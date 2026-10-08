@@ -343,7 +343,11 @@ async fn the_search_keeps_the_steps_whose_id_doc_or_unit_match_and_combines_with
     let (status, escaped) = f.get(&format!("/projects/id/{escaped_id}")).await;
     assert_eq!(status, StatusCode::OK);
     assert!(escaped.contains("data-node=\"u:build\""));
-    assert!(escaped.contains("fold-finished"));
+    // the done one-step unit is its card on the shelf, naming its unit
+    assert!(escaped.contains("<section id=\"unit-finished\" class=\"box solo done\""));
+    assert!(
+        escaped.contains("<span class=\"uid\">finished /</span><span class=\"sid\">done</span>")
+    );
     assert!(escaped.contains("data-preserve-attr=\"open\""));
     assert!(!escaped.contains("<script>failure"));
     assert!(escaped.contains("&lt;script&gt;"));
@@ -359,12 +363,12 @@ async fn the_search_keeps_the_steps_whose_id_doc_or_unit_match_and_combines_with
     assert_eq!(cards(&html), ["beta-review"]);
     assert!(!html.contains("id=\"unit-alpha\""), "{html}");
     assert!(html.contains("1 step matches “PARSER”."));
-    // A chip whose source the search left out says so in its title.
+    // A wait whose source the search left out is said in words, shown where lines are drawn.
     assert!(
-        html.contains("title=\"After alpha-review (not shown in this view)\""),
+        html.contains(&format!("<p class=\"waits away\">Waits for <a href=\"{base}/steps/alpha-review\" data-opens=\"alpha-review\" data-from=\"s:alpha-review\" data-to=\"s:beta-review\">alpha-review</a>, not in this view</p>")),
         "{html}"
     );
-    assert!(!page("").await.contains("not shown in this view"));
+    assert!(!page("").await.contains("not in this view"));
     // By unit id; words in any order, across id, doc and unit.
     assert_eq!(
         cards(&page("q=alpha&order=plan").await),
@@ -626,4 +630,159 @@ async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
         "</section>",
     );
     assert!(section.contains("by its last run"), "{section}");
+}
+
+/// The relations the page hands `<sluice-board>` to draw (its `edges` attribute, unescaped).
+fn edges(html: &str) -> Vec<Value> {
+    let raw = between(html, "edges=\"", "\">");
+    let json = raw["edges=\"".len()..]
+        .replace("&#34;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&#38;", "&");
+    serde_json::from_str(&json).unwrap()
+}
+/// Whether the relation `from` → `to` (step ids) is in the edges data, and is drawn as a line.
+fn line(edges: &[Value], from: &str, to: &str) -> Option<(bool, bool)> {
+    edges
+        .iter()
+        .find(|e| e["from"]["id"] == from && e["to"]["id"] == to)
+        .map(|e| (e["cross"] == true, e["line"] == true))
+}
+
+/// The plan reads without a key: a one-step unit is its card once, a wait between units is a
+/// line in the edges data (a satisfied one is not), nothing on the board needs a legend or an
+/// arrow count, and Live first draws the running band, then the waiting by depth, then one
+/// shelf of done units; a card says in words what it waits for, for a phone.
+#[tokio::test]
+async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
+    let f = Fixture::new().await;
+    let id = f
+        .project(
+            "graph",
+            json!({"steps":{
+                "k1":{"run":"custom.open","tags":["unit:k1"]},
+                "old":{"run":"custom.open","tags":["unit:old"]},
+                "k2":{"run":"custom.open","after":["k1"],"tags":["unit:k2"]},
+                "k3":{"run":"custom.open","after":["k2"],"tags":["unit:k3"]},
+                "k4":{"run":"custom.open","after":["k3","k1"],"tags":["unit:k4"]},
+                "compile":{"run":"custom.open","after":["k2"],"tags":["unit:build"]},
+                "lane-fork":{"run":"custom.open","tags":["unit:lane"]},
+                "lane-work":{"run":"custom.open","after":["lane-fork","k2"],"tags":["unit:lane"]},
+                "pkg":{"run":"custom.open","tags":["unit:pkg"]},
+                "pkg-rm":{"run":"custom.open","after":["pkg"],"tags":["unit:pkg"]}}}),
+            &[
+                ("k1", "succeeded"),
+                ("old", "succeeded"),
+                ("k2", "running"),
+                ("lane-fork", "succeeded"),
+                ("pkg", "succeeded"),
+                ("pkg-rm", "succeeded"),
+            ],
+        )
+        .await;
+    let base = format!("/projects/id/{id}");
+    let (status, html) = f.get(&base).await;
+    assert_eq!(status, StatusCode::OK, "{html}");
+    let board = between(&html, "<sluice-board", "</sluice-board>");
+    let plane = between(&html, "<div class=\"plane\"", "</sluice-board");
+    // one-step units are their card alone; a step named apart from its unit names both
+    assert!(
+        board.contains("<section id=\"unit-k3\" class=\"box solo\""),
+        "{board}"
+    );
+    assert_eq!(
+        board.matches("<span class=\"sid\">k3</span>").count(),
+        1,
+        "{board}"
+    );
+    assert!(!board.contains("box-label\">k3<"), "{board}");
+    assert!(
+        board.contains("<span class=\"uid\">build /</span><span class=\"sid\">compile</span>"),
+        "{board}"
+    );
+    assert!(
+        board.contains("<p class=\"meta box-label\">lane</p>"),
+        "a unit of steps keeps its box"
+    );
+    // a step named as its unit is that unit's mark alone in a done line
+    assert!(board.contains("title=\"✓ rm✓\""), "{board}");
+    // waits between units are lines; a satisfied one is not drawn
+    let edges = edges(&html);
+    assert_eq!(line(&edges, "k2", "k3"), Some((true, true)));
+    assert_eq!(line(&edges, "k3", "k4"), Some((true, true)));
+    assert_eq!(line(&edges, "k2", "lane-work"), Some((true, true)));
+    assert_eq!(line(&edges, "k2", "compile"), Some((true, true)));
+    assert_eq!(
+        line(&edges, "k1", "k4"),
+        Some((true, false)),
+        "k1 is through"
+    );
+    assert_eq!(line(&edges, "k1", "k2"), Some((true, false)));
+    assert_eq!(line(&edges, "lane-fork", "lane-work"), Some((false, true)));
+    // no key, no arrow counts, no chips
+    for gone in ["legend", "lg-line", "xout", "xref", "→"] {
+        assert!(!plane.contains(gone), "{gone}: {plane}");
+    }
+    // the waits in words, named and linked, with what a source is doing; a satisfied one unsaid
+    let to = |step: &str, from: &str| {
+        format!(
+            "<a href=\"{base}/steps/{from}\" data-opens=\"{from}\" data-from=\"s:{from}\" data-to=\"s:{step}\">{from}</a>"
+        )
+    };
+    assert!(
+        board.contains(&format!(
+            "<p class=\"waits\">Waits for {} (running)</p>",
+            to("k3", "k2")
+        )),
+        "{board}"
+    );
+    assert!(
+        board.contains(&format!(
+            "<p class=\"waits\">Waits for {}</p>",
+            to("k4", "k3")
+        )),
+        "{board}"
+    );
+    // a finished step is never "next"
+    assert!(
+        board.contains("id=\"n-k1\" class=\"node card is-succeeded\" "),
+        "{board}"
+    );
+    // Live first: running, then waiting by depth (k4 a layer under k3), then one done shelf
+    let at = |s: &str| plane.find(s).unwrap_or_else(|| panic!("no {s}: {plane}"));
+    let order = [
+        "<h3 class=\"band-h\">Running</h3>",
+        "id=\"unit-k2\"",
+        "<h3 class=\"band-h\">Waiting</h3>",
+        "id=\"unit-k3\"",
+        "id=\"unit-k4\"",
+        "class=\"done-shelf\"",
+        "id=\"unit-k1\"",
+    ];
+    for pair in order.windows(2) {
+        assert!(at(pair[0]) < at(pair[1]), "{} before {}", pair[0], pair[1]);
+    }
+    assert!(plane[at("id=\"unit-k3\"")..at("id=\"unit-k4\"")].contains("<div class=\"layer\">"));
+    assert_eq!(plane.matches("class=\"done-shelf\"").count(), 1);
+    assert!(plane.contains("3 done units · 4 steps"), "{plane}");
+    // the bar draws no sliver for nothing: no failed segment
+    assert!(!between(&html, "<div class=\"sumline\">", "</p>").contains("b-failed"));
+    // Plan order: one band without a label, the same single shelf at the end
+    let (_, html) = f.get(&format!("{base}?order=plan")).await;
+    let plane = between(&html, "<div class=\"plane\"", "</sluice-board");
+    assert!(!plane.contains("band-h"), "{plane}");
+    assert_eq!(plane.matches("class=\"done-shelf\"").count(), 1);
+    assert!(plane.find("id=\"unit-k4\"").unwrap() < plane.find("class=\"done-shelf\"").unwrap());
+    // an empty view says why
+    let (_, html) = f.get(&format!("{base}?show=attention")).await;
+    assert!(
+        html.contains("<p class=\"empty\">Nothing needs attention.</p>"),
+        "{html}"
+    );
+    // a plan without steps has nothing to search and says so
+    let (_, html) = f.get(&format!("/projects/id/{}", f.plain)).await;
+    assert!(html.contains("The plan has no steps yet."), "{html}");
+    assert!(!html.contains("class=\"board-tools\""), "{html}");
 }

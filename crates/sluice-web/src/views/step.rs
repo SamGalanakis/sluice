@@ -110,6 +110,7 @@ pub struct StepView {
     pub mark: String,
     pub tags: Vec<String>,
     pub paused: bool,
+    /// Pending with its gates met: the next to start (`is-next`). A finished step is never.
     pub ready: bool,
     pub blocked: bool,
     pub quiet: bool,
@@ -226,6 +227,8 @@ impl StepView {
         };
         let paused = step.paused.is_paused();
         let held = paused || state.paused.is_paused();
+        // next to start: pending with its gates met (a finished step's gates are met too)
+        let next = ready && entry.status == StepStatus::Pending;
         let status = status_name(&entry.status).to_owned();
         let mark = if entry.status == StepStatus::Pending && held {
             "paused"
@@ -320,7 +323,7 @@ impl StepView {
             mark,
             tags: step.tags.clone(),
             paused,
-            ready,
+            ready: next,
             blocked: false,
             quiet: false,
             waits,
@@ -403,12 +406,13 @@ impl StepView {
     }
     /// The card's timer, after its caption: a running run's a `<time data-since>` that
     /// `sluice.js` ticks (its text the clock's, which a page's version leaves out), a finished
-    /// one's static and quieter. Visible as "2h 14m"; read as ", for 2 hours 14 minutes" or
-    /// ", took 12 minutes". Its title says how many runs the step has had.
+    /// one's static and quieter. Visible as "2h 14m"; read as "for 2 hours 14 minutes" or
+    /// "took 12 minutes" after the step's id (no comma: the card's parts are flex items, which
+    /// a screen reader's name already separates with a space). Its title says how many runs the step has had.
     pub fn timer_html(&self) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(
-            source = "{% if live %}<time data-since=\"{{ t.started }}\" datetime=\"{{ t.started }}\" class=\"took live\" title=\"{{ title }}\"><span class=\"tk\" aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\">, for {{ said }}</span></time>{% else %}<span class=\"took\" title=\"{{ title }}\"><span aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\">, took {{ said }}</span></span>{% endif %}",
+            source = "{% if live %}<time data-since=\"{{ t.started }}\" datetime=\"{{ t.started }}\" class=\"took live\" title=\"{{ title }}\"><span class=\"tk\" aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"> for {{ said }}</span></time>{% else %}<span class=\"took\" title=\"{{ title }}\"><span aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"> took {{ said }}</span></span>{% endif %}",
             ext = "html"
         )]
         struct Timer<'a> {

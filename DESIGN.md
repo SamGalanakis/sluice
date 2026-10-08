@@ -405,91 +405,78 @@ Top down:
    types (200ms), without reloading: the address follows (`history.replaceState`) and the
    page's stream restarts under the new query; Apply is for a page without script only. Escape
    or the `x` clears the search. With a search a meta line under the tools says how many steps
-   match ("12 steps match “land”", "No step matches “x”.", a polite status). Live first orders
-   units by attention (a failed or stale step), running, ready, held, done; Plan order keeps
-   the plan's. The search keeps the steps whose id, doc or unit id holds every word of it (any
-   case, any order); a unit with none hides, and an empty board says "Clear the search to see
-   every unit."
-3. **The board**: first the legend (none when no unit is shown), one quiet line in meta under
-   the tools, each kind with its mark: a solid line for "handoff · condition" (a value passes),
-   a dotted one for "after" (order alone), a dashed one for "after, even if skipped (?)", a box
-   swatch for "unit", a sample chip "after step" (drawn as the board's chips) for "from
-   another unit".
-   Then the plan inputs as dashed chips, one box per unit, the plan outputs as dashed chips. A
-   box (the theme's box tone, 14px radius, 16 by 18px padding, 12px on a phone, no border) is
-   labelled with the unit's id in meta and lays its cards in rows by dependency depth. Live
-   units, failed ones and any with a step not done keep the full graph. A done unit (every step
-   succeeded or skipped) folds to one line, a `<details>`: the success glyph, the unit id, its
-   steps as the board's lane strings write them (`fork✓ work✓ land✓ rm–`, data mono 12px in
-   muted ink, the step's id without the unit's prefix and its mark, each mark in ink at 700
-   and 13px so a ✓ never passes for the pending dot; ellipsized, whole in its
-   title; a screen reader hears "6 steps done") and a chevron; the line or its chevron opens it
-   to its cards. On a phone the lane string takes a second line under the id.
-   - **The done shelf**: two or more done units in a row sit on one shelf, a `<details
-     class="done-shelf">` across the grid's row: the success glyph, "175 done units · 967
-     steps" (14px, 500) on the box tone with the 14px corner, and a chevron. Under Live first
-     every done unit is on one shelf after the live work; under Plan order each run of them is
-     a shelf in its place, and a lone done unit stays a line in the grid. The shelf is closed
-     by default and remembered per tab; it opens to its units' lines in a grid of wider cells
-     (`minmax(360px, 1fr)`, 8px apart), so a lane string mostly reads whole. A search that
-     matches in a done unit, or Show: Done, draws the shelf and the matching units open (under
-     ids of their own, so a shelf the page had closed opens to the matches); opening a step on
-     the shelf in the drawer opens the shelf and its unit.
-
-   A board with no units to show reads "No units match this view." The plan pane is a size
-   container named `plan`: what lays out the plan keys off the pane's width, which the
-   splitter changes, never the window's.
-   - **The grid**: from 720px of pane (more than a phone's pane ever has) the boxes are a
-     grid, `repeat(auto-fill, minmax(296px, 1fr))` with a 14px gap, read left to right then down in the server's order (Live first or Plan
-     order). The cell's minimum holds the widest card on a large live plan (222px) with the
-     box's padding. A unit of one lane (no row of it holds two cards) takes a cell; a unit
-     with cards side by side spans the row; a done unit folded to its line takes a cell, top
-     aligned, and spans the row again when it opens with lanes side by side. Boxes in one row
-     share its height, so the grid reads as tiles.
-4. **Edges** (the `<sluice-board>` element draws them in an SVG over the measured cards, from the
-   server's typed relations): only a relation within one box is drawn, one path a pair of
-   cards, however many relations join them (a handoff and an `after` on one pair are one line).
-   The path is drawn as its strongest relation: a value (a handoff, or a condition, which reads
-   an output) solid at 1.5px; order alone (`after`) dotted, round dots 4px apart; an `after?`,
-   which a skip satisfies, dashed 5/4. Its names are every relation between the pair, in the
-   chips' words ("text → data · after", "if ok", "if not ok"), in its `<title>` and shown while
-   a card is traced. An `after` whose order another path already gives (its source reaches its
-   dependent through two edges or more in the box) is not drawn: the order it states is on the
-   board already, and the drawer's After lists it; an `after?` is kept, since its skip rule is
-   its own. The edges are drawn on the client and kept across the stream's patches
-   (`data-ignore-morph`), redrawn when the cards move, a box opens or the board resizes.
-   - **Chips**: a relation whose ends are in two boxes (the server marks it `cross`; a plan
-     input or output is in no box, so its relations are chips too) is not drawn across the
-     page. Its dependent wears a chip on its top edge, part of the card's entry: the chips
-     come before the card in the page and sit 4px above it (one a line, centred, when there
-     are several), with the row gap between them and anything above, so they never read as
-     the previous row's. A plan output's chips sit above it the same way. A row's cards line
-     up at its foot, so a card under chips stays level with its neighbours. The chip says
-     what it is, as an input to its card: `after source` an after, `after unit:build` a unit
-     gate, `if source/ok` and `if not source/ok` a condition, `from source/text` a handoff
-     (its output, "from" as the step's page says of an input's source), a trailing `?` and a dashed hairline when a skip counts; no arrow. A chip is the
-     step card's pill, smaller and quieter: fully round, the card's hairline on half the card
-     colour, 2px by 10px of padding, and one voice for all its words, 12px at 500 in muted
-     ink; the kind word is plain text in that voice before the source ("after
-     fig-5226-landed"), never a second weight or colour. Every kind, and the legend's sample,
-     has the same size and spacing. Every chip at rest looks the same; the states are
-     deliberate and apart: hovered, or lit by a trace from its source, an ink hairline and ink
-     words on the card colour; focused, the ring as well, 1px out so it clears the card;
-     receded while another source is traced, still a chip (its hairline, no fill). Its
-     accessible name says the kind ("after source", "Handoff from source/text") and its title
-     the whole relation, and where its source is when its card is not on the board as drawn
-     ("in done unit build", "not shown in this view"). A chip is a link: to the source step (in the drawer with script, its
-     page without), the source unit's page, or the plan input's chip. Hovering or focusing it
-     traces its source: every chip from that source lights with its dependent, the source's
-     card (and a source unit's box, ringed in ink) stays crisp, the rest recede; a source folded
-     away in a done unit rings that unit's line instead. An edge within the box arrives on the
-     card itself, never on a chip: on the free shoulders of its top beside the chips (from
-     the side its source is on), or, when the chips cover the top, beside the chips and into
-     the pill's end, its head pointing across. An edge that passes the row keeps clear of the
-     chips as of the card. A source card counts what follows it in other
-     boxes, "→ n" in meta after its caption (a unit, after its id).
-   Below 720px there are no edges and no legend; each box stacks its lanes, each reading
-   straight down, a card's chips on its top edge.
+   match ("12 steps match “land”", "No step matches “x”.", a polite status). Live first draws
+   the running units, then the stopped, then the waiting, each band laid out by dependency
+   depth; Plan order draws every unit not done in one band by depth, in the plan's order where
+   depth ties. Either way every done unit is on one shelf at the end. The search keeps the
+   steps whose id, doc or unit id holds every word of it (any case, any order); a unit with
+   none hides, and an empty board says "Clear the search to see every unit." A plan with no
+   steps has no tools: it says "The plan has no steps yet."
+3. **The board**: the plan as a graph that reads top down with no key. Every mark explains
+   itself: a card is a step (its glyph and id), a box is a unit of several steps, a line with
+   an arrowhead is "this, then that", a quiet label names each band.
+   - **Bands**: under Live first, "Running" (a unit with a step running or outside), then
+     "Stopped" (a step failed or stale, or held up by one), then "Waiting" (the rest not
+     done), each label in meta (13px, 500, muted ink) at the column's left edge, 32px after
+     the band before. Under Plan order there is one band and no label. Show and the search
+     only leave units out; the bands keep their order.
+   - **Layers**: a band lays its units in layers by the longest chain of waits among them, so
+     every line from a unit to one that waits for it runs down to a later layer. A layer is a
+     centred row that wraps (16px between rows, 32px between units, so a line passes between
+     two units), 40px from the next layer for the lines; its units are ordered after where the
+     units they wait for were placed, so lines stay short and seldom cross, ties in the view's
+     order.
+   - **Units**: a unit of one step is its card alone, no box and no label: drawn once. When
+     the step's id does not hold the unit's name, the card names the unit first in muted ink
+     ("build / compile"). A unit of several steps is a box (the theme's box tone, 14px radius,
+     16 by 18px padding, 12px on a phone, no border) labelled with its id in meta, its cards
+     in rows by dependency depth.
+   - **The done shelf**: every done unit (every step succeeded or skipped), under either order,
+     on one `<details class="done-shelf">` after the bands: the success glyph, "44 done units ·
+     44 steps" (14px, 500) on the box tone with the 14px corner, and a chevron; closed by
+     default and remembered per tab. Open, its one-step units are their cards, wrapping
+     (10px by 12px apart), then each other unit one line, a `<details>`: the success glyph, the
+     unit id, its steps as the board's lane strings write them (`fork✓ work✓ land✓ rm–`, data
+     mono 12px in muted ink, the step's id without the unit's prefix and its mark, a step named
+     as its unit its mark alone; each mark in ink at 700 and 13px so a ✓ never passes for the
+     pending dot; ellipsized, whole in its title; a screen reader hears "6 steps done") and a
+     chevron, in a grid of wider cells (`minmax(360px, 1fr)`); the line opens to its cards. A
+     search that matches in a done unit, or Show: Done, draws the shelf and the matching units
+     open (under ids of their own); opening a step on the shelf in the drawer opens the shelf
+     and its unit.
+   - **Empty**: a board with no units to show says why, for the view: "Nothing needs
+     attention." (Attention), "Every unit is done." (Active), "No unit is done yet." (Done),
+     else "No units match this view.", at the column's left edge.
+   The plan pane is a size container named `plan`: what lays out the plan keys off the pane's
+   width, which the splitter changes, never the window's.
+4. **Lines** (the `<sluice-board>` element draws them in an SVG over the measured cards, from
+   the relations the server marks `line`): within a unit's box every relation; between units
+   each wait, from a source that has not yet succeeded or been skipped to a step the view
+   shows in a unit not done. A satisfied wait is history, so it has no line and no words; the
+   step's page lists every gate. One path a pair of cards, however many relations join them.
+   A path whose order a longer path already gives (its source reaches its dependent through
+   two lines or more) is not drawn, a value passed along it too: the board shows what comes
+   after what; a condition and an `after?` stay, each saying more than the order. Every line
+   looks alike: 1.5px in the edge colour, an arrowhead on the card it enters. It leaves the
+   bottom of its source's card (a unit gate, the bottom of its box) and enters the top of the
+   card that waits, spread along each in the order of the cards at the other ends; between
+   units it passes every card and every other unit in between through the gaps of each row,
+   never over a unit. What a line carries beyond order is in words, shown by its far end while
+   a card is traced and in its `<title>`: "text → data" for a value passed, "if ok" and "if
+   not ok" for a condition, "even if skipped" for an `after?`; plain order needs none. The
+   lines are drawn on the client and kept across the stream's patches (`data-ignore-morph`),
+   redrawn when the cards move, a box opens or the board resizes.
+   - **Waits in words**: under a card that waits on another unit, one sentence in meta (13px,
+     muted ink), "Waits for l-a1 (running) and l-d1": each source a link in ink to its step
+     (the drawer with script), what it is doing in brackets when it is not merely waiting
+     itself (running, failed, stale, paused, outside); past four sources the first three, then
+     "and 79 more", a link to the waiting step, whose page lists them all. Each link is a 24px
+     target. The sentence shows where no line says it: on a phone, on a page without script,
+     and where the view leaves a source out ("…, not in this view"). Hovering or focusing a
+     name traces its source.
+   Below 720px there are no lines: the layers stack in one column, a one-step unit's card at
+   the left with its waits under it (under its glyph's column), a box across the width
+   stacking its lanes, each reading straight down.
 5. **Under the board**: Result (each plan output's value, or "No value yet.") and Plan inputs
    (value or "No value yet.", and the input's doc).
 
@@ -680,11 +667,11 @@ card with a hairline, no shadow.
 The mark's generous corner, scaled down. 14px (`--radius`) for regions: unit boxes, the index's
 list, question cards, the danger card; 10px (`--radius-md`) for controls, the switcher and its
 menu, and code blocks; 5px (`--radius-sm`) for inline code, tags and menu items. A pill (999px)
-is only for the step cards and the chips on the plan graph, the progress bar, the inbox badge,
-the Types switch's track and a boolean value: a card is a token of work, not a panel. On the
-graph every pill is one family: plan input and output chips are dashed cards, since they are
-ends, not work; a relation chip ("after source") is the card's pill, smaller and quieter. The
-done shelf's lines and a done unit's line are rows of a box (`--radius`), not pills.
+is only for the step cards and the plan's input and output chips, the progress bar, the inbox
+badge, the Types switch's track and a boolean value: a card is a token of work, not a panel. On
+the graph every pill is one family: plan input and output chips are dashed cards, since they
+are ends, not work. The done shelf's lines and a done unit's line are rows of a box
+(`--radius`), not pills.
 
 ## Components
 
@@ -696,12 +683,15 @@ done shelf's lines and a done unit's line are rows of a box (`--radius`), not pi
   moves the card or its edges; a succeeded or failed step's says how long its last run took,
   in muted ink and still. A pending, blocked, queued, paused, stale or skipped step, and a value
   set by hand, has none. Its title counts the runs ("3 runs; this one took 2h 14m"); a screen
-  reader hears "running fig-5240-work, for 2 hours 14 minutes" or "…, took 12 minutes". On a
+  reader hears "running fig-5240-work for 2 hours 14 minutes" or "… took 12 minutes" (no
+comma: the card's parts are flex items, which the name already parts with a space). On a
   phone the card keeps one line: the id gives way before the timer. Running cards take a blue border,
   failed a full-ink one, stale a gold one, paused plum; blocked a dashed border; a step next in
   line (ready) keeps a strong hairline. Inline `core.*` steps are chips: dashed and muted. Its
   accessible description carries the doc, what it waits on and its error. The card in the drawer
-  wears the blue ring 2px outside its border.
+  wears the blue ring 2px outside its border; the keyboard's focus is a 2px ink ring on the
+  pill itself, no gap, so a card the drawer hands the focus back to never reads as running or
+  open. "Next" (a strong hairline) is only ever a pending step whose gates are met.
 - **Tag** (`.tag`): a small fact set apart: 12px text at 500, a strong hairline and the 5px
   corner; gold (`attn`) for "quiet" and "n awaiting reply", muted for a closed or answered
   state.
@@ -713,16 +703,17 @@ done shelf's lines and a done unit's line are rows of a box (`--radius`), not pi
   head and switch and its error boxes, the splitter's grip and the search field's magnifier and
   clear. A new icon is fetched from Lucide at that version, never
   drawn; the mark and favicon are the owner's, and a project's own icon is the user's.
-- **Tracing**: hovering or focusing a card lights its edges and the chips to and from it; the
-  other cards lose their border and fill and their text turns muted ink, the other chips keep
-  their hairline and lose their fill. A chip traces its source; a card folded away in a done
+- **Tracing**: hovering or focusing a card lights its lines to and from it, in ink, with their
+  words; the other cards lose their border and fill and their text turns muted ink, the other
+  lines fade. A name in a card's waits traces its source; a card folded away in a done
   unit is stood in for by that unit's line, ringed in ink, and a unit on the closed done shelf by
   the shelf's line, ringed the same way. Tracing follows the
   keyboard's focus, never a focus given back after a click or by the drawer's close, so when
   the pointer leaves with nothing focused from the keyboard, nothing stays lit.
 - **Buttons**: primary is the deep blue under cream; others are card-coloured with an input
   hairline. The progress bar is an 8px pill, 200px wide (120 on a phone); on a project page
-  it grows with its summary line, up to 480px.
+  it grows with its summary line, up to 480px. It draws a segment only for a count above
+  zero, so an empty plan's bar is its bare track and no zero leaves a sliver.
 - **Splitter**: see The project's board; the one control that resizes, a grip on a hairline
   that lights only when used.
 - **Live updates**: each page's stream patches only what changed; while it reconnects a gold

@@ -60,7 +60,7 @@ function tick() {
     }
     // a card's timer: its width is held, so only a longer text ("9h 59m" to "10h 0m") can move
     // the edges that meet its card
-    const text = short(seconds), words = `, for ${spoken(seconds)}`;
+    const text = short(seconds), words = ` for ${spoken(seconds)}`;
     if (shown.textContent !== text) {
       wider ||= text.length > shown.textContent.length;
       shown.textContent = text;
@@ -126,15 +126,16 @@ document.addEventListener("pointermove", (evt) => {
   const n = evt.target.closest?.(TRACES), host = n?.closest("sluice-board");
   if (host) trace(host, traceKey(n));
 }, { passive: true });
-// What traces when hovered or focused: a card, or a chip (which traces its source).
-const TRACES = ".node[data-node], .xref[data-from]";
-const traceKey = (el) => (el.matches(".xref") ? el.dataset.from : el.dataset.node);
+// What traces when hovered or focused: a card, or a name in a card's waits (its source).
+const TRACES = ".node[data-node], .waits a[data-from]";
+const traceKey = (el) => (el.matches(".waits a") ? el.dataset.from : el.dataset.node);
 // not inside a folded box (a closed <details> hides its content, which keeps its boxes)
 const shown = (n) => (n.checkVisibility ? n.checkVisibility() : n.getClientRects().length > 0);
 
 // ---- <sluice-board> ---------------------------------------------------------------------------
-// Each edge leaves the bottom of a card and enters the top of the card it feeds, ending in an
-// arrowhead. Several edges on one side of a card spread along it, in the order of the cards at
+// Each edge leaves the bottom of a card (or a unit's box, for a unit gate) and enters the top of
+// the card that comes after it, ending in an arrowhead: the line says "this, then that", in a
+// unit or between units. Several edges on one side of a card spread along it, in the order of the cards at
 // their other ends. An edge that passes rows of cards on its way runs through the nearest gap
 // in each (edges sharing a gap sit side by side), so it never hides behind a card.
 
@@ -197,30 +198,34 @@ function drawEdges(host, data) {
   const box = plane.getBoundingClientRect();
   const boxed = $(".boxes", plane)?.classList.contains("boxed");
   const boxes = $$(".box", plane), rect = new Map();
+  const at = (r) => ({ left: r.left - box.left, right: r.right - box.left, top: r.top - box.top,
+                       bottom: r.bottom - box.top, width: r.width,
+                       span: [r.left - box.left, r.right - box.left] });
+  // the units laid out on the board (a box, or a one-step unit's card): a line between units
+  // passes them, not just their cards
+  const tileEls = $$(".layer > .box", plane).filter(shown);
+  const tiles = tileEls.map((t) => at(t.getBoundingClientRect()));
   for (const n of $$("[data-node]", plane)) {
     if (!shown(n)) continue;
-    // a card with chips on its top edge: a passing edge keeps clear of them as of the card,
-    // and an edge into it arrives on the card itself, beside its chips (see `arrive`)
-    const r = n.getBoundingClientRect(), stacked = n.parentElement?.classList.contains("stack");
-    const whole = stacked ? n.parentElement.getBoundingClientRect() : r;
-    const xs = stacked && $(":scope > .xrefs", n.parentElement)?.getBoundingClientRect();
-    rect.set(n.dataset.node, { left: r.left - box.left, right: r.right - box.left,
-                               top: whole.top - box.top, bottom: r.bottom - box.top,
-                               cardTop: r.top - box.top, width: r.width,
-                               chips: xs ? [xs.left - box.left, xs.right - box.left] : null,
+    rect.set(n.dataset.node, { ...at(n.getBoundingClientRect()),
                                box: boxes.indexOf(n.closest(".box")),
-                               span: [Math.min(r.left, whole.left) - box.left,
-                                      Math.max(r.right, whole.right) - box.left] });
+                               tile: tileEls.indexOf(n.closest(".layer > .box")) });
   }
-  // Route within a unit, or through all intervening rows for a cross-unit relation.
+  // Route within a unit's box past its cards; between units past every card and every other
+  // unit, through the gaps of each row they make between the two ends (see the loop below).
   const rowsOf = new Map();
   const route = (a, b) => {
-    const key = rect.get(a).box === rect.get(b).box ? rect.get(a).box : -1;
+    const [ra, rb] = [rect.get(a), rect.get(b)];
+    const inBox = ra.box === rb.box && ra.box >= 0;
+    const key = inBox ? `box:${ra.box}` : `tiles:${ra.tile}:${rb.tile}`;
     if (!rowsOf.has(key)) {
-      const rows = bands([...rect.entries()].filter(([k, r]) => !k.startsWith("u:") && (key === -1 || r.box === key)).map(([,r]) => r));
+      const cards = [...rect.entries()].filter(([k, r]) => !k.startsWith("u:")
+        && (!inBox || r.box === ra.box)).map(([, r]) => r);
+      const others = inBox ? [] : tiles.filter((_, i) => i !== ra.tile && i !== rb.tile);
+      const rows = cards.concat(others);
       let lo = -CLEAR * 2, hi = box.width + CLEAR * 2;
-      if (boxed && boxes[key]) {
-        const l = boxes[key].getBoundingClientRect();
+      if (inBox && boxed) {
+        const l = boxes[ra.box].getBoundingClientRect();
         lo = l.left - box.left + SIDE;
         hi = l.right - box.left - SIDE;
       }
@@ -242,35 +247,9 @@ function drawEdges(host, data) {
     outs.get(a).push({other: b, index});
     ins.get(b).push({other: a, index});
   }
-  // Where each edge into a card ends: spread along its top; on a card under chips, on the top's
-  // free shoulders beside them (from the side its source is on), or, when the chips cover the
-  // top, on the pill's ends, spread down them: an arrowhead never meets a chip.
-  const arrive = (key, others) => {
-    const r = rect.get(key), at = new Map();
-    if (!r.chips) {
-      for (const [index, x] of spread(key, others)) at.set(index, { x, y: r.cardTop - 1, dir: 0 });
-      return at;
-    }
-    const mid = (r.left + r.right) / 2, sorted = [...others].sort((p, q) => cx(p.other) - cx(q.other));
-    const west = sorted.filter((o) => cx(o.other) < mid), east = sorted.filter((o) => cx(o.other) >= mid);
-    const lo = [r.left + 14, r.chips[0] - 6], hi = [r.chips[1] + 6, r.right - 14];
-    const fits = ([a, b]) => b - a >= 4;
-    const place = (group, [a, b]) => group.forEach((o, i) =>
-      at.set(o.index, { x: a + (b - a) * (i + 1) / (group.length + 1), y: r.cardTop - 1, dir: 0 }));
-    if (fits(lo) || fits(hi)) {
-      if (!fits(hi)) place(sorted, lo);
-      else if (!fits(lo)) place(sorted, hi);
-      else { place(west, lo); place(east, hi); }
-      return at;
-    }
-    const h = r.bottom - r.cardTop;
-    for (const [group, dir] of [[west, 1], [east, -1]]) {
-      group.forEach((o, i) => at.set(o.index, { x: dir > 0 ? r.left - 1 : r.right + 1,
-        y: r.cardTop + h * (i + 1) / (group.length + 1), dir,
-        lane: dir > 0 ? Math.min(r.chips[0], r.left) - 10 : Math.max(r.chips[1], r.right) + 10 }));
-    }
-    return at;
-  };
+  // Where each edge into a card ends: spread along its top, in the order of their sources.
+  const arrive = (key, others) => new Map([...spread(key, others)].map(([index, x]) =>
+    [index, { x, y: rect.get(key).top - 1 }]));
   const outX = new Map([...outs].map(([k, v]) => [k, spread(k, v)]));
   const inX = new Map([...ins].map(([k, v]) => [k, arrive(k, v)]));
   const used = new Map(), labelLanes = new Map();
@@ -278,18 +257,19 @@ function drawEdges(host, data) {
   const f = (n) => n.toFixed(1);
   for (const [index, [a, b, label, kinds]] of ends.entries()) {
     const x1 = outX.get(a).get(index), y1 = rect.get(a).bottom;
-    const end = inX.get(b).get(index), x2 = end.dir ? end.lane : end.x;
-    const tip = rect.get(b).top - 1;  // the dependent's entry: the top of its chips, or its own
-    const y2 = (end.dir ? end.y - 8 : end.y) - (end.dir ? 0 : HEAD_H);  // straight down, into the head
+    const end = inX.get(b).get(index), x2 = end.x;
+    const tip = rect.get(b).top - 1;
+    const y2 = end.y - HEAD_H;  // straight down, into the head
     const pts = [[x1, y1]];
-    const { rows, lo, hi, key } = route(a, b);
-    rows.forEach((row, i) => {
-      if (row.top <= y1 + 1 || row.bottom >= tip - 1) return;  // only the rows in between
+    const { rows: things, lo, hi, key } = route(a, b);
+    // the rows of what lies wholly between the two ends: a card under the source in its own
+    // box counts, a unit beside the source (begun above it) does not
+    const rows = bands(things.filter((r) => r.top > y1 + 1 && r.bottom < tip - 1));
+    rows.forEach((row) => {
       const t = ((row.top + row.bottom) / 2 - y1) / (tip - y1);
-      const x = passAt(row, x1 + (x2 - x1) * t, lo, hi, used, `${key}:${i}`);
+      const x = passAt(row, x1 + (x2 - x1) * t, lo, hi, used, `${key}:${Math.round(row.top)}`);
       pts.push([x, row.top - 4], [x, row.bottom + 4]);
     });
-    if (tip < end.y - 2 && tip > y1) pts.push([x2, tip - 2]);  // to beside the chips, then down
     pts.push([x2, y2]);
     let d = `M${f(x1)} ${f(y1)}`;
     if (tip <= y1) {
@@ -305,24 +285,20 @@ function drawEdges(host, data) {
         d += `C${f(xa)} ${f(ya + dy)} ${f(xb)} ${f(yb - dy)} ${f(xb)} ${f(yb)}`;
       }
     }
-    // into the pill's end: a turn from beside the chips, the head pointing across
-    const hx = end.dir ? end.x - end.dir * HEAD_H : x2;
-    if (end.dir) d += `Q${f(x2)} ${f(end.y)} ${f(hx)} ${f(end.y)}`;
     const attrs = { "data-from": a, "data-to": b, d };
     if (kinds.includes("tolerant")) attrs.class = "order";
     attrs["data-kind"] = kinds[0];
     const wire = svgEl("path", attrs), title = svgEl("title", {});
-    title.textContent = label;
+    title.textContent = label || "after";
     wire.append(title);
     wires.append(wire);
     wires.append(svgEl("path", { "data-from": a, "data-to": b, class: "head",
-                                 d: end.dir
-                                   ? `M${f(hx)} ${f(end.y - HEAD_W)}L${f(end.x)} ${f(end.y)}`
-                                     + `L${f(hx)} ${f(end.y + HEAD_W)}z`
-                                   : `M${f(x2 - HEAD_W)} ${f(y2)}L${f(x2)} ${f(end.y)}`
-                                     + `L${f(x2 + HEAD_W)} ${f(y2)}z` }));
+                                 d: `M${f(x2 - HEAD_W)} ${f(y2)}L${f(x2)} ${f(end.y)}`
+                                   + `L${f(x2 + HEAD_W)} ${f(y2)}z` }));
     // its names twice: by the far end from whichever card is traced, so the names of a card's
-    // edges spread out over the cards around it instead of piling up on it
+    // edges spread out over the cards around it instead of piling up on it. Plain order has
+    // none: the arrow says it.
+    if (!label) continue;
     const pair = JSON.stringify([a, b]);  // one path a pair (see merge), so one lane of names
     const lane = labelLanes.get(pair) || 0;
     labelLanes.set(pair, lane + 1);
@@ -417,24 +393,27 @@ function boardEdges(host, edges) {
     [e.kind, ...(e.tolerant ? ["tolerant"] : [])]]);
 }
 
-// A relation in words, as the chips say it: "summary → spec", "after", "if ok", "if not ok".
+// A relation in words, shown by its line while a card is traced: "summary → spec" (a value
+// passed), "even if skipped", "if ok", "if not ok". Plain order, a step's or a unit's, needs
+// none: the arrow says "this, then that".
 function words(label, kinds) {
-  if (kinds[0] === "ordering") return kinds.includes("tolerant") ? "after, even if skipped" : "after";
+  if (kinds[0] === "ordering" || kinds[0] === "unit") return kinds.includes("tolerant") ? "even if skipped" : "";
   if (kinds[0] === "condition" || kinds[0] === "negated_condition") return `if ${label}`;
   return label;
 }
 // One path per pair of cards, its names every relation between them: a handoff and a gate on
-// the same pair are one line. The line is drawn as its strongest relation: a value (handoff,
-// condition) solid, order alone dotted, an order a skip satisfies dashed. An `after` whose
-// order another path already gives (its source reaches its dependent through other edges in
-// the box) is dropped: the order it states is drawn, and the drawer's After lists it.
+// the same pair are one line, its kind the strongest relation's. A line whose order another
+// path already gives (its source reaches its dependent through two lines or more) is dropped,
+// a value passed along it too: the board shows what comes after what, and the step's page
+// lists its inputs and gates. A condition and an order a skip satisfies stay: each says more
+// than the order.
 function merge(list) {
   const pairs = new Map();
   for (const [a, b, label, kinds] of list) {
     const key = `${a}\n${b}`;
     if (!pairs.has(key)) pairs.set(key, { a, b, words: [], kinds: new Set(), tolerant: true });
     const p = pairs.get(key), said = words(label, kinds);
-    if (!p.words.includes(said)) p.words.push(said);
+    if (said && !p.words.includes(said)) p.words.push(said);
     p.kinds.add(kinds[0]);
     if (!kinds.includes("tolerant")) p.tolerant = false;
   }
@@ -457,8 +436,8 @@ function merge(list) {
   };
   const out = [];
   for (const p of pairs.values()) {
-    const orderOnly = p.kinds.size === 1 && p.kinds.has("ordering");
-    if (orderOnly && !p.tolerant && implied(p.a, p.b)) continue;
+    const plain = [...p.kinds].every((k) => k === "ordering" || k === "handoff" || k === "unit");
+    if (plain && !p.tolerant && implied(p.a, p.b)) continue;
     const kind = ["handoff", "condition", "negated_condition", "ordering"].find((k) => p.kinds.has(k))
       ?? [...p.kinds][0];
     out.push([p.a, p.b, p.words.join(" · "), [kind, ...(p.tolerant ? ["tolerant"] : [])]]);
@@ -466,8 +445,9 @@ function merge(list) {
   return out;
 }
 
-// Only a relation within one box is drawn; one between boxes is a chip on its dependent.
-const drawn = (edges) => boardEdges(null, (Array.isArray(edges) ? edges : []).filter((e) => !e.cross));
+// The relations the server marks as lines: within a box, and between units the view shows that
+// are not done (a done source is satisfied; one left out is said in words on its dependent).
+const drawn = (edges) => boardEdges(null, (Array.isArray(edges) ? edges : []).filter((e) => e.line));
 
 function openBoxes() {
   try { return JSON.parse(sessionStorage.getItem(BOXES) || "{}") || {}; } catch { return {}; }
@@ -492,7 +472,7 @@ rocket("sluice-board", {
   setup({ host, props, observeProps, cleanup }) {
     let frame = 0, active = true;
     // tracing follows the keyboard's focus, not a focus given back after a click or by the
-    // drawer's close: `kept` is the card or chip it traced, the one a pointer leaving (or a
+    // drawer's close: `kept` is the card or name it traced, the one a pointer leaving (or a
     // redraw) goes back to. Any other focus traces nothing, so a trace never stays on with
     // nothing held.
     let kept = null;
@@ -505,7 +485,7 @@ rocket("sluice-board", {
       frame = requestAnimationFrame(() => {
         frame = 0;
         drawEdges(host, drawn(props.edges));
-        const held = still ? null : $(":is(.node, .xref):hover", host) || focusKept();  // keep it lit
+        const held = still ? null : $(`:is(${TRACES}):hover`, host) || focusKept();  // keep it lit
         if (held) trace(host, traceKey(held));
       });
     };
@@ -661,10 +641,10 @@ function setupDrawer(host) {
         $("#drawer-stream", host).replaceChildren();
         mergePatch({step: "", sver: ""});
         // back to the card (beside the drawer, the page brought it into view); a phone's sheet
-        // did not, so a chip that opened it takes the focus back
+        // did not, so a name in a card's waits that opened it takes the focus back
         const card = last && document.getElementById(`n-${last}`);
-        const chip = PHONE.matches && opener?.matches(".xref") ? opener : null;
-        (chip || card || opener)?.focus({ preventScroll: true });
+        const named = PHONE.matches && opener?.matches(".waits a") ? opener : null;
+        (named || card || opener)?.focus({ preventScroll: true });
         for (const board of $$("sluice-board")) untrace(board);
         opener = null;
         last = "";
@@ -695,7 +675,7 @@ function setupDrawer(host) {
       }
     };
     const click = (evt) => {
-      const a = evt.target.closest?.("a[data-step], a[data-opens]");  // a card, or a chip's source
+      const a = evt.target.closest?.("a[data-step], a[data-opens]");  // a card, or a source named in its waits
       if (!a || evt.button !== 0 || evt.metaKey || evt.ctrlKey || evt.shiftKey
           || evt.altKey) return;
       evt.preventDefault();

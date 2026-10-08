@@ -461,8 +461,8 @@ async fn a_cards_timer_ticks_while_its_current_run_goes_and_holds_once_it_has_en
         html.contains("<time data-since=\"2026-10-05T09:00:00Z\" datetime=\"2026-10-05T09:00:00Z\" class=\"took live\" title=\"Started 2026-10-05 09:00 UTC\"><span class=\"tk\" aria-hidden=\"true\">"),
         "{html}"
     );
-    assert!(html.contains("<span class=\"vh\">, for "), "{html}");
-    // its name reads "running work, for 2 days 5 hours" (the glyph, the id, the timer)
+    assert!(html.contains("<span class=\"vh\"> for "), "{html}");
+    // its name reads "running work for 2 days 5 hours" (the glyph, the id, the timer; no comma before it)
     assert!(html.contains("aria-label=\"running\""), "{html}");
 
     // failed after it ran, then retried and pending again: nothing until the next run starts
@@ -470,7 +470,7 @@ async fn a_cards_timer_ticks_while_its_current_run_goes_and_holds_once_it_has_en
     set("UPDATE steps SET status='failed' WHERE project_id=?1").await;
     let html = card(&state, project).await;
     assert!(
-        html.contains("<span class=\"took\" title=\"Took 30m\"><span aria-hidden=\"true\">30m</span><span class=\"vh\">, took 30 minutes</span></span>"),
+        html.contains("<span class=\"took\" title=\"Took 30m\"><span aria-hidden=\"true\">30m</span><span class=\"vh\"> took 30 minutes</span></span>"),
         "{html}"
     );
     set("UPDATE steps SET status='pending' WHERE project_id=?1").await;
@@ -493,7 +493,7 @@ async fn a_cards_timer_ticks_while_its_current_run_goes_and_holds_once_it_has_en
     set("UPDATE steps SET status='succeeded' WHERE project_id=?1").await;
     let html = card(&state, project).await;
     assert!(
-        html.contains("<span class=\"took\" title=\"2 runs; this one took 2h 14m\"><span aria-hidden=\"true\">2h 14m</span><span class=\"vh\">, took 2 hours 14 minutes</span></span>"),
+        html.contains("<span class=\"took\" title=\"2 runs; this one took 2h 14m\"><span aria-hidden=\"true\">2h 14m</span><span class=\"vh\"> took 2 hours 14 minutes</span></span>"),
         "{html}"
     );
     assert!(!html.contains("data-since"), "{html}");

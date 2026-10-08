@@ -594,13 +594,13 @@ sluice-drawer { display: contents; }
 .fold-box > summary::-webkit-details-marker { display: none; }
 .fold-box > summary:hover { background: var(--secondary); }
 .fold-box > summary .sid { flex: none; max-width: 40%; }
-.fb-meta { flex: 1 1 auto; min-width: 0; font-size: 13px; line-height: 18px;
+/* positioned: its visually hidden words stay inside its clip, never past the page's edge */
+.fb-meta { position: relative; flex: 1 1 auto; min-width: 0; font-size: 13px; line-height: 18px;
            color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis;
            white-space: nowrap; }
 .fb-lane { font: 12px/18px var(--font-mono); color: var(--muted-foreground); }
 /* each mark in ink and heavier, a size up: a ✓ must never pass for the pending dot */
 .fb-lane .lm { color: var(--foreground); font-weight: 700; font-size: 13px; margin-left: 1px; }
-.fold-box > summary > .xout { margin-left: 2px; }
 .fold-box .chev { margin-left: auto; flex: none; }
 .fold-box[open] .chev { transform: rotate(180deg); }
 .fold-box[open] > summary { margin-bottom: 0; }
@@ -613,11 +613,6 @@ sluice-drawer { display: contents; }
 .row { grid-row: var(--r); min-width: 0; display: flex; flex-wrap: wrap; justify-content: center;
        align-items: flex-start; gap: 12px 14px; }
 .row .lane-start { margin-left: 22px; }  /* the next lane's cards begin */
-.legend { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
-          gap: 4px 8px; margin-top: 20px; font-size: 12.5px; line-height: 16px;
-          color: var(--muted-foreground); }
-.legend svg + * , .legend svg { flex: none; }
-.legend svg:not(:first-child) { margin-left: 10px; }
 /* the board's toolbar: the order, which boxes show and a tag, small quiet controls in one
    line; a filter that hides boxes says so at its end */
 .board-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
@@ -647,9 +642,6 @@ sluice-drawer { display: contents; }
          pointer-events: none; z-index: 0; }
 .wires path { fill: none; stroke: var(--edge); stroke-width: 1.5;
               transition: opacity 150ms, stroke 150ms; }
-.wires path[data-kind="ordering"] { stroke-dasharray: 0.5 3.5; stroke-linecap: round;
-                                     stroke-width: 1.75; }  /* order alone: dotted */
-.wires path.order { stroke-dasharray: 5 4; stroke-linecap: butt; }  /* a skip satisfies it: dashed */
 .wires path.head { fill: var(--edge-head); stroke: none; }
 .names text { font: 500 12px var(--font-sans); fill: var(--foreground); text-anchor: middle;
               opacity: 0; paint-order: stroke; stroke: var(--background); stroke-width: 6px;
@@ -702,6 +694,9 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 /* the step in the drawer: a ring apart from the card, never its own border (a failed card's
    ink border must not read as chosen) */
 .node.open { box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring); }
+/* the keyboard's place: an ink ring on the pill itself, never running's blue or the open
+   step's ring with its gap (the drawer gives focus back to a card it closes on) */
+.node:focus-visible { outline: 2px solid var(--foreground); outline-offset: 0; }
 .chip { border-style: dashed; border-color: var(--border-strong); background: transparent; }
 .chip .sid { font-weight: 500; font-size: 13.5px; color: var(--muted-foreground); }
 
@@ -1136,7 +1131,7 @@ main > .phead + * { margin-top: 0; }
   .prefs .themes label, .prefs label.check { min-height: 44px; }
   /* no edges on a phone: a lane reads straight down, its cards close together */
   .board { --row-gap: 10px; }
-  .board svg.edges, .board .legend { display: none; }
+  .board svg.edges { display: none; }
   /* a box of several lanes stacks them, lane by lane (`--o`: lane, then depth), so each reads
      straight down; a lane after the first starts a little apart */
   .box .rows { display: flex; flex-direction: column; align-items: center; }
@@ -1161,7 +1156,6 @@ main > .phead + * { margin-top: 0; }
   .boxes { gap: 10px; }
   .boxes.boxed > .box { padding: 12px; }
   .row { gap: 8px 10px; }
-  .legend { justify-content: flex-start; }
   details.about .clip { max-height: calc(min(var(--lines, 2) * 2, 4) * 22px); }
   .drawer { width: 100vw; border-left: 0; --d-pad-t: 16px; --d-pad-x: 16px; --a-bleed: 10px; }
   /* tap targets at least 44px tall */
@@ -1558,33 +1552,59 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 }
 /* ==== end of page shell, continued ============================================================ */
 
-/* ==== the plan grid ===========================================================================
+/* ==== the plan graph ==========================================================================
    Kept apart from the page shell's rules (the splitter, the view switch, the board column)
-   so the two merge cleanly. The plan pane is a size container, `plan` (the page shell's): the
-   board keys its grid off the pane's own width, not the window's. Where the pane is wide enough, the units
-   are a grid of boxes, read left to right then down in the server's order: a box of one lane
-   takes a cell (the widest card is 222px on the live plan, so a 296px cell holds any card
-   with its padding), a box of several lanes spans the row, a done unit folded to one line
-   sits in a cell (and spans the row again once it opens, if it has lanes side by side).
-   A relation between boxes is not drawn: its dependent wears a chip, "after source", on its
-   card's top edge; a source shows "→ n". The legend leads the board. Phones keep their stacked
-   lanes. */
-.boxes.units { flex-direction: column; align-items: stretch; }
+   so the two merge cleanly. The plan reads top down with no key: under Live first a band of
+   running units, then the stopped (failed, or held up by a failure), then the waiting, each
+   under its plain label; under Plan order one band. A band lays its units in layers by
+   dependency depth (the server's), each layer a centred row that wraps, so a line from a unit
+   to one that comes after it runs down to the next layer. A one-step unit is its card alone;
+   a unit of several steps is a box of rows. Every done unit is on the shelf at the end. On a
+   phone the layers stack in one column and a card's waits say in words what the lines say. */
+.boxes.graph { display: block; }
+.graph > .empty { text-align: left; }
+.band + .band, .graph > .layer + .band, .graph > .band + .layer,
+.graph > :is(.band, .layer) + .done-shelf { margin-top: 32px; }
+.band-h { margin: 0 0 12px; font: 500 13px/18px var(--font-sans); color: var(--muted-foreground); }
+.layer { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start;
+         gap: 16px 32px; }
+.layer + .layer { margin-top: 40px; }  /* room for the lines between layers */
+.layer > .box { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.boxes.boxed .layer > .box:not(.solo) { padding: 16px 18px; border-radius: var(--radius);
+                                         background: var(--box); }
+.box.solo { padding: 0; border-radius: 999px; }
 .box-label { margin: 0 0 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* from 720px of pane, which a phone's pane never reaches: two cells or more */
+.node .uid { flex: none; font-size: 12.5px; line-height: 16px; color: var(--muted-foreground);
+             white-space: nowrap; }
+.boxes.units { flex-direction: column; align-items: stretch; }
 @container plan (min-width: 720px) {
   .boxes.units { display: grid; align-items: stretch;
                  grid-template-columns: repeat(auto-fill, minmax(min(100%, 296px), 1fr)); }
-  .boxes.units > :is(.row, .empty, .box.wide) { grid-column: 1 / -1; }
+  .boxes.units > :is(.empty, .box.wide) { grid-column: 1 / -1; }
   .boxes.units > .box.done:not(:has(> details[open])) { grid-column: auto; align-self: start; }
   /* a folded line in a cell: the id keeps what it needs, the count gives way first */
   .boxes.units .fold-box > summary .sid { flex: 0 1 auto; max-width: none; }
   .boxes.units .fold-box > summary .fb-meta { flex: 1 1 0; }
 }
-/* the done shelf: a run of done units (under Live first, every one, at the end) on one line,
-   "175 done units · 967 steps", closed until opened (and open for a search that matches in it,
-   or Show: Done); open, each unit its own line in a grid of wider cells, so its lane string
-   reads. A unit traced from a chip while the shelf is closed rings the shelf's line. */
+/* a step's waits in words, "Waits for l-a1 (running) and l-d1": where no line says it (a
+   phone, a page without script) or when the view leaves a source out (`away`). Each name
+   links to its source, a target 24px tall. */
+.waits { display: none; max-width: 40ch; margin: 2px 0 0; font-size: 13px; line-height: 18px;
+         color: var(--muted-foreground); text-align: left; }
+.waits a { display: inline-block; padding: 3px 0; color: var(--foreground);
+           text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
+.waits a:hover { text-decoration-color: currentColor; }
+.waits.away { display: block; }
+@media (scripting: none) { .waits { display: block; } }
+.stack { display: flex; flex-direction: column; align-items: center; min-width: 0;
+         max-width: 100%; }
+.stack > .waits { text-align: center; }
+/* a unit that a traced card names (a unit gate) */
+.plane.tracing .box.near { box-shadow: inset 0 0 0 1.5px var(--foreground); }
+/* the done shelf: every done unit on one line at the end, "44 done units · 44 steps", closed
+   until opened (and open for a search that matches in it, or Show: Done); open, the one-step
+   units as their cards, then each other unit its own line in a grid of wider cells, so its
+   lane string reads. A unit traced while the shelf is closed rings the shelf's line. */
 .done-shelf { min-width: 0; }
 .done-shelf > summary { display: flex; align-items: center; gap: 8px; min-height: 44px;
                         padding: 8px 14px 8px 18px; list-style: none; cursor: pointer;
@@ -1594,64 +1614,26 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 .done-shelf > summary:hover { background: var(--secondary); }
 .done-shelf > summary .chev { margin-left: auto; flex: none; }
 .done-shelf[open] > summary .chev { transform: rotate(180deg); }
-.done-shelf[open] > summary { margin-bottom: 10px; }
+.done-shelf[open] > summary { margin-bottom: 12px; }
+.shelf-cards { display: flex; flex-wrap: wrap; gap: 10px 12px; }
+.shelf-cards > .box { flex: none; max-width: 100%; }
+.shelf-cards + .boxes.units { margin-top: 14px; }
 .done-shelf > .boxes.units { gap: 8px 14px; }
 .plane.tracing .done-shelf.near > summary { box-shadow: inset 0 0 0 1.5px var(--foreground); }
 @container plan (min-width: 720px) {
-  .boxes.units > .done-shelf { grid-column: 1 / -1; }
   .done-shelf > .boxes.units {
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); }
 }
 @media (max-width: 720px) {
-  .fold-box > summary > .xout { grid-column: 2; }
   .done-shelf > summary { padding: 8px 10px 8px 12px; }
-}
-/* a card's inputs from other boxes: chips on its top edge, part of its entry (4px to the card,
-   the row gap to anything above), each a link to its source. A row's cards line up at its
-   foot, so a card under chips sits level with its neighbours. */
-.stack { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0;
-         max-width: 100%; }
-/* one chip a line, so the column keeps near its card's width and an edge into the card finds
-   room beside it */
-.xrefs { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0;
-         max-width: 100%; }
-.boxes .row { align-items: flex-end; }
-/* a chip is the step card's pill, smaller and quieter: the card's hairline on half its fill,
-   one voice for its words (12px at 500 in muted ink; the kind word is plain text before the
-   source, "after fig-5226-landed"), the same size and padding for every kind */
-.xref { position: relative; z-index: 2; display: inline-block; box-sizing: border-box;
-        min-width: 0; max-width: 100%; padding: 2px 10px; overflow: hidden;
-        text-overflow: ellipsis; border: 1px solid var(--border); border-radius: 999px;
-        background: color-mix(in oklch, var(--card) 55%, transparent);
-        color: var(--muted-foreground); font: 500 12px/16px var(--font-sans);
-        text-decoration: none; white-space: nowrap;
-        transition: border-color 150ms, background 150ms, color 150ms; }
-.xref.tolerant { border-style: dashed; border-color: var(--border-strong); }  /* a skip counts: dashed, as its edge would be */
-/* one look at rest; lit (hovered, or traced from its source) in ink on the card colour, as a
-   card is; focused, the ring as well, close so it clears the card; receded while another
-   source is traced, still a chip: its hairline, no fill */
-a.xref:hover, .xref.on { border-color: var(--foreground); background: var(--card);
-                         color: var(--foreground); }
-.xref:focus-visible { outline-offset: 1px; }
-.plane.tracing .xref:not(.on) { background: transparent; }
-/* a unit that a traced card or chip names (a unit gate) */
-.plane.tracing .box.near { box-shadow: inset 0 0 0 1.5px var(--foreground); }
-.xout { flex: none; font-size: 12px; line-height: 16px; font-weight: 500; white-space: nowrap;
-        color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-.box-label .xout { margin-left: 8px; }
-/* the legend leads the board: one quiet line under its tools, each kind with its mark */
-.board > .legend { justify-content: flex-start; gap: 6px 18px; margin: 0 0 14px; }
-.legend .lg { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
-.lg-line { width: 22px; border-top: 1.5px solid var(--edge-head); }
-.lg-line.dashed { border-top-style: dashed; }
-.lg-line.dotted { border-top: 2px dotted var(--edge-head); }
-.lg-box { width: 14px; height: 10px; border-radius: 3px; background: var(--box);
-          box-shadow: inset 0 0 0 1px var(--border-strong); }
-sluice-board:has(.boxes > .empty) > .legend { display: none; }  /* nothing to read it by */
-.legend .lg-chip { font-style: normal; }  /* a chip as the board draws one */
-@media (max-width: 720px) {
-  /* phones: lanes stack as before (the phone rules above are the window's); a card's chips
-     stay on its top edge */
-  .box .rows .stack { order: var(--o, 0); margin: 0 0 var(--row-gap); }
+  /* one column: each layer's units under each other, a one-step unit's card at the left with
+     its waits under it, a box across the width; a box's lanes stack as before */
+  .band + .band, .graph > :is(.band, .layer) + :is(.band, .layer, .done-shelf) { margin-top: 24px; }
+  .layer { flex-direction: column; align-items: stretch; gap: 14px; }
+  .layer + .layer { margin-top: 14px; }
+  .box.solo > .waits { margin-left: 11px; }  /* under the card's glyph, its words */
+  .box.solo { display: flex; flex-direction: column; align-items: flex-start; border-radius: 0; }
+  .waits { display: block; }
+  .box .rows .stack { margin: 0 0 var(--row-gap); }
   .box .rows .stack > .node { margin: 0; }
 }

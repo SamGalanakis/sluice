@@ -58,9 +58,12 @@ pub struct Relation {
     pub kind: RelationKind,
     pub label: String,
     pub tolerant: bool,
-    /// Its ends are not in one unit's box (a plan input or output is in none): the board shows
-    /// it as a chip on the dependent (`Xref`), not as an edge drawn across other boxes.
+    /// Its ends are not in one unit's box (a plan input or output is in none).
     pub cross: bool,
+    /// The board draws it as a line: a relation within a box, or a wait between units (see
+    /// `ProjectView::settle`). One whose source the view leaves out is said in words on its
+    /// dependent.
+    pub line: bool,
 }
 impl Endpoint {
     /// The unit whose box holds this end; a plan input or output is in no box.
@@ -116,6 +119,7 @@ fn relation_ends(plan: &Plan) -> Vec<Relation> {
                     label: format!("{label} → {input}"),
                     tolerant: false,
                     cross: false,
+                    line: false,
                 });
             }
         }
@@ -154,6 +158,7 @@ fn relation_ends(plan: &Plan) -> Vec<Relation> {
                 label,
                 tolerant,
                 cross: false,
+                line: false,
             });
         }
     }
@@ -166,6 +171,7 @@ fn relation_ends(plan: &Plan) -> Vec<Relation> {
             label,
             tolerant: false,
             cross: false,
+            line: false,
         });
     }
     out
@@ -181,188 +187,56 @@ impl RelationKind {
         }
     }
 }
-/// A relation between boxes, shown on its dependent as a chip above its card ("after source")
-/// that links to the source and lights it when hovered or focused. Its words say the kind, as
-/// an input to the card: `after` for an ordering entry (`after unit:` for a unit gate), `if`
-/// (and `if not`) for a condition, `from` and the output for a handoff, `?` when a skip counts
-/// (dashed, as that edge is).
+/// A prerequisite in another unit that a step still waits for, said in words on its card
+/// where no line shows it: on a phone, without script, or when the view leaves its source out
+/// ("Waits for l-a1 (running) and l-d1").
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct Xref {
-    /// The source's and the dependent's node keys (`s:<step>`, `u:<unit>`, `i:<input>`, ...).
-    pub from: String,
-    pub to: String,
-    pub kind: RelationKind,
-    pub tolerant: bool,
-    /// Said before the rest by a screen reader, not shown: "Handoff " (the other kinds say
-    /// theirs in the shown words).
-    pub said: &'static str,
-    /// Muted before the source: "from ", "after ", "after unit:", "if ", "if not ".
-    pub lead: String,
-    /// The source: a step, a unit or a plan input.
+pub struct Wait {
+    pub key: String,
     pub name: String,
-    /// Muted after the source: a handoff's or condition's output ("/text"), or "?".
-    pub tail: String,
-    /// The whole relation, in words.
-    pub title: String,
     pub href: String,
     /// A source step, which opens in the drawer.
     pub opens: String,
-    /// Where a source step is when its card is not on the board as drawn ("in done unit
-    /// build", "not shown in this view"), said after the title; empty when it is shown.
-    pub away: String,
+    /// What the source is doing, when that is not just waiting itself: "running", "failed".
+    pub note: String,
+    /// The board draws the line from it (else the words say it is not in this view).
+    pub drawn: bool,
 }
-impl Xref {
-    fn new(project: ProjectId, relation: &Relation) -> Self {
-        let skip = if relation.tolerant { "?" } else { "" };
-        let skips = if relation.tolerant {
-            ", even if it is skipped"
-        } else {
-            ""
-        };
-        let (name, href, opens, step) = match &relation.from {
-            Endpoint::Step(id) => (
-                id.to_string(),
-                format!("/projects/id/{project}/steps/{id}"),
-                id.to_string(),
-                true,
-            ),
-            Endpoint::Unit(id) => (
-                id.to_string(),
-                format!("/projects/id/{project}/units/{id}"),
-                String::new(),
-                false,
-            ),
-            Endpoint::Input(id) | Endpoint::Output(id) => {
-                (id.to_string(), format!("#in-{id}"), String::new(), false)
-            }
-        };
-        // A step's output follows its id; a plan input's reference is its own name.
-        let output = |path: &str| {
-            if step {
-                (name.clone(), format!("/{path}"))
-            } else {
-                (path.to_owned(), String::new())
-            }
-        };
-        let (said, lead, (name, tail), title) = match relation.kind {
-            RelationKind::Handoff => {
-                let (path, into) = relation
-                    .label
-                    .split_once(" → ")
-                    .map_or((relation.label.as_str(), None), |(p, i)| (p, Some(i)));
-                let (shown, tail) = output(path);
-                let source = if step {
-                    format!("{shown}{tail}")
-                } else {
-                    format!("plan input {shown}")
-                };
-                let title = match (into, &relation.to) {
-                    (Some(input), _) => format!("Handoff: {source} → {input}"),
-                    (None, Endpoint::Output(out)) => format!("Plan output {out}: {source}"),
-                    (None, _) => format!("Handoff: {source}"),
-                };
-                // "from", as the drawer says of an input's source
-                let said = if step { "Handoff " } else { "Plan input handoff " };
-                (said, "from ".to_owned(), (shown, tail), title)
-            }
-            RelationKind::Ordering => (
-                "",
-                "after ".to_owned(),
-                (name.clone(), skip.to_owned()),
-                format!("After {name}{skips}"),
-            ),
-            RelationKind::Unit => (
-                "",
-                "after unit:".to_owned(),
-                (name.clone(), skip.to_owned()),
-                format!("After unit {name}{skips}"),
-            ),
-            RelationKind::Condition | RelationKind::NegatedCondition => {
-                let negated = relation.kind == RelationKind::NegatedCondition;
-                let path = if negated {
-                    relation
-                        .label
-                        .strip_prefix("not ")
-                        .unwrap_or(&relation.label)
-                } else {
-                    &relation.label
-                };
-                let (shown, tail) = output(path);
-                let truth = if negated { "false" } else { "true" };
-                let title = format!("If {shown}{tail} is {truth}");
-                let lead = if negated { "if not " } else { "if " };
-                ("", lead.to_owned(), (shown, tail), title)
-            }
-        };
-        Self {
-            from: relation.from.key(),
-            to: relation.to.key(),
-            kind: relation.kind.clone(),
-            tolerant: relation.tolerant,
-            said,
-            lead,
-            name,
-            tail,
-            title,
-            href,
-            opens,
-            away: String::new(),
-        }
+/// The words of a step's waits: "Waits for a (running), b and c". `away` when a source is not
+/// on the board as shown, so the words stay where the lines are drawn too. A name traces the
+/// line from its source to `step`. Past three sources the rest are a count, "and 79 more",
+/// which opens the step, whose page lists every gate: the words stay a line or two at any
+/// fan-in.
+pub fn waits_html(step: &StepView, waits: &[Wait]) -> Result<TrustedHtml, askama::Error> {
+    const SHOWN: usize = 3;
+    #[derive(Template)]
+    #[template(
+        source = "<p class=\"waits{% if away %} away{% endif %}\">Waits for {% for w in named %}{% if !loop.first %}{% if loop.last && more == 0 %} and {% else %}, {% endif %}{% endif %}<a href=\"{{ w.href }}\"{% if !w.opens.is_empty() %} data-opens=\"{{ w.opens }}\"{% endif %} data-from=\"{{ w.key }}\" data-to=\"{{ to }}\">{{ w.name }}</a>{% let off = !w.drawn && !none %}{% if !w.note.is_empty() || off %} ({{ w.note }}{% if off %}{% if !w.note.is_empty() %}, {% endif %}not in this view{% endif %}){% endif %}{% endfor %}{% if more > 0 %} and <a href=\"{{ href }}\" data-opens=\"{{ id }}\">{{ more }} more</a>{% endif %}{% if none %}, not in this view{% endif %}</p>",
+        ext = "html"
+    )]
+    struct Words<'a> {
+        to: String,
+        href: String,
+        id: &'a str,
+        named: &'a [Wait],
+        more: usize,
+        away: bool,
+        /// No source is in this view: said once, after them all.
+        none: bool,
     }
-    pub fn html(&self) -> Result<TrustedHtml, askama::Error> {
-        #[derive(Template)]
-        #[template(
-            source = "<a class=\"xref k-{{ x.kind.name() }}{% if x.tolerant %} tolerant{% endif %}\" href=\"{{ x.href }}\"{% if !x.opens.is_empty() %} data-opens=\"{{ x.opens }}\"{% endif %} data-from=\"{{ x.from }}\" data-to=\"{{ x.to }}\" title=\"{{ x.title }}{% if !x.away.is_empty() %} ({{ x.away }}){% endif %}\">{% if !x.said.is_empty() %}<span class=\"vh\">{{ x.said }}</span>{% endif %}{% if !x.lead.is_empty() %}<span class=\"xm\">{{ x.lead }}</span>{% endif %}<span class=\"xn\">{{ x.name }}</span>{% if !x.tail.is_empty() %}<span class=\"xm\">{{ x.tail }}</span>{% endif %}</a>",
-            ext = "html"
-        )]
-        struct Chip<'a> {
-            x: &'a Xref,
-        }
-        TrustedHtml::from_template(&Chip { x: self })
+    if waits.is_empty() {
+        return Ok(TrustedHtml::owned(String::new()));
     }
-}
-/// On a source card (or a unit's label): how many dependents it has in other boxes, "→ n".
-pub fn feeds_html(n: impl std::borrow::Borrow<usize>) -> String {
-    let n = *n.borrow();
-    format!(
-        "<span class=\"xout\" title=\"{n} in other units after it\"><span aria-hidden=\"true\">→ {n}</span><span class=\"vh\">, {n} in other units after it</span></span>"
-    )
-}
-/// The chips of the relations between boxes, by their dependent's node key (one chip for the
-/// relations a dependent shows alike), and how many dependents each source has in other boxes.
-type Crossings = (
-    BTreeMap<String, Vec<Xref>>,
-    BTreeMap<String, BTreeSet<String>>,
-);
-fn crossings(project: ProjectId, relations: &[Relation]) -> Crossings {
-    let mut chips = BTreeMap::<String, Vec<Xref>>::new();
-    let mut feeds = BTreeMap::<String, BTreeSet<String>>::new();
-    for relation in relations.iter().filter(|r| r.cross) {
-        let chip = Xref::new(project, relation);
-        feeds
-            .entry(chip.from.clone())
-            .or_default()
-            .insert(chip.to.clone());
-        let on = chips.entry(chip.to.clone()).or_default();
-        match on.iter_mut().find(|c| {
-            (&c.from, &c.kind, c.tolerant, &c.lead, &c.name, &c.tail)
-                == (
-                    &chip.from,
-                    &chip.kind,
-                    chip.tolerant,
-                    &chip.lead,
-                    &chip.name,
-                    &chip.tail,
-                )
-        }) {
-            Some(same) => {
-                same.title.push_str("; ");
-                same.title.push_str(&chip.title);
-            }
-            None => on.push(chip),
-        }
-    }
-    (chips, feeds)
+    let shown = if waits.len() > SHOWN + 1 { SHOWN } else { waits.len() };
+    TrustedHtml::from_template(&Words {
+        to: step.key(),
+        href: step.href(),
+        id: step.id.as_str(),
+        named: &waits[..shown],
+        more: waits.len() - shown,
+        away: waits.iter().any(|w| !w.drawn),
+        none: waits.iter().all(|w| !w.drawn),
+    })
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct UnitView {
@@ -375,48 +249,56 @@ pub struct UnitView {
     pub blocked: Vec<String>,
     pub last_message: String,
     pub changed: String,
-    /// Each step's chips for its relations to other boxes, by step id.
-    pub xrefs: BTreeMap<String, Vec<Xref>>,
-    /// How many dependents in other boxes each step has, by step id, and the unit itself.
-    pub feeds: BTreeMap<String, usize>,
-    pub unit_feeds: usize,
+    /// The unit is one step in the plan: the board draws that step's card alone, no box.
+    pub solo: bool,
+    /// What each step still waits for in other units, by step id.
+    pub waits: BTreeMap<String, Vec<Wait>>,
     /// A done unit a search matched in: drawn open, its matching cards in view.
     pub open: bool,
 }
-/// A run of units as the board draws them: one unit, or a shelf of consecutive done units
-/// (two or more), folded to one line ("175 done units · 967 steps").
-pub struct Group<'a> {
-    pub units: &'a [UnitView],
-    pub shelf: bool,
+/// A part of the board under one label ("Running", "Stopped", "Waiting"; none under Plan
+/// order): its units in layers by dependency depth, so the lines between them run down.
+pub struct Band<'a> {
+    pub label: &'static str,
+    pub layers: Vec<Vec<&'a UnitView>>,
+}
+/// The board as drawn: the bands of live and pending units, then every done unit on one shelf.
+pub struct Layout<'a> {
+    pub bands: Vec<Band<'a>>,
+    pub done: Vec<&'a UnitView>,
     /// The shelf drawn open: the view asks for done units (Show: Done) or a search matched in it.
     pub open: bool,
 }
-impl Group<'_> {
-    /// The shelf's key, after its first unit: what remembers it open in a tab.
-    pub fn key(&self) -> &str {
-        self.units.first().map_or("", |u| u.id.as_str())
-    }
+impl Layout<'_> {
     pub fn steps(&self) -> usize {
-        self.units.iter().map(|u| u.steps.len()).sum()
+        self.done.iter().map(|u| u.steps.len()).sum()
+    }
+    /// The done units drawn as a card alone; then those drawn as a line that opens.
+    pub fn done_solo(&self) -> Vec<&UnitView> {
+        self.done.iter().copied().filter(|u| u.solo).collect()
+    }
+    pub fn done_boxed(&self) -> Vec<&UnitView> {
+        self.done.iter().copied().filter(|u| !u.solo).collect()
     }
 }
 impl UnitView {
     pub fn key(&self) -> String {
         format!("u:{}", self.id)
     }
-    /// How many lanes the box lays side by side: its widest row's cards. A box of one lane
-    /// takes a cell of the board's grid; a wider one spans the grid's row.
+    /// How many lanes the box lays side by side: its widest row's cards.
     pub fn lanes(&self) -> usize {
         self.rows.iter().map(Vec::len).max().unwrap_or(0)
     }
-    pub fn xrefs_of(&self, step: &StepView) -> &[Xref] {
-        self.xrefs
+    pub fn waits_of(&self, step: &StepView) -> &[Wait] {
+        self.waits
             .get(step.id.as_str())
             .map(Vec::as_slice)
             .unwrap_or_default()
     }
-    pub fn feeds_of(&self, step: &StepView) -> usize {
-        self.feeds.get(step.id.as_str()).copied().unwrap_or(0)
+    /// A one-step unit's card names the unit too when the step's id does not already
+    /// (`build / compile`); `l-a1` in unit `l-a1`, or `fig-5216-work` in `fig-5216`, says it.
+    pub fn names_unit(&self, step: &StepView) -> bool {
+        self.solo && !step.id.as_str().starts_with(self.id.as_str())
     }
     /// The unit's steps as the board's lane strings write them: each step's id without the
     /// unit's prefix and its mark, `fork✓ work✓ land✓` (✓ succeeded, – skipped).
@@ -425,7 +307,12 @@ impl UnitView {
         self.steps
             .iter()
             .map(|s| {
-                let short = s.id.as_str().strip_prefix(&prefix).unwrap_or(s.id.as_str());
+                // a step named as its unit is the unit: its mark alone
+                let short = if s.id.as_str() == self.id.as_str() {
+                    ""
+                } else {
+                    s.id.as_str().strip_prefix(&prefix).unwrap_or(s.id.as_str())
+                };
                 let mark = match s.status.as_str() {
                     "succeeded" => '✓',
                     "running" => '▶',
@@ -504,6 +391,48 @@ impl UnitView {
             3
         }
     }
+    /// The band Live first draws the unit in: 0 running (a step running or outside), 1 stopped
+    /// (a step failed or stale, or held up by one), 2 waiting, 3 done (the shelf).
+    pub fn band(&self) -> u8 {
+        if self.done {
+            3
+        } else if self
+            .steps
+            .iter()
+            .any(|s| s.status == "running" || s.mark == "external")
+        {
+            0
+        } else if self
+            .steps
+            .iter()
+            .any(|s| s.blocked || matches!(s.status.as_str(), "failed" | "stale"))
+        {
+            1
+        } else {
+            2
+        }
+    }
+}
+/// What the board needs of the whole plan, whatever the view shows: each step's unit and
+/// status, which units are done, and which units each unit comes after.
+#[derive(Clone, Debug, Default)]
+struct PlanFacts {
+    /// By step key (`s:<id>`): its unit and status.
+    steps: BTreeMap<String, (String, String)>,
+    done: BTreeSet<String>,
+    /// By unit: the units a relation into one of its steps comes from, while its source has
+    /// not succeeded or been skipped.
+    after: BTreeMap<String, BTreeSet<String>>,
+}
+impl PlanFacts {
+    /// The unit an end is in; a plan input or output is in none.
+    fn unit_of(&self, key: &str) -> Option<String> {
+        match key.split_once(':') {
+            Some(("s", _)) => self.steps.get(key).map(|(u, _)| u.clone()),
+            Some(("u", unit)) => Some(unit.to_owned()),
+            _ => None,
+        }
+    }
 }
 #[derive(Template)]
 #[template(path = "unit.html")]
@@ -515,8 +444,8 @@ pub struct ProjectView {
     pub project: super::ProjectView,
     pub units: Vec<UnitView>,
     pub relations: Vec<Relation>,
-    /// Each plan output's chips for the relations that feed it, by output name.
-    pub output_xrefs: BTreeMap<String, Vec<Xref>>,
+    #[serde(skip)]
+    facts: PlanFacts,
     pub inputs: Vec<FieldView>,
     pub outputs: Vec<FieldView>,
     pub revision: u64,
@@ -556,7 +485,6 @@ impl ProjectView {
             }
         }
         let relations = relations(plan);
-        let (mut chips, feeds) = crossings(project.id, &relations);
         let units = plan
             .units()
             .values()
@@ -576,16 +504,6 @@ impl ProjectView {
                 for step in &steps {
                     rows.entry(depth[&step.id]).or_default().push(step.clone());
                 }
-                let xrefs = steps
-                    .iter()
-                    .filter_map(|s| Some((s.id.to_string(), chips.remove(&s.key())?)))
-                    .collect();
-                let feeds_of = |key: &str| feeds.get(key).map_or(0, BTreeSet::len);
-                let step_feeds = steps
-                    .iter()
-                    .map(|s| (s.id.to_string(), feeds_of(&s.key())))
-                    .filter(|(_, n)| *n > 0)
-                    .collect();
                 UnitView {
                     id: unit.name.clone(),
                     tagged: unit.tagged,
@@ -596,18 +514,45 @@ impl ProjectView {
                     rows: rows.into_values().collect(),
                     last_message: String::new(),
                     changed: project.changed.clone(),
-                    xrefs,
-                    feeds: step_feeds,
-                    unit_feeds: feeds_of(&format!("u:{}", unit.name)),
+                    solo: unit.steps.len() == 1,
+                    waits: BTreeMap::new(),
                     open: false,
                 }
             })
             .collect::<Vec<_>>();
-        let output_xrefs = plan
-            .outputs()
-            .keys()
-            .filter_map(|n| Some((n.clone(), chips.remove(&format!("o:{n}"))?)))
+        let mut facts = PlanFacts::default();
+        for unit in &units {
+            if unit.done {
+                facts.done.insert(unit.id.to_string());
+            }
+            for step in &unit.steps {
+                facts
+                    .steps
+                    .insert(step.key(), (unit.id.to_string(), step.mark.clone()));
+            }
+        }
+        // what each unit still waits for: a satisfied source puts no unit above another
+        let through = |key: &str| {
+            facts
+                .steps
+                .get(key)
+                .is_some_and(|(_, mark)| matches!(mark.as_str(), "succeeded" | "skipped"))
+        };
+        let waits: Vec<_> = relations
+            .iter()
+            .filter(|r| r.cross && !through(&r.from.key()))
             .collect();
+        for relation in waits {
+            let ends = (
+                facts.unit_of(&relation.from.key()),
+                facts.unit_of(&relation.to.key()),
+            );
+            if let (Some(from), Some(to)) = ends
+                && from != to
+            {
+                facts.after.entry(to).or_default().insert(from);
+            }
+        }
         let mut view = Self {
             inputs: plan
                 .inputs()
@@ -641,7 +586,7 @@ impl ProjectView {
             project,
             units,
             relations,
-            output_xrefs,
+            facts,
             revision,
             query: String::new(),
             order: "live".into(),
@@ -650,57 +595,226 @@ impl ProjectView {
             matched: 0,
             panel: None,
         };
-        view.mark_away();
+        view.settle();
         view
     }
-    /// Say on each chip where its source is when the board as drawn does not show its card: in
-    /// a done unit (folded to its line) or left out by the view's filter or search.
-    fn mark_away(&mut self) {
-        let mut shown = BTreeMap::<String, Option<String>>::new();
+    /// Mark the relations the board draws as lines, and say on each step what it still waits
+    /// for in other units. Within a box every relation is a line. Between units a line is a
+    /// wait: it joins a source not yet through (succeeded or skipped, or its unit done) to a
+    /// step the view shows in a unit not done. A satisfied source is neither drawn nor said:
+    /// the step's page lists every gate.
+    fn settle(&mut self) {
+        let facts = &self.facts;
+        let project = self.project.id;
+        let mut shown = BTreeSet::new();
         for unit in &self.units {
-            shown.insert(unit.key(), None);
-            for step in &unit.steps {
-                let done = unit.done.then(|| unit.id.to_string());
-                shown.insert(step.key(), done);
-            }
+            shown.insert(unit.key());
+            shown.extend(unit.steps.iter().map(StepView::key));
         }
-        let chips = self
-            .units
-            .iter_mut()
-            .flat_map(|u| u.xrefs.values_mut())
-            .chain(self.output_xrefs.values_mut())
-            .flatten();
-        for chip in chips {
-            if !(chip.from.starts_with("s:") || chip.from.starts_with("u:")) {
+        // an end a line can reach: shown and live (a plan input or output is always drawn)
+        let live = |key: &str| match facts.unit_of(key) {
+            Some(unit) => shown.contains(key) && !facts.done.contains(&unit),
+            None => true,
+        };
+        // a source already through: its step succeeded or was skipped, or its unit is done
+        let through = |key: &str| match key.split_once(':') {
+            Some(("s", _)) => facts
+                .steps
+                .get(key)
+                .is_some_and(|(_, mark)| matches!(mark.as_str(), "succeeded" | "skipped")),
+            Some(("u", unit)) => facts.done.contains(unit),
+            _ => false,
+        };
+        // between units, a line is a wait: from a source not through yet to a step that waits
+        for relation in &mut self.relations {
+            let (from, to) = (relation.from.key(), relation.to.key());
+            relation.line = !relation.cross || (live(&from) && live(&to) && !through(&from));
+        }
+        for unit in &mut self.units {
+            unit.waits.clear();
+            if unit.done {
                 continue;
             }
-            chip.away = match shown.get(&chip.from) {
-                None => "not shown in this view".into(),
-                Some(Some(unit)) => format!("in done unit {unit}"),
-                Some(None) => String::new(),
-            };
+            for step in &unit.steps {
+                let key = step.key();
+                let mut waits: Vec<Wait> = vec![];
+                for relation in self.relations.iter().filter(|r| r.cross && r.to.key() == key) {
+                    let from = relation.from.key();
+                    if waits.iter().any(|w| w.key == from) {
+                        continue;
+                    }
+                    let (name, href, opens, doing) = match &relation.from {
+                        Endpoint::Step(id) => {
+                            let mark = facts.steps.get(&from).map_or("", |(_, m)| m.as_str());
+                            if matches!(mark, "succeeded" | "skipped") {
+                                continue;
+                            }
+                            let doing = match mark {
+                                "running" | "failed" | "stale" | "paused" => mark,
+                                "external" => "outside",
+                                _ => "",
+                            };
+                            let href = format!("/projects/id/{project}/steps/{id}");
+                            (id.to_string(), href, id.to_string(), doing)
+                        }
+                        Endpoint::Unit(id) => {
+                            if facts.done.contains(id.as_str()) {
+                                continue;
+                            }
+                            let href = format!("/projects/id/{project}/units/{id}");
+                            (format!("unit {id}"), href, String::new(), "")
+                        }
+                        Endpoint::Input(_) | Endpoint::Output(_) => continue,
+                    };
+                    waits.push(Wait {
+                        drawn: live(&from),
+                        key: from,
+                        name,
+                        href,
+                        opens,
+                        note: doing.to_owned(),
+                    });
+                }
+                if !waits.is_empty() {
+                    unit.waits.insert(step.id.to_string(), waits);
+                }
+            }
         }
     }
     pub fn href(&self) -> String {
         self.project.href()
     }
-    /// The units in the order shown, consecutive done units (two or more) gathered on a shelf:
-    /// under Live first that is one shelf at the end; under Plan order each run in its place.
-    pub fn groups(&self) -> Vec<Group<'_>> {
-        let open = self.show == "done" || !self.q.is_empty();
-        let mut out = vec![];
-        let mut i = 0;
-        while i < self.units.len() {
-            let run = self.units[i..].iter().take_while(|u| u.done).count();
-            let n = run.max(1);
-            out.push(Group {
-                units: &self.units[i..i + n],
-                shelf: run >= 2,
-                open,
-            });
-            i += n;
+    /// The board as drawn. Live first: the running units, then the stopped (a failure, or
+    /// held up by one), then the waiting; Plan order: every unit not done in one band. Each band
+    /// lays its units in layers by dependency depth among themselves, a layer ordered after the
+    /// units it follows (so lines run down and seldom cross), ties in the view's order. Every
+    /// done unit is on one shelf at the end.
+    pub fn layout(&self) -> Layout<'_> {
+        let bands: Vec<(&'static str, Vec<&UnitView>)> = if self.order == "live" {
+            [("Running", 0), ("Stopped", 1), ("Waiting", 2)]
+                .into_iter()
+                .map(|(label, band)| {
+                    let units = self.units.iter().filter(|u| u.band() == band).collect();
+                    (label, units)
+                })
+                .collect()
+        } else {
+            vec![("", self.units.iter().filter(|u| !u.done).collect())]
+        };
+        let mut placed = BTreeMap::new();
+        Layout {
+            bands: bands
+                .into_iter()
+                .filter(|(_, units)| !units.is_empty())
+                .map(|(label, units)| Band {
+                    label,
+                    layers: self.layers(units, &mut placed),
+                })
+                .collect(),
+            done: self.units.iter().filter(|u| u.done).collect(),
+            open: self.show == "done" || !self.q.is_empty(),
         }
-        out
+    }
+    /// `units` in layers by the longest chain of them each comes after (a cycle between units
+    /// counts once), each layer ordered by where the units it follows were placed. `placed`
+    /// holds every placed unit's place across its layer, 0 to 1.
+    fn layers<'a>(
+        &self,
+        units: Vec<&'a UnitView>,
+        placed: &mut BTreeMap<String, f64>,
+    ) -> Vec<Vec<&'a UnitView>> {
+        fn depth(
+            i: usize,
+            before: &[Vec<usize>],
+            memo: &mut [Option<usize>],
+            open: &mut [bool],
+        ) -> usize {
+            if let Some(d) = memo[i] {
+                return d;
+            }
+            if open[i] {
+                return 0;
+            }
+            open[i] = true;
+            let d = before[i]
+                .iter()
+                .map(|&j| depth(j, before, memo, open) + 1)
+                .max()
+                .unwrap_or(0);
+            open[i] = false;
+            memo[i] = Some(d);
+            d
+        }
+        let index: BTreeMap<&str, usize> = units
+            .iter()
+            .enumerate()
+            .map(|(i, u)| (u.id.as_str(), i))
+            .collect();
+        let after = |u: &UnitView| -> Vec<String> {
+            self.facts
+                .after
+                .get(u.id.as_str())
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect()
+        };
+        let before: Vec<Vec<usize>> = units
+            .iter()
+            .map(|u| after(u).iter().filter_map(|p| index.get(p.as_str()).copied()).collect())
+            .collect();
+        let (mut memo, mut open) = (vec![None; units.len()], vec![false; units.len()]);
+        let mut layers = BTreeMap::<usize, Vec<usize>>::new();
+        for i in 0..units.len() {
+            layers
+                .entry(depth(i, &before, &mut memo, &mut open))
+                .or_default()
+                .push(i);
+        }
+        layers
+            .into_values()
+            .map(|layer| {
+                let n = layer.len() as f64;
+                let mut keyed: Vec<(f64, usize)> = layer
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &i)| {
+                        let at: Vec<f64> = after(units[i])
+                            .iter()
+                            .filter_map(|p| placed.get(p).copied())
+                            .collect();
+                        let own = (k as f64 + 0.5) / n;
+                        let key = if at.is_empty() {
+                            own
+                        } else {
+                            at.iter().sum::<f64>() / at.len() as f64
+                        };
+                        (key, i)
+                    })
+                    .collect();
+                keyed.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                for (k, &(_, i)) in keyed.iter().enumerate() {
+                    placed.insert(units[i].id.to_string(), (k as f64 + 0.5) / n);
+                }
+                keyed.into_iter().map(|(_, i)| units[i]).collect()
+            })
+            .collect()
+    }
+    /// The plan has no steps at all: nothing to find, order or filter.
+    pub fn plan_empty(&self) -> bool {
+        self.facts.steps.is_empty()
+    }
+    /// What the board says when it shows no unit, for the view's Show.
+    pub fn empty_words(&self) -> &'static str {
+        if self.plan_empty() {
+            return "The plan has no steps yet.";
+        }
+        match self.show.as_str() {
+            "attention" => "Nothing needs attention.",
+            "active" => "Every unit is done.",
+            "done" => "No unit is done yet.",
+            _ => "No units match this view.",
+        }
     }
     /// The board under the same order and show, without its search: the search's clear link.
     pub fn clear_href(&self) -> String {
@@ -714,12 +828,6 @@ impl ProjectView {
     /// and the rest, which the page folds.
     pub fn about(&self) -> (TrustedHtml, Option<TrustedHtml>) {
         crate::markdown::render_folded(&self.project.description)
-    }
-    pub fn output_xrefs_of(&self, output: &FieldView) -> &[Xref] {
-        self.output_xrefs
-            .get(&output.name)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
     }
     pub fn edges_json(&self) -> String {
         serde_json::to_string(&self.relations).expect("typed relations serialize")
@@ -1224,7 +1332,7 @@ impl BoardQuery {
             }
         }
         view.q = q;
-        view.mark_away();
+        view.settle();
         Ok(())
     }
 }
