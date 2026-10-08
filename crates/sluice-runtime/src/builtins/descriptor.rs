@@ -355,7 +355,8 @@ resume in the same directory. model is a JSON object, by default \
 {\"type\":\"normal\",\"model\":\"sol\",\"effort\":\"high\"}: \
 {\"type\":\"normal\",\"model\":M,\"effort\":E?}, a model `codex debug models` lists \
 (sol and astra name gpt-6.1-sol and gpt-6-astra) at an effort it supports. The result's \
-model names what ran (docs(\"plans\"), Choosing a model).",
+model names what ran (docs(\"plans\"), Choosing a model). log is the path to the \
+readable run record, copied to the log input when given, or null if no log exists.",
                 inputs: vec![
                     ("cwd", ty("string")),
                     ("spec", ty("string")),
@@ -366,7 +367,7 @@ model names what ran (docs(\"plans\"), Choosing a model).",
                     ("listen", ty("boolean?")),
                 ],
                 outputs: vec![
-                    ("log", ty("string")),
+                    ("log", ty("string?")),
                     ("final", ty("string")),
                     ("model", ty("string")),
                     ("report", ty("string?")),
@@ -388,7 +389,8 @@ resume in the same directory. model is a JSON object, by default \
 fusion {\"type\":\"fusion\",\"main\":{\"model\":M,\"effort\":E?,\"fast\":bool?},\
 \"sidekick\":{\"model\":S,\"effort\":F?,\"priority\":bool?}} runs \
 fusion-M[-E][-fast]-sidekick-S[-F][-priority]. The id must be one `devin models list` \
-shows. The result's model names what ran (docs(\"plans\"), Choosing a model).",
+shows. The result's model names what ran (docs(\"plans\"), Choosing a model). log is the path to the \
+readable run record, copied to the log input when given, or null if no log exists.",
                 inputs: ports(&[
                     ("cwd", "string"),
                     ("spec", "string"),
@@ -399,7 +401,7 @@ shows. The result's model names what ran (docs(\"plans\"), Choosing a model).",
                     ("listen", "boolean?"),
                 ]),
                 outputs: vec![
-                    ("log", ty("string")),
+                    ("log", ty("string?")),
                     ("final", ty("string")),
                     ("model", ty("string")),
                     ("report", ty("string?")),

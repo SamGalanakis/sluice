@@ -1640,6 +1640,13 @@ or when the engine exits first, the run fails with kind `ExitedWithoutSubmit` an
 `exited_without_submit`. A step with nothing to submit ends a settle after its agent goes idle,
 or when its reported background work ends (at most `SLUICE_AGENT_WORK_MIN`).
 
+`agent.codex` and `agent.devin` return `log: string?`, a path to the run's readable
+record of turns, completed assistant messages, tool calls and errors. Codex writes
+`codex.log` alongside its redacted diagnostic `codex-wire.jsonl`; Devin writes `devin.log`.
+A nonempty `log` input copies that record to the given path. If the run has no log file,
+`log` is null and nothing is copied. Claude returns its last message as `result` and has
+no `log` output; its transcript remains engine-owned.
+
 Claude's transcript (its session JSONL and its subagents') is read for progress, the last
 message so far and API errors. A record over 1 MiB (Claude Code writes one for a large tool
 result or file read) is skipped, never fatal, and the run's log says how many were skipped; the
@@ -1894,8 +1901,8 @@ run Claude's default.
 | `message.wait` | `thread`, `since: int?`, `to?`, `timeout: int?` (300), `wake?` | `messages: Any[]`, `last_seq: int` | waits for messages on a thread after `since`; `wake: "questions"` holds the rest |
 | `message.post` | `body`, `thread?`, `to?`, `needs_reply?`, `reply_to?`, `answer?`, `title?`, `ui?`, `input?`, `data?`, `from?`, `wait?` | `id: int`, `reply: Any?` | retired; plans that name it run through the `message_post` translation (§8), only in a run |
 | `agent.claude` | `cwd`, `prompt`, `model: Any?` (Opus, default `{"type":"normal","model":"opus","effort":"high"}`), `session?`, `listen?` | `result`, `model`, `session`, `git` | open |
-| `agent.codex` | `cwd`, `spec`, `model: Any?` (default `{"type":"normal","model":"sol","effort":"high"}`), `log?`, `session?`, `report_path?`, `listen?` | `log`, `final`, `model`, `report?`, `session`, `git` | open |
-| `agent.devin` | `cwd`, `spec`, `model: Any?` (default `{"type":"normal","model":"swe-2","effort":"high"}`; or a fusion), `log?`, `session?`, `report_path?`, `listen?` | `log`, `final`, `model`, `report?`, `session`, `git` | open |
+| `agent.codex` | `cwd`, `spec`, `model: Any?` (default `{"type":"normal","model":"sol","effort":"high"}`), `log?`, `session?`, `report_path?`, `listen?` | `log: string?`, `final`, `model`, `report?`, `session`, `git` | open |
+| `agent.devin` | `cwd`, `spec`, `model: Any?` (default `{"type":"normal","model":"swe-2","effort":"high"}`; or a fusion), `log?`, `session?`, `report_path?`, `listen?` | `log: string?`, `final`, `model`, `report?`, `session`, `git` | open |
 | `agent.review` | `cwd`, `base`, `standards`, `notes?`, `session?`, `listen?` | `summary`, `sha`, `commits: int`, `session`, `git` | open; reviews and fixes a branch diff with Claude |
 | `agent.run` | `engine` (`devin`, `codex`, `claude`), `cwd`, `spec`, `model: Any?`, `session?`, `report_path?`, `listen?` | `final`, `model`, `report?`, `session`, `git` | open |
 | `decide.llm` | `question`, `context: Any?`, `options: string[]`, `threshold: float?` | `choice`, `p: float`, `confident: boolean` | 2 retries, 30 s apart |

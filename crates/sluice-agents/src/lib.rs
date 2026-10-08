@@ -164,7 +164,8 @@ impl<F: AgentFactory> AgentFnHost<F> {
         Ok(outputs)
     }
 }
-/// `agent.codex` and `agent.devin` return their engine log: copied to the `log` input's path
+/// `agent.codex` and `agent.devin` return their readable engine log, or null if absent:
+/// copied to the `log` input's path
 /// when one is given, else the run's own.
 fn engine_log(
     request: &AgentBuiltinRequest,
@@ -176,10 +177,25 @@ fn engine_log(
         return Ok(());
     }
     let source = run_dir.join(format!("{}.log", request.engine));
+    match std::fs::metadata(&source) {
+        Ok(meta) if meta.is_file() => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            outputs.0.insert(
+                "log".into(),
+                JsonValue::try_from(Value::Null).map_err(|e| bad(e.to_string()))?,
+            );
+            return Ok(());
+        }
+        Ok(_) => return Err(bad("engine log is not a file")),
+        Err(e) => return Err(bad(format!("read engine log: {e}"))),
+    }
+
     let path = match inputs.0.get("log").map(JsonValue::as_value) {
         Some(Value::String(path)) if !path.is_empty() => {
             let path = PathBuf::from(path);
-            std::fs::copy(&source, &path).map_err(|e| bad(format!("copy engine log: {e}")))?;
+            if path != source {
+                std::fs::copy(&source, &path).map_err(|e| bad(format!("copy engine log: {e}")))?;
+            }
             path
         }
         None | Some(Value::Null) | Some(Value::String(_)) => source,

@@ -877,6 +877,7 @@ impl Codex {
                     Rpc::connect(
                         &socket,
                         &context.run_dir.join("codex-wire.jsonl"),
+                        &context.run_dir.join("codex.log"),
                         self.options.request_timeout,
                     )
                     .await?,

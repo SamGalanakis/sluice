@@ -734,6 +734,7 @@ async fn a_resumed_long_thread_larger_than_four_mebibytes_is_received() {
     let mut rpc = Rpc::connect(
         &socket,
         &scratch.path().join("wire.jsonl"),
+        &scratch.path().join("codex.log"),
         Duration::from_secs(30),
     )
     .await
@@ -768,6 +769,7 @@ async fn a_method_the_app_server_lacks_is_named() {
     let mut rpc = Rpc::connect(
         &socket,
         &scratch.path().join("wire.jsonl"),
+        &scratch.path().join("codex.log"),
         Duration::from_secs(30),
     )
     .await
@@ -795,6 +797,7 @@ async fn cancelled_request_keeps_unknown_acceptance_and_cleanup_reaps_server() {
     let mut rpc = Rpc::connect(
         &socket,
         &scratch.path().join("wire.jsonl"),
+        &scratch.path().join("codex.log"),
         Duration::from_secs(30),
     )
     .await

@@ -195,6 +195,12 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   session after a retry — the agent fns decide from the assigned messages and `prev_run`.
 
 ## Choosing a model
+`agent.codex` and `agent.devin` return `log`, the path to a readable run record of
+turns, completed messages, tool calls and errors. Bind a later step's input to `work/log`
+to read or copy it. A nonempty `log` input copies the record to that path. The output is
+null if no log file exists. Codex keeps its redacted diagnostic wire transcript separately.
+Claude returns its last message in `result` and does not expose a `log` output.
+
 `agent.run`, `agent.devin`, `agent.codex` and `agent.claude` take `model`, a JSON object. Leave
 it out for the engine's default (devin swe-2 high, codex sol high, claude opus high). There is
 no separate `effort` input: the effort is in the object.

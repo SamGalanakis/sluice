@@ -20,6 +20,61 @@ use tokio::{
 };
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 
+/// The engine log keeps completed messages and tool calls, without JSON-RPC bookkeeping.
+fn readable_event(log: &mut File, event: &Value) -> io::Result<()> {
+    let params = &event["params"];
+    match event["method"].as_str().unwrap_or("") {
+        "turn/started" => writeln!(log, "turn started"),
+        "turn/completed" | "turn/failed" => {
+            writeln!(
+                log,
+                "turn {}",
+                params["turn"]["status"].as_str().unwrap_or("completed")
+            )?;
+            if let Some(message) = params["turn"]["error"]["message"].as_str() {
+                writeln!(log, "error {message}")?;
+            }
+            Ok(())
+        }
+        "item/completed" => {
+            let item = &params["item"];
+            match item["type"].as_str().unwrap_or("") {
+                "agentMessage" => {
+                    writeln!(log, "assistant\n{}", item["text"].as_str().unwrap_or(""))
+                }
+                "contextCompaction" => writeln!(log, "context compacted"),
+                "reasoning" | "userMessage" => Ok(()),
+                kind => {
+                    writeln!(
+                        log,
+                        "tool {kind} {}",
+                        item["command"]
+                            .as_str()
+                            .or_else(|| item["tool"].as_str())
+                            .unwrap_or("")
+                    )?;
+                    if let Some(output) = item["aggregatedOutput"].as_str() {
+                        writeln!(log, "{output}")?;
+                    }
+                    if let Some(code) = item["exitCode"].as_i64() {
+                        writeln!(log, "exit {code}")?;
+                    }
+                    Ok(())
+                }
+            }
+        }
+        "error" => writeln!(
+            log,
+            "error {}",
+            params["error"]["message"]
+                .as_str()
+                .or_else(|| params["message"].as_str())
+                .unwrap_or("")
+        ),
+        _ => Ok(()),
+    }
+}
+
 /// Resuming a long thread returns its whole history in one message (5 MB seen live).
 pub const MAX_WIRE_BYTES: usize = 256 * 1024 * 1024;
 type Socket = WebSocketStream<UnixStream>;
@@ -31,6 +86,7 @@ pub struct Rpc {
     events: VecDeque<Value>,
     sequence: u64,
     transcript: File,
+    log: File,
     timeout: Duration,
     pending: bool,
     terminal_error: Option<EngineError>,
@@ -39,6 +95,7 @@ impl Rpc {
     pub async fn connect(
         socket: &Path,
         transcript: &Path,
+        log: &Path,
         timeout: Duration,
     ) -> Result<Self, EngineError> {
         let stream = UnixStream::connect(socket).await.map_err(transport)?;
@@ -56,6 +113,12 @@ impl Rpc {
             .append(true)
             .mode(0o600)
             .open(transcript)
+            .map_err(transport)?;
+        let log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(log)
             .map_err(transport)?;
         let reader = tokio::spawn(async move {
             while let Some(frame) = source.next().await {
@@ -87,6 +150,7 @@ impl Rpc {
             events: VecDeque::new(),
             sequence: 0,
             transcript,
+            log,
             timeout,
             pending: false,
             terminal_error: None,
@@ -98,7 +162,11 @@ impl Rpc {
             "{}",
             json!({"direction": direction, "frame": redact(value)})
         )
-        .map_err(transport)
+        .map_err(transport)?;
+        if direction == "receive" {
+            readable_event(&mut self.log, value).map_err(transport)?;
+        }
+        Ok(())
     }
     pub async fn notify(&mut self, method: &str) -> Result<(), EngineError> {
         let value = json!({"method":method});
@@ -441,7 +509,7 @@ pub async fn fixture_server(socket: &Path, scenario: &str) -> io::Result<()> {
         let request: Value = serde_json::from_str(frame.to_text().map_err(io::Error::other)?)
             .map_err(io::Error::other)?;
         let Some(id) = request.get("id") else {
-            if scenario == "tui" && request["method"] == "initialized" {
+            if matches!(scenario, "tui" | "readable-log") && request["method"] == "initialized" {
                 ws.send(Message::Text(
                     json!({"method":"thread/started","params":{"thread":{"id":"fixture-thread"}}})
                         .to_string()
@@ -564,6 +632,19 @@ pub async fn fixture_server(socket: &Path, scenario: &str) -> io::Result<()> {
                     }
                     event["params"]["turn"]["status"] = json!("failed");
                     event["params"]["turn"]["error"] = json!({"message":"Rate limit reached for gpt-6.1-sol. Please try again in 2s.","codexErrorInfo":"rateLimitExceeded","additionalDetails":null});
+                }
+                if scenario == "readable-log" && event["method"] == "item/completed" {
+                    match event["params"]["item"]["type"].as_str() {
+                        Some("agentMessage") => {
+                            event["params"]["item"]["text"] = json!("Fixture readable response")
+                        }
+                        Some("commandExecution") => {
+                            event["params"]["item"]["command"] = json!("printf fixture-log");
+                            event["params"]["item"]["aggregatedOutput"] =
+                                json!("Fixture tool output");
+                        }
+                        _ => {}
+                    }
                 }
                 if scenario == "limit-words" && event["method"] == "item/completed" {
                     // Codex's own limit and login wording, quoted by the agent and printed by a

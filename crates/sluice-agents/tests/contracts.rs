@@ -611,3 +611,38 @@ fn account_messages_mask_token_like_text_and_keep_ids() {
     let prose = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Apr 8th, 2026 10:13 AM.";
     assert_eq!(redact(prose), prose);
 }
+
+#[tokio::test]
+async fn settled_engine_logs_are_null_when_absent_and_copy_existing_records() {
+    let scratch = Scratch::new();
+    fs::write(
+        scratch.0.join("native.json"),
+        r#"{"session":"fixture","final_text":"done"}"#,
+    )
+    .unwrap();
+    for engine in ["codex", "devin"] {
+        let source = scratch.0.join(format!("{engine}.log"));
+        let destination = scratch.0.join(format!("{engine}-copy.log"));
+        let inp = inputs(serde_json::json!({"cwd":scratch.0,"spec":"fixture","log":destination}));
+        let name = format!("agent.{engine}");
+        let output = settled_outputs(&name, &inp, &scratch.0, &BTreeMap::new())
+            .await
+            .unwrap();
+        assert_eq!(output.0["log"].as_value(), &serde_json::Value::Null);
+        assert!(!destination.exists());
+        fs::write(&source, "assistant\ndone\n").unwrap();
+        let output = settled_outputs(&name, &inp, &scratch.0, &BTreeMap::new())
+            .await
+            .unwrap();
+        assert_eq!(output.0["log"].as_value(), &serde_json::json!(destination));
+        assert_eq!(
+            fs::read_to_string(&destination).unwrap(),
+            "assistant\ndone\n"
+        );
+        let inp = inputs(serde_json::json!({"cwd":scratch.0,"spec":"fixture","log":source}));
+        settled_outputs(&name, &inp, &scratch.0, &BTreeMap::new())
+            .await
+            .unwrap();
+        assert_eq!(fs::read_to_string(&source).unwrap(), "assistant\ndone\n");
+    }
+}

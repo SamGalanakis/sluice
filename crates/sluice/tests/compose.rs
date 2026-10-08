@@ -674,6 +674,51 @@ if 'CODEX_HOME' in os.environ:
     if not link.is_symlink(): link.symlink_to('/usr/bin/true')
 "#;
 #[test]
+fn codex_log_is_readable_as_a_downstream_input() {
+    for copied in [false, true] {
+        let g = Gate::configured(|g| {
+            native_engine(g, "codex");
+            g.env
+                .insert("SLUICE_CODEX_FIXTURE".into(), "readable-log".into());
+        });
+        let cwd = g.temp.path().join("work");
+        let destination = g.temp.path().join("copied.log");
+        let mut inputs = json!({"cwd":cwd,"spec":"Record this fixture turn"});
+        if copied {
+            inputs["log"] = json!(destination);
+        }
+        g.plan(json!({
+            "work": {"run":"agent.codex","in":bindings(inputs)},
+            "read": {"run":"inline.python","in":{
+                "log":{"source":"work/log"},
+                "code":{"default":"from pathlib import Path\nout = Path(inp['log']).read_text()"}
+            }}
+        }));
+        let _lease = g.lease();
+        let read = g.terminal("read");
+        assert_eq!(read["status"], "succeeded", "{read}: {}", g.status());
+        let log = read["outputs"]["value"].as_str().unwrap();
+        assert!(log.contains("turn started"), "{log}");
+        assert!(
+            log.contains("tool commandExecution printf fixture-log"),
+            "{log}"
+        );
+        assert!(
+            log.contains("assistant\nFixture readable response"),
+            "{log}"
+        );
+        assert!(log.contains("turn completed"), "{log}");
+        let work = g.status()["steps"]["work"].clone();
+        let path = PathBuf::from(work["outputs"]["log"].as_str().unwrap());
+        assert_eq!(
+            path.file_name().unwrap(),
+            if copied { "copied.log" } else { "codex.log" }
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), log);
+    }
+}
+
+#[test]
 fn composed_codex_environment_and_same_run_retry() {
     native_factory("codex");
 }
