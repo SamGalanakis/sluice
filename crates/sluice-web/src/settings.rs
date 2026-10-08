@@ -193,6 +193,7 @@ impl SettingsState {
                     .collect();
                 let doc = projects::board_doc(c, id)?;
                 let retired = projects::last_retirement(c, id)?;
+                let changes = field_changes(c, id)?;
                 Ok(ProjectSettingsView {
                     shared,
                     project,
@@ -200,11 +201,60 @@ impl SettingsState {
                     doc,
                     retired,
                     blocker,
+                    changes,
                 })
             })
             .await
             .map_err(|e| e.into_public(true))
     }
+}
+/// The settings a form edits, each with its last change: the seq of the record that made it and
+/// who did. A form keeps the settings revision it was drawn or last applied with while nobody
+/// else changes its field; when someone does, it says so and keeps that revision, so its Apply
+/// is refused as a conflict instead of writing over theirs.
+pub const FIELDS: [&str; 8] = [
+    "name",
+    "description",
+    "icon",
+    "resources",
+    "prune_done_after",
+    "prune_keep",
+    "paused",
+    "archived",
+];
+fn field_changes(
+    c: &rusqlite::Connection,
+    id: ProjectId,
+) -> sluice_store::Result<BTreeMap<&'static str, (i64, String)>> {
+    let mut changes = BTreeMap::new();
+    let mut q = c.prepare_cached(
+        "SELECT seq,kind,payload FROM records WHERE project_id=?1 AND kind IN ('project.update','project.rename','project.pause','project.archive') ORDER BY seq DESC",
+    )?;
+    let mut rows = q.query([id.to_string()])?;
+    while changes.len() < FIELDS.len()
+        && let Some(r) = rows.next()?
+    {
+        let (seq, kind, payload): (i64, String, String) = (r.get(0)?, r.get(1)?, r.get(2)?);
+        let payload: serde_json::Value = serde_json::from_str(&payload)?;
+        let author = payload["author"].as_str().unwrap_or("").to_owned();
+        let fields: Vec<&str> = match kind.as_str() {
+            "project.rename" => vec!["name"],
+            "project.pause" => vec!["paused"],
+            "project.archive" => vec!["archived"],
+            _ => payload["fields"]
+                .as_array()
+                .map(|f| f.iter().filter_map(serde_json::Value::as_str).collect())
+                .unwrap_or_default(),
+        };
+        for field in fields {
+            if let Some(field) = FIELDS.iter().find(|f| **f == field) {
+                changes
+                    .entry(*field)
+                    .or_insert_with(|| (seq, author.clone()));
+            }
+        }
+    }
+    Ok(changes)
 }
 struct CatalogSignatures<'a>(&'a views::FunctionCatalog);
 impl sluice_model::plan::SignatureProvider for CatalogSignatures<'_> {
@@ -257,6 +307,8 @@ pub struct ProjectSettingsView {
     /// The latest automatic retirement (SPEC §6.11), when there has been one.
     pub retired: Option<projects::Retirement>,
     pub blocker: Option<String>,
+    /// Each setting's last change (`field_changes`): the record's seq and its author.
+    pub changes: BTreeMap<&'static str, (i64, String)>,
 }
 impl ProjectSettingsView {
     /// The fns that can give a resource its capacity (they return `{capacity}`), with
@@ -299,6 +351,14 @@ impl ProjectSettingsView {
     }
     pub fn path(&self) -> String {
         format!("/projects/id/{}/settings", self.project.project_id)
+    }
+    /// The record a form's field was last changed by, as drawn: what it has seen.
+    pub fn seen(&self, field: &str) -> i64 {
+        self.changes.get(field).map_or(0, |c| c.0)
+    }
+    /// Every setting's last change as the live header carries it: `{"name":[seq,"author"]}`.
+    pub fn changes_json(&self) -> String {
+        serde_json::to_string(&self.changes).expect("owned changes serialize")
     }
     fn version(&self) -> String {
         sluice_store::artifacts::fingerprint(&serde_json::to_vec(&serde_json::json!({
@@ -652,10 +712,15 @@ async fn change(
         value: request.value,
         resource: request.resource,
         saved: result.is_ok(),
-        message: result
-            .err()
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| "Saved".into()),
+        message: match result {
+            Ok(_) => "Saved".into(),
+            // the store's revision check: someone changed a setting since the form was drawn
+            Err(PublicError::Conflict { message, .. }) if message == "project settings changed" => {
+                "Not applied: it changed since you opened it. Reload this field to see the change."
+                    .into()
+            }
+            Err(e) => e.to_string(),
+        },
     };
     match state
         .snapshot(id)
@@ -933,6 +998,7 @@ async fn settings_stream(
     }
     let viewer = Viewer::from_headers(&headers);
     let stop = state.dashboard.stop.clone();
+    let watch = state.dashboard.watch(Some(id));
     let loader = move || {
         let state = state.clone();
         let viewer = viewer.clone();
@@ -945,6 +1011,7 @@ async fn settings_stream(
         }
     };
     Sse::new(streams::page_events(
+        watch,
         loader,
         query.version(VersionSignal::Page),
         VersionSignal::Page,

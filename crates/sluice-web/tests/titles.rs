@@ -110,9 +110,10 @@ async fn a_recipe_with_a_view_draws_its_live_units_as_a_lane_matrix_attention_fi
     );
     assert!(rough.contains("<tr id=\"unit-r1\""), "{rough}");
     // lines: none inside a row (its columns say the order), none to, from or across a matrix
-    const EDGES: &str = "<sluice-board class=\"board\" edges=\"";
-    let edges = between(&html, EDGES, "\"><div")[EDGES.len()..].to_owned();
-    let edges: serde_json::Value = serde_json::from_str(&html_escape(&edges)).unwrap();
+    const EDGES: &str =
+        "<script type=\"application/json\" id=\"plan-edges\" class=\"board-edges\">";
+    let edges = between(&html, EDGES, "</script>")[EDGES.len()..].to_owned();
+    let edges: serde_json::Value = serde_json::from_str(&edges).unwrap();
     let line = |from: &str, to: &str| {
         edges
             .as_array()
@@ -127,15 +128,6 @@ async fn a_recipe_with_a_view_draws_its_live_units_as_a_lane_matrix_attention_fi
     assert_eq!(line("probe", "l3-land"), Some(false));
     // inside a plain unit's box the line is drawn
     assert_eq!(line("kit-a", "kit-b"), Some(true));
-}
-
-fn html_escape(text: &str) -> String {
-    text.replace("&quot;", "\"")
-        .replace("&#34;", "\"")
-        .replace("&#39;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
 }
 
 #[tokio::test]

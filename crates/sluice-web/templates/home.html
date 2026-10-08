@@ -11,5 +11,5 @@
 {% if !view.active.is_empty() %}<ul class="projects">{% for project in view.active %}{% call project_row(project) %}{% endcall %}{% endfor %}</ul>{% endif %}
 {% if !view.empty.is_empty() %}<details class="archived empties" data-preserve-attr="open"><summary>No steps yet ({{ view.empty.len() }})</summary><ul class="projects">{% for project in view.empty %}{% call project_row(project) %}{% endcall %}{% endfor %}</ul></details>{% endif %}
 {% if !view.archived.is_empty() %}<details class="archived" data-preserve-attr="open"><summary>Archived ({{ view.archived.len() }})</summary><ul class="projects">{% for project in view.archived %}{% call project_row(project) %}{% endcall %}{% endfor %}</ul></details>{% endif %}
-<span class="page-title" hidden data-page-title="{{ view.title() }} · sluice"></span>
+<span class="page-title" hidden data-page-title="{{ view.title() }} · sluice" data-title-src="/title"></span>
 </div>

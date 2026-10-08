@@ -785,6 +785,7 @@ fn stream(
     let stop = state.stop.clone();
     let viewer = Viewer::from_headers(&headers);
     let events = page_events(
+        state.watch(project),
         move || {
             let state = state.clone();
             let query = query.clone();

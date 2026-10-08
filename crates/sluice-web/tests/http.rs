@@ -750,3 +750,28 @@ fn quiet_is_two_hours_or_the_steps_own_cadence() {
         assert_eq!(quiet_after(&[bad.into()]), 7200, "{bad}");
     }
 }
+/// A stream goes out compressed as the client takes it, each batch flushed whole while the
+/// stream waits: its first batch arrives at once, not when the stream ends.
+#[tokio::test]
+async fn a_streams_batches_go_out_compressed_and_flushed() {
+    use futures_util::StreamExt;
+    let fixture = Fixture::new().await;
+    for (encoding, magic) in [("gzip", &[0x1f_u8, 0x8b][..]), ("br", &[][..])] {
+        let response = get_with(&fixture, "/stream", &[("accept-encoding", encoding)]).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "text/event-stream"
+        );
+        assert_eq!(response.headers()[header::CONTENT_ENCODING], encoding);
+        let mut body = response.into_body().into_data_stream();
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), body.next())
+            .await
+            .expect("the first batch, flushed while the stream waits")
+            .unwrap()
+            .unwrap();
+        assert!(first.len() > 2 && first.starts_with(magic), "{first:?}");
+    }
+    fixture.stop.cancel();
+    fixture.writer.shutdown().await.unwrap();
+}

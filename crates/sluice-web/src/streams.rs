@@ -20,18 +20,51 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
+/// A part of a page a stream patches, by its element's id. Its HTML may mark parts of it as
+/// regions of their own, `<!--r:id-->` and `<!--/r:id-->` around the element with that id: a
+/// batch then sends only the smallest regions that changed (`Comparison::events`).
 #[derive(Clone, Debug)]
 pub struct PatchRegion {
-    pub id: &'static str,
+    pub id: String,
     pub html: TrustedHtml,
 }
 impl PatchRegion {
-    pub fn new(id: &'static str, html: TrustedHtml) -> Self {
-        Self { id, html }
+    pub fn new(id: impl Into<String>, html: TrustedHtml) -> Self {
+        Self {
+            id: id.into(),
+            html,
+        }
     }
+}
+/// `html` split at the regions it marks: its skeleton, each marked region's HTML left out (its
+/// markers kept, so where each one sits is part of the skeleton), and those regions in order.
+/// A marked region's own regions stay inside it.
+fn split(html: &str) -> (String, Vec<(&str, &str)>) {
+    const OPEN: &str = "<!--r:";
+    let mut skeleton = String::with_capacity(html.len().min(4096));
+    let mut children = vec![];
+    let mut rest = html;
+    while let Some(at) = rest.find(OPEN) {
+        let after = &rest[at + OPEN.len()..];
+        let Some(close) = after.find("-->") else {
+            break;
+        };
+        let id = &after[..close];
+        let body = &after[close + 3..];
+        let end_marker = format!("<!--/r:{id}-->");
+        let Some(end) = body.find(&end_marker) else {
+            break;
+        };
+        skeleton.push_str(&rest[..at + OPEN.len() + close + 3]);
+        skeleton.push_str(&end_marker);
+        children.push((id, &body[..end]));
+        rest = &body[end + end_marker.len()..];
+    }
+    skeleton.push_str(rest);
+    (skeleton, children)
 }
 #[derive(Clone, Debug)]
 pub struct RenderedBatch {
@@ -57,11 +90,15 @@ impl RenderedBatch {
         }
     }
 }
-/// `html` with the text of each `<time data-since=…>` element left out (its tag kept).
+/// `html` with the text of each ticking `<time data-since=…>` and `<time data-ago=…>` left out
+/// (its tag kept).
 fn without_clock(html: &str, out: &mut Vec<u8>) {
-    const OPEN: &str = "<time data-since=";
     let mut rest = html;
-    while let Some(at) = rest.find(OPEN) {
+    while let Some(at) = ["<time data-since=", "<time data-ago="]
+        .iter()
+        .filter_map(|open| rest.find(open))
+        .min()
+    {
         let Some(tag) = rest[at..].find('>') else {
             break;
         };
@@ -71,7 +108,16 @@ fn without_clock(html: &str, out: &mut Vec<u8>) {
     }
     out.extend_from_slice(rest.as_bytes());
 }
-#[derive(Clone, Copy, Debug)]
+/// A region's skeleton as the comparison keeps it: hashed, its clock left out.
+fn skeleton_hash(skeleton: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut bytes = Vec::with_capacity(skeleton.len());
+    without_clock(skeleton, &mut bytes);
+    let mut hasher = std::hash::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VersionSignal {
     Page,
     Step,
@@ -85,6 +131,26 @@ impl VersionSignal {
             Self::Cursor => "seen",
         }
     }
+    /// The signal that says this stream is behind: the page's banner reads `stale`; a step
+    /// drawn in the drawer has its own, so the drawer never speaks for the page.
+    pub fn stale(self) -> &'static str {
+        match self {
+            Self::Step => "sstale",
+            Self::Page | Self::Cursor => "stale",
+        }
+    }
+}
+/// The running build's release: its installed release's name and its assets' fingerprint. A
+/// stream's first signals carry it (`rel`), and a page drawn by another build says so.
+pub fn release() -> &'static str {
+    static RELEASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    RELEASE.get_or_init(|| {
+        format!(
+            "{}:{}",
+            sluice_runtime::install::release_id("working-tree"),
+            crate::views::assets_fingerprint()
+        )
+    })
 }
 #[derive(Clone, Debug)]
 pub enum StreamEvent {
@@ -109,7 +175,8 @@ impl StreamEvent {
 pub struct Comparison {
     client_version: String,
     current: Option<String>,
-    regions: BTreeMap<&'static str, TrustedHtml>,
+    /// Each region drawn last, by id: its skeleton's hash.
+    drawn: BTreeMap<String, u64>,
     signal: VersionSignal,
 }
 impl Comparison {
@@ -117,60 +184,118 @@ impl Comparison {
         Self {
             client_version,
             current: None,
-            regions: BTreeMap::new(),
+            drawn: BTreeMap::new(),
             signal,
         }
     }
+    /// The events that bring the client from what this connection last sent (or, first, from
+    /// the version it says it has) to `batch`: nothing for the same version; otherwise each
+    /// smallest region that changed (a region whose skeleton is the same sends only its own
+    /// regions that changed), then the version. The first signals carry the release.
     pub fn events(&mut self, batch: RenderedBatch) -> Vec<StreamEvent> {
         if self.current.as_ref() == Some(&batch.version) {
             return vec![];
         }
         let first = self.current.is_none();
         let mut events = vec![];
-        if !first || self.client_version != batch.version {
-            for region in &batch.regions {
-                if first || self.regions.get(region.id) != Some(&region.html) {
-                    events.push(StreamEvent::Elements(
-                        PatchElements::new(region.html.as_str())
-                            .selector(format!("#{}", region.id)),
-                    ));
+        let mut drawn = BTreeMap::new();
+        let send = !first || self.client_version != batch.version;
+        for region in &batch.regions {
+            if first {
+                record(&region.id, region.html.as_str(), &mut drawn);
+                if send {
+                    events.push(patch(&region.id, region.html.as_str()));
                 }
+            } else {
+                self.diff(&region.id, region.html.as_str(), &mut drawn, &mut events);
             }
-            let signals = serde_json::json!({self.signal.name():batch.version,"stale":false});
-            events.push(StreamEvent::Signals(PatchSignals::new(signals.to_string())));
         }
-        if first && events.is_empty() {
+        let mut signals = serde_json::Map::new();
+        if send {
+            signals.insert(self.signal.name().into(), batch.version.clone().into());
+        }
+        signals.insert(self.signal.stale().into(), false.into());
+        if first {
+            signals.insert("rel".into(), release().into());
+        }
+        if send || first {
             events.push(StreamEvent::Signals(PatchSignals::new(
-                r#"{"stale":false}"#,
+                serde_json::Value::Object(signals).to_string(),
             )));
         }
         self.current = Some(batch.version);
-        self.regions = batch.regions.into_iter().map(|r| (r.id, r.html)).collect();
+        self.drawn = drawn;
         events
     }
+    fn diff(
+        &self,
+        id: &str,
+        html: &str,
+        drawn: &mut BTreeMap<String, u64>,
+        events: &mut Vec<StreamEvent>,
+    ) {
+        let (skeleton, children) = split(html);
+        let hash = skeleton_hash(&skeleton);
+        if self.drawn.get(id) != Some(&hash) {
+            record(id, html, drawn);
+            events.push(patch(id, html));
+            return;
+        }
+        drawn.insert(id.to_owned(), hash);
+        for (child, html) in children {
+            self.diff(child, html, drawn, events);
+        }
+    }
 }
+/// Note `html`'s skeleton and each of its regions' as drawn.
+fn record(id: &str, html: &str, drawn: &mut BTreeMap<String, u64>) {
+    let (skeleton, children) = split(html);
+    drawn.insert(id.to_owned(), skeleton_hash(&skeleton));
+    for (child, html) in children {
+        record(child, html, drawn);
+    }
+}
+fn patch(id: &str, html: &str) -> StreamEvent {
+    StreamEvent::Elements(PatchElements::new(html).selector(format!("#{id}")))
+}
+/// A stream renders its page again only when what it reads may have changed (its `watch`
+/// token moved), and at least this often: what the clock alone changes (a run going quiet,
+/// "Read today", a board query over the time) is redrawn within it.
+pub const FRESH: Duration = Duration::from_secs(30);
 /// Loader must finish its coherent snapshot before returning. Dropping the response
-/// cancels the loader/wait; no producer task or database lease survives it.
-pub fn page_events<L, F>(
+/// cancels the loader/wait; no producer task or database lease survives it. Each second the
+/// stream reads `watch`, a cheap token of everything its page reads (`DashboardState::token`),
+/// and runs `loader` only when it moved or the last render is older than `FRESH`.
+pub fn page_events<W, G, L, F>(
+    watch: W,
     loader: L,
     client_version: String,
     signal: VersionSignal,
     stop: Arc<AtomicBool>,
 ) -> impl Stream<Item = Result<Event, Infallible>>
 where
+    W: Fn() -> G + Send + 'static,
+    G: Future<Output = Result<String, PublicError>> + Send + 'static,
     L: Fn() -> F + Send + 'static,
     F: Future<Output = Result<RenderedBatch, PublicError>> + Send + 'static,
 {
+    struct Gate {
+        token: Option<String>,
+        rendered: Option<Instant>,
+    }
     stream::unfold(
         (
-            loader,
+            (watch, loader),
             Comparison::new(client_version, signal),
             VecDeque::new(),
-            false,
+            Gate {
+                token: None,
+                rendered: None,
+            },
             false,
             stop,
         ),
-        |(loader, mut comparison, mut pending, mut waited, mut ended, stop)| async move {
+        move |((watch, loader), mut comparison, mut pending, mut gate, mut ended, stop)| async move {
             loop {
                 if stop.load(Ordering::Acquire) {
                     return None;
@@ -178,24 +303,32 @@ where
                 if let Some(event) = pending.pop_front() {
                     return Some((
                         Ok(event),
-                        (loader, comparison, pending, waited, ended, stop),
+                        ((watch, loader), comparison, pending, gate, ended, stop),
                     ));
                 }
                 if ended {
                     return None;
                 }
-                if waited {
+                if gate.rendered.is_some() {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
-                waited = true;
+                // read before the loader's snapshot: a change after it moves the next token
+                let token = watch().await.ok();
+                if token.is_some()
+                    && token == gate.token
+                    && gate.rendered.is_some_and(|at| at.elapsed() < FRESH)
+                {
+                    continue;
+                }
+                gate.token = token;
+                gate.rendered = Some(Instant::now());
                 match loader().await {
                     Ok(batch) => {
                         pending.extend(comparison.events(batch).iter().map(StreamEvent::axum_event))
                     }
                     Err(_) => {
-                        pending.push_back(
-                            PatchSignals::new(r#"{"stale":true}"#).write_as_axum_sse_event(),
-                        );
+                        let stale = serde_json::json!({ signal.stale(): true }).to_string();
+                        pending.push_back(PatchSignals::new(stale).write_as_axum_sse_event());
                         ended = true;
                     }
                 }
@@ -250,12 +383,14 @@ async fn response(
     }
     let viewer = Viewer::from_headers(&headers);
     let stop = state.stop.clone();
+    let watch = state.watch(project);
     let loader = move || {
         let state = state.clone();
         let viewer = viewer.clone();
         async move { home::batch(&state.snapshot(project).await?, project, functions, &viewer) }
     };
     Sse::new(page_events(
+        watch,
         loader,
         query.version(VersionSignal::Page),
         VersionSignal::Page,

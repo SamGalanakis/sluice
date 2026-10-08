@@ -432,11 +432,21 @@ const presentation = new Set(["tracing", "near", "open", "flip", "on"]);
 const layoutClasses = (value) => (value || "").split(/\s+/)
   .filter((c) => c && !presentation.has(c)).sort().join(" ");
 
+// The board's relations are the JSON of its `script.board-edges`: a region of its own, which a
+// patch redraws only when the plan's shape or a line changes, not with every card's state.
+function boardRelations(host) {
+  const text = $(":scope > script.board-edges", host)?.textContent ?? "[]";
+  if (host.relationsText !== text) {
+    host.relationsText = text;
+    try { host.relations = JSON.parse(text); } catch { host.relations = []; }
+  }
+  return host.relations;
+}
+
 rocket("sluice-board", {
   mode: "light",
   renderOnPropChange: false,
-  props: ({ json }) => ({ edges: json.default([]) }),
-  setup({ host, props, observeProps, cleanup }) {
+  setup({ host, cleanup }) {
     let frame = 0, active = true;
     // tracing follows the keyboard's focus, not a focus given back after a click or by the
     // drawer's close: `kept` is the card or name it traced, the one a pointer leaving (or a
@@ -451,12 +461,11 @@ rocket("sluice-board", {
       if (!active || frame || document.documentElement.classList.contains("resizing")) return;
       frame = requestAnimationFrame(() => {
         frame = 0;
-        drawEdges(host, drawn(props.edges));
+        drawEdges(host, drawn(boardRelations(host)));
         const held = still ? null : $(`:is(${TRACES}):hover`, host) || focusKept();  // keep it lit
         if (held) trace(host, traceKey(held));
       });
     };
-    observeProps(redraw, "edges");
     const sizes = new ResizeObserver(redraw);
     sizes.observe(host);
     document.fonts?.ready.then(redraw);
@@ -512,7 +521,7 @@ rocket("sluice-board", {
       still = false;
       const here = card(evt);
       if (!here || evt.altKey || evt.ctrlKey || evt.metaKey) return;
-      const next = nearestCard(here, evt, boardEdges(host, props.edges));
+      const next = nearestCard(here, evt, boardEdges(host, boardRelations(host)));
       if (next) { evt.preventDefault(); next.focus(); }
     };
     host.addEventListener("pointerover", over, { signal: listeners.signal });
@@ -546,8 +555,8 @@ rocket("sluice-board", {
       PHONE.removeEventListener("change", redraw);
     });
   },
-  onFirstRender({ host, props }) {
-    drawEdges(host, drawn(props.edges));
+  onFirstRender({ host }) {
+    drawEdges(host, drawn(boardRelations(host)));
   },
 });
 

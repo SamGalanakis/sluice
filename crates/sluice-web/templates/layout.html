@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="{{ style_url }}">
 <script type="importmap">{{ import_map|safe }}</script>
 {% if !stream.is_empty() %}<script type="module" data-datastar-runtime src="{{ datastar_url }}"></script>{% endif %}
-</head><body data-signals="{{ signals }}">{{ crate::views::icons::sprite()|safe }}
+</head><body data-signals="{{ signals }}" data-release="{{ release }}">{{ crate::views::icons::sprite()|safe }}
 <a class="skip" href="#content">Skip to content</a>
 <header class="site-head"><nav id="top-nav" class="top" aria-label="Main">
 <a class="brand" href="/" aria-label="sluice: all projects"><img class="mark" src="{{ crate::views::asset_url("logo.svg") }}" width="27" height="26" alt=""><span class="wordmark">sluice</span></a>
@@ -26,6 +26,6 @@
 </fieldset><input type="hidden" name="types" value="0"><label class="check"><input type="checkbox" name="types" value="1"{% if viewer.types %} checked{% endif %}>Show value types</label><button class="save" type="submit">Save</button></form></div></details>
 </nav></header>
 <main id="content" tabindex="-1"{% if !stream.is_empty() %} data-init="@get('{{ stream }}', {retry: 'always', retryMaxCount: 10, retryMaxWait: 30000, requestCancellation: 'cleanup'})"{% endif %}>
-<p id="stream-state" class="stream-state attn" role="status" aria-live="polite" style="display:none" data-show="$stale">Updates paused. Reconnecting… <button type="button" class="stream-retry">Reconnect</button></p>
+<p id="stream-state" class="stream-state attn" role="status" aria-live="polite" hidden><span class="stream-words">Updates paused. Reconnecting…</span> <button type="button" class="stream-retry">Reconnect</button></p><p id="release-state" class="stream-state release-state" role="status" aria-live="polite" hidden>sluice was updated · <button type="button" class="release-reload">Reload</button></p>
 {{ body|safe }}
 </main><dialog id="confirmation" class="confirmation" aria-labelledby="confirmation-title" data-ignore-morph><h2 id="confirmation-title"></h2><div id="confirmation-body"></div></dialog><script type="module" src="{{ nav_url }}"></script></body></html>

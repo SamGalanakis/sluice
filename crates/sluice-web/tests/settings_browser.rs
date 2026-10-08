@@ -203,7 +203,7 @@ try:
  chrome.send('Page.navigate',{'url':url+path})
  chrome.wait("document.querySelector('#project-name') && document.querySelector('[data-preview]').hidden === false")
  chrome.eval("window.requests=[]; const realFetch=window.fetch; window.fetch=(input,opts)=>{requests.push(String(input));return realFetch(input,opts)}; window.errors=[];addEventListener('error',e=>errors.push(e.message));addEventListener('unhandledrejection',e=>errors.push(String(e.reason)))")
- assert chrome.eval("document.querySelector('#delete-button').disabled")
+ assert chrome.eval("document.querySelector('#delete-button').getAttribute('aria-disabled')==='true'")
  assert chrome.eval("document.querySelector('#delete-explanation').textContent.includes('running steps')")
  assert chrome.eval("document.querySelector('#delete-explanation a').textContent==='Open the plan'")
  assert chrome.eval("!document.querySelector('#confirm-name')")
@@ -246,7 +246,7 @@ try:
  chrome.wait("document.querySelector('#settings-live .tag')?.textContent==='Paused'")
  states('paused')
  # Delete a live, unarchived project after its work finishes.
- chrome.wait("document.querySelector('#delete-button').disabled===false")
+ chrome.wait("document.querySelector('#delete-button').getAttribute('aria-disabled')==='false'")
  assert chrome.eval("document.querySelector('#delete-button').getBoundingClientRect().height>=32")
  chrome.eval("document.querySelector('#delete-button').click()")
  chrome.wait("document.querySelector('#confirmation').open")
@@ -264,7 +264,7 @@ try:
  # A concurrent rename closes the outdated confirmation.
  apply('name','final-name')
  chrome.wait("document.querySelector('#settings-live').dataset.name==='final-name' && !document.querySelector('#confirmation').open")
- assert chrome.eval("document.querySelector('#delete-button').disabled===false")
+ assert chrome.eval("document.querySelector('#delete-button').getAttribute('aria-disabled')==='false'")
  assert chrome.eval("errors")==[],chrome.eval('errors')
  chrome.eval("document.querySelector('#delete-button').click()")
  chrome.wait("document.querySelector('#confirmation').open")

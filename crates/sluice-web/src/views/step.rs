@@ -389,10 +389,10 @@ pub struct StepView {
     /// How long its stage usually takes: the median of its recipe's done units' runs of the
     /// same stage (`board::usual_durations`), none with fewer than three.
     pub usually: Option<f64>,
-    /// Its unit's timeline, on its page and in the drawer (`board::step_snapshot`).
+    /// Its unit's timeline, on its page and in the drawer (`board::load_step`).
     pub timeline: Option<super::timeline::Timeline>,
     /// It comes after a step or a step comes after it: its page links its chain on the plan
-    /// (`board::step_snapshot`).
+    /// (`board::load_step`).
     pub chained: bool,
     /// Its latest agent run's activity outline, read from its transcript when its page or
     /// drawer draws (`activity::attach`).
@@ -1340,9 +1340,6 @@ impl StepView {
             js_url: super::asset_url("sluice.js"),
         })
     }
-    pub fn version(&self) -> String {
-        sluice_store::artifacts::fingerprint(&serde_json::to_vec(self).expect("view serializes"))
-    }
 }
 #[derive(Template)]
 #[template(path = "step.html")]
@@ -1749,24 +1746,29 @@ pub async fn step_page(
     headers: HeaderMap,
 ) -> Response {
     let page = async {
-        let (shared, view, mut step) =
-            board::step_snapshot(&state, project, registry.as_ref().map(|r| &r.0), &id).await?;
-        super::activity::attach(&state, &mut step, shown.all()).await;
-        let nav = NavView::new(&shared, Some(project), "plan")?;
-        let unit = view
-            .units
-            .iter()
-            .find(|u| u.tagged && u.steps.iter().any(|s| s.id == id))
-            .map(|u| {
-                (
-                    u.id.as_str(),
-                    if u.titled() { u.title.as_str() } else { "" },
-                )
+        let (shared, detail) =
+            board::step_detail(&state, project, registry.as_ref().map(|r| &r.0), &id, true).await?;
+        let (Some(shared), Some(mut detail)) = (shared, detail) else {
+            return Err(PublicError::NotFound {
+                message: "step not found".into(),
             });
-        step.page_body(&view.project.name, unit)
+        };
+        super::activity::attach(&state, &mut detail.step, shown.all()).await;
+        let nav = NavView::new(&shared, Some(project), "plan")?;
+        let step = &detail.step;
+        let unit = detail
+            .unit
+            .as_ref()
+            .map(|(id, title)| (id.as_str(), title.as_str()));
+        // the version its stream's first batch has when it draws the same: nothing to patch
+        let drawn = step
+            .own_body()
+            .map(|body| RenderedBatch::new(vec![PatchRegion::new("step-detail", body)]).version)
+            .map_err(render_error)?;
+        step.page_body(&detail.project, unit)
             .and_then(|body| {
                 super::render_layout(
-                    &format!("{} · {}", step.tab_title(), view.project.name),
+                    &format!("{} · {}", step.tab_title(), detail.project),
                     &body,
                     &nav,
                     &Viewer::from_headers(&headers),
@@ -1775,7 +1777,7 @@ pub async fn step_page(
                         step.href(),
                         if shown.all() { "&activity=all" } else { "" }
                     ),
-                    "",
+                    &drawn,
                     &step.href(),
                 )
             })
@@ -1792,6 +1794,21 @@ pub struct StepStreamQuery {
     #[serde(default)]
     page: bool,
 }
+/// A step no longer in the plan, where its detail was: it may have retired with its unit
+/// (SPEC §6.11) or been edited out. Its log still has it.
+fn gone(project: ProjectId, id: &StepId, page: bool) -> Result<TrustedHtml, askama::Error> {
+    #[derive(Template)]
+    #[template(
+        source = "<article id=\"step-detail\" data-step=\"{{ id }}\" data-gone><header class=\"d-head\"><div class=\"hd\">{% if page %}<h1 id=\"d-title\">{{ id }}</h1>{% else %}<h2 id=\"d-title\">{{ id }}</h2>{% endif %}</div></header><p class=\"d-gone\">This step left the plan; it may have retired. <a href=\"/projects/id/{{ project }}/log?step={{ id }}\">Search the log for it</a></p></article>",
+        ext = "html"
+    )]
+    struct Gone<'a> {
+        project: ProjectId,
+        id: &'a StepId,
+        page: bool,
+    }
+    TrustedHtml::from_template(&Gone { project, id, page })
+}
 pub async fn step_stream(
     State(state): State<DashboardState>,
     registry: Option<Extension<board::Registry>>,
@@ -1802,37 +1819,51 @@ pub async fn step_stream(
 ) -> Response {
     let all = shown.all();
     let stop = state.stop.clone();
-    let version = query.version(VersionSignal::Step);
+    // its own page's stream is the page's (`ver`, and its stale says so in the page's banner);
+    // the drawer's has its own (`sver`), so a drawer never says the board's updates paused
+    let signal = if own.page {
+        VersionSignal::Page
+    } else {
+        VersionSignal::Step
+    };
+    let version = query.version(signal);
+    // a run going grows its transcript with no commit: its activity redraws every second
+    let watch = state.watch_step(Some(project), Some(id.clone()));
+    // a step that left the plan is drawn as gone, not an error: the stream stays open and
+    // quiet (its drawer never reconnects for it) and draws the step again should it come back
     let loader = move || {
         let state = state.clone();
         let id = id.clone();
         let registry = registry.clone();
         async move {
-            let (_, _, mut step) =
-                board::step_snapshot(&state, project, registry.as_ref().map(|r| &r.0), &id).await?;
+            let (_, detail) =
+                board::step_detail(&state, project, registry.as_ref().map(|r| &r.0), &id, false)
+                    .await?;
+            let Some(detail) = detail else {
+                return Ok(RenderedBatch {
+                    version: format!("gone:{id}"),
+                    regions: vec![PatchRegion::new(
+                        "step-detail",
+                        gone(project, &id, own.page).map_err(render_error)?,
+                    )],
+                });
+            };
+            let mut step = detail.step;
             super::activity::attach(&state, &mut step, all).await;
-            Ok(RenderedBatch {
-                version: step.version(),
-                regions: vec![PatchRegion::new(
-                    "step-detail",
-                    if own.page {
-                        step.own_body()
-                    } else {
-                        step.body()
-                    }
-                    .map_err(render_error)?,
-                )],
-            })
+            Ok(RenderedBatch::new(vec![PatchRegion::new(
+                "step-detail",
+                if own.page {
+                    step.own_body()
+                } else {
+                    step.body()
+                }
+                .map_err(render_error)?,
+            )]))
         }
     };
-    Sse::new(streams::page_events(
-        loader,
-        version,
-        VersionSignal::Step,
-        stop,
-    ))
-    .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
-    .into_response()
+    Sse::new(streams::page_events(watch, loader, version, signal, stop))
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+        .into_response()
 }
 /// One of a run's files (`RUN_FILES`), read-only, as plain text: only a run of this project,
 /// only from its own directory, never through a link; a large file's last 2 MiB.

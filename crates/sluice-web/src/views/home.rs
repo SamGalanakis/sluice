@@ -199,11 +199,46 @@ async fn functions_handler(
     }
 }
 
+#[derive(Deserialize)]
+struct TitleQuery {
+    project: Option<ProjectId>,
+}
+/// A page's tab title alone, as its stream would write it: what a hidden tab asks for while its
+/// stream is closed (`nav.js`). The index's by default; a project's with `?project=`.
+async fn title_handler(
+    State(state): State<DashboardState>,
+    Query(query): Query<TitleQuery>,
+) -> Response {
+    let title = async {
+        let snapshot = state.snapshot(None).await?;
+        let words = match query.project {
+            None => home::HomeView::new(&snapshot).title(),
+            Some(id) => snapshot
+                .projects
+                .iter()
+                .find(|p| p.id == id)
+                .ok_or_else(|| PublicError::NotFound {
+                    message: "project not found".into(),
+                })?
+                .tab_words(),
+        };
+        Ok::<_, PublicError>(format!("{words} · sluice"))
+    };
+    match title.await {
+        Ok(title) => (
+            [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            title,
+        )
+            .into_response(),
+        Err(e) => crate::http::error_response(e),
+    }
+}
 pub fn registration() -> PageRegistration {
     PageRegistration {
         routes: |state| {
             Router::new()
                 .route("/", get(home_handler))
+                .route("/title", get(title_handler))
                 .route("/fns", get(functions_handler))
                 .route("/stream", get(crate::streams::home_stream))
                 .route("/fns/stream", get(crate::streams::functions_stream))

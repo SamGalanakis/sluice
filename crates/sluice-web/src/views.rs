@@ -28,9 +28,12 @@ use axum::{
 };
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
-use sluice_model::{error::PublicError, ids::ProjectId};
+use sluice_model::{
+    error::PublicError,
+    ids::{ProjectId, StepId},
+};
 use sluice_store::ReadPool;
-use std::{fmt, sync::Arc};
+use std::{fmt, future::Future, sync::Arc};
 
 /// HTML emitted by an owned Askama template or the markdown renderer. There is
 /// deliberately no public constructor accepting an arbitrary string.
@@ -197,6 +200,18 @@ impl ProjectView {
     pub fn shown(&self) -> ui::Shown {
         self.counts.first().unwrap_or(ui::Shown::Pending)
     }
+    /// Its pages' tab words, what needs a look first, as the index's tab counts it
+    /// (`home::HomeView::title`): "2 failed · 1 quiet · lash", the states that need attention.
+    pub fn tab_words(&self) -> String {
+        let mut words: Vec<String> = self
+            .counts
+            .iter()
+            .filter(|(s, _)| s.spec().attention)
+            .map(|(s, n)| format!("{n} {}", s.word()))
+            .collect();
+        words.push(self.name.clone());
+        words.join(" · ")
+    }
     pub fn summary(&self) -> &str {
         self.description.split("\n\n").next().unwrap_or("")
     }
@@ -247,6 +262,10 @@ pub struct FunctionCatalog {
 }
 pub trait CatalogSource: Send + Sync {
     fn catalog(&self, project: Option<ProjectId>) -> Result<FunctionCatalog, PublicError>;
+    /// The catalog's version alone: what a stream's change token reads each second.
+    fn version(&self, project: Option<ProjectId>) -> Result<String, PublicError> {
+        Ok(self.catalog(project)?.version)
+    }
 }
 #[derive(Default)]
 pub struct EmptyCatalog;
@@ -306,6 +325,74 @@ impl DashboardState {
             .snapshot(move |c| load_snapshot(c, functions))
             .await
             .map_err(|e| e.into_public(true))
+    }
+    /// A cheap token of everything a page reads: every store commit bumps a change version
+    /// (`change_versions`, which the writer keeps for each scope and view it touches), and the
+    /// function catalog has its version. What it leaves out moves only with the clock or the
+    /// run files (a run going quiet), which a stream redraws within `streams::FRESH`. With
+    /// `live`, a step whose run is going moves it every second: its page reads the run's
+    /// transcript (its activity), which grows with no commit.
+    pub async fn token(
+        &self,
+        project: Option<ProjectId>,
+        live: Option<StepId>,
+    ) -> Result<String, PublicError> {
+        let catalog = self.catalog.version(project)?;
+        let (sum, count, running): (i64, i64, bool) = self
+            .reads
+            .snapshot(move |c| {
+                let (sum, count) = c.query_row(
+                    "SELECT coalesce(sum(version),0),count(*) FROM change_versions",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                let running = match (project, live) {
+                    (Some(project), Some(step)) => c
+                        .query_row(
+                            "SELECT 1 FROM runs WHERE project_id=?1 AND step_id=?2 AND finished_at IS NULL LIMIT 1",
+                            rusqlite::params![project.to_string(), step.as_str()],
+                            |_| Ok(()),
+                        )
+                        .optional()?
+                        .is_some(),
+                    _ => false,
+                };
+                Ok((sum, count, running))
+            })
+            .await
+            .map_err(|e| e.into_public(true))?;
+        let tick = if running {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs())
+        } else {
+            0
+        };
+        Ok(format!("{sum}:{count}:{catalog}:{tick}"))
+    }
+    /// `token` for `project`'s pages, as a stream's watch (`streams::page_events`).
+    pub fn watch(
+        &self,
+        project: Option<ProjectId>,
+    ) -> impl Fn() -> std::pin::Pin<Box<dyn Future<Output = Result<String, PublicError>> + Send>>
+    + Send
+    + 'static {
+        self.watch_step(project, None)
+    }
+    /// `watch` for a step's page or drawer, which a run of the step going keeps moving.
+    pub fn watch_step(
+        &self,
+        project: Option<ProjectId>,
+        live: Option<StepId>,
+    ) -> impl Fn() -> std::pin::Pin<Box<dyn Future<Output = Result<String, PublicError>> + Send>>
+    + Send
+    + 'static {
+        let state = self.clone();
+        move || {
+            let state = state.clone();
+            let live = live.clone();
+            Box::pin(async move { state.token(project, live).await })
+        }
     }
 }
 #[derive(Clone, Debug)]
@@ -386,6 +473,8 @@ struct Layout<'a> {
     nav_url: String,
     datastar_url: String,
     import_map: &'static str,
+    /// The build that drew the page (`streams::release`): a stream from another says so.
+    release: &'static str,
 }
 pub fn render_layout(
     title: &str,
@@ -409,6 +498,7 @@ pub fn render_layout(
         nav_url: asset_url("nav.js"),
         datastar_url: asset_url("datastar-rocket-1.0.4.js"),
         import_map: import_map(),
+        release: crate::streams::release(),
     })
 }
 /// Every script module's plain URL mapped to this build's fingerprinted one, so a module one
@@ -455,6 +545,24 @@ pub fn render_nav(
             .expect("owned layout closes nav")
         + 6;
     Ok(TrustedHtml::owned(layout.as_str()[start..end].into()))
+}
+/// Every embedded asset's fingerprint, folded into one: what a release's pages look and act
+/// like (`streams::release`).
+pub fn assets_fingerprint() -> String {
+    let mut all = String::new();
+    for registered in PAGES.iter().flat_map(|page| (page)().assets) {
+        for name in registered.names {
+            all.push_str(name);
+            all.push_str(
+                asset(name)
+                    .map(|a| a.fingerprint.as_str())
+                    .unwrap_or_default(),
+            );
+        }
+    }
+    let mut fingerprint = sluice_store::artifacts::fingerprint(all.as_bytes());
+    fingerprint.truncate(12);
+    fingerprint
 }
 /// An asset's URL, fingerprinted by its bytes: the page asks for exactly this build's asset,
 /// which can then be cached for good.
@@ -714,35 +822,72 @@ pub fn observe_activity(home: &std::path::Path, running: &mut [RunningView]) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     for run in running {
-        // what it said (progress, its own messages) counts as much as what its run wrote
-        let mut newest = [timestamp(&run.started), timestamp(&run.said)]
-            .into_iter()
-            .flatten()
-            .max();
-        if run.run_id.parse::<sluice_model::ids::RunId>().is_ok() {
-            let directory = home.join("runs").join(&run.run_id);
-            for path in [
-                directory.clone(),
-                directory.join("stderr.txt"),
-                directory.join("input.json"),
-                directory.join("exit.json"),
-            ] {
-                if let Ok(meta) = std::fs::symlink_metadata(path)
-                    && !meta.file_type().is_symlink()
-                    && let Ok(modified) = meta.modified()
-                    && let Ok(age) = modified.duration_since(UNIX_EPOCH)
-                {
-                    newest = Some(newest.unwrap_or(0).max(age.as_secs()));
-                }
+        observe_run(home, run, now);
+    }
+}
+/// One running run's activity (`observe_activity`), as of `now` (seconds).
+pub fn observe_run(home: &std::path::Path, run: &mut RunningView, now: u64) {
+    use std::time::UNIX_EPOCH;
+    // what it said (progress, its own messages) counts as much as what its run wrote
+    let mut newest = [timestamp(&run.started), timestamp(&run.said)]
+        .into_iter()
+        .flatten()
+        .max();
+    if run.run_id.parse::<sluice_model::ids::RunId>().is_ok() {
+        let directory = home.join("runs").join(&run.run_id);
+        for path in [
+            directory.clone(),
+            directory.join("stderr.txt"),
+            directory.join("input.json"),
+            directory.join("exit.json"),
+        ] {
+            if let Ok(meta) = std::fs::symlink_metadata(path)
+                && !meta.file_type().is_symlink()
+                && let Ok(modified) = meta.modified()
+                && let Ok(age) = modified.duration_since(UNIX_EPOCH)
+            {
+                newest = Some(newest.unwrap_or(0).max(age.as_secs()));
             }
         }
-        run.activity = newest;
-        run.quiet = newest.is_some_and(|at| now.saturating_sub(at) >= run.quiet_after);
     }
+    run.activity = newest;
+    run.quiet = newest.is_some_and(|at| now.saturating_sub(at) >= run.quiet_after);
 }
 
 /// Read shared navigation and home data inside a caller-owned transaction.
 /// Sibling pages call this and their own projection reads in one ReadPool::snapshot.
+/// A live step's columns, as `RunningView::read` reads them: its id, status, its current run's
+/// start and id, its error, its tags, and when it last said anything itself.
+const STEP_LIVE: &str = "step_id,status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),error,coalesce(json_extract(declaration,'$.tags'),'[]'),max(coalesce(progress_at,''),coalesce((SELECT at FROM messages m WHERE m.project_id=steps.project_id AND m.thread='step-'||steps.step_id AND m.\"from\"=steps.step_id ORDER BY m.id DESC LIMIT 1),''))";
+impl RunningView {
+    fn read(r: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            step: r.get(0)?,
+            started: r.get(2)?,
+            quiet: false,
+            quiet_after: quiet_after(
+                &serde_json::from_str::<Vec<String>>(&r.get::<_, String>(5)?).unwrap_or_default(),
+            ),
+            run_id: r.get(3)?,
+            activity: None,
+            said: r.get(6)?,
+            stopping: false,
+            finishing: false,
+        })
+    }
+    /// `step`'s run while it runs, its activity not yet observed (`observe_run`).
+    pub fn of(
+        c: &rusqlite::Connection,
+        project: ProjectId,
+        step: &str,
+    ) -> sluice_store::Result<Option<Self>> {
+        Ok(c.prepare_cached(&format!(
+            "SELECT {STEP_LIVE} FROM steps WHERE project_id=?1 AND step_id=?2 AND status='running'"
+        ))?
+        .query_row((project.to_string(), step), Self::read)
+        .optional()?)
+    }
+}
 pub fn load_snapshot(
     c: &rusqlite::Connection,
     functions: FunctionCatalog,
@@ -775,7 +920,7 @@ pub fn load_snapshot(
             stopped: vec![],
             names: Default::default(),
         };
-        let mut steps = c.prepare_cached("SELECT step_id,status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),error,coalesce(json_extract(declaration,'$.tags'),'[]'),max(coalesce(progress_at,''),coalesce((SELECT at FROM messages m WHERE m.project_id=steps.project_id AND m.thread='step-'||steps.step_id AND m.\"from\"=steps.step_id ORDER BY m.id DESC LIMIT 1),'')) FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position")?;
+        let mut steps = c.prepare_cached(&format!("SELECT {STEP_LIVE} FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position"))?;
         // a failed step's error says whether the owner cancelled it: listed apart
         let mut step_rows = steps.query([&raw])?;
         let mut cancels = vec![];
@@ -799,21 +944,11 @@ pub fn load_snapshot(
                     view.stopped.push(stopped);
                 }
             } else {
-                let sid = step.parse::<sluice_model::ids::StepId>().ok();
-                view.running.push(RunningView {
-                    started: r.get(2)?,
-                    quiet: false,
-                    quiet_after: quiet_after(
-                        &serde_json::from_str::<Vec<String>>(&r.get::<_, String>(5)?)
-                            .unwrap_or_default(),
-                    ),
-                    run_id: r.get(3)?,
-                    activity: None,
-                    said: r.get(6)?,
-                    stopping: sid.as_ref().is_some_and(|s| stopping.contains(s)),
-                    finishing: sid.as_ref().is_some_and(|s| finishing.contains_key(s)),
-                    step,
-                });
+                let mut run = RunningView::read(r)?;
+                let sid = run.step.parse::<sluice_model::ids::StepId>().ok();
+                run.stopping = sid.as_ref().is_some_and(|s| stopping.contains(s));
+                run.finishing = sid.as_ref().is_some_and(|s| finishing.contains_key(s));
+                view.running.push(run);
             }
         }
         view.stopped.extend(cancels);

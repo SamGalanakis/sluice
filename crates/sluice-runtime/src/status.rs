@@ -277,36 +277,47 @@ fn facts(
     for step in sluice_store::attempts::stopping(sql, id)? {
         facts.entry(step).or_default().stopping = true;
     }
-    let ago = |sql: &Connection, query: &str| -> sluice_store::Result<Vec<(StepId, f64)>> {
+    // each query's third column is the instant its seconds count from (SQLite takes a bare
+    // column from the row its min or max picked)
+    let ago = |sql: &Connection, query: &str| -> sluice_store::Result<Vec<(StepId, f64, String)>> {
         let mut q = sql.prepare(query)?;
         let rows = q
             .query_map([id.to_string()], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Option<f64>>(1)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<f64>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
-            .filter_map(|(step, secs)| secs.map(|s| (step, s)))
-            .map(|(step, secs)| Ok((step_id(step)?, secs.max(0.0))))
+            .filter_map(|(step, secs, at)| Some((step, secs?, at.unwrap_or_default())))
+            .map(|(step, secs, at)| Ok((step_id(step)?, secs.max(0.0), at)))
             .collect()
     };
-    for (step, secs) in ago(
+    for (step, secs, at) in ago(
         sql,
-        "SELECT r.step_id,max((julianday('now')-julianday(coalesce(r.started_at,r.created_at)))*86400)
+        "SELECT r.step_id,max((julianday('now')-julianday(coalesce(r.started_at,r.created_at)))*86400),coalesce(r.started_at,r.created_at)
          FROM runs r JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.step_id
          WHERE r.project_id=?1 AND s.status='running' AND r.finished_at IS NULL GROUP BY r.step_id",
     )? {
-        facts.entry(step).or_default().running_for = Some(secs);
+        let entry = facts.entry(step).or_default();
+        entry.running_for = Some(secs);
+        entry.running_since = Some(at);
     }
     let changes = [
-        "SELECT step_id,min((julianday('now')-julianday(at))*86400) FROM records
+        "SELECT step_id,min((julianday('now')-julianday(at))*86400),at FROM records
          WHERE project_id=?1 AND kind='step.status' AND step_id IS NOT NULL GROUP BY step_id",
-        "SELECT step_id,min((julianday('now')-julianday(coalesce(finished_at,started_at,created_at)))*86400)
+        "SELECT step_id,min((julianday('now')-julianday(coalesce(finished_at,started_at,created_at)))*86400),coalesce(finished_at,started_at,created_at)
          FROM runs WHERE project_id=?1 AND step_id IS NOT NULL GROUP BY step_id",
     ];
     for query in changes {
-        for (step, secs) in ago(sql, query)? {
-            let entry = &mut facts.entry(step).or_default().changed_ago;
-            *entry = Some(entry.map_or(secs, |old| old.min(secs)));
+        for (step, secs, at) in ago(sql, query)? {
+            let entry = facts.entry(step).or_default();
+            if entry.changed_ago.is_none_or(|old| secs < old) {
+                entry.changed_ago = Some(secs);
+                entry.changed_at = Some(at);
+            }
         }
     }
     Ok(facts)

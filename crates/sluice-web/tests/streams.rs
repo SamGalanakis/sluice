@@ -104,6 +104,7 @@ fn idle_connections_diff_locally_and_log_only_changes_publish_version_alone() {
 #[tokio::test]
 async fn loader_errors_publish_visible_stale_state_and_end_without_a_producer_task() {
     let events = page_events(
+        || async { Ok(String::new()) },
         || async {
             Err(sluice_model::error::PublicError::NotFound {
                 message: "gone".into(),
@@ -202,4 +203,65 @@ fn a_ticking_times_text_is_the_clocks_not_part_of_the_version() {
     assert_eq!(start, version("2026-10-05T09:00:00Z", "2h 15m"));
     // a new run started: a new page
     assert_ne!(start, version("2026-10-05T11:00:00Z", "<1s"));
+}
+#[test]
+fn a_change_inside_a_marked_region_patches_that_region_alone() {
+    #[derive(Template)]
+    #[template(
+        source = "<div id=\"board\">{{ head }}<!--r:one--><p id=\"one\">{{ one }}<!--r:deep--><b id=\"deep\">{{ deep }}</b><!--/r:deep--></p><!--/r:one--><!--r:two--><p id=\"two\">{{ two }}<time data-since=\"x\">{{ clock }}</time></p><!--/r:two--></div>",
+        ext = "html"
+    )]
+    struct Board<'a> {
+        head: &'a str,
+        one: &'a str,
+        deep: &'a str,
+        two: &'a str,
+        clock: &'a str,
+    }
+    let page = |head, one, deep, two, clock| {
+        RenderedBatch::new(vec![PatchRegion::new(
+            "board",
+            TrustedHtml::from_template(&Board {
+                head,
+                one,
+                deep,
+                two,
+                clock,
+            })
+            .unwrap(),
+        )])
+    };
+    let sent = |events: Vec<StreamEvent>| -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Elements(p) => p.selector.clone(),
+                StreamEvent::Signals(_) => None,
+            })
+            .collect()
+    };
+    let mut state = Comparison::new(String::new(), VersionSignal::Page);
+    assert_eq!(
+        sent(state.events(page("h", "a", "d", "b", "1s"))),
+        ["#board"]
+    );
+    // inside one region: that region alone, as deep as the change goes
+    assert_eq!(
+        sent(state.events(page("h", "a", "d2", "b", "1s"))),
+        ["#deep"]
+    );
+    assert_eq!(
+        sent(state.events(page("h", "a2", "d2", "b", "1s"))),
+        ["#one"]
+    );
+    assert_eq!(
+        sent(state.events(page("h", "a3", "d2", "b2", "1s"))),
+        ["#one", "#two"]
+    );
+    // the clock alone sends nothing; the region around the regions changed sends it whole
+    assert!(sent(state.events(page("h", "a3", "d2", "b2", "2s"))).is_empty());
+    assert_eq!(
+        sent(state.events(page("h2", "a3", "d2", "b2", "2s"))),
+        ["#board"]
+    );
 }

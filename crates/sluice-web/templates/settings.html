@@ -1,7 +1,7 @@
 {% macro capacity(id, number, function, fns) %}<fieldset class="cap-choice"><legend class="vh">Capacity</legend><div class="cap-opt"><label><input type="radio" name="capacity" value="number"{% if function.is_empty() %} checked{% endif %}> A number</label><input id="{{ id }}" name="number" type="number" min="0" step="1" inputmode="numeric" value="{{ number }}" aria-label="Capacity as a number"></div><div class="cap-opt"><label><input type="radio" name="capacity" value="fn"{% if !function.is_empty() %} checked{% endif %}> From a fn</label><select name="capacity_fn" aria-label="The fn that gives the capacity">{% if fns.is_empty() %}<option value="">No fn returns a capacity</option>{% endif %}{% for f in fns %}<option{% if crate::settings::same(f, function) %} selected{% endif %}>{{ f }}</option>{% endfor %}</select></div></fieldset>{% endmacro -%}
 <link rel="stylesheet" href="{{ css }}">
 <div class="settings-page">
-<!--settings-live--><header id="settings-live" data-revision="{{ view.project.settings_rev }}" data-name="{{ view.project.name }}" data-paused="{{ view.project.paused }}" data-archived="{{ view.project.archived }}" data-page-title="{{ view.project.name }} · Settings · sluice">
+<!--settings-live--><header id="settings-live" data-revision="{{ view.project.settings_rev }}" data-name="{{ view.project.name }}" data-paused="{{ view.project.paused }}" data-archived="{{ view.project.archived }}" data-fields="{{ view.changes_json() }}" data-page-title="{{ view.project.name }} · Settings · sluice">
 <h1>{{ view.project.name }}{% if view.project.paused %} {{ crate::views::ui::tag("Paused", "", None)|safe }}{% endif %}</h1>
 <p class="settings-lead">Project settings{% if view.project.archived %} · Archived{% endif %}</p></header><!--/settings-live-->
 <nav class="settings-index" aria-label="Settings sections"><a href="#details-heading">Details</a><a href="#resources-heading">Resources</a><a href="#board-heading">Board</a><a href="#retire-heading">Retiring</a><a href="#activity-heading">Activity</a><a href="#danger-heading">Delete</a></nav>
@@ -9,21 +9,21 @@
 <section aria-labelledby="details-heading"><h2 id="details-heading">Details</h2>
 <dl class="settings-fields">
 <div class="setting-row"><dt><label for="project-name">Name</label></dt><dd>
-<form method="post" action="{{ view.path() }}" data-setting="name">
+<form method="post" action="{{ view.path() }}" data-setting="name" data-seen="{{ view.seen("name") }}">
 <input type="hidden" name="field" value="name"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
 <input id="project-name" name="value" value="{{ feedback.value("name", view.project.name.as_str()) }}" required aria-describedby="name-help name-feedback">
 <p id="name-help" class="setting-help">Lowercase letters, numbers, underscores and hyphens. Links and running work keep the same project ID.</p>
 <div class="setting-actions"><button type="submit">Apply name</button><span id="name-feedback" class="settings-feedback{% if feedback.error("name") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "name" %}{{ feedback.message }}{% endif %}</span></div>
 </form></dd></div>
 <div class="setting-row"><dt><label for="project-description">Description</label></dt><dd>
-<form method="post" action="{{ view.path() }}" data-setting="description">
+<form method="post" action="{{ view.path() }}" data-setting="description" data-seen="{{ view.seen("description") }}">
 <input type="hidden" name="field" value="description"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
 <textarea id="project-description" name="value" aria-describedby="description-feedback">{{ feedback.value("description", view.project.description.as_str()) }}</textarea>
 <div class="setting-actions"><button type="submit">Apply description</button><button type="button" data-preview hidden>Preview</button><span id="description-feedback" class="settings-feedback{% if feedback.error("description") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "description" %}{{ feedback.message }}{% endif %}</span></div>
 </form><details class="preview-fold more-fold" data-preserve-attr="open"><summary><span class="m-more">Show how it reads</span><span class="m-less">Hide how it reads</span>{{ crate::views::icons::icon(crate::views::icons::Icon::ChevronDown, 16, "chev")|safe }}</summary><div id="description-preview" class="settings-preview" aria-label="Markdown preview">{{ preview|safe }}</div></details></dd></div>
 <div class="setting-row"><dt><label for="project-icon">Icon</label></dt><dd>
 {% if !icon_url.is_empty() %}<img class="settings-icon" id="icon-preview" src="{{ icon_url }}" alt="Current project icon">{% endif %}
-<form method="post" action="{{ view.path() }}" data-setting="icon">
+<form method="post" action="{{ view.path() }}" data-setting="icon" data-seen="{{ view.seen("icon") }}">
 <input type="hidden" name="field" value="icon"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
 <input id="project-icon" name="value" value="{{ feedback.value("icon", icon_text.as_str()) }}" aria-describedby="icon-help icon-feedback">
 <p id="icon-help" class="setting-help">Up to 16 text characters. Leave empty to remove.</p>
@@ -36,12 +36,12 @@
 {% for r in view.resources %}<li><code>{{ r.name }}</code> · {% if r.dynamic %}Dynamic{% else %}Static{% endif %} capacity {{ r.capacity }} · {{ r.held }} in use · {{ r.waiting }} waiting for capacity{% if let Some(queued) = r.queued %} · {{ queued }} steps queued{% else %} · steps queued: not known until the plan's fns have loaded{% endif %}{% if !r.error.is_empty() %}<p class="setting-error">{{ r.error }}</p>{% endif %}</li>{% endfor %}
 {% if view.resources.is_empty() %}<li class="setting-help">No resources declared.</li>{% endif %}
 </ul></div><!--/resource-status-->
-<div id="resource-editors"><dl class="settings-fields">{% for r in view.resources %}<div class="setting-row"><dt><label for="resource-{{ r.name }}">{{ r.name }}</label></dt><dd><form method="post" action="{{ view.path() }}" data-setting="resources">
+<div id="resource-editors"><dl class="settings-fields">{% for r in view.resources %}<div class="setting-row"><dt><label for="resource-{{ r.name }}">{{ r.name }}</label></dt><dd><form method="post" action="{{ view.path() }}" data-setting="resources" data-seen="{{ view.seen("resources") }}">
 <input type="hidden" name="field" value="resources"><input type="hidden" name="resource" value="{{ r.name }}"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
 {% call capacity(format!("resource-{}", r.name), crate::settings::shown_number(feedback, r), r.function, view.capacity_fns(r.function)) %}{% endcall %}
 <div class="setting-actions"><button type="submit">Apply capacity</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" && feedback.resource == r.name %}{{ feedback.message }}{% endif %}</span></div>
-</form><form method="post" action="{{ view.path() }}" data-setting="resources" class="cap-remove"><input type="hidden" name="field" value="resources"><input type="hidden" name="resource" value="{{ r.name }}"><input type="hidden" name="capacity" value="remove"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><button type="submit" class="link-button">Remove {{ r.name }}</button><span class="settings-feedback" role="status"></span></form></dd></div>{% endfor %}</dl></div>
-<dl class="settings-fields"><div class="setting-row"><dt>New resource</dt><dd><form method="post" action="{{ view.path() }}" data-setting="resources" id="new-resource">
+</form><form method="post" action="{{ view.path() }}" data-setting="resources" class="cap-remove" data-seen="{{ view.seen("resources") }}"><input type="hidden" name="field" value="resources"><input type="hidden" name="resource" value="{{ r.name }}"><input type="hidden" name="capacity" value="remove"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><button type="submit" class="link-button">Remove {{ r.name }}</button><span class="settings-feedback" role="status"></span></form></dd></div>{% endfor %}</dl></div>
+<dl class="settings-fields"><div class="setting-row"><dt>New resource</dt><dd><form method="post" action="{{ view.path() }}" data-setting="resources" id="new-resource" data-seen="{{ view.seen("resources") }}">
 <input type="hidden" name="field" value="resources"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
 <div class="setting-pair"><label for="resource-name">Name</label><input id="resource-name" name="resource" value="{% if feedback.error("resources") %}{{ feedback.resource }}{% endif %}" required></div>
 {% call capacity("resource-value", "1", "", view.capacity_fns("")) %}{% endcall %}<div class="setting-actions"><button type="submit">Add resource</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" %}{{ feedback.message }}{% endif %}</span></div></form></dd></div></dl></section>
@@ -63,14 +63,14 @@
 <!--retire-status--><div id="retire-status"><p class="setting-help retire-status">{% if view.project.prune_done_after.is_some() %}{{ crate::views::ui::tag("On", "", None)|safe }} Done units retire {{ retire_hours }}h after their last step finished{% if !view.project.prune_keep.is_empty() %}, except {{ crate::views::ui::count(view.project.prune_keep.len(), "pattern", "patterns") }}{% endif %}. {% else %}{{ crate::views::ui::tag("Off", "muted", None)|safe }} Done units stay until an edit removes them. {% endif %}{% if let Some(r) = view.retired %}Last retired {{ crate::views::ui::ago(r.at)|safe }}: {{ crate::views::ui::count(r.steps, "step", "steps") }} (rev {{ r.rev }}).{% else %}Nothing retired yet.{% endif %}</p></div><!--/retire-status-->
 <dl class="settings-fields">
 <div class="setting-row"><dt><label for="prune-done-after">Retire done units after</label></dt><dd>
-<form method="post" action="{{ view.path() }}" data-setting="prune_done_after">
+<form method="post" action="{{ view.path() }}" data-setting="prune_done_after" data-seen="{{ view.seen("prune_done_after") }}">
 <input type="hidden" name="field" value="prune_done_after"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
 <div class="setting-unit"><input id="prune-done-after" name="value" inputmode="decimal" autocomplete="off" placeholder="Off" value="{{ feedback.value("prune_done_after", retire_hours.as_str()) }}" aria-describedby="prune-done-after-help prune-done-after-feedback"><span>hours</span></div>
 <p id="prune-done-after-help" class="setting-help">Such as 6 or 0.5. Leave empty to turn retiring off.</p>
 <div class="setting-actions"><button type="submit">Apply</button><span id="prune-done-after-feedback" class="settings-feedback{% if feedback.error("prune_done_after") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "prune_done_after" %}{{ feedback.message }}{% endif %}</span></div>
 </form></dd></div>
 <div class="setting-row"><dt><label for="prune-keep">Never retire</label></dt><dd>
-<form method="post" action="{{ view.path() }}" data-setting="prune_keep">
+<form method="post" action="{{ view.path() }}" data-setting="prune_keep" data-seen="{{ view.seen("prune_keep") }}">
 <input type="hidden" name="field" value="prune_keep"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
 <input id="prune-keep" name="value" autocomplete="off" spellcheck="false" class="mono-field" value="{{ feedback.value("prune_keep", retire_keep.as_str()) }}" aria-describedby="prune-keep-help prune-keep-feedback">
 <p id="prune-keep-help" class="setting-help">Unit-name patterns, separated by commas or spaces: <code>*</code> matches any run of characters, <code>?</code> one, as in <code>ta-*</code>. A matching unit is never retired, done or not.</p>
@@ -78,10 +78,10 @@
 </form></dd></div>
 </dl></section>
 <section aria-labelledby="activity-heading"><h2 id="activity-heading">Activity</h2>
-<form method="post" action="{{ view.path() }}" data-setting="paused" class="settings-switch"><div><p>Pause project</p><p class="setting-help">Hold future work. Running work continues.</p></div>
+<form method="post" action="{{ view.path() }}" data-setting="paused" class="settings-switch" data-seen="{{ view.seen("paused") }}"><div><p>Pause project</p><p class="setting-help">Hold future work. Running work continues.</p></div>
 <input type="hidden" name="field" value="paused"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><input type="hidden" name="value" value="{% if view.project.paused %}false{% else %}true{% endif %}">
 <button type="submit" role="switch" aria-checked="{{ view.project.paused }}" aria-label="Pause project">{% if view.project.paused %}Resume{% else %}Pause{% endif %}</button><span class="settings-feedback" role="status"></span></form>
-<form method="post" action="{{ view.path() }}" data-setting="archived" class="settings-switch"><div><p>Archive project</p><p class="setting-help">Move to the archived list. Running work continues.</p></div>
+<form method="post" action="{{ view.path() }}" data-setting="archived" class="settings-switch" data-seen="{{ view.seen("archived") }}"><div><p>Archive project</p><p class="setting-help">Move to the archived list. Running work continues.</p></div>
 <input type="hidden" name="field" value="archived"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><input type="hidden" name="value" value="{% if view.project.archived %}false{% else %}true{% endif %}">
 <button type="submit" role="switch" aria-checked="{{ view.project.archived }}" aria-label="Archive project">{% if view.project.archived %}Unarchive{% else %}Archive{% endif %}</button><span class="settings-feedback" role="status"></span></form>
 </section>
@@ -93,6 +93,36 @@
 const base = location.pathname;
 
 let saving = false;
+let sending = null;  // the form being applied: its own change is not someone else's
+// "Changed by cli since you opened this · Reload this field", once, before the form's actions
+function changedSince(form, by) {
+ let note = form.querySelector('.setting-changed');
+ if (!note) {
+  note = document.createElement('p');
+  note.className = 'setting-changed';
+  note.setAttribute('role', 'status');
+  const button = Object.assign(document.createElement('button'), {type: 'button', className: 'link-button', textContent: 'Reload this field'});
+  button.dataset.reloadField = '';
+  note.append(document.createElement('span'), ' · ', button);
+  (form.querySelector('.setting-actions') ?? form.querySelector('button[type=submit]'))?.before(note);
+ }
+ note.firstChild.textContent = `Changed by ${by === 'owner' ? 'the owner' : by || 'someone'} since you opened this`;
+}
+// the form as the page draws it now: its value, revision and change seen, the note gone
+async function reloadField(form) {
+ const response = await fetch(base, {headers: {accept: 'text/html'}});
+ const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+ const resource = form.querySelector('[name=resource]')?.value || '';
+ const fresh = [...doc.querySelectorAll('form[data-setting]')].find(f => f.dataset.setting === form.dataset.setting && f.className === form.className && (f.querySelector('[name=resource]')?.value || '') === resource);
+ if (!fresh) { location.reload(); return; }
+ form.replaceWith(fresh);
+ if (fresh.dataset.setting === 'description') patch(doc, ['description-preview']);
+ fresh.querySelector('input:not([type=hidden]), textarea, select, button')?.focus();
+}
+document.addEventListener('click', event => {
+ const button = event.target.closest('[data-reload-field]');
+ if (button) reloadField(button.closest('form')).catch(() => { button.textContent = 'Could not reload. Try again'; });
+});
 const refresh = () => {
  const live = document.querySelector('#settings-live');
  if (live.dataset.deleted === 'true') { location.assign('/'); return; }
@@ -109,9 +139,23 @@ const refresh = () => {
  document.querySelector('#delete-button').closest('.confirm-flow').dataset.confirmTitle = 'Delete ' + live.dataset.name + '?';
  deletion.querySelector('.confirm-copy').textContent = 'This permanently removes the plan, messages, history, functions, secrets and artifacts. This cannot be undone.';
  deletion.querySelector('.danger').textContent = 'Delete ' + live.dataset.name;
- for (const input of document.querySelectorAll('[name=expected_settings_rev]')) input.value = live.dataset.revision;
- document.querySelector('#delete-button').toggleAttribute('data-disabled', saving || document.querySelector('#delete-guard').dataset.allowed !== 'true');
- document.querySelector('#delete-button').disabled = saving || document.querySelector('#delete-guard').dataset.allowed !== 'true';
+ deletion.querySelector('[name=expected_settings_rev]').value = live.dataset.revision;
+ // A form keeps the revision it was drawn or last applied with while nobody else changes its
+ // field (another field's change cannot clash with it). When someone does, the form says so and
+ // keeps its revision: its Apply is refused as a conflict, never written over theirs.
+ const changes = JSON.parse(live.dataset.fields || '{}');
+ for (const form of document.querySelectorAll('form[data-seen]')) {
+  if (form === sending) continue;
+  const [seq, by] = changes[form.dataset.setting] || [0, ''];
+  const switched = ['paused','archived'].includes(form.dataset.setting);  // a switch reads the live state
+  if (switched || seq <= Number(form.dataset.seen)) {
+   form.querySelector('[name=expected_settings_rev]').value = live.dataset.revision;
+   if (switched) form.dataset.seen = String(seq);
+  } else changedSince(form, by);
+ }
+ const blocked = saving || document.querySelector('#delete-guard').dataset.allowed !== 'true';
+ document.querySelector('#delete-button').toggleAttribute('data-disabled', blocked);
+ document.querySelector('#delete-button').setAttribute('aria-disabled', String(blocked));
 };
 document.addEventListener('datastar-signal-patch', refresh);
 document.querySelector('[data-preview]').hidden = false;
@@ -123,6 +167,7 @@ function patch(doc, ids) {
 async function sendForm(form, submitter) {
  if (saving) return;
  saving = true;
+ sending = form;
  const feedback = form.querySelector('.settings-feedback');
  feedback.textContent = 'Saving…';
  try {
@@ -136,6 +181,12 @@ async function sendForm(form, submitter) {
    feedback.textContent = source?.querySelector('.settings-feedback')?.textContent || (response.ok ? 'Saved' : 'Could not save.');
    feedback.classList.toggle('setting-error', !response.ok);
    feedback.classList.toggle('setting-saved', response.ok);
+   // applied: the form now stands on the revision it made, its own change seen
+   if (response.ok && source?.dataset.seen) {
+    form.dataset.seen = source.dataset.seen;
+    form.querySelector('[name=expected_settings_rev]').value = source.querySelector('[name=expected_settings_rev]').value;
+    form.querySelector('.setting-changed')?.remove();
+   }
    if (response.ok && field === 'resources') patch(doc, ['resource-editors']);
    if (response.ok && field === 'description') patch(doc, ['description-preview']);
    if (response.ok && field === 'icon') { const image = doc.querySelector('#icon-preview'); document.querySelector('#icon-preview')?.remove(); if(image) form.before(image); }
@@ -148,13 +199,13 @@ async function sendForm(form, submitter) {
    }
   } else { feedback.textContent = JSON.parse(text).message || 'Could not save.'; }
  } catch { feedback.textContent = 'Could not save. Check the connection and try again.'; }
- finally { saving = false; refresh(); }
+ finally { saving = false; sending = null; refresh(); }
 }
 document.addEventListener('submit', event => {
  const form = event.target;
  if (form.matches('form[data-setting]')) { event.preventDefault(); sendForm(form, event.submitter); }
  if (form.id === 'delete-form') {
-  event.preventDefault(); if (document.querySelector('#delete-button').disabled) return;
+  event.preventDefault(); if (document.querySelector('#delete-button').hasAttribute('data-disabled')) return;
   saving = true; refresh();
   fetch(form.action, {method:'POST', body:new URLSearchParams(new FormData(form))}).then(async response => {
    if (response.ok && response.redirected) { location.assign('/'); return; }
@@ -170,9 +221,11 @@ document.querySelector('[data-upload-button]').addEventListener('click', async (
  const file = document.querySelector('#icon-file').files[0]; const feedback = document.querySelector('#icon-feedback');
  if (!file) { feedback.textContent = 'Choose an image first.'; return; }
  if (file.size > 262144) { feedback.textContent = 'Image must be at most 256 KiB.'; return; }
- const response = await fetch(base + '/icon?expected_settings_rev=' + document.querySelector('#settings-live').dataset.revision, {method:'POST',body:file});
+ const response = await fetch(base + '/icon?expected_settings_rev=' + document.querySelector('form[data-setting=icon] [name=expected_settings_rev]').value, {method:'POST',body:file});
  if (!response.ok) { feedback.textContent = (await response.json()).message; return; }
  const doc = new DOMParser().parseFromString(await response.text(),'text/html');
+ const iconForm = document.querySelector('form[data-setting=icon]'), drawn = doc.querySelector('form[data-setting=icon]');
+ if (drawn) { iconForm.dataset.seen = drawn.dataset.seen; iconForm.querySelector('[name=expected_settings_rev]').value = drawn.querySelector('[name=expected_settings_rev]').value; iconForm.querySelector('.setting-changed')?.remove(); }
  patch(doc,['settings-live','top-nav']);
  document.querySelector('#icon-preview')?.remove(); const image = doc.querySelector('#icon-preview'); if(image) document.querySelector('form[data-setting=icon]').before(image);
  feedback.textContent = 'Saved';

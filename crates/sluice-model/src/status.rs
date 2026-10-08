@@ -33,6 +33,10 @@ pub struct StepFacts {
     pub running_for: Option<f64>,
     /// Seconds since its last change (status record, run start or finish).
     pub changed_ago: Option<f64>,
+    /// When its earliest live run started and when it last changed (RFC 3339): the instants
+    /// `running_for` and `changed_ago` count from, which a page ticks from without the clock.
+    pub running_since: Option<String>,
+    pub changed_at: Option<String>,
     /// A running step whose run has submitted: it is only finishing.
     pub finishing: Option<crate::attempt::Finishing>,
     /// A running step whose cancel was asked for: its run is stopping.
@@ -63,6 +67,9 @@ pub struct UnitRow {
     #[serde(skip)]
     pub shown: Shown,
     pub age: Option<i64>,
+    /// The instant `age` counts from (RFC 3339): a page ticks it, so the age never changes it.
+    #[serde(skip)]
+    pub since: Option<String>,
     pub engine: String,
     pub steps: String,
     pub blocked: String,
@@ -508,20 +515,31 @@ pub fn units_view(
         if wanted.is_some_and(|w| !w.contains(&unit_state)) {
             continue;
         }
-        let exact = if unit_state == UnitState::Running {
-            Some(
-                unit.steps
-                    .iter()
-                    .zip(&statuses)
-                    .filter(|(_, s)| **s == StepStatus::Running)
-                    .map(|(id, _)| fact(id).running_for.unwrap_or(0.0))
-                    .fold(0.0, f64::max),
-            )
+        // the longest-running step's run, or the latest change: its seconds and its instant
+        let (exact, since) = if unit_state == UnitState::Running {
+            let mut longest = (0.0, None);
+            for (id, _) in unit
+                .steps
+                .iter()
+                .zip(&statuses)
+                .filter(|(_, s)| **s == StepStatus::Running)
+            {
+                let secs = fact(id).running_for.unwrap_or(0.0);
+                if longest.1.is_none() || secs > longest.0 {
+                    longest = (secs, fact(id).running_since.clone());
+                }
+            }
+            (Some(longest.0), longest.1)
         } else {
             unit.steps
                 .iter()
-                .filter_map(|id| fact(id).changed_ago)
-                .reduce(f64::min)
+                .filter_map(|id| {
+                    fact(id)
+                        .changed_ago
+                        .map(|secs| (secs, &fact(id).changed_at))
+                })
+                .reduce(|a, b| if b.0 < a.0 { b } else { a })
+                .map_or((None, None), |(secs, at)| (Some(secs), at.clone()))
         };
         let age = exact.map(|secs| secs as i64);
         let prefix = format!("{name}-");
@@ -590,6 +608,7 @@ pub fn units_view(
             state: unit_state,
             shown: shown.iter().copied().min().unwrap_or(Shown::Pending),
             age,
+            since,
             engine: engine(plan, state, unit),
             steps,
             blocked,

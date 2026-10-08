@@ -24,6 +24,7 @@ use std::{
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;
+use tower_http::compression::predicate::{NotForContentType, Predicate, SizeAbove};
 
 pub const MAX_BODY: usize = 1024 * 1024;
 const REQUEST_ID: &str = "x-request-id";
@@ -62,13 +63,20 @@ pub fn router(
         })
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(middleware::from_fn_with_state(state, policy))
-        // outside the policy, which reads an error's body as text: pages, styles, scripts and
-        // JSON go out as brotli or gzip when the client takes it (never a stream's events)
+        // outside the policy, which reads an error's body as text: pages, styles, scripts, JSON
+        // and a stream's events go out as brotli or gzip when the client takes it. A stream's
+        // encoder flushes whenever the stream waits, so each batch arrives whole and at once,
+        // and brotli's window spans batches: a region sent again compresses to almost nothing.
         // quality 6: brotli's default (4) comes out larger than gzip's on the styles and
         // scripts; at 6 it is smaller, and still fast enough for a large board page
         .layer(
             tower_http::compression::CompressionLayer::new()
-                .quality(tower_http::CompressionLevel::Precise(6)),
+                .quality(tower_http::CompressionLevel::Precise(6))
+                .compress_when(
+                    SizeAbove::new(32)
+                        .and(NotForContentType::GRPC)
+                        .and(NotForContentType::IMAGES),
+                ),
         )
 }
 pub fn error_response(error: PublicError) -> Response {
@@ -578,6 +586,27 @@ impl views::CatalogSource for SocketCatalog {
             .cloned()
             .unwrap_or_default()
             .view)
+    }
+    fn version(&self, project: Option<ProjectId>) -> Result<String, PublicError> {
+        self.cached(project, |c| {
+            c.map(|c| c.view.version.clone()).unwrap_or_default()
+        })
+    }
+}
+impl SocketCatalog {
+    fn cached<T>(
+        &self,
+        project: Option<ProjectId>,
+        read: impl FnOnce(Option<&CachedCatalog>) -> T,
+    ) -> Result<T, PublicError> {
+        Ok(read(
+            self.0
+                .read()
+                .map_err(|_| PublicError::Storage {
+                    message: "catalog cache lock poisoned".into(),
+                })?
+                .get(&project),
+        ))
     }
 }
 impl board::RegistrySource for SocketCatalog {

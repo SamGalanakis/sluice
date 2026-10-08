@@ -264,7 +264,9 @@ async fn a_stream_opened_at_the_drawn_version_sends_no_redraw() {
         let mut body = response.into_body().into_data_stream();
         let first = String::from_utf8(body.next().await.unwrap().unwrap().to_vec()).unwrap();
         assert!(
-            first.contains("datastar-patch-signals") && first.contains(r#"{"stale":false}"#),
+            first.contains("datastar-patch-signals")
+                && first.contains(r#"{"stale":false,"rel":"#)
+                && !first.contains(r#""ver""#),
             "{path}: the first batch only confirms the drawn page: {first}"
         );
         assert!(

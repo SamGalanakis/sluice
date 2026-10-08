@@ -150,6 +150,7 @@ async fn stream(
     let stop = state.dashboard.stop.clone();
     let viewer = Viewer::from_headers(&headers);
     let events = page_events(
+        state.dashboard.watch(project),
         move || {
             let state = state.clone();
             let path = path.clone();

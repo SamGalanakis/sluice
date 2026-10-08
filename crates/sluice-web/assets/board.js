@@ -334,6 +334,19 @@ window.addEventListener("keydown", event => {
 
 // ---- a board Button: its say, sent without leaving the page ------------------------------------
 
+// A refused field's note stays through the board's patches (`data-ignore-morph`) until the owner
+// edits that field, or sends the form again.
+const clearNote = event => {
+  const field = event.target.closest?.("form.board-form [name]");
+  const note = field && field.form?.querySelector(`[data-error-for="${CSS.escape(field.name)}"]`);
+  if (note && !note.hidden) {
+    note.hidden = true;
+    note.textContent = "";
+  }
+};
+document.addEventListener("input", clearNote);
+document.addEventListener("change", clearNote);
+
 document.addEventListener("submit", async event => {
   const form = event.target.closest?.("form.board-form");
   if (!form) return;

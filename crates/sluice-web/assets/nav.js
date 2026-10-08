@@ -1,5 +1,3 @@
-const runtimeUrl = document.querySelector("script[data-datastar-runtime]")?.src;
-const datastar = runtimeUrl ? await import(runtimeUrl) : null;
 // The nav's two menus (the project switcher, display preferences) and the plan's More menu are <details>: they open and
 // work without this. This closes them on a click elsewhere or Escape, as a menu does, and makes
 // a setting apply at once, without the menu's Save: the theme (its id as `data-theme` on
@@ -61,30 +59,90 @@ try {
   localStorage.removeItem("sluice.types");
 } catch { /* no storage */ }
 
-// The stream uses Datastar's own retry and cancellation ownership. The status
-// stays visible until the version marker acknowledges an entire rendered batch.
+// ---- the page's stream ------------------------------------------------------------------------
+// Datastar owns the stream's retries and cancellation; this says how it stands. Live, the line is
+// hidden. While Datastar retries (an error, or the stream ended), "Updates paused.
+// Reconnecting…". When it gives up (its retries ran out after about three minutes, or the server
+// ended the stream for good), "Updates stopped at 14:02." with Reconnect: it never gives up
+// silently, and going online, coming back to the tab or focusing the window opens it again.
+// The first batch of every connection names the build that drew it (`rel`): a page drawn by
+// another build says "sluice was updated" with Reload, calmly (its styles and scripts are the
+// old build's).
 const streamState = document.querySelector("#stream-state");
-// A page that points its stream at a new query (the board's search) ends the old request on
-// purpose: its end is not a lost connection.
+const streamWords = streamState?.querySelector(".stream-words");
+const releaseState = document.querySelector("#release-state");
+const mainStream = () => document.querySelector("main[data-init]");
+let phase = "live";
+// A page that points its stream at a new query (the board's search), or reconnects it, ends the
+// old request on purpose: its end is not a lost connection.
 let restarts = 0;
-window.addEventListener("sluice-stream-restart", () => { restarts++; });
+window.addEventListener("sluice-stream-restart", () => { if (phase !== "stopped") restarts++; });
+const clock = (at) => at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+function showPhase(next) {
+  phase = next;
+  if (!streamState) return;
+  streamState.hidden = next === "live";
+  if (next === "paused") streamWords.textContent = "Updates paused. Reconnecting…";
+  if (next === "stopped") streamWords.textContent = `Updates stopped at ${clock(new Date())}.`;
+}
+/** Open the page's stream again, now: Datastar ends the old request ('cleanup') and starts anew. */
+function reconnect() {
+  const main = mainStream();
+  const init = main?.getAttribute("data-init");
+  if (!init) return;
+  window.dispatchEvent(new Event("sluice-stream-restart"));
+  showPhase("paused");
+  main.removeAttribute("data-init");
+  setTimeout(() => main.setAttribute("data-init", init));
+}
 document.addEventListener("datastar-fetch", (event) => {
-  if (event.detail.el !== document.querySelector("main[data-init]")) return;
-  if (restarts && event.detail.type === "finished") { restarts--; return; }
-  if (["error", "retrying", "retries-failed", "finished"].includes(event.detail.type)) {
-    datastar?.mergePatch({ stale: true });
+  // the page's own stream (its attribute is briefly gone while it reconnects), never the drawer's
+  if (event.detail.el !== document.querySelector("main#content")) return;
+  const type = event.detail.type;
+  if (type === "finished") {
+    if (restarts) { restarts--; return; }
+    showPhase("stopped");
+  } else if (type === "retries-failed") {
+    showPhase("stopped");
+  } else if (type === "error" || type === "retrying") {
+    if (phase !== "stopped") showPhase("paused");
+  } else if (type === "datastar-patch-signals") {
+    // what the stream itself says (Datastar's signal events fire only for a value that moved)
+    let signals = {};
+    try { signals = JSON.parse(event.detail.argsRaw?.signals ?? "{}"); } catch { /* not ours */ }
+    if (signals.stale === false) showPhase("live");
+    if (signals.stale === true && phase === "live") showPhase("paused");
+    if (signals.rel && releaseState) releaseState.hidden = signals.rel === document.body.dataset.release;
   }
 });
-document.addEventListener("datastar-signal-patch", (event) => {
-  if (event.detail.stale === false && streamState) streamState.style.display = "none";
-  if (event.detail.stale === true && streamState) streamState.style.display = "";
+const revive = () => { if (phase === "stopped" && !document.hidden) reconnect(); };
+window.addEventListener("online", revive);
+window.addEventListener("focus", revive);
+document.addEventListener("visibilitychange", revive);
+document.querySelector(".stream-retry")?.addEventListener("click", reconnect);
+document.querySelector(".release-reload")?.addEventListener("click", () => location.reload());
+document.addEventListener("datastar-signal-patch", () => {
   const title = document.querySelector("[data-page-title]");
   if (title) document.title = title.dataset.pageTitle;
   tick();
 });
-// A stream with no version changes still sends keepalives. Fetch failures are
-// reported by Datastar, so an idle page is never marked stale by a timer.
-document.querySelector(".stream-retry")?.addEventListener("click", () => location.reload());
+// A hidden tab's stream is closed (Datastar reopens it when the tab shows again), but its title
+// is what the owner reads in the tab strip: while hidden it asks for the title alone every 30 s
+// (a timer, not a frame: a hidden tab runs no animation frames).
+let titlePoll = 0;
+async function pollTitle() {
+  const el = document.querySelector("[data-page-title][data-title-src]");
+  if (!el) return;
+  try {
+    const response = await fetch(el.dataset.titleSrc, { headers: { accept: "text/plain" } });
+    const text = response.ok ? (await response.text()).trim() : "";
+    if (text) { el.dataset.pageTitle = text; document.title = text; }
+  } catch { /* the next poll, or the stream when the tab shows again */ }
+}
+document.addEventListener("visibilitychange", () => {
+  clearInterval(titlePoll);
+  titlePoll = document.hidden && document.querySelector("[data-title-src]") ? setInterval(pollTitle, 30000) : 0;
+});
 // ---- times: one vocabulary on every page ------------------------------------------------------
 // A <time> carries its instant in `datetime`; until this reads it, its text is the server's
 // "2026-10-07 20:47 UTC" (and its title keeps that). `data-since`: how long since, ticking, in
@@ -168,51 +226,46 @@ setInterval(tick, 5000);
 new MutationObserver(tick).observe(document.querySelector("main") ?? document.body,
   { childList: true, subtree: true, characterData: true });
 
+// A confirmation (Cancel, Close all, Delete) stays the <details class="confirm-flow"> the server
+// draws, so a patch of its region morphs it in place: its summary keeps the focus and any click
+// that straddles the patch. With script, the summary opens the shared dialog instead of the
+// details, the form moved into it while it is open; without, the details open inline.
 const confirmation = document.querySelector('#confirmation');
 let confirming;
-function confirmations() {
-  for (const details of document.querySelectorAll('details.confirm-flow')) {
-    const flow = document.createElement('div');
-    for (const attr of details.attributes) flow.setAttribute(attr.name, attr.value);
-    flow.append(...details.childNodes);
-    details.replaceWith(flow);
-    const summary = flow.querySelector(':scope > summary');
-    if (!summary) continue;
-    const button = document.createElement('button');
-    for (const attr of summary.attributes) button.setAttribute(attr.name, attr.value);
-    button.type = 'button';
-    button.textContent = summary.textContent;
-    button.disabled = summary.hasAttribute('data-disabled');
-    summary.replaceWith(button);
-    button.addEventListener('click', () => {
-      if (button.disabled || confirmation.open) return;
-      const form = flow.querySelector('form');
-      const place = document.createComment('confirmation form');
-      form.replaceWith(place);
-      confirming = { form, place, button, title: flow.dataset.confirmTitle };
-      // a step named by its title, its id after it in data mono: "Cancel L13: certif… fig-5193-work?"
-      const head = document.querySelector('#confirmation-title');
-      head.textContent = flow.dataset.confirmTitle;
-      if (flow.dataset.confirmId) {
-        const id = Object.assign(document.createElement('code'), { className: 'sref-id', textContent: flow.dataset.confirmId });
-        head.append(' ', id, '?');
-      }
-      document.querySelector('#confirmation-body').replaceChildren(form);
-      form.querySelector('.confirm-copy').id = 'confirmation-copy';
-      confirmation.setAttribute('aria-describedby', 'confirmation-copy');
-      confirmation.showModal();
-      form.querySelector('[data-keep]').focus();
-    });
+document.addEventListener('click', event => {
+  const summary = event.target.closest?.('details.confirm-flow > summary');
+  if (!summary || !confirmation) return;
+  event.preventDefault();
+  if (summary.getAttribute('aria-disabled') === 'true' || summary.hasAttribute('data-disabled') || confirmation.open) return;
+  const flow = summary.parentElement;
+  const form = flow.querySelector(':scope > form');
+  if (!form) return;
+  const place = document.createComment('confirmation form');
+  form.replaceWith(place);
+  confirming = { form, place, flow, summary, title: flow.dataset.confirmTitle };
+  // a step named by its title, its id after it in data mono: "Cancel L13: certif… fig-5193-work?"
+  const head = document.querySelector('#confirmation-title');
+  head.textContent = flow.dataset.confirmTitle;
+  if (flow.dataset.confirmId) {
+    const id = Object.assign(document.createElement('code'), { className: 'sref-id', textContent: flow.dataset.confirmId });
+    head.append(' ', id, '?');
   }
-}
+  document.querySelector('#confirmation-body').replaceChildren(form);
+  form.querySelector('.confirm-copy').id = 'confirmation-copy';
+  confirmation.setAttribute('aria-describedby', 'confirmation-copy');
+  confirmation.showModal();
+  form.querySelector('[data-keep]').focus();
+});
 confirmation?.addEventListener('close', () => {
   if (!confirming) return;
-  const { form, place, button, title } = confirming;
-  form.querySelector('.confirm-copy').removeAttribute('id');
-  if (place.isConnected) place.replaceWith(form);
-  else form.remove();
+  const { form, place, flow, summary, title } = confirming;
   confirming = null;
-  const opener = button.isConnected ? button : [...document.querySelectorAll(".confirm-flow")].find(flow => flow.dataset.confirmTitle === title)?.querySelector("button");
+  form.querySelector('.confirm-copy').removeAttribute('id');
+  // a patch while it was open may have drawn the details a new form: keep that one
+  if (place.isConnected && !flow.querySelector(':scope > form')) place.replaceWith(form);
+  else { place.remove(); form.remove(); }
+  const opener = summary.isConnected ? summary
+    : [...document.querySelectorAll('details.confirm-flow')].find(f => f.dataset.confirmTitle === title)?.querySelector(':scope > summary');
   opener?.focus();
 });
 document.addEventListener('click', event => {
@@ -221,8 +274,6 @@ document.addEventListener('click', event => {
   if (confirmation.open && confirmation.contains(keep)) confirmation.close();
   else keep.closest('details.confirm-flow').open = false;
 });
-confirmations();
-new MutationObserver(confirmations).observe(document.body, { childList: true, subtree: true });
 
 document.addEventListener('keydown', event => {
   if (event.key !== 'Tab' || !confirmation?.open) return;

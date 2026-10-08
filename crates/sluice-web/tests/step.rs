@@ -345,11 +345,14 @@ async fn durable_detail_uses_current_generation_frozen_inputs_and_live_submissio
         .unwrap();
     // The board's cards carry no run detail; the step's page loads it.
     assert!(board.units[0].steps[0].runs.is_empty());
-    let (_, board, step) = views::board::step_snapshot(&state, project, Some(&registry), &work)
+    // the step's own read draws it alone, its runs with it
+    let step = views::board::step_detail(&state, project, Some(&registry), &work, false)
         .await
-        .unwrap();
+        .unwrap()
+        .1
+        .unwrap()
+        .step;
     let unit = &board.units[0];
-    assert_eq!(unit.steps[0].runs.len(), 1);
     let step = &step;
     assert_eq!(step.runs.len(), 1);
     assert_eq!(step.runs[0].id, live);
@@ -381,9 +384,12 @@ async fn durable_detail_uses_current_generation_frozen_inputs_and_live_submissio
         })
         .await
         .unwrap();
-    let (_, _, step) = views::board::step_snapshot(&state, project, Some(&registry), &work)
+    let step = views::board::step_detail(&state, project, Some(&registry), &work, false)
         .await
-        .unwrap();
+        .unwrap()
+        .1
+        .unwrap()
+        .step;
     assert!(!step.outputs[0].available);
 }
 
@@ -419,9 +425,12 @@ async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawe
         .await
         .unwrap();
     assert_eq!(board.units[0].steps[0].caption(), "finishing");
-    let (_, _, step) = views::board::step_snapshot(&state, project, Some(&registry), &work)
+    let step = views::board::step_detail(&state, project, Some(&registry), &work, false)
         .await
-        .unwrap();
+        .unwrap()
+        .1
+        .unwrap()
+        .step;
     let html = step.body().unwrap();
     let html = html.as_str();
     assert!(html.contains("finishing · running for <time"), "{html}");
@@ -859,9 +868,12 @@ async fn a_running_step_says_what_it_is_doing_now() {
     }).await.unwrap();
     let work = "work".parse().unwrap();
     let registry = Registry(Arc::new(Exact));
-    let (_, _, step) = views::board::step_snapshot(&state, project, Some(&registry), &work)
+    let step = views::board::step_detail(&state, project, Some(&registry), &work, false)
         .await
-        .unwrap();
+        .unwrap()
+        .1
+        .unwrap()
+        .step;
     let drawer = step.body().unwrap();
     let drawer = drawer.as_str();
     let now = &drawer[drawer

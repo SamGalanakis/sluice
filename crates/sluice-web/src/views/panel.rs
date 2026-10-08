@@ -1051,7 +1051,7 @@ impl Draw<'_> {
         }
         let _ = write!(
             self.out,
-            "{control}<span class=\"ou-error\" data-error-for=\"{name}\" hidden></span></{tag}>"
+            "{control}<span class=\"ou-error\" data-error-for=\"{name}\" data-ignore-morph hidden></span></{tag}>"
         );
     }
     fn table(
@@ -1104,10 +1104,17 @@ impl Draw<'_> {
                 Some((shown, steps)) => (*shown, steps.clone()),
                 None => (row.shown, vec![]),
             };
-            let age = row
-                .age
-                .map(|_| sluice_model::status::age_text(row.age))
-                .unwrap_or_default();
+            // how long since, ticking from the instant it counts from (`nav.js`): the clock's
+            // text, which the page's version leaves out, so the age alone never patches it
+            let age = match (&row.since, row.age) {
+                (Some(at), Some(_)) => format!(
+                    " <time data-since=\"{a}\" datetime=\"{a}\" class=\"meta\" title=\"{t}\">{}</time>",
+                    esc(sluice_model::status::age_text(row.age).trim()),
+                    a = esc(at),
+                    t = esc(&super::ui::at_text(at)),
+                ),
+                _ => String::new(),
+            };
             let waiting = [row.blocked.as_str(), row.last.as_str()]
                 .into_iter()
                 .filter(|s| !s.is_empty())
@@ -1134,11 +1141,7 @@ impl Draw<'_> {
                 esc(&row.unit),
                 super::ui::mark(shown),
                 esc(shown.word()),
-                if age.trim().is_empty() {
-                    String::new()
-                } else {
-                    format!(" <span class=\"meta\">{}</span>", esc(age.trim()))
-                },
+                age,
                 steps,
                 prose(&waiting)
             );

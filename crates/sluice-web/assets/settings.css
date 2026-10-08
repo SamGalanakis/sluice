@@ -18,6 +18,10 @@
 .cap-remove { margin-top:4px; display:flex; align-items:center; gap:8px; }
 .settings-page .link-button { min-height:32px; padding:0; border:0; background:none; color:var(--muted-foreground); text-decoration:underline; text-underline-offset:3px; font-size:13px; }
 .settings-page .link-button:hover { color:var(--status-attention); }
+/* another author changed this field since the form was drawn: said beside it, in the attention colour */
+.setting-changed { margin:8px 0 0; font-size:13px; line-height:18px; color:var(--status-attention); }
+.setting-changed .link-button { min-height:24px; color:inherit; }
+@media (max-width: 720px) { .setting-changed .link-button { min-height:44px; } }
 .preview-fold { margin-top:12px; }
 .settings-page h1 { overflow-wrap:anywhere; margin-bottom:8px; }
 .settings-page .settings-lead { color:var(--muted-foreground); margin:0 0 28px; }

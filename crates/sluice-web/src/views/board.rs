@@ -299,6 +299,18 @@ pub struct Layout<'a> {
     /// The shelf drawn open: the view asks for done units (Show: Done) or a search matched in it.
     pub open: bool,
 }
+impl Band<'_> {
+    /// Its element's id, a region a patch can draw alone: "band-running", "band-plan".
+    pub fn id(&self) -> String {
+        band_id(self.label)
+    }
+}
+fn band_id(label: &str) -> String {
+    match label {
+        "" => "band-plan".into(),
+        label => format!("band-{}", label.to_lowercase()),
+    }
+}
 impl Layout<'_> {
     /// The done units the shelf leaves out; "Show all" draws them (Show: Done).
     pub fn more(&self) -> usize {
@@ -316,7 +328,96 @@ impl Layout<'_> {
 }
 /// How many done units the shelf draws unless every one is asked for: the latest finished.
 pub const SHELF: usize = 20;
+/// Each step's depth in the plan (the longest chain of what it waits on), and the steps held up
+/// by a stopped step (`sluice_model::status::blocked`).
+struct Depths {
+    depth: BTreeMap<StepId, usize>,
+    blocked: indexmap::IndexSet<StepId>,
+}
+impl Depths {
+    fn new(plan: &Plan, state: &StateSnapshot) -> Self {
+        let mut depth = BTreeMap::new();
+        for id in plan.topological_order() {
+            let d = plan
+                .dependencies(id)
+                .iter()
+                .filter_map(|d| depth.get(d))
+                .max()
+                .copied()
+                .map_or(0, |d: usize| d + 1);
+            depth.insert(id.clone(), d);
+        }
+        Self {
+            depth,
+            blocked: sluice_model::status::blocked(plan, state),
+        }
+    }
+}
 impl UnitView {
+    /// The unit as the plan and its state have it, before it is named and its cards read.
+    fn new(
+        project: ProjectId,
+        changed: &str,
+        plan: &Plan,
+        state: &StateSnapshot,
+        unit: &sluice_model::units::Unit,
+        depths: &Depths,
+    ) -> Self {
+        let steps: Vec<_> = unit
+            .steps
+            .iter()
+            .map(|id| {
+                let mut view = StepView::new(project, plan, state, id);
+                view.blocked = depths.blocked.contains(id);
+                view
+            })
+            .collect();
+        let mut rows = BTreeMap::<usize, Vec<StepView>>::new();
+        for step in &steps {
+            rows.entry(depths.depth[&step.id]).or_default().push(step.clone());
+        }
+        UnitView {
+            id: unit.name.clone(),
+            title: String::new(),
+            recipe: String::new(),
+            stages: vec![],
+            params: indexmap::IndexMap::new(),
+            matrix: false,
+            pos: 0,
+            tagged: unit.tagged,
+            done: unit.done(state),
+            settled: unit.settled(plan, state),
+            steps,
+            rows: rows.into_values().collect(),
+            last_message: String::new(),
+            last_from: String::new(),
+            last_thread: String::new(),
+            changed: changed.to_owned(),
+            solo: unit.steps.len() == 1,
+            waits: BTreeMap::new(),
+            open: false,
+        }
+    }
+    /// Name it and its steps (`sluice_runtime::naming`): titles, stages, its recipe and params;
+    /// a unit whose recipe has a view is a row of that recipe's lane matrix.
+    fn name(&mut self, names: &sluice_runtime::naming::ProjectNaming) {
+        let id = self.id.to_string();
+        if let Some(named) = names.naming.unit(&id) {
+            self.title = named.title.clone();
+            self.recipe = named.recipe.clone();
+            self.stages = named.stages.clone();
+            self.params = named.params.clone();
+        }
+        self.matrix = names
+            .recipe_of(&id)
+            .is_some_and(|r| r.view_source().is_some());
+        for step in self.steps.iter_mut().chain(self.rows.iter_mut().flatten()) {
+            if let Some(named) = names.naming.step(step.id.as_str()) {
+                step.title = named.title.clone();
+                step.stage = named.stage.clone();
+            }
+        }
+    }
     /// Its steps counted by how each reads (`shown`).
     pub fn tally(&self) -> Tally {
         self.steps.iter().map(StepView::shown).collect()
@@ -598,8 +699,14 @@ pub struct Matrix<'a> {
     pub view_error: Option<&'a str>,
     /// Its head's level: an `h3` under its band's label, an `h2` where no label is drawn.
     pub level: u8,
+    /// Its band's id: a recipe may have a matrix in more than one band.
+    pub band: String,
 }
 impl Matrix<'_> {
+    /// Its element's id, a region a patch can draw alone: "mx-band-running-lane".
+    pub fn id(&self) -> String {
+        format!("mx-{}-{}", self.band, self.recipe)
+    }
     /// "14 units · 1 failed · 3 quiet · 9 running · 1 paused": its rows counted by how each
     /// reads (`UnitView::shown`), each row once.
     pub fn tally(&self) -> String {
@@ -729,58 +836,12 @@ impl ProjectView {
         state: &StateSnapshot,
         revision: u64,
     ) -> Self {
-        let mut depth = BTreeMap::new();
-        for id in plan.topological_order() {
-            let d = plan
-                .dependencies(id)
-                .iter()
-                .filter_map(|d| depth.get(d))
-                .max()
-                .copied()
-                .map_or(0, |d: usize| d + 1);
-            depth.insert(id.clone(), d);
-        }
-        let blocked = sluice_model::status::blocked(plan, state);
+        let depths = Depths::new(plan, state);
         let relations = relations(plan);
         let units = plan
             .units()
             .values()
-            .map(|unit| {
-                let steps: Vec<_> = unit
-                    .steps
-                    .iter()
-                    .map(|id| {
-                        let mut view = StepView::new(project.id, plan, state, id);
-                        view.blocked = blocked.contains(id);
-                        view
-                    })
-                    .collect();
-                let mut rows = BTreeMap::<usize, Vec<StepView>>::new();
-                for step in &steps {
-                    rows.entry(depth[&step.id]).or_default().push(step.clone());
-                }
-                UnitView {
-                    id: unit.name.clone(),
-                    title: String::new(),
-                    recipe: String::new(),
-                    stages: vec![],
-                    params: indexmap::IndexMap::new(),
-                    matrix: false,
-                    pos: 0,
-                    tagged: unit.tagged,
-                    done: unit.done(state),
-                    settled: unit.settled(plan, state),
-                    steps,
-                    rows: rows.into_values().collect(),
-                    last_message: String::new(),
-                    last_from: String::new(),
-                    last_thread: String::new(),
-                    changed: project.changed.clone(),
-                    solo: unit.steps.len() == 1,
-                    waits: BTreeMap::new(),
-                    open: false,
-                }
-            })
+            .map(|unit| UnitView::new(project.id, &project.changed, plan, state, unit, &depths))
             .collect::<Vec<_>>();
         let mut units = units;
         for (pos, unit) in units.iter_mut().enumerate() {
@@ -882,22 +943,7 @@ impl ProjectView {
     /// params; a unit whose recipe has a view becomes a row of that recipe's lane matrix.
     pub fn name(&mut self, names: std::sync::Arc<sluice_runtime::naming::ProjectNaming>) {
         for unit in &mut self.units {
-            let id = unit.id.to_string();
-            if let Some(named) = names.naming.unit(&id) {
-                unit.title = named.title.clone();
-                unit.recipe = named.recipe.clone();
-                unit.stages = named.stages.clone();
-                unit.params = named.params.clone();
-            }
-            unit.matrix = names
-                .recipe_of(&id)
-                .is_some_and(|r| r.view_source().is_some());
-            for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
-                if let Some(named) = names.naming.step(step.id.as_str()) {
-                    step.title = named.title.clone();
-                    step.stage = named.stage.clone();
-                }
-            }
+            unit.name(&names);
         }
         self.names = names;
         self.settle();
@@ -1118,7 +1164,7 @@ impl ProjectView {
                     loose.sort_by_key(|u| std::cmp::Reverse(u.height()));
                     Band {
                         label,
-                        matrices: self.matrices(rows),
+                        matrices: self.matrices(rows, band_id(label)),
                         layers: self.layers(joined, &mut placed),
                         loose,
                     }
@@ -1132,7 +1178,7 @@ impl ProjectView {
     }
     /// A band's matrix rows as one lane matrix a recipe, in the plan's order of their first
     /// rows; under Live first each matrix's rows that need someone first.
-    fn matrices<'a>(&'a self, mut rows: Vec<&'a UnitView>) -> Vec<Matrix<'a>> {
+    fn matrices<'a>(&'a self, mut rows: Vec<&'a UnitView>, band: String) -> Vec<Matrix<'a>> {
         rows.sort_by_key(|u| u.pos);
         let live = self.order == "live";
         let mut matrices: Vec<Matrix<'a>> = vec![];
@@ -1148,6 +1194,7 @@ impl ProjectView {
                         view: recipe.and_then(|r| r.view()),
                         view_error: recipe.and_then(|r| r.view_error()),
                         level: if live { 3 } else { 2 },
+                        band: band.clone(),
                     });
                 }
             }
@@ -1592,7 +1639,7 @@ impl ProjectView {
             .iter()
             .filter(|r| on_page(&r.from.key()) && on_page(&r.to.key()))
             .collect();
-        serde_json::to_string(&relations).expect("typed relations serialize")
+        script_json(&relations)
     }
     /// The lines inside one unit, for its own page.
     pub fn unit_edges_json(&self, unit: &UnitView) -> String {
@@ -1607,7 +1654,7 @@ impl ProjectView {
                 ..r.clone()
             })
             .collect();
-        serde_json::to_string(&relations).expect("typed relations serialize")
+        script_json(&relations)
     }
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&ProjectTemplate {
@@ -1615,10 +1662,6 @@ impl ProjectView {
             js_url: super::asset_url("sluice.js"),
             board_js_url: super::asset_url("board.js"),
         })
-    }
-    /// The part of the body a stream patches: everything before the drawer.
-    pub fn region(&self) -> Result<TrustedHtml, askama::Error> {
-        Ok(Self::board_region(&self.body()?))
     }
     fn board_region(body: &TrustedHtml) -> TrustedHtml {
         let end = body
@@ -1653,7 +1696,7 @@ impl ProjectView {
         let nav = NavView::new(shared, Some(self.project.id), "plan")?;
         let (body, batch) = self.draw(shared, viewer)?;
         super::render_layout(
-            &self.project.name,
+            &self.project.tab_words(),
             &body,
             &nav,
             viewer,
@@ -1670,6 +1713,36 @@ struct ProjectTemplate<'a> {
     view: &'a ProjectView,
     js_url: String,
     board_js_url: String,
+}
+/// Relations as the text of a `<script type="application/json">` the board reads its lines from:
+/// JSON with `<`, `>` and `&` written as escapes, so no text in it can end or open an element.
+fn script_json(relations: &[impl Serialize]) -> String {
+    serde_json::to_string(relations)
+        .expect("typed relations serialize")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+}
+/// What a page drew is gone: one calm line where it was (`id`'s element), with a way on.
+fn gone_html(id: &str, words: &str, href: &str, link: &str) -> TrustedHtml {
+    #[derive(Template)]
+    #[template(
+        source = "<div id=\"{{ id }}\" class=\"gone\" data-gone><p class=\"d-gone\">{{ words }} <a href=\"{{ href }}\">{{ link }}</a></p></div>",
+        ext = "html"
+    )]
+    struct Gone<'a> {
+        id: &'a str,
+        words: &'a str,
+        href: &'a str,
+        link: &'a str,
+    }
+    TrustedHtml::from_template(&Gone {
+        id,
+        words,
+        href,
+        link,
+    })
+    .expect("owned template renders")
 }
 pub(crate) fn render_error(error: askama::Error) -> PublicError {
     PublicError::Storage {
@@ -1749,8 +1822,8 @@ impl PlanCache {
 }
 /// Load the board and its compiled plan in a single caller-owned transaction. The signature
 /// provider must be the registry's exact compiled signatures, `signatures` its version. Every
-/// step gets what its card shows; `detail` also gets its runs, thread and submissions (its
-/// page).
+/// step gets what its card shows; a step's runs, thread and submissions are its page's
+/// (`load_step`).
 pub fn load_board(
     c: &Connection,
     shared: &DashboardSnapshot,
@@ -1758,7 +1831,6 @@ pub fn load_board(
     plans: &PlanCache,
     signatures: &str,
     provider: &impl SignatureProvider,
-    detail: Option<&StepId>,
 ) -> sluice_store::Result<(ProjectView, std::sync::Arc<Plan>)> {
     let summary = shared
         .projects
@@ -1774,23 +1846,7 @@ pub fn load_board(
     )?;
     let plan = plans.compile(project, doc, signatures, provider)?;
     let mut state = sluice_store::plans::read_state(c, project)?;
-    for (id, step) in plan.steps() {
-        if state.status(id) == StepStatus::Pending
-            && !step.is_external()
-            && evaluate_step(&plan, &state, step) == GateDecision::Ready
-        {
-            let needs = step.needs.iter().map(|(n, a)| (n.clone(), *a)).collect();
-            let fit = sluice_store::resources::fits(c, project, &needs)?;
-            if !fit.blocked.is_empty() {
-                state
-                    .steps
-                    .entry(id.clone())
-                    .or_default()
-                    .queued
-                    .push(fit.reason);
-            }
-        }
-    }
+    queue(c, project, &plan, &mut state, None)?;
     let mut board = ProjectView::new(summary.clone(), &plan, &state, revision as u64);
     board.name(sluice_runtime::naming::for_project(
         c,
@@ -1798,17 +1854,7 @@ pub fn load_board(
         project,
     )?);
     let mut last = last_messages(c, project, &board)?;
-    // What a card shows; a step's runs, thread and submissions are its page's (load_detail).
-    let mut cards = BTreeMap::new();
-    let mut rows = c.prepare_cached("SELECT step_id,manual,total,done,error FROM steps WHERE project_id=?1")?;
-    let mut found = rows.query([project.to_string()])?;
-    while let Some(r) = found.next()? {
-        let card: (bool, Option<i64>, i64, Option<String>) = (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
-        cards.insert(r.get::<_, String>(0)?, card);
-    }
-    let finishing = sluice_store::attempts::finishing(c, project)?;
-    let stopping = sluice_store::attempts::stopping(c, project)?;
-    let timings = run_timings(c, project)?;
+    let cards = Cards::read(c, project)?;
     for unit in &mut board.units {
         if let Some((message, at, from, thread)) = last.remove(unit.id.as_str()) {
             unit.last_message = message;
@@ -1817,9 +1863,7 @@ pub fn load_board(
             unit.last_thread = thread;
         }
         for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
-            step.finishing = finishing.get(&step.id).cloned();
-            step.stopping = stopping.contains(&step.id);
-            step.timing = timings.get(step.id.as_str()).cloned();
+            cards.decorate(step, revision as u64);
             // its run as observed with the store's snapshot: quiet, and when it last wrote
             let run = summary.running.iter().find(|r| r.step == step.id.as_str());
             step.quiet = run.is_some_and(|r| r.quiet);
@@ -1827,29 +1871,11 @@ pub fn load_board(
                 .and_then(|r| r.activity)
                 .map(super::rfc3339)
                 .unwrap_or_default();
-            if let Some((manual, total, done, error)) = cards.get(step.id.as_str()) {
-                step.manual = *manual;
-                step.total = total.map(|n| n as usize);
-                step.done = *done as usize;
-                if let Some(error) = error {
-                    let took = step.timing.as_ref().map(|t| t.seconds);
-                    step.set_failure(super::failure::Failure::parse(error, took));
-                }
-            }
-            step.revision = revision as u64;
         }
         // a lane's view reads its stages' live progress
         if unit.matrix && !unit.done {
             for step in unit.steps.iter_mut().filter(|s| s.running()) {
                 super::step::load_progress(c, project, step)?;
-            }
-        }
-        if let Some(id) = detail
-            && let Some(step) = unit.steps.iter_mut().find(|s| &s.id == id)
-        {
-            super::step::load_detail(c, project, step)?;
-            for drawn in unit.rows.iter_mut().flatten().filter(|s| &s.id == id) {
-                *drawn = step.clone();
             }
         }
     }
@@ -1864,7 +1890,196 @@ pub fn load_board(
     }
     board.usual = usual;
     // every fact read: how each step reads, its waits' words, the counts and the lines
-    board.known(&plan, &state);    Ok((board, plan))
+    board.known(&plan, &state);
+    Ok((board, plan))
+}
+/// Note on each pending step the plan would start but its resources hold back why it is queued
+/// (`only`: that step alone).
+fn queue(
+    c: &Connection,
+    project: ProjectId,
+    plan: &Plan,
+    state: &mut StateSnapshot,
+    only: Option<&StepId>,
+) -> sluice_store::Result<()> {
+    for (id, step) in plan.steps() {
+        if only.is_none_or(|only| only == id)
+            && state.status(id) == StepStatus::Pending
+            && !step.is_external()
+            && evaluate_step(plan, state, step) == GateDecision::Ready
+        {
+            let needs = step.needs.iter().map(|(n, a)| (n.clone(), *a)).collect();
+            let fit = sluice_store::resources::fits(c, project, &needs)?;
+            if !fit.blocked.is_empty() {
+                state
+                    .steps
+                    .entry(id.clone())
+                    .or_default()
+                    .queued
+                    .push(fit.reason);
+            }
+        }
+    }
+    Ok(())
+}
+/// What a step's card shows beyond the plan's state, read for the whole project:
+/// its progress counts, error, finishing run, asked cancel and current run times. A step's runs, thread and
+/// submissions are its page's (`step::load_detail`).
+struct Cards {
+    rows: BTreeMap<String, (bool, Option<i64>, i64, Option<String>)>,
+    finishing: BTreeMap<StepId, sluice_model::attempt::Finishing>,
+    stopping: BTreeSet<StepId>,
+    timings: BTreeMap<String, RunTiming>,
+}
+impl Cards {
+    fn read(c: &Connection, project: ProjectId) -> sluice_store::Result<Self> {
+        let mut rows = BTreeMap::new();
+        let mut q = c.prepare_cached("SELECT step_id,manual,total,done,error FROM steps WHERE project_id=?1")?;
+        let mut found = q.query([project.to_string()])?;
+        while let Some(r) = found.next()? {
+            rows.insert(r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?));
+        }
+        Ok(Self {
+            rows,
+            finishing: sluice_store::attempts::finishing(c, project)?,
+            stopping: sluice_store::attempts::stopping(c, project)?,
+            timings: run_timings(c, project)?,
+        })
+    }
+    fn decorate(&self, step: &mut StepView, revision: u64) {
+        step.finishing = self.finishing.get(&step.id).cloned();
+        step.stopping = self.stopping.contains(&step.id);
+        step.timing = self.timings.get(step.id.as_str()).cloned();
+        if let Some((manual, total, done, error)) = self.rows.get(step.id.as_str()) {
+            step.manual = *manual;
+            step.total = total.map(|n| n as usize);
+            step.done = *done as usize;
+            if let Some(error) = error {
+                let took = step.timing.as_ref().map(|t| t.seconds);
+                step.set_failure(super::failure::Failure::parse(error, took));
+            }
+        }
+        step.revision = revision;
+    }
+}
+/// One step as its page and the drawer draw it, read without drawing the rest of the board:
+/// what its card shows, its title and stage, and its runs, thread and submissions; with the
+/// project's name and, when the step is in a tagged unit, that unit's id and title. None when
+/// the plan has no such step.
+pub struct StepDetail {
+    pub project: String,
+    pub step: StepView,
+    pub unit: Option<(String, String)>,
+}
+/// A step's run while it runs, observed now (`super::observe_run`): whether it is quiet, and
+/// when it last wrote.
+fn observe(c: &Connection, project: ProjectId, step: &mut StepView) -> sluice_store::Result<()> {
+    if let Some(mut run) = super::RunningView::of(c, project, step.id.as_str())? {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        super::observe_run(&super::home_of(c), &mut run, now);
+        step.quiet = run.quiet;
+        step.active_at = run.activity.map(super::rfc3339).unwrap_or_default();
+    }
+    Ok(())
+}
+pub fn load_step(
+    c: &Connection,
+    project: ProjectId,
+    plans: &PlanCache,
+    signatures: &str,
+    provider: &impl SignatureProvider,
+    id: &StepId,
+) -> sluice_store::Result<Option<StepDetail>> {
+    let name: String = c
+        .query_row(
+            "SELECT name FROM projects WHERE project_id=?1 AND deleted_at IS NULL",
+            [project.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| PublicError::NotFound {
+            message: "project not found".into(),
+        })?;
+    let (revision, doc): (i64, String) = c.query_row(
+        "SELECT rev,doc FROM plans WHERE project_id=?1",
+        [project.to_string()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let plan = plans.compile(project, doc, signatures, provider)?;
+    if !plan.steps().contains_key(id) {
+        return Ok(None);
+    }
+    let mut state = sluice_store::plans::read_state(c, project)?;
+    queue(c, project, &plan, &mut state, Some(id))?;
+    let depths = Depths::new(&plan, &state);
+    let names = sluice_runtime::naming::for_project(c, &super::home_of(c), project)?;
+    let cards = Cards::read(c, project)?;
+    let unit_of = |unit: &sluice_model::units::Unit| {
+        let mut view = UnitView::new(project, "", &plan, &state, unit, &depths);
+        view.name(&names);
+        for step in &mut view.steps {
+            cards.decorate(step, revision as u64);
+        }
+        view
+    };
+    let Some(home) = plan.units().values().find(|u| u.steps.contains(id)) else {
+        return Ok(None);
+    };
+    let unit = unit_of(home);
+    let mut step = unit
+        .steps
+        .iter()
+        .find(|s| &s.id == id)
+        .cloned()
+        .expect("the unit holds the step");
+    // how long its stage usually takes, over its recipe's done units (as the board works it out)
+    if !unit.recipe.is_empty() {
+        let peers: Vec<UnitView> = plan
+            .units()
+            .values()
+            .filter(|u| {
+                u.done(&state)
+                    && names
+                        .naming
+                        .unit(u.name.as_str())
+                        .is_some_and(|n| n.recipe == unit.recipe)
+            })
+            .map(unit_of)
+            .collect();
+        step.usually = usual_durations(&peers)
+            .get(&(unit.recipe.clone(), step.stage.clone()))
+            .copied();
+    }
+    step.timeline = unit.timeline(Some(id));
+    step.chained = !plan.dependencies(id).is_empty()
+        || plan.steps().keys().any(|s| plan.dependencies(s).contains(id));
+    observe(c, project, &mut step)?;
+    // its waits name what they wait on by how each reads, as the board's do (`known`)
+    let mut shown = BTreeMap::new();
+    for other in plan
+        .dependencies(id)
+        .iter()
+        .chain(step.gates.iter().filter_map(|g| g.step.as_ref()))
+    {
+        let mut view = StepView::new(project, &plan, &state, other);
+        cards.decorate(&mut view, revision as u64);
+        observe(c, project, &mut view)?;
+        shown.insert(other.clone(), view.shown());
+    }
+    step.name_waits(&plan, &state, &|id| shown.get(id).copied());
+    super::step::load_detail(c, project, &mut step)?;
+    let unit = home.tagged.then(|| {
+        let title = names.naming.unit_title(home.name.as_str());
+        let titled = !title.is_empty() && title != home.name.as_str();
+        (home.name.to_string(), if titled { title.to_owned() } else { String::new() })
+    });
+    Ok(Some(StepDetail {
+        project: name,
+        step,
+        unit,
+    }))
 }
 /// How long each recipe's stage usually takes: the median, over the recipe's done units in
 /// the plan, of how long the stage's step took when it succeeded (its last run, a scatter's last
@@ -2099,7 +2314,7 @@ pub async fn snapshot(
     project: ProjectId,
     registry: Option<&Registry>,
 ) -> Result<(DashboardSnapshot, ProjectView), PublicError> {
-    let (shared, view, _) = load(state, project, registry, None, false).await?;
+    let (shared, view, _) = load(state, project, registry, false).await?;
     Ok((shared, view))
 }
 /// The project's page: the board with its panel (the project's board program, drawn), both
@@ -2110,43 +2325,48 @@ pub async fn page_snapshot(
     registry: Option<&Registry>,
     cache: Option<&super::panel::QueryCache>,
 ) -> Result<(DashboardSnapshot, ProjectView), PublicError> {
-    let (shared, mut view, panel) = load(state, project, registry, None, true).await?;
+    let (shared, mut view, panel) = load(state, project, registry, true).await?;
     view.panel = super::panel::draw(state, project, panel, cache).await?;
     Ok((shared, view))
 }
-/// The board with one step's full detail (its runs, frozen inputs, thread and submissions), for
-/// the step's page and drawer.
-pub async fn step_snapshot(
+/// One step's detail (`load_step`) from one store snapshot, its run's activity observed: what
+/// the step's page and the drawer draw, without drawing the rest of the board. With `nav`, the
+/// nav's snapshot from the same read. None when the plan has no such step.
+pub async fn step_detail(
     state: &DashboardState,
     project: ProjectId,
     registry: Option<&Registry>,
     step: &StepId,
-) -> Result<(DashboardSnapshot, ProjectView, StepView), PublicError> {
-    let (shared, view, _) = load(state, project, registry, Some(step.clone()), false).await?;
-    let unit = view
-        .units
-        .iter()
-        .find(|u| u.steps.iter().any(|s| &s.id == step))
-        .ok_or_else(|| PublicError::NotFound {
-            message: "step not found".into(),
-        })?;
-    let mut detail = unit
-        .steps
-        .iter()
-        .find(|s| &s.id == step)
-        .cloned()
-        .expect("the unit holds the step");
-    detail.timeline = unit.timeline(Some(step));
-    let id = step.as_str();
-    detail.chained = view.facts.deps.get(id).is_some_and(|d| !d.is_empty())
-        || view.facts.deps.values().any(|d| d.iter().any(|s| s == id));
-    Ok((shared, view, detail))
+    nav: bool,
+) -> Result<(Option<DashboardSnapshot>, Option<StepDetail>), PublicError> {
+    let exact = registry.map(|r| r.0.signatures(project)).transpose()?;
+    let catalog = state.catalog.catalog(Some(project))?;
+    let plans = state.plans.clone();
+    let id = step.clone();
+    let (shared, detail) = state
+        .reads
+        .snapshot(move |c| {
+            let detail = match &exact {
+                Some(exact) => {
+                    let version = format!("registry:{}", exact.version);
+                    load_step(c, project, &plans, &version, exact, &id)?
+                }
+                None => {
+                    let version = format!("catalog:{}", catalog.version);
+                    load_step(c, project, &plans, &version, &CatalogSignatures(&catalog), &id)?
+                }
+            };
+            let shared = nav.then(|| super::load_snapshot(c, catalog)).transpose()?;
+            Ok((shared, detail))
+        })
+        .await
+        .map_err(|e| e.into_public(true))?;
+    Ok((shared, detail))
 }
 async fn load(
     state: &DashboardState,
     project: ProjectId,
     registry: Option<&Registry>,
-    detail: Option<StepId>,
     panel: bool,
 ) -> Result<
     (
@@ -2163,14 +2383,13 @@ async fn load(
         .reads
         .snapshot(move |c| {
             let shared = super::load_snapshot(c, catalog)?;
-            let detail = detail.as_ref();
             let (board, plan) = if let Some(exact) = exact {
                 let version = format!("registry:{}", exact.version);
-                load_board(c, &shared, project, &plans, &version, &exact, detail)?
+                load_board(c, &shared, project, &plans, &version, &exact)?
             } else {
                 let version = format!("catalog:{}", shared.functions.version);
                 let provider = CatalogSignatures(&shared.functions);
-                load_board(c, &shared, project, &plans, &version, &provider, detail)?
+                load_board(c, &shared, project, &plans, &version, &provider)?
             };
             let loaded = if panel {
                 super::panel::gather(c, project, Some(&plan), &board, None)?
@@ -2403,6 +2622,7 @@ pub async fn project_stream(
     }
     .version(VersionSignal::Page);
     let cache = super::panel::SharedCache::default();
+    let watch = state.watch(Some(project));
     let loader = move || {
         let state = state.clone();
         let viewer = viewer.clone();
@@ -2411,12 +2631,22 @@ pub async fn project_stream(
         let cache = cache.clone();
         async move {
             let registry = registry.as_ref().map(|r| &r.0);
-            let (shared, mut view) = page_snapshot(&state, project, registry, Some(&cache)).await?;
+            // a deleted project is said where its plan was, and the stream stays open and quiet
+            let (shared, mut view) = match page_snapshot(&state, project, registry, Some(&cache)).await {
+                Err(PublicError::NotFound { .. }) => {
+                    return Ok(RenderedBatch::new(vec![PatchRegion::new(
+                        "project-board",
+                        gone_html("project-board", "This project was deleted.", "/", "All projects"),
+                    )]));
+                }
+                read => read?,
+            };
             query.apply(&mut view)?;
             Ok(view.draw(&shared, &viewer)?.1)
         }
     };
     Sse::new(streams::page_events(
+        watch,
         loader,
         version,
         VersionSignal::Page,
@@ -2529,6 +2759,7 @@ pub async fn unit_stream(
     let stop = state.stop.clone();
     let version = query.version(VersionSignal::Page);
     let viewer = Viewer::from_headers(&headers);
+    let watch = state.watch(Some(project));
     let loader = move || {
         let state = state.clone();
         let registry = registry.clone();
@@ -2537,10 +2768,24 @@ pub async fn unit_stream(
         async move {
             let (shared, view) =
                 snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await?;
+            // a unit that left the plan (retired, or edited out) is said where it was drawn,
+            // and the stream stays open and quiet: its page never reconnects for it
+            if !view.units.iter().any(|u| u.id == id) {
+                return Ok(RenderedBatch::new(vec![PatchRegion::new(
+                    "unit-detail",
+                    gone_html(
+                        "unit-detail",
+                        "This unit left the plan; it may have retired.",
+                        &format!("{}/log?unit={id}", view.href()),
+                        "Search the log for it",
+                    ),
+                )]));
+            }
             unit_batch(&shared, &view, &id, &viewer)
         }
     };
     Sse::new(streams::page_events(
+        watch,
         loader,
         version,
         VersionSignal::Page,

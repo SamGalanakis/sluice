@@ -632,16 +632,14 @@ async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
     assert!(section.contains("by its last run"), "{section}");
 }
 
-/// The relations the page hands `<sluice-board>` to draw (its `edges` attribute, unescaped).
+/// The relations the page hands `<sluice-board>` to draw: its `script.board-edges`, JSON.
 fn edges(html: &str) -> Vec<Value> {
-    let raw = between(html, "edges=\"", "\">");
-    let json = raw["edges=\"".len()..]
-        .replace("&#34;", "\"")
-        .replace("&#39;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&#38;", "&");
-    serde_json::from_str(&json).unwrap()
+    serde_json::from_str(edges_text(html)).unwrap()
+}
+fn edges_text(html: &str) -> &str {
+    const OPEN: &str = "<script type=\"application/json\" ";
+    let raw = between(html, OPEN, "</script>");
+    &raw[raw.find('>').unwrap() + 1..]
 }
 /// Whether the relation `from` → `to` (step ids) is in the edges data, and is drawn as a line.
 fn line(edges: &[Value], from: &str, to: &str) -> Option<(bool, bool)> {
@@ -772,7 +770,7 @@ async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
     assert!(plane[at("id=\"unit-k3\"")..at("id=\"unit-k4\"")].contains("<div class=\"layer\">"));
     assert_eq!(plane.matches("class=\"done-shelf\"").count(), 1);
     assert!(plane.contains("3 done units · 4 steps"), "{plane}");
-    assert!(between(&html, "<div class=\"sumline\">", "</p>").contains("b-failed"));
+    assert!(between(&html, "<div id=\"p-sum\" class=\"sumline\">", "</p>").contains("b-failed"));
     // Plan order: one band without a label, the same single shelf at the end
     let (_, html) = f.get(&format!("{base}?order=plan")).await;
     let plane = between(&html, "<div class=\"plane\"", "</sluice-board");
@@ -957,7 +955,7 @@ async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws
         page.contains(&format!("<p class=\"meta unit-sum\">2 steps · 1 pending · 1 succeeded · <a href=\"/projects/id/{}/log?unit=alpha\">Log</a></p>", f.id)),
         "{page}"
     );
-    let edges = between(&page, "<sluice-board class=\"board\" edges=\"", "\">");
+    let edges = edges_text(&page);
     assert!(
         edges.contains("alpha-build") && edges.contains("alpha-review"),
         "{edges}"

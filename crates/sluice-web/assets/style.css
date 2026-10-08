@@ -1492,12 +1492,11 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
                 gap: 8px 16px; }
 .stopped-head h2 { margin: 0; }
 /* Shared confirmation, inline without script and modal with it. */
-.confirm-flow:not(details) > form { display: none; }
 .confirm-flow > summary { display: inline-flex; align-items: center; min-height: 32px;
   padding: 5px 12px; border: 1px solid var(--input); border-radius: var(--radius-md);
   background: var(--card); cursor: pointer; list-style: none; font-weight: 500; }
 .confirm-flow > summary::-webkit-details-marker { display: none; }
-.confirm-flow > summary[data-disabled] { pointer-events: none; opacity: .5; }
+.confirm-flow > summary:is([data-disabled], [aria-disabled="true"]) { pointer-events: none; opacity: .5; }
 .confirm-flow > form { padding: 16px; background: var(--card); border: 1px solid var(--border);
   border-radius: var(--radius); margin-top: 8px; }
 .confirmation { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px);
@@ -1562,7 +1561,7 @@ details.read-today .item { opacity: .85; }
 .missing-links a { display: inline-flex; align-items: center; min-height: 32px; }
 @media (max-width: 720px) {
   .q-actions button, .q-close button, .crumbs a, .missing-links a, details.pane > summary,
-  details.kinds > summary, .stopped-list summary, .confirm-flow > summary, .confirm-flow > button, .mark-all, .mark-read, details.read-today > summary { min-height: 44px; }
+  details.kinds > summary, .stopped-list summary, .confirm-flow > summary, .mark-all, .mark-read, details.read-today > summary { min-height: 44px; }
   .stopped-list summary { padding-top: 10px; }
   dl.a-facts { grid-template-columns: minmax(0, 1fr); }
   dl.a-facts dd { margin-bottom: 4px; }
@@ -1668,6 +1667,12 @@ details.read-today .item { opacity: .85; }
 .project-settings:focus-visible { outline: none; }
 .project-settings:focus-visible::before { outline: 2px solid var(--nav-ink); }
 .stream-state { margin: 0 0 16px; }
+.stream-state button { margin-left: 4px; }
+/* a new build is news, not trouble: muted ink, never the attention colour */
+.release-state { color: var(--muted-foreground); }
+/* what a page drew is gone (a step or unit left the plan, a project was deleted): one calm line */
+.d-gone { max-width: var(--measure); margin: 8px 0 0; color: var(--muted-foreground); }
+.d-gone a { color: var(--foreground); }
 #functions { min-width: 0; }
 #nav-inbox { gap: 6px; }
 @media (max-width: 720px) { .picker button, .picker select, .fn-find input { min-height: 44px; } }
@@ -1925,7 +1930,7 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 .board-units td { padding: 6px 8px 6px 0; }
 .board-units th { padding-left: 0; }
 .board-units .u-state { white-space: nowrap; }
-.board-units .u-state > span:not(.g) { margin-left: 4px; }
+.board-units .u-state > :is(span:not(.g), time) { margin-left: 4px; }
 .board-units .u-state .g { vertical-align: -3px; }
 .board-units .u-steps { font: 12px/18px var(--font-mono); overflow-wrap: normal;
                         white-space: nowrap; }  /* a lane on one line; the table scrolls if it must */

@@ -1101,8 +1101,17 @@ comma: the card's parts are flex items, which the name already parts with a spac
   zero, so an empty plan's bar is its bare track and no zero leaves a sliver.
 - **Splitter**: see The project's board; the one control that resizes, a grip on a hairline
   that lights only when used.
-- **Live updates**: each page's stream patches only what changed; while it reconnects a gold
-  line says "Updates paused. Reconnecting…" with a Reconnect button. Times have one vocabulary
+- **Live updates**: each page's stream patches only the regions that changed (a unit's box, a
+  matrix row, the summary line; the plan's lines only when its shape changes). While it
+  reconnects a gold line says "Updates paused. Reconnecting…" with a Reconnect button; once
+  Datastar gives up it says "Updates stopped at 14:02." with the same button, and the stream opens
+  again on its own when the tab shows, the window is focused or the machine is back online. A
+  page drawn by an older build says "sluice was updated · Reload" in muted ink, news and not
+  trouble. A step or unit that left the plan says so where it was drawn, in muted ink, with a link
+  to its log. A patch never resets what the owner holds: a confirmation stays the server's
+  `<details>` (its summary opens the dialog), the plan's More menu stays open, a board field's
+  refusal stays until the field is edited, and a settings field another author changed says
+  "Changed by <author> since you opened this · Reload this field" in the attention colour. Times have one vocabulary
   on every page, and `nav.js` (on every page) owns them: the server writes "2026-10-07 20:47
   UTC" (its title keeps it), the script reads `data-since` as a two-unit duration ("45s",
   "12m", "2h 14m", "3d 12h") and `data-ago` as "just now", "12m ago", "3d 12h ago", and reads

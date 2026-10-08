@@ -237,7 +237,7 @@ async fn every_state_reads_the_same_on_every_surface() {
     }
     // the summary: every state counted once, those that need attention as tags (stale too),
     // the rest in the counts; the bar a segment a state
-    let sum = between(&html, "<div class=\"sumline\">", "</p>");
+    let sum = between(&html, "<div id=\"p-sum\" class=\"sumline\">", "</p>");
     for state in Shown::ALL {
         assert!(
             sum.contains(&format!(
@@ -256,7 +256,8 @@ async fn every_state_reads_the_same_on_every_surface() {
     assert!(sum.contains("1 stale</a>"), "{sum}");
     // the project reads as its first state
     assert!(
-        between(&html, "<h1 class=\"p-title\">", "</h1>").contains(&glyph(Shown::Failed)),
+        between(&html, "<h1 id=\"p-title\" class=\"p-title\"", "</h1>")
+            .contains(&glyph(Shown::Failed)),
         "{html}"
     );
     // the index: the same counts from the store (the plan's blocked, held, queued and outside
