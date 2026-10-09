@@ -821,8 +821,9 @@ pub fn trace_close() -> TrustedHtml {
 pub fn rail() -> TrustedHtml {
     TrustedHtml::owned("<span class=\"rail\" aria-hidden=\"true\"></span>".into())
 }
-/// The button that selects a unit to trace (its whole head), and the part of it that opens in
-/// place while it is traced (`trace_more_open`).
+/// The button that selects a unit to trace: its head (its kind's line, its id and its title,
+/// phrasing content only; its strip and the rest go after it), and the part of it that opens
+/// in place while it is traced (`trace_more_open`).
 pub fn trace_button_open() -> TrustedHtml {
     TrustedHtml::owned(
         "<button type=\"button\" class=\"trace-pick\" data-trace-pick aria-pressed=\"false\" aria-expanded=\"false\" data-preserve-attr=\"aria-pressed aria-expanded\">"

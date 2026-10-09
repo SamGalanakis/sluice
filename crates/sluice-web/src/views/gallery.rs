@@ -590,7 +590,7 @@ fn trace_part(prefix: &str) -> TrustedHtml {
     let trace = ui::Trace::new([("a-13", "a-12"), ("a-14", "a-13"), ("a-12", "s-3"), ("a-15", "a-12")]);
     let unit = |name: &str, recipe: &str, title: &str, stages: Vec<ui::Stage>| {
         format!(
-            "<div class=\"mod rail-slot\"{attrs}>{rail}{open}<span class=\"mod-meta\">{role}<b>{name}</b> · {recipe}</span><span class=\"mod-t\">{title}</span>{strip}{close}{more}<p class=\"meta\">Its steps, its last message and its buttons open here.</p>{more_end}</div>",
+            "<div class=\"mod rail-slot\"{attrs}>{rail}{open}<span class=\"mod-meta\">{role}<b>{name}</b> · {recipe}</span><span class=\"mod-t\">{title}</span>{close}{strip}{more}<p class=\"meta\">Its steps, its last message and its buttons open here.</p>{more_end}</div>",
             attrs = trace.attrs(name),
             rail = ui::rail(),
             open = ui::trace_button_open(),
