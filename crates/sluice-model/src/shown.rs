@@ -82,15 +82,15 @@ pub enum Tone {
     Ink,
     /// Muted ink: a stop on purpose.
     Muted,
-    /// Harvest gold: look at it.
+    /// Sand: look at it.
     Attention,
-    /// The logo's blue: work going on.
+    /// The channel's blue: work going on.
     Active,
-    /// Plum: a hold someone chose.
+    /// Muted ink: a hold someone chose.
     Paused,
-    /// Grey navy: nothing to do yet.
+    /// Idle navy: nothing to do yet.
     Idle,
-    /// Kelly green: done well.
+    /// Sky: done well.
     Success,
 }
 /// How one state is drawn.

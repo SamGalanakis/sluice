@@ -630,7 +630,7 @@ async fn a_dead_link_is_a_page_for_a_browser_and_json_for_a_client() {
     // the band sits in a header, its landmark named apart from the settings' index
     assert!(
         page.contains(
-            "<header class=\"site-head\"><nav id=\"top-nav\" class=\"top\" aria-label=\"Main\">"
+            "<header class=\"site-head\"><div class=\"band-in\"><nav id=\"top-nav\" class=\"top\" aria-label=\"Main\">"
         ),
         "{page}"
     );

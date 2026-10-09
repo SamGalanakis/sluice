@@ -863,6 +863,8 @@ define("sluice-banner", {
     const show = (next) => {
       phase = next;
       host.hidden = next === "live";
+      // the band's live line reads this: "Live" only while the stream is
+      root.dataset.stream = next;
       const words = host.querySelector(".stream-words");
       if (next === "paused") words.textContent = "Updates paused. Reconnecting…";
       if (next === "stopped") words.textContent = `Updates stopped at ${clock(new Date())}.`;
@@ -996,3 +998,4 @@ define("sluice-splitter", {
     requestAnimationFrame(values);
   },
 });
+

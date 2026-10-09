@@ -582,11 +582,11 @@ async fn chromium_the_board_alone_keeps_its_tags_and_a_wide_screen_sets_overview
             .eval("(() => { const o = document.querySelector('#tp-overview'), a = o.querySelector('.d-ask'), n = o.querySelector('.d-now'); return [getComputedStyle(o).display, Math.round(a.getBoundingClientRect().top) === Math.round(n.getBoundingClientRect().top), a.getBoundingClientRect().right < n.getBoundingClientRect().left, document.documentElement.scrollWidth <= innerWidth]; })()")
             .unwrap();
         assert_eq!(row, json!(["grid", true, true, true]));
-        // the column is 1440px there, the nav's content on the same edges
+        // the column is the frame's, 1376px (1440 less its margins), the band's content on the same edges
         let edges = browser
             .eval("(() => { const h = document.querySelector('#step-detail').getBoundingClientRect(); return Math.round(h.width); })()")
             .unwrap();
-        assert_eq!(edges, json!(1440));
+        assert_eq!(edges, json!(1376));
         // a narrow window keeps one column
         browser.viewport(1440, "light").unwrap();
         browser.navigate(&format!("http://{addr}/projects/id/{wide}/steps/l1-work")).unwrap();

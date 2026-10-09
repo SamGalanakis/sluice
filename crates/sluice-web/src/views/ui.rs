@@ -435,7 +435,7 @@ impl StepRef {
     }
     /// How every page says it in words, the one name for a step wherever it is plain text: a
     /// composer's "Message to …", a tab's title, a thread's heading, a confirmation. Its stage
-    /// and its title cut to `NAME_CHARS` ("work · The lashlang substrate is…"); its id alone
+    /// and its title cut to `NAME_CHARS` ("draft · The spring guide's shorebird…"); its id alone
     /// when it has no title.
     pub fn label(&self) -> String {
         self.text(NAME_CHARS)
@@ -479,8 +479,8 @@ impl StepRef {
             esc(&self.id)
         ))
     }
-    /// Its id first, then its title (its stage is in its id): "fig-5571-landed The lashlang
-    /// substrate…", where the id is what tells one wait from the next.
+    /// Its id first, then its title (its stage is in its id): "a-7-publish The spring guide's
+    /// shorebird…", where the id is what tells one wait from the next.
     pub fn id_first_html(&self, chars: usize) -> TrustedHtml {
         if !self.titled() {
             return self.html(chars);

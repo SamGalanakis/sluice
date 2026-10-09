@@ -40,7 +40,10 @@ progress line and its typed outputs, with the one human decision point (the Inbo
   messages, the log); each run's own files stay under `runs/`.
 - Agents post to per-step threads (`step-<id>`) and to `orchestrator`; questions to `owner` are
   the inbox, and Sam answers there.
-- Plans are light: a handful to a few dozen blocks, grouped into units by `unit:` tags.
+- Plans range from small to huge, and both must read well: a project of a handful of blocks, and
+  lash-scale (about 1,500 steps in about 250 units), where most units are repeated recipe lanes
+  (fork → work → land → landed → close → rm): a few dozen live at once, hundreds done, plus
+  one-off units and long-lived watchers. Units are grouped by `unit:` tags and recipes.
 
 ## Capabilities and Constraints
 
@@ -51,16 +54,18 @@ progress line and its typed outputs, with the one human decision point (the Inbo
   parts that changed. Every script is served by sluice itself (vendored); only the fonts come
   from cdn.jsdelivr.net.
 - Every value is untrusted and HTML-escaped.
-- Statuses: pending, running, succeeded, failed, stale, skipped; a succeeded step may be manual
-  (value set by hand). Scatter steps report done/total.
+- Statuses come from one status table (`sluice_model::shown`): stored pending, running,
+  succeeded, failed, stale, skipped, plus derived cancelled, stopping, finishing, quiet, paused,
+  held, blocked, queued, external and set by hand. Scatter steps report done/total.
 - Agent blocks are typed: a step declares its own `outputs` and binds extra named inputs.
 - Terminology: project, plan, unit, step (block), fn, engine, message (question or note),
   thread, log record, rev.
 
 ## Brand Commitments
 
-- The logo (the owner's SVG) is the brand: its navy, cream and blue are the dashboard's
-  palette, the blue its one accent and the colour of running.
+- The logo (the owner's SVG) is the brand. Its Americana palette (navy, cream, the channel's
+  blue, sky, sand and the coral corners) is binding for any redesign (owner, 2026-10-09).
+  Typography, layout, density and visual structure are open to change.
 - The dashboard's one coral badge: coral appears only in the logo and the count of open
   questions to the owner. A failure is never coral.
 - Plain, factual copy in sluice's own terms; no AI mention in teammate-visible text.

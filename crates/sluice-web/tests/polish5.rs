@@ -299,7 +299,7 @@ async fn the_asking_steps_tab_leads_with_its_question_and_the_switcher_counts_th
     let (_, other) = f.get(&format!("/projects/id/{id}/steps/l2-work")).await;
     assert!(other.contains("<title>work · FIG-2: Stop the parser leak · titled · sluice</title>"));
     // the project switcher: the project's count of questions, in the badge's coral
-    let switcher = between(&page, "<details class=\"switcher\"", "</details>");
+    let switcher = between(&page, "<details class=\"switcher", "</details>");
     let row = between(switcher, &format!("href=\"/projects/id/{id}\""), "</a>");
     assert!(
         row.contains("<span class=\"badge sw-q\" aria-hidden=\"true\">1</span><span class=\"vh\">, 1 question for you</span>"),

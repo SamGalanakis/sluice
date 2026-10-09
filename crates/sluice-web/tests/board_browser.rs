@@ -22,7 +22,7 @@ const GEOMETRY: &str = r#"(() => {
           navLeft: n.left + parseFloat(css.paddingLeft), navRight: n.right - parseFloat(css.paddingRight),
           plan: document.querySelector('#plan-pane sluice-board')?.checkVisibility() ? box('#plan-pane') : null,
           board: box('#board-pane'), sum: box('#plan-pane .sumline'),
-          navFits: (l => l.scrollWidth <= l.clientWidth)(nav.querySelector('.links')), tabs: box('.view-switch'), split: box('.splitter'),
+          navFits: (l => l.scrollWidth <= l.clientWidth)(document.querySelector('.subnav nav.links')), tabs: box('.view-switch'), split: box('.splitter'),
           view: document.querySelector('#project-board').dataset.view ?? null,
           h1: box('#plan-pane .p-title'),
           // the page is as tall as its main column (or the window): nothing hangs below it

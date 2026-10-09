@@ -56,15 +56,9 @@ impl fmt::Display for TrustedHtml {
     }
 }
 
-pub const THEMES: [(&str, &str); 7] = [
-    ("light", "Sluice Light"),
-    ("dark", "Sluice Dark"),
-    ("canyon", "Canyon"),
-    ("ranger", "Ranger"),
-    ("diner", "Diner"),
-    ("night-sky", "Night Sky"),
-    ("wood-panel", "Wood Panel"),
-];
+/// The two themes: cream paper and navy paper (DESIGN.md). With neither chosen a page follows
+/// the system.
+pub const THEMES: [(&str, &str); 2] = [("light", "Light"), ("dark", "Dark")];
 #[derive(Clone, Debug, Default)]
 pub struct Viewer {
     pub theme: Option<String>,
@@ -263,7 +257,7 @@ impl ProjectView {
         }
     }
     /// Its pages' tab words, what needs a look first, as the index's tab counts it
-    /// (`home::HomeView::title`): "1 question · 2 failed · 1 quiet · lash", its open questions
+    /// (`home::HomeView::title`): "1 question · 2 failed · 1 quiet · almanac", its open questions
     /// to the owner, then the states that need attention.
     pub fn tab_words(&self) -> String {
         let mut words: Vec<String> = questions_words(self.asks.len()).into_iter().collect();
@@ -547,10 +541,21 @@ impl NavView {
         keys
     }
 }
+/// What a page puts in the frame around it (DESIGN.md, The band): its head in the title band
+/// (`ui::band_head`, then any strip such as `ui::recent_strip`), and on the paper row under the
+/// band, after its sections, a meta line ("12 units · 40 steps") and its tools (a find, the
+/// grid switch). A page with none of it gets the band's top row alone.
+#[derive(Clone, Debug, Default)]
+pub struct Frame {
+    pub head: TrustedHtml,
+    pub meta: TrustedHtml,
+    pub tools: TrustedHtml,
+}
 #[derive(Template)]
 #[template(path = "layout.html")]
 struct Layout<'a> {
     title: &'a str,
+    frame: &'a Frame,
     body: &'a TrustedHtml,
     nav: &'a NavView,
     viewer: &'a Viewer,
@@ -575,8 +580,32 @@ pub fn render_layout(
     version: &str,
     path: &str,
 ) -> Result<TrustedHtml, askama::Error> {
+    render_framed(
+        title,
+        body,
+        nav,
+        viewer,
+        stream,
+        version,
+        path,
+        &Frame::default(),
+    )
+}
+/// A page in the frame with its own head in the band and its own row under it.
+#[allow(clippy::too_many_arguments)]
+pub fn render_framed(
+    title: &str,
+    body: &TrustedHtml,
+    nav: &NavView,
+    viewer: &Viewer,
+    stream: &str,
+    version: &str,
+    path: &str,
+    frame: &Frame,
+) -> Result<TrustedHtml, askama::Error> {
     TrustedHtml::from_template(&Layout {
         title,
+        frame,
         body,
         nav,
         viewer,
