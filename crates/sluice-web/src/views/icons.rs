@@ -71,6 +71,8 @@ icons! {
     CornerDownRight => "corner-down-right",
     MessageCircleQuestion => "message-circle-question",
     Copy => "copy",
+    Grid3x3 => "grid-3x3",
+    Timer => "timer",
 }
 
 /// Each icon's shapes (what sits inside its `<svg>`), on one line, in `Icon` order.
@@ -106,7 +108,7 @@ pub fn sprite() -> TrustedHtml {
                     .replace("<circle ", "<circle style=\"fill:currentColor\" ")
                     .replace(
                         "<path ",
-                        "<path style=\"stroke:var(--glyph-cut,var(--card))\" ",
+                        "<path style=\"stroke:var(--glyph-cut,var(--paper-raised))\" ",
                     );
                 out.push_str(&format!(
                     "<symbol id=\"i-{}-solid\" viewBox=\"0 0 24 24\">{solid}</symbol>",

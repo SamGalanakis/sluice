@@ -999,3 +999,146 @@ define("sluice-splitter", {
   },
 });
 
+// ---- sluice-grid -------------------------------------------------------------------------------
+// The module grid's construction (`ui::grid_open`): the server draws the sheet's columns, each
+// numbered, in `.grid-ovl` under its modules, and each module carries its span. While its
+// show-grid switch (`button.grid-toggle[aria-controls=<its id>]`, anywhere on the page) is
+// pressed the host has `showing` and the stylesheet shows them. The choice is kept in this
+// browser, for every grid.
+define("sluice-grid", {
+  props: ({ bool }) => ({ showing: bool }),
+  manifest: {
+    slots: [{ name: "overlay", description: "The server's .grid-ovl: a .gc a column, its number in .gc-n." },
+            { name: "modules", description: "Its modules and columns (.mod, .mod-col), each with data-span." }],
+    events: [{ name: "sluice-grid", description: "The construction grid was shown or hidden; detail.showing says which." }],
+  },
+  setup({ host, cleanup }) {
+    const on = listening(cleanup);
+    const KEY = "sluice.grid";
+    const switches = () => [...document.querySelectorAll("button.grid-toggle")]
+      .filter((b) => b.getAttribute("aria-controls") === host.id);
+    const apply = (show, told) => {
+      host.toggleAttribute("showing", show);
+      for (const b of switches()) b.setAttribute("aria-pressed", String(show));
+      if (!told) return;
+      store.set(KEY, show ? "1" : null);
+      host.dispatchEvent(new CustomEvent("sluice-grid", { bubbles: true, detail: { showing: show } }));
+    };
+    on(document, "click", (event) => {
+      const button = event.target.closest?.("button.grid-toggle");
+      if (!button || button.getAttribute("aria-controls") !== host.id) return;
+      apply(!host.hasAttribute("showing"), true);
+    });
+    apply(store.get(KEY) === "1" || host.hasAttribute("showing"), false);
+  },
+});
+
+// ---- sluice-trace ------------------------------------------------------------------------------
+// Select to trace (`ui::trace_open`). Each traceable unit is an element with `data-unit` (its
+// name), `data-up` and `data-down` (every unit up and down its chain, as the server worked them
+// out) and `data-chain` (the sentence that says it); its `[data-trace-pick]` button selects it.
+// Selecting marks every unit `data-trace` selected, up, down or faded, opens the selected one's
+// `[data-trace-more]` in place, draws the rail (each `.rail-slot`'s `.rail`, in page order,
+// gets `data-rail`: top, bottom and a node) and puts the sentence in the line; selecting it
+// again, Clear trace or Escape clears. The arrows move between the units' buttons. The choice
+// is the host's `selected`, kept through a patch, and drawn again after one.
+define("sluice-trace", {
+  props: ({ string }) => ({ selected: string }),
+  manifest: {
+    slots: [{ name: "line", description: "The server's .trace-line: .trace-words (the sentence, polite) and button.trace-clear." },
+            { name: "units", description: "Elements with data-unit, data-up, data-down and data-chain, each a .rail-slot with its .rail and a [data-trace-pick] button; section heads may be .rail-slot too." }],
+    events: [{ name: "sluice-trace", description: "A unit was traced or the trace cleared; detail.unit is its name or \"\"." }],
+  },
+  setup({ host, cleanup }) {
+    const on = listening(cleanup);
+    const words = host.querySelector(".trace-words");
+    const idle = words?.textContent ?? "";
+    const units = () => [...host.querySelectorAll("[data-unit]")];
+    const picks = () => [...host.querySelectorAll("[data-trace-pick]")].filter((b) => b.checkVisibility?.() ?? true);
+    const draw = () => {
+      const id = host.getAttribute("selected") ?? "";
+      const unit = id ? units().find((u) => u.dataset.unit === id) : null;
+      const set = (attr) => new Set((unit?.dataset[attr] ?? "").split(" ").filter(Boolean));
+      const up = set("up"), down = set("down");
+      host.toggleAttribute("tracing", !!unit);
+      for (const u of units()) {
+        const name = u.dataset.unit;
+        const role = !unit ? "" : name === id ? "selected" : up.has(name) ? "up" : down.has(name) ? "down" : "faded";
+        if (role) { if (u.dataset.trace !== role) u.dataset.trace = role; } else if (u.dataset.trace) delete u.dataset.trace;
+        for (const pick of u.querySelectorAll(":scope [data-trace-pick]")) {
+          if (pick.closest("[data-unit]") !== u) continue;
+          const pressed = String(role === "selected");
+          if (pick.getAttribute("aria-pressed") !== pressed) pick.setAttribute("aria-pressed", pressed);
+          if (pick.getAttribute("aria-expanded") !== pressed) pick.setAttribute("aria-expanded", pressed);
+        }
+        for (const more of u.querySelectorAll(":scope [data-trace-more]")) {
+          if (more.closest("[data-unit]") === u && more.hidden !== (role !== "selected")) more.hidden = role !== "selected";
+        }
+      }
+      // the rail: from the first lit slot down to the last, through whatever lies between
+      const slots = [...host.querySelectorAll(".rail-slot")];
+      const lit = slots.map((s) => !!unit && ["selected", "up", "down"].includes(s.dataset.trace));
+      const first = lit.indexOf(true), last = lit.lastIndexOf(true);
+      const drawn = first >= 0 && last > first;
+      slots.forEach((slot, i) => {
+        const rail = slot.querySelector(":scope > .rail");
+        if (!rail) return;
+        const parts = [];
+        if (drawn && i > first && i <= last) parts.push("top");
+        if (drawn && i >= first && i < last) parts.push("bottom");
+        if (drawn && lit[i]) parts.push(slot.dataset.trace === "selected" ? "chosen" : "node");
+        const value = parts.join(" ");
+        if ((rail.dataset.rail ?? "") !== value) { if (value) rail.dataset.rail = value; else delete rail.dataset.rail; }
+      });
+      const said = unit ? unit.dataset.chain : idle;
+      if (words && words.textContent !== said) words.textContent = said;
+      const clear = host.querySelector(".trace-clear");
+      if (clear && clear.hidden === !!unit) clear.hidden = !unit;
+    };
+    const choose = (id) => {
+      if (id) host.setAttribute("selected", id); else host.removeAttribute("selected");
+      draw();
+      host.dispatchEvent(new CustomEvent("sluice-trace", { bubbles: true, detail: { unit: id } }));
+    };
+    on(host, "click", (event) => {
+      if (event.target.closest?.(".trace-clear")) {
+        const was = host.getAttribute("selected");
+        choose("");
+        units().find((u) => u.dataset.unit === was)?.querySelector("[data-trace-pick]")?.focus();
+        return;
+      }
+      const pick = event.target.closest?.("[data-trace-pick]");
+      const unit = pick?.closest("[data-unit]");
+      if (!unit || !host.contains(unit)) return;
+      choose(host.getAttribute("selected") === unit.dataset.unit ? "" : unit.dataset.unit);
+    });
+    on(host, "keydown", (event) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.key === "Escape" && host.hasAttribute("selected")) {
+        const was = host.getAttribute("selected");
+        event.preventDefault();
+        choose("");
+        units().find((u) => u.dataset.unit === was)?.querySelector("[data-trace-pick]")?.focus();
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const pick = event.target.closest?.("[data-trace-pick]");
+      if (!pick) return;
+      const all = picks(), at = all.indexOf(pick);
+      const next = all[at + (event.key === "ArrowDown" ? 1 : -1)];
+      if (!next) return;
+      event.preventDefault();
+      next.focus();
+    });
+    // a patch redraws the units as the server has them: mark them again
+    let queued = false;
+    const observer = new MutationObserver(() => {
+      if (queued) return;
+      queued = true;
+      queueMicrotask(() => { queued = false; draw(); });
+    });
+    observer.observe(host, { childList: true, subtree: true });
+    cleanup(() => observer.disconnect());
+    draw();
+  },
+});

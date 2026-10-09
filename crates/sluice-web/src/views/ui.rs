@@ -4,7 +4,9 @@
 use super::TrustedHtml;
 use super::icons::{Icon, solid};
 
+mod grid;
 mod rocket;
+pub use grid::*;
 pub use rocket::*;
 
 /// Text escaped for HTML content and attribute values.

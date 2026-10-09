@@ -204,6 +204,22 @@ pub const COMPONENTS: &[Component] = &[
         slots: &["list"],
     },
     Component {
+        tag: "sluice-grid",
+        script: "components.js",
+        does: "Shows the module grid's construction under its modules while its show-grid switch (aria-controls its id) is pressed: each column tinted and numbered, each module's span in its corner; the choice kept in this browser.",
+        props: &[("showing", "boolean")],
+        events: &["sluice-grid"],
+        slots: &["overlay", "modules"],
+    },
+    Component {
+        tag: "sluice-trace",
+        script: "components.js",
+        does: "Select to trace: a unit's button selects it, opens it in place, lights its chain up and down from the ids its markup carries, draws the rail in the margin, says the chain in its line and fades the rest; again, Clear trace or Escape clears; the arrows move between units.",
+        props: &[("selected", "string")],
+        events: &["sluice-trace"],
+        slots: &["line", "units"],
+    },
+    Component {
         tag: "sluice-board",
         script: "sluice.js",
         does: "Draws the plan's lines between its cards, traces a card's relations on hover or focus, and moves between cards with the arrows.",

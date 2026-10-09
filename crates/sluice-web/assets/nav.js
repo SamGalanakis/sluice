@@ -57,6 +57,15 @@ function tick() {
   for (const t of document.querySelectorAll("time[datetime]")) {
     const seconds = (now - Date.parse(t.dateTime)) / 1000;
     if (!Number.isFinite(seconds)) continue;
+    if (t.hasAttribute("data-clock")) {
+      // a time of day on the reader's own clock: "17:49" today, "Oct 8 17:49" before
+      const at = new Date(t.dateTime), today = new Date();
+      const hm = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+      const text = at.toDateString() === today.toDateString() ? hm
+        : `${at.toLocaleDateString([], { month: "short", day: "numeric" })} ${hm}`;
+      if (t.textContent !== text) t.textContent = text;
+      continue;
+    }
     if (t.hasAttribute("data-since")) {
       const shown = t.querySelector(":scope > .tk"), said = t.querySelector(":scope > .vh");
       const text = short(seconds);

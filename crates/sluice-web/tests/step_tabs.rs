@@ -448,6 +448,14 @@ async fn the_kit_gallery_draws_every_part_in_both_themes() {
     assert_eq!(status, axum::http::StatusCode::OK);
     for part in [
         "Status",
+        "The band",
+        "Summary sentence",
+        "Module grid",
+        "Modules",
+        "Section heads",
+        "Stage strip",
+        "Margin module",
+        "Trace",
         "Tags",
         "Buttons",
         "Tabs",
@@ -472,12 +480,12 @@ async fn the_kit_gallery_draws_every_part_in_both_themes() {
     assert_eq!(
         html.matches("<div class=\"gal-th\" data-theme=\"light\">")
             .count(),
-        18
+        26
     );
     assert_eq!(
         html.matches("<div class=\"gal-th\" data-theme=\"dark\">")
             .count(),
-        18
+        26
     );
     // its two copies keep their ids apart
     let mut ids: Vec<&str> = html
@@ -628,11 +636,12 @@ async fn chromium_the_kit_gallery_at_every_width_and_theme() {
                 browser.wait("document.readyState === 'complete' && !!customElements.get('sluice-splitter')").unwrap();
                 browser.eval(FRAMES).unwrap();
                 let g = browser
-                    .eval("({scroll: document.documentElement.scrollWidth, width: document.documentElement.clientWidth, pairs: [...document.querySelectorAll('.gal-pair')].map(p => getComputedStyle(p).gridTemplateColumns.split(' ').length), tabs: document.querySelectorAll('sluice-tabs .tp[data-chosen]').length})")
+                    .eval("({scroll: document.documentElement.scrollWidth, width: document.documentElement.clientWidth, pairs: [...document.querySelectorAll('.gal-pair:not(.gal-wide)')].map(p => getComputedStyle(p).gridTemplateColumns.split(' ').length), tabs: document.querySelectorAll('sluice-tabs .tp[data-chosen]').length})")
                     .unwrap();
                 let label = format!("{width} {theme}");
                 assert!(g["scroll"].as_f64() <= g["width"].as_f64(), "{label}: sideways {g}");
                 // light and dark side by side once the column is wide enough, stacked on a phone
+                // (a part that needs the grid's room stacks them at every width)
                 let columns = if width == 390 { 1 } else { 2 };
                 assert!(g["pairs"].as_array().unwrap().iter().all(|n| n == columns), "{label}: {g}");
                 assert_eq!(g["tabs"], 2, "{label}: one chosen panel in each tab set");
