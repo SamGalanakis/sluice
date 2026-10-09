@@ -238,9 +238,9 @@ async fn what_sluice_sent_reads_from_the_file_it_handed_over_and_secrets_are_mas
         !activity.contains("read it fully, then do it"),
         "{activity}"
     );
-    // a message handed over as a file reads as the message
+    // a message handed over as a file reads as the message, headed by who sent it
     assert!(
-        turns[2].contains("<span class=\"act-lab\">Message</span> <span class=\"act-x\">Question 138961 from fig-5416-work"),
+        turns[2].contains("<span class=\"act-lab\">Question 138961 from fig-5416-work</span> <span class=\"act-x\">D3 stores are deleting"),
         "{}",
         turns[2]
     );
@@ -588,27 +588,29 @@ async fn a_running_steps_now_leads_with_its_live_turn() {
     drop(f.home);
 }
 
-/// A message handed to an agent reads without sluice's delivery line around it.
+/// A message handed to an agent reads without sluice's delivery line around it, its turn
+/// headed by who sent it, however it was delivered.
 #[test]
 fn a_handed_over_message_reads_without_its_delivery_line() {
     use sluice_web::views::activity::unwrapped;
+    let split = |lead: &str, body: &str| Some((lead.to_owned(), body.to_owned()));
     assert_eq!(
         unwrapped(
             "Message from orchestrator on your sluice thread `step-a`: You're on the critical path."
         ),
-        "Orchestrator: You're on the critical path."
+        split("From Orchestrator", "You're on the critical path.")
     );
     assert_eq!(
         unwrapped(
             "Question 12 from owner on your sluice thread `step-a` (answer it with sluice tool reply, to_message 12): Which one?"
         ),
-        "Question 12 from You: Which one?"
+        split("Question 12 from you", "Which one?")
     );
     assert_eq!(
         unwrapped("Reply from fig-1-work on your sluice thread `step-a` to message 9: Yes."),
-        "Reply from fig-1-work: Yes."
+        split("Reply from fig-1-work", "Yes.")
     );
-    assert_eq!(unwrapped("Plain words"), "Plain words");
+    assert_eq!(unwrapped("Plain words"), None);
 }
 
 /// A message turn whose handed-over file is gone reads back from the message it held: its
@@ -648,10 +650,16 @@ async fn a_message_turn_whose_file_is_gone_reads_back_from_its_message() {
     let (_, html) = f.get(&format!("{}?activity=all", f.page())).await;
     let activity = section(&html);
     assert!(
-        activity.contains("Orchestrator: Your default is right.")
+        activity.contains("<span class=\"act-lab\">From Orchestrator</span> <span class=\"act-x\">Your default is right.")
             && activity
                 .contains("<a class=\"act-ref\" href=\"#message-138999\"><code>#138999</code></a>"),
         "{activity}"
     );
-    assert!(!activity.contains("act-lab\">Sent<"), "{activity}");
+    // a turn is never headed by how its words were delivered
+    for transport in ["Sent<", "Received<", "Message<"] {
+        assert!(
+            !activity.contains(&format!("act-lab\">{transport}")),
+            "{activity}"
+        );
+    }
 }

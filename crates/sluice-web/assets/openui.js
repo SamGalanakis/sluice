@@ -176,8 +176,7 @@ async function send(area, answer) {
     });
     const got = await res.json().catch(() => ({}));
     if (res.ok) {
-      area.replaceChildren(h("p", { class: "ou-status" }, "Answered."));
-      answered(area);
+      answered(area, answer.answer?.action === "close");
       return;
     }
     note.textContent = [got.message ?? `Not answered: sluice refused it (${res.status}).`,
@@ -191,18 +190,39 @@ async function send(area, answer) {
   }
 }
 
-/** The server took the answer: show it now, whether or not the page's stream is connected (it
- * may be reconnecting after a restart). On the open view the item leaves the list, and the
+/** The server took the answer: say so where it was given, now, whether or not the page's
+ * stream is connected (it may be reconnecting after a restart): the question's buttons and box
+ * give way to one line, "Answered: sent to fig-5576-work · Read the thread", which the inbox
+ * keeps in the question's place once its stream patches it (`MessageItem::answered_html`). The
  * nav's count drops; the stream's next patch says the same. */
-function answered(area) {
-  const view = location.pathname.endsWith("/inbox") || location.pathname.endsWith("/questions") ? "open" : "thread";
-  const list = area.closest("#inbox-items");
-  if (view === "open" && list) {
-    area.closest("article.item")?.remove();
-    if (!list.querySelector("article.item")) {
-      list.prepend(h("p", { class: "empty" }, "Nothing is waiting on you."));
-    }
+function check() {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  for (const [k, v] of Object.entries({ class: "icon qa-icon", width: 16, height: 16, viewBox: "0 0 24 24", fill: "none",
+    stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) {
+    svg.setAttribute(k, v);
   }
+  const use = document.createElementNS(NS, "use");
+  use.setAttribute("href", "#i-check");
+  svg.append(use);
+  return svg;
+}
+
+function answered(area, closed) {
+  const host = area.closest("sluice-answer") ?? area;
+  const note = h("p", { class: "q-answered", role: "status" });
+  host.replaceChildren(note);
+  for (const held of [host.closest("li.m"), host.closest("article.item")]) held?.classList.add("q-done");
+  // filled once in the page, so a reader hears it
+  requestAnimationFrame(() => {
+    if (closed) {
+      note.append(h("span", { class: "qa-what" }, "Closed."));
+    } else {
+      note.append(check(), h("span", { class: "qa-what" }, "Answered:"), " ",
+                  h("span", { class: "meta qa-to" }, "sent to ", h("b", {}, area.dataset.to ?? "its asker"), " · ",
+                    h("a", { href: area.dataset.thread ?? "#" }, "Read the thread")));
+    }
+  });
   if (area.dataset.ownerQuestion !== "true") return;
   const badge = document.querySelector("#nav-inbox .badge");
   const left = badge ? Number(badge.firstChild.textContent) - 1 : NaN;

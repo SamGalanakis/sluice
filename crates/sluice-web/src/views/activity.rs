@@ -62,8 +62,12 @@ pub struct FailingCall {
 pub struct TurnView {
     pub n: usize,
     pub anchor: String,
-    pub sent_kind: &'static str,
+    /// What opened it: "Task", "From Orchestrator", "Reply from fig-5576-work", "From sluice",
+    /// "Compacted", "Carried on".
+    pub sent_kind: String,
     pub sent: String,
+    /// Sluice's own turn (it carried on, or handed back a compacted context): drawn muted.
+    pub quiet: bool,
     /// A message turn whose handed-over file is gone, read back from the messages table by
     /// its id: the id, a link to it in Messages.
     pub sent_ref: Option<i64>,
@@ -220,40 +224,40 @@ struct ActivityTemplate<'a> {
     a: &'a ActivityView,
 }
 
-/// A message as its agent was handed it, without sluice's delivery line around it: "Message
-/// from orchestrator on your sluice thread `step-a` (…): Look again" reads "Orchestrator: Look
-/// again", a question "Question 12 from b: …" (its id, to answer it), a reply "Reply from b: …".
-pub fn unwrapped(text: &str) -> String {
-    const ON: &str = " on your sluice thread `";
-    let Some(at) = text.find(ON) else {
-        return text.to_owned();
-    };
-    let head = &text[..at];
-    let rest = &text[at + ON.len()..];
-    let Some(body) = rest.find('`').and_then(|end| {
-        let after = &rest[end + 1..];
-        after.find(": ").map(|colon| &after[colon + 2..])
-    }) else {
-        return text.to_owned();
-    };
-    let who = |from: &str| match from {
-        "owner" => "You".to_owned(),
+/// Who sent a message, as a turn is headed: "Orchestrator", "you", a step by its id.
+fn sender(from: &str) -> String {
+    match from {
+        "owner" => "you".to_owned(),
         "orchestrator" => "Orchestrator".to_owned(),
         other => other.to_owned(),
-    };
+    }
+}
+/// A message as its agent was handed it, split from sluice's delivery line around it: how its
+/// turn is headed, by who sent it, and its words. "Message from orchestrator on your sluice
+/// thread `step-a` (…): Look again" is "From Orchestrator", "Look again"; a question "Question
+/// 12 from b", its id kept to answer it; a reply "Reply from b". None when it has no such line.
+pub fn unwrapped(text: &str) -> Option<(String, String)> {
+    const ON: &str = " on your sluice thread `";
+    let at = text.find(ON)?;
+    let head = &text[..at];
+    let rest = &text[at + ON.len()..];
+    let body = rest.find('`').and_then(|end| {
+        let after = &rest[end + 1..];
+        after.find(": ").map(|colon| &after[colon + 2..])
+    })?;
     let lead = if let Some(from) = head.strip_prefix("Message from ") {
-        who(from)
+        format!("From {}", sender(from))
     } else if let Some(from) = head.strip_prefix("Reply from ") {
-        format!("Reply from {}", who(from))
+        format!("Reply from {}", sender(from))
     } else if let Some((id, from)) = head
         .strip_prefix("Question ")
         .and_then(|q| q.split_once(" from "))
     {
-        format!("Question {id} from {}", who(from))
+        format!("Question {id} from {}", sender(from))
     } else {
-        return text.to_owned();
+        return None;
     };
-    format!("{lead}: {body}")
+    Some((lead, body.to_owned()))
 }
 /// A run's calls by tool as one meta line: "Bash 42 · Edit 9 · Read 17 · 2 failed", four tools
 /// at most and "n other" after them.
@@ -376,20 +380,34 @@ pub fn view(
             }
         }
         let open = running || failing_at.is_some_and(|(ft, _)| ft == t) || count == 1;
+        // a turn is headed by what opened it: its task, who sent the message (however it was
+        // delivered), sluice's own nudge, or sluice carrying it on
+        let (sent_kind, sent_words) = match turn.sent.kind {
+            SentKind::Task => ("Task".to_owned(), turn.sent.text.clone()),
+            SentKind::Carried => (
+                "Carried on".to_owned(),
+                "Its session went on from an earlier run.".to_owned(),
+            ),
+            SentKind::Compacted => (
+                "Compacted".to_owned(),
+                "Its engine compacted its context; sluice handed it its task and progress again."
+                    .to_owned(),
+            ),
+            SentKind::Message | SentKind::Text => match unwrapped(&turn.sent.text) {
+                Some(split) => split,
+                // a message file no longer kept: "#165159", named from its row (`name_messages`)
+                None if turn.sent.kind == SentKind::Message => {
+                    ("Message".to_owned(), turn.sent.text.clone())
+                }
+                None => ("From sluice".to_owned(), turn.sent.text.clone()),
+            },
+        };
         turns.push(TurnView {
             n: t + 1,
             anchor,
-            sent_kind: match turn.sent.kind {
-                SentKind::Task => "Task",
-                SentKind::Message => "Message",
-                SentKind::Text => "Received",
-                SentKind::Carried => "Carried on",
-            },
-            sent: match turn.sent.kind {
-                SentKind::Carried => "Its session went on from an earlier run.".into(),
-                SentKind::Task => turn.sent.text.clone(),
-                _ => unwrapped(&turn.sent.text),
-            },
+            sent_kind: sent_kind.clone(),
+            sent: sent_words,
+            quiet: matches!(turn.sent.kind, SentKind::Carried | SentKind::Compacted),
             sent_ref: None,
             said: turn.said.clone(),
             calls: turn.calls.len(),
@@ -546,8 +564,8 @@ pub async fn attach(state: &DashboardState, step: &mut StepView, all: bool) {
     }
 }
 /// A message turn whose handed-over file is gone names only its id ("#165159"): its sender and
-/// first line are read back from the messages table, "Orchestrator: Your default is right…",
-/// the id kept as a link to it.
+/// first line are read back from the messages table, "From Orchestrator", "Your default is
+/// right…", the id kept as a link to it.
 async fn name_messages(
     state: &DashboardState,
     project: sluice_model::ids::ProjectId,
@@ -596,17 +614,13 @@ async fn name_messages(
             continue;
         };
         if let Some((from, body)) = found.get(&id) {
-            let who = match from.as_str() {
-                "owner" => "You",
-                "orchestrator" => "Orchestrator",
-                other => other,
-            };
             let first = body
                 .lines()
                 .map(crate::markdown::plain)
                 .find(|l| !l.is_empty())
                 .unwrap_or_default();
-            turn.sent = format!("{who}: {}", crate::markdown::cut(&first, 200));
+            turn.sent_kind = format!("From {}", sender(from));
+            turn.sent = crate::markdown::cut(&first, 200);
             turn.sent_ref = Some(id);
         }
     }

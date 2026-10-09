@@ -331,14 +331,25 @@ async fn a_running_step_says_how_long_its_stage_usually_takes_from_three_done_un
     let pill = between(&html, "id=\"n-r1-work\"", "</a>");
     assert!(pill.contains("data-usually=\"1200\""), "{pill}");
     assert!(pill.contains("; its stage usually takes 20m\""), "{pill}");
+    // far past twice its usual time, its timer's words say how far, one sentence for a reader
+    // (no space before a comma), and the pill shows it in the attention tone, hidden from one
     assert!(
-        pill.contains("<span class=\"vh\" data-tail=\", usually 20 minutes\"> for ")
-            && pill.contains(", usually 20 minutes</span></time>"),
+        pill.contains("<span class=\"vh\" data-tail=\", usually 20 minutes, ")
+            && pill.contains("× its usual time</span></time>"),
         "{pill}"
     );
-    // far past twice its usual time, the pill says how many times, in the attention tone
     assert!(pill.contains("<span class=\"over-x\" title=\""), "{pill}");
-    assert!(pill.contains("× its usual time (usually 20m)\">"), "{pill}");
+    assert!(
+        pill.contains("× its usual time (usually 20m)\" aria-hidden=\"true\">"),
+        "{pill}"
+    );
+    // a row drawn as a lane string (a phone, the drawer open) keeps it on its live stage
+    let row = between(&html, "<tr id=\"unit-r1\"", "</tr>");
+    let lane = between(row, "<p class=\"mx-lane fb-lane\"", "</p>");
+    assert!(
+        lane.contains("× its usual time\">") && lane.contains("<span class=\"over-x\""),
+        "{lane}"
+    );
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/r1-work")).await;
     let badges = step
         .split("<p class=\"d-badges\">")

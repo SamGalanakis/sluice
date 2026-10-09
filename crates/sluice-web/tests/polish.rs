@@ -597,7 +597,8 @@ async fn chromium_a_form_of_filters_applies_as_it_changes_with_no_apply_button()
             .unwrap();
         assert_eq!(shown, false, "Apply hides while the form applies itself");
         browser
-            .eval("(() => { const box = document.querySelector('form.filters input[name=kind]'); box.closest('details').open = true; box.click(); return box.value; })()")
+            // the click navigates: it runs after this evaluation has returned
+            .eval("(() => { const box = document.querySelector('form.filters input[name=kind]'); box.closest('details').open = true; setTimeout(() => box.click(), 0); return box.value; })()")
             .unwrap();
         browser.wait("new URLSearchParams(location.search).has('kind')").unwrap();
         browser.navigate(&format!("http://{addr}/fns")).unwrap();

@@ -283,7 +283,15 @@ async fn p605_typed_ui_reply_is_atomic_and_stale_buttons_conflict() {
     )
     .await
     .unwrap();
-    assert!(questions.questions.is_empty());
+    // answered, it waits on no one: it stays in its place only as the line that says so
+    assert!(questions.for_you().is_empty());
+    assert!(
+        questions
+            .questions
+            .iter()
+            .all(|q| q.state == "answered" && !q.answered_at.is_empty())
+    );
+    assert_eq!(questions.for_you_rows().len(), 1);
     assert_eq!(questions.nav.inbox, 0);
     let requests = commands.requests.lock().unwrap();
     let CommandRequest::Reply(post) = &requests[0] else {

@@ -632,6 +632,10 @@ impl UnitView {
     }
     /// Its stages as a lane string of links (a phone's matrix row): each stage's name and mark,
     /// opening its step.
+    /// Its first step that put a question to the owner its run waits on: its row says so.
+    pub fn asking_step(&self) -> Option<&StepView> {
+        self.steps.iter().find(|s| s.asking.is_some())
+    }
     /// Its first step (in stage order) that failed or was cancelled: its row says why.
     pub fn why_step(&self) -> Option<&StepView> {
         self.steps.iter().find(|s| !s.why().is_empty())
@@ -684,14 +688,22 @@ impl UnitView {
                     run.map(|n| format!(" <span class=\"lm-run\">(run {n})</span>"))
                         .unwrap_or_default(),
                 );
+                // a run past twice its usual time says how far, as its pill does
+                let times = s.overrun_times();
                 format!(
-                    "<a href=\"{}\" data-opens=\"{}\" aria-label=\"{} {}{}\">{}</a>",
+                    "<a href=\"{}\" data-opens=\"{}\" aria-label=\"{} {}{}{}\">{}{}</a>",
                     s.href(),
                     s.id,
                     s.id,
                     s.shown().word(),
                     run.map(|n| format!(", run {n}")).unwrap_or_default(),
+                    if times.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {times} its usual time")
+                    },
                     super::ui::stage(s.shown(), &name, false),
+                    s.overrun_html(),
                 )
             })
             .collect::<Vec<_>>()
@@ -771,72 +783,8 @@ pub struct Matrix<'a> {
     pub band: String,
 }
 impl Matrix<'_> {
-    /// The waits two or more of its rows share, each with the rows that share it: said over the
-    /// table ("fig-5574 and fig-5578 wait for fig-5571-landed …"), naming the rows.
-    pub fn shared_waits(&self) -> Vec<(Vec<UnitName>, Wait)> {
-        let mut seen: Vec<(Vec<UnitName>, Wait)> = vec![];
-        for unit in &self.rows {
-            if let Some((_, waits)) = unit.all_waits() {
-                for wait in waits {
-                    match seen.iter_mut().find(|(_, w)| w.key == wait.key) {
-                        Some((units, _)) => units.push(unit.id.clone()),
-                        None => seen.push((vec![unit.id.clone()], wait)),
-                    }
-                }
-            }
-        }
-        seen.retain(|(units, _)| units.len() > 1);
-        seen
-    }
-    /// The shared waits' lines over the table, one sentence each naming the rows that wait,
-    /// each a link to its row: "fig-5574, fig-5577 and fig-5578 wait for `fig-5573-landed`
-    /// Hosts edit… (running)"; past four rows the first three and "and 3 more", the rest in its
-    /// title.
-    pub fn shared_html(&self) -> TrustedHtml {
-        use super::ui::esc;
-        const SHOWN: usize = 3;
-        let out: String = self
-            .shared_waits()
-            .iter()
-            .map(|(units, w)| {
-                let link = |u: &UnitName| format!("<a href=\"#unit-{0}\"><code>{0}</code></a>", esc(u.as_str()));
-                let named = if units.len() > SHOWN + 1 { SHOWN } else { units.len() };
-                let mut who: Vec<String> = units[..named].iter().map(link).collect();
-                if units.len() > named {
-                    let rest: Vec<&str> = units[named..].iter().map(|u| u.as_str()).collect();
-                    who.push(format!(
-                        "<span title=\"{}\">{} more</span>",
-                        esc(&rest.join(", ")),
-                        units.len() - named
-                    ));
-                }
-                let who = match who.split_last() {
-                    Some((last, [])) => last.clone(),
-                    Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
-                    None => String::new(),
-                };
-                format!(
-                    "<p class=\"waits said mx-shared\">{who} wait for <a href=\"{}\"{}>{}{}</a>{}</p>",
-                    esc(&w.href),
-                    if w.opens.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" data-opens=\"{}\"", esc(&w.opens))
-                    },
-                    if w.unit { "unit " } else { "" },
-                    w.name.id_first_html(72),
-                    if w.note.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" ({})", esc(&w.note))
-                    }
-                )
-            })
-            .collect();
-        TrustedHtml::owned(out)
-    }
-    /// A row's waits, each source by its id: a wait it shares is said over the table too, and
-    /// still here, so every row says what holds it.
+    /// A row's waits, each source by its id (its title on hover) and how it reads: every row
+    /// says what holds it, a wait it shares with other rows as well.
     pub fn row_waits<'u>(&self, unit: &'u UnitView) -> Option<(&'u StepView, Vec<Wait>)> {
         unit.all_waits()
     }
@@ -1688,6 +1636,22 @@ impl ProjectView {
         use super::ui::{glyph, mark, tag, tag_link};
         let href = self.attention_href();
         let mut out = String::new();
+        // its open questions to the owner first, in coral: one leads to where it is answered,
+        // several to the project's inbox
+        let asks = &self.project.asks;
+        if let Some(first) = asks.first() {
+            let id = self.project.id;
+            let to = if asks.len() == 1 {
+                first.href(&id)
+            } else {
+                format!("/projects/id/{id}/inbox")
+            };
+            let words = match asks.len() {
+                1 => "1 question for you".to_owned(),
+                n => format!("{n} questions for you"),
+            };
+            out.push_str(&tag_link(&to, &words, "ask", None).0);
+        }
         for (shown, n) in self.project.standing().iter().filter(|(s, _)| s.spec().attention) {
             let tone = match shown.spec().tone {
                 sluice_model::shown::Tone::Ink => "failed",
@@ -1721,7 +1685,7 @@ impl ProjectView {
     }
     /// The summary line has tags to draw.
     pub fn has_tags(&self) -> bool {
-        self.project.standing().attention() > 0 || self.project.paused
+        self.project.standing().attention() > 0 || self.project.paused || !self.project.asks.is_empty()
     }
     /// What the search found: "12 steps match “land”", "No step matches “x”."
     pub fn match_words(&self) -> String {
@@ -2014,6 +1978,7 @@ pub fn load_board(
                 .and_then(|r| r.activity)
                 .map(super::rfc3339)
                 .unwrap_or_default();
+            step.asking = summary.ask_of(step.id.as_str()).cloned();
         }
         // a unit whose every step is done but a cancel the owner dismissed is done too: on
         // the shelf, the cancel still on its card
@@ -2244,6 +2209,57 @@ pub fn load_step(
         shown.insert(other.clone(), view.shown());
     }
     step.name_waits(&plan, &state, &|id| shown.get(id).copied());
+    // every step it waits on is pending too: name the first one up the chain that holds it
+    // (running, stopped, paused: neither pending nor done), so "why has it not started?" is one
+    // look, not a hop per link
+    let deps = plan.dependencies(id);
+    if step.pending()
+        && !deps.is_empty()
+        && deps.iter().all(|d| shown.get(d) == Some(&Shown::Pending))
+    {
+        let mut seen: BTreeSet<&StepId> = deps.iter().collect();
+        let mut queue: std::collections::VecDeque<(&StepId, &StepId)> =
+            deps.iter().map(|d| (d, d)).collect();
+        while let Some((at, through)) = queue.pop_front() {
+            let reads = match shown.get(at) {
+                Some(known) => *known,
+                None => {
+                    let mut view = StepView::new(project, &plan, &state, at);
+                    cards.decorate(&mut view, revision as u64);
+                    observe(c, project, &mut view)?;
+                    view.shown()
+                }
+            };
+            // a done step holds nothing: the chain goes on only through what is pending
+            if reads.spec().band == sluice_model::shown::Band::Done {
+                continue;
+            }
+            if reads != Shown::Pending {
+                let gate = |id: &StepId, reads: Option<Shown>| super::step::GateView {
+                    entry: id.to_string(),
+                    href: format!("/projects/id/{project}/steps/{id}"),
+                    name: super::ui::StepRef::new(id.as_str(), names.naming.step(id.as_str())),
+                    shown: reads,
+                    step: Some(id.clone()),
+                };
+                step.held_by = Some((gate(at, Some(reads)), gate(through, shown.get(through).copied())));
+                break;
+            }
+            if seen.len() > 512 {
+                break;
+            }
+            for up in plan.dependencies(at) {
+                if seen.insert(up) {
+                    queue.push_back((up, through));
+                }
+            }
+        }
+    }
+    step.runner_stopped = c.query_row(
+        "SELECT scheduler_owner IS NULL FROM maintenance WHERE singleton=1",
+        [],
+        |r| r.get(0),
+    )?;
     step.name_links(&names.naming);
     super::step::load_detail(c, project, &mut step)?;
     let unit = home.tagged.then(|| {

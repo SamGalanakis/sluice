@@ -76,6 +76,9 @@ pub struct Timeline {
     pub ticks: Vec<Tick>,
     /// A run still goes: the axis ends in "now".
     pub open: bool,
+    /// Two or more stages at its end with no run yet, each its name and page: one row, "land,
+    /// landed, close, rm: no run yet", not a row each.
+    pub rest: Vec<(String, String)>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Row {
@@ -352,8 +355,24 @@ impl Timeline {
             }
         }
         kept.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // the stages at its end not reached yet are one row
+        let mut rows: Vec<Row> = rows;
+        let unreached = rows
+            .iter()
+            .rev()
+            .take_while(|r| r.marks.is_empty() && !r.current)
+            .count();
+        let rest = if unreached >= 2 {
+            rows.split_off(rows.len() - unreached)
+                .into_iter()
+                .map(|r| (r.label, r.href))
+                .collect()
+        } else {
+            vec![]
+        };
         Some(Self {
             rows,
+            rest,
             breaks,
             ticks: kept.into_iter().map(|(_, _, t)| t).collect(),
             open: axis.open,

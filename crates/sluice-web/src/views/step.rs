@@ -231,6 +231,20 @@ pub struct RunView {
     /// A cancelled run's one line, from the record that stopped it: "Cancelled after 1h 18m by
     /// cli, which retried it." ("" for any other run).
     pub cancelled_by: String,
+    /// What started it, after its step's first run (`load_restarts`): Runs says it under its
+    /// status, and Now for the run going.
+    pub restart: Option<Restart>,
+}
+impl RunView {
+    /// What started it, as Runs says it under its status ("" when nothing recorded says).
+    pub fn restart_html(&self, step: &str) -> TrustedHtml {
+        TrustedHtml::owned(
+            self.restart
+                .as_ref()
+                .map(|r| r.sentence(step))
+                .unwrap_or_default(),
+        )
+    }
 }
 /// The run files a page may open, read-only and only from that run's own directory: its
 /// stderr, its tail, its summary, the pane its agent left when it failed, and the records its
@@ -369,8 +383,17 @@ impl RunView {
             )
         })
     }
+    /// Where one of its files opens: a live run's at its end, where its newest lines are.
     pub fn file_href(&self, project: &ProjectId, name: &str) -> String {
-        format!("/projects/id/{project}/runs/{}/files/{name}", self.id)
+        format!(
+            "/projects/id/{project}/runs/{}/files/{name}{}",
+            self.id,
+            if self.finished.is_empty() {
+                "#file-end"
+            } else {
+                ""
+            }
+        )
     }
     /// "took 2h 14m" for an ended run.
     pub fn took(&self) -> String {
@@ -429,6 +452,9 @@ pub struct StepView {
     pub runs: Vec<RunView>,
     pub messages: usize,
     pub awaiting: usize,
+    /// Its open question to the owner that its run waits on, when it has put one: its header,
+    /// its card and its unit's row say so in coral, and its Overview draws it whole to answer.
+    pub asking: Option<super::AskView>,
     pub total: Option<usize>,
     pub done: usize,
     pub manual: bool,
@@ -482,18 +508,58 @@ pub struct StepView {
     /// How many steps come after it, near or far: a succeeded step's Retry says they may run
     /// again (`board::load_step`).
     pub downstream: usize,
-    /// While a later run of it goes: what started that run (`load_detail`).
-    pub restart: Option<Restart>,
+    /// A pending step whose every wait is pending too: the first step up its chain that is not,
+    /// and the wait of its own it holds through (`board::load_step`).
+    pub held_by: Option<(GateView, GateView)>,
+    /// Nothing holds the scheduler lease: a pending step's page says nothing starts.
+    pub runner_stopped: bool,
 }
-/// What started a step's run going now, after an earlier one: a retry's author and reason (a
-/// completion action's, an orchestrator's, the owner's), and the feedback it sent with it.
+/// What started a run after its step's first: a retry's author and reason (a completion
+/// action's, an orchestrator's, the owner's) and the feedback it sent with it; or an input it
+/// reads changing, which made it stale.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct Restart {
+    /// Who retried it ("" when it went stale).
     pub by: String,
     pub reason: String,
     pub at: String,
     /// The message sent with it to the step's thread, by its id.
     pub feedback: Option<i64>,
+    /// It ran again because an input it reads changed, not because someone retried it.
+    pub stale: bool,
+}
+impl Restart {
+    /// Who started it again, in a sentence of its own: "You retried it: rebase onto ce4fc38,
+    /// with feedback.", "fig-5571-land sent it back, with feedback.", "Sluice retried it on its
+    /// own.", "An input it reads changed, so it ran again." (`step`: the step it ran.)
+    pub fn sentence(&self, step: &str) -> String {
+        use super::ui::esc;
+        if self.stale {
+            return "An input it reads changed, so it ran again.".into();
+        }
+        let by = self.by.strip_prefix("step:").unwrap_or(&self.by);
+        let itself = by == step || by == "sluice";
+        // a completion action's reason is sluice's own wording ("conditional Rejected retry"):
+        // the step that sent it back says it
+        let action = self.reason.starts_with("conditional ");
+        let mut out = match by {
+            "" => return String::new(),
+            "owner" => "You retried it".to_owned(),
+            _ if itself => "Sluice retried it on its own".to_owned(),
+            "orchestrator" => "The orchestrator retried it".to_owned(),
+            by if action => format!("<code>{}</code> sent it back", esc(by)),
+            by => format!("{} retried it", esc(by)),
+        };
+        let reason = self.reason.trim().trim_end_matches('.');
+        if !itself && !action && !reason.is_empty() {
+            out.push_str(&format!(": {}", esc(reason)));
+        }
+        if let Some(m) = self.feedback {
+            out.push_str(&format!(", <a href=\"#message-{m}\">with feedback</a>"));
+        }
+        out.push('.');
+        out
+    }
 }
 /// When a step's current run started and how long it ran or has run so far: its card's timer.
 /// The current run is its latest in its current generation; a scatter's is its latest round,
@@ -829,6 +895,9 @@ impl StepView {
             runs: vec![],
             messages: 0,
             awaiting: 0,
+            asking: None,
+            held_by: None,
+            runner_stopped: false,
             total: None,
             done: 0,
             manual: false,
@@ -850,7 +919,6 @@ impl StepView {
             dismissed: false,
             kept: String::new(),
             downstream: 0,
-            restart: None,
             whole_title: String::new(),
         };
         if let Some(failure) = failure {
@@ -1051,14 +1119,30 @@ impl StepView {
             None,
         )
     }
-    /// "2 awaiting reply", gold: questions on its thread nobody has answered.
+    /// Its header's word on the questions on its thread nobody has answered: its own to the owner
+    /// the coral "Awaiting your reply", leading to its Overview, where it is answered; else "2
+    /// awaiting reply", gold, leading to its Messages.
     pub fn awaiting_tag(&self) -> TrustedHtml {
-        super::ui::tag_link(
-            "#tp-messages",
-            &format!("{} awaiting reply", self.awaiting),
-            "attn",
-            None,
-        )
+        match &self.asking {
+            Some(ask) => super::ui::ask_link(&format!("#ov-message-{}", ask.message), &ask.title),
+            None => super::ui::tag_link(
+                "#tp-messages",
+                &format!("{} awaiting reply", self.awaiting),
+                "attn",
+                None,
+            ),
+        }
+    }
+    /// Under its card on the board and its unit's matrix row: the coral "Awaiting your reply",
+    /// leading to its page, where its Overview draws the question whole to answer.
+    pub fn ask_html(&self) -> TrustedHtml {
+        match &self.asking {
+            Some(ask) => TrustedHtml::owned(format!(
+                "<p class=\"card-ask\">{}</p>",
+                super::ui::ask_link(&ask.href(&self.project), &ask.title)
+            )),
+            None => TrustedHtml::owned(String::new()),
+        }
     }
     pub fn href(&self) -> String {
         format!("/projects/id/{}/steps/{}", self.project, self.id)
@@ -1283,8 +1367,16 @@ impl StepView {
             said: super::ui::duration_words(t.seconds),
             title,
             usually: usually.map(|u| u.round() as u64),
+            // past twice its usual time, the words say how far: one sentence for a reader
             usual_said: usually
-                .map(|u| format!("usually {}", super::ui::duration_words(u)))
+                .map(|u| {
+                    let mut words = format!("usually {}", super::ui::duration_words(u));
+                    let times = self.overrun_times();
+                    if !times.is_empty() {
+                        words.push_str(&format!(", {times} its usual time"));
+                    }
+                    words
+                })
                 .unwrap_or_default(),
         })
     }
@@ -1329,8 +1421,9 @@ impl StepView {
         if times.is_empty() {
             return TrustedHtml::owned(String::new());
         }
+        // its timer's words say it for a reader (`timer_html`)
         TrustedHtml::owned(format!(
-            "<span class=\"over-x\" title=\"{t} its usual time ({u})\"><span aria-hidden=\"true\">{t}</span><span class=\"vh\">, {t} its usual time</span></span>",
+            "<span class=\"over-x\" title=\"{t} its usual time ({u})\" aria-hidden=\"true\">{t}</span>",
             t = super::ui::esc(&times),
             u = super::ui::esc(&self.usually_text()),
         ))
@@ -1774,28 +1867,11 @@ impl StepView {
                 out.push('.');
             }
         }
-        if let Some(r) = &self.restart {
-            let by = r.by.strip_prefix("step:").unwrap_or(&r.by);
-            let itself = by == self.id.as_str() || by == "sluice";
-            let who = match by {
-                "" => String::new(),
-                "owner" => "You retried it".into(),
-                _ if itself => "Sluice retried it on its own".into(),
-                "orchestrator" => "The orchestrator retried it".into(),
-                by => format!("{} retried it", esc(by)),
-            };
-            if !who.is_empty() {
+        if let Some(r) = self.runs.last().and_then(|r| r.restart.as_ref()) {
+            let sentence = r.sentence(self.id.as_str());
+            if !sentence.is_empty() {
                 out.push(' ');
-                out.push_str(&who);
-                // a completion action's reason is sluice's own wording, not the owner's
-                let reason = r.reason.trim().trim_end_matches('.');
-                if !itself && !reason.is_empty() && !reason.starts_with("conditional ") {
-                    out.push_str(&format!(": {}", esc(reason)));
-                }
-                if let Some(m) = r.feedback {
-                    out.push_str(&format!(", <a href=\"#message-{m}\">with feedback</a>"));
-                }
-                out.push('.');
+                out.push_str(&sentence);
             }
         }
         TrustedHtml::owned(out)
@@ -2039,7 +2115,8 @@ fn load_conversation(
             href: &here,
         },
         quoted,
-    );
+    )
+    .with_slot("ov-");
     let whole = super::threads::thread_url(project, &format!("step-{id}"));
     step.thread = Conversation::build(
         Build {
@@ -2171,6 +2248,7 @@ pub fn load_detail(
             seconds,
             profile: String::new(),
             cancelled_by: String::new(),
+            restart: None,
         });
     }
     load_cancels(c, project, step)?;
@@ -2208,7 +2286,10 @@ pub fn load_detail(
     } else {
         None
     };
-    step.restart = load_restart(c, project, step)?;
+    load_restarts(c, project, step)?;
+    step.asking = super::load_asks(c, &project.to_string())?
+        .into_iter()
+        .find(|a| a.step == step.id.as_str());
     load_conversation(c, project, step)?;
     (step.messages,step.awaiting) = c.prepare_cached("SELECT count(*),coalesce(sum(needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL),0) FROM messages WHERE project_id=?1 AND thread=?2")?.query_row((project.to_string(),format!("step-{}",step.id)), |r| Ok((r.get::<_, i64>(0)? as usize,r.get::<_, i64>(1)? as usize)))?;
     step.mark_setters();
@@ -2230,9 +2311,6 @@ pub fn load_detail(
     }
     Ok(())
 }
-/// While a later run of it goes, what started that run: the retry recorded after its run
-/// before started and before this one did (who, why, and the feedback it posted to the step in
-/// the same write). None for a first run, or a run relaunched with no retry (a lost one's).
 /// Each cancelled run's line: how long it ran and who stopped it, read from the record that did
 /// (a cancel's, or a retry's, which stops the run going), within its run's span.
 fn load_cancels(
@@ -2304,45 +2382,64 @@ fn load_cancels(
     }
     Ok(())
 }
-fn load_restart(
+/// What started each run after the first: the retry recorded after the run before it started
+/// and before it did (who, why, and the feedback posted to the step in the same write), else
+/// its going stale and pending again. None for a run relaunched with neither (a lost one's).
+fn load_restarts(
     c: &rusqlite::Connection,
     project: ProjectId,
-    step: &StepView,
-) -> sluice_store::Result<Option<Restart>> {
-    let [.., before, now] = step.runs.as_slice() else {
-        return Ok(None);
-    };
-    if !now.finished.is_empty() {
-        return Ok(None);
+    step: &mut StepView,
+) -> sluice_store::Result<()> {
+    for i in 1..step.runs.len() {
+        let (before, now) = (&step.runs[i - 1], &step.runs[i]);
+        let found = c
+            .prepare_cached("SELECT payload,at FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.retry' AND julianday(at)>=julianday(?3) AND julianday(at)<=julianday(?4) ORDER BY seq DESC LIMIT 1")?
+            .query_row(
+                (project.to_string(), step.id.as_str(), before.started.as_str(), now.started.as_str()),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        let restart = match found {
+            Some((payload, at)) => {
+                let payload: serde_json::Value = serde_json::from_str(&payload)?;
+                let said = |k: &str| {
+                    payload
+                        .get(k)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_owned()
+                };
+                let feedback = c
+                    .prepare_cached("SELECT id FROM messages WHERE project_id=?1 AND \"to\"=?2 AND abs(julianday(at)-julianday(?3))*86400.0<2 ORDER BY id LIMIT 1")?
+                    .query_row((project.to_string(), step.id.as_str(), at.as_str()), |r| r.get(0))
+                    .optional()?;
+                Some(Restart {
+                    by: said("author"),
+                    reason: said("reason"),
+                    at,
+                    feedback,
+                    stale: false,
+                })
+            }
+            // no retry: it ran again once it went stale and was made pending
+            None => c
+                .prepare_cached("SELECT at FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.status' AND json_extract(payload,'$.from')='stale' AND json_extract(payload,'$.to')='pending' AND julianday(at)>=julianday(?3) AND julianday(at)<=julianday(?4) ORDER BY seq DESC LIMIT 1")?
+                .query_row(
+                    (project.to_string(), step.id.as_str(), before.started.as_str(), now.started.as_str()),
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()?
+                .map(|at| Restart {
+                    by: String::new(),
+                    reason: String::new(),
+                    at,
+                    feedback: None,
+                    stale: true,
+                }),
+        };
+        step.runs[i].restart = restart;
     }
-    let Some((payload, at)) = c
-        .prepare_cached("SELECT payload,at FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.retry' AND julianday(at)>=julianday(?3) AND julianday(at)<=julianday(?4) ORDER BY seq DESC LIMIT 1")?
-        .query_row(
-            (project.to_string(), step.id.as_str(), before.started.as_str(), now.started.as_str()),
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-        )
-        .optional()?
-    else {
-        return Ok(None);
-    };
-    let payload: serde_json::Value = serde_json::from_str(&payload)?;
-    let said = |k: &str| {
-        payload
-            .get(k)
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned()
-    };
-    let feedback = c
-        .prepare_cached("SELECT id FROM messages WHERE project_id=?1 AND \"to\"=?2 AND abs(julianday(at)-julianday(?3))*86400.0<2 ORDER BY id LIMIT 1")?
-        .query_row((project.to_string(), step.id.as_str(), at.as_str()), |r| r.get(0))
-        .optional()?;
-    Ok(Some(Restart {
-        by: said("author"),
-        reason: said("reason"),
-        at,
-        feedback,
-    }))
+    Ok(())
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -2993,7 +3090,22 @@ async fn run_file_html(
     let text = plain_terminal(text);
     let lines = text.lines().count();
     let body = TrustedHtml::owned(format!(
-        "<div id=\"run-file\" class=\"run-file-page\"><nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{project}/steps/{s}?tab=runs\">{back}step {s}</a></nav><h1 class=\"title-long\">{n}</h1><p class=\"meta\">Run {id} · {lines} · <a href=\"?raw=1\">The file as it is</a></p>{body}</div>",
+        "<div id=\"run-file\" class=\"run-file-page\"><nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{project}/steps/{s}?tab=runs\">{back}step {s}</a></nav><h1 class=\"title-long\">{n}</h1><p class=\"meta\">Run {id} · {lines} · <a href=\"?raw=1\">The file as it is</a>{jump}</p>{body}<p class=\"meta run-file-end\" id=\"file-end\">{end}</p></div>",
+        // a long file has a way to its end, where a live run's newest lines are (its links
+        // open there: `RunView::file_href`)
+        jump = if lines > 40 {
+            format!(
+                " · <a class=\"jump\" href=\"#file-end\">{}Jump to end</a>",
+                super::icons::icon(super::icons::Icon::ArrowDown, 16, "")
+            )
+        } else {
+            String::new()
+        },
+        end = if lines > 40 {
+            "End of the file as read."
+        } else {
+            ""
+        },
         s = esc(step),
         back = super::icons::icon(super::icons::Icon::ArrowLeft, 16, ""),
         n = esc(name),

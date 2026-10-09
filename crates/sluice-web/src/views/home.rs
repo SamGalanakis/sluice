@@ -33,18 +33,25 @@ impl HomeView {
             runner_stopped: snapshot.runner_stopped,
         }
     }
-    /// The tab's words: what needs attention across the projects, counted ("2 failed · 1 quiet ·
-    /// Projects").
+    /// The tab's words: the open questions to the owner, then what needs attention across the
+    /// projects, counted ("2 questions · 2 failed · 1 quiet · Projects").
     pub fn title(&self) -> String {
         let mut all = ui::Tally::default();
         for project in &self.active {
             all += &project.standing();
         }
-        let mut words: Vec<String> = all
+        let asks = self
+            .active
             .iter()
-            .filter(|(s, _)| s.spec().attention)
-            .map(|(s, n)| format!("{n} {}", s.word()))
-            .collect();
+            .chain(&self.empty)
+            .map(|p| p.asks.len())
+            .sum();
+        let mut words: Vec<String> = questions_words(asks).into_iter().collect();
+        words.extend(
+            all.iter()
+                .filter(|(s, _)| s.spec().attention)
+                .map(|(s, n)| format!("{n} {}", s.word())),
+        );
         words.push("Projects".into());
         words.join(" · ")
     }
@@ -99,13 +106,18 @@ fn function_body(
     .filter(|(scope, _)| *scope != "project" || nav.selected.is_some())
     .map(|(scope, title)| FunctionGroup {
         title: title.into(),
-        functions: snapshot
-            .functions
-            .entries
-            .iter()
-            .filter(|f| f.scope == scope)
-            .cloned()
-            .collect(),
+        // a retired fn after the live ones
+        functions: {
+            let mut found: Vec<FunctionView> = snapshot
+                .functions
+                .entries
+                .iter()
+                .filter(|f| f.scope == scope)
+                .cloned()
+                .collect();
+            found.sort_by_key(FunctionView::retired);
+            found
+        },
     })
     .collect::<Vec<_>>();
     TrustedHtml::from_template(&FunctionsTemplate {

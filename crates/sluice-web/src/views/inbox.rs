@@ -327,11 +327,33 @@ async fn mutate(
             {
                 axum::Json(reply).into_response()
             } else {
-                axum::response::Redirect::to(&format!("/projects/id/{project}/history"))
-                    .into_response()
+                axum::response::Redirect::to(&back(&headers, project, reply_to)).into_response()
             }
         }
         Err(error) => error_response(error),
+    }
+}
+/// Where a form's post goes back to without script: the page it was sent from (the
+/// `Referer`'s path, on this server), where the answer now shows: on the inbox in the question's
+/// place ("Answered 1m ago: …"), on a thread under its question. A page that does not say goes to
+/// the question's project history.
+fn back(headers: &HeaderMap, project: ProjectId, reply_to: Option<MessageId>) -> String {
+    let from = headers
+        .get(header::REFERER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|r| r.split_once("://"))
+        .and_then(|(_, rest)| rest.find('/').map(|i| &rest[i..]))
+        .map(|path| path.split('#').next().unwrap_or(path))
+        .filter(|p| p.starts_with('/') && !p.starts_with("//") && !p.contains('\\'));
+    match (from, reply_to) {
+        (Some(path), Some(id)) if path.split('?').next().is_some_and(|p| {
+            p.ends_with("/inbox") || p.ends_with("/questions")
+        }) =>
+        {
+            format!("{path}#item-{project}-{}", id.0)
+        }
+        (Some(path), _) => path.to_owned(),
+        (None, _) => format!("/projects/id/{project}/history"),
     }
 }
 /// Close several questions at once (the inbox's "Close all n" for the questions nobody is

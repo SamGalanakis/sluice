@@ -181,8 +181,57 @@ pub struct ProjectView {
     /// longer marks the project, its tab or its index row.
     #[serde(default)]
     pub dismissed: std::collections::BTreeSet<String>,
+    /// Its open questions to the owner that someone still waits on, oldest first: what the
+    /// nav's Inbox counts, each with the step that asked it.
+    #[serde(default)]
+    pub asks: Vec<AskView>,
+}
+/// An open question to the owner that someone waits on: its message, the step that asked it
+/// ("" for the orchestrator or anyone else), and its title (its body's first line without one).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AskView {
+    pub message: i64,
+    pub step: String,
+    pub title: String,
+}
+impl AskView {
+    /// Where it is answered: its step's page, whose Overview draws it whole with Answer; a
+    /// question no step asked, its card in the project's inbox.
+    pub fn href(&self, project: &ProjectId) -> String {
+        if self.step.is_empty() {
+            format!(
+                "/projects/id/{project}/inbox#item-{project}-{}",
+                self.message
+            )
+        } else {
+            format!(
+                "/projects/id/{project}/steps/{}#ov-message-{}",
+                self.step, self.message
+            )
+        }
+    }
+}
+/// "2 questions": the open questions to the owner, counted, as a tab title leads with them.
+pub fn questions_words(n: usize) -> Option<String> {
+    match n {
+        0 => None,
+        1 => Some("1 question".into()),
+        n => Some(format!("{n} questions")),
+    }
 }
 impl ProjectView {
+    /// Its open question to the owner from `step`, when it has one.
+    pub fn ask_of(&self, step: &str) -> Option<&AskView> {
+        self.asks.iter().find(|a| a.step == step)
+    }
+    /// Its open questions to the owner no running step it lists asked: the orchestrator's,
+    /// a stopped step's; the index lists them on their own lines.
+    pub fn other_asks(&self) -> Vec<&AskView> {
+        self.asks
+            .iter()
+            .filter(|a| !self.running.iter().any(|r| r.step == a.step))
+            .collect()
+    }
     /// How a page names one of its listed steps: its title and id, or its id alone.
     pub fn step_ref(&self, id: &str) -> ui::StepRef {
         self.names.get(id).cloned().unwrap_or_else(|| ui::StepRef {
@@ -222,14 +271,16 @@ impl ProjectView {
         }
     }
     /// Its pages' tab words, what needs a look first, as the index's tab counts it
-    /// (`home::HomeView::title`): "2 failed · 1 quiet · lash", the states that need attention.
+    /// (`home::HomeView::title`): "1 question · 2 failed · 1 quiet · lash", its open questions
+    /// to the owner, then the states that need attention.
     pub fn tab_words(&self) -> String {
-        let mut words: Vec<String> = self
-            .standing()
-            .iter()
-            .filter(|(s, _)| s.spec().attention)
-            .map(|(s, n)| format!("{n} {}", s.word()))
-            .collect();
+        let mut words: Vec<String> = questions_words(self.asks.len()).into_iter().collect();
+        words.extend(
+            self.standing()
+                .iter()
+                .filter(|(s, _)| s.spec().attention)
+                .map(|(s, n)| format!("{n} {}", s.word())),
+        );
         words.push(self.name.clone());
         words.join(" · ")
     }
@@ -273,6 +324,12 @@ pub struct FunctionView {
     pub inputs: Vec<PortView>,
     pub outputs: Vec<PortView>,
     pub error: String,
+}
+impl FunctionView {
+    /// Kept only so plans written before its successors still run: its doc says so first.
+    pub fn retired(&self) -> bool {
+        self.doc.starts_with("Retired")
+    }
 }
 /// Registry owners return the visible entries, including errors and shadowed
 /// collisions. Its token must change for every externally visible registry edit.
@@ -930,6 +987,35 @@ impl RunningView {
         .optional()?)
     }
 }
+/// A project's open questions to the owner that someone still waits on, as Questions' "For
+/// you" lists them: one whose asking run has stopped is under "Nobody is waiting", not here.
+pub(crate) fn load_asks(
+    c: &rusqlite::Connection,
+    project: &str,
+) -> sluice_store::Result<Vec<AskView>> {
+    let mut q = c.prepare_cached("SELECT m.id,m.\"from\",m.thread,coalesce(m.title,''),m.body FROM messages m WHERE m.project_id=?1 AND m.\"to\"='owner' AND m.needs_reply=1 AND m.resolved_by IS NULL AND m.closed_at IS NULL AND NOT EXISTS (SELECT 1 FROM (SELECT coalesce((SELECT qa.run_id FROM question_attachments qa WHERE qa.project_id=m.project_id AND qa.message_id=m.id AND qa.detached_at IS NULL), m.run_id) AS run) asker WHERE asker.run IS NOT NULL AND NOT EXISTS (SELECT 1 FROM runs r JOIN attempts a ON a.attempt_id=r.attempt_id WHERE r.project_id=m.project_id AND r.run_id=asker.run AND r.finished_at IS NULL AND a.phase!='terminal' AND NOT a.cancel_requested)) ORDER BY m.id")?;
+    let rows = q.query_map([project], |r| {
+        let from: String = r.get(1)?;
+        let thread: String = r.get(2)?;
+        let title: String = r.get(3)?;
+        let body: String = r.get(4)?;
+        Ok(AskView {
+            message: r.get(0)?,
+            // a step asks on its own thread
+            step: if thread.strip_prefix("step-") == Some(from.as_str()) {
+                from
+            } else {
+                String::new()
+            },
+            title: if title.trim().is_empty() {
+                threads::headline(&body, 90)
+            } else {
+                title
+            },
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
 pub fn load_snapshot(
     c: &rusqlite::Connection,
     functions: FunctionCatalog,
@@ -962,6 +1048,7 @@ pub fn load_snapshot(
             stopped: vec![],
             names: Default::default(),
             dismissed: Default::default(),
+            asks: vec![],
         };
         let mut steps = c.prepare_cached(&format!("SELECT {STEP_LIVE} FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position"))?;
         // a failed step's error says whether the owner cancelled it: listed apart
@@ -1057,11 +1144,12 @@ pub fn load_snapshot(
         {
             view.changed = last;
         }
+        view.asks = load_asks(c, &raw)?;
         projects.push(view);
     }
     // the questions put to the owner that someone still waits on, as Questions' "For you"
     // lists them: one whose asking run has stopped is under "Nobody is waiting", not counted
-    let inbox: i64 = c.query_row("SELECT count(*) FROM messages m JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL AND m.\"to\"='owner' AND m.needs_reply=1 AND m.resolved_by IS NULL AND m.closed_at IS NULL AND NOT EXISTS (SELECT 1 FROM (SELECT coalesce((SELECT qa.run_id FROM question_attachments qa WHERE qa.project_id=m.project_id AND qa.message_id=m.id AND qa.detached_at IS NULL), m.run_id) AS run) asker WHERE asker.run IS NOT NULL AND NOT EXISTS (SELECT 1 FROM runs r JOIN attempts a ON a.attempt_id=r.attempt_id WHERE r.project_id=m.project_id AND r.run_id=asker.run AND r.finished_at IS NULL AND a.phase!='terminal' AND NOT a.cancel_requested))",[],|r|r.get(0))?;
+    let inbox = projects.iter().map(|p| p.asks.len()).sum();
     let notes: i64 = c.query_row("SELECT count(*) FROM messages m JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL AND m.\"to\"='owner' AND m.needs_reply=0 AND m.id>coalesce((SELECT cursor FROM readers r WHERE r.project_id=m.project_id AND r.identity='owner' AND r.stream='owner' AND r.thread=m.thread),0)",[],|r|r.get(0))?;
     // The scheduler lease lives as long as its holder's connection to the coordinator.
     let runner_stopped: bool = c.query_row(
@@ -1071,7 +1159,7 @@ pub fn load_snapshot(
     )?;
     Ok(DashboardSnapshot {
         projects,
-        inbox: inbox as usize,
+        inbox,
         notes: notes as usize,
         runner_stopped,
         functions,

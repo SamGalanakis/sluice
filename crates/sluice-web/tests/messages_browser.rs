@@ -129,3 +129,109 @@ async fn chromium_a_note_is_read_only_when_the_owner_asks_and_times_survive_a_pa
     .unwrap();
     server.abort();
 }
+
+/// A question to the owner is answered where it is read, the step's Overview among them, and
+/// the answer is confirmed there: the buttons and box give way to "Answered: sent to … · Read
+/// the thread", spoken; on the inbox the card keeps its place, the nav's count drops.
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_an_answer_is_confirmed_where_it_was_given() {
+    let f = Fixture::new().await;
+    for (thread, from) in [("step-beta-build", "beta-build"), ("owner", "orchestrator")] {
+        stored_messages::stored(
+            &f.writer,
+            f.id,
+            stored_messages::Stored {
+                thread,
+                from,
+                to: Some("owner"),
+                body: "Land it before the rename?\n\n- **Now:** rebase after.\n- **Later:** wait.",
+                title: Some("Land it before the rename?"),
+                question: true,
+                ..Default::default()
+            },
+        )
+        .await;
+    }
+    let router = f.router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let lanes = f.id;
+    let f = std::sync::Arc::new(f);
+    let checks = f.clone();
+    tokio::task::spawn_blocking(move || {
+        let f = checks;
+        let base = format!("http://{addr}");
+        let mut browser =
+            Chrome::open(&format!("{base}/projects/id/{lanes}/steps/beta-build")).unwrap();
+        browser.viewport(1440, "light").unwrap();
+        browser
+            .wait("document.readyState === 'complete' && !!document.querySelector('#tp-overview sluice-answer .answer[data-drawn]')")
+            .unwrap();
+        // the Overview's copy: whole, its list kept, Answer opens its own box
+        assert_eq!(
+            browser.eval("document.querySelector('#tp-overview li.m-yours .m-body li strong')?.textContent").unwrap(),
+            "Now:"
+        );
+        browser
+            .eval("document.querySelector('#tp-overview sluice-answer button.q-toggle').click()")
+            .unwrap();
+        browser
+            .wait("document.activeElement?.id?.startsWith('ov-reply-')")
+            .unwrap();
+        browser
+            .eval("(t => { t.value = 'Land it now.'; t.form.requestSubmit(); })(document.activeElement)")
+            .unwrap();
+        browser
+            .wait("!!document.querySelector('#tp-overview .q-answered[role=status] a')")
+            .unwrap();
+        assert_eq!(
+            browser.eval("document.querySelector('#tp-overview .q-answered').textContent").unwrap(),
+            "Answered: sent to beta-build · Read the thread"
+        );
+        assert!(
+            browser
+                .eval("document.querySelector('#tp-overview .q-answered a').getAttribute('href')")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("thread=step-beta-build#message-"),
+        );
+        let answers: Vec<_> = f
+            .commands
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|r| match r {
+                CommandRequest::Reply(reply) => Some((reply.body.clone(), reply.owner)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(answers, vec![("Land it now.".to_owned(), true)]);
+        // on the inbox the card stays where it was, as the line that says so
+        browser.navigate(&format!("{base}/inbox")).unwrap();
+        browser
+            .wait("document.readyState === 'complete' && document.querySelectorAll('#inbox-items article.item.q').length === 2 && [...document.querySelectorAll('#inbox-items .answer')].every(a => a.dataset.drawn)")
+            .unwrap();
+        let badge = browser.eval("document.querySelector('#nav-inbox .badge').textContent").unwrap();
+        browser
+            .eval("(a => { a.querySelector('button.q-toggle').click(); const t = a.querySelector('textarea'); t.value = 'Accept it.'; t.form.requestSubmit(); })([...document.querySelectorAll('#inbox-items article.item.q')].at(-1))")
+            .unwrap();
+        browser
+            .wait("!!document.querySelector('#inbox-items article.item.q.q-done .q-answered a')")
+            .unwrap();
+        assert_eq!(
+            browser.eval("document.querySelectorAll('#inbox-items article.item.q').length").unwrap(),
+            2
+        );
+        assert_eq!(
+            browser.eval("document.querySelector('#nav-inbox .badge')?.textContent ?? '0'").unwrap(),
+            (badge.as_str().unwrap().parse::<u32>().unwrap() - 1).to_string()
+        );
+        assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), serde_json::json!([]));
+    })
+    .await
+    .unwrap();
+    server.abort();
+}

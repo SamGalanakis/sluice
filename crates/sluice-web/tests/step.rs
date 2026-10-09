@@ -115,7 +115,7 @@ fn a_failed_steps_drawer_leads_with_retry_and_names_its_unset_outputs_on_one_lin
     let view = StepView::new(ProjectId::new(), &plan, &state, &"w".parse().unwrap());
     let html = view.body("").unwrap();
     let html = html.as_str();
-    assert!(html.contains("<span class=\"f-name\">summary</span> <span class=\"f-type\">&#34;string&#34;</span><span class=\"f-about\"><span class=\"f-doc\">What changed</span></span></dt><dd class=\"f-v\"><span class=\"v\">Fixed it</span></dd>"), "{html}");
+    assert!(html.contains("<span class=\"f-name\">summary</span> <span class=\"f-type\">string</span><span class=\"f-about\"><span class=\"f-doc\">What changed</span></span></dt><dd class=\"f-v\"><span class=\"v\">Fixed it</span></dd>"), "{html}");
     assert!(html.contains("2 outputs not set yet:"), "{html}");
     // a succeeded step's Retry asks first, naming what it does; never primary
     assert!(

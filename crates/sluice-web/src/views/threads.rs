@@ -30,6 +30,10 @@ pub struct MessageItem {
     /// Who sent it and to whom, named as a page names them (a step by its title).
     pub from_who: Who,
     pub to_who: Who,
+    /// A question to the owner the owner answered in the last ten minutes: when (RFC 3339).
+    /// The inbox keeps it in its place as one line saying so, so an answer is confirmed where
+    /// it was given, through every patch and without script.
+    pub answered_at: String,
 }
 impl MessageItem {
     pub fn id(&self) -> i64 {
@@ -117,6 +121,21 @@ impl MessageItem {
             _ => TrustedHtml::owned(String::new()),
         }
     }
+    /// An answered question's one line, where it stood: "Answered 2m ago: Land fig-5576
+    /// first? sent to fig-5576-work · Read the thread". The words `openui.js` says in place the
+    /// moment the answer is taken.
+    pub fn answered_html(&self) -> TrustedHtml {
+        use super::ui::{ago, esc};
+        TrustedHtml::owned(format!(
+            "<p class=\"q-answered\">{}<span class=\"qa-what\">Answered {}: <span class=\"qa-title\">{}</span></span> <span class=\"meta qa-to\">sent to {} · <a href=\"{}#message-{}\">Read the thread</a></span></p>",
+            super::icons::icon(super::icons::Icon::Check, 16, "qa-icon"),
+            ago(&self.answered_at),
+            esc(&self.title()),
+            self.from_who.html(&self.project),
+            esc(&self.thread_url()),
+            self.id()
+        ))
+    }
     /// Itself as a one-item list: a template binds `item` to it to draw its answer form.
     pub fn one(&self) -> &[MessageItem] {
         std::slice::from_ref(self)
@@ -196,13 +215,17 @@ impl ThreadView {
             return "Orchestrator".into();
         }
         if self.thread == "owner" {
-            return "Notes to you".into();
+            return "You and the orchestrator".into();
         }
         self.messages
             .first()
             .map(MessageItem::title)
             .filter(|t| !t.is_empty())
             .unwrap_or_else(|| self.thread.clone())
+    }
+    /// Its newest open question to the owner someone waits on: a history card leads with it.
+    pub fn open_ask(&self) -> Option<&MessageItem> {
+        self.messages.iter().rev().find(|m| m.awaits_owner())
     }
     /// When its last message came.
     /// The plan step whose thread this is, while the plan has it.
@@ -234,7 +257,7 @@ impl ThreadView {
     }
 }
 /// A body's first line as a title.
-fn headline(body: &str, most: usize) -> String {
+pub(crate) fn headline(body: &str, most: usize) -> String {
     let first = body
         .lines()
         .map(crate::markdown::plain)
@@ -297,6 +320,13 @@ impl InboxView {
                     48
                 )
             ),
+            // the inbox leads with what waits on the owner: "2 questions · Inbox"
+            (MessageView::Inbox | MessageView::Questions, _) => {
+                match super::questions_words(self.for_you().len()) {
+                    Some(n) => format!("{n} · {}", self.title()),
+                    None => self.title().to_owned(),
+                }
+            }
             _ => self.title().to_owned(),
         };
         match self
@@ -317,7 +347,21 @@ impl InboxView {
     }
     /// The open questions someone is waiting on.
     pub fn waiting(&self) -> Vec<&MessageItem> {
-        self.questions.iter().filter(|q| !q.stopped()).collect()
+        self.questions
+            .iter()
+            .filter(|q| q.state == "open" && !q.stopped())
+            .collect()
+    }
+    /// "For you" as it is drawn: the open questions to the owner someone waits on, and in its
+    /// place each the owner answered in the last ten minutes (`MessageItem::answered_at`).
+    pub fn for_you_rows(&self) -> Vec<&MessageItem> {
+        self.questions
+            .iter()
+            .filter(|q| {
+                q.recipient() == "owner"
+                    && ((q.state == "open" && !q.stopped()) || !q.answered_at.is_empty())
+            })
+            .collect()
     }
     /// The notes not read yet, across their threads (a thread card says how many it holds).
     pub fn unread_notes(&self) -> usize {
@@ -344,7 +388,10 @@ impl InboxView {
     }
     /// The open questions nobody is waiting on any more.
     pub fn stopped(&self) -> Vec<&MessageItem> {
-        self.questions.iter().filter(|q| q.stopped()).collect()
+        self.questions
+            .iter()
+            .filter(|q| q.state == "open" && q.stopped())
+            .collect()
     }
     /// "Close all n": the questions nobody waits on, closed at once once confirmed.
     pub fn close_all(&self, stopped: &[&MessageItem]) -> super::ui::Confirm {
@@ -482,6 +529,7 @@ pub fn item(
         long,
         from_who: Who::of(Some(&message.from), None, steps),
         to_who: Who::of(message.to.as_deref(), None, steps),
+        answered_at: String::new(),
         message,
     })
 }
@@ -580,6 +628,17 @@ impl Who {
             ),
         })
     }
+    /// Its name in plain words, as a sentence says it: a step's id, "the orchestrator", "you".
+    pub fn name(&self) -> String {
+        match self {
+            Who::This => "this step".into(),
+            Who::Step(step) => step.id.clone(),
+            Who::Orchestrator => "the orchestrator".into(),
+            Who::Owner => "you".into(),
+            Who::Anyone => "anyone".into(),
+            Who::Other(name) => name.clone(),
+        }
+    }
     fn key(&self) -> String {
         match self {
             Who::This => "\u{0}this".into(),
@@ -602,7 +661,8 @@ pub struct Entry {
     /// message's id: drawn once, "to 10 steps".
     pub also: Vec<(Who, i64)>,
     pub replies: Vec<Reply>,
-    /// Its first 360 characters only, with a link to it whole (the step's Overview).
+    /// Its first 360 characters only, with a link to it whole (the step's Overview; never an
+    /// open question to the owner, drawn whole with its Answer).
     pub excerpt: bool,
     /// Where it is drawn whole, for "Read it whole".
     pub href: String,
@@ -736,6 +796,9 @@ pub struct Conversation {
     /// On a step's thread page, when its step's Messages hold more than the thread: how many,
     /// and the tab ("2 in this thread · 11 with this step").
     pub wider: Option<(usize, String)>,
+    /// Before each id it draws, so two drawings of one message on a page (a step's Overview
+    /// and its Messages) keep their ids apart: "" or "ov-".
+    pub slot: String,
 }
 /// A conversation's message box: to whom it writes, and where it posts.
 #[derive(Clone, Debug)]
@@ -849,13 +912,16 @@ impl Conversation {
                 continue;
             }
             let href = (b.href)(&item);
+            // a question to the owner someone waits on is drawn whole, to be answered where
+            // it is read, an excerpt or not
+            let excerpt = b.excerpt && !item.awaits_owner();
             let entry = Entry {
                 item,
                 from: from.clone(),
                 to: to.clone(),
                 also: vec![],
                 replies,
-                excerpt: b.excerpt,
+                excerpt,
                 href,
             };
             match c.rows.last_mut() {
@@ -891,6 +957,11 @@ impl Conversation {
         if count > self.count {
             self.wider = Some((count, href));
         }
+        self
+    }
+    /// Its ids with `slot` before them (`Conversation::slot`).
+    pub fn with_slot(mut self, slot: &str) -> Self {
+        self.slot = slot.to_owned();
         self
     }
     pub fn with_composer(mut self, composer: Option<Composer>) -> Self {
@@ -1069,6 +1140,14 @@ fn threads_of(groups: BTreeMap<(String, String), ThreadView>) -> Vec<ThreadView>
     threads.sort_by_key(|t| std::cmp::Reverse(t.through));
     threads
 }
+/// The owner answered a question put to it in the last ten minutes, in this project.
+fn just_answered(
+    sql: &rusqlite::Connection,
+    project: ProjectId,
+) -> Result<bool, sluice_store::StoreError> {
+    Ok(sql.prepare_cached("SELECT EXISTS (SELECT 1 FROM messages q JOIN messages a ON a.project_id=q.project_id AND a.id=q.resolved_by WHERE q.project_id=?1 AND q.\"to\"='owner' AND q.needs_reply=1 AND a.\"from\"='owner' AND julianday(a.at)>=julianday('now')-10.0/1440.0)")?
+        .query_row([project.to_string()], |r| r.get(0))?)
+}
 pub async fn load(
     reads: &ReadPool,
     project: Option<ProjectId>,
@@ -1104,7 +1183,11 @@ pub async fn load(
                 } else {
                     vec![]
                 };
-                if selected.is_empty() && read_today.is_empty() {
+                if selected.is_empty()
+                    && read_today.is_empty()
+                    && !(matches!(view, MessageView::Inbox | MessageView::Questions)
+                        && just_answered(sql, p.id)?)
+                {
                     continue;
                 }
                 let steps = step_names(sql, p.id)?;
@@ -1121,6 +1204,23 @@ pub async fn load(
                 for message in read_today {
                     let item = item(sql, p.id, &p.name, &steps, message)?;
                     group(sql, &mut read, p, item)?;
+                }
+                // the questions to the owner the owner answered in the last ten minutes: kept
+                // in their place, each one line that says so
+                if matches!(view, MessageView::Inbox | MessageView::Questions) {
+                    let mut q = sql.prepare_cached("SELECT q.id,a.at FROM messages q JOIN messages a ON a.project_id=q.project_id AND a.id=q.resolved_by WHERE q.project_id=?1 AND q.\"to\"='owner' AND q.needs_reply=1 AND q.closed_at IS NULL AND a.\"from\"='owner' AND julianday(a.at)>=julianday('now')-10.0/1440.0 ORDER BY q.id")?;
+                    let answered = q
+                        .query_map([p.id.to_string()], |r| {
+                            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                        })?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    for (id, at) in answered {
+                        let message =
+                            messages::message(sql, p.id, sluice_model::ids::MessageId(id))?;
+                        let mut answered = item(sql, p.id, &p.name, &steps, message)?;
+                        answered.answered_at = at;
+                        questions.push(answered);
+                    }
                 }
             }
             questions.sort_by_key(MessageItem::id);

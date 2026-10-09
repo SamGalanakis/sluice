@@ -190,6 +190,12 @@ pub struct LogRow {
     pub chore: Option<(u64, usize)>,
     /// The first plan revision of a row of chores, for its sentence.
     pub chore_from: u64,
+    /// A step's status change that names no failure: its step and the states it went from and
+    /// to, so a step's changes within a minute read as one row ("x pending → running →
+    /// succeeded").
+    pub change: Option<(String, String, String)>,
+    /// What its sentence names that has a page (`links`), to link a merged sentence again.
+    pub links: Vec<(String, String, String, String)>,
 }
 #[derive(Clone, Debug)]
 pub struct LogView {
@@ -404,8 +410,10 @@ pub async fn load(
             condition.push_str(" AND (step_id IN (SELECT step_id FROM steps s WHERE s.project_id=records.project_id AND coalesce(s.unit,s.step_id)=?) OR thread IN (SELECT 'step-'||step_id FROM steps s WHERE s.project_id=records.project_id AND coalesce(s.unit,s.step_id)=?) OR (kind='unit.settled' AND json_extract(payload,'$.unit')=?))");
             args.extend(std::iter::repeat_n(Value::Text(query.unit.clone()), 3));
         }
-        // a lease held or let go is the scheduler's bookkeeping: left out unless asked for
+        // a lease held or let go is the scheduler's bookkeeping, and a notification's delivery
+        // the inbox's: each left out unless asked for by name
         if !query.kinds.iter().any(|k| k == "step.lease") { condition.push_str(" AND kind!='step.lease'"); }
+        if !query.kinds.iter().any(|k| k == "project.notify") { condition.push_str(" AND kind!='project.notify'"); }
         if query.errors {
             // a cancel is the owner's choice, not an error: `shown::is_cancel`, as SQL
             condition.push_str(&format!(" AND ((kind='step.status' AND json_extract(payload,'$.to')='failed' AND NOT {}) OR (kind='call' AND json_extract(payload,'$.status')='failed') OR kind='run.orphan')", sluice_model::shown::cancel_sql("payload", "$.error")));
@@ -440,7 +448,8 @@ pub async fn load(
                 },
                 None => None,
             };
-            let html = linked(&summary, &links(&json, owner, named.as_deref()));
+            let found = links(&json, owner, named.as_deref());
+            let html = linked(&summary, &found);
             // the global log names each record's project
             let place = match (project, owner) {
                 (None, Some(id)) => nav.projects.iter().find(|p| p.id == id).map(|p| (p.name.to_string(), p.href())).unwrap_or_else(|| ("a deleted project".into(), String::new())),
@@ -450,34 +459,66 @@ pub async fn load(
                 Event::PlanEdit { rev, author, reason, ops } if author == "sluice" && reason.starts_with("retire done units") => Some((rev.0, ops.len())),
                 _ => None,
             };
-            rows.push(LogRow { seq, at: at.clone(), kind, summary, html, count: 1, oldest: seq, place, chore, chore_from: chore.map_or(0, |c| c.0), json: serde_json::to_string_pretty(&Record { seq: RecordSeq(seq), at, project: owner, event })? });
+            let change = match &event {
+                Event::StepStatus { step, from: Some(from), to, error, .. } if error.is_none() || *to != sluice_model::commands::StepStatus::Failed => {
+                    Some((step.to_string(), stored_word(from).to_owned(), stored_word(to).to_owned()))
+                }
+                _ => None,
+            };
+            rows.push(LogRow { seq, at: at.clone(), kind, summary, html, count: 1, oldest: seq, place, chore, chore_from: chore.map_or(0, |c| c.0), change, links: found, json: serde_json::to_string_pretty(&Record { seq: RecordSeq(seq), at, project: owner, event })? });
         }
         rows.sort_by_key(|r| std::cmp::Reverse(r.seq));
         // records in a row that say the same are one line, "×10"
         let mut grouped: Vec<LogRow> = Vec::with_capacity(rows.len());
+        let near = |a: &str, b: &str, secs: u64| match (super::timestamp(a), super::timestamp(b)) {
+            (Some(a), Some(b)) => a.abs_diff(b) <= secs,
+            _ => false,
+        };
         for row in rows {
+            // a step's status changes within a minute are one row, "x pending → running →
+            // succeeded", the newer reading on from the older (a few rows between them allowed)
+            if let Some((step, from, to)) = &row.change {
+                let at = grouped.len().saturating_sub(3);
+                if let Some(newer) = grouped[at..].iter_mut().rev().find(|n| {
+                    n.place == row.place
+                        && n.change.as_ref().is_some_and(|(s, f, _)| s == step && f == to)
+                        && near(&n.at, &row.at, 60)
+                }) {
+                    let (_, _, last) = newer.change.clone().unwrap_or_default();
+                    let words = format!("{} {from} → {}", step, newer.summary.strip_prefix(&format!("{step} ")).unwrap_or(&last));
+                    newer.change = Some((step.clone(), from.clone(), last));
+                    newer.html = linked(&words, &newer.links);
+                    newer.summary = words;
+                    newer.oldest = newer.oldest.min(row.seq);
+                    continue;
+                }
+            }
+            // sluice's housekeeping within half an hour is one quiet row, whatever came between
+            if row.chore.is_some()
+                && let Some(last) = grouped.iter_mut().rev().find(|l| l.chore.is_some() && l.place == row.place)
+                && near(&last.at, &row.at, 1800)
+            {
+                last.count += 1;
+                last.oldest = last.oldest.min(row.seq);
+                if let (Some((rev, n)), Some((from, m))) = (last.chore, row.chore) {
+                    last.chore = Some((rev, n + m));
+                    last.chore_from = from;
+                }
+                let (rev, changes) = last.chore.unwrap_or_default();
+                let words = format!(
+                    "sluice retired done units {} times: plan revs {} to {rev}, {}",
+                    last.count,
+                    last.chore_from,
+                    super::ui::count(changes, "change", "changes")
+                );
+                last.html = TrustedHtml::owned(super::ui::esc(&words));
+                last.summary = words;
+                continue;
+            }
             match grouped.last_mut() {
                 Some(last) if last.kind == row.kind && last.summary == row.summary && last.place == row.place => {
                     last.count += 1;
                     last.oldest = row.seq;
-                }
-                // sluice's housekeeping in a row: one quiet row, its changes summed
-                Some(last) if last.chore.is_some() && row.chore.is_some() && last.place == row.place => {
-                    last.count += 1;
-                    last.oldest = row.seq;
-                    if let (Some((rev, n)), Some((from, m))) = (last.chore, row.chore) {
-                        last.chore = Some((rev, n + m));
-                        last.chore_from = from;
-                    }
-                    let (rev, changes) = last.chore.unwrap_or_default();
-                    let words = format!(
-                        "sluice retired done units {} times: plan revs {} to {rev}, {}",
-                        last.count,
-                        last.chore_from,
-                        super::ui::count(changes, "change", "changes")
-                    );
-                    last.html = TrustedHtml::owned(super::ui::esc(&words));
-                    last.summary = words;
                 }
                 _ => grouped.push(row),
             }

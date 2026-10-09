@@ -26,6 +26,7 @@ fn fixture() -> DashboardSnapshot {
             }],
             names: Default::default(),
             dismissed: Default::default(),
+            asks: vec![],
         }],
         inbox: 2,
         notes: 0,

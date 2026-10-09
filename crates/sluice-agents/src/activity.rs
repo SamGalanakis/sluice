@@ -130,6 +130,9 @@ pub enum SentKind {
     Text,
     /// Nothing in this run: the agent carried on in a session an earlier run left.
     Carried,
+    /// Its compacted context: after its engine compacted the session, sluice handed it its
+    /// task and progress again.
+    Compacted,
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Sent {
@@ -1175,6 +1178,12 @@ fn sent(text: &str, run_dir: &Path) -> Sent {
     {
         let kind = if what.ends_with("task") {
             SentKind::Task
+        } else if what.ends_with("compacted context")
+            || Path::new(path)
+                .file_stem()
+                .is_some_and(|stem| stem.to_string_lossy().starts_with("compact-"))
+        {
+            SentKind::Compacted
         } else {
             SentKind::Message
         };
@@ -1188,16 +1197,9 @@ fn sent(text: &str, run_dir: &Path) -> Sent {
             _ => words,
         });
         // a file no longer kept still names the message it held: its id ("#161183", under
-        // the turn's "Message"), or the compacted context it re-primed with
+        // the turn's "Message")
         let words = words.unwrap_or_else(|| match (kind, file.file_stem()) {
-            (SentKind::Message, Some(id)) => {
-                let id = id.to_string_lossy();
-                if id.starts_with("compact-") {
-                    "Its compacted context".to_owned()
-                } else {
-                    format!("#{id}")
-                }
-            }
+            (SentKind::Message, Some(id)) => format!("#{}", id.to_string_lossy()),
             _ => String::new(),
         });
         return Sent {
@@ -1328,6 +1330,34 @@ fn line(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_compacted_context_is_its_own_turn_kept_or_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let messages = dir.path().join("messages");
+        fs::create_dir_all(&messages).unwrap();
+        fs::write(messages.join("compact-1.md"), "Your task, again.").unwrap();
+        let kept = format!(
+            "Your compacted context is in {}; read it fully, then do it.",
+            messages.join("compact-1.md").display()
+        );
+        assert_eq!(sent(&kept, dir.path()).kind, SentKind::Compacted);
+        // its file gone, and an earlier release's wording: still a compaction, not a message
+        let gone = format!(
+            "A message is in {}; read it fully, then do it.",
+            messages.join("compact-2.md").display()
+        );
+        assert_eq!(sent(&gone, dir.path()).kind, SentKind::Compacted);
+        let message = format!(
+            "A message is in {}; read it fully, then do it.",
+            messages.join("161183.md").display()
+        );
+        let read = sent(&message, dir.path());
+        assert_eq!(
+            (read.kind, read.text.as_str()),
+            (SentKind::Message, "#161183")
+        );
+    }
 
     #[test]
     fn a_long_result_keeps_its_head_and_tail() {

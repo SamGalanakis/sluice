@@ -241,16 +241,68 @@ pub fn tally(parts: &[(usize, &str)]) -> String {
 pub fn cut(text: &str, chars: usize) -> String {
     sluice_model::naming::cut(text, chars)
 }
-/// A type in a few words: a JSON schema reads as its `type` ("object"), not as JSON; a type's
-/// name as itself.
+/// A type in a few words, never as JSON: a sluice type as a person reads it ("string[]",
+/// "record? (head_before, head_after, commits)", "enum (low | high)"), a JSON schema as its
+/// `type` ("object"), anything else as itself.
 pub fn type_words(ty: &str) -> String {
-    match serde_json::from_str::<serde_json::Value>(ty) {
-        Ok(serde_json::Value::Object(schema)) => schema
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("object")
-            .to_owned(),
-        _ => ty.to_owned(),
+    /// A type as a person reads it: "record? (head_before, head_after, commits, dirty)",
+    /// "enum (low | high)", "string[]".
+    fn words(ty: &sluice_model::types::Type) -> String {
+        use sluice_model::types::Type;
+        let list = |names: Vec<&str>, sep: &str| {
+            const MOST: usize = 5;
+            let mut out = names
+                .iter()
+                .take(MOST)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(sep);
+            if names.len() > MOST {
+                out.push_str(&format!("{sep}…"));
+            }
+            out
+        };
+        match ty {
+            Type::String => "string".into(),
+            Type::Int => "int".into(),
+            Type::Float => "float".into(),
+            Type::Boolean => "boolean".into(),
+            Type::Any => "Any".into(),
+            Type::Optional(inner) => match inner.as_ref() {
+                Type::Record(fields) => format!(
+                    "record? ({})",
+                    list(fields.keys().map(String::as_str).collect(), ", ")
+                ),
+                Type::Enum(symbols) => format!(
+                    "enum? ({})",
+                    list(symbols.iter().map(String::as_str).collect(), " | ")
+                ),
+                inner => format!("{}?", words(inner)),
+            },
+            Type::List(inner) => match inner.as_ref() {
+                Type::Record(_) | Type::Enum(_) => format!("[{}]", words(inner)),
+                inner => format!("{}[]", words(inner)),
+            },
+            Type::Enum(symbols) => format!(
+                "enum ({})",
+                list(symbols.iter().map(String::as_str).collect(), " | ")
+            ),
+            Type::Record(fields) => format!(
+                "record ({})",
+                list(fields.keys().map(String::as_str).collect(), ", ")
+            ),
+        }
+    }
+    match ty.parse::<sluice_model::types::Type>() {
+        Ok(parsed) => words(&parsed),
+        Err(_) => match serde_json::from_str::<serde_json::Value>(ty) {
+            Ok(serde_json::Value::Object(schema)) => schema
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("object")
+                .to_owned(),
+            _ => ty.to_owned(),
+        },
     }
 }
 
@@ -300,6 +352,16 @@ pub fn tag_link(href: &str, text: &str, tone: &str, mark: Option<TrustedHtml>) -
         esc(href),
         mark.map(|m| m.0).unwrap_or_default(),
         esc(text)
+    ))
+}
+/// The coral "Awaiting your reply" that leads to an open question to the owner, where it is
+/// answered: the one place, besides the nav's count, coral is spent. Its question is its title.
+pub fn ask_link(href: &str, question: &str) -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<a class=\"tag ask\" href=\"{}\" title=\"{}\" aria-label=\"Awaiting your reply: {}\">Awaiting your reply</a>",
+        esc(href),
+        esc(question),
+        esc(question)
     ))
 }
 fn tone_class(tone: &str) -> String {

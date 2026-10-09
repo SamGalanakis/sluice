@@ -293,6 +293,7 @@ fn conversation(prefix: &str, project: &ProjectId) -> Result<TrustedHtml, askama
             long,
             from_who: Who::of(Some(&m.from), None, &steps),
             to_who: Who::of(m.to.as_deref(), None, &steps),
+            answered_at: String::new(),
             message: m,
         }
     };
@@ -335,19 +336,9 @@ fn conversation(prefix: &str, project: &ProjectId) -> Result<TrustedHtml, askama
         label: "Message to work · SQLite: synchronous is a required argument".into(),
         note: String::new(),
     }))
-    .html()
     // the two themes' copies keep their ids apart
-    .map(|html| {
-        TrustedHtml::owned(
-            html.as_str()
-                .replace("id=\"message-", &format!("id=\"{prefix}message-"))
-                .replace("href=\"#message-", &format!("href=\"#{prefix}message-"))
-                .replace("composer-fig", &format!("{prefix}composer-fig"))
-                .replace("qbox-", &format!("{prefix}qbox-"))
-                .replace("reply-01", &format!("{prefix}reply-01"))
-                .replace("answer-01", &format!("{prefix}answer-01")),
-        )
-    })
+    .with_slot(prefix)
+    .html()
 }
 fn empties() -> TrustedHtml {
     TrustedHtml::owned(format!(

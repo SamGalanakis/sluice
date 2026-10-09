@@ -1037,6 +1037,9 @@ ol.attempts > li.a-now { margin: 4px 0 0; padding: 8px 12px 12px; background: va
 .a-now .a-o { font: 750 15px/22px var(--font-display); font-stretch: 105%; }
 .a-t { font-size: 13px; line-height: 18px; color: var(--muted-foreground); }
 .a-err { margin: 4px 0 0; font-weight: 500; overflow-wrap: anywhere; max-width: var(--measure); }
+/* what started a run after the first: who retried it and why, or an input that changed */
+.a-why { margin: 4px 0 0; max-width: var(--measure); overflow-wrap: anywhere; }
+.a-why code { font-size: 12px; }
 /* a core.external step's doc: who is doing its work, and where */
 .outside { max-width: var(--measure); font-size: 14px; line-height: 21px; padding: 12px 14px;
            overflow-wrap: anywhere; background: var(--muted); border-radius: var(--radius); }
@@ -1139,7 +1142,7 @@ code.v { border: 0; background: none; padding: 0; }
    about on the card colour, to it on the muted fill, the owner's tinted with the primary blue */
 .convo { display: grid; gap: 12px; min-width: 0; max-width: 78ch; }
 .convo-of { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; }
-.convo-of .jump { display: inline-flex; align-items: center; gap: 4px; color: var(--muted-foreground);
+.run-file-page .jump, .convo-of .jump { display: inline-flex; align-items: center; gap: 4px; color: var(--muted-foreground);
                   text-underline-offset: 3px; }
 .convo-more { margin: 0; }
 .convo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; min-width: 0; }
@@ -1222,6 +1225,16 @@ details.m-many[open] > .m-all { display: flex; flex-wrap: wrap; gap: 2px 14px; m
 .item.q > .q-where a { color: inherit; text-underline-offset: 3px;
                        text-decoration-color: var(--border-strong); }
 .item.q .convo { margin-top: 6px; }
+/* an answer said where it was given: one line, the check, what was answered, and to whom with
+   a way to its thread (the inbox keeps it in the question's place for ten minutes) */
+.q-answered { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin: 0;
+              font-size: 14px; line-height: 20px; }
+.q-answered .qa-icon { flex: none; align-self: center; color: var(--status-success); }
+.q-answered .qa-what { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.q-answered .qa-title { font-weight: 400; }
+.q-answered .qa-to a { color: inherit; text-underline-offset: 3px; }
+article.item.q-done { padding-block: 10px; }
+li.m.q-done > .md, li.m.q-done > .m-body { opacity: 0.7; }
 .threads { display: grid; gap: 10px; }
 .threads > .item { margin: 0; }
 
@@ -1272,6 +1285,18 @@ ul.now .r-meta { display: inline-flex; flex: none; align-items: center; gap: 8px
 ul.now a:hover .sref-t { text-decoration: underline; }
 ul.now .g { margin-top: 1px; }
 .dur { font-size: 13px; color: var(--muted-foreground); white-space: nowrap; }
+/* the index: an open question to the owner a running step put leads its row's meta; one no
+   running step put (the orchestrator's) is a row of its own, its title then the coral tag */
+.ask-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ask-rows li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: start;
+               gap: 2px 8px; font-size: 14px; line-height: 20px; }
+.ask-rows .ar-icon { margin-top: 2px; color: var(--foreground); }
+.ask-rows .ar-title { min-width: 0; font-weight: 600; overflow-wrap: anywhere;
+                      text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
+@media (max-width: 600px) { .ask-rows .tag.ask { grid-column: 2; justify-self: start; } }
+.ask-rows .ar-title:hover { text-decoration-color: currentColor; }
+a.tag.ask { text-decoration: none; white-space: nowrap; }
+a.tag.ask:hover { background: color-mix(in srgb, var(--badge) 85%, var(--foreground)); }
 p.now { font-size: 14px; color: var(--muted-foreground); }
 details.archived { margin-top: 20px; }
 details.archived > summary { font-size: 14px; }
@@ -1343,10 +1368,12 @@ table.log td.what { position: relative; min-width: 14rem; width: 100%; padding-r
 .run-file { margin: 16px 0 0; padding: 12px 14px; border: 1px solid var(--border);
             border-radius: var(--radius-md); background: var(--muted);
             font: 12.5px/18px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-file-end { margin: 8px 0 0; scroll-margin-bottom: 40vh; }
 /* a run past twice its stage's usual time: how many times, in the attention tone */
 .over-x { color: var(--status-attention); font-weight: 600; font-variant-numeric: tabular-nums;
           white-space: nowrap; }
 .d-badges .over-x { font-size: 13px; }
+.mx-lane .over-x { margin-left: 3px; font-size: 12px; }
 .log-x { margin-left: 2px; padding: 0 5px; border-radius: 999px; background: var(--muted);
          color: var(--muted-foreground); font-size: 11.5px; font-weight: 600;
          font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -1389,6 +1416,9 @@ p.fn-none { margin-top: 12px; }
 .fn .ports dd { margin: 0; display: flex; flex-wrap: wrap; gap: 2px 12px; min-width: 0; overflow-wrap: anywhere; }
 .fn .ports code { font-size: 12px; }
 .fn.problem { border-top-color: var(--foreground); }
+/* kept only for older plans: after the live ones, its words muted */
+.fn.retired .fn-head b, .fn.retired .fn-doc, .fn.retired .ports { color: var(--muted-foreground); }
+.fn-head .tag { margin-left: 8px; vertical-align: 1px; }
 .fn.problem .err { color: var(--foreground); font-weight: 500; }
 article.item { background: var(--card); border: 1px solid var(--border);
                border-radius: var(--radius); padding: 14px 16px; margin: 12px 0; }
@@ -1398,6 +1428,9 @@ article.item { background: var(--card); border: 1px solid var(--border);
                                     font-stretch: 100%; color: var(--foreground); }
 .t-name a { color: inherit; text-decoration: none; }
 .t-name a:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* a history card whose thread holds an open question to the owner leads with it */
+.t-ask { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 4px 0 0; }
+.t-ask-title { font-weight: 600; overflow-wrap: anywhere; }
 .item > .meta { margin: 2px 0 6px; }
 /* an open item whose asker has stopped: said in the attention gold, once, under its meta */
 .item > .gone { margin: 0 0 6px; color: var(--status-attention); font-weight: 500; }
@@ -1512,6 +1545,8 @@ details.act-t > summary:hover > .chev { color: var(--foreground); }
                        font-size: 14px; line-height: 20px; overflow-wrap: anywhere;
                        max-width: var(--measure); }
 .act-sent { -webkit-line-clamp: 2; font-weight: 500; }
+/* sluice's own turn (it carried on, or handed back a compacted context): no one's words */
+.act-sent.act-quiet { font-weight: 400; color: var(--muted-foreground); }
 .act-said { -webkit-line-clamp: 3; margin-top: 3px; }
 .act-lab { margin-right: 2px; font-size: 13px; font-weight: 400; color: var(--muted-foreground); }
 .act-x code { font-size: 12.5px; }
@@ -1655,6 +1690,10 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
 .tl-words { grid-column: 2; margin: 0; font-size: 13px; line-height: 18px;
             color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 .tl-row.is-current .tl-words { color: var(--foreground); }
+/* the stages at its end with no run yet: one line under the rest */
+.tl-rest .tl-words { grid-column: 1 / -1; }
+.tl-rest a { color: inherit; text-underline-offset: 3px; text-decoration-color: var(--border-strong); }
+.tl-rest a:hover { color: var(--foreground); text-decoration-color: currentColor; }
 @container tl (max-width: 490px) {
   .tl-in { display: block; }
   .tl-axis, .tl-breaks, .tl-track { display: none; }
@@ -1694,7 +1733,7 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
 .sum .tag .g, .sum .tag .g svg { width: 14px; height: 14px; }
 .sum a.tag:hover { border-color: var(--foreground); }
 .sum a.tag.t-failed { color: var(--foreground); border-color: var(--foreground); }
-.sum a.tag:not(.attn, .t-failed) { color: var(--muted-foreground); }
+.sum a.tag:not(.attn, .t-failed, .ask) { color: var(--muted-foreground); }
 
 /* ---- the index: each stopped step a row, its failure's sentence muted under its name; a cancel
    after every failure, its name in muted ink ---------------------------------------------------- */
@@ -2356,9 +2395,13 @@ main :is(h2, h3).band-h { margin: 0 0 12px; font: 500 13px/18px var(--font-sans)
          text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
 .why a:hover { color: var(--foreground); text-decoration-color: currentColor; }
 .stack > .why { text-align: center; }
+/* a step's open question to the owner its run waits on: the coral "Awaiting your reply" under
+   its card and its matrix row's title, a link to its page, where its Overview has Answer */
+.card-ask { margin: 4px 0 0; line-height: 20px; }
+.mx th.mx-unit .card-ask { margin-left: 24px; }
 /* a line from the card above passes behind the words under a card, as behind a label: they sit
    over the lines on the fill they are drawn on */
-:is(.stack, .box.solo) > :is(.why, .waits) { position: relative; z-index: 2; }
+:is(.stack, .box.solo) > :is(.why, .waits, .card-ask) { position: relative; z-index: 2; }
 .box:not(.solo) .stack > :is(.why, .waits) { background: var(--box); }
 .box.solo > :is(.why, .waits) { background: var(--background); }
 /* a unit that a traced card names (a unit gate) */
@@ -2433,6 +2476,15 @@ a.shelf-step.node:hover { background: var(--secondary); }
 .gate:has(.sref-a) > .meta { flex: none; white-space: nowrap; }
 p.wait-step { display: flex; margin: 0; }
 p.wait-step + p.wait-step { margin-top: 4px; }
+/* a pending step whose every wait is pending: what holds the chain further up, and a stopped
+   runner, said where "why has it not started?" is asked */
+p.wait-root { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 6px; margin: 6px 0 0;
+              white-space: normal; }
+p.wait-root .wr-lead { color: var(--muted-foreground); }
+p.wait-root .meta a { color: inherit; }
+p.wait-runner { display: flex; align-items: flex-start; gap: 6px; margin: 6px 0 0;
+                color: var(--status-attention); font-weight: 500; }
+p.wait-runner .icon { flex: none; margin-top: 2px; }
 details.gates > summary { margin-top: 0; font-size: 14px; color: var(--foreground); }
 /* a read mark that did not go through: one quiet line at the top of the notes */
 .read-status { margin: 4px 0 10px; }
@@ -2510,12 +2562,13 @@ sluice-board:not(:defined) .mx-wrap { overflow-x: auto; }
             display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
             line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .mx-title:hover { text-decoration: underline; text-underline-offset: 3px; }
-/* the id line: the unit's id, an alarm, and (without its column) the summary after them, one
-   line cut with "…" */
-.mx-idl { display: flex; align-items: baseline; gap: 0 6px; margin: 2px 0 0 24px; min-width: 0;
+/* the id line: the unit's id, an alarm, and (without its column) the summary's parts after
+   them, its message a line of its own under them */
+.mx-idl { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; margin: 2px 0 0 24px; min-width: 0;
           font-size: 13px; line-height: 18px; color: var(--muted-foreground); }
 .mx-id { margin: 0; flex: none; }
-.mx-idl > .mx-id:not(:empty) + .mx-sum-phone::before { content: "·"; flex: none; }
+.mx-idl > .mx-id:not(:empty) + .mx-sum-phone .uv-stack > .uv-param:first-child::before {
+  content: "·"; margin-right: 6px; color: var(--muted-foreground); font-weight: 400; }
 .mx-id .box-alarm { color: var(--foreground); font-weight: 600; }
 .mx th.mx-unit :is(.waits, .why) { margin-left: 24px; }
 td.mx-sum { width: 30%; min-width: 9rem; padding-right: 14px; font-size: 13px; line-height: 18px;
@@ -2551,15 +2604,11 @@ a.node.mx-dot:hover { background: var(--secondary); }
 .uv-msg { overflow-wrap: anywhere; }
 .uv-in-row .uv-msg { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1;
                      line-clamp: 1; overflow: hidden; flex-basis: 100%; }
-/* under a row's title the summary is one line: its parts in a row, the last cut with "…" */
-.mx-sum-phone .uv-in-row { flex: 1 1 0; width: 0; min-width: 0; }  /* the line never widens its column */
-.mx-sum-phone .uv-in-row .uv-stack { flex-wrap: nowrap; overflow: hidden; white-space: nowrap; }
-.mx-sum-phone .uv-in-row .uv-stack > * { flex: none; }
-.mx-sum-phone .uv-in-row .uv-stack > :last-child { flex: 0 1 auto; min-width: 0; overflow: hidden;
-                                                   text-overflow: ellipsis; }
-.mx-sum-phone .uv-in-row .uv-msg { display: block; flex-basis: auto; }
-/* a wait two or more rows share, said once over the table */
-.mx-shared { margin: 0 0 8px; max-width: none; }
+/* under a row's title the summary's parts flow on the id line, and its message is a line of its
+   own under them, two at most: never cut to a word or two */
+.mx-sum-phone .uv-in-row, .mx-sum-phone .uv-in-row .uv-stack { display: contents; }
+.mx-sum-phone .uv-in-row .uv-stack > :not(.uv-msg) { flex: none; }
+.mx-sum-phone .uv-in-row .uv-msg { flex: 1 0 100%; min-width: 0; -webkit-line-clamp: 2; line-clamp: 2; }
 .uv-from { color: var(--foreground); font-weight: 500; }
 .uv-text.muted { color: var(--muted-foreground); }
 .uv-link { color: var(--foreground); text-underline-offset: 3px;
@@ -2583,10 +2632,10 @@ a.node.mx-dot:hover { background: var(--secondary); }
    (`data-fit="nosum"`); the summary then goes under the row's title. */
 @container plan (max-width: 1100px) {
   .mx :is(th.mx-sum, td.mx-sum) { display: none; }
-  .matrix .mx-sum-phone { display: flex; gap: 6px; flex: 1 1 0; min-width: 0; }
+  .matrix .mx-sum-phone { display: contents; }
 }
 .matrix[data-fit] .mx :is(th.mx-sum, td.mx-sum) { display: none; }
-.matrix[data-fit] .mx-sum-phone { display: flex; gap: 6px; flex: 1 1 0; min-width: 0; }
+.matrix[data-fit] .mx-sum-phone { display: contents; }
 /* the stages still to come at a lane's end: one muted note, not a ring each */
 .lane-rest { color: var(--muted-foreground); white-space: nowrap; font-family: var(--font-sans); }
 .mx-lane a + .lane-rest { margin-left: 6px; }

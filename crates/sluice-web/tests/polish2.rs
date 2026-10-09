@@ -256,26 +256,21 @@ async fn shared(f: &Fixture) -> ProjectId {
 }
 
 #[tokio::test]
-async fn a_lane_matrix_names_the_rows_a_wait_holds_and_each_row_still_says_it() {
+async fn a_lane_matrix_row_says_its_own_waits_and_no_line_repeats_them() {
     let f = Fixture::new().await;
     let id = shared(&f).await;
     let (_, page) = f.get(&format!("/projects/id/{id}")).await;
     let matrix = between(&page, "<section id=\"mx-", "</section>");
-    let line = between(matrix, "<p class=\"waits said mx-shared\">", "</p>");
-    assert!(
-        line.starts_with(&format!(
-            "<p class=\"waits said mx-shared\"><a href=\"#unit-a1\"><code>a1</code></a> and <a href=\"#unit-a2\"><code>a2</code></a> wait for <a href=\"/projects/id/{id}/steps/base\" data-opens=\"base\"><span class=\"sref\"><code class=\"sref-id\">base</code> <span class=\"sref-t\">The substrate lands first</span></span></a> (running)"
-        )),
-        "{line}"
-    );
-    assert_eq!(matrix.matches("mx-shared").count(), 1, "{matrix}");
-    // the rows that share it still say what holds them, by its id; the other its own
+    // every row says what holds it, so a wait two rows share is not said again over them
+    assert!(!matrix.contains("mx-shared"), "{matrix}");
+    // the rows that share it each say what holds them, by its id (how it reads after it); the
+    // other its own
     for unit in ["a1", "a2"] {
         let row = between(matrix, &format!("<tr id=\"unit-{unit}\""), "</tr>");
         assert!(
             row.contains(&format!(
                 "Waits for <a href=\"/projects/id/{id}/steps/base\""
-            )),
+            )) && row.contains("</a> (running)"),
             "{unit}: {row}"
         );
     }

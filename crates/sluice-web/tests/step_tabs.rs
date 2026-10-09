@@ -414,10 +414,19 @@ async fn an_open_question_to_the_owner_is_the_one_coral_tag() {
         step.contains("<span class=\"tag ask\">Awaiting your reply</span>"),
         "{step}"
     );
-    // the header's count of what awaits a reply leads to the Thread tab
+    // the header says its question waits on you, in coral, and leads to it on Overview, where
+    // it is drawn whole with Answer
     assert!(
-        step.contains("<a class=\"tag attn\" href=\"#tp-messages\">1 awaiting reply</a>"),
+        step.contains("<a class=\"tag ask\" href=\"#ov-message-"),
         "{step}"
+    );
+    assert!(!step.contains("1 awaiting reply"), "{step}");
+    let at =
+        step.find("<a class=\"tag ask\" href=\"#").unwrap() + "<a class=\"tag ask\" href=\"#".len();
+    let anchor = &step[at..at + step[at..].find('"').unwrap()];
+    assert!(
+        step.contains(&format!("id=\"{anchor}\"")),
+        "{anchor}: {step}"
     );
     let (_, inbox) = f.get("/inbox").await;
     // the questions list draws each question as the Thread tab's card: a one-message
