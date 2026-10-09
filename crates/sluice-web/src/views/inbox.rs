@@ -448,11 +448,6 @@ pub fn registration() -> super::PageRegistration {
         },
         assets: &[
             Asset {
-                names: &["inbox.js"],
-                media_type: "text/javascript",
-                bytes: include_bytes!("../../assets/inbox.js"),
-            },
-            Asset {
                 names: &["openui.js"],
                 media_type: "text/javascript",
                 bytes: include_bytes!("../../assets/openui.js"),

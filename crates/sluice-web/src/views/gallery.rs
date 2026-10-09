@@ -22,7 +22,8 @@ use sluice_model::{
 use std::collections::{BTreeMap, BTreeSet};
 
 /// One part of the kit as the gallery shows it: its name, when a page uses it, and its HTML in
-/// each theme (drawn twice, its ids kept apart).
+/// each theme (drawn twice, its ids kept apart); a part with no dark copy (the components'
+/// table) is drawn once, across the column.
 pub struct Part {
     pub name: &'static str,
     pub about: &'static str,
@@ -82,7 +83,7 @@ fn tags() -> TrustedHtml {
 }
 fn buttons() -> TrustedHtml {
     TrustedHtml::owned(
-        "<p class=\"gal-row\"><button class=\"primary\" type=\"button\">Retry</button><button type=\"button\">Pause</button><button class=\"danger\" type=\"button\">Delete lanes</button><button type=\"button\" disabled>Unpause</button><button type=\"button\" class=\"types-toggle\" aria-pressed=\"true\">Types<span class=\"sw\" aria-hidden=\"true\"></span></button></p>"
+        "<p class=\"gal-row\"><button class=\"primary\" type=\"button\">Retry</button><button type=\"button\">Pause</button><button class=\"danger\" type=\"button\">Delete lanes</button><button type=\"button\" disabled>Unpause</button></p>"
             .into(),
     )
 }
@@ -148,10 +149,106 @@ fn folds() -> TrustedHtml {
     let long = crate::markdown::render(
         "The rebase onto origin/main conflicts in three places:\n\n- `crates/lash-conformance/src/conformance/attachment_reclamation.rs`: both sides add a case to the same table.\n- `crates/lash-durable-test/tests/fixtures/formats/lashlang`: the fixture images were re-blessed on main.\n- `crates/lash-store/src/sqlite/conn.rs`: FIG-5498 moved the operational presets.\n\nKeep both table rows, take main's fixtures and re-bless after, and move your `synchronous` argument into the new `SqliteConnectionPolicy.operational`.\n\nThen run the conformance suite again before you submit.",
     );
+    let short = crate::markdown::render("Rebased; the conformance suite passes.");
     TrustedHtml::owned(format!(
-        "{}<details class=\"gates more-fold gal-fold\"><summary><span>6 steps: 5 done, 1 running</span>{}</summary><p>fig-5491-work · fig-5493-work · fig-5496-work · fig-5498-work · fig-5499-work · fig-5500-work</p></details>",
+        "<p class=\"meta gal-cap\">A long text, cut</p>{}<p class=\"meta gal-cap\">One that fits its first lines: no Show all (with script)</p>{}<p class=\"meta gal-cap\">A list's sentence that opens to it</p>{}<p>fig-5491-work · fig-5493-work · fig-5496-work · fig-5498-work · fig-5499-work · fig-5500-work</p>{}<p class=\"meta gal-cap\">More and Less, Read less at its end</p>{}<div class=\"md\"><p>The rest of the document: what each lane owns, and the order they land in.</p></div>{}",
         ui::fold("md", &long),
-        super::icons::icon(super::icons::Icon::ChevronDown, 16, "chev")
+        ui::fold("md", &short),
+        ui::more_open("gates gal-fold", "6 steps: 5 done, 1 running", "", "", false),
+        ui::more_close(""),
+        ui::more_open("doc-more gal-fold", "Read more", "Read less", "", false),
+        ui::more_close("Read less"),
+    ))
+}
+fn menus() -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<div class=\"gal-row gal-menus\"><div class=\"board-tools\">{}<details class=\"tool-more\" data-preserve-attr=\"open\"><summary aria-label=\"More ways to see the plan\" title=\"More ways to see the plan\">{}</summary><div class=\"menu\"><a href=\"#\">The plan as Mermaid text</a><a href=\"#\">Its units as JSON</a></div></details>{}</div><p class=\"meta\">The plan's More: Escape or a click elsewhere closes it, ArrowDown goes into it.</p></div>",
+        ui::menu_open(),
+        super::icons::icon(super::icons::Icon::Ellipsis, 16, ""),
+        ui::menu_close(),
+    ))
+}
+fn copies() -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<dl class=\"facts gal-copies\"><div><dt>Step id</dt><dd>{}</dd></div><div><dt>Run id</dt><dd>{}</dd></div><div><dt>Release</dt><dd>{}</dd></div></dl>",
+        ui::copy("fig-5492-work", "Copy step id"),
+        ui::copy_with("01JA3V7KQ2W8M5T1X9C4ZB6NHE", "Copy run id", "a-id"),
+        ui::copy("5f3c2e1a9b7d", "Copy release"),
+    ))
+}
+fn toggles() -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<div class=\"d-sec-h tp-top\"><p class=\"meta\">From run 2 · value types shown or not, on every page at once</p>{}</div>",
+        ui::types_toggle()
+    ))
+}
+fn searches(prefix: &str) -> TrustedHtml {
+    let items: String = [
+        ("agent.claude", "Runs Claude Code on a prompt"),
+        ("agent.codex", "Runs Codex on a prompt"),
+        ("git.land", "Rebases, gates and lands a branch"),
+        ("core.external", "Work done outside sluice"),
+    ]
+    .iter()
+    .map(|(name, doc)| {
+        format!(
+            "<li data-find=\"{} {}\"><code>{}</code> <span class=\"meta\">{}</span></li>",
+            ui::esc(name),
+            ui::esc(&doc.to_lowercase()),
+            ui::esc(name),
+            ui::esc(doc)
+        )
+    })
+    .collect();
+    TrustedHtml::owned(format!(
+        "{}{}<p class=\"meta\" role=\"status\" hidden data-find-status data-none=\"No function matches\" data-one=\"function matches\" data-many=\"functions match\"></p><ul class=\"gal-list\" data-find-group>{items}</ul>{}",
+        ui::search_open("filter", ""),
+        ui::search_field(&format!("{prefix}find"), "Find a function", "Find functions by name or description"),
+        ui::search_close(),
+    ))
+}
+fn banners() -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "{}{}{}",
+        ui::banner("stream", "", "Updates paused. Reconnecting…", false),
+        ui::banner("stream", "", "Updates stopped at 14:02.", false),
+        ui::banner("release", "", "", false),
+    ))
+}
+fn splitters(prefix: &str) -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<div class=\"gal-split\" id=\"{prefix}split\"><div class=\"gal-plan\">Plan</div>{}<div class=\"gal-board\" id=\"{prefix}split-board\">Board</div></div>",
+        ui::splitter_for(&format!("{prefix}split"), &format!("{prefix}split-board"), &format!("sluice.gallery.{prefix}split"), 96, 120),
+    ))
+}
+fn components() -> TrustedHtml {
+    let rows: String = ui::COMPONENTS
+        .iter()
+        .map(|c| {
+            let props = c
+                .props
+                .iter()
+                .map(|(name, ty)| format!("<code>{}</code> {}", ui::esc(name), ui::esc(ty)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let events = c
+                .events
+                .iter()
+                .map(|e| format!("<code>{}</code>", ui::esc(e)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "<tr><th scope=\"row\"><code>{}</code><span class=\"meta\">{}</span></th><td>{}</td><td>{}</td><td>{}</td></tr>",
+                ui::esc(c.tag),
+                ui::esc(c.script),
+                ui::esc(c.does),
+                if props.is_empty() { "none".into() } else { props },
+                if events.is_empty() { "none".into() } else { events },
+            )
+        })
+        .collect();
+    TrustedHtml::owned(format!(
+        "<div class=\"gal-table\"><table class=\"gal-components\"><thead><tr><th scope=\"col\">Component</th><th scope=\"col\">What it does</th><th scope=\"col\">Props</th><th scope=\"col\">Events</th></tr></thead><tbody>{rows}</tbody></table></div>"
     ))
 }
 fn message(id: i64, from: &str, to: &str, at: &str, body: &str, verb: MessageVerb) -> Message {
@@ -236,7 +333,7 @@ fn conversation(prefix: &str, project: &ProjectId) -> Result<TrustedHtml, askama
         to: "fig-5492-work".into(),
         label: "Message to work · SQLite: synchronous is a required argument".into(),
     }))
-    .render()
+    .html()
     // the two themes' copies keep their ids apart
     .map(|html| {
         TrustedHtml::owned(
@@ -261,18 +358,33 @@ fn empties() -> TrustedHtml {
     ))
 }
 fn dialog() -> TrustedHtml {
-    Confirm {
+    let cancel = Confirm {
         opener: "Cancel".into(),
         title: "Cancel work · SQLite: synchronous is a required argument".into(),
         id: "fig-5492-work".into(),
         action: "#".into(),
-        hidden: vec![],
         copy: "Its 2h 14m run stops; Retry starts it over.".into(),
         reason: Some("Why stop this run?"),
-        confirm: "Cancel the run",
+        confirm: "Cancel the run".into(),
         keep: "Keep running",
-    }
-    .html()
+        ..Default::default()
+    };
+    let delete = Confirm {
+        opener: "Delete project".into(),
+        title: "Delete lash?".into(),
+        action: "#".into(),
+        copy: "This permanently removes the plan, messages, history, functions, secrets and artifacts. This cannot be undone.".into(),
+        confirm: "Delete lash".into(),
+        keep: "Keep it",
+        danger: true,
+        disabled: true,
+        ..Default::default()
+    };
+    TrustedHtml::owned(format!(
+        "<div class=\"gal-row\">{}{}</div><p class=\"meta\">Delete project is dimmed while something blocks it.</p>",
+        cancel.html(),
+        delete.html()
+    ))
 }
 /// Every part, drawn twice: once per theme of the house pair, with its ids apart.
 pub fn parts() -> Result<Vec<Part>, askama::Error> {
@@ -287,13 +399,20 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Status", "A state's glyph and word, from the status table: every page draws a status through `ui::status`, `ui::glyph` or `ui::mark`.", both(&|_| Ok(statuses()))?);
     add("Tags", "A small fact set apart (`ui::tag`): plain, muted for a closed state, gold for attention, coral only for a question waiting on you, live with the running glyph.", both(&|_| Ok(tags()))?);
     add("Buttons", "Primary for the next move, plain for the rest, the ink danger button for a delete, the Types switch.", both(&|_| Ok(buttons()))?);
-    add("Tabs", "`ui::tabs_open`, `panel_open`, `panel_close`, `tabs_close`: an ARIA tablist (arrow keys, Home, End), the chosen tab kept through a stream patch and mirrored into `?tab=` on a step's page; without script every panel stands stacked under its head.", both(&|p| Ok(tabs(&format!("{p}tabs-"))))?);
+    add("Tabs", "`ui::tabs_open`, `panel_open`, `panel_close`, `tabs_close` (`sluice-tabs`): an ARIA tablist (arrow keys, Home, End), the chosen tab in `current`, kept through a stream patch and mirrored into `?tab=` on a step's page; without script every panel stands stacked under its head.", both(&|p| Ok(tabs(&format!("{p}tabs-"))))?);
     add("Sections and cards", "`ui::head` over a section's rows; a card for a region of its own.", both(&|_| Ok(sections()))?);
     add("Fields", "One row for inputs, outputs and progress (`kit.html`'s `field`): the name in a narrow column, its type behind Types, where its value came from or what set it under it, the value beside it read by its kind.", both(&|p| fields(p, &project))?);
-    add("Folds", "A long value's first lines, faded, with Show all under them (`ui::fold`); a list's sentence that opens to it.", both(&|_| Ok(folds()))?);
-    add("Conversation", "`threads::Conversation`: messages in one column, a run from one sender grouped under who sent it to whom, a line at each day and at the first unread, a question's reply under it, long bodies folded, the message box at the end.", both(&|p| conversation(p, &project))?);
+    add("Folds", "`ui::fold`, `ui::more_open` (`sluice-fold`): a long value's first lines, faded, with Show all under them, said only when it is cut; a list's sentence that opens to it; More and Less kept per project or opened on a wide screen.", both(&|_| Ok(folds()))?);
+    add("Conversation", "`threads::Conversation` in `sluice-conversation`, its box `sluice-composer`, a question's answer `sluice-answer`: messages in one column, a run from one sender grouped under who sent it to whom, a line at each day and at the first unread, a question's reply under it, long bodies folded, the message box at the end.", both(&|p| conversation(p, &project))?);
     add("Empty states", "What a place says when it has nothing to show (`ui::empty`, `ui::empty_with`).", both(&|_| Ok(empties()))?);
-    add("Confirmation", "`ui::Confirm`: the server's details, whose summary opens the shared dialog (focus kept in it, Escape closes it); without script the form opens inline.", both(&|_| Ok(dialog()))?);
+    add("Confirmation", "`ui::Confirm` in `sluice-confirm`: the server's details, whose summary opens the shared dialog (focus starts on keep, stays in it, Escape closes it, back to the opener); dimmed while `disabled`; without script the form opens inline.", both(&|_| Ok(dialog()))?);
+    add("Menus", "`ui::menu_open` around a details menu (`sluice-menu`): a click elsewhere or Escape closes it, focus back on its summary; the arrows, Home and End move through it.", both(&|_| Ok(menus()))?);
+    add("Copy", "`ui::copy` (`sluice-copy`): an id or a SHA in data mono, its copy button there only with script, saying Copied for a moment.", both(&|_| Ok(copies()))?);
+    add("Settings", "`ui::types_toggle` and the display preferences' `ui::setting_open` (`sluice-toggle`): applied at once, kept by /settings; every Types switch on a page follows.", both(&|_| Ok(toggles()))?);
+    add("Search", "`ui::search_open` (`sluice-search`): a list filtered as one types (the functions), or the board's tools pointing the page's stream at their query; Escape clears.", both(&|p| Ok(searches(p)))?);
+    add("Banners", "`ui::banner` (`sluice-banner`): the page's stream paused or stopped with Reconnect, in gold; a newer build with Reload, muted. Hidden while live.", both(&|_| Ok(banners()))?);
+    add("Splitter", "`ui::splitter` (`sluice-splitter`): drag, the arrows (16px, 64px with Shift), Home and End; a double-click resets; the width kept per project.", both(&|p| Ok(splitters(p)))?);
+    add("Components", "Every Rocket component: Rust draws its host and all in it, the component only behaves (light DOM, no content of its own). Its props are its host's attributes.", (components(), TrustedHtml::default()));
     Ok(parts)
 }
 async fn gallery(State(state): State<DashboardState>, headers: HeaderMap) -> Response {

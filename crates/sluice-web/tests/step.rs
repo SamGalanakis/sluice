@@ -437,7 +437,7 @@ async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawe
     assert!(html.contains("<h4>Finishing</h4>"), "{html}");
     assert!(html.contains("datetime=\"2026-10-05T09:30:00Z\""), "{html}");
     assert!(
-        html.contains("release <code style=\"white-space:nowrap\">0123456789ab</code>"),
+        html.contains("release <sluice-copy value=\"0123456789ab\"><code>0123456789ab</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy release\""),
         "{html}"
     );
 }

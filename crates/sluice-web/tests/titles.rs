@@ -138,7 +138,7 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
     let (status, step) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
     assert_eq!(status, StatusCode::OK, "{step}");
     assert!(
-        step.contains("<h1 id=\"d-title\"><span class=\"d-stage\">work ·</span> FIG-1: Fix the cron driver</h1><p class=\"d-id\"><code>l1-work</code></p>"),
+        step.contains("<h1 id=\"d-title\"><span class=\"d-stage\">work ·</span> FIG-1: Fix the cron driver</h1><p class=\"d-id\"><sluice-copy value=\"l1-work\"><code>l1-work</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy step id\""),
         "{step}"
     );
     assert!(
@@ -174,7 +174,8 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
         "{unit}"
     );
     assert!(
-        unit.contains("<code>l2</code><span class=\"meta\"> · from recipe <code>lane</code>"),
+        unit.contains("<code>l2</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy unit id\"")
+            && unit.contains("</sluice-copy><span class=\"meta\"> · from recipe <code>lane</code>"),
         "{unit}"
     );
     assert!(

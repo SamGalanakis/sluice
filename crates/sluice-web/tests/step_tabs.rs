@@ -168,7 +168,7 @@ async fn a_step_draws_only_the_tabs_it_has_something_for_with_their_counts() {
     assert!(!html.contains("class=\"d-thread\""), "{html}");
     // Overview is chosen; its panel leads, every panel drawn (stacked without script)
     assert!(
-        html.contains("<div class=\"tabs\" data-tabs data-current=\"overview\" data-tab-url"),
+        html.contains("<sluice-tabs id=\"tabs\" class=\"tabs\" current=\"overview\" url data-preserve-attr=\"current\">"),
         "{html}"
     );
     assert!(html.contains(
@@ -201,7 +201,7 @@ async fn the_tab_asked_for_opens_and_an_unknown_one_falls_back_to_overview() {
     let f = Fixture::new().await;
     let page = format!("/projects/id/{}/steps/alpha-build", f.id);
     let (_, html) = f.get(&format!("{page}?tab=outputs")).await;
-    assert!(html.contains("data-current=\"outputs\""), "{html}");
+    assert!(html.contains("current=\"outputs\""), "{html}");
     assert!(html.contains("data-tab=\"outputs\" data-chosen"), "{html}");
     assert!(
         !html.contains("data-tab=\"overview\" data-chosen"),
@@ -213,7 +213,7 @@ async fn the_tab_asked_for_opens_and_an_unknown_one_falls_back_to_overview() {
     );
     // a tab it has no content for (no messages: no Thread tab) opens Overview
     let (_, html) = f.get(&format!("{page}?tab=thread")).await;
-    assert!(html.contains("data-current=\"overview\""), "{html}");
+    assert!(html.contains("current=\"overview\""), "{html}");
     let (_, html) = f.get(&format!("{page}?tab=nonsense")).await;
     assert!(html.contains("data-tab=\"overview\" data-chosen"), "{html}");
 }
@@ -445,18 +445,25 @@ async fn the_kit_gallery_draws_every_part_in_both_themes() {
         "Conversation",
         "Empty states",
         "Confirmation",
+        "Menus",
+        "Copy",
+        "Settings",
+        "Search",
+        "Banners",
+        "Splitter",
+        "Components",
     ] {
         assert!(html.contains(&format!("-h\">{part}</h2>")), "{part}");
     }
     assert_eq!(
         html.matches("<div class=\"gal-th\" data-theme=\"light\">")
             .count(),
-        10
+        16
     );
     assert_eq!(
         html.matches("<div class=\"gal-th\" data-theme=\"dark\">")
             .count(),
-        10
+        16
     );
     // its two copies keep their ids apart
     let mut ids: Vec<&str> = html
@@ -484,7 +491,7 @@ fn serve(f: &Fixture) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
     )
 }
 const FRAMES: &str = "new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))";
-const CHOSEN: &str = "[document.querySelector('[data-tabs]').dataset.current, document.querySelector('[role=tab][aria-selected=true]').dataset.tab, [...document.querySelectorAll('.tp')].filter(p => p.checkVisibility()).map(p => p.dataset.tab).join(' ')]";
+const CHOSEN: &str = "[document.querySelector('sluice-tabs').current, document.querySelector('[role=tab][aria-selected=true]').dataset.tab, [...document.querySelectorAll('.tp')].filter(p => p.checkVisibility()).map(p => p.dataset.tab).join(' ')]";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn chromium_tabs_keep_their_choice_through_a_patch_move_by_keyboard_and_open_on_a_link() {
@@ -500,7 +507,7 @@ async fn chromium_tabs_keep_their_choice_through_a_patch_move_by_keyboard_and_op
         let mut browser = Chrome::open(&page).unwrap();
         browser.viewport(1440, "light").unwrap();
         browser
-            .wait("document.readyState === 'complete' && !!document.querySelector('[data-tabs]')")
+            .wait("document.readyState === 'complete' && !!customElements.get('sluice-tabs') && !!document.querySelector('sluice-tabs')")
             .unwrap();
         assert_eq!(browser.eval(CHOSEN).unwrap(), json!(["overview", "overview", "overview"]));
         // a click chooses Outputs: its panel alone shows, the address says so
@@ -535,7 +542,7 @@ async fn chromium_tabs_keep_their_choice_through_a_patch_move_by_keyboard_and_op
                     )
                     .unwrap();
             }
-            browser.eval("[document.activeElement.dataset.tab, document.querySelector('[data-tabs]').dataset.current]").unwrap()
+            browser.eval("[document.activeElement.dataset.tab, document.querySelector('sluice-tabs').current]").unwrap()
         };
         assert_eq!(key(&mut browser, "ArrowRight", 39), json!(["runs", "runs"]));
         assert_eq!(key(&mut browser, "ArrowRight", 39), json!(["overview", "overview"]));
@@ -604,10 +611,10 @@ async fn chromium_the_kit_gallery_at_every_width_and_theme() {
             for theme in ["light", "dark"] {
                 browser.viewport(width, theme).unwrap();
                 browser.navigate(&page).unwrap();
-                browser.wait("document.readyState === 'complete'").unwrap();
+                browser.wait("document.readyState === 'complete' && !!customElements.get('sluice-splitter')").unwrap();
                 browser.eval(FRAMES).unwrap();
                 let g = browser
-                    .eval("({scroll: document.documentElement.scrollWidth, width: document.documentElement.clientWidth, pairs: [...document.querySelectorAll('.gal-pair')].map(p => getComputedStyle(p).gridTemplateColumns.split(' ').length), tabs: document.querySelectorAll('[data-tabs] .tp[data-chosen]').length})")
+                    .eval("({scroll: document.documentElement.scrollWidth, width: document.documentElement.clientWidth, pairs: [...document.querySelectorAll('.gal-pair')].map(p => getComputedStyle(p).gridTemplateColumns.split(' ').length), tabs: document.querySelectorAll('sluice-tabs .tp[data-chosen]').length})")
                     .unwrap();
                 let label = format!("{width} {theme}");
                 assert!(g["scroll"].as_f64() <= g["width"].as_f64(), "{label}: sideways {g}");
@@ -621,7 +628,7 @@ async fn chromium_the_kit_gallery_at_every_width_and_theme() {
             }
         }
         // the gallery's confirmation opens the shared dialog
-        browser.eval("document.querySelector('.gal-th details.confirm-flow > summary').click()").unwrap();
+        browser.eval("document.querySelector('.gal-th sluice-confirm:not([disabled]) details.confirm-flow > summary').click()").unwrap();
         assert_eq!(browser.eval("document.querySelector('#confirmation').open").unwrap(), true);
         assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), json!([]));
     })

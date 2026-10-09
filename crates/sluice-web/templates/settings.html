@@ -20,7 +20,7 @@
 <input type="hidden" name="field" value="description"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
 <textarea id="project-description" name="value" aria-describedby="description-feedback">{{ feedback.value("description", view.project.description.as_str()) }}</textarea>
 <div class="setting-actions"><button type="submit">Apply description</button><button type="button" data-preview hidden>Preview</button><span id="description-feedback" class="settings-feedback{% if feedback.error("description") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "description" %}{{ feedback.message }}{% endif %}</span></div>
-</form><details class="preview-fold more-fold" data-preserve-attr="open"><summary><span class="m-more">Show how it reads</span><span class="m-less">Hide how it reads</span>{{ crate::views::icons::icon(crate::views::icons::Icon::ChevronDown, 16, "chev")|safe }}</summary><div id="description-preview" class="settings-preview" aria-label="Markdown preview">{{ preview|safe }}</div></details></dd></div>
+</form>{{ crate::views::ui::more_open("preview-fold", "Show how it reads", "Hide how it reads", "", false)|safe }}<div id="description-preview" class="settings-preview" aria-label="Markdown preview">{{ preview|safe }}</div>{{ crate::views::ui::more_close("")|safe }}</dd></div>
 <div class="setting-row"><dt><label for="project-icon">Icon</label></dt><dd>
 {% if !icon_url.is_empty() %}<img class="settings-icon" id="icon-preview" src="{{ icon_url }}" alt="Current project icon">{% endif %}
 <form method="post" action="{{ view.path() }}" data-setting="icon" data-seen="{{ view.seen("icon") }}">
@@ -52,7 +52,7 @@
 <label for="board-program">Program{% if view.project.board_rev.0 > 0 %} · rev {{ view.project.board_rev }}{% endif %}</label>
 <textarea id="board-program" name="program" class="board-program" spellcheck="false" aria-describedby="board-feedback">{{ feedback.value("board", view.project.board.as_deref().unwrap_or("")) }}</textarea>
 <div class="setting-actions"><button type="submit" name="op" value="save">Save board</button><button type="submit" name="op" value="clear"{% if view.project.board.is_none() %} disabled{% endif %}>Clear board</button><span id="board-feedback" class="settings-feedback board-feedback{% if feedback.error("board") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "board" %}{{ feedback.message }}{% endif %}</span></div>
-</form><details class="preview-fold more-fold" data-board-preview-label hidden><summary><span class="m-more">Show the preview</span><span class="m-less">Hide the preview</span>{{ crate::views::icons::icon(crate::views::icons::Icon::ChevronDown, 16, "chev")|safe }}</summary><div id="board-preview" class="settings-preview board-preview" aria-label="Board preview" hidden></div></details>
+</form>{{ crate::views::ui::more_open_hidden("preview-fold", "Show the preview", "Hide the preview", "board-preview-label")|safe }}<div id="board-preview" class="settings-preview board-preview" aria-label="Board preview" hidden></div>{{ crate::views::ui::more_close("")|safe }}
 <h3 id="doc-heading">Document</h3>
 <p class="setting-help">The board's hand-written part, drawn where the program has <code>Doc()</code>. Agents read it with <code>board_doc_read</code> and change it with <code>board_doc_write</code> or <code>board_doc_edit</code>.</p>
 <!--board-doc--><div id="board-doc"><p class="setting-help doc-status">{% if view.doc.rev.0 > 0 %}Rev {{ view.doc.rev }}{% if let Some(at) = view.doc.at %} · edited {{ crate::views::ui::ago(at)|safe }}{% endif %}{% if let Some(author) = view.doc.author %} by {{ author }}{% endif %}{% else %}Not written yet.{% endif %}{% if !view.doc_drawn() %} The program has no <code>Doc()</code>, so the board does not show it.{% endif %}</p>
@@ -87,7 +87,7 @@
 </section>
 <section class="settings-danger" aria-labelledby="danger-heading"><h2 id="danger-heading">Delete project</h2>
 <!--delete-guard--><div id="delete-guard" data-allowed="{{ view.blocker.is_none() }}"><p id="delete-explanation" class="setting-help">{% if let Some(reason) = view.blocker %}Cannot delete: {{ reason }}. <a href="/projects/id/{{ view.project.project_id }}">Open the plan</a>.{% endif %}</p></div><!--/delete-guard-->
-<details class="confirm-flow" data-confirm-title="Delete {{ view.project.name }}?"><summary id="delete-button"{% if view.blocker.is_some() %} data-disabled="true"{% endif %}>Delete project</summary><form method="post" action="{{ view.path() }}/delete" id="delete-form"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><p class="confirm-copy">This permanently removes the plan, messages, history, functions, secrets and artifacts. This cannot be undone.</p><div class="confirm-actions"><button class="danger">Delete {{ view.project.name }}</button><button type="button" data-keep>Keep it</button></div><span id="delete-feedback" class="settings-feedback setting-error" role="status"></span></form></details></section>
+{{ view.delete_confirm().html()|safe }}</section>
 </div>
 <script type="module">
 const base = location.pathname;
@@ -136,7 +136,7 @@ const refresh = () => {
  }
  const deletion = document.querySelector('#delete-form');
  if (deletion.closest('dialog[open]') && deletion.querySelector('[name=expected_settings_rev]').value !== live.dataset.revision) deletion.closest('dialog').close();
- document.querySelector('#delete-button').closest('.confirm-flow').dataset.confirmTitle = 'Delete ' + live.dataset.name + '?';
+ document.querySelector('#delete-button').closest('sluice-confirm').heading = 'Delete ' + live.dataset.name + '?';
  deletion.querySelector('.confirm-copy').textContent = 'This permanently removes the plan, messages, history, functions, secrets and artifacts. This cannot be undone.';
  deletion.querySelector('.danger').textContent = 'Delete ' + live.dataset.name;
  deletion.querySelector('[name=expected_settings_rev]').value = live.dataset.revision;
@@ -154,8 +154,7 @@ const refresh = () => {
   } else changedSince(form, by);
  }
  const blocked = saving || document.querySelector('#delete-guard').dataset.allowed !== 'true';
- document.querySelector('#delete-button').toggleAttribute('data-disabled', blocked);
- document.querySelector('#delete-button').setAttribute('aria-disabled', String(blocked));
+ document.querySelector('#delete-button').closest('sluice-confirm').disabled = blocked;
 };
 document.addEventListener('datastar-signal-patch', refresh);
 document.querySelector('[data-preview]').hidden = false;
@@ -205,7 +204,7 @@ document.addEventListener('submit', event => {
  const form = event.target;
  if (form.matches('form[data-setting]')) { event.preventDefault(); sendForm(form, event.submitter); }
  if (form.id === 'delete-form') {
-  event.preventDefault(); if (document.querySelector('#delete-button').hasAttribute('data-disabled')) return;
+  event.preventDefault(); if (document.querySelector('#delete-button').closest('sluice-confirm').disabled) return;
   saving = true; refresh();
   fetch(form.action, {method:'POST', body:new URLSearchParams(new FormData(form))}).then(async response => {
    if (response.ok && response.redirected) { location.assign('/'); return; }

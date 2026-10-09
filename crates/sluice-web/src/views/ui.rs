@@ -4,6 +4,9 @@
 use super::TrustedHtml;
 use super::icons::{Icon, solid};
 
+mod rocket;
+pub use rocket::*;
+
 /// Text escaped for HTML content and attribute values.
 pub fn esc(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -383,11 +386,11 @@ impl StepRef {
     }
 }
 
-// ---- the kit: tabs, panels, a fold, an empty state, a confirmation -----------------------------
+// ---- the kit: tabs, panels, an empty state, a confirmation ------------------------------------
 // Server-drawn parts with one look each (DESIGN.md, Components; the gallery at `/_ui` shows every
-// one in every state). Their behaviour is `kit.js`: a page works without it, each part falling
-// back to plain HTML (tabs to their panels stacked under their heads, a fold to its details, a
-// confirmation to its form inline).
+// one in every state). Their behaviour is a Rocket component around them (`ui::rocket`): a page
+// works without it, each part falling back to plain HTML (tabs to their panels stacked under
+// their heads, a fold to its details, a confirmation to its form inline).
 
 /// One tab of a tab set: its key (the `?tab=` word and its panel's id), its label and a count
 /// after it ("15", "3/7"), with the count's words for a screen reader ("3 of 7 set").
@@ -414,11 +417,11 @@ impl Tab {
         self
     }
 }
-/// A tab set's opening and its bar: an ARIA tablist (arrow keys, Home and End move along it;
-/// `kit.js`), the tab `selected` chosen. Its panels follow (`panel_open` … `panel_close`), then
-/// `tabs_close`. `prefix` keeps two tab sets on one page apart; `url` mirrors the chosen tab
-/// into the address's `?tab=`. The chosen tab is the container's `data-current`, which a stream
-/// patch never resets (`data-preserve-attr`): the script owns it once the page is drawn.
+/// A tab set's host (`sluice-tabs`) and its bar: an ARIA tablist, the tab `selected` chosen.
+/// Its panels follow (`panel_open` … `panel_close`), then `tabs_close`. `prefix` keeps two tab
+/// sets on one page apart; `url` mirrors the chosen tab into the address's `?tab=`. The chosen
+/// tab is the host's `current`, which a stream patch never resets: the script owns it once the
+/// page is drawn.
 pub fn tabs_open(
     prefix: &str,
     label: &str,
@@ -453,14 +456,20 @@ pub fn tabs_open(
             label = esc(tab.label),
         ));
     }
+    let host = Host::new("sluice-tabs")
+        .attr("id", format!("{prefix}tabs"))
+        .attr("class", "tabs")
+        .attr("current", selected)
+        .flag("url", url)
+        .keep("current");
     TrustedHtml::owned(format!(
-        "<div class=\"tabs\" data-tabs data-current=\"{selected}\"{url} data-preserve-attr=\"data-current\"><div class=\"tabbar\"><div class=\"tablist\" role=\"tablist\" aria-label=\"{label}\">{bar}</div></div>",
-        url = if url { " data-tab-url" } else { "" },
+        "{}<div class=\"tabbar\"><div class=\"tablist\" role=\"tablist\" aria-label=\"{label}\">{bar}</div></div>",
+        host.open(),
         label = esc(label),
     ))
 }
 pub fn tabs_close() -> TrustedHtml {
-    TrustedHtml::owned("</div>".into())
+    Host::new("sluice-tabs").close()
 }
 /// A tab's panel: a section under its own head (at `level`), which stands alone without script
 /// (every panel stacked) and is the tab's words for a screen reader with it. With `region`, a
@@ -495,21 +504,10 @@ pub fn panel_close(prefix: &str, key: &str, region: bool) -> TrustedHtml {
         "</section>".into()
     })
 }
-/// A long text's toggle under it: "Show all", then "Show less" (the text itself sits in a
-/// `.clip` before it, never inside the toggle). Its state survives a stream patch.
-pub fn fold_toggle() -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<details class=\"fold-toggle more-fold\" data-preserve-attr=\"open\"><summary><span class=\"m-more\">Show all</span><span class=\"m-less\">Show less</span>{}</summary></details>",
-        super::icons::icon(Icon::ChevronDown, 16, "chev")
-    ))
-}
-/// A fold around HTML that may run long: its first lines, faded, and the toggle under them.
+/// A fold around HTML that may run long: its first lines, faded, and "Show all" under them
+/// (`sluice-fold`; said only when the text is cut).
 pub fn fold(class: &str, html: &TrustedHtml) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<div class=\"long\"><div class=\"clip {}\">{html}</div>{}</div>",
-        esc(class),
-        fold_toggle()
-    ))
+    TrustedHtml::owned(format!("{}{html}{}", fold_open(class), fold_close()))
 }
 /// What a place says when it has nothing to show: one plain sentence.
 pub fn empty(text: &str) -> TrustedHtml {
@@ -527,54 +525,30 @@ pub fn empty_with(text: &str, more: &TrustedHtml) -> TrustedHtml {
         }
     ))
 }
-/// A confirmation (Cancel, Close all): the server's `<details>`, its summary the opener and its
-/// form what is confirmed. With script its summary opens the shared dialog (`kit.js`), titled
-/// `title` with `id` after it in data mono; without, the details open the same form inline.
+/// A confirmation (Cancel, Close all, Delete project), drawn by `html` (`ui::rocket`): its
+/// opener's words, the dialog's title with an `id` after it in data mono, the form it confirms
+/// and its words.
 #[derive(Clone, Debug, Default)]
 pub struct Confirm {
     pub opener: String,
+    /// The opener's own id, for a page that names it (`delete-button`).
+    pub opener_id: String,
     pub title: String,
     pub id: String,
     pub action: String,
+    pub form_id: String,
     pub hidden: Vec<(&'static str, String)>,
     pub copy: String,
     /// A reason field's placeholder: none when the confirmation takes no reason.
     pub reason: Option<&'static str>,
-    pub confirm: &'static str,
+    pub confirm: String,
     pub keep: &'static str,
-}
-impl Confirm {
-    pub fn html(&self) -> TrustedHtml {
-        let hidden: String = self
-            .hidden
-            .iter()
-            .map(|(n, v)| {
-                format!(
-                    "<input type=\"hidden\" name=\"{}\" value=\"{}\">",
-                    esc(n),
-                    esc(v)
-                )
-            })
-            .collect();
-        let reason = self.reason.map_or(String::new(), |placeholder| format!(
-            "<label class=\"confirm-reason\">Reason (optional)<textarea name=\"message\" rows=\"3\" maxlength=\"16384\" placeholder=\"{}\"></textarea></label>",
-            esc(placeholder)
-        ));
-        TrustedHtml::owned(format!(
-            "<details class=\"confirm-flow\" data-confirm-title=\"{title}\"{id}><summary>{opener}</summary><form method=\"post\" action=\"{action}\">{hidden}<p class=\"confirm-copy\">{copy}</p>{reason}<div class=\"confirm-actions\"><button class=\"primary\">{confirm}</button><button type=\"button\" data-keep>{keep}</button></div></form></details>",
-            title = esc(&self.title),
-            id = if self.id.is_empty() {
-                String::new()
-            } else {
-                format!(" data-confirm-id=\"{}\"", esc(&self.id))
-            },
-            opener = esc(&self.opener),
-            action = esc(&self.action),
-            copy = esc(&self.copy),
-            confirm = esc(self.confirm),
-            keep = esc(self.keep),
-        ))
-    }
+    /// The confirm button in the ink-filled danger tone (Delete), else primary.
+    pub danger: bool,
+    /// It cannot be confirmed now: its opener is dimmed and does nothing.
+    pub disabled: bool,
+    /// What the form draws after its buttons (a status line its page's script writes).
+    pub after: TrustedHtml,
 }
 
 #[cfg(test)]

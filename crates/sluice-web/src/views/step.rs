@@ -1358,8 +1358,9 @@ impl StepView {
             ],
             copy: self.cancel_prompt(),
             reason: Some("Why stop this run?"),
-            confirm: "Cancel the run",
+            confirm: "Cancel the run".into(),
             keep: "Keep running",
+            ..Default::default()
         }
     }
     /// Cancel applies: running and not already stopping (a cancel asked for is not offered
@@ -1500,7 +1501,7 @@ impl StepView {
     ) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(
-            source = "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{{ step.project }}\">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, \"\")|safe }}{{ project }} plan</a>{% if let Some(unit) = unit %}<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{{ step.project }}/units/{{ unit.0 }}\"{% if !unit.1.is_empty() %} title=\"{{ unit.1 }}\"{% endif %}>{% if unit.1.is_empty() %}unit {{ unit.0 }}{% else %}{{ crate::views::ui::cut(unit.1, 64) }}{% endif %}</a>{% endif %}</nav>{{ body|safe }}<script type=\"module\" src=\"{{ js_url }}\"></script>",
+            source = "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{{ step.project }}\">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, \"\")|safe }}{{ project }} plan</a>{% if let Some(unit) = unit %}<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{{ step.project }}/units/{{ unit.0 }}\"{% if !unit.1.is_empty() %} title=\"{{ unit.1 }}\"{% endif %}>{% if unit.1.is_empty() %}unit {{ unit.0 }}{% else %}{{ crate::views::ui::cut(unit.1, 64) }}{% endif %}</a>{% endif %}</nav>{{ body|safe }}",
             ext = "html"
         )]
         struct Page<'a> {
@@ -1508,14 +1509,12 @@ impl StepView {
             project: &'a str,
             unit: Option<(&'a str, &'a str)>,
             body: TrustedHtml,
-            js_url: String,
         }
         TrustedHtml::from_template(&Page {
             step: self,
             project,
             unit,
             body: self.own_body(tab)?,
-            js_url: super::asset_url("sluice.js"),
         })
     }
 }

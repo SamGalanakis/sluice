@@ -695,7 +695,7 @@ async fn assets_are_compressed_versioned_and_revalidated() {
         .expect("an import map");
     let map: Value = serde_json::from_str(map).unwrap();
     for module in [
-        "inbox.js",
+        "components.js",
         "openui.js",
         "lang-core-0.3.0.js",
         "zod-4.6.5-v4.js",

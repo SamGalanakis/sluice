@@ -220,6 +220,7 @@ impl Fixture {
     }
     pub fn router(&self) -> Router {
         let mut pages = PageState::new(self.dashboard.clone());
+        pages.log = true;
         pages.messages = Some(MessageState {
             dashboard: self.dashboard.clone(),
             commands: self.commands.clone(),

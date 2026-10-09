@@ -1274,8 +1274,8 @@ impl Draw<'_> {
         match self.loaded.doc.as_ref().filter(|d| !d.markdown.trim().is_empty()) {
             Some(doc) => {
                 // its first section, then the rest folded: on a phone the parts after the
-                // document (the live widgets, the quick check) stay near the top; board.js
-                // opens the fold where the board has the room
+                // document (the live widgets, the quick check) stay near the top; the fold
+                // opens itself where the board has the room (`sluice-fold`'s `wide`)
                 let inner = keep_ids(
                     crate::markdown::render_from(&doc.markdown, self.depth + 1).as_str(),
                 );
@@ -1284,8 +1284,9 @@ impl Draw<'_> {
                 if !rest.is_empty() {
                     let _ = write!(
                         self.out,
-                        "<details class=\"doc-more more-fold\" data-preserve-attr=\"open\"><summary><span class=\"m-more\">Read more</span><span class=\"m-less\">Read less</span>{}</summary><div class=\"md board-md\">{rest}</div><button type=\"button\" class=\"doc-less link-quiet\">Read less</button></details>",
-                        super::icons::icon(super::icons::Icon::ChevronDown, 16, "chev"),
+                        "{}<div class=\"md board-md\">{rest}</div>{}",
+                        super::ui::more_open("doc-more", "Read more", "Read less", "", true),
+                        super::ui::more_close("Read less"),
                     );
                 }
                 if let Some(at) = &doc.at {

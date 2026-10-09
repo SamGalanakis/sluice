@@ -314,8 +314,9 @@ impl InboxView {
             hidden,
             copy: "Closed, they leave this list and no one can answer them.".into(),
             reason: None,
-            confirm: "Close them",
+            confirm: "Close them".into(),
             keep: "Keep them",
+            ..Default::default()
         }
     }
     /// The project a project's page is in: its name, for the way back.
@@ -734,8 +735,19 @@ impl Conversation {
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }
+    /// Its messages, for a page that draws its host itself (`ui::conversation_open`) around them
+    /// and what goes before them.
     pub fn render(&self) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&ConversationTemplate { c: self })
+    }
+    /// Its messages in their host (`sluice-conversation`).
+    pub fn html(&self) -> Result<TrustedHtml, askama::Error> {
+        Ok(TrustedHtml::owned(format!(
+            "{}{}{}",
+            super::ui::conversation_open("", ""),
+            self.render()?,
+            super::ui::conversation_close()
+        )))
     }
 }
 #[derive(Template)]

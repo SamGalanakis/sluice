@@ -8,7 +8,7 @@ import { createParser, parseRules, validate } from
   "/static/lang-core-0.3.0.js";
 
 const VOCAB = {
-  "doc": "The OpenUI Lang vocabulary of inbox items (SPEC §8). inbox.js draws exactly these components; docs/inbox.md lists their signatures (a test keeps the two in step). A prop name ending in ? is optional; props are positional, in this order.",
+  "doc": "The OpenUI Lang vocabulary of inbox items (SPEC §8). openui.js draws exactly these components; docs/inbox.md lists their signatures (a test keeps the two in step). A prop name ending in ? is optional; props are positional, in this order.",
   "root": "Stack",
   "components": [
     {"name": "Stack", "props": [["children", "Component[]"], ["direction?", "\"col\" | \"row\""]],

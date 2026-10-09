@@ -446,6 +446,11 @@ function boardRelations(host) {
 rocket("sluice-board", {
   mode: "light",
   renderOnPropChange: false,
+  manifest: {
+    slots: [{ name: "relations", description: "script.board-edges: the plan's relations as JSON, a region of its own." },
+            { name: "plane", description: ".plane: the bands, boxes, matrices and cards, then svg.edges, which this draws." }],
+    events: [],
+  },
   setup({ host, cleanup }) {
     let frame = 0, active = true;
     // tracing follows the keyboard's focus, not a focus given back after a click or by the
@@ -561,15 +566,29 @@ rocket("sluice-board", {
 });
 
 // ---- <sluice-drawer> --------------------------------------------------------------------------
-
-function setupDrawer(host) {
-    const disposers = [];
-    const cleanup = (fn) => disposers.push(fn);
-    host.disposeDrawer = () => { for (const fn of disposers) fn(); };
+// The step open on the board: `#step:<id>` opens it beside the board (over it below 1200px, a
+// modal dialog then, a sheet on a phone), streams its page into `#step-detail` from `base`, and
+// closes on Escape, its close button, the scrim or a click on the page around the board. Its tab
+// is the page's `tab` signal (the step's stream draws it chosen) and, while a step is open and
+// its tab is not Overview, the address's `?tab=` (the board's own query is its filters, which
+// leave `tab` alone), so a reload or a shared link opens the step on the same tab.
+rocket("sluice-drawer", {
+  mode: "light",
+  renderOnPropChange: false,
+  props: ({ string }) => ({ base: string }),
+  manifest: {
+    slots: [{ name: "scrim", description: ".scrim behind it below 1200px." },
+            { name: "drawer", description: "aside#drawer: its close band, #drawer-stream (the step's stream binding) and #step-detail." }],
+    events: [],
+  },
+  setup({ host, props, cleanup }) {
     const drawer = $("#drawer", host);
     let opener = null, stream = null, last = "";
     let focusFrame = 0, scrollTimer = 0;
     let pinned = true;  // the log follows its newest line until the reader scrolls up
+    const listeners = new AbortController();
+    const on = (target, type, fn, options = {}) => target.addEventListener(type, fn, { ...options, signal: listeners.signal });
+    mergePatch({ step: "", sver: "" });
     // the drawer's stream: each call ends the previous one (Datastar's requestCancellation)
     window.sluiceStream = () => {
       stream?.abort();
@@ -580,6 +599,13 @@ function setupDrawer(host) {
       if (!location.hash.startsWith("#step:")) return;
       history.pushState(null, "", location.pathname + location.search);
       window.dispatchEvent(new HashChangeEvent("hashchange"));
+    };
+    // the open step's tab in the address: `?tab=` while a step is open on a tab past Overview
+    const tabInAddress = (key) => {
+      const url = new URL(location.href);
+      if (key && key !== "overview" && currentStep()) url.searchParams.set("tab", key);
+      else url.searchParams.delete("tab");
+      if (url.href !== location.href) history.replaceState(history.state, "", url);
     };
     // below 1200px, over the page (a sheet on a phone), it is a modal dialog: the page behind
     // it is inert; from 1200px it is a region beside the page
@@ -596,11 +622,11 @@ function setupDrawer(host) {
       return result;
     };
     const modal = () => {
-      const on = Boolean(currentStep()) && OVER.matches;
-      drawer.setAttribute("role", on ? "dialog" : "complementary");
-      drawer.toggleAttribute("aria-modal", on);
-      if (on) drawer.setAttribute("aria-modal", "true");
-      for (const el of inertTargets()) el.inert = on;
+      const over = Boolean(currentStep()) && OVER.matches;
+      drawer.setAttribute("role", over ? "dialog" : "complementary");
+      drawer.toggleAttribute("aria-modal", over);
+      if (over) drawer.setAttribute("aria-modal", "true");
+      for (const el of inertTargets()) el.inert = over;
     };
     const open = () => {
       cancelAnimationFrame(focusFrame);
@@ -615,8 +641,9 @@ function setupDrawer(host) {
       for (const b of $$("sluice-board")) untrace(b);  // the drawer shows the step, undimmed
       if (!sid) {
         stream?.abort();
-        $("#drawer-stream", host).replaceChildren();
-        mergePatch({step: "", sver: ""});
+        $("#drawer-stream").replaceChildren();
+        mergePatch({ step: "", sver: "" });
+        tabInAddress("");
         // back to the card (beside the drawer, the page brought it into view); a phone's sheet
         // did not, so a name in a card's waits that opened it takes the focus back
         const card = last && document.getElementById(`n-${last}`);
@@ -633,10 +660,11 @@ function setupDrawer(host) {
         stream?.abort();
         stream = new AbortController();
         window.sluiceStepController = stream;
-        mergePatch({step: sid, sver: ""});
+        const tab = new URLSearchParams(location.search).get("tab") ?? "";
+        mergePatch({ step: sid, sver: "", tab });
         const binding = document.createElement("span");
-        binding.dataset.init = `@get('${host.dataset.projectBase}/steps/${encodeURIComponent(sid)}/stream', {retry: 'always', retryMaxCount: 10, retryMaxWait: 30000, requestCancellation: window.sluiceStepController})`;
-        $("#drawer-stream", host).replaceChildren(binding);
+        binding.dataset.init = `@get('${props.base}/steps/${encodeURIComponent(sid)}/stream', {retry: 'always', retryMaxCount: 10, retryMaxWait: 30000, requestCancellation: window.sluiceStepController})`;
+        $("#drawer-stream").replaceChildren(binding);
       }
       const detail = $("#step-detail", drawer);
       if (detail && detail.dataset.step !== sid) {
@@ -663,9 +691,9 @@ function setupDrawer(host) {
       if (document.querySelector("dialog[open]")) return;
       if (evt.key === "Tab" && currentStep() && OVER.matches) {
         const items = $$("a[href], button, input, select, textarea, [tabindex='0']", drawer).filter(shown);
-        const first = items[0], last = items.at(-1);
-        if (evt.shiftKey && (document.activeElement === first || document.activeElement === drawer)) { evt.preventDefault(); last?.focus(); }
-        else if (!evt.shiftKey && document.activeElement === last) { evt.preventDefault(); first?.focus(); }
+        const first = items[0], end = items.at(-1);
+        if (evt.shiftKey && (document.activeElement === first || document.activeElement === drawer)) { evt.preventDefault(); end?.focus(); }
+        else if (!evt.shiftKey && document.activeElement === end) { evt.preventDefault(); first?.focus(); }
       }
       if (evt.key === "Escape" && location.hash.startsWith("#step:")) window.sluiceClose();
     };
@@ -694,25 +722,19 @@ function setupDrawer(host) {
     });
     follow.observe(drawer, { childList: true, subtree: true, characterData: true });
     const close = () => window.sluiceClose();
-    $(".close", drawer).addEventListener("click", close);
-    $(".scrim", host).addEventListener("click", close);
-    document.addEventListener("click", click);
-    document.addEventListener("click", away);
-    document.addEventListener("keydown", escape);
-    window.addEventListener("hashchange", open);
-    OVER.addEventListener("change", modal);
-    drawer.addEventListener("scroll", scrolled, true);
+    on($(".close", drawer), "click", close);
+    on($(".scrim", host), "click", close);
+    on(document, "click", click);
+    on(document, "click", away);
+    on(document, "keydown", escape);
+    on(window, "hashchange", open);
+    on(OVER, "change", modal);
+    on(drawer, "scroll", scrolled, { capture: true });
+    on(drawer, "sluice-tab", (evt) => tabInAddress(evt.detail.key));
     open();
     cleanup(() => {
-      $(".close", drawer).removeEventListener("click", close);
-      $(".scrim", host).removeEventListener("click", close);
+      listeners.abort();
       delete window.sluiceStepController;
-      document.removeEventListener("click", click);
-      document.removeEventListener("click", away);
-      document.removeEventListener("keydown", escape);
-      window.removeEventListener("hashchange", open);
-      OVER.removeEventListener("change", modal);
-      drawer.removeEventListener("scroll", scrolled, true);
       follow.disconnect();
       stream?.abort();
       cancelAnimationFrame(focusFrame);
@@ -722,21 +744,5 @@ function setupDrawer(host) {
       delete window.sluiceStream;
       delete window.sluiceClose;
     });
-}
-customElements.define("sluice-drawer", class extends HTMLElement {
-  connectedCallback() { setupDrawer(this); }
-  disconnectedCallback() { this.disposeDrawer?.(); }
+  },
 });
-
-const navUrl = document.querySelector('script[src*="/static/nav.js"]')?.src;
-if (navUrl) {
-  const {setTypes, typesOn} = await import(navUrl);
-  const updateTypes = () => {
-    for (const b of $$(".types-toggle")) b.setAttribute("aria-pressed", String(typesOn()));
-  };
-  document.addEventListener("click", (ev) => {
-    if (ev.target.closest?.(".types-toggle")) { setTypes(!typesOn()); updateTypes(); }
-  });
-  document.addEventListener("datastar-signal-patch", updateTypes);
-  updateTypes();
-}

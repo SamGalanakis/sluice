@@ -265,9 +265,10 @@ pub struct UnitView {
     pub steps: Vec<StepView>,
     pub rows: Vec<Vec<StepView>>,
     pub last_message: String,
-    /// Who sent its last message, and its thread.
+    /// Who sent its last message, its thread and its id (its page draws it as a message).
     pub last_from: String,
     pub last_thread: String,
+    pub last_id: i64,
     pub changed: String,
     /// The unit is one step in the plan: the board draws that step's card alone, no box.
     pub solo: bool,
@@ -392,6 +393,7 @@ impl UnitView {
             last_message: String::new(),
             last_from: String::new(),
             last_thread: String::new(),
+            last_id: 0,
             changed: changed.to_owned(),
             solo: unit.steps.len() == 1,
             waits: BTreeMap::new(),
@@ -644,6 +646,7 @@ impl UnitView {
         project: &super::ProjectView,
         edges: &str,
         recipe: Option<&sluice_model::recipe::Recipe>,
+        last: Option<&super::threads::Conversation>,
     ) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(path = "unit_page.html")]
@@ -651,6 +654,7 @@ impl UnitView {
             unit: &'a UnitView,
             project: &'a super::ProjectView,
             edges: &'a str,
+            last: Option<&'a super::threads::Conversation>,
             js_url: String,
             tab: String,
             view: Option<TrustedHtml>,
@@ -660,6 +664,7 @@ impl UnitView {
             unit: self,
             project,
             edges,
+            last,
             js_url: super::asset_url("sluice.js"),
             tab: sluice_model::naming::cut(self.heading(), 48),
             view: recipe
@@ -675,10 +680,6 @@ impl UnitView {
     /// Its steps' records and messages, and its own, on the project's log.
     pub fn log_href(&self, project: &ProjectId) -> String {
         format!("/projects/id/{project}/log?unit={}", self.id)
-    }
-    /// Its last message, drawn as message bodies are.
-    pub fn last_message_html(&self) -> TrustedHtml {
-        crate::markdown::render(&self.last_message)
     }
     /// The band Live first draws it in (`Band`): its first state's; a done unit is on the shelf.
     pub fn band(&self) -> Placed {
@@ -1666,7 +1667,7 @@ impl ProjectView {
     fn board_region(body: &TrustedHtml) -> TrustedHtml {
         let end = body
             .as_str()
-            .find("<sluice-drawer")
+            .find(&format!("<{}", super::ui::DRAWER))
             .expect("owned template drawer boundary");
         TrustedHtml::owned(body.as_str()[..end].trim().to_owned())
     }
@@ -1856,11 +1857,12 @@ pub fn load_board(
     let mut last = last_messages(c, project, &board)?;
     let cards = Cards::read(c, project)?;
     for unit in &mut board.units {
-        if let Some((message, at, from, thread)) = last.remove(unit.id.as_str()) {
+        if let Some((message, at, from, thread, id)) = last.remove(unit.id.as_str()) {
             unit.last_message = message;
             unit.changed = at;
             unit.last_from = from;
             unit.last_thread = thread;
+            unit.last_id = id;
         }
         for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
             cards.decorate(step, revision as u64);
@@ -2251,13 +2253,15 @@ fn spans(all: &[Run]) -> Vec<super::timeline::RunSpan> {
     }
     out.into_iter().map(|(_, s)| s).collect()
 }
-/// Each unit's last message (body and time): the newest from or to one of its steps, or in one
-/// of its steps' threads. One pass over the project's messages, newest first.
+/// A unit's last message: its body, time, sender, thread and id.
+type LastMessage = (String, String, String, String, i64);
+/// Each unit's last message: the newest from or to one of its steps, or in one of its steps'
+/// threads. One pass over the project's messages, newest first.
 fn last_messages(
     c: &Connection,
     project: ProjectId,
     board: &ProjectView,
-) -> sluice_store::Result<BTreeMap<String, (String, String, String, String)>> {
+) -> sluice_store::Result<BTreeMap<String, LastMessage>> {
     let mut unit_of = BTreeMap::new();
     let mut steps = c.prepare("SELECT step_id,coalesce(unit,step_id) FROM steps WHERE project_id=?1")?;
     let mut rows = steps.query([project.to_string()])?;
@@ -2267,7 +2271,7 @@ fn last_messages(
     let wanted: BTreeSet<&str> = board.units.iter().map(|u| u.id.as_str()).collect();
     let mut last = BTreeMap::new();
     let mut messages = c.prepare(
-        "SELECT \"from\",\"to\",thread,body,at FROM messages WHERE project_id=?1 ORDER BY id DESC",
+        "SELECT \"from\",\"to\",thread,body,at,id FROM messages WHERE project_id=?1 ORDER BY id DESC",
     )?;
     let mut rows = messages.query([project.to_string()])?;
     while last.len() < wanted.len()
@@ -2281,7 +2285,10 @@ fn last_messages(
         ];
         for unit in units.into_iter().flatten() {
             if wanted.contains(unit.as_str()) && !last.contains_key(unit) {
-                last.insert(unit.clone(), (r.get(3)?, r.get(4)?, from.clone(), thread.clone()));
+                last.insert(
+                    unit.clone(),
+                    (r.get(3)?, r.get(4)?, from.clone(), thread.clone(), r.get(5)?),
+                );
             }
         }
     }
@@ -2684,6 +2691,7 @@ fn unit_batch(
     view: &ProjectView,
     unit: &UnitName,
     viewer: &Viewer,
+    last: Option<&super::threads::Conversation>,
 ) -> Result<RenderedBatch, PublicError> {
     let mut unit = view
         .units
@@ -2707,6 +2715,7 @@ fn unit_batch(
                 &view.project,
                 &view.unit_edges_json(&unit),
                 view.names.recipe_of(unit.id.as_str()).map(|r| r.as_ref()),
+                last,
             )
             .map_err(render_error)?,
         ),
@@ -2717,6 +2726,46 @@ fn unit_batch(
         ),
     ]))
 }
+/// A unit's last message as the unit page draws it: one message of the shared conversation,
+/// read from the store by its id (none when the unit has no message).
+async fn unit_last(
+    state: &DashboardState,
+    view: &ProjectView,
+    unit: &UnitName,
+) -> Result<Option<super::threads::Conversation>, PublicError> {
+    let Some(id) = view
+        .units
+        .iter()
+        .find(|u| &u.id == unit)
+        .map(|u| u.last_id)
+        .filter(|id| *id > 0)
+    else {
+        return Ok(None);
+    };
+    let (project, name) = (view.project.id, view.project.name.clone());
+    state
+        .reads
+        .snapshot(move |c| {
+            let message =
+                sluice_store::messages::message(c, project, sluice_model::ids::MessageId(id))?;
+            let steps = super::threads::step_names(c, project)?;
+            let item = super::threads::item(c, project, &name, &steps, message)?;
+            Ok(Some(super::threads::Conversation::build(
+                super::threads::Build {
+                    project,
+                    subject: None,
+                    steps: &steps,
+                    unread: &BTreeSet::new(),
+                    most: Some(1),
+                    excerpt: false,
+                    href: &|m| super::threads::thread_url(project, &m.message.thread),
+                },
+                vec![item],
+            )))
+        })
+        .await
+        .map_err(|e| e.into_public(true))
+}
 pub async fn unit_page(
     State(state): State<DashboardState>,
     registry: Option<Extension<Registry>>,
@@ -2726,7 +2775,8 @@ pub async fn unit_page(
     let page = async {
         let (shared, view) = snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await?;
         let viewer = Viewer::from_headers(&headers);
-        let drawn = unit_batch(&shared, &view, &unit, &viewer)?;
+        let last = unit_last(&state, &view, &unit).await?;
+        let drawn = unit_batch(&shared, &view, &unit, &viewer, last.as_ref())?;
         let nav = NavView::new(&shared, Some(project), "plan")?;
         super::render_layout(
             &format!(
@@ -2781,7 +2831,8 @@ pub async fn unit_stream(
                     ),
                 )]));
             }
-            unit_batch(&shared, &view, &id, &viewer)
+            let last = unit_last(&state, &view, &id).await?;
+            unit_batch(&shared, &view, &id, &viewer, last.as_ref())
         }
     };
     Sse::new(streams::page_events(

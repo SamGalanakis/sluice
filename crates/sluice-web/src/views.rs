@@ -37,7 +37,7 @@ use std::{fmt, future::Future, sync::Arc};
 
 /// HTML emitted by an owned Askama template or the markdown renderer. There is
 /// deliberately no public constructor accepting an arbitrary string.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrustedHtml(String);
 impl TrustedHtml {
     pub(crate) fn owned(html: String) -> Self {
@@ -471,7 +471,7 @@ struct Layout<'a> {
     path: &'a str,
     style_url: String,
     nav_url: String,
-    kit_url: String,
+    components_url: String,
     datastar_url: String,
     import_map: &'static str,
     /// The build that drew the page (`streams::release`): a stream from another says so.
@@ -497,7 +497,7 @@ pub fn render_layout(
         path,
         style_url: asset_url("style.css"),
         nav_url: asset_url("nav.js"),
-        kit_url: asset_url("kit.js"),
+        components_url: asset_url("components.js"),
         datastar_url: asset_url("datastar-rocket-1.0.4.js"),
         import_map: import_map(),
         release: crate::streams::release(),

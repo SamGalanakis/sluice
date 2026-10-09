@@ -207,10 +207,12 @@ the board.
 
 The pages are server-rendered by `crates/sluice-web` (askama templates in `templates/`, views in
 `src/views/`), styled by `assets/style.css` and `assets/settings.css`, and kept live by Datastar
-streams; `assets/sluice.js` adds the drawer, edge drawing and tracing, `nav.js` the menus and
-every page's live times, `kit.js` the kit's tabs, deep links, message box and confirmation dialog, `inbox.js` the message pages' read marks and closes (loading
-`openui.js`, the answer forms, only on a page with an answer), `board.js` the project page's view switch,
-splitter, description fold, board tools and the board's buttons. Every page works without JavaScript.
+streams. Its behaviour is its components (see Components): Rust draws every component's host
+and all in it, and a Rocket component in `assets/components.js` (the board and the drawer in
+`assets/sluice.js`) adds behaviour to what the server drew. `nav.js` keeps every page's live
+times and tab title, `openui.js` draws a question's answer form (loaded by its `sluice-answer`
+only on a page with one), and `board.js` keeps the project page's view switch, its board
+column's height and the board's buttons. Every page works without JavaScript.
 
 ## Colors
 
@@ -421,8 +423,8 @@ retry, its run's number with how the runs before it ended.
   status ramp's order, then those with no steps): a `<details>` whose summary is the chosen project's name ("All
   projects" when none) and a chevron, its label clipping at what the band leaves after the
   rest (120 to 260px), so a long name gives way before a section does; its menu lists All projects, then every live project with
-  its status glyph and icon, then the archived ones under "Archived". `nav.js` closes it on a
-  click elsewhere or Escape.
+  its status glyph and icon, then the archived ones under "Archived". It is a `sluice-menu`: a
+  click elsewhere or Escape closes it, and the arrows move through it.
 - **Sections**: in a project Plan, Messages, Log, Functions; without one Log and Functions (the
   index is the switcher's "All projects"). Messages is the project's inbox, questions and
   history behind one section (its tabs on the page): the one Inbox in the nav is the tray. The current one is `nav-ink` with
@@ -885,7 +887,7 @@ The step reads top down:
 
 ### Unit (`/projects/id/<p>/units/<u>`)
 A way back ("← <project> plan"), the unit's title as the page's `h1` (with the success glyph when
-done), its id in data mono under it with "· from recipe `lane`" in meta when a recipe made it,
+done), its id in data mono under it (with its copy button) with "· from recipe `lane`" in meta when a recipe made it,
 then its recipe's view drawn whole in a card-filled block at the measure (its parts in a
 row, a column stack as a grid; labelled "Summary" for a screen reader; each param, output
 and stage status named before its value, "engine opus"), and a sum in meta ("6 steps · 1
@@ -893,7 +895,8 @@ running · 4 pending · 1 succeeded · Log", the link its log filtered to the un
 the board draws it, with the lines inside it, without its label (the h1 names it), its
 layers from the column's left edge, a done unit open to its cards; each card that waits on
 another unit says it in words ("Waits for l-a1 (running), not in this view"); "Last message":
-who sent it and when, then its body as markdown at the measure, and "Read the thread". Between
+"Read the thread", then the message as every conversation draws one (who sent it to whom, when,
+its id, its state, its body folded past 700 characters). Between
 the box and the last message, once something in it has run, **Timeline** (a section head): see
 Components.
 
@@ -1024,15 +1027,75 @@ are ends, not work. The done shelf's lines and a done unit's line are rows of a 
 
 ## Components
 
-**The kit.** Every shared part is server-drawn from one place: `views::ui` (status, time,
-count, head, tag, tabs, panel, fold, empty state, confirmation), `templates/kit.html` (the field
-row) and `views::threads::Conversation` (messages); `assets/kit.js` gives them their behaviour
-and `style.css`'s kit section their look, on this file's tokens. **`/_ui`** is the kit's
-gallery and its documentation: every part in every state with real-looking data, the house
-pair's light and dark side by side (stacked under 900px). A new part goes there first. The
-ideas and CSS are adapted from knadh/oat and hunvreus/basecoat, the tabs' keyboard model from
-github/tab-container-element (all MIT; `assets/README.md`): no runtime, no shadow DOM, no
-build step.
+**The rule: Rust renders, Rocket behaves.** Every shared part is server-drawn from one place:
+`views::ui` (status, time, count, head, tag, tabs, panel, fold, empty state, confirmation, and
+every component's host in `ui::rocket`), `templates/kit.html` (the field row) and
+`views::threads::Conversation` (messages); `style.css`'s kit section gives them their look, on
+this file's tokens. A part with behaviour is a component: a custom element (`sluice-*`) whose
+host the server draws around the part, and a Rocket component of the same name (Datastar's
+custom-element API, bundled in `datastar-rocket-1.0.4.js`) defined in `assets/components.js`
+(the board and the drawer in `assets/sluice.js`), in light DOM, with typed props (its host's
+attributes) and a manifest (its slots and events). A component only enhances what the server
+drew, in its `setup`: listeners, observers, keyboard handling, and state kept in its host's own
+attributes, which a stream patch leaves as they are (`data-preserve-attr`). It never draws
+content: a page reads whole before its script runs and without it, a patch morphs server HTML
+into server HTML, and a screen reader hears what the server wrote; the only words a component
+writes are chrome with no meaning without script ("Sent.", "Copied", a mark that did not go
+through). A control that needs script (`.needs-js`: a copy button, Mark read, the functions'
+find field, Read less) is hidden until its component is defined. A host around a part gives it
+no box (`display: contents`); a host that is its part (tabs, a long text's fold, a copyable id,
+the splitter, a banner) takes the part's. A page makes a host only through `ui::rocket` (a test
+holds every template to it), and Datastar attributes stay outside a host: a component re-applies
+Datastar to what it holds after each patch inside it. **`/_ui`** is the kit's gallery and its
+documentation: every part and component in every state with real-looking data, the house pair's
+light and dark side by side (stacked under 900px), and a table of every component, its props
+and events (a Chromium test holds each to its script's manifest). A new part goes there first.
+The ideas and CSS are adapted from knadh/oat and hunvreus/basecoat, the tabs' keyboard model
+from github/tab-container-element (all MIT; `assets/README.md`): no runtime of theirs, no
+shadow DOM, no build step.
+
+The components:
+
+- **`sluice-tabs`**: the tab set below; its choice in `$$tab` and its `current`.
+- **`sluice-fold`**: Show all and Show less over a long text, said only when the text is cut
+  (`fits` otherwise: no fade, no toggle); or a More fold (`details.more-fold`: its summary's
+  two words, or one line such as "6 steps: 5 done, 1 running"), kept open per project in this
+  browser (`remember`, the description's More) or opened on a wide screen until folded by hand
+  (`wide`, the board's document, with "Read less" at its end). Folding brings its head back
+  into view.
+- **`sluice-confirm`**: Confirmation dialogs (below); `heading`, `ref-id`, `disabled`.
+- **`sluice-conversation`**: around a conversation and what its page draws before it (a note's
+  head, a thread's line): Jump to latest (its newest message brought into view and focused), a
+  thread's page opening at its end, Mark read and Mark all read (a mark that did not go through
+  said once at the top of the notes, with Try again).
+- **`sluice-composer`**: the message box: sends as JSON and stays on the page, keeps its text
+  through a patch; Ctrl or Cmd with Enter sends.
+- **`sluice-answer`**: a question's Answer (opens its box under the buttons, the focus in it)
+  and Close question (at once); loads `openui.js` for a question with a form.
+- **`sluice-menu`**: the project switcher, display preferences and the plan's More: a click
+  elsewhere or Escape closes it, the focus back on its summary; ArrowDown from the summary goes
+  in, the arrows, Home and End move through its links and buttons (a radio keeps its own).
+- **`sluice-copy`**: an id or a SHA in data mono (a step's, a unit's, a run's, a session's, a
+  thread's name, a release) with a 24px copy button after it, muted at 55% until hovered or
+  focused (always shown on touch), the Lucide `copy` icon turning to the success `check` for a
+  moment, "Copied" said to a screen reader.
+- **`sluice-toggle`**: a display setting applied at once and kept by `/settings`: value types
+  (the Types switch, its look read from `show-types` on `<html>` so it never flashes; every one
+  on the page follows) or the theme; the display preferences' Save hides once they run.
+- **`sluice-search`**: the board's search and filters (the address and the page's stream
+  follow as one types; Escape clears the search first) and the functions' find (a list
+  filtered as one types, "4 functions match").
+- **`sluice-banner`**: the stream line and the build line (Live updates, below).
+- **`sluice-splitter`**: The project's board's splitter.
+- **`sluice-board`**, **`sluice-drawer`**: the plan's lines and tracing, and the step drawer
+  (it writes the open step's tab into `?tab=`).
+
+The page's clock is no component: one ticker in `nav.js` reads every `<time>` (hundreds on a
+board) and writes only what changed, and its text is left out of the stream's version, so an
+idle board still sends nothing; a component per time would add a host per time for no new
+behaviour.
+
+The parts:
 
 - **Tabs** (`ui::tabs_open`, `panel_open`, `panel_close`, `tabs_close`): a bar of words under a
   hairline, the chosen one in ink at 650 over a 2px ink bar, a count after a word in muted
@@ -1040,9 +1103,10 @@ build step.
   and wrap, Home and End go to its ends, each move chooses; a panel is a tab stop of its own.
   The bar sticks to the top of what scrolls (in the drawer under its close band) and scrolls
   sideways inside itself on a narrow screen, fading at its end while more tabs wait there, so the
-  page never scrolls sideways. The choice is the set's `data-current` and the page's `tab` signal
+  page never scrolls sideways. The choice is the host's `current` (`$$tab` in its component) and the page's `tab` signal
   (the step's stream reads it as it connects), mirrored into `?tab=` on a step's own page
-  (replaceState, no history entry); a stream patch never resets it (`data-preserve-attr`).
+  (replaceState, no history entry), and in the drawer into the board's `?tab=` while a step
+  is open; a stream patch never resets it (`data-preserve-attr`).
   Without script the bar is gone and every panel stands stacked under its own head, apart by a
   hairline (`@media (scripting: none)`); with it the head is kept for a screen reader.
 - **Conversation** (`threads::Conversation`, `templates/conversation.html`): one column, as a
@@ -1207,4 +1271,4 @@ its facts and its thread link; the Types switch keeps its size on a 44px target.
 
 ### Confirmation dialogs
 
-Cancel, Delete project and Questions' Close all use one native `<dialog>` (Cancel and Close all are drawn by `ui::Confirm`; `kit.js` opens it). It is centred, at most 480px wide with 16px beside it on a phone, on the card colour with the region corner, strong hairline, lift and scrim. Its title is Public Sans 18/24 at 650, its copy the body voice. Button rows wrap and each target is at least 44px high. Focus starts on the keep button, stays in the dialog, Escape closes it, and closing returns focus to its opener. Without script, a details fold shows the same confirmation form inline. Cancel offers a reason field; Delete uses an ink-filled danger button, leaving coral to questions. Running card borders hold at least 3:1 in every theme; wait-lines hold at least 3.4:1 on a unit box.
+Cancel, Delete project and Questions' Close all use one native `<dialog>` (each is drawn by `ui::Confirm` in a `sluice-confirm`, which opens it; Delete project's is dimmed while something blocks it). It is centred, at most 480px wide with 16px beside it on a phone, on the card colour with the region corner, strong hairline, lift and scrim. Its title is Public Sans 18/24 at 650, its copy the body voice. Button rows wrap and each target is at least 44px high. Focus starts on the keep button, stays in the dialog, Escape closes it, and closing returns focus to its opener. Without script, a details fold shows the same confirmation form inline. Cancel offers a reason field; Delete uses an ink-filled danger button, leaving coral to questions. Running card borders hold at least 3:1 in every theme; wait-lines hold at least 3.4:1 on a unit box.

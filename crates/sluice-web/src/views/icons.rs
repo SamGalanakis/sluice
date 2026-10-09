@@ -70,6 +70,7 @@ icons! {
     ArrowDown => "arrow-down",
     CornerDownRight => "corner-down-right",
     MessageCircleQuestion => "message-circle-question",
+    Copy => "copy",
 }
 
 /// Each icon's shapes (what sits inside its `<svg>`), on one line, in `Icon` order.

@@ -351,7 +351,7 @@ nav.top::after { content: ""; position: absolute; top: 100%; left: 0; right: 0;
                  background: linear-gradient(var(--stripe-1) 0 var(--stripe),
                                              var(--stripe-2) 0 calc(2 * var(--stripe)),
                                              var(--stripe-3) 0); }
-nav.top > :not(.links) { min-height: 52px; }
+nav.top > :not(.links, sluice-menu), nav.top > sluice-menu > details { min-height: 52px; }
 /* the sections take the room left; never what wraps the band (a basis of 0) */
 nav.top .links { display: flex; flex: 1 1 0; align-items: stretch; min-width: 0; overflow-x: auto;
                 scrollbar-width: none; }
@@ -484,6 +484,8 @@ details.settings .menu { position: absolute; top: calc(100% + 6px); right: 12px;
   margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); cursor: pointer; }
 .prefs label.check input { width: 16px; height: 16px; margin: 0; flex: none; }
 .prefs .save { margin-top: 10px; }
+/* each setting applies as it changes once its component runs: no Save */
+form.prefs:has(sluice-toggle:defined) .save { display: none; }
 
 /* the first stop for a keyboard: past the nav to the plan */
 .skip { position: absolute; left: var(--gutter); top: 8px; z-index: 40; padding: 8px 12px;
@@ -569,6 +571,9 @@ details.about[open] > summary::after { content: "Show less"; }
                 mask-image: linear-gradient(to bottom, black 60%, transparent); }
 .long:has(> .fold-toggle[open]) > .clip { max-height: none; mask-image: none; }
 .long > .fold-toggle[open] > summary { margin-bottom: 0; }
+/* a text whose whole fits its first lines is neither faded nor offered Show all */
+.long[fits] > .clip { mask-image: none; }
+.long[fits] > .fold-toggle { display: none; }
 
 /* ---- the board: lanes of rows by dependency depth, inside the column -----------------
    Each lane (steps joined by handoffs) is a column of rows of compact bubbles; lanes stand
@@ -576,8 +581,32 @@ details.about[open] > summary::after { content: "Show less"; }
    <sluice-board> draws the edges into the SVG under the cards. Details live in the drawer. */
 #graph { margin-top: 20px; }
 #graph:focus { outline: none; }  /* the skip link's target, not a control */
-sluice-board, sluice-thread { display: block; }
-sluice-drawer { display: contents; }
+sluice-board { display: block; }
+/* The components' hosts (views::ui::rocket; DESIGN.md, Components): a host that is its part
+   (tabs, a long text's fold, a copyable id, the splitter, a banner) takes that part's box; a
+   host around a part (a menu, a confirmation, a conversation, a setting) gives it none, so the
+   part lays out as if the host were not there. A control that needs script waits for its
+   component (`.needs-js`), so a page without script never shows a button that does nothing. */
+sluice-tabs, sluice-fold, sluice-banner { display: block; }
+sluice-banner[hidden] { display: none; }
+sluice-fold:has(> details) { display: contents; }
+sluice-fold[hidden] { display: none; }
+sluice-drawer, sluice-menu, sluice-confirm, sluice-conversation, sluice-composer, sluice-answer,
+sluice-toggle, sluice-search { display: contents; }
+:not(:defined) .needs-js, :not(:defined).needs-js { display: none !important; }
+@media (scripting: none) { .needs-js { display: none !important; } }
+sluice-copy { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%;
+              vertical-align: baseline; }
+sluice-copy > code { min-width: 0; overflow-wrap: anywhere; }
+sluice-copy > .copy { display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px;
+  padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--muted-foreground);
+  cursor: pointer; opacity: .55; transition: opacity 120ms, color 120ms; }
+sluice-copy:hover > .copy, sluice-copy > .copy:focus-visible { opacity: 1; }
+sluice-copy > .copy:hover { color: var(--foreground); background: var(--muted); }
+sluice-copy > .copy .cp-done, sluice-copy > .copy[data-copied] .cp-copy { display: none; }
+sluice-copy > .copy[data-copied] .cp-done { display: block; color: var(--status-success); }
+sluice-copy > .copy[data-copied] { opacity: 1; }
+@media (hover: none) { sluice-copy > .copy { opacity: 1; } }
 .board { position: relative; padding: 8px 0 12px; --node-h: 36px; --row-gap: 40px; }
 .plane { position: relative; }
 /* the independent pieces of work (steps joined by any edge), each its own quiet box when
@@ -925,9 +954,9 @@ ul.v.list > li:not(:last-child)::after { content: ", "; color: var(--muted-foreg
 .types-toggle .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 8px;
                            height: 8px; border-radius: 50%; background: var(--muted-foreground);
                            transition: transform 150ms; }
-.types-toggle[aria-pressed="true"] { color: var(--foreground); }
-.types-toggle[aria-pressed="true"] .sw { background: var(--accent); box-shadow: none; }
-.types-toggle[aria-pressed="true"] .sw::after { transform: translateX(10px);
+.show-types .types-toggle, .types-toggle[aria-pressed="true"] { color: var(--foreground); }
+.show-types .types-toggle .sw, .types-toggle[aria-pressed="true"] .sw { background: var(--accent); box-shadow: none; }
+.show-types .types-toggle .sw::after, .types-toggle[aria-pressed="true"] .sw::after { transform: translateX(10px);
                                                 background: var(--primary-foreground); }
 @media (scripting: none) { .types-toggle { display: none; } }
 /* attempts, oldest first: number and outcome glyph in a column, a hairline rail joining the
@@ -980,7 +1009,7 @@ code.v { border: 0; background: none; padding: 0; }
 /* ---- the kit (views::ui; DESIGN.md, Components; every part in every state on /_ui) ----------
    Tabs, panels, a fold, an empty state, cards, tags and the conversation, each one look on
    every page. Ideas and CSS adapted from knadh/oat and hunvreus/basecoat (MIT), on this
-   file's tokens; their behaviour is kit.js. */
+   file's tokens; their behaviour is their Rocket components (components.js). */
 
 /* tabs: a bar of words under a hairline, the chosen one in ink at 650 over a 2px ink bar (the
    nav's current section's mark, in the page's ink); a count after a word in muted figures. The
@@ -993,7 +1022,7 @@ code.v { border: 0; background: none; padding: 0; }
 .tablist { display: flex; gap: 2px; overflow-x: auto; overscroll-behavior-x: contain;
            scrollbar-width: none; scroll-padding-inline: 8px; }
 .tablist::-webkit-scrollbar { display: none; }
-/* more tabs past its end: the bar fades out there (kit.js marks it) */
+/* more tabs past its end: the bar fades out there (sluice-tabs marks it) */
 .tablist[data-more] { mask-image: linear-gradient(to right, black calc(100% - 36px), transparent); }
 .tablist > [role=tab] { position: relative; flex: none; display: inline-flex; align-items: center;
   gap: 6px; height: 42px; padding: 0 12px; border: 0; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
@@ -1016,16 +1045,17 @@ code.v { border: 0; background: none; padding: 0; }
 #step-detail .tp > .tp-h, .tp > .tp-h { margin: 0 0 12px; font: 650 18px/24px var(--font-sans);
                                         font-stretch: 100%; color: var(--foreground); }
 @media (scripting: enabled) {
-  [data-tabs] > .tp:not([data-chosen]) { display: none; }
-  [data-tabs] > .tp > .tp-h { position: absolute; width: 1px; height: 1px; overflow: hidden;
+  sluice-tabs > .tp:not([data-chosen]) { display: none; }
+  sluice-tabs > .tp > .tp-h { position: absolute; width: 1px; height: 1px; overflow: hidden;
                               clip-path: inset(50%); white-space: nowrap; margin: 0; }
 }
 @media (scripting: none) {
   .tabbar { display: none; }
-  [data-tabs] > .tp + .tp { margin-top: 36px; padding-top: 22px; border-top: 1px solid var(--border); }
+  sluice-tabs > .tp + .tp { margin-top: 36px; padding-top: 22px; border-top: 1px solid var(--border); }
 }
 /* what opens a panel: its first section sits at the bar */
-.tp > .tp-h + :is(.d-sec, dl.facts, .d-sec-h, .convo, .empty-state) { margin-top: 0; }
+.tp > .tp-h + :is(.d-sec, dl.facts, .d-sec-h, sluice-conversation, .empty-state) { margin-top: 0; }
+.tp > .tp-h + sluice-conversation > .convo { margin-top: 0; }
 .tp-top { justify-content: space-between; align-items: center; min-height: 24px; }
 .tp-top .meta { margin: 0; }
 
@@ -1089,8 +1119,8 @@ code.v { border: 0; background: none; padding: 0; }
 .m-body pre { padding: 8px 10px; background: var(--muted); border: 1px solid var(--border);
               border-radius: var(--radius-md); }
 .mg-in .m-body pre { background: var(--card); }
-.m-long > .clip { max-height: 240px; max-width: 72ch; }
-.m-long > .fold-toggle { margin-top: 4px; }
+:is(.m, .m-reply) > .long > .clip { max-height: 240px; max-width: 72ch; }
+:is(.m, .m-reply) > .long > .fold-toggle { margin-top: 4px; }
 .m-text { margin-top: 6px; line-height: 21px; overflow-wrap: anywhere; max-width: 72ch; }
 .m-text code { font-size: 12.5px; }
 .m-whole { display: inline-block; margin-top: 6px; font-size: 13px; }
@@ -1261,7 +1291,7 @@ table.log .kind { font: 12px var(--font-mono); white-space: nowrap;
 .fn-index a:hover { color: var(--foreground); text-decoration: underline; }
 .fn-index .n { font: 500 13px var(--font-sans); color: var(--muted-foreground); }
 .fn-index .fn-none { color: color-mix(in srgb, var(--muted-foreground) 75%, transparent); }
-.fn-none { margin-top: 12px; }
+p.fn-none { margin-top: 12px; }
 .fn-group { scroll-margin-top: 16px; }
 .fn-group[hidden], .fn[hidden] { display: none; }
 .fn { padding: 12px 0; border-top: 1px solid var(--border); }
@@ -1867,16 +1897,16 @@ details.read-today .item { opacity: .85; }
 .doc-more { margin-top: var(--space-sm); }
 /* open, the document's toggle is at its end ("Read less"), not between its sections; without
    script the summary stays the toggle */
-.doc-less { display: none; }
+.fold-less { display: none; }
 @media (scripting: enabled) {
   .doc-more[open] > summary { display: none; }
-  .doc-more[open] .doc-less { display: inline-flex; align-items: center; min-height: 24px;
+  .doc-more[open] .fold-less { display: inline-flex; align-items: center; min-height: 24px;
     margin-top: 4px; padding: 0; border: 0; background: none; cursor: pointer;
     font: 500 13px/18px var(--font-sans); color: var(--muted-foreground); }
-  .doc-more[open] .doc-less:hover { color: var(--foreground); text-decoration: underline;
+  .doc-more[open] .fold-less:hover { color: var(--foreground); text-decoration: underline;
     text-underline-offset: 3px; }
 }
-.plan-pane > .board-tools { margin: var(--space-xl) 0 var(--space-md); }
+.plan-pane .board-tools { margin: var(--space-xl) 0 var(--space-md); }
 .board-tools label { display: inline-flex; align-items: center; gap: 6px;
                      color: var(--muted-foreground); font-weight: 500; }
 .board-tools .q-field { position: relative; display: flex; align-items: center;
@@ -2468,10 +2498,42 @@ a.node.mx-dot:hover { background: var(--secondary); }
                  align-items: baseline; }
 .gal-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
 .gal-cap { margin: 14px 0 6px; }
+.gal-row + .meta { margin: 10px 0 0; }
 .gal-cap:first-child { margin-top: 0; }
 .gal-card { margin-top: 14px; }
 .gal-fold { margin-top: 14px; }
 .gal-th .empty-state + .empty-state { margin-top: 10px; }
+.gal-th .stream-state + .stream-state { margin-top: 8px; }
+.gal-th .board-tools { display: flex; margin: 0; }
+.gal-th .board-tools .tool-more { margin-left: 0; }
+.gal-menus { gap: 12px; }
+.gal-menus .meta { margin: 0; }
+.gal-copies { margin: 0; }
+.gal-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }
+.gal-th .fn-find { max-width: 100%; }
+.gal-th .fn-find input { width: 100%; height: 32px; padding: 0 10px 0 31px; font-size: 14px; }
+/* the splitter between two stand-ins for the plan and the board */
+.gal-split { --board-w: 40%; display: grid; grid-template-columns: minmax(0, 1fr) 32px var(--board-w); min-height: 72px; }
+.gal-split .splitter { display: flex; }
+.gal-plan, .gal-board { display: grid; place-items: center; border: 1px dashed var(--border-strong);
+                        border-radius: var(--radius-md); color: var(--muted-foreground); font-size: 13px; }
+.gal-one { min-width: 0; }
+.gal-table { overflow-x: auto; }
+.gal-components th:first-child { width: 13rem; }
+.gal-components td:nth-child(3) { width: 14rem; }
+.gal-components td:nth-child(4) { width: 12rem; }
+.gal-components { width: 100%; border-collapse: collapse; font-size: 13.5px; line-height: 19px; }
+.gal-components th, .gal-components td { padding: 8px 10px 8px 0; border-top: 1px solid var(--border);
+                                          text-align: left; vertical-align: top; }
+.gal-components thead th { border-top: 0; font: 500 12px/16px var(--font-sans); color: var(--muted-foreground); }
+.gal-components tbody th { white-space: nowrap; font-weight: 500; }
+.gal-components tbody th .meta { display: block; font-size: 12px; }
+.gal-components code { font-size: 12px; }
+@container (max-width: 640px) {
+  .gal-components thead { display: none; }
+  .gal-components tr { display: grid; padding: 8px 0; border-top: 1px solid var(--border); }
+  .gal-components th, .gal-components td { border: 0; padding: 2px 0; white-space: normal; }
+}
 @media (max-width: 720px) {
   .gal-states li { grid-template-columns: minmax(0, 1fr); }
   .gal-index a { min-height: 44px; }

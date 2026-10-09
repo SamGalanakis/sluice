@@ -409,13 +409,20 @@ async fn dashboard_deletion_archives_first_and_requires_current_revision_and_no_
     let (_, html) = request(f.router(), "GET", &f.path(), String::new()).await;
     assert!(html.contains("Delete first?"));
     assert!(!html.contains("confirm-name"));
-    assert!(!html.contains("data-disabled=\"true\""));
+    assert!(
+        html.contains("<summary id=\"delete-button\">Delete project</summary>"),
+        "{html}"
+    );
     let id = f.id;
     f.writer.write(RetrySafety::NonIdempotent,move |tx| {tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status) VALUES (?1,'s',0,'{}','running')",[id.to_string()])?;tx.changed(Some(id),"status");Ok(())}).await.unwrap();
     assert_eq!(f.delete(1).await.0, 400);
     assert!(!f.project().await.archived);
     let (_, blocked) = f.get_page().await;
-    assert!(blocked.contains("id=\"delete-button\" data-disabled=\"true\""));
+    assert!(
+        blocked.contains("<sluice-confirm heading=\"Delete first?\" disabled>"),
+        "{blocked}"
+    );
+    assert!(blocked.contains("<summary id=\"delete-button\" aria-disabled=\"true\">"));
     assert!(blocked.contains("Open the plan"));
     let view = f.state.snapshot(id).await.unwrap();
     assert_eq!(view.blocker.as_deref(), Some("project has running steps"));

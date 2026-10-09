@@ -352,6 +352,28 @@ impl ProjectSettingsView {
     pub fn path(&self) -> String {
         format!("/projects/id/{}/settings", self.project.project_id)
     }
+    /// Delete project's confirmation: one button and a dialog, no typed name; dimmed while
+    /// something blocks it (the page's script follows the live state).
+    pub fn delete_confirm(&self) -> crate::views::ui::Confirm {
+        let name = &self.project.name;
+        crate::views::ui::Confirm {
+            opener: "Delete project".into(),
+            opener_id: "delete-button".into(),
+            title: format!("Delete {name}?"),
+            action: format!("{}/delete", self.path()),
+            form_id: "delete-form".into(),
+            hidden: vec![("expected_settings_rev", self.project.settings_rev.to_string())],
+            copy: "This permanently removes the plan, messages, history, functions, secrets and artifacts. This cannot be undone.".into(),
+            confirm: format!("Delete {name}"),
+            keep: "Keep it",
+            danger: true,
+            disabled: self.blocker.is_some(),
+            after: TrustedHtml::owned(
+                "<span id=\"delete-feedback\" class=\"settings-feedback setting-error\" role=\"status\"></span>".into(),
+            ),
+            ..Default::default()
+        }
+    }
     /// The record a form's field was last changed by, as drawn: what it has seen.
     pub fn seen(&self, field: &str) -> i64 {
         self.changes.get(field).map_or(0, |c| c.0)

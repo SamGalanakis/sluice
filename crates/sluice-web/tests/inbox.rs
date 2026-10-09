@@ -398,7 +398,9 @@ async fn p605_pages_escape_programs_and_validate_projects_thread_and_reply_paylo
     assert!(!html.contains("<script>bad"));
     assert!(!html.contains("<img src=x"));
     assert!(html.contains("data-ignore-morph"));
-    assert!(html.contains("/static/inbox.js"));
+    // its behaviour is the components' (the question's answer, the conversations), every page's
+    assert!(html.contains("<sluice-answer>"), "{html}");
+    assert!(html.contains("/static/components.js"));
     for path in [
         format!("/projects/id/{project}/thread"),
         format!("/projects/id/{}/inbox", ProjectId::new()),
@@ -587,7 +589,7 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
     );
     assert!(html.contains("Nobody is waiting <span class=\"n\">3</span>"));
     assert!(html.contains("<summary>Close all 3</summary>"));
-    assert!(html.contains("data-confirm-title=\"Close all 3 questions?\""));
+    assert!(html.contains("<sluice-confirm heading=\"Close all 3 questions?\">"));
     assert!(html.contains("data-keep>Keep them</button>"));
     // its body does not say its title again
     assert!(!html.contains("Close these 3 questions?"));
@@ -627,8 +629,8 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
     assert!(agents.contains(">Answer as owner</button>"), "{agents}");
     assert!(html.find("id=\"yours-h\"").unwrap() < html.find("id=\"between-h\"").unwrap());
     assert!(
-        html.contains("src=\"/static/inbox.js?v="),
-        "the inbox's script is versioned"
+        html.contains("src=\"/static/components.js?v="),
+        "the components' script is versioned"
     );
     for id in &gone {
         assert!(html.contains(&format!("name=\"m\" value=\"{project}/{id}\"")));
