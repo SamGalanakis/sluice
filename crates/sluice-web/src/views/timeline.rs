@@ -460,7 +460,7 @@ fn words(spans: &[RunSpan], all: &[&RunSpan]) -> String {
     if let Some(running) = spans.iter().find(|s| s.open()) {
         parts.push(format!(
             "running <time data-since=\"{a}\" datetime=\"{a}\">{}</time>",
-            esc(&super::ui::at_text(&running.started)),
+            esc(&super::ui::since_text(&running.started)),
             a = esc(&running.started)
         ));
     }

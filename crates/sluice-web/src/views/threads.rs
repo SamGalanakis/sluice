@@ -107,6 +107,11 @@ impl MessageItem {
         thread_url(self.project, &self.message.thread)
     }
     /// An open question someone waits on, put to the owner: the one place coral is spent.
+    /// A question to the owner, open or not: a conversation draws it whole wherever it is
+    /// shown, its answer under it, never as a run-together excerpt.
+    pub fn asks_owner(&self) -> bool {
+        self.message.is_question() && self.recipient() == "owner"
+    }
     pub fn awaits_owner(&self) -> bool {
         self.state == "open" && self.stopped.is_empty() && self.recipient() == "owner"
     }
@@ -121,19 +126,50 @@ impl MessageItem {
             _ => TrustedHtml::owned(String::new()),
         }
     }
-    /// An answered question's one line, where it stood: "Answered 2m ago: Land fig-5576
-    /// first? sent to fig-5576-work · Read the thread". The words `openui.js` says in place the
-    /// moment the answer is taken.
+    /// An answered question's one line, where it stood: "✓ Answered 2m ago: Land fig-5576
+    /// first? sent to fig-5576-work · Read the thread", or "Closed 2m ago: …" for one the owner
+    /// closed. One sentence, drawn here only: the inbox keeps it in the question's place for ten
+    /// minutes, and every answer box carries it (`answered_template`) for `openui.js` to put in
+    /// place, "just now", the moment the answer is taken. It takes focus there (tabindex -1),
+    /// found again after a patch by its `data-q`.
     pub fn answered_html(&self) -> TrustedHtml {
+        self.answered_line(self.state == "closed", Some(&self.answered_at))
+    }
+    fn answered_line(&self, closed: bool, at: Option<&str>) -> TrustedHtml {
         use super::ui::{ago, esc};
+        let when = at
+            .filter(|a| !a.is_empty())
+            .map_or_else(|| "just now".to_owned(), |a| ago(a).0);
         TrustedHtml::owned(format!(
-            "<p class=\"q-answered\">{}<span class=\"qa-what\">Answered {}: <span class=\"qa-title\">{}</span></span> <span class=\"meta qa-to\">sent to {} · <a href=\"{}#message-{}\">Read the thread</a></span></p>",
-            super::icons::icon(super::icons::Icon::Check, 16, "qa-icon"),
-            ago(&self.answered_at),
-            esc(&self.title()),
-            self.from_who.html(&self.project),
-            esc(&self.thread_url()),
-            self.id()
+            "<p class=\"q-answered\" tabindex=\"-1\" data-q=\"{p}-{id}\">{icon}<span class=\"qa-what\">{did} {when}: <span class=\"qa-title\">{title}</span></span> <span class=\"meta qa-to\">{to}<a href=\"{href}#message-{id}\">Read the thread</a></span></p>",
+            p = self.project,
+            id = self.id(),
+            icon = super::icons::icon(
+                if closed {
+                    super::icons::Icon::X
+                } else {
+                    super::icons::Icon::Check
+                },
+                16,
+                if closed { "qa-icon qa-x" } else { "qa-icon" }
+            ),
+            did = if closed { "Closed" } else { "Answered" },
+            title = esc(&self.title()),
+            to = if closed {
+                String::new()
+            } else {
+                format!("sent to {} · ", self.from_who.html(&self.project))
+            },
+            href = esc(&self.thread_url()),
+        ))
+    }
+    /// The answered and closed lines, unshown, in its answer box: `openui.js` puts the one that
+    /// happened in the question's place, so client and server say it in one sentence.
+    pub fn answered_template(&self) -> TrustedHtml {
+        TrustedHtml::owned(format!(
+            "<template data-done=\"answer\">{}</template><template data-done=\"close\">{}</template>",
+            self.answered_line(false, None),
+            self.answered_line(true, None)
         ))
     }
     /// Itself as a one-item list: a template binds `item` to it to draw its answer form.
@@ -180,8 +216,9 @@ pub struct ThreadView {
     pub recipient: String,
     pub messages: Vec<MessageItem>,
     pub through: i64,
-    /// Its step's title, while the plan has the step and it has one.
-    pub step_title: String,
+    /// A step's thread: the step as every page names it (`StepRef`), its title whole while
+    /// the plan has the step and it has one, else its id alone.
+    pub step_name: Option<StepRef>,
     /// Its step's stored status, while the plan has the step: its message box says when a
     /// step not running reads what is sent.
     pub step_status: Option<sluice_model::commands::StepStatus>,
@@ -201,15 +238,12 @@ impl ThreadView {
             .map(|m| crate::markdown::cut(&crate::markdown::plain(&m.message.body), 160))
             .unwrap_or_default()
     }
-    /// The thread by what it is about: a step's ("Step k2-owner"), the orchestrator's, or a
-    /// conversation's first message ("Can the lane land today?").
+    /// The thread by what it is about: a step's by the step's name ("work · Ship the cron
+    /// fix", `StepRef::label`), the orchestrator's, or a conversation's first message ("Can
+    /// the lane land today?").
     pub fn name(&self) -> String {
-        if let Some(step) = self.thread.strip_prefix("step-") {
-            return if self.step_title.is_empty() {
-                format!("Step {step}")
-            } else {
-                format!("Step: {}", self.step_title)
-            };
+        if let Some(step) = &self.step_name {
+            return step.label();
         }
         if self.thread == sluice_store::messages::ORCHESTRATOR_STREAM {
             return "Orchestrator".into();
@@ -241,6 +275,21 @@ impl ThreadView {
     /// Its step as the way back names it: the title (cut to 64), else "step <id>".
     /// The way back to its step, by its id ("step fig-5582-work"): the page's `h1` already
     /// says its title.
+    /// Its page's heading: a step's thread by its step's heading (its stage muted, its title
+    /// whole), as the step's own page has it; any other by its name.
+    pub fn heading_html(&self) -> TrustedHtml {
+        match &self.step_name {
+            Some(step) => step.heading_html(),
+            None => TrustedHtml::owned(super::ui::esc(&self.name())),
+        }
+    }
+    /// Its step's whole title, for a link's title (none when it has no title).
+    pub fn step_title(&self) -> &str {
+        self.step_name
+            .as_ref()
+            .filter(|s| s.titled())
+            .map_or("", |s| s.title.as_str())
+    }
     pub fn step_label(&self) -> String {
         self.step()
             .map(|step| format!("step {step}"))
@@ -310,15 +359,7 @@ impl InboxView {
         let what = match (&self.view, self.threads.first()) {
             (MessageView::Thread, Some(thread)) => format!(
                 "Thread · {}",
-                sluice_model::naming::cut(
-                    if thread.step_title.is_empty() {
-                        thread.name()
-                    } else {
-                        thread.step_title.clone()
-                    }
-                    .as_str(),
-                    48
-                )
+                sluice_model::naming::cut(&thread.name(), super::ui::NAME_CHARS + 8)
             ),
             // the inbox leads with what waits on the owner: "2 questions · Inbox"
             (MessageView::Inbox | MessageView::Questions, _) => {
@@ -844,9 +885,10 @@ pub struct Build<'a> {
 impl Conversation {
     pub fn build(b: Build<'_>, items: Vec<MessageItem>) -> Self {
         let ids: BTreeSet<i64> = items.iter().map(MessageItem::id).collect();
+        // a question drawn whole: every one, or in excerpts a question to the owner
         let questions: BTreeSet<i64> = items
             .iter()
-            .filter(|m| m.message.is_question())
+            .filter(|m| m.message.is_question() && (!b.excerpt || m.asks_owner()))
             .map(MessageItem::id)
             .collect();
         // a reply to a question here sits under it; any other message stands in its order
@@ -854,7 +896,7 @@ impl Conversation {
         let mut top = vec![];
         for item in items {
             match item.message.to_message.map(|m| m.0) {
-                Some(q) if questions.contains(&q) && ids.contains(&q) && !b.excerpt => {
+                Some(q) if questions.contains(&q) && ids.contains(&q) => {
                     replies.entry(q).or_default().push(item)
                 }
                 _ => top.push(item),
@@ -912,9 +954,9 @@ impl Conversation {
                 continue;
             }
             let href = (b.href)(&item);
-            // a question to the owner someone waits on is drawn whole, to be answered where
-            // it is read, an excerpt or not
-            let excerpt = b.excerpt && !item.awaits_owner();
+            // a question to the owner is drawn whole, an excerpt or not: open, to be answered
+            // where it is read; answered, with the answer under it
+            let excerpt = b.excerpt && !item.asks_owner();
             let entry = Entry {
                 item,
                 from: from.clone(),
@@ -1039,17 +1081,18 @@ fn group(
                 messages: vec![],
                 through: 0,
                 unread: 0,
-                step_title: match step.filter(|_| in_plan) {
-                    Some(step) => {
+                step_name: match step {
+                    Some(step) if in_plan => {
                         let names =
                             sluice_runtime::naming::for_project(sql, &super::home_of(sql), p.id)?;
-                        names
-                            .naming
-                            .step(step)
-                            .map(|n| n.whole.clone())
-                            .unwrap_or_default()
+                        let mut name = StepRef::new(step, names.naming.step(step));
+                        if let Some(n) = names.naming.step(step) {
+                            name.title = n.whole.clone();
+                        }
+                        Some(name)
                     }
-                    None => String::new(),
+                    Some(step) => Some(StepRef::new(step, None)),
+                    None => None,
                 },
                 step_status: status.and_then(|s| s.parse().ok()),
                 conversation: Conversation::default(),
@@ -1101,13 +1144,9 @@ fn converse(
             thread.messages.clone(),
         );
         thread.conversation = if page {
-            let label = match thread.step() {
-                Some(_) if !thread.step_title.is_empty() => {
-                    format!(
-                        "Message to {}",
-                        sluice_model::naming::cut(&thread.step_title, 48)
-                    )
-                }
+            // the same words as the step's own page: "Message to work · Ship the cron fix"
+            let label = match &thread.step_name {
+                Some(step) if step.id == thread.recipient => format!("Message to {}", step.label()),
                 _ => format!("Message to {}", thread.recipient),
             };
             let wider = match thread.step() {
@@ -1205,10 +1244,10 @@ pub async fn load(
                     let item = item(sql, p.id, &p.name, &steps, message)?;
                     group(sql, &mut read, p, item)?;
                 }
-                // the questions to the owner the owner answered in the last ten minutes: kept
-                // in their place, each one line that says so
+                // the questions to the owner the owner answered or closed in the last ten
+                // minutes: kept in their place, each one line that says so
                 if matches!(view, MessageView::Inbox | MessageView::Questions) {
-                    let mut q = sql.prepare_cached("SELECT q.id,a.at FROM messages q JOIN messages a ON a.project_id=q.project_id AND a.id=q.resolved_by WHERE q.project_id=?1 AND q.\"to\"='owner' AND q.needs_reply=1 AND q.closed_at IS NULL AND a.\"from\"='owner' AND julianday(a.at)>=julianday('now')-10.0/1440.0 ORDER BY q.id")?;
+                    let mut q = sql.prepare_cached("SELECT q.id,a.at FROM messages q JOIN messages a ON a.project_id=q.project_id AND a.id=q.resolved_by WHERE q.project_id=?1 AND q.\"to\"='owner' AND q.needs_reply=1 AND a.\"from\"='owner' AND julianday(a.at)>=julianday('now')-10.0/1440.0 ORDER BY q.id")?;
                     let answered = q
                         .query_map([p.id.to_string()], |r| {
                             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))

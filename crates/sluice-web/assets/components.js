@@ -428,7 +428,7 @@ define("sluice-composer", {
       const data = new FormData(form);
       button.disabled = true;
       try {
-        const response = await fetch(form.action, { method: "POST", headers: { "content-type": "application/json" },
+        const response = await fetch(form.getAttribute("action"), { method: "POST", headers: { "content-type": "application/json" },
                                                      body: JSON.stringify({ body: data.get("body"), to: data.get("to"), ask: data.get("ask") === "true" }) });
         const result = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(result.message ?? "Sluice did not take the message.");
@@ -447,8 +447,9 @@ define("sluice-composer", {
 // ---- sluice-answer -----------------------------------------------------------------------------
 // A question's answer: Answer opens its box under the buttons, which keep their places (the
 // box holds the question's own form, which openui.js draws from its OpenUI program, loaded once
-// a page has one), and Close question closes it at once, without leaving the page. Without
-// script the box stands open with its words-only form.
+// a page has one), and Close question closes it at once, without leaving the page, its line
+// then saying so and taking the focus as an answer's does. Without script the box stands open
+// with its words-only form.
 let openui = null;
 define("sluice-answer", {
   props: () => ({}),
@@ -477,11 +478,20 @@ define("sluice-answer", {
       const button = form.querySelector("button");
       button.disabled = true;
       try {
-        const response = await fetch(form.action, { method: "POST", headers: { "content-type": "application/json" },
+        // the attribute: its hidden input named "action" shadows `form.action`
+        const response = await fetch(form.getAttribute("action"), { method: "POST", headers: { "content-type": "application/json" },
                                                     body: JSON.stringify({ body: "", answer: { action: "close" } }) });
         if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message ?? "Sluice did not close it.");
+        // a question with an answer box becomes the server's "Closed just now: …" line, which
+        // takes the focus (openui.js); a stopped one's row says Closed, focused, in its place
+        const area = host.querySelector(".answer[data-url]");
+        const ui = area && openui ? await openui : null;
+        if (ui?.answered) return ui.answered(area, true);
         form.closest("li, article.item")?.classList.add("closing");
-        form.replaceChildren(Object.assign(document.createElement("span"), { className: "meta", textContent: "Closed." }));
+        const said = Object.assign(document.createElement("span"), { className: "meta", tabIndex: -1, textContent: "Closed." });
+        said.setAttribute("role", "status");
+        form.replaceChildren(said);
+        said.focus();
       } catch (error) {
         button.disabled = false;
         form.querySelector(".ou-status")?.remove();
@@ -687,8 +697,9 @@ define("sluice-toggle", {
 // holds (`[data-find]`, their words) that do not hold every word typed, a group
 // (`[data-find-group]`) with none left, and says how many match in its `[data-find-status]`.
 // `mode` "submit": a plain form of filters. In "filter" and "submit" a `form[data-applies]`
-// sends itself when a select, checkbox or radio in it changes, so its Apply (`.apply`, kept as
-// the form's default button for Enter in a text field) hides while the component runs.
+// sends itself when any field in it changes (a select, a checkbox, or a text field left with
+// new words), so its Apply (`.apply`, kept as the form's default button for Enter in a text
+// field) hides while the component runs.
 define("sluice-search", {
   props: ({ string, oneOf }) => ({ mode: oneOf("stream", "filter", "submit"), base: string }),
   manifest: {
@@ -701,7 +712,9 @@ define("sluice-search", {
     if (props.mode !== "stream") {
       on(host, "change", (event) => {
         const form = event.target.closest?.("form[data-applies]");
-        if (form && event.target.matches("select, input[type=checkbox], input[type=radio]")) form.requestSubmit();
+        // a text field's change fires when it is left with new words (or on Enter): it applies
+        // then too, so a filter typed and tabbed away from never silently waits
+        if (form && event.target.matches("select, input")) form.requestSubmit();
       });
     }
     if (props.mode === "submit") return;

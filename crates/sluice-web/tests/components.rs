@@ -634,7 +634,7 @@ async fn chromium_without_script_every_page_still_reads() {
             ("/inbox".to_owned(), "Twelve crates built."),
             ("/fns".to_owned(), "Functions"),
             (format!("{p}/settings"), "Delete project"),
-            ("/_ui".to_owned(), "Kit"),
+            ("/_ui".to_owned(), "States and parts"),
         ] {
             browser.navigate(&format!("{base}{path}")).unwrap();
             browser

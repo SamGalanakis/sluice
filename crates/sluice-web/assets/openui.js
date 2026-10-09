@@ -191,37 +191,28 @@ async function send(area, answer) {
 }
 
 /** The server took the answer: say so where it was given, now, whether or not the page's
- * stream is connected (it may be reconnecting after a restart): the question's buttons and box
- * give way to one line, "Answered: sent to fig-5576-work · Read the thread", which the inbox
- * keeps in the question's place once its stream patches it (`MessageItem::answered_html`). The
+ * stream is connected (it may be reconnecting after a restart). The question's buttons and box
+ * give way to the line the server drew for it in the box's <template> ("Answered just now: Land
+ * fig-5576 first? sent to fig-5576-work · Read the thread", or "Closed just now: …"), the one
+ * sentence the inbox keeps in the question's place (`MessageItem::answered_html`). The line is a
+ * polite status and takes the keyboard's focus, so a reader hears it and the next Tab goes on
+ * from the question; a patch that replaces it (the step's exchange drawing the answer under the
+ * question, the inbox its own line) hands focus to what stands there now (`keepFocus`). The
  * nav's count drops; the stream's next patch says the same. */
-function check() {
-  const NS = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(NS, "svg");
-  for (const [k, v] of Object.entries({ class: "icon qa-icon", width: 16, height: 16, viewBox: "0 0 24 24", fill: "none",
-    stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) {
-    svg.setAttribute(k, v);
-  }
-  const use = document.createElementNS(NS, "use");
-  use.setAttribute("href", "#i-check");
-  svg.append(use);
-  return svg;
-}
-
-function answered(area, closed) {
+export function answered(area, closed) {
   const host = area.closest("sluice-answer") ?? area;
-  const note = h("p", { class: "q-answered", role: "status" });
+  const drawn = area.querySelector(`template[data-done="${closed ? "close" : "answer"}"]`)?.content.firstElementChild;
+  const line = drawn ? drawn.cloneNode(true) : h("p", { class: "q-answered", tabindex: "-1" }, closed ? "Closed." : "Answered.");
+  // an empty live region first, filled once in the page, so a reader hears it
+  const note = h("p", { class: line.className, tabindex: "-1", role: "status", "aria-live": "polite" });
+  if (line.dataset.q) note.dataset.q = line.dataset.q;
   host.replaceChildren(note);
   for (const held of [host.closest("li.m"), host.closest("article.item")]) held?.classList.add("q-done");
-  // filled once in the page, so a reader hears it
   requestAnimationFrame(() => {
-    if (closed) {
-      note.append(h("span", { class: "qa-what" }, "Closed."));
-    } else {
-      note.append(check(), h("span", { class: "qa-what" }, "Answered:"), " ",
-                  h("span", { class: "meta qa-to" }, "sent to ", h("b", {}, area.dataset.to ?? "its asker"), " · ",
-                    h("a", { href: area.dataset.thread ?? "#" }, "Read the thread")));
-    }
+    note.append(...line.childNodes);
+    note.focus();
+    // the drawing it was answered in (`Conversation::slot`: "ov-" on a step's Overview)
+    held = { q: note.dataset.q ?? "", slot: area.id.replace(/answer-.*$/, ""), until: Date.now() + 60000 };
   });
   if (area.dataset.ownerQuestion !== "true") return;
   const badge = document.querySelector("#nav-inbox .badge");
@@ -229,6 +220,28 @@ function answered(area, closed) {
   if (left > 0) badge.firstChild.textContent = String(left);
   else if (badge) badge.remove();
 }
+
+/** The question just answered, while its confirmation should keep the focus: a patch that
+ * replaces the line (or the whole exchange) leaves focus on the page's body, and this puts it
+ * back on what now stands for the answer: the server's line for it, else the owner's reply
+ * under the question, else the question. Moving focus anywhere else lets it go. */
+let held = null;
+function keepFocus() {
+  if (!held) return;
+  if (Date.now() > held.until) { held = null; return; }
+  const active = document.activeElement;
+  if (active && active !== document.body && active.isConnected) return;
+  const [, id] = held.q.match(/-(\d+)$/) ?? [];
+  const line = document.querySelector(`.q-answered[data-q="${held.q}"]`);
+  const question = id ? document.getElementById(`${held.slot}message-${id}`) : null;
+  const target = line ?? question?.querySelector(".m-reply:last-child") ?? question;
+  if (!target) return;
+  if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+  target.focus({ preventScroll: true });
+}
+document.addEventListener("focusin", ev => {
+  if (held && !ev.target.matches?.(".q-answered, li.m, .m-reply")) held = null;
+});
 
 function submit(ctx, p, form) {
   const fields = ctx.fields.filter(f => f.form === form);
@@ -290,11 +303,14 @@ function render(area) {
 
 export const drawAll = root => root.querySelectorAll?.(".answer[data-url]").forEach(render);
 drawAll(document);
-new MutationObserver(changes => changes.forEach(c => c.addedNodes.forEach(n => {
-  if (n.nodeType !== 1) return;
-  if (n.matches(".answer[data-url]")) render(n);
-  drawAll(n);
-}))).observe(document.body, { childList: true, subtree: true });
+new MutationObserver(changes => {
+  changes.forEach(c => c.addedNodes.forEach(n => {
+    if (n.nodeType !== 1) return;
+    if (n.matches(".answer[data-url]")) render(n);
+    drawAll(n);
+  }));
+  keepFocus();
+}).observe(document.body, { childList: true, subtree: true });
 
 // For the vocabulary test: every component has a renderer and nothing else does.
 window.sluiceOpenUI = { components: Object.keys(RENDERERS), vocabulary: VOCAB.components.map(c => c.name) };

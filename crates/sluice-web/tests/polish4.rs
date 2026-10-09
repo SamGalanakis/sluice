@@ -156,23 +156,28 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     let (_, page) = f.get("/").await;
     assert!(page.contains("<title>3 questions · "), "{page}");
 
-    // the index: the asking step's row carries the coral tag to its Overview; the
-    // orchestrator's question is a row of its own, leading to the project's inbox
-    let row = between(&page, "#step:l1-work\"", "</li>");
-    assert!(
-        row.contains(&format!(
-            "<a class=\"tag ask\" href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\" title=\"Land l1 first?\" aria-label=\"Awaiting your reply: Land l1 first?\">Awaiting your reply</a>"
-        )),
-        "{row}"
-    );
+    // the index: each question leads its project's card, a row of its own with the coral tag:
+    // a step's names the step and leads to its Overview, the orchestrator's to the inbox; the
+    // asking step's running row no longer repeats the tag
     let others = between(&page, "<ul class=\"ask-rows\"", "</ul>");
+    assert!(
+        others.contains(&format!(
+            "<a class=\"tag ask\" href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\" title=\"Land l1 first?\" aria-label=\"Awaiting your reply: Land l1 first?\">Awaiting your reply</a>"
+        )) && others.contains("<span class=\"ar-from meta\">from <span class=\"sref\">"),
+        "{others}"
+    );
     assert!(
         others.contains(&format!(
             "<a class=\"ar-title\" href=\"/projects/id/{id}/inbox#item-{id}-{orchestrator}\">Accept revision 3?</a>"
         )),
         "{others}"
     );
-    assert!(!others.contains("Land l1 first?"), "{others}");
+    assert!(
+        page.find("<ul class=\"ask-rows\"").unwrap() < page.find("<ul class=\"now\"").unwrap(),
+        "the questions lead the card"
+    );
+    let row = between(&page, "#step:l1-work\"", "</li>");
+    assert!(!row.contains("tag ask"), "{row}");
 
     // the plan: its summary counts them in coral, the matrix row and the box's card say so
     let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
@@ -222,9 +227,17 @@ async fn a_steps_overview_draws_its_open_question_whole_to_answer_and_its_header
         "{actions}"
     );
     assert!(!actions.contains("awaiting reply"), "{actions}");
-    // Overview: whole, its list kept, with Answer and Close in the shared component
+    // Overview: first, above Now, whole, its list kept, with Answer and Close in the shared
+    // component
+    let asked = between(&page, "<section class=\"d-sec d-ask\">", "</section>");
+    assert!(asked.contains("<h3>Its question for you</h3>"), "{asked}");
+    assert!(
+        page.find("d-sec d-ask").unwrap() < page.find("d-sec d-now").unwrap(),
+        "the question comes before Now"
+    );
     let now = between(&page, "<section class=\"d-sec d-now\">", "</section>");
-    let item = between(now, &format!("id=\"ov-message-{q}\""), "</sluice-answer>");
+    assert!(!now.contains(&format!("ov-message-{q}")), "{now}");
+    let item = between(asked, &format!("id=\"ov-message-{q}\""), "</sluice-answer>");
     assert!(
         item.contains("<li><strong>Land now:</strong> l2 rebases.</li>"),
         "{item}"
@@ -237,7 +250,13 @@ async fn a_steps_overview_draws_its_open_question_whole_to_answer_and_its_header
     );
     assert!(item.contains(">Answer</button>"), "{item}");
     assert!(item.contains(">Close question</button>"), "{item}");
-    assert!(item.contains("data-to=\"l1-work\""), "{item}");
+    // the line it becomes once answered, the server's one sentence, waits in a template
+    assert!(
+        item.contains(&format!(
+            "<template data-done=\"answer\"><p class=\"q-answered\" tabindex=\"-1\" data-q=\"{id}-{q}\">"
+        )) && item.contains("Answered just now: <span class=\"qa-title\">Land l1 first?</span>"),
+        "{item}"
+    );
     // the same question on Messages keeps its own ids: none is drawn twice
     for prefix in ["qbox-", "answer-", "reply-"] {
         assert_eq!(

@@ -342,7 +342,7 @@ async fn a_failed_step_opens_on_its_last_failed_call_and_why_it_failed_links_the
         let why = &why[..why.find("</section>").unwrap()];
         assert!(
             why.contains(&format!(
-                "<p class=\"act-why\"><a href=\"#{anchor}\">Its last failed call: <span class=\"act-tool\">"
+                "<p class=\"act-why\"><a href=\"#{anchor}\">Its last failed call</a>: <span class=\"act-tool\">"
             )),
             "{engine}: {why}"
         );

@@ -135,14 +135,37 @@ pub fn at_text(at: &str) -> String {
         _ => at.to_owned(),
     }
 }
-/// A past time: "12m ago", "3d 12h ago" once the page's script reads it; the UTC day and minute
-/// before (and in its title, always).
-pub fn ago(at: &str) -> TrustedHtml {
-    time(at, "data-ago")
+/// Seconds from a stored time to now, when it parses.
+fn seconds_since(at: &str) -> Option<f64> {
+    let then = super::timestamp(at)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(now.saturating_sub(then) as f64)
 }
-/// How long since a time, ticking: "45s", "12m", "2h 14m", "3d 12h".
+/// How long since a time as the server reads it at render: "1h 25m" ("45s", "3d 12h"); the time
+/// itself when it does not parse. `nav.js` ticks it in the same words.
+pub fn since_text(at: &str) -> String {
+    seconds_since(at).map_or_else(|| at_text(at), duration_text)
+}
+/// A past time as the server reads it at render: "just now", "12m ago", "3d 12h ago".
+pub fn ago_text(at: &str) -> String {
+    match seconds_since(at) {
+        Some(s) if s < 60.0 => "just now".into(),
+        Some(s) => format!("{} ago", duration_text(s)),
+        None => at_text(at),
+    }
+}
+/// A past time: "12m ago", "3d 12h ago", drawn by the server and ticked by the page's script;
+/// the UTC day and minute in its title. Its text is the clock's: a stream's version leaves it
+/// out, so the clock alone never patches.
+pub fn ago(at: &str) -> TrustedHtml {
+    time(at, "data-ago", ago_text(at))
+}
+/// How long since a time, ticking: "45s", "12m", "2h 14m", "3d 12h", right before any script.
 pub fn since(at: &str) -> TrustedHtml {
-    time(at, "data-since")
+    time(at, "data-since", since_text(at))
 }
 /// A time as itself, the UTC day and minute, never read relative.
 pub fn at(at: &str) -> TrustedHtml {
@@ -152,11 +175,12 @@ pub fn at(at: &str) -> TrustedHtml {
         a = esc(at)
     ))
 }
-fn time(at: &str, mode: &str) -> TrustedHtml {
-    let shown = esc(&at_text(at));
+fn time(at: &str, mode: &str, text: String) -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<time {mode}=\"{a}\" datetime=\"{a}\" title=\"{shown}\">{shown}</time>",
-        a = esc(at)
+        "<time {mode}=\"{a}\" datetime=\"{a}\" title=\"{t}\">{text}</time>",
+        a = esc(at),
+        t = esc(&at_text(at)),
+        text = esc(&text),
     ))
 }
 /// A duration in the board's two largest units: "<1s", "45s", "12m", "2h 14m", "1d 3h"
@@ -374,6 +398,8 @@ fn tone_class(tone: &str) -> String {
 
 // ---- a step ----------------------------------------------------------------------------------
 
+/// How many characters of a step's title its name in words keeps (`StepRef::label`).
+pub const NAME_CHARS: usize = 48;
 /// How a page names a step: its title (its stage before it, muted: "land ·") and its id after
 /// it in data mono, muted; just its id when it has no title.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -406,6 +432,28 @@ impl StepRef {
         } else {
             format!("{} · {title}", self.stage)
         }
+    }
+    /// How every page says it in words, the one name for a step wherever it is plain text: a
+    /// composer's "Message to …", a tab's title, a thread's heading, a confirmation. Its stage
+    /// and its title cut to `NAME_CHARS` ("work · The lashlang substrate is…"); its id alone
+    /// when it has no title.
+    pub fn label(&self) -> String {
+        self.text(NAME_CHARS)
+    }
+    /// A page's heading for it: its stage muted, then its title whole; its id when it has none.
+    pub fn heading_html(&self) -> TrustedHtml {
+        if !self.titled() {
+            return TrustedHtml::owned(esc(&self.id));
+        }
+        TrustedHtml::owned(format!(
+            "{}{}",
+            if self.stage.is_empty() {
+                String::new()
+            } else {
+                format!("<span class=\"d-stage\">{} ·</span> ", esc(&self.stage))
+            },
+            esc(&self.title)
+        ))
     }
     /// A link's accessible name: its title cut to `chars` (its stage before it), then its id,
     /// so the name starts with the words the link shows; its id alone without a title.

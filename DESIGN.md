@@ -319,8 +319,9 @@ the first state among them.
 ### Named Rules
 **The One Coral Rule.** Coral (`badge`) marks an open question waiting on the owner and nothing
 else, besides the logo itself: the nav's count, and the "Awaiting your reply" tag (the question
-itself, the asking step's index row, card, matrix row and header, a History card) and the
-project's "1 question for you"; its words are deep navy (`badge-ink`). The tab title says the
+itself, its row leading its project's index card, the asking step's card, matrix row and
+header, a History card), the project's "1 question for you", and its count beside the project
+in the switcher; its words are deep navy (`badge-ink`). The tab title says the
 same in words, first ("2 questions · 4 failed · Projects"). A failed step
 reads through its cross glyph and border, not coral and not red. In another theme `badge` is
 that theme's one alert hue, under the same rule.
@@ -432,7 +433,9 @@ retry, its run's number with how the runs before it ended.
   status ramp's order, then those with no steps): a `<details>` whose summary is the chosen project's name ("All
   projects" when none) and a chevron, its label clipping at what the band leaves after the
   rest (120 to 260px), so a long name gives way before a section does; its menu lists All projects, then every live project with
-  its status glyph and icon, then the archived ones under "Archived". It is a `sluice-menu`: a
+  its status glyph and icon (and, at its end, a project's count of open questions to the owner in
+  the badge's coral, "1 question for you" to a screen reader), then the archived ones under
+  "Archived". It is a `sluice-menu`: a
   click elsewhere or Escape closes it, and the arrows move through it.
 - **Sections**: in a project Plan, Messages, Log, Functions; without one Log and Functions (the
   index is the switcher's "All projects"). Messages is the project's inbox, questions and
@@ -471,16 +474,16 @@ cancelled in muted ink), the step named as every page names it (title, then its 
 mono; a link that opens it in the drawer) and its failure's headline cut with an ellipsis in
 meta, a link to the failure's own record on the log (else to the log filtered to the step), a cancel's row a
 quiet "Dismiss" under it (a text button), the failures first and at most four rows, then "and n more" (a link to Show: Attention);
-an open question to the owner no running step asked (the orchestrator's) a row of its own
-before the stopped rows: `message-circle-question`, its title at 600 (a link to its card in the
-project's inbox) and the coral tag; its description's opening; a progress bar (a segment a state, as the board's) with "n of m"
+each open question to the owner someone waits on leads the card, a row of its own before the
+stopped rows: `message-circle-question`, its title at 600 (a link to the question: a step's on
+its Overview, the orchestrator's to its card in the project's inbox), the step that asked it
+under it in meta ("from work · Fix the cron driver `l1-work`"), and the coral tag; its description's opening; a progress bar (a segment a state, as the board's) with "n of m"
 and "· n paused" in plum when some are; then either its running steps (the glyph of how each
 reads: running, quiet, finishing, stopping, with a muted "stopping" or "finishing" tag; the step named as every page names it,
 its stage, title and id, the title cut at 96 characters, "running for" and its live time, and a gold "quiet" tag once a run has written
 nothing for its cadence (its plan's `cadence:` tag, else 2 hours; one threshold for every page):
-"quiet 2h 42m", or "quiet" alone when it has written nothing since it started; the coral
-"Awaiting your reply" after its time when it has asked the owner a question its run waits on,
-leading to the question on its Overview; on a narrow row
+"quiet 2h 42m", or "quiet" alone when it has written nothing since it started (its question,
+when it asked one, is the card's first row, not repeated here); on a narrow row
 the time and tags take the next line, never squeezing the title) or one line on what
 stops it ("Paused.", "Stopped: nothing is running."). Projects with no steps fold under "No
 steps yet (n)", the archived ones under "Archived (n)". While nothing holds the
@@ -776,16 +779,18 @@ phone) and puts the card's ring on; without script the card's link opens the ste
 The step reads top down:
 - on its own page only, a way back above it, in 14px muted ink: "← <project> plan / unit <u>"
   (Lucide `arrow-left`; the unit named by its title, cut at 64 characters, its whole title on hover); there its whole title, never cut, is the page's `h1` (the drawer's heading too) and each section's head an `h2`, in
-  the drawer its id a 22px `h2` and each head an `h3` (one look either way: 15/22 at 600), so
-  no level is skipped; the tab reads "<stage> · <title> · <project> · sluice" (the title cut at
-48 characters);
+  the drawer its title a 20px `h2`, three lines at most (its whole title on hover), and each
+  head an `h3` (one look either way: 15/22 at 600), so no level is skipped; the tab reads
+  "<stage> · <title> · <project> · sluice" (the title cut at 48 characters: `StepRef::label`,
+  the one way a step is named in words, its thread page and every "Message to …" too), led by
+  "Question · " while its own question to the owner waits;
 - its id with badges: the state's glyph and word, one tag ("blocked", "set by hand"); while
   it runs "running for 2h 14m" in that tag, led by its state when it is more than running
   ("quiet · running for 2h 14m", "stopping · …", gold when it needs a look), no second line
   repeating it; "usually 24m" in meta after the tags while pending or running (how long its
   stage usually takes; " · usually 24m" after "took …" once ended; in ink at 600 once a run has
   gone past twice that, followed by how many times in the attention gold at 600, "4.5× usual", down
-  to a half below ten, whole above); "done/total runs" when scattered; its doc; "Ended 3h ago · took 10h 0m" once it has ended, or for one waiting to run again "Last run ended 12h ago (took 3m)."; a meta line of the fn in mono and its tags as badges (a `unit:` tag a link to its
+  to a half below ten, whole above); "done/total runs" when scattered; its doc; "Ended 3h ago · took 10h 0m" once it has ended, or for one waiting to run again "Last run ended 12h ago (took 3m)."; a retry not run yet over that, in ink with the `rotate-cw` icon: "You retried it 2m ago, with feedback: “try with a longer cap”. It starts when the runner does." (its feedback's first line quoted, linked to it; the last sentence only while no runner runs); a meta line of the fn in mono and its tags as badges (a `unit:` tag a link to its
   unit's page);
 - the actions, one POST form carrying the plan revision: Pause or Unpause (where pausing acts:
   pending, stale, or any paused step; never a failed or cancelled one, which starts only when
@@ -866,8 +871,8 @@ The step reads top down:
   reason), then "Its log record 4521" in meta, a link to the failure's own record on the log
   (the step's records up to it, it first and marked), what it said under it (a captured tail
   that starts mid-sentence led by "…") (one line in 13px data; several as prose in the body's
-  font, lines kept, in the muted box), "Its last failed call: Bash `cargo test …`" (a link that
-  opens the Activity tab on that call), the traceback folded under "Traceback", the pane its
+  font, lines kept, in the muted box), "Its last failed call: Bash" with `cargo test …` under it, two lines at most (only the
+  label a link, opening the Activity tab on that call), the traceback folded under "Traceback", the pane its
   agent left folded under "Pane at failure" (a chevron; the rows in 12px data, scrolling in
   their own box), and "Run files" linking each file the run has (`file-text` icons) as plain
   text (each a page of its own: a way back to the step's Runs, the file's name, the run, "The
@@ -974,7 +979,8 @@ Components.
 A page title ("Inbox" for the tray; a project's is "Messages", the nav's word for it, under "←
 <project> plan") and a small segmented control (For you · Questions · History, the current one in the
 secondary fill). The questions someone waits on come in two groups, each an `h2` with its
-count: "For you" ("Questions for you" on the inbox; what the nav's Inbox counts) and "Between
+count: "Questions for you" (on both views; what the nav's Inbox counts; on the inbox a meta line
+under it says Questions also lists those between agents and those nobody waits on) and "Between
 agents" (one agent's question to another, under a meta line that its addressee answers it).
 Each is a card: its project's name in meta, linking to the thread, then the question as a
 one-message conversation, the card a step's Messages tab draws (who asked whom over it, the
@@ -993,8 +999,8 @@ meta) that opens to the body, and Close at its end. The inbox then lists "Unread
 "A note was not marked read: sluice did not take it. Try again", never the browser's words or
 a line under every note; every request a page makes says a failure in sluice's words): each
 thread a card named for what it is about (its notes drawn as the conversation draws them, flat
-in the card: no card in a card) ("Step k2-owner", "You and the
-orchestrator", else its first message's title or first line), with "Mark read" at its head's right. A
+in the card: no card in a card) (a step's by its step's name, "work · Fix the cron driver",
+as its page heads it; "You and the orchestrator", else its first message's title or first line), with "Mark read" at its head's right. A
 note is marked read only when the owner asks (its card's Mark read, Mark all read, or Mark n
 notes read on its thread page): never on render, never for having been on screen, never for
 opening its thread. The notes read in the last 24 hours fold under "Read today n" after the
@@ -1007,9 +1013,9 @@ a word with an ellipsis (a thread with an open question to the owner leads with 
 title at 600 and the coral tag instead). "Unread notes n" counts notes, not threads. A thread page
 (`thread?thread=<name>`) has no segmented control: a way back, "← <project> plan / step <its id>"
 (its whole title on hover: the title below says it; or "/ History", an empty thread too), then the thread's name
-as its title, the project, thread id and message count in meta under it with "Jump to latest"
+as its title (a step's thread its step's heading, the stage muted, the title whole), the project, thread id and message count in meta under it with "Jump to latest"
 past two messages and "Mark n notes read" while some are unread, then its conversation (below) with the message box at its end: to the thread's step while
-it is in the plan ("Message to <its title>"), else the orchestrator, with "Ask a question that
+it is in the plan ("Message to <its stage> · <its title>", the step page's words), else the orchestrator, with "Ask a question that
 needs a reply" (an ask; unchecked, a note) and Send. To a step not running a meta line under
 the label says when it reads it ("It has not started: it reads this when it does."; a finished
 one "It is not running: it reads this only if it runs again.", a failed one adding "To tell it
@@ -1022,13 +1028,15 @@ failed, failed calls and orphaned runs), then the filters: a Step field ("any st
 and its thread's messages; a unit's link from its page filters to the unit, said in a meta line
 with "every unit" to drop it), a Thread field ("any thread"), the kind checkboxes folded behind a
 bordered "Kinds: all" (open only when a custom set is chosen) and Apply (without script: with
-it a kind or preset applies as it changes, and Enter in a field); a meta line says that
+it a kind or preset applies as it changes, and a text field when it is left with new words or
+on Enter); a meta line says that
 fn calls that succeeded are left out (they are noise: a capacity fn runs every few seconds)
 unless the `call` kind is chosen, and that lease records (`step.lease`, resources held and
 released) are left out of All unless their kind is chosen. The tab reads "Log · <project>". Then a table of seq, time ("12m ago"), kind (12px data) and a
 one-line sentence, its step, unit and thread linked to their pages and the project's name
 linked on the global log ("fig-5294-rm running → succeeded", "w lane held 1 land", "Unit fig-5294
-settled, 6 steps", a failure as its step page says it, "harness: Cancelled while it ran.",
+settled, 6 steps · 9 status changes" (a settled unit's row holds its steps' status changes before
+it, linked to its unit's log), "fig-5576-work asked you: Land l1 first?", a failure as its step page says it, "harness: Cancelled while it ran.",
 "The board's document changed by cli: standup refresh"; never JSON; message bodies read as
 Now reads them), with a small "JSON" toggle at the row's right end (its name "Record 12345 as
 JSON") that opens the record's JSON under the sentence; records in a row that say the same are
@@ -1136,12 +1144,15 @@ find field, Read less) is hidden until its component is defined. A host around a
 no box (`display: contents`); a host that is its part (tabs, a long text's fold, a copyable id,
 the splitter, a banner) takes the part's. A page makes a host only through `ui::rocket` (a test
 holds every template to it), and Datastar attributes stay outside a host: a component re-applies
-Datastar to what it holds after each patch inside it. **`/_ui`** is the kit's gallery and its
-documentation: every part and component in every state with real-looking data, the house pair's
+Datastar to what it holds after each patch inside it. **`/_ui`** ("States and parts") is the kit's
+gallery and its documentation: each part led by what the owner sees it as, how it is built under
+that in meta, every part and component in every state with real-looking data, the house pair's
 light and dark side by side (stacked under 900px), and a table of every component, its props
 and events (a Chromium test holds each to its script's manifest). A new part goes there first.
-The display preferences menu ends with the Keys (with script) and "What each state and part means", the gallery's link, so the
-page itself needs no legend.
+The display preferences menu ends with the Keys (with script), then "What each state and part means", the gallery's link, so the
+page itself needs no legend, and "Agent docs" under it (`/docs`: the pages `sluice docs` gives the
+agents, an index of topics, then each topic's markdown at the reading width with the topics
+under it).
 The ideas and CSS are adapted from knadh/oat and hunvreus/basecoat, the tabs' keyboard model
 from github/tab-container-element (all MIT; `assets/README.md`): no runtime of theirs, no
 shadow DOM, no build step.
@@ -1164,7 +1175,9 @@ The components:
   through a patch; Ctrl or Cmd with Enter sends.
 - **`sluice-answer`**: a question's Answer (opens its box under the buttons, the focus in it)
   and Close question (at once); loads `openui.js`, which sends the answer (its form's or the
-  words-only box's) and puts "Answered: sent to <asker> · Read the thread" in its place, spoken.
+  words-only box's) and puts the server's line for it from the box's `<template>` ("Answered
+  just now: …", "Closed just now: …") in its place, spoken and focused; after a patch that
+  replaces that line the focus goes to what stands for the answer then.
 - **`sluice-menu`**: the project switcher, display preferences and the plan's More: a click
   elsewhere or Escape closes it, the focus back on its summary; ArrowDown from the summary goes
   in, the arrows, Home and End move through its links and buttons (a radio keeps its own).
@@ -1229,9 +1242,12 @@ The parts:
   `message-circle-question` glyph and "Question" at 650, a strong hairline, and "Awaiting your
   reply" in coral (only a question waiting on the owner), "Awaiting reply" in gold, else
   "Answered" or "Closed", muted; a question waiting on the owner is drawn whole wherever it is
-  (a step's Overview too) with Answer and Close, and answered it gives way to one line, the
-  green check, "Answered: sent to <asker> · Read the thread" (the inbox keeps it so in its place
-  for ten minutes); its reply sits in its card directly under it on the muted fill
+  (a step's Overview too, first, above Now, under "Its question for you") with Answer and Close,
+  and answered or closed it gives way to one line the server draws, the green check, "Answered
+  just now: <title> sent to <asker> · Read the thread" (a muted ✕ and "Closed just now: <title>"
+  for a close), a polite status that takes the focus (the inbox keeps it so in its place for ten
+  minutes); answered, the question stays whole wherever a conversation draws it, its answer
+  under it; its reply sits in its card directly under it on the muted fill
   (`corner-down-right`, "<who> replied", when, its id), never a distant link. A line across the
   column at each day's start ("Thu 8 Oct 2026", muted) and at the first note to the owner not
   read yet ("New", in ink at 650). A body past 700 characters or 14 lines folds behind Show all.
@@ -1353,10 +1369,11 @@ comma: the card's parts are flex items, which the name already parts with a spac
   `<details>` (its summary opens the dialog), the plan's More menu stays open, a board field's
   refusal stays until the field is edited, and a settings field another author changed says
   "Changed by <author> since you opened this · Reload this field" in the attention colour. Times have one vocabulary
-  on every page, and `nav.js` (on every page) owns them: the server writes "2026-10-07 20:47
-  UTC" (its title keeps it), the script reads `data-since` as a two-unit duration ("45s",
-  "12m", "2h 14m", "3d 12h") and `data-ago` as "just now", "12m ago", "3d 12h ago", and reads
-  a time again at once when a stream patch writes the server's text back; a running step's
+  on every page, and `nav.js` (on every page) ticks them: the server writes each as it read the
+  clock at render, so a page without script reads the same (`data-since` a two-unit duration,
+  "45s", "12m", "2h 14m", "3d 12h"; `data-ago` "just now", "12m ago", "3d 12h ago"; the UTC day
+  and minute in its title), the script ticks it on in those words and reads a time again at once
+  when a stream patch writes the server's text back; a running step's
   quiet tag appears after 15 minutes without a write.
 
 ### Touch

@@ -196,6 +196,10 @@ pub struct LogRow {
     pub change: Option<(String, String, String)>,
     /// What its sentence names that has a page (`links`), to link a merged sentence again.
     pub links: Vec<(String, String, String, String)>,
+    /// A unit settling: its unit, its steps, and how many of their status changes before it
+    /// this row holds (`folded`), said at its end and linked to the unit's log.
+    pub settled: Option<(String, Vec<String>)>,
+    pub folded: usize,
 }
 #[derive(Clone, Debug)]
 pub struct LogView {
@@ -465,7 +469,11 @@ pub async fn load(
                 }
                 _ => None,
             };
-            rows.push(LogRow { seq, at: at.clone(), kind, summary, html, count: 1, oldest: seq, place, chore, chore_from: chore.map_or(0, |c| c.0), change, links: found, json: serde_json::to_string_pretty(&Record { seq: RecordSeq(seq), at, project: owner, event })? });
+            let settled = match &event {
+                Event::UnitSettled { unit, steps, .. } => Some((unit.to_string(), steps.iter().map(|s| s.id.to_string()).collect())),
+                _ => None,
+            };
+            rows.push(LogRow { seq, at: at.clone(), kind, summary, html, count: 1, oldest: seq, place, chore, chore_from: chore.map_or(0, |c| c.0), change, links: found, settled, folded: 0, json: serde_json::to_string_pretty(&Record { seq: RecordSeq(seq), at, project: owner, event })? });
         }
         rows.sort_by_key(|r| std::cmp::Reverse(r.seq));
         // records in a row that say the same are one line, "×10"
@@ -474,7 +482,33 @@ pub async fn load(
             (Some(a), Some(b)) => a.abs_diff(b) <= secs,
             _ => false,
         };
+        let base = project.map(|id| format!("/projects/id/{id}/log")).unwrap_or_else(|| "/log".into());
         for row in rows {
+            // a settled unit holds its steps' status changes before it (within six hours): one
+            // row, "Unit x settled, 5 steps · 9 status changes", those linked to the unit's log,
+            // which lists them (and folds nothing)
+            if query.unit.is_empty()
+                && let Some((step, _, _)) = &row.change
+                && let Some(unit) = grouped.iter_mut().rev().take(40).find(|l| {
+                    l.place == row.place
+                        && l.settled.as_ref().is_some_and(|(_, steps)| steps.contains(step))
+                        && near(&l.at, &row.at, 6 * 3600)
+                })
+            {
+                unit.folded += 1;
+                unit.oldest = unit.oldest.min(row.seq);
+                let (name, _) = unit.settled.clone().unwrap_or_default();
+                let lead = linked(&unit.summary, &unit.links).0;
+                let href = match unit.place.1.as_str() {
+                    "" => format!("{base}?unit={}", super::ui::esc(&name)),
+                    page => format!("{page}/log?unit={}", super::ui::esc(&name)),
+                };
+                unit.html = TrustedHtml::owned(format!(
+                    "{lead} · <a href=\"{href}\">{}</a>",
+                    super::ui::count(unit.folded, "status change", "status changes")
+                ));
+                continue;
+            }
             // a step's status changes within a minute are one row, "x pending → running →
             // succeeded", the newer reading on from the older (a few rows between them allowed)
             if let Some((step, from, to)) = &row.change {
@@ -524,7 +558,6 @@ pub async fn load(
             }
         }
         let rows = grouped;
-        let base = project.map(|id| format!("/projects/id/{id}/log")).unwrap_or_else(|| "/log".into());
         let exists = |seq, comparator: &str| -> sluice_store::Result<bool> {
             let mut args = base_args.clone(); args.push(Value::Integer(seq));
             Ok(sql.query_row(&format!("SELECT EXISTS(SELECT 1 FROM records WHERE {base_condition} AND seq{comparator}?)"), params_from_iter(args), |r| r.get(0))?)
@@ -550,7 +583,14 @@ fn links(
     if let Some(thread) = field("thread") {
         links.push((thread.to_owned(), super::threads::thread_url(project, thread), String::new(), String::new()));
     }
-    if let Some(step) = field("step") {
+    // a question to the owner says who asked it first ("fig-5576-work asked you: …"): a step
+    // asking is linked as any step is
+    let asker = field("from").filter(|from| {
+        field("verb") == Some("ask")
+            && field("to") == Some("owner")
+            && !["owner", "orchestrator"].contains(from)
+    });
+    if let Some(step) = field("step").or(asker) {
         let named = super::ui::StepRef::new(step, names.and_then(|n| n.naming.step(step)));
         let (words, full) = if named.titled() { (named.html(48).0, named.title.clone()) } else { Default::default() };
         links.push((step.to_owned(), format!("/projects/id/{project}/steps/{step}"), words, full));
@@ -617,6 +657,20 @@ fn summary(event: &Event) -> String {
     };
     let maybe = |reason: &Option<String>| because(reason.as_deref().unwrap_or(""));
     match event {
+        // a question to the owner by its title: "fig-5576-work asked you: Land l1 first?"
+        Event::Message(m)
+            if m.verb == sluice_model::commands::MessageVerb::Ask
+                && m.to.as_deref() == Some("owner") =>
+        {
+            format!(
+                "{} asked you: {}",
+                m.from,
+                m.title
+                    .as_deref()
+                    .filter(|t| !t.trim().is_empty())
+                    .map_or_else(|| super::threads::headline(&m.body, 160), str::to_owned)
+            )
+        }
         Event::Message(m) => format!(
             "{} from {} to {}: {}",
             m.thread,

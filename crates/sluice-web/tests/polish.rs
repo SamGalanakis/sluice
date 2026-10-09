@@ -601,6 +601,23 @@ async fn chromium_a_form_of_filters_applies_as_it_changes_with_no_apply_button()
             .eval("(() => { const box = document.querySelector('form.filters input[name=kind]'); box.closest('details').open = true; setTimeout(() => box.click(), 0); return box.value; })()")
             .unwrap();
         browser.wait("new URLSearchParams(location.search).has('kind')").unwrap();
+        // a text field applies when it is left with new words, no Enter needed
+        browser
+            .wait("customElements.get('sluice-search') && document.querySelector('form.filters input[name=step]')")
+            .unwrap();
+        browser
+            .eval("document.querySelector('form.filters input[name=step]').focus()")
+            .unwrap();
+        browser
+            .send("Input.insertText", json!({"text": "beta-build"}))
+            .unwrap();
+        browser
+            // leaving it navigates: it runs after this evaluation has returned
+            .eval("setTimeout(() => document.activeElement.blur(), 0)")
+            .unwrap();
+        browser
+            .wait("new URLSearchParams(location.search).get('step') === 'beta-build' && new URLSearchParams(location.search).has('kind')")
+            .unwrap();
         browser.navigate(&format!("http://{addr}/fns")).unwrap();
         browser.wait("customElements.get('sluice-search') && document.querySelector('form.picker')").unwrap();
         assert_eq!(

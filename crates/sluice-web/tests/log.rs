@@ -377,8 +377,8 @@ async fn log_hides_call_noise_and_offers_presets_and_a_step_field() {
         "the kinds fold"
     );
     assert!(html.contains("<time data-ago="), "{html}");
-    // no raw RFC 3339 text outside a record's JSON: a time reads "2026-10-07 20:47 UTC" until
-    // the script reads it
+    // no raw RFC 3339 text outside a record's JSON: a time reads as the server read the clock
+    // ("just now", "12m ago") before any script, the UTC minute in its title
     let shown: String = html
         .split("<pre>")
         .map(|part| part.split_once("</pre>").map_or(part, |(_, after)| after))
@@ -388,7 +388,8 @@ async fn log_hides_call_noise_and_offers_presets_and_a_step_field() {
         .filter_map(|s| s.split('<').next())
         .collect::<String>();
     assert!(!regex_like_rfc3339(&text), "{text}");
-    assert!(text.contains(" UTC"), "{text}");
+    assert!(text.contains("just now"), "{text}");
+    assert!(html.contains(" UTC\">just now</time>"), "{html}");
     writer.shutdown().await.unwrap();
 }
 /// Some "2026-10-07T20:47:08" in text.

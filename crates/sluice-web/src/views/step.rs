@@ -513,6 +513,9 @@ pub struct StepView {
     pub held_by: Option<(GateView, GateView)>,
     /// Nothing holds the scheduler lease: a pending step's page says nothing starts.
     pub runner_stopped: bool,
+    /// A pending or stale step retried since its last run started: who retried it, when, and
+    /// the feedback sent with it, said under its header until it runs (`load_restarts`).
+    pub retried: Option<Restart>,
 }
 /// What started a run after its step's first: a retry's author and reason (a completion
 /// action's, an orchestrator's, the owner's) and the feedback it sent with it; or an input it
@@ -525,6 +528,8 @@ pub struct Restart {
     pub at: String,
     /// The message sent with it to the step's thread, by its id.
     pub feedback: Option<i64>,
+    /// That message's words, cut to a line.
+    pub feedback_text: String,
     /// It ran again because an input it reads changed, not because someone retried it.
     pub stale: bool,
 }
@@ -559,6 +564,50 @@ impl Restart {
         }
         out.push('.');
         out
+    }
+}
+impl Restart {
+    /// A retry not run yet, under its step's header: "You retried it 2m ago, with feedback:
+    /// try with a longer cap. It starts when the runner does." (the last sentence while no
+    /// runner runs).
+    pub fn waiting_html(&self, step: &str, runner_stopped: bool) -> TrustedHtml {
+        use super::ui::esc;
+        let by = self.by.strip_prefix("step:").unwrap_or(&self.by);
+        let mut out = match by {
+            "owner" => "You retried it".to_owned(),
+            "" => "It was retried".to_owned(),
+            "orchestrator" => "The orchestrator retried it".to_owned(),
+            by if by == step || by == "sluice" => "Sluice retried it".to_owned(),
+            by if self.reason.starts_with("conditional ") => {
+                format!("<code>{}</code> sent it back", esc(by))
+            }
+            by => format!("{} retried it", esc(by)),
+        };
+        out.push(' ');
+        out.push_str(super::ui::ago(&self.at).as_str());
+        let reason = self.reason.trim().trim_end_matches('.');
+        if !reason.is_empty() && !self.reason.starts_with("conditional ") {
+            out.push_str(&format!(": {}", esc(reason)));
+        }
+        // the sentence's own period, unless the quoted feedback ends one
+        let mut stop = ".";
+        if let Some(m) = self.feedback {
+            out.push_str(&format!(", <a href=\"#message-{m}\">with feedback</a>"));
+            if !self.feedback_text.is_empty() {
+                out.push_str(&format!(
+                    ": <q class=\"d-fb\">{}</q>",
+                    esc(&self.feedback_text)
+                ));
+                if self.feedback_text.ends_with(['.', '!', '?', '…']) {
+                    stop = "";
+                }
+            }
+        }
+        out.push_str(stop);
+        if runner_stopped {
+            out.push_str(" It starts when the runner does.");
+        }
+        TrustedHtml::owned(out)
     }
 }
 /// When a step's current run started and how long it ran or has run so far: its card's timer.
@@ -598,6 +647,14 @@ pub struct Hold {
     pub at: String,
 }
 impl Hold {
+    /// The period that ends its sentence, unless its reason ends one already ("…ready=false.").
+    pub fn stop(&self) -> &'static str {
+        if self.reason.trim_end().ends_with(['.', '!', '?']) {
+            ""
+        } else {
+            "."
+        }
+    }
     /// Who paused it, in words: "the owner", "cli", "" when unknown.
     pub fn who(&self) -> String {
         match self.by.as_str() {
@@ -688,7 +745,7 @@ impl StepView {
         if !hold.reason.is_empty() {
             words.push_str(&format!(": {}", hold.reason));
         }
-        words.push('.');
+        words.push_str(hold.stop());
         words
     }
     /// Its `after` in a few words: "98 steps, all done", "3 steps: 2 done, 1 running", with
@@ -898,6 +955,7 @@ impl StepView {
             asking: None,
             held_by: None,
             runner_stopped: false,
+            retried: None,
             total: None,
             done: 0,
             manual: false,
@@ -1071,6 +1129,14 @@ impl StepView {
             id: self.id.to_string(),
             title: self.title.clone(),
             stage: self.stage.clone(),
+        }
+    }
+    /// Its name with its title whole: its page's and the drawer's heading
+    /// (`StepRef::heading_html`).
+    pub fn whole_name(&self) -> super::ui::StepRef {
+        super::ui::StepRef {
+            title: self.whole_heading().to_owned(),
+            ..self.name()
         }
     }
     /// Its heading's words: its title, or its id when it has none.
@@ -1616,9 +1682,14 @@ impl StepView {
             .filter(|r| r.finished.is_empty() && self.running())
             .map(|r| r.started.as_str())
     }
-    /// The tab's words: its stage and title ("work · Ship the cron fix"), cut to 48 characters.
+    /// The tab's words: its name ("work · Ship the cron fix"), led by "Question" while its
+    /// own question to the owner waits.
     pub fn tab_title(&self) -> String {
-        self.name().text(48)
+        if self.asking.is_some() {
+            format!("Question · {}", self.name().label())
+        } else {
+            self.name().label()
+        }
     }
     pub fn cancel_prompt(&self) -> String {
         let duration = self
@@ -1923,14 +1994,17 @@ impl StepView {
         TrustedHtml::from_template(&StepTemplate {
             step: self,
             page: false,
+            project: "",
             tab: self.tab_on(tab),
         })
     }
-    /// The step as its own page draws it (and that page's stream): its id the page's heading.
-    pub fn own_body(&self, tab: &str) -> Result<TrustedHtml, askama::Error> {
+    /// The step as its own page draws it (and that page's stream): its id the page's heading,
+    /// and the tab's title (`tab_title`, then `project`'s name), kept current by each patch.
+    pub fn own_body(&self, project: &str, tab: &str) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&StepTemplate {
             step: self,
             page: true,
+            project,
             tab: self.tab_on(tab),
         })
     }
@@ -1961,7 +2035,7 @@ impl StepView {
             project,
             unit,
             notice,
-            body: self.own_body(tab)?,
+            body: self.own_body(project, tab)?,
         })
     }
 }
@@ -1971,6 +2045,8 @@ struct StepTemplate<'a> {
     step: &'a StepView,
     /// On its own page: its id is the page's `h1`.
     page: bool,
+    /// On its own page, its project's name: the tab's title ends with it.
+    project: &'a str,
     /// The tab it opens on.
     tab: &'static str,
 }
@@ -2090,7 +2166,15 @@ fn load_conversation(
     let id = step.id.to_string();
     let own = items.iter().rposition(|m| m.message.from == id);
     let mut quoted = vec![];
+    // its open question to the owner, while someone waits on it: Overview draws it alone, first,
+    // to be answered there
+    if let Some(ask) = step
+        .asking
+        .as_ref()
+        .and_then(|a| items.iter().find(|m| m.id() == a.message))
     {
+        quoted.push(ask.clone());
+    } else {
         if let Some(own) = own {
             quoted.push(items[own].clone());
         }
@@ -2134,7 +2218,7 @@ fn load_conversation(
     .with_composer(Some(Composer {
         project,
         to: id.clone(),
-        label: format!("Message to {}", step.name().text(48)),
+        label: format!("Message to {}", step.name().label()),
         note: Composer::note(Some(&step.status)),
     }));
     Ok(())
@@ -2382,9 +2466,53 @@ fn load_cancels(
     }
     Ok(())
 }
+/// The latest retry of `step` recorded at or after `from` (and at or before `to`, when given):
+/// who, why, and the feedback posted to the step in the same write.
+fn retry_between(
+    c: &rusqlite::Connection,
+    project: ProjectId,
+    step: &str,
+    from: &str,
+    to: Option<&str>,
+) -> sluice_store::Result<Option<Restart>> {
+    let found = c
+        .prepare_cached("SELECT payload,at FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.retry' AND julianday(at)>=julianday(?3) AND (?4 IS NULL OR julianday(at)<=julianday(?4)) ORDER BY seq DESC LIMIT 1")?
+        .query_row((project.to_string(), step, from, to), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .optional()?;
+    let Some((payload, at)) = found else {
+        return Ok(None);
+    };
+    let payload: serde_json::Value = serde_json::from_str(&payload)?;
+    let said = |k: &str| {
+        payload
+            .get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned()
+    };
+    let feedback: Option<(i64, String)> = c
+        .prepare_cached("SELECT id,body FROM messages WHERE project_id=?1 AND \"to\"=?2 AND abs(julianday(at)-julianday(?3))*86400.0<2 ORDER BY id LIMIT 1")?
+        .query_row((project.to_string(), step, at.as_str()), |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .optional()?;
+    Ok(Some(Restart {
+        by: said("author"),
+        reason: said("reason"),
+        at,
+        feedback: feedback.as_ref().map(|f| f.0),
+        feedback_text: feedback
+            .map(|f| super::threads::headline(&f.1, 160))
+            .unwrap_or_default(),
+        stale: false,
+    }))
+}
 /// What started each run after the first: the retry recorded after the run before it started
-/// and before it did (who, why, and the feedback posted to the step in the same write), else
-/// its going stale and pending again. None for a run relaunched with neither (a lost one's).
+/// and before it did, else its going stale and pending again (none for a run relaunched with
+/// neither, a lost one's). And a pending or stale step retried since its last run started: the
+/// retry its page says until it runs.
 fn load_restarts(
     c: &rusqlite::Connection,
     project: ProjectId,
@@ -2392,35 +2520,14 @@ fn load_restarts(
 ) -> sluice_store::Result<()> {
     for i in 1..step.runs.len() {
         let (before, now) = (&step.runs[i - 1], &step.runs[i]);
-        let found = c
-            .prepare_cached("SELECT payload,at FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.retry' AND julianday(at)>=julianday(?3) AND julianday(at)<=julianday(?4) ORDER BY seq DESC LIMIT 1")?
-            .query_row(
-                (project.to_string(), step.id.as_str(), before.started.as_str(), now.started.as_str()),
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-            )
-            .optional()?;
-        let restart = match found {
-            Some((payload, at)) => {
-                let payload: serde_json::Value = serde_json::from_str(&payload)?;
-                let said = |k: &str| {
-                    payload
-                        .get(k)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_owned()
-                };
-                let feedback = c
-                    .prepare_cached("SELECT id FROM messages WHERE project_id=?1 AND \"to\"=?2 AND abs(julianday(at)-julianday(?3))*86400.0<2 ORDER BY id LIMIT 1")?
-                    .query_row((project.to_string(), step.id.as_str(), at.as_str()), |r| r.get(0))
-                    .optional()?;
-                Some(Restart {
-                    by: said("author"),
-                    reason: said("reason"),
-                    at,
-                    feedback,
-                    stale: false,
-                })
-            }
+        let restart = match retry_between(
+            c,
+            project,
+            step.id.as_str(),
+            &before.started,
+            Some(&now.started),
+        )? {
+            Some(retry) => Some(retry),
             // no retry: it ran again once it went stale and was made pending
             None => c
                 .prepare_cached("SELECT at FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.status' AND json_extract(payload,'$.from')='stale' AND json_extract(payload,'$.to')='pending' AND julianday(at)>=julianday(?3) AND julianday(at)<=julianday(?4) ORDER BY seq DESC LIMIT 1")?
@@ -2434,10 +2541,18 @@ fn load_restarts(
                     reason: String::new(),
                     at,
                     feedback: None,
+                    feedback_text: String::new(),
                     stale: true,
                 }),
         };
         step.runs[i].restart = restart;
+    }
+    if matches!(step.status, StepStatus::Pending | StepStatus::Stale) {
+        let from = step
+            .runs
+            .last()
+            .map_or_else(|| "0000-01-01T00:00:00Z".to_owned(), |r| r.started.clone());
+        step.retried = retry_between(c, project, step.id.as_str(), &from, None)?;
     }
     Ok(())
 }
@@ -2814,7 +2929,7 @@ async fn page_html(
     // kept feedback is the page's alone, in a box no patch empties (`data-ignore-morph`)
     let drawn = detail
         .step
-        .own_body(&shown.tab)
+        .own_body(&detail.project, &shown.tab)
         .map(|body| RenderedBatch::new(vec![PatchRegion::new("step-detail", body)]).version)
         .map_err(render_error)?;
     if let Some(notice) = notice {
@@ -2916,7 +3031,7 @@ pub async fn step_stream(
             Ok(RenderedBatch::new(vec![PatchRegion::new(
                 "step-detail",
                 if own.page {
-                    step.own_body(&tab)
+                    step.own_body(&detail.project, &tab)
                 } else {
                     step.body(&tab)
                 }
@@ -3118,7 +3233,14 @@ async fn run_file_html(
         },
     ));
     super::render_layout(
-        &format!("{name} · {step} · sluice"),
+        &format!(
+            "{name} · {step} · {}",
+            shared
+                .projects
+                .iter()
+                .find(|p| p.id == project)
+                .map_or_else(|| project.to_string(), |p| p.name.clone())
+        ),
         &body,
         &nav,
         &Viewer::from_headers(headers),

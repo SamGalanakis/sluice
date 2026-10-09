@@ -224,14 +224,6 @@ impl ProjectView {
     pub fn ask_of(&self, step: &str) -> Option<&AskView> {
         self.asks.iter().find(|a| a.step == step)
     }
-    /// Its open questions to the owner no running step it lists asked: the orchestrator's,
-    /// a stopped step's; the index lists them on their own lines.
-    pub fn other_asks(&self) -> Vec<&AskView> {
-        self.asks
-            .iter()
-            .filter(|a| !self.running.iter().any(|r| r.step == a.step))
-            .collect()
-    }
     /// How a page names one of its listed steps: its title and id, or its id alone.
     pub fn step_ref(&self, id: &str) -> ui::StepRef {
         self.names.get(id).cloned().unwrap_or_else(|| ui::StepRef {

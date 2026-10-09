@@ -185,18 +185,36 @@ async fn chromium_an_answer_is_confirmed_where_it_was_given() {
         browser
             .wait("!!document.querySelector('#tp-overview .q-answered[role=status] a')")
             .unwrap();
-        assert_eq!(
-            browser.eval("document.querySelector('#tp-overview .q-answered').textContent").unwrap(),
-            "Answered: sent to beta-build · Read the thread"
+        // the server's one sentence, from the box's template, and the keyboard's focus with it
+        let said = browser.eval("document.querySelector('#tp-overview .q-answered').textContent").unwrap();
+        let said = said.as_str().unwrap();
+        assert!(
+            said.starts_with("Answered just now: Land it before the rename? sent to ")
+                && said.contains("beta-build")
+                && said.ends_with(" · Read the thread"),
+            "{said}"
         );
+        browser
+            .wait("document.activeElement?.matches('#tp-overview .q-answered[role=status][aria-live=polite]')")
+            .unwrap();
+
         assert!(
             browser
-                .eval("document.querySelector('#tp-overview .q-answered a').getAttribute('href')")
+                .eval("document.querySelector('#tp-overview .q-answered .qa-to > a').getAttribute('href')")
                 .unwrap()
                 .as_str()
                 .unwrap()
                 .contains("thread=step-beta-build#message-"),
         );
+        // a patch that replaces the exchange hands the focus to the question as now drawn
+        let question = browser
+            .eval("document.querySelector('#tp-overview .q-answered').closest('li.m').id")
+            .unwrap();
+        browser
+            .eval("(li => { const fresh = li.cloneNode(false); fresh.innerHTML = '<div class=\"md m-body\">Land it before the rename?</div><ol class=\"m-replies\"><li class=\"m-reply\" id=\"ov-message-999\">Land it now.</li></ol>'; li.replaceWith(fresh); })(document.querySelector('#tp-overview .q-answered').closest('li.m'))")
+            .unwrap();
+        browser.wait("document.activeElement?.id === 'ov-message-999'").unwrap();
+        assert!(question.as_str().unwrap().starts_with("ov-message-"), "{question}");
         let answers: Vec<_> = f
             .commands
             .0
@@ -221,6 +239,9 @@ async fn chromium_an_answer_is_confirmed_where_it_was_given() {
         browser
             .wait("!!document.querySelector('#inbox-items article.item.q.q-done .q-answered a')")
             .unwrap();
+        browser
+            .wait("document.activeElement?.matches('#inbox-items article.item.q-done .q-answered')")
+            .unwrap();
         assert_eq!(
             browser.eval("document.querySelectorAll('#inbox-items article.item.q').length").unwrap(),
             2
@@ -229,6 +250,99 @@ async fn chromium_an_answer_is_confirmed_where_it_was_given() {
             browser.eval("document.querySelector('#nav-inbox .badge')?.textContent ?? '0'").unwrap(),
             (badge.as_str().unwrap().parse::<u32>().unwrap() - 1).to_string()
         );
+        assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), serde_json::json!([]));
+    })
+    .await
+    .unwrap();
+    server.abort();
+}
+
+/// Close question confirms where it was pressed, as an answer does: the buttons give way to the
+/// server's "Closed just now: …" line, a polite status that takes the keyboard's focus, so the
+/// next Tab goes on from the question; the nav's count drops.
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_closing_a_question_confirms_it_in_place_and_keeps_the_focus() {
+    let f = Fixture::new().await;
+    for (thread, from, title) in [
+        (
+            "step-beta-build",
+            "beta-build",
+            "Land it before the rename?",
+        ),
+        ("owner", "orchestrator", "Accept revision 3?"),
+    ] {
+        stored_messages::stored(
+            &f.writer,
+            f.id,
+            stored_messages::Stored {
+                thread,
+                from,
+                to: Some("owner"),
+                body: "Say which.",
+                title: Some(title),
+                question: true,
+                ..Default::default()
+            },
+        )
+        .await;
+    }
+    let router = f.router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let lanes = f.id;
+    let f = std::sync::Arc::new(f);
+    let checks = f.clone();
+    tokio::task::spawn_blocking(move || {
+        let f = checks;
+        let base = format!("http://{addr}");
+        let closes = |f: &Fixture| {
+            f.commands
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| {
+                    matches!(r, CommandRequest::Reply(reply)
+                        if reply.owner && reply.answer.as_ref().is_some_and(|a| a.action == "close"))
+                })
+                .count()
+        };
+        // on the step's Overview, by keyboard: the focus lands on the line that says so
+        let mut browser =
+            Chrome::open(&format!("{base}/projects/id/{lanes}/steps/beta-build")).unwrap();
+        browser.viewport(1440, "light").unwrap();
+        browser
+            .wait("document.readyState === 'complete' && !!document.querySelector('#tp-overview sluice-answer .answer[data-drawn]') && customElements.get('sluice-answer')")
+            .unwrap();
+        browser
+            .eval("(b => { b.focus(); b.click(); })(document.querySelector('#tp-overview sluice-answer form.q-close button'))")
+            .unwrap();
+        browser
+            .wait("document.activeElement?.matches('#tp-overview .q-answered[role=status][aria-live=polite]')")
+            .unwrap();
+        let said = browser.eval("document.activeElement.textContent").unwrap();
+        assert_eq!(said, "Closed just now: Land it before the rename? Read the thread");
+        assert_eq!(closes(&f), 1);
+        // on the inbox the same: its line in the card's place, focused, the count down by one
+        browser.navigate(&format!("{base}/inbox")).unwrap();
+        browser
+            .wait("document.readyState === 'complete' && customElements.get('sluice-answer') && [...document.querySelectorAll('#inbox-items .answer')].every(a => a.dataset.drawn)")
+            .unwrap();
+        let badge = browser.eval("document.querySelector('#nav-inbox .badge').textContent").unwrap();
+        browser
+            .eval("[...document.querySelectorAll('#inbox-items article.item.q')].at(-1).querySelector('form.q-close button').click()")
+            .unwrap();
+        browser
+            .wait("document.activeElement?.matches('#inbox-items article.item.q-done .q-answered')")
+            .unwrap();
+        let said = browser.eval("document.activeElement.textContent").unwrap();
+        assert!(said.as_str().unwrap().starts_with("Closed just now: "), "{said}");
+        assert_eq!(
+            browser.eval("document.querySelector('#nav-inbox .badge')?.textContent ?? '0'").unwrap(),
+            (badge.as_str().unwrap().parse::<u32>().unwrap() - 1).to_string()
+        );
+        assert_eq!(closes(&f), 2);
         assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), serde_json::json!([]));
     })
     .await

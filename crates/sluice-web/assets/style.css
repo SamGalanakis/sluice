@@ -419,6 +419,8 @@ details.switcher .menu a span { overflow: hidden; text-overflow: ellipsis; min-w
 /* Uploaded project icons come in any size; show them at one fixed size everywhere. */
 .proj-icon { width: 20px; height: 20px; flex: none; object-fit: contain; border-radius: var(--radius-sm); }
 details.switcher .menu a .g { margin-top: 0; }
+/* a project with open questions to the owner: their count, the nav badge's coral, at the end */
+details.switcher .menu a .sw-q { flex: none; margin-left: auto; overflow: visible; box-shadow: none; }
 details.switcher .menu a:hover { background: var(--muted); }
 details.switcher .menu a[aria-current] { background: var(--muted); font-weight: 600; }
 details.switcher .menu a.all { color: var(--muted-foreground); margin-bottom: 4px;
@@ -464,10 +466,11 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; border: 1px solid 
       border-bottom-width: 2px; border-radius: var(--radius-sm); background: var(--card);
       font: 12px/17px var(--font-mono); text-align: center; color: var(--foreground); }
 .keys-note { margin: 6px 0 0; font-size: 12.5px; line-height: 18px; color: var(--muted-foreground); }
-.prefs-guide { display: block; margin: 10px -4px 0; padding: 8px 4px 2px; border-top: 1px solid var(--border);
-               font-size: 13px; line-height: 18px; color: var(--muted-foreground);
-               text-underline-offset: 3px; text-decoration-color: var(--border-strong); }
-.prefs-guide:hover { color: var(--foreground); }
+.prefs-guide { display: grid; gap: 4px; margin: 10px -4px 0; padding: 8px 4px 2px; border-top: 1px solid var(--border);
+               font-size: 13px; line-height: 18px; }
+.prefs-guide a { color: var(--muted-foreground); text-underline-offset: 3px;
+                 text-decoration-color: var(--border-strong); }
+.prefs-guide a:hover { color: var(--foreground); }
 .prefs legend { padding: 0; margin-bottom: 6px; font: 500 13px/18px var(--font-sans);
                 color: var(--muted-foreground); }
 /* the themes: a radio list, each row its swatch and name, the chosen one on the secondary
@@ -838,9 +841,13 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--foreground) 86%, v
 /* the id and, beside it, the step's state as badges; they wrap under a long id */
 .d-head .hd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
               padding-right: 40px; }  /* clear of the close */
+/* the drawer's heading: three lines at most (its whole title in its title and on the step's
+   page), so its state and tabs stay in view */
 .d-head h2 { margin: 0; font-family: var(--font-display); font-stretch: 110%;
-             font-size: 22px; line-height: 26px; font-weight: 800;
-             overflow-wrap: anywhere; min-width: 0; }
+             font-size: 20px; line-height: 25px; font-weight: 800;
+             overflow-wrap: anywhere; min-width: 0;
+             display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3;
+             overflow: hidden; }
 .d-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
 .d-badges .tag { height: 24px; padding: 0 8px; font-size: 13px; }
 .d-badges .tag .g, .d-badges .tag .g svg { width: 16px; height: 16px; }
@@ -1230,10 +1237,16 @@ details.m-many[open] > .m-all { display: flex; flex-wrap: wrap; gap: 2px 14px; m
 .q-answered { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin: 0;
               font-size: 14px; line-height: 20px; }
 .q-answered .qa-icon { flex: none; align-self: center; color: var(--status-success); }
+.q-answered .qa-icon.qa-x { color: var(--muted-foreground); }
+/* it takes focus when it replaces the box (openui.js): the ring sits around the line */
+.q-answered:focus { outline: none; }
+.q-answered:focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; border-radius: var(--radius-sm); }
 .q-answered .qa-what { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .q-answered .qa-title { font-weight: 400; }
 .q-answered .qa-to a { color: inherit; text-underline-offset: 3px; }
 article.item.q-done { padding-block: 10px; }
+.q-also { margin: 2px 0 10px; max-width: var(--measure); }
+.q-also a { color: inherit; text-underline-offset: 3px; }
 li.m.q-done > .md, li.m.q-done > .m-body { opacity: 0.7; }
 .threads { display: grid; gap: 10px; }
 .threads > .item { margin: 0; }
@@ -1285,12 +1298,14 @@ ul.now .r-meta { display: inline-flex; flex: none; align-items: center; gap: 8px
 ul.now a:hover .sref-t { text-decoration: underline; }
 ul.now .g { margin-top: 1px; }
 .dur { font-size: 13px; color: var(--muted-foreground); white-space: nowrap; }
-/* the index: an open question to the owner a running step put leads its row's meta; one no
-   running step put (the orchestrator's) is a row of its own, its title then the coral tag */
+/* the index: each open question to the owner leads its project's card, a row of its own: its
+   title, the step that asked it under it, then the coral tag */
 .ask-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .ask-rows li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: start;
                gap: 2px 8px; font-size: 14px; line-height: 20px; }
 .ask-rows .ar-icon { margin-top: 2px; color: var(--foreground); }
+.ask-rows .ar-main { display: flex; flex-direction: column; min-width: 0; }
+.ask-rows .ar-from { font-size: 13px; line-height: 18px; overflow-wrap: anywhere; }
 .ask-rows .ar-title { min-width: 0; font-weight: 600; overflow-wrap: anywhere;
                       text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
 @media (max-width: 600px) { .ask-rows .tag.ask { grid-column: 2; justify-self: start; } }
@@ -1474,6 +1489,11 @@ article.item { background: var(--card); border: 1px solid var(--border);
   .d-head :is(h1, h2), h1.unit-h, h1.title-long { font-size: 19px; line-height: 25px; }
 }
 .d-when { margin-top: 6px; }
+/* a retry not run yet: who retried it, when, and the feedback it took, in ink under the head */
+.d-retried { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; max-width: var(--measure);
+             font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
+.d-retried .icon { flex: none; margin-top: 2px; color: var(--muted-foreground); }
+.d-retried + .d-when { margin-top: 2px; }
 /* a run past twice its stage's usual time: its "usually" in ink, no colour of its own (gold is
    quiet's) */
 .d-usual.over { color: var(--foreground); font-weight: 600; }
@@ -1523,6 +1543,10 @@ dl.a-facts code { font-size: 12px; border: 0; background: none; padding: 0; }
            max-width: var(--measure); }
 .act-why .act-tool { font-weight: 600; }
 .act-why code { font-size: 12.5px; }
+/* its command under the label, two lines at most (the whole of it in its title and in the
+   call the label links to) */
+.act-why .act-cmd { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+                    line-clamp: 2; overflow: hidden; margin-top: 2px; line-height: 18px; }
 ol.act-turns { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
 .act-turn { display: grid; grid-template-columns: 1.4em minmax(0, 1fr); column-gap: 10px; }
 .act-n { padding-top: 9px; font-size: 13px; line-height: 20px; color: var(--muted-foreground);
@@ -2682,8 +2706,29 @@ a.node.mx-dot:hover { background: var(--secondary); }
 .gal-index a { display: inline-flex; align-items: center; min-height: 32px; }
 .gal-sec { margin-top: 36px; min-width: 0; }
 .gal-sec > h2 { margin: 0 0 4px; font-size: 18px; line-height: 24px; }
-.gal-about { margin: 0 0 12px; max-width: var(--measure); }
-.gal-about code, .gal-cap code { font-size: 12px; }
+.gal-about { margin: 0; max-width: var(--measure); }
+.gal-built { margin: 2px 0 12px; max-width: var(--measure); font-size: 13px; line-height: 18px; }
+:is(.gal-about, .gal-built) code, .gal-cap code { font-size: 12px; }
+.gal-lead a { color: var(--foreground); text-underline-offset: 3px; }
+
+/* ---- /docs, the agent docs: each page's markdown at the reading width, the topics under it */
+.agent-docs .lead { margin: 10px 0 0; max-width: var(--measure); color: var(--muted-foreground); }
+.docs-index ul, ul.docs-index { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 6px; }
+.docs-index li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.docs-index a { color: var(--foreground); text-underline-offset: 3px; font-weight: 500; }
+.docs-index a[aria-current] { font-weight: 700; text-decoration: none; }
+.docs-index code { font-size: 12px; }
+.docs-more { margin-top: 32px; padding-top: 12px; border-top: 1px solid var(--border); }
+.docs-page { max-width: var(--measure); margin-top: 12px; }
+.docs-page :is(h1, h2, h3) { margin: 28px 0 8px; }
+.docs-page h1 { font-size: 22px; line-height: 28px; margin-top: 0; }
+.docs-page h2 { font-size: 18px; line-height: 24px; }
+.docs-page h3 { font-size: 15px; line-height: 22px; }
+.docs-page pre { overflow-x: auto; padding: 10px 12px; border: 1px solid var(--border);
+                 border-radius: var(--radius-md); background: var(--muted); font-size: 12.5px; line-height: 18px; }
+.docs-page pre code { font-size: inherit; }
+.docs-page table { display: block; overflow-x: auto; border-collapse: collapse; font-size: 13px; margin: 0 0 12px; }
+.docs-page :is(th, td) { padding: 4px 8px; border: 1px solid var(--border); text-align: left; vertical-align: top; }
 .gal-pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 @container (min-width: 900px) { .gal-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .gallery { container-type: inline-size; }

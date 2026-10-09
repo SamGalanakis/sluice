@@ -22,9 +22,11 @@ document.addEventListener("visibilitychange", () => {
   titlePoll = document.hidden && document.querySelector("[data-title-src]") ? setInterval(pollTitle, 30000) : 0;
 });
 // ---- times: one vocabulary on every page ------------------------------------------------------
-// A <time> carries its instant in `datetime`; until this reads it, its text is the server's
-// "2026-10-07 20:47 UTC" (and its title keeps that). `data-since`: how long since, ticking, in
-// two units ("45s", "12m", "2h 14m", "3d 12h"); `data-ago`: "just now", "12m ago", "3d 12h ago".
+// A <time> carries its instant in `datetime`; the server draws its text as it read the clock at
+// render (so a page without script says "running for 1h 25m"), its title the UTC day and minute.
+// This ticks it on in the same words. `data-since`: how long since, in two units ("45s", "12m",
+// "2h 14m", "3d 12h"); `data-ago`: "just now", "12m ago", "3d 12h ago". The text is the clock's:
+// a stream's version leaves it out, so ticking never patches.
 // A card's timer (`.tk`, and `.vh` for a screen reader) holds its width, so only a longer text
 // can move its card: then "sluice-resized" asks the board to redraw its edges. A stream patch
 // writes the server's text back, so a patch is read again at once (the observer below).

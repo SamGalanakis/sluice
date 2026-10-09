@@ -214,7 +214,7 @@ async fn latest_message_shows_the_newest_from_its_sender_cut_with_a_link() {
     };
     let href = format!("/projects/id/{}/thread?thread=tests-main#message-103", f.id);
     assert!(
-        full.contains(&format!("<a href=\"{href}\"><time data-ago=\"2026-10-05T10:00:00Z\" datetime=\"2026-10-05T10:00:00Z\" title=\"2026-10-05 10:00 UTC\">2026-10-05 10:00 UTC</time></a>")),
+        full.contains(&format!("<a href=\"{href}\"><time data-ago=\"2026-10-05T10:00:00Z\" datetime=\"2026-10-05T10:00:00Z\" title=\"2026-10-05 10:00 UTC\">")) && full.contains(" ago</time></a>"),
         "{full}"
     );
     assert!(full.contains("<strong>3 red</strong>"), "{full}");

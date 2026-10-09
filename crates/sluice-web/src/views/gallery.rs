@@ -26,7 +26,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// table) is drawn once, across the column.
 pub struct Part {
     pub name: &'static str,
+    /// What the owner sees it as and when a page shows it.
     pub about: &'static str,
+    /// How a page draws it, for whoever builds one (`views::ui`, its component).
+    pub built: &'static str,
     pub light: TrustedHtml,
     pub dark: TrustedHtml,
 }
@@ -47,6 +50,21 @@ struct Fields<'a> {
     unset: &'a str,
 }
 
+/// Words with their `code` spans drawn as code: "Built with `ui::tag`".
+pub fn code_words(text: &str) -> TrustedHtml {
+    TrustedHtml::owned(
+        text.split('`')
+            .enumerate()
+            .map(|(i, part)| {
+                if i % 2 == 1 {
+                    format!("<code>{}</code>", ui::esc(part))
+                } else {
+                    ui::esc(part)
+                }
+            })
+            .collect(),
+    )
+}
 /// The gallery's one project id: a fixed one, so the page draws the same every time.
 fn project() -> ProjectId {
     "01a10513-16c5-7742-a8a2-42b9f1812a08"
@@ -395,28 +413,28 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
         Ok((f("l-")?, f("d-")?))
     };
     let mut parts = vec![];
-    let mut add = |name, about, (light, dark): (TrustedHtml, TrustedHtml)| {
-        parts.push(Part { name, about, light, dark })
+    let mut add = |name, about, built, (light, dark): (TrustedHtml, TrustedHtml)| {
+        parts.push(Part { name, about, built, light, dark })
     };
-    add("Status", "A state's glyph and word, from the status table: every page draws a status through `ui::status`, `ui::glyph` or `ui::mark`.", both(&|_| Ok(statuses()))?);
-    add("Tags", "A small fact set apart (`ui::tag`): plain, muted for a closed state, gold for attention, coral only for a question waiting on you, live with the running glyph.", both(&|_| Ok(tags()))?);
-    add("Buttons", "Primary for the next move, plain for the rest, the ink danger button for a delete, the Types switch.", both(&|_| Ok(buttons()))?);
-    add("Tabs", "`ui::tabs_open`, `panel_open`, `panel_close`, `tabs_close` (`sluice-tabs`): an ARIA tablist (arrow keys, Home, End), the chosen tab in `current`, kept through a stream patch and mirrored into `?tab=` on a step's page; without script every panel stands stacked under its head.", both(&|p| Ok(tabs(&format!("{p}tabs-"))))?);
-    add("Sections and cards", "`ui::head` over a section's rows; a card for a region of its own.", both(&|_| Ok(sections()))?);
-    add("Fields", "One row for inputs, outputs and progress (`kit.html`'s `field`): the name in a narrow column, its type behind Types, where its value came from or what set it under it, the value beside it read by its kind.", both(&|p| fields(p, &project))?);
-    add("Folds", "`ui::fold`, `ui::more_open` (`sluice-fold`): a long value's first lines, faded, with Show all under them, said only when it is cut; a list's sentence that opens to it; More and Less kept per project or opened on a wide screen.", both(&|_| Ok(folds()))?);
-    add("Conversation", "`threads::Conversation` in `sluice-conversation`, its box `sluice-composer`, a question's answer `sluice-answer`: messages in one column, a run from one sender grouped under who sent it to whom, a line at each day and at the first unread, a question's reply under it, long bodies folded, the message box at the end.", both(&|p| conversation(p, &project))?);
-    add("Empty states", "What a place says when it has nothing to show (`ui::empty`, `ui::empty_with`).", both(&|_| Ok(empties()))?);
-    add("Confirmation", "`ui::Confirm` in `sluice-confirm`: the server's details, whose summary opens the shared dialog (focus starts on keep, stays in it, Escape closes it, back to the opener); dimmed while `disabled`; without script the form opens inline.", both(&|_| Ok(dialog()))?);
-    add("Menus", "`ui::menu_open` around a details menu (`sluice-menu`): a click elsewhere or Escape closes it, focus back on its summary; the arrows, Home and End move through it.", both(&|_| Ok(menus()))?);
-    add("Copy", "`ui::copy` (`sluice-copy`): an id or a SHA in data mono, its copy button there only with script, saying Copied for a moment.", both(&|_| Ok(copies()))?);
-    add("Settings", "`ui::types_toggle` and the display preferences' `ui::setting_open` (`sluice-toggle`): applied at once, kept by /settings; every Types switch on a page follows.", both(&|_| Ok(toggles()))?);
-    add("Search", "`ui::search_open` (`sluice-search`): a list filtered as one types (the functions), or the board's tools pointing the page's stream at their query; Escape clears.", both(&|p| Ok(searches(p)))?);
-    add("Banners", "`ui::banner` (`sluice-banner`): the page's stream paused or stopped with Reconnect, in gold; a newer build with Reload, muted. Hidden while live.", both(&|_| Ok(banners()))?);
-    add("Notice", "`ui::notice`: what a page says at its top when something asked for was not done (a step's action refused: the browser is sent back to the step's own address, the notice and what was typed held for ten minutes under a key the server made), with what to do next; read out as it appears.", both(&|_| Ok(notices()))?);
-    add("Keys", "`sluice-keys`, listed under display preferences on every page: / finds on the plan, the log and functions, g then a letter goes to a section, ? opens the list; never while typing in a field, with a modifier held or under an open dialog.", both(&|_| Ok(keys()))?);
-    add("Splitter", "`ui::splitter` (`sluice-splitter`): drag, the arrows (16px, 64px with Shift), Home and End; a double-click resets; the width kept per project.", both(&|p| Ok(splitters(p)))?);
-    add("Components", "Every Rocket component: Rust draws its host and all in it, the component only behaves (light DOM, no content of its own). Its props are its host's attributes.", (components(), TrustedHtml::default()));
+    add("Status", "Each state a step, unit or project can be in: its glyph, its word and what it means. The same glyph and word on every page.", "`ui::status`, `ui::glyph` or `ui::mark`, from the status table.", both(&|_| Ok(statuses()))?);
+    add("Tags", "A small fact set apart: plain, muted once something is closed, gold when it wants a look, coral only for a question waiting on you, blue with the running glyph while live.", "`ui::tag`, `ui::tag_link`, `ui::ask_link`.", both(&|_| Ok(tags()))?);
+    add("Buttons", "The filled button is the next move; the rest are plain; a delete is the dark danger button; a dimmed one cannot be pressed now.", "Plain `button`, `.primary`, `.danger`.", both(&|_| Ok(buttons()))?);
+    add("Tabs", "A step's parts, one at a time. The arrow keys, Home and End move between them; the chosen tab stays chosen as the page updates and is in the address, so a link opens it. Without script every part stands stacked.", "`ui::tabs_open`, `panel_open`, `panel_close`, `tabs_close` (`sluice-tabs`).", both(&|p| Ok(tabs(&format!("{p}tabs-"))))?);
+    add("Sections and cards", "A heading over a section's rows, and a card around a region of its own.", "`ui::head`.", both(&|_| Ok(sections()))?);
+    add("Fields", "Inputs, outputs and progress, one row each: its name, its value read by its kind, and where it came from or which run set it under it. Show value types (display preferences) adds each type.", "`kit.html`'s `field`.", both(&|p| fields(p, &project))?);
+    add("Folds", "A long value shows its first lines, faded, with Show all under them (only when it was cut). A list says what it holds in a sentence that opens to it; More and Less are remembered per project, or open on a wide screen.", "`ui::fold`, `ui::more_open` (`sluice-fold`).", both(&|_| Ok(folds()))?);
+    add("Conversation", "Messages in one column: a run from one sender under who sent it to whom, a line at each day and at the first unread, a question's answer under it, long ones folded, the message box at the end. A question for you has Answer and Close, and says where it went once answered.", "`threads::Conversation` in `sluice-conversation`, `sluice-composer`, `sluice-answer`.", both(&|p| conversation(p, &project))?);
+    add("Empty states", "What a place says when it has nothing to show, and where to go instead.", "`ui::empty`, `ui::empty_with`.", both(&|_| Ok(empties()))?);
+    add("Confirmation", "A step asks before Cancel, a succeeded step's Retry, Close all and a delete. Focus starts on the safe choice, Escape keeps things as they are, and you return to the button you pressed. Without script the question opens in place.", "`ui::Confirm` in `sluice-confirm`.", both(&|_| Ok(dialog()))?);
+    add("Menus", "The project switcher and display preferences: a click elsewhere or Escape closes one, the arrows, Home and End move through it.", "`ui::menu_open` (`sluice-menu`).", both(&|_| Ok(menus()))?);
+    add("Copy", "An id or a SHA in data mono, with a copy button that says Copied for a moment.", "`ui::copy` (`sluice-copy`).", both(&|_| Ok(copies()))?);
+    add("Settings", "Display preferences apply at once and are kept for next time; every Show value types switch on a page follows.", "`ui::types_toggle`, `ui::setting_open` (`sluice-toggle`).", both(&|_| Ok(toggles()))?);
+    add("Search", "A list filtered as you type (the functions), or the plan's tools showing what matches; Escape clears.", "`ui::search_open` (`sluice-search`).", both(&|p| Ok(searches(p)))?);
+    add("Banners", "Updates paused or stopped, with Reconnect, in gold; a newer build of sluice, with Reload, muted. Hidden while the page is live.", "`ui::banner` (`sluice-banner`).", both(&|_| Ok(banners()))?);
+    add("Notice", "What a page says at its top when something you asked for was not done, with what to do next and your words kept in their box. Read out as it appears.", "`ui::notice`: a refused step action comes back to the step's address, the notice held ten minutes under a key the server made.", both(&|_| Ok(notices()))?);
+    add("Keys", "Listed under display preferences on every page: / finds on the plan, the log and functions; g then a letter goes to a section; ? opens the list. Never while typing in a field or under an open dialog.", "`sluice-keys`.", both(&|_| Ok(keys()))?);
+    add("Splitter", "The line between the plan and an open step: drag it, or use the arrows (16px, 64px with Shift), Home and End; a double-click resets it, and its width is kept per project.", "`ui::splitter` (`sluice-splitter`).", both(&|p| Ok(splitters(p)))?);
+    add("Components", "For whoever builds a page: every component, the attributes it reads and what it does. The server draws everything in it; the component only behaves.", "Rocket components in `components.js`, light DOM.", (components(), TrustedHtml::default()));
     Ok(parts)
 }
 async fn gallery(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
@@ -426,8 +444,85 @@ async fn gallery(State(state): State<DashboardState>, headers: HeaderMap) -> Res
         let parts = parts().map_err(super::threads::render_error)?;
         let body = TrustedHtml::from_template(&GalleryTemplate { parts: &parts })
             .map_err(super::threads::render_error)?;
-        super::render_layout("Kit", &body, &nav, &Viewer::from_headers(&headers), "", "", "/_ui")
+        super::render_layout("States and parts", &body, &nav, &Viewer::from_headers(&headers), "", "", "/_ui")
             .map_err(super::threads::render_error)
+    };
+    match page.await {
+        Ok(html) => Html(html.as_str().to_owned()).into_response(),
+        Err(e) => crate::http::error_response(e),
+    }
+}
+/// The agent docs (`docs/agent`, as `sluice docs` and the MCP `docs` tool serve them) as
+/// pages: an index, then each topic rendered.
+async fn agent_docs(
+    State(state): State<DashboardState>,
+    topic: Option<axum::extract::Path<String>>,
+    headers: HeaderMap,
+) -> Response {
+    use super::ui::esc;
+    let page = async {
+        let snapshot = state.snapshot(None).await?;
+        let nav = NavView::new(&snapshot, None, "")?;
+        let pages = sluice_runtime::docs::PAGES;
+        // a topic by its first line, its first sentence when that runs on
+        let first = |page: &str| {
+            let line = page
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("")
+                .trim_start_matches(['#', ' '])
+                .trim();
+            let sentence = line.split_once(". ").map_or(line, |(s, _)| s);
+            sluice_model::naming::cut(sentence.trim_end_matches('.'), 64)
+        };
+        let index: String = pages
+            .iter()
+            .map(|(name, page)| {
+                format!(
+                    "<li><a href=\"/docs/{n}\"{c}>{t}</a> <code class=\"meta\">{n}</code></li>",
+                    n = esc(name),
+                    t = esc(&first(page)),
+                    c = if topic.as_ref().is_some_and(|t| t.0 == *name) {
+                        " aria-current=\"page\""
+                    } else {
+                        ""
+                    },
+                )
+            })
+            .collect();
+        let (title, body) = match &topic {
+            None => (
+                "Agent docs".to_owned(),
+                format!(
+                    "<div class=\"agent-docs\"><h1>Agent docs</h1><p class=\"lead\">What the agents that drive sluice read: the same pages <code>sluice docs</code> and the MCP <code>docs</code> tool give them.</p><ul class=\"docs-index\">{index}</ul></div>"
+                ),
+            ),
+            Some(t) => {
+                let Some((_, page)) = pages.iter().find(|(name, _)| *name == t.0) else {
+                    return Err(sluice_model::error::PublicError::NotFound {
+                        message: format!("No agent docs page is named {}.", t.0),
+                    });
+                };
+                (
+                    format!("{} · Agent docs", first(page)),
+                    format!(
+                        "<div class=\"agent-docs\"><nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/docs\">{back}Agent docs</a></nav><div class=\"md docs-page\">{}</div><nav class=\"docs-index docs-more\" aria-label=\"Agent docs\"><ul>{index}</ul></nav></div>",
+                        crate::markdown::render_from(page, 1),
+                        back = super::icons::icon(super::icons::Icon::ArrowLeft, 16, ""),
+                    ),
+                )
+            }
+        };
+        super::render_layout(
+            &title,
+            &TrustedHtml::owned(body),
+            &nav,
+            &Viewer::from_headers(&headers),
+            "",
+            "",
+            "/docs",
+        )
+        .map_err(super::threads::render_error)
     };
     match page.await {
         Ok(html) => Html(html.as_str().to_owned()).into_response(),
@@ -439,6 +534,8 @@ pub fn registration() -> PageRegistration {
         routes: |state| {
             Router::new()
                 .route("/_ui", get(gallery))
+                .route("/docs", get(agent_docs))
+                .route("/docs/{topic}", get(agent_docs))
                 .with_state(state.dashboard.clone())
         },
         nav: |_| vec![],

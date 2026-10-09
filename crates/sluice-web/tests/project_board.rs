@@ -575,7 +575,8 @@ async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
     assert!(red.contains("<span class=\"v num\">2</span>"), "{red}");
     assert!(
         red.contains("<span class=\"tag live\">")
-            && red.contains("live</span><time data-ago=\"2026-10-06T10:00:00.5Z\" datetime=\"2026-10-06T10:00:00.5Z\" title=\"2026-10-06 10:00 UTC\">2026-10-06 10:00 UTC</time>"),
+            && red.contains("live</span><time data-ago=\"2026-10-06T10:00:00.5Z\" datetime=\"2026-10-06T10:00:00.5Z\" title=\"2026-10-06 10:00 UTC\">")
+            && red.contains(" ago</time>"),
         "{red}"
     );
     // A field the progress lacks shows the output, unmarked.
