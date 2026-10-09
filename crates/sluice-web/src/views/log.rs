@@ -201,7 +201,7 @@ pub struct LogRow {
     pub settled: Option<(String, Vec<String>)>,
     pub folded: usize,
     /// A message: drawn with its sender and recipient named as pages name them, and one note
-    /// sent to several in a row folded into one row, "fig-5577-work to 6 steps: …".
+    /// sent to several in a row folded into one row, "a-7-draft to 6 steps: …".
     pub note: Option<LogNote>,
 }
 /// A message record as its log row says it: who sent it to whom, its first words linked to
@@ -328,7 +328,7 @@ impl LogView {
         format!("{}?{}", self.base(), query.query(None, None))
     }
     /// What an empty page says: no records of what it asks for, said as its filters say it
-    /// ("No error records for step fig-5571-work."), with a link that drops each filter.
+    /// ("No error records for step a-6-draft."), with a link that drops each filter.
     pub fn empty_html(&self) -> TrustedHtml {
         use super::ui::esc;
         let q = &self.query;
@@ -444,7 +444,7 @@ impl LogView {
         } else {
             String::new()
         };
-        // the tab: "Log · lash" on a project's log
+        // the tab: "Log · almanac" on a project's log
         let title = match self
             .project
             .and_then(|id| self.nav.projects.iter().find(|p| p.id == id))
@@ -706,7 +706,7 @@ fn links(
     if let Some(thread) = field("thread") {
         links.push((thread.to_owned(), super::threads::thread_url(project, thread), String::new(), String::new()));
     }
-    // a question to the owner says who asked it first ("fig-5576-work asked you: …"): a step
+    // a question to the owner says who asked it first ("a-7-draft asked you: …"): a step
     // asking is linked as any step is
     let asker = field("from").filter(|from| {
         field("verb") == Some("ask")
@@ -780,7 +780,7 @@ fn summary(event: &Event) -> String {
     };
     let maybe = |reason: &Option<String>| because(reason.as_deref().unwrap_or(""));
     match event {
-        // a question to the owner by its title: "fig-5576-work asked you: Land l1 first?"
+        // a question to the owner by its title: "a-7-draft asked you: Publish a-6 first?"
         Event::Message(m)
             if m.verb == sluice_model::commands::MessageVerb::Ask
                 && m.to.as_deref() == Some("owner") =>

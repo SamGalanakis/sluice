@@ -62,7 +62,7 @@ pub struct FailingCall {
 pub struct TurnView {
     pub n: usize,
     pub anchor: String,
-    /// What opened it: "Task", "From Orchestrator", "Reply from fig-5576-work", "From sluice",
+    /// What opened it: "Task", "From Orchestrator", "Reply from a-7-draft", "From sluice",
     /// "Compacted", "Carried on".
     pub sent_kind: String,
     pub sent: String,

@@ -76,8 +76,8 @@ pub struct Timeline {
     pub ticks: Vec<Tick>,
     /// A run still goes: the axis ends in "now".
     pub open: bool,
-    /// Two or more stages at its end with no run yet, each its name and page: one row, "land,
-    /// landed, close, rm: no run yet", not a row each.
+    /// Two or more stages at its end with no run yet, each its name and page: one row, "review,
+    /// publish, index: no run yet", not a row each.
     pub rest: Vec<(String, String)>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]

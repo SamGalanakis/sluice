@@ -126,8 +126,8 @@ impl MessageItem {
             _ => TrustedHtml::owned(String::new()),
         }
     }
-    /// An answered question's one line, where it stood: "✓ Answered 2m ago: Land fig-5576
-    /// first? sent to fig-5576-work · Read the thread", or "Closed 2m ago: …" for one the owner
+    /// An answered question's one line, where it stood: "✓ Answered 2m ago: Publish a-6
+    /// first? sent to a-6-draft · Read the thread", or "Closed 2m ago: …" for one the owner
     /// closed. One sentence, drawn here only: the inbox keeps it in the question's place for ten
     /// minutes, and every answer box carries it (`answered_template`) for `openui.js` to put in
     /// place, "just now", the moment the answer is taken. It takes focus there (tabindex -1),
@@ -273,7 +273,7 @@ impl ThreadView {
         self.messages.last().map_or(0, MessageItem::id)
     }
     /// Its step as the way back names it: the title (cut to 64), else "step <id>".
-    /// The way back to its step, by its id ("step fig-5582-work"): the page's `h1` already
+    /// The way back to its step, by its id ("step a-6-draft"): the page's `h1` already
     /// says its title.
     /// Its page's heading: a step's thread by its step's heading (its stage muted, its title
     /// whole), as the step's own page has it; any other by its name.
@@ -870,7 +870,7 @@ pub struct Conversation {
 pub struct Composer {
     pub project: ProjectId,
     pub to: String,
-    /// Its recipient in words ("Message to fig-5492-work").
+    /// Its recipient in words ("Message to a-7-draft").
     pub label: String,
     /// Said under its label when its step is not running, so nobody reads it now: when it
     /// will be read, and how to tell a stopped step something at once (`Composer::note`).

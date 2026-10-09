@@ -125,7 +125,7 @@ function drawEdges(host, data) {
   // in its rows). Should the page and the server ever disagree (a patch on its way), a line that
   // would touch a matrix is left out rather than drawn through its cells.
   const matrices = $$(".matrix", plane).filter(shown).map((m) => at(m.getBoundingClientRect()));
-  // a box's label ("fig-5193") is passed like a card: a line into the box never strikes it
+  // a box's label ("a-12") is passed like a card: a line into the box never strikes it
   const labels = $$(".layer > .box > .box-label", plane).filter(shown)
     .map((l) => ({ ...at(l.getBoundingClientRect()), tile: tileEls.indexOf(l.parentElement) }));
   for (const n of $$("[data-node]", plane)) {

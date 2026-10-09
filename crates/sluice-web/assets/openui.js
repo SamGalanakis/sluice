@@ -192,8 +192,8 @@ async function send(area, answer) {
 
 /** The server took the answer: say so where it was given, now, whether or not the page's
  * stream is connected (it may be reconnecting after a restart). The question's buttons and box
- * give way to the line the server drew for it in the box's <template> ("Answered just now: Land
- * fig-5576 first? sent to fig-5576-work · Read the thread", or "Closed just now: …"), the one
+ * give way to the line the server drew for it in the box's <template> ("Answered just now: Publish
+ * a-6 first? sent to a-6-draft · Read the thread", or "Closed just now: …"), the one
  * sentence the inbox keeps in the question's place (`MessageItem::answered_html`). The line is a
  * polite status and takes the keyboard's focus, so a reader hears it and the next Tab goes on
  * from the question; a patch that replaces it (the step's exchange drawing the answer under the

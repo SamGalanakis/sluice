@@ -535,7 +535,7 @@ pub struct Restart {
 }
 impl Restart {
     /// Who started it again, in a sentence of its own: "You retried it: rebase onto ce4fc38,
-    /// with feedback.", "fig-5571-land sent it back, with feedback.", "Sluice retried it on its
+    /// with feedback.", "a-6-review sent it back, with feedback.", "Sluice retried it on its
     /// own.", "An input it reads changed, so it ran again." (`step`: the step it ran.)
     pub fn sentence(&self, step: &str) -> String {
         use super::ui::esc;
@@ -684,7 +684,7 @@ impl GateView {
         self.shown
             .is_some_and(|s| s.spec().band == sluice_model::shown::Band::Done)
     }
-    /// A step's entry that a skip satisfies too (`fig-1?`).
+    /// A step's entry that a skip satisfies too (`a-1?`).
     pub fn accepts_skip(&self) -> bool {
         self.step.is_some() && self.entry.ends_with('?')
     }
@@ -1937,7 +1937,7 @@ impl StepView {
         self.running() && self.outputs_from().is_some()
     }
     /// How the run going now came about, after `previous_run`: "Run 3 started 7m ago, after run
-    /// 2 failed: kiln clippy failed after the rebase. Sluice retried it on its own." (the run
+    /// 2 failed: the style check failed after the merge. Sluice retried it on its own." (the run
     /// before linked to it in Runs; who retried it in words, a retry's feedback linked).
     pub fn rerun_html(&self) -> TrustedHtml {
         use super::ui::{ago, esc};

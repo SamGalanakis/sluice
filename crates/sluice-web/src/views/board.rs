@@ -492,12 +492,12 @@ impl UnitView {
             .unwrap_or_default()
     }
     /// A one-step unit's card names the unit too when the step's id does not already
-    /// (`build / compile`); `l-a1` in unit `l-a1`, or `fig-5216-work` in `fig-5216`, says it.
+    /// (`build / compile`); `l-a1` in unit `l-a1`, or `a-12-draft` in `a-12`, says it.
     pub fn names_unit(&self, step: &StepView) -> bool {
         self.solo && !step.id.as_str().starts_with(self.id.as_str())
     }
     /// The unit's steps as the board's lane strings write them: each step's id without the
-    /// unit's prefix and its state's lane mark (`shown`), `fork✓ work✓ land✓`.
+    /// unit's prefix and its state's lane mark (`shown`), `draft✓ review✓ publish✓`.
     pub fn lane(&self) -> String {
         let prefix = format!("{}-", self.id);
         self.steps
@@ -1731,7 +1731,7 @@ impl ProjectView {
     }
     /// The relations among what the page draws: the live units and the done units on the
     /// shelf, with the plan's inputs and outputs. A relation inside a done unit the shelf
-    /// leaves out has no card to join, so it is not sent (on lash, most of the plan).
+    /// leaves out has no card to join, so it is not sent (on a large plan, most of it).
     pub fn edges_json(&self) -> String {
         let drawn: BTreeSet<&str> = self
             .units

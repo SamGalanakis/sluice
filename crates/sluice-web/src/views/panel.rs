@@ -648,7 +648,7 @@ fn first_section(html: &str) -> (&str, &str) {
 // ---- drawing -------------------------------------------------------------------------------
 
 use super::ui::esc;
-/// `text` escaped, each word with a hyphen inside it (a step id, a unit, `FIG-5004`) kept on
+/// `text` escaped, each word with a hyphen inside it (a step id, a unit, `A-5004`) kept on
 /// one line: a narrow board breaks between ids, never inside one.
 fn prose(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 16);
@@ -664,7 +664,7 @@ fn prose(text: &str) -> String {
     }
     out
 }
-/// A word kept on one line: one with a hyphen inside it (`fig-5004-work`, `FIG-5004`), short
+/// A word kept on one line: one with a hyphen inside it (`a-5004-draft`, `A-5004`), short
 /// enough to be an id. A longer one (a path, a hash with dashes) may break anywhere, so it never
 /// pushes the board wider than its column.
 fn kept_whole(word: &str) -> bool {
@@ -687,7 +687,7 @@ fn markdown(text: &str, class: &str, top: u8) -> String {
         keep_ids(crate::markdown::render_from(text, top).as_str())
     )
 }
-/// Rendered HTML with each word that has a hyphen inside it (a step or unit id, `FIG-5004`)
+/// Rendered HTML with each word that has a hyphen inside it (a step or unit id, `A-5004`)
 /// in its text wrapped to stay on one line, as `prose` keeps them; tags, attributes and code
 /// are left as they are.
 fn keep_ids(html: &str) -> String {
