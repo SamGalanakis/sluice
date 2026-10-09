@@ -40,7 +40,7 @@
 <input type="hidden" name="field" value="resources"><input type="hidden" name="resource" value="{{ r.name }}"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
 {% call capacity(format!("resource-{}", r.name), crate::settings::shown_number(feedback, r), r.function, view.capacity_fns(r.function)) %}{% endcall %}
 <div class="setting-actions"><button type="submit">Apply capacity</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" && feedback.resource == r.name %}{{ feedback.message }}{% endif %}</span></div>
-</form><form method="post" action="{{ view.path() }}" data-setting="resources" class="cap-remove" data-seen="{{ view.seen("resources") }}"><input type="hidden" name="field" value="resources"><input type="hidden" name="resource" value="{{ r.name }}"><input type="hidden" name="capacity" value="remove"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><button type="submit" class="link-button">Remove {{ r.name }}</button><span class="settings-feedback" role="status"></span></form></dd></div>{% endfor %}</dl></div>
+</form><div class="cap-remove">{{ view.remove_confirm(r.name).html()|safe }}</div></dd></div>{% endfor %}</dl></div>
 <dl class="settings-fields"><div class="setting-row"><dt>New resource</dt><dd><form method="post" action="{{ view.path() }}" data-setting="resources" id="new-resource" data-seen="{{ view.seen("resources") }}">
 <input type="hidden" name="field" value="resources"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
 <div class="setting-pair"><label for="resource-name">Name</label><input id="resource-name" name="resource" value="{% if feedback.error("resources") %}{{ feedback.resource }}{% endif %}" required></div>
@@ -51,8 +51,8 @@
 <input type="hidden" name="expected_rev" id="board-rev" value="{{ view.project.board_rev }}">
 <label for="board-program">Program{% if view.project.board_rev.0 > 0 %} · rev {{ view.project.board_rev }}{% endif %}</label>
 <textarea id="board-program" name="program" class="board-program" spellcheck="false" aria-describedby="board-feedback">{{ feedback.value("board", view.project.board.as_deref().unwrap_or("")) }}</textarea>
-<div class="setting-actions"><button type="submit" name="op" value="save">Save board</button><button type="submit" name="op" value="clear"{% if view.project.board.is_none() %} disabled{% endif %}>Clear board</button><span id="board-feedback" class="settings-feedback board-feedback{% if feedback.error("board") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "board" %}{{ feedback.message }}{% endif %}</span></div>
-</form>{{ crate::views::ui::more_open_hidden("preview-fold", "Show the preview", "Hide the preview", "board-preview-label")|safe }}<div id="board-preview" class="settings-preview board-preview" aria-label="Board preview" hidden></div>{{ crate::views::ui::more_close("")|safe }}
+<div class="setting-actions"><button type="submit" name="op" value="save">Save board</button><span id="board-feedback" class="settings-feedback board-feedback{% if feedback.error("board") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "board" %}{{ feedback.message }}{% endif %}</span></div>
+</form><div class="board-clear">{{ view.clear_confirm().html()|safe }}</div>{{ crate::views::ui::more_open_hidden("preview-fold", "Show the preview", "Hide the preview", "board-preview-label")|safe }}<div id="board-preview" class="settings-preview board-preview" aria-label="Board preview" hidden></div>{{ crate::views::ui::more_close("")|safe }}
 <h3 id="doc-heading">Document</h3>
 <p class="setting-help">The board's hand-written part, drawn where the program has <code>Doc()</code>. Agents read it with <code>board_doc_read</code> and change it with <code>board_doc_write</code> or <code>board_doc_edit</code>.</p>
 <!--board-doc--><div id="board-doc"><p class="setting-help doc-status">{% if view.doc.rev.0 > 0 %}Rev {{ view.doc.rev }}{% if let Some(at) = view.doc.at %} · edited {{ crate::views::ui::ago(at)|safe }}{% endif %}{% if let Some(author) = view.doc.author %} by {{ author }}{% endif %}{% else %}Not written yet.{% endif %}{% if !view.doc_drawn() %} The program has no <code>Doc()</code>, so the board does not show it.{% endif %}</p>
@@ -163,14 +163,21 @@ function patch(doc, ids) {
  for (const id of ids) { const node = doc.getElementById(id); if (node) document.getElementById(id)?.replaceWith(node); }
  refresh();
 }
-async function sendForm(form, submitter) {
+// Clear board's confirmation drawn anew (its revision, whether there is a board to clear)
+function replaceClear(doc) {
+ const here = document.querySelector('.board-clear'), there = doc.querySelector('.board-clear');
+ if (here && there && !document.querySelector('#confirmation[open]')) here.replaceWith(there);
+}
+async function sendForm(form, submitter, extra) {
  if (saving) return;
  saving = true;
  sending = form;
  const feedback = form.querySelector('.settings-feedback');
  feedback.textContent = 'Saving…';
  try {
-  const response = await fetch(form.action, {method:'POST', body:new URLSearchParams(new FormData(form, submitter))});
+  const body = new URLSearchParams(new FormData(form, submitter));
+  for (const [k, v] of Object.entries(extra || {})) body.set(k, v);
+  const response = await fetch(form.action, {method:'POST', body});
   const text = await response.text();
   const doc = new DOMParser().parseFromString(text, 'text/html');
   if (doc.getElementById('settings-live')) {
@@ -193,7 +200,7 @@ async function sendForm(form, submitter) {
    if (field === 'board' && source) {
     document.querySelector('#board-rev').value = source.querySelector('#board-rev').value;
     form.querySelector('label[for=board-program]').textContent = source.querySelector('label[for=board-program]').textContent;
-    form.querySelector('button[value=clear]').disabled = source.querySelector('button[value=clear]').disabled;
+    replaceClear(doc);
     if (response.ok) { document.querySelector('#board-program').value = source.querySelector('#board-program').value; previewBoard(); }
    }
   } else { feedback.textContent = JSON.parse(text).message || 'Could not save.'; }
@@ -203,6 +210,17 @@ async function sendForm(form, submitter) {
 document.addEventListener('submit', event => {
  const form = event.target;
  if (form.matches('form[data-setting]')) { event.preventDefault(); sendForm(form, event.submitter); }
+ // a confirmed Clear board or Remove: the dialog closes and its field's form sends it
+ if (form.id === 'board-clear-form') {
+  event.preventDefault(); document.querySelector('#confirmation').close();
+  sendForm(document.querySelector('#board-form'), null, {op: 'clear'});
+ }
+ if (form.id.startsWith('remove-')) {
+  event.preventDefault(); document.querySelector('#confirmation').close();
+  const resource = form.querySelector('[name=resource]').value;
+  const editor = [...document.querySelectorAll('#resource-editors form[data-setting=resources]')].find(f => f.querySelector('[name=resource]').value === resource);
+  if (editor) sendForm(editor, null, {capacity: 'remove'});
+ }
  if (form.id === 'delete-form') {
   event.preventDefault(); if (document.querySelector('#delete-button').closest('sluice-confirm').disabled) return;
   saving = true; refresh();

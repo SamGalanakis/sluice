@@ -503,6 +503,17 @@ pub struct Messages {
     pub owner: bool,
 }
 
+/// The owner sets a cancelled step aside (`dismissed`), or back: a dismissed cancel stays on
+/// its unit but no longer marks its project or holds its unit off the shelf, until the step
+/// is cancelled again. Kept like a read mark (`readers`), never a log record.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StepDismiss {
+    pub project: ProjectId,
+    pub step: StepId,
+    pub dismissed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MarkRead {
@@ -1113,6 +1124,7 @@ pub enum CommandRequest {
     MessagePost(MessagePost),
     Messages(Messages),
     MarkRead(MarkRead),
+    StepDismiss(StepDismiss),
     FnCall(FnCall),
     LogRead(LogRead),
     LogWait(LogWait),

@@ -460,8 +460,19 @@ async fn a_cancel_reads_cancelled_in_every_wait_and_gate() {
         page.contains(&format!("<span class=\"gate\">{}", glyph(Shown::Cancelled))),
         "{page}"
     );
+    // its page names the step it takes from by name and link, how it reads after it
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/reads")).await;
-    assert!(page.contains("<p>step up is cancelled</p>"), "{page}");
+    let wait = between(&page, "<p class=\"gate wait-step\">", "</p>");
+    assert!(wait.contains("aria-label=\"cancelled\""), "{wait}");
+    assert!(wait.contains("/steps/up\"><code>up</code></a>"), "{wait}");
+    assert!(
+        wait.ends_with(" <span class=\"meta\">(cancelled)</span>"),
+        "{wait}"
+    );
+    assert!(
+        !page.contains("<p>step up is cancelled</p>"),
+        "said once: {page}"
+    );
 }
 
 /// "Blocked" is one thing, a step behind a failure; a pause (the step's or its project's) reads

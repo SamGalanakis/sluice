@@ -656,17 +656,23 @@ fn prose(text: &str) -> String {
         if i > 0 {
             out.push(' ');
         }
-        let chars: Vec<char> = word.chars().collect();
-        let joined = chars
-            .windows(3)
-            .any(|w| w[1] == '-' && w[0].is_alphanumeric() && w[2].is_alphanumeric());
-        if joined {
+        if kept_whole(word) {
             let _ = write!(out, "<span class=\"ou-id\">{}</span>", esc(word));
         } else {
             out.push_str(&esc(word));
         }
     }
     out
+}
+/// A word kept on one line: one with a hyphen inside it (`fig-5004-work`, `FIG-5004`), short
+/// enough to be an id. A longer one (a path, a hash with dashes) may break anywhere, so it never
+/// pushes the board wider than its column.
+fn kept_whole(word: &str) -> bool {
+    let chars: Vec<char> = word.chars().collect();
+    chars.len() <= 40
+        && chars
+            .windows(3)
+            .any(|w| w[1] == '-' && w[0].is_alphanumeric() && w[2].is_alphanumeric())
 }
 /// A time the page's script reads as "2h ago": without script the UTC day and minute.
 fn ago(at: &str) -> String {
@@ -710,11 +716,7 @@ fn keep_ids(html: &str) -> String {
                 if i > 0 {
                     out.push(' ');
                 }
-                let chars: Vec<char> = word.chars().collect();
-                if chars
-                    .windows(3)
-                    .any(|w| w[1] == '-' && w[0].is_alphanumeric() && w[2].is_alphanumeric())
-                {
+                if kept_whole(word) {
                     let _ = write!(out, "<span class=\"ou-id\">{word}</span>");
                 } else {
                     out.push_str(word);

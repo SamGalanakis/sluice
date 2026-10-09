@@ -446,6 +446,12 @@ impl Tally {
     pub fn get(&self, shown: Shown) -> usize {
         self.0[shown.rank()]
     }
+    /// Without `n` of the steps counted under `shown` (as many as it has).
+    pub fn without(mut self, shown: Shown, n: usize) -> Self {
+        let at = shown.rank();
+        self.0[at] = self.0[at].saturating_sub(n);
+        self
+    }
     pub fn total(&self) -> usize {
         self.0.iter().sum()
     }

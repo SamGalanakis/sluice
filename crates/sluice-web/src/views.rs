@@ -174,6 +174,10 @@ pub struct ProjectView {
     /// How the index names its running, failed and cancelled steps (`ui::StepRef`), by id.
     #[serde(default)]
     pub names: std::collections::BTreeMap<String, ui::StepRef>,
+    /// Its cancelled steps the owner dismissed (`StepDismiss`): each stays on its unit, but no
+    /// longer marks the project, its tab or its index row.
+    #[serde(default)]
+    pub dismissed: std::collections::BTreeSet<String>,
 }
 impl ProjectView {
     /// How a page names one of its listed steps: its title and id, or its id alone.
@@ -196,15 +200,29 @@ impl ProjectView {
     pub fn stopped_more(&self) -> usize {
         self.stopped.len().saturating_sub(Self::STOPPED_ROWS)
     }
-    /// How the whole project reads: its first state (`Tally::first`), pending with no steps.
+    /// Its counts as they mark the project: without the cancels the owner dismissed.
+    pub fn standing(&self) -> ui::Tally {
+        self.counts
+            .clone()
+            .without(ui::Shown::Cancelled, self.dismissed.len())
+    }
+    /// How the whole project reads: its first state (`Tally::first`) less what the owner
+    /// dismissed, a value set by hand read as done (a project is succeeded, not "set by hand"),
+    /// pending with no steps.
     pub fn shown(&self) -> ui::Shown {
-        self.counts.first().unwrap_or(ui::Shown::Pending)
+        match self.standing().first() {
+            Some(ui::Shown::Manual) => ui::Shown::Succeeded,
+            Some(shown) => shown,
+            // nothing left but dismissed cancels: done
+            None if self.counts.total() > 0 => ui::Shown::Succeeded,
+            None => ui::Shown::Pending,
+        }
     }
     /// Its pages' tab words, what needs a look first, as the index's tab counts it
     /// (`home::HomeView::title`): "2 failed · 1 quiet · lash", the states that need attention.
     pub fn tab_words(&self) -> String {
         let mut words: Vec<String> = self
-            .counts
+            .standing()
             .iter()
             .filter(|(s, _)| s.spec().attention)
             .map(|(s, n)| format!("{n} {}", s.word()))
@@ -921,6 +939,7 @@ pub fn load_snapshot(
             running: vec![],
             stopped: vec![],
             names: Default::default(),
+            dismissed: Default::default(),
         };
         let mut steps = c.prepare_cached(&format!("SELECT {STEP_LIVE} FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position"))?;
         // a failed step's error says whether the owner cancelled it: listed apart
@@ -953,6 +972,9 @@ pub fn load_snapshot(
                 view.running.push(run);
             }
         }
+        // a cancel the owner dismissed is no longer listed, nor marks the project
+        view.dismissed = sluice_store::messages::dismissed(c, id)?;
+        cancels.retain(|s| !view.dismissed.contains(&s.step));
         view.stopped.extend(cancels);
         // each stopped step's failure as its log records it, so its row links that record
         if !view.stopped.is_empty() {

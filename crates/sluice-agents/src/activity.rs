@@ -1187,9 +1187,17 @@ fn sent(text: &str, run_dir: &Path) -> Sent {
                 .unwrap_or(words),
             _ => words,
         });
-        // a file no longer kept still names the message it held
+        // a file no longer kept still names the message it held: its id ("#161183", under
+        // the turn's "Message"), or the compacted context it re-primed with
         let words = words.unwrap_or_else(|| match (kind, file.file_stem()) {
-            (SentKind::Message, Some(id)) => format!("message {}", id.to_string_lossy()),
+            (SentKind::Message, Some(id)) => {
+                let id = id.to_string_lossy();
+                if id.starts_with("compact-") {
+                    "Its compacted context".to_owned()
+                } else {
+                    format!("#{id}")
+                }
+            }
             _ => String::new(),
         });
         return Sent {

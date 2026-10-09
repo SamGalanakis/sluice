@@ -145,6 +145,15 @@ pub async fn dispatch_ext<H: ExecutionHost>(
                 deleted: true,
             }
         }
+        CommandRequest::StepDismiss(request) => {
+            broker
+                .writer()
+                .write(RetrySafety::Idempotent, move |tx| {
+                    messages::dismiss(tx, request)
+                })
+                .await?;
+            CommandReply::Ack
+        }
         CommandRequest::MarkRead(request) => {
             broker
                 .writer()

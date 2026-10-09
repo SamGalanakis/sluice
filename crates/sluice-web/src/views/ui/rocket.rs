@@ -169,7 +169,7 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-search",
         script: "components.js",
-        does: "Finds as one types: the board's search and filters point the page's stream at the new query (the address follows), or a list hides what does not match; Escape clears.",
+        does: "Finds as one types: the board's search and filters point the page's stream at the new query (the address follows), or a list hides what does not match; Escape clears. A form of filters (form[data-applies]) sends itself as a choice in it changes, its Apply hidden.",
         props: &[("mode", "oneOf"), ("base", "string")],
         events: &["sluice-stream-restart"],
         slots: &["form", "list"],

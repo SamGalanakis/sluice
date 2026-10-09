@@ -374,6 +374,56 @@ impl ProjectSettingsView {
             ..Default::default()
         }
     }
+    /// Clear board's confirmation: it removes the program from the plan's page, the program
+    /// sent along so the box keeps it after (Save board restores it).
+    pub fn clear_confirm(&self) -> crate::views::ui::Confirm {
+        crate::views::ui::Confirm {
+            opener: "Clear board".into(),
+            opener_id: "board-clear".into(),
+            title: "Clear the board?".into(),
+            action: format!("{}/board", self.path()),
+            form_id: "board-clear-form".into(),
+            hidden: vec![
+                ("op", "clear".into()),
+                ("expected_rev", self.project.board_rev.to_string()),
+                ("program", self.project.board.clone().unwrap_or_default()),
+            ],
+            copy: format!(
+                "The plan takes the whole page again and agents see no board. Its program (rev {}) stays in the box here until you leave, so Save board puts it back.",
+                self.project.board_rev
+            ),
+            confirm: "Clear board".into(),
+            keep: "Keep it",
+            danger: true,
+            disabled: self.project.board.is_none(),
+            ..Default::default()
+        }
+    }
+    /// Remove a resource's confirmation: its steps then run with no limit on it.
+    pub fn remove_confirm(&self, resource: &str) -> crate::views::ui::Confirm {
+        crate::views::ui::Confirm {
+            opener: format!("Remove {resource}"),
+            title: format!("Remove {resource}?"),
+            action: self.path(),
+            form_id: format!("remove-{resource}"),
+            hidden: vec![
+                ("field", "resources".into()),
+                ("resource", resource.to_owned()),
+                ("capacity", "remove".into()),
+                (
+                    "expected_settings_rev",
+                    self.project.settings_rev.to_string(),
+                ),
+            ],
+            copy: format!(
+                "{resource} and its capacity leave this project. While a step still needs it, sluice refuses."
+            ),
+            confirm: format!("Remove {resource}"),
+            keep: "Keep it",
+            danger: true,
+            ..Default::default()
+        }
+    }
     /// The record a form's field was last changed by, as drawn: what it has seen.
     pub fn seen(&self, field: &str) -> i64 {
         self.changes.get(field).map_or(0, |c| c.0)
@@ -481,10 +531,13 @@ pub struct Feedback {
     pub resource: String,
     pub message: String,
     pub saved: bool,
+    /// Applied, and its box keeps what was sent: a cleared board's program stays in the box,
+    /// so Save board puts it back.
+    pub kept: bool,
 }
 impl Feedback {
     pub fn value<'a>(&'a self, field: &str, fallback: &'a str) -> &'a str {
-        if self.field == field && !self.saved {
+        if self.field == field && (!self.saved || self.kept) {
             &self.value
         } else {
             fallback
@@ -734,6 +787,7 @@ async fn change(
         value: request.value,
         resource: request.resource,
         saved: result.is_ok(),
+        kept: false,
         message: match result {
             Ok(_) => "Saved".into(),
             // the store's revision check: someone changed a setting since the form was drawn
@@ -798,11 +852,15 @@ async fn board_change(
     let status = result.as_ref().err().map(status).unwrap_or(StatusCode::OK);
     let feedback = Feedback {
         field: "board".into(),
+        kept: clear && result.is_ok() && !program.is_empty(),
         value: program,
         resource: String::new(),
         saved: result.is_ok(),
         message: match &result {
-            Ok(outcome) if clear => format!("Cleared (rev {})", outcome.rev),
+            Ok(outcome) if clear => format!(
+                "Cleared (rev {}). Its program is still in the box: Save board to restore it.",
+                outcome.rev
+            ),
             Ok(outcome) => std::iter::once(format!("Saved (rev {})", outcome.rev))
                 .chain(outcome.warnings.iter().map(|w| format!("Warning: {w}")))
                 .collect::<Vec<_>>()

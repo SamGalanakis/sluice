@@ -636,8 +636,11 @@ define("sluice-toggle", {
 // first, and only that (not also the open step). `mode` "filter": its field hides the items it
 // holds (`[data-find]`, their words) that do not hold every word typed, a group
 // (`[data-find-group]`) with none left, and says how many match in its `[data-find-status]`.
+// `mode` "submit": a plain form of filters. In "filter" and "submit" a `form[data-applies]`
+// sends itself when a select, checkbox or radio in it changes, so its Apply (`.apply`, kept as
+// the form's default button for Enter in a text field) hides while the component runs.
 define("sluice-search", {
-  props: ({ string, oneOf }) => ({ mode: oneOf("stream", "filter"), base: string }),
+  props: ({ string, oneOf }) => ({ mode: oneOf("stream", "filter", "submit"), base: string }),
   manifest: {
     slots: [{ name: "form", description: "stream: form.board-tools with input[name=q], its selects and [data-clear-q]." },
             { name: "list", description: "filter: its input[type=search], the [data-find] items, [data-find-group]s and [data-find-status]." }],
@@ -645,6 +648,13 @@ define("sluice-search", {
   },
   setup({ host, props, cleanup }) {
     const on = listening(cleanup);
+    if (props.mode !== "stream") {
+      on(host, "change", (event) => {
+        const form = event.target.closest?.("form[data-applies]");
+        if (form && event.target.matches("select, input[type=checkbox], input[type=radio]")) form.requestSubmit();
+      });
+    }
+    if (props.mode === "submit") return;
     if (props.mode === "filter") return filter(host, on, cleanup);
     const form = () => host.querySelector("form");
     let typing = 0;

@@ -25,6 +25,7 @@ fn fixture() -> DashboardSnapshot {
                 record: None,
             }],
             names: Default::default(),
+            dismissed: Default::default(),
         }],
         inbox: 2,
         notes: 0,

@@ -273,6 +273,70 @@ async fn router_uses_injected_exact_signatures_and_owner_commands() {
     assert_eq!(calls[1].action, Action::Cancel);
     assert_eq!(calls[1].message, "Stop to replan");
 }
+/// Dismiss and Undismiss edit no plan, so they need no revision; Dismiss applies only to a
+/// cancel, and `next` brings the index's Dismiss back to the index.
+#[tokio::test]
+async fn dismiss_sets_a_cancel_aside_with_no_revision_and_goes_back_where_it_was_asked() {
+    let (_home, writer, state, project) = fixture().await;
+    let fake = Arc::new(Fake::default());
+    let app = views::dashboard_router(state.clone())
+        .layer(Extension(Registry(Arc::new(Exact))))
+        .layer(Extension(Commands(fake.clone())));
+    let path = format!("/projects/id/{project}/steps/work/actions");
+    let post = |body: &'static str| {
+        let app = app.clone();
+        let path = path.clone();
+        async move {
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        }
+    };
+    // failed, but no cancel: nothing to dismiss
+    assert_eq!(
+        post("action=dismiss").await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            let cancel = PublicError::Cancelled {
+                message: "pivot".into(),
+            };
+            tx.sql().execute(
+                "UPDATE steps SET error=?2 WHERE project_id=?1",
+                (project.to_string(), serde_json::to_string(&cancel).unwrap()),
+            )?;
+            tx.changed(Some(project), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let response = post("action=dismiss&next=/").await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()["location"], "/");
+    // not dismissed yet (the fake records, the store is unchanged): nothing to undo
+    assert_eq!(
+        post("action=undismiss").await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    // a `next` off the site is not followed
+    let response = post("action=dismiss&next=//elsewhere.example").await;
+    assert_eq!(
+        response.headers()["location"],
+        format!("/projects/id/{project}/steps/work").as_str()
+    );
+    let calls = fake.0.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].action, Action::Dismiss);
+    assert_eq!(calls[0].step.as_ref().map(|s| s.as_str()), Some("work"));
+}
 #[tokio::test]
 async fn deleted_or_old_names_and_missing_steps_are_not_rendered() {
     let (_home, writer, state, project) = fixture().await;
@@ -366,7 +430,7 @@ async fn durable_detail_uses_current_generation_frozen_inputs_and_live_submissio
     timed.runs[0].seconds = Some(19200.0);
     assert_eq!(
         timed.cancel_prompt(),
-        "Its 5h 20m run stops; Retry starts it over."
+        "It has been running for 5h 20m. Cancelling stops that run; Retry starts it over."
     );
     assert_eq!(step.inputs[0].value, "frozen attempted value");
     assert_eq!(step.outputs[0].value, "true");

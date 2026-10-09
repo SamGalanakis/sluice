@@ -389,6 +389,9 @@ pub struct StepView {
     pub hold: Option<Hold>,
     /// What it runs after (`after`), each with where it leads and how it stands.
     pub gates: Vec<GateView>,
+    /// The steps whose outputs it takes and that have not succeeded yet, while it waits: its
+    /// page's "Waits on" names each by its title, linked, with how it reads.
+    pub waits_on: Vec<GateView>,
     pub queued: Vec<String>,
     pub skipped: Vec<String>,
     pub error: String,
@@ -437,6 +440,12 @@ pub struct StepView {
     /// Its latest agent run's activity outline, read from its transcript when its page or
     /// drawer draws (`activity::attach`).
     pub activity: Option<super::activity::ActivityView>,
+    /// Cancelled, and the owner dismissed it (`StepDismiss`): it no longer marks its unit or
+    /// project.
+    pub dismissed: bool,
+    /// Its run going now is an agent's whose transcript cannot be read here (`activity::attach`):
+    /// its Overview says so, so no activity shown is never read as an idle agent.
+    pub transcript_unread: bool,
 }
 /// When a step's current run started and how long it ran or has run so far: its card's timer.
 /// The current run is its latest in its current generation; a scatter's is its latest round,
@@ -489,6 +498,9 @@ impl Hold {
 pub struct GateView {
     pub entry: String,
     pub href: String,
+    /// Its step named as a page names it (its title, then its id), once its page has read the
+    /// plan's names; its id alone until then.
+    pub name: super::ui::StepRef,
     /// How its step reads; none for a unit or a condition.
     pub shown: Option<Shown>,
     #[serde(skip)]
@@ -505,6 +517,14 @@ impl GateView {
         self.shown
             .is_some_and(|s| s.spec().band == sluice_model::shown::Band::Done)
     }
+    /// A step's entry that a skip satisfies too (`fig-1?`).
+    pub fn accepts_skip(&self) -> bool {
+        self.step.is_some() && self.entry.ends_with('?')
+    }
+    /// How its step reads, in a word ("paused"); "" for a unit or a condition.
+    pub fn word(&self) -> &'static str {
+        self.shown.map(Shown::word).unwrap_or("")
+    }
 }
 /// A step's progress as its page shows it: the fields, when they were set, and whether the
 /// step still runs (live) or the run has ended (kept until the next run starts).
@@ -518,11 +538,25 @@ impl StepView {
     /// What its page lists under "Waits on": its waits, less those the After row says (each
     /// gate there carries its status).
     pub fn page_waits(&self) -> Vec<&str> {
+        let named: Vec<String> = self
+            .waits_on
+            .iter()
+            .map(|w| format!("step {} is ", w.entry))
+            .collect();
         self.waits
             .iter()
             .filter(|w| self.gates.is_empty() || !w.starts_with("after "))
+            .filter(|w| !named.iter().any(|n| w.starts_with(n.as_str())))
             .map(String::as_str)
             .collect()
+    }
+    /// Name the steps its page links ("After" and "Waits on") by their titles.
+    pub fn name_links(&mut self, names: &sluice_model::naming::Naming) {
+        for gate in self.gates.iter_mut().chain(self.waits_on.iter_mut()) {
+            if let Some(id) = &gate.step {
+                gate.name = super::ui::StepRef::new(id.as_str(), names.step(id.as_str()));
+            }
+        }
     }
     /// Its pause in words, for a line that has no room for its time: "Paused by cli: the
     /// reason.", "Its project is paused."; "" when nothing holds it.
@@ -706,6 +740,7 @@ impl StepView {
             stopping: false,
             waits: vec![],
             hold,
+            waits_on: vec![],
             gates: {
                 let mut gates: Vec<GateView> = step
                     .after
@@ -714,18 +749,21 @@ impl StepView {
                         sluice_model::gates::Gate::Step { id, .. } => GateView {
                             entry: g.entry(),
                             href: format!("/projects/id/{project}/steps/{id}"),
+                            name: super::ui::StepRef::new(id.as_str(), None),
                             shown: None,
                             step: Some(id.clone()),
                         },
                         sluice_model::gates::Gate::Unit { name, .. } => GateView {
                             entry: g.entry(),
                             href: format!("/projects/id/{project}/units/{name}"),
+                            name: Default::default(),
                             shown: None,
                             step: None,
                         },
                         sluice_model::gates::Gate::Bool { .. } => GateView {
                             entry: g.entry(),
                             href: String::new(),
+                            name: Default::default(),
                             shown: None,
                             step: None,
                         },
@@ -759,6 +797,8 @@ impl StepView {
             timeline: None,
             chained: false,
             activity: None,
+            transcript_unread: false,
+            dismissed: false,
         };
         if let Some(failure) = failure {
             view.set_failure(failure);
@@ -782,7 +822,29 @@ impl StepView {
     ) {
         let step = &plan.steps()[&self.id];
         let word = |id: &StepId| shown(id).map_or(state.status(id).as_str(), Shown::word);
-        self.waits = match evaluate_step(plan, state, step) {
+        let decision = evaluate_step(plan, state, step);
+        self.waits_on = vec![];
+        if matches!(decision, GateDecision::Wait(_)) {
+            for id in step
+                .bindings
+                .values()
+                .flat_map(Binding::references)
+                .filter_map(|r| r.parts().ok()?.step)
+            {
+                if state.status(&id) != StepStatus::Succeeded
+                    && !self.waits_on.iter().any(|w| w.step.as_ref() == Some(&id))
+                {
+                    self.waits_on.push(GateView {
+                        entry: id.to_string(),
+                        href: format!("/projects/id/{}/steps/{id}", self.project),
+                        name: super::ui::StepRef::new(id.as_str(), None),
+                        shown: shown(&id),
+                        step: Some(id),
+                    });
+                }
+            }
+        }
+        self.waits = match decision {
             GateDecision::Wait(_) => wait_reasons_worded(plan, state, step, &word),
             GateDecision::Invalid(e) => e.into_iter().map(|e| e.to_string()).collect(),
             GateDecision::Ready | GateDecision::Skip(_) => vec![],
@@ -818,6 +880,14 @@ impl StepView {
     }
     pub fn cancelled(&self) -> bool {
         self.shown() == Shown::Cancelled
+    }
+    /// How it stands for its unit and project: a cancel the owner dismissed stands as done
+    /// (its card still reads cancelled), anything else as it reads.
+    pub fn standing(&self) -> Shown {
+        match self.shown() {
+            Shown::Cancelled if self.dismissed => Shown::Succeeded,
+            shown => shown,
+        }
     }
     /// Its stored status is failed (a cancel too).
     pub fn failed(&self) -> bool {
@@ -1156,6 +1226,39 @@ impl StepView {
                 .unwrap_or_default(),
         })
     }
+    /// It has run more than twice as long as its stage usually takes: its "usually" reads in
+    /// ink, so an overrun shows without a colour of its own.
+    pub fn overrun(&self) -> bool {
+        match (self.usually, self.shown_timing()) {
+            (Some(usually), Some(t)) => {
+                self.running() && t.finished.is_none() && usually > 0.0 && t.seconds > 2.0 * usually
+            }
+            _ => false,
+        }
+    }
+    /// How its last run ended, for its header: a finished step's "Ended 2h ago · took 4m"
+    /// (with its usual time), one waiting to run again "Last run ended 12h ago (took 3m)".
+    pub fn ended_line(&self) -> Option<TrustedHtml> {
+        let run = self.last_run().filter(|r| !r.finished.is_empty())?;
+        let ago = super::ui::ago(&run.finished);
+        let took = super::ui::esc(&run.took());
+        Some(TrustedHtml::owned(if self.pending() {
+            if took.is_empty() {
+                format!("Last run ended {}.", ago.as_str())
+            } else {
+                format!("Last run ended {} ({took}).", ago.as_str())
+            }
+        } else {
+            let mut line = format!("Ended {}", ago.as_str());
+            for part in [took, super::ui::esc(&self.usually_text())] {
+                if !part.is_empty() {
+                    line.push_str(" · ");
+                    line.push_str(&part);
+                }
+            }
+            line
+        }))
+    }
     /// "usually 40m": how long its stage usually takes (`usually`), "" when that is not known.
     pub fn usually_text(&self) -> String {
         self.usually
@@ -1331,9 +1434,11 @@ impl StepView {
             .and_then(|r| r.seconds)
             .map(super::ui::duration_text);
         if let Some(duration) = duration {
-            format!("Its {duration} run stops; Retry starts it over.")
+            format!(
+                "It has been running for {duration}. Cancelling stops that run; Retry starts it over."
+            )
         } else {
-            "It stops; Retry starts it over.".to_owned()
+            "It is running. Cancelling stops its run; Retry starts it over.".to_owned()
         }
     }
     /// Cancel's confirmation: titled by its title, its id after it ("Cancel Fix the parser
@@ -1492,7 +1597,8 @@ impl StepView {
         })
     }
     /// Its own page: a way back to the plan (and its unit), then the step.
-    /// `unit`: its unit's id and title ("" when it has none), named in the way back.
+    /// `unit`: its unit's id and title ("" when it has none), named in the way back by its
+    /// title, or by its id when that title is the step's own (the `h1` says it already).
     pub fn page_body(
         &self,
         project: &str,
@@ -1501,7 +1607,7 @@ impl StepView {
     ) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(
-            source = "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{{ step.project }}\">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, \"\")|safe }}{{ project }} plan</a>{% if let Some(unit) = unit %}<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{{ step.project }}/units/{{ unit.0 }}\"{% if !unit.1.is_empty() %} title=\"{{ unit.1 }}\"{% endif %}>{% if unit.1.is_empty() %}unit {{ unit.0 }}{% else %}{{ crate::views::ui::cut(unit.1, 64) }}{% endif %}</a>{% endif %}</nav>{{ body|safe }}",
+            source = "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{{ step.project }}\">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, \"\")|safe }}{{ project }} plan</a>{% if let Some(unit) = unit %}<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{{ step.project }}/units/{{ unit.0 }}\"{% if !unit.1.is_empty() %} title=\"{{ unit.1 }}\"{% endif %}>{% if unit.1.is_empty() || unit.1 == step.title %}unit {{ unit.0 }}{% else %}{{ crate::views::ui::cut(unit.1, 64) }}{% endif %}</a>{% endif %}</nav>{{ body|safe }}",
             ext = "html"
         )]
         struct Page<'a> {
@@ -1686,6 +1792,7 @@ fn load_conversation(
         project,
         to: id.clone(),
         label: format!("Message to {}", step.name().text(48)),
+        note: Composer::note(Some(&step.status)),
     }));
     Ok(())
 }
@@ -1855,6 +1962,9 @@ pub enum Action {
     Unpause,
     Retry,
     Cancel,
+    /// Set a cancel aside (`StepDismiss`): no plan edit, so no revision to match.
+    Dismiss,
+    Undismiss,
 }
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct OwnerCommand {
@@ -1876,9 +1986,15 @@ pub struct Commands(pub Arc<dyn CommandService>);
 #[derive(Deserialize)]
 pub struct ActionForm {
     pub action: Action,
+    /// The plan revision it was drawn at; Dismiss and Undismiss edit no plan and need none.
+    #[serde(default)]
     pub revision: u64,
     #[serde(default)]
     pub message: String,
+    /// Where to go once done, a path on this site (the index's Dismiss comes back to it); the
+    /// step's page by default.
+    #[serde(default)]
+    pub next: String,
 }
 pub async fn action(
     State(state): State<DashboardState>,
@@ -1908,7 +2024,8 @@ async fn execute_action(
         Ok((_, view)) => view,
         Err(e) => return board::error_response(e),
     };
-    if view.revision != form.revision {
+    let marks = matches!(form.action, Action::Dismiss | Action::Undismiss);
+    if !marks && view.revision != form.revision {
         return (
             StatusCode::CONFLICT,
             "The plan changed. Reload before acting.",
@@ -1931,6 +2048,8 @@ async fn execute_action(
         Action::Cancel => step.cancellable(),
         Action::Pause => step.pausable(),
         Action::Unpause => step.paused,
+        Action::Dismiss => step.cancelled() && !step.dismissed,
+        Action::Undismiss => step.dismissed,
     };
     if !valid {
         return (
@@ -1939,7 +2058,11 @@ async fn execute_action(
         )
             .into_response();
     }
-    let next = format!("{}/steps/{id}", view.href());
+    let next = if form.next.starts_with('/') && !form.next.starts_with("//") {
+        form.next.clone()
+    } else {
+        format!("{}/steps/{id}", view.href())
+    };
     match commands
         .0
         .execute(OwnerCommand {

@@ -419,13 +419,15 @@ async fn an_open_question_to_the_owner_is_the_one_coral_tag() {
         "{step}"
     );
     let (_, inbox) = f.get("/inbox").await;
+    // the questions list draws each question as the Thread tab's card: a one-message
+    // conversation under who asked whom
     let card = between(&inbox, "<article class=\"item q\"", "</article>");
+    assert!(card.contains("<li class=\"m m-ask m-yours\""), "{card}");
     assert!(
-        card.contains(
-            "<p class=\"m-meta q-meta\"><span class=\"tag ask\">Awaiting your reply</span>"
-        ),
+        card.contains("<span class=\"tag ask\">Awaiting your reply</span>"),
         "{card}"
     );
+    assert!(card.contains("<p class=\"mg-head\">"), "{card}");
     assert!(card.contains("<span class=\"who who-step\">"), "{card}");
 }
 

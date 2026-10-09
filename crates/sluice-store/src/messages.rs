@@ -6,7 +6,7 @@ pub use sluice_model::commands::QuestionState;
 use sluice_model::{
     commands::{
         Ask, Delivery, MarkRead, Message, MessageAnswer, MessagePost, MessageReceipt, MessageVerb,
-        MessageView, Reply, Say,
+        MessageView, Reply, Say, StepDismiss,
     },
     error::PublicError,
     events::{Event, NotificationOutcome},
@@ -1201,6 +1201,75 @@ pub fn reader(
     Ok(sql.query_row("SELECT cursor,heartbeat_at,unread_alert_min FROM readers WHERE project_id=?1 AND identity=?2 AND stream=?3 AND thread=?4",params![project.to_string(),identity,stream,thread],|r|Ok(Reader { cursor:RecordSeq(r.get(0)?),heartbeat_at:r.get(1)?,unread_alert_min:r.get(2)? })).optional()?.unwrap_or(Reader {cursor:RecordSeq(0),heartbeat_at:None,unread_alert_min:None}))
 }
 
+/// The owner's mark on a cancelled step it has set aside: the stream its `readers` rows are
+/// kept under, a row a step (its `thread`), its cursor the cancel's log record.
+const DISMISSED_STREAM: &str = "dismissed";
+/// The step's latest record of going to failed, or the log's end when that record is trimmed:
+/// a later cancel writes a later one, so a mark at this point covers this cancel only.
+fn cancel_record(sql: &Connection, project: ProjectId, step: &str) -> Result<i64> {
+    Ok(sql.query_row(
+        "SELECT coalesce((SELECT max(seq) FROM records WHERE project_id=?1 AND kind='step.status' AND step_id=?2 AND json_extract(payload,'$.to')='failed'),(SELECT max(seq) FROM records WHERE project_id=?1),0)",
+        params![project.to_string(), step],
+        |r| r.get(0),
+    )?)
+}
+/// Set a cancelled step aside, or back (`StepDismiss`): only a step whose failure is a cancel.
+pub fn dismiss(tx: &mut WriteTransaction<'_>, request: StepDismiss) -> Result<()> {
+    let project = request.project.to_string();
+    let step = request.step.as_str();
+    if request.dismissed {
+        let found: Option<(String, Option<String>)> = tx
+            .sql()
+            .query_row(
+                "SELECT status,error FROM steps WHERE project_id=?1 AND step_id=?2",
+                params![project, step],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((status, error)) = found else {
+            return Err(missing(format!("no step {step}")));
+        };
+        if status != "failed" || !error.is_some_and(|e| sluice_model::shown::stored_is_cancel(&e)) {
+            return Err(invalid(format!(
+                "step {step} is not cancelled: only a cancel can be dismissed"
+            )));
+        }
+        let through = cancel_record(tx.sql(), request.project, step)?;
+        tx.sql().execute(
+            "INSERT INTO readers(project_id,identity,stream,thread,cursor) VALUES (?1,'owner',?2,?3,?4) ON CONFLICT(project_id,identity,stream,thread) DO UPDATE SET cursor=excluded.cursor",
+            params![project, DISMISSED_STREAM, step, through],
+        )?;
+    } else {
+        tx.sql().execute(
+            "DELETE FROM readers WHERE project_id=?1 AND identity='owner' AND stream=?2 AND thread=?3",
+            params![project, DISMISSED_STREAM, step],
+        )?;
+    }
+    changed(tx, request.project);
+    Ok(())
+}
+/// The project's cancelled steps the owner set aside, each still on the cancel it was set aside
+/// at (cancelled again since, a step stands out again).
+pub fn dismissed(
+    sql: &Connection,
+    project: ProjectId,
+) -> Result<std::collections::BTreeSet<String>> {
+    let mut q = sql.prepare_cached(
+        "SELECT r.thread,r.cursor FROM readers r JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.thread WHERE r.project_id=?1 AND r.identity='owner' AND r.stream=?2 AND s.status='failed'",
+    )?;
+    let marks = q
+        .query_map(params![project.to_string(), DISMISSED_STREAM], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut out = std::collections::BTreeSet::new();
+    for (step, through) in marks {
+        if cancel_record(sql, project, &step)? <= through {
+            out.insert(step);
+        }
+    }
+    Ok(out)
+}
 pub fn mark_read(tx: &mut WriteTransaction<'_>, read: MarkRead) -> Result<MessageId> {
     if read.through.0 < 0 || read.identity.trim().is_empty() {
         return Err(invalid("read identity and watermark are invalid"));

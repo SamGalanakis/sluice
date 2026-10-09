@@ -1033,6 +1033,11 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
             json!({"project":f.project,"identity":"cli","thread":"t","through":0}),
         ),
         (
+            "StepDismiss",
+            "step_dismiss",
+            json!({"project":f.project,"step":"work","dismissed":false}),
+        ),
+        (
             "FnCall",
             "fn_call",
             json!({"name":"fixture.echo","inputs":{"value":1},"wait_seconds":0,"direct":false}),

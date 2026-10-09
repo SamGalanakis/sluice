@@ -4,6 +4,7 @@ use super::{
     DashboardSnapshot, FunctionCatalog, NavView, TrustedHtml, Viewer, load_snapshot, render_layout,
 };
 use askama::Template;
+use rusqlite::OptionalExtension;
 use sluice_model::{
     commands::{Message, MessageView},
     error::PublicError,
@@ -120,6 +121,34 @@ impl MessageItem {
     pub fn one(&self) -> &[MessageItem] {
         std::slice::from_ref(self)
     }
+    /// Itself as a one-message conversation, as the questions list draws it: the card a step's
+    /// Thread tab draws, under who asked whom, its answer box at its end.
+    pub fn card(&self) -> Conversation {
+        let tone = match (&self.from_who, &self.to_who) {
+            (Who::Owner, _) => "you",
+            _ => "other",
+        };
+        Conversation {
+            project: self.project,
+            rows: vec![Row::Group(Group {
+                from: self.from_who.clone(),
+                to: self.to_who.clone(),
+                tone,
+                entries: vec![Entry {
+                    item: self.clone(),
+                    from: self.from_who.clone(),
+                    to: self.to_who.clone(),
+                    to_differs: false,
+                    replies: vec![],
+                    excerpt: false,
+                    href: self.thread_url(),
+                }],
+            })],
+            count: 1,
+            last: self.id(),
+            ..Conversation::default()
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub struct ThreadView {
@@ -133,6 +162,9 @@ pub struct ThreadView {
     pub through: i64,
     /// Its step's title, while the plan has the step and it has one.
     pub step_title: String,
+    /// Its step's stored status, while the plan has the step: its message box says when a
+    /// step not running reads what is sent.
+    pub step_status: Option<sluice_model::commands::StepStatus>,
     /// On its own page, its notes to the owner not marked read yet.
     pub unread: usize,
     /// Its messages as a conversation draws them (`Conversation`).
@@ -183,12 +215,12 @@ impl ThreadView {
         self.messages.last().map_or(0, MessageItem::id)
     }
     /// Its step as the way back names it: the title (cut to 64), else "step <id>".
+    /// The way back to its step, by its id ("step fig-5582-work"): the page's `h1` already
+    /// says its title.
     pub fn step_label(&self) -> String {
-        match self.step() {
-            Some(step) if self.step_title.is_empty() => format!("step {step}"),
-            Some(_) => sluice_model::naming::cut(&self.step_title, 64),
-            None => String::new(),
-        }
+        self.step()
+            .map(|step| format!("step {step}"))
+            .unwrap_or_default()
     }
     pub fn last_at(&self) -> &str {
         self.messages
@@ -225,13 +257,28 @@ pub struct InboxView {
     pub read: Vec<ThreadView>,
 }
 impl InboxView {
+    /// Its `h1`: a project's inbox is its "Messages" (the nav's word for the section), so it
+    /// never reads as the global "Inbox" beside it.
     pub fn title(&self) -> &str {
         match self.view {
+            MessageView::Inbox if self.project.is_some() => "Messages",
             MessageView::Inbox => "Inbox",
             MessageView::Questions => "Questions",
             MessageView::History => "History",
             MessageView::Thread => "Thread",
         }
+    }
+    /// Its last path segment: `inbox`, `questions`, `history` or `thread`.
+    pub fn slug(&self) -> &'static str {
+        match self.view {
+            MessageView::Inbox => "inbox",
+            MessageView::Questions => "questions",
+            MessageView::History => "history",
+            MessageView::Thread => "thread",
+        }
+    }
+    pub fn is_inbox(&self) -> bool {
+        self.view == MessageView::Inbox
     }
     /// The tab's title: a thread by what it is about ("Thread · <its step's title>"), a
     /// project's pages with the project's name.
@@ -332,7 +379,7 @@ impl InboxView {
             .unwrap_or_default()
     }
     pub fn path(&self) -> String {
-        format!("{}/{}", self.base(), self.title().to_lowercase())
+        format!("{}/{}", self.base(), self.slug())
     }
     pub fn version(&self) -> String {
         sluice_store::artifacts::fingerprint(
@@ -566,6 +613,14 @@ impl Entry {
     pub fn excerpt_html(&self) -> (TrustedHtml, bool) {
         crate::markdown::excerpt(&self.item.message.body, 360)
     }
+    /// Its body as drawn under its title: without its first line when the title says it.
+    pub fn body(&self) -> TrustedHtml {
+        if self.item.message.title.is_some() {
+            self.item.shown_body()
+        } else {
+            self.item.body.clone()
+        }
+    }
     /// A reply to a message this conversation does not hold: its id, said in its line.
     pub fn reply_to(&self) -> Option<i64> {
         self.item.message.to_message.map(|m| m.0)
@@ -619,6 +674,26 @@ pub struct Composer {
     pub to: String,
     /// Its recipient in words ("Message to fig-5492-work").
     pub label: String,
+    /// Said under its label when its step is not running, so nobody reads it now: when it
+    /// will be read, and how to tell a stopped step something at once (`Composer::note`).
+    pub note: String,
+}
+impl Composer {
+    /// What a message to a step in this state waits for: "" while it runs (it reads it now);
+    /// a step not started yet reads it when it starts; a finished one only if it runs again.
+    pub fn note(status: Option<&sluice_model::commands::StepStatus>) -> String {
+        use sluice_model::commands::StepStatus;
+        match status {
+            None | Some(StepStatus::Running) => String::new(),
+            Some(StepStatus::Pending) => "It has not started: it reads this when it does.".into(),
+            Some(StepStatus::Failed) => {
+                "It is not running: it reads this only if it runs again. To tell it something now, Retry with feedback.".into()
+            }
+            Some(StepStatus::Succeeded | StepStatus::Stale | StepStatus::Skipped) => {
+                "It is not running: it reads this only if it runs again.".into()
+            }
+        }
+    }
 }
 /// How a conversation is built: the step it is about, the steps' names, what is unread, how
 /// many messages at most (the latest kept), and whether each is its first words only.
@@ -787,11 +862,14 @@ fn group(
     let key = (p.id.to_string(), item.message.thread.clone());
     if !groups.contains_key(&key) {
         let step = item.message.thread.strip_prefix("step-");
-        let in_plan: bool = sql.query_row(
-            "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
-            (p.id.to_string(), step.unwrap_or("")),
-            |r| r.get(0),
-        )?;
+        let status: Option<String> = sql
+            .query_row(
+                "SELECT status FROM steps WHERE project_id=?1 AND step_id=?2",
+                (p.id.to_string(), step.unwrap_or("")),
+                |r| r.get(0),
+            )
+            .optional()?;
+        let in_plan = status.is_some();
         groups.insert(
             key.clone(),
             ThreadView {
@@ -817,6 +895,7 @@ fn group(
                     }
                     None => String::new(),
                 },
+                step_status: status.and_then(|s| s.parse().ok()),
                 conversation: Conversation::default(),
             },
         );
@@ -881,6 +960,7 @@ fn converse(
                     project: thread.project,
                     to: thread.recipient.clone(),
                     label,
+                    note: Composer::note(thread.step().and(thread.step_status.as_ref())),
                 }))
         } else {
             conversation

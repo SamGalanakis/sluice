@@ -332,6 +332,7 @@ fn conversation(prefix: &str, project: &ProjectId) -> Result<TrustedHtml, askama
         project: *project,
         to: "fig-5492-work".into(),
         label: "Message to work · SQLite: synchronous is a required argument".into(),
+        note: String::new(),
     }))
     .html()
     // the two themes' copies keep their ids apart
@@ -363,7 +364,7 @@ fn dialog() -> TrustedHtml {
         title: "Cancel work · SQLite: synchronous is a required argument".into(),
         id: "fig-5492-work".into(),
         action: "#".into(),
-        copy: "Its 2h 14m run stops; Retry starts it over.".into(),
+        copy: "It has been running for 2h 14m. Cancelling stops that run; Retry starts it over.".into(),
         reason: Some("Why stop this run?"),
         confirm: "Cancel the run".into(),
         keep: "Keep running",

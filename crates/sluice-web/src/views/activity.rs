@@ -442,6 +442,7 @@ pub async fn attach(state: &DashboardState, step: &mut StepView, all: bool) {
         .collect();
     let fail = step.shown() == super::ui::Shown::Failed;
     let href = step.href();
+    let runs_dir = state.reads.home().join("runs");
     let read = tokio::task::spawn_blocking(move || {
         let mut profiles = vec![];
         let mut latest = None;
@@ -462,13 +463,21 @@ pub async fn attach(state: &DashboardState, step: &mut StepView, all: bool) {
                 latest = Some((i, *live, outline));
             }
         }
+        // the run going now is an agent's (its engine's record is in its directory), yet no
+        // transcript of it could be read here
+        let unread = runs.last().is_some_and(|(id, _, live)| {
+            *live
+                && runs_dir.join(id).join("native.json").is_file()
+                && latest.as_ref().is_none_or(|(i, _, _)| *i + 1 != runs.len())
+        });
         let view = latest
             .filter(|(i, _, o)| *i + 1 == runs.len() && !o.turns.is_empty())
             .map(|(i, live, o)| view(&o, i + 1, live, fail, all, href));
-        (profiles, view)
+        (profiles, view, unread)
     })
     .await;
-    if let Ok((profiles, mut view)) = read {
+    if let Ok((profiles, mut view, unread)) = read {
+        step.transcript_unread = unread;
         for (run, profile) in step.runs.iter_mut().zip(profiles) {
             run.profile = profile;
         }

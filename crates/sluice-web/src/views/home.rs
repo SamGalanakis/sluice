@@ -38,7 +38,7 @@ impl HomeView {
     pub fn title(&self) -> String {
         let mut all = ui::Tally::default();
         for project in &self.active {
-            all += &project.counts;
+            all += &project.standing();
         }
         let mut words: Vec<String> = all
             .iter()

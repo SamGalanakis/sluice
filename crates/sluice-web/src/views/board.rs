@@ -429,7 +429,7 @@ impl UnitView {
     pub fn shown(&self) -> Shown {
         self.steps
             .iter()
-            .map(StepView::shown)
+            .map(StepView::standing)
             .min()
             .unwrap_or(Shown::Pending)
     }
@@ -1539,6 +1539,11 @@ impl ProjectView {
                 .filter(|(s, _)| !s.spec().attention)
                 .map(|(s, n)| (n, s.word())),
         );
+        // the cancels the owner dismissed: counted, but no longer a tag that asks for a look
+        let dismissed = c.get(Shown::Cancelled) - self.project.standing().get(Shown::Cancelled);
+        if dismissed > 0 {
+            parts.push((dismissed, Shown::Cancelled.word()));
+        }
         super::ui::tally(&parts)
     }
     /// The summary line's tags: each state that needs attention (failed, cancelled, stale,
@@ -1547,7 +1552,7 @@ impl ProjectView {
         use super::ui::{glyph, mark, tag, tag_link};
         let href = self.attention_href();
         let mut out = String::new();
-        for (shown, n) in self.project.counts.iter().filter(|(s, _)| s.spec().attention) {
+        for (shown, n) in self.project.standing().iter().filter(|(s, _)| s.spec().attention) {
             let tone = match shown.spec().tone {
                 sluice_model::shown::Tone::Ink => "failed",
                 sluice_model::shown::Tone::Attention => "attn",
@@ -1580,7 +1585,7 @@ impl ProjectView {
     }
     /// The summary line has tags to draw.
     pub fn has_tags(&self) -> bool {
-        self.project.counts.attention() > 0 || self.project.paused
+        self.project.standing().attention() > 0 || self.project.paused
     }
     /// What the search found: "12 steps match “land”", "No step matches “x”."
     pub fn match_words(&self) -> String {
@@ -1596,7 +1601,7 @@ impl ProjectView {
     /// Something in it needs the owner: a step needs attention (failed, cancelled, stale, a
     /// quiet run), or a pause holds work back. A phone then opens on the plan, not the board.
     pub fn needs_attention(&self) -> bool {
-        let c = &self.project.counts;
+        let c = &self.project.standing();
         c.attention() + c.get(Shown::Paused) > 0 || self.project.paused
     }
     /// The board's Attention view, in the order shown: where a summary's failed, cancelled and
@@ -1874,6 +1879,17 @@ pub fn load_board(
                 .map(super::rfc3339)
                 .unwrap_or_default();
         }
+        // a unit whose every step is done but a cancel the owner dismissed is done too: on
+        // the shelf, the cancel still on its card
+        if !unit.done
+            && unit.steps.iter().any(|s| s.dismissed && s.cancelled())
+            && unit
+                .steps
+                .iter()
+                .all(|s| s.standing().spec().band == sluice_model::shown::Band::Done)
+        {
+            unit.done = true;
+        }
         // a lane's view reads its stages' live progress
         if unit.matrix && !unit.done {
             for step in unit.steps.iter_mut().filter(|s| s.running()) {
@@ -1929,6 +1945,8 @@ fn queue(
 /// submissions are its page's (`step::load_detail`).
 struct Cards {
     rows: BTreeMap<String, (bool, Option<i64>, i64, Option<String>)>,
+    /// The cancels the owner dismissed.
+    dismissed: BTreeSet<String>,
     finishing: BTreeMap<StepId, sluice_model::attempt::Finishing>,
     stopping: BTreeSet<StepId>,
     timings: BTreeMap<String, RunTiming>,
@@ -1943,6 +1961,7 @@ impl Cards {
         }
         Ok(Self {
             rows,
+            dismissed: sluice_store::messages::dismissed(c, project)?,
             finishing: sluice_store::attempts::finishing(c, project)?,
             stopping: sluice_store::attempts::stopping(c, project)?,
             timings: run_timings(c, project)?,
@@ -1961,6 +1980,7 @@ impl Cards {
                 step.set_failure(super::failure::Failure::parse(error, took));
             }
         }
+        step.dismissed = self.dismissed.contains(step.id.as_str());
         step.revision = revision;
     }
 }
@@ -2071,6 +2091,7 @@ pub fn load_step(
         shown.insert(other.clone(), view.shown());
     }
     step.name_waits(&plan, &state, &|id| shown.get(id).copied());
+    step.name_links(&names.naming);
     super::step::load_detail(c, project, &mut step)?;
     let unit = home.tagged.then(|| {
         let title = names.naming.unit_title(home.name.as_str());

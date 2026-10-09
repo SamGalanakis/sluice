@@ -427,6 +427,29 @@ function restoreBoxes(host) {
   }
 }
 
+// A lane matrix never cuts a column off. Its stylesheet folds it by its pane's width (the
+// summary under the title from 1100px of pane, rows as lane strings from 720px, earlier for many
+// stages), but a pill's width is its content's (a long timer, a run's earlier glyphs), so the
+// board measures too: a table still wider than its wrap gives up its summary column
+// (`data-fit="nosum"`), then becomes lane strings (`data-fit="lane"`). Each fit starts from
+// the whole table, so a matrix that has room again gets its columns back.
+function fitMatrices(host) {
+  for (const m of $$(".matrix", host)) {
+    const wrap = $(":scope > .mx-wrap", m), table = wrap && $(":scope > .mx", wrap);
+    if (!table || !shown(m)) continue;
+    const css = getComputedStyle(wrap);
+    const room = () => wrap.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight);
+    const over = () => table.getBoundingClientRect().width > room() + 0.5;
+    if (m.hasAttribute("data-fit")) m.removeAttribute("data-fit");
+    let fit = null;
+    for (const next of ["nosum", "lane"]) {
+      if (!over()) break;
+      fit = next;
+      m.setAttribute("data-fit", fit);
+    }
+  }
+}
+
 // These classes change highlighting or animation, without changing card geometry.
 const presentation = new Set(["tracing", "near", "open", "flip", "on"]);
 const layoutClasses = (value) => (value || "").split(/\s+/)
@@ -462,10 +485,13 @@ rocket("sluice-board", {
     const listeners = new AbortController();
     // while the board's splitter is dragged the plan's edges hide and wait: one redraw at the
     // end ("sluice-resized"), not one per frame
+    // the matrices fit on every frame of a drag too: a column is never cut, even for a moment
     const redraw = () => {
-      if (!active || frame || document.documentElement.classList.contains("resizing")) return;
+      if (!active || frame) return;
       frame = requestAnimationFrame(() => {
         frame = 0;
+        fitMatrices(host);
+        if (document.documentElement.classList.contains("resizing")) return;
         drawEdges(host, drawn(boardRelations(host)));
         const held = still ? null : $(`:is(${TRACES}):hover`, host) || focusKept();  // keep it lit
         if (held) trace(host, traceKey(held));
@@ -561,6 +587,7 @@ rocket("sluice-board", {
     });
   },
   onFirstRender({ host }) {
+    fitMatrices(host);
     drawEdges(host, drawn(boardRelations(host)));
   },
 });
@@ -571,7 +598,8 @@ rocket("sluice-board", {
 // closes on Escape, its close button, the scrim or a click on the page around the board. Its tab
 // is the page's `tab` signal (the step's stream draws it chosen) and, while a step is open and
 // its tab is not Overview, the address's `?tab=` (the board's own query is its filters, which
-// leave `tab` alone), so a reload or a shared link opens the step on the same tab.
+// leave `tab` alone), so a reload or a shared link opens the step on the same tab; moving on to
+// another step opens that one on its Overview.
 rocket("sluice-drawer", {
   mode: "light",
   renderOnPropChange: false,
@@ -654,13 +682,17 @@ rocket("sluice-drawer", {
         last = "";
         return;
       }
-      const changed = last !== sid;
+      const changed = last !== sid, moved = changed && Boolean(last);
       last = sid;
       if (changed) {
         stream?.abort();
         stream = new AbortController();
         window.sluiceStepController = stream;
-        const tab = new URLSearchParams(location.search).get("tab") ?? "";
+        // a step opened from another opens on its Overview (a failure leads there): the tab
+        // the last one was on is that step's, not this one's. Opened afresh (a reload, a
+        // shared link), it opens on the address's tab.
+        if (moved) tabInAddress("");
+        const tab = moved ? "" : new URLSearchParams(location.search).get("tab") ?? "";
         mergePatch({ step: sid, sver: "", tab });
         const binding = document.createElement("span");
         binding.dataset.init = `@get('${props.base}/steps/${encodeURIComponent(sid)}/stream', {retry: 'always', retryMaxCount: 10, retryMaxWait: 30000, requestCancellation: window.sluiceStepController})`;

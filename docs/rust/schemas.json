@@ -3643,7 +3643,8 @@
         "$ref": "#/$defs/ProjectSelector"
       },
       "view": {
-        "$ref": "#/$defs/MessageView"
+        "$ref": "#/$defs/MessageView",
+        "default": "inbox"
       },
       "thread": {
         "type": [
@@ -3665,8 +3666,7 @@
     },
     "additionalProperties": false,
     "required": [
-      "project",
-      "view"
+      "project"
     ],
     "$defs": {
       "ProjectSelector": {
@@ -11134,6 +11134,23 @@
             "properties": {
               "command": {
                 "type": "string",
+                "const": "step_dismiss"
+              },
+              "args": {
+                "$ref": "#/$defs/StepDismiss"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
                 "const": "fn_call"
               },
               "args": {
@@ -13117,8 +13134,19 @@
             "$ref": "#/$defs/ProjectSelector"
           },
           "to_message": {
-            "type": "integer",
+            "description": "Select exactly one of this message id or `to`, a sender with one open question.",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64"
+          },
+          "to": {
+            "description": "Answer this sender's single open question addressed to the caller.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "body": {
             "type": "string",
@@ -13150,8 +13178,7 @@
         },
         "additionalProperties": false,
         "required": [
-          "project",
-          "to_message"
+          "project"
         ]
       },
       "MessageAnswer": {
@@ -13295,7 +13322,8 @@
             "$ref": "#/$defs/ProjectSelector"
           },
           "view": {
-            "$ref": "#/$defs/MessageView"
+            "$ref": "#/$defs/MessageView",
+            "default": "inbox"
           },
           "thread": {
             "type": [
@@ -13317,8 +13345,7 @@
         },
         "additionalProperties": false,
         "required": [
-          "project",
-          "view"
+          "project"
         ]
       },
       "MessageView": {
@@ -13353,6 +13380,27 @@
           "identity",
           "thread",
           "through"
+        ]
+      },
+      "StepDismiss": {
+        "description": "The owner sets a cancelled step aside (`dismissed`), or back: a dismissed cancel stays on\nits unit but no longer marks its project or holds its unit off the shelf, until the step\nis cancelled again. Kept like a read mark (`readers`), never a log record.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectId"
+          },
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "dismissed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "step",
+          "dismissed"
         ]
       },
       "FnCall": {
@@ -13840,7 +13888,7 @@
         ]
       },
       "UnitState": {
-        "description": "A unit's state in the units view, checked in this order: a step running, a step failed\nor stale, every step succeeded or skipped, nothing startable and something held, a step\nqueued on resources, else pending.",
+        "description": "A unit's state in the units view, checked in this order (the status table's, `shown`: a\nstopped step first): a step failed or stale, a step running, every step succeeded or\nskipped, nothing startable and something held, a step queued on resources, else pending.",
         "type": "string",
         "enum": [
           "running",
@@ -21367,6 +21415,23 @@
         "properties": {
           "command": {
             "type": "string",
+            "const": "step_dismiss"
+          },
+          "args": {
+            "$ref": "#/$defs/StepDismiss"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
             "const": "fn_call"
           },
           "args": {
@@ -23350,8 +23415,19 @@
             "$ref": "#/$defs/ProjectSelector"
           },
           "to_message": {
-            "type": "integer",
+            "description": "Select exactly one of this message id or `to`, a sender with one open question.",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64"
+          },
+          "to": {
+            "description": "Answer this sender's single open question addressed to the caller.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "body": {
             "type": "string",
@@ -23383,8 +23459,7 @@
         },
         "additionalProperties": false,
         "required": [
-          "project",
-          "to_message"
+          "project"
         ]
       },
       "MessageAnswer": {
@@ -23528,7 +23603,8 @@
             "$ref": "#/$defs/ProjectSelector"
           },
           "view": {
-            "$ref": "#/$defs/MessageView"
+            "$ref": "#/$defs/MessageView",
+            "default": "inbox"
           },
           "thread": {
             "type": [
@@ -23550,8 +23626,7 @@
         },
         "additionalProperties": false,
         "required": [
-          "project",
-          "view"
+          "project"
         ]
       },
       "MessageView": {
@@ -23586,6 +23661,27 @@
           "identity",
           "thread",
           "through"
+        ]
+      },
+      "StepDismiss": {
+        "description": "The owner sets a cancelled step aside (`dismissed`), or back: a dismissed cancel stays on\nits unit but no longer marks its project or holds its unit off the shelf, until the step\nis cancelled again. Kept like a read mark (`readers`), never a log record.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectId"
+          },
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "dismissed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "step",
+          "dismissed"
         ]
       },
       "FnCall": {
@@ -24073,7 +24169,7 @@
         ]
       },
       "UnitState": {
-        "description": "A unit's state in the units view, checked in this order: a step running, a step failed\nor stale, every step succeeded or skipped, nothing startable and something held, a step\nqueued on resources, else pending.",
+        "description": "A unit's state in the units view, checked in this order (the status table's, `shown`: a\nstopped step first): a step failed or stale, a step running, every step succeeded or\nskipped, nothing startable and something held, a step queued on resources, else pending.",
         "type": "string",
         "enum": [
           "running",
@@ -32372,8 +32468,19 @@
         "$ref": "#/$defs/ProjectSelector"
       },
       "to_message": {
-        "type": "integer",
+        "description": "Select exactly one of this message id or `to`, a sender with one open question.",
+        "type": [
+          "integer",
+          "null"
+        ],
         "format": "int64"
+      },
+      "to": {
+        "description": "Answer this sender's single open question addressed to the caller.",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "body": {
         "type": "string",
@@ -32405,8 +32512,7 @@
     },
     "additionalProperties": false,
     "required": [
-      "project",
-      "to_message"
+      "project"
     ],
     "$defs": {
       "ProjectSelector": {

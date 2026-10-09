@@ -526,7 +526,7 @@ impl step::CommandService for SocketOwnerCommands {
         Box::pin(async move {
             let project = ProjectSelector::Id(command.project);
             let selection = StepSelection {
-                steps: command.step.map(|step| vec![step]),
+                steps: command.step.clone().map(|step| vec![step]),
                 tags: None,
             };
             let edit = EditOptions {
@@ -553,6 +553,18 @@ impl step::CommandService for SocketOwnerCommands {
                     reason: None,
                     author: Some(command.author.into()),
                 }),
+                step::Action::Dismiss | step::Action::Undismiss => {
+                    let Some(step) = command.step else {
+                        return Err(PublicError::BadRequest {
+                            message: "dismiss names one step".into(),
+                        });
+                    };
+                    CommandRequest::StepDismiss(StepDismiss {
+                        project: command.project,
+                        step,
+                        dismissed: command.action == step::Action::Dismiss,
+                    })
+                }
                 step::Action::Cancel => CommandRequest::StepCancel(StepCancel {
                     expected_rev: Some(Revision(command.revision)),
                     project,

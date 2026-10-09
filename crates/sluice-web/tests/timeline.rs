@@ -347,8 +347,9 @@ async fn a_running_step_says_how_long_its_stage_usually_takes_from_three_done_un
     );
 
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/r1-work")).await;
+    // its run started days ago, far past twice its usual 20m: the "usually" reads in ink
     assert!(
-        page.contains("<span class=\"meta d-usual\">usually 20m</span>"),
+        page.contains("<span class=\"meta d-usual over\">usually 20m</span>"),
         "{page}"
     );
     // a done unit's step says it after how long it took
