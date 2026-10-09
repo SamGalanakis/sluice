@@ -291,6 +291,14 @@ code, pre { font-family: var(--font-mono); font-size: 13px; }
 code { padding: 0 .3em; border: 1px solid var(--border); border-radius: var(--radius-sm);
        background: var(--muted); }
 pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 20px; }
+/* rendered markdown's code block (comrak's <pre><code>): one box, its lines and indentation
+   kept, scrolling sideways inside it; the code in it is plain text, not a chip per line */
+pre:has(> code) { max-width: 100%; padding: 8px 10px; overflow-x: auto; white-space: pre;
+                  overflow-wrap: normal; word-break: normal; background: var(--muted);
+                  border: 1px solid var(--border); border-radius: var(--radius-md);
+                  font-size: 12.5px; line-height: 19px; }
+pre > code { padding: 0; border: 0; border-radius: 0; background: none; font-size: inherit;
+             white-space: inherit; }
 /* the display voice: Archivo, heavy and a little wide, as the wordmark is */
 h1, .display { font-family: var(--font-display); font-stretch: 110%; }
 h1 { font-size: 28px; line-height: 34px; font-weight: 800; margin: 0; letter-spacing: -0.015em; }
@@ -340,6 +348,10 @@ main { display: grid; padding: 20px 0 48px;
                               [col-start] minmax(0, var(--column)) [col-end]
                               minmax(var(--gutter), 1fr) [full-end]; }
 main > *, #graph > * { grid-column: col; }
+/* a wide screen widens the one column, the nav with it: tables, lists and cards take the room,
+   prose keeps its measure inside them */
+@media (min-width: 1800px) { :root { --column: 1200px; } }
+@media (min-width: 2400px) { :root { --column: 1440px; } }
 
 /* ---- nav: a band of the theme's deepest colour, its three stripes under it --------------- */
 /* a size container (`nav`): what it holds keys off the band's own width, which the drawer
@@ -899,7 +911,7 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--foreground) 86%, v
 /* quiet: how long its run has written nothing, before what it last said */
 /* a retry's run before this one: its number (a link to it under Runs), how it ended and why */
 .now-retry { margin: 6px 0 0; max-width: var(--measure); overflow-wrap: anywhere; }
-.d-failure .err-log { margin: 4px 0 0; }
+.d-failure .err-log { margin: 8px 0 0; }
 .d-failure .err-next { margin: 4px 0 0; max-width: var(--measure); }
 .now-quiet { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; font-weight: 600;
              color: var(--status-attention); }
@@ -1124,6 +1136,19 @@ code.v { border: 0; background: none; padding: 0; }
 }
 /* what opens a panel: its first section sits at the bar */
 .tp > .tp-h + :is(.d-sec, dl.facts, .d-sec-h, sluice-conversation, .empty-state) { margin-top: 0; }
+/* a wide screen draws a step page's Overview in two columns, in its order: its question or why
+   it failed beside Now, its outputs beside its last message; a section alone, and any line of
+   its own (ready, its waits, its chain), spans both */
+@media (min-width: 1800px) {
+  #step-detail[data-page-title] #tp-overview { display: grid; gap: 26px 40px; align-items: start;
+                                                grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #step-detail[data-page-title] #tp-overview > * { margin-top: 0; }
+  #step-detail[data-page-title] #tp-overview > :not(section.d-sec),
+  #step-detail[data-page-title] #tp-overview > section.d-sec:only-of-type { grid-column: 1 / -1; }
+}
+@media (min-width: 1800px) and (scripting: enabled) {
+  #step-detail[data-page-title] sluice-tabs > #tp-overview:not([data-chosen]) { display: none; }
+}
 .tp > .tp-h + sluice-conversation > .convo { margin-top: 0; }
 .tp-top { justify-content: space-between; align-items: center; min-height: 24px; }
 .tp-top .meta { margin: 0; }
@@ -1195,8 +1220,6 @@ details.m-many[open] > .m-all { display: flex; flex-wrap: wrap; gap: 2px 14px; m
 .m-body { margin-top: 6px; max-width: 72ch; overflow-wrap: anywhere; }
 .m-body p { margin: 0; }
 .m-body p + p, .m-body ul, .m-body ol, .m-body pre { margin-top: 8px; }
-.m-body pre { padding: 8px 10px; background: var(--muted); border: 1px solid var(--border);
-              border-radius: var(--radius-md); }
 .mg-in .m-body pre { background: var(--card); }
 :is(.m, .m-reply) > .long > .clip { max-height: 240px; max-width: 72ch; }
 :is(.m, .m-reply) > .long > .fold-toggle { margin-top: 4px; }
@@ -1250,6 +1273,13 @@ article.item.q-done { padding-block: 10px; }
 li.m.q-done > .md, li.m.q-done > .m-body { opacity: 0.7; }
 .threads { display: grid; gap: 10px; }
 .threads > .item { margin: 0; }
+/* a wide screen sets the inbox's questions and notes two to a row, each card at its measure */
+@media (min-width: 1800px) {
+  .q-group, .threads { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+                       gap: 12px 16px; align-items: start; }
+  .q-group > :not(article.item) { grid-column: 1 / -1; }
+  .q-group > article.item { margin: 0; }
+}
 
 details > summary { cursor: pointer; color: var(--muted-foreground); }
 details[open] > summary { margin-bottom: 6px; }
@@ -1388,6 +1418,8 @@ table.log td.what { position: relative; min-width: 14rem; width: 100%; padding-r
 .over-x { color: var(--status-attention); font-weight: 600; font-variant-numeric: tabular-nums;
           white-space: nowrap; }
 .d-badges .over-x { font-size: 13px; }
+/* an ended run's overrun is history, not a call to act: ink, not the attention gold */
+.d-when .over-x { color: var(--foreground); font-weight: 500; }
 .mx-lane .over-x { margin-left: 3px; font-size: 12px; }
 .log-x { margin-left: 2px; padding: 0 5px; border-radius: 999px; background: var(--muted);
          color: var(--muted-foreground); font-size: 11.5px; font-weight: 600;
@@ -1501,7 +1533,9 @@ article.item { background: var(--card); border: 1px solid var(--border);
 .d-meta a.tag:hover { border-color: var(--foreground); }
 /* why it failed: one sentence first, in ink; what it said under it; the pane folded */
 .d-failure .err-line { font-size: 15px; line-height: 22px; font-weight: 500; }
-.err-said { margin-top: 4px; font: 13px/20px var(--font-mono); color: var(--muted-foreground);
+/* its engine's or fn's own one paragraph: prose at the reading measure, set apart by a hairline */
+.err-said { margin-top: 8px; padding-left: 12px; border-left: 1px solid var(--border-strong);
+            font-size: 14px; line-height: 21px; color: var(--muted-foreground);
             overflow-wrap: anywhere; max-width: var(--measure); }
 .d-failure .err-box { margin-top: 8px; }
 details.pane { margin-top: 10px; }
@@ -2153,9 +2187,10 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
   html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane > .sumline {
     margin-bottom: var(--space-lg); }
 }
-/* above a phone the board alone keeps only the switch; a phone keeps the summary over it */
+/* above a phone the board alone keeps its counts and tags (a question for you, a cancel) and
+   the switch, not the bar; a phone keeps the whole summary over it */
 @media (min-width: 721px) and (scripting: enabled) {
-  html:not(.drawer-open) .project-page[data-view="board"] .sumline > :not(.view-switch) { display: none; }
+  html:not(.drawer-open) .project-page[data-view="board"] .sumline > :not(.view-switch, .sum) { display: none; }
 }
 @media (max-width: 1279px) and (scripting: enabled) {
   .view-switch [data-view-tab="both"] { display: none; }
@@ -2295,7 +2330,7 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 .board-stale code { font-size: 12px; color: var(--foreground); white-space: nowrap; }
 .board-md { max-width: var(--measure); min-width: 0; overflow-wrap: anywhere; }
 .board-md.muted { color: var(--muted-foreground); }
-.board-md :is(pre, table) { display: block; max-width: 100%; overflow: auto; }
+.board-md table { display: block; max-width: 100%; overflow: auto; }
 .board-md img { max-width: 100%; height: auto; }
 .board-fresh, .board-msg-head, .board-more, p.board-message { margin: 0; }
 .board-msg-head .m-from { font-weight: 600; color: var(--foreground); }
@@ -2509,6 +2544,9 @@ p.wait-root .meta a { color: inherit; }
 p.wait-runner { display: flex; align-items: flex-start; gap: 6px; margin: 6px 0 0;
                 color: var(--status-attention); font-weight: 500; }
 p.wait-runner .icon { flex: none; margin-top: 2px; }
+/* a pending step nothing holds says so, and when it starts, in place of an empty "Waits on" */
+p.d-ready { display: flex; align-items: flex-start; gap: 6px; margin: 4px 0 12px; }
+p.d-ready .g { flex: none; }
 details.gates > summary { margin-top: 0; font-size: 14px; color: var(--foreground); }
 /* a read mark that did not go through: one quiet line at the top of the notes */
 .read-status { margin: 4px 0 10px; }
@@ -2547,7 +2585,9 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
 .box.solo.titled { display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
                    border-radius: 0; }
 /* two lines held, the words at their foot, so the cards of one layer share a baseline */
-.solo-title { contain: inline-size; align-self: stretch; margin: 0 0 2px 4px; min-height: 36px;
+/* its title may run wider than its pill, to about 40ch, so a short title is not wrapped to the
+   pill's width; a longer one wraps there and is cut at two lines */
+.solo-title { align-self: stretch; max-width: 40ch; margin: 0 0 2px 4px; min-height: 36px;
   display: flex; align-items: flex-end; font: 500 13px/18px var(--font-sans);
   color: var(--muted-foreground); }
 .solo-title > span { text-wrap: balance; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
@@ -2724,9 +2764,7 @@ a.node.mx-dot:hover { background: var(--secondary); }
 .docs-page h1 { font-size: 22px; line-height: 28px; margin-top: 0; }
 .docs-page h2 { font-size: 18px; line-height: 24px; }
 .docs-page h3 { font-size: 15px; line-height: 22px; }
-.docs-page pre { overflow-x: auto; padding: 10px 12px; border: 1px solid var(--border);
-                 border-radius: var(--radius-md); background: var(--muted); font-size: 12.5px; line-height: 18px; }
-.docs-page pre code { font-size: inherit; }
+.docs-page pre { padding: 10px 12px; margin: 12px 0; }
 .docs-page table { display: block; overflow-x: auto; border-collapse: collapse; font-size: 13px; margin: 0 0 12px; }
 .docs-page :is(th, td) { padding: 4px 8px; border: 1px solid var(--border); text-align: left; vertical-align: top; }
 .gal-pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }

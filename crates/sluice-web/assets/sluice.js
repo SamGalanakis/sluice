@@ -599,7 +599,7 @@ rocket("sluice-board", {
 // is the page's `tab` signal (the step's stream draws it chosen) and, while a step is open and
 // its tab is not Overview, the address's `?tab=` (the board's own query is its filters, which
 // leave `tab` alone), so a reload or a shared link opens the step on the same tab; moving on to
-// another step opens that one on its Overview.
+// another step opens that one on its Overview. `[` and `]` move to the step before or after.
 rocket("sluice-drawer", {
   mode: "light",
   renderOnPropChange: false,
@@ -729,6 +729,25 @@ rocket("sluice-drawer", {
       }
       if (evt.key === "Escape" && location.hash.startsWith("#step:")) window.sluiceClose();
     };
+    // `[` and `]` open the step before or after this one in the board's order as drawn (its
+    // bands, live first): each step once, as its first card, pill or dot shows it; never while
+    // typing, with a modifier or under an open dialog
+    const step = (evt) => {
+      const sid = currentStep();
+      if (!sid || (evt.key !== "[" && evt.key !== "]") || evt.defaultPrevented
+          || evt.ctrlKey || evt.metaKey || evt.altKey || document.querySelector("dialog[open]")) return;
+      const t = evt.target;
+      if (t instanceof Element && t.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return;
+      // a matrix too narrow for its columns draws each row's stages as links in its lane line
+      const ids = [...new Set($$("sluice-board a[data-step], sluice-board .mx-lane a[data-opens]")
+        .filter(shown).map((a) => a.dataset.step || a.dataset.opens))];
+      const at = ids.indexOf(sid);
+      const next = ids[evt.key === "]" ? at + 1 : (at < 0 ? ids.length : at) - 1];
+      if (!next) return;
+      evt.preventDefault();
+      opener = document.getElementById(`n-${next}`) || opener;
+      location.hash = `step:${encodeURIComponent(next)}`;
+    };
     // a click on the page around the board (not on a card, a control, the switcher or in the
     // drawer, and not the end of selecting text) closes the drawer as Escape does
     const INTERACTIVE = "a, button, summary, input, select, textarea, label, details.switcher, "
@@ -759,6 +778,7 @@ rocket("sluice-drawer", {
     on(document, "click", click);
     on(document, "click", away);
     on(document, "keydown", escape);
+    on(document, "keydown", step);
     on(window, "hashchange", open);
     on(OVER, "change", modal);
     on(drawer, "scroll", scrolled, { capture: true });

@@ -532,6 +532,22 @@ pub(crate) fn render_error(error: askama::Error) -> PublicError {
     }
 }
 
+/// Why nobody waits on a question, as the store says it ("b2-h-final is succeeded"), in the
+/// owner's words: "b2-h-final has finished", "… failed", "… was cancelled", "… was skipped".
+fn stopped_words(stopped: &str) -> String {
+    for (said, words) in [
+        (" is succeeded", " has finished"),
+        (" is failed", " failed"),
+        (" is cancelled", " was cancelled"),
+        (" is skipped", " was skipped"),
+        (" is pending", " is waiting to run again"),
+    ] {
+        if let Some(step) = stopped.strip_suffix(said) {
+            return format!("{step}{words}");
+        }
+    }
+    stopped.to_owned()
+}
 /// A message as a page draws it.
 pub fn item(
     sql: &rusqlite::Connection,
@@ -548,9 +564,11 @@ pub fn item(
                 QuestionState::Closed => "closed",
             }
             .into(),
-            messages::question(sql, project, message.id)?
-                .stopped
-                .unwrap_or_default(),
+            stopped_words(
+                &messages::question(sql, project, message.id)?
+                    .stopped
+                    .unwrap_or_default(),
+            ),
         ),
         None => ("note".into(), String::new()),
     };
@@ -796,6 +814,12 @@ pub struct Reply {
     pub item: MessageItem,
     pub from: Who,
 }
+impl Reply {
+    /// Its first words as one line, under a question drawn as its first words.
+    pub fn excerpt_html(&self) -> (TrustedHtml, bool) {
+        crate::markdown::excerpt(&self.item.message.body, 360)
+    }
+}
 /// What a conversation lists: a day's start, the first message not read yet, or the messages
 /// one sender sent in a row.
 #[derive(Clone, Debug)]
@@ -883,12 +907,31 @@ pub struct Build<'a> {
     pub href: &'a dyn Fn(&MessageItem) -> String,
 }
 impl Conversation {
+    /// Its notes sent to several, each drawn once, as its count's head says them: "the note to
+    /// 6 steps shown once", "2 notes to several shown once each"; "" when it has none.
+    pub fn folded_words(&self) -> String {
+        let folded: Vec<&Entry> = self
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Group(g) => Some(g.entries.iter()),
+                _ => None,
+            })
+            .flatten()
+            .filter(|e| !e.also.is_empty())
+            .collect();
+        match folded.as_slice() {
+            [] => String::new(),
+            [one] => format!("the note {} shown once", one.also_words()),
+            many => format!("{} notes to several shown once each", many.len()),
+        }
+    }
     pub fn build(b: Build<'_>, items: Vec<MessageItem>) -> Self {
         let ids: BTreeSet<i64> = items.iter().map(MessageItem::id).collect();
-        // a question drawn whole: every one, or in excerpts a question to the owner
+        // every question: its replies sit under it (in excerpts, as their first words too)
         let questions: BTreeSet<i64> = items
             .iter()
-            .filter(|m| m.message.is_question() && (!b.excerpt || m.asks_owner()))
+            .filter(|m| m.message.is_question())
             .map(MessageItem::id)
             .collect();
         // a reply to a question here sits under it; any other message stands in its order

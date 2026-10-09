@@ -200,6 +200,106 @@ pub struct LogRow {
     /// this row holds (`folded`), said at its end and linked to the unit's log.
     pub settled: Option<(String, Vec<String>)>,
     pub folded: usize,
+    /// A message: drawn with its sender and recipient named as pages name them, and one note
+    /// sent to several in a row folded into one row, "fig-5577-work to 6 steps: …".
+    pub note: Option<LogNote>,
+}
+/// A message record as its log row says it: who sent it to whom, its first words linked to
+/// its thread.
+#[derive(Clone, Debug)]
+pub struct LogNote {
+    from: String,
+    from_html: String,
+    /// Each recipient: its id and how the row names it.
+    to: Vec<(String, String)>,
+    /// Every recipient is a step of the plan: "to 6 steps", else "to 3 recipients".
+    steps: bool,
+    thread: String,
+    thread_href: String,
+    body: String,
+    title: Option<String>,
+    question: bool,
+    text: String,
+}
+impl LogNote {
+    fn new(
+        m: &sluice_model::commands::Message,
+        project: ProjectId,
+        names: Option<&sluice_runtime::naming::ProjectNaming>,
+    ) -> Self {
+        let to = m.to.clone().unwrap_or_default();
+        let (to_html, steps) = who_html(&to, project, names, false);
+        Self {
+            from: m.from.clone(),
+            from_html: who_html(&m.from, project, names, true).0,
+            to: vec![(to, to_html)],
+            steps,
+            thread: m.thread.clone(),
+            thread_href: super::threads::thread_url(project, &m.thread),
+            body: m.body.clone(),
+            title: m.title.clone(),
+            question: m.verb == sluice_model::commands::MessageVerb::Ask,
+            text: cut(&crate::markdown::plain(&m.body), 160),
+        }
+    }
+    /// The same note as this one, sent on to someone else within a minute.
+    fn repeats(&self, other: &LogNote) -> bool {
+        !self.question
+            && !other.question
+            && self.from == other.from
+            && self.thread == other.thread
+            && self.body == other.body
+            && self.title == other.title
+            && other.to.iter().all(|(id, _)| !self.to.iter().any(|(t, _)| t == id))
+    }
+    fn words(&self) -> String {
+        let to = match self.to.as_slice() {
+            [(id, _)] => id.clone(),
+            many => format!("{} {}", many.len(), if self.steps { "steps" } else { "recipients" }),
+        };
+        format!("{} to {to}: {}", self.from, self.text)
+    }
+    fn html(&self) -> TrustedHtml {
+        let to = match self.to.as_slice() {
+            [(_, html)] => html.clone(),
+            many => format!("{} {}", many.len(), if self.steps { "steps" } else { "recipients" }),
+        };
+        TrustedHtml::owned(format!(
+            "{} to {to}: <a href=\"{}\">{}</a>",
+            self.from_html,
+            super::ui::esc(&self.thread_href),
+            super::ui::esc(&self.text)
+        ))
+    }
+}
+/// A sender or recipient as a log row names it: a step of the plan by its title and id,
+/// linked; the owner as you; anyone else by name. And whether it is a step.
+fn who_html(
+    id: &str,
+    project: ProjectId,
+    names: Option<&sluice_runtime::naming::ProjectNaming>,
+    lead: bool,
+) -> (String, bool) {
+    match id {
+        "owner" => ((if lead { "You" } else { "you" }).into(), false),
+        "orchestrator" => ((if lead { "The orchestrator" } else { "the orchestrator" }).into(), false),
+        "" => ("anyone".into(), false),
+        id => match names.and_then(|n| n.naming.step(id)) {
+            Some(name) => {
+                let named = super::ui::StepRef::new(id, Some(name));
+                (
+                    format!(
+                        "<a href=\"/projects/id/{project}/steps/{}\"{}>{}</a>",
+                        super::ui::esc(id),
+                        if named.titled() { format!(" title=\"{}\"", super::ui::esc(&named.title)) } else { String::new() },
+                        named.html(48).0
+                    ),
+                    true,
+                )
+            }
+            None => (super::ui::esc(id), false),
+        },
+    }
 }
 #[derive(Clone, Debug)]
 pub struct LogView {
@@ -453,7 +553,14 @@ pub async fn load(
                 None => None,
             };
             let found = links(&json, owner, named.as_deref());
-            let html = linked(&summary, &found);
+            let note = match (&event, owner) {
+                (Event::Message(m), Some(project)) if !(m.verb == sluice_model::commands::MessageVerb::Ask && m.to.as_deref() == Some("owner")) => Some(LogNote::new(m, project, named.as_deref())),
+                _ => None,
+            };
+            let html = match &note {
+                Some(note) => note.html(),
+                None => linked(&summary, &found),
+            };
             // the global log names each record's project
             let place = match (project, owner) {
                 (None, Some(id)) => nav.projects.iter().find(|p| p.id == id).map(|p| (p.name.to_string(), p.href())).unwrap_or_else(|| ("a deleted project".into(), String::new())),
@@ -473,7 +580,7 @@ pub async fn load(
                 Event::UnitSettled { unit, steps, .. } => Some((unit.to_string(), steps.iter().map(|s| s.id.to_string()).collect())),
                 _ => None,
             };
-            rows.push(LogRow { seq, at: at.clone(), kind, summary, html, count: 1, oldest: seq, place, chore, chore_from: chore.map_or(0, |c| c.0), change, links: found, settled, folded: 0, json: serde_json::to_string_pretty(&Record { seq: RecordSeq(seq), at, project: owner, event })? });
+            rows.push(LogRow { seq, at: at.clone(), kind, summary, html, count: 1, oldest: seq, place, chore, chore_from: chore.map_or(0, |c| c.0), change, links: found, settled, folded: 0, note, json: serde_json::to_string_pretty(&Record { seq: RecordSeq(seq), at, project: owner, event })? });
         }
         rows.sort_by_key(|r| std::cmp::Reverse(r.seq));
         // records in a row that say the same are one line, "×10"
@@ -484,6 +591,22 @@ pub async fn load(
         };
         let base = project.map(|id| format!("/projects/id/{id}/log")).unwrap_or_else(|| "/log".into());
         for row in rows {
+            // one note sent to several in a row (within a minute) is one row, "x to 6 steps: …",
+            // as its thread draws it
+            if let Some(note) = &row.note
+                && let Some(last) = grouped.last_mut()
+                && last.place == row.place
+                && near(&last.at, &row.at, 60)
+                && let Some(kept) = last.note.as_mut()
+                && kept.repeats(note)
+            {
+                kept.to.extend(note.to.iter().cloned());
+                kept.steps &= note.steps;
+                last.summary = kept.words();
+                last.html = kept.html();
+                last.oldest = last.oldest.min(row.seq);
+                continue;
+            }
             // a settled unit holds its steps' status changes before it (within six hours): one
             // row, "Unit x settled, 5 steps · 9 status changes", those linked to the unit's log,
             // which lists them (and folds nothing)
@@ -672,8 +795,7 @@ fn summary(event: &Event) -> String {
             )
         }
         Event::Message(m) => format!(
-            "{} from {} to {}: {}",
-            m.thread,
+            "{} to {}: {}",
             m.from,
             m.to.as_deref().unwrap_or("anyone"),
             cut(&crate::markdown::plain(&m.body), 160)

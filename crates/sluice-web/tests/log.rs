@@ -213,7 +213,12 @@ async fn p605_thread_filter_uses_message_records_and_log_retention_cannot_erase_
     .await
     .unwrap();
     assert_eq!(page.rows.len(), 1);
-    assert!(page.rows[0].summary.contains("a from worker"));
+    // the row names who sent it to whom, and its words: thread a's message, not b's
+    assert!(
+        page.rows[0].summary.contains("worker to owner: a"),
+        "{}",
+        page.rows[0].summary
+    );
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
             sluice_store::records::trim_to(tx, Some(project), 1, 1)?;

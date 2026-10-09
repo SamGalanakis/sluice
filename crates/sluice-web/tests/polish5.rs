@@ -197,10 +197,12 @@ async fn a_retried_step_that_has_not_run_says_so_under_its_header() {
     );
     assert!(
         said.contains(&format!(
-            ", <a href=\"#message-{feedback}\">with feedback</a>: <q class=\"d-fb\">try with a longer cap</q>. It starts when the runner does."
+            ", <a href=\"#message-{feedback}\">with feedback</a>: <q class=\"d-fb\">try with a longer cap</q>."
         )),
         "{said}"
     );
+    // when it starts is Overview's to say (`polish6.rs`), not the header's
+    assert!(!said.contains("It starts when"), "{said}");
     // it sits under the header, before when its last run ended
     assert!(
         page.find("d-retried").unwrap() < page.find("Last run ended").unwrap(),

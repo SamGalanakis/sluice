@@ -198,7 +198,7 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-keys",
         script: "components.js",
-        does: "The page's keys, listed where it draws them (display preferences): / finds on the page, g then a letter goes to a section, ? shows the list. None while typing in a field, with a modifier held or under an open dialog.",
+        does: "The page's keys, listed where it draws them (display preferences): / finds on the page (on its plan from a step or unit page), g then a letter goes to a section, ? shows the list. None while typing in a field, with a modifier held or under an open dialog.",
         props: &[],
         events: &[],
         slots: &["list"],
@@ -214,7 +214,7 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-drawer",
         script: "sluice.js",
-        does: "Opens a step beside the board (over it below 1200px, a sheet on a phone) from #step:<id>, streams it, writes its tab into ?tab= and closes on Escape or a click away.",
+        does: "Opens a step beside the board (over it below 1200px, a sheet on a phone) from #step:<id>, streams it, writes its tab into ?tab= and closes on Escape or a click away; [ and ] open the step before or after it in the board's order.",
         props: &[("base", "string")],
         events: &[],
         slots: &["scrim", "drawer"],

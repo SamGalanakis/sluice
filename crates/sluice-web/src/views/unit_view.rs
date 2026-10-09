@@ -139,7 +139,19 @@ impl Draw<'_> {
             }
             "LastMessage" => {
                 // the unit's page says its last message whole, under its cards
-                if self.unit.last_message.is_empty() || !self.row {
+                if !self.row {
+                    return;
+                }
+                // a row whose step waits on the owner says its question, not its last note
+                if let Some(ask) = self.unit.asking_step().and_then(|s| s.asking.as_ref()) {
+                    let _ = write!(
+                        out,
+                        "<span class=\"uv-msg uv-ask\"><span class=\"uv-from\">Question for you</span>: {}</span>",
+                        esc(&sluice_model::naming::cut(&ask.title, ROW_CHARS * 2))
+                    );
+                    return;
+                }
+                if self.unit.last_message.is_empty() {
                     return;
                 }
                 let chars = c
@@ -150,7 +162,12 @@ impl Draw<'_> {
                 let (body, _) = crate::markdown::excerpt(&self.unit.last_message, chars);
                 let _ = write!(
                     out,
-                    "<span class=\"uv-msg\"><span class=\"uv-from\">{}</span> · {}: {body}</span>",
+                    "<span class=\"uv-msg\"><span class=\"uv-from\">{}{}</span> · {}: {body}</span>",
+                    if self.unit.last_received {
+                        "Note from "
+                    } else {
+                        ""
+                    },
                     esc(&self.unit.last_from),
                     ui::ago(&self.unit.changed)
                 );

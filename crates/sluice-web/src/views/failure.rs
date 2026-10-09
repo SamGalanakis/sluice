@@ -200,9 +200,9 @@ impl Failure {
     }
     /// Its card's caption, the kind of failure in a word, so "retry it" reads apart from "read
     /// it" before the card is opened: "cap" (a wall-clock cap), "stalled", "quota", "auth",
-    /// "engine" (its engine would not start, take its input or keep its session), "lost" (its
-    /// process), "no submit", "invalid" (outputs), "rejected" (inputs), "transient",
-    /// "cancelled"; "failed" for the work's own failure.
+    /// "engine exited", "engine fault" (its engine would not start, take its input or keep its
+    /// session), "lost" (its process), "no submit", "invalid" (outputs), "rejected" (inputs),
+    /// "transient", "cancelled"; "failed" for the work's own failure.
     pub fn caption(&self) -> &'static str {
         if self.cancelled {
             return "cancelled";
@@ -215,9 +215,10 @@ impl Failure {
             "StallCap" => "stalled",
             "QuotaExhausted" => "quota",
             "AuthFailed" => "auth",
-            "ReadyTimeout" | "TurnStartTimeout" | "EngineExited" | "MissingSession"
-            | "BlockedScreen" | "LockConflict" | "SessionCwd" | "CapabilityMismatch"
-            | "UnknownAcceptance" | "Cleanup" => "engine",
+            "EngineExited" => "engine exited",
+            "ReadyTimeout" | "TurnStartTimeout" | "MissingSession" | "BlockedScreen"
+            | "LockConflict" | "SessionCwd" | "CapabilityMismatch" | "UnknownAcceptance"
+            | "Cleanup" => "engine fault",
             "process_lost" => "lost",
             "ExitedWithoutSubmit" | "exited_without_submit" => "no submit",
             "invalid" | "Invalid" => "invalid",
@@ -238,7 +239,7 @@ impl Failure {
             }
             "quota" => "Retry once its engine's usage cap resets.",
             "auth" => "Sign its engine in again on this machine, then Retry.",
-            "engine" => {
+            "engine exited" | "engine fault" => {
                 "An engine that would not start or take its input is most often a passing fault: Retry."
             }
             "lost" => {

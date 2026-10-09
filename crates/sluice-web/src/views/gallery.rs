@@ -432,7 +432,7 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Search", "A list filtered as you type (the functions), or the plan's tools showing what matches; Escape clears.", "`ui::search_open` (`sluice-search`).", both(&|p| Ok(searches(p)))?);
     add("Banners", "Updates paused or stopped, with Reconnect, in gold; a newer build of sluice, with Reload, muted. Hidden while the page is live.", "`ui::banner` (`sluice-banner`).", both(&|_| Ok(banners()))?);
     add("Notice", "What a page says at its top when something you asked for was not done, with what to do next and your words kept in their box. Read out as it appears.", "`ui::notice`: a refused step action comes back to the step's address, the notice held ten minutes under a key the server made.", both(&|_| Ok(notices()))?);
-    add("Keys", "Listed under display preferences on every page: / finds on the plan, the log and functions; g then a letter goes to a section; ? opens the list. Never while typing in a field or under an open dialog.", "`sluice-keys`.", both(&|_| Ok(keys()))?);
+    add("Keys", "Listed under display preferences on every page: / finds on the plan (from a step or unit page too), the log and functions; [ and ] move the drawer to the step before or after; g then a letter goes to a section; ? opens the list. Never while typing in a field or under an open dialog.", "`sluice-keys`.", both(&|_| Ok(keys()))?);
     add("Splitter", "The line between the plan and an open step: drag it, or use the arrows (16px, 64px with Shift), Home and End; a double-click resets it, and its width is kept per project.", "`ui::splitter` (`sluice-splitter`).", both(&|p| Ok(splitters(p)))?);
     add("Components", "For whoever builds a page: every component, the attributes it reads and what it does. The server draws everything in it; the component only behaves.", "Rocket components in `components.js`, light DOM.", (components(), TrustedHtml::default()));
     Ok(parts)
@@ -464,6 +464,20 @@ async fn agent_docs(
         let snapshot = state.snapshot(None).await?;
         let nav = NavView::new(&snapshot, None, "")?;
         let pages = sluice_runtime::docs::PAGES;
+        // by task, not by name: the overview first, then a plan, its parts, and talking
+        const ORDER: [&str; 9] = [
+            "instructions",
+            "plans",
+            "types",
+            "fns",
+            "composing",
+            "examples",
+            "threads",
+            "inbox",
+            "board",
+        ];
+        let mut ordered: Vec<&(&str, &str)> = pages.iter().collect();
+        ordered.sort_by_key(|(name, _)| ORDER.iter().position(|o| o == name).unwrap_or(ORDER.len()));
         // a topic by its first line, its first sentence when that runs on
         let first = |page: &str| {
             let line = page
@@ -475,7 +489,7 @@ async fn agent_docs(
             let sentence = line.split_once(". ").map_or(line, |(s, _)| s);
             sluice_model::naming::cut(sentence.trim_end_matches('.'), 64)
         };
-        let index: String = pages
+        let index: String = ordered
             .iter()
             .map(|(name, page)| {
                 format!(

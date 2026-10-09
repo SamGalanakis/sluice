@@ -568,9 +568,8 @@ impl Restart {
 }
 impl Restart {
     /// A retry not run yet, under its step's header: "You retried it 2m ago, with feedback:
-    /// try with a longer cap. It starts when the runner does." (the last sentence while no
-    /// runner runs).
-    pub fn waiting_html(&self, step: &str, runner_stopped: bool) -> TrustedHtml {
+    /// “try with a longer cap”." When it starts is Overview's to say (`StepView::ready`).
+    pub fn waiting_html(&self, step: &str) -> TrustedHtml {
         use super::ui::esc;
         let by = self.by.strip_prefix("step:").unwrap_or(&self.by);
         let mut out = match by {
@@ -604,9 +603,6 @@ impl Restart {
             }
         }
         out.push_str(stop);
-        if runner_stopped {
-            out.push_str(" It starts when the runner does.");
-        }
         TrustedHtml::owned(out)
     }
 }
@@ -1079,6 +1075,17 @@ impl StepView {
     pub fn pending(&self) -> bool {
         self.status == StepStatus::Pending
     }
+    /// Pending with nothing holding it: no pause, wait, queue or step up its chain. Overview
+    /// says it is ready, and when it starts, in place of an empty "Waits on".
+    pub fn ready(&self) -> bool {
+        self.pending()
+            && self.waits.is_empty()
+            && self.waits_on.is_empty()
+            && self.hold.is_none()
+            && self.held_by.is_none()
+            && self.queued.is_empty()
+            && !self.external
+    }
     pub fn succeeded(&self) -> bool {
         self.status == StepStatus::Succeeded
     }
@@ -1270,7 +1277,7 @@ impl StepView {
             | Shown::Skipped => false,
         }
     }
-    /// Its card's caption: a failure's kind in a word ("cap", "quota", "engine", "failed"),
+    /// Its card's caption: a failure's kind in a word ("cap", "quota", "engine exited", "failed"),
     /// else its state's word when the table says a card says it ("cancelled", "quiet",
     /// "outside"), else a scatter's items done ("3/5").
     pub fn caption(&self) -> String {
@@ -1278,7 +1285,7 @@ impl StepView {
         if shown == Shown::Failed
             && let Some(failure) = &self.failure
         {
-            // the kind of failure in a word: "cap", "quota", "engine", …
+            // the kind of failure in a word: "cap", "quota", "engine exited", …
             failure.caption().into()
         } else if shown.spec().caption {
             shown.word().into()
@@ -1463,20 +1470,7 @@ impl StepView {
             return String::new();
         }
         match (self.usually, self.shown_timing()) {
-            (Some(usually), Some(t)) => {
-                let times = t.seconds / usually;
-                // to a half below ten, whole above
-                let times = if times < 10.0 {
-                    (times * 2.0).floor() / 2.0
-                } else {
-                    times.floor()
-                };
-                if times.fract() == 0.0 {
-                    format!("{times:.0}×")
-                } else {
-                    format!("{times:.1}×")
-                }
-            }
+            (Some(usually), Some(t)) => times_text(t.seconds / usually),
             _ => String::new(),
         }
     }
@@ -1513,6 +1507,16 @@ impl StepView {
                     line.push_str(" · ");
                     line.push_str(&part);
                 }
+            }
+            // a run that took more than twice its usual time says how far, quietly: it is over
+            if let (Some(usually), Some(seconds)) = (self.usually, run.seconds)
+                && usually > 0.0
+                && seconds > 2.0 * usually
+            {
+                line.push_str(&format!(
+                    " · <span class=\"over-x\">{} usual</span>",
+                    times_text(seconds / usually)
+                ));
             }
             line
         }))
@@ -1661,6 +1665,41 @@ impl StepView {
     /// stopped on purpose, so Retry stays a plain button.
     pub fn retry_first(&self) -> bool {
         self.shown() == Shown::Failed
+    }
+    /// A failed step whose run before its last failed the same way (the same kind and the same
+    /// words): that run's number. A bare Retry would most likely fail a third time, so its
+    /// next step says so and its feedback box opens.
+    pub fn failed_alike(&self) -> Option<usize> {
+        if !self.failed() || self.runs.len() < 2 {
+            return None;
+        }
+        let n = self.runs.len();
+        let (Some(last), Some(before)) = (&self.runs[n - 1].failure, &self.runs[n - 2].failure)
+        else {
+            return None;
+        };
+        let alike = !last.cancelled
+            && !before.cancelled
+            && last.kind == before.kind
+            && if last.said.trim().is_empty() {
+                last.headline == before.headline
+            } else {
+                last.said.trim() == before.said.trim()
+            };
+        alike.then_some(n - 1)
+    }
+    /// What to try next under why it failed: its kind's advice (`Failure::next_step`), unless
+    /// the run before failed the same way.
+    pub fn next_step(&self) -> String {
+        if let Some(n) = self.failed_alike() {
+            return format!(
+                "Run {n} failed the same way, so a bare Retry would most likely fail again. Retry with feedback, or change its inputs."
+            );
+        }
+        self.failure
+            .as_ref()
+            .map(|f| f.next_step().to_owned())
+            .unwrap_or_default()
     }
     pub fn retryable(&self) -> bool {
         matches!(
@@ -1950,6 +1989,8 @@ impl StepView {
     /// Overview has nothing else to say: its state's own sentence stands in.
     pub fn overview_empty(&self) -> bool {
         !self.running()
+            && !self.ready()
+            && !(self.pending() && self.runner_stopped)
             && !self.failed()
             && self.page_waits().is_empty()
             && self.hold.is_none()
@@ -2020,7 +2061,7 @@ impl StepView {
     ) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(
-            source = "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{{ step.project }}\">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, \"\")|safe }}{{ project }} plan</a>{% if let Some(unit) = unit %}<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{{ step.project }}/units/{{ unit.0 }}\"{% if !unit.1.is_empty() %} title=\"{{ unit.1 }}\"{% endif %}>{% if unit.1.is_empty() || unit.1 == step.title %}unit {{ unit.0 }}{% else %}{{ crate::views::ui::cut(unit.1, 64) }}{% endif %}</a>{% endif %}</nav>{% if let Some(words) = notice %}{{ crate::views::ui::notice(words)|safe }}{% endif %}{{ body|safe }}",
+            source = "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{{ step.project }}\" data-find-at=\"/projects/id/{{ step.project }}#find\">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, \"\")|safe }}{{ project }} plan</a>{% if let Some(unit) = unit %}<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{{ step.project }}/units/{{ unit.0 }}\"{% if !unit.1.is_empty() %} title=\"{{ unit.1 }}\"{% endif %}>{% if unit.1.is_empty() || unit.1 == step.title %}unit {{ unit.0 }}{% else %}{{ crate::views::ui::cut(unit.1, 64) }}{% endif %}</a>{% endif %}</nav>{% if let Some(words) = notice %}{{ crate::views::ui::notice(words)|safe }}{% endif %}{{ body|safe }}",
             ext = "html"
         )]
         struct Page<'a> {
@@ -2177,6 +2218,16 @@ fn load_conversation(
     } else {
         if let Some(own) = own {
             quoted.push(items[own].clone());
+            // a question of its own is quoted with what answered it, under it
+            if items[own].message.is_question() {
+                let asked = items[own].message.id;
+                quoted.extend(
+                    items[own + 1..]
+                        .iter()
+                        .filter(|m| m.message.to_message == Some(asked))
+                        .cloned(),
+                );
+            }
         }
         if step.running()
             && let Some(inbound) = items[own.map_or(0, |i| i + 1)..]
@@ -3249,4 +3300,18 @@ async fn run_file_html(
         &format!("/projects/id/{project}/runs/{run}/files/{name}"),
     )
     .map_err(render_error)
+}
+/// How many times its usual time a run took or has taken: "2.5×", to a half below ten and
+/// whole above, so it changes seldom.
+fn times_text(times: f64) -> String {
+    let times = if times < 10.0 {
+        (times * 2.0).floor() / 2.0
+    } else {
+        times.floor()
+    };
+    if times.fract() == 0.0 {
+        format!("{times:.0}×")
+    } else {
+        format!("{times:.1}×")
+    }
 }

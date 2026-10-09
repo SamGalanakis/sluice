@@ -278,6 +278,9 @@ pub struct UnitView {
     pub last_from: String,
     pub last_thread: String,
     pub last_id: i64,
+    /// Its last message was only sent to one of its steps (a note from another unit's): its
+    /// row says "Note from …".
+    pub last_received: bool,
     pub changed: String,
     /// The unit is one step in the plan: the board draws that step's card alone, no box.
     pub solo: bool,
@@ -404,6 +407,7 @@ impl UnitView {
             last_from: String::new(),
             last_thread: String::new(),
             last_id: 0,
+            last_received: false,
             changed: changed.to_owned(),
             solo: unit.steps.len() == 1,
             waits: BTreeMap::new(),
@@ -1962,12 +1966,13 @@ pub fn load_board(
     let mut last = last_messages(c, project, &board)?;
     let cards = Cards::read(c, project)?;
     for unit in &mut board.units {
-        if let Some((message, at, from, thread, id)) = last.remove(unit.id.as_str()) {
+        if let Some((message, at, from, thread, id, received)) = last.remove(unit.id.as_str()) {
             unit.last_message = message;
             unit.changed = at;
             unit.last_from = from;
             unit.last_thread = thread;
             unit.last_id = id;
+            unit.last_received = received;
         }
         for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
             cards.decorate(step, revision as u64);
@@ -2443,10 +2448,13 @@ fn spans(all: &[Run]) -> Vec<super::timeline::RunSpan> {
     }
     out.into_iter().map(|(_, s)| s).collect()
 }
-/// A unit's last message: its body, time, sender, thread and id.
-type LastMessage = (String, String, String, String, i64);
-/// Each unit's last message: the newest from or to one of its steps, or in one of its steps'
-/// threads. One pass over the project's messages, newest first.
+/// A unit's last message: its body, time, sender, thread and id, and whether it was only sent
+/// to it (a note from another unit's step), not said in or from its own steps' threads.
+type LastMessage = (String, String, String, String, i64, bool);
+/// Each unit's last message: the newest from one of its steps or in one of its steps' threads;
+/// a unit with none, the newest sent to one of its steps. So a note one step sends to many
+/// rests on the rows of those with nothing of their own. One pass over the project's messages,
+/// newest first.
 fn last_messages(
     c: &Connection,
     project: ProjectId,
@@ -2459,30 +2467,40 @@ fn last_messages(
         unit_of.insert(r.get::<_, String>(0)?, r.get::<_, String>(1)?);
     }
     let wanted: BTreeSet<&str> = board.units.iter().map(|u| u.id.as_str()).collect();
-    let mut last = BTreeMap::new();
+    let mut own: BTreeMap<String, LastMessage> = BTreeMap::new();
+    let mut sent_to: BTreeMap<String, LastMessage> = BTreeMap::new();
     let mut messages = c.prepare(
         "SELECT \"from\",\"to\",thread,body,at,id FROM messages WHERE project_id=?1 ORDER BY id DESC",
     )?;
     let mut rows = messages.query([project.to_string()])?;
-    while last.len() < wanted.len()
+    while own.len() < wanted.len()
         && let Some(r) = rows.next()?
     {
         let (from, to, thread): (String, Option<String>, String) = (r.get(0)?, r.get(1)?, r.get(2)?);
-        let units = [
+        let mine = [
             unit_of.get(&from),
-            to.and_then(|to| unit_of.get(&to)),
             thread.strip_prefix("step-").and_then(|step| unit_of.get(step)),
         ];
-        for unit in units.into_iter().flatten() {
-            if wanted.contains(unit.as_str()) && !last.contains_key(unit) {
-                last.insert(
-                    unit.clone(),
-                    (r.get(3)?, r.get(4)?, from.clone(), thread.clone(), r.get(5)?),
-                );
+        let message = |received| -> rusqlite::Result<LastMessage> {
+            Ok((r.get(3)?, r.get(4)?, from.clone(), thread.clone(), r.get(5)?, received))
+        };
+        for unit in mine.into_iter().flatten() {
+            if wanted.contains(unit.as_str()) && !own.contains_key(unit) {
+                own.insert(unit.clone(), message(false)?);
             }
         }
+        if let Some(unit) = to.and_then(|to| unit_of.get(&to))
+            && wanted.contains(unit.as_str())
+            && !own.contains_key(unit)
+            && !sent_to.contains_key(unit)
+        {
+            sent_to.insert(unit.clone(), message(true)?);
+        }
     }
-    Ok(last)
+    for (unit, message) in sent_to {
+        own.entry(unit).or_insert(message);
+    }
+    Ok(own)
 }
 /// Exact registry signatures, including open/submitted ports, supplied by the
 /// application. Display catalog ports alone cannot describe arbitrary open fns.
@@ -2939,18 +2957,47 @@ async fn unit_last(
             let message =
                 sluice_store::messages::message(c, project, sluice_model::ids::MessageId(id))?;
             let steps = super::threads::step_names(c, project)?;
-            let item = super::threads::item(c, project, &name, &steps, message)?;
+            // a note sent to several within a minute is drawn as its thread draws it, once,
+            // "to 6 steps": every copy of it is read
+            let mut ids = vec![];
+            if !message.is_question() {
+                let mut q = c.prepare_cached("SELECT id FROM messages WHERE project_id=?1 AND thread=?2 AND \"from\"=?3 AND body=?4 AND coalesce(title,'')=?5 AND needs_reply=0 AND abs(julianday(at)-julianday(?6))*86400<=60 AND id!=?7 ORDER BY id")?;
+                let rows = q.query_map(
+                    rusqlite::params![
+                        project.to_string(),
+                        message.thread,
+                        message.from,
+                        message.body,
+                        message.title.clone().unwrap_or_default(),
+                        message.at,
+                        id
+                    ],
+                    |r| r.get::<_, i64>(0),
+                )?;
+                ids = rows.collect::<Result<Vec<_>, _>>()?;
+            }
+            ids.push(id);
+            ids.sort_unstable();
+            let mut items = vec![];
+            for each in ids {
+                let message = if each == id {
+                    message.clone()
+                } else {
+                    sluice_store::messages::message(c, project, sluice_model::ids::MessageId(each))?
+                };
+                items.push(super::threads::item(c, project, &name, &steps, message)?);
+            }
             Ok(Some(super::threads::Conversation::build(
                 super::threads::Build {
                     project,
                     subject: None,
                     steps: &steps,
                     unread: &BTreeSet::new(),
-                    most: Some(1),
+                    most: None,
                     excerpt: false,
                     href: &|m| super::threads::thread_url(project, &m.message.thread),
                 },
-                vec![item],
+                items,
             )))
         })
         .await

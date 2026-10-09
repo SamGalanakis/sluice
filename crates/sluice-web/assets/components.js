@@ -554,8 +554,9 @@ define("sluice-menu", {
 // ---- sluice-copy -------------------------------------------------------------------------------
 // An id or a SHA with a button that copies `value` (the button is there only with script); it
 // says Copied for a moment, to the eye and to a screen reader.
-// The page's keys, listed in display preferences: / finds on the page, g then a letter goes
-// to a section (its link in the list), ? opens the list. A key typed into a field, with a
+// The page's keys, listed in display preferences: / finds on the page (on a step's or unit's
+// page, on its plan: `a[data-find-at]`), g then a letter goes to a section (its link in the
+// list), ? opens the list. A key typed into a field, with a
 // modifier, or under an open dialog is the field's or the dialog's, never one of these.
 define("sluice-keys", {
   props: () => ({}),
@@ -569,6 +570,12 @@ define("sluice-keys", {
     cleanup(() => clearTimeout(go));
     const typing = (target) =>
       target instanceof Element && Boolean(target.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])"));
+    const finder = () => [...document.querySelectorAll("main [data-find]")].find((el) => el.checkVisibility?.() ?? true);
+    // arrived from `/` on a page with nothing to find: the find takes the focus, once
+    if (location.hash === "#find") {
+      history.replaceState(history.state, "", location.pathname + location.search);
+      requestAnimationFrame(() => finder()?.focus());
+    }
     on(document, "keydown", (event) => {
       if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
       if (typing(event.target) || document.querySelector("dialog[open]")) return;
@@ -586,9 +593,15 @@ define("sluice-keys", {
         return;
       }
       if (event.key === "/") {
-        const find = [...document.querySelectorAll("main [data-find]")].find((el) => el.checkVisibility?.() ?? true);
-        if (!find) return;
+        const find = finder();
+        // a page with nothing to find (a step's or a unit's) finds on its plan
+        const away = find ? null : document.querySelector("main a[data-find-at]");
+        if (!find && !away) return;
         event.preventDefault();
+        if (away) {
+          location.assign(away.dataset.findAt);
+          return;
+        }
         find.focus();
         find.select?.();
         return;

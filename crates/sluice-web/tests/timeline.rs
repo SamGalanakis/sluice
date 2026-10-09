@@ -589,3 +589,31 @@ async fn chromium_draws_the_timeline_to_its_width_and_a_running_card_how_far_alo
     .unwrap();
     server.abort();
 }
+
+#[tokio::test]
+async fn an_ended_run_past_twice_its_usual_time_says_how_far_in_ink() {
+    let f = Fixture::new().await;
+    let id = recipes(&f).await;
+    // d1's fork took 5m where forks take 1m: 5× its usual time, said quietly once it has ended
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE runs SET finished_at='2026-10-06T09:05:00Z' WHERE project_id=?1 AND step_id='d1-fork'",
+                [id.to_string()],
+            )?;
+            tx.changed(Some(id), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (_, html) = f.get(&format!("/projects/id/{id}/steps/d1-fork")).await;
+    let when = between(&html, "<p class=\"meta d-when\">", "</p>");
+    assert!(
+        when.contains("took 5m · usually 1m · <span class=\"over-x\">5× usual</span>"),
+        "{when}"
+    );
+    // within twice its usual time, nothing more
+    let (_, html) = f.get(&format!("/projects/id/{id}/steps/d2-fork")).await;
+    let when = between(&html, "<p class=\"meta d-when\">", "</p>");
+    assert!(!when.contains("over-x"), "{when}");
+}
