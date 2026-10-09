@@ -185,9 +185,10 @@ async fn a_step_draws_only_the_tabs_it_has_something_for_with_their_counts() {
         !html.contains(" hidden data-tab"),
         "no panel is hidden by the server"
     );
-    // its key output leads Overview, with a way to all of them; its last message after it
+    // its key output leads Overview; its last message after it
     let overview = between(&html, "id=\"tp-overview\"", "<!--/r:tp-overview-->");
-    assert!(overview.contains("<h3>Its output</h3><a class=\"meta\" href=\"#tp-outputs\" data-tab-to=\"outputs\">All outputs</a>"), "{overview}");
+    // its only output: no way to "all" of one
+    assert!(overview.contains("<h3>Its output</h3></div>"), "{overview}");
     assert!(overview.contains("Built &#60;12&#62; crates"), "{overview}");
     assert!(
         overview.contains("<h3>Its last message</h3>")
@@ -256,7 +257,7 @@ async fn outputs_say_a_repeated_value_once_and_inputs_where_theirs_came_from() {
         "{outputs}"
     );
     assert_eq!(outputs.matches("f-same").count(), 1, "{outputs}");
-    assert!(html.contains("<button type=\"button\" role=\"tab\" id=\"tt-outputs\" aria-controls=\"tp-outputs\" aria-selected=\"true\" tabindex=\"0\" data-tab=\"outputs\" data-preserve-attr=\"aria-selected tabindex\">Outputs <span class=\"n\" aria-hidden=\"true\">4</span><span class=\"vh\">, all set</span></button>"), "{html}");
+    assert!(html.contains("<button type=\"button\" role=\"tab\" id=\"tt-outputs\" aria-controls=\"tp-outputs\" aria-selected=\"true\" tabindex=\"0\" data-tab=\"outputs\" data-preserve-attr=\"aria-selected tabindex\">Outputs<span class=\"n\" aria-hidden=\"true\">4</span><span class=\"vh\">, all set</span></button>"), "{html}");
     // an input says where its value came from: another step's output (a link to it) or its
     // default
     let (_, html) = f
@@ -452,6 +453,8 @@ async fn the_kit_gallery_draws_every_part_in_both_themes() {
         "Settings",
         "Search",
         "Banners",
+        "Notice",
+        "Keys",
         "Splitter",
         "Components",
     ] {
@@ -460,12 +463,12 @@ async fn the_kit_gallery_draws_every_part_in_both_themes() {
     assert_eq!(
         html.matches("<div class=\"gal-th\" data-theme=\"light\">")
             .count(),
-        16
+        18
     );
     assert_eq!(
         html.matches("<div class=\"gal-th\" data-theme=\"dark\">")
             .count(),
-        16
+        18
     );
     // its two copies keep their ids apart
     let mut ids: Vec<&str> = html

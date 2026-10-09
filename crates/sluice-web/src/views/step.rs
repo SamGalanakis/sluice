@@ -220,6 +220,8 @@ pub struct RunView {
     pub action: String,
     /// The run's files the dashboard serves (`run_file`), those it has.
     pub files: Vec<&'static str>,
+    /// Those of its files that are empty: named, not linked ("stderr.log · empty").
+    pub empty_files: Vec<&'static str>,
     /// Seconds it ran (to its end, or to the read).
     #[serde(skip)]
     pub seconds: Option<f64>,
@@ -344,6 +346,26 @@ impl RunView {
             None => "",
         }
     }
+    /// One of its files as a page names it: a link to it, or its name and "empty" when it is.
+    pub fn file_html(&self, project: &ProjectId, name: &str, icon: bool) -> TrustedHtml {
+        let mark = if icon {
+            super::icons::icon(super::icons::Icon::FileText, 16, "").to_string()
+        } else {
+            String::new()
+        };
+        TrustedHtml::owned(if self.empty_files.contains(&name) {
+            format!(
+                "<span class=\"run-file-empty\">{mark}{} · empty</span>",
+                super::ui::esc(name)
+            )
+        } else {
+            format!(
+                "<a href=\"{}\">{mark}{}</a>",
+                super::ui::esc(&self.file_href(project, name)),
+                super::ui::esc(name)
+            )
+        })
+    }
     pub fn file_href(&self, project: &ProjectId, name: &str) -> String {
         format!("/projects/id/{project}/runs/{}/files/{name}", self.id)
     }
@@ -361,6 +383,8 @@ pub struct StepView {
     pub id: StepId,
     /// Its title (`sluice_model::naming`): "" when it has none and its id names it.
     pub title: String,
+    /// Its title whole, before `TITLE_CHARS` cut it: its own page's and the drawer's heading.
+    pub whole_title: String,
     /// Its stage in its unit ("land"), "" when it has none.
     pub stage: String,
     pub function: String,
@@ -446,6 +470,24 @@ pub struct StepView {
     /// Its run going now is an agent's whose transcript cannot be read here (`activity::attach`):
     /// its Overview says so, so no activity shown is never read as an idle agent.
     pub transcript_unread: bool,
+    /// Feedback typed with an action that could not be taken, kept in its box (`execute_action`).
+    #[serde(skip)]
+    pub kept: String,
+    /// How many steps come after it, near or far: a succeeded step's Retry says they may run
+    /// again (`board::load_step`).
+    pub downstream: usize,
+    /// While a later run of it goes: what started that run (`load_detail`).
+    pub restart: Option<Restart>,
+}
+/// What started a step's run going now, after an earlier one: a retry's author and reason (a
+/// completion action's, an orchestrator's, the owner's), and the feedback it sent with it.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct Restart {
+    pub by: String,
+    pub reason: String,
+    pub at: String,
+    /// The message sent with it to the step's thread, by its id.
+    pub feedback: Option<i64>,
 }
 /// When a step's current run started and how long it ran or has run so far: its card's timer.
 /// The current run is its latest in its current generation; a scatter's is its latest round,
@@ -799,6 +841,10 @@ impl StepView {
             activity: None,
             transcript_unread: false,
             dismissed: false,
+            kept: String::new(),
+            downstream: 0,
+            restart: None,
+            whole_title: String::new(),
         };
         if let Some(failure) = failure {
             view.set_failure(failure);
@@ -958,6 +1004,15 @@ impl StepView {
             self.id.as_str()
         } else {
             &self.title
+        }
+    }
+    /// Its page's and the drawer's heading: its title whole (`TITLE_CHARS` cuts the one lists
+    /// show), or its id.
+    pub fn whole_heading(&self) -> &str {
+        if self.whole_title.is_empty() {
+            self.heading()
+        } else {
+            &self.whole_title
         }
     }
     /// It has a title apart from its id.
@@ -1443,6 +1498,63 @@ impl StepView {
     }
     /// Cancel's confirmation: titled by its title, its id after it ("Cancel Fix the parser
     /// `l1-work`?"), naming the run, with an optional reason.
+    /// What its action forms were drawn against (`seen`): its status, its own pause and how
+    /// many runs it has had. A plan edit elsewhere leaves it the same, so an action posted
+    /// after one still applies, at the plan's new revision (`execute_action`).
+    pub fn seen(&self) -> String {
+        format!(
+            "{}:{}:{}",
+            self.status.as_str(),
+            self.paused,
+            self.timing.as_ref().map_or(0, |t| t.runs)
+        )
+    }
+    /// Retry asks first on a succeeded step: its result stands, and running it again can send
+    /// the steps after it round again. A failed or stale step's Retry is direct.
+    pub fn retry_asks(&self) -> bool {
+        self.status == StepStatus::Succeeded
+    }
+    /// A succeeded step's Retry: what it does to it and to the steps after it.
+    pub fn retry_confirm(&self) -> super::ui::Confirm {
+        let after = match self.downstream {
+            0 => String::new(),
+            1 => " The step after it runs again only if its new result differs.".into(),
+            n => format!(" The {n} steps after it run again only if its new result differs."),
+        };
+        let ended = if self.result_at.is_empty() {
+            String::new()
+        } else {
+            format!(" at {}", super::ui::at_text(&self.result_at))
+        };
+        super::ui::Confirm {
+            opener: "Retry".into(),
+            title: if self.titled() {
+                format!("Retry {}", self.name().text(60))
+            } else {
+                format!("Retry {}?", self.id)
+            },
+            id: if self.titled() {
+                self.id.to_string()
+            } else {
+                String::new()
+            },
+            action: format!("{}/actions", self.href()),
+            hidden: vec![
+                ("revision", self.revision.to_string()),
+                ("seen", self.seen()),
+                ("action", "retry".into()),
+            ],
+            copy: format!(
+                "It succeeded{ended}. Retrying runs it again; its outputs stay until the new run ends.{after}"
+            ),
+            reason: Some("Optional feedback for the next attempt"),
+            reason_label: "Feedback (optional)",
+            reason_value: self.kept.clone(),
+            confirm: "Retry".into(),
+            keep: "Keep its result",
+            ..Default::default()
+        }
+    }
     pub fn cancel_confirm(&self) -> super::ui::Confirm {
         super::ui::Confirm {
             opener: "Cancel".into(),
@@ -1459,12 +1571,15 @@ impl StepView {
             action: format!("{}/actions", self.href()),
             hidden: vec![
                 ("revision", self.revision.to_string()),
+                ("seen", self.seen()),
                 ("action", "cancel".into()),
             ],
             copy: self.cancel_prompt(),
             reason: Some("Why stop this run?"),
+            reason_value: self.kept.clone(),
             confirm: "Cancel the run".into(),
             keep: "Keep running",
+            danger: true,
             ..Default::default()
         }
     }
@@ -1494,13 +1609,16 @@ impl StepView {
             );
         }
         if !self.thread.is_empty() {
-            tabs.push(Tab::new("thread", "Thread").counted(
+            tabs.push(Tab::new("thread", "Messages").counted(
                 self.thread.count.to_string(),
                 count(self.thread.count, "message", "messages"),
             ));
         }
         if !self.inputs.is_empty() {
-            tabs.push(Tab::new("inputs", "Inputs").counted(self.inputs.len().to_string(), ""));
+            tabs.push(Tab::new("inputs", "Inputs").counted(
+                self.inputs.len().to_string(),
+                count(self.inputs.len(), "input", "inputs"),
+            ));
         }
         if !self.outputs.is_empty() {
             let set = self.outputs_set().len();
@@ -1513,7 +1631,10 @@ impl StepView {
             });
         }
         if !self.runs.is_empty() {
-            tabs.push(Tab::new("runs", "Runs").counted(self.runs.len().to_string(), ""));
+            tabs.push(Tab::new("runs", "Runs").counted(
+                self.runs.len().to_string(),
+                count(self.runs.len(), "run", "runs"),
+            ));
         } else if self.no_run_kept() {
             tabs.push(Tab::new("runs", "Runs"));
         }
@@ -1538,6 +1659,69 @@ impl StepView {
             .iter()
             .find_map(|name| self.outputs.iter().find(|f| f.available && f.name == *name))
     }
+    /// The outputs its Overview shows: its key output; with none, all of a few short ones (three
+    /// at most, each under 200 characters), else its first.
+    pub fn overview_outputs(&self) -> Vec<&FieldView> {
+        if let Some(key) = self.key_output() {
+            return vec![key];
+        }
+        let set = self.outputs_set();
+        if set.len() <= 3 && set.iter().all(|f| f.value.chars().count() < 200) {
+            set
+        } else {
+            set.into_iter().take(1).collect()
+        }
+    }
+    /// Its Overview's outputs come from a run before the one going now.
+    pub fn outputs_earlier(&self) -> bool {
+        self.running() && self.outputs_from().is_some()
+    }
+    /// How the run going now came about, after `previous_run`: "Run 3 started 7m ago, after
+    /// fig-5571-land retried it: conditional Rejected retry (its feedback)." and how the run
+    /// before ended, linked to it in Runs.
+    pub fn rerun_html(&self) -> TrustedHtml {
+        use super::ui::{ago, esc};
+        let Some((n, prev)) = self.previous_run() else {
+            return TrustedHtml::owned(String::new());
+        };
+        let mut out = String::new();
+        if let Some(now) = self.last_run() {
+            out.push_str(&format!("Run {} started {}", n + 1, ago(&now.started)));
+            if let Some(r) = &self.restart {
+                // a completion action retries its own step: it retried itself
+                out.push_str(&match r.by.as_str() {
+                    "owner" => ", after you retried it".to_owned(),
+                    "" => ", after a retry".to_owned(),
+                    by if by == self.id.as_str() || by == format!("step:{}", self.id) => {
+                        ", after it retried itself".to_owned()
+                    }
+                    by => format!(", after {} retried it", esc(by)),
+                });
+                let reason = r.reason.trim().trim_end_matches('.');
+                if !reason.is_empty() {
+                    out.push_str(&format!(": {}", esc(reason)));
+                }
+                if let Some(m) = r.feedback {
+                    out.push_str(&format!(" (<a href=\"#message-{m}\">with feedback</a>)"));
+                }
+            }
+            out.push_str(". ");
+        }
+        out.push_str(&format!(
+            "<a href=\"#run-{n}\">Run {n}</a> {}",
+            esc(&prev.ended_words())
+        ));
+        if !prev.finished.is_empty() {
+            out.push_str(&format!(" {}", ago(&prev.finished)));
+        }
+        let sentence = prev.ended_sentence();
+        if sentence.is_empty() {
+            out.push('.');
+        } else {
+            out.push_str(&format!(": {}", esc(sentence)));
+        }
+        TrustedHtml::owned(out)
+    }
     /// Overview has nothing else to say: its state's own sentence stands in.
     pub fn overview_empty(&self) -> bool {
         !self.running()
@@ -1550,7 +1734,7 @@ impl StepView {
             && self.skipped.is_empty()
             && !self.external
             && self.progress.is_none()
-            && self.key_output().is_none()
+            && self.overview_outputs().is_empty()
             && self.exchange.is_empty()
     }
     /// What its state means, in a sentence (the status table's): Overview's when it has nothing
@@ -1604,22 +1788,25 @@ impl StepView {
         project: &str,
         unit: Option<(&str, &str)>,
         tab: &str,
+        notice: Option<&str>,
     ) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(
-            source = "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{{ step.project }}\">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, \"\")|safe }}{{ project }} plan</a>{% if let Some(unit) = unit %}<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{{ step.project }}/units/{{ unit.0 }}\"{% if !unit.1.is_empty() %} title=\"{{ unit.1 }}\"{% endif %}>{% if unit.1.is_empty() || unit.1 == step.title %}unit {{ unit.0 }}{% else %}{{ crate::views::ui::cut(unit.1, 64) }}{% endif %}</a>{% endif %}</nav>{{ body|safe }}",
+            source = "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{{ step.project }}\">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, \"\")|safe }}{{ project }} plan</a>{% if let Some(unit) = unit %}<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{{ step.project }}/units/{{ unit.0 }}\"{% if !unit.1.is_empty() %} title=\"{{ unit.1 }}\"{% endif %}>{% if unit.1.is_empty() || unit.1 == step.title %}unit {{ unit.0 }}{% else %}{{ crate::views::ui::cut(unit.1, 64) }}{% endif %}</a>{% endif %}</nav>{% if let Some(words) = notice %}{{ crate::views::ui::notice(words)|safe }}{% endif %}{{ body|safe }}",
             ext = "html"
         )]
         struct Page<'a> {
             step: &'a StepView,
             project: &'a str,
             unit: Option<(&'a str, &'a str)>,
+            notice: Option<&'a str>,
             body: TrustedHtml,
         }
         TrustedHtml::from_template(&Page {
             step: self,
             project,
             unit,
+            notice,
             body: self.own_body(tab)?,
         })
     }
@@ -1868,14 +2055,19 @@ pub fn load_detail(
                 Err(_) => Outcome::Unknown(word.to_owned()),
             },
         };
-        let files = match &home {
+        let found: Vec<(&'static str, bool)> = match &home {
             Some(home) => RUN_FILES
                 .iter()
                 .copied()
-                .filter(|name| run_file(home, &id, name).is_some())
+                .filter_map(|name| {
+                    let path = run_file(home, &id, name)?;
+                    Some((name, std::fs::metadata(path).is_ok_and(|m| m.len() == 0)))
+                })
                 .collect(),
             None => vec![],
         };
+        let files = found.iter().map(|(n, _)| *n).collect();
+        let empty_files = found.iter().filter(|(_, e)| *e).map(|(n, _)| *n).collect();
         step.runs.push(RunView {
             id,
             started: r.get(1)?,
@@ -1896,6 +2088,7 @@ pub fn load_detail(
                 .unwrap_or_default()
                 .into(),
             files,
+            empty_files,
             seconds,
             profile: String::new(),
         });
@@ -1934,6 +2127,7 @@ pub fn load_detail(
     } else {
         None
     };
+    step.restart = load_restart(c, project, step)?;
     load_conversation(c, project, step)?;
     (step.messages,step.awaiting) = c.prepare_cached("SELECT count(*),coalesce(sum(needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL),0) FROM messages WHERE project_id=?1 AND thread=?2")?.query_row((project.to_string(),format!("step-{}",step.id)), |r| Ok((r.get::<_, i64>(0)? as usize,r.get::<_, i64>(1)? as usize)))?;
     step.mark_setters();
@@ -1954,6 +2148,49 @@ pub fn load_detail(
         }
     }
     Ok(())
+}
+/// While a later run of it goes, what started that run: the retry recorded after its run
+/// before started and before this one did (who, why, and the feedback it posted to the step in
+/// the same write). None for a first run, or a run relaunched with no retry (a lost one's).
+fn load_restart(
+    c: &rusqlite::Connection,
+    project: ProjectId,
+    step: &StepView,
+) -> sluice_store::Result<Option<Restart>> {
+    let [.., before, now] = step.runs.as_slice() else {
+        return Ok(None);
+    };
+    if !now.finished.is_empty() {
+        return Ok(None);
+    }
+    let Some((payload, at)) = c
+        .prepare_cached("SELECT payload,at FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.retry' AND julianday(at)>=julianday(?3) AND julianday(at)<=julianday(?4) ORDER BY seq DESC LIMIT 1")?
+        .query_row(
+            (project.to_string(), step.id.as_str(), before.started.as_str(), now.started.as_str()),
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let payload: serde_json::Value = serde_json::from_str(&payload)?;
+    let said = |k: &str| {
+        payload
+            .get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned()
+    };
+    let feedback = c
+        .prepare_cached("SELECT id FROM messages WHERE project_id=?1 AND \"to\"=?2 AND abs(julianday(at)-julianday(?3))*86400.0<2 ORDER BY id LIMIT 1")?
+        .query_row((project.to_string(), step.id.as_str(), at.as_str()), |r| r.get(0))
+        .optional()?;
+    Ok(Some(Restart {
+        by: said("author"),
+        reason: said("reason"),
+        at,
+        feedback,
+    }))
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1995,15 +2232,41 @@ pub struct ActionForm {
     /// step's page by default.
     #[serde(default)]
     pub next: String,
+    /// The step as its form was drawn (`StepView::seen`): an action posted after a plan edit
+    /// that left the step as it was still applies.
+    #[serde(default)]
+    pub seen: String,
 }
 pub async fn action(
     State(state): State<DashboardState>,
     registry: Option<Extension<board::Registry>>,
     commands: Option<Extension<Commands>>,
     Path((project, id)): Path<(ProjectId, StepId)>,
+    headers: HeaderMap,
     Form(form): Form<ActionForm>,
 ) -> Response {
-    execute_action(state, commands, registry, project, id, form).await
+    execute_action(state, commands, registry, project, id, headers, form).await
+}
+impl Action {
+    /// Its button's word.
+    fn word(&self) -> &'static str {
+        match self {
+            Self::Pause => "Pause",
+            Self::Unpause => "Unpause",
+            Self::Retry => "Retry",
+            Self::Cancel => "Cancel",
+            Self::Dismiss => "Dismiss",
+            Self::Undismiss => "Undo",
+        }
+    }
+}
+/// An action the page asked for and sluice did not take: the HTTP status, and what its step's
+/// page says over it (the feedback typed with it kept in its box).
+struct Refusal {
+    status: StatusCode,
+    words: String,
+    /// The action still applies, so what was typed with it is kept in its box for another try.
+    keeps: bool,
 }
 async fn execute_action(
     state: DashboardState,
@@ -2011,53 +2274,145 @@ async fn execute_action(
     registry: Option<Extension<board::Registry>>,
     project: ProjectId,
     id: StepId,
+    headers: HeaderMap,
     form: ActionForm,
 ) -> Response {
-    let Some(Extension(commands)) = commands else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Command service unavailable",
-        )
-            .into_response();
+    let kept = form.message.clone();
+    let action = form.action.clone();
+    let outcome = try_action(&state, commands, registry.as_ref(), project, &id, form).await;
+    let refusal = match outcome {
+        Ok(next) => return Redirect::to(&next).into_response(),
+        Err(Ok(refusal)) => refusal,
+        Err(Err(e)) => return board::error_response(e),
     };
-    let view = match board::snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await {
-        Ok((_, view)) => view,
-        Err(e) => return board::error_response(e),
-    };
-    let marks = matches!(form.action, Action::Dismiss | Action::Undismiss);
-    if !marks && view.revision != form.revision {
-        return (
-            StatusCode::CONFLICT,
-            "The plan changed. Reload before acting.",
-        )
-            .into_response();
+    // a browser's form comes back to its step's page, saying what happened over it, its
+    // feedback still in its box; a script or tool gets the error as JSON
+    if !super::missing::accepts_html(&headers) {
+        let error = match refusal.status {
+            StatusCode::CONFLICT => PublicError::Conflict {
+                message: refusal.words,
+                current_rev: None,
+            },
+            StatusCode::SERVICE_UNAVAILABLE => PublicError::Busy {
+                message: refusal.words,
+                retryable: true,
+            },
+            _ => PublicError::BadRequest {
+                message: refusal.words,
+            },
+        };
+        return crate::http::error_response(error);
     }
+    let words = if kept.trim().is_empty() || !refusal.keeps {
+        refusal.words
+    } else {
+        format!(
+            "{} What you wrote is kept in its box: {} sends it.",
+            refusal.words,
+            action.word()
+        )
+    };
+    let notice = Notice { words, kept };
+    match page_html(
+        &state,
+        registry.as_ref().map(|r| &r.0),
+        project,
+        &id,
+        &ActivityQuery::default(),
+        &headers,
+        Some(&notice),
+    )
+    .await
+    {
+        Ok(html) => (refusal.status, Html(html.0)).into_response(),
+        Err(e) => board::error_response(e),
+    }
+}
+/// What a step's page says over it after an action it could not take, and the feedback typed
+/// with that action, kept in its box.
+pub struct Notice {
+    pub words: String,
+    pub kept: String,
+}
+/// The action, or why not: `Ok` where to go once done; `Err(Ok)` a refusal its step's page says;
+/// `Err(Err)` an error with no page to say it on (no such step, a broken read).
+async fn try_action(
+    state: &DashboardState,
+    commands: Option<Extension<Commands>>,
+    registry: Option<&Extension<board::Registry>>,
+    project: ProjectId,
+    id: &StepId,
+    form: ActionForm,
+) -> Result<String, Result<Refusal, PublicError>> {
+    let refuse = |status, words: String| {
+        Err(Ok(Refusal {
+            status,
+            words,
+            keeps: true,
+        }))
+    };
+    let Some(Extension(commands)) = commands else {
+        return refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Nothing was done: sluice's coordinator is not answering. Try again in a moment."
+                .into(),
+        );
+    };
+    let view = board::snapshot(state, project, registry.map(|r| &r.0))
+        .await
+        .map(|(_, view)| view)
+        .map_err(Err)?;
     if form.message.len() > 16_384 {
-        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        return refuse(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Nothing was done: the feedback is longer than 16,384 bytes.".into(),
+        );
     }
     let Some(step) = view
         .units
         .iter()
         .flat_map(|u| &u.steps)
-        .find(|s| s.id == id)
+        .find(|s| &s.id == id)
     else {
-        return StatusCode::NOT_FOUND.into_response();
+        return Err(Err(PublicError::NotFound {
+            message: "step not found".into(),
+        }));
     };
+    let word = step.shown().word();
     let valid = match form.action {
         Action::Retry => step.retryable(),
         Action::Cancel => step.cancellable(),
-        Action::Pause => step.pausable(),
+        Action::Pause => step.pausable() && !step.paused,
         Action::Unpause => step.paused,
         Action::Dismiss => step.cancelled() && !step.dismissed,
         Action::Undismiss => step.dismissed,
     };
     if !valid {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Action does not apply to this state",
-        )
-            .into_response();
+        return Err(Ok(Refusal {
+            status: StatusCode::CONFLICT,
+            words: format!(
+                "Nothing was done: {} does not apply to a {word} step.",
+                form.action.word()
+            ),
+            keeps: false,
+        }));
     }
+    // the plan moved since the page drew: an edit elsewhere leaves this step as it was, and
+    // the action still means what it meant, so it applies at the plan's new revision
+    let marks = matches!(form.action, Action::Dismiss | Action::Undismiss);
+    let revision = if marks || view.revision == form.revision {
+        form.revision
+    } else if !form.seen.is_empty() && form.seen == step.seen() {
+        view.revision
+    } else {
+        return refuse(
+            StatusCode::CONFLICT,
+            format!(
+                "Nothing was done: this step changed since the page drew it, and it is {word} now. Look again, then {}.",
+                form.action.word().to_lowercase()
+            ),
+        );
+    };
     let next = if form.next.starts_with('/') && !form.next.starts_with("//") {
         form.next.clone()
     } else {
@@ -2067,16 +2422,24 @@ async fn execute_action(
         .0
         .execute(OwnerCommand {
             project,
-            step: Some(id),
-            action: form.action,
-            revision: form.revision,
+            step: Some(id.clone()),
+            action: form.action.clone(),
+            revision,
             message: form.message,
             author: "owner",
         })
         .await
     {
-        Ok(()) => Redirect::to(&next).into_response(),
-        Err(e) => board::error_response(e),
+        Ok(()) => Ok(next),
+        Err(PublicError::Conflict { .. }) => refuse(
+            StatusCode::CONFLICT,
+            format!(
+                "Nothing was done: the plan changed again as you acted. {} once more to try.",
+                form.action.word()
+            ),
+        ),
+        Err(PublicError::NotFound { message }) => Err(Err(PublicError::NotFound { message })),
+        Err(e) => refuse(crate::http::status_of(&e), format!("Nothing was done: {e}")),
     }
 }
 /// `?activity=all` draws every turn and call of its activity outline, not only the latest;
@@ -2100,48 +2463,76 @@ pub async fn step_page(
     Query(shown): Query<ActivityQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let page = async {
-        let (shared, detail) =
-            board::step_detail(&state, project, registry.as_ref().map(|r| &r.0), &id, true).await?;
-        let (Some(shared), Some(mut detail)) = (shared, detail) else {
-            return Err(PublicError::NotFound {
-                message: "step not found".into(),
-            });
-        };
-        super::activity::attach(&state, &mut detail.step, shown.all()).await;
-        let nav = NavView::new(&shared, Some(project), "plan")?;
-        let step = &detail.step;
-        let unit = detail
-            .unit
-            .as_ref()
-            .map(|(id, title)| (id.as_str(), title.as_str()));
-        // the version its stream's first batch has when it draws the same: nothing to patch
-        let drawn = step
-            .own_body(&shown.tab)
-            .map(|body| RenderedBatch::new(vec![PatchRegion::new("step-detail", body)]).version)
-            .map_err(render_error)?;
-        step.page_body(&detail.project, unit, &shown.tab)
-            .and_then(|body| {
-                super::render_layout(
-                    &format!("{} · {}", step.tab_title(), detail.project),
-                    &body,
-                    &nav,
-                    &Viewer::from_headers(&headers),
-                    &format!(
-                        "{}/stream?page=true{}",
-                        step.href(),
-                        if shown.all() { "&activity=all" } else { "" }
-                    ),
-                    &drawn,
-                    &step.href(),
-                )
-            })
-            .map_err(render_error)
-    };
-    match page.await {
+    match page_html(
+        &state,
+        registry.as_ref().map(|r| &r.0),
+        project,
+        &id,
+        &shown,
+        &headers,
+        None,
+    )
+    .await
+    {
         Ok(html) => Html(html.0).into_response(),
         Err(e) => board::error_response(e),
     }
+}
+/// A step's own page; `notice` what it says over the step after an action it did not take.
+async fn page_html(
+    state: &DashboardState,
+    registry: Option<&board::Registry>,
+    project: ProjectId,
+    id: &StepId,
+    shown: &ActivityQuery,
+    headers: &HeaderMap,
+    notice: Option<&Notice>,
+) -> Result<TrustedHtml, PublicError> {
+    let (shared, detail) = board::step_detail(state, project, registry, id, true).await?;
+    let (Some(shared), Some(mut detail)) = (shared, detail) else {
+        return Err(PublicError::NotFound {
+            message: "step not found".into(),
+        });
+    };
+    super::activity::attach(state, &mut detail.step, shown.all()).await;
+    let nav = NavView::new(&shared, Some(project), "plan")?;
+    // the version its stream's first batch has when it draws the same: nothing to patch. The
+    // kept feedback is the page's alone, in a box no patch empties (`data-ignore-morph`)
+    let drawn = detail
+        .step
+        .own_body(&shown.tab)
+        .map(|body| RenderedBatch::new(vec![PatchRegion::new("step-detail", body)]).version)
+        .map_err(render_error)?;
+    if let Some(notice) = notice {
+        detail.step.kept = notice.kept.clone();
+    }
+    let step = &detail.step;
+    let unit = detail
+        .unit
+        .as_ref()
+        .map(|(id, title)| (id.as_str(), title.as_str()));
+    step.page_body(
+        &detail.project,
+        unit,
+        &shown.tab,
+        notice.map(|n| n.words.as_str()),
+    )
+    .and_then(|body| {
+        super::render_layout(
+            &format!("{} · {}", step.tab_title(), detail.project),
+            &body,
+            &nav,
+            &Viewer::from_headers(headers),
+            &format!(
+                "{}/stream?page=true{}",
+                step.href(),
+                if shown.all() { "&activity=all" } else { "" }
+            ),
+            &drawn,
+            &step.href(),
+        )
+    })
+    .map_err(render_error)
 }
 #[derive(Deserialize)]
 pub struct StepStreamQuery {

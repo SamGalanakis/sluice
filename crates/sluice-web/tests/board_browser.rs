@@ -690,10 +690,17 @@ async fn chromium_no_line_enters_a_lane_matrix_and_every_line_ends_on_its_cards(
         let phone = browser
             .eval(r#"(() => { const row = document.getElementById('unit-l1');
               return {lane: row.querySelector('.mx-lane').checkVisibility() ? row.querySelector('.mx-lane').textContent : null,
+                      marks: [...row.querySelectorAll('.mx-lane .stg > .g')].map(g => g.classList[1]),
                       cells: [...row.querySelectorAll('td')].filter(t => t.checkVisibility()).length,
                       scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth}; })()"#)
             .unwrap();
-        assert_eq!(phone["lane"], "fork✓ work▶ land·", "{phone}");
+        // each stage its state's glyph and its name, as everywhere else
+        assert_eq!(phone["lane"], "fork work land", "{phone}");
+        assert_eq!(
+            phone["marks"],
+            serde_json::json!(["g-succeeded", "g-running", "g-pending"]),
+            "{phone}"
+        );
         assert_eq!(phone["cells"], 0, "{phone}");
         assert_eq!(phone["scroll"], 0, "{phone}");
         assert_eq!(browser.eval("window.browserErrors").unwrap(), serde_json::json!([]));

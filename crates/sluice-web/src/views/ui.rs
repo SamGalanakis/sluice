@@ -53,6 +53,16 @@ fn shape(shown: Shown) -> TrustedHtml {
     let icon = Icon::named(spec.icon).expect("every state's icon is in the sprite");
     solid(icon, 16, if spec.turns { "spin" } else { "" })
 }
+/// One stage of a lane, kept whole: its state's small glyph, then its name (already escaped
+/// HTML), as every lane string draws it (a matrix row on a phone, a done unit's line, the
+/// board's Lanes table). The glyph is named for a screen reader unless `named` says the words
+/// around it say the state already.
+pub fn stage(shown: Shown, name: &str, named: bool) -> String {
+    format!(
+        "<span class=\"stg\">{}{name}</span>",
+        if named { glyph(shown) } else { mark(shown) }
+    )
+}
 /// A state's word ("set by hand", "outside").
 pub fn word(shown: Shown) -> &'static str {
     shown.word()
@@ -359,6 +369,33 @@ impl StepRef {
             esc(&self.id)
         ))
     }
+    /// Its id first, then its title (its stage is in its id): "fig-5571-landed The lashlang
+    /// substrate…", where the id is what tells one wait from the next.
+    pub fn id_first_html(&self, chars: usize) -> TrustedHtml {
+        if !self.titled() {
+            return self.html(chars);
+        }
+        TrustedHtml::owned(format!(
+            "<span class=\"sref\"><code class=\"sref-id\">{}</code> <span class=\"sref-t\">{}</span></span>",
+            esc(&self.id),
+            esc(&sluice_model::naming::cut(&self.title, chars))
+        ))
+    }
+    /// Its id alone, its title on hover.
+    pub fn id_html(&self) -> TrustedHtml {
+        if !self.titled() {
+            return self.html(0);
+        }
+        TrustedHtml::owned(format!(
+            "<span class=\"sref\"{}><code class=\"sref-id\">{}</code></span>",
+            if self.titled() {
+                format!(" title=\"{}\"", esc(&self.title))
+            } else {
+                String::new()
+            },
+            esc(&self.id)
+        ))
+    }
     fn stage_html(&self) -> String {
         if self.stage.is_empty() {
             String::new()
@@ -440,10 +477,11 @@ pub fn tabs_open(
         let count = if tab.count.is_empty() {
             String::new()
         } else if tab.said.is_empty() {
-            format!(" <span class=\"n\">{}</span>", esc(&tab.count))
+            format!("<span class=\"n\">{}</span>", esc(&tab.count))
         } else {
+            // no space between: a screen reader hears "Activity, 3 turns" (the gap is margin)
             format!(
-                " <span class=\"n\" aria-hidden=\"true\">{}</span><span class=\"vh\">, {}</span>",
+                "<span class=\"n\" aria-hidden=\"true\">{}</span><span class=\"vh\">, {}</span>",
                 esc(&tab.count),
                 esc(&tab.said)
             )
@@ -525,6 +563,16 @@ pub fn empty_with(text: &str, more: &TrustedHtml) -> TrustedHtml {
         }
     ))
 }
+/// What a page says at its top after something the owner asked for was not done: one calm box
+/// with the attention mark, read out as it appears.
+pub fn notice(words: &str) -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<div class=\"notice\" role=\"alert\">{}<p>{}</p></div>",
+        crate::views::icons::icon(crate::views::icons::Icon::TriangleAlert, 16, "notice-i"),
+        esc(words)
+    ))
+}
+
 /// A confirmation (Cancel, Close all, Delete project), drawn by `html` (`ui::rocket`): its
 /// opener's words, the dialog's title with an `id` after it in data mono, the form it confirms
 /// and its words.
@@ -541,6 +589,11 @@ pub struct Confirm {
     pub copy: String,
     /// A reason field's placeholder: none when the confirmation takes no reason.
     pub reason: Option<&'static str>,
+    /// The reason field's label: "Reason (optional)" when empty.
+    pub reason_label: &'static str,
+    /// What the reason field holds as drawn: text typed with an action that could not be
+    /// taken, kept for the next try.
+    pub reason_value: String,
     pub confirm: String,
     pub keep: &'static str,
     /// The confirm button in the ink-filled danger tone (Delete), else primary.

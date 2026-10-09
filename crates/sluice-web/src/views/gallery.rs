@@ -59,6 +59,7 @@ fn step_ref(id: &str, stage: &str, title: &str) -> StepRef {
         Some(&StepName {
             title: title.into(),
             stage: stage.into(),
+            ..Default::default()
         }),
     )
 }
@@ -91,7 +92,7 @@ fn tabs(prefix: &str) -> TrustedHtml {
     let set = [
         Tab::new("overview", "Overview"),
         Tab::new("activity", "Activity").counted("8", "8 turns"),
-        Tab::new("thread", "Thread").counted("15", "15 messages"),
+        Tab::new("thread", "Messages").counted("15", "15 messages"),
         Tab::new("inputs", "Inputs").counted("6", ""),
         Tab::new("outputs", "Outputs").counted("3/7", "3 of 7 set"),
         Tab::new("runs", "Runs").counted("2", ""),
@@ -368,6 +369,7 @@ fn dialog() -> TrustedHtml {
         reason: Some("Why stop this run?"),
         confirm: "Cancel the run".into(),
         keep: "Keep running",
+        danger: true,
         ..Default::default()
     };
     let delete = Confirm {
@@ -386,6 +388,14 @@ fn dialog() -> TrustedHtml {
         cancel.html(),
         delete.html()
     ))
+}
+fn notices() -> TrustedHtml {
+    ui::notice("Nothing was done: this step changed since the page drew it, and it is running now. Look again, then retry. What you wrote is kept in its box: Retry sends it.")
+}
+/// The keys' list as display preferences draws it (its `sluice-keys` host is the page's own:
+/// one per page).
+fn keys() -> TrustedHtml {
+    TrustedHtml::owned("<div class=\"keys gal-keys\"><p class=\"menu-label\">Keys</p><dl class=\"keys-list\"><div><dt><kbd>/</kbd></dt><dd>Find on this page</dd></div><div><dt><kbd>g</kbd> <kbd>h</kbd></dt><dd><a href=\"#\">All projects</a></dd></div><div><dt><kbd>g</kbd> <kbd>p</kbd></dt><dd><a href=\"#\">Plan</a></dd></div><div><dt><kbd>g</kbd> <kbd>m</kbd></dt><dd><a href=\"#\">Messages</a></dd></div><div><dt><kbd>g</kbd> <kbd>l</kbd></dt><dd><a href=\"#\">Log</a></dd></div><div><dt><kbd>g</kbd> <kbd>i</kbd></dt><dd><a href=\"#\">Inbox</a></dd></div><div><dt><kbd>?</kbd></dt><dd>These keys</dd></div></dl><p class=\"keys-note\">None while typing in a field.</p></div>".into())
 }
 /// Every part, drawn twice: once per theme of the house pair, with its ids apart.
 pub fn parts() -> Result<Vec<Part>, askama::Error> {
@@ -412,6 +422,8 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Settings", "`ui::types_toggle` and the display preferences' `ui::setting_open` (`sluice-toggle`): applied at once, kept by /settings; every Types switch on a page follows.", both(&|_| Ok(toggles()))?);
     add("Search", "`ui::search_open` (`sluice-search`): a list filtered as one types (the functions), or the board's tools pointing the page's stream at their query; Escape clears.", both(&|p| Ok(searches(p)))?);
     add("Banners", "`ui::banner` (`sluice-banner`): the page's stream paused or stopped with Reconnect, in gold; a newer build with Reload, muted. Hidden while live.", both(&|_| Ok(banners()))?);
+    add("Notice", "`ui::notice`: what a page says at its top when something asked for was not done (a step's action refused), with what to do next; read out as it appears.", both(&|_| Ok(notices()))?);
+    add("Keys", "`sluice-keys`, listed under display preferences on every page: / finds on the page, g then a letter goes to a section, ? opens the list; never while typing in a field, with a modifier held or under an open dialog.", both(&|_| Ok(keys()))?);
     add("Splitter", "`ui::splitter` (`sluice-splitter`): drag, the arrows (16px, 64px with Shift), Home and End; a double-click resets; the width kept per project.", both(&|p| Ok(splitters(p)))?);
     add("Components", "Every Rocket component: Rust draws its host and all in it, the component only behaves (light DOM, no content of its own). Its props are its host's attributes.", (components(), TrustedHtml::default()));
     Ok(parts)

@@ -212,6 +212,102 @@ impl LogView {
         };
         format!("{}?{}", self.base(), query.query(None, None))
     }
+    /// What an empty page says: no records of what it asks for, said as its filters say it
+    /// ("No error records for step fig-5571-work."), with a link that drops each filter.
+    pub fn empty_html(&self) -> TrustedHtml {
+        use super::ui::esc;
+        let q = &self.query;
+        let what = if q.errors {
+            "error records".to_owned()
+        } else if q.kinds.is_empty() {
+            "records".to_owned()
+        } else {
+            format!("{} records", q.kinds.join(", "))
+        };
+        let mut words = format!("No {what}");
+        if !q.step.is_empty() {
+            words.push_str(&format!(" for step {}", q.step));
+        }
+        if !q.unit.is_empty() {
+            words.push_str(&format!(" in unit {}", q.unit));
+        }
+        if !q.threads.is_empty() {
+            words.push_str(&format!(" on {}", q.threads.join(", ")));
+        }
+        if q.before.is_some() || q.after.is_some() {
+            words.push_str(" on this page");
+        }
+        words.push('.');
+        let href = |query: LogQuery| format!("{}?{}", self.base(), query.query(None, None));
+        let mut ways: Vec<(String, &str)> = vec![];
+        let paged = LogQuery {
+            before: None,
+            after: None,
+            ..q.clone()
+        };
+        if q.errors || !q.kinds.is_empty() {
+            ways.push((
+                href(LogQuery {
+                    errors: false,
+                    kinds: vec![],
+                    ..paged.clone()
+                }),
+                "Show every kind",
+            ));
+        }
+        if !q.step.is_empty() {
+            ways.push((
+                href(LogQuery {
+                    step: String::new(),
+                    ..paged.clone()
+                }),
+                "Any step",
+            ));
+        }
+        if !q.unit.is_empty() {
+            ways.push((
+                href(LogQuery {
+                    unit: String::new(),
+                    ..paged.clone()
+                }),
+                "Any unit",
+            ));
+        }
+        if !q.threads.is_empty() {
+            ways.push((
+                href(LogQuery {
+                    threads: vec![],
+                    ..paged.clone()
+                }),
+                "Any thread",
+            ));
+        }
+        if q.before.is_some() || q.after.is_some() {
+            ways.push((href(paged.clone()), "The latest records"));
+        }
+        // a step's records alone, none found: it may have left with its unit
+        let retired = !q.step.is_empty() && !q.errors && q.kinds.is_empty() && q.threads.is_empty();
+        TrustedHtml::owned(format!(
+            "<div class=\"empty log-empty\"><p>{}{}</p>{}</div>",
+            esc(&words),
+            if retired {
+                " A step retired with its unit keeps its records until the log is trimmed."
+            } else {
+                ""
+            },
+            if ways.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "<p class=\"log-ways\">{}</p>",
+                    ways.iter()
+                        .map(|(h, w)| format!("<a href=\"{}\">{w}</a>", esc(h)))
+                        .collect::<Vec<_>>()
+                        .join(" · ")
+                )
+            }
+        ))
+    }
     pub fn base(&self) -> String {
         self.project
             .map(|id| format!("/projects/id/{id}/log"))
@@ -325,7 +421,8 @@ pub async fn load(
             let event: Event = serde_json::from_str(&payload)?;
             let json = serde_json::to_value(&event)?;
             let kind = json.get("kind").and_then(|v| v.as_str()).unwrap_or("").into();
-            let summary = summary(&event);
+            // one sentence a row: a long one (a conflict's file list) is cut, its JSON whole
+            let summary = cut(&summary(&event), 240);
             let owner: Option<ProjectId> = owner.and_then(|p| p.parse().ok());
             let named = match owner {
                 Some(id) => match names.get(&id) {

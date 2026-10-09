@@ -543,6 +543,55 @@ define("sluice-menu", {
 // ---- sluice-copy -------------------------------------------------------------------------------
 // An id or a SHA with a button that copies `value` (the button is there only with script); it
 // says Copied for a moment, to the eye and to a screen reader.
+// The page's keys, listed in display preferences: / finds on the page, g then a letter goes
+// to a section (its link in the list), ? opens the list. A key typed into a field, with a
+// modifier, or under an open dialog is the field's or the dialog's, never one of these.
+define("sluice-keys", {
+  props: () => ({}),
+  manifest: {
+    slots: [{ name: "list", description: ".keys: a dl of each key and what it does; each g key's link (a[data-go]) is where it goes." }],
+    events: [],
+  },
+  setup({ host, cleanup }) {
+    const on = listening(cleanup);
+    let go = 0;
+    cleanup(() => clearTimeout(go));
+    const typing = (target) =>
+      target instanceof Element && Boolean(target.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])"));
+    on(document, "keydown", (event) => {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (typing(event.target) || document.querySelector("dialog[open]")) return;
+      if (go) {
+        clearTimeout(go);
+        go = 0;
+        const link = host.querySelector(`a[data-go="${CSS.escape(event.key.toLowerCase())}"]`);
+        if (!link) return;
+        event.preventDefault();
+        location.assign(link.href);
+        return;
+      }
+      if (event.key === "g") {
+        go = setTimeout(() => { go = 0; }, 1500);
+        return;
+      }
+      if (event.key === "/") {
+        const find = [...document.querySelectorAll("main [data-find]")].find((el) => el.checkVisibility?.() ?? true);
+        if (!find) return;
+        event.preventDefault();
+        find.focus();
+        find.select?.();
+        return;
+      }
+      if (event.key === "?") {
+        const menu = host.closest("details");
+        if (!menu) return;
+        event.preventDefault();
+        menu.open = true;
+        requestAnimationFrame(() => host.querySelector("a[data-go]")?.focus());
+      }
+    });
+  },
+});
 define("sluice-copy", {
   props: ({ string }) => ({ value: string }),
   manifest: {

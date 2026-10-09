@@ -466,12 +466,12 @@ last changed; for one
 with failures or cancels a list of its stopped steps, a row each: the step's glyph (failed, or
 cancelled in muted ink), the step named as every page names it (title, then its id in data
 mono; a link that opens it in the drawer) and its failure's headline cut with an ellipsis in
-meta, a link to the failure's own record on the log when the log keeps it, a cancel's row a
+meta, a link to the failure's own record on the log (else to the log filtered to the step), a cancel's row a
 quiet "Dismiss" under it (a text button), the failures first and at most four rows, then "and n more" (a link to Show: Attention);
 its description's opening; a progress bar (a segment a state, as the board's) with "n of m"
 and "· n paused" in plum when some are; then either its running steps (the glyph of how each
 reads: running, quiet, finishing, stopping, with a muted "stopping" or "finishing" tag; the step named as every page names it,
-its stage, title and id, the title cut at 96 characters, its live time and a gold "quiet" tag once a run has written
+its stage, title and id, the title cut at 96 characters, "running for" and its live time, and a gold "quiet" tag once a run has written
 nothing for its cadence (its plan's `cadence:` tag, else 2 hours; one threshold for every page):
 "quiet 2h 42m", or "quiet" alone when it has written nothing since it started; on a narrow row
 the time and tag take the next line, never squeezing the title) or one line on what
@@ -534,7 +534,7 @@ Top down:
    state it reads as ("3 units · 1 failed · 1 running · 1 pending"). A row a unit: the first column its status glyph, its title (600, ink, a link to
    its unit page, two lines at most), its id in data mono and any alarm under it; then the
    view's summary in 13/18 (its parts in a line: a param at 500 in ink, an output in data mono,
-   a message clamped to two lines), its column headed by what the view shows ("Ticket · last
+   a message on one line, cut with an ellipsis), its column headed by what the view shows ("Ticket · last
    message"); then a column per stage, headed by the stage in 12.5px meta and, when its
    column holds something that needs a look, what in ink at 600 ("land · 2 failed · 1 quiet",
    the attention states counted in the ramp's order), each cell that
@@ -546,13 +546,16 @@ Top down:
    the window's top while a tall matrix's rows pass under it (its wrap clips rather than
    scrolls, so nothing between it and the page scrolls). A row with a failed or cancelled
    stage says why under its id: that stage's one sentence, muted, a link to the step. A matrix is a table and draws no
-   lines: what a row waits for is said in words under its title ("Waits for land · Stop the
-   parser leak `l2-land` (failed)"), and no line from elsewhere crosses its cells (a line to or from a row would have
+   lines: what a row waits for is said in words under its title, each source by its id with its
+   title on hover ("Waits for `l2-land` (failed)"); a wait two rows or more share is said once,
+   above the table ("3 units wait for `fig-5571-landed` The lashlang substrate… (running)", the
+   source's id first, then its title, a link), and left out of those rows; and no line from elsewhere crosses its cells (a line to or from a row would have
    to). A view that does not check is one line above the table in the attention colour with
    `triangle-alert`, and the table draws without the summary column. The matrix keys off the
    `plan` container, never the window: at 720px of pane and narrower a row is a block: the
-   glyph and title, the id, then the stages as a lane string in 13px (`fork✓ work▶ land·`, each
-   a 44px-tall link to its step), then the summary; the stage columns and head are gone. Between
+   glyph and title, the id, then the stages as a lane string in 13px (each stage its name after
+   its glyph at 12px, the status ramp's, a stage not reached its mark; each a 44px-tall link to
+   its step), then the summary; the stage columns and head are gone. Between
    720px and 1100px of pane (a laptop with the drawer open, or beside the board) the summary
    column gives way (the summary goes under the row's title, as on a phone) and the title column
    narrows. A pill is as wide as what it says (a long timer, a run's earlier glyphs), so the
@@ -593,10 +596,9 @@ Top down:
      first in muted ink when the step's id does not hold it, the step named as every page names
      it (its title, its id after it in data mono, the title giving way to an ellipsis before the
      id does), how long it took, and when; any other one line, a `<details>`: the success glyph,
-     its title and id as a step's are named, its steps as the board's lane strings write them (`fork✓ work✓ land✓ rm–`, data
-     mono 12px in muted ink, the step's id without the unit's prefix and its mark, a step named
-     as its unit its mark alone; each mark in ink at 700 and 13px so a ✓ never passes for the
-     pending dot; a lane too long for its line gives way at its start, so its last steps (land,
+     its title and id as a step's are named, its steps as the board's lane strings write them (each stage its 12px glyph, the
+     status ramp's, then its name, the step's id without the unit's prefix, in data mono 12px
+     and muted ink; a step named as its unit its glyph alone; a lane too long for its line gives way at its start, so its last steps (land,
      close, rm), which say how it ended, stay in view; whole in its title; a screen reader hears "6 steps done") and a
      chevron, in a grid of wider cells (`minmax(360px, 1fr)`); the line opens to its cards. A
      search that matches in a done unit, or Show: Done, draws the shelf and the matching units
@@ -759,7 +761,7 @@ page from 1200px, `min(680px, 45vw)`; over the page on a scrim below that; full 
 phone) and puts the card's ring on; without script the card's link opens the step's own page.
 The step reads top down:
 - on its own page only, a way back above it, in 14px muted ink: "← <project> plan / unit <u>"
-  (Lucide `arrow-left`; the unit named by its title, cut at 64 characters, its whole title on hover); there its title is the page's `h1` and each section's head an `h2`, in
+  (Lucide `arrow-left`; the unit named by its title, cut at 64 characters, its whole title on hover); there its whole title, never cut, is the page's `h1` (the drawer's heading too) and each section's head an `h2`, in
   the drawer its id a 22px `h2` and each head an `h3` (one look either way: 15/22 at 600), so
   no level is skipped; the tab reads "<stage> · <title> · <project> · sluice" (the title cut at
 48 characters);
@@ -774,40 +776,56 @@ The step reads top down:
   pending, stale, or any paused step; never a failed or cancelled one, which starts only when
   retried), Retry with a folded "Feedback for retry" textarea
   (succeeded, failed, stale; on a failed step Retry is the primary button and comes first; on
-  a cancelled one it stays a plain button),
-  Cancel (running, not already stopping; or pending work outside sluice), 14px apart; it opens the shared confirmation dialog, titled by the step's title with its id in data mono ("Cancel Fix the parser `l1-work`?"), says first how long it has been running ("It has been running for 2h 14m."), then that Retry starts it over, and offers an optional reason, "Cancel the run" and "Keep running"; then, while it has no messages, a link
+  a cancelled one it stays a plain button; on a succeeded one it asks first in the shared
+  dialog, "Retry work · Fix the parser `l1-work`? It succeeded at 14:02. Retrying runs it
+  again; its outputs stay until the new run ends. The 93 steps after it run again only if its
+  new result differs.", with "Feedback (optional)", Retry and "Keep its result"),
+  Cancel (running, not already stopping; or pending work outside sluice), 14px apart; it opens the shared confirmation dialog, titled by the step's title with its id in data mono ("Cancel Fix the parser `l1-work`?"), says first how long it has been running ("It has been running for 2h 14m."), then that Retry starts it over, and offers an optional reason, "Cancel the run" (the ink danger button) and "Keep running". The form also carries what the page saw of the step (its state, whether paused, its run count): when the plan changed since the page drew it but the step did not, the action applies to the new plan without asking. An action that does nothing answers with the step's own page at its status (409, 413, 503), a notice under the way back (below) saying in sluice's words why nothing was done ("Nothing was done: this step changed since the page drew it, and it is running now. Look again, then retry.", "Nothing was done: Cancel does not apply to a succeeded step."), and what the owner typed kept in its box, its fold open ("What you wrote is kept in its box: Retry sends it."); a client that asks for JSON gets the JSON error. Then, while it has no messages, a link
   "Thread · no messages yet" to its thread's page (where the owner can write to it), "Log" (the
   log of its records, filtered to the step) and a gold "n awaiting reply" tag leading to its
-  Thread tab, on the same line, the feedback's fold on a line of its own under them;
+  Messages tab, on the same line, the feedback's fold on a line of its own under them;
   a failure that says how to resume ("To resume it, bind the step's session input…") under
   them in meta at the measure, its tool call as code; a meta line under the description says
   when it ended ("Ended 3h ago · took 2h 14m", "Failed 8d ago" from its result when no run is
   kept);
 - under the header, **tabs** (the kit's, below), each only when it has something to show and
   with a count where one helps: **Overview** (always, and where every page opens), **Activity n**
-  (its turns), **Thread n** (its messages), **Inputs n**, **Outputs n** (or "3/7" while some are
-  not set; a screen reader hears "3 of 7 set") and **Runs n**. `?tab=` opens another; an anchor
+  (its turns), **Messages n** (its conversation; its key in `?tab=` stays `thread`), **Inputs n**,
+  **Outputs n** (or "3/7" while some are not set) and **Runs n**, a screen reader hearing each
+  count in words ("Outputs, 3 of 7 set", "Inputs, 6 inputs"). `?tab=` opens another; an anchor
   in a tab (`#run-3`, a failing call's, `#message-12`, `#activity`, `#tp-outputs`) opens its tab
   on it. In the drawer a step opened from another opens on its Overview (a failure leads
   there; the last step's tab was that step's), one opened afresh on the address's tab, and a
   link inside it never touches the address (its hash is the open step's). The way back above
   the title names the unit by its id when its title is the step's own.
 - **Overview**, in need order: a failed step's failure first ("Why it failed", or "Cancelled":
-  below), its latest own message under it ("Its last message"); while it runs **Now**: on a
-  retry one meta line for the run before ("Run 2 failed 2h ago: Its engine hit a usage cap.", a
-  cancel's reason after its colon, "Run 2" a link to that run in Runs); when it is quiet,
-  "Nothing written for 6h 18m." in gold at 600 with the hourglass; then its latest exchange as
-  messages (the conversation's look, below): its own latest (to anyone) and the latest to it
-  since, each its first 360 characters as inline markdown with "Read it in the thread" (its
-  Thread tab, on that message) when cut, or "It has sent no message yet."; its live progress
-  (before the messages when it is newer); and its activity in one meta line, "Run 3 · 9 turns ·
-  33 tool calls · Its activity", the link its Activity tab, or, for an agent's run whose
-  transcript cannot be read here, "Its transcript can't be read here, so what it is doing is not
-  shown." (so no activity never reads as an idle agent). Then the facts ("Waits on", "After"),
-  Queued, Skipped, Finishing, Outside sluice, progress kept from an ended run, **Its output**
-  (the first set of `summary`, `result`, `report`, `final`, `answer` or `verdict`, as Outputs
-  draws it, "All outputs" beside its head), a finished step's last message, and "Show its
-  chain on the plan" last. With none of these, the state's own sentence from the status table
+  below), then what to do next in one meta line when its kind has a known remedy ("Retry runs
+  it again under the same cap. The cap is set in minutes by SLUICE_AGENT_MAX_MIN in the
+  environment its fn runs in."), its latest own message under it ("Its last message"); while it
+  runs **Now**, live first: when it is quiet, "Nothing written for 6h 18m." in gold at 600 with
+  the hourglass; then its live turn in a card at 78ch with running's blue border: the running
+  glyph and "Turn 2, running for 1h 22m" at 600 with its calls by tool in meta, what it said
+  last (four lines at most), its last call on one line (its kind's icon, the tool at 600, its
+  key argument in data mono cut with an ellipsis, the running glyph, the failed glyph or how
+  long it took; wrapping under the tool on a phone) and "Its activity · run 1 · 2 turns · 71
+  tool calls · 12 failed" (the link its Activity tab); for an agent's run whose transcript
+  cannot be read here, "Its transcript can't be read here, so what it is doing is not shown."
+  (so no activity never reads as an idle agent). Then, on a retry, why it runs again in one
+  meta line: what started this run ("Run 3 started 1h ago, after you retried it: <reason>", or
+  "after it retried itself", "after <step> retried it"; "with feedback" a link to the message
+  the retry sent) and how the run before ended ("Run 2 failed 2h ago: Its engine hit a usage
+  cap.", a cancel's reason after its colon, "Run 2" a link to that run in Runs). Then its live
+  progress and its latest exchange as messages (the conversation's look, below): its own
+  latest (to anyone) and the latest to it since, each its first 360 characters as inline
+  markdown with "Read it in the thread" (its Messages tab, on that message) when cut; "It has
+  sent no message yet." only when it has no activity either. Then the facts ("Waits on",
+  "After"), Queued, Skipped, Finishing, Outside sluice, progress kept from an ended run, **Its
+  output** (the first set of `summary`, `result`, `report`, `final`, `answer` or `verdict`;
+  else up to three outputs under 200 characters each, "Its outputs"; else the first; as
+  Outputs draws them, "All outputs" beside the head only when some are left out), under its
+  head which run set them ("From run 2 · 1h ago"; a running step's are its earlier run's, so
+  "From run 2, before this run · 1h ago", their values in muted ink), a finished step's last
+  message, and "Show its chain on the plan" last. With none of these, the state's own sentence from the status table
   in an empty state.
 - facts: "Waits on" (each step whose outputs it takes, not yet set, named as every page names a
   step and linked, its glyph before it and its state's word after it: "work · L13: certification…
@@ -830,8 +848,8 @@ The step reads top down:
   opens the Activity tab on that call), the traceback folded under "Traceback", the pane its
   agent left folded under "Pane at failure" (a chevron; the rows in 12px data, scrolling in
   their own box), and "Run files" linking each file the run has (`file-text` icons) as plain
-  text.
-- **Thread**: the step's conversation (below): its own thread and every message it sent or was
+  text, an empty one "name · empty" and no link.
+- **Messages**: the step's conversation (below): its own thread and every message it sent or was
   sent on another (a question it put to a sibling, the sibling's reply), its latest 60 with "n
   earlier messages not shown. Read the whole thread", the message box to it at the end.
 - Activity (an agent run's, read from its transcript when the page draws): a meta line "Run 2 ·
@@ -922,12 +940,12 @@ Components.
 
 ### Messages (`/inbox`, `/questions`, `/history`, `/projects/id/<p>/…`)
 A page title ("Inbox" for the tray; a project's is "Messages", the nav's word for it, under "←
-<project> plan") and a small segmented control (Inbox · Questions · History, the current one in the
+<project> plan") and a small segmented control (For you · Questions · History, the current one in the
 secondary fill). The questions someone waits on come in two groups, each an `h2` with its
 count: "For you" ("Questions for you" on the inbox; what the nav's Inbox counts) and "Between
 agents" (one agent's question to another, under a meta line that its addressee answers it).
 Each is a card: "project · thread" in meta, linking to the thread, then the question as a
-one-message conversation, the card a step's Thread tab draws (who asked whom over it, the
+one-message conversation, the card a step's Messages tab draws (who asked whom over it, the
 Question mark, when, its id, its state's tag, "sets <input>", its title when it has one and
 never its body's opening twice, the body folded when long), then
 a row of two buttons that keep their places: Answer (primary; "Answer as owner", plain, between
@@ -962,7 +980,7 @@ it is in the plan ("Message to <its title>"), else the orchestrator, with "Ask a
 needs a reply" (an ask; unchecked, a note) and Send. To a step not running a meta line under
 the label says when it reads it ("It has not started: it reads this when it does."; a finished
 one "It is not running: it reads this only if it runs again.", a failed one adding "To tell it
-something now, Retry with feedback."), the Thread tab's box too. Arriving without an anchor the page
+something now, Retry with feedback."), the Messages tab's box too. Arriving without an anchor the page
 scrolls to the newest message and the box. The tab reads "Thread · <step title>".
 
 ### Log (`/log`, `/projects/id/<p>/log`)
@@ -982,8 +1000,12 @@ settled, 6 steps", a failure as its step page says it, "harness: Cancelled while
 Now reads them), with a small "JSON" toggle at the row's right end (its name "Record 12345 as
 JSON") that opens the record's JSON under the sentence; records in a row that say the same are
 one row with "×10"; Errors leaves out the owner's cancels; the record a link names (`#r4521`,
-a failure's "Its log record") is on the secondary fill, its seq in ink at 700; each row at least 24px tall, 50 records a page with "« newest", "‹ newer" and
-"older ›", in a focusable region named "Log records". A status record that changes nothing (a
+a failure's "Its log record") is on the secondary fill, its seq in ink at 700; a row's sentence
+is cut at 240 characters (its JSON keeps the whole); each row at least 24px tall, 50 records a page with "« newest", "‹ newer" and
+"older ›", in a focusable region named "Log records". A page with no records says which filters left
+them out and offers each back: "No error records for step `l1-work` in unit l1." with "Show
+every kind", "Any step", "Any unit" (and "Any thread", "The latest records" past the first
+page), a retired step's note only when the step alone is the filter. A status record that changes nothing (a
 restart, running → running) is left out unless `step.status` is chosen. The global log holds
 every project's records, each sentence led by its project's name at 600 in muted ink, and says
 so in the meta line. On a phone each record is a block (seq, time and kind on a
@@ -1009,14 +1031,15 @@ lash plan", "Search the log for nope") and "HTTP 404" in meta.
 The project's name as title, "Project settings", and "Each Apply commits one change right away"
 with a link to the authored changes, under an index of the sections (Details · Resources ·
 Board · Retiring · Activity · Delete; its landmark "Settings sections") that sticks to the top
-as the page scrolls (14px muted links over a hairline, wrapping on a phone). Help lines keep the
+as the page scrolls (14px muted links over a hairline, on one line that scrolls inside itself
+on a phone). Help lines keep the
 measure. Details: Name (with its rules; links and running work keep
 the project id), Description (with a Preview; how it reads folded under "Show how it reads"), Icon (a text icon up to 16 characters, or an
 image up to 256 KiB; the file input's button in the page's button look). Resources: a line per
-resource (static capacity or capacity fn, in use, waiting, the step queue, or "steps queued:
-not known until the plan's fns have loaded") and an editor each: a choice of "A number" (a whole-number field, 0
+resource (static capacity or capacity fn, in use, waiting, the step queue, or "steps queued —"
+with "not known until the plan's fns have loaded" its title) and an editor each: a choice of "A number" (a whole-number field, 0
 or more, the browser refusing a negative) or "From a fn" (a select of the fns that return a
-capacity), Apply capacity, and "Remove <name>", which asks first in the shared dialog ("Remove
+capacity), Apply capacity, and "Remove <name>" (a quiet link, as Clear board's opener is), which asks first in the shared dialog ("Remove
 land?"); then a new resource's name and the same choice.
 Board: the program in a monospace textarea (with its rev), Save board, then Clear board, which
 asks first ("Clear the board?": the plan takes the whole page again; its program stays in the
@@ -1077,7 +1100,7 @@ Datastar to what it holds after each patch inside it. **`/_ui`** is the kit's ga
 documentation: every part and component in every state with real-looking data, the house pair's
 light and dark side by side (stacked under 900px), and a table of every component, its props
 and events (a Chromium test holds each to its script's manifest). A new part goes there first.
-The display preferences menu ends with "What each state and part means", its one link, so the
+The display preferences menu ends with the Keys (with script) and "What each state and part means", the gallery's link, so the
 page itself needs no legend.
 The ideas and CSS are adapted from knadh/oat and hunvreus/basecoat, the tabs' keyboard model
 from github/tab-container-element (all MIT; `assets/README.md`): no runtime of theirs, no
@@ -1117,6 +1140,12 @@ The components:
   Log's and Functions' project) that sends itself as a choice in it changes, its Apply hidden
   while it runs.
 - **`sluice-banner`**: the stream line and the build line (Live updates, below).
+- **`sluice-keys`**: the keyboard's shortcuts, listed in the display preferences under "Keys":
+  `/` finds (the page's first search field: the board's, the functions', the log's step), `g`
+  then a letter goes to a page (`g h` all projects, `g p` the plan, `g m` messages, `g l` the
+  log, `g f` functions, `g i` the inbox, each a link the server drew), `?` opens the list. It
+  never takes a key while one types in a field, a dialog is open or a modifier is held; the list
+  says so ("None while typing in a field.").
 - **`sluice-splitter`**: The project's board's splitter.
 - **`sluice-board`**, **`sluice-drawer`**: the plan's lines and tracing, and the step drawer
   (it writes the open step's tab into `?tab=`).
@@ -1150,7 +1179,11 @@ The parts:
   the 14px corner): from the step the page is about on the card colour, to it on the muted
   fill, the owner's tinted with 7% of the primary blue; its line in 12.5px meta: when
   (relative, the absolute time in its title), its id in 11.5px data mono, its state's tag, "to
-  Y" when its group's head does not say it. A question leads its line with the
+  Y" when its group's head does not say it. A group whose messages go to different recipients
+  names only its sender in its head, and each message says its own "to Y". One note sent to
+  several recipients within a minute (the same sender, title and body; not a question, none
+  replied to) is one entry, "to 9 steps" (a fold that opens to each recipient, named and
+  linked), every id it stands for still an anchor on it. A question leads its line with the
   `message-circle-question` glyph and "Question" at 650, a strong hairline, and "Awaiting your
   reply" in coral (only a question waiting on the owner), "Awaiting reply" in gold, else
   "Answered" or "Closed", muted; its reply sits in its card directly under it on the muted fill
@@ -1163,6 +1196,9 @@ The parts:
 - **Field row** (`kit.html`'s `field`): see the step's Outputs and Inputs.
 - **Empty state** (`ui::empty`, `ui::empty_with`): one sentence in muted ink in a dashed
   region at the measure, a way on under it.
+- **Notice** (`ui::notice`): what an action the page sent did not do, at the top of the page
+  it came back to: Lucide `triangle-alert` in the attention gold, the sentence in ink, on a 9%
+  gold tint inside its hairline at the measure, `role="alert"`.
 - **Card** (`.card`): the card colour, the hairline and the region's corner; never a card in a
   card.
 - **Confirmation** (`ui::Confirm`): see Confirmation dialogs.
@@ -1303,4 +1339,4 @@ its facts and its thread link; the Types switch keeps its size on a 44px target.
 
 ### Confirmation dialogs
 
-Cancel, Delete project, Clear board, Remove <resource> and Questions' Close all use one native `<dialog>` (each is drawn by `ui::Confirm` in a `sluice-confirm`, which opens it; Delete project's is dimmed while something blocks it). It is centred, at most 480px wide with 16px beside it on a phone, on the card colour with the region corner, strong hairline, lift and scrim. Its title is Public Sans 18/24 at 650, its copy the body voice. Button rows wrap and each target is at least 44px high. Focus starts on the keep button, stays in the dialog, Escape closes it, and closing returns focus to its opener. Without script, a details fold shows the same confirmation form inline. Cancel offers a reason field; Delete, Clear board and Remove use an ink-filled danger button, leaving coral to questions. Running card borders hold at least 3:1 in every theme; wait-lines hold at least 3.4:1 on a unit box.
+Cancel, Delete project, Clear board, Remove <resource> and Questions' Close all use one native `<dialog>` (each is drawn by `ui::Confirm` in a `sluice-confirm`, which opens it; Delete project's is dimmed while something blocks it). It is centred, at most 480px wide with 16px beside it on a phone, on the card colour with the region corner, strong hairline, lift and scrim. Its title is Public Sans 18/24 at 650, its copy the body voice. Button rows wrap and each target is at least 44px high. Focus starts on the keep button, stays in the dialog, Escape closes it, and closing returns focus to its opener. Without script, a details fold shows the same confirmation form inline. Cancel offers a reason field and a succeeded step's Retry a feedback field (each kept through a patch and through a refused action); Cancel, Delete, Clear board and Remove use an ink-filled danger button, leaving coral to questions. Running card borders hold at least 3:1 in every theme; wait-lines hold at least 3.4:1 on a unit box.

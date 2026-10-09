@@ -775,3 +775,95 @@ async fn a_streams_batches_go_out_compressed_and_flushed() {
     fixture.stop.cancel();
     fixture.writer.shutdown().await.unwrap();
 }
+/// A step action refused in a browser comes back as its step's page through the whole stack
+/// (the page as the handler drew it, never wrapped as a JSON error); a client's stays JSON.
+#[tokio::test]
+async fn a_refused_step_action_is_its_page_for_a_browser_and_json_for_a_client() {
+    let fixture = Fixture::new().await;
+    let id = fixture.id;
+    fixture
+        .writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            let doc = serde_json::json!({"steps":{"work":{"run":"custom.open"}}});
+            tx.sql().execute(
+                "UPDATE plans SET doc=?2 WHERE project_id=?1",
+                (id.to_string(), doc.to_string()),
+            )?;
+            tx.sql().execute(
+                "INSERT INTO steps(project_id,step_id,position,declaration,status) VALUES(?1,'work',0,?2,'succeeded')",
+                (id.to_string(), doc["steps"]["work"].to_string()),
+            )?;
+            tx.changed(Some(id), "project");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    struct Exact;
+    impl sluice_web::views::board::RegistrySource for Exact {
+        fn signatures(
+            &self,
+            _: ProjectId,
+        ) -> Result<sluice_web::views::board::RegistrySnapshot, PublicError> {
+            Ok(sluice_web::views::board::RegistrySnapshot {
+                version: "1".into(),
+                functions: vec![(
+                    "custom.open".into(),
+                    sluice_model::plan::FnSignature {
+                        open: true,
+                        ..Default::default()
+                    },
+                )],
+            })
+        }
+    }
+    struct Owner;
+    impl sluice_web::views::step::CommandService for Owner {
+        fn execute(
+            &self,
+            _: sluice_web::views::step::OwnerCommand,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), PublicError>> + Send + '_>>
+        {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    let app = fixture
+        .app
+        .clone()
+        .layer(axum::Extension(sluice_web::views::board::Registry(
+            Arc::new(Exact),
+        )))
+        .layer(axum::Extension(sluice_web::views::step::Commands(
+            Arc::new(Owner),
+        )));
+    let post = |accept: &'static str| {
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/projects/id/{id}/steps/work/actions"))
+            .header(header::HOST, "localhost")
+            .header(header::ORIGIN, "http://localhost")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(header::ACCEPT, accept)
+            .body(Body::from("action=cancel&revision=1&message=Stop+here"))
+            .unwrap();
+        app.clone().oneshot(request)
+    };
+    let response = post("text/html,application/xhtml+xml,*/*;q=0.8")
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(
+        response.headers()[header::CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
+    let page = text_body(response).await;
+    assert!(page.starts_with("<!doctype html>"), "{page}");
+    assert!(
+        page.contains("<p>Nothing was done: Cancel does not apply to a succeeded step.</p>"),
+        "{page}"
+    );
+    let response = post("application/json").await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(response).await["error"], "conflict");
+}

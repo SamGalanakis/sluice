@@ -117,9 +117,12 @@ fn a_failed_steps_drawer_leads_with_retry_and_names_its_unset_outputs_on_one_lin
     let html = html.as_str();
     assert!(html.contains("<span class=\"f-name\">summary</span> <span class=\"f-type\">&#34;string&#34;</span><span class=\"f-about\"><span class=\"f-doc\">What changed</span></span></dt><dd class=\"f-v\"><span class=\"v\">Fixed it</span></dd>"), "{html}");
     assert!(html.contains("2 outputs not set yet:"), "{html}");
+    // a succeeded step's Retry asks first, naming what it does; never primary
     assert!(
-        html.contains("<button name=\"action\" value=\"retry\">Retry</button>"),
-        "not primary unless failed"
+        html.contains("<details class=\"confirm-flow\"><summary>Retry</summary>")
+            && html.contains("Retrying runs it again; its outputs stay until the new run ends.")
+            && !html.contains("value=\"retry\" class=\"primary\""),
+        "{html}"
     );
 }
 struct Catalog;
@@ -201,7 +204,7 @@ async fn router_uses_injected_exact_signatures_and_owner_commands() {
     assert!(body.contains("Thread"));
     for (body, status) in [
         ("action=retry&revision=0", StatusCode::CONFLICT),
-        ("action=cancel&revision=1", StatusCode::BAD_REQUEST),
+        ("action=cancel&revision=1", StatusCode::CONFLICT),
         (
             "action=retry&revision=1&message=Try+again",
             StatusCode::SEE_OTHER,
@@ -300,10 +303,7 @@ async fn dismiss_sets_a_cancel_aside_with_no_revision_and_goes_back_where_it_was
         }
     };
     // failed, but no cancel: nothing to dismiss
-    assert_eq!(
-        post("action=dismiss").await.status(),
-        StatusCode::BAD_REQUEST
-    );
+    assert_eq!(post("action=dismiss").await.status(), StatusCode::CONFLICT);
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
             let cancel = PublicError::Cancelled {
@@ -324,7 +324,7 @@ async fn dismiss_sets_a_cancel_aside_with_no_revision_and_goes_back_where_it_was
     // not dismissed yet (the fake records, the store is unchanged): nothing to undo
     assert_eq!(
         post("action=undismiss").await.status(),
-        StatusCode::BAD_REQUEST
+        StatusCode::CONFLICT
     );
     // a `next` off the site is not followed
     let response = post("action=dismiss&next=//elsewhere.example").await;
@@ -853,7 +853,13 @@ async fn the_index_lists_each_stopped_step_as_a_row_with_its_failure() {
         .unwrap();
     let rows = &rows[..rows.find("</ul>").unwrap()];
     assert_eq!(rows.matches("<li").count(), 5, "{rows}");
-    assert!(rows.contains("<span class=\"sr-why\" title=\"Its fn failed: exit code 1.\">Its fn failed: exit code 1.</span>"), "{rows}");
+    // with no record kept, the reason still links: its step's records on the log
+    assert!(
+        rows.contains("log?step=")
+            && rows
+                .contains("title=\"Its fn failed: exit code 1.\">Its fn failed: exit code 1.</a>"),
+        "{rows}"
+    );
     assert!(rows.contains("Stopped at its wall-clock cap"), "{rows}");
     assert!(rows.contains("and 2 more</a>"), "{rows}");
     assert!(
@@ -1000,7 +1006,7 @@ async fn a_running_step_says_what_it_is_doing_now() {
                 .find("<h3 class=\"tp-h\">Inputs</h3>")
                 .unwrap_or(usize::MAX)
     );
-    let page = step.page_body("p", None, "").unwrap();
+    let page = step.page_body("p", None, "", None).unwrap();
     let page = page.as_str();
     assert!(page.contains("<h1 id=\"d-title\">work</h1>"), "{page}");
     assert!(
@@ -1055,4 +1061,112 @@ fn a_fn_failure_reads_as_its_exception_with_the_resume_hint_by_retry() {
         "{html}"
     );
     assert!(!html.contains("Its fn failed"), "{html}");
+}
+/// A step action the page asked for and sluice did not take comes back to the step's own page
+/// with a notice saying why and the feedback typed with it kept in its box (a script gets the
+/// error as JSON); one posted after a plan edit that left the step as drawn simply applies, at
+/// the plan's new revision.
+#[tokio::test]
+async fn a_refused_action_comes_back_to_its_step_saying_why_with_its_feedback_kept() {
+    let (_home, writer, state, project) = fixture().await;
+    let fake = Arc::new(Fake::default());
+    let app = views::dashboard_router(state.clone())
+        .layer(Extension(Registry(Arc::new(Exact))))
+        .layer(Extension(Commands(fake.clone())));
+    let path = format!("/projects/id/{project}/steps/work");
+    let body = |response: axum::response::Response| async move {
+        String::from_utf8(
+            to_bytes(response.into_body(), 1 << 22)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap()
+    };
+    let page = body(
+        app.clone()
+            .oneshot(Request::builder().uri(&path).body(Body::empty()).unwrap())
+            .await
+            .unwrap(),
+    )
+    .await;
+    let seen = page
+        .split("name=\"seen\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_owned();
+    assert_eq!(seen, "failed:false:0", "{page}");
+    let post = |form: String, accept: &'static str| {
+        let app = app.clone();
+        let path = format!("{path}/actions");
+        async move {
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("accept", accept)
+                    .body(Body::from(form))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        }
+    };
+    // the plan moved on (revision 0 is behind) but the step is as drawn: it applies, at the
+    // plan's revision now
+    let response = post(
+        format!("action=retry&revision=0&seen={seen}&message=Look+again"),
+        "text/html",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    {
+        let calls = fake.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].revision, 1);
+        assert_eq!(calls[0].message, "Look again");
+    }
+    // the step changed since: nothing is done, and its page says so over it, the feedback in
+    // its box and the box open
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE steps SET status='stale' WHERE project_id=?1",
+                [project.to_string()],
+            )?;
+            tx.changed(Some(project), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let response = post(
+        format!("action=retry&revision=0&seen={seen}&message=Look+again"),
+        "text/html,application/xhtml+xml",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let html = body(response).await;
+    assert!(html.starts_with("<!doctype html>"), "{html}");
+    assert!(
+        html.contains("<div class=\"notice\" role=\"alert\">")
+            && html.contains("<p>Nothing was done: this step changed since the page drew it, and it is stale now. Look again, then retry. What you wrote is kept in its box: Retry sends it.</p>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<details data-preserve-attr=\"open\" open><summary>Feedback for retry</summary>")
+            && html.contains("data-ignore-morph placeholder=\"Optional feedback for the next attempt\">Look again</textarea>"),
+        "{html}"
+    );
+    assert_eq!(fake.0.lock().unwrap().len(), 1, "nothing more was done");
+    // an action that no longer applies says so; a script gets JSON with the matching code
+    let response = post("action=cancel&revision=1".into(), "application/json").await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let json: serde_json::Value = serde_json::from_str(&body(response).await).unwrap();
+    assert_eq!(json["error"], "conflict", "{json}");
+    assert_eq!(
+        json["message"],
+        "Nothing was done: Cancel does not apply to a stale step."
+    );
 }

@@ -20,6 +20,9 @@ pub const PROMPT_INPUTS: [&str; 3] = ["spec", "prompt", "task"];
 pub struct StepName {
     pub title: String,
     pub stage: String,
+    /// Its title whole, before `TITLE_CHARS` cut it: what its own page's heading says.
+    #[serde(skip)]
+    pub whole: String,
 }
 /// A unit's name: its title ("" when it has none), the recipe it was made from ("" when none
 /// matches), that recipe's stages, and the params its steps give back, as text (a file param as
@@ -27,6 +30,9 @@ pub struct StepName {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct UnitNaming {
     pub title: String,
+    /// Its title whole, before `TITLE_CHARS` cut it: what its own page's heading says.
+    #[serde(skip)]
+    pub whole: String,
     pub recipe: String,
     pub stages: Vec<String>,
     pub params: IndexMap<String, String>,
@@ -65,6 +71,10 @@ impl Naming {
 /// One line as a title: markdown's marks dropped (a heading's `#`, a list's or quote's lead,
 /// emphasis, code ticks), whitespace collapsed, cut at a word before `TITLE_CHARS` with "…".
 pub fn line_title(line: &str) -> String {
+    cut(&whole_title(line), TITLE_CHARS)
+}
+/// One line as a title, as `line_title` reads it but whole.
+pub fn whole_title(line: &str) -> String {
     let mut text = line.trim();
     text = text.trim_start_matches('#').trim_start();
     for lead in ["- ", "* ", "+ ", "> "] {
@@ -72,13 +82,13 @@ pub fn line_title(line: &str) -> String {
             text = rest.trim_start();
         }
     }
-    let text = text.replace("**", "").replace("__", "").replace('`', "");
-    let text = text
+    text.replace("**", "")
+        .replace("__", "")
+        .replace('`', "")
         .trim_matches(|c: char| c == '*' || c == '_' || c.is_whitespace())
         .split_whitespace()
         .collect::<Vec<_>>()
-        .join(" ");
-    cut(&text, TITLE_CHARS)
+        .join(" ")
 }
 /// At most `chars` characters, cut at a word with "…" when longer.
 pub fn cut(text: &str, chars: usize) -> String {
@@ -94,6 +104,10 @@ pub fn cut(text: &str, chars: usize) -> String {
 }
 /// A prompt's title: its first markdown heading, else its first non-empty line.
 pub fn heading(text: &str) -> Option<String> {
+    whole_heading(text).map(|t| cut(&t, TITLE_CHARS))
+}
+/// A prompt's title whole, as `heading` reads it.
+pub fn whole_heading(text: &str) -> Option<String> {
     let lines = || text.lines().map(str::trim).filter(|l| !l.is_empty());
     let line = lines()
         .find(|l| {
@@ -101,7 +115,7 @@ pub fn heading(text: &str) -> Option<String> {
             (1..=6).contains(&hashes) && l[hashes..].starts_with(' ')
         })
         .or_else(|| lines().find(|l| !l.starts_with("---") && !l.starts_with("```")))?;
-    Some(line_title(line)).filter(|t| !t.is_empty())
+    Some(whole_title(line)).filter(|t| !t.is_empty())
 }
 
 /// Name every step and unit of a plan. `steps` is the plan document's `steps` (raw, in plan
@@ -128,19 +142,22 @@ pub fn name_plan(
             .insert(id.clone(), step.clone());
     }
     let mut naming = Naming::default();
-    let mut file_title = |path: &str| read(path).as_deref().and_then(heading);
+    // a file's title whole; a param's text and every title are cut from it
+    let mut file_title = |path: &str| read(path).as_deref().and_then(whole_heading);
     for (unit, members) in &units {
         let mut unit_naming = UnitNaming::default();
         let matched = recipes
             .iter()
             .find_map(|r| r.match_unit(unit, members).map(|params| (*r, params)));
-        let mut title = String::new();
+        let mut whole = String::new();
         let borrow = matched.is_some();
         if let Some((recipe, params)) = matched {
             let files = recipe.file_params();
             unit_naming.recipe = recipe.name().to_owned();
             unit_naming.stages = recipe.stages();
-            unit_naming.params = params
+            // each param as text: a file param as its file's title, whole for the unit's title
+            // and cut as the params the views show
+            let texts: IndexMap<String, String> = params
                 .iter()
                 .map(|(name, value)| {
                     let text = match value {
@@ -154,19 +171,29 @@ pub fn name_plan(
                     (name.clone(), text)
                 })
                 .collect();
+            unit_naming.params = texts
+                .iter()
+                .map(|(name, text)| {
+                    let cut_text = match params.get(name) {
+                        Some(Value::String(_)) if files.contains(name) => cut(text, TITLE_CHARS),
+                        _ => text.clone(),
+                    };
+                    (name.clone(), cut_text)
+                })
+                .collect();
             if let Some(template) = recipe.title() {
-                title = line_title(&Recipe::fill(template, &unit_naming.params));
+                whole = whole_title(&Recipe::fill(template, &texts));
             }
         }
-        let explicit = !title.is_empty();
+        let explicit = !whole.is_empty();
         // a stage borrows its unit's title only in a recipe's unit, whose stages are one piece
         // of work; elsewhere the first titled step may describe itself alone (`borrow`)
         let own: Vec<(String, String)> = members
             .iter()
             .map(|(id, step)| (id.clone(), own_title(step, &mut file_title)))
             .collect();
-        if title.is_empty() {
-            title = own
+        if whole.is_empty() {
+            whole = own
                 .iter()
                 .map(|(_, t)| t)
                 .find(|t| !t.is_empty())
@@ -180,34 +207,36 @@ pub fn name_plan(
             } else {
                 String::new()
             };
-            let step_title = if explicit {
-                title.clone()
+            let step_whole = if explicit {
+                whole.clone()
             } else if !own.is_empty() {
                 own
             } else if borrow && !stage.is_empty() {
-                title.clone()
+                whole.clone()
             } else {
                 String::new()
             };
             naming.steps.insert(
                 id,
                 StepName {
-                    title: step_title,
+                    title: cut(&step_whole, TITLE_CHARS),
                     stage,
+                    whole: step_whole,
                 },
             );
         }
-        unit_naming.title = title;
+        unit_naming.title = cut(&whole, TITLE_CHARS);
+        unit_naming.whole = whole;
         naming.units.insert(unit.clone(), unit_naming);
     }
     naming
 }
-/// A step's own title: its doc's first line, else its prompt's title.
+/// A step's own title, whole: its doc's first line, else its prompt's title.
 fn own_title(step: &Value, file_title: &mut dyn FnMut(&str) -> Option<String>) -> String {
     if let Some(doc) = step.get("doc").and_then(Value::as_str)
         && let Some(line) = doc.lines().map(str::trim).find(|l| !l.is_empty())
     {
-        let title = line_title(line);
+        let title = whole_title(line);
         if !title.is_empty() {
             return title;
         }
@@ -218,7 +247,7 @@ fn own_title(step: &Value, file_title: &mut dyn FnMut(&str) -> Option<String>) -
             continue;
         };
         let found = match (binding.get("default"), binding.get("file")) {
-            (Some(Value::String(text)), _) => heading(text),
+            (Some(Value::String(text)), _) => whole_heading(text),
             (_, Some(Value::String(path))) => file_title(path),
             _ => None,
         };

@@ -183,7 +183,8 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
         "</p>",
     );
     assert!(
-        lane.contains("aria-label=\"l1-work quiet, run 6\">work<span class=\"lm\">◔</span> <span class=\"lm-run\">(run 6)</span></a>"),
+        lane.contains("aria-label=\"l1-work quiet, run 6\"><span class=\"stg\"><span class=\"g g-quiet\" aria-hidden=\"true\">")
+            && lane.contains("</span>work <span class=\"lm-run\">(run 6)</span></span></a>"),
         "{lane}"
     );
     // a card in a box: its second run, the first failed
@@ -203,7 +204,8 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
     let now = between(&page, "<section class=\"d-sec d-now\">", "</section>");
     let retry = between(now, "<p class=\"meta now-retry\">", "</p>");
     assert!(
-        retry.starts_with("<p class=\"meta now-retry\"><a href=\"#run-5\">Run 5</a> failed <time"),
+        retry.starts_with("<p class=\"meta now-retry\">Run 6 started <time")
+            && retry.contains(". <a href=\"#run-5\">Run 5</a> failed <time"),
         "{retry}"
     );
     assert!(retry.ends_with(": Its engine hit a usage cap."), "{retry}");
@@ -307,11 +309,11 @@ async fn a_stopped_card_names_its_failures_kind_and_says_why_under_it() {
 async fn a_failure_links_its_own_log_record_which_the_log_marks() {
     let f = Fixture::new().await;
     let id = retried(&f).await;
-    // no record kept: the sentence alone
+    // no record kept: the sentence links the step's records on the log, as every reason does
     let (_, home) = f.get("/").await;
     let row = between(&home, "#step:l2-work", "</li>");
     assert!(
-        row.contains("<span class=\"sr-why\" title=\"Its engine hit a usage cap.\">"),
+        row.contains(&format!("<a class=\"sr-why\" href=\"/projects/id/{id}/log?step=l2-work\" title=\"Its engine hit a usage cap.\">")),
         "{row}"
     );
     let seq = f
@@ -451,18 +453,19 @@ async fn a_filtered_empty_board_says_how_many_units_its_show_hides() {
 }
 
 #[tokio::test]
-async fn a_wait_names_its_source_by_title_its_id_after_it() {
+async fn a_matrix_rows_wait_names_its_source_by_id_its_title_on_hover() {
     let f = Fixture::new().await;
     let id = f.titled().await;
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
     let row = between(&html, "<tr id=\"unit-l3\"", "</tr>");
     let waits = between(row, "<p class=\"waits", "</p>");
+    // in a lane matrix's row a wait is its source's id, its title on hover
     assert!(
-        waits.contains("data-from=\"s:l2-land\" data-to=\"s:l3-fork\"><span class=\"sref\"><span class=\"sref-stage\">land ·</span> <span class=\"sref-t\">FIG-2: Stop the parser leak</span> <code class=\"sref-id\">l2-land</code></span></a>"),
+        waits.contains("data-from=\"s:l2-land\" data-to=\"s:l3-fork\"><span class=\"sref\" title=\"FIG-2: Stop the parser leak\"><code class=\"sref-id\">l2-land</code></span></a>"),
         "{waits}"
     );
     assert!(
-        waits.contains("<span class=\"sref-t\">Probes the parser under load</span> <code class=\"sref-id\">probe</code>"),
+        waits.contains("<span class=\"sref\" title=\"Probes the parser under load\"><code class=\"sref-id\">probe</code></span>"),
         "{waits}"
     );
 }

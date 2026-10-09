@@ -79,7 +79,7 @@ async fn a_recipe_with_a_view_draws_its_live_units_as_a_lane_matrix_attention_fi
     // its title first, its id after in mono, a link to its unit
     assert!(
         matrix.contains(&format!(
-            "href=\"/projects/id/{id}/units/l1\" aria-description=\"FIG-1: Fix the cron driver\">FIG-1: Fix the cron driver</a>"
+            "href=\"/projects/id/{id}/units/l1\">FIG-1: Fix the cron driver</a>"
         )),
         "{matrix}"
     );
@@ -97,7 +97,8 @@ async fn a_recipe_with_a_view_draws_its_live_units_as_a_lane_matrix_attention_fi
         "{matrix}"
     );
     assert!(
-        matrix.contains("fork<span class=\"lm\">✓</span>"),
+        matrix.contains("<span class=\"stg\"><span class=\"g g-succeeded\" aria-hidden=\"true\">")
+            && matrix.contains("</span>fork</span>"),
         "{matrix}"
     );
     // its units are not drawn again as boxes

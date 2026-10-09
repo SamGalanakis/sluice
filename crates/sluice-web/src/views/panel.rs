@@ -1129,10 +1129,9 @@ impl Draw<'_> {
                 .map(|(short, step)| {
                     marks.insert(*step);
                     format!(
-                        "<span class=\"u-mark\" title=\"{}\">{}{}</span>",
+                        "<span class=\"u-mark\" title=\"{}\">{}</span>",
                         esc(step.word()),
-                        esc(short),
-                        step.spec().lane
+                        super::ui::stage(*step, &esc(short), true)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -1154,9 +1153,8 @@ impl Draw<'_> {
             .iter()
             .map(|step| {
                 format!(
-                    "<span class=\"u-k\"><span class=\"u-km\" aria-hidden=\"true\">{}</span> {}</span>",
-                    step.spec().lane,
-                    esc(step.word())
+                    "<span class=\"u-k\">{}</span>",
+                    super::ui::stage(*step, &esc(step.word()), false)
                 )
             })
             .collect();

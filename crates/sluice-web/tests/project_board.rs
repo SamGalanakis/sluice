@@ -809,13 +809,20 @@ async fn a_cancel_reads_as_cancelled_in_the_units_table_and_on_its_card() {
     assert_eq!(status, StatusCode::OK, "{html}");
     let board = between(&html, "<aside id=\"board-pane\"", "</aside>");
     let units = between(board, "board-units", "</table>");
-    // the unit stopped only by a cancel: "cancelled", its step marked ■, never ✗ failed
+    // the unit stopped only by a cancel: "cancelled", its step marked with the cancelled glyph,
+    // never failed
     assert!(units.contains("<span>cancelled</span>"), "{units}");
     assert!(!units.contains("<span>failed</span>"), "{units}");
-    assert!(units.contains("build■"), "{units}");
+    assert!(
+        units.contains("<span class=\"g g-cancelled\" role=\"img\" aria-label=\"cancelled\">")
+            && units.contains("</span>build</span>"),
+        "{units}"
+    );
     let key = between(board, "u-key", "</p>");
     assert!(
-        key.contains("■</span> cancelled") && !key.contains("failed"),
+        key.contains("g-cancelled")
+            && key.contains("</span>cancelled</span>")
+            && !key.contains("failed"),
         "{key}"
     );
     // the board's own count agrees: a cancel is not a failure

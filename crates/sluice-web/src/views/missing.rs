@@ -18,10 +18,15 @@ pub fn wants_page(method: &axum::http::Method, headers: &HeaderMap, path: &str) 
         && !path.starts_with("/api/")
         && !path.starts_with("/mcp")
         && !path.ends_with("/stream")
-        && headers
-            .get(header::ACCEPT)
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.contains("text/html"))
+        && accepts_html(headers)
+}
+
+/// Its sender reads HTML: a browser's page or form, not a script's fetch or a tool.
+pub fn accepts_html(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("text/html"))
 }
 
 /// What the address named, read from its path.

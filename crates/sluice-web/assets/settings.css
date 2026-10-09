@@ -5,7 +5,7 @@
 /* the measure: about 72 characters a line */
 .settings-page .setting-help, .settings-page section > p { max-width:var(--measure); }
 /* the sections, one tap away while the page scrolls */
-.settings-index { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; gap:4px 18px; padding:10px 0; margin:0 0 8px; background:var(--background); border-bottom:1px solid var(--border); font-size:14px; }
+.settings-index { position:sticky; top:0; z-index:5; display:flex; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; gap:4px 18px; padding:10px 0; margin:0 0 8px; background:var(--background); border-bottom:1px solid var(--border); font-size:14px; }
 .settings-index a { white-space:nowrap; color:var(--muted-foreground); text-decoration:none; padding:2px 0; }
 .settings-index a:hover { color:var(--foreground); text-decoration:underline; text-underline-offset:3px; }
 .settings-page h2[id] { scroll-margin-top:56px; }
@@ -16,6 +16,11 @@
 .settings-page .cap-opt input[type=radio] { width:auto; min-height:0; margin:0; }
 .cap-opt select { min-height:36px; min-width:0; }
 .cap-remove { margin-top:4px; display:flex; align-items:center; gap:8px; }
+/* Remove and Clear board are the quiet half of their pair: a link-weight opener under the
+   field's own button, the dialog saying what goes */
+:is(.cap-remove, .board-clear) .confirm-flow > summary { min-height:32px; padding:0; border:0; background:none; color:var(--muted-foreground); text-decoration:underline; text-underline-offset:3px; font-size:13px; font-weight:400; }
+:is(.cap-remove, .board-clear) .confirm-flow > summary:hover { color:var(--foreground); }
+.board-clear { margin-top:2px; }
 .settings-page .link-button { min-height:32px; padding:0; border:0; background:none; color:var(--muted-foreground); text-decoration:underline; text-underline-offset:3px; font-size:13px; }
 .settings-page .link-button:hover { color:var(--status-attention); }
 /* another author changed this field since the form was drawn: said beside it, in the attention colour */

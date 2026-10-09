@@ -142,10 +142,13 @@ pub struct StoppedView {
 impl StoppedView {
     /// Its failure's own record on its project's log, that record in view and marked
     /// (`step::failure_log_href`); "" when the log no longer keeps it.
+    /// Where its reason leads: its failure's own log record, else its step's records on the
+    /// log, so every reason on the index is a link.
     pub fn log_href(&self, project: &ProjectId) -> String {
-        self.record
-            .map(|seq| step::failure_log_href(project, &self.step, seq))
-            .unwrap_or_default()
+        self.record.map_or_else(
+            || format!("/projects/id/{project}/log?step={}", self.step),
+            |seq| step::failure_log_href(project, &self.step, seq),
+        )
     }
     pub fn shown(&self) -> ui::Shown {
         if self.cancelled {
@@ -474,6 +477,25 @@ impl NavView {
                 .unwrap_or_default(),
             selected: project,
         })
+    }
+}
+impl NavView {
+    /// The keys that go somewhere (`sluice-keys`), each "g" then its letter: the index, every
+    /// section the nav links (by its word's first letter: p plan, m messages, l log, f
+    /// functions) and the inbox.
+    pub fn keys(&self) -> Vec<(char, String, String)> {
+        let mut keys: Vec<(char, String, String)> = vec![('h', "All projects".into(), "/".into())];
+        for link in &self.links {
+            if let Some(k) = link.label.chars().next().map(|c| c.to_ascii_lowercase())
+                && !keys.iter().any(|(have, _, _)| *have == k)
+            {
+                keys.push((k, link.label.clone(), link.href.clone()));
+            }
+        }
+        if !keys.iter().any(|(k, _, _)| *k == 'i') {
+            keys.push(('i', "Inbox".into(), "/inbox".into()));
+        }
+        keys
     }
 }
 #[derive(Template)]

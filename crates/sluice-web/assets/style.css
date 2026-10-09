@@ -326,6 +326,9 @@ p { margin: 0; }
 .d-progress .d-sec-h { align-items: center; }  /* the "live" badge on the head's centre line */
 .err { color: var(--foreground); font-weight: 500; }
 .empty { color: var(--muted-foreground); padding: 32px 0; max-width: 60ch; }
+.log-empty p { margin: 0; }
+.log-empty .log-ways { margin-top: 8px; }
+.log-ways a { color: var(--foreground); }
 .lead { font-size: 15px; line-height: 22px; }
 .scroll { overflow-x: auto; }
 .num { text-align: right; }
@@ -448,6 +451,19 @@ details.settings .menu { position: absolute; top: calc(100% + 6px); right: 12px;
   box-shadow: var(--lift); font: 15px/22px var(--font-sans); color: var(--foreground); }
 .prefs fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 /* the gallery of every state and part, under the preferences: the page's key, never on it */
+/* the page's keys (sluice-keys), under the display preferences */
+.keys { padding: 8px 4px 2px; border-top: 1px solid var(--border); margin-top: 6px; }
+.keys .menu-label { margin: 0 0 4px; }
+.keys-list { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 0;
+             font-size: 13px; line-height: 20px; }
+.keys-list > div { display: contents; }
+.keys-list dt { white-space: nowrap; }
+.keys-list dd { margin: 0; }
+.keys-list a { color: var(--foreground); }
+kbd { display: inline-block; min-width: 18px; padding: 0 5px; border: 1px solid var(--border-strong);
+      border-bottom-width: 2px; border-radius: var(--radius-sm); background: var(--card);
+      font: 12px/17px var(--font-mono); text-align: center; color: var(--foreground); }
+.keys-note { margin: 6px 0 0; font-size: 12.5px; line-height: 18px; color: var(--muted-foreground); }
 .prefs-guide { display: block; margin: 10px -4px 0; padding: 8px 4px 2px; border-top: 1px solid var(--border);
                font-size: 13px; line-height: 18px; color: var(--muted-foreground);
                text-underline-offset: 3px; text-decoration-color: var(--border-strong); }
@@ -643,7 +659,9 @@ sluice-copy > .copy[data-copied] { opacity: 1; }
 .fold-box > summary .fb-meta { direction: rtl; text-align: left; }
 .fold-box > summary .fb-meta > * { direction: ltr; unicode-bidi: isolate; }
 /* each mark in ink and heavier, a size up: a ✓ must never pass for the pending dot */
-.fb-lane .lm { color: var(--foreground); font-weight: 700; font-size: 13px; margin-left: 1px; }
+/* a lane's stage: its state's small glyph and its name, kept whole; stages wrap between */
+.stg { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.stg .g, .stg .g svg { width: 12px; height: 12px; margin: 0; }
 .fold-box .chev { margin-left: auto; flex: none; }
 .fold-box[open] .chev { transform: rotate(180deg); }
 .fold-box[open] > summary { margin-bottom: 0; }
@@ -831,9 +849,24 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--foreground) 86%, v
 /* a section's head: an h2 under the step page's h1, an h3 in the drawer; one look for both */
 #step-detail :is(.d-sec, .d-sec-h) > :is(h2, h3, h4) { font: 650 16px/22px var(--font-sans);
   font-stretch: 100%; letter-spacing: 0; margin: 0; color: var(--foreground); }
-/* what a running step is doing now: its latest exchange as messages (its own latest, the latest
-   to it since), its live progress, its activity in a line */
-.d-now .convo { margin-top: 8px; }
+/* what a running step is doing now: its latest turn first (what it said, the call in flight,
+   its activity in a line), how this run came about, its live progress, its latest exchange as
+   messages (its own latest, the latest to it since) */
+.now-turn { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--border);
+            border-radius: var(--radius-md); background: var(--card); max-width: 78ch; }
+.now-turn.is-running { border-color: var(--status-active); }
+.now-turn-h { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0;
+              font-size: 14px; line-height: 20px; font-weight: 600;
+              font-variant-numeric: tabular-nums; }
+.now-turn-h .meta { font-weight: 400; }
+.now-said { margin: 6px 0 0; max-width: var(--measure); font-size: 14px; line-height: 20px;
+            overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical;
+            -webkit-line-clamp: 4; overflow: hidden; }
+.now-call { display: flex; align-items: center; gap: 8px; margin: 6px 0 0; min-width: 0;
+            font-size: 13.5px; line-height: 20px; }
+.now-turn .now-act { margin: 8px 0 0; }
+@media (max-width: 720px) { .now-call { flex-wrap: wrap; row-gap: 0; } }
+.d-now .convo { margin-top: 12px; }
 .now-from { font-weight: 600; color: var(--foreground); }
 .now-progress { margin-top: 12px; }
 .now-act { margin: 10px 0 0; }
@@ -841,11 +874,22 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--foreground) 86%, v
 .d-said { margin-top: 12px; }
 .d-said-h { margin: 0 0 6px; }
 .d-key .d-sec-h { align-items: baseline; }
+.d-from { margin: -4px 0 8px; }
+/* outputs a run before the one going now set: said so, and set back in muted ink */
+.d-key.is-earlier dl.fields { color: var(--muted-foreground); }
+/* what a page says at its top when something asked for was not done */
+.notice { display: flex; align-items: flex-start; gap: 10px; max-width: var(--column);
+          margin: 0 0 18px; padding: 10px 14px; border-radius: var(--radius-md);
+          border: 1px solid color-mix(in oklch, var(--status-attention) 55%, transparent);
+          background: color-mix(in srgb, var(--status-attention) 9%, var(--card)); }
+.notice p { margin: 0; max-width: var(--measure); overflow-wrap: anywhere; }
+.notice-i { flex: none; margin-top: 2px; color: var(--status-attention); }
 .a-id { font-size: 12px; color: var(--muted-foreground); border: 0; background: none; padding: 0; }
 /* quiet: how long its run has written nothing, before what it last said */
 /* a retry's run before this one: its number (a link to it under Runs), how it ended and why */
 .now-retry { margin: 6px 0 0; max-width: var(--measure); overflow-wrap: anywhere; }
 .d-failure .err-log { margin: 4px 0 0; }
+.d-failure .err-next { margin: 4px 0 0; max-width: var(--measure); }
 .now-quiet { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; font-weight: 600;
              color: var(--status-attention); }
 .d-resume { margin-top: 10px; max-width: var(--measure); overflow-wrap: anywhere; }
@@ -1047,7 +1091,7 @@ code.v { border: 0; background: none; padding: 0; }
 .tablist > [role=tab][aria-selected=true]::after { content: ""; position: absolute; left: var(--tab-x);
   right: var(--tab-x); bottom: 0; height: 2px; border-radius: 2px; background: var(--foreground); }
 .tablist > [role=tab]:focus-visible { outline-offset: -3px; border-radius: var(--radius-md); }
-.tablist > [role=tab] .n { font: 500 12.5px/18px var(--font-sans); color: var(--muted-foreground);
+.tablist > [role=tab] .n { margin-left: 6px; font: 500 12.5px/18px var(--font-sans); color: var(--muted-foreground);
                            font-variant-numeric: tabular-nums; }
 .tp { min-width: 0; }
 .tp:focus-visible { outline: 2px solid var(--ring); outline-offset: 6px; border-radius: var(--radius-sm); }
@@ -1078,6 +1122,8 @@ code.v { border: 0; background: none; padding: 0; }
 .empty-state { max-width: var(--measure); padding: 16px 18px; border: 1px dashed var(--border-strong);
                border-radius: var(--radius); color: var(--muted-foreground); }
 .empty-state .es-more { margin-top: 6px; font-size: 13px; }
+/* the messages pages' sections share one width, empty or not */
+#messages-view .empty-state { max-width: none; }
 /* a question waiting on the owner: the one coral tag (the One Coral Rule's other place) */
 .tag.ask { background: var(--badge); color: var(--badge-ink); border-color: transparent;
            font-weight: 650; }
@@ -1122,6 +1168,14 @@ code.v { border: 0; background: none; padding: 0; }
 .m-q { display: inline-flex; align-items: center; gap: 4px; font-weight: 650; color: var(--foreground); }
 .m-q svg { width: 15px; height: 15px; }
 .m-to { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 4px; }
+/* a note sent to many in a row, drawn once: "to 10 steps", its recipients folded under it */
+details.m-many { display: inline; }
+details.m-many > summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+                           color: var(--foreground); font-weight: 600; list-style: none;
+                           text-decoration: underline dotted; text-underline-offset: 3px; }
+details.m-many > summary::-webkit-details-marker { display: none; }
+details.m-many[open] { display: block; flex-basis: 100%; order: 9; }
+details.m-many[open] > .m-all { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 2px; }
 .m-re a { color: inherit; }
 .m-title { margin: 4px 0 0; font: 650 15px/22px var(--font-sans); }
 .m-body { margin-top: 6px; max-width: 72ch; overflow-wrap: anywhere; }
@@ -1396,6 +1450,9 @@ pre.pane-rows { max-height: 420px; overflow: auto; padding: 10px 12px; backgroun
 .run-files a, .a-files a { display: inline-flex; align-items: center; gap: 4px;
                            font: 12.5px/20px var(--font-mono); color: var(--foreground); }
 .run-files a .icon { color: var(--muted-foreground); }
+/* an empty run file: its name and "empty", nothing to open */
+.run-file-empty { display: inline-flex; align-items: center; gap: 4px; font: 12.5px/20px var(--font-mono);
+                  color: var(--muted-foreground); }
 .a-t time { font-variant-numeric: tabular-nums; }
 .a-h .a-t { margin-left: 2px; }
 /* a run's result as labelled facts, never escaped JSON */
@@ -2200,7 +2257,7 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 .board-units td.u-unit a { white-space: nowrap; }
 .u-key { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 6px; }
 .u-k { white-space: nowrap; }
-.u-km { font: 12px/18px var(--font-mono); color: var(--foreground); }
+
 @container board (max-width: 600px) {
   .board-units, .board-units tbody { display: block; }
   .board-units thead { position: absolute; width: 1px; height: 1px; overflow: hidden;
@@ -2354,6 +2411,7 @@ a.shelf-step.node:hover { background: var(--secondary); }
 .gate:has(.sref-a) { display: inline-flex; align-items: flex-start; white-space: normal; min-width: 0; }
 .gate:has(.sref-a) .g { margin-top: 3px; flex: none; }
 .gate .sref-a { overflow-wrap: anywhere; }
+.gate:has(.sref-a) > .meta { flex: none; white-space: nowrap; }
 p.wait-step { display: flex; margin: 0; }
 p.wait-step + p.wait-step { margin-top: 4px; }
 details.gates > summary { margin-top: 0; font-size: 14px; color: var(--foreground); }
@@ -2467,8 +2525,17 @@ a.node.mx-dot:hover { background: var(--secondary); }
           overflow-wrap: anywhere; }
 .uv-out .g, .uv-out .g svg { width: 12px; height: 12px; vertical-align: -1px; margin-right: 3px; }
 .uv-msg { overflow-wrap: anywhere; }
-.uv-in-row .uv-msg { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-                     line-clamp: 2; overflow: hidden; flex-basis: 100%; }
+.uv-in-row .uv-msg { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1;
+                     line-clamp: 1; overflow: hidden; flex-basis: 100%; }
+/* under a row's title the summary is one line: its parts in a row, the last cut with "…" */
+.mx-sum-phone .uv-in-row { width: 0; min-width: 100%; }  /* the line never widens its column */
+.mx-sum-phone .uv-in-row .uv-stack { flex-wrap: nowrap; overflow: hidden; white-space: nowrap; }
+.mx-sum-phone .uv-in-row .uv-stack > * { flex: none; }
+.mx-sum-phone .uv-in-row .uv-stack > :last-child { flex: 0 1 auto; min-width: 0; overflow: hidden;
+                                                   text-overflow: ellipsis; }
+.mx-sum-phone .uv-in-row .uv-msg { display: block; flex-basis: auto; }
+/* a wait two or more rows share, said once over the table */
+.mx-shared { margin: 0 0 8px; max-width: none; }
 .uv-from { color: var(--foreground); font-weight: 500; }
 .uv-text.muted { color: var(--muted-foreground); }
 .uv-link { color: var(--foreground); text-underline-offset: 3px;
@@ -2485,6 +2552,7 @@ a.node.mx-dot:hover { background: var(--secondary); }
    is the container, so the drawer and the splitter count; the table's least width grows with
    its stages. */
 .mx-lane a { display: inline-block; padding: 6px 0; color: inherit; text-decoration: none; }
+.mx-lane a + a { margin-left: 6px; }
 .mx-lane a:hover { text-decoration: underline; }
 /* The summary column gives way first: under 1100px of pane (a laptop with the drawer open, or
    the plan beside the board), or wherever the board finds the table wider than its pane

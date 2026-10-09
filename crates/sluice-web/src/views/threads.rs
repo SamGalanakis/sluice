@@ -133,12 +133,13 @@ impl MessageItem {
             rows: vec![Row::Group(Group {
                 from: self.from_who.clone(),
                 to: self.to_who.clone(),
+                mixed: false,
                 tone,
                 entries: vec![Entry {
                     item: self.clone(),
                     from: self.from_who.clone(),
                     to: self.to_who.clone(),
-                    to_differs: false,
+                    also: vec![],
                     replies: vec![],
                     excerpt: false,
                     href: self.thread_url(),
@@ -597,8 +598,9 @@ pub struct Entry {
     pub item: MessageItem,
     pub from: Who,
     pub to: Who,
-    /// Its recipient differs from its group's first: its own line says it.
-    pub to_differs: bool,
+    /// The same note sent on to others in a row (a broadcast), each recipient with its
+    /// message's id: drawn once, "to 10 steps".
+    pub also: Vec<(Who, i64)>,
     pub replies: Vec<Reply>,
     /// Its first 360 characters only, with a link to it whole (the step's Overview).
     pub excerpt: bool,
@@ -625,6 +627,68 @@ impl Entry {
     pub fn reply_to(&self) -> Option<i64> {
         self.item.message.to_message.map(|m| m.0)
     }
+    /// A broadcast's recipients in words: "to 10 steps", "to 3 recipients".
+    pub fn also_words(&self) -> String {
+        let n = self.also.len() + 1;
+        let steps = std::iter::once(&self.to)
+            .chain(self.also.iter().map(|(w, _)| w))
+            .all(|w| matches!(w, Who::Step(_) | Who::This));
+        format!("to {n} {}", if steps { "steps" } else { "recipients" })
+    }
+    /// Every recipient of a broadcast, its first among them.
+    pub fn recipients(&self) -> impl Iterator<Item = &Who> {
+        std::iter::once(&self.to).chain(self.also.iter().map(|(w, _)| w))
+    }
+    /// Its newest message's id (a broadcast's last).
+    pub fn last_id(&self) -> i64 {
+        self.also
+            .iter()
+            .map(|(_, id)| *id)
+            .fold(self.item.id(), i64::max)
+    }
+    /// The same note as `item`, sent on to someone else right after: one entry draws both.
+    fn repeats(&self, item: &MessageItem, to: &Who) -> bool {
+        const WINDOW: f64 = 60.0;
+        let a = &self.item.message;
+        let b = &item.message;
+        !self.excerpt
+            && !a.is_question()
+            && !b.is_question()
+            && self.replies.is_empty()
+            && a.from == b.from
+            && a.body == b.body
+            && a.title == b.title
+            && self.to.key() != to.key()
+            && !self.also.iter().any(|(w, _)| w.key() == to.key())
+            && seconds_between(&a.at, &b.at).is_some_and(|s| s.abs() <= WINDOW)
+    }
+}
+/// Seconds from one stored time to another (RFC 3339 in UTC, as every stored time), none when
+/// either does not read.
+fn seconds_between(from: &str, to: &str) -> Option<f64> {
+    fn instant(t: &str) -> Option<f64> {
+        let num = |r: std::ops::Range<usize>| t.get(r)?.parse::<i64>().ok();
+        let (y, m, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+        let (h, min) = (num(11..13)?, num(14..16)?);
+        let sec: f64 = t
+            .get(17..)?
+            .trim_end_matches(|c: char| !c.is_ascii_digit())
+            .split(['+', 'Z'])
+            .next()?
+            .parse()
+            .ok()?;
+        Some((days_from_civil(y, m, d) * 86_400 + h * 3_600 + min * 60) as f64 + sec)
+    }
+    Some(instant(to)? - instant(from)?)
+}
+/// Days since 1970-01-01 (Howard Hinnant's days_from_civil).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let (yy, mm) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+    let era = yy.div_euclid(400);
+    let yoe = yy - era * 400;
+    let doy = (153 * mm + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 #[derive(Clone, Debug)]
 pub struct Reply {
@@ -643,6 +707,9 @@ pub enum Row {
 pub struct Group {
     pub from: Who,
     pub to: Who,
+    /// Its messages went to more than one recipient (or one is a broadcast): its head names
+    /// only who sent them, and each message says to whom.
+    pub mixed: bool,
     /// "out" from the step the page is about, "in" to it, "you" the owner's, else "other".
     pub tone: &'static str,
     pub entries: Vec<Entry>,
@@ -767,19 +834,30 @@ impl Conversation {
             }
             let from = Who::of(Some(&item.message.from), b.subject, b.steps);
             let to = Who::of(item.message.to.as_deref(), b.subject, b.steps);
+            // one note sent to many in a row is one entry, "to 10 steps"
+            if let Some(Row::Group(g)) = c.rows.last_mut()
+                && !fresh
+                && replies.is_empty()
+                && let Some(last) = g.entries.last_mut()
+                && last.repeats(&item, &to)
+            {
+                last.also.push((to, item.id()));
+                g.mixed = true;
+                continue;
+            }
             let href = (b.href)(&item);
-            let mut entry = Entry {
+            let entry = Entry {
                 item,
                 from: from.clone(),
                 to: to.clone(),
-                to_differs: false,
+                also: vec![],
                 replies,
                 excerpt: b.excerpt,
                 href,
             };
             match c.rows.last_mut() {
                 Some(Row::Group(g)) if !fresh && g.from.key() == from.key() => {
-                    entry.to_differs = g.to.key() != to.key();
+                    g.mixed |= g.to.key() != to.key();
                     g.entries.push(entry);
                 }
                 _ => c.rows.push(Row::Group(Group {
@@ -791,6 +869,7 @@ impl Conversation {
                     },
                     from,
                     to,
+                    mixed: false,
                     entries: vec![entry],
                 })),
             }
@@ -836,13 +915,8 @@ fn day_words(day: &str) -> String {
     let [y, m, d] = parts[..] else {
         return day.to_owned();
     };
-    // days since 1970-01-01 (Howard Hinnant's days_from_civil), 1970-01-01 a Thursday
-    let (yy, mm) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
-    let era = yy.div_euclid(400);
-    let yoe = yy - era * 400;
-    let doy = (153 * mm + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
+    // 1970-01-01 a Thursday
+    let days = days_from_civil(y, m, d);
     const WEEK: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -890,7 +964,7 @@ fn group(
                         names
                             .naming
                             .step(step)
-                            .map(|n| n.title.clone())
+                            .map(|n| n.whole.clone())
                             .unwrap_or_default()
                     }
                     None => String::new(),

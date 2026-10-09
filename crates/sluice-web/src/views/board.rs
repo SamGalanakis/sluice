@@ -214,17 +214,23 @@ pub struct Wait {
 /// say one of them, so the words show where the lines are drawn too. A name traces its source.
 /// Past three sources the rest are a count, "and 79 more", which opens the step, whose page
 /// lists every gate: the words stay a line or two at any fan-in.
-pub fn waits_html(step: &StepView, waits: &[Wait]) -> Result<TrustedHtml, askama::Error> {
+/// `brief` (a lane matrix's row) names each source by its id alone, its title on hover.
+pub fn waits_html(
+    step: &StepView,
+    waits: &[Wait],
+    brief: bool,
+) -> Result<TrustedHtml, askama::Error> {
     const SHOWN: usize = 3;
     #[derive(Template)]
     #[template(
-        source = "<p class=\"waits{% if said %} said{% endif %}\">Waits for {% for w in named %}{% if !loop.first %}{% if loop.last && more == 0 %} and {% else %}, {% endif %}{% endif %}<a href=\"{{ w.href }}\"{% if !w.opens.is_empty() %} data-opens=\"{{ w.opens }}\"{% endif %} data-from=\"{{ w.key }}\" data-to=\"{{ to }}\">{% if w.unit %}unit {% endif %}{{ w.name.html(40)|safe }}</a>{% let off = !w.shown && !none %}{% if !w.note.is_empty() || off %} ({{ w.note }}{% if off %}{% if !w.note.is_empty() %}, {% endif %}not in this view{% endif %}){% endif %}{% endfor %}{% if more > 0 %} and <a href=\"{{ href }}\" data-opens=\"{{ id }}\">{{ more }} more</a>{% endif %}{% if none %}, not in this view{% endif %}</p>",
+        source = "<p class=\"waits{% if said %} said{% endif %}\">Waits for {% for w in named %}{% if !loop.first %}{% if loop.last && more == 0 %} and {% else %}, {% endif %}{% endif %}<a href=\"{{ w.href }}\"{% if !w.opens.is_empty() %} data-opens=\"{{ w.opens }}\"{% endif %} data-from=\"{{ w.key }}\" data-to=\"{{ to }}\">{% if w.unit %}unit {% endif %}{% if brief %}{{ w.name.id_html()|safe }}{% else %}{{ w.name.id_first_html(40)|safe }}{% endif %}</a>{% let off = !w.shown && !none %}{% if !w.note.is_empty() || off %} ({{ w.note }}{% if off %}{% if !w.note.is_empty() %}, {% endif %}not in this view{% endif %}){% endif %}{% endfor %}{% if more > 0 %} and <a href=\"{{ href }}\" data-opens=\"{{ id }}\">{{ more }} more</a>{% endif %}{% if none %}, not in this view{% endif %}</p>",
         ext = "html"
     )]
     struct Words<'a> {
         to: String,
         href: String,
         id: &'a str,
+        brief: bool,
         named: &'a [Wait],
         more: usize,
         said: bool,
@@ -238,6 +244,7 @@ pub fn waits_html(step: &StepView, waits: &[Wait]) -> Result<TrustedHtml, askama
     TrustedHtml::from_template(&Words {
         to: step.key(),
         href: step.href(),
+        brief,
         id: step.id.as_str(),
         named: &waits[..shown],
         more: waits.len() - shown,
@@ -250,6 +257,8 @@ pub struct UnitView {
     pub id: UnitName,
     /// Its title (`sluice_model::naming`): "" when it has none and its id names it.
     pub title: String,
+    /// Its title whole, before `TITLE_CHARS` cut it: its own page's heading.
+    pub whole: String,
     /// The recipe it was made from, its stages and the params its steps give back ("" and
     /// empty when no recipe matches it).
     pub recipe: String,
@@ -380,6 +389,7 @@ impl UnitView {
         UnitView {
             id: unit.name.clone(),
             title: String::new(),
+            whole: String::new(),
             recipe: String::new(),
             stages: vec![],
             params: indexmap::IndexMap::new(),
@@ -406,6 +416,7 @@ impl UnitView {
         let id = self.id.to_string();
         if let Some(named) = names.naming.unit(&id) {
             self.title = named.title.clone();
+            self.whole = named.whole.clone();
             self.recipe = named.recipe.clone();
             self.stages = named.stages.clone();
             self.params = named.params.clone();
@@ -416,6 +427,7 @@ impl UnitView {
         for step in self.steps.iter_mut().chain(self.rows.iter_mut().flatten()) {
             if let Some(named) = names.naming.step(step.id.as_str()) {
                 step.title = named.title.clone();
+                step.whole_title = named.whole.clone();
                 step.stage = named.stage.clone();
             }
         }
@@ -498,20 +510,19 @@ impl UnitView {
             .collect::<Vec<_>>()
             .join(" ")
     }
-    /// The lane string drawn: each mark in a span of its own (`.lm`), in ink and weight, so a
-    /// ✓ never reads as the pending dot beside the muted step names.
+    /// The lane string drawn: each stage its state's glyph and its short name, kept whole.
     pub fn lane_html(&self) -> String {
-        self.lane()
-            .split(' ')
-            .map(|step| {
-                let mut chars = step.chars();
-                let mark = chars.next_back().unwrap_or(' ');
-                let name = chars
-                    .as_str()
-                    .replace('&', "&amp;")
-                    .replace('<', "&lt;")
-                    .replace('>', "&gt;");
-                format!("{name}<span class=\"lm\">{mark}</span>")
+        let prefix = format!("{}-", self.id);
+        self.steps
+            .iter()
+            .map(|s| {
+                // a step named as its unit is the unit: its glyph alone
+                let short = if s.id.as_str() == self.id.as_str() {
+                    ""
+                } else {
+                    s.id.as_str().strip_prefix(&prefix).unwrap_or(s.id.as_str())
+                };
+                super::ui::stage(s.shown(), &super::ui::esc(short), false)
             })
             .collect::<Vec<_>>()
             .join(" ")
@@ -550,6 +561,14 @@ impl UnitView {
             self.id.as_str()
         } else {
             &self.title
+        }
+    }
+    /// Its own page's heading: its title whole, or its id.
+    pub fn whole_heading(&self) -> &str {
+        if self.whole.is_empty() {
+            self.heading()
+        } else {
+            &self.whole
         }
     }
     /// Its heading cut to `chars`: a link's accessible name stays short, the whole title its
@@ -623,17 +642,20 @@ impl UnitView {
             .map(|s| {
                 // a retry says its run: "land✗ (run 3)"
                 let run = s.retries().map(|(n, _)| n);
+                let name = format!(
+                    "{}{}",
+                    super::ui::esc(if s.stage.is_empty() { s.id.as_str() } else { &s.stage }),
+                    run.map(|n| format!(" <span class=\"lm-run\">(run {n})</span>"))
+                        .unwrap_or_default(),
+                );
                 format!(
-                    "<a href=\"{}\" data-opens=\"{}\" aria-label=\"{} {}{}\">{}<span class=\"lm\">{}</span>{}</a>",
+                    "<a href=\"{}\" data-opens=\"{}\" aria-label=\"{} {}{}\">{}</a>",
                     s.href(),
                     s.id,
                     s.id,
                     s.shown().word(),
                     run.map(|n| format!(", run {n}")).unwrap_or_default(),
-                    super::ui::esc(if s.stage.is_empty() { s.id.as_str() } else { &s.stage }),
-                    s.shown().spec().lane,
-                    run.map(|n| format!(" <span class=\"lm-run\">(run {n})</span>"))
-                        .unwrap_or_default(),
+                    super::ui::stage(s.shown(), &name, false),
                 )
             })
             .collect::<Vec<_>>()
@@ -704,6 +726,59 @@ pub struct Matrix<'a> {
     pub band: String,
 }
 impl Matrix<'_> {
+    /// The waits two or more of its rows share, each with how many rows: said once over the
+    /// table ("6 units wait for fig-5571-landed …"), and left out of those rows.
+    pub fn shared_waits(&self) -> Vec<(usize, Wait)> {
+        let mut seen: Vec<(usize, Wait)> = vec![];
+        for unit in &self.rows {
+            if let Some((_, waits)) = unit.all_waits() {
+                for wait in waits {
+                    match seen.iter_mut().find(|(_, w)| w.key == wait.key) {
+                        Some((n, _)) => *n += 1,
+                        None => seen.push((1, wait)),
+                    }
+                }
+            }
+        }
+        seen.retain(|(n, _)| *n > 1);
+        seen
+    }
+    /// The shared waits' line over the table, one sentence each.
+    pub fn shared_html(&self) -> TrustedHtml {
+        let out: String = self
+            .shared_waits()
+            .iter()
+            .map(|(n, w)| {
+                format!(
+                    "<p class=\"waits said mx-shared\">{n} units wait for <a href=\"{}\"{}>{}{}</a>{}</p>",
+                    super::ui::esc(&w.href),
+                    if w.opens.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" data-opens=\"{}\"", super::ui::esc(&w.opens))
+                    },
+                    if w.unit { "unit " } else { "" },
+                    w.name.id_first_html(72),
+                    if w.note.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", super::ui::esc(&w.note))
+                    }
+                )
+            })
+            .collect();
+        TrustedHtml::owned(out)
+    }
+    /// A row's own waits: those it shares with no other row (`shared_waits` says the rest).
+    pub fn row_waits<'u>(&self, unit: &'u UnitView) -> Option<(&'u StepView, Vec<Wait>)> {
+        let shared: Vec<String> = self.shared_waits().into_iter().map(|(_, w)| w.key).collect();
+        let (step, waits) = unit.all_waits()?;
+        let own: Vec<Wait> = waits
+            .into_iter()
+            .filter(|w| !shared.contains(&w.key))
+            .collect();
+        (!own.is_empty()).then_some((step, own))
+    }
     /// Its element's id, a region a patch can draw alone: "mx-band-running-lane".
     pub fn id(&self) -> String {
         format!("mx-{}-{}", self.band, self.recipe)
@@ -2077,6 +2152,23 @@ pub fn load_step(
     step.timeline = unit.timeline(Some(id));
     step.chained = !plan.dependencies(id).is_empty()
         || plan.steps().keys().any(|s| plan.dependencies(s).contains(id));
+    // every step after it, near or far: what a succeeded step's Retry may send round again
+    let mut dependents: BTreeMap<&StepId, Vec<&StepId>> = BTreeMap::new();
+    for s in plan.steps().keys() {
+        for d in plan.dependencies(s) {
+            dependents.entry(d).or_default().push(s);
+        }
+    }
+    let mut after: BTreeSet<&StepId> = BTreeSet::new();
+    let mut next = vec![id];
+    while let Some(from) = next.pop() {
+        for s in dependents.get(from).into_iter().flatten() {
+            if after.insert(s) {
+                next.push(s);
+            }
+        }
+    }
+    step.downstream = after.len();
     observe(c, project, &mut step)?;
     // its waits name what they wait on by how each reads, as the board's do (`known`)
     let mut shown = BTreeMap::new();

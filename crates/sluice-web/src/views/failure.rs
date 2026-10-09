@@ -226,6 +226,31 @@ impl Failure {
             _ => "failed",
         }
     }
+    /// What to try next, by its kind, under its sentence: "" where only its own words can say
+    /// (the work's own failure) and for a cancel.
+    pub fn next_step(&self) -> &'static str {
+        match self.caption() {
+            "cap" => {
+                "Retry runs it again under the same cap. The cap is set in minutes by SLUICE_AGENT_MAX_MIN in the environment its fn runs in."
+            }
+            "stalled" => {
+                "Retry runs it again. Its Activity shows what it was doing when it went quiet."
+            }
+            "quota" => "Retry once its engine's usage cap resets.",
+            "auth" => "Sign its engine in again on this machine, then Retry.",
+            "engine" => {
+                "An engine that would not start or take its input is most often a passing fault: Retry."
+            }
+            "lost" => {
+                "Its process ended with no result recorded, most often when sluice restarted: Retry."
+            }
+            "no submit" => "Retry with feedback telling it to submit its outputs.",
+            "invalid" => "Retry with feedback naming the outputs that did not fit.",
+            "rejected" => "Fix the inputs it refused (its Inputs tab shows them), then Retry.",
+            "transient" => "Retry: it may pass now.",
+            _ => "",
+        }
+    }
     /// A cancel's sentence under its "Cancelled" head: the reason, without the word again.
     pub fn cancel_words(&self) -> &str {
         self.headline

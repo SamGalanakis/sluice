@@ -151,8 +151,8 @@ async fn a_projects_messages_page_is_titled_messages_and_the_tray_stays_inbox() 
         "{project}"
     );
     assert!(
-        project.contains(">Inbox</a>"),
-        "its seg still names the view"
+        project.contains(">For you</a>"),
+        "its seg names the view for you"
     );
     let (_, tray) = f.get("/inbox").await;
     assert!(tray.contains("<h1>Inbox</h1>"), "{tray}");

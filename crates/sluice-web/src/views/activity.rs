@@ -175,7 +175,20 @@ impl TurnView {
         words
     }
 }
+impl TurnView {
+    /// Its latest call, a fold's last one: the call in flight while the turn runs.
+    pub fn last_call(&self) -> Option<&CallView> {
+        match self.items.last()? {
+            Item::Call(call) => Some(call),
+            Item::Looks { calls, .. } => calls.last(),
+        }
+    }
+}
 impl ActivityView {
+    /// The turn a running step's Now leads with: its latest.
+    pub fn now_turn(&self) -> Option<&TurnView> {
+        self.turns.last()
+    }
     /// The outline, its tab's panel's content (the panel's head names it).
     pub fn render(&self) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&ActivityTemplate { a: self })
@@ -204,6 +217,41 @@ struct ActivityTemplate<'a> {
     a: &'a ActivityView,
 }
 
+/// A message as its agent was handed it, without sluice's delivery line around it: "Message
+/// from orchestrator on your sluice thread `step-a` (…): Look again" reads "Orchestrator: Look
+/// again", a question "Question 12 from b: …" (its id, to answer it), a reply "Reply from b: …".
+pub fn unwrapped(text: &str) -> String {
+    const ON: &str = " on your sluice thread `";
+    let Some(at) = text.find(ON) else {
+        return text.to_owned();
+    };
+    let head = &text[..at];
+    let rest = &text[at + ON.len()..];
+    let Some(body) = rest.find('`').and_then(|end| {
+        let after = &rest[end + 1..];
+        after.find(": ").map(|colon| &after[colon + 2..])
+    }) else {
+        return text.to_owned();
+    };
+    let who = |from: &str| match from {
+        "owner" => "You".to_owned(),
+        "orchestrator" => "Orchestrator".to_owned(),
+        other => other.to_owned(),
+    };
+    let lead = if let Some(from) = head.strip_prefix("Message from ") {
+        who(from)
+    } else if let Some(from) = head.strip_prefix("Reply from ") {
+        format!("Reply from {}", who(from))
+    } else if let Some((id, from)) = head
+        .strip_prefix("Question ")
+        .and_then(|q| q.split_once(" from "))
+    {
+        format!("Question {id} from {}", who(from))
+    } else {
+        return text.to_owned();
+    };
+    format!("{lead}: {body}")
+}
 /// A run's calls by tool as one meta line: "Bash 42 · Edit 9 · Read 17 · 2 failed", four tools
 /// at most and "n other" after them.
 pub fn profile_words(outline: &act::Outline) -> String {
@@ -334,10 +382,10 @@ pub fn view(
                 SentKind::Text => "Sent",
                 SentKind::Carried => "Carried on",
             },
-            sent: if turn.sent.kind == SentKind::Carried {
-                "Its session went on from an earlier run.".into()
-            } else {
-                turn.sent.text.clone()
+            sent: match turn.sent.kind {
+                SentKind::Carried => "Its session went on from an earlier run.".into(),
+                SentKind::Task => turn.sent.text.clone(),
+                _ => unwrapped(&turn.sent.text),
             },
             said: turn.said.clone(),
             calls: turn.calls.len(),

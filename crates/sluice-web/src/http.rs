@@ -80,15 +80,18 @@ pub fn router(
         )
 }
 pub fn error_response(error: PublicError) -> Response {
-    let status = match &error {
+    (status_of(&error), axum::Json(error)).into_response()
+}
+/// The HTTP status an error answers with.
+pub fn status_of(error: &PublicError) -> StatusCode {
+    match error {
         PublicError::BadRequest { .. } | PublicError::Invalid { .. } => StatusCode::BAD_REQUEST,
         PublicError::NotFound { .. } => StatusCode::NOT_FOUND,
         PublicError::Conflict { .. } | PublicError::CursorExpired { .. } => StatusCode::CONFLICT,
         PublicError::Busy { .. } => StatusCode::SERVICE_UNAVAILABLE,
         PublicError::Cancelled { .. } => StatusCode::REQUEST_TIMEOUT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    (status, axum::Json(error)).into_response()
+    }
 }
 fn status_error(status: StatusCode, message: impl Into<String>) -> Response {
     (
@@ -230,8 +233,6 @@ async fn handle_policy(state: &HttpState, request: Request, next: Next) -> Respo
     } else {
         30
     };
-    let settings_response =
-        parts.uri.path().starts_with("/projects/id/") && parts.uri.path().ends_with("/settings");
     let request = Request::from_parts(parts, Body::from(bytes));
     let mut response =
         match tokio::time::timeout(Duration::from_secs(budget), next.run(request)).await {
@@ -243,27 +244,28 @@ async fn handle_policy(state: &HttpState, request: Request, next: Next) -> Respo
                 });
             }
         };
+    // an error a handler answered as a page (a setting or a step action refused, said on its
+    // own page with what was typed kept) stands as it is
+    let failed = response.status().is_client_error() || response.status().is_server_error();
+    let drawn = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .is_some_and(|v| v.as_bytes().starts_with(b"text/html"));
     // a browser that asked for a page gets one, in the layout, saying what is missing
     if let Some((path, headers)) = page
-        && (response.status().is_client_error() || response.status().is_server_error())
-        && !(settings_response
-            && response
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .is_some_and(|v| v.as_bytes().starts_with(b"text/html")))
+        && failed
+        && !drawn
     {
         response = missing_page(state, &path, &headers, response).await;
         response.extensions_mut().insert(Arc::new(permit));
         return response;
     }
-    if (response.status().is_client_error() || response.status().is_server_error())
+    if failed
+        && !drawn
         && !response
             .headers()
             .get(header::CONTENT_TYPE)
-            .is_some_and(|v| {
-                v.as_bytes().starts_with(b"application/json")
-                    || (settings_response && v.as_bytes().starts_with(b"text/html"))
-            })
+            .is_some_and(|v| v.as_bytes().starts_with(b"application/json"))
     {
         response = error_json(response).await;
     }

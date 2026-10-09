@@ -196,6 +196,14 @@ pub const COMPONENTS: &[Component] = &[
         slots: &["grip"],
     },
     Component {
+        tag: "sluice-keys",
+        script: "components.js",
+        does: "The page's keys, listed where it draws them (display preferences): / finds on the page, g then a letter goes to a section, ? shows the list. None while typing in a field, with a modifier held or under an open dialog.",
+        props: &[],
+        events: &[],
+        slots: &["list"],
+    },
+    Component {
         tag: "sluice-board",
         script: "sluice.js",
         does: "Draws the plan's lines between its cards, traces a card's relations on hover or focus, and moves between cards with the arrows.",
@@ -437,12 +445,20 @@ pub fn search_close() -> TrustedHtml {
 /// A filter's field, there only with script.
 pub fn search_field(id: &str, placeholder: &str, label: &str) -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<div class=\"q-field fn-find needs-js\">{}<input type=\"search\" id=\"{}\" placeholder=\"{}\" aria-label=\"{}\" autocomplete=\"off\" spellcheck=\"false\" data-preserve-attr=\"value\"></div>",
+        "<div class=\"q-field fn-find needs-js\">{}<input type=\"search\" id=\"{}\" placeholder=\"{}\" aria-label=\"{}\" autocomplete=\"off\" spellcheck=\"false\" data-preserve-attr=\"value\" data-find></div>",
         icon(Icon::Search, 16, "q-icon"),
         esc(id),
         esc(placeholder),
         esc(label)
     ))
+}
+
+/// The page's keys (`sluice-keys`) around their list.
+pub fn keys_open() -> TrustedHtml {
+    Host::new("sluice-keys").open()
+}
+pub fn keys_close() -> TrustedHtml {
+    Host::new("sluice-keys").close()
 }
 
 /// The board's host around its relations and its plane.
@@ -542,9 +558,12 @@ impl Confirm {
                 )
             })
             .collect();
+        // the box is the owner's while open: a stream patch never empties it (`data-ignore-morph`)
         let reason = self.reason.map_or(String::new(), |placeholder| format!(
-            "<label class=\"confirm-reason\">Reason (optional)<textarea name=\"message\" rows=\"3\" maxlength=\"16384\" placeholder=\"{}\"></textarea></label>",
-            esc(placeholder)
+            "<label class=\"confirm-reason\">{}<textarea name=\"message\" rows=\"3\" maxlength=\"16384\" placeholder=\"{}\" data-ignore-morph>{}</textarea></label>",
+            esc(if self.reason_label.is_empty() { "Reason (optional)" } else { self.reason_label }),
+            esc(placeholder),
+            esc(&self.reason_value)
         ));
         let host = Host::new("sluice-confirm")
             .attr("heading", &self.title)

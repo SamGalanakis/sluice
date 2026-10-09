@@ -543,3 +543,70 @@ async fn chromium_draws_the_outline_in_one_column_on_a_phone_and_its_failure_lin
     .unwrap();
     server.abort();
 }
+
+/// A running step's Now leads with its live turn: what it last said, the call in flight and
+/// its activity in a line, before anything else.
+#[tokio::test]
+async fn a_running_steps_now_leads_with_its_live_turn() {
+    let f = fixture("claude", "running").await;
+    let upto = f
+        .laid
+        .lines
+        .iter()
+        .position(|l| l.contains("messages/138999.md"))
+        .unwrap();
+    f.laid.write(upto);
+    let (_, html) = f.get(&f.page()).await;
+    let now = &html[html.find("<section class=\"d-sec d-now\">").unwrap()..];
+    let now = &now[..now.find("</section>").unwrap()];
+    let turn = &now[now
+        .find("<div class=\"now-turn is-running\">")
+        .unwrap_or_else(|| panic!("{now}"))..];
+    assert!(
+        turn.starts_with(
+            "<div class=\"now-turn is-running\"><p class=\"now-turn-h\"><span class=\"g g-running\""
+        ) && turn.contains("<span>Turn 3, running for <time data-since=\"2026-10-08T10:"),
+        "{turn}"
+    );
+    assert!(
+        turn.contains("<p class=\"now-call\">"),
+        "the call in flight: {turn}"
+    );
+    assert!(
+        turn.contains(
+            "<a href=\"#activity\" data-tab-to=\"activity\">Its activity</a> · run 1 · 3 turns"
+        ),
+        "{turn}"
+    );
+    // nothing comes before it but the section's head
+    let before = &now[..now.find("<div class=\"now-turn").unwrap()];
+    assert!(
+        !before.contains("<p") && !before.contains("convo"),
+        "{before}"
+    );
+    drop(f.writer);
+    drop(f.home);
+}
+
+/// A message handed to an agent reads without sluice's delivery line around it.
+#[test]
+fn a_handed_over_message_reads_without_its_delivery_line() {
+    use sluice_web::views::activity::unwrapped;
+    assert_eq!(
+        unwrapped(
+            "Message from orchestrator on your sluice thread `step-a`: You're on the critical path."
+        ),
+        "Orchestrator: You're on the critical path."
+    );
+    assert_eq!(
+        unwrapped(
+            "Question 12 from owner on your sluice thread `step-a` (answer it with sluice tool reply, to_message 12): Which one?"
+        ),
+        "Question 12 from You: Which one?"
+    );
+    assert_eq!(
+        unwrapped("Reply from fig-1-work on your sluice thread `step-a` to message 9: Yes."),
+        "Reply from fig-1-work: Yes."
+    );
+    assert_eq!(unwrapped("Plain words"), "Plain words");
+}

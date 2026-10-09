@@ -208,7 +208,8 @@ async fn every_state_reads_the_same_on_every_surface() {
             "{state:?}: {row}"
         );
         assert!(
-            row.contains(&format!("{step}{}</span>", state.spec().lane)),
+            row.contains(&format!("<span class=\"stg\">{}", glyph(state)))
+                && row.contains(&format!("</span>{step}</span>")),
             "{state:?}: {row}"
         );
         // Count counts it by its key
@@ -495,8 +496,16 @@ async fn a_project_pause_and_outside_work_read_as_themselves() {
     let pane = between(&html, "<aside id=\"board-pane\"", "</aside>");
     let row = between(pane, "/units/x\">x</a>", "</tr>");
     assert!(row.contains("<span>outside</span>"), "{row}");
-    assert!(row.contains("wait↗</span>"), "{row}");
-    assert!(pane.contains("↗</span> outside</span>"), "the key: {pane}");
+    assert!(
+        row.contains(&format!("<span class=\"stg\">{}", glyph(Shown::External)))
+            && row.contains("</span>wait</span>"),
+        "{row}"
+    );
+    let key = between(pane, "u-key", "</p>");
+    assert!(
+        key.contains("g-external") && key.contains("</span>outside</span>"),
+        "the key: {key}"
+    );
     // the titled project paused: a matrix's lane string marks each pending stage paused
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
@@ -513,7 +522,10 @@ async fn a_project_pause_and_outside_work_read_as_themselves() {
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
     let row = between(&html, "<tr id=\"unit-l3\"", "</tr>");
     assert!(
-        row.contains("aria-label=\"l3-fork paused\">fork<span class=\"lm\">‖</span></a>"),
+        row.contains(&format!(
+            "aria-label=\"l3-fork paused\"><span class=\"stg\">{}fork</span></a>",
+            mark(Shown::Paused)
+        )),
         "{row}"
     );
     let pane = between(&html, "<aside id=\"board-pane\"", "</aside>");
@@ -522,7 +534,11 @@ async fn a_project_pause_and_outside_work_read_as_themselves() {
         row.contains(&format!("{}<span>paused</span>", mark(Shown::Paused))),
         "{row}"
     );
-    assert!(row.contains("fork‖</span>"), "{row}");
+    assert!(
+        row.contains(&format!("<span class=\"stg\">{}", glyph(Shown::Paused)))
+            && row.contains("</span>fork</span>"),
+        "{row}"
+    );
 }
 
 /// A lane matrix counts each row once, under how the unit reads: a unit with a failed step and
