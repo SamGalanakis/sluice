@@ -185,6 +185,11 @@ pub struct LogRow {
     /// On the global log, the record's project: its name and page ("" for the home's own).
     pub place: (String, String),
     pub json: String,
+    /// sluice's own housekeeping (retiring done units): such records in a row are one quiet
+    /// row, "sluice retired done units 4 times" (`Some` its plan revision and changes).
+    pub chore: Option<(u64, usize)>,
+    /// The first plan revision of a row of chores, for its sentence.
+    pub chore_from: u64,
 }
 #[derive(Clone, Debug)]
 pub struct LogView {
@@ -441,7 +446,11 @@ pub async fn load(
                 (None, Some(id)) => nav.projects.iter().find(|p| p.id == id).map(|p| (p.name.to_string(), p.href())).unwrap_or_else(|| ("a deleted project".into(), String::new())),
                 _ => (String::new(), String::new()),
             };
-            rows.push(LogRow { seq, at: at.clone(), kind, summary, html, count: 1, oldest: seq, place, json: serde_json::to_string_pretty(&Record { seq: RecordSeq(seq), at, project: owner, event })? });
+            let chore = match &event {
+                Event::PlanEdit { rev, author, reason, ops } if author == "sluice" && reason.starts_with("retire done units") => Some((rev.0, ops.len())),
+                _ => None,
+            };
+            rows.push(LogRow { seq, at: at.clone(), kind, summary, html, count: 1, oldest: seq, place, chore, chore_from: chore.map_or(0, |c| c.0), json: serde_json::to_string_pretty(&Record { seq: RecordSeq(seq), at, project: owner, event })? });
         }
         rows.sort_by_key(|r| std::cmp::Reverse(r.seq));
         // records in a row that say the same are one line, "×10"
@@ -451,6 +460,24 @@ pub async fn load(
                 Some(last) if last.kind == row.kind && last.summary == row.summary && last.place == row.place => {
                     last.count += 1;
                     last.oldest = row.seq;
+                }
+                // sluice's housekeeping in a row: one quiet row, its changes summed
+                Some(last) if last.chore.is_some() && row.chore.is_some() && last.place == row.place => {
+                    last.count += 1;
+                    last.oldest = row.seq;
+                    if let (Some((rev, n)), Some((from, m))) = (last.chore, row.chore) {
+                        last.chore = Some((rev, n + m));
+                        last.chore_from = from;
+                    }
+                    let (rev, changes) = last.chore.unwrap_or_default();
+                    let words = format!(
+                        "sluice retired done units {} times: plan revs {} to {rev}, {}",
+                        last.count,
+                        last.chore_from,
+                        super::ui::count(changes, "change", "changes")
+                    );
+                    last.html = TrustedHtml::owned(super::ui::esc(&words));
+                    last.summary = words;
                 }
                 _ => grouped.push(row),
             }

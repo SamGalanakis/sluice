@@ -591,7 +591,7 @@ async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
     assert!(!detail.contains("d-progress"), "{detail}");
     let section = between(&detail, "<section class=\"d-sec d-now\">", "</section>");
     assert!(
-        section.contains(">Now</") && section.contains("Progress, set"),
+        section.contains(">Now</") && section.contains("Live progress, set"),
         "{section}"
     );
     assert!(
@@ -959,7 +959,7 @@ async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws
     let (status, page) = f.get(&format!("/projects/id/{}/units/alpha", f.id)).await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert!(
-        page.contains(&format!("<p class=\"meta unit-sum\">2 steps · 1 pending · 1 succeeded · <a href=\"/projects/id/{}/log?unit=alpha\">Log</a></p>", f.id)),
+        page.contains(&format!("<div class=\"meta unit-sum\"><span>2 steps · 1 pending · 1 succeeded</span><span aria-hidden=\"true\">·</span><a href=\"/projects/id/{}/log?unit=alpha\">Log</a></div>", f.id)),
         "{page}"
     );
     let edges = edges_text(&page);

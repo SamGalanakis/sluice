@@ -228,6 +228,9 @@ pub struct RunView {
     /// An agent run's calls by tool, read from its transcript (`activity::attach`): "Bash 42 ·
     /// Edit 9 · Read 17 · 2 failed"; "" for any other run.
     pub profile: String,
+    /// A cancelled run's one line, from the record that stopped it: "Cancelled after 1h 18m by
+    /// cli, which retried it." ("" for any other run).
+    pub cancelled_by: String,
 }
 /// The run files a page may open, read-only and only from that run's own directory: its
 /// stderr, its tail, its summary, the pane its agent left when it failed, and the records its
@@ -448,6 +451,9 @@ pub struct StepView {
     pub active_at: String,
     /// When its current result (its outputs, or its failure) was recorded; "" without one.
     pub result_at: String,
+    /// Every message of its conversation, its Messages tab's count (the tab draws the latest).
+    #[serde(skip)]
+    pub messages_total: usize,
     /// A failed step's failure as its project's log records it (the record's seq), once its
     /// page has read it.
     pub failure_record: Option<i64>,
@@ -833,6 +839,7 @@ impl StepView {
             exchange: Default::default(),
             active_at: String::new(),
             result_at: String::new(),
+            messages_total: 0,
             failure_record: None,
             timing: None,
             usually: None,
@@ -1047,7 +1054,7 @@ impl StepView {
     /// "2 awaiting reply", gold: questions on its thread nobody has answered.
     pub fn awaiting_tag(&self) -> TrustedHtml {
         super::ui::tag_link(
-            "#tp-thread",
+            "#tp-messages",
             &format!("{} awaiting reply", self.awaiting),
             "attn",
             None,
@@ -1212,7 +1219,7 @@ impl StepView {
     pub fn timer_html(&self) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(
-            source = "{% if live %}<time data-since=\"{{ t.started }}\" datetime=\"{{ t.started }}\" class=\"took live\" title=\"{{ title }}\"{% if let Some(u) = usually %} data-usually=\"{{ u }}\"{% endif %}><span class=\"tk\" aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"> for {{ said }}</span>{% if !usual_said.is_empty() %}<span class=\"vh tu\">, {{ usual_said }}</span>{% endif %}</time>{% else %}<span class=\"took\" title=\"{{ title }}\"><span aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"> took {{ said }}</span></span>{% endif %}",
+            source = "{% if live %}<time data-since=\"{{ t.started }}\" datetime=\"{{ t.started }}\" class=\"took live\" title=\"{{ title }}\"{% if let Some(u) = usually %} data-usually=\"{{ u }}\"{% endif %}><span class=\"tk\" aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"{% if !usual_said.is_empty() %} data-tail=\", {{ usual_said }}\"{% endif %}> for {{ said }}{% if !usual_said.is_empty() %}, {{ usual_said }}{% endif %}</span></time>{% else %}<span class=\"took\" title=\"{{ title }}\"><span aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"> took {{ said }}</span></span>{% endif %}",
             ext = "html"
         )]
         struct Timer<'a> {
@@ -1291,6 +1298,43 @@ impl StepView {
             _ => false,
         }
     }
+    /// How many times its usual time it has run, once past twice that: "2.5×" (down to a half
+    /// below ten, whole above, so it changes seldom); "" otherwise.
+    pub fn overrun_times(&self) -> String {
+        if !self.overrun() {
+            return String::new();
+        }
+        match (self.usually, self.shown_timing()) {
+            (Some(usually), Some(t)) => {
+                let times = t.seconds / usually;
+                // to a half below ten, whole above
+                let times = if times < 10.0 {
+                    (times * 2.0).floor() / 2.0
+                } else {
+                    times.floor()
+                };
+                if times.fract() == 0.0 {
+                    format!("{times:.0}×")
+                } else {
+                    format!("{times:.1}×")
+                }
+            }
+            _ => String::new(),
+        }
+    }
+    /// A matrix pill's overrun after its timer: "2.5×" in the attention tone, its title in
+    /// words; "" while it runs within twice its usual time.
+    pub fn overrun_html(&self) -> TrustedHtml {
+        let times = self.overrun_times();
+        if times.is_empty() {
+            return TrustedHtml::owned(String::new());
+        }
+        TrustedHtml::owned(format!(
+            "<span class=\"over-x\" title=\"{t} its usual time ({u})\"><span aria-hidden=\"true\">{t}</span><span class=\"vh\">, {t} its usual time</span></span>",
+            t = super::ui::esc(&times),
+            u = super::ui::esc(&self.usually_text()),
+        ))
+    }
     /// How its last run ended, for its header: a finished step's "Ended 2h ago · took 4m"
     /// (with its usual time), one waiting to run again "Last run ended 12h ago (took 3m)".
     pub fn ended_line(&self) -> Option<TrustedHtml> {
@@ -1368,13 +1412,14 @@ impl StepView {
             format!("Run {run}, {words}")
         };
         TrustedHtml::owned(format!(
-            "<span class=\"tries\" title=\"{title}\"><span class=\"tries-m\" aria-hidden=\"true\">{marks}</span>run {run}{vh}</span>",
+            "<span class=\"tries\" title=\"{title}\"><span class=\"tries-m\" aria-hidden=\"true\">{marks}</span><span aria-hidden=\"true\">run {run}</span><span class=\"vh\">{said}</span></span>",
             title = super::ui::esc(&title),
-            vh = if words.is_empty() {
-                String::new()
+            // one phrase for a screen reader: "run 3, after 2 failed"
+            said = super::ui::esc(&if words.is_empty() {
+                format!("run {run}")
             } else {
-                format!("<span class=\"vh\">, {}</span>", super::ui::esc(&words))
-            },
+                format!("run {run}, {words}")
+            }),
         ))
     }
     /// A running step's run before this one, for Now: its number and the run.
@@ -1521,10 +1566,10 @@ impl StepView {
             1 => " The step after it runs again only if its new result differs.".into(),
             n => format!(" The {n} steps after it run again only if its new result differs."),
         };
-        let ended = if self.result_at.is_empty() {
-            String::new()
+        let lead = if self.result_at.is_empty() {
+            "It succeeded. ".to_owned()
         } else {
-            format!(" at {}", super::ui::at_text(&self.result_at))
+            format!("It succeeded {}. ", super::ui::ago(&self.result_at))
         };
         super::ui::Confirm {
             opener: "Retry".into(),
@@ -1544,8 +1589,9 @@ impl StepView {
                 ("seen", self.seen()),
                 ("action", "retry".into()),
             ],
+            lead: TrustedHtml::owned(lead),
             copy: format!(
-                "It succeeded{ended}. Retrying runs it again; its outputs stay until the new run ends.{after}"
+                "Retrying runs it again; its outputs stay until the new run ends.{after}"
             ),
             reason: Some("Optional feedback for the next attempt"),
             reason_label: "Feedback (optional)",
@@ -1609,10 +1655,11 @@ impl StepView {
             );
         }
         if !self.thread.is_empty() {
-            tabs.push(Tab::new("thread", "Messages").counted(
-                self.thread.count.to_string(),
-                count(self.thread.count, "message", "messages"),
-            ));
+            let total = self.messages_total.max(self.thread.count);
+            tabs.push(
+                Tab::new("messages", "Messages")
+                    .counted(total.to_string(), count(total, "message", "messages")),
+            );
         }
         if !self.inputs.is_empty() {
             tabs.push(Tab::new("inputs", "Inputs").counted(
@@ -1642,6 +1689,8 @@ impl StepView {
     }
     /// The tab a page opens on: the one asked for (`?tab=`) when it has one, else Overview.
     pub fn tab_on(&self, asked: &str) -> &'static str {
+        // `thread`, the tab's old key, still opens it: links to it are kept in messages
+        let asked = if asked == "thread" { "messages" } else { asked };
         self.tabs()
             .into_iter()
             .find(|t| t.key == asked)
@@ -1672,13 +1721,21 @@ impl StepView {
             set.into_iter().take(1).collect()
         }
     }
+    /// How Now's progress is introduced: "Live progress from run 4" (the run going now), or
+    /// "Live progress" when no run of it is kept.
+    pub fn progress_lead(&self) -> String {
+        match self.runs.len() {
+            0 => "Live progress".into(),
+            n => format!("Live progress from run {n}"),
+        }
+    }
     /// Its Overview's outputs come from a run before the one going now.
     pub fn outputs_earlier(&self) -> bool {
         self.running() && self.outputs_from().is_some()
     }
-    /// How the run going now came about, after `previous_run`: "Run 3 started 7m ago, after
-    /// fig-5571-land retried it: conditional Rejected retry (its feedback)." and how the run
-    /// before ended, linked to it in Runs.
+    /// How the run going now came about, after `previous_run`: "Run 3 started 7m ago, after run
+    /// 2 failed: kiln clippy failed after the rebase. Sluice retried it on its own." (the run
+    /// before linked to it in Runs; who retried it in words, a retry's feedback linked).
     pub fn rerun_html(&self) -> TrustedHtml {
         use super::ui::{ago, esc};
         let Some((n, prev)) = self.previous_run() else {
@@ -1686,39 +1743,60 @@ impl StepView {
         };
         let mut out = String::new();
         if let Some(now) = self.last_run() {
-            out.push_str(&format!("Run {} started {}", n + 1, ago(&now.started)));
-            if let Some(r) = &self.restart {
-                // a completion action retries its own step: it retried itself
-                out.push_str(&match r.by.as_str() {
-                    "owner" => ", after you retried it".to_owned(),
-                    "" => ", after a retry".to_owned(),
-                    by if by == self.id.as_str() || by == format!("step:{}", self.id) => {
-                        ", after it retried itself".to_owned()
-                    }
-                    by => format!(", after {} retried it", esc(by)),
-                });
-                let reason = r.reason.trim().trim_end_matches('.');
-                if !reason.is_empty() {
-                    out.push_str(&format!(": {}", esc(reason)));
-                }
-                if let Some(m) = r.feedback {
-                    out.push_str(&format!(" (<a href=\"#message-{m}\">with feedback</a>)"));
-                }
-            }
-            out.push_str(". ");
+            out.push_str(&format!(
+                "Run {} started {}, after ",
+                n + 1,
+                ago(&now.started)
+            ));
         }
         out.push_str(&format!(
-            "<a href=\"#run-{n}\">Run {n}</a> {}",
+            "<a href=\"#run-{n}\">run {n}</a> {}",
             esc(&prev.ended_words())
         ));
-        if !prev.finished.is_empty() {
-            out.push_str(&format!(" {}", ago(&prev.finished)));
-        }
+        // a cancel names who stopped it, from its record: "cancelled by cli: switch to …"; one
+        // a retry made is said once, after, as the retry
+        let by_retry = prev.cancelled_by.contains(", which retried it")
+            || prev.cancelled_by.contains(", when you retried it");
+        let stopped = prev
+            .cancelled_by
+            .find(" by ")
+            .filter(|_| !by_retry)
+            .map(|i| prev.cancelled_by[i..].to_owned());
         let sentence = prev.ended_sentence();
-        if sentence.is_empty() {
+        let sentence = sentence.strip_prefix("Its fn failed: ").unwrap_or(sentence);
+        if let Some(stopped) = stopped {
+            out.push_str(&esc(&stopped));
+        } else if sentence.is_empty() {
             out.push('.');
         } else {
             out.push_str(&format!(": {}", esc(sentence)));
+            if !sentence.ends_with(['.', '!', '?']) {
+                out.push('.');
+            }
+        }
+        if let Some(r) = &self.restart {
+            let by = r.by.strip_prefix("step:").unwrap_or(&r.by);
+            let itself = by == self.id.as_str() || by == "sluice";
+            let who = match by {
+                "" => String::new(),
+                "owner" => "You retried it".into(),
+                _ if itself => "Sluice retried it on its own".into(),
+                "orchestrator" => "The orchestrator retried it".into(),
+                by => format!("{} retried it", esc(by)),
+            };
+            if !who.is_empty() {
+                out.push(' ');
+                out.push_str(&who);
+                // a completion action's reason is sluice's own wording, not the owner's
+                let reason = r.reason.trim().trim_end_matches('.');
+                if !itself && !reason.is_empty() && !reason.starts_with("conditional ") {
+                    out.push_str(&format!(": {}", esc(reason)));
+                }
+                if let Some(m) = r.feedback {
+                    out.push_str(&format!(", <a href=\"#message-{m}\">with feedback</a>"));
+                }
+                out.push('.');
+            }
         }
         TrustedHtml::owned(out)
     }
@@ -1913,6 +1991,7 @@ fn load_conversation(
 ) -> sluice_store::Result<()> {
     use super::threads::{Build, Composer, Conversation};
     let messages = sluice_store::messages::conversation(c, project, step.id.as_str())?;
+    step.messages_total = messages.len();
     if messages.is_empty() {
         step.thread = Conversation::default();
         step.exchange = Conversation::default();
@@ -2091,8 +2170,10 @@ pub fn load_detail(
             empty_files,
             seconds,
             profile: String::new(),
+            cancelled_by: String::new(),
         });
     }
+    load_cancels(c, project, step)?;
     // the values its last run received, each still saying where it came from
     if let Some(last) = step.runs.last() {
         for frozen in &last.inputs {
@@ -2152,6 +2233,77 @@ pub fn load_detail(
 /// While a later run of it goes, what started that run: the retry recorded after its run
 /// before started and before this one did (who, why, and the feedback it posted to the step in
 /// the same write). None for a first run, or a run relaunched with no retry (a lost one's).
+/// Each cancelled run's line: how long it ran and who stopped it, read from the record that did
+/// (a cancel's, or a retry's, which stops the run going), within its run's span.
+fn load_cancels(
+    c: &rusqlite::Connection,
+    project: ProjectId,
+    step: &mut StepView,
+) -> sluice_store::Result<()> {
+    let id = step.id.to_string();
+    for run in &mut step.runs {
+        if run.outcome != Outcome::Ended(Shown::Cancelled) || run.finished.is_empty() {
+            continue;
+        }
+        let found = c
+            .prepare_cached("SELECT kind,payload FROM records WHERE project_id=?1 AND step_id=?2 AND kind IN ('step.cancel','step.retry') AND julianday(at)>=julianday(?3) AND julianday(at)<=julianday(?4)+5.0/86400.0 ORDER BY seq DESC LIMIT 1")?
+            .query_row(
+                (project.to_string(), id.as_str(), run.started.as_str(), run.finished.as_str()),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        let after = run
+            .seconds
+            .map(|s| format!(" after {}", super::ui::duration_text(s)))
+            .unwrap_or_default();
+        let mut line = format!("Cancelled{after}");
+        if let Some((kind, payload)) = found {
+            let payload: serde_json::Value = serde_json::from_str(&payload)?;
+            let said = |k: &str| {
+                payload
+                    .get(k)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_owned()
+            };
+            let by = said("author");
+            let by = by.strip_prefix("step:").unwrap_or(&by);
+            let who = match by {
+                "" => String::new(),
+                "owner" => "you".into(),
+                "orchestrator" => "the orchestrator".into(),
+                by if by == id => "sluice".into(),
+                by => by.to_owned(),
+            };
+            if !who.is_empty() {
+                line.push_str(&format!(" by {who}"));
+                if kind == "step.retry" {
+                    line.push_str(if who == "you" {
+                        ", when you retried it"
+                    } else {
+                        ", which retried it"
+                    });
+                }
+            }
+            let reason = said("reason");
+            let reason = reason.trim_end_matches('.');
+            if !reason.is_empty()
+                && reason != "cancel requested"
+                && !reason.starts_with("conditional ")
+            {
+                line.push_str(&format!(": {reason}"));
+            }
+        } else if let Some(f) = &run.failure
+            && let Some(reason) = f.headline.strip_prefix("Cancelled: ")
+        {
+            line.push_str(&format!(": {}", reason.trim_end_matches('.')));
+        }
+        line.push('.');
+        run.cancelled_by = line;
+    }
+    Ok(())
+}
 fn load_restart(
     c: &rusqlite::Connection,
     project: ProjectId,
@@ -2267,6 +2419,8 @@ struct Refusal {
     words: String,
     /// The action still applies, so what was typed with it is kept in its box for another try.
     keeps: bool,
+    /// Its box is in the confirmation its button opens (Cancel, a succeeded step's Retry).
+    dialog: bool,
 }
 async fn execute_action(
     state: DashboardState,
@@ -2307,32 +2461,73 @@ async fn execute_action(
         refusal.words
     } else {
         format!(
-            "{} What you wrote is kept in its box: {} sends it.",
+            "{} What you wrote is kept{}",
             refusal.words,
-            action.word()
+            if refusal.dialog {
+                format!(": {} opens it again.", action.word())
+            } else {
+                format!(" in its box: {} sends it.", action.word())
+            }
         )
     };
-    let notice = Notice { words, kept };
-    match page_html(
-        &state,
-        registry.as_ref().map(|r| &r.0),
-        project,
-        &id,
-        &ActivityQuery::default(),
-        &headers,
-        Some(&notice),
-    )
-    .await
-    {
-        Ok(html) => (refusal.status, Html(html.0)).into_response(),
-        Err(e) => board::error_response(e),
-    }
+    // back to the step's own address (303), so a reload never posts the action again: the
+    // notice and the typed text wait under a key no one can guess, for a while only
+    let key = notices::keep(project, &id, Notice { words, kept });
+    Redirect::to(&format!("/projects/id/{project}/steps/{id}?notice={key}")).into_response()
 }
 /// What a step's page says over it after an action it could not take, and the feedback typed
 /// with that action, kept in its box.
+#[derive(Clone, Debug)]
 pub struct Notice {
     pub words: String,
     pub kept: String,
+}
+/// The refusals a browser was sent back to its step with (`?notice=<key>`), each with what was
+/// typed: held in this process only, under a key the server made (a v7 UUID: its random bits
+/// are not guessable, so no address can put words over a step), for ten minutes, the latest
+/// 256. A reload within that draws the same notice; an unknown or expired key draws the step
+/// as it is. Nothing typed goes into an address, a history entry or a log line.
+pub mod notices {
+    use super::Notice;
+    use sluice_model::ids::{ProjectId, StepId};
+    use std::sync::{LazyLock, Mutex};
+    use std::time::{Duration, Instant};
+    const KEPT_FOR: Duration = Duration::from_secs(600);
+    const MOST: usize = 256;
+    struct Kept {
+        key: String,
+        at: Instant,
+        project: ProjectId,
+        step: StepId,
+        notice: Notice,
+    }
+    static KEPT: LazyLock<Mutex<Vec<Kept>>> = LazyLock::new(Default::default);
+    /// Holds `notice` for this step and returns its key.
+    pub fn keep(project: ProjectId, step: &StepId, notice: Notice) -> String {
+        let key = uuid::Uuid::now_v7().simple().to_string();
+        let mut kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+        kept.retain(|k| k.at.elapsed() < KEPT_FOR);
+        if kept.len() >= MOST {
+            kept.remove(0);
+        }
+        kept.push(Kept {
+            key: key.clone(),
+            at: Instant::now(),
+            project,
+            step: step.clone(),
+            notice,
+        });
+        key
+    }
+    /// The notice kept under `key` for this step, while it is kept.
+    pub fn get(project: ProjectId, step: &StepId, key: &str) -> Option<Notice> {
+        let kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+        kept.iter()
+            .find(|k| {
+                k.key == key && k.project == project && &k.step == step && k.at.elapsed() < KEPT_FOR
+            })
+            .map(|k| k.notice.clone())
+    }
 }
 /// The action, or why not: `Ok` where to go once done; `Err(Ok)` a refusal its step's page says;
 /// `Err(Err)` an error with no page to say it on (no such step, a broken read).
@@ -2349,6 +2544,7 @@ async fn try_action(
             status,
             words,
             keeps: true,
+            dialog: false,
         }))
     };
     let Some(Extension(commands)) = commands else {
@@ -2395,8 +2591,23 @@ async fn try_action(
                 form.action.word()
             ),
             keeps: false,
+            dialog: false,
         }));
     }
+    // past here what was typed waits in the box its button opens
+    let dialog = match form.action {
+        Action::Cancel => true,
+        Action::Retry => step.retry_asks(),
+        _ => false,
+    };
+    let refuse = |status, words: String| {
+        Err(Ok(Refusal {
+            status,
+            words,
+            keeps: true,
+            dialog,
+        }))
+    };
     // the plan moved since the page drew: an edit elsewhere leaves this step as it was, and
     // the action still means what it meant, so it applies at the plan's new revision
     let marks = matches!(form.action, Action::Dismiss | Action::Undismiss);
@@ -2450,6 +2661,9 @@ pub struct ActivityQuery {
     activity: String,
     #[serde(default)]
     tab: String,
+    /// A refused action's notice, by its key (`notices`).
+    #[serde(default)]
+    notice: String,
 }
 impl ActivityQuery {
     fn all(&self) -> bool {
@@ -2463,6 +2677,9 @@ pub async fn step_page(
     Query(shown): Query<ActivityQuery>,
     headers: HeaderMap,
 ) -> Response {
+    let notice = (!shown.notice.is_empty())
+        .then(|| notices::get(project, &id, &shown.notice))
+        .flatten();
     match page_html(
         &state,
         registry.as_ref().map(|r| &r.0),
@@ -2470,7 +2687,7 @@ pub async fn step_page(
         &id,
         &shown,
         &headers,
-        None,
+        notice.as_ref(),
     )
     .await
     {
@@ -2616,9 +2833,58 @@ pub async fn step_stream(
 }
 /// One of a run's files (`RUN_FILES`), read-only, as plain text: only a run of this project,
 /// only from its own directory, never through a link; a large file's last 2 MiB.
+/// `?raw=1` serves a run's file as it is, plain text; without it the file is a page of the
+/// dashboard, its terminal colour codes taken out.
+#[derive(Deserialize, Default)]
+pub struct RunFileQuery {
+    #[serde(default)]
+    raw: String,
+}
+/// Text with its terminal escape sequences taken out (colours, cursor moves, a title), so a
+/// run's log reads as words: "\x1b[38;5;9mFail\x1b[0m" reads "Fail".
+pub fn plain_terminal(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            if c == '\r' && chars.peek() != Some(&'\n') {
+                out.push('\n');
+            } else if c != '\r' {
+                out.push(c);
+            }
+            continue;
+        }
+        match chars.next() {
+            // CSI: parameters and intermediates, then one final byte
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            // OSC: up to BEL or ST
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\u{7}' {
+                        break;
+                    }
+                    if c == '\u{1b}' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
 pub async fn run_file_page(
     State(state): State<DashboardState>,
     Path((project, run, name)): Path<(ProjectId, String, String)>,
+    Query(query): Query<RunFileQuery>,
+    headers: HeaderMap,
 ) -> Response {
     const MOST: u64 = 2 * 1024 * 1024;
     // an address with no run id in it names no run: the calm 404, never the parser's words
@@ -2632,23 +2898,22 @@ pub async fn run_file_page(
         .reads
         .snapshot(move |c| {
             Ok(c.query_row(
-                "SELECT 1 FROM runs WHERE project_id=?1 AND run_id=?2",
+                "SELECT step_id FROM runs WHERE project_id=?1 AND run_id=?2",
                 (project.to_string(), run.to_string()),
-                |_| Ok(()),
+                |r| r.get::<_, String>(0),
             )
-            .optional()?
-            .is_some())
+            .optional()?)
         })
         .await;
-    match owned {
-        Ok(true) => {}
-        Ok(false) => {
+    let step = match owned {
+        Ok(Some(step)) => step,
+        Ok(None) => {
             return board::error_response(PublicError::NotFound {
                 message: format!("Run {run} is not a run of this project."),
             });
         }
         Err(e) => return board::error_response(e.into_public(true)),
-    }
+    };
     let (asked, wanted) = (run, name.clone());
     let read = tokio::task::spawn_blocking(move || -> Option<Vec<u8>> {
         use std::io::{Read, Seek, SeekFrom};
@@ -2667,8 +2932,23 @@ pub async fn run_file_page(
     .await
     .ok()
     .flatten();
-    match read {
-        Some(bytes) => (
+    let text = read.map(|bytes| {
+        if TRANSCRIPTS.contains(&name.as_str()) {
+            sluice_agents::engines::account::redact(&String::from_utf8_lossy(&bytes))
+        } else {
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+    });
+    if query.raw != "1"
+        && let Some(text) = &text
+    {
+        return match run_file_html(&state, project, &step, run, &name, text, &headers).await {
+            Ok(html) => Html(html.0).into_response(),
+            Err(e) => board::error_response(e),
+        };
+    }
+    match text {
+        Some(text) => (
             [
                 (
                     axum::http::header::CONTENT_TYPE,
@@ -2680,11 +2960,7 @@ pub async fn run_file_page(
                     "default-src 'none'; sandbox",
                 ),
             ],
-            if TRANSCRIPTS.contains(&name.as_str()) {
-                sluice_agents::engines::account::redact(&String::from_utf8_lossy(&bytes))
-            } else {
-                String::from_utf8_lossy(&bytes).into_owned()
-            },
+            text,
         )
             .into_response(),
         None => board::error_response(PublicError::NotFound {
@@ -2698,4 +2974,45 @@ pub async fn run_file_page(
             ),
         }),
     }
+}
+
+/// A run's file as a page of the dashboard: a way back to its step's runs, its name, the run,
+/// the raw file's link, and its text as it reads (terminal codes out), wrapping in its box.
+async fn run_file_html(
+    state: &DashboardState,
+    project: ProjectId,
+    step: &str,
+    run: RunId,
+    name: &str,
+    text: &str,
+    headers: &HeaderMap,
+) -> Result<TrustedHtml, PublicError> {
+    use super::ui::esc;
+    let shared = state.snapshot(Some(project)).await?;
+    let nav = NavView::new(&shared, Some(project), "plan")?;
+    let text = plain_terminal(text);
+    let lines = text.lines().count();
+    let body = TrustedHtml::owned(format!(
+        "<div id=\"run-file\" class=\"run-file-page\"><nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{project}/steps/{s}?tab=runs\">{back}step {s}</a></nav><h1 class=\"title-long\">{n}</h1><p class=\"meta\">Run {id} · {lines} · <a href=\"?raw=1\">The file as it is</a></p>{body}</div>",
+        s = esc(step),
+        back = super::icons::icon(super::icons::Icon::ArrowLeft, 16, ""),
+        n = esc(name),
+        id = super::ui::copy(&run.to_string(), "Copy run id"),
+        lines = super::ui::count(lines, "line", "lines"),
+        body = if text.trim().is_empty() {
+            super::ui::empty("The file is empty.").to_string()
+        } else {
+            format!("<pre class=\"run-file\">{}</pre>", esc(&text))
+        },
+    ));
+    super::render_layout(
+        &format!("{name} · {step} · sluice"),
+        &body,
+        &nav,
+        &Viewer::from_headers(headers),
+        "",
+        "",
+        &format!("/projects/id/{project}/runs/{run}/files/{name}"),
+    )
+    .map_err(render_error)
 }

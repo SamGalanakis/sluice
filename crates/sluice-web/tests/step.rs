@@ -201,7 +201,7 @@ async fn router_uses_injected_exact_signatures_and_owner_commands() {
     let body = String::from_utf8(body.to_vec()).unwrap();
     assert!(body.contains("custom.open"));
     assert!(body.contains("ready"));
-    assert!(body.contains("Thread"));
+    assert!(body.contains("Messages · none yet"));
     for (body, status) in [
         ("action=retry&revision=0", StatusCode::CONFLICT),
         ("action=cancel&revision=1", StatusCode::CONFLICT),
@@ -968,7 +968,7 @@ async fn a_running_step_says_what_it_is_doing_now() {
         "{now}"
     );
     assert!(
-        now.contains("…</p>") && now.contains("Read it in the thread"),
+        now.contains("…</p>") && now.contains("Read it whole"),
         "{now}"
     );
     assert!(
@@ -1146,8 +1146,25 @@ async fn a_refused_action_comes_back_to_its_step_saying_why_with_its_feedback_ke
         "text/html,application/xhtml+xml",
     )
     .await;
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    let html = body(response).await;
+    // back to the step's own address (303), so a reload posts nothing again
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response.headers()["location"].to_str().unwrap().to_owned();
+    assert!(
+        location.starts_with(&format!("{path}?notice=")),
+        "{location}"
+    );
+    let html = body(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&location)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
     assert!(html.starts_with("<!doctype html>"), "{html}");
     assert!(
         html.contains("<div class=\"notice\" role=\"alert\">")
@@ -1168,5 +1185,41 @@ async fn a_refused_action_comes_back_to_its_step_saying_why_with_its_feedback_ke
     assert_eq!(
         json["message"],
         "Nothing was done: Cancel does not apply to a stale step."
+    );
+    // a succeeded step's Retry asks first: what was typed waits in the box its button opens
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE steps SET status='succeeded' WHERE project_id=?1",
+                [project.to_string()],
+            )?;
+            tx.changed(Some(project), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let response = post(
+        format!("action=retry&revision=0&seen={seen}&message=Use+the+12h+cap"),
+        "text/html",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response.headers()["location"].to_str().unwrap().to_owned();
+    let html = body(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&location)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        html.contains("and it is succeeded now. Look again, then retry. What you wrote is kept: Retry opens it again.</p>")
+            && html.contains("data-ignore-morph>Use the 12h cap</textarea>"),
+        "{html}"
     );
 }

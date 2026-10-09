@@ -561,6 +561,8 @@ form.prefs:has(sluice-toggle:defined) .save { display: none; }
    the retry's feedback folds on a line of its own */
 .d-actions form { display: contents; }
 .d-actions form > details { order: 1; flex-basis: 100%; }
+.d-actions form > details textarea { display: block; width: 100%; max-width: var(--measure);
+                                     box-sizing: border-box; margin-top: 6px; resize: vertical; }
 .d-actions form > button.primary { order: -1; }
 .d-thread { font-size: 13px; color: var(--muted-foreground); }
 .d-thread:hover { color: var(--foreground); }
@@ -858,7 +860,7 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--foreground) 86%, v
 .now-turn-h { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0;
               font-size: 14px; line-height: 20px; font-weight: 600;
               font-variant-numeric: tabular-nums; }
-.now-turn-h .meta { font-weight: 400; }
+.now-turn-h .meta { font-weight: 400; margin-left: 4px; }
 .now-said { margin: 6px 0 0; max-width: var(--measure); font-size: 14px; line-height: 20px;
             overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical;
             -webkit-line-clamp: 4; overflow: hidden; }
@@ -869,6 +871,8 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--foreground) 86%, v
 .d-now .convo { margin-top: 12px; }
 .now-from { font-weight: 600; color: var(--foreground); }
 .now-progress { margin-top: 12px; }
+/* Now reads as one column: the turn's card, its progress and its exchange one width */
+.d-now > :is(.now-progress, .convo) { max-width: 78ch; }
 .now-act { margin: 10px 0 0; }
 /* a failed step's own last message, after its failure: what its agent last said, in its words */
 .d-said { margin-top: 12px; }
@@ -1333,7 +1337,16 @@ a.log-place:hover { color: var(--foreground); text-decoration: underline; }
    the row's right end so the sentence keeps the width */
 table.log td.what { position: relative; min-width: 14rem; width: 100%; padding-right: 52px; }
 .log-what { margin: 0; padding: 3px 0; min-height: 18px; color: var(--foreground);
-            overflow-wrap: anywhere; max-width: var(--measure); }
+            overflow-wrap: anywhere; }
+.log-what.chore { color: var(--muted-foreground); }
+/* a run's file as a page: its text as it reads, wrapping in the mono box */
+.run-file { margin: 16px 0 0; padding: 12px 14px; border: 1px solid var(--border);
+            border-radius: var(--radius-md); background: var(--muted);
+            font: 12.5px/18px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* a run past twice its stage's usual time: how many times, in the attention tone */
+.over-x { color: var(--status-attention); font-weight: 600; font-variant-numeric: tabular-nums;
+          white-space: nowrap; }
+.d-badges .over-x { font-size: 13px; }
 .log-x { margin-left: 2px; padding: 0 5px; border-radius: 999px; background: var(--muted);
          color: var(--muted-foreground); font-size: 11.5px; font-weight: 600;
          font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -1575,7 +1588,10 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
 .unit-h { display: flex; align-items: flex-start; gap: 10px; overflow-wrap: anywhere; }
 .unit-h > .g { margin-top: 3px; flex: none; }
 .unit-h .g, .unit-h .g svg, .p-title .g, .p-title .g svg { width: 22px; height: 22px; }
-.unit-sum { margin: 4px 0 16px; }
+.unit-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: 4px 0 16px; }
+/* a short view said on the meta line: "engine opus" */
+.unit-sum .uv-line .uv, .unit-sum .uv-line .uv-stack { display: inline-flex; flex-wrap: wrap;
+                                                       align-items: baseline; gap: 2px 10px; }
 .unit-page .board { padding: 0; }
 /* the unit's box sits on the column's left edge, under its title, not centred */
 .unit-page .board .boxes, .unit-page .board .layer { justify-content: flex-start; }
@@ -1747,6 +1763,9 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
   background: var(--card); color: var(--foreground); box-shadow: var(--lift); }
 .confirmation::backdrop { background: var(--scrim); }
 .confirmation h2 { font: 650 18px/24px var(--font-sans); margin: 0 0 12px; overflow-wrap: anywhere; }
+/* the title asks the question; the id it names sits under it */
+.confirmation h2 .sref-id { display: block; margin-top: 4px; font-size: 13px; font-weight: 400;
+                            color: var(--muted-foreground); }
 .confirm-copy { margin-bottom: 16px; overflow-wrap: anywhere; }
 .confirm-reason { display: grid; gap: 6px; font-size: 14px; }
 .confirm-reason textarea { width: 100%; min-width: 0; }
@@ -2491,7 +2510,12 @@ sluice-board:not(:defined) .mx-wrap { overflow-x: auto; }
             display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
             line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .mx-title:hover { text-decoration: underline; text-underline-offset: 3px; }
-.mx-id { margin: 2px 0 0 24px; font-size: 13px; line-height: 18px; color: var(--muted-foreground); }
+/* the id line: the unit's id, an alarm, and (without its column) the summary after them, one
+   line cut with "…" */
+.mx-idl { display: flex; align-items: baseline; gap: 0 6px; margin: 2px 0 0 24px; min-width: 0;
+          font-size: 13px; line-height: 18px; color: var(--muted-foreground); }
+.mx-id { margin: 0; flex: none; }
+.mx-idl > .mx-id:not(:empty) + .mx-sum-phone::before { content: "·"; flex: none; }
 .mx-id .box-alarm { color: var(--foreground); font-weight: 600; }
 .mx th.mx-unit :is(.waits, .why) { margin-left: 24px; }
 td.mx-sum { width: 30%; min-width: 9rem; padding-right: 14px; font-size: 13px; line-height: 18px;
@@ -2528,7 +2552,7 @@ a.node.mx-dot:hover { background: var(--secondary); }
 .uv-in-row .uv-msg { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1;
                      line-clamp: 1; overflow: hidden; flex-basis: 100%; }
 /* under a row's title the summary is one line: its parts in a row, the last cut with "…" */
-.mx-sum-phone .uv-in-row { width: 0; min-width: 100%; }  /* the line never widens its column */
+.mx-sum-phone .uv-in-row { flex: 1 1 0; width: 0; min-width: 0; }  /* the line never widens its column */
 .mx-sum-phone .uv-in-row .uv-stack { flex-wrap: nowrap; overflow: hidden; white-space: nowrap; }
 .mx-sum-phone .uv-in-row .uv-stack > * { flex: none; }
 .mx-sum-phone .uv-in-row .uv-stack > :last-child { flex: 0 1 auto; min-width: 0; overflow: hidden;
@@ -2559,12 +2583,13 @@ a.node.mx-dot:hover { background: var(--secondary); }
    (`data-fit="nosum"`); the summary then goes under the row's title. */
 @container plan (max-width: 1100px) {
   .mx :is(th.mx-sum, td.mx-sum) { display: none; }
-  .matrix .mx-sum-phone { display: block; margin: 2px 0 0 24px; font-size: 13px; line-height: 18px;
-                          color: var(--muted-foreground); }
+  .matrix .mx-sum-phone { display: flex; gap: 6px; flex: 1 1 0; min-width: 0; }
 }
 .matrix[data-fit] .mx :is(th.mx-sum, td.mx-sum) { display: none; }
-.matrix[data-fit] .mx-sum-phone { display: block; margin: 2px 0 0 24px; font-size: 13px;
-                                  line-height: 18px; color: var(--muted-foreground); }
+.matrix[data-fit] .mx-sum-phone { display: flex; gap: 6px; flex: 1 1 0; min-width: 0; }
+/* the stages still to come at a lane's end: one muted note, not a ring each */
+.lane-rest { color: var(--muted-foreground); white-space: nowrap; font-family: var(--font-sans); }
+.mx-lane a + .lane-rest { margin-left: 6px; }
 /* Then a row becomes a block: at 720px of pane and narrower, earlier for a matrix of many
    stages, and wherever its stages alone are still wider than its pane (`data-fit="lane"`). */
 .matrix[data-fit="lane"] .mx-wrap { padding: 4px 12px; }

@@ -778,7 +778,7 @@ async fn a_streams_batches_go_out_compressed_and_flushed() {
 /// A step action refused in a browser comes back as its step's page through the whole stack
 /// (the page as the handler drew it, never wrapped as a JSON error); a client's stays JSON.
 #[tokio::test]
-async fn a_refused_step_action_is_its_page_for_a_browser_and_json_for_a_client() {
+async fn a_refused_step_action_sends_a_browser_back_to_its_step_and_a_client_json() {
     let fixture = Fixture::new().await;
     let id = fixture.id;
     fixture
@@ -847,22 +847,47 @@ async fn a_refused_step_action_is_its_page_for_a_browser_and_json_for_a_client()
             .unwrap();
         app.clone().oneshot(request)
     };
+    // a browser goes back to the step's own address (303), so a reload never posts again;
+    // the notice waits there under a key the server made
     let response = post("text/html,application/xhtml+xml,*/*;q=0.8")
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_owned();
     assert!(
-        response.headers()[header::CONTENT_TYPE]
-            .to_str()
-            .unwrap()
-            .starts_with("text/html")
+        location.starts_with(&format!("/projects/id/{id}/steps/work?notice=")),
+        "{location}"
     );
-    let page = text_body(response).await;
-    assert!(page.starts_with("<!doctype html>"), "{page}");
-    assert!(
-        page.contains("<p>Nothing was done: Cancel does not apply to a succeeded step.</p>"),
-        "{page}"
-    );
+    let get = |uri: String| {
+        let request = Request::builder()
+            .uri(uri)
+            .header(header::HOST, "localhost")
+            .header(header::ACCEPT, "text/html")
+            .body(Body::empty())
+            .unwrap();
+        app.clone().oneshot(request)
+    };
+    for _ in 0..2 {
+        let response = get(location.clone()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let page = text_body(response).await;
+        assert!(page.starts_with("<!doctype html>"), "{page}");
+        assert!(
+            page.contains("<p>Nothing was done: Cancel does not apply to a succeeded step.</p>"),
+            "{page}"
+        );
+    }
+    // a key the server did not make draws the step as it is
+    let page = text_body(
+        get(format!("/projects/id/{id}/steps/work?notice=0190aaaa"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(!page.contains("Nothing was done"), "{page}");
     let response = post("application/json").await.unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(json_body(response).await["error"], "conflict");

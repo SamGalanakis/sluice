@@ -604,7 +604,7 @@ pub struct Entry {
     pub replies: Vec<Reply>,
     /// Its first 360 characters only, with a link to it whole (the step's Overview).
     pub excerpt: bool,
-    /// Where it is drawn whole, for "Read it in the thread".
+    /// Where it is drawn whole, for "Read it whole".
     pub href: String,
 }
 impl Entry {
@@ -733,6 +733,9 @@ pub struct Conversation {
     pub head: bool,
     /// The box to write to its step or the orchestrator, at its end.
     pub composer: Option<Composer>,
+    /// On a step's thread page, when its step's Messages hold more than the thread: how many,
+    /// and the tab ("2 in this thread · 11 with this step").
+    pub wider: Option<(usize, String)>,
 }
 /// A conversation's message box: to whom it writes, and where it posts.
 #[derive(Clone, Debug)]
@@ -771,7 +774,7 @@ pub struct Build<'a> {
     pub unread: &'a BTreeSet<i64>,
     pub most: Option<usize>,
     pub excerpt: bool,
-    /// Where an excerpt's "Read it in the thread" leads: before the message's id (`#message-N`
+    /// Where an excerpt's "Read it whole" leads: before the message's id (`#message-N`
     /// on the same page, else the thread's page).
     pub href: &'a dyn Fn(&MessageItem) -> String,
 }
@@ -880,6 +883,14 @@ impl Conversation {
     pub fn with_head(mut self, whole_href: String) -> Self {
         self.head = true;
         self.whole_href = whole_href;
+        self
+    }
+    /// Its step's whole conversation holds `count` messages, at `href`: said beside its own
+    /// count when that is more.
+    pub fn with_wider(mut self, count: usize, href: String) -> Self {
+        if count > self.count {
+            self.wider = Some((count, href));
+        }
         self
     }
     pub fn with_composer(mut self, composer: Option<Composer>) -> Self {
@@ -1027,6 +1038,17 @@ fn converse(
                     )
                 }
                 _ => format!("Message to {}", thread.recipient),
+            };
+            let wider = match thread.step() {
+                Some(step) => Some((
+                    sluice_store::messages::conversation(sql, thread.project, step)?.len(),
+                    format!("/projects/id/{}/steps/{step}?tab=messages", thread.project),
+                )),
+                None => None,
+            };
+            let conversation = match wider {
+                Some((count, href)) => conversation.with_wider(count, href),
+                None => conversation,
             };
             conversation
                 .with_head(thread.href())

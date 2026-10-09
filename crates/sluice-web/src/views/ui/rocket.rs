@@ -577,7 +577,7 @@ impl Confirm {
             }
         };
         TrustedHtml::owned(format!(
-            "{open}<details class=\"confirm-flow\"><summary{opener_id}{disabled}>{opener}</summary><form method=\"post\" action=\"{action}\"{form_id}>{hidden}<p class=\"confirm-copy\">{copy}</p>{reason}<div class=\"confirm-actions\"><button class=\"{tone}\">{confirm}</button><button type=\"button\" data-keep>{keep}</button></div>{after}</form></details>{close}",
+            "{open}<details class=\"confirm-flow\"><summary{opener_id}{disabled}>{opener}</summary><form method=\"post\" action=\"{action}\"{form_id}>{hidden}<p class=\"confirm-copy\">{lead}{copy}</p>{reason}<div class=\"confirm-actions\"><button class=\"{tone}\">{confirm}</button><button type=\"button\" data-keep>{keep}</button></div>{after}</form></details>{close}",
             open = host.open(),
             close = host.close(),
             opener_id = id(&self.opener_id),
@@ -589,6 +589,7 @@ impl Confirm {
             opener = esc(&self.opener),
             action = esc(&self.action),
             form_id = id(&self.form_id),
+            lead = self.lead,
             copy = esc(&self.copy),
             tone = if self.danger { "danger" } else { "primary" },
             confirm = esc(&self.confirm),

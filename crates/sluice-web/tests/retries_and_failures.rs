@@ -164,7 +164,7 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
     let mark = |s| sluice_web::views::ui::mark(s).as_str().to_owned();
     assert!(
         pill.contains(&format!(
-            "+2</span>{}{}{}</span>run 6",
+            "+2</span>{}{}{}</span><span aria-hidden=\"true\">run 6</span>",
             mark(Shown::Cancelled),
             mark(Shown::Failed),
             mark(Shown::Failed)
@@ -172,7 +172,7 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
         "the last three, oldest first: {tries}"
     );
     assert!(
-        pill.contains("run 6<span class=\"vh\">, after 4 failed and 1 cancelled</span></span>"),
+        pill.contains("<span class=\"vh\">run 6, after 4 failed and 1 cancelled</span></span>"),
         "{pill}"
     );
     // the phone's lane string says it too
@@ -205,7 +205,7 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
     let retry = between(now, "<p class=\"meta now-retry\">", "</p>");
     assert!(
         retry.starts_with("<p class=\"meta now-retry\">Run 6 started <time")
-            && retry.contains(". <a href=\"#run-5\">Run 5</a> failed <time"),
+            && retry.contains(", after <a href=\"#run-5\">run 5</a> failed: "),
         "{retry}"
     );
     assert!(retry.ends_with(": Its engine hit a usage cap."), "{retry}");
@@ -214,10 +214,10 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
     let (_, kit) = f.get(&format!("/projects/id/{id}/steps/kit-a")).await;
     let retry = between(&kit, "<p class=\"meta now-retry\">", "</p>");
     assert!(
-        retry.contains("<a href=\"#run-1\">Run 1</a> failed"),
+        retry.contains("<a href=\"#run-1\">run 1</a> failed"),
         "{retry}"
     );
-    assert!(retry.ends_with(": Its fn failed: flaky."), "{retry}");
+    assert!(retry.ends_with(": flaky."), "{retry}");
 }
 
 #[tokio::test]

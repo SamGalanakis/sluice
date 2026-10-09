@@ -64,6 +64,9 @@ pub struct TurnView {
     pub anchor: String,
     pub sent_kind: &'static str,
     pub sent: String,
+    /// A message turn whose handed-over file is gone, read back from the messages table by
+    /// its id: the id, a link to it in Messages.
+    pub sent_ref: Option<i64>,
     pub said: String,
     pub calls: usize,
     pub failed: usize,
@@ -379,7 +382,7 @@ pub fn view(
             sent_kind: match turn.sent.kind {
                 SentKind::Task => "Task",
                 SentKind::Message => "Message",
-                SentKind::Text => "Sent",
+                SentKind::Text => "Received",
                 SentKind::Carried => "Carried on",
             },
             sent: match turn.sent.kind {
@@ -387,6 +390,7 @@ pub fn view(
                 SentKind::Task => turn.sent.text.clone(),
                 _ => unwrapped(&turn.sent.text),
             },
+            sent_ref: None,
             said: turn.said.clone(),
             calls: turn.calls.len(),
             failed: turn.failed(),
@@ -535,6 +539,75 @@ pub async fn attach(state: &DashboardState, step: &mut StepView, all: bool) {
                 .find(|name| run.files.contains(name))
                 .map(|name| (name.to_string(), run.file_href(&step.project, name)));
         }
+        if let Some(view) = view.as_mut() {
+            name_messages(state, step.project, view).await;
+        }
         step.activity = view;
+    }
+}
+/// A message turn whose handed-over file is gone names only its id ("#165159"): its sender and
+/// first line are read back from the messages table, "Orchestrator: Your default is right…",
+/// the id kept as a link to it.
+async fn name_messages(
+    state: &DashboardState,
+    project: sluice_model::ids::ProjectId,
+    view: &mut ActivityView,
+) {
+    let ids: Vec<i64> = view
+        .turns
+        .iter()
+        .filter(|t| t.sent_kind == "Message")
+        .filter_map(|t| t.sent.strip_prefix('#').and_then(|id| id.parse().ok()))
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let found = state
+        .reads
+        .snapshot(move |c| {
+            let mut out = std::collections::BTreeMap::new();
+            let mut q = c.prepare_cached(
+                "SELECT \"from\",body FROM messages WHERE project_id=?1 AND id=?2",
+            )?;
+            for id in ids {
+                if let Some(row) = q
+                    .query_row((project.to_string(), id), |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    })
+                    .map(Some)
+                    .or_else(|e| match e {
+                        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                        e => Err(e),
+                    })?
+                {
+                    out.insert(id, row);
+                }
+            }
+            Ok(out)
+        })
+        .await;
+    let Ok(found) = found else { return };
+    for turn in &mut view.turns {
+        let Some(id) = turn
+            .sent
+            .strip_prefix('#')
+            .and_then(|id| id.parse::<i64>().ok())
+        else {
+            continue;
+        };
+        if let Some((from, body)) = found.get(&id) {
+            let who = match from.as_str() {
+                "owner" => "You",
+                "orchestrator" => "Orchestrator",
+                other => other,
+            };
+            let first = body
+                .lines()
+                .map(crate::markdown::plain)
+                .find(|l| !l.is_empty())
+                .unwrap_or_default();
+            turn.sent = format!("{who}: {}", crate::markdown::cut(&first, 200));
+            turn.sent_ref = Some(id);
+        }
     }
 }

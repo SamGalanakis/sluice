@@ -547,18 +547,24 @@ Top down:
    scrolls, so nothing between it and the page scrolls). A row with a failed or cancelled
    stage says why under its id: that stage's one sentence, muted, a link to the step. A matrix is a table and draws no
    lines: what a row waits for is said in words under its title, each source by its id with its
-   title on hover ("Waits for `l2-land` (failed)"); a wait two rows or more share is said once,
-   above the table ("3 units wait for `fig-5571-landed` The lashlang substrate… (running)", the
-   source's id first, then its title, a link), and left out of those rows; and no line from elsewhere crosses its cells (a line to or from a row would have
+   title on hover ("Waits for `l2-land` (failed)"), so every row says what holds it; a wait two
+   rows or more share is also said over the table, naming the rows it holds, each a link to its
+   row ("`fig-5576` and `fig-5577` wait for `fig-5575-landed` Every execution event… (running)";
+   past four rows the first three and "and 3 more", the rest in its title), the source's id
+   first, then its title, a link; and no line from elsewhere crosses its cells (a line to or from a row would have
    to). A view that does not check is one line above the table in the attention colour with
    `triangle-alert`, and the table draws without the summary column. The matrix keys off the
    `plan` container, never the window: at 720px of pane and narrower a row is a block: the
-   glyph and title, the id, then the stages as a lane string in 13px (each stage its name after
-   its glyph at 12px, the status ramp's, a stage not reached its mark; each a 44px-tall link to
-   its step), then the summary; the stage columns and head are gone. Between
+   glyph and title, the id with the summary after it on the same line (one line, cut with an
+   ellipsis), then the stages as a lane string in 13px (each stage its name after its glyph at
+   12px, the status ramp's, a stage not reached its mark; each a 44px-tall link to its step; two
+   or more pending stages at its end one muted "+4 to go" in the body's font, their names its
+   title, and a unit none of whose stages has started "Not started · 6 stages"); the stage
+   columns and head are gone. Between
    720px and 1100px of pane (a laptop with the drawer open, or beside the board) the summary
    column gives way (the summary goes under the row's title, as on a phone) and the title column
-   narrows. A pill is as wide as what it says (a long timer, a run's earlier glyphs), so the
+   narrows. A running pill past twice its stage's usual time says how many times after its
+   timer, "4×" in the attention gold at 600 (its title in words). A pill is as wide as what it says (a long timer, a run's earlier glyphs), so the
    board also measures each matrix (`data-fit`): a table still wider than its pane gives up its
    summary column, then its rows become lane strings, and gets its columns back once there is
    room; the stage columns are never clipped and the page never scrolls sideways. Without script
@@ -770,18 +776,19 @@ The step reads top down:
   ("quiet · running for 2h 14m", "stopping · …", gold when it needs a look), no second line
   repeating it; "usually 24m" in meta after the tags while pending or running (how long its
   stage usually takes; " · usually 24m" after "took …" once ended; in ink at 600 once a run has
-  gone past twice that, so an overrun shows without a colour of its own); "done/total runs" when scattered; its doc; "Ended 3h ago · took 10h 0m" once it has ended, or for one waiting to run again "Last run ended 12h ago (took 3m)."; a meta line of the fn in mono and its tags as badges (a `unit:` tag a link to its
+  gone past twice that, followed by how many times in the attention gold at 600, "4.5× usual", down
+  to a half below ten, whole above); "done/total runs" when scattered; its doc; "Ended 3h ago · took 10h 0m" once it has ended, or for one waiting to run again "Last run ended 12h ago (took 3m)."; a meta line of the fn in mono and its tags as badges (a `unit:` tag a link to its
   unit's page);
 - the actions, one POST form carrying the plan revision: Pause or Unpause (where pausing acts:
   pending, stale, or any paused step; never a failed or cancelled one, which starts only when
   retried), Retry with a folded "Feedback for retry" textarea
   (succeeded, failed, stale; on a failed step Retry is the primary button and comes first; on
   a cancelled one it stays a plain button; on a succeeded one it asks first in the shared
-  dialog, "Retry work · Fix the parser `l1-work`? It succeeded at 14:02. Retrying runs it
+  dialog, "Retry work · Fix the parser?" (the step's id under the title, in data mono), "It succeeded 3h ago. Retrying runs it
   again; its outputs stay until the new run ends. The 93 steps after it run again only if its
   new result differs.", with "Feedback (optional)", Retry and "Keep its result"),
-  Cancel (running, not already stopping; or pending work outside sluice), 14px apart; it opens the shared confirmation dialog, titled by the step's title with its id in data mono ("Cancel Fix the parser `l1-work`?"), says first how long it has been running ("It has been running for 2h 14m."), then that Retry starts it over, and offers an optional reason, "Cancel the run" (the ink danger button) and "Keep running". The form also carries what the page saw of the step (its state, whether paused, its run count): when the plan changed since the page drew it but the step did not, the action applies to the new plan without asking. An action that does nothing answers with the step's own page at its status (409, 413, 503), a notice under the way back (below) saying in sluice's words why nothing was done ("Nothing was done: this step changed since the page drew it, and it is running now. Look again, then retry.", "Nothing was done: Cancel does not apply to a succeeded step."), and what the owner typed kept in its box, its fold open ("What you wrote is kept in its box: Retry sends it."); a client that asks for JSON gets the JSON error. Then, while it has no messages, a link
-  "Thread · no messages yet" to its thread's page (where the owner can write to it), "Log" (the
+  Cancel (running, not already stopping; or pending work outside sluice), 14px apart; it opens the shared confirmation dialog, titled by the step's title ("Cancel Fix the parser?", its id under it in data mono), says first how long it has been running ("It has been running for 2h 14m."), then that Retry starts it over, and offers an optional reason, "Cancel the run" (the ink danger button) and "Keep running". The form also carries what the page saw of the step (its state, whether paused, its run count): when the plan changed since the page drew it but the step did not, the action applies to the new plan without asking. An action that does nothing sends a browser back to the step's own address (303, so a reload never posts it again) with a notice under the way back (below) saying in sluice's words why nothing was done ("Nothing was done: this step changed since the page drew it, and it is running now. Look again, then retry.", "Nothing was done: Cancel does not apply to a succeeded step."), and what the owner typed kept in its box, its fold open ("What you wrote is kept in its box: Retry sends it."; in the confirmation's box for Cancel and a succeeded step's Retry, "What you wrote is kept: Retry opens it again."); the notice and the text wait in the serving process under a key the server made (`?notice=<key>`, ten minutes, the latest 256), so no address can put words over a step and nothing typed goes into an address; a client that asks for JSON gets the JSON error. Then, while it has no messages, a link
+  "Messages · none yet" to its thread's page (where the owner can write to it), "Log" (the
   log of its records, filtered to the step) and a gold "n awaiting reply" tag leading to its
   Messages tab, on the same line, the feedback's fold on a line of its own under them;
   a failure that says how to resume ("To resume it, bind the step's session input…") under
@@ -790,9 +797,9 @@ The step reads top down:
   kept);
 - under the header, **tabs** (the kit's, below), each only when it has something to show and
   with a count where one helps: **Overview** (always, and where every page opens), **Activity n**
-  (its turns), **Messages n** (its conversation; its key in `?tab=` stays `thread`), **Inputs n**,
+  (its turns), **Messages n** (its conversation, every message counted; `?tab=messages`, and `thread`, its old key, still opens it), **Inputs n**,
   **Outputs n** (or "3/7" while some are not set) and **Runs n**, a screen reader hearing each
-  count in words ("Outputs, 3 of 7 set", "Inputs, 6 inputs"). `?tab=` opens another; an anchor
+  count in words, one phrase, the tab's label ("Outputs, 3 of 7 set", "Inputs, 6 inputs"). `?tab=` opens another; an anchor
   in a tab (`#run-3`, a failing call's, `#message-12`, `#activity`, `#tp-outputs`) opens its tab
   on it. In the drawer a step opened from another opens on its Overview (a failure leads
   there; the last step's tab was that step's), one opened afresh on the address's tab, and a
@@ -811,13 +818,15 @@ The step reads top down:
   tool calls · 12 failed" (the link its Activity tab); for an agent's run whose transcript
   cannot be read here, "Its transcript can't be read here, so what it is doing is not shown."
   (so no activity never reads as an idle agent). Then, on a retry, why it runs again in one
-  meta line: what started this run ("Run 3 started 1h ago, after you retried it: <reason>", or
-  "after it retried itself", "after <step> retried it"; "with feedback" a link to the message
-  the retry sent) and how the run before ended ("Run 2 failed 2h ago: Its engine hit a usage
-  cap.", a cancel's reason after its colon, "Run 2" a link to that run in Runs). Then its live
-  progress and its latest exchange as messages (the conversation's look, below): its own
+  meta line, in plain words: the run, how the run before ended and who started this one ("Run 3
+  started 1h ago, after run 2 failed: kiln clippy failed after the rebase. Sluice retried it on
+  its own."; "after run 3 cancelled by cli: switch to main_tests. cli retried it."; "You retried
+  it: <reason>, with feedback", the feedback a link to the message the retry sent; "run 2" a
+  link to that run in Runs; a completion action's own wording never shown). Then its live
+  progress ("Live progress from run 4, set 20m ago: not an output yet.") and its latest exchange as messages (the conversation's look, below): its own
   latest (to anyone) and the latest to it since, each its first 360 characters as inline
-  markdown with "Read it in the thread" (its Messages tab, on that message) when cut; "It has
+  markdown with "Read it whole" (its Messages tab, on that message) when cut; the turn's card,
+  the progress and the exchange one width (78ch); "It has
   sent no message yet." only when it has no activity either. Then the facts ("Waits on",
   "After"), Queued, Skipped, Finishing, Outside sluice, progress kept from an ended run, **Its
   output** (the first set of `summary`, `result`, `report`, `final`, `answer` or `verdict`;
@@ -848,7 +857,9 @@ The step reads top down:
   opens the Activity tab on that call), the traceback folded under "Traceback", the pane its
   agent left folded under "Pane at failure" (a chevron; the rows in 12px data, scrolling in
   their own box), and "Run files" linking each file the run has (`file-text` icons) as plain
-  text, an empty one "name · empty" and no link.
+  text (each a page of its own: a way back to the step's Runs, the file's name, the run, "The
+  file as it is" (`?raw=1`, plain text), and its text in the mono box, wrapping, terminal
+  colour codes taken out), an empty one "name · empty" and no link.
 - **Messages**: the step's conversation (below): its own thread and every message it sent or was
   sent on another (a question it put to a sibling, the sibling's reply), its latest 60 with "n
   earlier messages not shown. Read the whole thread", the message box to it at the end.
@@ -857,7 +868,8 @@ The step reads top down:
   the raw transcript when the run's directory holds one), then one row per turn, numbered in the
   attempts' muted column (gone on a phone, where the turn takes the column's width): a card (the
   hairline, `--radius-md`, the card colour) whose summary is what sluice sent ("Task", "Message"
-  or "Sent" in 13px muted, then its first words at 500, two lines at most), "Said" and the
+  or "Received" in 13px muted; a message whose handed-over file is gone read back from the
+  messages table, "Orchestrator: Your default is right…", its id a link to it, then its first words at 500, two lines at most), "Said" and the
   agent's last words (three lines), and a meta line "12 tool calls · Bash 8 · Edit 3 · Read 1 ·
   took 4m" with "· 1 failed" in ink at 600 behind the failed glyph; the live run's open turn
   leads its meta with the running glyph and "running for 6m", ticking, and takes running's blue
@@ -884,7 +896,7 @@ The step reads top down:
 - Progress (a step's `step_progress` values while they are fresher than its outputs): the
   small head "Progress" with the same badge as the board's Output ("live" with the running
   glyph while the step runs, else a muted "progress") on its centre line, a meta line "Set 2m
-  ago by its current run. Not final: no step reads it." (or "by its last run, which ended
+  ago by its current run: not an output yet." (or "by its last run, which ended
   without making it outputs. Kept until the next run starts."), then its fields as the
   Outputs draw theirs.
 - Outputs and Inputs are their tabs, field lists (the kit's field rows): the name (with its type after it, shown by the Types
@@ -916,8 +928,10 @@ The step reads top down:
   per run, numbered (its ordinal; its id in data mono among its facts as "Run
   id"), with its own outcome's glyph and word (Running, Succeeded,
   Failed, Cancelled) and "ended 3h ago · took 2h 14m" (or "started 5m ago"), its failure's
-  sentence (not on a failed step's last run, whose sentence leads the page), then its result as
-  labelled facts in 13px (Kind in plain words, "wall-clock cap", "fn failure"; Said, left out
+  sentence (not on a failed step's last run, whose sentence leads the page; a cancelled run's
+  one line from the record that stopped it, "Cancelled after 1h 18m by cli, which retried it."
+  or "… by cli: switch to main_tests."), then its result as
+  labelled facts in 13px (Kind in plain words, left out for a cancel, which the line says, "wall-clock cap", "fn failure"; Said, left out
   on a failed step's last run whose words lead the page; Outputs by name, On completion, Engine, Session,
   Run, Files), never escaped JSON; an agent run's calls by tool on a meta line under its
   outcome ("Bash 42 · Edit 9 · Read 17 · 2 failed"); the current run last on the
@@ -926,15 +940,16 @@ The step reads top down:
 ### Unit (`/projects/id/<p>/units/<u>`)
 A way back ("← <project> plan"), the unit's title as the page's `h1` (with the success glyph when
 done), its id in data mono under it (with its copy button) with "· from recipe `lane`" in meta when a recipe made it,
-then its recipe's view drawn whole in a card-filled block at the measure (its parts in a
-row, a column stack as a grid; labelled "Summary" for a screen reader; each param, output
-and stage status named before its value, "engine opus"), and a sum in meta ("6 steps · 1
-running · 4 pending · 1 succeeded · Log", the link its log filtered to the unit); its box as
+a sum in meta ("6 steps · 1 running · 4 pending · 1 succeeded · Log", the link its log
+filtered to the unit), a short view (one line of 60 characters or fewer, "engine opus") said in
+it before Log; else its recipe's view drawn whole under it in a card-filled block at the measure
+(its parts in a row, a column stack as a grid; labelled "Summary"; each param, output and stage
+status named before its value); its box as
 the board draws it, with the lines inside it, without its label (the h1 names it), its
 layers from the column's left edge, a done unit open to its cards; each card that waits on
 another unit says it in words ("Waits for l-a1 (running), not in this view"); "Last message":
-"Read the thread", then the message as every conversation draws one (who sent it to whom, when,
-its id, its state, its body folded past 700 characters). Between
+the message as every conversation draws one (who sent it to whom, when, its id, its state, its
+body folded past 700 characters), then "Read the thread". Between
 the box and the last message, once something in it has run, **Timeline** (a section head): see
 Components.
 
@@ -1002,7 +1017,9 @@ JSON") that opens the record's JSON under the sentence; records in a row that sa
 one row with "×10"; Errors leaves out the owner's cancels; the record a link names (`#r4521`,
 a failure's "Its log record") is on the secondary fill, its seq in ink at 700; a row's sentence
 is cut at 240 characters (its JSON keeps the whole); each row at least 24px tall, 50 records a page with "« newest", "‹ newer" and
-"older ›", in a focusable region named "Log records". A page with no records says which filters left
+"older ›", in a focusable region named "Log records". A sentence runs the cell's width, so a status
+change stays on one line. sluice's housekeeping (its plan edits that retire done units) in a
+row is one muted row, "sluice retired done units 4 times: plan revs 1209 to 1212, 219 changes". A page with no records says which filters left
 them out and offers each back: "No error records for step `l1-work` in unit l1." with "Show
 every kind", "Any step", "Any unit" (and "Any thread", "The latest records" past the first
 page), a retired step's note only when the step alone is the filter. A status record that changes nothing (a
@@ -1141,7 +1158,8 @@ The components:
   while it runs.
 - **`sluice-banner`**: the stream line and the build line (Live updates, below).
 - **`sluice-keys`**: the keyboard's shortcuts, listed in the display preferences under "Keys":
-  `/` finds (the page's first search field: the board's, the functions', the log's step), `g`
+  `/` finds (the page's first search field: the board's, the functions', the log's step; the
+  list says "Find (plan, log, functions)"), `g`
   then a letter goes to a page (`g h` all projects, `g p` the plan, `g m` messages, `g l` the
   log, `g f` functions, `g i` the inbox, each a link the server drew), `?` opens the list. It
   never takes a key while one types in a field, a dialog is open or a modifier is held; the list
@@ -1159,7 +1177,7 @@ The parts:
 
 - **Tabs** (`ui::tabs_open`, `panel_open`, `panel_close`, `tabs_close`): a bar of words under a
   hairline, the chosen one in ink at 650 over a 2px ink bar, a count after a word in muted
-  tabular figures; 42px tall (44px on a phone). An ARIA tablist: the arrow keys move along it
+  tabular figures (the tab named in one phrase for a screen reader, "Activity, 11 turns"); 42px tall (44px on a phone). An ARIA tablist: the arrow keys move along it
   and wrap, Home and End go to its ends, each move chooses; a panel is a tab stop of its own.
   The bar sticks to the top of what scrolls (in the drawer under its close band) and scrolls
   sideways inside itself on a narrow screen, fading over its last 64px while more tabs wait
@@ -1190,7 +1208,9 @@ The parts:
   (`corner-down-right`, "<who> replied", when, its id), never a distant link. A line across the
   column at each day's start ("Thu 8 Oct 2026", muted) and at the first note to the owner not
   read yet ("New", in ink at 650). A body past 700 characters or 14 lines folds behind Show all.
-  "n messages · Jump to latest" over it on a page of its own; the message box at its end (a card
+  "n messages · Jump to latest" over it on a page of its own (a step's thread page whose step's
+  conversation holds more says "2 in this thread · 11 with this step", the second a link to its
+  Messages tab); the message box at its end (a card
   with a strong hairline: the recipient, the text, "Ask a question that needs a reply" and Send;
   it keeps what is typed through a patch). Inside a card (an inbox note) messages are flat.
 - **Field row** (`kit.html`'s `field`): see the step's Outputs and Inputs.
@@ -1339,4 +1359,4 @@ its facts and its thread link; the Types switch keeps its size on a 44px target.
 
 ### Confirmation dialogs
 
-Cancel, Delete project, Clear board, Remove <resource> and Questions' Close all use one native `<dialog>` (each is drawn by `ui::Confirm` in a `sluice-confirm`, which opens it; Delete project's is dimmed while something blocks it). It is centred, at most 480px wide with 16px beside it on a phone, on the card colour with the region corner, strong hairline, lift and scrim. Its title is Public Sans 18/24 at 650, its copy the body voice. Button rows wrap and each target is at least 44px high. Focus starts on the keep button, stays in the dialog, Escape closes it, and closing returns focus to its opener. Without script, a details fold shows the same confirmation form inline. Cancel offers a reason field and a succeeded step's Retry a feedback field (each kept through a patch and through a refused action); Cancel, Delete, Clear board and Remove use an ink-filled danger button, leaving coral to questions. Running card borders hold at least 3:1 in every theme; wait-lines hold at least 3.4:1 on a unit box.
+Cancel, Delete project, Clear board, Remove <resource> and Questions' Close all use one native `<dialog>` (each is drawn by `ui::Confirm` in a `sluice-confirm`, which opens it; Delete project's is dimmed while something blocks it). It is centred, at most 480px wide with 16px beside it on a phone, on the card colour with the region corner, strong hairline, lift and scrim. Its title is Public Sans 18/24 at 650, ending in its question mark, the id it names under it in 13px muted data mono; its copy the body voice. Button rows wrap and each target is at least 44px high. Focus starts on the keep button, stays in the dialog, Escape closes it, and closing returns focus to its opener. Without script, a details fold shows the same confirmation form inline. Cancel offers a reason field and a succeeded step's Retry a feedback field (each kept through a patch and through a refused action); Cancel, Delete, Clear board and Remove use an ink-filled danger button, leaving coral to questions. Running card borders hold at least 3:1 in every theme; wait-lines hold at least 3.4:1 on a unit box.

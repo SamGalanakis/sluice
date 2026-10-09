@@ -22,6 +22,27 @@ pub fn draw(root: &Component, unit: &UnitView, row: bool) -> TrustedHtml {
     ))
 }
 
+/// A view short enough to say on its unit's meta line ("engine opus"): one line of 60
+/// characters or fewer once its markup is out, no list or block in it.
+pub fn short(html: &TrustedHtml) -> bool {
+    let html = html.as_str();
+    if html.contains("<ul") || html.contains("<ol") || html.contains("<pre") || html.contains("<p")
+    {
+        return false;
+    }
+    let mut text = String::new();
+    let mut tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => tag = true,
+            '>' => tag = false,
+            c if !tag => text.push(c),
+            _ => {}
+        }
+    }
+    let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    !words.is_empty() && words.chars().count() <= 60
+}
 struct Draw<'a> {
     unit: &'a UnitView,
     row: bool,

@@ -636,8 +636,44 @@ impl UnitView {
     pub fn why_step(&self) -> Option<&StepView> {
         self.steps.iter().find(|s| !s.why().is_empty())
     }
+    /// Its stages as a matrix row says them where it has no columns, each a link to its step;
+    /// two or more pending stages at its end are one muted "+4 to go" (their names its title); a
+    /// unit none of whose stages has started is "Not started · 6 stages".
     pub fn lane_links_html(&self) -> String {
-        self.steps
+        use super::ui::{Shown, esc};
+        let stage = |s: &StepView| {
+            if s.stage.is_empty() { s.id.to_string() } else { s.stage.clone() }
+        };
+        let reached = self
+            .steps
+            .iter()
+            .rposition(|s| s.shown() != Shown::Pending)
+            .map_or(0, |i| i + 1);
+        // one stage to go reads as itself: a note saves nothing
+        let reached = if reached > 0 && self.steps.len() - reached == 1 {
+            self.steps.len()
+        } else {
+            reached
+        };
+        let rest = &self.steps[reached..];
+        let rest_html = if rest.is_empty() {
+            String::new()
+        } else {
+            let names: Vec<String> = rest.iter().map(stage).collect();
+            let words = if reached == 0 {
+                format!(
+                    "Not started · {}",
+                    super::ui::count(rest.len(), "stage", "stages")
+                )
+            } else {
+                format!("+{} to go", rest.len())
+            };
+            format!(
+                "<span class=\"lane-rest\" title=\"{}\">{words}</span>",
+                esc(&names.join(", "))
+            )
+        };
+        let reached_html = self.steps[..reached]
             .iter()
             .map(|s| {
                 // a retry says its run: "land✗ (run 3)"
@@ -659,7 +695,12 @@ impl UnitView {
                 )
             })
             .collect::<Vec<_>>()
-            .join(" ")
+            .join(" ");
+        match (reached_html.is_empty(), rest_html.is_empty()) {
+            (true, _) => rest_html,
+            (false, true) => reached_html,
+            (false, false) => format!("{reached_html} {rest_html}"),
+        }
     }
     /// The unit's own page: a way back to the plan, its id as the page's heading, its cards
     /// (a done unit open), what it waits on and its last message.
@@ -680,8 +721,13 @@ impl UnitView {
             js_url: String,
             tab: String,
             view: Option<TrustedHtml>,
+            /// The view is short enough for the meta line, not a card of its own.
+            view_short: bool,
             view_error: Option<&'a str>,
         }
+        let view = recipe
+            .and_then(|r| r.view())
+            .map(|root| super::unit_view::draw(root, self, false));
         TrustedHtml::from_template(&UnitPage {
             unit: self,
             project,
@@ -689,9 +735,8 @@ impl UnitView {
             last,
             js_url: super::asset_url("sluice.js"),
             tab: sluice_model::naming::cut(self.heading(), 48),
-            view: recipe
-                .and_then(|r| r.view())
-                .map(|root| super::unit_view::draw(root, self, false)),
+            view_short: view.as_ref().is_some_and(super::unit_view::short),
+            view,
             view_error: recipe.and_then(|r| r.view_error()),
         })
     }
@@ -726,58 +771,74 @@ pub struct Matrix<'a> {
     pub band: String,
 }
 impl Matrix<'_> {
-    /// The waits two or more of its rows share, each with how many rows: said once over the
-    /// table ("6 units wait for fig-5571-landed …"), and left out of those rows.
-    pub fn shared_waits(&self) -> Vec<(usize, Wait)> {
-        let mut seen: Vec<(usize, Wait)> = vec![];
+    /// The waits two or more of its rows share, each with the rows that share it: said over the
+    /// table ("fig-5574 and fig-5578 wait for fig-5571-landed …"), naming the rows.
+    pub fn shared_waits(&self) -> Vec<(Vec<UnitName>, Wait)> {
+        let mut seen: Vec<(Vec<UnitName>, Wait)> = vec![];
         for unit in &self.rows {
             if let Some((_, waits)) = unit.all_waits() {
                 for wait in waits {
                     match seen.iter_mut().find(|(_, w)| w.key == wait.key) {
-                        Some((n, _)) => *n += 1,
-                        None => seen.push((1, wait)),
+                        Some((units, _)) => units.push(unit.id.clone()),
+                        None => seen.push((vec![unit.id.clone()], wait)),
                     }
                 }
             }
         }
-        seen.retain(|(n, _)| *n > 1);
+        seen.retain(|(units, _)| units.len() > 1);
         seen
     }
-    /// The shared waits' line over the table, one sentence each.
+    /// The shared waits' lines over the table, one sentence each naming the rows that wait,
+    /// each a link to its row: "fig-5574, fig-5577 and fig-5578 wait for `fig-5573-landed`
+    /// Hosts edit… (running)"; past four rows the first three and "and 3 more", the rest in its
+    /// title.
     pub fn shared_html(&self) -> TrustedHtml {
+        use super::ui::esc;
+        const SHOWN: usize = 3;
         let out: String = self
             .shared_waits()
             .iter()
-            .map(|(n, w)| {
+            .map(|(units, w)| {
+                let link = |u: &UnitName| format!("<a href=\"#unit-{0}\"><code>{0}</code></a>", esc(u.as_str()));
+                let named = if units.len() > SHOWN + 1 { SHOWN } else { units.len() };
+                let mut who: Vec<String> = units[..named].iter().map(link).collect();
+                if units.len() > named {
+                    let rest: Vec<&str> = units[named..].iter().map(|u| u.as_str()).collect();
+                    who.push(format!(
+                        "<span title=\"{}\">{} more</span>",
+                        esc(&rest.join(", ")),
+                        units.len() - named
+                    ));
+                }
+                let who = match who.split_last() {
+                    Some((last, [])) => last.clone(),
+                    Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+                    None => String::new(),
+                };
                 format!(
-                    "<p class=\"waits said mx-shared\">{n} units wait for <a href=\"{}\"{}>{}{}</a>{}</p>",
-                    super::ui::esc(&w.href),
+                    "<p class=\"waits said mx-shared\">{who} wait for <a href=\"{}\"{}>{}{}</a>{}</p>",
+                    esc(&w.href),
                     if w.opens.is_empty() {
                         String::new()
                     } else {
-                        format!(" data-opens=\"{}\"", super::ui::esc(&w.opens))
+                        format!(" data-opens=\"{}\"", esc(&w.opens))
                     },
                     if w.unit { "unit " } else { "" },
                     w.name.id_first_html(72),
                     if w.note.is_empty() {
                         String::new()
                     } else {
-                        format!(" ({})", super::ui::esc(&w.note))
+                        format!(" ({})", esc(&w.note))
                     }
                 )
             })
             .collect();
         TrustedHtml::owned(out)
     }
-    /// A row's own waits: those it shares with no other row (`shared_waits` says the rest).
+    /// A row's waits, each source by its id: a wait it shares is said over the table too, and
+    /// still here, so every row says what holds it.
     pub fn row_waits<'u>(&self, unit: &'u UnitView) -> Option<(&'u StepView, Vec<Wait>)> {
-        let shared: Vec<String> = self.shared_waits().into_iter().map(|(_, w)| w.key).collect();
-        let (step, waits) = unit.all_waits()?;
-        let own: Vec<Wait> = waits
-            .into_iter()
-            .filter(|w| !shared.contains(&w.key))
-            .collect();
-        (!own.is_empty()).then_some((step, own))
+        unit.all_waits()
     }
     /// Its element's id, a region a patch can draw alone: "mx-band-running-lane".
     pub fn id(&self) -> String {

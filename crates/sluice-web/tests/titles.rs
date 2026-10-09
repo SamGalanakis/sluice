@@ -179,10 +179,11 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
             && unit.contains("</sluice-copy><span class=\"meta\"> · from recipe <code>lane</code>"),
         "{unit}"
     );
+    // a view this short is said on the unit's meta line, not in a card of its own
     assert!(
         unit.contains(
-            "<section class=\"unit-view\" aria-labelledby=\"uv-h\"><p id=\"uv-h\" class=\"uv-h\">Summary</p><div class=\"uv uv-page\">"
-        ),
+            "<span aria-hidden=\"true\">·</span><div class=\"uv-line\"><div class=\"uv uv-page\">"
+        ) && !unit.contains("class=\"unit-view\""),
         "{unit}"
     );
     // its view's values are named on its page ("ticket FIG-2"), and its log is a link away

@@ -284,8 +284,9 @@ define("sluice-confirm", {
       const head = dialog.querySelector("#confirmation-title");
       head.textContent = props.heading;
       if (props.refId) {
+        // the question mark ends the title; the id it names goes under it
         const id = Object.assign(document.createElement("code"), { className: "sref-id", textContent: props.refId });
-        head.append(" ", id, "?");
+        head.append("?", " ", id);
       }
       dialog.querySelector("#confirmation-body").replaceChildren(form);
       form.querySelector(".confirm-copy").id = "confirmation-copy";

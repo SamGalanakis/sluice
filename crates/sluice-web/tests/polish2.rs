@@ -189,7 +189,7 @@ async fn a_rerun_says_what_started_it_and_its_outputs_which_run_set_them() {
     );
     assert!(
         why.contains(&format!(
-            ", after you retried it: check the docs too (<a href=\"#message-{feedback}\">with feedback</a>). <a href=\"#run-1\">Run 1</a> succeeded <time"
+            ", after <a href=\"#run-1\">run 1</a> succeeded. You retried it: check the docs too, <a href=\"#message-{feedback}\">with feedback</a>."
         )),
         "{why}"
     );
@@ -256,7 +256,7 @@ async fn shared(f: &Fixture) -> ProjectId {
 }
 
 #[tokio::test]
-async fn a_lane_matrix_says_a_wait_its_rows_share_once_and_a_rows_own_wait_by_its_id() {
+async fn a_lane_matrix_names_the_rows_a_wait_holds_and_each_row_still_says_it() {
     let f = Fixture::new().await;
     let id = shared(&f).await;
     let (_, page) = f.get(&format!("/projects/id/{id}")).await;
@@ -264,15 +264,20 @@ async fn a_lane_matrix_says_a_wait_its_rows_share_once_and_a_rows_own_wait_by_it
     let line = between(matrix, "<p class=\"waits said mx-shared\">", "</p>");
     assert!(
         line.starts_with(&format!(
-            "<p class=\"waits said mx-shared\">2 units wait for <a href=\"/projects/id/{id}/steps/base\" data-opens=\"base\"><span class=\"sref\"><code class=\"sref-id\">base</code> <span class=\"sref-t\">The substrate lands first</span></span></a> (running)"
+            "<p class=\"waits said mx-shared\"><a href=\"#unit-a1\"><code>a1</code></a> and <a href=\"#unit-a2\"><code>a2</code></a> wait for <a href=\"/projects/id/{id}/steps/base\" data-opens=\"base\"><span class=\"sref\"><code class=\"sref-id\">base</code> <span class=\"sref-t\">The substrate lands first</span></span></a> (running)"
         )),
         "{line}"
     );
     assert_eq!(matrix.matches("mx-shared").count(), 1, "{matrix}");
-    // the rows that share it say no wait; the other its own, by id
+    // the rows that share it still say what holds them, by its id; the other its own
     for unit in ["a1", "a2"] {
         let row = between(matrix, &format!("<tr id=\"unit-{unit}\""), "</tr>");
-        assert!(!row.contains("class=\"waits"), "{unit}: {row}");
+        assert!(
+            row.contains(&format!(
+                "Waits for <a href=\"/projects/id/{id}/steps/base\""
+            )),
+            "{unit}: {row}"
+        );
     }
     let row = between(matrix, "<tr id=\"unit-a3\"", "</tr>");
     assert!(
@@ -313,7 +318,7 @@ async fn a_succeeded_steps_retry_asks_first_and_names_the_steps_that_may_run_aga
         "{actions}"
     );
     assert!(
-        actions.contains("Retrying runs it again; its outputs stay until the new run ends. The 2 steps after it run again only if its new result differs."),
+        actions.contains("<p class=\"confirm-copy\">It succeeded. Retrying runs it again; its outputs stay until the new run ends. The 2 steps after it run again only if its new result differs."),
         "{actions}"
     );
     assert!(
@@ -356,9 +361,9 @@ async fn a_steps_heading_is_its_title_whole_and_its_tabs_say_what_they_hold() {
     assert!(h1.ends_with("no aliases at all (FIG-5571)"), "{h1}");
     // the tab's own title stays cut
     assert!(between(&page, "<title>", "</title>").contains('…'));
-    // a tab's count is said with its words, with no stray gap before the comma
+    // a tab's name is one phrase, its count in words
     assert!(
-        page.contains(">Inputs<span class=\"n\" aria-hidden=\"true\">1</span><span class=\"vh\">, 1 input</span></button>"),
+        page.contains(" aria-label=\"Inputs, 1 input\">Inputs<span class=\"n\" aria-hidden=\"true\">1</span></button>"),
         "{page}"
     );
     // the inbox's first view is For you; Inbox is the tray's name alone
@@ -386,11 +391,47 @@ async fn a_step_with_messages_has_a_messages_tab() {
         },
     )
     .await;
+    // and one it sent on another thread: its Messages hold both
+    stored_messages::stored(
+        &f.writer,
+        id,
+        stored_messages::Stored {
+            thread: "orchestrator",
+            from: "l1-work",
+            to: Some("orchestrator"),
+            body: "Rebased.",
+            ..Default::default()
+        },
+    )
+    .await;
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
     assert!(
-        page.contains("data-tab=\"thread\" data-preserve-attr=\"aria-selected tabindex\">Messages<span class=\"n\" aria-hidden=\"true\">1</span><span class=\"vh\">, 1 message</span>"),
+        page.contains("data-tab=\"messages\" data-preserve-attr=\"aria-selected tabindex\" aria-label=\"Messages, 2 messages\">Messages<span class=\"n\" aria-hidden=\"true\">2</span></button>"),
         "{page}"
     );
+    // `?tab=messages` opens it, and `?tab=thread`, its old name, still does
+    for tab in ["messages", "thread"] {
+        let (_, page) = f
+            .get(&format!("/projects/id/{id}/steps/l1-work?tab={tab}"))
+            .await;
+        assert!(
+            page.contains("<sluice-tabs id=\"tabs\" class=\"tabs\" current=\"messages\""),
+            "{tab}: {page}"
+        );
+    }
+    // the thread page says how many are its own and leads to them all
+    let (_, thread) = f
+        .get(&format!("/projects/id/{id}/thread?thread=step-l1-work"))
+        .await;
+    assert!(
+        thread.contains(&format!(
+            "<p class=\"meta convo-of\">1 in this thread · <a href=\"/projects/id/{id}/steps/l1-work?tab=messages\">2 with this step</a>"
+        )),
+        "{thread}"
+    );
+    // a step with none links its thread page as Messages too
+    let (_, other) = f.get(&format!("/projects/id/{id}/steps/l2-work")).await;
+    assert!(other.contains(">Messages · none yet</a>"), "{other}");
 }
 
 #[tokio::test]

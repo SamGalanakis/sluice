@@ -159,7 +159,7 @@ async fn a_step_draws_only_the_tabs_it_has_something_for_with_their_counts() {
         tabs(&html),
         tab_list(&[
             ("overview", ""),
-            ("thread", "5"),
+            ("messages", "5"),
             ("outputs", "1"),
             ("runs", "")
         ])
@@ -175,7 +175,7 @@ async fn a_step_draws_only_the_tabs_it_has_something_for_with_their_counts() {
         "id=\"tt-overview\" aria-controls=\"tp-overview\" aria-selected=\"true\" tabindex=\"0\""
     ));
     assert!(html.contains("<!--r:tp-overview--><section class=\"tp\" id=\"tp-overview\" role=\"tabpanel\" aria-labelledby=\"tt-overview\" data-tab=\"overview\" data-chosen"));
-    for key in ["thread", "outputs", "runs"] {
+    for key in ["messages", "outputs", "runs"] {
         assert!(
             html.contains(&format!("<section class=\"tp\" id=\"tp-{key}\" role=\"tabpanel\" aria-labelledby=\"tt-{key}\" data-tab=\"{key}\" data-preserve-attr")),
             "{key}: {html}"
@@ -257,7 +257,7 @@ async fn outputs_say_a_repeated_value_once_and_inputs_where_theirs_came_from() {
         "{outputs}"
     );
     assert_eq!(outputs.matches("f-same").count(), 1, "{outputs}");
-    assert!(html.contains("<button type=\"button\" role=\"tab\" id=\"tt-outputs\" aria-controls=\"tp-outputs\" aria-selected=\"true\" tabindex=\"0\" data-tab=\"outputs\" data-preserve-attr=\"aria-selected tabindex\">Outputs<span class=\"n\" aria-hidden=\"true\">4</span><span class=\"vh\">, all set</span></button>"), "{html}");
+    assert!(html.contains("<button type=\"button\" role=\"tab\" id=\"tt-outputs\" aria-controls=\"tp-outputs\" aria-selected=\"true\" tabindex=\"0\" data-tab=\"outputs\" data-preserve-attr=\"aria-selected tabindex\" aria-label=\"Outputs, all set\">Outputs<span class=\"n\" aria-hidden=\"true\">4</span></button>"), "{html}");
     // an input says where its value came from: another step's output (a link to it) or its
     // default
     let (_, html) = f
@@ -289,7 +289,7 @@ async fn one_conversation_on_the_steps_thread_tab_its_thread_page_and_the_inbox(
             f.id
         ))
         .await;
-    let tab = between(&step, "id=\"tp-thread\"", "<!--/r:tp-thread-->");
+    let tab = between(&step, "id=\"tp-messages\"", "<!--/r:tp-messages-->");
     let (_, page) = f
         .get(&format!(
             "/projects/id/{}/thread?thread=step-alpha-build",
@@ -416,7 +416,7 @@ async fn an_open_question_to_the_owner_is_the_one_coral_tag() {
     );
     // the header's count of what awaits a reply leads to the Thread tab
     assert!(
-        step.contains("<a class=\"tag attn\" href=\"#tp-thread\">1 awaiting reply</a>"),
+        step.contains("<a class=\"tag attn\" href=\"#tp-messages\">1 awaiting reply</a>"),
         "{step}"
     );
     let (_, inbox) = f.get("/inbox").await;
@@ -533,7 +533,7 @@ async fn chromium_tabs_keep_their_choice_through_a_patch_move_by_keyboard_and_op
             },
         ));
         browser
-            .wait("document.querySelector('#tt-thread .n')?.textContent === '6'")
+            .wait("document.querySelector('#tt-messages .n')?.textContent === '6'")
             .unwrap();
         assert_eq!(browser.eval(CHOSEN).unwrap(), json!(["outputs", "outputs", "outputs"]));
         // the keyboard: arrows move along the bar (wrapping), Home and End to its ends
@@ -561,16 +561,16 @@ async fn chromium_tabs_keep_their_choice_through_a_patch_move_by_keyboard_and_op
             .unwrap();
         browser.wait("document.readyState === 'complete'").unwrap();
         browser.eval(FRAMES).unwrap();
-        assert_eq!(browser.eval(CHOSEN).unwrap(), json!(["thread", "thread", "thread"]));
+        assert_eq!(browser.eval(CHOSEN).unwrap(), json!(["messages", "messages", "messages"]));
         let shown = browser
             .eval(&format!("(r => r.top >= 0 && r.bottom <= innerHeight)(document.getElementById('message-{}').getBoundingClientRect())", ask.0))
             .unwrap();
         assert_eq!(shown, true);
         // the message box sends a note to the step, and keeps the page
-        browser.eval("document.querySelector('#tp-thread textarea').value = 'Ship it after the tag.'").unwrap();
-        browser.eval("document.querySelector('#tp-thread form.composer button').click()").unwrap();
+        browser.eval("document.querySelector('#tp-messages textarea').value = 'Ship it after the tag.'").unwrap();
+        browser.eval("document.querySelector('#tp-messages form.composer button').click()").unwrap();
         browser
-            .wait("document.querySelector('#tp-thread .ou-status').textContent === 'Sent.'")
+            .wait("document.querySelector('#tp-messages .ou-status').textContent === 'Sent.'")
             .unwrap();
         let sent: Vec<_> = f
             .commands
@@ -593,7 +593,7 @@ async fn chromium_tabs_keep_their_choice_through_a_patch_move_by_keyboard_and_op
         let stacked = browser
             .eval("[[...document.querySelectorAll('.tp')].filter(p => p.checkVisibility()).map(p => p.dataset.tab).join(' '), document.querySelector('.tabbar').checkVisibility(), [...document.querySelectorAll('.tp-h')].every(h => h.getBoundingClientRect().height > 10)]")
             .unwrap();
-        assert_eq!(stacked, json!(["overview thread outputs runs", false, true]));
+        assert_eq!(stacked, json!(["overview messages outputs runs", false, true]));
         browser
             .send("Emulation.setScriptExecutionDisabled", json!({"value": false}))
             .unwrap();

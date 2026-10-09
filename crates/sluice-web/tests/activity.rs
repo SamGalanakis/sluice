@@ -610,3 +610,48 @@ fn a_handed_over_message_reads_without_its_delivery_line() {
     );
     assert_eq!(unwrapped("Plain words"), "Plain words");
 }
+
+/// A message turn whose handed-over file is gone reads back from the message it held: its
+/// sender and first line from the messages table, its id a link to it; what sluice typed into
+/// the agent itself is what it received.
+#[tokio::test]
+async fn a_message_turn_whose_file_is_gone_reads_back_from_its_message() {
+    let f = fixture("claude", "succeeded").await;
+    let file = f
+        .home
+        .path()
+        .join("runs")
+        .join(f.run.to_string())
+        .join("invocations")
+        .join(lay::CLAUDE_INVOCATION)
+        .join("messages")
+        .join("138999.md");
+    std::fs::remove_file(&file).unwrap();
+    let (_, before) = f.get(&format!("{}?activity=all", f.page())).await;
+    assert!(
+        section(&before).contains("<span class=\"act-x\">#138999"),
+        "{}",
+        section(&before)
+    );
+    let project = f.project;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,needs_reply,at) VALUES (138999,?1,'step-work','orchestrator','work',?2,0,'2026-10-08T10:30:00Z')",
+                (project.to_string(), "Your **default** is right.\n\nKeep going."),
+            )?;
+            tx.changed(Some(project), "messages");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (_, html) = f.get(&format!("{}?activity=all", f.page())).await;
+    let activity = section(&html);
+    assert!(
+        activity.contains("Orchestrator: Your default is right.")
+            && activity
+                .contains("<a class=\"act-ref\" href=\"#message-138999\"><code>#138999</code></a>"),
+        "{activity}"
+    );
+    assert!(!activity.contains("act-lab\">Sent<"), "{activity}");
+}

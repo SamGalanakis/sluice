@@ -474,20 +474,26 @@ pub fn tabs_open(
     let mut bar = String::new();
     for tab in tabs {
         let on = tab.key == selected;
-        let count = if tab.count.is_empty() {
-            String::new()
+        // a counted tab's name is one phrase, "Activity, 3 turns": its label in words, so a
+        // screen reader never hears the count apart from it
+        let (count, name) = if tab.count.is_empty() {
+            (String::new(), String::new())
         } else if tab.said.is_empty() {
-            format!("<span class=\"n\">{}</span>", esc(&tab.count))
+            (
+                format!("<span class=\"n\">{}</span>", esc(&tab.count)),
+                String::new(),
+            )
         } else {
-            // no space between: a screen reader hears "Activity, 3 turns" (the gap is margin)
-            format!(
-                "<span class=\"n\" aria-hidden=\"true\">{}</span><span class=\"vh\">, {}</span>",
-                esc(&tab.count),
-                esc(&tab.said)
+            (
+                format!(
+                    "<span class=\"n\" aria-hidden=\"true\">{}</span>",
+                    esc(&tab.count)
+                ),
+                format!(" aria-label=\"{}, {}\"", esc(tab.label), esc(&tab.said)),
             )
         };
         bar.push_str(&format!(
-            "<button type=\"button\" role=\"tab\" id=\"{p}tt-{k}\" aria-controls=\"{p}tp-{k}\" aria-selected=\"{on}\" tabindex=\"{ti}\" data-tab=\"{k}\" data-preserve-attr=\"aria-selected tabindex\">{label}{count}</button>",
+            "<button type=\"button\" role=\"tab\" id=\"{p}tt-{k}\" aria-controls=\"{p}tp-{k}\" aria-selected=\"{on}\" tabindex=\"{ti}\" data-tab=\"{k}\" data-preserve-attr=\"aria-selected tabindex\"{name}>{label}{count}</button>",
             p = esc(prefix),
             k = tab.key,
             ti = if on { 0 } else { -1 },
@@ -602,6 +608,8 @@ pub struct Confirm {
     pub disabled: bool,
     /// What the form draws after its buttons (a status line its page's script writes).
     pub after: TrustedHtml,
+    /// Drawn before its copy, in the same paragraph: a time that ticks ("It succeeded 3h ago.").
+    pub lead: TrustedHtml,
 }
 
 #[cfg(test)]

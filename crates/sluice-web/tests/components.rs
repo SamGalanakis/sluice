@@ -359,19 +359,19 @@ async fn chromium_the_step_page_components_keep_their_state_through_a_patch_and_
         );
         // the message box keeps what is typed, the Types switch its state and the fold its
         // opening through a patch of their panels
-        browser.eval("document.querySelector('#tt-thread').click()").unwrap();
-        browser.eval("document.querySelector('#tp-thread textarea').value = 'Half a thought'").unwrap();
+        browser.eval("document.querySelector('#tt-messages').click()").unwrap();
+        browser.eval("document.querySelector('#tp-messages textarea').value = 'Half a thought'").unwrap();
         rt.block_on(note(&f, "alpha-build", "One more thing: tag the release."));
         rt.block_on(long_output(&f));
-        browser.wait("document.querySelector('#tt-thread .n')?.textContent === '2'").unwrap();
+        browser.wait("document.querySelector('#tt-messages .n')?.textContent === '2'").unwrap();
         assert_eq!(
-            browser.eval(&format!("[document.querySelector('#tp-thread textarea').value, {fold}.querySelector('.fold-toggle').open, document.querySelector('#tp-outputs .types-toggle').getAttribute('aria-pressed'), document.querySelector('sluice-tabs').current]")).unwrap(),
-            json!(["Half a thought", true, "true", "thread"])
+            browser.eval(&format!("[document.querySelector('#tp-messages textarea').value, {fold}.querySelector('.fold-toggle').open, document.querySelector('#tp-outputs .types-toggle').getAttribute('aria-pressed'), document.querySelector('sluice-tabs').current]")).unwrap(),
+            json!(["Half a thought", true, "true", "messages"])
         );
         // Ctrl+Enter sends the box's text; its status says so
-        browser.eval("document.querySelector('#tp-thread textarea').focus()").unwrap();
+        browser.eval("document.querySelector('#tp-messages textarea').focus()").unwrap();
         press(&mut browser, "Enter", 13, 2);
-        browser.wait("document.querySelector('#tp-thread .ou-status').textContent === 'Sent.'").unwrap();
+        browser.wait("document.querySelector('#tp-messages .ou-status').textContent === 'Sent.'").unwrap();
         let sent: Vec<_> = f
             .commands
             .0
@@ -664,7 +664,7 @@ async fn chromium_without_script_every_page_still_reads() {
         browser.wait("document.readyState === 'complete'").unwrap();
         assert_eq!(
             browser.eval("[...document.querySelectorAll('.tp')].filter(p => p.checkVisibility()).map(p => p.dataset.tab).join(' ')").unwrap(),
-            json!("overview thread outputs runs")
+            json!("overview messages outputs runs")
         );
         browser.eval("document.querySelector('details.settings').open = true").unwrap();
         assert_eq!(browser.eval("document.querySelector('form.prefs .save').checkVisibility()").unwrap(), true);

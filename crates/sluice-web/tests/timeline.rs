@@ -332,8 +332,24 @@ async fn a_running_step_says_how_long_its_stage_usually_takes_from_three_done_un
     assert!(pill.contains("data-usually=\"1200\""), "{pill}");
     assert!(pill.contains("; its stage usually takes 20m\""), "{pill}");
     assert!(
-        pill.contains("<span class=\"vh tu\">, usually 20 minutes</span>"),
+        pill.contains("<span class=\"vh\" data-tail=\", usually 20 minutes\"> for ")
+            && pill.contains(", usually 20 minutes</span></time>"),
         "{pill}"
+    );
+    // far past twice its usual time, the pill says how many times, in the attention tone
+    assert!(pill.contains("<span class=\"over-x\" title=\""), "{pill}");
+    assert!(pill.contains("× its usual time (usually 20m)\">"), "{pill}");
+    let (_, step) = f.get(&format!("/projects/id/{id}/steps/r1-work")).await;
+    let badges = step
+        .split("<p class=\"d-badges\">")
+        .nth(1)
+        .unwrap_or_default();
+    let badges = &badges[..badges.find("</p>").unwrap_or(badges.len())];
+    assert!(
+        badges.contains(
+            "<span class=\"meta d-usual over\">usually 20m</span><span class=\"over-x\">"
+        ) && badges.contains("× usual</span>"),
+        "{badges}"
     );
     // the clock never enters the drawing: the pill starts `<time data-since=`
     assert!(
