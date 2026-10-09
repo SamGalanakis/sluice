@@ -331,9 +331,10 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
   details.settings { order: 6; margin-left: auto; margin-right: 0; }
   html[data-stream="live"] details.settings { margin-left: 0; }
   .band-head { grid-template-columns: minmax(0, 1fr); row-gap: 14px; padding: 22px 0 22px; }
-  .band-head > h1, .band-head > h1.long { grid-column: 1 / -1; font-size: 88px; margin: 0 0 0 -0.04em; }
-  .band-head > h1.longer { font-size: 56px; margin-bottom: 0; }
-  .band-head > h1.longest { font-size: 40px; margin-bottom: 0; }
+  .band-head > h1 { grid-column: 1 / -1; font-size: 88px; margin: 0 0 0 -0.04em; }
+  .band-head > h1.long { font-size: 64px; }
+  .band-head > h1.longer { font-size: 46px; margin-bottom: 0; }
+  .band-head > h1.longest { font-size: 34px; margin-bottom: 0; }
   .band-sub, .band-head > h1:is(.longer, .longest) + .band-sub { grid-column: 1 / -1;
     grid-template-columns: minmax(0, 1fr); row-gap: 12px; }
   .band-sub > *, .band-head > h1:is(.longer, .longest) + .band-sub > * { grid-column: 1 / -1 !important; }

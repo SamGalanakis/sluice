@@ -424,8 +424,10 @@ async fn chromium_the_grid_switch_and_the_trace_and_the_band_on_a_phone() {
         browser.navigate(&gallery).unwrap();
         browser.wait("document.readyState === 'complete'").unwrap();
         browser.eval(FRAMES).unwrap();
-        let band = browser.eval("(b => { const h = b.querySelector('h1').getBoundingClientRect(), l = b.querySelector('.band-lead').getBoundingClientRect(), s = b.querySelector('.band-summary').getBoundingClientRect(); return {size: getComputedStyle(b.querySelector('h1')).fontSize, stacked: l.top >= h.bottom - 1 && s.top >= l.bottom - 1, left: Math.abs(h.left - s.left) < 12, items: [...document.querySelectorAll('.band-strip .rf-list a')].map(a => Math.round(a.getBoundingClientRect().left)).filter((x, i, all) => all.indexOf(x) === i).length}; })(document.querySelector('.gal-band .band-head').parentElement)").unwrap();
-        assert_eq!(band["size"], "88px", "{band}");
+        let band = browser.eval("(b => { const h = b.querySelector('h1').getBoundingClientRect(), l = b.querySelector('.band-lead').getBoundingClientRect(), s = b.querySelector('.band-summary').getBoundingClientRect(); return {size: getComputedStyle(b.querySelector('h1')).fontSize, whole: b.querySelector('h1').getBoundingClientRect().height < 80, stacked: l.top >= h.bottom - 1 && s.top >= l.bottom - 1, left: Math.abs(h.left - s.left) < 12, items: [...document.querySelectorAll('.band-strip .rf-list a')].map(a => Math.round(a.getBoundingClientRect().left)).filter((x, i, all) => all.indexOf(x) === i).length}; })(document.querySelector('.gal-band .band-head').parentElement)").unwrap();
+        // a name of seven letters steps down from 88px so it stays whole
+        assert_eq!(band["size"], "64px", "{band}");
+        assert_eq!(band["whole"], true, "{band}");
         assert_eq!(band["stacked"], true, "{band}");
         assert_eq!(band["left"], true, "{band}");
         assert_eq!(band["items"], 1, "{band}");

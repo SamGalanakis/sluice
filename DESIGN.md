@@ -292,8 +292,8 @@ cdn.jsdelivr.net (`@fontsource-variable/schibsted-grotesk@5.3.0`,
 `@fontsource-variable/jetbrains-mono@5.3.0`), the only third-party requests a page makes.
 
 - The band's name: 150px, 900, line-height 0.8, -0.04em (88px on a phone); a longer name
-  steps down (`long` 104px from 7 characters, `longer` 76px across the band from 13,
-  `longest` 52px from 21) and wraps anywhere rather than run off.
+  steps down (`long` 104px from 7 characters, 64px on a phone; `longer` 76px across the band
+  from 13, 46px; `longest` 52px from 21, 34px) and wraps anywhere rather than run off.
 - A band section's head: 30px, 850, -0.03em. A question's title in its module: 23px, 800. The
   summary sentence: 19px, 650. A module's title: 16px, 750, two lines at most.
 - Body 15/22; meta 13/18 in `ink-muted`; a running cell's time 20px 800.
