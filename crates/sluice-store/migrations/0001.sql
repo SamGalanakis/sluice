@@ -133,6 +133,7 @@ CREATE TABLE runs (
   result TEXT CHECK (result IS NULL OR json_type(result) = 'object'),
   completion_action TEXT CHECK (completion_action IS NULL OR json_type(completion_action) = 'object'),
   action_outcome TEXT CHECK (action_outcome IS NULL OR json_type(action_outcome) = 'object'),
+  stopped TEXT CHECK (stopped IS NULL OR json_type(stopped) = 'object'),
   CHECK (step_id IS NULL OR project_id IS NOT NULL),
   FOREIGN KEY (project_id, attempt_id) REFERENCES attempts(project_id, attempt_id),
   UNIQUE (project_id, run_id)

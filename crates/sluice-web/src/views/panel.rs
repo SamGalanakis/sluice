@@ -1117,7 +1117,9 @@ impl Draw<'_> {
                 ),
                 _ => String::new(),
             };
-            let waiting = [row.blocked.as_str(), row.last.as_str()]
+            // its last message as plain words: its markdown's marks and line breaks dropped
+            let last = crate::markdown::plain(&row.last);
+            let waiting = [row.blocked.as_str(), last.trim()]
                 .into_iter()
                 .filter(|s| !s.is_empty())
                 .map(|s| cut(s, 90))

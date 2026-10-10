@@ -212,23 +212,34 @@ async fn a_failure_that_repeats_its_run_before_says_so_and_opens_the_feedback() 
     fail(&f, id, "same", flagged).await;
     fail(&f, id, "other", "The disk is full.").await;
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/same")).await;
-    let next = between(&page, "<p class=\"meta err-next\">", "</p>");
+    let next = between(&page, "<p class=\"err-next\">", "</p>");
     assert!(
         next.contains("Run 1 failed the same way, so a bare Retry would most likely fail again. Retry with feedback, or change its inputs."),
         "{next}"
     );
-    // its feedback box is open, to be written in
+    // its feedback box stands open under the advice, in Why it failed, to be written in after
+    // reading why; the band keeps a plain Retry and no box of its own
+    let why = between(&page, "<p class=\"err-next\">", "</form>");
     assert!(
-        page.contains(
-            "<details data-preserve-attr=\"open\" open><summary>Feedback for retry</summary>"
-        ),
-        "{page}"
+        why.contains("<form class=\"err-retry\" method=\"post\"")
+            && why.contains("<label for=\"why-feedback\">Feedback for its next run</label>")
+            && why.contains("<button name=\"action\" value=\"retry\" class=\"primary\">Retry with this feedback</button>"),
+        "{why}"
     );
-    // a failure unlike the run before keeps its kind's advice and its box closed
+    let band = between(&page, "<header id=\"step-band\"", "</header>");
+    assert!(
+        !band.contains("pl-fb") && band.contains(">Retry</button>"),
+        "{band}"
+    );
+    // a failure unlike the run before keeps its kind's advice, and its box folded in the band
+    // under the plan's own "Retry with feedback"
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/other")).await;
     assert!(!page.contains("failed the same way"), "{page}");
+    assert!(!page.contains("err-retry"), "{page}");
     assert!(
-        page.contains("<details data-preserve-attr=\"open\"><summary>Feedback for retry</summary>"),
+        page.contains(
+            "<details class=\"pl-fb\" data-preserve-attr=\"open\"><summary class=\"primary\">"
+        ) && page.contains("Retry with feedback</summary>"),
         "{page}"
     );
 }
@@ -308,16 +319,20 @@ async fn a_lane_row_says_its_question_and_a_note_to_many_is_drawn_once() {
     let row = rows[0];
     assert!(
         row.contains(&format!("<a href=\"/projects/id/{id}/steps/l1-work\""))
-            && row.contains("<code class=\"sref-id\">l1-work</code></span></a> to 2 steps: <a href=\"/projects/id/"),
+            && row.contains("<code class=\"sref-id\">l1-work</code></span></a> to 2 steps: <span class=\"lg-said\">Heads up"),
         "{row}"
     );
-    // not "step-l1-work from l1-work to …": the thread is the link, not words
+    // not "step-l1-work from l1-work to …": the thread is one small link after its words
     assert!(!row.contains("step-l1-work from"), "{row}");
     let own = log
         .split("<tr id=\"r")
         .find(|r| r.contains("Parser leak"))
         .unwrap();
-    assert!(own.contains("</a> to the orchestrator: <a href="), "{own}");
+    assert!(
+        own.contains("</a> to the orchestrator: <span class=\"lg-said\">")
+            && own.contains("</span> <a class=\"lg-thread\" href=\""),
+        "{own}"
+    );
     // the unit page draws the note as its thread does: once, to 2 steps
     let (_, unit) = f.get(&format!("/projects/id/{id}/units/l3")).await;
     let last = between(

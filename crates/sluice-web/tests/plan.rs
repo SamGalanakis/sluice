@@ -56,7 +56,7 @@ async fn every_unit_of_the_fixture_is_drawn_once_in_its_band_in_rank() {
     assert!(at(running, "<!--r:u-a-6-->") < at(running, "<!--r:u-index-->"));
     assert!(
         running.contains(
-            "Quiet first, then the longest. 1 unit asks you above. 1 long run is in the margin."
+            "Quiet first, then the longest. 1 unit asks you above. 1 long run is shown apart."
         ),
         "{running}"
     );
@@ -245,13 +245,13 @@ async fn chromium_the_page_head_keeps_its_size_and_stays_whole_beside_the_drawer
   const h1 = document.querySelector('.page-head h1'), top = document.querySelector('.page-top');
   const r = h1.getBoundingClientRect(), dm = document.querySelector('.ph-name details.dm').getBoundingClientRect();
   const line = document.querySelector('.page-line').getBoundingClientRect();
-  return {size: getComputedStyle(h1).fontSize, lines: Math.round(r.height / 34),
+  return {size: getComputedStyle(h1).fontSize, lines: Math.round(r.height / 38),
           beside: Math.abs(dm.top - r.top) < 8 && dm.left >= r.right,
           under: line.top >= r.bottom - 1,
           inside: r.right <= top.getBoundingClientRect().right + 0.5,
           scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth};
 })()"#;
-        let want = serde_json::json!({"size": "30px", "lines": 1, "beside": true, "under": true, "inside": true, "scroll": 0});
+        let want = serde_json::json!({"size": "34px", "lines": 1, "beside": true, "under": true, "inside": true, "scroll": 0});
         assert_eq!(browser.eval(NAME).unwrap(), want, "alone");
         // the drawer open beside it: the head narrows and keeps its size
         browser

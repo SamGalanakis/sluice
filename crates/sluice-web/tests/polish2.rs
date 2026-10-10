@@ -494,9 +494,9 @@ async fn a_failure_says_what_to_try_and_the_index_says_a_runs_time_as_running() 
         .unwrap();
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/q")).await;
     assert!(
-        page.contains("<p class=\"err-line\">Its engine hit a usage cap.</p><p class=\"meta err-next\">Retry once its engine's usage cap resets.</p>")
-            || page.contains("<p class=\"err-line\">Its engine hit a usage cap.</p><p class=\"meta err-next\">Retry once its engine&#39;s usage cap resets.</p>")
-            || page.contains("<p class=\"err-line\">Its engine hit a usage cap.</p><p class=\"meta err-next\">Retry once its engine&#x27;s usage cap resets.</p>"),
+        page.contains("<p class=\"err-line\">Its engine hit a usage cap.</p><p class=\"err-next\">Retry once its engine's usage cap resets.</p>")
+            || page.contains("<p class=\"err-line\">Its engine hit a usage cap.</p><p class=\"err-next\">Retry once its engine&#39;s usage cap resets.</p>")
+            || page.contains("<p class=\"err-line\">Its engine hit a usage cap.</p><p class=\"err-next\">Retry once its engine&#x27;s usage cap resets.</p>"),
         "{page}"
     );
     run(&f, id, "r", "2026-10-01T00:00:00Z", None, None).await;

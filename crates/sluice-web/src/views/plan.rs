@@ -51,6 +51,9 @@ pub struct Plan<'a> {
     margin: Vec<&'a UnitView>,
     /// The done units, the latest finished first.
     done: Vec<&'a UnitView>,
+    /// The cancels the owner dismissed in the last ten minutes, each with its unit: Stopped
+    /// says each with its Undo.
+    dismissed: Vec<(&'a UnitView, &'a StepView)>,
     trace: Trace,
 }
 
@@ -163,6 +166,17 @@ fn took(unit: &UnitView) -> (f64, usize) {
     (took, runs)
 }
 /// Where a unit's name leads: a loose step's own page, else the unit's.
+/// A project's description in its head's Details, as markdown (its lists as lists), "" when it
+/// has none.
+fn about_html(description: &str) -> TrustedHtml {
+    if description.is_empty() {
+        return TrustedHtml::default();
+    }
+    TrustedHtml::owned(format!(
+        "<div class=\"md dm-md\">{}</div>",
+        crate::markdown::render(description).as_str()
+    ))
+}
 fn unit_href(view: &ProjectView, unit: &UnitView) -> String {
     match unit.steps.as_slice() {
         [only] if !unit.tagged => only.href(),
@@ -270,6 +284,17 @@ impl<'a> Plan<'a> {
                 .into_iter()
                 .filter(|(u, on)| drawn.contains(u) && drawn.contains(on)),
         );
+        let mut dismissed: Vec<(&UnitView, &StepView)> = view
+            .units
+            .iter()
+            .flat_map(|u| {
+                u.steps
+                    .iter()
+                    .filter(|s| s.dismissed && !s.dismissed_at.is_empty())
+                    .map(move |s| (u, s))
+            })
+            .collect();
+        dismissed.sort_by(|a, b| b.1.dismissed_at.cmp(&a.1.dismissed_at));
         Plan {
             view,
             asks,
@@ -278,6 +303,7 @@ impl<'a> Plan<'a> {
             waiting,
             margin,
             done,
+            dismissed,
             trace,
         }
     }
@@ -343,7 +369,7 @@ impl<'a> Plan<'a> {
         let project = &self.view.project;
         let details = ui::Details::new()
             .id("Project", &project.id.to_string())
-            .text("About", project.description.trim())
+            .html("About", &about_html(project.description.trim()))
             .link(
                 "Settings",
                 &format!("{}/settings", project.href()),
@@ -402,7 +428,7 @@ impl<'a> Plan<'a> {
         if !view.plan_empty() {
             out.push_str(ui::search_open("stream", &href).as_str());
             out.push_str(&format!(
-                "<form class=\"board-tools pl-find\" method=\"get\" action=\"{h}\" role=\"search\" aria-label=\"Find units\"><div class=\"q-field\">{i}<input type=\"search\" name=\"q\" value=\"{q}\" data-find placeholder=\"Find unit, step or title\" aria-label=\"Find units by id or title, or by a step's id, title or description\" autocomplete=\"off\" spellcheck=\"false\" enterkeyhint=\"search\" data-preserve-attr=\"value\"><a class=\"q-clear\" data-clear-q href=\"{c}\" aria-label=\"Clear the find\" title=\"Clear the find\">{x}</a></div>{focus}{show}<button class=\"apply\">Find</button></form>",
+                "<form class=\"board-tools pl-find\" method=\"get\" action=\"{h}\" role=\"search\" aria-label=\"Find units\"><div class=\"q-field\">{i}<input type=\"search\" name=\"q\" value=\"{q}\" data-find placeholder=\"Find\" aria-label=\"Find units by id or title, or by a step's id, title or description\" autocomplete=\"off\" spellcheck=\"false\" enterkeyhint=\"search\" data-preserve-attr=\"value\"><a class=\"q-clear\" data-clear-q href=\"{c}\" aria-label=\"Clear the find\" title=\"Clear the find\">{x}</a></div>{focus}{show}<button class=\"apply\">Find</button></form>",
                 h = esc(&href),
                 i = icon(Icon::Search, 16, "q-icon"),
                 q = esc(&view.q),
@@ -445,7 +471,9 @@ impl<'a> Plan<'a> {
         let cols = self.cols();
         let mut rows = 0;
         // the first row: For you beside Stopped
-        let stopped_span = match (self.asks.is_empty(), self.stopped.is_empty()) {
+        // Stopped stands while a unit is stopped, or a cancel was dismissed lately (its Undo)
+        let stops = !self.stopped.is_empty() || !self.dismissed.is_empty();
+        let stopped_span = match (self.asks.is_empty(), !stops) {
             (_, true) => 0,
             (true, false) => cols,
             (false, false) => 4,
@@ -462,9 +490,9 @@ impl<'a> Plan<'a> {
         ));
         out.push_str(&band(
             "plan-stopped",
-            (!self.stopped.is_empty()).then(|| self.stopped_html(stopped_span)),
+            stops.then(|| self.stopped_html(stopped_span)),
         ));
-        if !self.asks.is_empty() || !self.stopped.is_empty() {
+        if !self.asks.is_empty() || stops {
             rows += 1;
         }
         let bands = [
@@ -731,6 +759,25 @@ impl<'a> Plan<'a> {
                 &self.stop_html(unit, module),
             ));
         }
+        // a cancel dismissed in the last ten minutes: one polite line, with its Undo
+        if !self.dismissed.is_empty() {
+            out.push_str("<div class=\"pl-dismissed\" role=\"status\">");
+            for (unit, step) in &self.dismissed {
+                let name = if unit.steps.len() > 1 {
+                    format!("{} ({})", title(unit), short(unit, step))
+                } else {
+                    title(unit).to_owned()
+                };
+                out.push_str(&format!(
+                    "<form method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"undismiss\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><p>{ic}<span>Dismissed: <a href=\"{h}\">{name}</a></span> · <button class=\"text-button\" aria-label=\"Undo dismissing {name}\">Undo</button></p></form>",
+                    h = esc(&step.href()),
+                    next = esc(&self.view.href()),
+                    ic = icon(Icon::Check, 16, ""),
+                    name = esc(&name),
+                ));
+            }
+            out.push_str("</div>");
+        }
         out.push_str("</section>");
         out
     }
@@ -739,16 +786,25 @@ impl<'a> Plan<'a> {
         let step = current(unit);
         let mut said = String::new();
         if let Some(step) = step {
-            said.push_str(&esc(&short(unit, step)));
-            if let Some(t) = step.timing.as_ref()
-                && let Some(end) = &t.finished
-            {
-                said.push_str(&format!(
-                    ", at {} after {}",
-                    ui::clock(end),
-                    esc(&ui::duration_text(t.seconds))
-                ));
-            }
+            // the stage that stopped, on a unit of several; a unit of one step is that step,
+            // whose title heads the card (its id is in the card's Details)
+            let stage = (unit.steps.len() > 1).then(|| esc(&short(unit, step)));
+            let when = step
+                .timing
+                .as_ref()
+                .and_then(|t| t.finished.as_ref().map(|end| (end, t.seconds)))
+                .map(|(end, took)| {
+                    format!(
+                        "at {} after {}",
+                        ui::clock(end),
+                        esc(&ui::duration_text(took))
+                    )
+                });
+            said = [stage, when]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(", ");
         }
         let marks = ui::stage_marks(&format!("Stages of {}", unit.heading()), &strip(unit));
         let mut body = String::new();
@@ -787,6 +843,16 @@ impl<'a> Plan<'a> {
             "<a class=\"quiet-act\" href=\"{}\">Unit page</a>",
             esc(&unit_href(self.view, unit))
         ));
+        // a cancel is set aside here, no confirm (Stopped then offers its Undo); a failure is
+        // never dismissed
+        if let Some(step) = step.filter(|s| s.cancelled() && !s.dismissed) {
+            actions.push_str(&format!(
+                "<form class=\"pl-dismiss\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"quiet-act\" aria-label=\"Dismiss {name}\" title=\"It stays on its unit, but no longer marks the unit or its project\">Dismiss</button></form>",
+                h = esc(&step.href()),
+                next = esc(&self.view.href()),
+                name = esc(title(unit)),
+            ));
+        }
         format!(
             "<div id=\"s-{id}\" class=\"pl-item pl-stop\" style=\"--span:{span}\"{attrs} data-said=\"{states}\">{open}{pick}<span class=\"mod-k\">{role}{g}<b>{word}</b>{kind}<span class=\"quiet\">{said}</span>{marks}</span><span class=\"mod-t\">{title}</span>{pick_end}{menu}<div class=\"mod-body\">{body}</div><div class=\"mod-actions\">{actions}</div>{close}</div>",
             id = esc(unit.id.as_str()),
@@ -913,7 +979,9 @@ impl<'a> Plan<'a> {
         out.push_str("</section>");
         out
     }
-    /// "Quiet first, then the longest. 1 unit asks you above. 1 long run is in the margin."
+    /// "Quiet first, then the longest. 1 unit asks you above. 1 long run is shown apart." (the
+    /// margin is at the sheet's right on a wide sheet but under the band on a narrow one, so
+    /// the line names no place)
     fn running_line(&self) -> String {
         let mut line = "Quiet first, then the longest.".to_owned();
         let above = self
@@ -930,7 +998,7 @@ impl<'a> Plan<'a> {
         }
         if !self.margin.is_empty() {
             line.push_str(&format!(
-                " {} in the margin.",
+                " {} shown apart.",
                 ui::count(self.margin.len(), "long run is", "long runs are")
             ));
         }
@@ -1295,13 +1363,15 @@ impl<'a> Plan<'a> {
         let mut items = String::new();
         for unit in &self.done {
             let (took, _) = took(unit);
-            // a cancel the owner dismissed leaves its unit done, still said
+            // a cancel the owner dismissed leaves its unit done, still said: "b cancelled and
+            // dismissed" (its step's page has the Undo)
             let cancels: Vec<String> = unit
                 .steps
                 .iter()
                 .filter(|s| s.cancelled())
                 .map(|s| short(unit, s))
                 .collect();
+            let dismissed = unit.steps.iter().any(|s| s.cancelled() && s.dismissed);
             items.push_str(&format!(
                 "<li data-said=\"{states}\"><a href=\"{h}\"><span class=\"pl-at\">{at}</span>{g}<span class=\"pl-dt\">{t}</span><span class=\"pl-dk\">{k}</span></a></li>",
                 h = esc(&unit_href(self.view, unit)),
@@ -1319,7 +1389,11 @@ impl<'a> Plan<'a> {
                 t = esc(title(unit)),
                 k = if !cancels.is_empty() {
                     let cancels: Vec<&str> = cancels.iter().map(String::as_str).collect();
-                    format!("{} cancelled", esc(&join(&cancels)))
+                    format!(
+                        "{} cancelled{}",
+                        esc(&join(&cancels)),
+                        if dismissed { " and dismissed" } else { "" }
+                    )
                 } else if took > 0.0 {
                     format!("took {}", esc(&ui::duration_text(took)))
                 } else {

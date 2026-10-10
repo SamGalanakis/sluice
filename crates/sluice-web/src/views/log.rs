@@ -264,11 +264,13 @@ impl LogNote {
             [(_, html)] => html.clone(),
             many => format!("{} {}", many.len(), if self.steps { "steps" } else { "recipients" }),
         };
+        // its words as plain muted text, the thread one small link at their end: the names are
+        // the row's links, not the whole excerpt
         TrustedHtml::owned(format!(
-            "{} to {to}: <a href=\"{}\">{}</a>",
+            "{} to {to}: <span class=\"lg-said\">{}</span> <a class=\"lg-thread\" href=\"{}\">thread</a>",
             self.from_html,
-            super::ui::esc(&self.thread_href),
-            super::ui::esc(&self.text)
+            super::ui::esc(&self.text),
+            super::ui::esc(&self.thread_href)
         ))
     }
 }

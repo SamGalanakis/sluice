@@ -58,6 +58,13 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ),
     // When the owner marked a message read (`mark_read`): what the inbox's "Read today" lists.
     ("messages", "read_at", "TEXT"),
+    // Who stopped or retried a run, and why (`{"cancel": {author, reason, at}, "retry": {…}}`),
+    // kept on the run so a trimmed log does not lose it.
+    (
+        "runs",
+        "stopped",
+        "TEXT CHECK (stopped IS NULL OR json_type(stopped) = 'object')",
+    ),
 ];
 /// Views added after homes existed, as `(name, definition)`: the writer creates the missing
 /// ones with the columns. A view is no table, so a release that counts the home's tables

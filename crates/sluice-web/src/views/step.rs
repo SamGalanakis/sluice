@@ -228,7 +228,7 @@ pub struct RunView {
     /// An agent run's calls by tool, read from its transcript (`activity::attach`): "Bash 42 ·
     /// Edit 9 · Read 17 · 2 failed"; "" for any other run.
     pub profile: String,
-    /// A cancelled run's one line, from the record that stopped it: "Cancelled after 1h 18m by
+    /// A cancelled run's one line, as the run keeps who stopped it: "Cancelled after 1h 18m by
     /// cli, which retried it." ("" for any other run).
     pub cancelled_by: String,
     /// What started it, after its step's first run (`load_restarts`): Runs says it under its
@@ -499,6 +499,9 @@ pub struct StepView {
     /// Cancelled, and the owner dismissed it (`StepDismiss`): it no longer marks its unit or
     /// project.
     pub dismissed: bool,
+    /// When the owner dismissed it, in the last ten minutes ("" otherwise): the plan's Stopped
+    /// says so with its Undo for that long.
+    pub dismissed_at: String,
     /// Its run going now is an agent's whose transcript cannot be read here (`activity::attach`):
     /// its Overview says so, so no activity shown is never read as an idle agent.
     pub transcript_unread: bool,
@@ -978,6 +981,7 @@ impl StepView {
             activity: None,
             transcript_unread: false,
             dismissed: false,
+            dismissed_at: String::new(),
             kept: String::new(),
             downstream: 0,
             whole_title: String::new(),
@@ -1654,7 +1658,7 @@ impl StepView {
     }
     /// A failed step whose run before its last failed the same way (the same kind and the same
     /// words): that run's number. A bare Retry would most likely fail a third time, so its
-    /// next step says so and its feedback box opens.
+    /// next step says so and its feedback box stands open under why it failed.
     pub fn failed_alike(&self) -> Option<usize> {
         if !self.failed() || self.runs.len() < 2 {
             return None;
@@ -1686,6 +1690,11 @@ impl StepView {
             .as_ref()
             .map(|f| f.next_step().to_owned())
             .unwrap_or_default()
+    }
+    /// Its retry's feedback box stands open in Why it failed, under the advice, rather than
+    /// folded in its band: the failure repeated (`failed_alike`) and Retry asks no confirm.
+    pub fn feedback_in_why(&self) -> bool {
+        self.retryable() && !self.retry_asks() && self.failed_alike().is_some()
     }
     pub fn retryable(&self) -> bool {
         matches!(
@@ -1767,11 +1776,6 @@ impl StepView {
             } else {
                 format!("Retry {}?", self.id)
             },
-            id: if self.titled() {
-                self.id.to_string()
-            } else {
-                String::new()
-            },
             action: format!("{}/actions", self.href()),
             hidden: vec![
                 ("revision", self.revision.to_string()),
@@ -1797,11 +1801,6 @@ impl StepView {
                 format!("Cancel {}", self.name().text(60))
             } else {
                 format!("Cancel {}?", self.id)
-            },
-            id: if self.titled() {
-                self.id.to_string()
-            } else {
-                String::new()
             },
             action: format!("{}/actions", self.href()),
             hidden: vec![
@@ -2216,6 +2215,17 @@ fn load_conversation(
     let unread = super::threads::unread_ids(c, project, &items)?;
     let id = step.id.to_string();
     let own = items.iter().rposition(|m| m.message.from == id);
+    // a progress field that says what its latest message says is said once, as the message
+    if step.running()
+        && let Some(own) = own
+        && let Some(progress) = step.progress.as_mut()
+    {
+        let said = items[own].message.body.trim();
+        progress.fields.retain(|f| f.value.trim() != said);
+        if progress.fields.is_empty() {
+            step.progress = None;
+        }
+    }
     let mut quoted = vec![];
     // its open question to the owner, while someone waits on it: Overview draws it alone, first,
     // to be answered there
@@ -2456,8 +2466,8 @@ pub fn load_detail(
     }
     Ok(())
 }
-/// Each cancelled run's line: how long it ran and who stopped it, read from the record that did
-/// (a cancel's, or a retry's, which stops the run going), within its run's span.
+/// Each cancelled run's line: how long it ran and who stopped it, as the run keeps it (a cancel,
+/// or a retry, which stops the run going) or else the record that did, within its run's span.
 fn load_cancels(
     c: &rusqlite::Connection,
     project: ProjectId,
@@ -2468,10 +2478,11 @@ fn load_cancels(
         if run.outcome != Outcome::Ended(Shown::Cancelled) || run.finished.is_empty() {
             continue;
         }
+        // kept on the run (`runs.stopped`); a run stopped before that was kept reads the log
         let found = c
-            .prepare_cached("SELECT kind,payload FROM records WHERE project_id=?1 AND step_id=?2 AND kind IN ('step.cancel','step.retry') AND julianday(at)>=julianday(?3) AND julianday(at)<=julianday(?4)+5.0/86400.0 ORDER BY seq DESC LIMIT 1")?
+            .prepare_cached("SELECT kind,payload FROM (SELECT 'step.'||j.key AS kind,j.value AS payload,json_extract(j.value,'$.at') AS at,1 AS kept FROM runs r,json_each(r.stopped) j WHERE r.run_id=?5 UNION ALL SELECT kind,payload,at,0 FROM records WHERE project_id=?1 AND step_id=?2 AND kind IN ('step.cancel','step.retry')) WHERE julianday(at)>=julianday(?3) AND julianday(at)<=julianday(?4)+5.0/86400.0 ORDER BY julianday(at) DESC,kept DESC LIMIT 1")?
             .query_row(
-                (project.to_string(), id.as_str(), run.started.as_str(), run.finished.as_str()),
+                (project.to_string(), id.as_str(), run.started.as_str(), run.finished.as_str(), run.id.to_string()),
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
             )
             .optional()?;
@@ -2527,7 +2538,7 @@ fn load_cancels(
     }
     Ok(())
 }
-/// The latest retry of `step` recorded at or after `from` (and at or before `to`, when given):
+/// The latest retry of `step` kept on its runs or recorded at or after `from` (and at or before `to`, when given):
 /// who, why, and the feedback posted to the step in the same write.
 fn retry_between(
     c: &rusqlite::Connection,
@@ -2536,8 +2547,9 @@ fn retry_between(
     from: &str,
     to: Option<&str>,
 ) -> sluice_store::Result<Option<Restart>> {
+    // kept on the step's runs (`runs.stopped`); one from before that was kept is read from the log
     let found = c
-        .prepare_cached("SELECT payload,at FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.retry' AND julianday(at)>=julianday(?3) AND (?4 IS NULL OR julianday(at)<=julianday(?4)) ORDER BY seq DESC LIMIT 1")?
+        .prepare_cached("SELECT payload,at FROM (SELECT json_extract(stopped,'$.retry') AS payload,json_extract(stopped,'$.retry.at') AS at,1 AS kept FROM runs WHERE project_id=?1 AND step_id=?2 AND json_extract(stopped,'$.retry') IS NOT NULL UNION ALL SELECT payload,at,0 FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.retry') WHERE julianday(at)>=julianday(?3) AND (?4 IS NULL OR julianday(at)<=julianday(?4)) ORDER BY julianday(at) DESC,kept DESC LIMIT 1")?
         .query_row((project.to_string(), step, from, to), |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })

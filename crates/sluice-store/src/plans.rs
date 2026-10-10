@@ -1516,7 +1516,7 @@ pub(crate) fn apply_retry(
             params![context.project.to_string(), id.as_str()],
             |r| r.get::<_, i64>(0),
         )?;
-        tx.append_record(
+        let record = tx.append_record(
             Some(context.project),
             Event::StepRetry {
                 rev: context.revision,
@@ -1526,6 +1526,7 @@ pub(crate) fn apply_retry(
                 work: WorkGeneration(work as u64),
             },
         )?;
+        mark_stopped(tx, context.project, id, "retry", author, reason, &record.at)?;
         status_record(tx, context.project, id, previous, StepStatus::Pending, None)?;
     }
     if let Some(body) = message {
@@ -1539,6 +1540,28 @@ pub(crate) fn apply_retry(
         rearmed: walk.rearmed,
         stopped_at: walk.stopped_at,
     })
+}
+/// Keep who cancelled or retried `step`, and why, on its latest run of each item (`runs.stopped`
+/// under `kind`, "cancel" or "retry"), so a trimmed log does not lose it. A step with no run yet
+/// keeps it only in the log.
+pub(crate) fn mark_stopped(
+    tx: &WriteTransaction<'_>,
+    project: ProjectId,
+    step: &StepId,
+    kind: &str,
+    author: &str,
+    reason: &str,
+    at: &str,
+) -> Result<()> {
+    let entry = json!({"author": author, "reason": reason, "at": at}).to_string();
+    tx.sql().execute(
+        "UPDATE runs SET stopped=json_set(coalesce(stopped,'{}'),'$.'||?3,json(?4))
+         WHERE project_id=?1 AND step_id=?2 AND NOT EXISTS (SELECT 1 FROM runs n
+           WHERE n.project_id=runs.project_id AND n.step_id=runs.step_id AND n.item_index=runs.item_index
+           AND (n.created_at>runs.created_at OR (n.created_at=runs.created_at AND n.run_id>runs.run_id)))",
+        params![project.to_string(), step.as_str(), kind, entry],
+    )?;
+    Ok(())
 }
 pub(crate) fn validate_message(body: &str) -> Result<()> {
     if body.trim().is_empty() || body.len() > 65536 {
@@ -1570,13 +1593,23 @@ pub fn step_cancel(
         }
     }
     for id in &selected {
-        tx.append_record(
+        let author = request.author.clone().unwrap_or_default();
+        let record = tx.append_record(
             Some(context.project),
             Event::StepCancel {
                 step: id.clone(),
-                author: request.author.clone().unwrap_or_default(),
+                author: author.clone(),
                 reason: request.reason.clone(),
             },
+        )?;
+        mark_stopped(
+            tx,
+            context.project,
+            id,
+            "cancel",
+            &author,
+            &request.reason,
+            &record.at,
         )?;
         let status = state.status(id);
         if status == StepStatus::Running {

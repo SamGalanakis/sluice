@@ -613,13 +613,16 @@ pub fn cancel(
         [id.attempt.to_string()],
     )?;
     if changed > 0 {
-        tx.append_record(
+        let record = tx.append_record(
             Some(id.project),
             Event::StepCancel {
                 step: id.step.clone(),
-                author,
-                reason,
+                author: author.clone(),
+                reason: reason.clone(),
             },
+        )?;
+        plans::mark_stopped(
+            tx, id.project, &id.step, "cancel", &author, &reason, &record.at,
         )?;
         tx.changed(Some(id.project), "status");
     }
@@ -1625,16 +1628,17 @@ fn previous_attempt(
         Option<String>,
         Option<String>,
         Option<String>,
+        Option<String>,
     );
     let row: Option<Row> = sql
         .query_row(
-            "SELECT r.started_at,r.created_at,r.finished_at,r.result,json_extract(a.request,'$.settle')
+            "SELECT r.started_at,r.created_at,r.finished_at,r.result,json_extract(a.request,'$.settle'),json_extract(r.stopped,'$.cancel')
              FROM runs r JOIN attempts a USING(attempt_id) WHERE r.run_id=?1 AND r.project_id=?2",
             params![run, project.to_string()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
         )
         .optional()?;
-    let Some((started, created, finished, result, settle)) = row else {
+    let Some((started, created, finished, result, settle, stopped)) = row else {
         return Ok(None);
     };
     let result: Option<Value> = result.map(|r| serde_json::from_str(&r)).transpose()?;
@@ -1667,15 +1671,19 @@ fn previous_attempt(
         reason = settle["reason"].as_str().map(str::to_owned);
     }
     if ended == Ended::Cancelled {
-        // The log may have trimmed it; then who cancelled is unknown.
-        let cancel: Option<String> = sql
+        // Kept on the run; a run cancelled before it was kept there reads the log, which may
+        // have trimmed it, and then who cancelled is unknown.
+        let cancel: Option<String> = match stopped {
+            Some(stopped) => Some(stopped),
+            None => sql
             .query_row(
                 "SELECT payload FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.cancel'
                  AND julianday(at)>=julianday(?3) AND julianday(at)<=julianday(coalesce(?4,'now')) ORDER BY seq DESC LIMIT 1",
                 params![project.to_string(), step.as_str(), created, finished],
                 |r| r.get(0),
             )
-            .optional()?;
+            .optional()?,
+        };
         if let Some(cancel) = cancel {
             let cancel: Value = serde_json::from_str(&cancel)?;
             by = cancel["author"]

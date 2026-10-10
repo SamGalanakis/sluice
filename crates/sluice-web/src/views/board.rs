@@ -1297,6 +1297,8 @@ struct Cards {
     rows: BTreeMap<String, (bool, Option<i64>, i64, Option<String>)>,
     /// The cancels the owner dismissed.
     dismissed: BTreeSet<String>,
+    /// Those dismissed in the last ten minutes, each with when.
+    lately: BTreeMap<String, String>,
     finishing: BTreeMap<StepId, sluice_model::attempt::Finishing>,
     stopping: BTreeSet<StepId>,
     timings: BTreeMap<String, RunTiming>,
@@ -1312,6 +1314,7 @@ impl Cards {
         Ok(Self {
             rows,
             dismissed: sluice_store::messages::dismissed(c, project)?,
+            lately: sluice_store::messages::dismissed_lately(c, project, 10.0)?,
             finishing: sluice_store::attempts::finishing(c, project)?,
             stopping: sluice_store::attempts::stopping(c, project)?,
             timings: run_timings(c, project)?,
@@ -1331,6 +1334,11 @@ impl Cards {
             }
         }
         step.dismissed = self.dismissed.contains(step.id.as_str());
+        step.dismissed_at = self
+            .lately
+            .get(step.id.as_str())
+            .cloned()
+            .unwrap_or_default();
         step.revision = revision;
     }
 }

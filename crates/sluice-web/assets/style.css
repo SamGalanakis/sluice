@@ -503,10 +503,10 @@ form.prefs:has(sluice-toggle:defined) .save { display: none; }
 .page-top { container: band / inline-size; }
 .page-head { padding: 14px 0 6px; }
 .ph-name { display: flex; align-items: flex-start; gap: 4px 10px; min-width: 0; }
-.ph-name > sluice-menu > details.dm { margin-top: 1px; }
-.ph-name > h1, .page-head > h1 { margin: 0; font-size: 30px; line-height: 34px; font-weight: 850;
+.ph-name > sluice-menu > details.dm { margin: 1px 0 0 auto; }
+.ph-name > h1, .page-head > h1 { margin: 0; font-size: 34px; line-height: 38px; font-weight: 850;
   letter-spacing: -0.025em; overflow-wrap: anywhere; text-wrap: balance; min-width: 0; }
-.page-line { margin-top: 2px; font-size: 17px; line-height: 24px; font-weight: 500;
+.page-line { margin-top: 2px; max-width: 100ch; font-size: 17px; line-height: 24px; font-weight: 500;
              letter-spacing: -0.005em; text-wrap: pretty; }
 .page-line a { text-decoration-thickness: 1px; text-underline-offset: 4px; }
 .page-line a.ask { text-decoration-color: var(--coral); text-decoration-thickness: 2px; }
@@ -556,8 +556,10 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
   .subnav-tools :is(button, input, select, a) { min-height: 44px; }
   .prefs .themes label, .prefs label.check { min-height: 44px; }
   .page-head { padding: 12px 0 8px; }
-  .ph-name > h1, .page-head > h1 { font-size: 26px; line-height: 31px; }
+  .ph-name > h1, .page-head > h1 { font-size: 28px; line-height: 32px; }
   .page-line { font-size: 15px; line-height: 21px; }
+  /* its links (the questions, a recipe) a 44px target, the line's height unchanged */
+  .page-line a { display: inline-block; padding: 11.5px 0; margin: -11.5px 0; }
 }
 
 /* ---- the module grid (`ui::grid_open`, `.sheet`): a sheet of modules, the `sheet`
@@ -623,7 +625,7 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 /* ---- a band's head on the paper (`ui::section_head`, `ui::strip_head`) ------------------- */
 .sec-h { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between;
          gap: 6px 12px; min-height: 56px; padding-bottom: 10px; border-top: 3px solid var(--navy); }
-.sec-h h2 { margin: 0; font-size: 30px; line-height: 1; font-weight: 850; letter-spacing: -0.03em; }
+.sec-h h2 { margin: 0; font-size: 26px; line-height: 1; font-weight: 850; letter-spacing: -0.025em; }
 .sec-n { font-size: 13px; color: var(--ink-muted); }
 /* a strip head (`ui::strip_head`) and the rows under it (the plan's units, `ui::strip_row_open`)
    share one track list: the lead takes what the cells leave, the stages `--cell` wide each so
@@ -714,7 +716,7 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 .lt-at { font: 600 12.5px/19px var(--font-mono); color: var(--ink-muted); }
 .lt-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .lt-place { color: var(--ink-muted); font-weight: 500; }
-.lt-took { font-size: 12.5px; color: var(--sky-ink); white-space: nowrap; }
+.lt-took { font-size: 12.5px; color: var(--ink-muted); white-space: nowrap; }
 .lt-how { display: inline-flex; align-items: center; gap: 4px; color: var(--sand-ink); font-weight: 650; }
 .lt-how .g { color: inherit; width: 13px; height: 13px; margin: 0; }
 
@@ -767,6 +769,11 @@ details.dm > summary:hover, details.dm[open] > summary { color: var(--ink); back
 .dm-l dt { color: var(--ink-muted); font-weight: 600; white-space: nowrap; }
 .dm-l dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .dm-l code { padding: 0; background: none; font-size: 12.5px; }
+/* a description in Details is markdown: its paragraphs and lists as such, tight */
+.dm-md { max-width: 52ch; }
+.dm-md :is(p, ul, ol) { margin: 0 0 6px; }
+.dm-md :is(ul, ol) { padding-left: 18px; }
+.dm-md > :last-child { margin-bottom: 0; }
 .dm-l sluice-copy > .copy { opacity: 1; }
 /* in a module, at its top right; its kind's line keeps clear of it */
 .mod > sluice-menu > details.dm { position: absolute; top: 8px; right: 8px; }
@@ -835,7 +842,7 @@ sluice-trace[tracing] [data-trace="selected"] { box-shadow: 0 0 0 2px var(--navy
   .sc > a.sc-a { margin: 0 -6px; padding: 0 6px; }
   .sc-run .sc-time, .sc-look .sc-time { font-size: 14px; }
   .sc-name { font-size: 11px; }
-  .sec-h h2 { font-size: 28px; }
+  .sec-h h2 { font-size: 24px; }
 }
 /* the rail sits in the gutter, so it narrows with it under 1200px */
 @media (max-width: 1199.98px) {
@@ -1091,7 +1098,7 @@ sluice-copy > button.copy { box-shadow: none; }
 .sb-t { margin: 0; min-width: 0; font-size: 28px; line-height: 34px; font-weight: 850;
         letter-spacing: -0.025em; overflow-wrap: anywhere; text-wrap: balance; }
 .sb-t .d-stage { color: var(--ink-muted); font-weight: 700; }
-.sb-name > sluice-menu > details.dm { margin-top: 1px; }
+.sb-name > sluice-menu > details.dm { margin: 1px 0 0 auto; }
 .d-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 8px 0 0; }
 .step-band .d-badges .tag { height: 28px; padding: 0 10px; gap: 6px; font-size: 13.5px; }
 .step-band .d-badges .tag .g, .step-band .d-badges .tag .g svg { width: 15px; height: 15px; }
@@ -1120,14 +1127,19 @@ sluice-copy > button.copy { box-shadow: none; }
 .step-band .d-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px;
                         margin-top: 16px; }
 .step-band .d-actions > form { display: contents; }
-.step-band .d-actions details:not(.confirm-flow) { order: 9; flex-basis: 100%; }
 .step-band .d-actions > a.d-thread:first-of-type { margin-left: auto; }
 .step-band .d-actions :is(button, .confirm-flow > summary) { display: inline-flex; align-items: center;
   min-height: 44px; padding: 0 18px; font-weight: 650; }
-.step-band .d-actions details:not(.confirm-flow) > summary { min-height: 44px; display: inline-flex;
-  align-items: center; color: var(--ink-muted); }
-.step-band .d-actions details[open]:not(.confirm-flow) > textarea { max-width: var(--measure); }
+/* Retry with feedback, as on the plan's Stopped cards (.pl-fb): its box on a line of its own */
+.step-band .d-actions .pl-fb > summary { font-weight: 650; }
+.step-band .d-actions .pl-fb > textarea { max-width: var(--measure); }
 .step-band textarea { width: 100%; }
+/* Dismiss, a cancel's quiet way aside: no box, muted */
+.step-band .d-actions > form.d-dismiss-b { display: contents; }
+.step-band .d-actions button.quiet-act { box-shadow: none; padding: 0 10px; color: var(--ink-muted);
+                                         font-weight: 600; }
+.step-band .d-actions button.quiet-act:hover { background: none; color: var(--ink);
+                                               text-decoration: underline; }
 .step-band a.d-thread { display: inline-flex; align-items: center; min-height: 44px;
                         color: var(--ink-muted); }
 .step-band a.d-thread:hover { color: var(--ink); }
@@ -1147,7 +1159,9 @@ article#step-detail { display: flow-root; }  /* its head's margins stay its own 
   .step-band { padding: 12px 0 10px; }
   .sb-t { font-size: 23px; line-height: 28px; }
   .sb-lane .strip, .ub-lane .strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .step-band .d-actions :is(button, .confirm-flow > summary) { flex: 1 1 auto; justify-content: center; }
+  .step-band .d-actions :is(button, .confirm-flow > summary, .pl-fb > summary) { flex: 1 1 auto;
+    justify-content: center; }
+  .step-band .d-actions button.quiet-act { flex: none; }
 }
 
 /* ---- a step's Overview (DESIGN.md, A step's page): modules on the grid, the question to the
@@ -1207,7 +1221,13 @@ article#step-detail { display: flow-root; }  /* its head's margins stay its own 
 /* why it failed: on the sand, its sentence first */
 .d-failure > :is(h2, h3, h4):first-child { font-size: 22px; }
 .d-failure .err-line { font-size: 17px; line-height: 1.4; font-weight: 650; }
-.d-failure .err-next { margin-top: 6px; }
+/* the advice is the next move: ink at body size; when the failure repeated, the feedback box
+   stands open under it */
+.d-failure .err-next { margin-top: 6px; color: var(--ink); font-size: inherit; }
+.err-retry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; }
+.err-retry > label { flex-basis: 100%; font-weight: 650; }
+.err-retry > textarea { flex-basis: 100%; max-width: var(--measure); min-height: 72px; resize: vertical; }
+.err-retry > button { min-height: 44px; padding: 0 18px; }
 .d-failure .err-log { margin-top: 8px; }
 .d-failure .d-dismiss { margin-top: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .d-failure .d-dismiss button { min-height: 40px; }
@@ -1644,8 +1664,8 @@ li.m.q-done > .md, li.m.q-done > .m-body { opacity: 0.7; }
 .swell-ask .m-title { font-size: 23px; line-height: 1.18; font-weight: 800; letter-spacing: -0.022em;
                       margin-top: 8px; }
 .swell-ask .m-body { font-size: 15.5px; line-height: 1.5; }
-.q-sheet .note-head h3 a, .q-sheet .item > h3 a { text-decoration: none; }
-.q-sheet .note-head h3, .q-sheet .item > h3 { font-size: 17px; line-height: 1.25; font-weight: 800; }
+.q-sheet .note-h a, .q-sheet .item > h3 a { text-decoration: none; }
+.q-sheet .note-h, .q-sheet .item > h3 { font-size: 17px; line-height: 1.25; font-weight: 800; }
 
 details > summary { cursor: pointer; color: var(--ink-muted); }
 details[open] > summary { margin-bottom: 6px; }
@@ -2117,7 +2137,7 @@ h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
   background: color-mix(in srgb, var(--run-ink) 50%, transparent); }
 
 /* a button that reads as a quiet text action (Dismiss, Undo): an underline, no box */
-.text-button { min-height: 0; padding: 0; border: 0; background: none; color: var(--ink-muted);
+.text-button { min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--ink-muted);
                font: inherit; font-size: 13px; line-height: 18px; text-decoration: underline;
                text-underline-offset: 3px; text-decoration-color: var(--rule); cursor: pointer; }
 .text-button:hover { color: var(--ink); text-decoration-color: currentColor; background: none; }
@@ -2190,10 +2210,10 @@ button.danger:hover { background: var(--navy); }
 .stopped-list .s-body .md { max-width: var(--measure); }
 .stopped-list form { flex: none; }
 li.closing, article.closing { opacity: .55; }
-/* a thread of notes: its name, then "Mark read" at the line's end; read only when asked */
-.note-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
-             gap: 4px 12px; }
-.note-head h3 { margin: 0; min-width: 0; }
+/* a thread of notes: its name and project, its notes, then "Mark read" after them; read only
+   when asked */
+.note-h { margin: 0; min-width: 0; }
+.note-end { margin: 12px 0 0; }
 button.mark-read { flex: none; }
 /* the notes marked read in the last day, kept under a fold that the store draws */
 details.read-today { margin-top: 24px; }
@@ -2207,7 +2227,6 @@ details.read-today .item { opacity: .85; }
 .notes-none { margin-top: 24px; }
 .thread-of { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
              gap: 6px 12px; margin: 8px 0 14px; }
-.thread-of .meta { margin: 0; }
 
 /* ---- a page that cannot be drawn (`views::missing`): the band says what is missing and why;
    on the paper the ways on, each a heavy link -------------------------------------------------- */
@@ -2312,7 +2331,11 @@ details.read-today .item { opacity: .85; }
 .pl-ask .mod-body { margin-top: 14px; font-size: 15px; line-height: 22px; }
 .pl-ask .mod-body > :first-child { margin-top: 0; }
 .ask-i { color: var(--coral); }
-.pl-ask .mod > .strip { margin-top: 16px; }
+/* the question's unit's stages wrap rather than cut a name: as many cells a row as fit 96px,
+   three a row in a half-width card, each name whole, its state its glyph */
+.pl-ask .mod > .strip { margin-top: 16px; row-gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
+.pl-ask .mod > .strip .sc-top .sc-word { display: none; }
 .pl-ask .mod-actions button.quiet-act, .pl-stop .mod-actions button.quiet-act {
   background: none; box-shadow: none; }
 /* Retry with feedback opens its box in place; Retry beside it sends none */
@@ -2325,7 +2348,15 @@ details.read-today .item { opacity: .85; }
 .pl-fb[open] > summary { order: 0; }
 .pl-fb > textarea { order: 1; flex: 1 1 100%; min-height: 72px; resize: vertical; }
 .pl-fb > button { order: 2; }
-.pl-retry { display: contents; }
+.pl-retry, .pl-dismiss { display: contents; }
+.pl-stop .mod-actions button.quiet-act { padding: 0 10px; color: var(--ink-muted); font-weight: 600; }
+.pl-stop .mod-actions button.quiet-act:hover { color: var(--ink); text-decoration: underline; }
+/* a cancel dismissed lately: one polite line a cancel, with its Undo, for ten minutes */
+.pl-dismissed { grid-column: 1 / -1; display: grid; gap: 4px; }
+.pl-dismissed p { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0;
+                  color: var(--ink-muted); }
+.pl-dismissed p > svg { flex: none; color: var(--ink-muted); }
+.pl-dismissed .text-button { min-height: 44px; }
 
 /* a band of rows: its head (a recipe's block head, or the band's own), then a row a unit. A row
    is its head (its state, how long it has run against its usual time and its overrun, then its
@@ -2557,7 +2588,7 @@ sluice-drawer#step-drawer .drawer .close:hover { background: var(--paper-2); }
 @media (scripting: enabled) {
   .doc-more[open] > summary { display: none; }
   .doc-more[open] .fold-less { display: inline-flex; align-items: center; min-height: 24px;
-    margin-top: 4px; padding: 0; border: 0; background: none; cursor: pointer;
+    margin-top: 4px; padding: 0; border: 0; background: none; box-shadow: none; cursor: pointer;
     font: 500 13px/18px var(--font-sans); color: var(--ink-muted); }
   .doc-more[open] .fold-less:hover { color: var(--ink); text-decoration: underline;
     text-underline-offset: 3px; }
@@ -3069,15 +3100,19 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
 .tt-pname { display: none; }
 .tt-runs { list-style: none; margin: 0; padding: 0; }
 .tt-many { columns: 300px; column-gap: var(--col-gap); }
-.tt-run { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-height: 22px;
-          break-inside: avoid; font-size: 13px; line-height: 20px; max-width: 480px; }
-.tt-m { flex: none; min-width: 2.6em; font: 500 11.5px/20px var(--font-mono); color: var(--ink-muted);
-        font-variant-numeric: tabular-nums; }
-.tt-name { min-width: 0; text-decoration: none; overflow-wrap: anywhere; }
+/* a run's line: its minute, its name (two lines at most) and its outcome, each in a column of
+   its own, so the outcome never drops under the name nor the minute over it */
+.tt-run { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline;
+          column-gap: 6px; min-height: 22px; break-inside: avoid; font-size: 13px; line-height: 20px;
+          max-width: 480px; }
+.tt-m { min-width: 2.6em; font: 500 11.5px/20px var(--font-mono); color: var(--ink-muted);
+        font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tt-name { min-width: 0; text-decoration: none; overflow-wrap: anywhere; display: -webkit-box;
+           -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
 .tt-name b { font-weight: 750; }
 .tt-name:hover { text-decoration: underline; }
 .tt-stage { color: var(--ink-muted); }
-.tt-out { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding-left: 6px;
+.tt-out { display: inline-flex; align-items: center; gap: 4px; justify-self: end;
           font: 500 12px/18px var(--font-mono); color: var(--ink-muted); white-space: nowrap;
           font-variant-numeric: tabular-nums; }
 .tt-out .g { width: 13px; height: 13px; margin: 0; }
@@ -3123,6 +3158,11 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
   .tt-many { columns: auto; }
   .tt-run { min-height: 44px; align-content: center; }
   .tt-more > summary { min-height: 44px; display: flex; align-items: center; }
+}
+@container frame (max-width: 399.98px) {
+  /* the narrowest phone: the name under the minute and the outcome */
+  .tt-run { grid-template-columns: auto minmax(0, 1fr); }
+  .tt-name { grid-column: 1 / -1; grid-row: 2; }
 }
 
 /* the pages lay out by the content's own width (rd-frame's contract: the page's content is
@@ -3175,13 +3215,13 @@ main { container: frame / inline-size; }
 .pm.swell-look { padding: 14px 16px 16px; }
 .pm-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
            gap: 4px 16px; }
-.pm-name { margin: 0; font-size: 46px; line-height: 1; font-weight: 900; letter-spacing: -0.035em;
+.pm-name { margin: 0; font-size: 26px; line-height: 1.1; font-weight: 850; letter-spacing: -0.025em;
            overflow-wrap: anywhere; min-width: 0; }
-.pm-name.long { font-size: 36px; }
-.pm-name.longer { font-size: 28px; }
+.pm-name.long { font-size: 23px; }
+.pm-name.longer { font-size: 20px; }
 .pm-name a { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; }
 .pm-name a:hover { text-decoration: underline; text-decoration-thickness: 2px; }
-.pm-name .proj-icon { width: 32px; height: 32px; }
+.pm-name .proj-icon { width: 24px; height: 24px; }
 .pm-size { font-size: 13px; color: var(--ink-muted); }
 .pm-paused { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; color: var(--ink);
              font-weight: 650; }
@@ -3233,8 +3273,8 @@ main { container: frame / inline-size; }
 .ix-archived th[scope=row] a, .ix-archived td { color: var(--ink-muted); }
 @container frame (max-width: 639.98px) {
   .home { gap: 36px; }
-  .pm-name { font-size: 38px; }
-  .pm-name.long { font-size: 30px; }
+  .pm-name { font-size: 24px; }
+  .pm-name.long { font-size: 21px; }
   .pm-row .text-button { min-height: 44px; }
   .pm-open a { min-height: 44px; }
   .ix td.num, .ix th.num { width: auto; }
@@ -3259,6 +3299,9 @@ main { container: frame / inline-size; }
 .logpage table.log td.num, .logpage table.log td.at { font-family: var(--font-mono); font-size: 12px;
                                                        color: var(--ink-muted); white-space: nowrap; }
 .logpage table.log td.kind { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
+.lg-said { color: var(--ink-muted); }
+.lg-thread { font-size: 12px; white-space: nowrap; color: var(--ink-muted); }
+.lg-thread:hover { color: var(--ink); }
 .logpage .pager { margin: 18px 0 0; font-size: 14px; font-weight: 650; }
 .logpage .pager a { display: inline-flex; align-items: center; min-height: 32px; }
 @container frame (max-width: 639.98px) {
@@ -3419,3 +3462,8 @@ main { container: frame / inline-size; }
 @container frame (max-width: 639.98px) {
   #messages-view.histpage .item > h2.t-name a { display: inline-flex; min-height: 44px; align-items: center; }
 }
+
+/* a step's own question on its Overview: the module's coral rule, its heading and the step's
+   head chip already say it is the owner's to answer, so the conversation's route, its kind and
+   its state tag are not said again there */
+.d-ask .mg-head, .d-ask .m-meta :is(.m-q, .tag.ask) { display: none; }

@@ -861,7 +861,7 @@ impl Details {
             .map(|(name, value)| format!("<div><dt>{}</dt><dd>{value}</dd></div>", esc(name)))
             .collect();
         TrustedHtml::owned(format!(
-            "{}<details class=\"dm\" data-preserve-attr=\"open\"><summary class=\"dm-b\" aria-label=\"Details of {a}\" title=\"Details\" data-preserve-attr=\"aria-expanded\">{}</summary><div class=\"menu dm-p\" role=\"group\" aria-label=\"Details of {a}\"><p class=\"dm-h\">Details</p><dl class=\"dm-l\">{rows}</dl></div></details>{}",
+            "{}<details class=\"dm\" data-preserve-attr=\"open\"><summary class=\"dm-b\" aria-label=\"Details of {a}\" title=\"Details\" data-preserve-attr=\"aria-expanded\">{}</summary><div class=\"menu dm-p\" role=\"group\" aria-label=\"Details of {a}\" data-preserve-attr=\"style\"><p class=\"dm-h\">Details</p><dl class=\"dm-l\">{rows}</dl></div></details>{}",
             super::menu_open(),
             icon(Icon::Ellipsis, 18, ""),
             super::menu_close(),

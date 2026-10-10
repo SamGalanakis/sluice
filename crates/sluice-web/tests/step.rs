@@ -90,8 +90,12 @@ fn a_failed_steps_drawer_leads_with_retry_and_names_its_unset_outputs_on_one_lin
     let view = StepView::new(ProjectId::new(), &plan, &state, &"w".parse().unwrap());
     let html = view.body("").unwrap();
     let html = html.as_str();
+    // Retry with feedback leads, filled, as on the plan's Stopped cards; Retry beside it
     assert!(
-        html.contains("<button name=\"action\" value=\"retry\" class=\"primary\">Retry</button>"),
+        html.contains(
+            "<details class=\"pl-fb\" data-preserve-attr=\"open\"><summary class=\"primary\">"
+        ) && html.contains("Retry with feedback</summary>")
+            && html.contains("<button name=\"action\" value=\"retry\">Retry</button>"),
         "{html}"
     );
     assert!(
@@ -695,7 +699,12 @@ fn a_cancelled_step_reads_as_cancelled_not_failed() {
         "{html}"
     );
     assert!(!html.contains("Why it failed"));
-    assert!(!html.contains("class=\"primary\">Retry"));
+    // stopped on purpose: neither Retry nor Retry with feedback leads
+    assert!(!html.contains("<summary class=\"primary\">"), "{html}");
+    assert!(
+        html.contains("<button name=\"action\" value=\"retry\">Retry</button>"),
+        "{html}"
+    );
 }
 /// A long `after` is a few words ("6 steps: 5 done, 1 running") over the steps it names,
 /// folded, sorted and linked; a cancelled or failed step offers no Pause.
@@ -1205,8 +1214,8 @@ async fn a_refused_action_comes_back_to_its_step_saying_why_with_its_feedback_ke
         "{html}"
     );
     assert!(
-        html.contains("<details data-preserve-attr=\"open\" open><summary>Feedback for retry</summary>")
-            && html.contains("data-ignore-morph placeholder=\"Optional feedback for the next attempt\">Look again</textarea>"),
+        html.contains("<details class=\"pl-fb\" data-preserve-attr=\"open\" open><summary")
+            && html.contains("data-ignore-morph placeholder=\"What its next run should do differently\">Look again</textarea>"),
         "{html}"
     );
     assert_eq!(fake.0.lock().unwrap().len(), 1, "nothing more was done");

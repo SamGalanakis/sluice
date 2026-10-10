@@ -18,7 +18,8 @@
 //!   item_index, prev_run, unit, unit_name, boot_id, guardian_pid, guardian_start,
 //!   cgroup, socket_challenge, release_id, protocol_major, assigned_after,
 //!   assigned_through, started_at, created_at, finished_at, completion_id,
-//!   completion_ack, result, completion_action, action_outcome.
+//!   completion_ack, result, completion_action, action_outcome, stopped (who cancelled or
+//!   retried the run and why: `{"cancel": {author, reason, at}, "retry": {...}}`).
 //! - `calls`: call_id, project_id, run_id, fn, status, inputs, outputs, error,
 //!   direct, author, created_at, finished_at.
 //!

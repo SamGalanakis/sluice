@@ -214,11 +214,12 @@ async fn chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_quest
         browser.navigate(&failed).unwrap();
         browser.wait("document.readyState === 'complete'").unwrap();
         let band: Value = browser
-            .eval("(() => { const b = document.querySelector('.page-top #step-band'); return [b.querySelector('h1#d-title').textContent, b.querySelector('[aria-current=step] .sc-name').textContent, [...b.querySelectorAll('.d-actions button')].map(x => x.textContent.trim())]; })()")
+            .eval("(() => { const b = document.querySelector('.page-top #step-band'); return [b.querySelector('h1#d-title').textContent, b.querySelector('[aria-current=step] .sc-name').textContent, [...b.querySelectorAll('.d-actions :is(button, summary)')].filter(x => x.checkVisibility()).map(x => x.textContent.trim())]; })()")
             .unwrap();
+        // Retry with feedback, as on the plan's Stopped cards, its box folded; Retry beside it
         assert_eq!(
             band,
-            json!(["review · Waders: the autumn guide's entries", "review", ["Retry"]])
+            json!(["review · Waders: the autumn guide's entries", "review", ["Retry with feedback", "Retry"]])
         );
 
         // Overview at 2560: two to a row, its columns side by side from the top

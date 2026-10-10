@@ -63,7 +63,7 @@ typography:
     letterSpacing: "-0.04em"
   section:
     fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, sans-serif"
-    fontSize: "30px"
+    fontSize: "26px"
     fontWeight: 850
     lineHeight: "1"
     letterSpacing: "-0.03em"
@@ -138,7 +138,7 @@ components:
     height: "52px"
   page-head:
     textColor: "{colors.ink}"
-    typography: "30px/34px 850"
+    typography: "34px/38px 850"
   inbox-count:
     backgroundColor: "{colors.coral}"
     textColor: "{colors.on-coral}"
@@ -387,12 +387,15 @@ One family: **Schibsted Grotesk** (variable, 400 to 900) for display and text, w
 cdn.jsdelivr.net (`@fontsource-variable/schibsted-grotesk@5.3.0`,
 `@fontsource-variable/jetbrains-mono@5.3.0`), the only third-party requests a page makes.
 
-- The page's name (`ui::page_head`): 30px/34px, 850, -0.025em (26px on a phone), balanced
+- The page's name (`ui::page_head`): 34px/38px, 850, -0.025em (28px on a phone), balanced
   and wrapping anywhere rather than running off; a step's name 28px/34px (23px on a phone,
   24px in the drawer, three lines at most there). The summary sentence under it: 17px/24px, 500
-  (15px on a phone), one line where it fits. A page's note in its place: 14px in `ink-muted`.
-- A band section's head: 30px, 850, -0.03em. A question's title in its module: 23px, 800. A
-  module's title: 16px, 750, two lines at most.
+  (15px on a phone), at most 100 characters a line; its links (the questions, a recipe) are
+  44px targets on a phone without changing the line. A page's note in its place: 14px in
+  `ink-muted`.
+- A band section's head: 26px, 850, -0.025em (24px on a phone), so the page's name outranks it,
+  and so does nothing in it: home's project names are 26px. A question's title in its module:
+  23px, 800. A module's title: 16px, 750, two lines at most.
 - Body 15/22; meta 13/18 in `ink-muted`; a running cell's time 20px 800.
 - Data: JetBrains Mono 12.5px.
 - Tabular figures only on numeric data (`time`, durations, counts, `.num`), never page-wide:
@@ -457,8 +460,9 @@ head on the paper under it.
   `band-mark`. On a phone the wordmark and Projects give way to the switcher (whose menu has
   them), its name shortens before anything wraps, and the live line is its square.
 - **The page's head** (`Frame::head`, `ui::page_head` and `ui::page_head_with`): on the paper,
-  its crumbs when it is one thing in a tab (a step's way back to its plan and its unit), its name
-  at 30px with its Details' "⋯" beside it, and under it on a plan and on home only the summary
+  its crumbs when it is one thing in a tab (a step's way back to its plan and its unit, the unit
+  by its title or name cut to 40, never "Its unit"), its name at 34px with its Details' "⋯"
+  pinned to the head's right edge, and under it on a plan and on home only the summary
   sentence (`ui::summary_sentence`), one line of large body text where it fits; a page that says
   what it shows has a muted note in its place (`ui::page_head_note`: the Log's records, the
   Day's date and clock, the Functions' counts). No page carries a description blurb.
@@ -487,8 +491,11 @@ and earlier runs, its fn, engine and model, its tags, its recipe, its params, a 
 hash or a path) is kept behind one "⋯" at the item's end: `ui::Details`, drawn by its `menu`.
 It is a `<details>` (so it opens without script) inside a `sluice-menu` (Escape and a click
 elsewhere close it and give the focus back to its button, which says `aria-expanded`), 44px on
-a phone, where it opens as a sheet at the bottom of the window. Its panel lists each value with
-its name; an id is whole in data mono with a copy button. Every row, module, head and message
+a phone, where it opens as a sheet at the bottom of the window. Wider, its panel hangs from its
+button's right edge, and `sluice-menu` moves it back inside the window when that would cut it
+(8px from either edge), so every panel opens whole at every width (a Chromium test opens each
+on the plan, a step, a unit, home and the inbox at 390, 1440 and 2560). Its panel lists each
+value with its name; an id is whole in data mono with a copy button, a description is markdown. Every row, module, head and message
 has one; ids stay addressable (the find takes them, URLs carry them, and a step's Inputs,
 Outputs and Runs tabs stay whole).
 
@@ -510,7 +517,7 @@ when), `.mod-t` (its title), `.mod-meta` (its facts; what identifies it in its D
   rule, with Retry with feedback first. A long run (`Swell::Margin`) is the margin module on
   sky under a 3px navy rule. Anything else (`Swell::Plain`) is a row under a hairline.
 - **A band section's head** (`ui::section_head`): For you, Stopped, Running, Waiting, Done,
-  each under a 3px navy rule, its name at 30px at the left and its count line at the right
+  each under a 3px navy rule, its name at 26px at the left and its count line at the right
   ("1 failed · 1 cancelled").
 - **The margin module** (`ui::margin_module`): two columns at the sheet's right; a long run's
   title (linking its page) with its Details, its words, its running time on the blue with the
@@ -681,7 +688,7 @@ The parts:
 - **Confirmation dialogs**: Cancel, a succeeded step's Retry, Delete project (a single
   confirm), Clear board, Remove a resource and Close all use one native `<dialog>`, drawn by
   `ui::Confirm` in a `sluice-confirm`: square, on `paper-raised` with the lift and the scrim,
-  its title ending in its question mark with the id under it in data mono. Focus starts on the
+  its title naming what it acts on in words (a step by its stage and title, never its id). Focus starts on the
   keep button, stays in the dialog, Escape closes it and focus returns to the opener. Without
   script a details fold shows the same form inline.
 - **Live updates**: each page's stream patches only the regions that changed, and a quiet
@@ -699,12 +706,17 @@ The pages compose these parts; each lane that redraws one writes its section her
   holds it:
   - **For you**: each open question to the owner a swelled module (the coral rule, the
     question as its title, who asked in words and when, the unit's title and how long it has
-    run, its stage strip the first time a unit asks, the question's body, Answer primary, Open
+    run, its stage strip the first time a unit asks (three cells a row in the half-width card,
+    each name whole, its state its glyph), the question's body, Answer primary, Open
     step, Message, Close question, its Details). Beside it, **Stopped**: each failed, cancelled
     or stale unit a module on the sand (its glyph and word, its failure's kind in a word, its
     stage marks, the failure's sentence and what to try next, Retry with feedback first when a
     bare Retry would fail again, Retry, Open step, Unit page, its Details). Failures before
-    cancels, in plan order.
+    cancels, in plan order. A cancelled card ends with a quiet Dismiss (a plain form, no
+    confirm): its unit then stops marking the plan and the summary, and stands in Done's index
+    as "b cancelled and dismissed". For ten minutes after, Stopped says "Dismissed: <title> ·
+    Undo" in one polite status line a cancel, the Undo a plain form too. A failure is never
+    dismissed.
   - **Running**, quiet first then the longest running, and **Waiting**, in plan order, as rows:
     a block a recipe (its name, linking to every unit it made, its count by state, its stages
     as the columns over its rows), then the units of no recipe and the loose steps. A row (72 to
@@ -721,7 +733,8 @@ The pages compose these parts; each lane that redraws one writes its section her
   - **Done**: its count and when the last finished; what finished last, the latest four by
     title with their clock time and how long they took (`ui::latest_list`); then the index
     folded behind "Show the n done units" (open for Show: Done, a find or a recipe's every
-    unit), a dense list newest first in columns: finish time, glyph, title, how long it took.
+    unit), a dense list newest first in columns: finish time, glyph, title, how long it took
+    (in `ink-muted`, like every finished duration: the blue is for what runs).
   The sheet's modes: on a medium sheet (under 1200px, a board or the drawer beside it) a row's
   cells narrow to 68px each, the modules sit two to a band's row and the long
   runs go side by side under Running; under 640px everything stacks; from 2000px the bands of
@@ -734,10 +747,16 @@ The pages compose these parts; each lane that redraws one writes its section her
   Step head, `StepView::band`): its way back to its plan and its unit, its stage muted before
   its title at 28px with its Details (its id, unit, recipe, fn, run and tags), its state and how
   long it has run against its usual time, its words, then its unit's stage strip (its own
-  stage ringed) and its actions, the next move filled. Its tabs follow. Overview is modules on the sheet: the question
+  stage ringed) and its actions, the next move filled: Retry with feedback as on the plan's
+  Stopped cards (its box folded under it, Retry beside it), a cancel's quiet Dismiss. When a
+  failure repeated the run before, the box stands open in Why it failed instead, under its
+  advice (ink at body size), so the owner reads why before writing. Its tabs follow. Overview is modules on the sheet: the question
   to the owner swells first on the coral rule, answered in place; then why it failed on the
-  sand, or Now (its live turn: last words, its calls by tool as tiles, named exactly as the
-  engine's transcript names them, and its latest calls); beside them, as titled modules, what
+  sand, or Now (its live turn: last words, its calls counted once in the turn's line, by tool
+  as tiles when it used more than one, named exactly as the engine's transcript names them,
+  and its latest calls; a progress field that repeats its latest message is said once, as the
+  message); a question to the owner says it is waiting once, in the band's chip and the coral
+  rule; beside them, as titled modules, what
   it waits on (or when it starts), what it comes after, its progress and its key output. The
   columns stand one over the other on a narrow sheet (the drawer, a phone, to 900px of sheet),
   at seven and five twelfths to 2000px, as halves from there with the side's modules two to a
@@ -759,7 +778,9 @@ The pages compose these parts; each lane that redraws one writes its section her
   owner
   come first as swelled modules on the coral rule, answered in place (Answer and Close 44px; on
   a phone a whole-width card), one a row to 900px of sheet, two to 2000, three from there and
-  four from 3000; then those between agents, the ones nobody waits on and the unread notes.
+  four from 3000; then those between agents, the ones nobody waits on and the unread notes
+  (each its thread's name and project, its notes, then Mark read after them). A thread's page
+  keeps its thread name and project in its Details.
   A conversation's messages are rows apart by hairlines, each with its Details (its id, its
   thread, what it replies to), an open question to the owner on the coral rule with its reply
   under it, the message box under the navy rule.
@@ -785,11 +806,12 @@ The pages compose these parts; each lane that redraws one writes its section her
   bars on 7px tracks (sky done, blue running, sand-ink needing a look), the hours along the top
   in data mono, the rule at now in the run blue; quick successes are counted, not drawn. The
   timetable: a 64px hour column (the hour 22px, its day where it changes, its runs counted),
-  then a column a project; each run a line: its minute in mono, its unit's title in ink and its
-  stage muted (its step and run in the link's title), then at the right its glyph and duration
-  (sky-ink check), its word on
-  the sand chip when it needs a look, or "running 43m" on the blue; a line is at most 480px, so
-  its outcome stays by its name on a wide screen. A busy hour (more than six in a cell) lists
+  then a column a project; each run a line, three columns: its minute in mono (never wrapped),
+  its unit's title in ink and its stage muted (two lines at most; its step and run in the
+  link's title), then at the right its glyph and duration (sky-ink check), its word on the sand
+  chip when it needs a look, or "running 43m" on the blue, never wrapped; a line is at most
+  480px, so its outcome stays by its name on a wide screen. Under 400px of frame the title takes
+  a line of its own under the minute and outcome. A busy hour (more than six in a cell) lists
   only its notable runs (not a success, an hour or longer, or past twice its stage's usual time
   that day) and folds the successes behind a muted "+23 more succeeded, 1m to 12m" that opens
   in place; a long list flows into columns as wide as the screen allows; four projects or more stack under each hour below
@@ -801,7 +823,9 @@ The pages compose these parts; each lane that redraws one writes its section her
   records on this page; the newest …"). The log is the records whole, so it keeps each record's
   seq and names its step by title with its id after it; under the head the presets as one
   view-switch bar beside the filters, the note on what is left out, then Records under a
-  band section's head, the table under a 2px navy rule with seq, time and kind in data mono.
+  band section's head, the table under a 2px navy rule with seq, time and kind in data mono. A
+  message row is its sender and recipient as name links, then its words in plain muted text and
+  one small "thread" link after them.
 - **Functions** (`/fns`): the head says "Functions" and counts them in its note; the picker and
   the
   find on one bar, the groups' index, then each group under a band section's head, its

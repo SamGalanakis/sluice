@@ -822,7 +822,7 @@ impl HomeView {
         )
     }
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
-        let mut html = String::from("<div id=\"projects\" class=\"home\"><h1 class=\"vh\">Projects</h1>");
+        let mut html = String::from("<div id=\"projects\" class=\"home\">");
         if self.projects.is_empty() && self.archived.is_empty() {
             html.push_str("<p class=\"empty\">No projects yet. An orchestrator creates one with <code>project_create</code>.</p>");
         } else {

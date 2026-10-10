@@ -583,8 +583,13 @@ async fn a_running_steps_now_leads_with_its_live_turn() {
     // nothing comes before it but the module's head
     let body = &before[before.find("</div>").unwrap()..];
     assert!(body == "</div>" && !before.contains("convo"), "{before}");
-    // its calls by tool, as the transcript names each tool, and its latest calls before it
-    assert!(turn.contains("<ul class=\"now-tools\""), "{turn}");
+    // its calls counted once, in the turn's line; a turn of one tool (Bash here) draws no
+    // tiles by tool, which would count them again
+    assert!(
+        turn.contains("<span class=\"meta\">8 tool calls</span>"),
+        "{turn}"
+    );
+    assert!(!turn.contains("<ul class=\"now-tools\""), "{turn}");
     drop(f.writer);
     drop(f.home);
 }
@@ -697,7 +702,8 @@ async fn chromium_a_running_steps_now_reads_its_live_turn_on_the_grid() {
                     .eval("(() => { const now = document.querySelector('#tp-overview .d-now'), tiles = [...now.querySelectorAll('.now-tools > li')], calls = now.querySelectorAll('.now-calls a[data-tab-to=activity]'); return {tiles: tiles.length, named: tiles.every(t => t.querySelector('.nt-tool').textContent.trim().length > 0 && /^[0-9]+$/.test(t.querySelector('.nt-n').textContent)), calls: calls.length, last: !!now.querySelector('.now-call')?.checkVisibility(), scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth}; })()")
                     .unwrap();
                 let label = format!("{width} {theme}");
-                assert!(g["tiles"].as_u64().unwrap() >= 1, "{label}: {g}");
+                // one tool this turn: no tiles by tool
+                assert_eq!(g["tiles"], 0, "{label}: {g}");
                 assert_eq!(g["named"], true, "{label}: {g}");
                 assert!(g["calls"].as_u64().unwrap() >= 1, "{label}: {g}");
                 assert_eq!(g["last"], true, "{label}: {g}");

@@ -557,14 +557,15 @@ async fn chromium_conversations_answers_copies_and_the_dialog_take_the_keyboard(
             browser.eval("document.activeElement.id === [...document.querySelectorAll('.convo-list [id^=message-]')].at(-1).id").unwrap(),
             true
         );
-        // the thread's name copies, the button saying so for a moment
+        // the thread's name copies from its head's Details, the button saying so for a moment
         browser
             .send("Browser.grantPermissions", json!({"permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]}))
             .unwrap();
-        browser.eval("document.querySelector('.thread-of sluice-copy button.copy').click()").unwrap();
-        browser.wait("document.querySelector('.thread-of sluice-copy button.copy').hasAttribute('data-copied')").unwrap();
+        browser.eval("document.querySelector('#messages-band details.dm > summary').click()").unwrap();
+        browser.eval("document.querySelector('#messages-band .dm-l sluice-copy button.copy').click()").unwrap();
+        browser.wait("document.querySelector('#messages-band .dm-l sluice-copy button.copy').hasAttribute('data-copied')").unwrap();
         assert_eq!(browser.eval("navigator.clipboard.readText()").unwrap(), json!("step-alpha-build"));
-        assert_eq!(browser.eval("document.querySelector('.thread-of sluice-copy .copy-said').textContent").unwrap(), json!("Copied"));
+        assert_eq!(browser.eval("document.querySelector('#messages-band .dm-l sluice-copy .copy-said').textContent").unwrap(), json!("Copied"));
         // a question's Answer opens its box and puts the focus in it; again closes it
         browser.navigate(&inbox).unwrap();
         browser.wait("document.readyState === 'complete' && customElements.get('sluice-answer') && document.querySelector('button.q-toggle')").unwrap();

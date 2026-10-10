@@ -168,11 +168,15 @@ impl Verdict {
             )
         })
     }
-    /// `message`, with this version named when it is untested.
+    /// `message`, with this version named when it is untested: "…unavailable; likely cause:
+    /// untested codex 0.161.0 (…)", the message's own full stop dropped before the join.
     pub fn explain(&self, message: impl Into<String>) -> String {
         let message = message.into();
         match self.hint() {
-            Some(hint) if !message.contains(&hint) => format!("{message}; likely cause: {hint}"),
+            Some(hint) if !message.contains(&hint) => format!(
+                "{}; likely cause: {hint}",
+                message.trim_end().trim_end_matches(['.', ';'])
+            ),
             _ => message,
         }
     }
@@ -489,5 +493,18 @@ mod tests {
         .unwrap();
         assert!(between.note().unwrap().contains("is not one of the tested"));
         assert_eq!(POLICY.judge("0.160.1").unwrap().note(), None);
+    }
+    #[test]
+    fn a_likely_cause_joins_a_sentence_without_its_full_stop() {
+        let newer = POLICY.judge("0.161.0").unwrap();
+        assert_eq!(
+            newer.explain("The session ended early."),
+            "The session ended early; likely cause: untested codex 0.161.0 (tested 0.160.0, 0.160.1)"
+        );
+        assert_eq!(
+            POLICY.judge("0.160.1").unwrap().explain("Ended."),
+            "Ended.",
+            "a tested version leaves the message as it was"
+        );
     }
 }

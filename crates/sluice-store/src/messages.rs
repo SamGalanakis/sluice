@@ -1202,7 +1202,8 @@ pub fn reader(
 }
 
 /// The owner's mark on a cancelled step it has set aside: the stream its `readers` rows are
-/// kept under, a row a step (its `thread`), its cursor the cancel's log record.
+/// kept under, a row a step (its `thread`), its cursor the cancel's log record and its
+/// `heartbeat_at` when the owner set it (`dismissed_lately`).
 const DISMISSED_STREAM: &str = "dismissed";
 /// The step's latest record of going to failed, or the log's end when that record is trimmed:
 /// a later cancel writes a later one, so a mark at this point covers this cancel only.
@@ -1236,8 +1237,8 @@ pub fn dismiss(tx: &mut WriteTransaction<'_>, request: StepDismiss) -> Result<()
         }
         let through = cancel_record(tx.sql(), request.project, step)?;
         tx.sql().execute(
-            "INSERT INTO readers(project_id,identity,stream,thread,cursor) VALUES (?1,'owner',?2,?3,?4) ON CONFLICT(project_id,identity,stream,thread) DO UPDATE SET cursor=excluded.cursor",
-            params![project, DISMISSED_STREAM, step, through],
+            "INSERT INTO readers(project_id,identity,stream,thread,cursor,heartbeat_at) VALUES (?1,'owner',?2,?3,?4,?5) ON CONFLICT(project_id,identity,stream,thread) DO UPDATE SET cursor=excluded.cursor,heartbeat_at=excluded.heartbeat_at",
+            params![project, DISMISSED_STREAM, step, through, now()?],
         )?;
     } else {
         tx.sql().execute(
@@ -1269,6 +1270,28 @@ pub fn dismissed(
         }
     }
     Ok(out)
+}
+/// The cancels the owner set aside in the last `minutes`, still set aside, each with when: the
+/// plan says each, with its Undo, for that long.
+pub fn dismissed_lately(
+    sql: &Connection,
+    project: ProjectId,
+    minutes: f64,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let still = dismissed(sql, project)?;
+    let mut q = sql.prepare_cached(
+        "SELECT thread,heartbeat_at FROM readers WHERE project_id=?1 AND identity='owner' AND stream=?2 AND heartbeat_at IS NOT NULL AND julianday(heartbeat_at)>=julianday('now')-?3/1440.0",
+    )?;
+    let rows = q
+        .query_map(
+            params![project.to_string(), DISMISSED_STREAM, minutes],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .filter(|(step, _)| still.contains(step))
+        .collect())
 }
 pub fn mark_read(tx: &mut WriteTransaction<'_>, read: MarkRead) -> Result<MessageId> {
     if read.through.0 < 0 || read.identity.trim().is_empty() {

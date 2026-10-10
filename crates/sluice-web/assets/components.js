@@ -521,8 +521,22 @@ define("sluice-menu", {
       const d = details(), summary = d?.querySelector(":scope > summary");
       if (summary && summary.getAttribute("aria-expanded") !== String(d.open)) summary.setAttribute("aria-expanded", String(d.open));
     };
-    on(host, "toggle", said, { capture: true });
+    // an open panel stays inside the window: one anchored by its right edge near the window's
+    // left (a short name's "⋯", a module at the sheet's left) moves right until it fits, and the
+    // other way round; a phone's sheet is fixed to the window already
+    const fit = () => {
+      const d = details(), panel = d?.querySelector(":scope > .dm-p");
+      if (!panel) return;
+      panel.style.translate = "";
+      if (!d.open || getComputedStyle(panel).position === "fixed") return;
+      const r = panel.getBoundingClientRect(), edge = 8, width = document.documentElement.clientWidth;
+      const dx = r.left < edge ? edge - r.left : r.right > width - edge ? width - edge - r.right : 0;
+      if (dx) panel.style.translate = `${Math.round(dx)}px 0`;
+    };
+    on(host, "toggle", () => { said(); fit(); }, { capture: true });
+    on(window, "resize", fit);
     said();
+    fit();
     const items = () => [...(details()?.querySelectorAll(".menu a[href], .menu button:not([hidden]), .menu input:not([type=hidden])") ?? [])]
       .filter((el) => el.checkVisibility?.() ?? true);
     on(document, "click", (event) => {

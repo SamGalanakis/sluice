@@ -534,7 +534,7 @@ async fn chromium_the_plain_sheet_the_trace_details_and_the_head_at_every_width(
         let head = browser.eval("(() => { const first = [...document.querySelectorAll('#plan-grid .sec-h')].find(h => h.checkVisibility()); return {nav: Math.round(document.querySelector('header.site-head').getBoundingClientRect().height), first: Math.round(first.getBoundingClientRect().top + scrollY), h1: getComputedStyle(document.querySelector('.page-head h1')).fontSize, line: document.querySelectorAll('.page-line').length}; })()").unwrap();
         assert!(head["first"].as_f64().unwrap() <= 220.0, "{head}");
         assert!(head["nav"].as_f64().unwrap() <= 56.0, "{head}");
-        assert_eq!(head["h1"], "30px", "{head}");
+        assert_eq!(head["h1"], "34px", "{head}");
         assert_eq!(head["line"], 1, "{head}");
         // a running row says its title and state, never its step's id; its Details do
         let ids = browser.eval("(() => { const row = document.querySelector('#plan-running .pl-row'); const seen = row.innerText; const d = row.querySelector('.pl-end details.dm'); const step = [...d.querySelectorAll('.dm-l > div')].find(x => x.querySelector('dt').textContent === 'Step').querySelector('code').textContent; return [row.querySelector('.pl-t') !== null, step.length > 0, seen.includes(step)]; })()").unwrap();
@@ -547,7 +547,7 @@ async fn chromium_the_plain_sheet_the_trace_details_and_the_head_at_every_width(
         assert_eq!(browser.eval("(d => [d.open, d.querySelector('.dm-p').checkVisibility()])(document.querySelector('#plan-running .pl-end details.dm'))").unwrap(), json!([true, true]));
         browser.send("Emulation.setScriptExecutionDisabled", json!({"value": false})).unwrap();
 
-        // ---- the head on a phone: the nav one slim row, the name at 26px, the plan's first
+        // ---- the head on a phone: the nav one slim row, the name at 28px, the plan's first
         // section near the top, and the sections a row of 44px targets
         browser.viewport(390, "light").unwrap();
         browser.navigate(&plan).unwrap();
@@ -556,7 +556,7 @@ async fn chromium_the_plain_sheet_the_trace_details_and_the_head_at_every_width(
         browser.eval(FRAMES).unwrap();
         let phone = browser.eval("(() => { const first = [...document.querySelectorAll('#plan-grid .sec-h')].find(h => h.checkVisibility()); return {nav: Math.round(document.querySelector('header.site-head').getBoundingClientRect().height), h1: getComputedStyle(document.querySelector('.page-head h1')).fontSize, first: Math.round(first.getBoundingClientRect().top + scrollY), fits: document.querySelector('#top-nav').scrollWidth <= document.querySelector('#top-nav').clientWidth, links: [...document.querySelectorAll('.subnav nav.links > a')].every(a => a.getBoundingClientRect().height >= 44)}; })()").unwrap();
         assert!(phone["nav"].as_f64().unwrap() <= 52.0, "{phone}");
-        assert_eq!(phone["h1"], "26px", "{phone}");
+        assert_eq!(phone["h1"], "28px", "{phone}");
         assert!(phone["first"].as_f64().unwrap() <= 340.0, "{phone}");
         assert_eq!(phone["fits"], true, "{phone}");
         assert_eq!(phone["links"], true, "{phone}");

@@ -108,7 +108,7 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/b")).await;
     assert!(
         step.contains(
-            "<input type=\"hidden\" name=\"action\" value=\"dismiss\"><button>Dismiss</button>"
+            "<input type=\"hidden\" name=\"action\" value=\"dismiss\"><button class=\"quiet-act\" title=\"It stays on its unit, but no longer marks the unit or its project\">Dismiss</button>"
         ),
         "{step}"
     );
@@ -126,11 +126,17 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     let done = plan_html::band(&page, "plan-done");
     let line = between(done, "<li data-said=\"a succeeded|b cancelled\">", "</li>");
     assert!(
-        line.contains("g-cancelled") && line.contains(">b cancelled</span>"),
+        line.contains("g-cancelled") && line.contains(">b cancelled and dismissed</span>"),
         "{line}"
     );
     assert!(!plan_html::summary(&page).contains("cancelled"), "{page}");
-    assert!(!page.contains(">Stopped</h2>"), "{page}");
+    // Stopped holds no card now, only the line that offers its Undo, for ten minutes
+    let stopped = plan_html::band(&page, "plan-stopped");
+    assert!(
+        !stopped.contains("pl-item pl-stop")
+            && stopped.contains("<div class=\"pl-dismissed\" role=\"status\">"),
+        "{stopped}"
+    );
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/b")).await;
     assert!(step.contains("cancelled"), "the step still reads cancelled");
     assert!(
@@ -512,7 +518,7 @@ async fn chromium_a_steps_heading_steps_down_on_a_phone_and_a_units_glyph_sits_b
             .eval("(() => { const h = document.querySelector('h1.unit-h'), g = h.querySelector('.g'); return {top: g.getBoundingClientRect().top - h.getBoundingClientRect().top, size: getComputedStyle(h).fontSize}; })()")
             .unwrap();
         assert!(g["top"].as_f64().unwrap() < 8.0, "the glyph by the first line: {g}");
-        assert_eq!(g["size"], "26px", "{g}");
+        assert_eq!(g["size"], "28px", "{g}");
     })
     .await
     .unwrap();

@@ -313,8 +313,13 @@ mod support {
         }
     }
 }
-use serde_json::json;
-use sluice_model::{commands::*, error::PublicError};
+use rusqlite::params;
+use serde_json::{Value, json};
+use sluice_model::{
+    commands::*,
+    error::PublicError,
+    ids::{AttemptId, ProjectSelector, RunId},
+};
 use sluice_store::{
     RetrySafety,
     plans::{self},
@@ -411,4 +416,108 @@ async fn regression_growing_reorder_preserves_old_steps_and_inputs_without_posit
     );
     assert_eq!(state.status(&id("z")), StepStatus::Succeeded);
     assert_eq!(state.inputs, map(json!({"iz":5})));
+}
+
+/// Who cancelled or retried a run, and why, is kept on the run (`runs.stopped`), so the page
+/// still says it once the log has trimmed the record: a retry on the step's latest run only, a
+/// cancel on the run it stops.
+#[tokio::test]
+async fn cancel_and_retry_keep_who_and_why_on_the_run() {
+    let f = Fixture::new(json!({"steps":{"a":{"run":"empty"}}})).await;
+    f.manual("a", json!({}), false).await;
+    let project = f.context.project;
+    let runs: Vec<String> = f
+        .writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            let mut runs = vec![];
+            for (n, at) in ["2026-10-01T00:00:00Z", "2026-10-01T01:00:00Z"]
+                .into_iter()
+                .enumerate()
+            {
+                let (attempt, run) = (AttemptId::new(), RunId::new());
+                let phase = if n == 0 { "terminal" } else { "executing" };
+                tx.sql().execute(
+                    "INSERT INTO attempts(attempt_id,project_id,step_id,generation,work_generation,phase,request,inputs_hash,created_at) VALUES (?1,?2,'a',1,1,?3,'{}','hash',?4)",
+                    params![attempt.to_string(), project.to_string(), phase, at],
+                )?;
+                tx.sql().execute(
+                    "INSERT INTO runs(run_id,project_id,attempt_id,step_id,generation,work_generation,created_at,started_at) VALUES (?1,?2,?3,'a',1,1,?4,?4)",
+                    params![run.to_string(), project.to_string(), attempt.to_string(), at],
+                )?;
+                runs.push(run.to_string());
+            }
+            tx.changed(Some(project), "status");
+            Ok(runs)
+        })
+        .await
+        .unwrap();
+    let reads = &f.reads;
+    let stopped = |run: String| async move {
+        reads
+            .snapshot(move |c| {
+                Ok(c.query_row(
+                    "SELECT coalesce(stopped,'{}') FROM runs WHERE run_id=?1",
+                    [run],
+                    |r| r.get::<_, String>(0),
+                )?)
+            })
+            .await
+            .unwrap()
+    };
+    let context = f.context.clone();
+    let request = retry_request(project, &["a"], None);
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            plans::step_retry(tx, &context, request, &mut Hooks::default())
+        })
+        .await
+        .unwrap();
+    assert_eq!(stopped(runs[0].clone()).await, "{}");
+    let kept: Value = serde_json::from_str(&stopped(runs[1].clone()).await).unwrap();
+    assert_eq!(kept["retry"]["author"], "sam");
+    assert_eq!(kept["retry"]["reason"], "retry");
+    assert!(
+        kept["retry"]["at"]
+            .as_str()
+            .is_some_and(|a| a.starts_with("20"))
+    );
+    // the step runs again; the owner cancels it
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE steps SET status='running' WHERE project_id=?1 AND step_id='a'",
+                [project.to_string()],
+            )?;
+            tx.changed(Some(project), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let context = f.context.clone();
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            plans::step_cancel(
+                tx,
+                &context,
+                StepCancel {
+                    expected_rev: None,
+                    project: ProjectSelector::Id(project),
+                    selection: StepSelection {
+                        steps: Some(vec![id("a")]),
+                        tags: None,
+                    },
+                    reason: "switch to the new brief".into(),
+                    author: Some("owner".into()),
+                },
+            )
+        })
+        .await
+        .unwrap();
+    let kept: Value = serde_json::from_str(&stopped(runs[1].clone()).await).unwrap();
+    assert_eq!(kept["cancel"]["author"], "owner");
+    assert_eq!(kept["cancel"]["reason"], "switch to the new brief");
+    assert_eq!(
+        kept["retry"]["author"], "sam",
+        "a cancel keeps the retry beside it"
+    );
 }

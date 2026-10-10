@@ -185,6 +185,13 @@ impl TurnView {
 impl TurnView {
     /// Its calls by tool, most first, each tool named exactly as its engine's transcript names
     /// it (`tools`, "Bash 8 · Edit 3"): Now's tiles.
+    /// Its calls counted, as Now's turn line says them (its tools are Now's tiles).
+    pub fn calls_count(&self) -> String {
+        if self.calls == 0 {
+            return "No tool calls".into();
+        }
+        ui::count(self.calls, "tool call", "tool calls")
+    }
     pub fn tool_counts(&self) -> Vec<(String, usize)> {
         self.tools
             .split(" · ")
@@ -236,6 +243,15 @@ impl ActivityView {
             parts.push(format!("{} failed", self.failed));
         }
         parts.join(" · ")
+    }
+    /// Now's head: its turns and how many calls failed, the calls themselves counted once, on
+    /// the turn under it.
+    pub fn turns_words(&self) -> String {
+        let mut words = ui::count(self.turns.len() + self.earlier, "turn", "turns");
+        if self.failed > 0 {
+            words.push_str(&format!(" · {} failed", self.failed));
+        }
+        words
     }
     pub fn all_href(&self) -> String {
         format!("{}?activity=all&tab=activity#activity", self.step_href)
