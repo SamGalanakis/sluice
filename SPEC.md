@@ -1317,8 +1317,14 @@ functions are refused. JSON columns come back as JSON text.
 
 The wire also carries `mark_read` (advance a reader's position on a thread), `step_dismiss`
 (`project`, `step`, `dismissed`: the owner sets a cancelled step aside, or back; kept as the
-owner's `readers` row on the stream `dismissed`, its cursor the cancel's `step.status` record and
-its `heartbeat_at` when it was set, so it covers that cancel only and writes no record; only a cancel can be dismissed), `backup`, `builtin`
+owner's `readers` row on the stream `dismissed`, its `cursor` the step's `work_generation`,
+its `unread_alert_min` the step's `generation`, and its `heartbeat_at` when it was set.
+It holds while that key is unchanged and the step is still failed as a cancel, regardless of
+record retention or later project activity. Retry increments the work generation; removing
+and recreating the step changes its generation. Writer startup rewrites legacy dismissal
+rows, identified by a null `unread_alert_min`, to the current cancel's key without changing
+`heartbeat_at`, and removes legacy rows for steps no longer cancelled. No record is written;
+only a cancel can be dismissed), `backup`, `builtin`
 (guardian-authenticated only), `submission`, `acquire_lease`, `release_lease` and
 `register_completion_action` (run callbacks only).
 

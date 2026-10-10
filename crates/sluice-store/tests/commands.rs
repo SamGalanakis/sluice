@@ -521,3 +521,183 @@ async fn cancel_and_retry_keep_who_and_why_on_the_run() {
         "a cancel keeps the retry beside it"
     );
 }
+
+async fn cancel_external(f: &Fixture) {
+    let context = f.context.clone();
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            plans::step_cancel(
+                tx,
+                &context,
+                StepCancel {
+                    expected_rev: None,
+                    project: ProjectSelector::Id(context.project),
+                    selection: StepSelection {
+                        steps: Some(vec![id("a")]),
+                        tags: None,
+                    },
+                    reason: "cancel".into(),
+                    author: Some("owner".into()),
+                },
+            )
+        })
+        .await
+        .unwrap();
+}
+
+async fn dismissal(f: &Fixture) -> bool {
+    let project = f.context.project;
+    f.reads
+        .snapshot(move |sql| Ok(sluice_store::messages::dismissed(sql, project)?.contains("a")))
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn dismissal_survives_record_retention_until_retry_and_new_cancel() {
+    let f = Fixture::new(json!({"steps":{"a":{"run":"core.external"}}})).await;
+    cancel_external(&f).await;
+    let project = f.context.project;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute("DELETE FROM records", [])?;
+            sluice_store::messages::dismiss(
+                tx,
+                StepDismiss {
+                    project,
+                    step: id("a"),
+                    dismissed: true,
+                },
+            )
+        })
+        .await
+        .unwrap();
+    assert!(dismissal(&f).await);
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            for _ in 0..3 {
+                tx.append_record(
+                    Some(project),
+                    sluice_model::events::Event::StepCancel {
+                        step: id("unrelated"),
+                        author: "owner".into(),
+                        reason: "other work".into(),
+                    },
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(
+        dismissal(&f).await,
+        "unrelated records must not expire a dismissal"
+    );
+    assert_eq!(
+        f.reads
+            .snapshot(move |sql| sluice_store::messages::dismissed_lately(sql, project, 10.0))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let context = f.context.clone();
+    let request = retry_request(project, &["a"], None);
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            plans::step_retry(tx, &context, request, &mut Hooks::default())
+        })
+        .await
+        .unwrap();
+    assert!(!dismissal(&f).await);
+    cancel_external(&f).await;
+    assert!(
+        !dismissal(&f).await,
+        "a new cancel needs its own dismissal even without a run"
+    );
+}
+
+#[tokio::test]
+async fn legacy_dismissal_is_rewritten_without_refreshing_undo_time() {
+    let mut f =
+        Fixture::new(json!({"steps":{"a":{"run":"core.external"},"b":{"run":"core.external"},"c":{"run":"core.external"},"d":{"run":"core.external"}}}))
+            .await;
+    cancel_external(&f).await;
+    let project = f.context.project;
+    f.writer.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute("DELETE FROM records", [])?;
+        tx.sql().execute("INSERT INTO readers(project_id,identity,stream,thread,cursor,heartbeat_at) VALUES (?1,'owner','dismissed','a',226915,'2000-01-01T00:00:00Z'),(?1,'owner','dismissed','b',226915,'2000-01-01T00:00:00Z')", [project.to_string()])?;
+        for (step, error) in [
+            ("c", PublicError::AgentFailure { kind: "Cancelled".into(), message: "stop".into(), session: None }),
+            ("d", PublicError::FnFailure { message: "cancelled: stop".into() }),
+        ] {
+            tx.sql().execute("UPDATE steps SET status='failed',error=?2 WHERE step_id=?1", params![step, serde_json::to_string(&error)?])?;
+            tx.sql().execute("INSERT INTO readers(project_id,identity,stream,thread,cursor,heartbeat_at) VALUES (?1,'owner','dismissed',?2,1,'2000-01-01T00:00:00Z')", params![project.to_string(), step])?;
+        }
+        tx.changed(Some(project), "status");
+        Ok(())
+    }).await.unwrap();
+    f.writer.shutdown().await.unwrap();
+    f.writer = sluice_store::Writer::open(f._home.path()).unwrap();
+    assert!(
+        dismissal(&f).await,
+        "a legacy mark holds for the current cancel"
+    );
+    f.reads.snapshot(move |sql| {
+        let row: (i64, Option<i64>, String) = sql.query_row("SELECT cursor,unread_alert_min,heartbeat_at FROM readers WHERE thread='a' AND stream='dismissed'", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+        assert_eq!(row, (1, Some(1), "2000-01-01T00:00:00Z".into()));
+        assert_eq!(sql.query_row("SELECT count(*) FROM readers WHERE thread='b' AND stream='dismissed'", [], |r| r.get::<_,i64>(0))?, 0);
+        assert_eq!(sluice_store::messages::dismissed(sql, project)?, ["a".into(), "c".into(), "d".into()].into_iter().collect());
+        assert!(sluice_store::messages::dismissed_lately(sql, project, 10.0)?.is_empty());
+        Ok(())
+    }).await.unwrap();
+    let context = f.context.clone();
+    let request = retry_request(project, &["a"], None);
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            plans::step_retry(tx, &context, request, &mut Hooks::default())
+        })
+        .await
+        .unwrap();
+    cancel_external(&f).await;
+    assert!(!dismissal(&f).await);
+    f.writer.shutdown().await.unwrap();
+    f.writer = sluice_store::Writer::open(f._home.path()).unwrap();
+    assert!(
+        !dismissal(&f).await,
+        "startup must not rebind an already migrated mark"
+    );
+}
+
+#[tokio::test]
+async fn dismissal_does_not_hide_a_failure_or_follow_a_recreated_step() {
+    let doc = json!({"steps":{"a":{"run":"core.external"}}});
+    let mut f = Fixture::new(doc.clone()).await;
+    cancel_external(&f).await;
+    let project = f.context.project;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            sluice_store::messages::dismiss(
+                tx,
+                StepDismiss {
+                    project,
+                    step: id("a"),
+                    dismissed: true,
+                },
+            )
+        })
+        .await
+        .unwrap();
+    f.fail_projection("a").await;
+    assert!(
+        !dismissal(&f).await,
+        "a non-cancel failure cannot be hidden by an old mark"
+    );
+    f.apply(json!({"steps":{}})).await;
+    f.apply(doc).await;
+    cancel_external(&f).await;
+    assert!(
+        !dismissal(&f).await,
+        "the same step id with a new generation needs a new mark"
+    );
+}

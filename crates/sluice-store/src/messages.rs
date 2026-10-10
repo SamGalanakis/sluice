@@ -1202,32 +1202,49 @@ pub fn reader(
 }
 
 /// The owner's mark on a cancelled step it has set aside: the stream its `readers` rows are
-/// kept under, a row a step (its `thread`), its cursor the cancel's log record and its
+/// kept under, a row a step (its `thread`), its cursor the step's work generation,
+/// `unread_alert_min` its generation (unused for alerts on this stream), and its
 /// `heartbeat_at` when the owner set it (`dismissed_lately`).
 const DISMISSED_STREAM: &str = "dismissed";
-/// The step's latest record of going to failed, or the log's end when that record is trimmed:
-/// a later cancel writes a later one, so a mark at this point covers this cancel only.
-fn cancel_record(sql: &Connection, project: ProjectId, step: &str) -> Result<i64> {
-    Ok(sql.query_row(
-        "SELECT coalesce((SELECT max(seq) FROM records WHERE project_id=?1 AND kind='step.status' AND step_id=?2 AND json_extract(payload,'$.to')='failed'),(SELECT max(seq) FROM records WHERE project_id=?1),0)",
-        params![project.to_string(), step],
-        |r| r.get(0),
-    )?)
+
+/// Legacy cursors are record sequences and have no generation. Bind them once to
+/// the current cancel, preserving Undo's timestamp. Drop marks on other states so
+/// a future cancel cannot inherit one. Called only on a writable startup connection.
+pub(crate) fn upgrade_dismissals(sql: &mut Connection) -> Result<()> {
+    let transaction = sql.transaction()?;
+    transaction.execute(
+        &format!(
+            "DELETE FROM readers WHERE identity='owner' AND stream=?1 AND unread_alert_min IS NULL
+         AND NOT EXISTS (SELECT 1 FROM steps s WHERE s.project_id=readers.project_id
+           AND s.step_id=readers.thread AND s.status='failed' AND {})",
+            sluice_model::shown::cancel_sql("s.error", "$")
+        ),
+        [DISMISSED_STREAM],
+    )?;
+    transaction.execute(
+        "UPDATE readers SET
+           cursor=(SELECT s.work_generation FROM steps s WHERE s.project_id=readers.project_id AND s.step_id=readers.thread),
+           unread_alert_min=(SELECT s.generation FROM steps s WHERE s.project_id=readers.project_id AND s.step_id=readers.thread)
+         WHERE identity='owner' AND stream=?1 AND unread_alert_min IS NULL",
+        [DISMISSED_STREAM],
+    )?;
+    transaction.commit()?;
+    Ok(())
 }
 /// Set a cancelled step aside, or back (`StepDismiss`): only a step whose failure is a cancel.
 pub fn dismiss(tx: &mut WriteTransaction<'_>, request: StepDismiss) -> Result<()> {
     let project = request.project.to_string();
     let step = request.step.as_str();
     if request.dismissed {
-        let found: Option<(String, Option<String>)> = tx
+        let found: Option<(String, Option<String>, i64, i64)> = tx
             .sql()
             .query_row(
-                "SELECT status,error FROM steps WHERE project_id=?1 AND step_id=?2",
+                "SELECT status,error,generation,work_generation FROM steps WHERE project_id=?1 AND step_id=?2",
                 params![project, step],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()?;
-        let Some((status, error)) = found else {
+        let Some((status, error, generation, work)) = found else {
             return Err(missing(format!("no step {step}")));
         };
         if status != "failed" || !error.is_some_and(|e| sluice_model::shown::stored_is_cancel(&e)) {
@@ -1235,10 +1252,9 @@ pub fn dismiss(tx: &mut WriteTransaction<'_>, request: StepDismiss) -> Result<()
                 "step {step} is not cancelled: only a cancel can be dismissed"
             )));
         }
-        let through = cancel_record(tx.sql(), request.project, step)?;
         tx.sql().execute(
-            "INSERT INTO readers(project_id,identity,stream,thread,cursor,heartbeat_at) VALUES (?1,'owner',?2,?3,?4,?5) ON CONFLICT(project_id,identity,stream,thread) DO UPDATE SET cursor=excluded.cursor,heartbeat_at=excluded.heartbeat_at",
-            params![project, DISMISSED_STREAM, step, through, now()?],
+            "INSERT INTO readers(project_id,identity,stream,thread,cursor,unread_alert_min,heartbeat_at) VALUES (?1,'owner',?2,?3,?4,?5,?6) ON CONFLICT(project_id,identity,stream,thread) DO UPDATE SET cursor=excluded.cursor,unread_alert_min=excluded.unread_alert_min,heartbeat_at=excluded.heartbeat_at",
+            params![project, DISMISSED_STREAM, step, work, generation, now()?],
         )?;
     } else {
         tx.sql().execute(
@@ -1256,16 +1272,16 @@ pub fn dismissed(
     project: ProjectId,
 ) -> Result<std::collections::BTreeSet<String>> {
     let mut q = sql.prepare_cached(
-        "SELECT r.thread,r.cursor FROM readers r JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.thread WHERE r.project_id=?1 AND r.identity='owner' AND r.stream=?2 AND s.status='failed'",
+        "SELECT r.thread,s.error FROM readers r JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.thread WHERE r.project_id=?1 AND r.identity='owner' AND r.stream=?2 AND s.status='failed' AND r.cursor=s.work_generation AND r.unread_alert_min=s.generation",
     )?;
     let marks = q
         .query_map(params![project.to_string(), DISMISSED_STREAM], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let mut out = std::collections::BTreeSet::new();
-    for (step, through) in marks {
-        if cancel_record(sql, project, &step)? <= through {
+    for (step, error) in marks {
+        if error.is_some_and(|e| sluice_model::shown::stored_is_cancel(&e)) {
             out.insert(step);
         }
     }

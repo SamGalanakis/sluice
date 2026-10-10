@@ -214,6 +214,7 @@ pub(crate) fn open_writer(home: &Path, timeout: Duration) -> Result<Connection> 
     } else {
         conform(&mut connection)?;
     }
+    crate::messages::upgrade_dismissals(&mut connection)?;
     Ok(connection)
 }
 
@@ -225,7 +226,8 @@ pub(crate) fn upgrade_copy(database: &Path) -> Result<()> {
     )?;
     connection.pragma_update(None, "foreign_keys", true)?;
     verify_schema(&connection, true)?;
-    conform(&mut connection)
+    conform(&mut connection)?;
+    crate::messages::upgrade_dismissals(&mut connection)
 }
 
 /// Add a verified home's missing `ADDED_COLUMNS` and mark it `SCHEMA_VERSION`, in one

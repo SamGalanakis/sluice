@@ -711,7 +711,9 @@ The pages compose these parts; each lane that redraws one writes its section her
     bare Retry would fail again, Retry, Open step, Unit page, its Details). Failures before
     cancels, in plan order. A cancelled card ends with a quiet Dismiss (a plain form, no
     confirm): its unit then stops marking the plan and the summary, and stands in Done's index
-    as "b cancelled and dismissed". For ten minutes after, Stopped says "Dismissed: <title>" and Undo in one
+    as "b cancelled and dismissed". The dismissal persists through record retention and later
+    project activity; a retry or a new cancel brings the card back. For ten minutes after,
+    Stopped says "Dismissed: <title>" and Undo in one
     polite status line a cancel (glyph, title clamped to two lines, Undo), the Undo a plain
     form too. With script, both post in place and the live stream updates Stopped without a
     navigation or scroll jump. Dismiss gives Undo the focus; Undo gives the restored card the
