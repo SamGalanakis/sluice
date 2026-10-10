@@ -1192,12 +1192,16 @@ sluice-copy > button.copy { box-shadow: none; }
 .sb-name { grid-column: span 7; min-width: 0; }
 .sb-side { grid-column: span 5; display: flex; flex-direction: column; gap: 10px; min-width: 0;
            padding-bottom: 4px; }
-.sb-t { margin: 0 0 0 -0.04em; font-size: 96px; line-height: .88; font-weight: 900;
+/* its name is fluid like the band's: 96px at 1440 (68, 48, 36 for a longer one), a phone's
+   floor, more on a wide screen */
+.sb-t { margin: 0 0 0 -0.04em; font-size: clamp(56px, calc(96px + (100vw - 1440px) * 0.0667), 154px); line-height: .88; font-weight: 900;
         letter-spacing: -0.04em; color: var(--band-ink); overflow-wrap: anywhere;
         text-wrap: balance; }
-.sb-t.long { font-size: 68px; line-height: .92; }
-.sb-t.longer { font-size: 48px; line-height: 1; letter-spacing: -0.035em; }
-.sb-t.longest { font-size: 36px; line-height: 1.08; letter-spacing: -0.03em; }
+.sb-t.long { font-size: clamp(44px, calc(68px + (100vw - 1440px) * 0.0472), 109px); line-height: .92; }
+.sb-t.longer { font-size: clamp(32px, calc(48px + (100vw - 1440px) * 0.0333), 77px); line-height: 1;
+               letter-spacing: -0.035em; }
+.sb-t.longest { font-size: clamp(26px, calc(36px + (100vw - 1440px) * 0.025), 58px); line-height: 1.08;
+                letter-spacing: -0.03em; }
 .sb-t .d-stage { color: var(--band-muted); font-weight: 700; }
 .step-band .d-id { margin-top: 14px; display: flex; align-items: center; gap: 4px; }
 .step-band .d-id code { padding: 0; background: none; color: var(--band-muted); font-size: 14px; }
@@ -1214,7 +1218,7 @@ sluice-copy > button.copy { box-shadow: none; }
 .step-band .d-usual.over { color: var(--band-ink); font-weight: 650; }
 .over-x { display: inline-flex; align-items: center; padding: 1px 6px; background: var(--sand);
           color: var(--on-sand); font-size: 12.5px; font-weight: 700; white-space: nowrap; }
-.step-band .d-doc { font-size: 15px; line-height: 1.45; color: var(--band-muted);
+.step-band .d-doc { font-size: clamp(15px, calc(12px + 0.2vw), 19px); line-height: 1.45; color: var(--band-muted);
                     max-width: var(--measure); overflow-wrap: anywhere; }
 .step-band :is(.d-when, .d-retried, .d-resume) { color: var(--band-muted); font-size: 14px;
                                                 line-height: 20px; max-width: var(--measure);
@@ -1307,25 +1311,39 @@ article#step-detail { display: flow-root; }  /* its band's margins stay its own 
 /* ---- a step's Overview (DESIGN.md, A step's page): modules on the grid, the question to the
    owner swelling first, then why it failed or what it does now; beside them what it waits on,
    what it comes after, its progress and its key output. One column on a narrow sheet (the
-   drawer, a phone); two to a row from 900px of sheet; past 2200px the side's own modules two
-   to a row, so a wide screen holds more modules, never longer lines. -------------------------- */
+   drawer, a phone); two to a row from 900px of sheet; from 2000px more modules to a row, never
+   longer lines. -------------------------------------------------------------------------------- */
 .ov { container: ov / inline-size; }
 .ov > sluice-grid { row-gap: 26px; }
 .ov .mod-col { gap: 26px; }
-@container ov (max-width: 899px) {
-  .ov > sluice-grid > .mod-col { grid-column: 1 / -1; }
+/* by its sheet's mode (DESIGN.md, The module grid): the columns one over the other on a narrow
+   sheet and to 900px; 7 and 5 twelfths to 2000px; from there halves, the side's modules two to
+   a row (and with no side, the first column's two to a row); from 3000px a third and two
+   thirds, so three modules stand in a row */
+@container sheet (min-width: 640px) and (max-width: 899.98px) {
+  .ov > sluice-grid > .mod-col { --take: 12; }
+}
+@container sheet (min-width: 900px) and (max-width: 1199.98px) {
+  .ov > sluice-grid > .mod-col { --take: var(--span); }
+}
+@container sheet (min-width: 2000px) {
+  .ov > sluice-grid > .mod-col { --take: 12; }
+  .ov:not(.ov-two) > sluice-grid > .mod-col { --take: 24; }
+  .ov.ov-two > sluice-grid > .mod-col[data-span="5"],
+  .ov:not(.ov-two) > sluice-grid > .mod-col {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start;
+    column-gap: var(--col-gap); }
+}
+@container sheet (min-width: 3000px) {
+  .ov.ov-two > sluice-grid > .mod-col[data-span="7"] { --take: 8; }
+  .ov.ov-two > sluice-grid > .mod-col[data-span="5"] { --take: 16; }
 }
 /* nothing in the first column (a step done with no words or outputs of its own): its waits and
-   what it comes after take the sheet, two to a row */
+   what it comes after take the sheet, as many to a row as fit */
 .ov > sluice-grid > .mod-col[data-span="7"]:not(:has(> *)) { display: none; }
 .ov:has(> sluice-grid > .mod-col[data-span="7"]:not(:has(> *))) .mod-col[data-span="5"] {
   grid-column: 1 / -1; display: grid; column-gap: var(--col-gap); align-items: start;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); }
-@container ov (min-width: 2200px) {
-  .ov.ov-two > sluice-grid > .mod-col[data-span="7"] { grid-column: span 6; }
-  .ov.ov-two > sluice-grid > .mod-col[data-span="5"] { grid-column: span 6; display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; column-gap: var(--col-gap); }
-}
 /* a module of a step is titled on a heavy rule; its words at the reading measure */
 #step-detail .mod:not(.swell-ask, .swell-look), .unit-page .mod.d-sec { border-top: 3px solid var(--navy);
                                                                        padding-top: 12px; }
@@ -1410,6 +1428,7 @@ ol.now-calls > li.is-failed .act-key { color: var(--ink); }
 .chain-link { margin: 0; }
 .chain-link a { color: var(--ink-muted); text-underline-offset: 3px; }
 .chain-link a:hover { color: var(--ink); }
+.ov > .chain-link { margin-top: 22px; }
 @media (max-width: 760px) {
   .chain-link a { display: inline-flex; align-items: center; min-height: 44px; }
 }
@@ -1766,10 +1785,13 @@ li.m.q-done > .md, li.m.q-done > .m-body { opacity: 0.7; }
 #messages-view > details.read-today { margin-top: 30px; }
 #messages-view > #inbox-items > section:first-child { margin-top: 22px; }
 #messages-view .sec-h { margin-bottom: 4px; }
-.q-sheet { container: qsheet / inline-size; margin-top: 12px; }
+/* its questions and notes by the sheet's mode: one to a row to 900px, two to 2000px, three
+   from there and four from 3000px, each at its reading measure */
+.q-sheet { margin-top: 12px; }
 .q-sheet > sluice-grid { row-gap: 26px; }
-@container qsheet (max-width: 899px) { .q-sheet > sluice-grid > .mod { grid-column: 1 / -1; } }
-@container qsheet (min-width: 2400px) { .q-sheet > sluice-grid > .mod { grid-column: span 4; } }
+@container sheet (min-width: 640px) and (max-width: 899.98px) { .q-sheet > sluice-grid > .mod { --take: 12; } }
+@container sheet (min-width: 2000px) { .q-sheet > sluice-grid > .mod { --take: 8; } }
+@container sheet (min-width: 3000px) { .q-sheet > sluice-grid > .mod { --take: 6; } }
 .q-sheet article.item { margin: 0; padding: 0; border-inline: 0; border-bottom: 0; background: none; }
 .q-sheet article.item.swell-ask { padding-top: 14px; border-top: 6px solid var(--coral); }
 .q-sheet article.item:not(.swell-ask) { padding-top: 12px; border-top: 1.5px solid var(--navy); }
@@ -2173,11 +2195,14 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
 .ub-top { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); align-items: end;
           column-gap: var(--col-gap); row-gap: 16px; }
 h1.unit-h { grid-column: span 7; display: flex; align-items: flex-start; gap: 14px; margin: 0;
-            font-size: 96px; line-height: .88; font-weight: 900; letter-spacing: -0.04em;
+            font-size: clamp(56px, calc(96px + (100vw - 1440px) * 0.0667), 154px); line-height: .88;
+            font-weight: 900; letter-spacing: -0.04em;
             overflow-wrap: anywhere; text-wrap: balance; color: var(--band-ink); }
-h1.unit-h.long { font-size: 72px; line-height: .92; }
-h1.unit-h.longer { font-size: 48px; line-height: 1; letter-spacing: -0.035em; }
-h1.unit-h.longest { font-size: 36px; line-height: 1.08; letter-spacing: -0.03em; }
+h1.unit-h.long { font-size: clamp(44px, calc(72px + (100vw - 1440px) * 0.05), 115px); line-height: .92; }
+h1.unit-h.longer { font-size: clamp(32px, calc(48px + (100vw - 1440px) * 0.0333), 77px); line-height: 1;
+                   letter-spacing: -0.035em; }
+h1.unit-h.longest { font-size: clamp(26px, calc(36px + (100vw - 1440px) * 0.025), 58px); line-height: 1.08;
+                    letter-spacing: -0.03em; }
 h1.unit-h > span { min-width: 0; }
 h1.unit-h > .g { flex: none; margin-top: .12em; color: var(--band-ink); }
 h1.unit-h .g, h1.unit-h .g svg { width: 28px; height: 28px; }
@@ -2211,12 +2236,11 @@ h1.unit-h .g, h1.unit-h .g svg { width: 28px; height: 28px; }
   h1.unit-h.longest { font-size: 26px; }
   h1.unit-h .g, h1.unit-h .g svg { width: 20px; height: 20px; }
 }
-.u-sheet { container: usheet / inline-size; }
+/* its steps by the sheet's mode: one to a row on a narrow sheet, two from 640px, three from
+   1200px, four from 2000px and six from 3000px */
 .u-sheet > sluice-grid { row-gap: 22px; }
-@container usheet (max-width: 899px) { .u-sheet > sluice-grid > .mod { grid-column: 1 / -1; } }
-@container usheet (min-width: 900px) and (max-width: 1199px) {
-  .u-sheet > sluice-grid > .u-step { grid-column: span 6; } }
-@container usheet (min-width: 2000px) { .u-sheet > sluice-grid > .u-step { grid-column: span 3; } }
+@container sheet (min-width: 2000px) { .u-sheet > sluice-grid > .u-step { --take: 6; } }
+@container sheet (min-width: 3000px) { .u-sheet > sluice-grid > .u-step { --take: 4; } }
 .u-step { padding: 12px 0 14px; border-top: 1.5px solid var(--navy); }
 .u-step.swell-ask { border-top: 6px solid var(--coral); }
 .u-step.swell-look { padding: 12px 14px 14px; }

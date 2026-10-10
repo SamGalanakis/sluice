@@ -583,6 +583,7 @@ async fn chromium_the_board_alone_keeps_its_tags_and_a_wide_screen_sets_overview
         browser.viewport(2400, "dark").unwrap();
         browser.navigate(&format!("http://{addr}/projects/id/{wide}/steps/l1-work")).unwrap();
         browser.wait("document.querySelector('#tp-overview .d-ask')").unwrap();
+        browser.eval("document.fonts.ready.then(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))))").unwrap();
         assert_eq!(browser.eval(TWO).unwrap(), json!([2, true, true, true]));
         // its question swells first, above Now, in the first column
         let order = browser
