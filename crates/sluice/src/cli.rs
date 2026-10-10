@@ -485,6 +485,25 @@ fn fill_author(request: &mut CommandRequest, author: &str) {
 /// required fields — this rewrites the argv object into that shape before it
 /// decodes. Keys a command does not know are left for `deny_unknown_fields`
 /// to refuse.
+/// `sluice tool unit_add`'s shorthands, before the shared plan-tool decoder: the unit may be
+/// given as `params.unit`, and a single step id for a recipe step suffix in `after` is a
+/// one-item list.
+fn unit_add_shorthands(name: &str, args: &mut serde_json::Map<String, Value>) {
+    if name != "unit_add" {
+        return;
+    }
+    if let Some(Value::Object(after)) = args.get_mut("after") {
+        for ids in after.values_mut() {
+            if let Value::String(_) = ids {
+                *ids = Value::Array(vec![ids.take()]);
+            }
+        }
+    }
+    if let Some(unit) = args.get("params").and_then(|p| p.get("unit")).cloned() {
+        args.entry("unit").or_insert(unit);
+    }
+}
+
 async fn normalize_args(
     home: &Path,
     name: &str,
@@ -1131,6 +1150,7 @@ async fn tool(home: &Path, argv: Vec<String>) -> Result<(), PublicError> {
     sluice_web::tool_args::coerce_integers(&fields.schema, &mut args)?;
     run_defaults(&name, &fields, &mut args);
     let request = if crate::plan_tools::handles(&name) {
+        unit_add_shorthands(&name, &mut args);
         crate::plan_tools::decode(&name, args, &cli_author())?
     } else {
         normalize_args(home, &name, &mut args).await?;

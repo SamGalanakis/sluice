@@ -1050,7 +1050,7 @@ fn a_bare_id_an_id_selector_and_the_name_reach_the_same_project() {
     mark(99);
     for (selector, refusal) in [
         (format!("id:{id}"), "stale submission"),
-        ("demo".into(), "unsupported schema version 99; expected 1"),
+        ("demo".into(), "unsupported schema version 99; expected 3"),
     ] {
         let submit = tool(
             home.path(),
@@ -1059,7 +1059,7 @@ fn a_bare_id_an_id_selector_and_the_name_reach_the_same_project() {
         );
         assert_eq!(stderr(&submit)["message"], refusal, "{selector}");
     }
-    mark(1);
+    mark(3);
     let posted = tool(
         home.path(),
         "messages",
@@ -1932,7 +1932,10 @@ fn step_wait_and_the_log_filters_take_flags_strings_and_run_defaults() {
         "step_wait takes no argument 'untill'; did you mean until?"
     );
     let message = refused(&tool_with(home, &["step_wiat"], &[], None));
-    assert_eq!(message, "unknown tool step_wiat; did you mean step_wait?");
+    assert_eq!(
+        message,
+        "unknown tool step_wiat; did you mean step_wait or step_get?"
+    );
     // recipients narrows messages to those to q; a word is a one-item list.
     let page = ok(tool_with(
         home,
