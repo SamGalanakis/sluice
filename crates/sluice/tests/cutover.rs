@@ -1361,3 +1361,76 @@ fn cutover_reports_a_run_settled_before_the_deadline_as_succeeded_with_no_advice
     );
     assert_eq!(settled.advice, RetryAdvice::None);
 }
+
+// ---- sluice home migrate -----------------------------------------------------------------------
+
+fn migrate(gate: &support::Gate, args: &[&str]) -> Output {
+    let mut all = vec!["home", "migrate"];
+    all.extend_from_slice(args);
+    gate.command(Path::new(env!("CARGO_BIN_EXE_sluice")), &all)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn home_migrate_converts_a_drained_schema_1_home_only_with_the_writer_lock_free() {
+    let mut scratch = Scratch::new();
+    scratch.project(&[("w", "fixture.wait")]);
+    let run = scratch.live_run("step_id='w'");
+    std::fs::write(
+        scratch.gate.home.join("runs").join(&run).join("finish"),
+        "finish",
+    )
+    .unwrap();
+    wait_for("w to succeed", Duration::from_secs(60), || {
+        scratch
+            .value("SELECT status FROM steps WHERE step_id='w'")
+            .as_deref()
+            == Some("succeeded")
+    });
+    // Refused while the old coordinator holds the home's writer lock.
+    let output = migrate(&scratch.gate, &["--json"]);
+    assert!(!output.status.success(), "{}", text(&output));
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"], "busy", "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("coordinator.lock"),
+        "{error}"
+    );
+    scratch.stop_services();
+    let database = scratch.gate.home.join("sluice.db");
+    let before = std::fs::read(&database).unwrap();
+    // A dry run converts a copy and leaves the home's bytes as they were.
+    let output = migrate(&scratch.gate, &["--dry-run", "--json"]);
+    assert!(output.status.success(), "{}", text(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["from_schema"], 1, "{report}");
+    assert_eq!(report["projects"][0]["name"], "p", "{report}");
+    assert_eq!(report["projects"][0]["revisions"], 2, "{report}");
+    assert_eq!(std::fs::read(&database).unwrap(), before);
+    assert_eq!(
+        scratch
+            .value("SELECT schema_version FROM home_meta")
+            .as_deref(),
+        Some("1")
+    );
+    // The conversion itself, in words.
+    let output = migrate(&scratch.gate, &[]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).starts_with(&format!(
+            "converted schema 1 to {SCHEMA}: 1 projects, 2 revisions, 0 warnings"
+        )),
+        "{}",
+        text(&output)
+    );
+    assert_eq!(
+        scratch
+            .value("SELECT schema_version FROM home_meta")
+            .as_deref(),
+        Some(SCHEMA.to_string().as_str())
+    );
+}

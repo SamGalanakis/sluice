@@ -1847,6 +1847,16 @@ pub enum HomeCommand {
     /// Print `{"schema": N}`: the database schema this release reads and writes
     /// (`scripts/build-release` records it in the release manifest).
     Schema,
+    /// Convert the home's schema-1 or schema-2 database to this release's schema, holding
+    /// `coordinator.lock` (docs/design/plan-rows.md §10.2).
+    Migrate {
+        /// Convert a backup-API copy in a scratch directory and leave the home untouched.
+        #[arg(long)]
+        dry_run: bool,
+        /// Print the conversion report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
