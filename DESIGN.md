@@ -713,8 +713,12 @@ The pages compose these parts; each lane that redraws one writes its section her
     confirm): its unit then stops marking the plan and the summary, and stands in Done's index
     as "b cancelled and dismissed". For ten minutes after, Stopped says "Dismissed: <title>" and Undo in one
     polite status line a cancel (glyph, title clamped to two lines, Undo), the Undo a plain
-    form too; Dismiss comes back with the focus on that Undo, Undo with it on the restored
-    card. A failure is never dismissed. A card's stage names it on a unit of several; a step's
+    form too. With script, both post in place and the live stream updates Stopped without a
+    navigation or scroll jump. Dismiss gives Undo the focus; Undo gives the restored card the
+    focus. Retry, retry feedback, Cancel and Close question also post in place, including forms
+    moved into the confirmation dialog. A failed post shows a notice beside the form and keeps
+    its typed feedback. Without script, the forms keep their POST and redirect round trip.
+    A failure is never dismissed. A card's stage names it on a unit of several; a step's
     id never heads or leads a card. A card or row is its unit's trace button, named "Trace
     <title>", its state and time its description.
   - **Running**, quiet first then the longest running, and **Waiting**, in plan order, as rows:

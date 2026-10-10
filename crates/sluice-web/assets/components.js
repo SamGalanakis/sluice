@@ -33,6 +33,60 @@ const store = {
   },
 };
 
+// Owner action forms include ones moved into the shared confirmation dialog. Delegate on
+// the document so streamed replacements and moved forms keep the same enhancement.
+const postingActions = new WeakSet();
+document.addEventListener("submit", async (event) => {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement) || form.method !== "post") return;
+  const url = new URL(form.getAttribute("action"), location.href);
+  if (url.origin !== location.origin || !(/^\/projects\/id\/[^/]+\/steps\/[^/]+\/actions$/.test(url.pathname)
+      || form.matches(".pl-close"))) return;
+  event.preventDefault();
+  if (postingActions.has(form)) return;
+  postingActions.add(form);
+  const data = new FormData(form, event.submitter);
+  const button = event.submitter ?? form.querySelector("button");
+  const dialog = form.closest("dialog");
+  const next = new URL(data.get("next") || location.href, location.href);
+  const focusId = next.pathname === location.pathname
+    && /^(undo-|s-)/.test(next.hash.slice(1)) ? decodeURIComponent(next.hash.slice(1)) : "";
+  const scroll = { left: scrollX, top: scrollY };
+  let observer, timer;
+  const stop = () => { observer?.disconnect(); clearTimeout(timer); };
+  if (focusId) {
+    observer = new MutationObserver(() => {
+      const target = document.getElementById(focusId);
+      if (!target) return;
+      stop();
+      target.focus({ preventScroll: true });
+      window.scrollTo(scroll);
+    });
+    observer.observe(document.getElementById("project-board") ?? document.body, { childList: true, subtree: true });
+    timer = setTimeout(stop, 10000);
+  }
+  form.querySelector(".action-notice")?.remove();
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch(url, { method: "POST", headers: { accept: "application/json" }, redirect: "manual", body: new URLSearchParams(data) });
+    if (!response.ok && response.type !== "opaqueredirect") {
+      const text = await response.text();
+      let message = text;
+      try { message = JSON.parse(text).message ?? text; } catch { /* a text refusal */ }
+      throw new Error(message || "Sluice did not take the action.");
+    }
+    if (dialog?.open) dialog.close();
+  } catch (error) {
+    stop();
+    const notice = Object.assign(document.createElement("div"), { className: "notice action-notice", role: "alert" });
+    notice.append(Object.assign(document.createElement("p"), { textContent: unreached(error) }));
+    form.append(notice);
+  } finally {
+    if (button) button.disabled = false;
+    postingActions.delete(form);
+  }
+});
+
 // ---- sluice-tabs -------------------------------------------------------------------------------
 // An ARIA tablist (`[role=tab][data-tab]` in its `.tabbar`) over its `.tp[data-tab]` panels. The
 // choice is `$$tab`, reflected into the host's `current` (kept through a patch), the chosen

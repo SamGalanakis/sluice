@@ -11,7 +11,7 @@
 #![allow(dead_code)]
 #[allow(dead_code)]
 #[path = "../../../../tests/support/messages.rs"]
-mod stored_messages;
+pub(crate) mod stored_messages;
 
 use serde_json::{Value, json};
 use sluice_model::{

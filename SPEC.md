@@ -1623,7 +1623,10 @@ sentence and what to try next, Retry with feedback and Retry, its Details, and o
 Dismiss, a form posting `dismiss` with no confirm; failures first, then cancels, then stale, the
 plan's order where they tie; a cancel the owner dismissed in the last ten minutes, from its
 mark's `heartbeat_at`, is one status line there, "Dismissed: <title> · Undo", the Undo a form
-posting `undismiss`; a failure has no Dismiss), the **margin** (a long run: a unit
+posting `undismiss`; with script, both post in place and the stream updates Stopped, preserving
+scroll and focusing Undo after Dismiss, the restored card after Undo. Other plan and drawer
+actions also post in place; a failed post shows a notice and keeps typed feedback. Without
+script, forms retain their POST and redirect round trip. A failure has no Dismiss), the **margin** (a long run: a unit
 of one step and no recipe running, not quiet, that reports progress fields or has run six hours
 or more: its progress fields in the sheet's last two columns), **Running** (it reads as quiet, stopping,
 finishing, running or outside: quiet first, then by how long it has run, longest first) and
