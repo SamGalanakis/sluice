@@ -1,0 +1,17 @@
+[package]
+name = "sluice-reference"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Test-only reference: the schema-1 plan compiler, patch semantics, edit preparation and whole-plan simulation, and the differential harness over them. A dev-dependency only; never linked into a binary."
+
+[dependencies]
+sluice-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+indexmap.workspace = true
+json-patch.workspace = true
+proptest.workspace = true

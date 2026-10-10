@@ -2394,6 +2394,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sluice-reference"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "json-patch",
+ "proptest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sluice-model",
+]
+
+[[package]]
 name = "sluice-runtime"
 version = "0.1.0"
 dependencies = [
