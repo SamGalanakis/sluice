@@ -101,6 +101,31 @@ pub mod counters {
     }
 }
 
+/// A hook every preparation is held at, for the contention tests (plan-rows §11: "a
+/// barrier-driven test holds a high-fanout edit's preparation at a barrier"): it runs once per
+/// preparation, inside its read snapshot, after the preparation has read and worked out
+/// everything and before its result goes to the writer, so a test can move the state under
+/// it. Unset (always, outside those tests) it costs one read of an uncontended lock. It is
+/// process-wide: a test that sets it runs alone in its binary or clears it before others
+/// prepare.
+pub mod barrier {
+    use std::sync::{Arc, RwLock};
+
+    type Hook = Arc<dyn Fn() + Send + Sync>;
+    static HOOK: RwLock<Option<Hook>> = RwLock::new(None);
+
+    /// Hold every preparation at `hook` from now on (`None` releases them).
+    pub fn set(hook: Option<Hook>) {
+        *HOOK.write().unwrap_or_else(|e| e.into_inner()) = hook;
+    }
+    pub(crate) fn hold() {
+        let hook = HOOK.read().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+}
+
 /// The project an edit command edits; `None` for any other command. Every edit tool goes
 /// through the pipeline.
 pub(crate) fn edit_selector(command: &CommandRequest) -> Option<&ProjectSelector> {
@@ -179,7 +204,9 @@ where
         let prepared = log
             .preparing(reads.snapshot(move |sql| {
                 counters::started();
-                prepare(sql)
+                let prepared = prepare(sql);
+                barrier::hold();
+                prepared
             }))
             .await
             .map_err(|e| e.into_public(true))?;
@@ -612,16 +639,18 @@ mod tests {
             .await
             .unwrap();
         counters::reset();
-        // Each preparation waits at the barrier (the test's side of it releases it) after it
-        // has read the epoch, like a 2,000-reader preparation still working.
+        // Each preparation is held at the barrier hook (the test's side of it releases it)
+        // after it has read the epoch, like a 2,000-reader preparation still working.
         let arrived = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
         let (a, r) = (arrived.clone(), release.clone());
+        barrier::set(Some(Arc::new(move || {
+            a.wait();
+            r.wait();
+        })));
         let prepare = Arc::new(move |sql: &Connection| {
             let seen = epoch(sql)?;
             let fanout: Vec<i64> = (0..2000).collect();
-            a.wait();
-            r.wait();
             Ok(Prepared::Commit(Box::new((seen, fanout.len() as i64))))
         });
         let committed = Arc::new(Mutex::new(0_usize));
@@ -675,6 +704,7 @@ mod tests {
             wait(release.clone()).await.unwrap();
         }
         let error = edit.await.unwrap().unwrap_err();
+        barrier::set(None);
         assert_eq!(
             error,
             PublicError::Busy {
