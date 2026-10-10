@@ -2,6 +2,7 @@
 
 pub mod attempt;
 pub mod commands;
+pub mod cost;
 pub mod doc;
 pub mod edit;
 pub mod error;

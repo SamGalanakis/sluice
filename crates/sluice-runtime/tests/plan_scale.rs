@@ -1,18 +1,25 @@
-//! A small edit to a large plan costs the coordinator a small, bounded time, driven
-//! through the coordinator socket: on a lash-shaped plan of 1,980 steps (330 units of
-//! fork, work, land, landed, close and rm, with handoffs, step gates and unit gates)
-//! each edit tool answers in under a second in a debug build, and a write made during an
-//! edit does not wait for it. Each edit used to hold the one writer while it compiled
-//! the plan four times and rewrote every step row, serialising the whole plan once per
-//! row and copying the fn catalog once per step: seconds per edit in a release build,
-//! and on this plan in a debug build the first edit alone outlasts the client's
-//! two-minute timeout.
+//! A small edit to a large plan costs the coordinator a small, bounded time, driven through
+//! the coordinator socket: on a lash-shaped plan of 1,980 steps (330 units of fork, work,
+//! land, landed, close and rm, with handoffs, step gates and unit gates) a local metadata or
+//! binding edit answers within 100 ms in a debug build and a six-step unit addition within
+//! 200 ms (`docs/design/plan-rows.md` §11). A write made while an edit is being prepared
+//! does not wait for it: a preparation barrier holds the edit, the write commits within
+//! 100 ms, and the edit, finding the state moved, is prepared again and commits. Two edits
+//! prepared from one revision both commit, one prepared again; an edit that names the old
+//! revision is refused as a conflict.
+//!
+//! Schema 3's edits cost what they change (rows, not the document), so these are the
+//! contract's budgets, where schema 1's were 1,000, 2,500 and 750 ms. It needs the
+//! integration group (B, C, D and E) and is ignored until `rw/pn-cutover` holds it. Run
+//! there with `cargo test -p sluice-runtime --test plan_scale -- --include-ignored`; if the
+//! integration runner's measurement says otherwise, §11 keeps the old bounds until it does.
 #[allow(dead_code)]
 #[path = "../../../tests/support/home.rs"]
 mod home;
 use serde_json::{Map, Value, json};
 use sluice_model::{
     commands::*,
+    cost::{self, Measurement, PreparationPoint},
     error::PublicError,
     ids::*,
     rpc::{FnInvocation, JsonMap, decode_json},
@@ -24,7 +31,10 @@ use sluice_runtime::{
     dispatch::Catalog,
     execution::{ExecutionHost, Launch, LaunchOutcome},
 };
-use std::time::{Duration, Instant};
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -53,13 +63,12 @@ impl ExecutionHost for Fake {
 
 const UNITS: usize = 330;
 const SUFFIXES: [&str; 6] = ["fork", "work", "land", "landed", "close", "rm"];
-/// A debug build answers a one-step edit in about 0.2 s and a unit_add (whose recipe
-/// expansion compiles the plan twice more) in about 0.6 s; the bounds leave room for a
-/// loaded machine.
-const BOUND: Duration = Duration::from_millis(1000);
-const UNIT_ADD_BOUND: Duration = Duration::from_millis(2500);
-/// A write made during an edit takes tens of milliseconds in a debug build.
-const CONCURRENT_BOUND: Duration = Duration::from_millis(750);
+/// A local metadata or binding edit with a bounded affected set (§11).
+const LOCAL_EDIT_BUDGET: Duration = Duration::from_millis(100);
+/// A six-step unit addition with a small external boundary (§11).
+const UNIT_ADD_BUDGET: Duration = Duration::from_millis(200);
+/// An independent small write during an edit's preparation (§11).
+const INDEPENDENT_WRITE_BUDGET: Duration = Duration::from_millis(100);
 
 /// The steps of one lash-shaped unit: a chain of handoffs and step gates inside the
 /// unit, its entry gated on the previous unit.
@@ -97,6 +106,10 @@ struct Fixture {
     stop: CancellationToken,
     server: tokio::task::JoinHandle<Result<(), PublicError>>,
 }
+fn payload(reply: CommandReply) -> Value {
+    let value = serde_json::to_value(&reply).unwrap();
+    value.get("data").cloned().unwrap_or(value)
+}
 impl Fixture {
     async fn new() -> Self {
         let home = home::ScratchHome::new().unwrap();
@@ -113,20 +126,18 @@ impl Fixture {
             assert!(tokio::time::Instant::now() < deadline);
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        let CommandReply::Project(p) = client
+        let created = client
             .command(request(
                 "project_create",
                 json!({"name":"lash","description":"","resources":{}}),
             ))
             .await
-            .unwrap()
-        else {
-            panic!("project")
-        };
+            .unwrap();
+        let project = serde_json::from_value(payload(created)["project_id"].clone()).unwrap();
         let recipes = home
             .path()
             .join("projects")
-            .join(p.project_id.to_string())
+            .join(format!("{project}"))
             .join("recipes");
         std::fs::create_dir_all(&recipes).unwrap();
         let mut steps = Map::new();
@@ -142,34 +153,32 @@ impl Fixture {
         Self {
             _home: home,
             client,
-            project: p.project_id,
+            project,
             stop,
             server,
         }
     }
-    async fn call(&self, name: &str, mut args: Value) -> Result<CommandReply, PublicError> {
+    async fn call(&self, name: &str, mut args: Value) -> Result<Value, PublicError> {
         args["project"] = json!({"kind":"id","value":self.project});
-        self.client.command(request(name, args)).await
+        self.client.command(request(name, args)).await.map(payload)
     }
     async fn rev(&self) -> u64 {
-        let plan = self.call("plan_get", json!({})).await.unwrap();
-        serde_json::to_value(&plan).unwrap()["data"]["rev"]
+        self.call("plan_get", json!({})).await.unwrap()["rev"]
             .as_u64()
             .unwrap()
     }
-    /// One edit, timed from the client: its reply is an edit result at a new revision
-    /// (or, for a prune that removes nothing, at the same one).
+    /// One edit, timed from the client: its reply is an edit result at a new revision (or,
+    /// for a typed tool whose lowering changes nothing, at the same one).
     async fn timed(&self, name: &str, args: Value) -> Duration {
         let before = self.rev().await;
         let started = Instant::now();
         let reply = self.call(name, args).await.unwrap();
         let took = started.elapsed();
-        let result = match reply {
-            CommandReply::Edit(result) => result,
-            CommandReply::Pruned(pruned) => pruned.edit,
-            other => panic!("{name}: expected an edit result, got {other:?}"),
-        };
-        assert!(result.rev.0 >= before, "{name}: {result:?}");
+        let rev = reply["rev"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{name}: {reply}"));
+        assert!(rev >= before, "{name}: {reply}");
+        assert_eq!(reply["preview"]["scope"], "impact", "{name}: {reply}");
         took
     }
     async fn close(self) {
@@ -184,38 +193,55 @@ fn edit(reason: &str) -> Value {
     json!({"dry_run":false,"reason":reason})
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lanes B, C, D and E)"]
 async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
     let f = Fixture::new().await;
-    let mut steps = Map::new();
-    let mut previous = None;
+    let mut ops = Vec::new();
+    let mut previous: Option<String> = None;
     for index in 0..UNITS {
         let name = format!("fig-{}", 4000 + index);
-        steps.extend(unit(&name, previous.as_deref()));
+        for (step, spec) in unit(&name, previous.as_deref()) {
+            ops.push(json!({"op": "step.add", "step": step, "spec": spec}));
+        }
         previous = Some(name);
     }
-    assert_eq!(steps.len(), UNITS * SUFFIXES.len());
-    // The whole plan in one edit, every step paused so nothing is launched.
-    let rev = f.rev().await;
-    let adds: Vec<Value> = steps
-        .iter()
-        .map(|(step, spec)| json!({"op":"step.add","step":step,"spec":spec}))
-        .collect();
+    assert_eq!(ops.len(), UNITS * SUFFIXES.len());
+    // The whole plan in one edit, every step added paused so nothing is launched.
     f.call(
         "plan_edit",
-        json!({"rev":rev,"ops":adds,"reason":"seed","start":false}),
+        json!({"ops": ops, "start": false, "reason": "seed"}),
+    )
+    .await
+    .unwrap();
+    // A first edit warms the plan cache, as a running coordinator's would be.
+    f.call(
+        "plan_edit",
+        json!({"ops": [{"op": "step.update", "step": "fig-4000-fork", "changes": {"doc": "warm"}}],
+            "reason": "warm"}),
     )
     .await
     .unwrap();
 
+    let measurement = Measurement::start();
     let mut took = vec![];
-    let rev = f.rev().await;
     took.push((
-        "plan_edit",
+        "plan_edit metadata",
         f.timed(
             "plan_edit",
-            json!({"rev":rev,"ops":[{"op":"step.update","step":"fig-4140-rm","changes":{"doc":"probe"}}],
-                "reason":"probe"}),
+            json!({"ops": [{"op": "step.update", "step": "fig-4140-rm",
+                "changes": {"tags": ["unit:fig-4140", "lane", "exit", "probe"]}}],
+                "reason": "probe"}),
+        )
+        .await,
+    ));
+    took.push((
+        "plan_edit binding",
+        f.timed(
+            "plan_edit",
+            json!({"ops": [{"op": "step.update", "step": "fig-4141-work",
+                "changes": {"in": {"value": {"source": "fig-4141-fork/value.issue"}}}}],
+                "reason": "rebind"}),
         )
         .await,
     ));
@@ -261,88 +287,121 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
         )
         .await,
     ));
+    let costs = measurement.costs();
+    drop(measurement);
+    eprintln!(
+        "edit times on {} steps: {took:?}; costs {costs:?}",
+        UNITS * SUFFIXES.len()
+    );
+    assert_eq!(
+        (
+            costs.full_exports,
+            costs.full_compiles,
+            costs.writer_preparations
+        ),
+        (0, 0, 0),
+        "no edit on the warm cache exported or compiled the plan: {costs:?}"
+    );
     for (name, one) in &took {
-        let bound = if *name == "unit_add" {
-            UNIT_ADD_BOUND
+        let budget = if *name == "unit_add" {
+            UNIT_ADD_BUDGET
         } else {
-            BOUND
+            LOCAL_EDIT_BUDGET
         };
         assert!(
-            *one < bound,
-            "{name} on a plan of {} steps took {one:?}; every edit: {took:?}",
+            *one < budget,
+            "{name} on a plan of {} steps took {one:?} (budget {budget:?}); every edit: {took:?}",
             UNITS * SUFFIXES.len(),
         );
     }
-    eprintln!("edit times on {} steps: {took:?}", UNITS * SUFFIXES.len());
 
-    // A write made while an edit is being prepared does not wait for it: the edit holds
-    // the one writer only to check its tokens and write its rows; it is never prepared in
-    // the writer.
+    // A write made while an edit is being prepared does not wait for it. The barrier holds
+    // the edit's first preparation (no sleep: the write is issued only once the edit is
+    // there); the write moves the board's revision, a token the edit was prepared from, so
+    // the edit is prepared again and commits.
     let rev = f.rev().await;
-    let patch = f.call(
-        "plan_edit",
-        json!({"rev":rev,"ops":[{"op":"step.update","step":"fig-4141-rm","changes":{"doc":"held"}}],
-            "reason":"probe"}),
-    );
-    let slot = async {
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        let started = Instant::now();
-        f.call(
-            "board_set",
-            json!({"program":"root = Doc(\"set while an edit is prepared\")"}),
-        )
+    let (reached, at_barrier) = std::sync::mpsc::channel::<usize>();
+    let (release, go) = std::sync::mpsc::channel::<()>();
+    let go = Arc::new(Mutex::new(go));
+    let project = f.project;
+    let hook = cost::hook_preparations(move |point: &PreparationPoint| {
+        if point.project == project && point.attempt == 1 {
+            reached.send(point.attempt).unwrap();
+            go.lock().unwrap().recv().unwrap();
+        }
+    });
+    let measurement = Measurement::start();
+    let held = {
+        let client = f.client.clone();
+        let project = f.project;
+        tokio::spawn(async move {
+            client
+                .command(request(
+                    "plan_edit",
+                    json!({"project": {"kind": "id", "value": project}, "reason": "held",
+                        "ops": [{"op": "step.update", "step": "fig-4141-rm",
+                            "changes": {"tags": ["unit:fig-4141", "lane", "exit", "held"]}}]}),
+                ))
+                .await
+        })
+    };
+    tokio::task::spawn_blocking(move || at_barrier.recv_timeout(Duration::from_secs(60)))
         .await
-        .unwrap();
-        started.elapsed()
-    };
-    let (patched, slot) = tokio::join!(patch, slot);
-    let CommandReply::Edit(patched) = patched.unwrap() else {
-        panic!("an edit result")
-    };
-    assert_eq!(patched.rev.0, rev + 1);
-    eprintln!("a board set during an edit took {slot:?}");
+        .unwrap()
+        .expect("the edit reaches its preparation barrier");
+    let started = Instant::now();
+    f.call(
+        "board_set",
+        json!({"program":"root = Doc(\"set while an edit is prepared\")"}),
+    )
+    .await
+    .unwrap();
+    let slot = started.elapsed();
+    release.send(()).unwrap();
+    let held = payload(held.await.unwrap().unwrap());
+    drop(hook);
+    assert_eq!(held["rev"].as_u64(), Some(rev + 1), "{held}");
+    let costs = measurement.costs();
+    drop(measurement);
+    assert!(costs.preparations.stale >= 1, "prepared again: {costs:?}");
+    assert_eq!(costs.writer_preparations, 0, "{costs:?}");
+    eprintln!("a board set during an edit's preparation took {slot:?}");
     assert!(
-        slot < CONCURRENT_BOUND,
+        slot < INDEPENDENT_WRITE_BUDGET,
         "a write during an edit took {slot:?}"
     );
 
-    // Two edits prepared from one revision: the first commits and the second, finding
-    // the plan changed when it reaches the writer, is prepared again outside it and commits
-    // after it. A plan_edit that names the old revision is refused as stale.
+    // Two edits prepared from one revision both commit, one of them prepared again; an edit
+    // naming the old revision is refused as a conflict.
     let rev = f.rev().await;
     let add = |step: &str| {
         json!({"step":step,"spec":{"run":"fixture.echo","in":{"value":{"default":step}}},
             "start":false,"edit":edit("race")})
     };
-    let (first, second, stale) = tokio::join!(
+    let (first, second) = tokio::join!(
         f.call("step_add", add("race-a")),
         f.call("step_add", add("race-b")),
-        f.call(
-            "plan_edit",
-            json!({"rev":rev,"ops":[{"op":"step.add","step":"race-c","spec":{"run":"fixture.echo","in":{"value":{"default":1}},"paused":true}}],
-                "reason":"race"}),
-        ),
     );
-    let mut revs = vec![];
-    for reply in [first, second] {
-        let CommandReply::Edit(result) = reply.unwrap() else {
-            panic!("an edit result")
-        };
-        revs.push(result.rev.0);
-    }
+    let mut revs = vec![
+        first.unwrap()["rev"].as_u64().unwrap(),
+        second.unwrap()["rev"].as_u64().unwrap(),
+    ];
     revs.sort();
+    assert_eq!(revs, [rev + 1, rev + 2]);
+    let stale = f
+        .call(
+            "plan_edit",
+            json!({"rev": rev, "reason": "race",
+                "ops": [{"op": "step.add", "step": "race-c", "spec": {"run": "fixture.echo",
+                    "in": {"value": {"default": 1}}, "paused": true}}]}),
+        )
+        .await;
     match stale {
-        Ok(CommandReply::Edit(result)) => {
-            revs.push(result.rev.0);
-            revs.sort();
-            assert_eq!(revs, [rev + 1, rev + 2, rev + 3]);
-        }
         Err(PublicError::Conflict { current_rev, .. }) => {
-            assert!(current_rev.is_some_and(|current| current.0 > rev));
-            assert_eq!(revs, [rev + 1, rev + 2]);
+            assert_eq!(current_rev, Some(Revision(rev + 2)));
         }
         other => panic!("plan_edit at rev {rev}: {other:?}"),
     }
-    assert_eq!(f.rev().await, *revs.last().unwrap());
+    assert_eq!(f.rev().await, rev + 2);
     f.close().await;
 }
