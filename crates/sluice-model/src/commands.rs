@@ -2,6 +2,10 @@ use crate::{
     error::PublicError,
     events::{ChangeBatch, ChangeCursor, Record},
     ids::*,
+    plan_rows::{
+        self, PlanEditRequest, PlanHistoryQuery, PlanRead, PlanViewQuery, PreviewScope,
+        StepChanges, StepGet, UnitGet, UnitRemove, UnitUpdate,
+    },
     rpc::{JsonMap, JsonValue},
 };
 use schemars::JsonSchema;
@@ -199,7 +203,11 @@ pub struct StepSelection {
 #[serde(deny_unknown_fields)]
 pub struct EditOptions {
     pub expected: Option<Revision>,
+    #[serde(default)]
     pub dry_run: bool,
+    #[serde(default)]
+    pub preview_scope: PreviewScope,
+    #[serde(default)]
     pub reason: String,
     pub author: Option<String>,
 }
@@ -210,19 +218,6 @@ fn is_false(value: &bool) -> bool {
 
 fn default_start() -> bool {
     true
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PlanPatch {
-    pub project: ProjectSelector,
-    pub rev: Revision,
-    pub ops: Vec<PatchOperation>,
-    #[serde(default = "default_start")]
-    pub start: bool,
-    pub dry_run: bool,
-    pub reason: String,
-    pub author: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -269,7 +264,7 @@ pub struct EdgeEdit {
 pub struct StepUpdate {
     pub project: ProjectSelector,
     pub step: StepId,
-    pub changes: JsonMap,
+    pub changes: Box<StepChanges>,
     pub edit: EditOptions,
 }
 
@@ -767,36 +762,6 @@ pub struct RegisterCompletionAction {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct EditPreview {
-    pub ops: Vec<PatchOperation>,
-    /// Ready executable candidates, including those also listed in `would_queue`.
-    pub would_start: Vec<StepId>,
-    pub would_queue: Vec<StepId>,
-    pub would_skip: Vec<StepId>,
-    pub would_stale: Vec<StepId>,
-    pub errors: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EditResult {
-    pub project: ProjectIdentity,
-    /// The new revision, or the current one when the edit changed nothing (its
-    /// `preview.ops` is then empty and nothing was committed).
-    pub rev: Revision,
-    pub preview: EditPreview,
-    /// The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,
-    /// `step_pause`'s selection (subtree included), `plan_prune`'s removed steps.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub steps: Option<Vec<StepId>>,
-    /// Each step the project's board names that this edit took out of the plan, such as
-    /// "line 4: Metric names step `x`, which is not in the plan". The edit is made all the same.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub board_warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct RetryResult {
     pub project: ProjectIdentity,
     pub steps: Vec<StepId>,
@@ -804,30 +769,7 @@ pub struct RetryResult {
     pub stopped_at: Vec<StepId>,
 }
 
-/// `step_set_input`'s reply: the edit result plus what happened to each selected step.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct InputEditResult {
-    #[serde(flatten)]
-    pub edit: EditResult,
-    pub changed: Vec<StepId>,
-    /// Selected but running, so left unchanged.
-    pub running: Vec<StepId>,
-    /// Selected but lacking an input.
-    pub unsupported: Vec<UnsupportedInput>,
-}
-
-/// `plan_prune`'s reply: the edit result (its `steps` are the removed steps), the
-/// removed units, and each candidate unit kept with what holds it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct PruneResult {
-    #[serde(flatten)]
-    pub edit: EditResult,
-    pub units: Vec<UnitName>,
-    pub kept: Vec<KeptUnit>,
-}
-
-/// A unit prune kept: held by a step outside the pruned set, by a plan output, or by the
-/// keep pattern its name matches.
+/// A prune candidate kept by a surviving reference or a keep pattern.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct KeptUnit {
@@ -974,17 +916,6 @@ pub struct FileBinding {
     pub file: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
-pub enum PatchOperation {
-    Add { path: String, value: JsonValue },
-    Remove { path: String },
-    Replace { path: String, value: JsonValue },
-    Move { from: String, path: String },
-    Copy { from: String, path: String },
-    Test { path: String, value: JsonValue },
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageView {
@@ -1101,7 +1032,12 @@ pub enum CommandRequest {
     BoardDocRead(BoardDocRead),
     BoardDocWrite(BoardDocWrite),
     BoardDocEdit(BoardDocEdit),
-    PlanPatch(PlanPatch),
+    PlanEdit(PlanEditRequest),
+    UnitUpdate(UnitUpdate),
+    UnitRemove(UnitRemove),
+    PlanRead(PlanRead),
+    StepGet(StepGet),
+    UnitGet(UnitGet),
     StepAdd(StepAdd),
     UnitAdd(UnitAdd),
     StepUpdate(StepUpdate),
@@ -1147,10 +1083,7 @@ pub enum CommandRequest {
     PlanGet {
         project: ProjectSelector,
     },
-    PlanHistory {
-        project: ProjectSelector,
-        since_rev: Option<Revision>,
-    },
+    PlanHistory(PlanHistoryQuery),
     RecipeList {
         project: ProjectSelector,
     },
@@ -1175,12 +1108,7 @@ pub enum CommandRequest {
         step: StepId,
     },
     Status(StatusQuery),
-    PlanView {
-        project: ProjectSelector,
-        format: PlanViewFormat,
-        #[serde(default, skip_serializing_if = "is_false")]
-        all: bool,
-    },
+    PlanView(PlanViewQuery),
     Verify {
         project: Option<ProjectSelector>,
     },
@@ -1227,11 +1155,16 @@ pub enum CommandReply {
         name: ProjectName,
         deleted: bool,
     },
-    Edit(EditResult),
-    Preview(EditPreview),
+    Plan(plan_rows::PlanGetResult),
+    PlanRead(plan_rows::PlanReadResult),
+    Step(plan_rows::StepGetResult),
+    Unit(plan_rows::UnitGetResult),
+    History(plan_rows::PlanHistoryPage),
+    Edit(plan_rows::EditResult),
+    Preview(plan_rows::EditPreview),
     Retry(RetryResult),
-    Inputs(InputEditResult),
-    Pruned(PruneResult),
+    Inputs(plan_rows::InputEditResult),
+    Pruned(plan_rows::PruneResult),
     /// The retired message_post's reply, kept for the binaries that sent it.
     Posted {
         id: MessageId,
@@ -1265,4 +1198,70 @@ pub trait RuntimeApi: Send + Sync {
         &self,
         cursor: ChangeCursor,
     ) -> impl std::future::Future<Output = Result<ChangeBatch, PublicError>> + Send;
+}
+
+/// A plan edit command's name and author, for the coordinator's log; None for any other
+/// command.
+pub fn edit_label(command: &CommandRequest) -> Option<(&'static str, Option<&str>)> {
+    let (kind, options) = match command {
+        CommandRequest::PlanEdit(e) => return Some(("plan_edit", e.author.as_deref())),
+        CommandRequest::UnitUpdate(e) => return Some(("unit_update", e.author.as_deref())),
+        CommandRequest::UnitRemove(e) => return Some(("unit_remove", e.author.as_deref())),
+        CommandRequest::StepAdd(e) => ("step_add", &e.edit),
+        CommandRequest::UnitAdd(e) => ("unit_add", &e.edit),
+        CommandRequest::StepUpdate(e) => ("step_update", &e.edit),
+        CommandRequest::StepRemove(e) => ("step_remove", &e.edit),
+        CommandRequest::EdgeAdd(e) => ("edge_add", &e.edit),
+        CommandRequest::EdgeRemove(e) => ("edge_remove", &e.edit),
+        CommandRequest::StepSetInput(e) => ("step_set_input", &e.edit),
+        CommandRequest::PlanSetInput(e) => ("plan_set_input", &e.edit),
+        CommandRequest::UnitTag(e) => ("unit_tag", &e.edit),
+        CommandRequest::StepPause(e) => ("step_pause", &e.edit),
+        CommandRequest::PlanPrune(e) => ("plan_prune", &e.edit),
+        _ => return None,
+    };
+    Some((kind, options.author.as_deref()))
+}
+
+impl CommandRequest {
+    /// Check supplied edit shapes before dispatch. Typed lowering may later produce no ops.
+    pub fn check_plan_arguments(&self) -> Result<(), PublicError> {
+        use plan_rows::PlanRowsError;
+        let options = match self {
+            Self::PlanRead(r) if r.limit == 0 => return Err(PlanRowsError::Limit.into()),
+            Self::PlanHistory(r) if r.limit == 0 => return Err(PlanRowsError::Limit.into()),
+            Self::PlanEdit(r) => return r.check_supplied().map_err(Into::into),
+            Self::UnitUpdate(r) => return r.check_supplied().map_err(Into::into),
+            Self::UnitRemove(r) => {
+                if r.preview_scope == PreviewScope::All && !r.dry_run {
+                    return Err(PlanRowsError::PreviewAllNeedsDryRun.into());
+                }
+                return Ok(());
+            }
+            Self::StepAdd(r) => &r.edit,
+            Self::UnitAdd(r) => &r.edit,
+            Self::StepUpdate(r) => {
+                if r.changes.is_empty() {
+                    return Err(PlanRowsError::Empty {
+                        path: "changes".into(),
+                        what: "field",
+                    }
+                    .into());
+                }
+                &r.edit
+            }
+            Self::StepRemove(r) => &r.edit,
+            Self::StepPause(r) => &r.edit,
+            Self::UnitTag(r) => &r.edit,
+            Self::PlanPrune(r) => &r.edit,
+            Self::PlanSetInput(r) => &r.edit,
+            Self::StepSetInput(r) => &r.edit,
+            Self::EdgeAdd(r) | Self::EdgeRemove(r) => &r.edit,
+            _ => return Ok(()),
+        };
+        if options.preview_scope == PreviewScope::All && !options.dry_run {
+            return Err(PlanRowsError::PreviewAllNeedsDryRun.into());
+        }
+        Ok(())
+    }
 }

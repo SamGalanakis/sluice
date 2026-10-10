@@ -381,52 +381,7 @@ async fn tool(
     Path(name): Path<String>,
     request: Request,
 ) -> Response {
-    if !request
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|h| h.to_str().ok())
-        .is_some_and(|s| {
-            s.split(';')
-                .next()
-                .is_some_and(|s| s.trim().eq_ignore_ascii_case("application/json"))
-        })
-    {
-        return status_error(
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "expected application/json",
-        );
-    }
-    let bytes = match to_bytes(request.into_body(), MAX_BODY).await {
-        Ok(bytes) => bytes,
-        Err(_) => return status_error(StatusCode::PAYLOAD_TOO_LARGE, "request body exceeds 1 MiB"),
-    };
-    let args: sluice_model::rpc::JsonMap = match sluice_model::rpc::decode_json(&bytes) {
-        Ok(args) => args,
-        Err(error) => return error_response(error),
-    };
-    let value = serde_json::to_value(args)
-        .expect("arguments")
-        .as_object()
-        .expect("argument map")
-        .clone();
-    let result = state.server.call(&name, value, Some("http")).await;
-    if result.is_error == Some(true) {
-        let error: PublicError =
-            serde_json::from_value(result.structured_content.expect("structured public error"))
-                .expect("public error");
-        error_response(error)
-    } else {
-        let text = result
-            .content
-            .first()
-            .and_then(|c| c.as_text())
-            .map(|c| c.text.clone())
-            .unwrap_or_default();
-        match serde_json::from_str::<Value>(&text) {
-            Ok(value) => axum::Json(value).into_response(),
-            Err(_) => text.into_response(),
-        }
-    }
+    mcp::call_http(&state.server, &name, request).await
 }
 
 #[derive(Clone)]
@@ -534,6 +489,7 @@ impl step::CommandService for SocketOwnerCommands {
             let edit = EditOptions {
                 expected: Some(Revision(command.revision)),
                 dry_run: false,
+                preview_scope: Default::default(),
                 reason: command.message.clone(),
                 author: Some(command.author.into()),
             };

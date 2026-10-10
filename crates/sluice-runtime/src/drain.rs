@@ -52,7 +52,9 @@ pub async fn check_command(reads: &ReadPool, request: &CommandRequest) -> Result
     let fenced = matches!(
         request,
         CommandRequest::FnCall(_)
-            | CommandRequest::PlanPatch(_)
+            | CommandRequest::PlanEdit(_)
+            | CommandRequest::UnitUpdate(_)
+            | CommandRequest::UnitRemove(_)
             | CommandRequest::StepAdd(_)
             | CommandRequest::UnitAdd(_)
             | CommandRequest::EdgeAdd(_)

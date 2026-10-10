@@ -13,7 +13,7 @@ use sluice_model::{
     edit::{self, EditSnapshot, PlanEdit},
     error::PublicError,
     events::Event,
-    gates::{self, CachedResources, Gate},
+    gates::{self, CachedResources},
     ids::*,
     plan::Binding,
     recipe::{Recipe, RecipeEntry},
@@ -22,6 +22,11 @@ use sluice_model::{
 };
 use sluice_store::{RetrySafety, messages, plans, projects, records, resources, writer::ChangeKey};
 use std::{path::Path, time::Duration};
+
+#[path = "dispatch_ext/plan_tools.rs"]
+mod plan_tools;
+#[path = "dispatch_ext/plan_values.rs"]
+pub mod plan_values;
 
 fn storage(error: impl std::fmt::Display) -> PublicError {
     PublicError::Storage {
@@ -118,6 +123,9 @@ pub async fn dispatch_ext<H: ExecutionHost>(
     broker: &Coordinator<H>,
     request: CommandRequest,
 ) -> Result<Option<CommandReply>, PublicError> {
+    if let Some(reply) = plan_tools::dispatch(broker, request.clone()).await? {
+        return Ok(Some(reply));
+    }
     let catalog = broker.catalog().clone();
     let reply = match request {
         CommandRequest::ProjectDelete(request) => {
@@ -190,15 +198,6 @@ pub async fn dispatch_ext<H: ExecutionHost>(
             log.finish(Some(("plan_prune", author.as_deref())), &reply);
             reply?
         }
-        CommandRequest::PlanHistory { project, since_rev } => data(
-            broker
-                .reads()
-                .snapshot(move |sql| {
-                    plans::history(sql, messages::resolve_project(sql, &project)?, since_rev)
-                })
-                .await
-                .map_err(public)?,
-        )?,
         CommandRequest::StepContext { project, step } => {
             let (mut out, note) = broker
                 .reads()
@@ -216,21 +215,6 @@ pub async fn dispatch_ext<H: ExecutionHost>(
             }
             data(out)?
         }
-        CommandRequest::PlanView {
-            project,
-            format,
-            all,
-        } => data(
-            broker
-                .reads()
-                .snapshot(move |sql| {
-                    let id = messages::resolve_project(sql, &project)?;
-                    let ctx = context(sql, id, &catalog)?;
-                    render_plan_view(sql, id, &ctx.plan, format, all)
-                })
-                .await
-                .map_err(public)?,
-        )?,
         CommandRequest::Query(request) => {
             let home = broker.home().to_owned();
             let params = request
@@ -946,263 +930,12 @@ fn step_context(
     Ok((out, note))
 }
 
-fn html(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-fn label(text: &str) -> String {
-    html(text)
-        .replace('\n', " ")
-        .replace('[', "&#91;")
-        .replace(']', "&#93;")
-}
-struct StepViewState {
-    manual: bool,
-    done: i64,
-    total: Option<i64>,
-}
-/// `plan_view`'s Mermaid (`flowchart TD`) or HTML page for a project's compiled plan, read in
-/// the caller's snapshot. The board's `?format=mermaid` serves the same text.
+/// Render the graph rows read by the caller. No document or fn catalog is needed.
 pub fn render_plan_view(
-    sql: &Connection,
-    id: ProjectId,
-    plan: &sluice_model::plan::Plan,
+    name: &str,
+    graph: &sluice_model::plan_rows::GraphRows,
     format: PlanViewFormat,
-    all: bool,
-) -> sluice_store::Result<String> {
-    let state = plans::read_state(sql, id)?;
-    let name = projects::resolve(sql, &ProjectSelector::Id(id))?.name;
-    let mut stmt = sql.prepare(
-        "SELECT step_id,manual,done,total FROM steps WHERE project_id=?1 ORDER BY position",
-    )?;
-    let metadata = stmt
-        .query_map([id.to_string()], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                StepViewState {
-                    manual: row.get(1)?,
-                    done: row.get(2)?,
-                    total: row.get(3)?,
-                },
-            ))
-        })?
-        .map(|row| {
-            let (id, metadata) = row?;
-            Ok((crate::calls::parse_id(id)?, metadata))
-        })
-        .collect::<sluice_store::Result<IndexMap<StepId, StepViewState>>>()?;
-    Ok(plan_view(&name, plan, &state, format, all, &metadata))
-}
-fn plan_view(
-    name: &ProjectName,
-    plan: &sluice_model::plan::Plan,
-    state: &gates::StateSnapshot,
-    format: PlanViewFormat,
-    all: bool,
-    metadata: &IndexMap<StepId, StepViewState>,
+    omitted: &str,
 ) -> String {
-    let done: Vec<_> = plan
-        .units()
-        .values()
-        .filter(|unit| !all && unit.done(state))
-        .collect();
-    let visible: Vec<_> = plan
-        .topological_order()
-        .iter()
-        .filter(|id| !done.iter().any(|u| u.steps.contains(id)))
-        .collect();
-    let nodes: IndexMap<_, _> = visible
-        .iter()
-        .enumerate()
-        .map(|(i, id)| ((*id).clone(), format!("s{i}")))
-        .collect();
-    let units: IndexMap<_, _> = plan
-        .units()
-        .iter()
-        .filter(|(_, unit)| unit.steps.iter().any(|id| nodes.contains_key(id)))
-        .enumerate()
-        .map(|(i, (name, _))| (name.clone(), format!("u{i}")))
-        .collect();
-    let inputs: IndexMap<_, _> = plan
-        .inputs()
-        .keys()
-        .enumerate()
-        .map(|(i, name)| (name.clone(), format!("i{i}")))
-        .collect();
-    let mut diagram = String::from("flowchart TD\n");
-    let mut boxes = vec![];
-    for (name, node) in &inputs {
-        diagram.push_str(&format!("  {node}([\"{}\"])\n", label(name)));
-        boxes.push((node.clone(), name.clone(), "input".to_owned()));
-    }
-    for (unit, node) in &units {
-        diagram.push_str(&format!(
-            "  subgraph {node}[\"{}\"]\n",
-            label(unit.as_str())
-        ));
-        for id in &plan.units()[unit].steps {
-            let Some(node) = nodes.get(id) else {
-                continue;
-            };
-            let step = &plan.steps()[id];
-            let status = serde_json::to_value(state.status(id))
-                .expect("status serializes")
-                .as_str()
-                .unwrap()
-                .to_owned();
-            let doc: String = step
-                .doc
-                .as_deref()
-                .unwrap_or("")
-                .replace('\n', " ")
-                .chars()
-                .take(60)
-                .collect();
-            let progress = metadata
-                .get(id)
-                .and_then(|m| m.total.map(|total| format!(" {}/{total}", m.done)))
-                .unwrap_or_default();
-            let text = format!(
-                "{id} / {} / {status}{progress}{}",
-                step.run,
-                if doc.is_empty() {
-                    String::new()
-                } else {
-                    format!(" / {doc}")
-                }
-            );
-            diagram.push_str(&format!("    {node}[\"{}\"]:::{status}\n", label(&text)));
-            let class = if metadata.get(id).is_some_and(|m| m.manual)
-                && state.status(id) == StepStatus::Succeeded
-            {
-                diagram.push_str(&format!("    class {node} manual\n"));
-                format!("{status} manual")
-            } else {
-                status
-            };
-            boxes.push((node.clone(), text, class));
-        }
-        diagram.push_str("  end\n");
-    }
-    let mut edges = vec![];
-    let source = |reference: &gates::ValueRef| {
-        reference.parts().ok().and_then(|r| {
-            if let Some(step) = r.step {
-                nodes.get(&step).cloned()
-            } else {
-                inputs.get(&r.name).cloned()
-            }
-        })
-    };
-    for id in visible {
-        let target = &nodes[id];
-        let step = &plan.steps()[id];
-        for reference in step.bindings.values().flat_map(Binding::references) {
-            if let Some(from) = source(reference) {
-                edges.push((from, target.clone(), reference.to_string(), false));
-            }
-        }
-        for gate in &step.after {
-            match gate {
-                Gate::Step { id, accept_skip } => {
-                    if let Some(from) = nodes.get(id) {
-                        edges.push((
-                            from.clone(),
-                            target.clone(),
-                            if *accept_skip {
-                                "after ?".into()
-                            } else {
-                                "after".into()
-                            },
-                            *accept_skip,
-                        ));
-                    }
-                }
-                Gate::Unit { name, accept_skip } => {
-                    if let Some(from) = units.get(name) {
-                        edges.push((from.clone(), target.clone(), gate.entry(), *accept_skip));
-                    }
-                }
-                Gate::Bool { reference, negate } => {
-                    if let Some(from) = source(reference) {
-                        edges.push((
-                            from,
-                            target.clone(),
-                            format!("{}{}", if *negate { "not " } else { "" }, reference),
-                            false,
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    for (i, (name, reference)) in plan.outputs().iter().enumerate() {
-        let node = format!("o{i}");
-        diagram.push_str(&format!("  {node}([\"{}\"])\n", label(name)));
-        if let Some(from) = source(reference) {
-            edges.push((from, node.clone(), reference.to_string(), false));
-        }
-        boxes.push((node, name.clone(), "output".into()));
-    }
-    for (from, to, text, dashed) in &edges {
-        diagram.push_str(&format!(
-            "  {from} {}|\"{}\"| {to}\n",
-            if *dashed { "-.->" } else { "-->" },
-            label(text)
-        ));
-    }
-    diagram.push_str("  classDef pending fill:#e5e7eb,color:#111827\n  classDef running fill:#bfdbfe,color:#111827\n  classDef succeeded fill:#bbf7d0,color:#111827\n  classDef failed fill:#172554,color:#fff,stroke-width:3px\n  classDef stale fill:#fde68a,color:#111827\n  classDef skipped fill:#f3f4f6,color:#6b7280\n  classDef manual fill:#fff,stroke:#16a34a,stroke-width:2px\n");
-    let omitted = if done.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "{} done units ({} steps) left out",
-            done.len(),
-            done.iter().map(|unit| unit.steps.len()).sum::<usize>()
-        )
-    };
-    if !omitted.is_empty() {
-        diagram.push_str(&format!("  %% {omitted}\n"));
-    }
-    if matches!(format, PlanViewFormat::Mermaid) {
-        return diagram;
-    }
-    // A self-contained SVG, with the same typed nodes/relations as the text form.
-    let mut positions: IndexMap<_, _> = boxes
-        .iter()
-        .enumerate()
-        .map(|(i, (id, _, _))| (id.clone(), i))
-        .collect();
-    for (name, node) in &units {
-        if let Some(position) = plan.units()[name]
-            .exits
-            .iter()
-            .find_map(|id| nodes.get(id).and_then(|node| positions.get(node)).copied())
-        {
-            positions.insert(node.clone(), position);
-        }
-    }
-    let mut svg = format!(
-        "<svg role=\"img\" aria-label=\"Plan graph\" viewBox=\"0 0 1000 {}\" xmlns=\"http://www.w3.org/2000/svg\"><defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"10\" refY=\"5\" markerWidth=\"6\" markerHeight=\"6\" orient=\"auto-start-reverse\"><path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"#64748b\"/></marker></defs>",
-        boxes.len().max(1) * 100 + 30
-    );
-    for (from, to, text, dashed) in edges {
-        let a = positions[&from] * 100 + 55;
-        let b = positions[&to] * 100 + 55;
-        svg.push_str(&format!("<path d=\"M 690 {a} C 800 {a},800 {b},690 {b}\" fill=\"none\" stroke=\"#64748b\" {} marker-end=\"url(#arrow)\"/><text x=\"805\" y=\"{}\" font-size=\"11\">{}</text>", if dashed {"stroke-dasharray=\"4 4\""} else {""}, (a+b)/2,html(&text)));
-    }
-    for (i, (_, text, status)) in boxes.iter().enumerate() {
-        svg.push_str(&format!("<g class=\"{}\"><rect x=\"20\" y=\"{}\" width=\"670\" height=\"70\" rx=\"8\"/><text x=\"35\" y=\"{}\" font-size=\"12\">{}</text></g>",html(status),i*100+20,i*100+58,html(text)));
-    }
-    svg.push_str("</svg>");
-    format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><style>body{{margin:auto;padding:24px;max-width:1100px;font:16px system-ui;color:#172554;background:#fff}}svg{{width:100%;height:auto}}rect{{fill:#e5e7eb;stroke:#64748b}}.running rect{{fill:#bfdbfe}}.succeeded rect{{fill:#bbf7d0}}.failed rect{{fill:#fecaca;stroke-width:3}}.stale rect{{fill:#fde68a}}.manual rect{{fill:none;stroke:#16a34a;stroke-width:2}}pre{{white-space:pre-wrap;overflow-wrap:anywhere}}@media(prefers-color-scheme:dark){{body{{background:#0f172a;color:#e2e8f0}}text{{fill:#334155}}}}</style><h1>{}</h1><p>{}</p>{svg}<details><summary>Mermaid source</summary><pre>{}</pre></details></html>",
-        html(name.as_str()),
-        html(name.as_str()),
-        html(&omitted),
-        html(&diagram)
-    )
+    plan_values::render_graph(name, graph, format, omitted)
 }

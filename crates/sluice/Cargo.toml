@@ -21,5 +21,6 @@ rusqlite.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
 tempfile.workspace = true
 tokio-util.workspace = true

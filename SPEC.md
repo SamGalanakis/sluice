@@ -1241,7 +1241,7 @@ else `step:<SLUICE_STEP>` when set; else the MCP client's name; else `mcp` (MCP)
 Edit tools share `rev?`, `dry_run=false`, `preview_scope="impact"`, `reason=""` and `author?`
 (`plan_edit`, `unit_update` and `unit_remove` require `reason`) and return the edit result
 (§6.10) or, with `dry_run`, the preview. (schema 3; lands with the plan-rows cutover)
-`plan_patch` is gone; `plan_edit` batches operations instead. Selection tools take `steps?`
+`plan_edit` batches operations. Selection tools take `steps?`
 and/or `tags?` (a `unit:` tag selects the unit); naming neither is `bad_request`, an unknown
 step `not_found`.
 
@@ -1428,6 +1428,9 @@ rows, identified by a null `unread_alert_min`, to the current cancel's key witho
 only a cancel can be dismissed), `backup`, `builtin`
 (guardian-authenticated only), `submission`, `acquire_lease`, `release_lease` and
 `register_completion_action` (run callbacks only).
+
+
+Read the unit or steps you need with `unit_get`, `step_get` or `plan_read`. Use the typed tools for single changes and `plan_edit` for an atomic batch. Pass `rev` when a change depends on an earlier read. `plan_get` exports the whole plan. A preview describes the edit's affected work; ask for a full dry run explicitly. An edit refused `busy` is retried as is. (schema 3; lands with the plan-rows cutover)
 
 ## 13. Dashboard
 
