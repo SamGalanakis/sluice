@@ -4,12 +4,9 @@
 //! manifest's `schema`. Every installation here is a scratch one in test mode: a scratch home,
 //! a scratch installation directory and prefix, plain child services, `sluice-test-*` units.
 //!
-//! The cutover needs two releases: the old one the home runs (schema 1) and the candidate.
-//! Before the plan-rows group lands this build is schema 1, so the old release is this build
-//! and the candidate is this build under a manifest that says schema 3: a stand-in that drains,
-//! cancels and settles exactly as the real cutover does but cannot migrate. On the integration
-//! branch (this build at schema 3) the old release is the schema-1 build of the merge base with
-//! `main`, built once into the target directory, and the candidate is this build.
+//! The cutover needs two releases: the old one the home runs (schema 1) and the candidate. The
+//! old release is the schema-1 build of the merge base with `main`, built once into the target
+//! directory, and the candidate is this build.
 #[path = "../../../tests/support/executable.rs"]
 mod executable;
 #[allow(dead_code)]
@@ -81,9 +78,6 @@ fn wait_for(what: &str, limit: Duration, mut predicate: impl FnMut() -> bool) {
 
 /// The schema-1 binary the home runs before the cutover.
 fn old_binary() -> PathBuf {
-    if SCHEMA == 1 {
-        return PathBuf::from(env!("CARGO_BIN_EXE_sluice"));
-    }
     let repo = repo();
     let sha = git(&repo, &["merge-base", "HEAD", "main"]);
     let cache = target().join("cutover-old").join(&sha);
@@ -216,8 +210,6 @@ struct Releases {
     _root: tempfile::TempDir,
     old: PathBuf,
     candidate: PathBuf,
-    /// The candidate can convert a schema-1 home (the integration branch).
-    migrates: bool,
 }
 impl Releases {
     fn new() -> Self {
@@ -236,7 +228,6 @@ impl Releases {
             _root: root,
             old,
             candidate,
-            migrates: SCHEMA == i64::from(TARGET),
         }
     }
 }
@@ -910,71 +901,46 @@ fn cutover_cancels_the_running_steps_stops_the_calls_settles_and_reports_how_eac
         .unwrap()
         .collect();
     assert_eq!(backups.len(), 1);
-    if scratch.releases.migrates {
-        assert!(output.status.success(), "{}", text(&output));
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains(&format!(
-                "schema {TARGET} · 1 projects · 2 revisions converted · cancel requested for 1 runs · 1 calls stopped"
-            )),
-            "{stdout}"
-        );
-        assert!(stdout.contains(&format!(
-            "stopped p w {step_run} requested=cancel outcome=failed:cancelled advice=retry"
-        )));
-        assert!(stdout.contains(&format!(
-            "stopped - call:{call} {call_run} requested=stop outcome=failed:process_lost advice=call-again"
-        )) || stdout.contains(&format!(
-            "stopped p call:{call} {call_run} requested=stop outcome=failed:process_lost advice=call-again"
-        )));
-        // Unfenced, released, the candidate selected and the home at its schema.
-        assert_eq!(scratch.fence(), None);
-        assert_eq!(
-            scratch.value("SELECT mode FROM maintenance").as_deref(),
-            Some("normal")
-        );
-        assert_eq!(
-            scratch.value("SELECT paused FROM projects WHERE name='p'"),
-            Some("0".into())
-        );
-        let selection = Installation::at(scratch.gate.install.clone())
-            .unwrap()
-            .status()
-            .unwrap()
-            .selection
-            .unwrap();
-        assert_eq!(selection.release_path, scratch.releases.candidate);
-        assert_eq!(
-            scratch.db(|db| db
-                .query_row("SELECT schema_version FROM home_meta", [], |r| r
-                    .get::<_, i64>(0))
-                .unwrap()),
-            i64::from(TARGET)
-        );
-    } else {
-        // The stand-in candidate cannot migrate: the cutover stops there, fenced, with the
-        // home unchanged and the services stopped, and says how to recover.
-        assert!(!output.status.success(), "{}", text(&output));
-        assert!(
-            String::from_utf8_lossy(&output.stdout).contains("home migrate failed"),
-            "{}",
-            text(&output)
-        );
-        assert_eq!(scratch.fence(), Some(format!("schema-{TARGET} cutover")));
-        assert_eq!(
-            scratch.db(|db| db
-                .query_row("SELECT schema_version FROM home_meta", [], |r| r
-                    .get::<_, i64>(0))
-                .unwrap()),
-            1
-        );
-        assert!(
-            !scratch.gate.home.join("coordinator.sock").exists() || {
-                std::os::unix::net::UnixStream::connect(scratch.gate.home.join("coordinator.sock"))
-                    .is_err()
-            }
-        );
-    }
+    assert!(output.status.success(), "{}", text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "schema {TARGET} · 1 projects · 2 revisions converted · cancel requested for 1 runs · 1 calls stopped"
+        )),
+        "{stdout}"
+    );
+    assert!(stdout.contains(&format!(
+        "stopped p w {step_run} requested=cancel outcome=failed:cancelled advice=retry"
+    )));
+    assert!(stdout.contains(&format!(
+        "stopped - call:{call} {call_run} requested=stop outcome=failed:process_lost advice=call-again"
+    )) || stdout.contains(&format!(
+        "stopped p call:{call} {call_run} requested=stop outcome=failed:process_lost advice=call-again"
+    )));
+    // Unfenced, released, the candidate selected and the home at its schema.
+    assert_eq!(scratch.fence(), None);
+    assert_eq!(
+        scratch.value("SELECT mode FROM maintenance").as_deref(),
+        Some("normal")
+    );
+    assert_eq!(
+        scratch.value("SELECT paused FROM projects WHERE name='p'"),
+        Some("0".into())
+    );
+    let selection = Installation::at(scratch.gate.install.clone())
+        .unwrap()
+        .status()
+        .unwrap()
+        .selection
+        .unwrap();
+    assert_eq!(selection.release_path, scratch.releases.candidate);
+    assert_eq!(
+        scratch.db(|db| db
+            .query_row("SELECT schema_version FROM home_meta", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap()),
+        i64::from(TARGET)
+    );
 }
 
 // ---- compat-check --incompatible --copy -------------------------------------------------------
@@ -1410,6 +1376,8 @@ fn home_migrate_converts_a_drained_schema_1_home_only_with_the_writer_lock_free(
     assert_eq!(report["from_schema"], 1, "{report}");
     assert_eq!(report["projects"][0]["name"], "p", "{report}");
     assert_eq!(report["projects"][0]["revisions"], 2, "{report}");
+    assert_eq!(report["projects"][0]["anchor"], Value::Null, "{report}");
+    assert_eq!(report["anchored"], json!([]), "{report}");
     assert_eq!(std::fs::read(&database).unwrap(), before);
     assert_eq!(
         scratch
@@ -1422,7 +1390,7 @@ fn home_migrate_converts_a_drained_schema_1_home_only_with_the_writer_lock_free(
     assert!(output.status.success(), "{}", text(&output));
     assert!(
         String::from_utf8_lossy(&output.stdout).starts_with(&format!(
-            "converted schema 1 to {SCHEMA}: 1 projects, 2 revisions, 0 warnings"
+            "converted schema 1 to {SCHEMA}: 1 projects, 2 revisions, 0 anchored, 0 warnings"
         )),
         "{}",
         text(&output)

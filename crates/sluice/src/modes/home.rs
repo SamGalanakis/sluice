@@ -75,7 +75,7 @@ fn migrate(home: &Path, dry_run: bool) -> Result<Value, PublicError> {
         let _lock = writer_lock(home)?;
         sluice_store::convert::convert_home(&database).map_err(|e| e.into_public(false))?
     };
-    serde_json::to_value(&report).map_err(storage)
+    Ok(report.to_json())
 }
 
 /// A private scratch directory for a dry run's copy, removed with it.
@@ -121,7 +121,7 @@ fn writer_lock(home: &Path) -> Result<File, PublicError> {
     }
 }
 
-/// One line for the conversion, then one per warning.
+/// One line for the conversion, then one per anchored project and one per warning.
 fn summary(report: &Value, dry_run: bool) -> Vec<String> {
     let projects = report["projects"].as_array().cloned().unwrap_or_default();
     let revisions: u64 = projects
@@ -130,7 +130,7 @@ fn summary(report: &Value, dry_run: bool) -> Vec<String> {
         .sum();
     let warnings = report["warnings"].as_array().cloned().unwrap_or_default();
     let mut lines = vec![format!(
-        "{} schema {} to {}: {} projects, {} revisions, {} warnings",
+        "{} schema {} to {}: {} projects, {} revisions, {} anchored, {} warnings",
         if dry_run {
             "would convert"
         } else {
@@ -140,8 +140,23 @@ fn summary(report: &Value, dry_run: bool) -> Vec<String> {
         sluice_store::schema::SCHEMA_VERSION,
         projects.len(),
         revisions,
+        report["anchored"].as_array().map_or(0, Vec::len),
         warnings.len()
     )];
+    let anchored = report["anchored"].as_array().cloned().unwrap_or_default();
+    lines.extend(anchored.iter().map(|a| {
+        format!(
+            "anchored: {} at rev {} from its {} ({} folded edits)",
+            a["name"].as_str().unwrap_or_default(),
+            a["rev"],
+            if a["source"] == "snapshot" {
+                "completion snapshot"
+            } else {
+                "stored plan"
+            },
+            a["folded_edits"]
+        )
+    }));
     lines.extend(warnings.iter().map(|w| match w {
         Value::String(text) => format!("warning: {text}"),
         other => format!("warning: {other}"),
