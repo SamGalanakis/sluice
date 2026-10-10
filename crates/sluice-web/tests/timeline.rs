@@ -4,6 +4,7 @@
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
+mod plan_html;
 use axum::http::StatusCode;
 use board_fixture::{Fixture, lane_recipe};
 use serde_json::json;
@@ -328,27 +329,26 @@ async fn a_running_step_says_how_long_its_stage_usually_takes_from_three_done_un
     // work took 10m, 30m and 20m in the done units: usually 20m
     let (status, html) = f.get(&format!("/projects/id/{id}")).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    let pill = between(&html, "id=\"n-r1-work\"", "</a>");
-    assert!(pill.contains("data-usually=\"1200\""), "{pill}");
-    assert!(pill.contains("; its stage usually takes 20m\""), "{pill}");
-    // far past twice its usual time, its timer's words say how far, one sentence for a reader
-    // (no space before a comma), and the pill shows it in the attention tone, hidden from one
+    // its row says how long its stage usually takes; far past twice that, its live cell says
+    // how far (once, for a reader too) and the row carries the overrun chip
+    let row = plan_html::row(&html, "r1");
+    assert!(row.contains(" · usually 20m"), "{row}");
+    assert!(row.contains("class=\"overrun\""), "{row}");
+    let cell = plan_html::cell(&html, "r1-work");
     assert!(
-        pill.contains("<span class=\"vh\" data-tail=\", usually 20 minutes, ")
-            && pill.contains("× its usual time</span></time>"),
-        "{pill}"
+        cell.contains("<span class=\"sc-over\" aria-hidden=\"true\">")
+            && cell.contains("× its usual time</span>"),
+        "{cell}"
     );
-    assert!(pill.contains("<span class=\"over-x\" title=\""), "{pill}");
+    // the clock never enters the drawing: the cell's time is a `<time data-since=`
     assert!(
-        pill.contains("× its usual time (usually 20m)\" aria-hidden=\"true\">"),
-        "{pill}"
+        cell.contains("<time data-since=\"2026-10-07T09:01:00Z\""),
+        "{cell}"
     );
-    // a row drawn as a lane string (a phone, the drawer open) keeps it on its live stage
-    let row = between(&html, "<tr id=\"unit-r1\"", "</tr>");
-    let lane = between(row, "<p class=\"mx-lane fb-lane\"", "</p>");
+    // a finished cell carries no estimate
     assert!(
-        lane.contains("× its usual time\">") && lane.contains("<span class=\"over-x\""),
-        "{lane}"
+        !plan_html::cell(&html, "r1-fork").contains("usual"),
+        "{html}"
     );
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/r1-work")).await;
     let badges = step
@@ -362,17 +362,6 @@ async fn a_running_step_says_how_long_its_stage_usually_takes_from_three_done_un
         ) && badges.contains("× usual</span>"),
         "{badges}"
     );
-    // the clock never enters the drawing: the pill starts `<time data-since=`
-    assert!(
-        pill.contains("<time data-since=\"2026-10-07T09:01:00Z\""),
-        "{pill}"
-    );
-    // a finished card carries no estimate
-    assert!(
-        !between(&html, "id=\"n-r1-fork\"", "</a>").contains("usually"),
-        "{html}"
-    );
-
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/r1-work")).await;
     // its run started days ago, far past twice its usual 20m: the "usually" reads in ink
     assert!(
@@ -391,8 +380,9 @@ async fn a_running_step_says_how_long_its_stage_usually_takes_from_three_done_un
 async fn the_board_shows_a_steps_chain_from_its_address_and_says_so() {
     let f = Fixture::new().await;
     let id = f.titled().await;
+    // the units shown, whole: a chain's steps keep their units
     let shown = |html: &str| -> Vec<String> {
-        html.split("data-step=\"")
+        html.split("data-unit=\"")
             .skip(1)
             .map(|s| s[..s.find('"').unwrap()].to_owned())
             .collect::<std::collections::BTreeSet<_>>()
@@ -404,11 +394,7 @@ async fn the_board_shows_a_steps_chain_from_its_address_and_says_so() {
         .get(&format!("/projects/id/{id}?root=l2-land&down=1"))
         .await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    assert_eq!(
-        shown(&html),
-        ["l2-land", "l3-fork", "l3-land", "l3-work"],
-        "{html}"
-    );
+    assert_eq!(shown(&html), ["l2", "l3"], "{html}");
     let note = between(&html, "<p class=\"focus-note meta\">", "</p>");
     assert!(
         note.starts_with(
@@ -425,24 +411,18 @@ async fn the_board_shows_a_steps_chain_from_its_address_and_says_so() {
     // the form keeps the focus as it applies, and so does the stream
     assert!(html.contains("<input type=\"hidden\" name=\"root\" value=\"l2-land\"><input type=\"hidden\" name=\"down\" value=\"1\">"), "{html}");
     assert!(
-        html.contains("/stream?order=live&#38;show=all&#38;root=l2-land&#38;down=1'"),
+        html.contains("/stream?show=all&#38;root=l2-land&#38;down=1'"),
         "{html}"
     );
-    // what it comes after, one step deep
+    // what it comes after, one step deep: l2 alone
     let (_, html) = f
         .get(&format!("/projects/id/{id}?root=l2-land&up=1&depth=1"))
         .await;
-    assert_eq!(shown(&html), ["l2-land", "l2-work"], "{html}");
+    assert_eq!(shown(&html), ["l2"], "{html}");
     assert!(html.contains(", 1 step each way."), "{html}");
     // both ways when neither is said
     let (_, html) = f.get(&format!("/projects/id/{id}?root=l2-land")).await;
-    assert_eq!(
-        shown(&html),
-        [
-            "l2-fork", "l2-land", "l2-work", "l3-fork", "l3-land", "l3-work"
-        ],
-        "{html}"
-    );
+    assert_eq!(shown(&html), ["l2", "l3"], "{html}");
     assert!(html.contains("Showing the chain of "), "{html}");
     // a step no longer in the plan: said, and nothing else drawn
     let (status, html) = f.get(&format!("/projects/id/{id}?root=gone")).await;
@@ -464,13 +444,13 @@ async fn the_board_shows_a_steps_chain_from_its_address_and_says_so() {
 }
 
 #[tokio::test]
-async fn a_matrix_head_leads_to_every_unit_its_recipe_made_done_ones_too() {
+async fn a_recipes_head_leads_to_every_unit_it_made_done_ones_too() {
     let f = Fixture::new().await;
     let id = recipes(&f).await;
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
     assert!(
         html.contains(&format!(
-            "<a class=\"mx-name\" href=\"/projects/id/{id}?recipe=lane&#38;show=all\""
+            "<a class=\"sec-a\" href=\"/projects/id/{id}?recipe=lane&#38;show=all\">lane</a>"
         )),
         "{html}"
     );
@@ -482,25 +462,19 @@ async fn a_matrix_head_leads_to_every_unit_its_recipe_made_done_ones_too() {
         html.contains("Every unit of recipe <code>lane</code>: 4 units · 1 running · 3 done."),
         "{html}"
     );
-    // the matrix stays live units only; the done ones are on the shelf, drawn open
-    let matrix = between(&html, "data-matrix=\"lane\"", "</section>");
-    assert!(matrix.contains("<tr id=\"unit-r1\""), "{matrix}");
-    assert!(!matrix.contains("unit-d1"), "{matrix}");
-    let shelf = &html[html.find("class=\"done-shelf\"").unwrap()..];
+    // the live one a row, the done ones in the Done index, drawn open
+    assert_eq!(plan_html::place(&html, "r1"), "running");
+    for unit in ["d1", "d2", "d3"] {
+        assert_eq!(plan_html::place(&html, unit), "done", "{unit}");
+    }
     assert!(
-        html.contains("id=\"shelf-open\" class=\"done-shelf\""),
+        html.contains("<details class=\"pl-index\" data-preserve-attr=\"open\" open>"),
         "{html}"
     );
-    for unit in ["d1", "d2", "d3"] {
-        assert!(
-            shelf.contains(&format!("id=\"unit-{unit}\" class=\"box done\"")),
-            "{unit}: {shelf}"
-        );
-    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn chromium_draws_the_timeline_to_its_width_and_a_running_card_how_far_along_it_is() {
+async fn chromium_draws_the_timeline_to_its_width() {
     let f = Fixture::new().await;
     let id = f.titled().await;
     runs(
@@ -525,7 +499,7 @@ async fn chromium_draws_the_timeline_to_its_width_and_a_running_card_how_far_alo
         )],
     )
     .await;
-    let lanes = recipes(&f).await;
+    recipes(&f).await;
     let router = f.router();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -568,22 +542,6 @@ async fn chromium_draws_the_timeline_to_its_width_and_a_running_card_how_far_alo
                 }
             }
         }
-        // a running card whose stage usually takes 20m: nav.js draws how far along (past it: all)
-        browser.navigate(&format!("{base}/projects/id/{lanes}")).unwrap();
-        browser.viewport(1440, "light").unwrap();
-        let along = browser
-            .wait("document.querySelector('#n-r1-work')?.style.getPropertyValue('--along')")
-            .unwrap();
-        assert_eq!(along, "1.000");
-        let line = browser
-            .eval("getComputedStyle(document.querySelector('#n-r1-work'), '::after').width")
-            .unwrap();
-        assert_ne!(line, "0px", "{line}");
-        // a finished card has none
-        assert_eq!(
-            browser.eval("getComputedStyle(document.querySelector('#n-r1-fork'), '::after').content").unwrap(),
-            "none"
-        );
     })
     .await
     .unwrap();

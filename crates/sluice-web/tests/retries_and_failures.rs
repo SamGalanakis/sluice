@@ -1,15 +1,12 @@
-//! What the board says of a step that has run before, or stopped, before it is opened: a retry's
-//! run number and how its earlier runs ended (card, matrix pill, phone lane string, the step's
-//! badge and Now), a failure's kind in its caption and its one sentence under its card or matrix
-//! row, a link to the failure's own log record (the step page and the index), what each stage
-//! column of a lane matrix has that needs a look, what a filtered empty board hides, and a wait
-//! named by its source's title.
+//! What the plan says of a step that has run before, or stopped, before it is opened: a retry's
+//! run number and how its earlier runs ended (its unit's row, the step's badge and Now), a
+//! failure's kind in a word and its one sentence in its stopped module, a link to the failure's
+//! own log record (the step page and the index), what a filtered empty plan hides, and a wait
+//! named by its source's title and id.
 mod board_fixture;
-#[path = "../../../tests/support/chrome.rs"]
-mod chrome;
+mod plan_html;
 use axum::http::StatusCode;
 use board_fixture::Fixture;
-use chrome::Chrome;
 use serde_json::json;
 use sluice_model::{
     commands::StepStatus,
@@ -147,12 +144,14 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
     let id = retried(&f).await;
     let (status, html) = f.get(&format!("/projects/id/{id}")).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    // the matrix pill of a quiet run: its quiet time, then "run 6" after the last three earlier
-    // runs' marks and "+2" for the two before them
-    let pill = between(&html, "<a id=\"n-l1-work\"", "</a>");
-    assert!(pill.contains("is-quiet"), "{pill}");
-    assert!(pill.contains("title=\"Nothing written since"), "{pill}");
-    let tries = between(pill, "<span class=\"tries\"", "</span></span>");
+    // the row of a quiet run: its quiet time, then "run 6" after the last three earlier runs'
+    // marks and "+2" for the two before them
+    let row = plan_html::row(&html, "l1");
+    assert!(
+        row.contains("<b>quiet</b>") && row.contains(" · silent "),
+        "{row}"
+    );
+    let tries = between(row, "<span class=\"tries\"", "</span></span>");
     assert!(
         tries.contains("title=\"Run 6, after 4 failed and 1 cancelled\""),
         "{tries}"
@@ -163,7 +162,7 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
     );
     let mark = |s| sluice_web::views::ui::mark(s).as_str().to_owned();
     assert!(
-        pill.contains(&format!(
+        row.contains(&format!(
             "+2</span>{}{}{}</span><span aria-hidden=\"true\">run 6</span>",
             mark(Shown::Cancelled),
             mark(Shown::Failed),
@@ -172,27 +171,15 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
         "the last three, oldest first: {tries}"
     );
     assert!(
-        pill.contains("<span class=\"vh\">run 6, after 4 failed and 1 cancelled</span></span>"),
-        "{pill}"
+        row.contains("<span class=\"vh\">run 6, after 4 failed and 1 cancelled</span></span>"),
+        "{row}"
     );
-    // the phone's lane string says it too
-    let row = between(&html, "<tr id=\"unit-l1\"", "</tr>");
-    let lane = between(
-        row,
-        "<p class=\"mx-lane fb-lane\" aria-label=\"Stages\">",
-        "</p>",
-    );
-    assert!(
-        lane.contains("aria-label=\"l1-work quiet, run 6\"><span class=\"stg\"><span class=\"g g-quiet\" aria-hidden=\"true\">")
-            && lane.contains("</span>work <span class=\"lm-run\">(run 6)</span></span></a>"),
-        "{lane}"
-    );
-    // a card in a box: its second run, the first failed
-    let card = between(&html, "<a id=\"n-kit-a\"", "</a>");
-    assert!(card.contains("title=\"Run 2, after 1 failed\""), "{card}");
-    assert!(card.contains(">run 2<"), "{card}");
+    // a unit of no recipe: its second run, the first failed
+    let kit = plan_html::row(&html, "kit");
+    assert!(kit.contains("title=\"Run 2, after 1 failed\""), "{kit}");
+    assert!(kit.contains(">run 2<"), "{kit}");
     // a first run says nothing of runs
-    let first = between(&html, "<a id=\"n-probe\"", "</a>");
+    let first = plan_html::row(&html, "probe");
     assert!(!first.contains("tries"), "{first}");
 
     // its page: the badge says the run, Now says how the run before ended and why, linked to
@@ -259,50 +246,36 @@ async fn a_stopped_card_names_its_failures_kind_and_says_why_under_it() {
         .await
         .unwrap();
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
-    // the matrix pill: the ink pill and glyph stay, its caption the kind, its title the sentence
-    let pill = between(&html, "<a id=\"n-l2-work\"", "</a>");
-    assert!(pill.contains("is-failed"), "{pill}");
+    // a stopped module: the glyph and its word, the failure's kind in a word, why under it;
+    // never the stored JSON
+    let l2 = plan_html::stopped(&html, "l2");
     assert!(
-        pill.contains("<span class=\"dur\" title=\"Its engine hit a usage cap.\">quota</span>"),
-        "{pill}"
+        l2.contains("<b>failed</b> <span class=\"pl-kind\">quota</span>"),
+        "{l2}"
     );
+    assert!(l2.contains("<p>Its engine hit a usage cap.</p>"), "{l2}");
+    assert!(!l2.contains("agent_failure"), "{l2}");
+    let plain = plan_html::stopped(&html, "plain");
     assert!(
-        pill.contains("aria-description=\"Its engine hit a usage cap.\""),
-        "{pill}"
+        plain.contains("<span class=\"pl-kind\">lost</span>")
+            && plain.contains("<p>Its process was lost.</p>"),
+        "{plain}"
     );
+    // the work's own failure: no kind beside "failed"
+    let bare = plan_html::stopped(&html, "bare");
     assert!(
-        !pill.contains("agent_failure"),
-        "never the stored JSON: {pill}"
+        !bare.contains("pl-kind") && bare.contains("<p>Its fn failed: boom.</p>"),
+        "{bare}"
     );
-    // its row says why, a link to the step
-    let row = between(&html, "<tr id=\"unit-l2\"", "</tr>");
+    // a fn stopped at its wall-clock cap reads as an agent's cap does
+    let kit = plan_html::stopped(&html, "kit");
     assert!(
-        row.contains("<p class=\"why\"><a href=\"/projects/id/{id}/steps/l2-work\" data-opens=\"l2-work\">Its engine hit a usage cap.</a></p>".replace("{id}", &id.to_string()).as_str()),
-        "{row}"
+        kit.contains("<span class=\"pl-kind\">cap</span>")
+            && kit.contains("<p>Stopped at its wall-clock cap after 10h 0m.</p>"),
+        "{kit}"
     );
-    // a stopped card outside a matrix: its kind, and its sentence under it
-    let unit = between(&html, "<section id=\"unit-plain\"", "</section>");
-    assert!(
-        unit.contains("<span class=\"dur\" title=\"Its process was lost.\">lost</span>"),
-        "{unit}"
-    );
-    assert!(unit.contains(">Its process was lost.</a></p>"), "{unit}");
-    let unit = between(&html, "<section id=\"unit-bare\"", "</section>");
-    assert!(
-        unit.contains(">failed</span>"),
-        "the work's own failure: {unit}"
-    );
-    assert!(unit.contains(">Its fn failed: boom.</a></p>"), "{unit}");
-    let card = between(&html, "<a id=\"n-kit-b\"", "</a>");
-    assert!(
-        card.contains(
-            "<span class=\"dur\" title=\"Stopped at its wall-clock cap after 10h 0m.\">cap</span>"
-        ),
-        "{card}"
-    );
-    // a running card says no why
-    let unit = between(&html, "<section id=\"unit-probe\"", "</section>");
-    assert!(!unit.contains("class=\"why\""), "{unit}");
+    // a running unit says no why
+    assert!(!plan_html::row(&html, "probe").contains("class=\"why\""));
 }
 
 #[tokio::test]
@@ -387,41 +360,6 @@ async fn a_failure_links_its_own_log_record_which_the_log_marks() {
 }
 
 #[tokio::test]
-async fn a_lane_matrix_heads_each_stage_with_what_needs_a_look_in_it() {
-    let f = Fixture::new().await;
-    let id = retried(&f).await;
-    let (_, html) = f.get(&format!("/projects/id/{id}")).await;
-    // each band draws its own matrix: the failed lane's under Stopped, the quiet one's under
-    // Running
-    let stopped = between(&html, "<tr id=\"unit-l2\"", "</table>");
-    let head = &html[..html.find("<tr id=\"unit-l2\"").unwrap()];
-    let head = &head[head.rfind("<thead>").unwrap()..];
-    assert!(
-        head.contains(
-            "<th scope=\"col\" class=\"mx-stage\">work<span class=\"mx-hc\"> · 1 failed</span></th>"
-        ),
-        "{head}"
-    );
-    assert!(!stopped.contains("unit-l1"), "{stopped}");
-    let running = &html[..html.find("<tr id=\"unit-l1\"").unwrap()];
-    let running = &running[running.rfind("<thead>").unwrap()..];
-    assert!(
-        running.contains(
-            "<th scope=\"col\" class=\"mx-stage\">work<span class=\"mx-hc\"> · 1 quiet</span></th>"
-        ),
-        "{running}"
-    );
-    assert!(
-        head.contains("<th scope=\"col\" class=\"mx-stage\">fork</th>"),
-        "{head}"
-    );
-    assert!(
-        head.contains("<th scope=\"col\" class=\"mx-stage\">land</th>"),
-        "{head}"
-    );
-}
-
-#[tokio::test]
 async fn a_filtered_empty_board_says_how_many_units_its_show_hides() {
     let f = Fixture::new().await;
     let id = f
@@ -438,7 +376,7 @@ async fn a_filtered_empty_board_says_how_many_units_its_show_hides() {
     assert_eq!(
         empty,
         format!(
-            "<p class=\"empty\">Nothing needs attention. 3 units hidden by Show: Attention. <a href=\"/projects/id/{id}?order=plan&#38;show=all\">Show all</a>"
+            "<p class=\"empty\">Nothing needs attention. 3 units hidden by Show: Attention. <a href=\"/projects/id/{id}?show=all\">Show all</a>"
         )
     );
     let (_, html) = f.get(&format!("/projects/id/{id}?show=done")).await;
@@ -453,66 +391,18 @@ async fn a_filtered_empty_board_says_how_many_units_its_show_hides() {
 }
 
 #[tokio::test]
-async fn a_matrix_rows_wait_names_its_source_by_id_its_title_on_hover() {
+async fn a_rows_wait_names_its_source_by_title_and_id_linked() {
     let f = Fixture::new().await;
     let id = f.titled().await;
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
-    let row = between(&html, "<tr id=\"unit-l3\"", "</tr>");
-    let waits = between(row, "<p class=\"waits", "</p>");
-    // in a lane matrix's row a wait is its source's id, its title on hover
+    let row = plan_html::row(&html, "l3");
+    let waits = between(row, "<p class=\"pl-sub pl-waits\">", "</p>");
     assert!(
-        waits.contains("data-from=\"s:l2-land\" data-to=\"s:l3-fork\"><span class=\"sref\" title=\"FIG-2: Stop the parser leak\"><code class=\"sref-id\">l2-land</code></span></a>"),
+        waits.contains(&format!("fork waits for <a href=\"/projects/id/{id}/steps/l2-land\" data-opens=\"l2-land\">FIG-2: Stop the parser leak <code>l2-land</code></a> (blocked)")),
         "{waits}"
     );
     assert!(
-        waits.contains("<span class=\"sref\" title=\"Probes the parser under load\"><code class=\"sref-id\">probe</code></span>"),
+        waits.contains("Probes the parser under load <code>probe</code></a> (running)"),
         "{waits}"
     );
-}
-
-/// A tall lane matrix's stage heads stay at the page's top while its rows scroll under them,
-/// and the matrix never scrolls sideways or clips.
-#[tokio::test(flavor = "multi_thread")]
-async fn chromium_a_matrix_keeps_its_stage_heads_in_view() {
-    let f = Fixture::new().await;
-    let id = retried(&f).await;
-    let router = f.router();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    tokio::task::spawn_blocking(move || {
-        let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
-        browser
-            .wait("document.readyState === 'complete' && document.querySelector('.mx thead')")
-            .unwrap();
-        for (width, theme) in [(1440, "light"), (2560, "dark")] {
-            browser.viewport(width, theme).unwrap();
-            let g = browser
-                .eval(
-                    r#"(() => {
-  const table = document.querySelector('.mx'), head = table.querySelector('thead th.mx-stage');
-  const rows = table.querySelectorAll('tbody tr');
-  // the table's head scrolled just above the window's top, a row still under it
-  scrollTo(0, scrollY + head.getBoundingClientRect().top + 30);
-  const top = head.getBoundingClientRect().top;
-  const last = rows[rows.length - 1].getBoundingClientRect();
-  const wrap = document.querySelector('.mx-wrap');
-  return {top, under: last.bottom > top, overflow: getComputedStyle(wrap).overflowX,
-          scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-          clipped: wrap.scrollWidth > wrap.clientWidth + 1, errors: window.browserErrors};
-})()"#,
-                )
-                .unwrap();
-            assert!(g["top"].as_f64().unwrap().abs() < 1.0, "{width}: {g}");
-            assert_eq!(g["under"], true, "{width}: {g}");
-            assert_eq!(g["overflow"], "clip", "{width}: {g}");
-            assert_eq!(g["scroll"], 0, "{width}: {g}");
-            assert_eq!(g["clipped"], false, "{width}: {g}");
-            assert_eq!(g["errors"], json!([]), "{width}: {g}");
-            browser.eval("scrollTo(0, 0)").unwrap();
-        }
-    })
-    .await
-    .unwrap();
-    server.abort();
 }

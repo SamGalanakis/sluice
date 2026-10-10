@@ -3,18 +3,19 @@
 //! not running says when it is read; "Waits on" names steps by their titles, linked; a pending
 //! step that ran says when its last run ended, once; an empty output says so; Clear board and
 //! Remove ask first, a cleared board's program kept in the box. In Chromium: a step opened from
-//! another opens on its Overview, a lane matrix never clips its columns, a long token never
+//! another opens on its Overview, a long token never
 //! pushes a phone's page sideways, a step's heading steps down on a phone, and a form of filters
 //! applies as it changes.
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
+mod plan_html;
 #[allow(dead_code)]
 #[path = "../../../tests/support/messages.rs"]
 mod stored_messages;
 use board_fixture::Fixture;
 use chrome::Chrome;
-use serde_json::{Value, json};
+use serde_json::json;
 use sluice_model::{
     commands::StepDismiss,
     error::PublicError,
@@ -120,13 +121,15 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     assert!(!home.contains("sr-dismiss"), "the index lists it no more");
     let (_, page) = f.get(&format!("/projects/id/{id}")).await;
     assert!(!title(&page).contains("cancelled"), "{}", title(&page));
-    // counted still, but no longer a tag asking for a look; its unit is done, on the shelf
-    let sum = between(&page, "<span class=\"sum-n\">", "</span>");
-    assert!(sum.ends_with("1 cancelled"), "{sum}");
+    // no longer stopped: its unit is done, a line of the Done index that still reads cancelled
+    assert_eq!(plan_html::place(&page, "u"), "done", "{page}");
+    let done = plan_html::band(&page, "plan-done");
+    let line = between(done, "<li data-said=\"a succeeded|b cancelled\">", "</li>");
     assert!(
-        !page.contains("show=attention\" title="),
-        "no attention tag: {page}"
+        line.contains("g-cancelled") && line.contains(">b cancelled</span>"),
+        "{line}"
     );
+    assert!(!plan_html::summary(&page).contains("cancelled"), "{page}");
     assert!(!page.contains(">Stopped</h2>"), "{page}");
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/b")).await;
     assert!(step.contains("cancelled"), "the step still reads cancelled");
@@ -421,83 +424,6 @@ async fn chromium_a_step_opened_from_another_opens_on_its_overview() {
         browser
             .wait("document.querySelector('#drawer #step-detail[data-step=\"l2-work\"] [role=tab][aria-selected=true]')?.dataset.tab === 'inputs'")
             .unwrap();
-    })
-    .await
-    .unwrap();
-    server.abort();
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn chromium_a_lane_matrix_never_clips_a_column_beside_the_board_or_the_drawer() {
-    let f = Fixture::new().await;
-    let id = f.titled().await;
-    // a board, so the plan stands beside it (Both) from 1280px
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            sluice_store::projects::board_set(
-                tx,
-                &sluice_model::ids::ProjectSelector::Id(id),
-                sluice_store::projects::SetBoard {
-                    program: Some("root = Stack([Units()])".into()),
-                    expected_rev: Some(sluice_model::ids::Revision(0)),
-                    reason: None,
-                    author: "orch".into(),
-                },
-            )?;
-            Ok(())
-        })
-        .await
-        .unwrap();
-    let (addr, server) = serve(&f).await;
-    tokio::task::spawn_blocking(move || {
-        let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
-        browser
-            .wait("document.readyState === 'complete' && document.querySelector('sluice-board .mx-pill')")
-            .unwrap();
-        const FIT: &str = r#"(() => {
-  const out = [];
-  for (const w of document.querySelectorAll('.mx-wrap')) {
-    if (!w.checkVisibility()) continue;
-    const t = w.querySelector('.mx').getBoundingClientRect(), r = w.getBoundingClientRect(), cs = getComputedStyle(w);
-    out.push({over: t.width - (r.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)),
-              fit: w.closest('.matrix').dataset.fit ?? null});
-  }
-  return {matrices: out, view: document.querySelector('#project-board').dataset.view,
-          scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-          errors: window.browserErrors};
-})()"#;
-        let look = |browser: &mut Chrome, label: &str| -> Value {
-            settle(browser);
-            let g = browser.eval(FIT).unwrap();
-            for m in g["matrices"].as_array().unwrap() {
-                assert!(m["over"].as_f64().unwrap() <= 0.5, "{label}: a column cut off {g}");
-            }
-            assert_eq!(g["scroll"], 0, "{label}: {g}");
-            assert_eq!(g["errors"], json!([]), "{label}: {g}");
-            g
-        };
-        // pills as wide as a long run history makes them
-        browser
-            .eval("document.querySelectorAll('.matrix .mx-pill').forEach(p => p.insertAdjacentHTML('beforeend', '<span class=\"wide\">✓✓✓✓✓✓ run 14 · 12h 40m and more</span>'))")
-            .unwrap();
-        for drawer in [false, true] {
-            if drawer {
-                browser.eval("location.hash = '#step:l1-work'").unwrap();
-                browser.wait("document.querySelector('#drawer:not([hidden]) #d-title')").unwrap();
-            }
-            for width in [1280, 1440, 1600, 1920] {
-                browser.viewport(width, "light").unwrap();
-                let g = look(&mut browser, &format!("{width}{}", if drawer { "-drawer" } else { "" }));
-                assert_eq!(g["view"], "both", "{g}");
-            }
-        }
-        // wide pills gone and room again: every column back
-        browser.eval("window.sluiceClose(); document.querySelectorAll('.wide').forEach(s => s.remove())").unwrap();
-        browser.viewport(2560, "light").unwrap();
-        let g = look(&mut browser, "2560");
-        for m in g["matrices"].as_array().unwrap() {
-            assert_eq!(m["fit"], Value::Null, "{g}");
-        }
     })
     .await
     .unwrap();

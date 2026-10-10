@@ -2,6 +2,7 @@
 //! each data component filled on the server, a bad part an inline error box, and a Button a
 //! say to the orchestrator refused once the board has moved on.
 mod board_fixture;
+mod plan_html;
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
@@ -75,8 +76,11 @@ async fn every_data_component_is_filled_from_the_project_and_a_bad_query_is_an_e
         "{error}"
     );
     assert!(board.contains("<button type=\"submit\" name=\"button\" value=\"0\" class=\"primary\">Retry the lane</button>"));
-    // The plan is still all there.
-    assert!(html.contains("id=\"n-beta-review\""));
+    // The plan is still all there: the failed unit stopped, the other running.
+    assert!(
+        html.contains("<div id=\"s-beta\" class=\"pl-item pl-stop\""),
+        "{html}"
+    );
     // A project with no board draws none, and no switch.
     let (_, plain) = f.get(&format!("/projects/id/{}", f.plain)).await;
     assert!(
@@ -297,16 +301,34 @@ async fn settings_save_clear_and_preview_the_board() {
 }
 
 /// The cards a page draws on the plan, by step id, in page order.
-fn cards(html: &str) -> Vec<&str> {
-    let plan = between(html, "<sluice-board", "</sluice-board>");
-    plan.split("data-step=\"")
+/// The units the plan draws, in its order: its rows and modules, then its done index.
+fn units(html: &str) -> Vec<String> {
+    if !html.contains("id=\"plan-grid\"") {
+        return vec![];
+    }
+    let sheet = between(html, "id=\"plan-grid\"", "</sluice-grid>");
+    let mut out: Vec<String> = vec![];
+    for (rest, quote) in sheet
+        .split(" data-unit=\"")
         .skip(1)
-        .map(|rest| &rest[..rest.find('"').unwrap()])
-        .collect()
+        .map(|r| (r, '"'))
+        .chain(
+            sheet
+                .split("<code class=\"pl-did\">")
+                .skip(1)
+                .map(|r| (r, '<')),
+        )
+    {
+        let unit = rest[..rest.find(quote).unwrap()].to_owned();
+        if !out.contains(&unit) {
+            out.push(unit);
+        }
+    }
+    out
 }
 
 #[tokio::test]
-async fn the_search_keeps_the_steps_whose_id_doc_or_unit_match_and_combines_with_show() {
+async fn the_find_keeps_whole_units_whose_id_title_or_steps_match_and_combines_with_show() {
     let f = Fixture::new().await;
     let base = format!("/projects/id/{}", f.id);
     let page = |query: &str| {
@@ -342,66 +364,53 @@ async fn the_search_keeps_the_steps_whose_id_doc_or_unit_match_and_combines_with
         .unwrap();
     let (status, escaped) = f.get(&format!("/projects/id/{escaped_id}")).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(escaped.contains("data-node=\"u:build\""));
-    // the done one-step unit is a row on the shelf, naming its unit before its step
-    assert!(escaped.contains("<section id=\"unit-finished\" class=\"box solo done shelf-row\""));
+    // the failed unit is stopped; the done one is a line of the index
+    assert_eq!(units(&escaped), ["build", "finished"], "{escaped}");
     assert!(
-        escaped.contains("<span class=\"uid\">finished /</span><span class=\"fb-name\"><span class=\"sref\"><span class=\"sref-t\">done</span></span></span>"),
+        escaped.contains("<div id=\"s-build\" class=\"pl-item pl-stop\""),
         "{escaped}"
     );
-    assert!(escaped.contains("data-preserve-attr=\"open\""));
+    assert!(escaped.contains("<details class=\"pl-index\" data-preserve-attr=\"open\">"));
     assert!(!escaped.contains("<script>failure"));
+    assert!(!escaped.contains("Fixture <script>"));
     assert!(escaped.contains("&lt;script&gt;"));
-    let region = between(&escaped, "id=\"project-board\"", "</sluice-board>");
-    assert!(!region.contains("sluice-drawer"));
+    let region = between(&escaped, "id=\"project-board\"", "<sluice-drawer");
     assert!(!region.contains("data-init"));
-    // By id: each unit keeps only its matching steps; the count says how many.
+    // By a step's id: each unit whole, stopped before waiting; the count says how many.
     let html = page("q=review").await;
-    assert_eq!(cards(&html), ["beta-review", "alpha-review"], "live order");
-    assert!(html.contains("2 steps match “review”."), "{html}");
-    // By doc, in any case: a unit with no match is hidden whole.
+    assert_eq!(units(&html), ["beta", "alpha"]);
+    assert!(html.contains("2 units match “review”."), "{html}");
+    // By a step's doc, in any case: a unit with no match is hidden whole.
     let html = page("q=PARSER").await;
-    assert_eq!(cards(&html), ["beta-review"]);
-    assert!(!html.contains("id=\"unit-alpha\""), "{html}");
-    assert!(html.contains("1 step matches “PARSER”."));
-    // A wait whose source the search left out is said in words, shown where lines are drawn.
-    assert!(
-        html.contains(&format!("<p class=\"waits said\">Waits for <a href=\"{base}/steps/alpha-review\" data-opens=\"alpha-review\" data-from=\"s:alpha-review\" data-to=\"s:beta-review\"><span class=\"sref\"><span class=\"sref-t\">alpha-review</span></span></a>, not in this view</p>")),
-        "{html}"
-    );
-    assert!(!page("").await.contains("not in this view"));
-    // By unit id; words in any order, across id, doc and unit.
-    assert_eq!(
-        cards(&page("q=alpha&order=plan").await),
-        ["alpha-build", "alpha-review"]
-    );
-    assert_eq!(cards(&page("q=output+beta").await), ["beta-review"]);
-    // With show: attention keeps the failed unit, and the search narrows it.
-    assert_eq!(cards(&page("q=build&show=attention").await), ["beta-build"]);
+    assert_eq!(units(&html), ["beta"]);
+    assert!(html.contains("1 unit matches “PARSER”."));
+    // By unit id; words in any order, across ids, titles and docs.
+    assert_eq!(units(&page("q=alpha").await), ["alpha"]);
+    assert_eq!(units(&page("q=output+beta").await), ["beta"]);
+    // With show: attention keeps the failed unit, and the find narrows it.
+    assert_eq!(units(&page("q=build&show=attention").await), ["beta"]);
     let none = page("q=build&show=done").await;
-    assert!(cards(&none).is_empty());
-    assert!(none.contains("No step matches “build”."), "{none}");
+    assert!(units(&none).is_empty(), "{none}");
+    assert!(none.contains("No unit matches “build”."), "{none}");
     assert!(
         none.contains(&format!(
-            "<a href=\"{base}?order=live&#38;show=done\" data-clear-q>Clear the search</a>"
+            "<a href=\"{base}?show=done\" data-clear-q>Clear the find</a>"
         )),
         "{none}"
     );
-    // The field keeps the search, escaped; the page's stream asks for the same view.
+    // The field keeps the find, escaped; the page's stream asks for the same view.
     let html = page("q=%3Cb%3E+x&show=active").await;
-    assert!(html.contains("value=\"&#60;b&#62; x\""), "{html}");
+    assert!(html.contains("value=\"&lt;b&gt; x\""), "{html}");
     assert!(html.contains("“&#60;b&#62; x”"), "{html}");
     assert!(
-        html.contains(&format!(
-            "@get('{base}/stream?order=live&#38;show=active&#38;q=%3Cb%3E+x'"
-        )),
+        html.contains(&format!("@get('{base}/stream?show=active&#38;q=%3Cb%3E+x'")),
         "{html}"
     );
-    // Without a search there is no count, and every card shows.
+    // Without a find there is no count, and every unit shows.
     let html = page("").await;
-    assert_eq!(cards(&html).len(), 4);
+    assert_eq!(units(&html).len(), 2);
     assert!(html.contains("<p class=\"match-note meta\" role=\"status\"></p>"));
-    // The live stream draws the board under the same search.
+    // The live stream draws the plan under the same find.
     use futures_util::StreamExt;
     let response = f
         .router()
@@ -419,10 +428,10 @@ async fn the_search_keeps_the_steps_whose_id_doc_or_unit_match_and_combines_with
     let first = String::from_utf8(body.next().await.unwrap().unwrap().to_vec()).unwrap();
     assert!(first.contains("selector #project-board"), "{first}");
     assert!(
-        first.contains("data-step=\"beta-review\"") && !first.contains("data-step=\"alpha-build\""),
+        first.contains("data-unit=\"beta\"") && !first.contains("data-unit=\"alpha\""),
         "{first}"
     );
-    assert!(first.contains("1 step matches “parser”."), "{first}");
+    assert!(first.contains("1 unit matches “parser”."), "{first}");
 }
 
 /// The board's head is the program's own title when a level-1 Heading leads it (drawn once,
@@ -633,29 +642,18 @@ async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
     assert!(section.contains("by its last run"), "{section}");
 }
 
-/// The relations the page hands `<sluice-board>` to draw: its `script.board-edges`, JSON.
-fn edges(html: &str) -> Vec<Value> {
-    serde_json::from_str(edges_text(html)).unwrap()
-}
+/// The relations the unit page hands `<sluice-board>` to draw: its `script.board-edges`, JSON.
 fn edges_text(html: &str) -> &str {
     const OPEN: &str = "<script type=\"application/json\" ";
     let raw = between(html, OPEN, "</script>");
     &raw[raw.find('>').unwrap() + 1..]
 }
-/// Whether the relation `from` → `to` (step ids) is in the edges data, and is drawn as a line.
-fn line(edges: &[Value], from: &str, to: &str) -> Option<(bool, bool)> {
-    edges
-        .iter()
-        .find(|e| e["from"]["id"] == from && e["to"]["id"] == to)
-        .map(|e| (e["cross"] == true, e["line"] == true))
-}
-
-/// The plan reads without a key: a one-step unit is its card once, a wait between units is a
-/// line in the edges data (a satisfied one is not), nothing on the board needs a legend or an
-/// arrow count, and Live first draws stopped, running, then waiting by depth, then one
-/// shelf of done units; a card says in words what it waits for, for a phone.
+/// The plan reads without a key and draws no line between units: a one-step unit is one cell,
+/// a unit of no recipe its own small graph, a wait between units is said in words on the row
+/// that waits (a satisfied one is not), and the bands run Stopped, Running, Waiting (in plan
+/// order) then one Done index.
 #[tokio::test]
-async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
+async fn the_plan_orders_its_bands_and_says_each_wait_between_units_in_words() {
     let f = Fixture::new().await;
     let id = f
         .project(
@@ -686,106 +684,66 @@ async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
     let base = format!("/projects/id/{id}");
     let (status, html) = f.get(&base).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    let board = between(&html, "<sluice-board", "</sluice-board>");
-    let plane = between(&html, "<div class=\"plane\"", "</sluice-board");
-    // one-step units are their card alone; a step named apart from its unit names both
+    // one-step units are one cell; a unit of several steps of no recipe its own graph
+    let k3 = plan_html::row(&html, "k3");
+    assert_eq!(k3.matches("<li class=\"sc").count(), 1, "{k3}");
+    assert!(!k3.contains("pl-graph"), "{k3}");
+    let lane = plan_html::row(&html, "lane");
+    assert!(lane.contains("<div class=\"pl-graph\""), "{lane}");
+    assert!(lane.contains("<svg class=\"pl-wire\""), "{lane}");
+    // no lines between units, no key, no arrow counts
     assert!(
-        board.contains("<section id=\"unit-k3\" class=\"box solo\""),
-        "{board}"
+        !html.contains("board-edges") && !html.contains("<svg class=\"edges\""),
+        "{html}"
     );
-    assert_eq!(
-        board.matches("<span class=\"sid\">k3</span>").count(),
-        1,
-        "{board}"
-    );
-    assert!(!board.contains("box-label\">k3<"), "{board}");
-    assert!(
-        board.contains("<span class=\"uid\">build /</span><span class=\"sid\">compile</span>"),
-        "{board}"
-    );
-    assert!(
-        board.contains("<p class=\"box-label\"><span class=\"u-meta\"><code class=\"u-id\">lane</code></span></p>"),
-        "a unit of steps keeps its box"
-    );
-    // a step named as its unit is that unit's mark alone in a done line
-    assert!(board.contains("title=\"✓ rm✓\""), "{board}");
-    // waits between units are lines; a satisfied one is not drawn
-    let edges = edges(&html);
-    assert_eq!(line(&edges, "k2", "k3"), Some((true, true)));
-    assert_eq!(line(&edges, "k3", "k4"), Some((true, true)));
-    assert_eq!(line(&edges, "k2", "lane-work"), Some((true, true)));
-    assert_eq!(line(&edges, "k2", "compile"), Some((true, true)));
-    assert_eq!(
-        line(&edges, "k1", "k4"),
-        Some((true, false)),
-        "k1 is through"
-    );
-    assert_eq!(line(&edges, "k1", "k2"), Some((true, false)));
-    assert_eq!(line(&edges, "lane-fork", "lane-work"), Some((false, true)));
-    // no key, no arrow counts, no chips
-    for gone in ["legend", "lg-line", "xout", "xref", "→"] {
-        assert!(!plane.contains(gone), "{gone}: {plane}");
+    let sheet = between(&html, "id=\"plan-grid\"", "</sluice-grid>");
+    for gone in ["legend", "lg-line", "xout", "xref"] {
+        assert!(!sheet.contains(gone), "{gone}");
     }
     // the waits in words, named (by title, else id) and linked, with what a source is doing; a
     // satisfied one unsaid
-    let to = |step: &str, from: &str| {
-        format!(
-            "<a href=\"{base}/steps/{from}\" data-opens=\"{from}\" data-from=\"s:{from}\" data-to=\"s:{step}\"><span class=\"sref\"><span class=\"sref-t\">{from}</span></span></a>"
-        )
-    };
     assert!(
-        board.contains(&format!(
-            "<p class=\"waits\">Waits for {} (running)</p>",
-            to("k3", "k2")
+        k3.contains(&format!(
+            "k3 waits for <a href=\"{base}/steps/k2\" data-opens=\"k2\"><code>k2</code></a> (running).</p>"
         )),
-        "{board}"
+        "{k3}"
     );
+    let k4 = plan_html::row(&html, "k4");
     assert!(
-        board.contains(&format!(
-            "<p class=\"waits\">Waits for {}</p>",
-            to("k4", "k3")
+        k4.contains(&format!(
+            "k4 waits for <a href=\"{base}/steps/k3\" data-opens=\"k3\"><code>k3</code></a>.</p>"
         )),
-        "{board}"
+        "{k4}"
     );
-    // a finished step is never "next"
-    assert!(
-        board.contains("id=\"n-k1\" class=\"node shelf-step is-succeeded\" "),
-        "{board}"
-    );
-    // Live first: stopped, running, waiting by depth (k4 under k3), then one done shelf
-    let at = |s: &str| plane.find(s).unwrap_or_else(|| panic!("no {s}: {plane}"));
+    assert!(!k4.contains("k1"), "{k4}");
+    // stopped, running, waiting in plan order, then the one Done index
+    let at = |s: &str| html.find(s).unwrap_or_else(|| panic!("no {s}: {html}"));
     let order = [
-        "<h2 class=\"band-h\">Stopped</h2>",
-        "id=\"unit-stopped\"",
-        "<h2 class=\"band-h\">Running</h2>",
-        "id=\"unit-k2\"",
-        "<h2 class=\"band-h\">Waiting</h2>",
-        "id=\"unit-k3\"",
-        "id=\"unit-k4\"",
-        "class=\"done-shelf\"",
-        "id=\"unit-k1\"",
+        "<!--r:plan-stopped-->",
+        "<!--r:s-stopped-->",
+        "<!--r:plan-running-->",
+        "<!--r:u-k2-->",
+        "<!--r:plan-waiting-->",
+        "<!--r:u-k3-->",
+        "<!--r:u-k4-->",
+        "<!--r:plan-done-->",
     ];
     for pair in order.windows(2) {
         assert!(at(pair[0]) < at(pair[1]), "{} before {}", pair[0], pair[1]);
     }
-    assert!(plane[at("id=\"unit-k3\"")..at("id=\"unit-k4\"")].contains("<div class=\"layer\">"));
-    assert_eq!(plane.matches("class=\"done-shelf\"").count(), 1);
-    assert!(plane.contains("3 done units · 4 steps"), "{plane}");
-    assert!(between(&html, "<div id=\"p-sum\" class=\"sumline\">", "</p>").contains("b-failed"));
-    // Plan order: one band without a label, the same single shelf at the end
-    let (_, html) = f.get(&format!("{base}?order=plan")).await;
-    let plane = between(&html, "<div class=\"plane\"", "</sluice-board");
-    assert!(!plane.contains("band-h"), "{plane}");
-    assert_eq!(plane.matches("class=\"done-shelf\"").count(), 1);
-    assert!(plane.find("id=\"unit-k4\"").unwrap() < plane.find("class=\"done-shelf\"").unwrap());
+    let done = plan_html::band(&html, "plan-done");
+    assert!(done.contains("3 units · 4 steps"), "{done}");
+    for unit in ["k1", "old", "pkg"] {
+        assert_eq!(plan_html::place(&html, unit), "done", "{unit}");
+    }
     // Attention keeps the stopped unit and leaves out running work
     let (_, html) = f.get(&format!("{base}?show=attention")).await;
-    assert!(html.contains("id=\"unit-stopped\""), "{html}");
-    assert!(!html.contains("id=\"unit-k2\""), "{html}");
-    // a plan without steps has nothing to search and says so
+    assert_eq!(plan_html::place(&html, "stopped"), "stopped", "{html}");
+    assert_eq!(plan_html::place(&html, "k2"), "", "{html}");
+    // a plan without steps has nothing to find and says so
     let (_, html) = f.get(&format!("/projects/id/{}", f.plain)).await;
     assert!(html.contains("The plan has no steps yet."), "{html}");
-    assert!(!html.contains("class=\"board-tools\""), "{html}");
+    assert!(!html.contains("pl-find"), "{html}");
 }
 
 #[tokio::test]
@@ -831,23 +789,19 @@ async fn a_cancel_reads_as_cancelled_in_the_units_table_and_on_its_card() {
         board.contains("<span class=\"metric-v\">0</span><span class=\"metric-l\">Failed</span>"),
         "{board}"
     );
-    // its unit's label says what in it needs someone
+    // its module under Stopped says so, its glyph and its word, never failed
+    let module = plan_html::stopped(&html, "beta");
     assert!(
-        html.contains(
-            "<code class=\"u-id\">beta</code> <span class=\"box-alarm\">· 1 cancelled</span>"
-        ),
-        "{html}"
+        module.contains("<span class=\"g g-cancelled\" aria-hidden=\"true\">")
+            && module.contains("<b>cancelled</b>"),
+        "{module}"
     );
-    // its card says so in words, after its id
-    let card = between(&html, "id=\"n-beta-build\"", "</a>");
-    assert!(
-        card.contains("is-cancelled") && card.contains(">cancelled</span>"),
-        "{card}"
-    );
+    assert!(!module.contains("<b>failed</b>"), "{module}");
+    assert!(plan_html::summary(&html).contains("1 cancelled."), "{html}");
 }
 
 #[tokio::test]
-async fn the_shelf_draws_the_latest_done_units_and_sends_only_their_edges() {
+async fn the_done_index_lists_every_done_unit_newest_first_and_recently_finished_the_latest_five() {
     let f = Fixture::new().await;
     // 25 one-step units, each after the one before, all done
     let mut steps = serde_json::Map::new();
@@ -887,56 +841,48 @@ async fn the_shelf_draws_the_latest_done_units_and_sends_only_their_edges() {
         .unwrap();
     let (status, html) = f.get(&format!("/projects/id/{id}")).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    let shelf = between(&html, "class=\"done-shelf\"", "class=\"shelf-more");
-    assert!(shelf.contains("25 done units · 25 steps"), "{shelf}");
+    let done = plan_html::band(&html, "plan-done");
+    assert!(done.contains("25 units · 25 steps"), "{done}");
+    // every one, newest first, folded until opened
     assert_eq!(
-        shelf.matches("class=\"box solo done shelf-row\"").count(),
-        20,
-        "{shelf}"
-    );
-    // newest first, each with when it finished
-    assert!(
-        shelf.find("id=\"n-u24\"").unwrap() < shelf.find("id=\"n-u23\"").unwrap(),
-        "{shelf}"
-    );
-    assert!(!shelf.contains("id=\"n-u04\""), "{shelf}");
-    // a row says its title first and its id after it in mono, once
-    let row = between(shelf, "id=\"n-u24\"", "</a>");
-    assert!(
-        row.contains("<span class=\"fb-name\"><span class=\"sref\"><span class=\"sref-t\">Ship the parser fix</span> <code class=\"sref-id\">u24</code></span></span>"),
-        "{row}"
-    );
-    assert_eq!(row.matches("Ship the parser fix").count(), 1, "{row}");
-    assert!(
-        row.contains("<span class=\"vh\"> took 1 hour 24 minutes</span>"),
-        "{row}"
+        done.matches("<code class=\"pl-did\">").count(),
+        25,
+        "{done}"
     );
     assert!(
-        shelf.contains("<span class=\"fb-ago\"><time data-ago=\"2026-10-06T11:24:00Z\""),
-        "{shelf}"
+        done.contains("<details class=\"pl-index\" data-preserve-attr=\"open\">"),
+        "{done}"
+    );
+    let at = |u: &str| {
+        done.find(&format!("<code class=\"pl-did\">{u}</code>"))
+            .unwrap()
+    };
+    assert!(at("u24") < at("u23") && at("u23") < at("u00"), "{done}");
+    // a line says when it finished (the reader's clock), its id, its title and how long it took
+    let line = plan_html::between(
+        done,
+        "<time data-clock datetime=\"2026-10-06T11:24:00Z\"",
+        "</li>",
     );
     assert!(
-        html.contains(&format!(
-            "<a href=\"/projects/id/{id}?order=live&#38;show=done\">Show all 25</a>"
-        )),
+        line.contains("<code class=\"pl-did\">u24</code><span class=\"pl-dt\">Ship the parser fix</span><span class=\"pl-dk\">took 1h 24m</span>"),
+        "{line}"
+    );
+    // the band's Recently finished: the latest five, newest first
+    let recent = plan_html::between(&html, "<section class=\"band-strip\"", "</section>");
+    assert_eq!(recent.matches("<li>").count(), 5, "{recent}");
+    assert!(
+        recent.find("u24").unwrap() < recent.find("u20").unwrap(),
+        "{recent}"
+    );
+    assert!(!recent.contains("u19"), "{recent}");
+    assert!(recent.contains("took 1h 24m"), "{recent}");
+    // Show: Done opens the index
+    let (_, html) = f.get(&format!("/projects/id/{id}?show=done")).await;
+    assert!(
+        html.contains("<details class=\"pl-index\" data-preserve-attr=\"open\" open>"),
         "{html}"
     );
-    // the edges data holds only the relations among what the page draws
-    let drawn = edges(&html);
-    assert!(drawn.len() < 24, "{drawn:?}");
-    for e in &drawn {
-        assert!(
-            html.contains(&format!("id=\"n-{}\"", e["to"]["id"].as_str().unwrap())),
-            "{e}"
-        );
-    }
-    // Show: Done draws every one
-    let (_, html) = f.get(&format!("/projects/id/{id}?show=done")).await;
-    assert_eq!(
-        html.matches("class=\"box solo done shelf-row\"").count(),
-        25
-    );
-    assert_eq!(edges(&html).len(), 24);
 }
 
 #[tokio::test]
@@ -949,11 +895,9 @@ async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws
         board.contains("<span class=\"metric-v\">1</span><span class=\"metric-l\">Failed</span>"),
         "{board}"
     );
-    // a failed step's unit says so at its head, so a phone reads it before its cards
+    // a failed step's unit is stopped: its module says so first
     assert!(
-        html.contains(
-            "<code class=\"u-id\">beta</code> <span class=\"box-alarm\">· 1 failed</span>"
-        ),
+        plan_html::stopped(&html, "beta").contains("<b>failed</b>"),
         "{html}"
     );
     // the unit's own page: its steps summed, and the lines inside it drawn
@@ -1004,10 +948,11 @@ async fn a_paused_step_is_named_and_counted_paused_on_every_surface() {
         .unwrap();
     let (status, html) = f.get(&format!("/projects/id/{held}")).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    let sum = between(&html, "class=\"sum-n", "</span>");
-    assert!(sum.contains("3 steps · 1 succeeded · 1 paused"), "{sum}");
+    // the plan: the paused one waits, its cell says paused; the band counts it waiting
+    let cell = plan_html::cell(&html, "hold");
+    assert!(cell.contains("data-state=\"paused\""), "{cell}");
     assert!(
-        html.contains("<i class=\"b-paused\" style=\"flex:1\">"),
+        plan_html::summary(&html).contains("2 waiting. 1 of 3 units done"),
         "{html}"
     );
     let reads = sluice_store::ReadPool::open(f._home.path(), 1).unwrap();

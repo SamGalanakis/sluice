@@ -137,9 +137,8 @@ this shows its last data." StepStatus and Output draw their error box instead.
 ## A recipe's unit view
 The board is one panel for the whole project. To show each unit of a recipe the same way, give
 the recipe a `view` instead (`docs("plans")`, Recipes): a program in this same language, bound
-to one unit, which the dashboard draws in the unit's row of the recipe's lane matrix and whole
-on the unit's page, inside a frame sluice draws (the unit's title, id, status and a pill per
-stage). Its vocabulary is smaller and per unit: `Stack(children, direction?)`, `Text(text,
+to one unit, which the dashboard draws in the unit's row on the plan and whole on the unit's page, inside a
+frame sluice draws (the unit's title, id, status and a cell per stage). Its vocabulary is smaller and per unit: `Stack(children, direction?)`, `Text(text,
 tone?)`, `Markdown(text)`, `Link(label, href)`, `Param(name)`, `Output(stage, field)`,
 `StepStatus(stage)` and `LastMessage(chars?)`, where a stage is the recipe step's id without
 `{unit}-` and `{param}` fills in any string. No queries, charts or buttons: those belong on
@@ -148,7 +147,7 @@ the board.
 The dashboard names steps by their titles (a step's doc's first line, its spec's heading, or
 its recipe's `title`; `docs("plans")`, Titles), so a Text that repeats a step's id adds little.
 
-A recipe's matrix lists its live units; its name links to every unit it made, done ones too
+A recipe's block on the plan lists its live units; its name links to every unit it made, done ones too
 (`/projects/id/<p>?recipe=<name>&show=all`). A step's chain is `?root=<step>` (`&up=1` what it
 comes after, `&down=1` what comes after it, `&depth=N`), a link worth sending the owner instead
 of a list of ids. Each unit's page draws its runs on a timeline, and a running stage of a recipe

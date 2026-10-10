@@ -1,3 +1,4 @@
+mod plan_html;
 use axum::{
     Extension,
     body::{Body, to_bytes},
@@ -530,7 +531,8 @@ fn a_cards_timer_reads_in_its_two_largest_units() {
     }
 }
 
-/// The step's card on the project page, as the page draws it.
+/// The step's place on the project page, as the page draws it: its stopped module, its row,
+/// its long run in the margin, or its line of the Done index.
 async fn card(state: &views::DashboardState, project: ProjectId) -> String {
     let app = views::dashboard_router(state.clone()).layer(Extension(Registry(Arc::new(Exact))));
     let response = app
@@ -545,13 +547,22 @@ async fn card(state: &views::DashboardState, project: ProjectId) -> String {
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), 1 << 22).await.unwrap();
     let body = String::from_utf8(body.to_vec()).unwrap();
-    let start = body.find("<a id=\"n-work\"").expect("the card");
-    let end = start + body[start..].find("</a>").unwrap();
-    body[start..end].to_owned()
+    match plan_html::place(&body, "work") {
+        "stopped" => plan_html::stopped(&body, "work").to_owned(),
+        "margin" => plan_html::region(&body, "m-work").to_owned(),
+        "done" => {
+            let at = body
+                .find("<code class=\"pl-did\">work</code>")
+                .expect("its line");
+            body[at..at + body[at..].find("</li>").unwrap()].to_owned()
+        }
+        "" => panic!("the step's unit: {body}"),
+        _ => plan_html::row(&body, "work").to_owned(),
+    }
 }
 
 #[tokio::test]
-async fn a_cards_timer_ticks_while_its_current_run_goes_and_holds_once_it_has_ended() {
+async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_once_it_has_ended() {
     use sluice_model::ids::{AttemptId, RunId};
     let (_home, writer, state, project) = fixture().await;
     let set = |sql: &'static str| {
@@ -589,51 +600,56 @@ async fn a_cards_timer_ticks_while_its_current_run_goes_and_holds_once_it_has_en
         }
     };
     // failed without a run, then pending: no timer
-    assert!(!card(&state, project).await.contains("took"));
+    let html = card(&state, project).await;
+    assert!(
+        !html.contains("data-since") && !html.contains(" after "),
+        "{html}"
+    );
     set("UPDATE steps SET status='pending' WHERE project_id=?1").await;
-    assert!(!card(&state, project).await.contains("took"));
+    let html = card(&state, project).await;
+    assert!(!html.contains("sc-time"), "{html}");
 
-    // running: a <time data-since> at its run's start, which sluice.js ticks
+    // running for days, alone: a long run in the margin, its time a <time data-since> at its
+    // run's start, which the page ticks
     run("2026-10-05T09:00:00Z", None).await;
     set("UPDATE steps SET status='running' WHERE project_id=?1").await;
     let html = card(&state, project).await;
     assert!(
-        html.contains("<time data-since=\"2026-10-05T09:00:00Z\" datetime=\"2026-10-05T09:00:00Z\" class=\"took live\" title=\"Started 2026-10-05 09:00 UTC\"><span class=\"tk\" aria-hidden=\"true\">"),
+        html.contains("<span class=\"mm-time\"><time data-since=\"2026-10-05T09:00:00Z\" datetime=\"2026-10-05T09:00:00Z\""),
         "{html}"
     );
-    assert!(html.contains("<span class=\"vh\"> for "), "{html}");
-    // its name reads "running work for 2 days 5 hours" (the glyph, the id, the timer; no comma before it)
-    assert!(html.contains("aria-label=\"running\""), "{html}");
 
-    // failed after it ran, then retried and pending again: nothing until the next run starts
+    // failed after it ran: how long that run took, still; then retried and pending again:
+    // nothing until the next run starts
     set("UPDATE runs SET finished_at='2026-10-05T09:30:00Z' WHERE project_id=?1").await;
     set("UPDATE steps SET status='failed' WHERE project_id=?1").await;
     let html = card(&state, project).await;
-    assert!(
-        html.contains("<span class=\"took\" title=\"Took 30m\"><span aria-hidden=\"true\">30m</span><span class=\"vh\"> took 30 minutes</span></span>"),
-        "{html}"
-    );
+    assert!(html.contains(" after 30m</span>"), "{html}");
+    assert!(!html.contains("data-since"), "{html}");
     set("UPDATE steps SET status='pending' WHERE project_id=?1").await;
+    let html = card(&state, project).await;
     assert!(
-        !card(&state, project).await.contains("took"),
-        "a pending step shows no timer"
+        !html.contains("sc-time"),
+        "a pending step shows no timer: {html}"
     );
 
-    // the retry runs: the timer is the current run's, not the first's
+    // the retry runs: the timer is the current run's, not the first's, and it says its run
     run("2026-10-05T10:00:00Z", None).await;
     set("UPDATE steps SET status='running' WHERE project_id=?1").await;
     let html = card(&state, project).await;
     assert!(
-        html.contains("<time data-since=\"2026-10-05T10:00:00Z\" datetime=\"2026-10-05T10:00:00Z\" class=\"took live\" title=\"2 runs; this one started 2026-10-05 10:00 UTC\">"),
+        html.contains("<time data-since=\"2026-10-05T10:00:00Z\"")
+            && !html.contains("2026-10-05T09:00:00Z"),
         "{html}"
     );
+    assert!(html.contains("running · run 2"), "{html}");
 
-    // it succeeds: how long its last run took, static and quieter
+    // it succeeds: done, how long its last run took, static
     set("UPDATE runs SET finished_at='2026-10-05T12:14:30Z' WHERE project_id=?1 AND finished_at IS NULL").await;
     set("UPDATE steps SET status='succeeded' WHERE project_id=?1").await;
     let html = card(&state, project).await;
     assert!(
-        html.contains("<span class=\"took\" title=\"2 runs; this one took 2h 14m\"><span aria-hidden=\"true\">2h 14m</span><span class=\"vh\"> took 2 hours 14 minutes</span></span>"),
+        html.contains("<span class=\"pl-dk\">took 2h 14m</span>"),
         "{html}"
     );
     assert!(!html.contains("data-since"), "{html}");

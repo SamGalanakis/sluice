@@ -1,9 +1,9 @@
-//! Real Chromium gate for the project's board: beside the plan from 1280px across the window (to
-//! 2400px, the nav on the same edges) with a splitter between them and a Plan · Both · Board
-//! switch, its own section behind the Plan · Board switch below that (each remembered per
-//! project), nothing at all without a board; centred, unclipped and never scrolling sideways,
-//! light and dark. `SLUICE_BOARD_SCREENS=<dir>` also saves a
-//! screenshot of each state there.
+//! Real Chromium gate for the project page: the board beside the plan from 1280px with a
+//! splitter between them and a Plan · Both · Board switch, its own section behind the Plan ·
+//! Board switch below that (each remembered per project), nothing at all without a board;
+//! centred, unclipped and never scrolling sideways, light and dark. Select-to-trace on the
+//! plan, the drawer giving the focus back, and a step's new state said to a screen reader.
+//! `SLUICE_BOARD_SCREENS=<dir>` also saves a screenshot of each state there.
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
@@ -20,11 +20,11 @@ const GEOMETRY: &str = r#"(() => {
   return {scroll: document.documentElement.scrollWidth, width: document.documentElement.clientWidth,
           left: page.left, right: page.right,
           navLeft: n.left + parseFloat(css.paddingLeft), navRight: n.right - parseFloat(css.paddingRight),
-          plan: document.querySelector('#plan-pane sluice-board')?.checkVisibility() ? box('#plan-pane') : null,
-          board: box('#board-pane'), sum: box('#plan-pane .sumline'),
+          plan: box('#plan-pane'),
+          board: box('#board-pane'), sum: box('.band-summary'),
           navFits: (l => l.scrollWidth <= l.clientWidth)(document.querySelector('.subnav nav.links')), tabs: box('.view-switch'), split: box('.splitter'),
           view: document.querySelector('#project-board').dataset.view ?? null,
-          h1: box('#plan-pane .p-title'),
+          h1: box('.site-head h1'),
           // the page is as tall as its main column (or the window): nothing hangs below it
           below: document.documentElement.scrollHeight - Math.max(innerHeight,
             Math.ceil(document.querySelector('main').getBoundingClientRect().bottom + scrollY)),
@@ -83,7 +83,7 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         browser.wait(ready).unwrap();
         let listener_counts = |browser: &mut Chrome| {
             browser.send("Runtime.evaluate", serde_json::json!({
-                "expression": "Object.fromEntries(['pointerover','pointerout','focusin','focusout','keydown','toggle'].map(t=>[t,(getEventListeners(document.querySelector('sluice-board'))[t]||[]).length]))",
+                "expression": "Object.fromEntries(['click','keydown'].map(t=>[t,(getEventListeners(document.querySelector('sluice-trace'))[t]||[]).length]))",
                 "includeCommandLineAPI": true,
                 "returnByValue": true
             })).unwrap()["result"]["value"].clone()
@@ -100,15 +100,16 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         let scroll = scroll_count(&mut browser);
         assert_eq!(scroll, 1);
         for _ in 0..3 {
-            browser.eval("(()=>{window.controller=sluiceStream();const board=document.querySelector('sluice-board'),parent=board.parentNode,next=board.nextSibling;board.remove();parent.insertBefore(board,next);window.host=document.querySelector('sluice-drawer');window.drawerParent=host.parentNode;window.after=host.nextSibling;host.remove()})()").unwrap();
+            browser.eval("(()=>{window.controller=sluiceStream();const board=document.querySelector('sluice-trace'),parent=board.parentNode,next=board.nextSibling;board.remove();parent.insertBefore(board,next);window.host=document.querySelector('sluice-drawer');window.drawerParent=host.parentNode;window.after=host.nextSibling;host.remove()})()").unwrap();
             assert_eq!(browser.eval("controller.signal.aborted").unwrap(), true);
             browser.eval("drawerParent.insertBefore(host,after)").unwrap();
             assert_eq!(listener_counts(&mut browser), expected);
             assert_eq!(scroll_count(&mut browser), scroll);
         }
-        browser.eval("document.getElementById('n-alpha-build').focus()").unwrap();
+        // the arrows move between the units' trace buttons
+        browser.eval("window.first=document.querySelector('[data-trace-pick]');first.focus()").unwrap();
         browser.send("Input.dispatchKeyEvent", serde_json::json!({"type":"keyDown","key":"ArrowDown","code":"ArrowDown"})).unwrap();
-        assert_ne!(browser.eval("document.activeElement.id").unwrap(), "n-alpha-build");
+        assert_eq!(browser.eval("document.activeElement !== first && document.activeElement.matches('[data-trace-pick]')").unwrap(), true);
         browser.eval("window.late=0;document.querySelector('#drawer').focus=()=>late++;history.replaceState(null,'','#step:beta-build');dispatchEvent(new HashChangeEvent('hashchange'));host.remove()").unwrap();
         browser.eval("new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))").unwrap();
         assert_eq!(browser.eval("late").unwrap(), 0);
@@ -146,6 +147,7 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                             assert_eq!(g["view"], "plan", "{label}: {g}");
                             assert!(g["h1"].is_object(), "{label}: the project's title stays over its board {g}");
                             assert!(g["tabs"]["top"].as_f64().unwrap() > g["sum"]["top"].as_f64().unwrap(), "{label}: the switch after the summary {g}");
+                            assert!(g["board"].is_null(), "{label}: {g}");
                         }
                         ("board", _) => {
                             assert!(plan.is_object(), "{label}: {g}");
@@ -177,8 +179,8 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                 }
             }
         }
-        // Across 1280px the page keeps its edges and the switch its place: at the summary
-        // line's right end, on its row, as wide as its words.
+        // Across 1280px the page keeps its edges and the switch its place, in the tools' row
+        // under the summary.
         browser
             .navigate(&format!("{base}/projects/id/{lanes}"))
             .unwrap();
@@ -192,9 +194,8 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
             let gutter = (10.0 + 0.015 * width as f64).clamp(16.0, 64.0);
             assert!(near(&g["left"], gutter) && near(&g["right"], g["width"].as_f64().unwrap() - gutter), "{label}: {g}");
             assert!(near(&g["left"], g["navLeft"].as_f64().unwrap()) && near(&g["right"], g["navRight"].as_f64().unwrap()), "{label}: {g}");
-            let (tabs, sum, plan) = (&g["tabs"], &g["sum"], &g["plan"]);
-            assert!(near(&tabs["right"], plan["right"].as_f64().unwrap()), "{label}: {g}");
-            assert!(tabs["top"].as_f64().unwrap() >= sum["top"].as_f64().unwrap() - 1.0, "{label}: {g}");
+            let (tabs, sum) = (&g["tabs"], &g["sum"]);
+            assert!(tabs["top"].as_f64().unwrap() > sum["top"].as_f64().unwrap(), "{label}: {g}");
         }
         // Every page's times are nav.js's, in one vocabulary: a running time is a two-unit
         // duration, never "… ago".
@@ -333,33 +334,21 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
     let _ = server.await;
 }
 
-/// Each drawn line: its two ends, whether it leaves its source's foot and its arrowhead meets
-/// its dependent, and whether it runs down the page (its head below its source's foot).
-const EDGES: &str = r#"(() => {
-  const plane = document.querySelector('.plane').getBoundingClientRect();
-  return [...document.querySelectorAll('svg.edges .wires path:not(.head)')].map(p => {
-    const a = document.querySelector(`[data-node="${p.dataset.from}"]`).getBoundingClientRect();
-    const z = document.querySelector(`[data-node="${p.dataset.to}"]`).getBoundingClientRect();
-    const head = p.nextElementSibling.getBoundingClientRect();
-    const n = p.getAttribute('d').match(/-?[\d.]+/g).map(Number);
-    const [x1, y1] = [n[0], n[1]];
-    const meets = (h, r, d) => h.right > r.left - d && h.left < r.right + d && h.bottom > r.top - d && h.top < r.bottom + d;
-    return {from: p.dataset.from, to: p.dataset.to, down: head.top > a.bottom,
-            lands: x1 >= a.left - plane.left - 1 && x1 <= a.right - plane.left + 1
-              && Math.abs(y1 - (a.bottom - plane.top)) < 1.5 && meets(head, z, 1.5)};
-  });
-})()"#;
-/// Each unit laid out on the board: its id and box.
-const TILES: &str = r#"Object.fromEntries([...document.querySelectorAll('.plane .layer > .box')].map(b => {
-  const r = b.getBoundingClientRect(); return [b.id, {left: r.left, top: r.top, bottom: r.bottom, width: r.width}]; }))"#;
+/// Each unit's trace role on the plan, the host's selection and its sentence.
+const TRACED: &str = r#"(() => { const host = document.querySelector('sluice-trace');
+  return {selected: host.getAttribute('selected'), tracing: host.hasAttribute('tracing'),
+          words: host.querySelector('.trace-words').textContent,
+          roles: Object.fromEntries([...host.querySelectorAll('[data-unit]')].map(u => [u.dataset.unit, u.dataset.trace ?? ''])),
+          faded: [...host.querySelectorAll('[data-trace=faded]')].filter(u => Number(getComputedStyle(u).opacity) < 1).length,
+          more: [...host.querySelectorAll('[data-trace-more]')].filter(m => !m.hidden).length,
+          errors: window.browserErrors}; })()"#;
 
-/// The plan as a graph keyed off nothing but the plan: under Live first the running units side
-/// by side in one layer, the waiting in layers under them by depth, and a line for each wait
-/// between units, leaving its source's foot and landing on the card that waits, running down
-/// the page; a satisfied wait has no line. That holds after a resize. On a phone the units
-/// stack, no line is drawn, and a card says its waits in words. Nothing scrolls sideways.
+/// Select to trace on the plan: a unit's button selects it, every unit up its chain and down
+/// it is marked, the rest fade, the sentence says the chain and the selected unit's more opens
+/// in place. The arrows move between the buttons, Enter selects, Escape clears and gives the
+/// focus back. A stream patch keeps the choice and draws it again. Nothing scrolls sideways.
 #[tokio::test(flavor = "multi_thread")]
-async fn chromium_plan_graph_draws_each_wait_between_units_as_a_line_down_to_its_card() {
+async fn chromium_select_to_trace_marks_the_chain_by_keyboard_and_through_a_patch() {
     let f = Fixture::new().await;
     let id = f
         .project(
@@ -378,53 +367,99 @@ async fn chromium_plan_graph_draws_each_wait_between_units_as_a_line_down_to_its
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    tokio::task::spawn_blocking(move || {
+    let mut browser = tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
         browser
-            .wait("document.readyState === 'complete' && document.querySelector('sluice-board')")
+            .wait("document.readyState === 'complete' && document.querySelector('sluice-trace [data-trace-pick]')")
             .unwrap();
-        let want: Vec<(String, String)> = [("r1", "w1"), ("r1", "w2"), ("r2", "w2"), ("w1", "w3"), ("w2", "w3")]
-            .iter()
-            .map(|(a, b)| (format!("s:{a}"), format!("s:{b}")))
-            .collect();
-        for width in [1440, 1300, 2560, 1440] {
+        for width in [390, 1440, 2560] {
             browser.viewport(width, "light").unwrap();
-            browser
-                .wait("document.querySelectorAll('svg.edges .wires path:not(.head)').length === 5")
-                .unwrap();
-            let edges = browser.eval(EDGES).unwrap();
-            let mut drawn: Vec<(String, String)> = edges
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|e| (e["from"].as_str().unwrap().into(), e["to"].as_str().unwrap().into()))
-                .collect();
-            drawn.sort();
-            assert_eq!(drawn, want, "{width}: r1→w3 is implied, d1→r1 is satisfied");
-            assert!(
-                edges.as_array().unwrap().iter().all(|e| e["lands"] == true && e["down"] == true),
-                "{width}: {edges}"
+            let g = browser.eval(TRACED).unwrap();
+            assert_eq!(g["tracing"], false, "{width}: {g}");
+            assert_eq!(
+                browser.eval("document.documentElement.scrollWidth - document.documentElement.clientWidth").unwrap(),
+                0,
+                "{width}: sideways scroll"
             );
-            let t = browser.eval(TILES).unwrap();
-            let (top, bottom) = (|u: &str| t[u]["top"].as_f64().unwrap(), |u: &str| t[u]["bottom"].as_f64().unwrap());
-            assert!(near(&t["unit-r1"]["top"], top("unit-r2")), "{width}: one layer {t}");
-            assert!(near(&t["unit-w1"]["top"], top("unit-w2")), "{width}: one layer {t}");
-            assert!(top("unit-w1") > bottom("unit-r1") + 30.0, "{width}: waiting under running {t}");
-            assert!(top("unit-w3") > bottom("unit-w2") + 30.0, "{width}: by depth {t}");
-            let scroll = browser
-                .eval("document.documentElement.scrollWidth - document.documentElement.clientWidth")
-                .unwrap();
-            assert_eq!(scroll, 0, "{width}: sideways scroll");
         }
-        browser.viewport(390, "light").unwrap();
-        let t = browser.eval(TILES).unwrap();
-        assert!(t["unit-w1"]["top"].as_f64().unwrap() >= t["unit-r2"]["bottom"].as_f64().unwrap(), "phone: stacked {t}");
-        assert_eq!(browser.eval("document.querySelectorAll('svg.edges path').length").unwrap(), 0);
-        let words = browser
-            .eval("(w => w && w.checkVisibility() ? w.textContent : null)(document.querySelector('#unit-w2 .waits'))")
+        // by keyboard: w2's button, Enter
+        browser.eval("document.querySelector('[data-unit=w2] [data-trace-pick]').focus()").unwrap();
+        let key = |browser: &mut Chrome, key: &str, code: u32| {
+            let mut down = serde_json::json!({"type": "keyDown", "key": key, "code": key, "windowsVirtualKeyCode": code});
+            if key == "Enter" {
+                down["text"] = "\r".into();
+            }
+            browser.send("Input.dispatchKeyEvent", down).unwrap();
+            browser
+                .send("Input.dispatchKeyEvent", serde_json::json!({"type": "keyUp", "key": key, "code": key, "windowsVirtualKeyCode": code}))
+                .unwrap();
+        };
+        key(&mut browser, "Enter", 13);
+        browser.wait("document.querySelector('sluice-trace').getAttribute('selected') === 'w2'").unwrap();
+        settle(&mut browser);
+        let g = browser.eval(TRACED).unwrap();
+        assert_eq!(
+            g["roles"],
+            serde_json::json!({"r1": "up", "r2": "up", "w1": "faded", "w2": "selected", "w3": "down"}),
+            "{g}"
+        );
+        assert_eq!(g["words"], "Tracing w2. It waits for r1 and r2. w3 waits on it.", "{g}");
+        assert_eq!(g["faded"], 1, "the rest fades {g}");
+        assert_eq!(g["more"], 1, "{g}");
+        assert_eq!(
+            browser.eval("document.querySelector('[data-unit=w2] [data-trace-pick]').getAttribute('aria-pressed')").unwrap(),
+            "true"
+        );
+        // the arrows move between the buttons
+        key(&mut browser, "ArrowDown", 40);
+        assert_eq!(
+            browser.eval("document.activeElement.closest('[data-unit]').dataset.unit").unwrap(),
+            "w3"
+        );
+        key(&mut browser, "ArrowUp", 38);
+        // let the page's stream open before the change
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        browser
+    })
+    .await
+    .unwrap();
+    // r1 succeeds: the patch moves it to Done and w1 to its turn; the choice stays
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE steps SET status='succeeded' WHERE project_id=?1 AND step_id='r1'",
+                [id.to_string()],
+            )?;
+            tx.changed(Some(id), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    tokio::task::spawn_blocking(move || {
+        browser
+            .wait("!document.querySelector('[data-unit=r1] [data-trace-pick]')")
             .unwrap();
-        assert_eq!(words, "Waits for r1 (running) and r2 (running)");
-        assert_eq!(browser.eval("window.browserErrors").unwrap(), serde_json::json!([]));
+        settle(&mut browser);
+        let g = browser.eval(TRACED).unwrap();
+        assert_eq!(g["selected"], "w2", "{g}");
+        assert_eq!(g["roles"]["w2"], "selected", "{g}");
+        assert_eq!(g["roles"]["r2"], "up", "{g}");
+        assert_eq!(g["roles"]["w3"], "down", "{g}");
+        assert_eq!(g["more"], 1, "{g}");
+        // Escape clears and leaves the focus on the selected unit's button
+        browser.eval("document.querySelector('[data-unit=w2] [data-trace-pick]').focus()").unwrap();
+        browser
+            .send("Input.dispatchKeyEvent", serde_json::json!({"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27}))
+            .unwrap();
+        settle(&mut browser);
+        let g = browser.eval(TRACED).unwrap();
+        assert_eq!(g["tracing"], false, "{g}");
+        assert_eq!(g["more"], 0, "{g}");
+        assert_eq!(
+            browser.eval("document.activeElement.closest('[data-unit]')?.dataset.unit").unwrap(),
+            "w2"
+        );
+        assert_eq!(g["errors"], serde_json::json!([]), "{g}");
     })
     .await
     .unwrap();
@@ -443,13 +478,13 @@ fn pointer(browser: &mut Chrome, kind: &str, x: f64, y: f64) {
     }
     browser.send("Input.dispatchMouseEvent", event).unwrap();
 }
-/// Waits two frames and for every transition to run out.
+/// Waits two frames and for every transition to run out (a running cell's sweep never does).
 fn settle(browser: &mut Chrome) {
     browser
         .wait("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))")
         .unwrap();
     browser
-        .wait("document.getAnimations().length === 0")
+        .wait("document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity)")
         .unwrap();
 }
 /// Moves the pointer onto the element `selector` names (scrolled into view), in a few steps.
@@ -464,11 +499,10 @@ fn hover(browser: &mut Chrome, selector: &str) -> (f64, f64) {
     (x, y)
 }
 
-/// The drawer gives the focus back to the card it closes on: that card wears the keyboard's
-/// ring in ink on the pill itself, never running's blue or the open step's ring, and once the
-/// pointer has passed over a card and left the board nothing stays traced.
+/// The drawer gives the focus back to the stage cell it opened from: that cell wears the
+/// keyboard's ring, and the pointer passing over the plan traces nothing (a trace is chosen).
 #[tokio::test(flavor = "multi_thread")]
-async fn chromium_the_card_the_drawer_gives_focus_back_wears_an_ink_ring_and_traces_nothing() {
+async fn chromium_the_cell_the_drawer_gives_focus_back_wears_the_ring_and_hover_traces_nothing() {
     let f = Fixture::new().await;
     let router = f.router();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -478,20 +512,11 @@ async fn chromium_the_card_the_drawer_gives_focus_back_wears_an_ink_ring_and_tra
     tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{lanes}")).unwrap();
         browser
-            .wait("document.readyState === 'complete' && document.querySelector('sluice-board')")
+            .wait("document.readyState === 'complete' && document.querySelector('#n-alpha-review')")
             .unwrap();
         browser.viewport(1440, "light").unwrap();
-        // the two lines inside the boxes; alpha-review sits under beta-review (Stopped before
-        // Waiting), and a line never runs up: beta-review's words say that wait
-        browser
-            .wait("document.querySelectorAll('svg.edges .wires path:not(.head)').length === 2")
-            .unwrap();
-        let edges = browser.eval(EDGES).unwrap();
-        assert!(edges.as_array().unwrap().iter().all(|e| e["lands"] == true && e["down"] == true), "{edges}");
-        let words = browser
-            .eval("(w => w && w.checkVisibility() ? w.textContent : null)(document.querySelector('#unit-beta .waits'))")
-            .unwrap();
-        assert_eq!(words, "Waits for alpha-review", "the upward wait in words");
+        // no line is drawn between units
+        assert_eq!(browser.eval("document.querySelectorAll('svg.edges').length").unwrap(), 0);
         let (x, y) = hover(&mut browser, "#n-alpha-review");
         pointer(&mut browser, "mousePressed", x, y);
         pointer(&mut browser, "mouseReleased", x, y);
@@ -508,206 +533,18 @@ async fn chromium_the_card_the_drawer_gives_focus_back_wears_an_ink_ring_and_tra
             .unwrap();
         settle(&mut browser);
         let ring = browser
-            .eval("(c => { const s = getComputedStyle(c); return [c.matches(':focus-visible'), s.outlineColor === getComputedStyle(document.body).color, s.outlineOffset, s.boxShadow]; })(document.activeElement)")
+            .eval("(c => { const s = getComputedStyle(c); return [c.matches(':focus-visible'), s.outlineStyle !== 'none', c.classList.contains('open')]; })(document.activeElement)")
             .unwrap();
-        assert_eq!(ring, serde_json::json!([true, true, "0px", "none"]), "an ink ring, not the open ring");
-        hover(&mut browser, "#n-beta-build");
-        browser
-            .wait("document.querySelector('.plane').classList.contains('tracing')")
-            .unwrap();
+        assert_eq!(ring, serde_json::json!([true, true, false]), "the keyboard's ring, the drawer shut");
+        hover(&mut browser, "#u-alpha .pl-t");
         for step in [40.0, 20.0, 4.0] {
             pointer(&mut browser, "mouseMoved", step, step);
         }
         settle(&mut browser);
         let lit = browser
-            .eval("[document.querySelector('.plane').classList.contains('tracing'), document.querySelectorAll('.plane .on').length]")
+            .eval("[document.querySelector('sluice-trace').hasAttribute('tracing'), document.querySelectorAll('[data-trace]').length]")
             .unwrap();
-        assert_eq!(lit, serde_json::json!([false, 0]), "a trace left on");
-        assert_eq!(browser.eval("window.browserErrors").unwrap(), serde_json::json!([]));
-    })
-    .await
-    .unwrap();
-    server.abort();
-    let _ = server.await;
-}
-
-/// One path a pair of cards, named with every relation between them (a handoff and an after
-/// on the same pair are one line). A line whose order a longer path already gives is not
-/// drawn, a value passed along it too: the step's page lists its inputs. Every line is drawn
-/// alike, its kind in its name; plain order has none but "after" in its title. Arrowheads
-/// land on their cards.
-#[tokio::test(flavor = "multi_thread")]
-async fn chromium_one_path_a_pair_and_no_after_that_a_path_already_gives() {
-    let f = Fixture::new().await;
-    let id = f
-        .project(
-            "edges",
-            serde_json::json!({"steps":{
-                "lane-fork":{"run":"custom.open","outputs":{"path":"string"},"tags":["unit:lane"]},
-                "lane-work":{"run":"custom.open","in":{"cwd":{"source":"lane-fork/path"}},"after":["lane-fork"],"tags":["unit:lane"]},
-                "lane-land":{"run":"custom.open","in":{"fork":{"source":"lane-fork/path"}},"after":["lane-work"],"tags":["unit:lane"]},
-                "lane-rm":{"run":"custom.open","after":["lane-fork","lane-land"],"tags":["unit:lane"]}}}),
-            &[("lane-fork", "succeeded")],
-        )
-        .await;
-    let router = f.router();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    tokio::task::spawn_blocking(move || {
-        let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
-        browser
-            .wait("document.readyState === 'complete' && document.querySelector('sluice-board')")
-            .unwrap();
-        browser.viewport(1440, "light").unwrap();
-        browser
-            .wait("document.querySelectorAll('svg.edges .wires path:not(.head)').length > 0")
-            .unwrap();
-        let paths = browser
-            .eval("[...document.querySelectorAll('svg.edges .wires path:not(.head)')].map(p => [p.dataset.from, p.dataset.to, p.dataset.kind, p.querySelector('title')?.textContent ?? ''])")
-            .unwrap();
-        let mut paths: Vec<Vec<String>> = serde_json::from_value(paths).unwrap();
-        paths.sort();
-        let want: Vec<Vec<String>> = [
-            ["s:lane-fork", "s:lane-work", "handoff", "path → cwd"],
-            ["s:lane-land", "s:lane-rm", "ordering", "after"],
-            ["s:lane-work", "s:lane-land", "ordering", "after"],
-        ]
-        .iter()
-        .map(|p| p.iter().map(|s| s.to_string()).collect())
-        .collect();
-        assert_eq!(paths, want, "fork→land and fork→rm are implied by fork→work→land→rm");
-        let dash = browser
-            .eval("[...document.querySelectorAll('svg.edges .wires path:not(.head)')].map(p => getComputedStyle(p).strokeDasharray)")
-            .unwrap();
-        let dash: Vec<String> = serde_json::from_value(dash).unwrap();
-        assert!(dash.iter().all(|d| d == "none"), "every line alike: {dash:?}");
-        let edges = browser.eval(EDGES).unwrap();
-        assert!(
-            edges.as_array().unwrap().iter().all(|e| e["lands"] == true),
-            "{edges}"
-        );
-        assert_eq!(browser.eval("window.browserErrors").unwrap(), serde_json::json!([]));
-    })
-    .await
-    .unwrap();
-    server.abort();
-    let _ = server.await;
-}
-
-/// Every line the board draws starts on its source's card and ends on the card that waits, and
-/// none enters a lane matrix: a matrix is a table, so a wait to or from one of its rows is said
-/// in words in the row ("Waits for l2-land (failed) and probe (running)"), never drawn through
-/// its cells or around its box. That holds at every width, with the drawer open beside the
-/// plan, and when the plan grows too narrow for the table and its rows turn into lane strings.
-/// On a phone there are no lines at all.
-#[tokio::test(flavor = "multi_thread")]
-async fn chromium_no_line_enters_a_lane_matrix_and_every_line_ends_on_its_cards() {
-    let f = Fixture::new().await;
-    let id = f.titled().await;
-    let router = f.router();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    tokio::task::spawn_blocking(move || {
-        let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
-        browser
-            .wait("document.readyState === 'complete' && document.querySelector('sluice-board')")
-            .unwrap();
-        // each line's ends against its cards, each sample of it against every matrix's box
-        const LINES: &str = r#"(() => {
-  const plane = document.querySelector('.plane').getBoundingClientRect();
-  const inside = (q, b, pad) => q.x >= b.left - pad && q.x <= b.right + pad && q.y >= b.top - pad && q.y <= b.bottom + pad;
-  const matrices = [...document.querySelectorAll('.matrix')].filter(m => m.checkVisibility()).map(m => m.getBoundingClientRect());
-  const bad = [];
-  let lines = 0;
-  for (const p of document.querySelectorAll('svg.edges .wires path:not(.head)')) {
-    lines++;
-    const [from, to] = [p.dataset.from, p.dataset.to];
-    const node = k => [...document.querySelectorAll(`.plane [data-node="${CSS.escape(k)}"]`)].find(n => n.checkVisibility());
-    const a = node(from), b = node(to);
-    if (!a || !b) { bad.push(`${from}→${to}: an end not on screen`); continue; }
-    if (a.closest('.matrix') || b.closest('.matrix')) bad.push(`${from}→${to}: drawn to a matrix row`);
-    const at = l => { const q = p.getPointAtLength(l); return {x: q.x + plane.left, y: q.y + plane.top}; };
-    const len = p.getTotalLength(), start = at(0), end = at(len);
-    if (!inside(start, a.getBoundingClientRect(), 2)) bad.push(`${from}→${to}: starts off its source ${JSON.stringify(start)}`);
-    const t = b.getBoundingClientRect();
-    if (!(end.x >= t.left - 2 && end.x <= t.right + 2 && end.y >= t.top - 12 && end.y <= t.bottom + 2))
-      bad.push(`${from}→${to}: ends off its card ${JSON.stringify(end)}`);
-    for (let l = 0; l <= len; l += 3) {
-      const q = at(l);
-      if (matrices.some(m => inside(q, m, 0))) { bad.push(`${from}→${to}: enters a matrix at ${Math.round(q.x)},${Math.round(q.y)}`); break; }
-    }
-  }
-  const words = document.querySelector('#unit-l3 .waits');
-  return {lines, bad, words: words && words.checkVisibility() ? words.textContent : null,
-          clipped: [...document.querySelectorAll('.mx-wrap')].filter(w => w.checkVisibility() && w.scrollWidth > w.clientWidth + 1).length,
-          scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-          errors: window.browserErrors};
-})()"#;
-        fn look(browser: &mut Chrome, label: &str) -> Value {
-            // the lines redraw a frame after a resize (running glyphs spin on, so no settle)
-            browser
-                .wait("new Promise(r => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(() => r(true))), 400))")
-                .unwrap();
-            let g = browser.eval(LINES).unwrap();
-            assert_eq!(g["bad"], serde_json::json!([]), "{label}: {g}");
-            assert_eq!(g["clipped"], 0, "{label}: a matrix cut off {g}");
-            assert_eq!(g["scroll"], 0, "{label}: sideways scroll {g}");
-            assert_eq!(g["errors"], serde_json::json!([]), "{label}: {g}");
-            let words = g["words"].as_str().unwrap_or_default().to_owned();
-            assert!(
-                words.contains("l2-land") && words.contains("probe"),
-                "{label}: l3's row says its waits {g}"
-            );
-            if let Some(dir) = std::env::var_os("SLUICE_BOARD_SCREENS") {
-                let dir = std::path::PathBuf::from(dir);
-                std::fs::create_dir_all(&dir).unwrap();
-                browser.screenshot(&dir.join(format!("matrix-{label}.png"))).unwrap();
-            }
-            g
-        }
-        for width in [720, 1100, 1280, 1440, 2560] {
-            browser.viewport(width, "light").unwrap();
-            let g = look(&mut browser, &format!("{width}"));
-            // the lines between plain units are still drawn (at 720 and below none are)
-            assert_eq!(g["lines"].as_u64().unwrap() > 0, width > 720, "{width}: {g}");
-        }
-        // the drawer open beside the plan: the plan narrows, the matrix never clips; once the
-        // plan pane is too narrow for the table (a container query on the pane, not the
-        // window) its rows become lane strings
-        browser.eval("location.hash = '#step:l1-work'").unwrap();
-        browser
-            .wait("document.querySelector('#drawer:not([hidden]) #d-title')")
-            .unwrap();
-        for (width, theme) in [(1280, "light"), (1440, "dark"), (2560, "light")] {
-            browser.viewport(width, theme).unwrap();
-            look(&mut browser, &format!("{width}-drawer"));
-            let lane = browser
-                .eval("[document.querySelector('.plan-pane').getBoundingClientRect().width, document.querySelector('#unit-l1 .mx-lane').checkVisibility()]")
-                .unwrap();
-            let pane = lane[0].as_f64().unwrap();
-            assert_eq!(lane[1].as_bool().unwrap(), pane <= 720.0, "{width}-drawer: {lane}");
-        }
-        browser.eval("window.sluiceClose()").unwrap();
-        browser.viewport(390, "light").unwrap();
-        browser.wait("document.querySelectorAll('svg.edges path').length === 0").unwrap();
-        let phone = browser
-            .eval(r#"(() => { const row = document.getElementById('unit-l1');
-              return {lane: row.querySelector('.mx-lane').checkVisibility() ? row.querySelector('.mx-lane').textContent : null,
-                      marks: [...row.querySelectorAll('.mx-lane .stg > .g')].map(g => g.classList[1]),
-                      cells: [...row.querySelectorAll('td')].filter(t => t.checkVisibility()).length,
-                      scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth}; })()"#)
-            .unwrap();
-        // each stage its state's glyph and its name, as everywhere else
-        assert_eq!(phone["lane"], "fork work land", "{phone}");
-        assert_eq!(
-            phone["marks"],
-            serde_json::json!(["g-succeeded", "g-running", "g-pending"]),
-            "{phone}"
-        );
-        assert_eq!(phone["cells"], 0, "{phone}");
-        assert_eq!(phone["scroll"], 0, "{phone}");
+        assert_eq!(lit, serde_json::json!([false, 0]), "hover traced");
         assert_eq!(browser.eval("window.browserErrors").unwrap(), serde_json::json!([]));
     })
     .await
@@ -779,10 +616,10 @@ async fn chromium_a_phone_opens_on_the_plan_while_something_needs_attention() {
     let _ = server.await;
 }
 
-/// A card whose state the live board moves on is said once to a screen reader, politely: its
-/// id and the state's word, read from its glyph's name (the status table's word).
+/// A step whose state the live plan moves on is said once to a screen reader, politely: its id
+/// and the state's word, also when the change moves its unit to another band (here to Done).
 #[tokio::test(flavor = "multi_thread")]
-async fn chromium_says_a_cards_new_state_to_a_screen_reader() {
+async fn chromium_says_a_steps_new_state_to_a_screen_reader() {
     let f = Fixture::new().await;
     let router = f.router();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -792,7 +629,7 @@ async fn chromium_says_a_cards_new_state_to_a_screen_reader() {
     let mut browser = tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{lanes}")).unwrap();
         browser
-            .wait("document.readyState === 'complete' && document.querySelector('#n-alpha-review.is-pending')")
+            .wait("document.readyState === 'complete' && document.querySelector('li.sc[data-state=pending] > #n-alpha-review')")
             .unwrap();
         assert_eq!(
             browser
@@ -819,7 +656,7 @@ async fn chromium_says_a_cards_new_state_to_a_screen_reader() {
         .unwrap();
     let said = tokio::task::spawn_blocking(move || {
         browser
-            .wait("document.querySelector('#n-alpha-review.is-skipped') && document.getElementById('announce').textContent")
+            .wait("!document.querySelector('#n-alpha-review') && document.getElementById('announce').textContent")
             .unwrap()
     })
     .await

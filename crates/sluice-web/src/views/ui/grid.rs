@@ -224,6 +224,9 @@ pub struct Stage {
     pub href: String,
     /// A note across this and the cells after it ("waits for review"): `cols` cells wide.
     pub gap: Option<(String, u8)>,
+    /// Its step's id: its link opens the step in a plan's drawer (`data-step`) and carries the
+    /// id `n-<step>` the drawer marks open and gives the focus back to.
+    pub step: String,
 }
 impl Stage {
     pub fn new(name: impl Into<String>, shown: Option<Shown>) -> Self {
@@ -255,6 +258,11 @@ impl Stage {
     }
     pub fn href(mut self, href: impl Into<String>) -> Self {
         self.href = href.into();
+        self
+    }
+    /// Its step's id (`step`): the cell's link opens it in the drawer.
+    pub fn step(mut self, id: impl Into<String>) -> Self {
+        self.step = id.into();
         self
     }
 }
@@ -341,7 +349,8 @@ pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
         let state = stage.shown.map_or("not reached", word);
         let time = |s: f64| -> String {
             match cell {
-                Cell::Run if !stage.since.is_empty() => {
+                // a run still going ticks, a quiet one too: its text is the clock's
+                _ if !stage.since.is_empty() => {
                     format!("<span class=\"sc-time\">{}</span>", since(&stage.since))
                 }
                 _ => format!("<span class=\"sc-time\">{}</span>", duration(s)),
@@ -402,8 +411,13 @@ pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
             inner
         } else {
             format!(
-                "<a class=\"sc-a\" href=\"{}\">{inner}</a>",
-                esc(&stage.href)
+                "<a class=\"sc-a\" href=\"{}\"{}>{inner}</a>",
+                esc(&stage.href),
+                if stage.step.is_empty() {
+                    String::new()
+                } else {
+                    format!(" id=\"n-{s}\" data-step=\"{s}\"", s = esc(&stage.step))
+                }
             )
         };
         cells.push_str(&format!(
@@ -458,6 +472,9 @@ pub struct UnitFact {
     pub over: Option<f64>,
     /// How long its quiet run has written nothing, seconds.
     pub quiet: Option<f64>,
+    /// When its quiet run last wrote (RFC 3339), so "quiet for 53m" ticks on the page and a
+    /// stream's version leaves it out; "" to say `quiet` as it stands.
+    pub quiet_since: String,
 }
 /// What the band's summary sentence says (`summary_sentence`): built from the status table's
 /// counts, overruns, quiet runs and open questions alone, naming recipes by their own names.
@@ -472,9 +489,9 @@ pub struct Summary<'a> {
     /// What a unit is called in the count ("unit", "units").
     pub noun: (&'a str, &'a str),
 }
-/// The band's summary sentence: "1 question for you. 1 failed, 1 cancelled. 2 article and 1
-/// scan at work: a-14 at 2.1× its usual time, s-3 quiet for 53m. 4 waiting. 11 of 19 units
-/// done; the last finished 57m ago." Each part left out when it has nothing to say; "Nothing
+/// The band's summary sentence: "1 question for you. 1 failed, 1 cancelled. 2 article units
+/// and 1 scan unit at work: s-3 quiet for 53m, a-14 at 2.1× its usual time. 4 waiting. 11 of
+/// 19 units done; the last finished 57m ago." Each part left out when it has nothing to say; "Nothing
 /// has started yet." for a plan with no work at all.
 pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
     let (one, many) = if s.noun.0.is_empty() {
@@ -524,33 +541,35 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
                 None => by.push((name, 1)),
             }
         }
+        // each recipe's count names the recipe and the unit ("2 article units and 1 scan
+        // unit"); a unit of no recipe is "other"
         let named = by.iter().any(|(r, _)| !r.is_empty());
         let who = if named {
             join(
                 &by.iter()
                     .map(|(r, n)| {
-                        if r.is_empty() {
-                            format!("{n} other")
-                        } else {
-                            format!("{n} {r}")
-                        }
+                        let r = if r.is_empty() { "other" } else { r };
+                        count(*n, &format!("{r} {one}"), &format!("{r} {many}"))
                     })
                     .collect::<Vec<_>>(),
             )
         } else {
-            running.len().to_string()
+            count(running.len(), one, many)
         };
         let mut notes: Vec<(f64, String)> = vec![];
         for unit in &running {
             if let Some(secs) = unit.quiet {
-                notes.push((
-                    f64::MAX,
-                    format!("{} quiet for {}", unit.name, duration_text(secs)),
-                ));
+                // since it went quiet, ticking, when the page knows when that was
+                let time = if unit.quiet_since.is_empty() {
+                    esc(&duration_text(secs))
+                } else {
+                    since(&unit.quiet_since).0
+                };
+                notes.push((f64::MAX, format!("{} quiet for {time}", esc(&unit.name))));
             } else if let Some(r) = unit.over {
                 notes.push((
                     r,
-                    format!("{} at {} its usual time", unit.name, ratio_text(r)),
+                    format!("{} at {} its usual time", esc(&unit.name), ratio_text(r)),
                 ));
             }
         }
@@ -563,7 +582,7 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
             if notes.is_empty() {
                 String::new()
             } else {
-                format!(": {}", esc(&notes.join(", ")))
+                format!(": {}", notes.join(", "))
             }
         ));
     }
@@ -949,6 +968,7 @@ mod tests {
             shown: Some(shown),
             over,
             quiet,
+            ..UnitFact::default()
         };
         let units = [
             unit("a-1", "article", Shown::Failed, None, None),
@@ -967,7 +987,7 @@ mod tests {
         });
         assert_eq!(
             html.as_str(),
-            "<a class=\"ask\" href=\"#for-you\">1 question for you</a>. 1 failed, 1 cancelled. 1 article and 1 scan at work: s-1 quiet for 53m, a-3 at 2.1× its usual time. 1 waiting. 1 of 6 units done."
+            "<a class=\"ask\" href=\"#for-you\">1 question for you</a>. 1 failed, 1 cancelled. 1 article unit and 1 scan unit at work: s-1 quiet for 53m, a-3 at 2.1× its usual time. 1 waiting. 1 of 6 units done."
         );
         assert_eq!(
             summary_sentence(&Summary::default()).as_str(),

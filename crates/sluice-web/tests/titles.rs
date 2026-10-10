@@ -1,7 +1,8 @@
 //! Steps and units by their titles (SPEC §13): every page names a step by its title with its id
-//! after it in mono, a recipe with a view draws its live units as one lane matrix, the attention
-//! rows first, and the board's search finds a step by its title.
+//! after it in mono, a recipe with a view draws its live units as rows under its stages, the
+//! stopped ones first, and the plan's find finds a step by its title.
 mod board_fixture;
+mod plan_html;
 use axum::http::StatusCode;
 use board_fixture::Fixture;
 use sluice_model::{events::Event, ids::StepId};
@@ -16,119 +17,73 @@ fn between<'a>(html: &'a str, from: &str, to: &str) -> &'a str {
 }
 
 #[tokio::test]
-async fn a_recipe_with_a_view_draws_its_live_units_as_a_lane_matrix_attention_first() {
+async fn a_recipe_with_a_view_draws_its_live_units_as_rows_under_its_stages_attention_first() {
     let f = Fixture::new().await;
     let id = f.titled().await;
     let (status, html) = f.get(&format!("/projects/id/{id}")).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    // the matrix is split by band: Stopped (l2 failed, l3 held by it) above every other
-    // matrix and unit, then Running (l1); a row a unit, its head counting its rows
-    let rows_of = |m: &str| -> Vec<String> {
-        m.split("<tr id=\"unit-")
-            .skip(1)
-            .map(|r| r[..r.find('"').unwrap()].to_owned())
-            .collect()
-    };
-    let lanes: Vec<&str> = html
-        .match_indices("data-matrix=\"lane\"")
-        .map(|(at, _)| &html[at..at + html[at..].find("</section>").unwrap()])
-        .collect();
-    assert_eq!(lanes.len(), 2, "{html}");
-    assert_eq!(rows_of(lanes[0]), ["l2", "l3"], "{}", lanes[0]);
-    assert_eq!(rows_of(lanes[1]), ["l1"], "{}", lanes[1]);
-    assert!(
-        lanes[0].contains("2 units · 1 failed · 1 blocked"),
-        "{}",
-        lanes[0]
-    );
-    assert!(lanes[1].contains("1 unit · 1 running"), "{}", lanes[1]);
+    // l2 failed: a module under Stopped, above everything else; l1 runs, a row under Running;
+    // l3, held by l2, a row under Waiting
+    assert_eq!(plan_html::place(&html, "l2"), "stopped");
+    assert_eq!(plan_html::place(&html, "l1"), "running");
+    assert_eq!(plan_html::place(&html, "l3"), "waiting");
     let at = |needle: &str| {
         html.find(needle)
             .unwrap_or_else(|| panic!("{needle}: {html}"))
     };
-    assert!(at(">Stopped</h2>") < at("data-matrix=\"lane\""));
-    assert!(at(">Running</h2>") > at("<tr id=\"unit-l3\""));
-    assert!(at(">Running</h2>") < at("<tr id=\"unit-l1\""));
-    let matrix = format!("{}{}", lanes[0], lanes[1]);
-    // the summary column is headed by what the view shows
+    assert!(at(">Stopped</h2>") < at("<!--r:s-l2-->"));
+    assert!(at("<!--r:s-l2-->") < at(">Running</h2>"));
+    assert!(at("<!--r:u-l1-->") < at(">Waiting</h2>"));
+    assert!(at(">Waiting</h2>") < at("<!--r:u-l3-->"));
+    // the recipe's block heads its stages' columns
+    let running = plan_html::band(&html, "plan-running");
+    for stage in ["fork", "work", "land"] {
+        assert!(
+            running.contains(&format!("<span class=\"sh-stage\">{stage}</span>")),
+            "{running}"
+        );
+    }
+    // a cell a stage, each with its state; one nothing has reached is drawn empty
+    assert!(plan_html::cell(&html, "l1-work").contains("data-state=\"running\""));
+    let fork = plan_html::cell(&html, "l3-fork");
     assert!(
-        matrix.contains("<th scope=\"col\" class=\"mx-sum\">Ticket · last message</th>"),
-        "{matrix}"
-    );
-    // a stage nothing has reached is a small mark, not a card
-    assert!(
-        matrix.contains("id=\"n-l3-fork\" class=\"node mx-dot is-blocked\""),
-        "{matrix}"
+        fork.starts_with("<li class=\"sc sc-empty\" data-state=\"blocked\""),
+        "{fork}"
     );
     // a wait to or from a row is said in its row, never drawn
+    let l3 = plan_html::row(&html, "l3");
     assert!(
-        matrix.contains("<p class=\"waits said\">Waits for <a"),
-        "{matrix}"
+        l3.contains("<p class=\"pl-sub pl-waits\">fork waits for <a"),
+        "{l3}"
     );
-    // the stages are columns, the frame sluice's: a pill per stage with the card's look
-    for stage in ["fork", "work", "land"] {
-        assert!(matrix.contains(&format!(
-            "<th scope=\"col\" class=\"mx-stage\">{stage}</th>"
-        )));
-    }
+    assert!(!html.contains("board-edges"), "{html}");
+    // its title first, its id after it, and a way to its unit's page
+    let l1 = plan_html::row(&html, "l1");
     assert!(
-        matrix.contains("id=\"n-l1-work\" class=\"node card is-running mx-pill\""),
-        "{matrix}"
-    );
-    assert!(matrix.contains("data-step=\"l2-work\""), "{matrix}");
-    // its title first, its id after in mono, a link to its unit
-    assert!(
-        matrix.contains(&format!(
-            "href=\"/projects/id/{id}/units/l1\">FIG-1: Fix the cron driver</a>"
-        )),
-        "{matrix}"
+        l1.contains("<span class=\"pl-t\">FIG-1: Fix the cron driver</span><span class=\"pl-m\"><b class=\"pl-id\">l1</b> · lane"),
+        "{l1}"
     );
     assert!(
-        matrix.contains("<p class=\"mx-id\"><code>l1</code>"),
-        "{matrix}"
+        l1.contains(&format!("href=\"/projects/id/{id}/units/l1\"")),
+        "{l1}"
     );
-    // the recipe's view draws its summary; a phone reads the stages as a lane string
+    // the recipe's view draws its summary in the unit's row
     assert!(
-        matrix.contains("<span class=\"uv-param\" title=\"ticket\">FIG-2</span>"),
-        "{matrix}"
+        l1.contains("<span class=\"uv-param\" title=\"ticket\">FIG-1</span>"),
+        "{l1}"
     );
-    assert!(
-        matrix.contains("<p class=\"mx-lane fb-lane\" aria-label=\"Stages\">"),
-        "{matrix}"
+    // a recipe whose view does not check: its units are still rows, with one note
+    let waiting = plan_html::band(&html, "plan-waiting");
+    assert_eq!(
+        waiting.matches("view does not check").count(),
+        1,
+        "{waiting}"
     );
-    assert!(
-        matrix.contains("<span class=\"stg\"><span class=\"g g-succeeded\" aria-hidden=\"true\">")
-            && matrix.contains("</span>fork</span>"),
-        "{matrix}"
-    );
-    // its units are not drawn again as boxes
-    assert!(!html.contains("id=\"unit-l1\" class=\"box"), "{html}");
-    // a recipe whose view does not check: its units are still a matrix, with one note
-    let rough = between(&html, "data-matrix=\"rough\"", "</section>");
-    assert!(
-        rough.contains("This recipe's view does not check"),
-        "{rough}"
-    );
-    assert!(rough.contains("<tr id=\"unit-r1\""), "{rough}");
-    // lines: none inside a row (its columns say the order), none to, from or across a matrix
-    const EDGES: &str =
-        "<script type=\"application/json\" id=\"plan-edges\" class=\"board-edges\">";
-    let edges = between(&html, EDGES, "</script>")[EDGES.len()..].to_owned();
-    let edges: serde_json::Value = serde_json::from_str(&edges).unwrap();
-    let line = |from: &str, to: &str| {
-        edges
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|e| e["from"]["id"] == from && e["to"]["id"] == to)
-            .map(|e| e["line"].as_bool().unwrap())
-    };
-    assert_eq!(line("l1-fork", "l1-work"), Some(false));
-    assert_eq!(line("l2-land", "l3-fork"), Some(false));
-    assert_eq!(line("l1-land", "report"), Some(false));
-    assert_eq!(line("probe", "l3-land"), Some(false));
-    // inside a plain unit's box the line is drawn
-    assert_eq!(line("kit-a", "kit-b"), Some(true));
+    assert_eq!(plan_html::place(&html, "r1"), "waiting");
+    // a unit of no recipe draws its own steps: kit's two, a connector between them
+    let kit = plan_html::row(&html, "kit");
+    assert!(kit.contains("<div class=\"pl-graph\""), "{kit}");
+    assert_eq!(kit.matches("<path ").count(), 1, "{kit}");
 }
 
 #[tokio::test]
@@ -210,14 +165,13 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
     assert!(home.contains("<span class=\"sref-t\">Watches main for red</span> <code class=\"sref-id\">watch</code>"), "{home}");
     // a failed step in the stopped line too
     assert!(home.contains("<span class=\"sref-t\">FIG-2: Stop the parser leak</span> <code class=\"sref-id\">l2-work</code>"), "{home}");
-    // a board's multi-step unit outside a matrix names its stages; a solo unit's title is over it
+    // the plan: a loose step's row is its title, its id after it
     let (_, board) = f.get(&format!("/projects/id/{id}")).await;
-    assert!(
-        board.contains(
-            "<p class=\"solo-title\" title=\"Watches main for red\"><span>Watches main for red</span></p>"
-        ),
-        "{board}"
-    );
+    let watch = match plan_html::place(&board, "watch") {
+        "margin" => plan_html::region(&board, "m-watch"),
+        _ => plan_html::row(&board, "watch"),
+    };
+    assert!(watch.contains("Watches main for red"), "{watch}");
     // the log names a record's step by its title, linked, its id after it
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
@@ -258,15 +212,18 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
 async fn the_search_finds_a_step_by_its_title() {
     let f = Fixture::new().await;
     let id = f.titled().await;
-    // "parser" is in no id: l2's title, which each of its stages carries, and probe's doc
+    // "parser" is in no id: l2's title, which each of its stages carries, and probe's doc; each
+    // unit is kept whole
     let (_, html) = f.get(&format!("/projects/id/{id}?q=parser")).await;
-    assert!(html.contains("4 steps match “parser”."), "{html}");
-    let matrix = between(&html, "data-matrix=\"lane\"", "</section>");
-    assert!(
-        matrix.contains("<tr id=\"unit-l2\"") && !matrix.contains("<tr id=\"unit-l1\""),
-        "{matrix}"
-    );
+    assert!(html.contains("2 units match “parser”."), "{html}");
+    for (unit, found) in [("l2", true), ("probe", true), ("l1", false), ("l3", false)] {
+        assert_eq!(
+            !plan_html::place(&html, unit).is_empty(),
+            found,
+            "{unit}: {html}"
+        );
+    }
     // a doc's title too
     let (_, html) = f.get(&format!("/projects/id/{id}?q=bare+heading")).await;
-    assert!(html.contains("1 step matches “bare heading”."), "{html}");
+    assert!(html.contains("1 unit matches “bare heading”."), "{html}");
 }

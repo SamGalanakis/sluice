@@ -534,9 +534,11 @@ draws:
 - **The One Blue Rule.** Blue fills only what runs now.
 
 **The summary sentence** (`ui::summary_sentence`): "1 question for you. 1 failed, 1
-cancelled. 2 article and 1 scan at work: s-3 quiet for 53m, a-12 at 2.1× its usual time. 2
-waiting. 3 of 10 units done; the last finished 57m ago." Each part is left out when it has
-nothing to say; the question links to where it is answered, under a coral underline.
+cancelled. 2 article units and 1 scan unit at work: s-3 quiet for 53m, a-12 at 2.1× its usual
+time. 2 waiting. 3 of 10 units done; the last finished 57m ago." Each recipe is named by its
+own name with the unit after it ("1 other unit" for one of no recipe), each part is left out
+when it has nothing to say, and the question links to where it is answered, under a coral
+underline. A quiet run's time ticks on the page.
 
 ## Select to trace
 
@@ -648,11 +650,45 @@ The parts:
 
 The pages compose these parts; each lane that redraws one writes its section here.
 
-- **A project's plan** (`/projects/id/<p>`): the band with the project's name, its summary
-  sentence and Recently finished; the row with Plan, Messages, Log, Settings, the count line,
-  Find and Show grid; the trace line; then on the sheet For you (six columns) beside Stopped
-  (four), the margin module in the last two, Running and Waiting as strip tables per recipe,
-  Done folded to an index. The matrix and the plan list live units only.
+- **A project's plan** (`/projects/id/<p>`, `views::plan`): the band with the project's name,
+  its description (the rest under More), its summary sentence and Recently finished (the five
+  latest done units, newest first); the row with Plan, Messages, Log, Functions, Settings, the
+  count line ("103 units · 475 steps"), Find, the Plan · Both · Board switch when the project
+  has a board, Show grid and a quiet menu; the trace line; then the sheet. Each live unit is
+  drawn once, in the first band that holds it:
+  - **For you**: each open question to the owner a swelled module (the coral rule, the
+    question as its title, who asked and when, the unit's id, title and recipe, its stage strip
+    the first time a unit asks, the question's body, Answer primary, Open, Message, Close
+    question). Beside it, **Stopped**: each failed, cancelled or stale unit a module on the
+    sand (its glyph and word, its failure's kind in a word, the stage, run and when it ended,
+    its stage marks, the failure's sentence and what to try next, Retry with feedback first
+    when a bare Retry would fail again, Retry, Open, Unit page). Failures before cancels, in
+    plan order.
+  - **Running**, quiet first then the longest running, and **Waiting**, in plan order, as rows:
+    a block a recipe (its name, linking to every unit it made, its count by state, its stages
+    as the columns over its rows), then the units of no recipe and the loose steps. A row is the
+    unit's trace button (its glyph and word, the overrun chip past twice its usual time, its
+    title, its id, recipe, how long it has run, been silent and usually takes, a retried step's
+    run), under it the recipe's `view` (else its last message), a waiting unit what holds it in
+    words (each source by title with its id in mono, linked, and what it is doing), and its
+    cells at the right: a cell a stage on a recipe's columns (half a row while the head keeps a
+    third), a unit of no recipe its own small graph (its steps in columns by their own chain,
+    a connector an edge, never a line between units), a loose step one cell. Selecting a row
+    opens its steps, last message and actions in place.
+  - **The margin**: a long run alone (no recipe, reporting progress, or past four times the
+    longest usual time) as the sky module in the sheet's last two columns, down beside the
+    bands; its title opens the step in the drawer.
+  - **Done**: its count and when the last finished, the index folded behind "Show the n done
+    units" (open for Show: Done, a find or a recipe's every unit), a dense list newest first in
+    columns: finish time, glyph, id, title, how long it took.
+  The sheet's modes: on a medium sheet (under 1200px, a board or the drawer beside it) a row's
+  strip takes eight of its twelve columns, the modules sit two to a band's row and the long
+  runs go side by side under Running; under 640px everything stacks; from 2000px the bands of
+  modules set twice as many to a row and Running and Waiting stand side by side. Every band
+  is a patch region and every unit one inside it, so a change patches the bands a unit moved
+  between and nothing else; a step whose state moves on is said once to a screen reader. The
+  step drawer opens beside the plan from any cell, Open or margin title, on paper under the
+  heavy navy rule a band's head wears, a hairline at its edge, lifted off the plan.
 - **A step, its thread, the inbox**: Unigrid's step board and phone question, on the same
   band and grid.
 - **Home** (`/`): the projects as a cover and an index; the log, functions and settings on the

@@ -531,6 +531,7 @@ fn summary_part() -> TrustedHtml {
         shown: Some(shown),
         over,
         quiet,
+        ..ui::UnitFact::default()
     };
     let units = [
         unit("a-6", "article", Shown::Failed, None, None),
@@ -578,7 +579,7 @@ fn band_part(prefix: &str) -> TrustedHtml {
         ui::band_head(
             "almanac",
             &TrustedHtml::owned("<p>The field guide's spring and autumn editions, written a section at a time and checked against the regional checklist.</p>".into()),
-            &TrustedHtml::owned("<a class=\"ask\" href=\"#\">1 question for you</a>. 1 failed, 1 cancelled. 2 article and 1 scan at work: s-3 quiet for 53m, a-12 at 2.1× its usual time. 2 waiting. 3 of 10 units done; the last finished 57m ago.".into()),
+            &TrustedHtml::owned("<a class=\"ask\" href=\"#\">1 question for you</a>. 1 failed, 1 cancelled. 2 article units and 1 scan unit at work: s-3 quiet for 53m, a-12 at 2.1× its usual time. 2 waiting. 3 of 10 units done; the last finished 57m ago.".into()),
         ),
         ui::recent_strip(&format!("{prefix}rf"), "Newest first. 5 in the last three hours.", &finished),
     ))

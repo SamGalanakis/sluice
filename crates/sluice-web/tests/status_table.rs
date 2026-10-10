@@ -2,6 +2,7 @@
 //! step's state from it. A project holds a step in each state; each is checked on its card, its
 //! step page, the board's StepStatus, Units and Count, the summary line and bar, and the index.
 mod board_fixture;
+mod plan_html;
 use axum::http::StatusCode;
 use board_fixture::Fixture;
 use serde_json::json;
@@ -176,27 +177,35 @@ async fn every_state_reads_the_same_on_every_surface() {
     let pane = between(&html, "<aside id=\"board-pane\"", "</aside>");
     for state in Shown::ALL {
         let step = step_of(state);
-        // its card: the state's class and glyph, its caption the state's word when it has one
-        let card = between(plan, &format!("<a id=\"n-{step}\""), "</a>");
-        assert!(
-            card.contains(&format!("is-{}", state.key())),
-            "{state:?}: {card}"
-        );
-        assert!(card.contains(&glyph(state)), "{state:?}: {card}");
-        if state.spec().caption {
-            // a failure's or a cancel's caption says its own sentence (a failure its kind)
-            let help = match state {
-                Shown::Failed => "It failed.",
-                Shown::Cancelled => "Cancelled: not needed.",
-                _ => state.spec().help,
-            };
-            assert!(
-                card.contains(&format!(
-                    "<span class=\"dur\" title=\"{help}\">{}</span>",
-                    state.word()
-                )),
-                "{state:?}: {card}"
-            );
+        // on the plan, by its band: a stopped one its module on the sand, its glyph and word; a
+        // running or waiting one its cell, its state and its word; a done one the index's line
+        // with its glyph
+        match state.spec().band {
+            sluice_model::shown::Band::Done => {
+                let line = between(
+                    plan_html::band(plan, "plan-done"),
+                    &format!("<code class=\"pl-did\">{step}</code>"),
+                    "</li>",
+                );
+                let item = &plan[..plan.find(line).unwrap() + line.len()];
+                let item = &item[item.rfind("<li ").unwrap()..];
+                assert!(item.contains(&glyph(state)), "{state:?}: {item}");
+            }
+            _ if matches!(state, Shown::Failed | Shown::Cancelled | Shown::Stale) => {
+                let module = plan_html::stopped(plan, &step);
+                assert!(
+                    module.contains(&format!("{}<b>{}</b>", mark(state), state.word())),
+                    "{state:?}: {module}"
+                );
+            }
+            _ => {
+                let cell = plan_html::cell(plan, &step);
+                assert!(
+                    cell.contains(&format!("data-state=\"{}\"", state.key()))
+                        && cell.contains(&format!(": {}</span>", state.word())),
+                    "{state:?}: {cell}"
+                );
+            }
         }
         // the board's StepStatus: the same class, glyph and word
         let chip = between(pane, &format!("/steps/{step}\">"), "</div>");
@@ -236,29 +245,22 @@ async fn every_state_reads_the_same_on_every_surface() {
             assert!(page.contains("<summary>Cancel</summary>"), "{page}");
         }
     }
-    // the summary: every state counted once, those that need attention as tags (stale too),
-    // the rest in the counts; the bar a segment a state
-    let sum = between(&html, "<div id=\"p-sum\" class=\"sumline\">", "</p>");
-    for state in Shown::ALL {
-        assert!(
-            sum.contains(&format!(
-                "<i class=\"b-{}\" style=\"flex:1\"></i>",
-                state.key()
-            )),
-            "{state:?}: {sum}"
-        );
-        let said = format!("1 {}", state.word());
-        assert!(sum.contains(&said), "{state:?}: {sum}");
+    // the band's summary sentence: each unit (a loose step is one) counted once by how it reads,
+    // a step a failure holds up as waiting
+    let sum = plan_html::summary(&html);
+    for said in [
+        "1 failed, 1 cancelled, 1 stale.",
+        "5 units at work: s-quiet quiet for ",
+        "5 waiting.",
+        "3 of 16 units done",
+    ] {
+        assert!(sum.contains(said), "{said}: {sum}");
     }
+    // the project reads as its first state: its tab says what needs a look first
     assert!(
-        sum.contains("16 steps · 1 set by hand · 1 succeeded · 1 skipped · 1 blocked"),
-        "{sum}"
-    );
-    assert!(sum.contains("1 stale</a>"), "{sum}");
-    // the project reads as its first state
-    assert!(
-        between(&html, "<h1 id=\"p-title\" class=\"p-title\"", "</h1>")
-            .contains(&glyph(Shown::Failed)),
+        html.contains(
+            "data-page-title=\"1 failed · 1 cancelled · 1 stale · 1 quiet · states · sluice\""
+        ),
         "{html}"
     );
     // the index: the same counts from the store (the plan's blocked, held, queued and outside
@@ -320,11 +322,11 @@ async fn a_failure_ranks_before_running_work_on_every_surface() {
         .unwrap();
     board(&f, mixed, "root = Units([\"failed\"])".into()).await;
     let (_, html) = f.get(&format!("/projects/id/{mixed}")).await;
-    // under Stopped, not Running
-    let stopped = between(&html, ">Stopped</h2>", "</div><div class=\"band\">");
-    assert!(stopped.contains("id=\"unit-m\""), "{stopped}");
+    // under Stopped, not Running, which comes after it
+    assert_eq!(plan_html::place(&html, "m"), "stopped", "{html}");
+    assert_eq!(plan_html::place(&html, "solo"), "running", "{html}");
     assert!(
-        html.find("id=\"unit-m\"").unwrap() < html.find(">Running</h2>").unwrap(),
+        html.find("<!--r:s-m-->").unwrap() < html.find("<!--r:plan-running-->").unwrap(),
         "{html}"
     );
     // the Units table names it failed, and its filter finds it as failed
@@ -435,16 +437,23 @@ async fn a_cancel_reads_cancelled_in_every_wait_and_gate() {
     )
     .await;
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
-    let gated = between(&html, "<a id=\"n-gated\"", ">");
-    assert!(gated.contains("after up (cancelled)"), "{gated}");
-    assert!(!gated.contains("(failed)"), "{gated}");
-    let reads = between(&html, "<a id=\"n-reads\"", ">");
-    assert!(reads.contains("step up is cancelled"), "{reads}");
-    // a blocked card's caption names a cancel among what blocks it
-    let card = between(&html, "<a id=\"n-gated\"", "</a>");
+    // each row says what it waits on and how that reads: cancelled, never failed
+    let gated = plan_html::row(&html, "gated");
     assert!(
-        card.contains("title=\"Waits on a step that failed, was cancelled or went stale\">blocked"),
-        "{card}"
+        gated.contains("<code>up</code></a> (cancelled)."),
+        "{gated}"
+    );
+    assert!(!gated.contains("(failed)"), "{gated}");
+    let reads = plan_html::row(&html, "reads");
+    assert!(
+        reads.contains("<code>up</code></a> (cancelled)."),
+        "{reads}"
+    );
+    // a blocked step's cell says it is blocked
+    let cell = plan_html::cell(&html, "gated");
+    assert!(
+        cell.contains("data-state=\"blocked\"") && cell.contains("blocked</span>"),
+        "{cell}"
     );
     let pane = between(&html, "<aside id=\"board-pane\"", "</aside>");
     assert!(
@@ -520,13 +529,12 @@ async fn a_project_pause_and_outside_work_read_as_themselves() {
         .unwrap();
     board(&f, id, "root = Units()".into()).await;
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
-    let row = between(&html, "<tr id=\"unit-l3\"", "</tr>");
+    // the plan: a waiting unit's first stage says it is paused, in its cell
+    let cell = plan_html::cell(&html, "l3-fork");
     assert!(
-        row.contains(&format!(
-            "aria-label=\"l3-fork paused\"><span class=\"stg\">{}fork</span></a>",
-            mark(Shown::Paused)
-        )),
-        "{row}"
+        cell.contains("data-state=\"paused\"")
+            && cell.contains(&format!("{}paused</span>", mark(Shown::Paused))),
+        "{cell}"
     );
     let pane = between(&html, "<aside id=\"board-pane\"", "</aside>");
     let row = between(pane, "/units/l3\">l3</a>", "</tr>");
@@ -541,11 +549,11 @@ async fn a_project_pause_and_outside_work_read_as_themselves() {
     );
 }
 
-/// A lane matrix counts each row once, under how the unit reads: a unit with a failed step and
-/// a quiet one is one failed row, never one failed and one quiet (which once wrapped the
-/// "waiting" count below zero).
+/// The plan counts each unit once, under how it reads: a unit with a failed step and a quiet one
+/// is one failed module under Stopped, never also a quiet row under Running, and the band's
+/// sentence counts it failed.
 #[tokio::test]
-async fn a_matrix_row_with_a_failed_and_a_quiet_step_counts_once() {
+async fn a_unit_with_a_failed_and_a_quiet_step_counts_once() {
     let f = Fixture::new().await;
     let id = f.titled().await;
     // l2 has a failed work; its land runs quiet (so l3, after it, only waits)
@@ -559,14 +567,21 @@ async fn a_matrix_row_with_a_failed_and_a_quiet_step_counts_once() {
         .unwrap();
     let (status, html) = f.get(&format!("/projects/id/{id}")).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    let lanes = between(&html, "data-matrix=\"lane\"", "</section>");
+    assert_eq!(plan_html::place(&html, "l2"), "stopped", "{html}");
     assert!(
-        lanes.contains("<span class=\"mx-tally\">1 unit · 1 failed</span>"),
-        "{lanes}"
+        !plan_html::band(&html, "plan-running").contains("data-unit=\"l2\""),
+        "{html}"
     );
-    let row = between(&html, "<tr id=\"unit-l2\"", "</tr>");
-    assert!(row.contains("1 failed · 1 quiet"), "{row}");
-    assert!(row.contains(&glyph(Shown::Quiet)), "{row}");
+    let head = between(
+        plan_html::band(&html, "plan-stopped"),
+        "<p class=\"sec-n\">",
+        "</p>",
+    );
+    assert_eq!(head, "<p class=\"sec-n\">1 failed");
+    // its stages' marks still say the quiet one needs a look
+    let module = plan_html::stopped(&html, "l2");
+    assert!(module.contains("land quiet"), "{module}");
+    assert!(plan_html::summary(&html).contains("1 failed."), "{html}");
 }
 
 /// A done unit reads as its steps do (all skipped: skipped), and a unit's own page always
@@ -586,8 +601,10 @@ async fn a_unit_reads_by_its_steps_on_the_shelf_and_its_page() {
         )
         .await;
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
-    let fold = between(&html, "id=\"fold-k\"", "</summary>");
-    assert!(fold.contains(&glyph(Shown::Skipped)), "{fold}");
+    let done = plan_html::band(&html, "plan-done");
+    let line = between(done, "<li ", "<code class=\"pl-did\">k</code>");
+    let line = &line[line.rfind("<li ").unwrap()..];
+    assert!(line.contains(&glyph(Shown::Skipped)), "{line}");
     let (_, page) = f.get(&format!("/projects/id/{id}/units/w")).await;
     assert!(
         between(&page, "<h1 class=\"unit-h\">", "</h1>").contains(&glyph(Shown::Pending)),

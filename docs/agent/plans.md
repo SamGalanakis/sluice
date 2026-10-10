@@ -307,9 +307,10 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
 - **Title and view.** A recipe may say how its units read on the dashboard. `"title"` is a
   template filled with the unit's params: `"title": "{ticket}: {spec}"`. A param bound as
   `{"file": "{spec}"}` stands for that file's title (its first heading), not its path. `"view"`
-  is an OpenUI Lang program drawing a unit's one-line summary; every recipe with a view draws
-  its live units as one **lane matrix** on the board (a row a unit, a column a stage, the units
-  that need someone first) and the view whole on the unit's page:
+  is an OpenUI Lang program drawing a unit's one-line summary; the plan draws
+  a recipe's live units as one block per band (a row a unit, a column a stage, the units that
+  need someone in For you and Stopped first), the view in each unit's row, and the view whole on
+  the unit's page:
 
   ```json
   "title": "{spec}",
@@ -321,7 +322,7 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
   `StepStatus(stage)` and `LastMessage(chars?)`; a stage is a step id without `{unit}-`, and
   `{param}` works in any string. `recipe_list` returns each recipe's `stages`, its `title` and
   `view` as written, and `title_error` or `view_error` when one does not check (the recipe still
-  adds units; the matrix then shows a note instead of the summary). Nothing is stored with the
+  adds units; its block then shows a note instead of the summary). Nothing is stored with the
   plan: the dashboard finds a unit's recipe again from its step ids and fns, and reads its
   params back from its steps, so a unit you reshape by hand no longer matches and is drawn as a
   plain unit.

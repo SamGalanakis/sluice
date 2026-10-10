@@ -1,10 +1,10 @@
 //! The third critique's fixes, each through the pages it changed: a cancelled run says who
 //! stopped it in one line, and a rerun says how the run before ended and who retried it in
-//! plain words; a lane's stages still to come are one note, and a unit that has not started
-//! says so; sluice's housekeeping on the log is one quiet row; a run's file is a page with its
-//! terminal codes out, the file itself a link away; a card names its step by its id for a
-//! screen reader in one word.
+//! plain words; a unit's stages still to come are drawn empty under its recipe's columns, and a
+//! unit that has not started says what holds it; sluice's housekeeping on the log is one quiet
+//! row; a run's file is a page with its terminal codes out, the file itself a link away.
 mod board_fixture;
+mod plan_html;
 use board_fixture::Fixture;
 use serde_json::json;
 use sluice_model::{
@@ -241,28 +241,26 @@ async fn a_lanes_stages_still_to_come_are_one_note_and_its_summary_shares_the_id
     )
     .unwrap();
     let (_, page) = f.get(&format!("/projects/id/{id}")).await;
-    // b1 runs its fork: its two stages after it are one note, their names its title
-    let b1 = between(&page, "<tr id=\"unit-b1\"", "</tr>");
-    let lane = between(b1, "<p class=\"mx-lane fb-lane\"", "</p>");
-    assert!(
-        lane.contains("<span class=\"lane-rest\" title=\"work, land\">+2 to go</span>")
-            && lane.contains("/steps/b1-fork"),
-        "{lane}"
-    );
-    // b2 has not started: said once, not a ring a stage
-    let b2 = between(&page, "<tr id=\"unit-b2\"", "</tr>");
-    let lane = between(b2, "<p class=\"mx-lane fb-lane\"", "</p>");
-    assert!(
-        lane.contains(
-            "<span class=\"lane-rest\" title=\"fork, work, land\">Not started · 3 stages</span>"
-        ) && !lane.contains("<a "),
-        "{lane}"
-    );
-    // its summary, where it has no column, shares the id's line
-    assert!(
-        b2.contains("<div class=\"mx-idl\"><p class=\"mx-id\"><code>b2</code></p><div class=\"mx-sum-phone\">"),
-        "{b2}"
-    );
+    // b1 runs its fork: a row of Running, a cell a stage under the recipe's columns, the ones
+    // to come drawn but empty
+    assert_eq!(plan_html::place(&page, "b1"), "running");
+    assert!(plan_html::cell(&page, "b1-fork").contains("data-state=\"running\""));
+    for step in ["b1-work", "b1-land"] {
+        let cell = plan_html::cell(&page, step);
+        assert!(
+            cell.starts_with("<li class=\"sc sc-empty\""),
+            "{step}: {cell}"
+        );
+    }
+    let head = plan_html::band(&page, "plan-running");
+    for stage in ["fork", "work", "land"] {
+        assert!(head.contains(&format!(">{stage}</")), "{stage}: {head}");
+    }
+    // b2 has not started: a row of Waiting, three empty cells and what holds it in words
+    assert_eq!(plan_html::place(&page, "b2"), "waiting");
+    let b2 = plan_html::row(&page, "b2");
+    assert_eq!(b2.matches("<li class=\"sc sc-empty\"").count(), 3, "{b2}");
+    assert!(b2.contains("<p class=\"pl-sub pl-waits\">"), "{b2}");
 }
 
 #[tokio::test]
@@ -349,16 +347,4 @@ async fn a_runs_file_is_a_page_with_its_terminal_codes_out_and_the_file_a_link_a
     );
     let (_, raw) = f.get(&format!("{href}?raw=1")).await;
     assert!(raw.starts_with("\u{1b}[38;5;9mFail"), "{raw}");
-}
-
-#[tokio::test]
-async fn a_card_names_its_step_by_its_id_in_one_word_for_a_screen_reader() {
-    let f = Fixture::new().await;
-    let id = f.titled().await;
-    let (_, page) = f.get(&format!("/projects/id/{id}")).await;
-    assert!(
-        page.contains("<span class=\"sid\"><span class=\"vh\">kit-a</span><span aria-hidden=\"true\">a</span></span>"),
-        "{page}"
-    );
-    assert!(!page.contains("-</span>a</span>"), "{page}");
 }
