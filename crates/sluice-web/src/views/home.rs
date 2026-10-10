@@ -359,14 +359,14 @@ impl HomeProject {
                 glyph = ui::glyph(s.shown()),
                 name = step_link(&sref, &href),
                 word = esc(s.shown().word()),
-                why = if s.headline.is_empty() {
-                    String::new()
-                } else {
-                    format!(
+                // "cancelled: pivot …", the word said once
+                why = match s.headline.strip_prefix("Cancelled: ").unwrap_or(&s.headline) {
+                    "" => String::new(),
+                    headline => format!(
                         ": <a class=\"sr-why\" href=\"{}\" title=\"{t}\">{t}</a>",
                         esc(&s.log_href(&p.id)),
-                        t = esc(&s.headline)
-                    )
+                        t = esc(headline)
+                    ),
                 },
             ));
         }
@@ -792,7 +792,7 @@ impl HomeView {
                 ""
             };
             rows.push_str(&format!(
-                "<tr><th scope=\"row\"><a href=\"{}\">{}</a>{word}</th><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"ix-at\">{}</td></tr>",
+                "<tr><th scope=\"row\"><a href=\"{}\">{}</a>{word}</th><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num ix-w\">{}</td><td class=\"num\">{}</td><td class=\"ix-at\">{}</td></tr>",
                 esc(&p.project.href()),
                 esc(&p.project.name),
                 if p.read { p.unit_count().to_string() } else { "–".into() },
@@ -805,7 +805,7 @@ impl HomeView {
         }
         for p in &self.archived {
             rows.push_str(&format!(
-                "<tr class=\"ix-archived\"><th scope=\"row\"><a href=\"{}\">{}</a> <span class=\"meta\">· archived</span></th><td class=\"num\" colspan=\"5\">{}</td><td class=\"ix-at\">{}</td></tr>",
+                "<tr class=\"ix-archived\"><th scope=\"row\"><a href=\"{}\">{}</a> <span class=\"meta\">· archived</span></th><td class=\"num\" colspan=\"3\">{}</td><td class=\"num ix-w\"></td><td class=\"num\"></td><td class=\"ix-at\">{}</td></tr>",
                 esc(&p.href()),
                 esc(&p.name),
                 esc(&ui::count(p.counts.total(), "step", "steps")),
@@ -813,7 +813,7 @@ impl HomeView {
             ));
         }
         format!(
-            "{}<div class=\"scroll ix-wrap\" tabindex=\"0\" role=\"region\" aria-labelledby=\"index\"><table class=\"ix\"><thead><tr><th scope=\"col\">Project</th><th scope=\"col\" class=\"num\">Units</th><th scope=\"col\" class=\"num\">Running</th><th scope=\"col\" class=\"num\">Stopped</th><th scope=\"col\" class=\"num\">Waiting</th><th scope=\"col\" class=\"num\">Done</th><th scope=\"col\" class=\"ix-at\">Changed</th></tr></thead><tbody>{rows}</tbody><tfoot><tr><th scope=\"row\">All</th><td class=\"num\">{units}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td></td></tr></tfoot></table></div>",
+            "{}<div class=\"scroll ix-wrap\" tabindex=\"0\" role=\"region\" aria-labelledby=\"index\"><table class=\"ix\"><thead><tr><th scope=\"col\">Project</th><th scope=\"col\" class=\"num\">Units</th><th scope=\"col\" class=\"num\">Running</th><th scope=\"col\" class=\"num\">Stopped</th><th scope=\"col\" class=\"num ix-w\">Waiting</th><th scope=\"col\" class=\"num\">Done</th><th scope=\"col\" class=\"ix-at\">Changed</th></tr></thead><tbody>{rows}</tbody><tfoot><tr><th scope=\"row\">All</th><td class=\"num\">{units}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num ix-w\">{}</td><td class=\"num\">{}</td><td class=\"ix-at\"></td></tr></tfoot></table></div>",
             ui::section_head("index", "Index", "Every project's units by where they stand"),
             total[0],
             total[1],

@@ -390,7 +390,7 @@ async fn one_conversation_on_the_steps_thread_tab_its_thread_page_and_the_inbox(
         "{notes}"
     );
     assert!(
-        notes.contains("<p class=\"mg-head\"><span class=\"who who-step\">"),
+        notes.contains("<p class=\"mg-head\"><span class=\"who who-this\">This step</span>"),
         "{notes}"
     );
 }

@@ -566,32 +566,8 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
         parts.push(format!("{}.", esc(&stops.join(", "))));
     }
     if !running.is_empty() {
-        // how many of each recipe, in the order a recipe first appears
-        let mut by: Vec<(&str, usize)> = vec![];
-        for unit in &running {
-            match by.iter_mut().find(|(r, _)| *r == unit.recipe.as_str()) {
-                Some((_, n)) => *n += 1,
-                None => by.push((unit.recipe.as_str(), 1)),
-            }
-        }
-        // each recipe's count names the recipe and the unit ("2 article units and 1 scan
-        // unit"); units of no recipe are "units without a recipe" (`NO_RECIPE`)
-        let named = by.iter().any(|(r, _)| !r.is_empty());
-        let who = if named {
-            join(
-                &by.iter()
-                    .map(|(r, n)| {
-                        if r.is_empty() {
-                            no_recipe(*n, (one, many))
-                        } else {
-                            count(*n, &format!("{r} {one}"), &format!("{r} {many}"))
-                        }
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            count(running.len(), one, many)
-        };
+        // how many: which recipe made them is the Running section's groups, not the sentence's
+        let who = count(running.len(), one, many);
         // the quiet ones and those past their usual time, counted, the longest quiet and the
         // furthest over said: the units are named on their rows, not here
         let mut quiet: Vec<(&UnitFact, f64)> = running
@@ -659,8 +635,8 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
     }
     TrustedHtml::owned(parts.join(" "))
 }
-/// What units of no recipe are called wherever they are counted: "1 unit without a recipe",
-/// "3 units without a recipe" (the summary sentence and the plan's head over them alike).
+/// What units of no recipe are called where the plan's Running groups them: "1 unit without
+/// a recipe", "3 units without a recipe".
 pub fn no_recipe(n: usize, noun: (&str, &str)) -> String {
     count(
         n,
@@ -1171,11 +1147,19 @@ pub fn rail() -> TrustedHtml {
 /// The button that selects a unit to trace: its head (its kind's line, its id and its title,
 /// phrasing content only; its strip and the rest go after it), and the part of it that opens
 /// in place while it is traced (`trace_more_open`).
-pub fn trace_button_open() -> TrustedHtml {
-    TrustedHtml::owned(
-        "<button type=\"button\" class=\"trace-pick\" data-trace-pick aria-pressed=\"false\" aria-expanded=\"false\" data-preserve-attr=\"aria-pressed aria-expanded\">"
-            .into(),
-    )
+/// Its name says what pressing does, "Trace <name>", so the card's state, its strip's image
+/// and its title are not read as one run-together label; `described` names the element that
+/// says how it stands (its kind's line), read as its description ("" for none).
+pub fn trace_button_open(name: &str, described: &str) -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<button type=\"button\" class=\"trace-pick\" data-trace-pick aria-pressed=\"false\" aria-expanded=\"false\" data-preserve-attr=\"aria-pressed aria-expanded\" aria-label=\"Trace {}\"{}>",
+        esc(name),
+        if described.is_empty() {
+            String::new()
+        } else {
+            format!(" aria-describedby=\"{}\"", esc(described))
+        }
+    ))
 }
 pub fn trace_button_close() -> TrustedHtml {
     TrustedHtml::owned("</button>".into())
@@ -1255,7 +1239,7 @@ mod tests {
         });
         assert_eq!(
             html.as_str(),
-            "<a class=\"ask\" href=\"#for-you\">1 question for you</a>. 1 failed, 1 cancelled. 1 article unit and 1 scan unit at work: 1 quiet for 53m, 1 at 2.1× its usual time. 1 waiting. 1 of 6 units done."
+            "<a class=\"ask\" href=\"#for-you\">1 question for you</a>. 1 failed, 1 cancelled. 2 units at work: 1 quiet for 53m, 1 at 2.1× its usual time. 1 waiting. 1 of 6 units done."
         );
         assert_eq!(
             summary_sentence(&Summary::default()).as_str(),
@@ -1303,7 +1287,7 @@ mod tests {
         };
         assert_eq!(
             says(&units),
-            "8 lane units and 1 unit without a recipe at work: 9 past their usual time, the furthest at 9.8×."
+            "9 units at work: 9 past their usual time, the furthest at 9.8×."
         );
         units.extend([
             run("lane", None, Some(600.0)),
@@ -1312,7 +1296,7 @@ mod tests {
         ]);
         assert_eq!(
             says(&units),
-            "11 lane units and 1 unit without a recipe at work: 3 quiet, the longest for 1h 6m, 9 past their usual time, the furthest at 9.8×."
+            "12 units at work: 3 quiet, the longest for 1h 6m, 9 past their usual time, the furthest at 9.8×."
         );
         assert_eq!(says(&[run("", None, None)]), "1 unit at work.");
     }

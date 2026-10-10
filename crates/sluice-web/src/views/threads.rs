@@ -285,12 +285,16 @@ impl ThreadView {
             .filter(|s| s.titled())
             .map_or("", |s| s.title.as_str())
     }
-    /// The way back to its step, in words: "its step" (the page's `h1` already says its title,
-    /// and its Details its id).
+    /// The way back to its step, in words: its title cut to 40 (its id when it has none; the
+    /// page's Details hold the id).
     pub fn step_label(&self) -> String {
-        self.step()
-            .map(|_| "Its step".to_owned())
-            .unwrap_or_default()
+        let Some(step) = self.step() else {
+            return String::new();
+        };
+        match self.step_name.as_ref().filter(|s| s.titled()) {
+            Some(name) => super::ui::cut(&name.title, 40),
+            None => step.to_string(),
+        }
     }
     pub fn last_at(&self) -> &str {
         self.messages
@@ -1279,11 +1283,9 @@ fn converse(
             BTreeSet::new()
         };
         thread.unread = unread.len();
-        let subject = if page {
-            thread.step().map(str::to_owned)
-        } else {
-            None
-        };
+        // its step, which the thread's heading (on its page, and its note's card in the
+        // inbox) already names: its messages say "This step", the title said once
+        let subject = thread.step().map(str::to_owned);
         let conversation = Conversation::build(
             Build {
                 project: thread.project,

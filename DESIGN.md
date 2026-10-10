@@ -388,9 +388,9 @@ cdn.jsdelivr.net (`@fontsource-variable/schibsted-grotesk@5.3.0`,
 `@fontsource-variable/jetbrains-mono@5.3.0`), the only third-party requests a page makes.
 
 - The page's name (`ui::page_head`): 34px/38px, 850, -0.025em (28px on a phone), balanced
-  and wrapping anywhere rather than running off; a step's name 28px/34px (23px on a phone,
-  24px in the drawer, three lines at most there). The summary sentence under it: 17px/24px, 500
-  (15px on a phone), at most 100 characters a line; its links (the questions, a recipe) are
+  and wrapping anywhere rather than running off; a step's name the same 34px/38px (23px on a phone, 24px in the drawer, three lines at most
+  there). The summary sentence under it: 17px/24px, 500
+  (15px on a phone), at most 75ch a line; its links (the questions, a recipe) are
   44px targets on a phone without changing the line. A page's note in its place: 14px in
   `ink-muted`.
 - A band section's head: 26px, 850, -0.025em (24px on a phone), so the page's name outranks it,
@@ -501,7 +501,10 @@ Outputs and Runs tabs stay whole).
 
 **A value by its shape** (`ui::ValueSet`), never its name: a number, a boolean or a short word
 shows; a hash, an id, a path, a URL or a long token goes to the Details; prose shows clamped to
-two lines, whole in the Details. A message line on a row names its sender in words (the
+two lines, whole in the Details. Every preview goes through it: a step's progress fields (Now,
+its Progress module, the margin), Overview's outputs and a recipe's view on a unit's row and
+head (a "land sha" is in the unit's Details); only the Inputs and Outputs tabs draw every value
+whole. A message line on a row names its sender in words (the
 sending step's stage, "orchestrator" or "you") and keeps to one line.
 
 ## Modules
@@ -531,7 +534,10 @@ Status words, glyphs and ranks come from the status table (`sluice_model::shown`
 status is never colour alone: every state has its Lucide glyph and its word.
 
 **The stage strip** (`ui::stage_strip`): a unit's stages in recipe order, one 56px cell each
-(48px on a phone), the cell's kind read from the status table (`ui::Cell::of`):
+(48px on a phone), the cell's kind read from the status table (`ui::Cell::of`). Wherever a
+strip is narrow (a phone's row, the drawer, the For you card) one rule holds: three cells a
+row, never under 72px, so a stage's name is never cut; where a cell says its state in a word,
+the word goes under the name, never beside it.
 
 - **Not reached**: an outline in `rule` with the stage's name; a waiting state that says
   itself (held, queued, paused, blocked) writes its glyph and word in it.
@@ -579,12 +585,10 @@ draws:
 - **The One Blue Rule.** Blue fills only what runs now.
 
 **The summary sentence** (`ui::summary_sentence`): "1 question for you. 1 failed, 1
-cancelled. 2 article units and 1 scan unit at work: 1 quiet for 53m, 1 at 2.1× its usual
-time. 2 waiting. 3 of 10 units done; the last finished 57m ago." It names no unit: quiet runs
+cancelled. 3 units at work: 1 quiet for 53m, 1 at 2.1× its usual time. 2 waiting. 3 of 10 units done; the last finished 57m ago." It names no unit: quiet runs
 and overruns are counted, the furthest said ("8 past their usual time, the furthest at 9.8×"),
-and the rows under it name them. Each recipe is named by its
-own name with the unit after it ("1 unit without a recipe" for one of no recipe, as the
-plan's head over them says it too), each part is left out
+and the rows under it name them. The units at work are counted, not split by recipe
+(Running's groups say which recipe made them), each part is left out
 when it has nothing to say, and the question links to where it is answered, under a coral
 underline. A quiet run's time ticks on the page.
 
@@ -649,7 +653,8 @@ The components:
 - **`sluice-trace`**: select to trace (above).
 - **`sluice-tabs`**: an ARIA tablist over its panels (arrows wrap, Home and End); the choice in
   `$$tab`, its `current`, and with `url` in `?tab=`; without script every panel stands stacked.
-- **`sluice-fold`**: Show all and Show less over a long text, said only when it is cut; or a
+- **`sluice-fold`**: Show all and Show less over a long text, said only when it is cut, and
+  never over an open question the owner can answer (its last line is usually the ask); or a
   More fold kept open per project or opened on a wide screen.
 - **`sluice-confirm`**: the confirmation dialog (below).
 - **`sluice-conversation`**, **`sluice-composer`**, **`sluice-answer`**: a conversation (Jump
@@ -714,9 +719,12 @@ The pages compose these parts; each lane that redraws one writes its section her
     bare Retry would fail again, Retry, Open step, Unit page, its Details). Failures before
     cancels, in plan order. A cancelled card ends with a quiet Dismiss (a plain form, no
     confirm): its unit then stops marking the plan and the summary, and stands in Done's index
-    as "b cancelled and dismissed". For ten minutes after, Stopped says "Dismissed: <title> ·
-    Undo" in one polite status line a cancel, the Undo a plain form too. A failure is never
-    dismissed.
+    as "b cancelled and dismissed". For ten minutes after, Stopped says "Dismissed: <title>" and Undo in one
+    polite status line a cancel (glyph, title clamped to two lines, Undo), the Undo a plain
+    form too; Dismiss comes back with the focus on that Undo, Undo with it on the restored
+    card. A failure is never dismissed. A card's stage names it on a unit of several; a step's
+    id never heads or leads a card. A card or row is its unit's trace button, named "Trace
+    <title>", its state and time its description.
   - **Running**, quiet first then the longest running, and **Waiting**, in plan order, as rows:
     a block a recipe (its name, linking to every unit it made, its count by state, its stages
     as the columns over its rows), then the units of no recipe and the loose steps. A row (72 to
@@ -748,9 +756,9 @@ The pages compose these parts; each lane that redraws one writes its section her
   its title at 28px with its Details (its id, unit, recipe, fn, run and tags), its state and how
   long it has run against its usual time, its words, then its unit's stage strip (its own
   stage ringed) and its actions, the next move filled: Retry with feedback as on the plan's
-  Stopped cards (its box folded under it, Retry beside it), a cancel's quiet Dismiss. When a
-  failure repeated the run before, the box stands open in Why it failed instead, under its
-  advice (ink at body size), so the owner reads why before writing. Its tabs follow. Overview is modules on the sheet: the question
+  Stopped cards (its box folded under it, Retry beside it), a cancel's quiet Dismiss. Why it failed reads in order: its headline, the words its run said and its last failed
+  call, then the advice (ink at body size), then, when a failure repeated the run before, the
+  feedback box standing open, so the owner reads why before writing. Its tabs follow. Overview is modules on the sheet: the question
   to the owner swells first on the coral rule, answered in place; then why it failed on the
   sand, or Now (its live turn: last words, its calls counted once in the turn's line, by tool
   as tiles when it used more than one, named exactly as the engine's transcript names them,
@@ -799,7 +807,8 @@ The pages compose these parts; each lane that redraws one writes its section her
   steps, running steps by title, "running for 1h 10m" against "usually 30m" or the overrun
   chip), what it finished last by title and the way to its plan and its day. Then the Index, a
   table of every project's units by band, archived ones muted, its counts 10ch each so on a
-  wide screen they stand together at the right.
+  wide screen they stand together at the right; on a phone it drops Changed and Waiting so it
+  fits without a hidden scroll, and its links and Today's are 44px targets.
 - **Day** (`/day`, `/projects/id/<p>/day`, `views::day`): the day as a timetable. The head:
   "Day", its note the date and the reader's clock. The day line under the day's sentence: a
   row a project, its name in the first 132px, its runs as 5px

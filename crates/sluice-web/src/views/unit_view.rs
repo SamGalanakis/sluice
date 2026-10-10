@@ -22,6 +22,31 @@ pub fn draw(root: &Component, unit: &UnitView, row: bool) -> TrustedHtml {
     ))
 }
 
+/// The view's outputs that identify rather than explain ("land sha", its hash), which it does
+/// not draw: the unit page's Details hold them, each named by its stage and field.
+pub fn held(root: &Component, unit: &UnitView) -> Vec<(String, String)> {
+    fn walk(draw: &Draw<'_>, c: &Component, out: &mut Vec<(String, String)>) {
+        match c.name.as_str() {
+            "Stack" => {
+                for child in c.components_arg(0) {
+                    walk(draw, child, out);
+                }
+            }
+            "Output" => {
+                let (stage, field) = (c.str_arg(0).unwrap_or(""), c.str_arg(1).unwrap_or(""));
+                if let Some((first, _)) = draw.value(stage, field)
+                    && ui::ValueSet::of_text(&first) == ui::ValueSet::Detail
+                {
+                    out.push((format!("{stage} {}", field.replace(['_', '-'], " ")), first));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = vec![];
+    walk(&Draw { unit, row: false }, root, &mut out);
+    out
+}
 /// Whether a drawn view says nothing (a view of params alone, which the unit's Details hold).
 pub fn empty(html: &TrustedHtml) -> bool {
     let mut tag = false;
@@ -182,11 +207,9 @@ impl Draw<'_> {
         }
     }
     /// A stage's output as the board's Output reads it: its progress while that is fresher
-    /// (marked live while it runs), else its output; nothing until it has one.
-    fn output(&self, stage: &str, field: &str, out: &mut String) {
-        let Some(step) = self.unit.stage_step(stage) else {
-            return;
-        };
+    /// (whether live), else its output; its first line. None until it has one.
+    fn value(&self, stage: &str, field: &str) -> Option<(String, bool)> {
+        let step = self.unit.stage_step(stage)?;
         let progress = step.progress.as_ref().and_then(|p| {
             p.fields
                 .iter()
@@ -195,21 +218,31 @@ impl Draw<'_> {
         });
         let (value, live) = match progress {
             Some((f, live)) => (f, live),
-            None => match step.outputs.iter().find(|f| f.name == field && f.available) {
-                Some(f) => (f, false),
-                None => return,
-            },
+            None => (
+                step.outputs
+                    .iter()
+                    .find(|f| f.name == field && f.available)?,
+                false,
+            ),
         };
         if value.kind == "null" || value.value.is_empty() {
-            return;
+            return None;
         }
         let first = value
             .value
             .lines()
             .find(|l| !l.trim().is_empty())
             .unwrap_or("");
-        // a row shows what explains: a hash, an id, a path or a long token is its Details'
-        if self.row && ui::ValueSet::of_text(first) == ui::ValueSet::Detail {
+        Some((first.trim().to_owned(), live))
+    }
+    /// A stage's output, marked live while it runs; nothing until it has one. What identifies
+    /// (a hash, an id, a path, a long token) is never drawn: the unit's Details hold it
+    /// (`held`).
+    fn output(&self, stage: &str, field: &str, out: &mut String) {
+        let Some((first, live)) = self.value(stage, field) else {
+            return;
+        };
+        if ui::ValueSet::of_text(&first) == ui::ValueSet::Detail {
             return;
         }
         let _ = write!(
@@ -225,7 +258,7 @@ impl Draw<'_> {
             } else {
                 String::new()
             },
-            esc(&sluice_model::naming::cut(first.trim(), self.chars()))
+            esc(&sluice_model::naming::cut(&first, self.chars()))
         );
     }
 }

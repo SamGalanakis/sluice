@@ -124,11 +124,10 @@ async fn every_unit_of_the_fixture_is_drawn_once_in_its_band_in_rank() {
     assert!(
         summary.starts_with("<p class=\"page-line\"><a class=\"ask\"")
             && summary.contains("1 question for you</a>. 2 failed, 1 cancelled.")
-            && summary
-                .contains("2 article units, 1 scan unit and 2 units without a recipe at work"),
+            && summary.contains("5 units at work"),
         "{summary}"
     );
-    // the head over the units of no recipe says them the same way
+    // the Running group of units of no recipe says what they are
     assert!(
         html.contains("1 unit without a recipe and 1 loose step")
             || html.contains("1 unit without a recipe: each draws its own steps"),

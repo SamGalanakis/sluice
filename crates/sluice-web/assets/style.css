@@ -506,7 +506,7 @@ form.prefs:has(sluice-toggle:defined) .save { display: none; }
 .ph-name > sluice-menu > details.dm { margin: 1px 0 0 auto; }
 .ph-name > h1, .page-head > h1 { margin: 0; font-size: 34px; line-height: 38px; font-weight: 850;
   letter-spacing: -0.025em; overflow-wrap: anywhere; text-wrap: balance; min-width: 0; }
-.page-line { margin-top: 2px; max-width: 100ch; font-size: 17px; line-height: 24px; font-weight: 500;
+.page-line { margin-top: 2px; max-width: 75ch; font-size: 17px; line-height: 24px; font-weight: 500;
              letter-spacing: -0.005em; text-wrap: pretty; }
 .page-line a { text-decoration-thickness: 1px; text-underline-offset: 4px; }
 .page-line a.ask { text-decoration-color: var(--coral); text-decoration-thickness: 2px; }
@@ -646,15 +646,18 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 @container sheet (max-width: 639.98px) {
   .sec-strip, .strip-row { grid-template-columns: minmax(0, 1fr); row-gap: 8px; }
   .sh-stages, .sh-end { display: none; }
-  .strip-row > .strip { grid-column: 1; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
+  .strip-row > .strip { grid-column: 1; row-gap: 8px; grid-template-columns: var(--strip-narrow); }
 }
 @container frame (max-width: 639.98px) {
   .sec-strip, .strip-row { grid-template-columns: minmax(0, 1fr); row-gap: 8px; }
   .sh-stages, .sh-end { display: none; }
-  .strip-row > .strip { grid-column: 1; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
+  .strip-row > .strip { grid-column: 1; row-gap: 8px; grid-template-columns: var(--strip-narrow); }
 }
 
 /* ---- the stage strip (`ui::stage_strip`): a cell a stage, in recipe order ----------------- */
+/* One rule wherever a strip is narrow (a phone's row, the drawer, a half-width card): three
+   cells a row, never under 72px, so a stage's name is never cut; fewer cells share the row. */
+:root { --strip-narrow: repeat(auto-fit, minmax(max(72px, calc((100% - 16px) / 3)), 1fr)); }
 .strip { list-style: none; margin: 0; padding: 0; display: grid; column-gap: var(--col-gap);
          grid-template-columns: repeat(var(--n), minmax(0, 1fr)); min-height: 56px; }
 .sc { position: relative; display: flex; flex-direction: column; justify-content: center;
@@ -681,8 +684,9 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 .sc-look { background: var(--sand); color: var(--on-sand); }
 .sc-look .g { color: var(--sand-mark); }
 .sc-look .sc-word { font-weight: 700; }
-.sc-top .sc-word { flex: none; font-size: 12px; }
-.sc-top .sc-word::before { content: "·"; margin-right: 4px; font-weight: 400; }
+/* a cell's state word goes under its name, never beside it (where it would cut the name) */
+.sc-top:has(> .sc-word) { flex-wrap: wrap; row-gap: 1px; }
+.sc-top .sc-word { flex: 0 0 100%; font-size: 12px; }
 .sc-quiet { box-shadow: inset 0 0 0 2px var(--run); }
 .sc-over { position: absolute; top: 4px; right: 4px; padding: 0 4px; background: var(--sand);
            color: var(--on-sand); font: 700 11px/16px var(--font-sans); }
@@ -707,13 +711,16 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 
 /* ---- what finished last (`ui::latest_list`): a line each, its clock time in data mono, its
    title, how long it took; the plan's Done head and a project's module on home -------------- */
-.latest { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
-.latest a { display: grid; grid-template-columns: 3.2em minmax(0, 1fr) auto; align-items: baseline;
+/* its times one column as wide as the widest ("Oct 9 06:16" on one line), its rows sharing it */
+.latest { list-style: none; margin: 0; padding: 0; display: grid; gap: 0;
+          grid-template-columns: minmax(3.2em, max-content) minmax(0, 1fr) auto; }
+.latest > li { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; }
+.latest a { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: baseline;
             gap: 0 10px; min-height: 30px; padding: 5px 0; border-top: 1px solid var(--rule-faint);
             font-size: 13.5px; line-height: 19px; text-decoration: none; }
 .latest li:first-child a { border-top: 0; }
 .latest a:hover .lt-t { text-decoration: underline; }
-.lt-at { font: 600 12.5px/19px var(--font-mono); color: var(--ink-muted); }
+.lt-at { font: 600 12.5px/19px var(--font-mono); color: var(--ink-muted); white-space: nowrap; }
 .lt-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .lt-place { color: var(--ink-muted); font-weight: 500; }
 .lt-took { font-size: 12.5px; color: var(--ink-muted); white-space: nowrap; }
@@ -769,6 +776,9 @@ details.dm > summary:hover, details.dm[open] > summary { color: var(--ink); back
 .dm-l dt { color: var(--ink-muted); font-weight: 600; white-space: nowrap; }
 .dm-l dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .dm-l code { padding: 0; background: none; font-size: 12.5px; }
+/* a preview's fields that identify (a sha, a path), behind one "⋯" under its rows */
+.f-held { display: flex; justify-content: flex-start; margin-top: 2px; }
+.mod-h > .f-held { margin-left: 8px; }
 /* a description in Details is markdown: its paragraphs and lists as such, tight */
 .dm-md { max-width: 52ch; }
 .dm-md :is(p, ul, ol) { margin: 0 0 6px; }
@@ -1095,7 +1105,7 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--ink) 86%, var(--pa
 .step-band .crumbs { margin: 0 0 6px; font-size: 13px; }
 sluice-copy > button.copy { box-shadow: none; }
 .sb-name { display: flex; align-items: flex-start; gap: 4px 10px; min-width: 0; }
-.sb-t { margin: 0; min-width: 0; font-size: 28px; line-height: 34px; font-weight: 850;
+.sb-t { margin: 0; min-width: 0; font-size: 34px; line-height: 38px; font-weight: 850;
         letter-spacing: -0.025em; overflow-wrap: anywhere; text-wrap: balance; }
 .sb-t .d-stage { color: var(--ink-muted); font-weight: 700; }
 .sb-name > sluice-menu > details.dm { margin: 1px 0 0 auto; }
@@ -1150,7 +1160,7 @@ article#step-detail { display: flow-root; }  /* its head's margins stay its own 
 .step-band.in-drawer .sb-name { padding-right: 52px; }
 .step-band.in-drawer .sb-t { font-size: 24px; line-height: 30px; display: -webkit-box;
   -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
-.step-band.in-drawer .sb-lane .strip { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+.step-band.in-drawer .sb-lane .strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 /* a narrow strip keeps each stage's name whole: its state is its glyph (and its words for a
    screen reader), not the word beside the name */
 .step-band.in-drawer .sb-lane .sc-word { display: none; }
@@ -2157,8 +2167,11 @@ h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
 .stopped-head > .sec-h { flex: 1 1 auto; }
 .stopped-head:has(> .sec-h) { align-items: flex-end; border-top: 3px solid var(--navy); }
 .stopped-head > .sec-h { border-top: 0; }
-.q-toggle[aria-expanded="true"] { background: var(--paper-raised); color: var(--ink);
-                                  border-color: var(--rule); }
+/* Answer open: an outlined button, under the pointer too (it outranks button.primary:hover) */
+button.q-toggle[aria-expanded="true"] { background: var(--paper-raised); color: var(--ink);
+                                        border-color: var(--rule); box-shadow: inset 0 0 0 1.5px var(--navy); }
+button.q-toggle.primary[aria-expanded="true"]:hover {
+  background: color-mix(in oklch, var(--navy) 8%, var(--paper-raised)); color: var(--ink); }
 .q-box { margin-top: 10px; }
 @media (scripting: enabled) { .q-box:not([data-open]) { display: none; } }
 @media (scripting: none) { .q-toggle { display: none; } }
@@ -2333,8 +2346,7 @@ details.read-today .item { opacity: .85; }
 .ask-i { color: var(--coral); }
 /* the question's unit's stages wrap rather than cut a name: as many cells a row as fit 96px,
    three a row in a half-width card, each name whole, its state its glyph */
-.pl-ask .mod > .strip { margin-top: 16px; row-gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
+.pl-ask .mod > .strip { margin-top: 16px; gap: 8px; grid-template-columns: var(--strip-narrow); }
 .pl-ask .mod > .strip .sc-top .sc-word { display: none; }
 .pl-ask .mod-actions button.quiet-act, .pl-stop .mod-actions button.quiet-act {
   background: none; box-shadow: none; }
@@ -2353,10 +2365,15 @@ details.read-today .item { opacity: .85; }
 .pl-stop .mod-actions button.quiet-act:hover { color: var(--ink); text-decoration: underline; }
 /* a cancel dismissed lately: one polite line a cancel, with its Undo, for ten minutes */
 .pl-dismissed { grid-column: 1 / -1; display: grid; gap: 4px; }
-.pl-dismissed p { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0;
-                  color: var(--ink-muted); }
-.pl-dismissed p > svg { flex: none; color: var(--ink-muted); }
+/* glyph | "Dismissed: <title>", two lines at most | Undo, on one line of three columns */
+.pl-dismissed p { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center;
+                  gap: 0 10px; margin: 0; color: var(--ink-muted); }
+.pl-dismissed p > svg { color: var(--ink-muted); }
+.pl-dn { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+         overflow: hidden; }
 .pl-dismissed .text-button { min-height: 44px; }
+.pl-stop:focus { outline: none; }
+.pl-stop:focus-visible { outline: 2px solid var(--navy); outline-offset: 3px; }
 
 /* a band of rows: its head (a recipe's block head, or the band's own), then a row a unit. A row
    is its head (its state, how long it has run against its usual time and its overrun, then its
@@ -3182,8 +3199,8 @@ main { container: frame / inline-size; }
 .fy-q + .fy-q { margin-top: 28px; }
 .fy-q .mod-k .meta { font-size: 13px; }
 .fy-q .mod-t { -webkit-line-clamp: 3; }
-.fy-body { max-height: 9.6em; overflow: hidden; color: var(--ink);
-           mask-image: linear-gradient(to bottom, #000 70%, transparent); }
+/* the question whole, as everywhere it is answered: its last line is usually the ask */
+.fy-body { color: var(--ink); }
 .fy-body > :first-child { margin-top: 0; }
 .fy-q sluice-answer .q-actions { margin-top: 14px; gap: 10px; }
 .fy-q sluice-answer .q-actions button { min-height: 44px; padding: 0 18px; font-weight: 650; }
@@ -3206,7 +3223,7 @@ main { container: frame / inline-size; }
 .td-wide .td-list li + li { border-top: 0; }
 .td-wide .td-list li { border-bottom: 1px solid var(--rule); }
 .td-all { padding-top: 10px; border-top: 1px solid var(--rule); font-size: 14px; font-weight: 650; }
-.td-all a::after, .pm-open a::after { content: " →"; }
+.td-all a::after, .pm-open a::after { content: "\00a0→"; }
 /* each project a module: as many to a row as fit at least 460px each */
 .proj-grid { display: grid; gap: 40px var(--col-gap); align-items: start;
              grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); }
@@ -3257,7 +3274,7 @@ main { container: frame / inline-size; }
 .pm-more a { color: var(--ink-muted); }
 .pm-done { margin-top: 14px; font-size: 13px; }
 .pm-done-h { font-weight: 700; }
-.pm-done ol { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 2px 16px; }
+.pm-done .latest { margin-top: 2px; }
 .pm-done time { font-family: var(--font-mono); font-size: 12px; }
 .pm-open { display: flex; flex-wrap: wrap; gap: 4px 20px; margin-top: auto; padding-top: 16px;
            font-size: 14px; font-weight: 650; }
@@ -3277,9 +3294,13 @@ main { container: frame / inline-size; }
   .pm-name.long { font-size: 21px; }
   .pm-row .text-button { min-height: 44px; }
   .pm-open a { min-height: 44px; }
+  /* a phone's targets: Today's project names, the card's way to its step or thread */
+  .td-name, .td-all a, .fy-more a { display: inline-flex; align-items: center; min-height: 44px; }
   .ix td.num, .ix th.num { width: auto; }
   .ix .ix-at { display: none; }
 }
+/* a phone: the index fits without a hidden scroll, Waiting left to the project's plan */
+@container frame (max-width: 459.98px) { .ix .ix-w { display: none; } }
 
 /* ---- the log (`views::log`): its band says what this page shows; under the band the presets and
    filters on one bar, then its records under a section head ---------------------------------- */

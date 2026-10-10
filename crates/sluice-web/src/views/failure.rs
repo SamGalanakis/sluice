@@ -51,6 +51,9 @@ impl Failure {
             }
             other => (message_of(other), String::new()),
         };
+        // a likely cause an older release joined after a full stop (".; likely cause:"): the
+        // words read as a release writes them now
+        let message = &message.replace(".; likely cause:", "; likely cause:");
         let (said, pane, pane_file) = split_pane(message);
         // a fn's traceback: folded; its last exception line is the cause
         let (said, trace, cause, resume) = split_trace(&said);
@@ -232,7 +235,7 @@ impl Failure {
     pub fn next_step(&self) -> &'static str {
         match self.caption() {
             "cap" => {
-                "Retry runs it again under the same cap. The cap is set in minutes by SLUICE_AGENT_MAX_MIN in the environment its fn runs in."
+                "Retry runs it again under the same cap. To give it longer, raise its agent's time limit, set in minutes where its fn runs."
             }
             "stalled" => {
                 "Retry runs it again. Its Activity shows what it was doing when it went quiet."

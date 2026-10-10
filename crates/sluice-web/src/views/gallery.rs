@@ -705,7 +705,7 @@ fn trace_part(prefix: &str) -> TrustedHtml {
             "<div class=\"mod rail-slot\"{attrs}>{rail}{open}<span class=\"mod-meta\">{role}</span><span class=\"mod-t\">{title}</span>{close}{strip}{more}<p class=\"meta\">Its steps, its last message and its buttons open here.</p>{more_end}</div>",
             attrs = trace.attrs(name),
             rail = ui::rail(),
-            open = ui::trace_button_open(),
+            open = ui::trace_button_open(title, ""),
             role = ui::trace_role(),
             title = ui::esc(title),
             strip = ui::stage_strip(&format!("Stages of {title}"), &stages),

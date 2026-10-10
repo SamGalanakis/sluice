@@ -157,3 +157,11 @@ tick();
 setInterval(tick, 5000);
 new MutationObserver(tick).observe(document.querySelector("main") ?? document.body,
   { childList: true, subtree: true, characterData: true });
+
+// An action that comes back to a place on its page (Dismiss to its Undo, Undo to the card it
+// restored) names it in the address's fragment: the focus goes there, not to the page's top.
+{
+  const id = decodeURIComponent(location.hash.slice(1));
+  const target = id ? document.getElementById(id) : null;
+  if (target?.matches("button, [tabindex='-1']")) target.focus();
+}

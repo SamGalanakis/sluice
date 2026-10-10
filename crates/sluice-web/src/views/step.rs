@@ -110,6 +110,16 @@ impl FieldView {
     pub fn ty_words(&self) -> String {
         super::ui::type_words(&self.ty)
     }
+    /// It identifies rather than explains, by its shape alone (`ui::ValueSet`): a path, a list
+    /// or object, a hash, an id or a long token. A preview (Now's progress, Overview's
+    /// outputs) keeps it in a Details; the Inputs and Outputs tabs draw every value whole.
+    pub fn identifies(&self) -> bool {
+        match self.kind.as_str() {
+            "file" | "json" => true,
+            "text" => super::ui::ValueSet::of_text(&self.value) == super::ui::ValueSet::Detail,
+            _ => false,
+        }
+    }
     pub fn long(&self) -> bool {
         if self.kind == "pairs" {
             return false;
@@ -710,6 +720,30 @@ pub struct ProgressView {
     pub fields: Vec<FieldView>,
     pub at: String,
     pub live: bool,
+}
+impl ProgressView {
+    /// The fields that explain, drawn as rows.
+    pub fn shown(&self) -> Vec<&FieldView> {
+        self.fields.iter().filter(|f| !f.identifies()).collect()
+    }
+    /// Those that identify (a head's sha, a path), behind one "⋯" under the rows.
+    pub fn held_menu(&self) -> TrustedHtml {
+        held_menu(self.fields.iter(), "its progress")
+    }
+}
+/// What identifies among `fields`, in a Details "⋯" about `about`; nothing when none does.
+fn held_menu<'a>(fields: impl Iterator<Item = &'a FieldView>, about: &str) -> TrustedHtml {
+    let mut details = super::ui::Details::new();
+    for field in fields.filter(|f| f.identifies()) {
+        details = details.id(&field.name, &field.value);
+    }
+    if details.is_empty() {
+        return TrustedHtml::default();
+    }
+    TrustedHtml::owned(format!(
+        "<div class=\"f-held\">{}</div>",
+        details.menu(about).as_str()
+    ))
 }
 impl StepView {
     /// What its page lists under "Waits on": its waits, less those the After row says (each
@@ -1731,12 +1765,20 @@ impl StepView {
             .filter(|r| r.finished.is_empty())
             .and_then(|r| r.seconds)
             .map(super::ui::duration_text);
-        if let Some(duration) = duration {
+        let ran = if let Some(duration) = duration {
             format!(
                 "It has been running for {duration}. Cancelling stops that run; Retry starts it over."
             )
         } else {
             "It is running. Cancelling stops its run; Retry starts it over.".to_owned()
+        };
+        // a run waiting on the owner's answer: cancelling leaves its question unanswered
+        match &self.asking {
+            Some(ask) => format!(
+                "It is waiting on your answer to “{}”. {ran}",
+                super::ui::cut(&ask.title, 80)
+            ),
+            None => ran,
         }
     }
     /// Cancel's confirmation: titled by its title, its id after it ("Cancel Fix the parser
@@ -1899,15 +1941,23 @@ impl StepView {
     /// The outputs its Overview shows: its key output; with none, all of a few short ones (three
     /// at most, each under 200 characters), else its first.
     pub fn overview_outputs(&self) -> Vec<&FieldView> {
-        if let Some(key) = self.key_output() {
+        if let Some(key) = self.key_output().filter(|f| !f.identifies()) {
             return vec![key];
         }
-        let set = self.outputs_set();
+        let set: Vec<&FieldView> = self
+            .outputs_set()
+            .into_iter()
+            .filter(|f| !f.identifies())
+            .collect();
         if set.len() <= 3 && set.iter().all(|f| f.value.chars().count() < 200) {
             set
         } else {
             set.into_iter().take(1).collect()
         }
+    }
+    /// Its outputs that identify (a commit hash), which Overview's preview keeps behind "⋯".
+    pub fn overview_held(&self) -> TrustedHtml {
+        held_menu(self.outputs_set().into_iter(), "its outputs")
     }
     /// How Now's progress is introduced: "Live progress from run 4" (the run going now), or
     /// "Live progress" when no run of it is kept.

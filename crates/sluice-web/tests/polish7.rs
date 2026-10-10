@@ -160,7 +160,7 @@ async fn a_cancel_is_dismissed_from_its_card_and_undone_from_the_line_stopped_th
         form.contains(&format!("action=\"/projects/id/{id}/steps/b/actions\""))
             && form.contains("<input type=\"hidden\" name=\"action\" value=\"dismiss\">")
             && form.contains(&format!(
-                "<input type=\"hidden\" name=\"next\" value=\"{plan}\">"
+                "<input type=\"hidden\" name=\"next\" value=\"{plan}#undo-b\">"
             ))
             && form.contains("<button class=\"quiet-act\" aria-label=\"Dismiss u\""),
         "{form}"
@@ -196,7 +196,7 @@ async fn a_cancel_is_dismissed_from_its_card_and_undone_from_the_line_stopped_th
     );
     assert!(
         line.contains("Dismissed: <a href=")
-            && line.contains(">u (b)</a>")
+            && line.contains(">u</a>")
             && line.contains("<input type=\"hidden\" name=\"action\" value=\"undismiss\">")
             && line.contains(">Undo</button>"),
         "{line}"
@@ -264,16 +264,22 @@ async fn in_chromium_dismiss_and_undo_move_the_card_out_of_stopped_and_back() {
         browser
             .wait("document.readyState === 'complete' && document.querySelector('.pl-dismissed') && !document.querySelector('#s-u.pl-stop')")
             .unwrap();
+        // the glyph, the title and Undo on one line; the focus on Undo, where Dismiss sent it
         let line = browser
-            .eval("document.querySelector('.pl-dismissed').textContent.replace(/\\s+/g, ' ').trim()")
+            .eval("(() => { const p = document.querySelector('.pl-dismissed p'), b = p.querySelector('button'); return [p.querySelector('.pl-dn').textContent, b.textContent, Math.round(p.getBoundingClientRect().height) <= 48, document.activeElement === b]; })()")
             .unwrap();
-        assert_eq!(line, json!("Dismissed: u (b) · Undo"));
+        assert_eq!(line, json!(["Dismissed: u", "Undo", true, true]));
         browser
             .eval("document.querySelector('.pl-dismissed button').click()")
             .unwrap();
         browser
             .wait("document.readyState === 'complete' && document.querySelector('#s-u.pl-stop') && !document.querySelector('.pl-dismissed')")
             .unwrap();
+        // the focus on the card Undo restored
+        assert_eq!(
+            browser.eval("document.activeElement?.id").unwrap(),
+            json!("s-u")
+        );
         assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
     })
     .await
@@ -386,4 +392,60 @@ async fn who_cancelled_a_run_and_why_is_read_from_the_run_once_the_log_trimmed_i
         ),
         "{first}"
     );
+}
+
+/// The ask an agent puts last in a long question to the owner: on every page built to answer
+/// it, at a phone's width, the question is whole and its last line seen, never folded away.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_long_open_question_is_whole_with_its_last_line_seen_on_every_answering_page() {
+    let f = Fixture::new().await;
+    let id = f.titled().await;
+    let mut body =
+        String::from("The encoder for stored images changed its byte layout. Two options:\n\n");
+    for n in 1..=12 {
+        body.push_str(&format!(
+            "- option detail {n}: what it costs and what it keeps\n"
+        ));
+    }
+    body.push_str("\n```rust\npub fn encode(img: &Image) -> Vec<u8> {\n    todo!()\n}\n```\n\nWhich do you want before I land?");
+    let body: &'static str = Box::leak(body.into_boxed_str());
+    stored(
+        &f.writer,
+        id,
+        Stored {
+            thread: "step-l1-work",
+            from: "l1-work",
+            to: Some("owner"),
+            body,
+            title: Some("Re-record goldens or keep the old layout?"),
+            question: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let (addr, server) = serve(f.router()).await;
+    tokio::task::spawn_blocking(move || {
+        let base = format!("http://{addr}");
+        let pages = [
+            "/inbox".to_owned(),
+            format!("/projects/id/{id}/steps/l1-work"),
+            format!("/projects/id/{id}/units/l1"),
+            format!("/projects/id/{id}/thread?thread=step-l1-work"),
+        ];
+        // the last line drawn, inside every box around it (no fold, no clip), no closed
+        // disclosure over it
+        const SEEN: &str = "(() => { const want = 'Which do you want before I land?'; const e = [...document.querySelectorAll('p')].find(p => p.textContent.trim() === want && p.checkVisibility()); if (!e) return 'missing'; const r = e.getBoundingClientRect(); for (let a = e.parentElement; a && a !== document.body; a = a.parentElement) { if (a.tagName === 'DETAILS' && !a.open) return 'in a closed details'; const cs = getComputedStyle(a); if (cs.overflowY !== 'visible') { const ar = a.getBoundingClientRect(); if (r.bottom > ar.bottom + 1) return 'clipped by ' + a.tagName + '.' + a.className; } } return 'seen'; })()";
+        let mut browser = Chrome::open(&format!("{base}{}", pages[0])).unwrap();
+        browser.viewport(390, "light").unwrap();
+        for page in &pages {
+            browser.navigate(&format!("{base}{page}")).unwrap();
+            browser.wait("document.readyState === 'complete'").unwrap();
+            browser.eval("document.fonts.ready").unwrap();
+            assert_eq!(browser.eval(SEEN).unwrap(), json!("seen"), "{page}");
+        }
+        assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
+    })
+    .await
+    .unwrap();
+    server.abort();
 }

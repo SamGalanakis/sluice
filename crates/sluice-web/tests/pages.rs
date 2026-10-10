@@ -258,12 +258,11 @@ async fn home_puts_what_needs_the_owner_first_and_its_question_is_answered_in_pl
     // a project with no steps is in the index only
     assert!(!grid.contains("aria-label=\"plain\""), "{grid}");
     let almanac = between(grid, "aria-label=\"almanac\"", "</article>");
-    // its own sentence names its recipes by their own names; a square a unit; its rows
+    // its own sentence counts its units (its plan groups them by recipe); a square a unit; its rows
     assert!(
         almanac.contains("<p class=\"pm-summary\"><a class=\"ask\""),
         "{almanac}"
     );
-    assert!(almanac.contains("article"), "{almanac}");
     assert!(almanac.contains("<i class=\"mk mk-ask\"></i>"), "{almanac}");
     assert!(almanac.contains("asks you: <a href="), "{almanac}");
     assert!(

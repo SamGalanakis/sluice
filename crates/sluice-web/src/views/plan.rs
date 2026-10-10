@@ -669,7 +669,7 @@ impl<'a> Plan<'a> {
         } else {
             format!(
                 "{}{head}{}",
-                ui::trace_button_open(),
+                ui::trace_button_open(&ask.title, ""),
                 ui::trace_button_close()
             )
         };
@@ -763,15 +763,19 @@ impl<'a> Plan<'a> {
         if !self.dismissed.is_empty() {
             out.push_str("<div class=\"pl-dismissed\" role=\"status\">");
             for (unit, step) in &self.dismissed {
-                let name = if unit.steps.len() > 1 {
-                    format!("{} ({})", title(unit), short(unit, step))
+                // its unit's title, and its stage on a unit of several (never its id)
+                let name = if unit.steps.len() > 1 && !step.stage.is_empty() {
+                    format!("{} ({})", title(unit), step.stage)
                 } else {
                     title(unit).to_owned()
                 };
+                // Undo comes back to the card it restores, the focus on it
                 out.push_str(&format!(
-                    "<form method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"undismiss\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><p>{ic}<span>Dismissed: <a href=\"{h}\">{name}</a></span> · <button class=\"text-button\" aria-label=\"Undo dismissing {name}\">Undo</button></p></form>",
+                    "<form method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"undismiss\"><input type=\"hidden\" name=\"next\" value=\"{next}#s-{u}\"><p>{ic}<span class=\"pl-dn\">Dismissed: <a href=\"{h}\">{name}</a></span><button id=\"undo-{s}\" class=\"text-button\" aria-label=\"Undo dismissing {name}\">Undo</button></p></form>",
                     h = esc(&step.href()),
                     next = esc(&self.view.href()),
+                    u = esc(unit.id.as_str()),
+                    s = esc(step.id.as_str()),
                     ic = icon(Icon::Check, 16, ""),
                     name = esc(&name),
                 ));
@@ -788,7 +792,9 @@ impl<'a> Plan<'a> {
         if let Some(step) = step {
             // the stage that stopped, on a unit of several; a unit of one step is that step,
             // whose title heads the card (its id is in the card's Details)
-            let stage = (unit.steps.len() > 1).then(|| esc(&short(unit, step)));
+            // its stage on a unit of several; never a step's id (a unit of no recipe's steps
+            // have no stage: the card's title says the unit)
+            let stage = (unit.steps.len() > 1 && !step.stage.is_empty()).then(|| esc(&step.stage));
             let when = step
                 .timing
                 .as_ref()
@@ -847,14 +853,15 @@ impl<'a> Plan<'a> {
         // never dismissed
         if let Some(step) = step.filter(|s| s.cancelled() && !s.dismissed) {
             actions.push_str(&format!(
-                "<form class=\"pl-dismiss\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"quiet-act\" aria-label=\"Dismiss {name}\" title=\"It stays on its unit, but no longer marks the unit or its project\">Dismiss</button></form>",
+                "<form class=\"pl-dismiss\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"next\" value=\"{next}#undo-{s}\"><button class=\"quiet-act\" aria-label=\"Dismiss {name}\" title=\"It stays on its unit, but no longer marks the unit or its project\">Dismiss</button></form>",
                 h = esc(&step.href()),
                 next = esc(&self.view.href()),
+                s = esc(step.id.as_str()),
                 name = esc(title(unit)),
             ));
         }
         format!(
-            "<div id=\"s-{id}\" class=\"pl-item pl-stop\" style=\"--span:{span}\"{attrs} data-said=\"{states}\">{open}{pick}<span class=\"mod-k\">{role}{g}<b>{word}</b>{kind}<span class=\"quiet\">{said}</span>{marks}</span><span class=\"mod-t\">{title}</span>{pick_end}{menu}<div class=\"mod-body\">{body}</div><div class=\"mod-actions\">{actions}</div>{close}</div>",
+            "<div id=\"s-{id}\" class=\"pl-item pl-stop\" tabindex=\"-1\" style=\"--span:{span}\"{attrs} data-said=\"{states}\">{open}{pick}<span class=\"mod-k\" id=\"k-s-{id}\">{role}{g}<b>{word}</b>{kind}<span class=\"quiet\">{said}</span>{marks}</span><span class=\"mod-t\">{title}</span>{pick_end}{menu}<div class=\"mod-body\">{body}</div><div class=\"mod-actions\">{actions}</div>{close}</div>",
             id = esc(unit.id.as_str()),
             attrs = self.attrs(unit),
             states = esc(&states_said(unit)),
@@ -863,7 +870,7 @@ impl<'a> Plan<'a> {
                 Swell::Look,
                 &format!("{}, {}", unit.heading(), shown.word())
             ),
-            pick = ui::trace_button_open(),
+            pick = ui::trace_button_open(title(unit), &format!("k-s-{}", unit.id)),
             role = ui::trace_role(),
             g = ui::mark(shown),
             word = esc(shown.word()),
@@ -1088,12 +1095,12 @@ impl<'a> Plan<'a> {
             ui::stage_strip(&format!("Stages of {}", unit.heading()), &strip(unit)).0
         };
         format!(
-            "<div id=\"u-{id}\" class=\"pl-row rail-slot{g}\" style=\"--cells:{cells}\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-head\"><span class=\"pl-k\"><span class=\"pl-w\">{role}{mark}<b>{word}</b></span>{state}{chip}</span> <span class=\"pl-t\">{title}</span></span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open the unit</a></div><div class=\"pl-cells\">{cells_html}</div><div class=\"pl-end\">{menu}</div>{more}{more_body}{more_end}</div>",
+            "<div id=\"u-{id}\" class=\"pl-row rail-slot{g}\" style=\"--cells:{cells}\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-head\"><span class=\"pl-k\" id=\"k-u-{id}\"><span class=\"pl-w\">{role}{mark}<b>{word}</b></span> {state}{chip}</span> <span class=\"pl-t\">{title}</span></span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open the unit</a></div><div class=\"pl-cells\">{cells_html}</div><div class=\"pl-end\">{menu}</div>{more}{more_body}{more_end}</div>",
             id = esc(unit.id.as_str()),
             g = if graph { " pl-graphed" } else { "" },
             attrs = self.attrs(unit),
             rail = ui::rail(),
-            pick = ui::trace_button_open(),
+            pick = ui::trace_button_open(title(unit), &format!("k-u-{}", unit.id)),
             role = ui::trace_role(),
             mark = ui::mark(shown),
             word = esc(shown.word()),

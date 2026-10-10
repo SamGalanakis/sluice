@@ -221,7 +221,7 @@ async fn a_message_box_to_a_step_not_running_says_when_it_is_read() {
     // the head says the step's title; its crumb leads back to the step, its id in Details
     assert!(
         thread.contains("<div class=\"ph-name\"><h1><span class=\"d-stage\">")
-            && thread.contains("/steps/l2-work\">Its step</a></nav>")
+            && thread.contains("/steps/l2-work\">FIG-2: Stop the parser leak</a></nav>")
             && thread.contains("<dt>Step</dt>"),
         "{thread}"
     );
@@ -510,7 +510,7 @@ async fn chromium_a_steps_heading_steps_down_on_a_phone_and_a_units_glyph_sits_b
         browser.viewport(390, "light").unwrap();
         assert_eq!(browser.eval(SIZE).unwrap(), json!({"size": "23px", "line": "28px"}));
         browser.viewport(1440, "light").unwrap();
-        assert_eq!(browser.eval(SIZE).unwrap(), json!({"size": "28px", "line": "34px"}));
+        assert_eq!(browser.eval(SIZE).unwrap(), json!({"size": "34px", "line": "38px"}));
         browser.navigate(&format!("http://{addr}/projects/id/{id}/units/l1")).unwrap();
         browser.wait("document.querySelector('h1.unit-h')").unwrap();
         browser.viewport(390, "light").unwrap();

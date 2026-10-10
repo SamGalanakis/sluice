@@ -332,15 +332,17 @@ async fn a_succeeded_steps_retry_asks_first_and_names_the_steps_that_may_run_aga
         !actions.contains("value=\"retry\" class=\"primary\""),
         "{actions}"
     );
-    // with no key output, its two short outputs stand on its Overview
+    // with no key output, its outputs are a path and a hash: they identify rather than
+    // explain, so Overview's preview leaves them to the Outputs tab, which draws them whole
     let overview = between(&page, "id=\"tp-overview\"", "<!--/r:tp-overview-->");
     assert!(
-        overview.contains("<h3 id=\"ov-key-h\">Its outputs</h3></div>"),
+        !overview.contains("/forks/a") && !overview.contains("8128e0d"),
         "{overview}"
     );
+    let outputs = between(&page, "id=\"tp-outputs\"", "<!--/r:tp-outputs-->");
     assert!(
-        overview.contains("/forks/a") && overview.contains("8128e0d"),
-        "{overview}"
+        outputs.contains("/forks/a") && outputs.contains("8128e0d"),
+        "{outputs}"
     );
 }
 
@@ -494,9 +496,15 @@ async fn a_failure_says_what_to_try_and_the_index_says_a_runs_time_as_running() 
         .unwrap();
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/q")).await;
     assert!(
-        page.contains("<p class=\"err-line\">Its engine hit a usage cap.</p><p class=\"err-next\">Retry once its engine's usage cap resets.</p>")
-            || page.contains("<p class=\"err-line\">Its engine hit a usage cap.</p><p class=\"err-next\">Retry once its engine&#39;s usage cap resets.</p>")
-            || page.contains("<p class=\"err-line\">Its engine hit a usage cap.</p><p class=\"err-next\">Retry once its engine&#x27;s usage cap resets.</p>"),
+        page.contains("<p class=\"err-line\">Its engine hit a usage cap.</p>")
+            && (page
+                .contains("<p class=\"err-next\">Retry once its engine's usage cap resets.</p>")
+                || page.contains(
+                    "<p class=\"err-next\">Retry once its engine&#39;s usage cap resets.</p>"
+                )
+                || page.contains(
+                    "<p class=\"err-next\">Retry once its engine&#x27;s usage cap resets.</p>"
+                )),
         "{page}"
     );
     run(&f, id, "r", "2026-10-01T00:00:00Z", None, None).await;

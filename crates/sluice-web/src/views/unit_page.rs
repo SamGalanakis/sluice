@@ -92,6 +92,8 @@ struct UnitPage<'a> {
     /// The view is short enough for the band's line, not a module of its own.
     view_short: bool,
     view_error: Option<&'a str>,
+    /// The view's outputs that identify (a merged hash), which its Details hold.
+    held: Vec<(String, String)>,
     /// Drawing the band (else the detail).
     band: bool,
 }
@@ -102,7 +104,8 @@ impl UnitPage<'_> {
     fn strip(&self) -> TrustedHtml {
         ui::stage_strip("Stages of the unit", &stages(self.unit))
     }
-    /// What identifies it, behind its head's "⋯": its id, its recipe and its params.
+    /// What identifies it, behind its head's "⋯": its id, its recipe, its params and the
+    /// view's outputs that identify (`unit_view::held`).
     fn details(&self) -> TrustedHtml {
         let mut details = ui::Details::new()
             .id("Unit", self.unit.id.as_str())
@@ -112,6 +115,9 @@ impl UnitPage<'_> {
                 ui::ValueSet::Detail => details.id(name, value),
                 _ => details.text(name, value),
             };
+        }
+        for (name, value) in &self.held {
+            details = details.id(name, value);
         }
         details.menu(self.unit.whole_heading())
     }
@@ -196,6 +202,10 @@ fn draw(
         .and_then(|r| r.view())
         .map(|root| super::unit_view::draw(root, unit, false))
         .filter(|drawn| !super::unit_view::empty(drawn));
+    let held = recipe
+        .and_then(|r| r.view())
+        .map(|root| super::unit_view::held(root, unit))
+        .unwrap_or_default();
     let page = |band| UnitPage {
         unit,
         project: &view.project,
@@ -204,6 +214,7 @@ fn draw(
         view_short: drawn_view.as_ref().is_some_and(super::unit_view::short),
         view: drawn_view.clone(),
         view_error: recipe.and_then(|r| r.view_error()),
+        held: held.clone(),
         band,
     };
     Ok(Drawn {
