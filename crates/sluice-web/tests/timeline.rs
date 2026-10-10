@@ -1,6 +1,6 @@
-//! A unit's runs in time (SPEC §13): the unit page's timeline and the step page's fold of it, how
-//! long a recipe's stage usually takes, a step's chain on the board (`?root=`), and a recipe's
-//! every unit (`?recipe=`), each read over HTTP as a browser gets it.
+//! A unit's runs in time (SPEC §13): the unit page's timeline and the step page's fold of it, a
+//! running step's time with no usual time beside it, a step's chain on the board (`?root=`),
+//! and a recipe's every unit (`?recipe=`), each read over HTTP as a browser gets it.
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
@@ -323,57 +323,33 @@ async fn a_unit_page_draws_its_runs_on_one_axis_its_long_waits_collapsed_and_its
 }
 
 #[tokio::test]
-async fn a_running_step_says_how_long_its_stage_usually_takes_from_three_done_units_or_more() {
+async fn a_running_step_says_how_long_it_has_run_and_nothing_of_a_usual_time() {
     let f = Fixture::new().await;
     let id = recipes(&f).await;
-    // work took 10m, 30m and 20m in the done units: usually 20m
+    // work took 10m, 30m and 20m in the done units, and r1's has run for days: the plan, the
+    // step and its unit say how long it has run, never against those (the Stats page does)
     let (status, html) = f.get(&format!("/projects/id/{id}")).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    // its row says how long its stage usually takes; far past twice that, its live cell says
-    // how far (once, for a reader too) and the row carries the overrun chip
     let row = plan_html::row(&html, "r1");
-    assert!(row.contains(", usually 20m"), "{row}");
-    assert!(row.contains("class=\"overrun\""), "{row}");
+    assert!(row.contains("<span class=\"pl-time\">"), "{row}");
+    assert!(!row.contains("usual") && !row.contains("×"), "{row}");
     let cell = plan_html::cell(&html, "r1-work");
-    assert!(
-        cell.contains("<span class=\"sc-over\" aria-hidden=\"true\">")
-            && cell.contains("× its usual time</span>"),
-        "{cell}"
-    );
     // the clock never enters the drawing: the cell's time is a `<time data-since=`
     assert!(
         cell.contains("<time data-since=\"2026-10-07T09:01:00Z\""),
         "{cell}"
     );
-    // a finished cell carries no estimate
-    assert!(
-        !plan_html::cell(&html, "r1-fork").contains("usual"),
-        "{html}"
-    );
+    assert!(!cell.contains("usual") && !cell.contains("×"), "{cell}");
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/r1-work")).await;
-    let badges = step
-        .split("<p class=\"d-badges\">")
-        .nth(1)
-        .unwrap_or_default();
-    let badges = &badges[..badges.find("</p>").unwrap_or(badges.len())];
-    assert!(
-        badges.contains(
-            "<span class=\"meta d-usual over\">usually 20m</span><span class=\"over-x\">"
-        ) && badges.contains("× usual</span>"),
-        "{badges}"
-    );
-    let (_, page) = f.get(&format!("/projects/id/{id}/steps/r1-work")).await;
-    // its run started days ago, far past twice its usual 20m: the "usually" reads in ink
-    assert!(
-        page.contains("<span class=\"meta d-usual over\">usually 20m</span>"),
-        "{page}"
-    );
-    // a done unit's step says it after how long it took
+    let badges = between(&step, "<p class=\"d-badges\">", "</p>");
+    assert!(badges.contains("running for "), "{badges}");
+    assert!(!badges.contains("usual"), "{badges}");
+    let (_, unit) = f.get(&format!("/projects/id/{id}/units/r1")).await;
+    assert!(!unit.contains("usual"), "{unit}");
+    // a done unit's step says how long it took, and only that
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/d2-work")).await;
-    assert!(page.contains(" · took 30m · usually 20m</span>"), "{page}");
-    // land ran in two done units only: too few to say
-    let (_, page) = f.get(&format!("/projects/id/{id}/steps/r1-land")).await;
-    assert!(!page.contains("usually"), "{page}");
+    let when = between(&page, "<span class=\"meta d-when\">", "</p>");
+    assert!(when.ends_with(" · took 30m</span>"), "{when}");
 }
 
 #[tokio::test]
@@ -546,32 +522,4 @@ async fn chromium_draws_the_timeline_to_its_width() {
     .await
     .unwrap();
     server.abort();
-}
-
-#[tokio::test]
-async fn an_ended_run_past_twice_its_usual_time_says_how_far_in_ink() {
-    let f = Fixture::new().await;
-    let id = recipes(&f).await;
-    // d1's fork took 5m where forks take 1m: 5× its usual time, said quietly once it has ended
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            tx.sql().execute(
-                "UPDATE runs SET finished_at='2026-10-06T09:05:00Z' WHERE project_id=?1 AND step_id='d1-fork'",
-                [id.to_string()],
-            )?;
-            tx.changed(Some(id), "status");
-            Ok(())
-        })
-        .await
-        .unwrap();
-    let (_, html) = f.get(&format!("/projects/id/{id}/steps/d1-fork")).await;
-    let when = between(&html, "<span class=\"meta d-when\">", "</p>");
-    assert!(
-        when.contains("took 5m · usually 1m · <span class=\"over-x\">5× usual</span>"),
-        "{when}"
-    );
-    // within twice its usual time, nothing more
-    let (_, html) = f.get(&format!("/projects/id/{id}/steps/d2-fork")).await;
-    let when = between(&html, "<span class=\"meta d-when\">", "</p>");
-    assert!(!when.contains("over-x"), "{when}");
 }

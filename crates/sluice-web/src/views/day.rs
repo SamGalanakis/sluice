@@ -30,10 +30,6 @@ pub const QUICK: u64 = 60;
 pub const CELL_RUNS: usize = 6;
 /// A run that took at least this long (seconds) is notable however it ended.
 pub const LONG: u64 = 60 * 60;
-/// A run past this many times its stage's usual time that day overran, and is notable.
-pub const OVERRAN: u64 = 2;
-/// How many successes of a stage that day give it a usual time.
-pub const USUAL_FROM: usize = 3;
 /// How many tracks a project's day line stacks before its last holds the rest.
 pub const LANES: usize = 14;
 
@@ -97,13 +93,6 @@ impl DayRun {
             (name, rest)
         } else {
             (sluice_model::naming::cut(&self.title, 64), rest)
-        }
-    }
-    /// What its usual time is reckoned by: its step past its unit's name, else its step.
-    pub fn stage(&self) -> String {
-        match self.name() {
-            (_, rest) if !rest.is_empty() => rest,
-            (name, _) => name,
         }
     }
     /// Its step's runs while the plan keeps the step, else its records on the project's log,
@@ -412,35 +401,10 @@ impl DayView {
         }
         out
     }
-    /// Each stage's usual time that day, by project and stage (a step's name past its unit's,
-    /// or a step of no unit's own id): the median of its successes, once it has `USUAL_FROM`.
-    pub fn usual(&self) -> BTreeMap<(ProjectId, String), u64> {
-        let mut took: BTreeMap<(ProjectId, String), Vec<u64>> = BTreeMap::new();
-        for r in &self.runs {
-            if r.outcome == Some(Shown::Succeeded) && r.ended.is_some() {
-                took.entry((r.project, r.stage()))
-                    .or_default()
-                    .push(r.seconds(self.now));
-            }
-        }
-        took.into_iter()
-            .filter(|(_, t)| t.len() >= USUAL_FROM)
-            .map(|(k, mut t)| {
-                t.sort_unstable();
-                (k, t[t.len() / 2])
-            })
-            .collect()
-    }
     /// A run worth its own line in a busy hour: it did not succeed (it failed, was cancelled,
-    /// still runs or ended with no result), it took `LONG` or more, or it overran its stage's
-    /// usual time that day.
-    pub fn notable(&self, r: &DayRun, usual: &BTreeMap<(ProjectId, String), u64>) -> bool {
-        let took = r.seconds(self.now);
-        r.outcome != Some(Shown::Succeeded)
-            || took >= LONG
-            || usual
-                .get(&(r.project, r.stage()))
-                .is_some_and(|u| took >= QUICK && took > OVERRAN * u)
+    /// still runs or ended with no result), or it took `LONG` or more.
+    pub fn notable(&self, r: &DayRun) -> bool {
+        r.outcome != Some(Shown::Succeeded) || r.seconds(self.now) >= LONG
     }
     /// The projects that ran in the window, the busiest first; a project's own day has its
     /// column whether or not it ran.
@@ -698,7 +662,6 @@ impl DayView {
         }
         head.push_str("</div>");
         let mut rows = String::new();
-        let usual = self.usual();
         let hours: Vec<u64> = w.hours().collect();
         for (i, at) in hours.iter().enumerate() {
             let from = if i == 0 { 0 } else { *at };
@@ -713,7 +676,7 @@ impl DayView {
                     .filter(|r| r.started >= from && r.started < to)
                     .collect();
                 started += here.len();
-                cells.push_str(&self.cell(c.project, &here, i == 0, *at, &usual));
+                cells.push_str(&self.cell(c.project, &here, i == 0, *at));
             }
             let (day, _) = w.day_name(*at);
             let first_of_day = i == 0 || w.hour(*at) == 0;
@@ -758,7 +721,6 @@ impl DayView {
         runs: &[&DayRun],
         first: bool,
         hour: u64,
-        usual: &BTreeMap<(ProjectId, String), u64>,
     ) -> String {
         let (quick, listed): (Vec<&DayRun>, Vec<&DayRun>) = runs.iter().partition(|r| r.quick());
         let mut shown: Vec<&DayRun> = listed.clone();
@@ -769,10 +731,10 @@ impl DayView {
                 .max_by_key(|r| r.seconds(self.now))
                 .map(|r| r.run_id.as_str())
                 .unwrap_or("");
-            let any = listed.iter().any(|r| self.notable(r, usual));
-            (shown, folded) = listed.iter().partition(|r| {
-                self.notable(r, usual) || (!any && r.run_id == longest)
-            });
+            let any = listed.iter().any(|r| self.notable(r));
+            (shown, folded) = listed
+                .iter()
+                .partition(|r| self.notable(r) || (!any && r.run_id == longest));
         }
         let mut html = format!(
             "<div class=\"tt-c\"><p class=\"tt-pname\">{}</p>",

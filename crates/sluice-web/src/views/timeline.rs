@@ -497,21 +497,6 @@ fn now_mark(t0: f64, now: f64) -> f64 {
     t0 + ((elapsed / step).floor() + 1.0) * step
 }
 
-/// The middle of `samples` (the mean of the two middles for an even count); none for fewer
-/// than three, too few to say what a stage usually takes.
-pub fn median(mut samples: Vec<f64>) -> Option<f64> {
-    if samples.len() < 3 {
-        return None;
-    }
-    samples.sort_by(f64::total_cmp);
-    let mid = samples.len() / 2;
-    Some(if samples.len().is_multiple_of(2) {
-        (samples[mid - 1] + samples[mid]) / 2.0
-    } else {
-        samples[mid]
-    })
-}
-
 /// Seconds since the epoch of a julian day, as SQLite's `julianday` gives it.
 pub fn from_julian(day: f64) -> f64 {
     (day - 2_440_587.5) * 86_400.0
@@ -653,12 +638,5 @@ mod tests {
                 .breaks
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn a_median_needs_three_samples() {
-        assert_eq!(median(vec![1.0, 2.0]), None);
-        assert_eq!(median(vec![30.0, 10.0, 20.0]), Some(20.0));
-        assert_eq!(median(vec![4.0, 1.0, 3.0, 2.0]), Some(2.5));
     }
 }

@@ -495,9 +495,6 @@ pub struct StepView {
     pub failure_record: Option<i64>,
     /// Its current run's times, for its card's timer.
     pub timing: Option<RunTiming>,
-    /// How long its stage usually takes: the median of its recipe's done units' runs of the
-    /// same stage (`board::usual_durations`), none with fewer than three.
-    pub usually: Option<f64>,
     /// Its unit's timeline, on its page and in the drawer (`board::load_step`).
     pub timeline: Option<super::timeline::Timeline>,
     /// It comes after a step or a step comes after it: its page links its chain on the plan
@@ -1009,7 +1006,6 @@ impl StepView {
             messages_total: 0,
             failure_record: None,
             timing: None,
-            usually: None,
             timeline: None,
             chained: false,
             activity: None,
@@ -1406,7 +1402,7 @@ impl StepView {
     pub fn timer_html(&self) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(
-            source = "{% if live %}<time data-since=\"{{ t.started }}\" datetime=\"{{ t.started }}\" class=\"took live\" title=\"{{ title }}\"{% if let Some(u) = usually %} data-usually=\"{{ u }}\"{% endif %}><span class=\"tk\" aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"{% if !usual_said.is_empty() %} data-tail=\", {{ usual_said }}\"{% endif %}> for {{ said }}{% if !usual_said.is_empty() %}, {{ usual_said }}{% endif %}</span></time>{% else %}<span class=\"took\" title=\"{{ title }}\"><span aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"> took {{ said }}</span></span>{% endif %}",
+            source = "{% if live %}<time data-since=\"{{ t.started }}\" datetime=\"{{ t.started }}\" class=\"took live\" title=\"{{ title }}\"><span class=\"tk\" aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"> for {{ said }}</span></time>{% else %}<span class=\"took\" title=\"{{ title }}\"><span aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"> took {{ said }}</span></span>{% endif %}",
             ext = "html"
         )]
         struct Timer<'a> {
@@ -1415,10 +1411,6 @@ impl StepView {
             shown: String,
             said: String,
             title: String,
-            /// While it runs, how long its stage usually takes, whole seconds: the page's script
-            /// draws how far along it is against that.
-            usually: Option<u64>,
-            usual_said: String,
         }
         if self.shown() == Shown::Quiet {
             // how long it has written nothing, ticking, in place of its run's time
@@ -1447,7 +1439,7 @@ impl StepView {
         } else {
             format!("took {shown}")
         };
-        let mut title = match t.runs {
+        let title = match t.runs {
             0 | 1 => {
                 let mut c = this.chars();
                 c.next()
@@ -1456,64 +1448,16 @@ impl StepView {
             }
             n => format!("{n} runs; this one {this}"),
         };
-        let usually = self.usually.filter(|_| live);
-        if let Some(u) = usually {
-            title = format!(
-                "{title}; its stage usually takes {}",
-                super::ui::duration_text(u)
-            );
-        }
         TrustedHtml::from_template(&Timer {
             t,
             live,
             shown,
             said: super::ui::duration_words(t.seconds),
             title,
-            usually: usually.map(|u| u.round() as u64),
-            // past twice its usual time, the words say how far: one sentence for a reader
-            usual_said: usually
-                .map(|u| {
-                    let mut words = format!("usually {}", super::ui::duration_words(u));
-                    let times = self.overrun_times();
-                    if !times.is_empty() {
-                        words.push_str(&format!(", {times} its usual time"));
-                    }
-                    words
-                })
-                .unwrap_or_default(),
         })
     }
-    /// It has run more than twice as long as its stage usually takes: its "usually" reads in
-    /// ink, so an overrun shows without a colour of its own.
-    pub fn overrun(&self) -> bool {
-        match (self.usually, self.shown_timing()) {
-            (Some(usually), Some(t)) => {
-                self.running() && t.finished.is_none() && usually > 0.0 && t.seconds > 2.0 * usually
-            }
-            _ => false,
-        }
-    }
-    /// How many times its usual time it has run, once past twice that: "2.5×"
-    /// (`ui::ratio_text`, as its cell and chip say it); "" otherwise.
-    pub fn overrun_times(&self) -> String {
-        if !self.overrun() {
-            return String::new();
-        }
-        match (self.usually, self.shown_timing()) {
-            (Some(usually), Some(t)) => super::ui::ratio_text(t.seconds / usually),
-            _ => String::new(),
-        }
-    }
-    /// How many times its usual time it has run (its overrun chip's ratio), once past twice
-    /// that; 0 otherwise.
-    pub fn overrun_ratio(&self) -> f64 {
-        match (self.usually, self.shown_timing()) {
-            (Some(usually), Some(t)) if self.overrun() => t.seconds / usually,
-            _ => 0.0,
-        }
-    }
-    /// How its last run ended, for its header: a finished step's "Ended 2h ago · took 4m"
-    /// (with its usual time), one waiting to run again "Last run ended 12h ago (took 3m)".
+    /// How its last run ended, for its header: a finished step's "Ended 2h ago · took 4m",
+    /// one waiting to run again "Last run ended 12h ago (took 3m)".
     pub fn ended_line(&self) -> Option<TrustedHtml> {
         let run = self.last_run().filter(|r| !r.finished.is_empty())?;
         let ago = super::ui::ago(&run.finished);
@@ -1526,30 +1470,12 @@ impl StepView {
             }
         } else {
             let mut line = format!("Ended {}", ago.as_str());
-            for part in [took, super::ui::esc(&self.usually_text())] {
-                if !part.is_empty() {
-                    line.push_str(" · ");
-                    line.push_str(&part);
-                }
-            }
-            // a run that took more than twice its usual time says how far, quietly: it is over
-            if let (Some(usually), Some(seconds)) = (self.usually, run.seconds)
-                && usually > 0.0
-                && seconds > 2.0 * usually
-            {
-                line.push_str(&format!(
-                    " · <span class=\"over-x\">{} usual</span>",
-                    super::ui::ratio_text(seconds / usually)
-                ));
+            if !took.is_empty() {
+                line.push_str(" · ");
+                line.push_str(&took);
             }
             line
         }))
-    }
-    /// "usually 40m": how long its stage usually takes (`usually`), "" when that is not known.
-    pub fn usually_text(&self) -> String {
-        self.usually
-            .map(|s| format!("usually {}", super::ui::duration_text(s)))
-            .unwrap_or_default()
     }
     /// Its run's number and how its earlier runs ended (oldest first), when it has had more
     /// than one and the latest is its own (running, or failed); a quiet run keeps its count.

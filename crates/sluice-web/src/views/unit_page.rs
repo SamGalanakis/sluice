@@ -36,8 +36,8 @@ pub fn ordered(unit: &UnitView) -> Vec<&StepView> {
     out
 }
 /// A step's cell in its unit's strip: its stage's name (else its id less its unit's), its
-/// state, how long its run took or has run, and past its usual time by how far.
-pub fn stage_of(unit: &UnitView, step: &StepView) -> Stage {
+/// state, and how long its run took or has run.
+fn stage_of(unit: &UnitView, step: &StepView) -> Stage {
     let prefix = format!("{}-", unit.id);
     let name = if !step.stage.is_empty() {
         step.stage.clone()
@@ -57,14 +57,6 @@ pub fn stage_of(unit: &UnitView, step: &StepView) -> Stage {
         } else {
             stage.took(t.seconds)
         };
-    }
-    if let (Some(usually), Some(t)) = (step.usually, step.timing.as_ref())
-        && step.running()
-        && t.finished.is_none()
-        && usually > 0.0
-        && t.seconds > 2.0 * usually
-    {
-        stage = stage.over(t.seconds / usually);
     }
     stage
 }

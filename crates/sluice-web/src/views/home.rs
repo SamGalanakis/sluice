@@ -3,7 +3,7 @@
 //! finished most recently; under it For you (every open question to the owner, swollen and
 //! answerable in place) beside the day in a line a project; then each project as a module,
 //! the ones that need the owner first: its own summary sentence, a square a unit, its questions,
-//! its stopped steps, its running steps against their usual time and what it finished last;
+//! its stopped steps, its running steps with how long each has run and what it finished last;
 //! then the index of every project, archived ones too.
 use super::*;
 use crate::streams::{PatchRegion, RenderedBatch};
@@ -24,7 +24,7 @@ pub struct HomeProject {
     pub project: ProjectView,
     /// Each unit as the summary counts it, and as a square.
     pub units: Vec<ui::UnitFact>,
-    /// Its running steps: their unit (or step), its page, since when, its usual time, quiet.
+    /// Its running steps: their unit (or step), its page, since when, quiet.
     pub running: Vec<Running>,
     /// Its units (or steps of no unit) that finished last, newest first.
     pub finished: Vec<ui::Finished>,
@@ -33,8 +33,6 @@ pub struct HomeProject {
     /// Its board was read: a project whose plan cannot be read says only its counts.
     pub read: bool,
 }
-/// A run is past its usual time, as home says it, from half again that time.
-pub const OVER: f64 = 1.5;
 /// A running step as a project's module lists it.
 #[derive(Clone, Debug)]
 pub struct Running {
@@ -43,17 +41,8 @@ pub struct Running {
     pub href: String,
     pub since: String,
     pub seconds: f64,
-    pub usually: Option<f64>,
     pub quiet: bool,
     pub shown: Shown,
-}
-impl Running {
-    /// Past its stage's usual time: how far.
-    pub fn over(&self) -> Option<f64> {
-        let usual = self.usually.filter(|u| *u > 0.0)?;
-        let ratio = self.seconds / usual;
-        (ratio >= 1.0).then_some(ratio)
-    }
 }
 impl HomeProject {
     /// What its board says, as home reads it.
@@ -69,7 +58,6 @@ impl HomeProject {
                     href: format!("{}/steps/{}", project.href(), r.step),
                     since: r.started.clone(),
                     seconds: timestamp(&r.started).map_or(0.0, |t| now.saturating_sub(t) as f64),
-                    usually: None,
                     quiet: r.quiet,
                     shown: r.shown(),
                 })
@@ -86,8 +74,8 @@ impl HomeProject {
         let mut units = vec![];
         let mut finished = vec![];
         let mut steps = 0;
-        // every running step as the summary has it, with what its board knows: its stage's
-        // usual time, when its run started, its unit
+        // every running step as the summary has it, with what its board knows: when its run
+        // started, its unit
         let mut known = BTreeMap::new();
         for unit in &board.units {
             for step in unit.steps.iter().filter(|s| s.running()) {
@@ -112,7 +100,6 @@ impl HomeProject {
                     href: format!("{}/steps/{}", project.href(), r.step),
                     seconds: timestamp(&since).map_or(0.0, |t| now.saturating_sub(t) as f64),
                     since,
-                    usually: found.and_then(|(_, s)| s.usually),
                     quiet: r.quiet,
                     shown: r.shown(),
                 }
@@ -120,16 +107,12 @@ impl HomeProject {
             .collect();
         for unit in &board.units {
             steps += unit.steps.len();
-            let mut over: Option<f64> = None;
             let mut quiet: Option<f64> = None;
             let mut quiet_since = String::new();
             for run in running
                 .iter()
                 .filter(|r| unit.steps.iter().any(|s| s.id.as_str() == r.step))
             {
-                if let Some(r) = run.over().filter(|r| *r >= OVER) {
-                    over = Some(over.map_or(r, |o: f64| o.max(r)));
-                }
                 if run.quiet {
                     let active = unit
                         .steps
@@ -147,7 +130,6 @@ impl HomeProject {
                 name: unit.id.to_string(),
                 recipe: unit.recipe.clone(),
                 shown: Some(unit.shown()),
-                over,
                 quiet,
                 quiet_since,
             });
@@ -192,11 +174,10 @@ impl HomeProject {
         finished.sort_by(|a, b| b.at.cmp(&a.at));
         finished.truncate(5);
         let mut running = running;
-        // quiet first, then the longest past its usual time, then the longest running
+        // quiet first, then the longest running
         running.sort_by(|a, b| {
             b.quiet
                 .cmp(&a.quiet)
-                .then(b.over().unwrap_or(0.0).total_cmp(&a.over().unwrap_or(0.0)))
                 .then(b.seconds.total_cmp(&a.seconds))
         });
         Self {
@@ -385,16 +366,8 @@ impl HomeProject {
             } else {
                 (run.shown, run.shown.word())
             };
-            let usual = match (run.usually, run.over()) {
-                (Some(_), Some(r)) if r >= OVER => format!(" {}", ui::overrun(r)),
-                (Some(u), _) => format!(
-                    " <span class=\"pm-usual\">usually {}</span>",
-                    esc(&ui::duration_text(u))
-                ),
-                _ => String::new(),
-            };
             html.push_str(&format!(
-                "<li class=\"pm-row pm-running{q}\">{glyph}<span class=\"pm-line\"><span class=\"pm-who\">{name}</span> <span class=\"pm-what\">{word}running for <span class=\"pm-for\">{since}</span>{usual}</span></span></li>",
+                "<li class=\"pm-row pm-running{q}\">{glyph}<span class=\"pm-line\"><span class=\"pm-who\">{name}</span> <span class=\"pm-what\">{word}running for <span class=\"pm-for\">{since}</span></span></span></li>",
                 q = if run.quiet { " pm-quiet" } else { "" },
                 glyph = ui::glyph(shown),
                 name = step_link(&sref, &run.href),
@@ -572,7 +545,7 @@ impl HomeView {
         self.projects.iter().filter(|p| p.project.counts.total() > 0)
     }
     /// The band's sentence across the projects: its questions and where, what runs and where
-    /// (quiet and past its usual time said), what stopped and where, and otherwise that all is
+    /// (the quiet ones said), what stopped and where, and otherwise that all is
     /// done or waiting.
     pub fn summary(&self) -> TrustedHtml {
         let mut parts: Vec<String> = vec![];
@@ -604,22 +577,6 @@ impl HomeView {
                 .iter()
                 .map(|p| p.project.running.iter().filter(|r| r.quiet).count())
                 .sum();
-            let over: usize = running
-                .iter()
-                .map(|p| {
-                    p.running
-                        .iter()
-                        .filter(|r| r.over().is_some_and(|o| o >= 2.0))
-                        .count()
-                })
-                .sum();
-            let mut notes = vec![];
-            if quiet > 0 {
-                notes.push(format!("{quiet} quiet"));
-            }
-            if over > 0 {
-                notes.push(format!("{over} past twice its usual time"));
-            }
             parts.push(format!(
                 "{} running {}{}.",
                 n_running,
@@ -628,10 +585,10 @@ impl HomeView {
                 } else {
                     format!("across {}", esc(&day::join(&names)))
                 },
-                if notes.is_empty() {
-                    String::new()
+                if quiet > 0 {
+                    format!(", {quiet} quiet")
                 } else {
-                    format!(", {}", esc(&day::join(&notes)))
+                    String::new()
                 }
             ));
         }

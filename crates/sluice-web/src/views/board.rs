@@ -564,10 +564,6 @@ pub struct ProjectView {
     /// Its steps' and units' names, and the recipes they came from.
     #[serde(skip)]
     pub names: std::sync::Arc<sluice_runtime::naming::ProjectNaming>,
-    /// How long each recipe's stage usually takes, seconds, by recipe and stage: worked out
-    /// once a read (`usual_durations`), each step looking its own up. Nothing is stored.
-    #[serde(skip)]
-    pub usual: BTreeMap<(String, String), f64>,
     /// Its open questions to the owner (`project.asks`) as asked: what For you draws whole.
     pub questions: Vec<Question>,
 }
@@ -662,7 +658,6 @@ impl ProjectView {
             panel: None,
             view: None,
             names: Default::default(),
-            usual: BTreeMap::new(),
             questions: vec![],
         };
         view.settle();
@@ -1231,16 +1226,6 @@ pub fn load_board(
             }
         }
     }
-    // how long each recipe's stage usually takes, for its steps' pages and running cards
-    let usual = usual_durations(&board.units);
-    for unit in board.units.iter_mut().filter(|u| !u.recipe.is_empty()) {
-        for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
-            step.usually = usual
-                .get(&(unit.recipe.clone(), step.stage.clone()))
-                .copied();
-        }
-    }
-    board.usual = usual;
     // each open question to the owner as asked: its words and when
     let mut asked = c.prepare_cached("SELECT body,at FROM messages WHERE project_id=?1 AND id=?2")?;
     for ask in &summary.asks {
@@ -1414,34 +1399,10 @@ pub fn load_step(
         .find(|s| &s.id == id)
         .cloned()
         .expect("the unit holds the step");
-    // how long its stage usually takes, over its recipe's done units (as the board works it out)
-    if !unit.recipe.is_empty() {
-        let peers: Vec<UnitView> = plan
-            .units()
-            .values()
-            .filter(|u| {
-                u.done(&state)
-                    && names
-                        .naming
-                        .unit(u.name.as_str())
-                        .is_some_and(|n| n.recipe == unit.recipe)
-            })
-            .map(unit_of)
-            .collect();
-        step.usually = usual_durations(&peers)
-            .get(&(unit.recipe.clone(), step.stage.clone()))
-            .copied();
-    }
     step.timeline = unit.timeline(Some(id));
     // its unit's stages in its band: a unit of one step is the step alone
     if unit.steps.len() > 1 {
-        // its own cell knows its stage's usual time
-        let own = super::unit_page::stage_of(&unit, &step);
-        let mut lane = super::unit_page::stages(&unit);
-        if let Some(cell) = lane.iter_mut().find(|s| s.href == own.href) {
-            *cell = own;
-        }
-        step.lane = lane;
+        step.lane = super::unit_page::stages(&unit);
         step.lane_unit = unit.id.to_string();
         step.lane_recipe = unit.recipe.clone();
     }
@@ -1541,31 +1502,6 @@ pub fn load_step(
         step,
         unit,
     }))
-}
-/// How long each recipe's stage usually takes: the median, over the recipe's done units in
-/// the plan, of how long the stage's step took when it succeeded (its last run, a scatter's last
-/// round; never a value set by hand). A stage with fewer than three such runs has none.
-pub fn usual_durations(units: &[UnitView]) -> BTreeMap<(String, String), f64> {
-    let mut samples = BTreeMap::<(String, String), Vec<f64>>::new();
-    for unit in units.iter().filter(|u| u.done && !u.recipe.is_empty()) {
-        for step in &unit.steps {
-            if let Some(t) = &step.timing
-                && t.finished.is_some()
-                && step.status == StepStatus::Succeeded
-                && !step.manual
-                && !step.stage.is_empty()
-            {
-                samples
-                    .entry((unit.recipe.clone(), step.stage.clone()))
-                    .or_default()
-                    .push(t.seconds);
-            }
-        }
-    }
-    samples
-        .into_iter()
-        .filter_map(|(key, s)| Some((key, super::timeline::median(s)?)))
-        .collect()
 }
 /// Each step's current run times (its card's timer) and every run of its current generation
 /// (its unit's timeline, and how its earlier runs ended for its card's "run 3"): its latest run, or for a scatter its latest round's item runs, from the

@@ -93,18 +93,9 @@ function tick() {
         wider ||= text.length > shown.textContent.length;
         shown.textContent = text;
       }
-      // one span for a screen reader, so it hears one phrase: what follows the time (", usually
-      // 22 minutes") is kept in data-tail
-      const words = ` for ${spoken(seconds)}${said?.dataset.tail ?? ""}`;
+      // one span for a screen reader, so it hears one phrase
+      const words = ` for ${spoken(seconds)}`;
       if (said && said.textContent !== words) said.textContent = words;
-      // a running card whose stage usually takes so long: how far along it is, a faint line
-      // along its foot (full once past it); never the quiet gold
-      const usually = Number(t.dataset.usually);
-      if (usually > 0) {
-        const along = String(Math.min(1, seconds / usually).toFixed(3));
-        const card = t.closest(".node");
-        if (card && card.style.getPropertyValue("--along") !== along) card.style.setProperty("--along", along);
-      }
     } else {
       const text = ago(seconds);
       if (t.textContent !== text) t.textContent = text;

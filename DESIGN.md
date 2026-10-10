@@ -179,11 +179,6 @@ components:
     backgroundColor: "{colors.sand}"
     textColor: "{colors.on-sand}"
     height: "56px"
-  overrun-chip:
-    backgroundColor: "{colors.sand}"
-    textColor: "{colors.on-sand}"
-    rounded: "{rounded.none}"
-    padding: "1px 6px"
   button-primary:
     backgroundColor: "{colors.navy}"
     textColor: "{colors.on-navy}"
@@ -219,10 +214,10 @@ The owner opens the dashboard between other work, often on a second screen or a 
 answer one question within seconds: does anything need me, and is the work moving? The page
 answers in its order. The page's head says it in one sentence; under it the paper lists what needs the
 owner first and what is done last: **For you** (a question to the owner) → **Stopped**
-(failed, cancelled, stale) → **Running** (quiet first, then the longest past its usual time) →
+(failed, cancelled, stale) → **Running** (quiet first, then the longest running) →
 **Waiting** → **Done** (a dense index, folded). The module that needs the owner swells. A
-running step shows its elapsed time against its stage's usual time and says when it is over
-("2.1× usual"). Selecting a unit traces it: it opens in place, its upstream and downstream
+running step shows how long it has run; how long a stage usually takes is the project's Stats
+page's to say, never a row's. Selecting a unit traces it: it opens in place, its upstream and downstream
 chain lights with a rail in the margin, a sentence states the chain, and the rest fades.
 
 The old world (rounded cards on cream, three racing stripes under the nav, Archivo and Public
@@ -240,10 +235,10 @@ outputs and the project's board document. Nothing in view code assumes a project
   its own small graph; a one-step unit is one cell.
 - **"Finished last"** is the units (or steps of no unit) whose run ended most recently, by
   title, with when and how long they took.
-- **A long run** (a step running far past any usual time, or reporting `step_progress`) shows
+- **A long run** (a step of no recipe running six hours or more, or reporting `step_progress`) shows
   its progress fields in the margin module, as it reported them: sluice never reads or names
   them.
-- **The summary sentence** is built only from status counts, overruns, quiet runs and open
+- **The summary sentence** is built only from status counts, quiet runs and open
   questions, naming recipes by their own names.
 - **Project-specific words** come only from what the project supplies: recipe definitions
   (step names, title template, `view`), step progress and outputs, its board document.
@@ -277,7 +272,7 @@ chosen the system's. These are Sluice's (Sluice Light and Sluice Dark); every ot
 - **Sky** (`sky`): done. A done cell's fill and a done mark's (edged in `sky-ink`); `sky-ink`
   its glyph; `sweep` the bright sky of the sweep along a running cell's foot.
 - **Sand** (`sand`, `sand-pale`, `sand-ink`, `sand-mark`): needs a look: failed, cancelled,
-  stale, quiet, an overrun. A look cell and the overrun chip are sand with navy on them; a
+  stale, quiet. A look cell is sand with navy on it; a
   stopped module sits on `sand-pale`.
 - **Coral** (`coral`, `on-coral`): only an open question to the owner (the Inbox count, the
   question module's rule, "Awaiting your reply", the summary's link to it) and the logo. A
@@ -466,7 +461,7 @@ head on the paper under it.
   sentence (`ui::summary_sentence`), one line of large body text where it fits; a page that says
   what it shows has a muted note in its place (`ui::page_head_note`: the Log's records, the
   Day's date and clock, the Functions' counts). No page carries a description blurb.
-- **The row** (`.subnav`): its sections as tabs (Plan, Day, Messages, Log, Functions, Settings;
+- **The row** (`.subnav`): its sections as tabs (Plan, Day, Stats, Messages, Log, Functions, Settings;
   the current one under a 2px ink bar), a count line (`Frame::meta`), and at the right its tools
   (`Frame::tools`: a find field and the view switch on a plan, the messages' switch on For you,
   Questions and History). A hairline closes it. On a phone the tabs wrap and the tools take a
@@ -544,17 +539,14 @@ the word goes under the name, never beside it.
 - **Done** (the Done band): sky, its glyph (check, set by hand, skipped) and its name, how long
   it took under it.
 - **Running** (the rest of the Running band: running, finishing, stopping, outside): the blue,
-  its name small, its elapsed time big and ticking, a sweep along its foot; past its stage's
-  usual time a sand corner says "2.1×".
+  its name small, its elapsed time big and ticking, a sweep along its foot. It is never set
+  against a usual time: that is the Stats page's.
 - **Needs a look** (a state that wants attention: failed, cancelled, stale, quiet): sand, its
   glyph, its name and its word, its time; a quiet run keeps running's blue edge.
 - A note may span the cells not reached ("then review and publish").
 
 Each cell's state is said in words to a screen reader, and a cell with a page links to it.
-`ui::stage_marks` draws the same strip as 12px squares in a line of words; `ui::overrun` is
-the sand chip with the timer, "2.1× usual". Every overrun on every page is said by one rule,
-`ui::ratio_text`: one decimal below ten ("5×" when whole), a whole number from ten, rounded
-down.
+`ui::stage_marks` draws the same strip as 12px squares in a line of words.
 
 ### Status ramp
 
@@ -585,9 +577,9 @@ draws:
 - **The One Blue Rule.** Blue fills only what runs now.
 
 **The summary sentence** (`ui::summary_sentence`): "1 question for you. 1 failed, 1
-cancelled. 3 units at work: 1 quiet for 53m, 1 at 2.1× its usual time. 2 waiting. 3 of 10 units done; the last finished 57m ago." It names no unit: quiet runs
-and overruns are counted, the furthest said ("8 past their usual time, the furthest at 9.8×"),
-and the rows under it name them. The units at work are counted, not split by recipe
+cancelled. 3 units at work: 1 quiet for 53m. 2 waiting. 3 of 10 units done; the last finished
+57m ago." It names no unit: quiet runs are counted, the longest said ("3 quiet, the longest for
+1h 6m"), and the rows under it name them. The units at work are counted, not split by recipe
 (Running's groups say which recipe made them), each part is left out
 when it has nothing to say, and the question links to where it is answered, under a coral
 underline. A quiet run's time ticks on the page.
@@ -728,15 +720,14 @@ The pages compose these parts; each lane that redraws one writes its section her
   - **Running**, quiet first then the longest running, and **Waiting**, in plan order, as rows:
     a block a recipe (its name, linking to every unit it made, its count by state, its stages
     as the columns over its rows), then the units of no recipe and the loose steps. A row (72 to
-    88px at 1440) is the unit's trace button: its glyph and word, how long it has run against
-    its usual time ("1h 51m, usually 21m", how long silent when quiet) and the overrun chip past
-    twice it, then its title, two lines at most; under it one line, what holds a waiting unit
+    88px at 1440) is the unit's trace button: its glyph and word, how long it has run ("1h 51m",
+    and how long silent when quiet), then its title, two lines at most; under it one line, what holds a waiting unit
     (each source by title, linked, and what it is doing) or the recipe's `view` (else its last
     message, its sender in words); its cells close beside it, sized to them, on the recipe's
     columns (a unit of no recipe its own small graph, a loose step one cell); its Details at
     the end. Selecting a row opens its steps, last message and actions in place.
-  - **The margin**: a long run alone (no recipe, reporting progress, or past four times the
-    longest usual time) as the sky module in the sheet's last two columns, down beside the
+  - **The margin**: a long run alone (no recipe, reporting progress, or running six hours or
+    more, `plan::LONG_RUN`) as the sky module in the sheet's last two columns, down beside the
     bands; its title opens the step in the drawer.
   - **Done**: its count and when the last finished; what finished last, the latest four by
     title with their clock time and how long they took (`ui::latest_list`); then the index
@@ -754,7 +745,7 @@ The pages compose these parts; each lane that redraws one writes its section her
 - **A step's page** (`/projects/id/<p>/steps/<s>`): under the row, its head (the gallery's
   Step head, `StepView::band`): its way back to its plan and its unit, its stage muted before
   its title at 28px with its Details (its id, unit, recipe, fn, run and tags), its state and how
-  long it has run against its usual time, its words, then its unit's stage strip (its own
+  long it has run, its words, then its unit's stage strip (its own
   stage ringed) and its actions, the next move filled: Retry with feedback as on the plan's
   Stopped cards (its box folded under it, Retry beside it), a cancel's quiet Dismiss. Why it failed reads in order: its headline, the words its run said and its last failed
   call, then the advice (ink at body size), then, when a failure repeated the run before, the
@@ -804,8 +795,7 @@ The pages compose these parts; each lane that redraws one writes its section her
   question: the coral swell; something stopped: the sand swell): its name at 46px, its
   state's glyph and size, its words, its summary sentence, a 9px square a unit (coral asks,
   sand needs a look, blue runs, an outline waits, sky done), its rows (questions, stopped
-  steps, running steps by title, "running for 1h 10m" against "usually 30m" or the overrun
-  chip), what it finished last by title and the way to its plan and its day. Then the Index, a
+  steps, running steps by title, "running for 1h 10m"), what it finished last by title and the way to its plan and its day. Then the Index, a
   table of every project's units by band, archived ones muted, its counts 10ch each so on a
   wide screen they stand together at the right; on a phone it drops Changed and Waiting so it
   fits without a hidden scroll, and its links and Today's are 44px targets.
@@ -821,13 +811,35 @@ The pages compose these parts; each lane that redraws one writes its section her
   chip when it needs a look, or "running 43m" on the blue, never wrapped; a line is at most
   480px, so its outcome stays by its name on a wide screen. Under 400px of frame the title takes
   a line of its own under the minute and outcome. A busy hour (more than six in a cell) lists
-  only its notable runs (not a success, an hour or longer, or past twice its stage's usual time
-  that day) and folds the successes behind a muted "+23 more succeeded, 1m to 12m" that opens
+  only its notable runs (not a success, still running, or an hour or longer) and folds the successes behind a muted "+23 more succeeded, 1m to 12m" that opens
   in place; a long list flows into columns as wide as the screen allows; four projects or more stack under each hour below
   1100px of content, every project below 640px. The current hour ends on the now rule and
   says what runs. `nav.js` keeps the reader's zone in a cookie and moves the rule and the
   running bars with the clock; the page's version is its runs, so it patches only when they
   change.
+- **Stats** (`/projects/id/<p>/stats`, `views::stats`): a project's numbers over a window, and
+  the one place a stage's usual time is said. The head: "Stats", its note how many runs ended
+  and units finished in the window ("on your clock" when it is not UTC); in the row the window
+  switch (24 hours, 7 days, the default, 30 days, All), the view-switch bar of links
+  (`?window=`), so it works without script. On the paper four band sections, each under its
+  3px navy rule: **Durations by stage**, a table a recipe in the project's recipe order (its
+  name, how many units and runs) with a row a stage in the recipe's order: how many of its runs
+  succeeded and their median, p90 and longest in data mono, then the median drawn as a sky-ink
+  bar inside its p90 in pale sky with a sky-ink edge, against the recipe's longest p90; the
+  units of no recipe and the loose steps last, "Without a recipe", a row a step (the busiest
+  first). A unit the plan has retired goes with the recipe whose stages hold every stage it ran
+  with the fewest left over. **Outcomes**, the same tables: succeeded, failed, cancelled,
+  retried (a second or later try of its step), the failure rate (in `sand-ink` when any
+  failed) and the failures by kind in words, from the failure classification. **Throughput**:
+  a sentence (finished, started, the busiest day) over a column a day (an hour for 24 hours, a
+  week for a long All) in sky-ink, the busiest in navy, its largest count and its first and
+  last dates in data mono, every count in a table for a screen reader. **The slowest runs**:
+  the ten longest that ended in the window, a row each: the duration in data mono, the unit's
+  title and its stage muted (linked to the step's runs, or its log once retired), its word on
+  the sand when it did not succeed, when it ended, and its ids behind its ⋯. Tables have fixed
+  columns so a recipe's lines up under the one before; under 760px of frame a row is a block,
+  its stage then its numbers in labelled cells. The page's version is what it draws (it reads
+  no clock but the window's edges), so its stream patches only when the runs change.
 - **Log** (`views::log`): the head says "Log" and, as its note, what the page shows ("42
   records on this page; the newest …"). The log is the records whole, so it keeps each record's
   seq and names its step by title with its id after it; under the head the presets as one

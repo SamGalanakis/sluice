@@ -688,8 +688,6 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 .sc-top:has(> .sc-word) { flex-wrap: wrap; row-gap: 1px; }
 .sc-top .sc-word { flex: 0 0 100%; font-size: 12px; }
 .sc-quiet { box-shadow: inset 0 0 0 2px var(--run); }
-.sc-over { position: absolute; top: 4px; right: 4px; padding: 0 4px; background: var(--sand);
-           color: var(--on-sand); font: 700 11px/16px var(--font-sans); }
 .sc-gap { grid-column: span var(--gap); flex-direction: row; align-items: center; gap: 8px;
           padding: 0; font-size: 12.5px; color: var(--ink-muted); }
 .sc-gap::before, .sc-gap::after { content: ""; flex: 1 1 8px; height: 1px; background: var(--rule); }
@@ -699,9 +697,6 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
                 transform: translateX(-100%); animation: tide 3.2s var(--ease-out) infinite; }
 @keyframes tide { 0% { transform: translateX(-100%); } 70% { transform: translateX(0); }
                   100% { transform: translateX(100%); } }
-.overrun { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px;
-           background: var(--sand); color: var(--on-sand); font-size: 12px; font-weight: 700;
-           line-height: 18px; white-space: nowrap; }
 .marks { display: inline-flex; gap: 3px; vertical-align: middle; }
 .mk { display: block; width: 12px; height: 12px; }
 .mk-done { background: var(--sky); box-shadow: inset 0 0 0 1.5px var(--sky-ink); }
@@ -1094,7 +1089,7 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--ink) 86%, var(--pa
 /* ---- a step's head (DESIGN.md, A step's page): on its own page the frame's head on the
    paper (`Frame::head`), in the drawer the top of the step. Its way back, its name at a reading
    size (its stage muted before its title) with its Details' "⋯", its state and how long it has
-   run against its usual time, its words, its unit's stages with its own ringed, its actions
+   run, its words, its unit's stages with its own ringed, its actions
    (the next move filled navy). ----------------------------------------------------------------- */
 .step-band { padding: 14px 0 10px; }
 .swell-look { --glyph-cut: var(--sand-pale); }
@@ -1112,14 +1107,7 @@ sluice-copy > button.copy { box-shadow: none; }
 .d-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 8px 0 0; }
 .step-band .d-badges .tag { height: 28px; padding: 0 10px; gap: 6px; font-size: 13.5px; }
 .step-band .d-badges .tag .g, .step-band .d-badges .tag .g svg { width: 15px; height: 15px; }
-.step-band .d-usual { font-size: 13.5px; }
-.step-band .d-usual.over { color: var(--ink); font-weight: 650; }
-/* a live overrun on a step's head and a unit's step: the attention fill, its own text on it; an
-   ended one (history) in plain ink */
-:is(.step-band, .u-step) .over-x { display: inline-flex; align-items: center; padding: 1px 6px;
-  background: var(--sand); color: var(--on-sand); font-size: 12.5px; font-weight: 700; }
 .step-band .d-when { font-size: 13.5px; }
-.step-band .d-when .over-x { padding: 0; background: none; color: var(--ink); font-weight: 600; }
 .step-band .d-doc { margin-top: 8px; font-size: 15px; line-height: 1.45; color: var(--ink-muted);
                     max-width: var(--measure); overflow-wrap: anywhere; display: -webkit-box;
                     -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
@@ -1760,12 +1748,6 @@ table.log td.what { position: relative; min-width: 14rem; width: 100%; padding-r
             border-radius: 0; background: var(--paper-2);
             font: 12.5px/18px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .run-file-end { margin: 8px 0 0; scroll-margin-bottom: 40vh; }
-/* a run past twice its stage's usual time: how many times, in the attention tone */
-.over-x { color: var(--sand-ink); font-weight: 600; font-variant-numeric: tabular-nums;
-          white-space: nowrap; }
-.d-badges .over-x { font-size: 13px; }
-/* an ended run's overrun is history, not a call to act: ink, not the attention gold */
-.d-when .over-x { color: var(--ink); font-weight: 500; }
 .log-x { margin-left: 2px; padding: 0 5px; border-radius: 999px; background: var(--paper-2);
          color: var(--ink-muted); font-size: 11.5px; font-weight: 600;
          font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -2138,14 +2120,6 @@ h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
 @media (max-width: 720px) {
   .focus-note > a:last-child { display: inline-flex; align-items: center; min-height: 44px; }
 }
-/* a running card whose stage usually takes so long (`data-usually`): how far along it is, a
-   faint line in running's blue along its foot, drawn by nav.js; full once past it. Never the
-   quiet gold, which says something else */
-.node:has(> time[data-usually])::after {
-  content: ""; position: absolute; left: 12px; bottom: 3px; height: 2px;
-  width: calc((100% - 24px) * var(--along, 0)); pointer-events: none;
-  background: color-mix(in srgb, var(--run-ink) 50%, transparent); }
-
 /* a button that reads as a quiet text action (Dismiss, Undo): an underline, no box */
 .text-button { min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--ink-muted);
                font: inherit; font-size: 13px; line-height: 18px; text-decoration: underline;
@@ -2376,8 +2350,7 @@ details.read-today .item { opacity: .85; }
 .pl-stop:focus-visible { outline: 2px solid var(--navy); outline-offset: 3px; }
 
 /* a band of rows: its head (a recipe's block head, or the band's own), then a row a unit. A row
-   is its head (its state, how long it has run against its usual time and its overrun, then its
-   title, on two lines at most), its one line under it (what it said last, or what holds it),
+   is its head (its state and how long it has run, then its title, on two lines at most), its one line under it (what it said last, or what holds it),
    its cells close beside it, each `--cell` wide, so a block's cells stand in their recipe's
    columns under the head's stage names, and its "⋯" at the end. */
 .pl-rows { row-gap: 0; }
@@ -2403,8 +2376,6 @@ details.read-today .item { opacity: .85; }
 /* a running or stopped cell's time a size its cell holds */
 .pl-cells .strip:not(.pl-layer .strip) :is(.sc-run, .sc-look) .sc-time {
   font-size: clamp(13px, calc(var(--cell) * 0.17), 19px); }
-/* a cell narrower than its overrun tag leaves it to the row's chip (its words stay for a reader) */
-@container sheet (max-width: 1199.98px) { .pl-cells .sc-over { display: none; } }
 /* a narrow lead (a board or the drawer beside the plan) keeps the title in sight: three lines
    for its state and its title together */
 @container sheet (max-width: 1199.98px) { .pl-head { -webkit-line-clamp: 3; } }
@@ -2417,13 +2388,12 @@ details.read-today .item { opacity: .85; }
 .pl-head { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
            font-size: 15.5px; line-height: 21px; }
 .pl-k { display: inline; margin-right: 4px; font-size: 13px; line-height: 21px; }
-.pl-k > :is(.pl-w, .pl-time, .overrun) { white-space: nowrap; }
+.pl-k > :is(.pl-w, .pl-time) { white-space: nowrap; }
 .pl-k b { font-weight: 750; margin-left: 4px; }
 .pl-k .g { display: inline-block; vertical-align: -2px; margin: 0; width: 14px; height: 14px; }
 .pl-k .g svg { width: 14px; height: 14px; }
 .pl-time { margin-left: 6px; font-weight: 650; }
-.pl-usual { color: var(--ink-muted); }
-.pl-k .overrun { margin-left: 6px; vertical-align: 1px; }
+.pl-note { color: var(--ink-muted); }
 .pl-k .trace-role { margin-right: 4px; }
 .pl-t { font-weight: 750; letter-spacing: -0.005em; }
 .pl-sub { max-width: var(--measure); font-size: 13px; line-height: 18px; color: var(--ink-muted);
@@ -3182,6 +3152,96 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
   .tt-name { grid-column: 1 / -1; grid-row: 2; }
 }
 
+/* ---- a project's stats (`views::stats`): durations by stage, outcomes, throughput and the
+   slowest runs over the window the row's switch picks. Tables under a 2px navy rule, numbers in
+   data mono with tabular figures; a stage's median a sky-ink bar inside its pale p90; the
+   throughput a column a bucket, the busiest in navy. Under 640px of frame a row is a block: its
+   stage, then its numbers in labelled cells. ------------------------------------------------- */
+.stats { display: grid; gap: 44px; min-width: 0; }
+/* a wide screen sets the sections two to a row: durations beside outcomes, throughput beside
+   the slowest runs; never longer lines */
+@container frame (min-width: 2000px) {
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--gutter, 48px); }
+}
+.st-sec { min-width: 0; }
+.st-group + .st-group { margin-top: 26px; }
+.st-gh { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin: 6px 0 8px;
+         font-size: 16px; font-weight: 750; line-height: 1.25; overflow-wrap: anywhere; }
+.st-gn { font-size: 13px; font-weight: 400; color: var(--ink-muted); }
+.st-t { width: 100%; table-layout: fixed; border-collapse: collapse; border-top: 2px solid var(--navy);
+        font-size: 13.5px; }
+/* fixed columns, so every group's table lines up under the one before it */
+.st-dur thead th:nth-child(n+2):nth-child(-n+5) { width: 5.5em; }
+.st-outcomes thead th:nth-child(n+2):nth-child(-n+6) { width: 6.5em; }
+.st-outcomes thead th:last-child { width: 26%; }
+.st-t :is(th, td) { padding: 7px 14px 7px 0; text-align: left; vertical-align: baseline;
+                    border-bottom: 1px solid var(--rule-faint); }
+.st-t :is(th, td):last-child { padding-right: 0; }
+.st-t thead th { font-size: 12px; font-weight: 650; line-height: 16px; color: var(--ink-muted);
+                 border-bottom-color: var(--rule); white-space: nowrap; }
+.st-t tbody th { font-weight: 750; overflow-wrap: anywhere; }
+.st-t .num { text-align: right; white-space: nowrap; font: 500 12.5px/18px var(--font-mono);
+             font-variant-numeric: tabular-nums; }
+.st-t thead .num { font-family: var(--font-sans); }
+.st-none { color: var(--ink-muted); }
+.st-t .st-bad { color: var(--sand-ink); font-weight: 700; }
+.st-kinds { font-size: 12.5px; color: var(--ink-muted); overflow-wrap: anywhere; }
+.st-dur .st-draw { width: 30%; }
+.st-bar { position: relative; display: block; height: 12px; }
+.st-bar > span { position: absolute; top: 0; left: 0; height: 100%; width: var(--w); min-width: 2px; }
+.st-p90 { background: var(--sky); box-shadow: inset 0 0 0 1px var(--sky-ink); }
+.st-med { background: var(--sky-ink); }
+.st-empty, .st-said { font-size: 14px; color: var(--ink-muted); max-width: var(--measure); }
+.st-said { color: var(--ink); font-size: 15px; }
+.st-spark { margin: 14px 0 0; max-width: max(280px, calc(var(--n) * 56px)); }
+.st-plot { position: relative; padding-top: 18px; }
+.st-plot svg { display: block; width: 100%; height: 88px; overflow: visible; }
+.st-top { position: absolute; top: 0; left: 0; font: 500 11px/14px var(--font-mono);
+          color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.st-col { fill: var(--sky-ink); }
+.st-most { fill: var(--navy); }
+.st-base { stroke: var(--rule); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.st-axis { display: flex; justify-content: space-between; gap: 12px; margin-top: 4px;
+           font: 500 11px/14px var(--font-mono); color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.st-slow { list-style: none; margin: 0; padding: 0; border-top: 2px solid var(--navy); }
+.st-run { display: grid; grid-template-columns: 6.5em minmax(0, 1fr) auto 11em 34px; align-items: baseline;
+          column-gap: 14px; padding: 8px 0; border-bottom: 1px solid var(--rule-faint); font-size: 14px;
+          line-height: 20px; }
+.st-took { font: 600 13px/20px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.st-name { min-width: 0; text-decoration: none; overflow-wrap: anywhere; display: -webkit-box;
+           -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.st-name b { font-weight: 750; }
+.st-name:hover { text-decoration: underline; }
+.st-stage { color: var(--ink-muted); }
+.st-out { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; font-size: 12.5px;
+          font-weight: 700; white-space: nowrap; background: var(--sand); color: var(--on-sand); }
+.st-out .g { width: 13px; height: 13px; margin: 0; color: var(--sand-mark); }
+.st-out .g svg { width: 13px; height: 13px; }
+.st-out.st-cancelled { background: none; color: var(--ink-muted); box-shadow: inset 0 0 0 1px var(--rule); }
+.st-out.st-cancelled .g { color: inherit; }
+.st-when { font: 500 12px/20px var(--font-mono); color: var(--ink-muted); white-space: nowrap;
+           font-variant-numeric: tabular-nums; }
+.st-run > .st-out { grid-column: 3; justify-self: end; }
+.st-run > .st-when { grid-column: 4; }
+.st-run > sluice-menu > .dm { grid-column: 5; justify-self: end; }
+@container frame (max-width: 759.98px) {
+  .st-t, .st-t tbody, .st-t tr { display: block; }
+  .st-t thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .st-t tr { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 10px;
+             padding: 8px 0; border-bottom: 1px solid var(--rule-faint); }
+  .st-outcomes tr { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .st-t :is(th, td) { padding: 0; border: 0; }
+  .st-t tbody th, .st-t .st-draw, .st-t .st-kinds { grid-column: 1 / -1; }
+  .st-t tbody th { margin-bottom: 4px; }
+  .st-t .st-draw { width: auto; margin-top: 6px; }
+  .st-t .st-kinds:not(:empty) { margin-top: 4px; }
+  .st-t .num { display: flex; flex-direction: column; text-align: left; }
+  .st-t .num::before { content: attr(data-k); font: 500 11px/14px var(--font-sans); color: var(--ink-muted); }
+  .st-run { grid-template-columns: 5.5em minmax(0, 1fr) 44px; row-gap: 4px; }
+  .st-run > :is(.st-out, .st-when) { grid-column: 2; justify-self: start; }
+  .st-run > sluice-menu > .dm { grid-column: 3; grid-row: 1; }
+}
+
 /* the pages lay out by the content's own width (rd-frame's contract: the page's content is
    the frame container, "a phone's content" is under 640px of it) */
 main { container: frame / inline-size; }
@@ -3269,7 +3329,6 @@ main { container: frame / inline-size; }
 .pm-row .sr-dismiss { grid-column: 2; margin: 2px 0 0; }
 .pm-row .text-button { box-shadow: none; min-height: 24px; }
 .pm-for { font-variant-numeric: tabular-nums; }
-.pm-usual { color: var(--ink-muted); }
 .pm-more { display: block; padding-left: 26px; font-size: 13px; }
 .pm-more a { color: var(--ink-muted); }
 .pm-done { margin-top: 14px; font-size: 13px; }

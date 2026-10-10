@@ -109,8 +109,8 @@ fn in_busy_hour(minute: u64) -> u64 {
     let start = (now() - 10 * 3600) / 3600 * 3600;
     now() - (start + minute * 60)
 }
-/// A busy hour of chores: eight water-plants successes of 2m, one of them past twice that
-/// (10m), a failed sort-mail and an hour-long file-receipts success.
+/// A busy hour of chores: eight water-plants successes of 2m and one of 10m, a failed
+/// sort-mail and an hour-long file-receipts success.
 async fn seed_busy_hour(f: &Fixture, chores: ProjectId) {
     for k in 0..8 {
         run(
@@ -161,20 +161,21 @@ async fn a_busy_hour_lists_its_notable_runs_and_folds_the_successes_in_place() {
     let page = get_with(&router, "/day", "sluice_zone=0").await;
     let cell = chores_cell(row(&page, &hour(in_busy_hour(0), 0)));
     let (listed, folded) = cell.split_once("<details").expect(cell);
-    // listed: the failure, the overrun (10m where water-plants usually takes 2m), the long one
-    assert_eq!(listed.matches("<li class=\"tt-run\">").count(), 3, "{cell}");
+    // listed: the failure and the one that took an hour or more; a success under an hour is
+    // folded however long its kind usually takes (a 10m water-plants among 2m ones)
+    assert_eq!(listed.matches("<li class=\"tt-run\">").count(), 2, "{cell}");
     assert!(
         listed.contains("<b>Sort the week&#39;s mail</b>"),
         "{listed}"
     );
     assert!(listed.contains("tt-failed"), "{listed}");
     assert!(listed.contains("<b>File the receipts</b>"), "{listed}");
-    assert!(listed.contains("10m</span>"), "{listed}");
-    // folded: the eight plain successes, behind "+8 more" that opens in place and keeps
-    // its state through a patch
+    assert!(!listed.contains("10m</span>"), "{listed}");
+    // folded: the nine successes under an hour, behind "+9 more" that opens in place and
+    // keeps its state through a patch
     assert!(
         folded.starts_with(&format!(
-            " class=\"tt-more\" id=\"tt-more-{}-{}\" data-preserve-attr=\"open\"><summary>+8 more succeeded, 2m to 2m</summary>",
+            " class=\"tt-more\" id=\"tt-more-{}-{}\" data-preserve-attr=\"open\"><summary>+9 more succeeded, 2m to 10m</summary>",
             (now() - 10 * 3600) / 3600 * 3600,
             n.chores
         )),
@@ -182,7 +183,7 @@ async fn a_busy_hour_lists_its_notable_runs_and_folds_the_successes_in_place() {
     );
     assert_eq!(
         folded.matches("<li class=\"tt-run\">").count(),
-        8,
+        9,
         "{folded}"
     );
     assert!(!folded.contains("tt-look"), "{folded}");
@@ -273,8 +274,12 @@ async fn home_puts_what_needs_the_owner_first_and_its_question_is_answered_in_pl
         almanac.contains("<li class=\"pm-row pm-running pm-quiet\">"),
         "{almanac}"
     );
-    // a run past its stage's usual time says how far
-    assert!(almanac.contains("× usual</span>"), "{almanac}");
+    // a running row says how long it has run and nothing of a usual time
+    assert!(
+        almanac.contains("running for <span class=\"pm-for\">"),
+        "{almanac}"
+    );
+    assert!(!almanac.contains("usual"), "{almanac}");
     assert!(almanac.contains("Finished last"), "{almanac}");
     // the stopped cancel is dismissed from here and comes back here
     assert!(
@@ -542,7 +547,7 @@ async fn the_day_patches_only_when_its_runs_change() {
     // a busy hour's runs: the patch folds its successes and lists what is notable
     seed_busy_hour(&f, n.chores).await;
     let wire = read_for(&mut body, Duration::from_secs(4)).await;
-    assert!(wire.contains("+8 more succeeded, 2m to 2m"), "{wire}");
+    assert!(wire.contains("+9 more succeeded, 2m to 10m"), "{wire}");
     // one more plain success joins the fold; a failure in that hour is listed
     run(
         &f,
@@ -554,7 +559,7 @@ async fn the_day_patches_only_when_its_runs_change() {
     )
     .await;
     let wire = read_for(&mut body, Duration::from_secs(4)).await;
-    assert!(wire.contains("+9 more succeeded, 2m to 2m"), "{wire}");
+    assert!(wire.contains("+10 more succeeded, 2m to 10m"), "{wire}");
     run(
         &f,
         n.chores,

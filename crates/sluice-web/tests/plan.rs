@@ -85,10 +85,9 @@ async fn every_unit_of_the_fixture_is_drawn_once_in_its_band_in_rank() {
         "{}",
         plan_html::row(&html, "s-3")
     );
-    // the overrun: its chip on the row, how far on its live cell, its usual time said
-    assert!(article.contains("class=\"overrun\""), "{article}");
-    assert!(article.contains(", usually "), "{article}");
-    assert!(plan_html::cell(&html, "a-6-draft").contains("sc-over"));
+    // a running row says how long it has run, never against a usual time
+    assert!(article.contains("<span class=\"pl-time\">"), "{article}");
+    assert!(!article.contains("usual"), "{article}");
     // the unit of no recipe: its two gathers fan in to its merge, a connector an edge
     let index = plan_html::row(&html, "index");
     assert!(index.contains("<div class=\"pl-graph\""), "{index}");

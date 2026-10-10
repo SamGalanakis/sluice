@@ -31,9 +31,7 @@ const FRAMES: &str = "new Promise(r=>requestAnimationFrame(()=>requestAnimationF
 fn every_cell_of_a_strip_says_its_state_in_words_and_shape() {
     let stages = [
         Stage::new("draft", Some(Shown::Succeeded)).took(1_500.0),
-        Stage::new("review", Some(Shown::Running))
-            .running_since("2026-10-10T00:00:00Z", 4_000.0)
-            .over(2.14),
+        Stage::new("review", Some(Shown::Running)).running_since("2026-10-10T00:00:00Z", 4_000.0),
         Stage::new("publish", None),
         Stage::new("check", Some(Shown::Failed)).took(60.0),
         Stage::new("hold", Some(Shown::Paused)),
@@ -57,11 +55,12 @@ fn every_cell_of_a_strip_says_its_state_in_words_and_shape() {
         html.contains("<li class=\"sc sc-run\" data-state=\"running\">"),
         "{html}"
     );
+    // a running cell says its state and its time, never against a usual time
     assert!(
-        html.contains("<span class=\"sc-over\" aria-hidden=\"true\">2.1×</span>"),
+        html.contains("<span class=\"vh\">: running</span>"),
         "{html}"
     );
-    assert!(html.contains(": running, 2.1× its usual time"), "{html}");
+    assert!(!html.contains("usual") && !html.contains("×"), "{html}");
     assert!(
         html.contains("<time data-since=\"2026-10-10T00:00:00Z\""),
         "{html}"
@@ -78,8 +77,6 @@ fn every_cell_of_a_strip_says_its_state_in_words_and_shape() {
         html.contains("<li class=\"sc sc-gap\" style=\"--gap:2\"><span>then the rest</span></li>"),
         "{html}"
     );
-    assert_eq!(ui::overrun(2.14).as_str().matches("2.1× usual").count(), 1);
-    assert_eq!(ui::ratio_text(12.4), "12×");
     let marks = ui::stage_marks("Stages of a-1", &stages[..3]);
     assert!(
         marks.as_str().contains(
@@ -307,7 +304,7 @@ async fn the_frame_draws_the_page_head_and_the_row_under_it_and_the_gallery_ever
         (
             "Summary sentence",
             &[
-                "<a class=\"ask\" href=\"#\">1 question for you</a>. 1 failed, 1 cancelled. 2 article units and 1 scan unit at work: 1 quiet for 53m, 1 at 2.1× its usual time. 2 waiting. 3 of 10 units done; the last finished",
+                "<a class=\"ask\" href=\"#\">1 question for you</a>. 1 failed, 1 cancelled. 3 units at work: 1 quiet for 53m. 2 waiting. 3 of 10 units done; the last finished",
             ][..],
         ),
         (
@@ -336,7 +333,6 @@ async fn the_frame_draws_the_page_head_and_the_row_under_it_and_the_gallery_ever
                 "sc sc-run",
                 "sc sc-look sc-quiet",
                 "sc sc-gap",
-                "class=\"overrun\"",
                 "class=\"marks\"",
             ][..],
         ),

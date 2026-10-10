@@ -3,8 +3,8 @@
 //!
 //! `almanac`, a team writing a field guide, has two recipes with different steps: `article`
 //! (draft → review → publish) and the one-step `scan`. Its units sit in every band: done ones
-//! (whose runs set each stage's usual time), a failed and a cancelled one, one running past its
-//! usual time, a quiet one, one whose step asks the owner a question, a wait chain across units
+//! (whose runs its Stats page measures), a failed and a cancelled one, one running longer than
+//! its stage's done runs took, a quiet one, one whose step asks the owner a question, a wait chain across units
 //! (a-8 after a-6, a-9 after a-8; s-5 after s-3), a unit of no recipe (`index`: two gathers
 //! fanning in to a merge), and a long run of no unit (`survey`) reporting progress fields.
 //! `chores` is a tiny project of three loose steps.
@@ -127,9 +127,11 @@ async fn plan(writer: &Writer, project: ProjectId, doc: Value, steps: Vec<Step>)
                     let (attempt, run) = (AttemptId::new(), RunId::new());
                     let start = ago(*started);
                     let end = took.map(|t| ago(started.saturating_sub(t)));
-                    let result = took.map(|_| {
-                        json!({"status": if s.status == "failed" { "failed" } else { "succeeded" }})
-                            .to_string()
+                    // a failed run's result carries its error, as the store writes it
+                    let result = took.map(|_| match (s.status, &s.error) {
+                        ("failed", Some(e)) => json!({"status": "failed", "error": e}).to_string(),
+                        ("failed", None) => json!({"status": "failed"}).to_string(),
+                        _ => json!({"status": "succeeded"}).to_string(),
                     });
                     tx.sql().execute(
                         "INSERT INTO attempts(attempt_id,project_id,step_id,generation,work_generation,phase,request,inputs_hash,created_at,finished_at) VALUES (?1,?2,?3,1,1,?4,'{}','hash',?5,?6)",
@@ -288,7 +290,7 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
             error: Some(broken),
             ..step("s-4-scan", "failed", &[(40 * M, Some(3 * M))])
         },
-        // running: a-6 past its usual time (about 2.3×), a-7 asking the owner, s-3 quiet
+        // running: a-6 longer than its stage's done runs took, a-7 asking the owner, s-3 quiet
         step("a-6-draft", "running", &[(70 * M, None)]),
         step("a-7-draft", "running", &[(20 * M, None)]),
         step("s-3-scan", "running", &[(3 * H, None)]),

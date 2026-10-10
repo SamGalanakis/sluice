@@ -21,6 +21,9 @@ use std::collections::BTreeSet;
 
 /// The grid every plan sits on.
 pub const GRID: &str = "plan-grid";
+/// A run of no recipe, alone in its unit, that has run this long (seconds) is a long run: the
+/// margin draws it, as it does one reporting progress.
+pub const LONG_RUN: f64 = 6.0 * 3600.0;
 
 /// Where a unit not done is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,11 +82,6 @@ fn elapsed(step: &StepView) -> Option<f64> {
     let t = step.timing.as_ref()?;
     (step.running() && t.finished.is_none()).then_some(t.seconds)
 }
-/// A running step past twice its stage's usual time: how many times that it has run.
-fn over(step: &StepView) -> Option<f64> {
-    let (usually, seconds) = (step.usually?, elapsed(step)?);
-    (step.overrun() && usually > 0.0).then_some(seconds / usually)
-}
 /// How long a quiet run has written nothing.
 fn quiet_secs(step: &StepView) -> Option<f64> {
     (step.shown() == Shown::Quiet)
@@ -103,9 +101,6 @@ fn stage_of(step: &StepView, name: &str) -> Stage {
     match (Cell::of(Some(shown)), step.timing.as_ref()) {
         (_, Some(t)) if step.running() && t.finished.is_none() => {
             stage = stage.running_since(t.started.clone(), t.seconds);
-            if let Some(ratio) = over(step) {
-                stage = stage.over(ratio);
-            }
         }
         (Cell::Done | Cell::Look, _) => {
             if let Some(t) = step.shown_timing() {
@@ -190,21 +185,15 @@ fn title(unit: &UnitView) -> &str {
 
 impl<'a> Plan<'a> {
     pub fn new(view: &'a ProjectView) -> Self {
-        // a run past any usual time by far, or reporting progress, of no recipe and alone in
-        // its unit, is a long run: the margin draws it
-        let longest = view.usual.values().copied().fold(0.0_f64, f64::max);
-        let long = if longest > 0.0 {
-            (4.0 * longest).max(2.0 * 3600.0)
-        } else {
-            6.0 * 3600.0
-        };
+        // a run reporting progress, or running `LONG_RUN` or more, of no recipe and alone in its
+        // unit, is a long run: the margin draws it
         let is_long = |unit: &UnitView| match unit.steps.as_slice() {
             // a quiet one needs a look: it leads Running instead
             [step] if unit.recipe.is_empty() && step.running() && step.shown() != Shown::Quiet => {
                 step.progress
                     .as_ref()
                     .is_some_and(|p| p.live && !p.fields.is_empty())
-                    || elapsed(step).is_some_and(|e| e > long)
+                    || elapsed(step).is_some_and(|e| e >= LONG_RUN)
             }
             _ => false,
         };
@@ -339,7 +328,6 @@ impl<'a> Plan<'a> {
                     name: u.id.to_string(),
                     recipe: u.recipe.clone(),
                     shown: Some(shown),
-                    over: step.and_then(over),
                     quiet,
                     quiet_since: if quiet.is_some() {
                         step.map(|s| s.active_at.clone()).unwrap_or_default()
@@ -596,9 +584,6 @@ impl<'a> Plan<'a> {
                         meta.push_str(" · ");
                     }
                     meta.push_str(&format!("running {run}"));
-                    if let Some(ratio) = over(step) {
-                        meta.push_str(&format!(" {}", ui::overrun(ratio)));
-                    }
                 }
                 let strip = if a.strip {
                     ui::stage_strip(&format!("Stages of {}", unit.heading()), &strip(unit)).0
@@ -685,23 +670,16 @@ impl<'a> Plan<'a> {
             close = ui::module_close(),
         )
     }
-    /// How long a running step has run against its usual time: "1h 15m, usually 21m" (ticking),
-    /// ", silent 42m" after it when it is quiet; "" when it is not running.
+    /// How long a running step has run: "1h 15m" (ticking), ", silent 42m" after it when it is
+    /// quiet; "" when it is not running.
     fn run_words(&self, step: &StepView) -> String {
         let Some(t) = step.timing.as_ref().filter(|_| step.running()) else {
             return String::new();
         };
         let mut words = format!("<span class=\"pl-time\">{}</span>", ui::since(&t.started));
-        let usually = step.usually_text();
-        if !usually.is_empty() {
-            words.push_str(&format!(
-                "<span class=\"pl-usual\">, {}</span>",
-                esc(&usually)
-            ));
-        }
         if step.shown() == Shown::Quiet && !step.active_at.is_empty() {
             words.push_str(&format!(
-                "<span class=\"pl-usual\">, silent {}</span>",
+                "<span class=\"pl-note\">, silent {}</span>",
                 ui::since(&step.active_at)
             ));
         }
@@ -1048,27 +1026,23 @@ impl<'a> Plan<'a> {
         }
         line
     }
-    /// One unit's row: its head (the trace's button: its state, how long it has run against
-    /// its usual time, its title), its one line under it, its cells beside it at their recipe's
+    /// One unit's row: its head (the trace's button: its state, how long it has run, its
+    /// title), its one line under it, its cells beside it at their recipe's
     /// columns, its "⋯" at the end, and what opens in place when it is traced.
     fn row_html(&self, unit: &UnitView) -> String {
         let shown = unit.shown();
         let step = current(unit);
         let mut state = String::new();
-        let mut chip = String::new();
         if let Some(step) = step {
             let run = self.run_words(step);
             if !run.is_empty() {
                 state = run;
-                if let Some(ratio) = over(step) {
-                    chip = ui::overrun(ratio).0;
-                }
             } else if unit.steps.len() > 1 && shown.spec().band != Band::Running {
                 // its steps by state, when they stand apart ("1 succeeded · 5 pending"); one
                 // state for all its steps is the word before it already
                 let tally = unit.tally_words();
                 if tally.contains('·') {
-                    state = format!("<span class=\"pl-usual\">, {}</span>", esc(&tally));
+                    state = format!("<span class=\"pl-note\">, {}</span>", esc(&tally));
                 }
             }
         }
@@ -1095,7 +1069,7 @@ impl<'a> Plan<'a> {
             ui::stage_strip(&format!("Stages of {}", unit.heading()), &strip(unit)).0
         };
         format!(
-            "<div id=\"u-{id}\" class=\"pl-row rail-slot{g}\" style=\"--cells:{cells}\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-head\"><span class=\"pl-k\" id=\"k-u-{id}\"><span class=\"pl-w\">{role}{mark}<b>{word}</b></span> {state}{chip}</span> <span class=\"pl-t\">{title}</span></span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open the unit</a></div><div class=\"pl-cells\">{cells_html}</div><div class=\"pl-end\">{menu}</div>{more}{more_body}{more_end}</div>",
+            "<div id=\"u-{id}\" class=\"pl-row rail-slot{g}\" style=\"--cells:{cells}\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-head\"><span class=\"pl-k\" id=\"k-u-{id}\"><span class=\"pl-w\">{role}{mark}<b>{word}</b></span> {state}</span> <span class=\"pl-t\">{title}</span></span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open the unit</a></div><div class=\"pl-cells\">{cells_html}</div><div class=\"pl-end\">{menu}</div>{more}{more_body}{more_end}</div>",
             id = esc(unit.id.as_str()),
             g = if graph { " pl-graphed" } else { "" },
             attrs = self.attrs(unit),

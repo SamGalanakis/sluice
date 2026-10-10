@@ -223,8 +223,6 @@ pub struct Stage {
     pub seconds: Option<f64>,
     /// When its running run started, so the page ticks its elapsed time.
     pub since: String,
-    /// Its run against its stage's usual time, when past it ("2.1×").
-    pub over: Option<f64>,
     /// Its step's page.
     pub href: String,
     /// A note across this and the cells after it ("waits for review"): `cols` cells wide.
@@ -255,10 +253,6 @@ impl Stage {
     pub fn running_since(mut self, at: impl Into<String>, seconds: f64) -> Self {
         self.since = at.into();
         self.seconds = Some(seconds);
-        self
-    }
-    pub fn over(mut self, ratio: f64) -> Self {
-        self.over = Some(ratio);
         self
     }
     pub fn href(mut self, href: impl Into<String>) -> Self {
@@ -316,32 +310,6 @@ impl Cell {
         format!("sc sc-{}", self.key())
     }
 }
-/// How many times its usual time a run has taken, the one rule every page says it by (a stage's
-/// cell, the overrun chip, a step's band and timer, the summary sentence): "2.1×", one decimal
-/// below ten ("5×" when it is whole) and a whole number from ten, each rounded down, so no two
-/// places disagree and none says more than it has run.
-pub fn ratio_text(ratio: f64) -> String {
-    let r = if ratio >= 10.0 {
-        ratio.floor()
-    } else {
-        (ratio * 10.0).floor() / 10.0
-    };
-    // a whole number without its ".0": "5×"
-    if r.fract() == 0.0 {
-        format!("{r:.0}×")
-    } else {
-        format!("{r:.1}×")
-    }
-}
-/// The overrun chip: a running step past its stage's usual time, "2.1× usual", on the sand
-/// with the timer, said whole for a screen reader.
-pub fn overrun(ratio: f64) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<span class=\"overrun\" title=\"{r} its usual time\">{}<span>{r} usual</span></span>",
-        icon(Icon::Timer, 12, ""),
-        r = ratio_text(ratio)
-    ))
-}
 /// A unit's stages as a strip of cells, one a stage in recipe order (DESIGN.md, Status
 /// presentation): never colour alone, each cell carries its glyph or its words, and the strip
 /// is a list named `label` ("Stages of a-12"). A cell with a page links to it.
@@ -392,21 +360,10 @@ pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
                 esc(state)
             ),
             Cell::Run => format!(
-                "<span class=\"sc-top\"><span class=\"sc-name\">{}</span>{}</span>{}<span class=\"vh\">: {}{}</span><span class=\"sweep\" aria-hidden=\"true\"></span>",
+                "<span class=\"sc-top\"><span class=\"sc-name\">{}</span></span>{}<span class=\"vh\">: {}</span><span class=\"sweep\" aria-hidden=\"true\"></span>",
                 esc(&stage.name),
-                stage
-                    .over
-                    .map(|r| format!(
-                        "<span class=\"sc-over\" aria-hidden=\"true\">{}</span>",
-                        ratio_text(r)
-                    ))
-                    .unwrap_or_default(),
                 stage.seconds.map(time).unwrap_or_default(),
                 esc(state),
-                stage
-                    .over
-                    .map(|r| format!(", {} its usual time", ratio_text(r)))
-                    .unwrap_or_default(),
             ),
             Cell::Look => {
                 let shown = stage.shown.expect("a look has a state");
@@ -506,8 +463,6 @@ pub struct UnitFact {
     pub recipe: String,
     /// The unit's state: its steps' first in the status table's order.
     pub shown: Option<Shown>,
-    /// Its running step against its stage's usual time, when past it.
-    pub over: Option<f64>,
     /// How long its quiet run has written nothing, seconds.
     pub quiet: Option<f64>,
     /// When its quiet run last wrote (RFC 3339), so "quiet for 53m" ticks on the page and a
@@ -515,7 +470,7 @@ pub struct UnitFact {
     pub quiet_since: String,
 }
 /// What the summary sentence says (`summary_sentence`): built from the status table's
-/// counts, overruns, quiet runs and open questions alone, naming recipes by their own names.
+/// counts, quiet runs and open questions alone, naming recipes by their own names.
 #[derive(Clone, Debug, Default)]
 pub struct Summary<'a> {
     /// Open questions to the owner that someone waits on, and where they are answered.
@@ -527,9 +482,8 @@ pub struct Summary<'a> {
     /// What a unit is called in the count ("unit", "units").
     pub noun: (&'a str, &'a str),
 }
-/// The summary sentence under the page's name: "1 question for you. 1 failed, 1 cancelled. 2
-/// article units and 1 scan unit at work: 1 quiet for 53m, 1 at 2.1× its usual time. 4
-/// waiting. 11 of 19 units done; the last finished 57m ago." It counts and names no unit (the
+/// The summary sentence under the page's name: "1 question for you. 1 failed, 1 cancelled. 3
+/// units at work: 1 quiet for 53m. 4 waiting. 11 of 19 units done; the last finished 57m ago." It counts and names no unit (the
 /// rows do). Each part left out when it has nothing to say; "Nothing has started yet." for a
 /// plan with no work at all.
 pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
@@ -568,19 +522,13 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
     if !running.is_empty() {
         // how many: which recipe made them is the Running section's groups, not the sentence's
         let who = count(running.len(), one, many);
-        // the quiet ones and those past their usual time, counted, the longest quiet and the
-        // furthest over said: the units are named on their rows, not here
+        // the quiet ones counted and the longest quiet said: the units are named on their
+        // rows, not here
         let mut quiet: Vec<(&UnitFact, f64)> = running
             .iter()
             .filter_map(|u| u.quiet.map(|q| (*u, q)))
             .collect();
         quiet.sort_by(|a, b| b.1.total_cmp(&a.1));
-        let over: Vec<f64> = running
-            .iter()
-            .filter(|u| u.quiet.is_none())
-            .filter_map(|u| u.over)
-            .collect();
-        let furthest = over.iter().copied().fold(0.0_f64, f64::max);
         // since it went quiet, ticking, when the page knows when that was
         let quiet_for = |unit: &UnitFact, secs: f64| {
             if unit.quiet_since.is_empty() {
@@ -589,26 +537,16 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
                 since(&unit.quiet_since).0
             }
         };
-        let mut notes: Vec<String> = vec![];
-        match quiet.as_slice() {
-            [] => {}
-            [(u, q)] => notes.push(format!("1 quiet for {}", quiet_for(u, *q))),
-            [(u, q), ..] => notes.push(format!(
-                "{} quiet, the longest for {}",
+        let note = match quiet.as_slice() {
+            [] => String::new(),
+            [(u, q)] => format!(": 1 quiet for {}", quiet_for(u, *q)),
+            [(u, q), ..] => format!(
+                ": {} quiet, the longest for {}",
                 quiet.len(),
                 quiet_for(u, *q)
-            )),
-        }
-        match over.len() {
-            0 => {}
-            1 => notes.push(format!("1 at {} its usual time", ratio_text(furthest))),
-            n => notes.push(format!(
-                "{n} past their usual time, the furthest at {}",
-                ratio_text(furthest)
-            )),
-        }
-        let lead = if notes.is_empty() { "" } else { ": " };
-        parts.push(format!("{} at work{lead}{}.", esc(&who), notes.join(", ")));
+            ),
+        };
+        parts.push(format!("{} at work{note}.", esc(&who)));
     }
     if waiting > 0 {
         parts.push(format!("{waiting} waiting."));
@@ -860,7 +798,7 @@ pub fn clock(at: &str) -> TrustedHtml {
 
 // ---- the margin module: a long run's progress ------------------------------------------------
 
-/// A step whose run has gone on far past any usual time, or reports progress (`step_progress`):
+/// A step whose run has gone on for hours, or reports progress (`step_progress`):
 /// its fields as it reported them, never read or named by sluice.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LongRun {
@@ -1215,20 +1153,19 @@ mod tests {
 
     #[test]
     fn the_summary_says_only_what_the_counts_say() {
-        let unit = |recipe: &str, shown, over, quiet| UnitFact {
+        let unit = |recipe: &str, shown, quiet| UnitFact {
             recipe: recipe.into(),
             shown: Some(shown),
-            over,
             quiet,
             ..UnitFact::default()
         };
         let units = [
-            unit("article", Shown::Failed, None, None),
-            unit("article", Shown::Cancelled, None, None),
-            unit("article", Shown::Running, Some(2.14), None),
-            unit("scan", Shown::Quiet, None, Some(3180.0)),
-            unit("article", Shown::Pending, None, None),
-            unit("article", Shown::Succeeded, None, None),
+            unit("article", Shown::Failed, None),
+            unit("article", Shown::Cancelled, None),
+            unit("article", Shown::Running, None),
+            unit("scan", Shown::Quiet, Some(3180.0)),
+            unit("article", Shown::Pending, None),
+            unit("article", Shown::Succeeded, None),
         ];
         let html = summary_sentence(&Summary {
             asks: 1,
@@ -1239,7 +1176,7 @@ mod tests {
         });
         assert_eq!(
             html.as_str(),
-            "<a class=\"ask\" href=\"#for-you\">1 question for you</a>. 1 failed, 1 cancelled. 2 units at work: 1 quiet for 53m, 1 at 2.1× its usual time. 1 waiting. 1 of 6 units done."
+            "<a class=\"ask\" href=\"#for-you\">1 question for you</a>. 1 failed, 1 cancelled. 2 units at work: 1 quiet for 53m. 1 waiting. 1 of 6 units done."
         );
         assert_eq!(
             summary_sentence(&Summary::default()).as_str(),
@@ -1248,34 +1185,19 @@ mod tests {
     }
 
     #[test]
-    fn one_rule_says_how_far_past_its_usual_time_a_run_is() {
-        // one decimal below ten, a whole number from ten, each rounded down: a cell, a chip
-        // and a step's head never say "20×" beside "19×"
-        assert_eq!(ratio_text(2.19), "2.1×");
-        assert_eq!(ratio_text(4.5), "4.5×");
-        assert_eq!(ratio_text(9.99), "9.9×");
-        assert_eq!(ratio_text(5.0), "5×");
-        assert_eq!(ratio_text(10.0), "10×");
-        assert_eq!(ratio_text(19.7), "19×");
-        assert!(overrun(19.7).as_str().contains("<span>19× usual</span>"));
-    }
-
-    #[test]
-    fn a_busy_summary_counts_its_overruns_and_quiet_runs_and_names_no_unit() {
-        let run = |recipe: &str, over: Option<f64>, quiet: Option<f64>| UnitFact {
+    fn a_busy_summary_counts_its_quiet_runs_and_names_no_unit() {
+        let run = |recipe: &str, quiet: Option<f64>| UnitFact {
             recipe: recipe.into(),
             shown: Some(if quiet.is_some() {
                 Shown::Quiet
             } else {
                 Shown::Running
             }),
-            over,
             quiet,
             ..UnitFact::default()
         };
-        let ratios = [5.7, 2.2, 9.8, 3.1, 1.6, 4.0, 2.5, 1.2];
-        let mut units: Vec<UnitFact> = ratios.iter().map(|r| run("lane", Some(*r), None)).collect();
-        units.push(run("", Some(1.1), None));
+        let mut units: Vec<UnitFact> = (0..8).map(|_| run("lane", None)).collect();
+        units.push(run("", None));
         let says = |units: &[UnitFact]| {
             summary_sentence(&Summary {
                 units,
@@ -1285,20 +1207,17 @@ mod tests {
             .as_str()
             .to_owned()
         };
-        assert_eq!(
-            says(&units),
-            "9 units at work: 9 past their usual time, the furthest at 9.8×."
-        );
+        assert_eq!(says(&units), "9 units at work.");
         units.extend([
-            run("lane", None, Some(600.0)),
-            run("lane", None, Some(4000.0)),
-            run("lane", None, Some(120.0)),
+            run("lane", Some(600.0)),
+            run("lane", Some(4000.0)),
+            run("lane", Some(120.0)),
         ]);
         assert_eq!(
             says(&units),
-            "12 units at work: 3 quiet, the longest for 1h 6m, 9 past their usual time, the furthest at 9.8×."
+            "12 units at work: 3 quiet, the longest for 1h 6m."
         );
-        assert_eq!(says(&[run("", None, None)]), "1 unit at work.");
+        assert_eq!(says(&[run("", None)]), "1 unit at work.");
     }
 
     #[test]
