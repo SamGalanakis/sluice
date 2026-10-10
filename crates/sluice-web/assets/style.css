@@ -1181,11 +1181,11 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--ink) 86%, var(--pa
 :is(.step-band, .unit-band) .sc-done { --glyph-cut: var(--sky); }
 :is(.step-band, .unit-band) .sc-look { --glyph-cut: var(--sand); }
 .swell-look { --glyph-cut: var(--sand-pale); }
-.site-head .crumbs { margin: 0 0 16px; color: var(--band-muted); }
-.site-head .d-stage { color: var(--band-muted); }
+:is(.site-head, .step-band) .crumbs { margin: 0 0 16px; color: var(--band-muted); }
+:is(.site-head, .step-band) .d-stage { color: var(--band-muted); }
 sluice-copy > button.copy { box-shadow: none; }
-.site-head .crumbs a { color: var(--band-muted); }
-.site-head .crumbs a:hover { color: var(--band-ink); text-decoration: underline;
+:is(.site-head, .step-band) .crumbs a { color: var(--band-muted); }
+:is(.site-head, .step-band) .crumbs a:hover { color: var(--band-ink); text-decoration: underline;
                              text-decoration-color: var(--band-accent); }
 .sb-top { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); align-items: end;
           column-gap: var(--col-gap); row-gap: 18px; }
@@ -1379,6 +1379,15 @@ ol.now-calls > li > a:hover { background: var(--paper-2); }
 ol.now-calls > li > a:hover .act-key { color: var(--ink); }
 ol.now-calls > li.is-failed .act-key { color: var(--ink); }
 .now-call .act-end .g { color: var(--run-ink); }
+:is(.now-call, ol.now-calls > li > a) .act-end { white-space: nowrap; }
+.d-now .now-turn { max-width: 132ch; }
+/* a phone: each call's tool and time on a line, its key argument under them */
+@media (max-width: 760px) {
+  .now-call, ol.now-calls > li > a { grid-template-columns: 16px minmax(0, 1fr) auto; row-gap: 2px;
+                                    padding: 6px 8px; min-height: 44px; }
+  :is(.now-call, ol.now-calls > li > a) .act-key { grid-column: 2 / -1; grid-row: 2; order: 0;
+                                                   flex-basis: auto; padding-left: 0; }
+}
 .d-now > .now-quiet { display: flex; align-items: center; gap: 6px; margin: 0 0 10px;
                       font-weight: 650; color: var(--sand-ink); }
 .d-now .now-retry { margin-top: 14px; padding: 10px 12px; background: var(--paper-2); }

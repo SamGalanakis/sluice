@@ -667,3 +667,64 @@ async fn a_message_turn_whose_file_is_gone_reads_back_from_its_message() {
         );
     }
 }
+
+/// In Chromium a running step's Now reads its live turn on the grid: its last words, its calls
+/// by tool as tiles (each tool named as the transcript names it) and its latest calls, each a
+/// link into Activity; nothing scrolls sideways at a phone's width or a wide screen's.
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_a_running_steps_now_reads_its_live_turn_on_the_grid() {
+    let f = fixture("claude", "running").await;
+    let upto = f
+        .laid
+        .lines
+        .iter()
+        .position(|l| l.contains("messages/138999.md"))
+        .unwrap();
+    f.laid.write(upto);
+    let router = f.app.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let page = format!("http://{addr}{}", f.page());
+    tokio::task::spawn_blocking(move || {
+        let screens = std::env::var_os("SLUICE_ACTIVITY_SCREENS").map(std::path::PathBuf::from);
+        let mut browser = chrome::Chrome::open(&page).unwrap();
+        let ready = "document.readyState === 'complete' && document.querySelector('#tp-overview .d-now .now-turn')";
+        browser.wait(ready).unwrap();
+        for width in [390, 1440, 2560] {
+            for theme in ["light", "dark"] {
+                browser.viewport(width, theme).unwrap();
+                browser.navigate(&page).unwrap();
+                browser.wait(ready).unwrap();
+                let g = browser
+                    .eval("(() => { const now = document.querySelector('#tp-overview .d-now'), tiles = [...now.querySelectorAll('.now-tools > li')], calls = now.querySelectorAll('.now-calls a[data-tab-to=activity]'); return {tiles: tiles.length, named: tiles.every(t => t.querySelector('.nt-tool').textContent.trim().length > 0 && /^[0-9]+$/.test(t.querySelector('.nt-n').textContent)), calls: calls.length, last: !!now.querySelector('.now-call')?.checkVisibility(), scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth}; })()")
+                    .unwrap();
+                let label = format!("{width} {theme}");
+                assert!(g["tiles"].as_u64().unwrap() >= 1, "{label}: {g}");
+                assert_eq!(g["named"], true, "{label}: {g}");
+                assert!(g["calls"].as_u64().unwrap() >= 1, "{label}: {g}");
+                assert_eq!(g["last"], true, "{label}: {g}");
+                assert_eq!(g["scroll"], 0, "{label}: sideways {g}");
+                if let Some(dir) = &screens {
+                    browser
+                        .screenshot(&dir.join(format!("step-running-{width}-{theme}.png")))
+                        .unwrap();
+                }
+            }
+        }
+        // a latest call opens Activity on it
+        browser.viewport(1440, "light").unwrap();
+        browser.navigate(&page).unwrap();
+        browser.wait(ready).unwrap();
+        browser
+            .eval("document.querySelector('#tp-overview .now-calls a').click()")
+            .unwrap();
+        browser
+            .wait("document.querySelector('#activity').checkVisibility()")
+            .unwrap();
+        assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), serde_json::json!([]));
+    })
+    .await
+    .unwrap();
+    server.abort();
+}

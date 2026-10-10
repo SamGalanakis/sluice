@@ -583,6 +583,65 @@ fn band_part(prefix: &str) -> TrustedHtml {
         ui::recent_strip(&format!("{prefix}rf"), "Newest first. 5 in the last three hours.", &finished),
     ))
 }
+/// A step's band (`StepView::band`): a review stage of an invented article, failed on its
+/// second run, its unit's three stages with its own ringed, Retry its next move.
+fn step_band_part(prefix: &str) -> Result<TrustedHtml, askama::Error> {
+    use sluice_model::commands::StepStatus;
+    use sluice_model::gates::{StateSnapshot, StepState};
+    use sluice_model::plan::{FnSignature, Plan, SignatureProvider};
+    struct Open;
+    impl SignatureProvider for Open {
+        fn signature(&self, _: &str) -> Option<FnSignature> {
+            Some(FnSignature {
+                open: true,
+                ..Default::default()
+            })
+        }
+    }
+    let plan = Plan::parse_json(
+        br#"{"steps":{"a-12-review":{"run":"custom.open","doc":"Terns: the spring guide's entries\n\nCheck each entry against the regional checklist and the photograph credits."}}}"#,
+        &Open,
+    )
+    .map_err(|e| askama::Error::Custom(format!("{e:?}").into()))?;
+    let mut state = StateSnapshot::default();
+    state.steps.insert(
+        "a-12-review".parse().expect("a step id"),
+        StepState {
+            status: StepStatus::Failed,
+            ..Default::default()
+        },
+    );
+    let mut step = super::step::StepView::new(
+        ProjectId::new(),
+        &plan,
+        &state,
+        &"a-12-review".parse().expect("a step id"),
+    );
+    step.title = "Terns: the spring guide's entries".into();
+    step.stage = "review".into();
+    step.lane_unit = "a-12".into();
+    step.lane_recipe = "article".into();
+    step.lane = vec![
+        ui::Stage::new("draft", Some(Shown::Succeeded)).took(1_680.0),
+        ui::Stage::new("review", Some(Shown::Failed))
+            .took(1_080.0)
+            .href(step.href()),
+        ui::Stage::new("publish", Some(Shown::Blocked)),
+    ];
+    let band = step.band("almanac", Some(("a-12", "Terns: the spring guide's entries")))?;
+    // each copy keeps its ids (the feedback box, the dialogs) apart
+    let html = band
+        .as_str()
+        .replacen(" id=\"step-band\"", "", 1)
+        .replacen(" id=\"d-title\"", "", 1)
+        .replace(" id=\"", &format!(" id=\"{prefix}"))
+        .replace(" for=\"", &format!(" for=\"{prefix}"))
+        .replace(" aria-labelledby=\"", &format!(" aria-labelledby=\"{prefix}"))
+        .replace(" aria-describedby=\"", &format!(" aria-describedby=\"{prefix}"))
+        .replace(" aria-controls=\"", &format!(" aria-controls=\"{prefix}"))
+        .replace(" data-dialog=\"", &format!(" data-dialog=\"{prefix}"));
+    Ok(TrustedHtml::owned(format!("<div class=\"gal-band\">{html}</div>")))
+}
 fn margin_part() -> TrustedHtml {
     let run = ui::LongRun {
         name: "survey".into(),
@@ -680,6 +739,7 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     };
     add("Status", "Each state a step, unit or project can be in: its glyph, its word and what it means. The same glyph and word on every page.", "`ui::status`, `ui::glyph` or `ui::mark`, from the status table.", both(&|_| Ok(statuses()))?);
     add("The band", "The navy title band at the top of a page: the page's name huge on the grid, its words and its summary sentence beside it, and under them what finished most recently, newest first. The sentence says only what the counts say: questions for you, what stopped, what runs (named by recipe, quiet first, then past its usual time), what waits and how much is done.", "`ui::band_head` and `ui::recent_strip` in `Frame::head` (`render_framed`); `ui::summary_sentence` from `ui::UnitFact`s.", both(&|p| Ok(band_part(p)))?);
+    add("Step band", "A step's own page carries it in the band: its way back, its stage muted before its title set huge, its id, its state, run and usual time, its words, its unit's stages with its own ringed, and its actions on the navy, the next move filled cream. In the drawer the same band heads the step a size down.", "`StepView::band` (`templates/step_band.html`) in `Frame::head`, the region a step's stream patches as `step-band`; `ui::stage_strip_at`.", both(&|p| step_band_part(p))?);
     add("Summary sentence", "One sentence from the counts alone, with the question for you linked first.", "`ui::summary_sentence`.", both(&|_| Ok(summary_part()))?);
     add("Module grid", "Twelve columns that every module spans, fluid at every width: six on a narrow sheet (every module across it), a module half or whole on a medium one, and twenty-four from 2000px, where a module keeps its share or halves so two whole-width ones stand side by side. Show grid draws the construction under the modules: each column tinted and numbered, each module's span in its corner, as the sheet has them now.", "`ui::grid_open`, `ui::module_open`, `ui::module_open_wide` with `ui::Wide`, `ui::grid_toggle` (`sluice-grid`).", both(&|p| Ok(grid_part(p)))?);
     add("Modules", "A module is a unit (or a question, or a step) on the grid. The one that needs you swells: a question to you under the coral rule, its title a size up; a stopped one sits on the sand.", "`ui::module_open` with `ui::Swell`, `.mod-k`, `.mod-t`, `.mod-meta`, `.mod-body`, `.mod-actions`.", both(&|_| Ok(modules_part()))?);
@@ -707,7 +767,7 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Themes", "Each theme the display preferences offer, in light and dark: a well-loved colour scheme mapped onto sluice's roles, so its band is its deepest surface, its blue (or its nearest) runs, its done is calm, its yellow wants a look and one colour of its own asks you a question. Americana, the logo's palette, is the default.", "`data-theme` and `data-appearance` on the page (cookies `sluice_theme`, `sluice_appearance`); the tokens in `style.css`.", both(&|_| Ok(themes_part()))?);
     add("Components", "For whoever builds a page: every component, the attributes it reads and what it does. The server draws everything in it; the component only behaves.", "Rocket components in `components.js`, light DOM.", (components(), TrustedHtml::default()));
     for part in &mut parts {
-        part.wide = matches!(part.name, "Themes" | "The band" | "Module grid" | "Modules" | "Section heads" | "Trace");
+        part.wide = matches!(part.name, "Themes" | "The band" | "Step band" | "Module grid" | "Modules" | "Section heads" | "Trace");
     }
     Ok(parts)
 }

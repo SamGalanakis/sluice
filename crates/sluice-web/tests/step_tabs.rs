@@ -449,6 +449,7 @@ async fn the_kit_gallery_draws_every_part_in_both_themes() {
     for part in [
         "Status",
         "The band",
+        "Step band",
         "Summary sentence",
         "Module grid",
         "Modules",
@@ -481,12 +482,12 @@ async fn the_kit_gallery_draws_every_part_in_both_themes() {
     assert_eq!(
         html.matches("<div class=\"gal-th\" data-appearance=\"light\">")
             .count(),
-        27
+        28
     );
     assert_eq!(
         html.matches("<div class=\"gal-th\" data-appearance=\"dark\">")
             .count(),
-        27
+        28
     );
     // its two copies keep their ids apart
     let mut ids: Vec<&str> = html
