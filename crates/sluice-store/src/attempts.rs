@@ -347,7 +347,7 @@ pub fn reserve(
     // takes messages on its live feed unless this run's frozen inputs turn it off.
     let listens = step.signature.inputs.contains_key("listen")
         && request.inputs.0.get("listen").map(|v| v.as_value()) != Some(&Value::Bool(false));
-    let frozen = json!({"declaration":plans::wire_step(&context.plan,&step.id)?,"inputs":request.inputs,"effective_inputs":effective,"returns":returns,"declared":declared,"item_count":request.item_count,"provenance":request.provenance,"listens":listens});
+    let frozen = json!({"declaration":plans::step_declaration(tx.sql(),context.project,&step.id)?,"inputs":request.inputs,"effective_inputs":effective,"returns":returns,"declared":declared,"item_count":request.item_count,"provenance":request.provenance,"listens":listens});
     let compatible = !scatter
         || old_hash.as_deref() == Some(&request.inputs_hash.to_string())
             && old_total == request.item_count.map(plans::sql_counter).transpose()?;

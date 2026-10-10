@@ -34,7 +34,7 @@ file round-trips through its type. Change one, change both.
 |---|---|
 | Readers require exactly 23 tables | **Confirmed.** `schema.rs::verify_schema` refuses any count but 23 (`home_meta` … `notification_attempts`, `sqlite_%` excluded), for readers and writers alike, and refuses a `schema_version` other than 1 (a writer also takes 2). Any new table, or schema 3, makes every older binary refuse the home: the cutover is necessarily incompatible. |
 | Schema 2 is the historical board interim | **Confirmed.** `48800ff` shipped the board columns as schema 2; `c554868` returned to 1 and made the writer mark a schema-2 home as 1 (`BOARD_INTERIM_SCHEMA`). 3 is the next free version. |
-| The initializer stores `{"steps":{}}` | **Confirmed.** Project creation (the coordinator's `ProjectCreate`) uses `projects::EmptyPlanInitializer`: `plans.doc` is `{"steps":{}}`, `plan_edits` rev 1 has `ops` `[]` and reason `project created`, and a `plan.edit` record with empty `ops` is written. SPEC §6.1 and `docs/agent/plans.md` say a new plan is `{"inputs": {}, "outputs": {}, "steps": {}}`, which the code never produced. `plans::initialize_plan` (any plan at rev 1, no `plan_edits` row) is used only by tests and the dashboard fixture. |
+| The initializer stores `{"steps":{}}` | **Confirmed.** Project creation (the coordinator's `ProjectCreate`) uses `projects::EmptyPlanInitializer`: `plans.doc` is `{"steps":{}}`, `plan_edits` rev 1 has `ops` `[]` and reason `project created`, and a `plan.edit` record with empty `ops` is written. SPEC §6.1 and `docs/agent/plans.md` say a new plan is `{"inputs": {}, "outputs": {}, "steps": {}}`, which the code never produced. `plans::initialize_plan` (any plan at rev 1, no `plan_edits` row) is used by tests and the dashboard fixture, and was used by the Python home's importer: lash, figments and sluice on the live home have no rev-1 row (§10.4.1, round 3). |
 | `FrozenPlan` is used in completion only for project identity | **Confirmed, with a correction.** `attempts::complete_frozen` reads the admitted `PlanContext` only for `context.project != id.project`; outputs are checked against the attempt's frozen `returns` and `declared`. **Correction:** the snapshot is stored twice, at `attempts.request.provenance.runtime.completion` and at `attempts.provenance.runtime.completion` (the reservation copies `provenance` into both), and the coordinator's completion path (`coordinator.rs`, the `Callback` completion) fails the completion when the snapshot does not decode, so a schema-3 completion must stop reading it before any attempt lacks it. |
 | `plans.doc` readers | **Confirmed, with additions** the study missed (§9): `projects::last_retirement` reads `json_array_length(plan_edits.ops)`; `projects::project_delete` deletes from `plans` and `plan_edits` by name; `coordinator.rs`'s `EditLog` logs `preview.ops.len()`; `dispatch_ext.rs` builds an `EditPreview` for the input preview; `views/step.rs::load_detail` searches `plan.edit` payloads for the JSON pointer `/steps/<id>/paused` to say who paused a step; the public `edits` view is `SELECT * FROM plan_edits`, so its columns are a `query` contract. `naming.rs::for_project` reads `plans.doc` (the study is right that the brief missed it). |
 | Patch examples live in `threads.md` and the fn-helper docs | **Correction.** `plan_patch` appears in `docs/agent/{board,plans,instructions,examples}.md` and `docs/rust/schemas.json`; not in `threads.md`, and not in `python/`. |
@@ -2487,7 +2487,11 @@ into a schema-3 binary) converts nothing and is unchanged.
 - **Output:** the same file at schema 3, converted in **one transaction** (any failure leaves it
   untouched), then `PRAGMA integrity_check` and `foreign_key_check`.
 - **Report** (JSON with `--json`): `{from_schema, projects: [{project_id, name, revisions,
-  steps, inputs, outputs, records_rewritten, attempt_snapshots_removed}], warnings: [...]}`.
+  steps, inputs, outputs, records_rewritten, attempt_snapshots_removed, anchor}], anchored:
+  [{project_id, name, rev, folded_edits, source}], warnings: [...]}`. `anchor` is
+  `{rev, folded_edits, source}` for a project anchored by §10.4.1 (`source` `snapshot` or
+  `current`), else null; `anchored` lists those projects, and the cutover report (lane G)
+  lists each one's anchor rev and folded edits.
 
 ### 10.3 Preconditions (every conversion, checked inside the transaction)
 
@@ -2503,8 +2507,11 @@ into a schema-3 binary) converts nothing and is unchanged.
 
 1. History is complete: `plan_edits` revs are exactly `1 … plans.rev`; rev 1 has `ops` `[]`
    (its origin is `EmptyPlanInitializer`'s `{"steps":{}}`). A gap or another rev-1 origin is a
-   blocker (**unknown origin**): never collapsed into a new baseline.
-2. Replay: from `{"steps":{}}`, apply each revision's RFC 6902 `ops` with `Plan::patch`'s
+   blocker (**unknown origin**): never collapsed into a new baseline. The one exception is a
+   logged history that starts above rev 1, contiguous from there to `plans.rev`: §10.4.1
+   anchors it, or it is a blocker.
+2. Replay: from `{"steps":{}}` (or the anchor's document from rev `k + 1`), apply each
+   revision's RFC 6902 `ops` with `Plan::patch`'s
    exact semantics (`json_patch` one operation at a time, restoring the key order of every map
    above each touched path), **without** validation. A patch that does not apply is a blocker.
 3. At each revision, build its rows from the replayed document (`PlanRows::from_document` with
@@ -2531,6 +2538,43 @@ Then, home-wide: every record's `payload_version` becomes 2; `plans.doc`, `plan_
 views become §2.2's (schema-equivalent to a fresh home); `home_meta.schema_version` and
 `user_version` become 3. IDs, generations, work generations, input values, outcomes, attempts,
 runs, results and their links are preserved.
+
+### 10.4.1 Imported projects: the anchored baseline (round 3, decided)
+
+Projects the Python home's importer created (`initialize_plan` at rev 1, no `plan_edits` row)
+have a logged history that starts at rev 2: the imported document was never logged. On the
+live home these are lash, figments and sluice. The Python home is deleted by owner ruling, so
+nothing else can supply their origin; attempts' frozen completion snapshots
+(`provenance.runtime.completion.{revision, document}`, also under `request.provenance`) can.
+
+- **Anchor.** A project whose logged history starts at rev `f > 1` (contiguous from `f` to
+  `N = plans.rev`) is anchored at the **earliest** revision `k`, `f − 1 ≤ k ≤ N`, for which an
+  attempt's completion snapshot of revision `k`, replayed through the logged revisions
+  `k + 1 … N` (step 2's semantics), equals the stored plan under §10.5. Candidates are tried by
+  `k` ascending, and each revision's distinct documents in the order their attempts were
+  created; a patch that does not apply or a final document that differs rules a candidate out.
+  The snapshots are read in step 1, before step 8 removes them.
+- **No snapshot.** With none that reproduces the stored plan and exactly one logged revision
+  (`f = N`), the anchor is `k = N` with the stored plan as its document. Otherwise the project
+  is a blocker naming it: `history starts at rev <f>: unknown origin (no completion snapshot
+  replays through revs <f> to <N> to the stored plan, and more than one revision is logged)`.
+  An empty logged history stays a blocker.
+- **Baseline.** Revision `k`'s `plan_edits` row becomes the baseline: author `sluice`, reason
+  `imported baseline: history before rev <k> was not logged`, `changes` the anchor document's
+  rows from nothing (`header.put` and every put). It keeps rev `k`'s own `seq` and `at` when
+  rev `k` is logged; below the first logged revision it takes the highest record sequence under
+  that revision's that no record of the project holds (history orders and pages by it) and the
+  project's `created_at`, and no free sequence is a blocker. Revisions after `k` convert by
+  steps 2 to 5 from the anchor's rows; steps 4 and 5 hold unchanged.
+- **Folded edits.** Logged revisions at or below `k` are **folded** into the baseline: their
+  `plan_edits` rows are not kept (rev `k`'s is the baseline). Each such revision's retained
+  `plan.edit` record is kept with its author and reason: rev `k`'s carries the baseline's
+  changes, an earlier one `changes: []`; each is a warning (`plan.edit record <seq> at rev <r>
+  is folded into the imported baseline at rev <k>`), not a blocker.
+- **Report.** `folded_edits` counts the logged revisions at or below `k`. On a backup copy of
+  the live home (2026-10-10) the converter anchors lash at rev 1 from a snapshot (0 folded:
+  its whole history is recovered), figments at rev 2 from a snapshot (1 folded: rev 2's own
+  edit) and sluice at rev 2 from the stored plan (1 folded).
 
 ### 10.5 Round-trip equality
 

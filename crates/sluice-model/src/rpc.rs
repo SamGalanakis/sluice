@@ -172,6 +172,18 @@ fn check_integer_tokens(bytes: &[u8]) -> Result<(), PublicError> {
     Ok(())
 }
 
+/// An object of strict values is strict.
+impl From<JsonMap> for JsonValue {
+    fn from(map: JsonMap) -> Self {
+        Self(Value::Object(
+            map.0
+                .into_iter()
+                .map(|(key, value)| (key, value.0))
+                .collect(),
+        ))
+    }
+}
+
 /// Every external JSON boundary must use this entry point before typed decoding.
 pub fn decode_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, PublicError> {
     if bytes.len() > MAX_FRAME_BYTES {

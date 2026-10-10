@@ -1392,3 +1392,303 @@ pub struct CutoverReport {
     pub stopped: Vec<StoppedRun>,
     pub refused: Vec<CancelRefusal>,
 }
+
+// ---- the document, assembled from rows and taken apart into them --------------------------
+
+impl PlanRows {
+    /// The plan document assembled from the rows: the present root sections in `root_order`,
+    /// each collection's keys in position order, each declaration as written. Never compiled.
+    pub fn to_document(&self) -> JsonMap {
+        let section = |entries: Vec<(String, JsonValue)>| {
+            JsonValue::from(JsonMap(entries.into_iter().collect()))
+        };
+        JsonMap(
+            self.header
+                .root_order
+                .iter()
+                .map(|root| {
+                    let value = match root {
+                        RootSection::Inputs => section(
+                            self.inputs
+                                .iter()
+                                .map(|row| (row.name.clone(), row.declaration.clone()))
+                                .collect(),
+                        ),
+                        RootSection::Outputs => section(
+                            self.outputs
+                                .iter()
+                                .map(|row| (row.name.clone(), JsonValue::from(row.binding.clone())))
+                                .collect(),
+                        ),
+                        RootSection::Steps => section(
+                            self.steps
+                                .iter()
+                                .map(|row| {
+                                    (
+                                        row.step.to_string(),
+                                        JsonValue::from(row.declaration.clone()),
+                                    )
+                                })
+                                .collect(),
+                        ),
+                    };
+                    (root.as_str().to_owned(), value)
+                })
+                .collect(),
+        )
+    }
+
+    /// The rows of a plan document, positioned relative to `base` (the previous revision's
+    /// rows) by the replay rule (`replay_positions`); with no base, `0 … n-1`. The header
+    /// takes `base`'s revision plus one (1 with no base) and its state epoch (0 with none).
+    /// Refused when the document is not a plan's shape: a root field other than the three
+    /// sections, no `steps`, a section, step or output that is not an object, or a step id
+    /// that is not one.
+    pub fn from_document(document: &JsonMap, base: Option<&PlanRows>) -> Result<PlanRows, String> {
+        let mut root_order = vec![];
+        for key in document.0.keys() {
+            root_order.push(match key.as_str() {
+                "inputs" => RootSection::Inputs,
+                "outputs" => RootSection::Outputs,
+                "steps" => RootSection::Steps,
+                other => return Err(format!("plan has an unknown root field {other}")),
+            });
+        }
+        if !root_order.contains(&RootSection::Steps) {
+            return Err("plan has no steps".into());
+        }
+        let section = |name: &str| -> Result<Vec<(&String, &serde_json::Value)>, String> {
+            match document.0.get(name).map(JsonValue::as_value) {
+                None => Ok(vec![]),
+                Some(serde_json::Value::Object(map)) => Ok(map.iter().collect()),
+                Some(_) => Err(format!("{name}: expected an object")),
+            }
+        };
+        let strict = |value: &serde_json::Value| {
+            JsonValue::try_from(value.clone()).map_err(|error| error.to_string())
+        };
+        let object = |path: String, value: &serde_json::Value| -> Result<JsonMap, String> {
+            match value {
+                serde_json::Value::Object(map) => Ok(JsonMap(
+                    map.iter()
+                        .map(|(key, value)| Ok((key.clone(), strict(value)?)))
+                        .collect::<Result<_, String>>()?,
+                )),
+                _ => Err(format!("{path}: expected an object")),
+            }
+        };
+        let inputs = section("inputs")?;
+        let outputs = section("outputs")?;
+        let steps = section("steps")?;
+        let place = |keys: Vec<&String>, before: Vec<(String, u64)>| {
+            replay_positions(&before, &keys.into_iter().cloned().collect::<Vec<_>>()).0
+        };
+        let input_positions = place(
+            inputs.iter().map(|(k, _)| *k).collect(),
+            base.map(|b| {
+                b.inputs
+                    .iter()
+                    .map(|r| (r.name.clone(), r.position))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        );
+        let output_positions = place(
+            outputs.iter().map(|(k, _)| *k).collect(),
+            base.map(|b| {
+                b.outputs
+                    .iter()
+                    .map(|r| (r.name.clone(), r.position))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        );
+        let step_positions = place(
+            steps.iter().map(|(k, _)| *k).collect(),
+            base.map(|b| {
+                b.steps
+                    .iter()
+                    .map(|r| (r.step.to_string(), r.position))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        );
+        Ok(PlanRows {
+            header: PlanHeader {
+                rev: base.map_or(Revision(1), |b| Revision(b.header.rev.0 + 1)),
+                root_order,
+                state_epoch: base.map_or(StateEpoch(0), |b| b.header.state_epoch),
+            },
+            inputs: inputs
+                .iter()
+                .zip(input_positions)
+                .map(|((name, value), position)| {
+                    Ok(InputRow {
+                        name: (*name).clone(),
+                        position,
+                        declaration: strict(value)?,
+                    })
+                })
+                .collect::<Result<_, String>>()?,
+            outputs: outputs
+                .iter()
+                .zip(output_positions)
+                .map(|((name, value), position)| {
+                    Ok(OutputRow {
+                        name: (*name).clone(),
+                        position,
+                        binding: object(format!("outputs.{name}"), value)?,
+                    })
+                })
+                .collect::<Result<_, String>>()?,
+            steps: steps
+                .iter()
+                .zip(step_positions)
+                .map(|((id, value), position)| {
+                    Ok(StepRow {
+                        step: StepId::new(id.as_str())
+                            .map_err(|error| format!("steps.{id}: {error}"))?,
+                        position,
+                        declaration: object(format!("steps.{id}"), value)?,
+                    })
+                })
+                .collect::<Result<_, String>>()?,
+        })
+    }
+
+    /// The row changes that take `base` (no rows when `None`) to these rows, as §5.1 lists a
+    /// revision's set: a `header.put` when the present sections or their order differ; a delete
+    /// for each key gone (inputs, outputs, steps, each in key order); a put for each key that is
+    /// new, whose declaration's compact serialization differs, or whose position differs
+    /// (inputs, outputs, steps, each in position order).
+    pub fn changes_from(&self, base: Option<&PlanRows>) -> Vec<PlanChange> {
+        fn compact<T: Serialize>(value: &T) -> String {
+            serde_json::to_string(value).expect("JSON values serialize")
+        }
+        let mut changes = vec![];
+        if base.map(|b| &b.header.root_order) != Some(&self.header.root_order) {
+            changes.push(PlanChange::HeaderPut {
+                root_order: self.header.root_order.clone(),
+            });
+        }
+        let empty = PlanRows {
+            header: self.header.clone(),
+            inputs: vec![],
+            outputs: vec![],
+            steps: vec![],
+        };
+        let base = base.unwrap_or(&empty);
+        let deleted = |before: Vec<&str>, after: Vec<&str>| -> Vec<String> {
+            let after: std::collections::HashSet<&str> = after.into_iter().collect();
+            let mut gone: Vec<String> = before
+                .into_iter()
+                .filter(|key| !after.contains(key))
+                .map(str::to_owned)
+                .collect();
+            gone.sort();
+            gone
+        };
+        for name in deleted(
+            base.inputs.iter().map(|r| r.name.as_str()).collect(),
+            self.inputs.iter().map(|r| r.name.as_str()).collect(),
+        ) {
+            changes.push(PlanChange::InputDelete { name });
+        }
+        for name in deleted(
+            base.outputs.iter().map(|r| r.name.as_str()).collect(),
+            self.outputs.iter().map(|r| r.name.as_str()).collect(),
+        ) {
+            changes.push(PlanChange::OutputDelete { name });
+        }
+        for step in deleted(
+            base.steps.iter().map(|r| r.step.as_str()).collect(),
+            self.steps.iter().map(|r| r.step.as_str()).collect(),
+        ) {
+            changes.push(PlanChange::StepDelete {
+                step: StepId::new(step).expect("a stored step id"),
+            });
+        }
+        let before: std::collections::HashMap<&str, (u64, String)> = base
+            .inputs
+            .iter()
+            .map(|r| (r.name.as_str(), (r.position, compact(&r.declaration))))
+            .collect();
+        let mut puts: Vec<&InputRow> = self
+            .inputs
+            .iter()
+            .filter(|r| before.get(r.name.as_str()) != Some(&(r.position, compact(&r.declaration))))
+            .collect();
+        puts.sort_by_key(|r| r.position);
+        changes.extend(puts.into_iter().map(|r| PlanChange::InputPut {
+            name: r.name.clone(),
+            position: r.position,
+            declaration: r.declaration.clone(),
+        }));
+        let before: std::collections::HashMap<&str, (u64, String)> = base
+            .outputs
+            .iter()
+            .map(|r| (r.name.as_str(), (r.position, compact(&r.binding))))
+            .collect();
+        let mut puts: Vec<&OutputRow> = self
+            .outputs
+            .iter()
+            .filter(|r| before.get(r.name.as_str()) != Some(&(r.position, compact(&r.binding))))
+            .collect();
+        puts.sort_by_key(|r| r.position);
+        changes.extend(puts.into_iter().map(|r| PlanChange::OutputPut {
+            name: r.name.clone(),
+            position: r.position,
+            binding: r.binding.clone(),
+        }));
+        let before: std::collections::HashMap<&str, (u64, String)> = base
+            .steps
+            .iter()
+            .map(|r| (r.step.as_str(), (r.position, compact(&r.declaration))))
+            .collect();
+        let mut puts: Vec<&StepRow> = self
+            .steps
+            .iter()
+            .filter(|r| before.get(r.step.as_str()) != Some(&(r.position, compact(&r.declaration))))
+            .collect();
+        puts.sort_by_key(|r| r.position);
+        changes.extend(puts.into_iter().map(|r| PlanChange::StepPut {
+            step: r.step.clone(),
+            position: r.position,
+            declaration: r.declaration.clone(),
+        }));
+        changes
+    }
+}
+
+/// §10.6's positions for one collection at a replayed revision: `before` is the previous
+/// revision's `(key, position)` rows, `keys` the replayed document's keys in order. Each key
+/// that stays keeps its position and each new key is appended at `max + 1` (0 when there were
+/// none), then the next; when the positions so assigned do not give `keys` back in order
+/// (a key inserted before or between survivors, a move, a section replaced in another order),
+/// the collection is renumbered `0 … n-1` in document order. Returns each key's position, in
+/// `keys` order, and whether it renumbered.
+pub fn replay_positions(before: &[(String, u64)], keys: &[String]) -> (Vec<u64>, bool) {
+    let known: std::collections::HashMap<&str, u64> = before
+        .iter()
+        .map(|(key, position)| (key.as_str(), *position))
+        .collect();
+    let mut next = before
+        .iter()
+        .map(|(_, position)| position + 1)
+        .max()
+        .unwrap_or(0);
+    let tentative: Vec<u64> = keys
+        .iter()
+        .map(|key| {
+            known.get(key.as_str()).copied().unwrap_or_else(|| {
+                next += 1;
+                next - 1
+            })
+        })
+        .collect();
+    if tentative.windows(2).all(|pair| pair[0] < pair[1]) {
+        (tentative, false)
+    } else {
+        ((0..keys.len() as u64).collect(), true)
+    }
+}

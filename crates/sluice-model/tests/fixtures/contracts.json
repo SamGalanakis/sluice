@@ -5,12 +5,18 @@
       "rev": 1,
       "author": "fixture",
       "reason": "fixture",
-      "ops": [
+      "changes": [
         {
-          "op": "add",
-          "path": "fixture",
-          "value": {
-            "file": "/tmp/brief.md"
+          "op": "step.put",
+          "step": "fixture",
+          "position": 0,
+          "declaration": {
+            "run": "fixture",
+            "in": {
+              "brief": {
+                "file": "/tmp/brief.md"
+              }
+            }
           }
         }
       ]

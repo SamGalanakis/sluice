@@ -14,9 +14,12 @@
 //! Restore preserves HomeId and maintenance state. Starting the restored home
 //! and releasing its maintenance fence are separate caller decisions.
 
-use crate::schema::{self, DATABASE_FILE, Result, StoreError};
+use crate::{
+    convert,
+    schema::{self, DATABASE_FILE, Result, StoreError},
+};
 use rusqlite::{
-    Connection, OpenFlags,
+    Connection, OpenFlags, OptionalExtension,
     backup::{Backup, StepResult},
 };
 use sluice_model::error::PublicError;
@@ -211,6 +214,12 @@ fn check_paused(connection: &Connection, paused: &AdmissionPaused) -> Result<()>
 /// an absent/empty isolated home. Existing contents are always refused. The
 /// database uses the online backup API even on restore, then verifies the Rust
 /// schema and integrity. No coordinator, guardian or fn is started.
+///
+/// A backup at schema 1 or 2 is converted to schema 3 on its private destination
+/// (`convert::convert_home`, with its unweakened preconditions). Such a schema-changing
+/// restore refuses a backup holding live work before anything is written
+/// (`LiveWorkInBackup`): a restore keeps every run's unit name and cgroup, so the restored
+/// home's adoption would reach, and could stop, the original home's live units.
 pub fn restore_into_fresh_home(src: &Path, dst: &Path) -> Result<BackupInfo> {
     let metadata = fs::symlink_metadata(src)?;
     if metadata.file_type().is_symlink() {
@@ -234,17 +243,50 @@ pub fn restore_into_fresh_home(src: &Path, dst: &Path) -> Result<BackupInfo> {
     source.pragma_update(None, "query_only", true)?;
     integrity(&source)?;
     pin_snapshot(&source)?;
+    let converts = matches!(source_schema(&source)?, Some(1 | 2));
+    if converts {
+        let live = convert::live_work(&source)?;
+        if !live.is_empty() {
+            return Err(StoreError::LiveWorkInBackup {
+                attempts: live.attempts,
+                runs: live.runs,
+                leases: live.leases,
+                calls: live.calls,
+            });
+        }
+    }
     let mut destination = FreshDirectory::create(dst, true)?;
     let info = backup_connection(&source, &dst.join(DATABASE_FILE))?;
-    // A backup of an older schema comes forward here, as its writer would bring it.
-    schema::upgrade_copy(&dst.join(DATABASE_FILE))?;
-    // This verifies HomeId, format, schema, application_id and all 23 tables.
+    if converts {
+        convert::convert_home(&dst.join(DATABASE_FILE))?;
+    }
+    // This verifies HomeId, format, schema, application_id and all 27 tables.
     schema::open_reader(dst, Duration::from_millis(50))?;
     if is_home {
         copy_home_files(src, dst)?;
     }
     destination.finish()?;
     Ok(info)
+}
+
+/// The backup's `home_meta.schema_version`, if it has one (the restore's checks refuse
+/// anything else).
+fn source_schema(source: &Connection) -> Result<Option<i64>> {
+    let has_meta: bool = source.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='home_meta')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_meta {
+        return Ok(None);
+    }
+    Ok(source
+        .query_row(
+            "SELECT schema_version FROM home_meta WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?)
 }
 
 fn copy_home_files(src: &Path, dst: &Path) -> Result<()> {

@@ -27,8 +27,8 @@ impl Fixture {
         let project = ProjectId::new();
         writer.write(RetrySafety::NonIdempotent,move |tx| {
             tx.sql().execute("INSERT INTO projects(project_id,name,created_at) VALUES (?1,'p','now')",[project.to_string()])?;
-            tx.sql().execute("INSERT INTO plans(project_id,rev,doc) VALUES (?1,1,'{}')",[project.to_string()])?;
-            tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration) VALUES (?1,'work',0,'{}'),(?1,'other',1,'{}')",[project.to_string()])?;
+            tx.sql().execute("INSERT INTO plans(project_id,rev,root_order) VALUES (?1,1,'[\"steps\"]')",[project.to_string()])?;
+            tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,unit,paused,run,priority) VALUES (?1,'work',0,'{\"run\":\"x\"}','work','false','x',0),(?1,'other',1,'{\"run\":\"x\"}','other','false','x',0)",[project.to_string()])?;
             tx.changed(Some(project),"plan");Ok(())
         }).await.unwrap();
         let reads = ReadPool::open(home.path(), 2).unwrap();

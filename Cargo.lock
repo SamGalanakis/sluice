@@ -2437,7 +2437,9 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "fs4",
+ "json-patch",
  "rusqlite",
+ "serde",
  "serde_json",
  "sluice-model",
  "sluice-process",

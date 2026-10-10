@@ -1,26 +1,35 @@
 //! Plan and result commands composed inside one writer transaction.
 
-use crate::{Result, StoreError, WriteTransaction};
+use crate::{
+    Result, StoreError, WriteTransaction,
+    cost::{self, Counter},
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::{EditPreview, EditResult, ProjectIdentity, RetryResult, StepSelection, StepStatus},
-    edit::PreparedEdit,
+    commands::{ProjectIdentity, RetryResult, StepSelection, StepStatus},
     error::PublicError,
     events::Event,
     gates::{self, GateDecision, StateSnapshot, StepState},
     hash::EffectiveInput,
     ids::{
-        AttemptId, ProjectId, ResultId, Revision, RunId, StepGeneration, StepId, UnitName,
-        WorkGeneration,
+        AttemptId, ProjectId, RecordSeq, ResultId, Revision, RunId, StepGeneration, StepId,
+        UnitName, WorkGeneration,
     },
     plan::{Pause, Plan, Step, inputs_hash},
+    plan_rows::{
+        CompetitorRow, ConsumerKind, EdgeKind, EdgeRow, ExportedPlan, GraphRows, HistoryRecord,
+        InputRow, LeaseRow, MAX_LIMIT, OutputRow, PauseValue, PlanChange, PlanEditCommit,
+        PlanHeader, PlanRows, PlanRowsError, PreparationReads, RefKind, ReferenceRow,
+        ReferenceRows, ReferenceSelection, RootSection, RowSelection, ScopedState, SourceKind,
+        StateEpoch, StepProjection, StepRow, StepRowView, StepRows,
+    },
     rpc::JsonMap,
     types::{Type, check_value_at},
     units::retry_walk,
 };
 
-/// A compiled snapshot. Commands recheck its revision and document in the writer.
+/// A compiled snapshot. Commands recheck its revision in the writer.
 #[derive(Debug, Clone)]
 pub struct PlanContext {
     pub project: ProjectId,
@@ -29,7 +38,8 @@ pub struct PlanContext {
 }
 
 /// Store evidence for an age-filtered model prune. Prepare the model edit using
-/// units(), then pass both the edit and this certificate to apply_prune.
+/// units(), then pass both the edit's `PlanEditCommit` and this certificate to
+/// `commit_plan_edit`.
 #[derive(Debug, Clone)]
 pub struct PruneEligibility {
     project: ProjectId,
@@ -51,14 +61,7 @@ pub fn prune_eligible(
     context: &PlanContext,
     cutoff: time::OffsetDateTime,
 ) -> Result<PruneEligibility> {
-    let (rev, doc): (i64, String) = c.query_row(
-        "SELECT rev,doc FROM plans WHERE project_id=?1",
-        [context.project.to_string()],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    if rev != sql_counter(context.revision.0)?
-        || serde_json::from_str::<JsonMap>(&doc)? != *context.plan.document()
-    {
+    if plan_revision(c, context.project)? != context.revision {
         return Err(conflict("plan changed before prune preparation"));
     }
     let state = read_state(c, context.project)?;
@@ -111,42 +114,6 @@ fn current_prune_result(
         Ok((id, at))
     })
     .transpose()
-}
-
-/// Apply an age-filtered prune with its original cutoff and frozen result IDs.
-/// A new result or a retried member conflicts even when plan revision is unchanged.
-pub fn apply_prune(
-    tx: &mut WriteTransaction<'_>,
-    project: ProjectId,
-    edit: PreparedEdit,
-    evidence: &PruneEligibility,
-) -> Result<EditResult> {
-    let prune = edit
-        .prune
-        .as_ref()
-        .ok_or_else(|| invalid("edit is not a prune"))?;
-    if evidence.project != project
-        || evidence.revision != edit.expected
-        || prune
-            .units
-            .iter()
-            .any(|unit| !evidence.units.contains(unit))
-    {
-        return Err(conflict(
-            "prune eligibility does not match the prepared edit",
-        ));
-    }
-    for step in &prune.steps {
-        let current = current_prune_result(tx.sql(), project, step)?;
-        if current
-            .is_none_or(|(id, at)| evidence.results.get(step) != Some(&id) || at > evidence.cutoff)
-        {
-            return Err(conflict(format!(
-                "steps.{step}: prune result changed; prepare prune again"
-            )));
-        }
-    }
-    apply_edit(tx, project, edit)
 }
 
 /// The message owner implements this synchronous adapter with its post command.
@@ -212,40 +179,14 @@ pub(crate) fn identity(c: &Connection, project: ProjectId) -> Result<ProjectIden
             .map_err(|e| StoreError::InvalidDatabase(format!("{e}")))?,
     })
 }
+/// The context's plan is the project's current revision: a compiled plan is certified for its
+/// revision, so equal revisions mean equal plans.
 pub(crate) fn check_context(tx: &WriteTransaction<'_>, context: &PlanContext) -> Result<()> {
     identity(tx.sql(), context.project)?;
-    let (rev, doc): (i64, String) = tx.sql().query_row(
-        "SELECT rev,doc FROM plans WHERE project_id=?1",
-        [context.project.to_string()],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    if Revision(rev as u64) != context.revision {
-        return Err(PublicError::Conflict {
-            message: format!("plan is at rev {rev}"),
-            current_rev: Some(Revision(rev as u64)),
-        }
-        .into());
+    let rev = plan_revision(tx.sql(), context.project)?;
+    if rev != context.revision {
+        return Err(PlanRowsError::StaleRev { current: rev }.into());
     }
-    if serde_json::from_str::<JsonMap>(&doc)? != *context.plan.document() {
-        return Err(conflict("compiled plan does not match stored revision"));
-    }
-    Ok(())
-}
-
-/// Initialize rev 1, including ordered input and step projections. Called by
-/// project creation in its own transaction, never opens another connection.
-pub fn initialize_plan(
-    tx: &mut WriteTransaction<'_>,
-    project: ProjectId,
-    plan: &Plan,
-) -> Result<()> {
-    tx.sql().execute(
-        "INSERT INTO plans(project_id,rev,doc) VALUES (?1,1,?2)",
-        params![project.to_string(), serde_json::to_string(plan.document())?],
-    )?;
-    sync_projection(tx, project, plan, Revision(1))?;
-    tx.changed(Some(project), "plan");
-    tx.changed(Some(project), "status");
     Ok(())
 }
 
@@ -310,623 +251,6 @@ fn step_state(
             .transpose()?,
         queued: vec![],
     })
-}
-
-/// The stored rows a plan edit is worked out from: the plan's revision (which fixes its
-/// document), the project's pause, its plan inputs, its step rows (projection and state)
-/// and its resource declarations, read as stored. An edit prepared and worked out from a
-/// read snapshot whose witness still holds in the writer is the edit the writer would
-/// have worked out itself, so the writer only checks this and writes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Witness(Vec<u8>);
-const WITNESS: [&str; 5] = [
-    "SELECT rev FROM plans WHERE project_id=?1",
-    "SELECT paused FROM projects WHERE project_id=?1",
-    "SELECT name,position,value,declaration FROM inputs WHERE project_id=?1 ORDER BY position",
-    "SELECT step_id,position,declaration,unit,paused,status,outputs,inputs_hash,skipped,error FROM steps WHERE project_id=?1 ORDER BY position",
-    "SELECT name,declaration FROM resources WHERE project_id=?1 ORDER BY name",
-];
-impl Witness {
-    /// The witness, and the state `read_state` reads, from one pass over the rows.
-    pub fn read_with_state(c: &Connection, project: ProjectId) -> Result<(Self, StateSnapshot)> {
-        let mut bytes = vec![];
-        let mut state = StateSnapshot::default();
-        let mut paused = None;
-        witness_scan(
-            c,
-            project,
-            &mut |part| {
-                bytes.extend_from_slice(part);
-                true
-            },
-            &mut |query, row| {
-                match query {
-                    1 => paused = Some(row.get::<_, bool>(0)?),
-                    2 => {
-                        if let Some(value) = row.get::<_, Option<String>>(2)? {
-                            state
-                                .inputs
-                                .0
-                                .insert(row.get(0)?, serde_json::from_str(&value)?);
-                        }
-                    }
-                    3 => {
-                        let id: String = row.get(0)?;
-                        state.steps.insert(
-                            id.parse()
-                                .map_err(|e| StoreError::InvalidDatabase(format!("{e}")))?,
-                            step_state(
-                                row.get(5)?,
-                                row.get(6)?,
-                                row.get(7)?,
-                                row.get(8)?,
-                                row.get(9)?,
-                            )?,
-                        );
-                    }
-                    _ => {}
-                }
-                Ok(())
-            },
-        )?;
-        // As read_state, which refuses a project it cannot find.
-        let paused = paused.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-        state.paused = if paused { Pause::Yes } else { Pause::No };
-        Ok((Self(bytes), state))
-    }
-    /// Whether the rows are still exactly as read: compared as they are scanned, with no
-    /// copy, stopping at the first difference.
-    pub fn holds(&self, c: &Connection, project: ProjectId) -> Result<bool> {
-        let mut at = 0;
-        let same = witness_scan(
-            c,
-            project,
-            &mut |part| {
-                let end = at + part.len();
-                let same = self.0.get(at..end) == Some(part);
-                at = end;
-                same
-            },
-            &mut |_, _| Ok(()),
-        )?;
-        Ok(same && at == self.0.len())
-    }
-    /// `holds` in a writer transaction, for a witness read in a snapshot that began after
-    /// `mark`: when no row committed since the mark is the project's, it holds without the
-    /// project's rows being read again; else (or when the log no longer reaches back to
-    /// the mark) they are compared.
-    pub fn holds_since(
-        &self,
-        tx: &WriteTransaction<'_>,
-        project: ProjectId,
-        mark: crate::RowMark,
-    ) -> Result<bool> {
-        let Some(rows) = tx.rows_changed_since(mark) else {
-            return self.holds(tx.sql(), project);
-        };
-        let project_id = project.to_string();
-        let mut seen = std::collections::HashSet::new();
-        for (table, rowid) in rows {
-            // A rowid changed twice may be a row deleted and its rowid taken by another.
-            if !seen.insert((table, rowid)) {
-                return self.holds(tx.sql(), project);
-            }
-            let owner: Option<Option<String>> = tx
-                .sql()
-                .prepare_cached(&format!("SELECT project_id FROM {table} WHERE rowid=?1"))?
-                .query_row([rowid], |r| r.get(0))
-                .optional()?;
-            // A row since deleted may have been the project's.
-            if owner.is_none_or(|owner| owner.as_deref() == Some(project_id.as_str())) {
-                return self.holds(tx.sql(), project);
-            }
-        }
-        Ok(true)
-    }
-}
-/// Feed every witnessed cell to `sink` as a type tag, a length and its bytes, each row
-/// and each query closed by a marker; false as soon as `sink` refuses a part.
-/// `read` is handed each row first, with its query's index in WITNESS.
-fn witness_scan(
-    c: &Connection,
-    project: ProjectId,
-    sink: &mut dyn FnMut(&[u8]) -> bool,
-    read: &mut dyn FnMut(usize, &rusqlite::Row<'_>) -> Result<()>,
-) -> Result<bool> {
-    use rusqlite::types::ValueRef;
-    let project = project.to_string();
-    for (query_index, sql) in WITNESS.iter().enumerate() {
-        let mut query = c.prepare_cached(sql)?;
-        let columns = query.column_count();
-        let mut rows = query.query([&project])?;
-        while let Some(row) = rows.next()? {
-            read(query_index, row)?;
-            if !sink(b"r") {
-                return Ok(false);
-            }
-            for index in 0..columns {
-                let number;
-                let (tag, bytes): (u8, &[u8]) = match row.get_ref(index)? {
-                    ValueRef::Null => (0, &[]),
-                    ValueRef::Integer(n) => {
-                        number = n.to_le_bytes();
-                        (1, &number)
-                    }
-                    ValueRef::Real(f) => {
-                        number = f.to_bits().to_le_bytes();
-                        (2, &number)
-                    }
-                    ValueRef::Text(text) => (3, text),
-                    ValueRef::Blob(blob) => (4, blob),
-                };
-                let mut head = [tag; 9];
-                head[1..].copy_from_slice(&(bytes.len() as u64).to_le_bytes());
-                if !sink(&head) || !sink(bytes) {
-                    return Ok(false);
-                }
-            }
-        }
-        if !sink(b"e") {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-pub(crate) fn wire_step(plan: &Plan, id: &StepId) -> Result<Value> {
-    plan_steps(plan.document())
-        .and_then(|steps| steps.get(id.as_str()))
-        .cloned()
-        .ok_or_else(|| invalid("compiled step is missing its document"))
-}
-/// A plan document's `steps` object, read in place.
-fn plan_steps(document: &JsonMap) -> Option<&serde_json::Map<String, Value>> {
-    document
-        .0
-        .get("steps")
-        .and_then(|steps| steps.as_value().as_object())
-}
-
-/// The step and input rows a plan needs. Only the step rows that differ from those
-/// stored (position, declaration, unit, paused) are written, so an edit touching a few
-/// steps writes a few rows whatever the plan's size.
-struct Projection {
-    steps: i64,
-    generation: i64,
-    /// Rows that change position: they go above the whole current range first, so no
-    /// two rows ever share a position (UNIQUE) while the others take theirs.
-    moving: Vec<String>,
-    /// (id, position, declaration, unit, paused) to insert or update.
-    rows: Vec<(String, i64, String, String, String)>,
-    /// (name, declaration) of every plan input, in plan order.
-    inputs: Vec<(String, String)>,
-}
-fn projection(
-    c: &Connection,
-    project: ProjectId,
-    plan: &Plan,
-    revision: Revision,
-) -> Result<Projection> {
-    let documents =
-        plan_steps(plan.document()).ok_or_else(|| invalid("compiled plan has no steps"))?;
-    let mut stored: std::collections::HashMap<
-        String,
-        (i64, String, Option<String>, Option<String>),
-    > = std::collections::HashMap::with_capacity(plan.steps().len());
-    {
-        let mut query = c.prepare_cached(
-            "SELECT step_id,position,declaration,unit,paused FROM steps WHERE project_id=?1",
-        )?;
-        for row in query.query_map([project.to_string()], |r| {
-            Ok((r.get(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
-        })? {
-            let (id, row) = row?;
-            stored.insert(id, row);
-        }
-    }
-    let mut moving = vec![];
-    let mut rows = vec![];
-    for (position, (id, step)) in plan.steps().iter().enumerate() {
-        let position = position as i64;
-        let declaration = documents
-            .get(id.as_str())
-            .ok_or_else(|| invalid("compiled step is missing its document"))?
-            .to_string();
-        let unit = step.unit_name().to_string();
-        let paused = match &step.paused {
-            Pause::No => "false".into(),
-            Pause::Yes => "true".into(),
-            Pause::Reason(reason) => serde_json::to_string(reason)?,
-        };
-        match stored.get(id.as_str()) {
-            Some(row)
-                if row.0 == position
-                    && row.1 == declaration
-                    && row.2.as_deref() == Some(unit.as_str())
-                    && row.3.as_deref() == Some(paused.as_str()) =>
-            {
-                continue;
-            }
-            Some(row) if row.0 != position => moving.push(id.to_string()),
-            _ => {}
-        }
-        rows.push((id.to_string(), position, declaration, unit, paused));
-    }
-    Ok(Projection {
-        steps: plan.steps().len() as i64,
-        generation: sql_counter(revision.0)?,
-        moving,
-        rows,
-        inputs: plan
-            .inputs()
-            .iter()
-            .map(|(name, declaration)| {
-                (
-                    name.clone(),
-                    json!({"type":declaration.ty,"doc":declaration.doc}).to_string(),
-                )
-            })
-            .collect(),
-    })
-}
-fn write_projection(
-    tx: &mut WriteTransaction<'_>,
-    project: ProjectId,
-    projection: &Projection,
-) -> Result<()> {
-    let project = project.to_string();
-    if !projection.moving.is_empty() {
-        let offset: i64 = tx.sql().query_row(
-            "SELECT coalesce(max(position),0)+?2+1 FROM steps WHERE project_id=?1",
-            params![project, projection.steps],
-            |r| r.get(0),
-        )?;
-        let mut shift = tx.sql().prepare_cached(
-            "UPDATE steps SET position=position+?3 WHERE project_id=?1 AND step_id=?2",
-        )?;
-        for id in &projection.moving {
-            shift.execute(params![project, id, offset])?;
-        }
-    }
-    {
-        let mut upsert = tx.sql().prepare_cached("INSERT INTO steps(project_id,step_id,position,generation,declaration,unit,paused) VALUES (?1,?2,?3,?4,?5,?6,?7)
-            ON CONFLICT(project_id,step_id) DO UPDATE SET position=excluded.position,declaration=excluded.declaration,unit=excluded.unit,paused=excluded.paused")?;
-        for (id, position, declaration, unit, paused) in &projection.rows {
-            upsert.execute(params![
-                project,
-                id,
-                position,
-                projection.generation,
-                declaration,
-                unit,
-                paused
-            ])?;
-        }
-    }
-    let offset: i64 = tx.sql().query_row(
-        "SELECT coalesce(max(position),0)+?2+1 FROM inputs WHERE project_id=?1",
-        params![project, projection.inputs.len() as i64],
-        |r| r.get(0),
-    )?;
-    tx.sql().execute(
-        "UPDATE inputs SET position=position+?2 WHERE project_id=?1",
-        params![project, offset],
-    )?;
-    for (position, (name, declaration)) in projection.inputs.iter().enumerate() {
-        tx.sql().execute("INSERT INTO inputs(project_id,name,position,declaration,generation) VALUES (?1,?2,?3,?4,?5)
-            ON CONFLICT(project_id,name) DO UPDATE SET position=excluded.position,declaration=excluded.declaration",
-            params![project,name,position as i64,declaration,projection.generation])?;
-    }
-    let names: Vec<String> = {
-        let mut query = tx
-            .sql()
-            .prepare("SELECT name FROM inputs WHERE project_id=?1")?;
-        query
-            .query_map([&project], |r| r.get(0))?
-            .collect::<rusqlite::Result<_>>()?
-    };
-    for name in names {
-        if !projection.inputs.iter().any(|(kept, _)| *kept == name) {
-            tx.sql().execute(
-                "DELETE FROM inputs WHERE project_id=?1 AND name=?2",
-                params![project, name],
-            )?;
-        }
-    }
-    Ok(())
-}
-fn sync_projection(
-    tx: &mut WriteTransaction<'_>,
-    project: ProjectId,
-    plan: &Plan,
-    revision: Revision,
-) -> Result<()> {
-    let projection = projection(tx.sql(), project, plan, revision)?;
-    write_projection(tx, project, &projection)
-}
-
-/// The state rows read back once an edit's projection is written: removed steps gone,
-/// new ones fresh and pending, plan inputs without a value left out, in plan order.
-fn projected_state(plan: &Plan, state: &StateSnapshot) -> StateSnapshot {
-    StateSnapshot {
-        paused: state.paused.clone(),
-        inputs: JsonMap(
-            plan.inputs()
-                .keys()
-                .filter_map(|name| Some((name.clone(), state.inputs.0.get(name)?.clone())))
-                .collect(),
-        ),
-        steps: plan
-            .steps()
-            .keys()
-            .map(|id| (id.clone(), state.steps.get(id).cloned().unwrap_or_default()))
-            .collect(),
-    }
-}
-
-/// The plan at its revision and the state it is read with, from one snapshot.
-pub struct Current<'a> {
-    pub revision: Revision,
-    pub document: &'a JsonMap,
-    pub state: &'a StateSnapshot,
-    /// `state` is the state the edit was prepared with, so the state it reconciled to
-    /// (`PreparedEdit::reconciled`) is reused rather than worked out again.
-    pub prepared_with: bool,
-}
-/// What a prepared edit writes, worked out by `edit_effect` and written by `commit_effect`.
-pub struct EditEffect {
-    project: ProjectId,
-    revision: Revision,
-    preview: EditPreview,
-    steps: Option<Vec<StepId>>,
-    /// None when nothing is written: an edit that changes nothing, or a dry run.
-    commit: Option<Box<EditCommit>>,
-}
-struct EditCommit {
-    revision: Revision,
-    removed: Vec<StepId>,
-    projection: Projection,
-    document: String,
-    author: String,
-    reason: String,
-    ops: Vec<sluice_model::commands::PatchOperation>,
-    statuses: Vec<StatusChange>,
-    plan: Option<Plan>,
-}
-impl EditEffect {
-    /// The plan this edit commits, if it commits one.
-    pub fn take_plan(&mut self) -> Option<(Revision, Plan)> {
-        let commit = self.commit.as_mut()?;
-        Some((commit.revision, commit.plan.take()?))
-    }
-}
-
-/// Work out a prepared edit against the plan and state it was prepared from, reading
-/// only. Refusals (a stale revision, a running step changed, a prune no longer done,
-/// input values that no longer fit) are decided here.
-pub fn edit_effect(
-    c: &Connection,
-    project: ProjectId,
-    edit: PreparedEdit,
-    current: Current<'_>,
-) -> Result<EditEffect> {
-    let rev = sql_counter(current.revision.0)?;
-    if rev != sql_counter(edit.expected.0)? {
-        return Err(PublicError::Conflict {
-            message: format!("plan is at rev {rev}"),
-            current_rev: Some(current.revision),
-        }
-        .into());
-    }
-    // An edit that changes nothing commits nothing: no rev, record or history row.
-    if sluice_model::hash::data_equal_maps(current.document, edit.plan.document())? {
-        return Ok(EditEffect {
-            project,
-            revision: current.revision,
-            preview: EditPreview {
-                ops: vec![],
-                ..edit.preview
-            },
-            steps: edit.steps,
-            commit: None,
-        });
-    }
-    let state = current.state;
-    if let Some(prune) = &edit.prune {
-        // Retry and manual output writes can change eligibility without a plan edit.
-        // The revision check alone therefore cannot certify a prepared prune.
-        let members: Vec<&str> = prune.steps.iter().map(|id| id.as_str()).collect();
-        let mut query = c.prepare("SELECT step_id,unit,status FROM steps WHERE project_id=?1")?;
-        for row in query.query_map([project.to_string()], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        })? {
-            let (id, unit, status) = row?;
-            let unit = unit.as_deref().unwrap_or(&id);
-            if (members.contains(&id.as_str())
-                || prune.units.iter().any(|name| name.as_str() == unit))
-                && !matches!(status.as_str(), "succeeded" | "skipped")
-            {
-                return Err(conflict(format!(
-                    "unit {unit} is no longer done; prepare prune again"
-                )));
-            }
-        }
-        if prune.steps.iter().any(|id| !state.steps.contains_key(id)) {
-            return Err(conflict("prune member disappeared; prepare prune again"));
-        }
-    }
-    let (old_steps, new_steps) = (
-        plan_steps(current.document),
-        plan_steps(edit.plan.document()),
-    );
-    for (id, entry) in &state.steps {
-        if entry.status != StepStatus::Running {
-            continue;
-        }
-        let old = old_steps.and_then(|steps| steps.get(id.as_str()));
-        let new = new_steps.and_then(|steps| steps.get(id.as_str()));
-        let strip = |value: &Value| {
-            let mut value = value.clone();
-            if let Some(map) = value.as_object_mut() {
-                map.remove("paused");
-                map.remove("tags");
-            }
-            value
-        };
-        if new.is_none() || old.map(strip) != new.map(strip) {
-            return Err(invalid(format!(
-                "steps.{id}: cannot change a running step, except paused and tags"
-            )));
-        }
-    }
-    let mut candidate_inputs = state.inputs.clone();
-    candidate_inputs
-        .0
-        .retain(|name, _| edit.plan.inputs().contains_key(name));
-    edit.plan
-        .validate_input_values(&candidate_inputs)
-        .map_err(|errors| {
-            invalid(
-                errors
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            )
-        })?;
-    if edit.dry_run {
-        return Ok(EditEffect {
-            project,
-            revision: current.revision,
-            preview: edit.preview,
-            steps: edit.steps,
-            commit: None,
-        });
-    }
-    let revision = Revision(
-        rev.checked_add(1)
-            .ok_or_else(|| invalid("revision exhausted"))? as u64,
-    );
-    let removed = state
-        .steps
-        .keys()
-        .filter(|id| !edit.plan.steps().contains_key(*id))
-        .cloned()
-        .collect();
-    let projection = projection(c, project, &edit.plan, revision)?;
-    let projected = projected_state(&edit.plan, state);
-    let statuses = if current.prepared_with {
-        let reused = reconciled_changes(&edit.plan, &projected, &edit.reconciled);
-        // Every debug build (the test suite) checks the reuse against the full reconcile.
-        debug_assert!(
-            reused == status_changes(&edit.plan, &projected),
-            "reconciled state reused for a different state"
-        );
-        reused
-    } else {
-        status_changes(&edit.plan, &projected)
-    };
-    Ok(EditEffect {
-        project,
-        revision,
-        preview: edit.preview,
-        steps: edit.steps,
-        commit: Some(Box::new(EditCommit {
-            revision,
-            removed,
-            projection,
-            document: serde_json::to_string(edit.plan.document())?,
-            author: edit.author.unwrap_or_default(),
-            reason: edit.reason,
-            ops: edit.ops,
-            statuses,
-            plan: Some(edit.plan),
-        })),
-    })
-}
-
-/// Write an edit's effect: remove and archive its removed steps, write the rows that
-/// change, the plan, its record and history row, and the statuses it settles.
-pub fn commit_effect(tx: &mut WriteTransaction<'_>, effect: EditEffect) -> Result<EditResult> {
-    let project = effect.project;
-    let project_identity = identity(tx.sql(), project)?;
-    let Some(commit) = effect.commit else {
-        return Ok(EditResult {
-            project: project_identity,
-            rev: effect.revision,
-            preview: effect.preview,
-            steps: effect.steps,
-            board_warnings: vec![],
-        });
-    };
-    for id in &commit.removed {
-        archive(tx, project, id)?;
-        tx.sql().execute(
-            "DELETE FROM steps WHERE project_id=?1 AND step_id=?2",
-            params![project.to_string(), id.as_str()],
-        )?;
-    }
-    write_projection(tx, project, &commit.projection)?;
-    tx.sql().execute(
-        "UPDATE plans SET rev=?2,doc=?3 WHERE project_id=?1",
-        params![
-            project.to_string(),
-            sql_counter(commit.revision.0)?,
-            commit.document
-        ],
-    )?;
-    let record = tx.append_record(
-        Some(project),
-        Event::PlanEdit {
-            rev: commit.revision,
-            author: commit.author.clone(),
-            reason: commit.reason.clone(),
-            ops: commit.ops.clone(),
-        },
-    )?;
-    tx.sql().execute("INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,ops) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        params![project.to_string(),sql_counter(commit.revision.0)?,record.seq.0,record.at,commit.author,commit.reason,serde_json::to_string(&commit.ops)?])?;
-    tx.changed(Some(project), "plan");
-    tx.changed(Some(project), "edits");
-    write_status_changes(tx, project, &commit.statuses)?;
-    Ok(EditResult {
-        project: project_identity,
-        rev: commit.revision,
-        preview: effect.preview,
-        steps: effect.steps,
-        board_warnings: vec![],
-    })
-}
-
-pub fn apply_edit(
-    tx: &mut WriteTransaction<'_>,
-    project: ProjectId,
-    edit: PreparedEdit,
-) -> Result<EditResult> {
-    identity(tx.sql(), project)?;
-    let (rev, doc): (i64, String) = tx.sql().query_row(
-        "SELECT rev,doc FROM plans WHERE project_id=?1",
-        [project.to_string()],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    let document: JsonMap = serde_json::from_str(&doc)?;
-    let state = read_state(tx.sql(), project)?;
-    let effect = edit_effect(
-        tx.sql(),
-        project,
-        edit,
-        Current {
-            revision: Revision(rev as u64),
-            document: &document,
-            state: &state,
-            prepared_with: false,
-        },
-    )?;
-    commit_effect(tx, effect)
 }
 
 /// Snapshot the current terminal projection. Previously recorded declaration and
@@ -1047,33 +371,6 @@ fn status_changes(plan: &Plan, before: &StateSnapshot) -> Vec<StatusChange> {
                 id,
                 previous,
                 entry,
-            })
-        })
-        .collect()
-}
-/// `status_changes` from the state an edit's preparation reconciled to: the same
-/// changes, since it reconciled the same plan from the same steps, less the new ones it
-/// left pending and untouched, which `projected` holds as fresh rows.
-fn reconciled_changes(
-    plan: &Plan,
-    projected: &StateSnapshot,
-    reconciled: &StateSnapshot,
-) -> Vec<StatusChange> {
-    plan.steps()
-        .keys()
-        .filter_map(|id| {
-            let entry = reconciled.steps.get(id)?;
-            let previous = projected.status(id);
-            let old = projected.steps.get(id);
-            if previous == entry.status
-                && old.is_some_and(|old| old.skipped == entry.skipped && old.error == entry.error)
-            {
-                return None;
-            }
-            Some(StatusChange {
-                id: id.clone(),
-                previous,
-                entry: entry.clone(),
             })
         })
         .collect()
@@ -1699,53 +996,6 @@ pub fn read_result(c: &Connection, id: ResultId) -> Result<Option<StepResult>> {
     }))
 }
 
-/// Complete authored edits plus retained manual/input/retry records in sequence order.
-/// Feed retention must not shorten the plan's edit history.
-pub fn history(
-    sql: &Connection,
-    project: ProjectId,
-    since_rev: Option<Revision>,
-) -> Result<Vec<sluice_model::events::Record>> {
-    let mut stmt = sql.prepare(
-        "SELECT seq,at,payload,payload_version FROM (
-         SELECT seq,at,payload,payload_version FROM records WHERE project_id=?1
-           AND kind IN ('plan.input','step.output','step.retry')
-         UNION ALL
-         SELECT seq,at,json_object('kind','plan.edit','rev',rev,'author',author,
-           'reason',reason,'ops',json(ops)),1 FROM plan_edits WHERE project_id=?1
-         ) WHERE (?2 IS NULL OR json_extract(payload,'$.rev')>?2) ORDER BY seq",
-    )?;
-    let rows = stmt.query_map(
-        params![
-            project.to_string(),
-            since_rev.map(|r| sql_counter(r.0)).transpose()?
-        ],
-        |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, i64>(3)?,
-            ))
-        },
-    )?;
-    rows.map(|row| {
-        let (seq, at, payload, version) = row?;
-        if version != crate::schema::RECORD_PAYLOAD_VERSION {
-            return Err(StoreError::InvalidDatabase(format!(
-                "unsupported record payload version {version}"
-            )));
-        }
-        Ok(sluice_model::events::Record {
-            seq: sluice_model::ids::RecordSeq(seq),
-            at,
-            project: Some(project),
-            event: serde_json::from_str(&payload)?,
-        })
-    })
-    .collect()
-}
-
 /// Compute and freeze an age cutoff for coordinator prune preparation.
 pub fn prune_eligible_age(
     sql: &Connection,
@@ -1757,4 +1007,1123 @@ pub fn prune_eligible_age(
         .checked_sub(time::Duration::seconds(seconds))
         .ok_or_else(|| invalid("prune age too large"))?;
     prune_eligible(sql, context, cutoff)
+}
+
+// ---- schema-3 rows: reads ---------------------------------------------------------------
+//
+// Every read takes the caller's connection (a read snapshot, or `tx.sql()` in the writer). The
+// plan is its rows; the document is assembled only by `export_plan`.
+
+/// A store value that does not decode is a corrupt home, never a caller's mistake.
+fn corrupt(error: impl std::fmt::Display) -> StoreError {
+    StoreError::InvalidDatabase(error.to_string())
+}
+fn counter(value: i64) -> u64 {
+    value.max(0) as u64
+}
+/// A list as SQL text for `IN (SELECT value FROM json_each(?))`, with no parameter limit.
+fn json_list<T: AsRef<str>>(values: &[T]) -> String {
+    serde_json::Value::Array(
+        values
+            .iter()
+            .map(|value| Value::String(value.as_ref().to_owned()))
+            .collect(),
+    )
+    .to_string()
+}
+
+/// The project's authored plan revision.
+pub fn plan_revision(sql: &Connection, project: ProjectId) -> Result<Revision> {
+    let rev: Option<i64> = sql
+        .query_row(
+            "SELECT rev FROM plans WHERE project_id=?1",
+            [project.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    rev.map(|rev| Revision(counter(rev))).ok_or_else(|| {
+        PublicError::NotFound {
+            message: "project does not exist".into(),
+        }
+        .into()
+    })
+}
+
+/// The `plans` row: revision, the present root sections in order, and the state epoch.
+pub fn plan_header(sql: &Connection, project: ProjectId) -> Result<PlanHeader> {
+    let row: Option<(i64, String, i64)> = sql
+        .query_row(
+            "SELECT rev,root_order,state_epoch FROM plans WHERE project_id=?1",
+            [project.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    let (rev, root_order, epoch) = row.ok_or_else(|| PublicError::NotFound {
+        message: "project does not exist".into(),
+    })?;
+    Ok(PlanHeader {
+        rev: Revision(counter(rev)),
+        root_order: serde_json::from_str::<Vec<RootSection>>(&root_order).map_err(corrupt)?,
+        state_epoch: StateEpoch(counter(epoch)),
+    })
+}
+
+/// Every authored row of the plan, each collection in position order: a whole-plan read.
+pub fn read_plan_rows(sql: &Connection, project: ProjectId) -> Result<PlanRows> {
+    cost::add(Counter::FullExports, 1);
+    plan_rows(sql, project)
+}
+fn plan_rows(sql: &Connection, project: ProjectId) -> Result<PlanRows> {
+    let header = plan_header(sql, project)?;
+    let id = project.to_string();
+    let mut decoded = 0;
+    let inputs = sql
+        .prepare_cached(
+            "SELECT name,position,declaration FROM inputs WHERE project_id=?1 ORDER BY position",
+        )?
+        .query_map([&id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .map(|row| {
+            let (name, position, declaration) = row?;
+            decoded += 1;
+            Ok(InputRow {
+                name,
+                position: counter(position),
+                declaration: serde_json::from_str(&declaration).map_err(corrupt)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let outputs = sql
+        .prepare_cached(
+            "SELECT name,position,binding FROM plan_outputs WHERE project_id=?1 ORDER BY position",
+        )?
+        .query_map([&id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .map(|row| {
+            let (name, position, binding) = row?;
+            decoded += 1;
+            Ok(OutputRow {
+                name,
+                position: counter(position),
+                binding: serde_json::from_str(&binding).map_err(corrupt)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let steps = sql
+        .prepare_cached(
+            "SELECT step_id,position,declaration FROM steps WHERE project_id=?1
+             ORDER BY position,step_id",
+        )?
+        .query_map([&id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .map(|row| {
+            let (step, position, declaration) = row?;
+            decoded += 1;
+            Ok(StepRow {
+                step: step.parse().map_err(corrupt)?,
+                position: counter(position),
+                declaration: serde_json::from_str(&declaration).map_err(corrupt)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    cost::add(Counter::DeclarationsDecoded, decoded);
+    Ok(PlanRows {
+        header,
+        inputs,
+        outputs,
+        steps,
+    })
+}
+
+/// The plan document assembled from its rows, never compiled: a whole-plan read.
+pub fn export_plan(sql: &Connection, project: ProjectId) -> Result<ExportedPlan> {
+    cost::add(Counter::FullExports, 1);
+    let rows = plan_rows(sql, project)?;
+    Ok(ExportedPlan {
+        rev: rows.header.rev,
+        document: rows.to_document(),
+    })
+}
+
+/// The selected steps, `(position, id)` order. `Compact` reads only the covering indexes'
+/// columns and never the declaration; `Full` reads the declaration too. `limit` reads one more
+/// row to set `more`.
+pub fn read_steps(
+    sql: &Connection,
+    project: ProjectId,
+    selection: &RowSelection,
+    projection: StepProjection,
+) -> Result<StepRows> {
+    let header = plan_header(sql, project)?;
+    let (steps, more) = select_steps(sql, project, selection, projection)?;
+    Ok(StepRows {
+        rev: header.rev,
+        state_epoch: header.state_epoch,
+        steps,
+        more,
+    })
+}
+fn select_steps(
+    sql: &Connection,
+    project: ProjectId,
+    selection: &RowSelection,
+    projection: StepProjection,
+) -> Result<(Vec<StepRowView>, bool)> {
+    use rusqlite::types::Value as Sql;
+    if [
+        selection.units.as_ref().map(Vec::is_empty),
+        selection.steps.as_ref().map(Vec::is_empty),
+        selection.status.as_ref().map(Vec::is_empty),
+    ]
+    .contains(&Some(true))
+    {
+        return Ok((vec![], false));
+    }
+    let full = projection == StepProjection::Full;
+    // One covering index per access path, so a compact read never touches a declaration and a
+    // unit's or a status's read never scans the rest of the plan.
+    let index = if selection.units.is_some() {
+        "steps_unit_compact"
+    } else if selection.status.is_some() {
+        "steps_status_compact"
+    } else {
+        "steps_compact"
+    };
+    let mut query = format!(
+        "SELECT step_id,position,run,unit,priority,paused,status{} FROM steps INDEXED BY {index}
+         WHERE project_id=?",
+        if full { ",declaration" } else { "" }
+    );
+    let mut args = vec![Sql::Text(project.to_string())];
+    let mut list = |column: &str, values: Option<Vec<String>>| {
+        if let Some(values) = values {
+            query.push_str(&format!(
+                " AND {column} IN (SELECT value FROM json_each(?))"
+            ));
+            args.push(Sql::Text(json_list(&values)));
+        }
+    };
+    list(
+        "unit",
+        selection
+            .units
+            .as_ref()
+            .map(|units| units.iter().map(ToString::to_string).collect()),
+    );
+    list(
+        "step_id",
+        selection
+            .steps
+            .as_ref()
+            .map(|steps| steps.iter().map(ToString::to_string).collect()),
+    );
+    list(
+        "status",
+        selection
+            .status
+            .as_ref()
+            .map(|status| status.iter().map(|s| s.as_str().to_owned()).collect()),
+    );
+    if let Some((position, step)) = &selection.after {
+        query.push_str(" AND (position>? OR (position=? AND step_id>?))");
+        let position = Sql::Integer(sql_counter(*position)?);
+        args.extend([position.clone(), position, Sql::Text(step.to_string())]);
+    }
+    query.push_str(" ORDER BY position,step_id");
+    if let Some(limit) = selection.limit {
+        query.push_str(" LIMIT ?");
+        args.push(Sql::Integer(i64::from(limit) + 1));
+    }
+    let mut statement = sql.prepare_cached(&query)?;
+    let mut rows = statement.query(rusqlite::params_from_iter(args))?;
+    let mut steps = vec![];
+    while let Some(row) = rows.next()? {
+        let declaration = if full {
+            cost::add(Counter::DeclarationsDecoded, 1);
+            Some(serde_json::from_str(&row.get::<_, String>(7)?).map_err(corrupt)?)
+        } else {
+            None
+        };
+        steps.push(StepRowView {
+            step: row.get::<_, String>(0)?.parse().map_err(corrupt)?,
+            position: counter(row.get(1)?),
+            run: row.get(2)?,
+            unit: row.get::<_, String>(3)?.parse().map_err(corrupt)?,
+            priority: row.get(4)?,
+            paused: serde_json::from_str::<PauseValue>(&row.get::<_, String>(5)?)
+                .map_err(corrupt)?,
+            status: serde_json::from_value(json!(row.get::<_, String>(6)?)).map_err(corrupt)?,
+            declaration,
+        });
+    }
+    let more = selection
+        .limit
+        .is_some_and(|limit| steps.len() > limit as usize);
+    if let Some(limit) = selection.limit {
+        steps.truncate(limit as usize);
+    }
+    Ok((steps, more))
+}
+
+/// The `plan_refs` rows a selection names, `(consumer, slot, ordinal)` order.
+pub fn read_references(
+    sql: &Connection,
+    project: ProjectId,
+    selection: &ReferenceSelection,
+) -> Result<ReferenceRows> {
+    let (condition, kind, list) = match selection {
+        ReferenceSelection::Consumers(steps) => (
+            "consumer_kind='step' AND consumer_id IN (SELECT value FROM json_each(?2))",
+            None,
+            json_list(&steps.iter().map(StepId::as_str).collect::<Vec<_>>()),
+        ),
+        ReferenceSelection::Outputs(names) => (
+            "consumer_kind='output' AND consumer_id IN (SELECT value FROM json_each(?2))",
+            None,
+            json_list(names),
+        ),
+        ReferenceSelection::Sources { kind, ids } => (
+            "source_kind=?3 AND source_id IN (SELECT value FROM json_each(?2))",
+            Some(source_word(*kind)),
+            json_list(ids),
+        ),
+    };
+    let mut statement = sql.prepare_cached(&format!(
+        "SELECT consumer_kind,consumer_id,slot,ordinal,kind,source_kind,source_id,source_port,
+           source_path FROM plan_refs WHERE project_id=?1 AND {condition}
+         ORDER BY consumer_kind,consumer_id,slot,ordinal"
+    ))?;
+    let project = project.to_string();
+    let mut rows = match &kind {
+        Some(kind) => statement.query(params![project, list, kind])?,
+        None => statement.query(params![project, list])?,
+    };
+    let mut references = vec![];
+    while let Some(row) = rows.next()? {
+        references.push(reference_row(row)?);
+    }
+    Ok(ReferenceRows(references))
+}
+fn reference_row(row: &rusqlite::Row<'_>) -> Result<ReferenceRow> {
+    let word = |index: usize| -> Result<Value> { Ok(Value::String(row.get(index)?)) };
+    Ok(ReferenceRow {
+        consumer_kind: serde_json::from_value(word(0)?).map_err(corrupt)?,
+        consumer_id: row.get(1)?,
+        slot: row.get(2)?,
+        ordinal: u32::try_from(row.get::<_, i64>(3)?).map_err(corrupt)?,
+        kind: serde_json::from_value(word(4)?).map_err(corrupt)?,
+        source_kind: serde_json::from_value(word(5)?).map_err(corrupt)?,
+        source_id: row.get(6)?,
+        source_port: row.get(7)?,
+        source_path: row.get(8)?,
+    })
+}
+
+/// The selected steps (compact), every edge with a selected endpoint, and the other
+/// endpoints (compact, position order) as `boundary`.
+pub fn read_graph(
+    sql: &Connection,
+    project: ProjectId,
+    selection: &RowSelection,
+) -> Result<GraphRows> {
+    let (steps, _) = select_steps(sql, project, selection, StepProjection::Compact)?;
+    let everything = selection.units.is_none()
+        && selection.steps.is_none()
+        && selection.status.is_none()
+        && selection.after.is_none()
+        && selection.limit.is_none();
+    let selected: std::collections::HashSet<&str> =
+        steps.iter().map(|step| step.step.as_str()).collect();
+    let project_id = project.to_string();
+    let mut edges = vec![];
+    {
+        let mut statement;
+        let mut rows = if everything {
+            statement = sql.prepare_cached(
+                "SELECT source_step,target_step,kind,via_unit FROM plan_edges WHERE project_id=?1
+                 ORDER BY target_step,source_step,kind,via_unit",
+            )?;
+            statement.query([&project_id])?
+        } else {
+            statement = sql.prepare_cached(
+                "SELECT source_step,target_step,kind,via_unit FROM plan_edges WHERE project_id=?1
+                   AND target_step IN (SELECT value FROM json_each(?2))
+                 UNION
+                 SELECT source_step,target_step,kind,via_unit FROM plan_edges WHERE project_id=?1
+                   AND source_step IN (SELECT value FROM json_each(?2))
+                 ORDER BY 2,1,3,4",
+            )?;
+            statement.query(params![
+                project_id,
+                json_list(&selected.iter().collect::<Vec<_>>())
+            ])?
+        };
+        while let Some(row) = rows.next()? {
+            edges.push(edge_row(row)?);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut outside: Vec<StepId> = vec![];
+    for edge in &edges {
+        for end in [&edge.source, &edge.target] {
+            if !selected.contains(end.as_str()) && seen.insert(end.as_str()) {
+                outside.push(end.clone());
+            }
+        }
+    }
+    let boundary = if outside.is_empty() {
+        vec![]
+    } else {
+        select_steps(
+            sql,
+            project,
+            &RowSelection {
+                steps: Some(outside),
+                ..RowSelection::default()
+            },
+            StepProjection::Compact,
+        )?
+        .0
+    };
+    Ok(GraphRows {
+        steps,
+        edges,
+        boundary,
+    })
+}
+fn edge_row(row: &rusqlite::Row<'_>) -> Result<EdgeRow> {
+    let via: String = row.get(3)?;
+    Ok(EdgeRow {
+        source: row.get::<_, String>(0)?.parse().map_err(corrupt)?,
+        target: row.get::<_, String>(1)?.parse().map_err(corrupt)?,
+        kind: match row.get::<_, String>(2)?.as_str() {
+            "data" => EdgeKind::Data,
+            "gate" => EdgeKind::Gate,
+            other => return Err(corrupt(format!("unknown edge kind {other}"))),
+        },
+        via_unit: if via.is_empty() {
+            None
+        } else {
+            Some(via.parse().map_err(corrupt)?)
+        },
+    })
+}
+
+/// Exactly the read set of an edit's preparation (§6.4): the listed steps' state, the listed
+/// inputs' values, the project's pause, the live leases on the listed resources, and each
+/// listed competitor resource's pending steps (from `steps_needs`). Never a declaration, never
+/// a step outside the list.
+pub fn read_scoped_state(
+    sql: &Connection,
+    project: ProjectId,
+    reads: &PreparationReads,
+) -> Result<ScopedState> {
+    let id = project.to_string();
+    let mut read = 0;
+    let mut scoped = ScopedState::default();
+    let paused: bool = sql.query_row(
+        "SELECT paused FROM projects WHERE project_id=?1",
+        [&id],
+        |r| r.get(0),
+    )?;
+    scoped.state.paused = if paused { Pause::Yes } else { Pause::No };
+    if !reads.steps.is_empty() {
+        let mut statement = sql.prepare_cached(
+            "SELECT step_id,status,outputs,inputs_hash,skipped,error FROM steps
+             WHERE project_id=?1 AND step_id IN (SELECT value FROM json_each(?2))
+             ORDER BY position",
+        )?;
+        let mut rows = statement.query(params![
+            id,
+            json_list(&reads.steps.iter().map(StepId::as_str).collect::<Vec<_>>())
+        ])?;
+        while let Some(row) = rows.next()? {
+            read += 1;
+            scoped.state.steps.insert(
+                row.get::<_, String>(0)?.parse().map_err(corrupt)?,
+                step_state(
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                )?,
+            );
+        }
+    }
+    if !reads.inputs.is_empty() {
+        let mut statement = sql.prepare_cached(
+            "SELECT name,value FROM inputs WHERE project_id=?1 AND value IS NOT NULL
+               AND name IN (SELECT value FROM json_each(?2)) ORDER BY position",
+        )?;
+        let mut rows = statement.query(params![id, json_list(&reads.inputs)])?;
+        while let Some(row) = rows.next()? {
+            read += 1;
+            scoped.state.inputs.0.insert(
+                row.get(0)?,
+                serde_json::from_str(&row.get::<_, String>(1)?).map_err(corrupt)?,
+            );
+        }
+    }
+    if !reads.resources.is_empty() {
+        let mut statement = sql.prepare_cached(
+            "SELECT l.resource,l.project_id,r.step_id,l.state='held',l.amount,l.priority
+             FROM leases l LEFT JOIN runs r ON r.run_id=l.run_id
+             WHERE l.scope=?1 AND l.state IN ('waiting','held')
+               AND l.resource IN (SELECT value FROM json_each(?2))
+             ORDER BY l.resource,l.lease_id",
+        )?;
+        let mut rows = statement.query(params![id, json_list(&reads.resources)])?;
+        while let Some(row) = rows.next()? {
+            read += 1;
+            scoped.leases.push(LeaseRow {
+                resource: row.get(0)?,
+                project: row
+                    .get::<_, Option<String>>(1)?
+                    .map(|p| p.parse())
+                    .transpose()
+                    .map_err(corrupt)?,
+                step: row
+                    .get::<_, Option<String>>(2)?
+                    .map(|s| s.parse())
+                    .transpose()
+                    .map_err(corrupt)?,
+                held: row.get(3)?,
+                amount: counter(row.get(4)?),
+                priority: row.get(5)?,
+            });
+        }
+    }
+    if !reads.competitors.is_empty() {
+        let mut statement = sql.prepare_cached(
+            "SELECT step_id,needs,priority FROM steps INDEXED BY steps_needs
+             WHERE project_id=?1 AND status='pending' AND needs IS NOT NULL ORDER BY step_id",
+        )?;
+        let mut rows = statement.query([&id])?;
+        while let Some(row) = rows.next()? {
+            read += 1;
+            let needs: JsonMap =
+                serde_json::from_str(&row.get::<_, String>(1)?).map_err(corrupt)?;
+            let step: StepId = row.get::<_, String>(0)?.parse().map_err(corrupt)?;
+            let priority: i64 = row.get(2)?;
+            for resource in &reads.competitors {
+                if needs.0.contains_key(resource) {
+                    scoped.competitors.push(CompetitorRow {
+                        resource: resource.clone(),
+                        step: step.clone(),
+                        priority,
+                        needs: needs.clone(),
+                    });
+                }
+            }
+        }
+    }
+    cost::add(Counter::StateRowsRead, read);
+    Ok(scoped)
+}
+
+/// A step's declaration as written, read from its row (an attempt freezes it at reservation).
+pub(crate) fn step_declaration(
+    sql: &Connection,
+    project: ProjectId,
+    step: &StepId,
+) -> Result<Value> {
+    let declaration: Option<String> = sql
+        .query_row(
+            "SELECT declaration FROM steps WHERE project_id=?1 AND step_id=?2",
+            params![project.to_string(), step.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    cost::add(Counter::DeclarationsDecoded, 1);
+    serde_json::from_str(&declaration.ok_or_else(|| invalid("no such step"))?).map_err(corrupt)
+}
+
+// ---- schema-3 rows: the edit commit -----------------------------------------------------
+
+/// What `commit_plan_edit` did: committed at this revision (the current one when the edit
+/// changes nothing), or found a token moved since preparation and wrote nothing, so the
+/// coordinator prepares the edit again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitOutcome {
+    Committed(Revision),
+    Stale,
+}
+
+/// The `paused`, `run`, `priority` and `needs` columns, each written with its `CHECK`'s own
+/// expression of the declaration (parameter 1), so no write can let them drift.
+const HELD_COLUMNS: &str = "CASE json_type(?1,'$.paused') WHEN 'true' THEN 'true'
+     WHEN 'text' THEN json_quote(json_extract(?1,'$.paused')) ELSE 'false' END,
+   json_extract(?1,'$.run'), coalesce(json_extract(?1,'$.priority'),0), json_extract(?1,'$.needs')";
+
+/// Commit a prepared plan edit (§4) in the writer: the project is live and the home admits
+/// plan edits; the caller's `rev` is current (else `conflict`); the tokens still hold (else
+/// `Stale`, nothing written); an empty change set writes nothing. Then removed steps are
+/// archived and deleted, the row changes and index rows written, the status transitions
+/// applied, and the `plan.edit` record and history row appended at the next revision.
+pub fn commit_plan_edit(
+    tx: &mut WriteTransaction<'_>,
+    project: ProjectId,
+    commit: &PlanEditCommit,
+    prune: Option<&PruneEligibility>,
+) -> Result<CommitOutcome> {
+    identity(tx.sql(), project)?;
+    let mode: String =
+        tx.sql()
+            .query_row("SELECT mode FROM maintenance WHERE singleton=1", [], |r| {
+                r.get(0)
+            })?;
+    if mode != "normal" {
+        return Err(PublicError::Busy {
+            message: format!("{mode} rejects new plan work and user calls"),
+            retryable: false,
+        }
+        .into());
+    }
+    let id = project.to_string();
+    let header = plan_header(tx.sql(), project)?;
+    let board_rev: i64 = tx.sql().query_row(
+        "SELECT board_rev FROM projects WHERE project_id=?1",
+        [&id],
+        |r| r.get(0),
+    )?;
+    if let Some(rev) = commit.rev
+        && rev != header.rev
+    {
+        return Err(PlanRowsError::StaleRev {
+            current: header.rev,
+        }
+        .into());
+    }
+    let tokens = &commit.tokens;
+    if tokens.plan_rev != header.rev
+        || tokens.state_epoch != header.state_epoch
+        || tokens.board_rev != Revision(counter(board_rev))
+    {
+        return Ok(CommitOutcome::Stale);
+    }
+    if commit.rows.changes.is_empty() {
+        return Ok(CommitOutcome::Committed(header.rev));
+    }
+    check_prune(tx, project, header.rev, commit, prune)?;
+    check_commit(tx.sql(), project, commit)?;
+    let revision = Revision(header.rev.0 + 1);
+    let generation = sql_counter(revision.0)?;
+    let mut written = 0u64;
+    // 4: removed steps: outcome archived, row deleted (tags and edges by cascade, its
+    // references by trigger).
+    for step in &commit.state.removed {
+        archive(tx, project, step)?;
+        written += tx.sql().execute(
+            "DELETE FROM steps WHERE project_id=?1 AND step_id=?2",
+            params![id, step.as_str()],
+        )? as u64;
+    }
+    // 5: the row changes, deletes first; a put that moves a row moves it above the
+    // collection's maximum first, so no two rows share a position mid-transaction.
+    let mut inputs = vec![];
+    let mut outputs = vec![];
+    let mut steps = vec![];
+    for change in &commit.rows.changes {
+        match change {
+            PlanChange::HeaderPut { root_order } => {
+                written += tx.sql().execute(
+                    "UPDATE plans SET root_order=?2 WHERE project_id=?1",
+                    params![id, serde_json::to_string(root_order)?],
+                )? as u64;
+            }
+            PlanChange::InputDelete { name } => {
+                written += tx.sql().execute(
+                    "DELETE FROM inputs WHERE project_id=?1 AND name=?2",
+                    params![id, name],
+                )? as u64;
+            }
+            PlanChange::OutputDelete { name } => {
+                written += tx.sql().execute(
+                    "DELETE FROM plan_outputs WHERE project_id=?1 AND name=?2",
+                    params![id, name],
+                )? as u64;
+            }
+            PlanChange::StepDelete { .. } => {}
+            PlanChange::InputPut {
+                name,
+                position,
+                declaration,
+            } => inputs.push((
+                name.as_str(),
+                *position,
+                serde_json::to_string(declaration)?,
+            )),
+            PlanChange::OutputPut {
+                name,
+                position,
+                binding,
+            } => outputs.push((name.as_str(), *position, serde_json::to_string(binding)?)),
+            PlanChange::StepPut {
+                step,
+                position,
+                declaration,
+            } => steps.push((
+                step.as_str(),
+                *position,
+                serde_json::to_string(declaration)?,
+            )),
+        }
+    }
+    cost::add(
+        Counter::DeclarationsWritten,
+        (inputs.len() + outputs.len() + steps.len()) as u64,
+    );
+    let units: std::collections::HashMap<&str, &str> = commit
+        .rows
+        .step_index
+        .iter()
+        .map(|index| (index.step.as_str(), index.unit.as_str()))
+        .collect();
+    written += put_rows(tx, project, Collection::Inputs, &inputs, generation, &units)?;
+    written += put_rows(
+        tx,
+        project,
+        Collection::Outputs,
+        &outputs,
+        generation,
+        &units,
+    )?;
+    written += put_rows(tx, project, Collection::Steps, &steps, generation, &units)?;
+    // 6: the index rows the changes imply.
+    for index in &commit.rows.step_index {
+        written += tx.sql().execute(
+            "UPDATE steps SET unit=?3 WHERE project_id=?1 AND step_id=?2 AND unit IS NOT ?3",
+            params![id, index.step.as_str(), index.unit.as_str()],
+        )? as u64;
+        written += tx.sql().execute(
+            "DELETE FROM step_tags WHERE project_id=?1 AND step_id=?2",
+            params![id, index.step.as_str()],
+        )? as u64;
+        for tag in &index.tags {
+            written += tx.sql().execute(
+                "INSERT INTO step_tags(project_id,step_id,tag) VALUES (?1,?2,?3)",
+                params![id, index.step.as_str(), tag],
+            )? as u64;
+        }
+        written += replace_references(tx, project, "step", index.step.as_str(), &index.references)?;
+    }
+    for (name, references) in &commit.rows.output_refs {
+        written += replace_references(tx, project, "output", name, references)?;
+    }
+    for (target, edges) in &commit.rows.edges {
+        written += tx.sql().execute(
+            "DELETE FROM plan_edges WHERE project_id=?1 AND target_step=?2",
+            params![id, target.as_str()],
+        )? as u64;
+        for edge in edges {
+            written += insert_edge(tx.sql(), project, edge)?;
+        }
+    }
+    // 7: the status transitions the edit's reconciliation settled.
+    let changes: Vec<StatusChange> = commit
+        .state
+        .transitions
+        .iter()
+        .map(|transition| StatusChange {
+            id: transition.step.clone(),
+            previous: transition.from.clone(),
+            entry: StepState {
+                status: transition.to.clone(),
+                skipped: transition.skipped.clone(),
+                error: transition.error.clone(),
+                ..StepState::default()
+            },
+        })
+        .collect();
+    write_status_changes(tx, project, &changes)?;
+    // 8, 9: the record, the history row, the revision.
+    let record = tx.append_record(
+        Some(project),
+        Event::PlanEdit {
+            rev: revision,
+            author: commit.author.clone(),
+            reason: commit.reason.clone(),
+            changes: commit.rows.changes.clone(),
+        },
+    )?;
+    written += tx.sql().execute(
+        "INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,changes) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![
+            id,
+            generation,
+            record.seq.0,
+            record.at,
+            commit.author,
+            commit.reason,
+            serde_json::to_string(&commit.rows.changes)?
+        ],
+    )? as u64;
+    tx.sql().execute(
+        "UPDATE plans SET rev=?2 WHERE project_id=?1",
+        params![id, generation],
+    )?;
+    cost::add(Counter::RowsWritten, written);
+    tx.changed(Some(project), "plan");
+    tx.changed(Some(project), "edits");
+    if !commit.state.removed.is_empty() || !changes.is_empty() {
+        tx.changed(Some(project), "status");
+    }
+    Ok(CommitOutcome::Committed(revision))
+}
+
+/// A prune commits only with the store's age evidence for its own revision, and only while
+/// every member's result is still the one the evidence froze at the cutoff.
+fn check_prune(
+    tx: &WriteTransaction<'_>,
+    project: ProjectId,
+    rev: Revision,
+    commit: &PlanEditCommit,
+    evidence: Option<&PruneEligibility>,
+) -> Result<()> {
+    let (prune, evidence) = match (&commit.prune, evidence) {
+        (None, None) => return Ok(()),
+        (Some(prune), Some(evidence)) => (prune, evidence),
+        (None, Some(_)) => {
+            return Err(invalid(
+                "prune evidence was given for an edit that is not a prune",
+            ));
+        }
+        (Some(_), None) => {
+            return Err(invalid(
+                "a prune commits only with the store's age evidence",
+            ));
+        }
+    };
+    if evidence.project != project
+        || evidence.revision != rev
+        || prune
+            .units
+            .iter()
+            .any(|unit| !evidence.units.contains(unit))
+    {
+        return Err(conflict(
+            "prune eligibility does not match the prepared edit",
+        ));
+    }
+    for step in &prune.steps {
+        let current = current_prune_result(tx.sql(), project, step)?;
+        if current
+            .is_none_or(|(id, at)| evidence.results.get(step) != Some(&id) || at > evidence.cutoff)
+        {
+            return Err(conflict(format!(
+                "steps.{step}: prune result changed; prepare prune again"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The commit's parts agree: its step deletes are the steps it removes, its puts of steps
+/// that do not exist are the steps it adds, and every step it puts has its index rows.
+fn check_commit(sql: &Connection, project: ProjectId, commit: &PlanEditCommit) -> Result<()> {
+    use std::collections::BTreeSet;
+    let deleted: BTreeSet<&str> = commit
+        .rows
+        .changes
+        .iter()
+        .filter_map(|change| match change {
+            PlanChange::StepDelete { step } => Some(step.as_str()),
+            _ => None,
+        })
+        .collect();
+    let removed: BTreeSet<&str> = commit.state.removed.iter().map(StepId::as_str).collect();
+    let indexed: BTreeSet<&str> = commit
+        .rows
+        .step_index
+        .iter()
+        .map(|index| index.step.as_str())
+        .collect();
+    let mut added = BTreeSet::new();
+    let mut statement =
+        sql.prepare_cached("SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2")?;
+    for change in &commit.rows.changes {
+        if let PlanChange::StepPut { step, .. } = change {
+            if !indexed.contains(step.as_str()) {
+                return Err(invalid(format!(
+                    "plan edit commit is inconsistent: steps.{step} is put without its index rows"
+                )));
+            }
+            if !statement.exists(params![project.to_string(), step.as_str()])? {
+                added.insert(step.as_str());
+            }
+        }
+    }
+    let declared: BTreeSet<&str> = commit.state.added.iter().map(StepId::as_str).collect();
+    if deleted != removed || added != declared {
+        return Err(invalid(
+            "plan edit commit is inconsistent: its step deletes and new steps must be its removed and added steps",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum Collection {
+    Inputs,
+    Outputs,
+    Steps,
+}
+
+/// Insert or update one collection's puts, `(key, position, declaration text)`. Rows that
+/// move go above the collection's maximum (and every put's position) first.
+fn put_rows(
+    tx: &mut WriteTransaction<'_>,
+    project: ProjectId,
+    collection: Collection,
+    puts: &[(&str, u64, String)],
+    generation: i64,
+    units: &std::collections::HashMap<&str, &str>,
+) -> Result<u64> {
+    if puts.is_empty() {
+        return Ok(0);
+    }
+    let (table, key) = match collection {
+        Collection::Inputs => ("inputs", "name"),
+        Collection::Outputs => ("plan_outputs", "name"),
+        Collection::Steps => ("steps", "step_id"),
+    };
+    let id = project.to_string();
+    let mut current = Vec::with_capacity(puts.len());
+    {
+        let mut statement = tx.sql().prepare_cached(&format!(
+            "SELECT position FROM {table} WHERE project_id=?1 AND {key}=?2"
+        ))?;
+        for (name, _, _) in puts {
+            current.push(
+                statement
+                    .query_row(params![id, name], |r| r.get::<_, i64>(0))
+                    .optional()?,
+            );
+        }
+    }
+    let mut written = 0;
+    let moving: Vec<&str> = puts
+        .iter()
+        .zip(&current)
+        .filter(|((_, position, _), now)| {
+            now.is_some_and(|now| Some(now) != sql_counter(*position).ok())
+        })
+        .map(|((name, _, _), _)| *name)
+        .collect();
+    if !moving.is_empty() {
+        cost::add(Counter::PositionsRenumbered, moving.len() as u64);
+        // Above every current row and every position a put takes, so a moved row never
+        // meets a row put after it.
+        let highest = puts
+            .iter()
+            .map(|(_, position, _)| *position)
+            .max()
+            .unwrap_or(0);
+        let above: i64 = tx.sql().query_row(
+            &format!(
+                "SELECT max(coalesce(max(position),-1),?2)+1 FROM {table} WHERE project_id=?1"
+            ),
+            params![id, sql_counter(highest)?],
+            |r| r.get(0),
+        )?;
+        let mut shift = tx.sql().prepare_cached(&format!(
+            "UPDATE {table} SET position=?3 WHERE project_id=?1 AND {key}=?2"
+        ))?;
+        for (offset, name) in moving.iter().enumerate() {
+            written += shift.execute(params![id, name, above + offset as i64])? as u64;
+        }
+    }
+    for ((name, position, declaration), now) in puts.iter().zip(&current) {
+        let position = sql_counter(*position)?;
+        written += match (collection, now) {
+            (Collection::Inputs, Some(_)) => tx.sql().execute(
+                "UPDATE inputs SET position=?3,declaration=?4 WHERE project_id=?1 AND name=?2",
+                params![id, name, position, declaration],
+            )?,
+            (Collection::Inputs, None) => tx.sql().execute(
+                "INSERT INTO inputs(project_id,name,position,declaration,generation) VALUES (?1,?2,?3,?4,?5)",
+                params![id, name, position, declaration, generation],
+            )?,
+            (Collection::Outputs, Some(_)) => tx.sql().execute(
+                "UPDATE plan_outputs SET position=?3,binding=?4 WHERE project_id=?1 AND name=?2",
+                params![id, name, position, declaration],
+            )?,
+            (Collection::Outputs, None) => tx.sql().execute(
+                "INSERT INTO plan_outputs(project_id,name,position,binding) VALUES (?1,?2,?3,?4)",
+                params![id, name, position, declaration],
+            )?,
+            (Collection::Steps, Some(_)) => tx.sql().execute(
+                &format!(
+                    "UPDATE steps SET (position,declaration,paused,run,priority,needs)=(?4,?1,{HELD_COLUMNS})
+                     WHERE project_id=?2 AND step_id=?3"
+                ),
+                params![declaration, id, name, position],
+            )?,
+            (Collection::Steps, None) => {
+                let unit = units.get(name).ok_or_else(|| {
+                    invalid(format!("plan edit commit is inconsistent: steps.{name} has no unit"))
+                })?;
+                tx.sql().execute(
+                    &format!(
+                        "INSERT INTO steps(declaration,project_id,step_id,position,generation,unit,paused,run,priority,needs)
+                         VALUES (?1,?2,?3,?4,?5,?6,{HELD_COLUMNS})"
+                    ),
+                    params![declaration, id, name, position, generation, unit],
+                )?
+            }
+        } as u64;
+    }
+    Ok(written)
+}
+
+fn replace_references(
+    tx: &WriteTransaction<'_>,
+    project: ProjectId,
+    consumer_kind: &str,
+    consumer: &str,
+    references: &[ReferenceRow],
+) -> Result<u64> {
+    let id = project.to_string();
+    let mut written = tx.sql().execute(
+        "DELETE FROM plan_refs WHERE project_id=?1 AND consumer_kind=?2 AND consumer_id=?3",
+        params![id, consumer_kind, consumer],
+    )? as u64;
+    for reference in references {
+        written += insert_reference(tx.sql(), project, reference)?;
+    }
+    Ok(written)
+}
+pub(crate) fn insert_reference(
+    sql: &Connection,
+    project: ProjectId,
+    reference: &ReferenceRow,
+) -> Result<u64> {
+    Ok(sql
+        .prepare_cached(
+            "INSERT INTO plan_refs(project_id,consumer_kind,consumer_id,slot,ordinal,kind,
+               source_kind,source_id,source_port,source_path) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        )?
+        .execute(params![
+            project.to_string(),
+            consumer_word(reference.consumer_kind),
+            reference.consumer_id,
+            reference.slot,
+            i64::from(reference.ordinal),
+            ref_word(reference.kind),
+            source_word(reference.source_kind),
+            reference.source_id,
+            reference.source_port,
+            reference.source_path
+        ])? as u64)
+}
+pub(crate) fn insert_edge(sql: &Connection, project: ProjectId, edge: &EdgeRow) -> Result<u64> {
+    Ok(sql
+        .prepare_cached(
+            "INSERT INTO plan_edges(project_id,source_step,target_step,kind,via_unit) VALUES (?1,?2,?3,?4,?5)",
+        )?
+        .execute(params![
+            project.to_string(),
+            edge.source.as_str(),
+            edge.target.as_str(),
+            match edge.kind {
+                EdgeKind::Data => "data",
+                EdgeKind::Gate => "gate",
+            },
+            edge.via_unit.as_ref().map_or("", |unit| unit.as_str())
+        ])? as u64)
+}
+/// The words `plan_refs` stores for its enum columns.
+fn consumer_word(kind: ConsumerKind) -> &'static str {
+    match kind {
+        ConsumerKind::Step => "step",
+        ConsumerKind::Output => "output",
+    }
+}
+fn ref_word(kind: RefKind) -> &'static str {
+    match kind {
+        RefKind::Binding => "binding",
+        RefKind::Gate => "gate",
+        RefKind::Output => "output",
+    }
+}
+fn source_word(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::Step => "step",
+        SourceKind::Input => "input",
+        SourceKind::Unit => "unit",
+    }
+}
+
+// ---- history ------------------------------------------------------------------------------
+
+/// A page of the plan's history (§5.4): every plan edit (from `plan_edits`, never trimmed)
+/// and the log's retained `plan.input`, `step.output` and `step.retry` records, merged by
+/// `seq`, oldest first. `since_rev` keeps entries whose `rev` is greater, `after_seq` those
+/// whose `seq` is greater. `limit` is 1 to 1000 (larger reads as 1000; 0 is `bad_request`).
+/// The second value is the last entry's seq when more entries match.
+pub fn history(
+    sql: &Connection,
+    project: ProjectId,
+    since_rev: Option<Revision>,
+    after_seq: Option<RecordSeq>,
+    limit: u32,
+) -> Result<(Vec<HistoryRecord>, Option<RecordSeq>)> {
+    if limit == 0 {
+        return Err(PlanRowsError::Limit.into());
+    }
+    let limit = limit.min(MAX_LIMIT);
+    let mut statement = sql.prepare_cached(
+        "SELECT seq,at,payload,payload_version FROM (
+           SELECT seq,at,payload,payload_version FROM records WHERE project_id=?1
+             AND kind IN ('plan.input','step.output','step.retry')
+           UNION ALL
+           SELECT seq,at,json_object('kind','plan.edit','rev',rev,'author',author,
+             'reason',reason,'changes',json(changes)),?5 FROM plan_edits WHERE project_id=?1
+         ) WHERE (?2 IS NULL OR json_extract(payload,'$.rev')>?2) AND (?3 IS NULL OR seq>?3)
+         ORDER BY seq LIMIT ?4",
+    )?;
+    let mut rows = statement.query(params![
+        project.to_string(),
+        since_rev.map(|rev| sql_counter(rev.0)).transpose()?,
+        after_seq.map(|seq| seq.0),
+        i64::from(limit) + 1,
+        crate::schema::RECORD_PAYLOAD_VERSION
+    ])?;
+    let mut entries = vec![];
+    while let Some(row) = rows.next()? {
+        let version: i64 = row.get(3)?;
+        if version != crate::schema::RECORD_PAYLOAD_VERSION {
+            return Err(StoreError::InvalidDatabase(format!(
+                "unsupported record payload version {version}"
+            )));
+        }
+        entries.push(HistoryRecord {
+            seq: RecordSeq(row.get(0)?),
+            at: row.get(1)?,
+            project: Some(project),
+            event: serde_json::from_str(&row.get::<_, String>(2)?).map_err(corrupt)?,
+        });
+    }
+    let more = entries.len() > limit as usize;
+    entries.truncate(limit as usize);
+    let next = more
+        .then(|| entries.last().map(|entry| entry.seq))
+        .flatten();
+    Ok((entries, next))
 }

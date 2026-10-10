@@ -1,14 +1,16 @@
 #[path = "../../../tests/support/home.rs"]
 mod home;
 #[allow(dead_code)]
+#[path = "support/plan_rows.rs"]
+mod plan_rows;
+#[allow(dead_code)]
 mod support {
     use super::home::ScratchHome;
     use rusqlite::params;
     use serde_json::{Value, json};
     use sluice_model::{
         commands::*,
-        edit::PreparedEdit,
-        gates::{CachedResources, StateSnapshot},
+        gates::StateSnapshot,
         ids::*,
         plan::{FnSignature, Plan, SignatureProvider},
         rpc::{JsonMap, decode_json},
@@ -58,38 +60,6 @@ mod support {
     pub fn plan(doc: Value) -> Plan {
         Plan::parse(&map(doc), &Signatures).unwrap()
     }
-    pub fn edit(context: &PlanContext, doc: Value) -> PreparedEdit {
-        let state = StateSnapshot::default();
-        let recipes = Default::default();
-        let limits = Default::default();
-        let resources = CachedResources::default();
-        let request = sluice_model::edit::PlanEdit::Patch(PlanPatch {
-            project: ProjectSelector::Id(context.project),
-            rev: context.revision,
-            ops: vec![PatchOperation::Replace {
-                path: "".into(),
-                value: doc.try_into().unwrap(),
-            }],
-            start: true,
-            dry_run: false,
-            reason: "change".into(),
-            author: Some("sam".into()),
-        });
-        sluice_model::edit::prepare_edit(
-            &sluice_model::edit::EditSnapshot {
-                revision: context.revision,
-                plan: &context.plan,
-                state: &state,
-                signatures: &Signatures,
-                recipes: &recipes,
-                limits: &limits,
-                resources: &resources,
-                prune_eligible: None,
-            },
-            request,
-        )
-        .unwrap()
-    }
     pub struct Fixture {
         pub home: ScratchHome,
         pub writer: Writer,
@@ -102,16 +72,19 @@ mod support {
             assert!(home.root().exists());
             assert_eq!(ScratchHome::validate(home.path()).unwrap(), home.path());
             let writer = Writer::open(home.path()).unwrap();
-            let project = ProjectId::new();
-            let plan = plan(doc);
+            let plan = plan(doc.clone());
             let copy = plan.clone();
-            writer
+            let (project, revision) = writer
                 .write(RetrySafety::NonIdempotent, move |tx| {
-                    tx.sql().execute(
-                        "INSERT INTO projects(project_id,name,created_at) VALUES (?1,'p','now')",
-                        [project.to_string()],
+                    let project = super::plan_rows::create_project(tx, "p")?;
+                    let rev = super::plan_rows::commit_document(
+                        tx,
+                        project,
+                        &map(doc),
+                        Some(&copy),
+                        None,
                     )?;
-                    plans::initialize_plan(tx, project, &copy)
+                    Ok((project, rev))
                 })
                 .await
                 .unwrap();
@@ -122,7 +95,7 @@ mod support {
                 reads,
                 context: PlanContext {
                     project,
-                    revision: Revision(1),
+                    revision,
                     plan,
                 },
             }
@@ -148,18 +121,18 @@ mod support {
                 .unwrap()
         }
         pub async fn apply(&mut self, doc: Value) {
-            let prepared = edit(&self.context, doc);
-            let plan = prepared.plan.clone();
+            let plan = plan(doc.clone());
+            let copy = plan.clone();
             let project = self.context.project;
-            let result = self
+            let revision = self
                 .writer
                 .write(RetrySafety::NonIdempotent, move |tx| {
-                    plans::apply_edit(tx, project, prepared)
+                    super::plan_rows::commit_document(tx, project, &map(doc), Some(&copy), None)
                 })
                 .await
                 .unwrap();
             self.context.plan = plan;
-            self.context.revision = result.rev;
+            self.context.revision = revision;
         }
         pub async fn manual(&self, step: &str, outputs: Value, force: bool) -> ResultId {
             let context = self.context.clone();

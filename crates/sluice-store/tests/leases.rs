@@ -45,10 +45,10 @@ impl Fixture {
                     [project.to_string()],
                 )?;
                 tx.sql().execute(
-                    "INSERT INTO plans(project_id,rev,doc) VALUES (?,1,?)",
+                    "INSERT INTO plans(project_id,rev,root_order) VALUES (?,1,?)",
                     params![
                         project.to_string(),
-                        json!({"inputs":{},"outputs":{},"steps":{}}).to_string()
+                        json!(["inputs", "outputs", "steps"]).to_string()
                     ],
                 )?;
                 r::patch_resources(tx, project, &resources, &Signatures)?;
@@ -71,10 +71,8 @@ impl Fixture {
         let attempt = AttemptId::new();
         self.writer.write(RetrySafety::NonIdempotent,move |tx| {
             let declaration=json!({"run":"job","priority":priority});
-            tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status) VALUES (?1,?2,(SELECT count(*) FROM steps WHERE project_id=?1),?3,'running')",params![p.to_string(),step,declaration.to_string()])?;
-            let doc:String=tx.sql().query_row("SELECT doc FROM plans WHERE project_id=?",[p.to_string()],|r| r.get(0))?;
-            let mut doc:Value=serde_json::from_str(&doc)?; doc["steps"][&step]=declaration;
-            tx.sql().execute("UPDATE plans SET doc=?2,rev=rev+1 WHERE project_id=?1",params![p.to_string(),doc.to_string()])?;
+            tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status,unit,paused,run,priority) VALUES (?1,?2,(SELECT count(*) FROM steps WHERE project_id=?1),?3,'running',?2,'false',json_extract(?3,'$.run'),coalesce(json_extract(?3,'$.priority'),0))",params![p.to_string(),step,declaration.to_string()])?;
+            tx.sql().execute("UPDATE plans SET rev=rev+1 WHERE project_id=?1",params![p.to_string()])?;
             tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,phase,request,inputs_hash,created_at) VALUES (?,?,?,'executing','{}','hash','now')",params![attempt.to_string(),p.to_string(),step])?;
             tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,created_at) VALUES (?,?,?,?,'now')",params![run.to_string(),p.to_string(),attempt.to_string(),step])?;
             tx.changed(Some(p),"status"); Ok(run)
