@@ -502,10 +502,11 @@ define("sluice-answer", {
 });
 
 // ---- sluice-menu -------------------------------------------------------------------------------
-// A menu behind its summary (the project switcher, display preferences, the plan's More): a
-// `<details>` that opens and works without script. A click elsewhere or Escape closes it, the
-// focus back on its summary; ArrowDown from the summary goes into it, and the arrows, Home and
-// End move through its links and buttons (a radio keeps its own arrows).
+// A menu behind its summary (the project switcher, display preferences, an item's Details
+// behind its "⋯"): a `<details>` that opens and works without script. Its summary says
+// aria-expanded; a click elsewhere or Escape closes it, the focus back on its summary;
+// ArrowDown from the summary goes into it, and the arrows, Home and End move through its links
+// and buttons (a radio keeps its own arrows).
 define("sluice-menu", {
   props: () => ({}),
   manifest: {
@@ -516,6 +517,12 @@ define("sluice-menu", {
   setup({ host, cleanup }) {
     const on = listening(cleanup);
     const details = () => host.querySelector(":scope > details");
+    const said = () => {
+      const d = details(), summary = d?.querySelector(":scope > summary");
+      if (summary && summary.getAttribute("aria-expanded") !== String(d.open)) summary.setAttribute("aria-expanded", String(d.open));
+    };
+    on(host, "toggle", said, { capture: true });
+    said();
     const items = () => [...(details()?.querySelectorAll(".menu a[href], .menu button:not([hidden]), .menu input:not([type=hidden])") ?? [])]
       .filter((el) => el.checkVisibility?.() ?? true);
     on(document, "click", (event) => {
@@ -658,16 +665,14 @@ define("sluice-copy", {
 // ---- sluice-toggle -----------------------------------------------------------------------------
 // A display setting applied at once and kept by posting it to /settings, which sets the cookie
 // every page is drawn from: `setting` "types" (a Types switch's aria-pressed, or the display
-// preferences' checkbox; every one on the page follows, and `show-types` on <html>), "theme"
-// (its id as `data-theme` on <html>; the default, Americana, removes it) or "appearance"
-// (light or dark as `data-appearance` on <html>; "Match system" removes it, so the page follows
-// the OS).
+// preferences' checkbox; every one on the page follows, and `show-types` on <html>) or "theme"
+// (its id as `data-theme` on <html>: a complete theme, its palette and its scheme).
 const keepSetting = (name, value) =>
   fetch("/settings", { method: "POST", keepalive: true, body: new URLSearchParams({ [name]: value }) }).catch(() => {});
 define("sluice-toggle", {
   props: ({ string }) => ({ setting: string }),
   manifest: {
-    slots: [{ name: "control", description: "button.types-toggle[aria-pressed], a types checkbox, or the theme or appearance radios." }],
+    slots: [{ name: "control", description: "button.types-toggle[aria-pressed], a types checkbox, or the theme radios." }],
     events: [{ name: "sluice-setting", description: "A setting changed (on document); detail.setting and detail.value." }],
   },
   setup({ host, props, cleanup }) {
@@ -692,11 +697,9 @@ define("sluice-toggle", {
     on(host, "change", (event) => {
       const input = event.target;
       if (input.name === "types" && input.type === "checkbox") types(input.checked);
-      if (input.name === "theme" || input.name === "appearance") {
-        const key = input.name;
-        if (input.value && input.value !== "americana") root.dataset[key] = input.value;
-        else delete root.dataset[key];
-        keepSetting(key, input.value);
+      if (input.name === "theme" && input.value) {
+        root.dataset.theme = input.value;
+        keepSetting("theme", input.value);
         say(input.value);
       }
     });
@@ -999,40 +1002,6 @@ define("sluice-splitter", {
       resized();
     });
     requestAnimationFrame(values);
-  },
-});
-
-// ---- sluice-grid -------------------------------------------------------------------------------
-// The module grid's construction (`ui::grid_open`): the server draws the sheet's columns, each
-// numbered, in `.grid-ovl` under its modules, and each module carries its span. While its
-// show-grid switch (`button.grid-toggle[aria-controls=<its id>]`, anywhere on the page) is
-// pressed the host has `showing` and the stylesheet shows them. The choice is kept in this
-// browser, for every grid.
-define("sluice-grid", {
-  props: ({ bool }) => ({ showing: bool }),
-  manifest: {
-    slots: [{ name: "overlay", description: "The server's .grid-ovl: a .gc a column, its number in .gc-n." },
-            { name: "modules", description: "Its modules and columns (.mod, .mod-col), each with data-span." }],
-    events: [{ name: "sluice-grid", description: "The construction grid was shown or hidden; detail.showing says which." }],
-  },
-  setup({ host, cleanup }) {
-    const on = listening(cleanup);
-    const KEY = "sluice.grid";
-    const switches = () => [...document.querySelectorAll("button.grid-toggle")]
-      .filter((b) => b.getAttribute("aria-controls") === host.id);
-    const apply = (show, told) => {
-      host.toggleAttribute("showing", show);
-      for (const b of switches()) b.setAttribute("aria-pressed", String(show));
-      if (!told) return;
-      store.set(KEY, show ? "1" : null);
-      host.dispatchEvent(new CustomEvent("sluice-grid", { bubbles: true, detail: { showing: show } }));
-    };
-    on(document, "click", (event) => {
-      const button = event.target.closest?.("button.grid-toggle");
-      if (!button || button.getAttribute("aria-controls") !== host.id) return;
-      apply(!host.hasAttribute("showing"), true);
-    });
-    apply(store.get(KEY) === "1" || host.hasAttribute("showing"), false);
   },
 });
 

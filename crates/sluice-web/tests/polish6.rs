@@ -286,11 +286,17 @@ async fn a_lane_row_says_its_question_and_a_note_to_many_is_drawn_once() {
         l2.contains("<b>failed</b>") && !l2.contains("Heads up"),
         "{l2}"
     );
-    // a row with nothing of its own says the note and who sent it
+    // a waiting row's one line is what holds it; the note and who sent it, by its stage, are
+    // in its more
     let l3 = plan_html::row(&html, "l3");
     assert!(
-        l3.contains("<span class=\"uv-from\">Note from l1-work</span>") && l3.contains("Heads up"),
+        l3.contains("<p class=\"pl-sub pl-waits\">fork waits for"),
         "{l3}"
+    );
+    let more = &l3[l3.find("<div class=\"pl-said\">").expect("its more")..];
+    assert!(
+        more.contains("<b>Note from work</b>") && more.contains("Heads up"),
+        "{more}"
     );
     // the log: the note is one row, its sender named as pages name a step and linked
     let (_, log) = f.get(&format!("/projects/id/{id}/log")).await;
@@ -575,9 +581,10 @@ async fn chromium_the_board_alone_keeps_its_tags_and_a_wide_screen_sets_overview
         browser
             .wait("document.querySelector('.project-page[data-view=\"board\"]')")
             .unwrap();
-        // the board alone keeps the band's summary, its question first, and hides the plan
+        // the board alone keeps the page's summary sentence, its question first, and hides
+        // the plan
         let kept = browser
-            .eval("[document.querySelector('.band-summary').checkVisibility(), document.querySelector('.band-summary').textContent.startsWith('1 question for you'), document.querySelector('#plan-pane').checkVisibility()]")
+            .eval("[document.querySelector('.page-line').checkVisibility(), document.querySelector('.page-line').textContent.startsWith('1 question for you'), document.querySelector('#plan-pane').checkVisibility()]")
             .unwrap();
         assert_eq!(kept, json!([true, true, false]));
         browser
@@ -586,7 +593,7 @@ async fn chromium_the_board_alone_keeps_its_tags_and_a_wide_screen_sets_overview
 
         // a wide screen: Overview's modules two to a row, its question and Now in the first
         // column, what it waits on and its output beside them, side by side from the top
-        const TWO: &str = "(() => { const cols = [...document.querySelectorAll('#tp-overview .ov > sluice-grid > .mod-col')].map(c => c.getBoundingClientRect()); return [cols.length, cols.length === 2 && Math.round(cols[0].top) === Math.round(cols[1].top), cols.length === 2 && cols[0].right < cols[1].left, document.documentElement.scrollWidth <= innerWidth]; })()";
+        const TWO: &str = "(() => { const cols = [...document.querySelectorAll('#tp-overview .ov > .sheet > .mod-col')].map(c => c.getBoundingClientRect()); return [cols.length, cols.length === 2 && Math.round(cols[0].top) === Math.round(cols[1].top), cols.length === 2 && cols[0].right < cols[1].left, document.documentElement.scrollWidth <= innerWidth]; })()";
         browser.viewport(2400, "dark").unwrap();
         browser.navigate(&format!("http://{addr}/projects/id/{wide}/steps/l1-work")).unwrap();
         browser.wait("document.querySelector('#tp-overview .d-ask')").unwrap();
@@ -610,7 +617,7 @@ async fn chromium_the_board_alone_keeps_its_tags_and_a_wide_screen_sets_overview
         browser.wait("document.querySelector('#tp-overview .d-ask')").unwrap();
         assert_eq!(
             browser
-                .eval("(() => { const cols = [...document.querySelectorAll('#tp-overview .ov > sluice-grid > .mod-col')].map(c => c.getBoundingClientRect()); return cols.length === 2 && cols[1].top >= cols[0].bottom; })()")
+                .eval("(() => { const cols = [...document.querySelectorAll('#tp-overview .ov > .sheet > .mod-col')].map(c => c.getBoundingClientRect()); return cols.length === 2 && cols[1].top >= cols[0].bottom; })()")
                 .unwrap(),
             json!(true)
         );

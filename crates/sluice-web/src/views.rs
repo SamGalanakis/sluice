@@ -58,70 +58,105 @@ impl fmt::Display for TrustedHtml {
     }
 }
 
-/// A theme (DESIGN.md, Themes): a palette mapped onto every role, light and dark. Its id is
-/// `data-theme` on the page and the `sluice_theme` cookie; the first, Americana, is the default
-/// and names neither.
+/// A theme (DESIGN.md, Themes): one complete look, a palette mapped onto every role in one
+/// scheme, light or dark. Its id is `data-theme` on the page and the `sluice_theme` cookie:
+/// `<family>-light` or `<family>-dark`, the family naming its palette in the stylesheet, the
+/// suffix its scheme.
 pub struct Theme {
     pub id: &'static str,
     pub name: &'static str,
     /// Where its colours come from: the scheme, its author and its licence.
     pub source: &'static str,
 }
-pub const THEMES: [Theme; 7] = [
+impl Theme {
+    pub fn dark(&self) -> bool {
+        self.id.ends_with("-dark")
+    }
+}
+/// Every theme the display preferences offer, one flat list, each light then dark. With none
+/// chosen (the first open) a page is Sluice Light or Sluice Dark by the system's scheme, and
+/// its script keeps that choice from then on.
+pub const THEMES: [Theme; 14] = [
     Theme {
-        id: "americana",
-        name: "Americana",
-        source: "The logo's own palette (the default)",
+        id: "sluice-light",
+        name: "Sluice Light",
+        source: "The logo's own palette",
     },
     Theme {
-        id: "solarized",
-        name: "Solarized",
+        id: "sluice-dark",
+        name: "Sluice Dark",
+        source: "The logo's own palette",
+    },
+    Theme {
+        id: "solarized-light",
+        name: "Solarized Light",
         source: "Solarized, Ethan Schoonover (MIT)",
     },
     Theme {
-        id: "nord",
+        id: "solarized-dark",
+        name: "Solarized Dark",
+        source: "Solarized, Ethan Schoonover (MIT)",
+    },
+    Theme {
+        id: "nord-light",
+        name: "Nord Light",
+        source: "Nord, Arctic Ice Studio (MIT)",
+    },
+    Theme {
+        id: "nord-dark",
         name: "Nord",
         source: "Nord, Arctic Ice Studio (MIT)",
     },
     Theme {
-        id: "gruvbox",
-        name: "Gruvbox",
+        id: "gruvbox-light",
+        name: "Gruvbox Light",
         source: "Gruvbox, Pavel Pertsev (MIT/X11)",
     },
     Theme {
-        id: "catppuccin",
-        name: "Catppuccin",
-        source: "Catppuccin Latte and Mocha (MIT)",
+        id: "gruvbox-dark",
+        name: "Gruvbox Dark",
+        source: "Gruvbox, Pavel Pertsev (MIT/X11)",
     },
     Theme {
-        id: "rose-pine",
+        id: "catppuccin-light",
+        name: "Catppuccin Latte",
+        source: "Catppuccin (MIT)",
+    },
+    Theme {
+        id: "catppuccin-dark",
+        name: "Catppuccin Mocha",
+        source: "Catppuccin (MIT)",
+    },
+    Theme {
+        id: "rose-pine-light",
+        name: "Rosé Pine Dawn",
+        source: "Rosé Pine (MIT)",
+    },
+    Theme {
+        id: "rose-pine-dark",
         name: "Rosé Pine",
-        source: "Rosé Pine and its Dawn (MIT)",
+        source: "Rosé Pine (MIT)",
     },
     Theme {
-        id: "flexoki",
-        name: "Flexoki",
+        id: "flexoki-light",
+        name: "Flexoki Light",
+        source: "Flexoki, Steph Ango (MIT)",
+    },
+    Theme {
+        id: "flexoki-dark",
+        name: "Flexoki Dark",
         source: "Flexoki, Steph Ango (MIT)",
     },
 ];
-/// The default theme's id: it is drawn with no `data-theme` and kept with no cookie.
-pub const DEFAULT_THEME: &str = THEMES[0].id;
-/// An appearance: `data-appearance` and the `sluice_appearance` cookie. With neither chosen a
-/// page follows the system.
-pub const APPEARANCES: [(&str, &str); 2] = [("light", "Light"), ("dark", "Dark")];
-fn is_theme(id: &str) -> bool {
-    THEMES.iter().any(|t| t.id == id)
-}
-fn is_appearance(id: &str) -> bool {
-    APPEARANCES.iter().any(|(a, _)| *a == id)
+fn theme(id: &str) -> Option<&'static Theme> {
+    THEMES.iter().find(|t| t.id == id)
 }
 /// The display preferences a page is drawn with, from its cookies.
 #[derive(Clone, Debug, Default)]
 pub struct Viewer {
-    /// A theme other than the default, by id.
-    pub theme: Option<String>,
-    /// Light or dark; `None` follows the system.
-    pub appearance: Option<String>,
+    /// The chosen theme, by id; `None` before the first choice (the page follows the system's
+    /// scheme in Sluice's palette until its script keeps one).
+    pub theme: Option<&'static str>,
     pub types: bool,
 }
 impl Viewer {
@@ -135,12 +170,7 @@ impl Viewer {
         {
             if let Some((name, value)) = cookie.trim().split_once('=') {
                 match name {
-                    "sluice_theme" if is_theme(value) && value != DEFAULT_THEME => {
-                        viewer.theme = Some(value.into())
-                    }
-                    "sluice_appearance" if is_appearance(value) => {
-                        viewer.appearance = Some(value.into())
-                    }
+                    "sluice_theme" => viewer.theme = theme(value).map(|t| t.id),
                     "sluice_types" => viewer.types = value == "1",
                     _ => {}
                 }
@@ -148,13 +178,9 @@ impl Viewer {
         }
         viewer
     }
-    /// The theme's id, the default's when none is chosen.
+    /// The chosen theme's id, "" before the first choice.
     pub fn theme_id(&self) -> &str {
-        self.theme.as_deref().unwrap_or(DEFAULT_THEME)
-    }
-    /// The appearance's id, "" when the page follows the system.
-    pub fn appearance_id(&self) -> &str {
-        self.appearance.as_deref().unwrap_or("")
+        self.theme.unwrap_or("")
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -542,6 +568,8 @@ pub struct NavView {
     pub notes: usize,
     pub settings_href: String,
     pub selected: Option<ProjectId>,
+    /// The current project's mark in the switcher: its icon, else its initial in a square.
+    pub icon: TrustedHtml,
 }
 impl NavView {
     pub fn new(
@@ -587,6 +615,7 @@ impl NavView {
                 .map(|p| format!("{}/settings", p.href()))
                 .unwrap_or_default(),
             selected: project,
+            icon: chosen.map(ui::project_mark).unwrap_or_default(),
         })
     }
 }
@@ -609,15 +638,18 @@ impl NavView {
         keys
     }
 }
-/// What a page puts in the frame around it (DESIGN.md, The band): its head in the title band
-/// (`ui::band_head`, then any strip such as `ui::recent_strip`), and on the paper row under the
-/// band, after its sections, a meta line ("12 units · 40 steps") and its tools (a find, the
-/// grid switch). A page with none of it gets the band's top row alone.
+/// What a page puts in the frame around it (DESIGN.md, The page head): its head on the paper
+/// under the slim nav bar (`ui::page_head`: its name, and on the plan and home the summary
+/// sentence), then its row (after its sections, a count line such as "12 units · 40 steps" and
+/// its tools, a find and the view switch). A page with none of it draws the nav bar alone.
+/// A page that is one thing inside a tab (a step, a unit, a thread) is `inner`: the tab row
+/// comes first and its head under it, so the row stays where the plan has it.
 #[derive(Clone, Debug, Default)]
 pub struct Frame {
     pub head: TrustedHtml,
     pub meta: TrustedHtml,
     pub tools: TrustedHtml,
+    pub inner: bool,
 }
 #[derive(Template)]
 #[template(path = "layout.html")]
@@ -630,7 +662,6 @@ struct Layout<'a> {
     stream: &'a str,
     signals: String,
     themes: &'a [Theme],
-    appearances: &'a [(&'a str, &'a str)],
     path: &'a str,
     style_url: String,
     nav_url: String,
@@ -681,7 +712,6 @@ pub fn render_framed(
         stream,
         signals: serde_json::json!({"ver":version,"stale":false}).to_string(),
         themes: &THEMES,
-        appearances: &APPEARANCES,
         path,
         style_url: asset_url("style.css"),
         nav_url: asset_url("nav.js"),
@@ -941,31 +971,23 @@ pub async fn display_preferences(body: axum::body::Bytes) -> Response {
     }
     let values: url::form_urlencoded::Parse<'_> = url::form_urlencoded::parse(&body);
     let mut theme = None;
-    let mut appearance = None;
     let mut types = None;
     let mut next = "/".to_owned();
     for (name, value) in values {
         match name.as_ref() {
             "theme" => theme = Some(value.into_owned()),
-            "appearance" => appearance = Some(value.into_owned()),
             "types" => types = Some(value.into_owned()),
             "next" => next = value.into_owned(),
             _ => {}
         }
     }
-    // the default theme and "Match system" are no cookie: the page draws Americana, following
-    // the OS
-    if theme
-        .as_deref()
-        .is_some_and(|t| !t.is_empty() && !is_theme(t))
-        || appearance
-            .as_deref()
-            .is_some_and(|a| !a.is_empty() && !is_appearance(a))
+    // a theme is one of the list: there is no "follow the system" to choose, only the first
+    // open's default, which the page's script keeps as a choice
+    if theme.as_deref().is_some_and(|t| self::theme(t).is_none())
         || types.as_deref().is_some_and(|t| t != "0" && t != "1")
     {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let theme = theme.map(|t| if t == DEFAULT_THEME { String::new() } else { t });
     if !next.starts_with('/')
         || next.starts_with("//")
         || next.contains('\\')
@@ -974,14 +996,10 @@ pub async fn display_preferences(body: axum::body::Bytes) -> Response {
         next = "/".into();
     }
     let mut response = axum::response::Redirect::to(&next).into_response();
-    for (name, value) in [
-        ("sluice_theme", theme),
-        ("sluice_appearance", appearance),
-        ("sluice_types", types),
-    ] {
+    for (name, value) in [("sluice_theme", theme), ("sluice_types", types)] {
         if let Some(value) = value {
-            let age = if value.is_empty() { 0 } else { 34_560_000 };
-            let cookie = format!("{name}={value}; Path=/; Max-Age={age}; SameSite=Lax; HttpOnly");
+            let cookie =
+                format!("{name}={value}; Path=/; Max-Age=34560000; SameSite=Lax; HttpOnly");
             response.headers_mut().append(
                 header::SET_COOKIE,
                 cookie.parse().expect("validated ASCII cookie"),

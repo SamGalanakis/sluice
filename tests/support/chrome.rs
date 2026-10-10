@@ -193,15 +193,27 @@ impl Chrome {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+    /// The page at `width` in `theme`: "light" or "dark" (Sluice Light or Dark), or a theme's
+    /// id ("nord-dark"); the system's scheme is emulated to match.
     pub fn viewport(&mut self, width: u32, theme: &str) -> Result<()> {
+        let id = match theme {
+            "light" | "dark" => format!("sluice-{theme}"),
+            id => id.to_owned(),
+        };
+        let scheme = if id.ends_with("-dark") {
+            "dark"
+        } else {
+            "light"
+        };
         self.send("Emulation.setDeviceMetricsOverride", json!({"width":width,"height":1000,"screenWidth":width,"screenHeight":1000,"deviceScaleFactor":1,"mobile":false}))?;
         self.send(
             "Emulation.setEmulatedMedia",
-            json!({"features":[{"name":"prefers-color-scheme","value":theme}]}),
+            json!({"features":[{"name":"prefers-color-scheme","value":scheme}]}),
         )?;
-        self.eval(
-            "document.documentElement.removeAttribute('data-appearance');document.fonts.ready",
-        )?;
+        self.eval(&format!(
+            "document.documentElement.dataset.theme={};document.fonts.ready",
+            json!(id)
+        ))?;
         self.eval("window.scrollTo(0,0);new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))")?;
         Ok(())
     }

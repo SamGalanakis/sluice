@@ -13,7 +13,6 @@ use sluice_model::{
     error::PublicError,
     events::Event,
     ids::{AttemptId, ProjectId, RunId, StepId},
-    shown::Shown,
 };
 use sluice_store::RetrySafety;
 
@@ -159,50 +158,40 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
     let id = retried(&f).await;
     let (status, html) = f.get(&format!("/projects/id/{id}")).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    // the row of a quiet run: its quiet time, then "run 6" after the last three earlier runs'
-    // marks and "+2" for the two before them
+    // the row of a quiet run: its quiet time and how long it has been silent; which run it is
+    // and how the earlier ones ended are its Details', not its line's
     let row = plan_html::row(&html, "l1");
     assert!(
-        row.contains("<b>quiet</b>") && row.contains(" · silent "),
+        row.contains("<b>quiet</b>") && row.contains(", silent "),
         "{row}"
     );
-    let tries = between(row, "<span class=\"tries\"", "</span></span>");
     assert!(
-        tries.contains("title=\"Run 6, after 4 failed and 1 cancelled\""),
-        "{tries}"
+        !row.contains("class=\"tries\"") && !row.contains(">run 6<"),
+        "{row}"
     );
     assert!(
-        tries.contains("<span class=\"tries-more\">+2</span>"),
-        "{tries}"
-    );
-    let mark = |s| sluice_web::views::ui::mark(s).as_str().to_owned();
-    assert!(
-        row.contains(&format!(
-            "+2</span>{}{}{}</span><span aria-hidden=\"true\">run 6</span>",
-            mark(Shown::Cancelled),
-            mark(Shown::Failed),
-            mark(Shown::Failed)
-        )),
-        "the last three, oldest first: {tries}"
-    );
-    assert!(
-        row.contains("<span class=\"vh\">run 6, after 4 failed and 1 cancelled</span></span>"),
+        row.contains("<dt>Run</dt><dd><span>6, after 4 failed and 1 cancelled</span></dd>"),
         "{row}"
     );
     // a unit of no recipe: its second run, the first failed
     let kit = plan_html::row(&html, "kit");
-    assert!(kit.contains("title=\"Run 2, after 1 failed\""), "{kit}");
-    assert!(kit.contains(">run 2<"), "{kit}");
+    assert!(
+        kit.contains("<dt>Run</dt><dd><span>2, after 1 failed</span></dd>"),
+        "{kit}"
+    );
     // a first run says nothing of runs
     let first = plan_html::row(&html, "probe");
-    assert!(!first.contains("tries"), "{first}");
+    assert!(!first.contains("<dt>Run</dt>"), "{first}");
 
-    // its page: the badge says the run, Now says how the run before ended and why, linked to
-    // that run under Runs
+    // its page: its head's Details say the run, Now says how the run before ended and why,
+    // linked to that run under Runs
     let (status, page) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
     assert_eq!(status, StatusCode::OK, "{page}");
-    let badges = between(&page, "<p class=\"d-badges\">", "</p>");
-    assert!(badges.contains(">run 6<"), "{badges}");
+    let head = between(&page, "<header id=\"step-band\"", "</header>");
+    assert!(
+        head.contains("<dt>Run</dt><dd><span>6, after 4 failed and 1 cancelled</span></dd>"),
+        "{head}"
+    );
     let now = between(&page, "<article class=\"mod d-sec d-now\"", "</article>");
     let retry = between(now, "<p class=\"meta now-retry\">", "</p>");
     assert!(
@@ -268,25 +257,28 @@ async fn a_stopped_card_names_its_failures_kind_and_says_why_under_it() {
         l2.contains("<b>failed</b> <span class=\"pl-kind\">quota</span>"),
         "{l2}"
     );
-    assert!(l2.contains("<p>Its engine hit a usage cap.</p>"), "{l2}");
+    assert!(
+        l2.contains("<p class=\"pl-why\">Its engine hit a usage cap.</p>"),
+        "{l2}"
+    );
     assert!(!l2.contains("agent_failure"), "{l2}");
     let plain = plan_html::stopped(&html, "plain");
     assert!(
         plain.contains("<span class=\"pl-kind\">lost</span>")
-            && plain.contains("<p>Its process was lost.</p>"),
+            && plain.contains("<p class=\"pl-why\">Its process was lost.</p>"),
         "{plain}"
     );
     // the work's own failure: no kind beside "failed"
     let bare = plan_html::stopped(&html, "bare");
     assert!(
-        !bare.contains("pl-kind") && bare.contains("<p>Its fn failed: boom.</p>"),
+        !bare.contains("pl-kind") && bare.contains("<p class=\"pl-why\">Its fn failed: boom.</p>"),
         "{bare}"
     );
     // a fn stopped at its wall-clock cap reads as an agent's cap does
     let kit = plan_html::stopped(&html, "kit");
     assert!(
         kit.contains("<span class=\"pl-kind\">cap</span>")
-            && kit.contains("<p>Stopped at its wall-clock cap after 10h 0m.</p>"),
+            && kit.contains("<p class=\"pl-why\">Stopped at its wall-clock cap after 10h 0m.</p>"),
         "{kit}"
     );
     // a running unit says no why
@@ -413,18 +405,18 @@ async fn a_filtered_empty_board_says_how_many_units_its_show_hides() {
 }
 
 #[tokio::test]
-async fn a_rows_wait_names_its_source_by_title_and_id_linked() {
+async fn a_rows_wait_names_its_source_by_title_linked() {
     let f = Fixture::new().await;
     let id = f.titled().await;
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
     let row = plan_html::row(&html, "l3");
     let waits = between(row, "<p class=\"pl-sub pl-waits\">", "</p>");
     assert!(
-        waits.contains(&format!("fork waits for <a href=\"/projects/id/{id}/steps/l2-land\" data-opens=\"l2-land\">FIG-2: Stop the parser leak <code>l2-land</code></a> (blocked)")),
+        waits.contains(&format!("fork waits for <a href=\"/projects/id/{id}/steps/l2-land\" data-opens=\"l2-land\">land · FIG-2: Stop the parser leak</a> (blocked)")),
         "{waits}"
     );
     assert!(
-        waits.contains("Probes the parser under load <code>probe</code></a> (running)"),
+        waits.contains(">Probes the parser under load</a> (running)"),
         "{waits}"
     );
 }

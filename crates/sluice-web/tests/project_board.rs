@@ -306,7 +306,7 @@ fn units(html: &str) -> Vec<String> {
     if !html.contains("id=\"plan-grid\"") {
         return vec![];
     }
-    let sheet = between(html, "id=\"plan-grid\"", "</sluice-grid>");
+    let sheet = between(html, "id=\"plan-grid\"", "</sluice-trace>");
     let mut out: Vec<String> = vec![];
     for (rest, quote) in sheet
         .split(" data-unit=\"")
@@ -314,12 +314,19 @@ fn units(html: &str) -> Vec<String> {
         .map(|r| (r, '"'))
         .chain(
             sheet
-                .split("<code class=\"pl-did\">")
+                .split("<details class=\"pl-index\"")
+                .nth(1)
+                .unwrap_or("")
+                .split("<li data-said=")
                 .skip(1)
-                .map(|r| (r, '<')),
+                .map(|r| {
+                    let href = &r[r.find(" href=\"").unwrap() + 7..];
+                    let href = &href[..href.find('"').unwrap()];
+                    (&href[href.rfind('/').unwrap() + 1..], '"')
+                }),
         )
     {
-        let unit = rest[..rest.find(quote).unwrap()].to_owned();
+        let unit = rest[..rest.find(quote).unwrap_or(rest.len())].to_owned();
         if !out.contains(&unit) {
             out.push(unit);
         }
@@ -690,7 +697,7 @@ async fn the_plan_orders_its_bands_and_says_each_wait_between_units_in_words() {
         !html.contains("board-edges") && !html.contains("<svg class=\"edges\""),
         "{html}"
     );
-    let sheet = between(&html, "id=\"plan-grid\"", "</sluice-grid>");
+    let sheet = between(&html, "id=\"plan-grid\"", "</sluice-trace>");
     for gone in ["legend", "lg-line", "xout", "xref"] {
         assert!(!sheet.contains(gone), "{gone}");
     }
@@ -795,7 +802,7 @@ async fn a_cancel_reads_as_cancelled_in_the_units_table_and_on_its_card() {
 }
 
 #[tokio::test]
-async fn the_done_index_lists_every_done_unit_newest_first_and_recently_finished_the_latest_five() {
+async fn the_done_index_lists_every_done_unit_newest_first_and_its_head_the_latest_four() {
     let f = Fixture::new().await;
     // 25 one-step units, each after the one before, all done
     let mut steps = serde_json::Map::new();
@@ -838,38 +845,46 @@ async fn the_done_index_lists_every_done_unit_newest_first_and_recently_finished
     let done = plan_html::band(&html, "plan-done");
     assert!(done.contains("25 units · 25 steps"), "{done}");
     // every one, newest first, folded until opened
-    assert_eq!(
-        done.matches("<code class=\"pl-did\">").count(),
-        25,
-        "{done}"
-    );
+    assert_eq!(done.matches("<span class=\"pl-at\">").count(), 25, "{done}");
+    for i in 0..25 {
+        assert_eq!(
+            plan_html::done_lines(&html, &format!("u{i:02}")),
+            1,
+            "u{i:02}"
+        );
+    }
     assert!(
         done.contains("<details class=\"pl-index\" data-preserve-attr=\"open\">"),
         "{done}"
     );
     let at = |u: &str| {
-        done.find(&format!("<code class=\"pl-did\">{u}</code>"))
+        ["units", "steps"]
+            .iter()
+            .find_map(|kind| done.find(&format!("/{kind}/{u}\"><span class=\"pl-at\">")))
             .unwrap()
     };
     assert!(at("u24") < at("u23") && at("u23") < at("u00"), "{done}");
-    // a line says when it finished (the reader's clock), its id, its title and how long it took
+    // a line says when it finished (the reader's clock), its title and how long it took; its
+    // id is its link's
+    let index = &done[done.find("<details class=\"pl-index\"").unwrap()..];
     let line = plan_html::between(
-        done,
+        index,
         "<time data-clock datetime=\"2026-10-06T11:24:00Z\"",
         "</li>",
     );
     assert!(
-        line.contains("<code class=\"pl-did\">u24</code><span class=\"pl-dt\">Ship the parser fix</span><span class=\"pl-dk\">took 1h 24m</span>"),
+        line.contains("<span class=\"pl-dt\">Ship the parser fix</span><span class=\"pl-dk\">took 1h 24m</span>"),
         "{line}"
     );
-    // the band's Recently finished: the latest five, newest first
-    let recent = plan_html::between(&html, "<section class=\"band-strip\"", "</section>");
-    assert_eq!(recent.matches("<li>").count(), 5, "{recent}");
+    assert!(!line.contains("pl-did"), "{line}");
+    // Done's head: what finished last, the latest four, newest first
+    let recent = plan_html::between(done, "<ol class=\"latest\"", "</ol>");
+    assert_eq!(recent.matches("<li>").count(), 4, "{recent}");
     assert!(
-        recent.find("u24").unwrap() < recent.find("u20").unwrap(),
+        recent.find("/u24\"").unwrap() < recent.find("/u21\"").unwrap(),
         "{recent}"
     );
-    assert!(!recent.contains("u19"), "{recent}");
+    assert!(!recent.contains("/u20\""), "{recent}");
     assert!(recent.contains("took 1h 24m"), "{recent}");
     // Show: Done opens the index
     let (_, html) = f.get(&format!("/projects/id/{id}?show=done")).await;

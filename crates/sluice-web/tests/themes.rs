@@ -1,9 +1,10 @@
 //! The frame's themes and its fluid grid: every theme's tokens read from the stylesheet hold
 //! WCAG contrast (text 4.5:1, focus and status marks 3:1) and keep the question's colour apart
-//! from every other role; the theme and appearance cookies, the picker and the gallery over
-//! HTTP; and in Chromium, at eight widths from 320 to 3840, no page scrolls sideways, the
-//! sheet has the columns its width gives it (its overlay drawing them), a strip head stays
-//! over its rows, and a theme and an appearance switch apply at once and are kept.
+//! from every other role; the theme cookie, the picker and the gallery over HTTP; and in
+//! Chromium, at eight widths from 320 to 3840, no page scrolls sideways, the sheet's modules
+//! take the columns its width gives them, a strip head stays over its rows, the first open
+//! takes Sluice Light or Dark from the system once and keeps it, and a pick applies at once
+//! and is kept.
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
@@ -174,11 +175,14 @@ fn block(selector: &str) -> BTreeMap<String, String> {
         })
         .collect()
 }
-/// A theme's light and dark value of every role: its own block over Americana's.
-fn theme(id: &str) -> BTreeMap<String, (Rgb, Rgb)> {
+/// A theme's value of every role in its own scheme: its family's block over Sluice's, the
+/// light or the dark side of each `light-dark()` by its id's suffix.
+fn theme(id: &str) -> BTreeMap<String, Rgb> {
     let mut tokens = block(":root, [data-theme]");
-    if id != "americana" {
-        let own = block(&format!("[data-theme=\"{id}\"]"));
+    let (family, scheme) = id.rsplit_once('-').unwrap();
+    assert!(matches!(scheme, "light" | "dark"), "{id}: a scheme");
+    if family != "sluice" {
+        let own = block(&format!("[data-theme^=\"{family}-\"]"));
         for role in ROLES {
             assert!(own.contains_key(role), "{id} maps every role: {role}");
         }
@@ -210,84 +214,77 @@ fn theme(id: &str) -> BTreeMap<String, (Rgb, Rgb)> {
                 }
                 None => (parse(value), parse(value)),
             };
-            (role.to_string(), pair)
+            (
+                role.to_string(),
+                if scheme == "dark" { pair.1 } else { pair.0 },
+            )
         })
         .collect()
 }
 
 #[test]
 fn every_theme_maps_every_role_and_holds_its_contrast() {
-    // the themes the picker offers are the stylesheet's, and no other theme block is there
-    let blocks = STYLE.matches("\n[data-theme=\"").count();
+    // the themes the picker offers are the stylesheet's: a block for each family but Sluice's,
+    // each family a light and a dark entry, and no other theme block is there
+    let families: std::collections::BTreeSet<&str> = THEMES
+        .iter()
+        .map(|t| t.id.rsplit_once('-').unwrap().0)
+        .collect();
+    assert_eq!(THEMES.len(), 14);
+    assert_eq!(families.len() * 2, THEMES.len(), "{families:?}");
     assert_eq!(
-        blocks,
-        THEMES.len() - 1,
-        "a block for each theme but the default"
+        STYLE.matches("\n[data-theme^=\"").count(),
+        families.len() - 1,
+        "a block for each family but Sluice's"
     );
     let mut failures = vec![];
     for t in THEMES {
+        assert_eq!(t.dark(), t.id.ends_with("-dark"));
         let tokens = theme(t.id);
-        for (appearance, pick) in [("light", 0), ("dark", 1)] {
-            let get = |role: &str| {
-                let (light, dark) = tokens[role];
-                if pick == 0 { light } else { dark }
-            };
-            for (fg, bg) in TEXT {
-                let ratio = contrast(get(fg), get(bg));
-                if ratio < 4.5 {
-                    failures.push(format!(
-                        "{} {appearance}: {fg} on {bg} {ratio:.2} < 4.5",
-                        t.id
-                    ));
-                }
-            }
-            // the band's muted words: its ink at 74%
-            let muted = Rgb(get("band-ink").0, 0.74);
-            let ratio = contrast(muted, get("band"));
+        let get = |role: &str| tokens[role];
+        for (fg, bg) in TEXT {
+            let ratio = contrast(get(fg), get(bg));
             if ratio < 4.5 {
-                failures.push(format!(
-                    "{} {appearance}: band-muted on band {ratio:.2} < 4.5",
-                    t.id
-                ));
+                failures.push(format!("{}: {fg} on {bg} {ratio:.2} < 4.5", t.id));
             }
-            for (fg, bg) in MARKS {
-                let ratio = contrast(get(fg), get(bg));
-                if ratio < 3.0 {
-                    failures.push(format!(
-                        "{} {appearance}: {fg} on {bg} {ratio:.2} < 3",
-                        t.id
-                    ));
-                }
-            }
-            // the question's colour is its own: apart from every other role a page colours with
-            for other in [
-                "sand", "run", "sky", "ink", "paper", "sky-ink", "sand-ink", "run-ink",
-            ] {
-                let d = apart(get("coral"), get(other));
-                if d < 0.1 {
-                    failures.push(format!(
-                        "{} {appearance}: coral too near {other} ({d:.3})",
-                        t.id
-                    ));
-                }
-            }
-            if apart(get("run"), get("sky")) < 0.1 {
-                failures.push(format!("{} {appearance}: run too near sky", t.id));
-            }
-            // the band is the deepest surface: darker than the paper in the light, no lighter
-            // than it in the dark
-            assert!(
-                luminance(get("band")) <= luminance(get("paper")) + 1e-9,
-                "{} {appearance}: the band is the deepest surface",
-                t.id
-            );
         }
+        // the band's muted words: its ink at 74%
+        let muted = Rgb(get("band-ink").0, 0.74);
+        let ratio = contrast(muted, get("band"));
+        if ratio < 4.5 {
+            failures.push(format!("{}: band-muted on band {ratio:.2} < 4.5", t.id));
+        }
+        for (fg, bg) in MARKS {
+            let ratio = contrast(get(fg), get(bg));
+            if ratio < 3.0 {
+                failures.push(format!("{}: {fg} on {bg} {ratio:.2} < 3", t.id));
+            }
+        }
+        // the question's colour is its own: apart from every other role a page colours with
+        for other in [
+            "sand", "run", "sky", "ink", "paper", "sky-ink", "sand-ink", "run-ink",
+        ] {
+            let d = apart(get("coral"), get(other));
+            if d < 0.1 {
+                failures.push(format!("{}: coral too near {other} ({d:.3})", t.id));
+            }
+        }
+        if apart(get("run"), get("sky")) < 0.1 {
+            failures.push(format!("{}: run too near sky", t.id));
+        }
+        // the band is the deepest surface: darker than the paper in the light, no lighter
+        // than it in the dark
+        assert!(
+            luminance(get("band")) <= luminance(get("paper")) + 1e-9,
+            "{}: the band is the deepest surface",
+            t.id
+        );
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
 #[tokio::test]
-async fn the_theme_and_appearance_are_cookies_the_picker_and_the_gallery_show() {
+async fn the_theme_is_a_cookie_the_picker_and_the_gallery_show() {
     let f = Fixture::new().await;
     let router = f.router();
     use axum::body::Body;
@@ -315,30 +312,27 @@ async fn the_theme_and_appearance_are_cookies_the_picker_and_the_gallery_show() 
             .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
             .collect()
     };
-    let r = post("theme=nord&appearance=dark&next=%2Finbox").await;
+    let r = post("theme=nord-dark&next=%2Finbox").await;
     assert_eq!(r.status(), 303);
     assert_eq!(r.headers()["location"], "/inbox");
-    assert_eq!(cookies(&r), ["sluice_theme=nord", "sluice_appearance=dark"]);
-    // the default theme and Match system are no cookie at all
-    let r = post("theme=americana&appearance=").await;
-    assert_eq!(cookies(&r), ["sluice_theme=", "sluice_appearance="]);
+    assert_eq!(cookies(&r), ["sluice_theme=nord-dark"]);
+    // Sluice's own are choices like any other, kept for a year
+    let r = post("theme=sluice-light").await;
+    assert_eq!(cookies(&r), ["sluice_theme=sluice-light"]);
     assert!(
-        r.headers()
-            .get_all(header::SET_COOKIE)
-            .iter()
-            .all(|v| v.to_str().unwrap().contains("Max-Age=0")),
+        r.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=34560000"),
         "{:?}",
         r.headers()
     );
-    // nothing else is a theme or an appearance (the old light and dark themes neither)
-    for body in [
-        "theme=dark",
-        "theme=solarized-dark",
-        "appearance=dusk",
-        "appearance=nord",
-    ] {
+    // nothing else is a theme: not a family, not a scheme, not the old default
+    for body in ["theme=dark", "theme=nord", "theme=americana", "theme="] {
         assert_eq!(post(body).await.status(), 400, "{body}");
     }
+    // an appearance is no longer a setting: it sets nothing
+    assert!(cookies(&post("appearance=dark").await).is_empty());
 
     let get = |cookie: &'static str| {
         let router = router.clone();
@@ -359,52 +353,51 @@ async fn the_theme_and_appearance_are_cookies_the_picker_and_the_gallery_show() 
             String::from_utf8(body.to_vec()).unwrap()
         }
     };
-    let html = get("sluice_theme=rose-pine; sluice_appearance=light").await;
+    let html = get("sluice_theme=rose-pine-light").await;
     assert!(
-        html.contains("<html lang=\"en\" data-theme=\"rose-pine\" data-appearance=\"light\">"),
+        html.contains("<html lang=\"en\" data-theme=\"rose-pine-light\">"),
         "{html}"
     );
     assert!(
-        html.contains("<input type=\"radio\" name=\"theme\" value=\"rose-pine\" checked>"),
+        html.contains("<input type=\"radio\" name=\"theme\" value=\"rose-pine-light\" checked>"),
         "{html}"
     );
-    assert!(
-        html.contains("<input type=\"radio\" name=\"appearance\" value=\"light\" checked>"),
-        "{html}"
-    );
-    // no cookie: Americana, the system's appearance, both said checked in the picker
+    assert!(!html.contains("appearance"), "{html}");
+    // no cookie (the first open): no theme drawn, so the system's scheme picks Sluice Light or
+    // Dark in the stylesheet, and none checked until the page's script keeps that choice
     let html = get("").await;
     assert!(html.contains("<html lang=\"en\">"), "{html}");
     assert!(
-        html.contains("<input type=\"radio\" name=\"theme\" value=\"americana\" checked>"),
+        !html.contains("name=\"theme\" value=\"sluice-light\" checked"),
         "{html}"
     );
     assert!(
-        html.contains("<input type=\"radio\" name=\"appearance\" value=\"\" checked>"),
+        !html.contains("name=\"theme\" value=\"sluice-dark\" checked"),
         "{html}"
     );
-    // a stale cookie (the old light and dark themes, the default named) draws nothing stale
-    let html = get("sluice_theme=dark; sluice_appearance=sepia").await;
-    assert!(html.contains("<html lang=\"en\">"), "{html}");
-    let html = get("sluice_theme=americana").await;
-    assert!(html.contains("<html lang=\"en\">"), "{html}");
-    // each theme in the picker with its swatch (band, paper, running, question)
+    // a stale cookie (a family alone, the old default) draws nothing stale
+    for stale in [
+        "sluice_theme=nord; sluice_appearance=dark",
+        "sluice_theme=americana",
+    ] {
+        let html = get(stale).await;
+        assert!(html.contains("<html lang=\"en\">"), "{stale}: {html}");
+    }
+    // each theme in the picker with its swatch (band, paper, running, question), and in the
+    // gallery once
     for t in THEMES {
         assert!(html.contains(&format!("<span>{}</span><span class=\"swatch\" data-theme=\"{}\" aria-hidden=\"true\"><i class=\"sw-run\"></i><i class=\"sw-ask\"></i></span>", t.name, t.id)), "{}", t.id);
-        // and in the gallery, in light and in dark
         assert_eq!(
             html.matches(&format!(
                 "<figure class=\"gal-themecard\" data-theme=\"{}\">",
                 t.id
             ))
             .count(),
-            2,
+            1,
             "{}",
             t.id
         );
     }
-    assert!(html.contains("<div class=\"gal-th\" data-appearance=\"light\"><p class=\"gal-theme\">Light</p><div class=\"gal-themes\">"), "{html}");
-    assert!(html.contains("<div class=\"gal-th\" data-appearance=\"dark\"><p class=\"gal-theme\">Dark</p><div class=\"gal-themes\">"), "{html}");
 }
 
 fn serve(f: &Fixture) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
@@ -419,28 +412,28 @@ fn serve(f: &Fixture) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
     )
 }
 const FRAMES: &str = "new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))";
-/// The page's width against the window's, the light sheet's mode and its overlay, and the
-/// strip head's stage columns against its rows' cells.
+/// The page's width against the window's, the light sheet's tracks and its modules' widths, and
+/// the strip head's stage columns against its rows' cells.
 const MEASURE: &str = "(() => {
   const d = document.documentElement, g = document.querySelector('#l-grid');
   const r = {scroll: d.scrollWidth, width: d.clientWidth};
   if (g) {
-    const mods = [...g.querySelectorAll(':scope > .mod')];
+    const css = getComputedStyle(g), tracks = css.gridTemplateColumns.split(' ').map(parseFloat);
     r.sheet = g.getBoundingClientRect().width;
-    r.cells = [...g.querySelectorAll('.gc')].filter(c => c.checkVisibility()).length;
-    r.cellTops = new Set([...g.querySelectorAll('.gc')].filter(c => c.checkVisibility()).map(c => Math.round(c.getBoundingClientRect().top))).size;
-    r.takes = mods.map(m => getComputedStyle(m).counterReset.replace('take ', ''));
-    r.widths = mods.map(m => m.getBoundingClientRect().width);
-    r.gap = parseFloat(getComputedStyle(g).columnGap);
-    r.col = g.querySelector('.gc').getBoundingClientRect().width;
+    r.tracks = tracks.length;
+    r.track = tracks[0];
+    r.gap = parseFloat(css.columnGap);
+    r.widths = [...g.querySelectorAll(':scope > .mod')].map(m => m.getBoundingClientRect().width);
     const s = document.querySelector('.gal-strips');
     r.heads = [...s.querySelectorAll('.sh-stage')].map(e => Math.round(e.getBoundingClientRect().left));
     r.rows = [...s.querySelectorAll('.strip-row > .strip')].map(st => [...st.children].map(e => Math.round(e.getBoundingClientRect().left)));
   }
   return r; })()";
+/// The page's paper and its theme, as drawn.
+const PAPER: &str = "[document.documentElement.dataset.theme ?? null, getComputedStyle(document.body).backgroundColor]";
 
 #[tokio::test(flavor = "multi_thread")]
-async fn chromium_every_width_fits_its_columns_and_a_theme_switch_applies() {
+async fn chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
     let f = Fixture::new().await;
     let n = neutral::seed(&f.writer, f._home.path()).await;
     let (addr, server) = serve(&f);
@@ -450,8 +443,6 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_switch_applies() {
         let plan = format!("{base}/projects/id/{}", n.almanac);
         let home = format!("{base}/");
         let mut browser = Chrome::open(&gallery).unwrap();
-        browser.viewport(1440, "light").unwrap();
-        browser.eval("try { localStorage.setItem('sluice.grid', '1') } catch {}").unwrap();
         for width in [320, 390, 768, 1024, 1440, 1920, 2560, 3840] {
             for (name, url) in [("ui", &gallery), ("plan", &plan), ("home", &home)] {
                 browser.viewport(width, "light").unwrap();
@@ -464,80 +455,74 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_switch_applies() {
                 if name != "ui" {
                     continue;
                 }
-                browser.wait("!!customElements.get('sluice-grid') && document.querySelector('#l-grid').hasAttribute('showing')").unwrap();
-                let m: Value = browser.eval(MEASURE).unwrap();
-                // the sheet's columns follow its own width; the overlay draws them in one row
+                // the sheet's modules take the columns its own width gives them: every one
+                // across a narrow sheet, halves and wholes on a medium one, a share of twelve
+                // to 2000px and of twenty-four from there
                 let sheet = m["sheet"].as_f64().unwrap();
                 let (cols, takes) = if sheet < 640.0 {
-                    (6, ["6", "6", "6", "6", "6", "6"])
+                    (6.0, [6.0, 6.0, 6.0, 6.0, 6.0, 6.0])
                 } else if sheet < 1200.0 {
-                    (12, ["6", "6", "6", "12", "12", "12"])
+                    (12.0, [6.0, 6.0, 6.0, 12.0, 12.0, 12.0])
                 } else if sheet < 2000.0 {
-                    (12, ["6", "4", "2", "12", "12", "12"])
+                    (12.0, [6.0, 4.0, 2.0, 12.0, 12.0, 12.0])
                 } else {
-                    (24, ["12", "8", "4", "24", "12", "12"])
+                    (24.0, [12.0, 8.0, 4.0, 24.0, 12.0, 12.0])
                 };
-                assert_eq!(m["cells"], cols, "{width}: {m}");
-                assert_eq!(m["cellTops"], 1, "{width}: {m}");
-                assert_eq!(m["takes"], json!(takes), "{width}: {m}");
-                // each module is its columns and the gaps between them, on the overlay's lines
-                let (col, gap) = (m["col"].as_f64().unwrap(), m["gap"].as_f64().unwrap());
-                for (take, w) in takes.iter().zip(m["widths"].as_array().unwrap()) {
-                    let take: f64 = take.parse().unwrap();
-                    let want = if sheet < 640.0 { sheet } else { take * col + (take - 1.0) * gap };
-                    assert!((w.as_f64().unwrap() - want).abs() <= 2.0, "{width}: {take} col is {w}, not {want}: {m}");
+                let (tracks, track, gap) = (
+                    m["tracks"].as_f64().unwrap(),
+                    m["track"].as_f64().unwrap(),
+                    m["gap"].as_f64().unwrap(),
+                );
+                let widths = m["widths"].as_array().unwrap();
+                assert_eq!(widths.len(), takes.len(), "{width}: {m}");
+                for (take, w) in takes.iter().zip(widths) {
+                    let spans = take * tracks / cols;
+                    let want = if sheet < 640.0 { sheet } else { spans * track + (spans - 1.0) * gap };
+                    assert!((w.as_f64().unwrap() - want).abs() <= 2.0, "{width}: {take} of {cols} is {w}, not {want}: {m}");
                 }
-                // the strip head's stages stand over its rows' cells at every width
+                // the strip head's stages stand over its rows' cells wherever the sheet sets
+                // them beside their lead; under 640px the names give way and each row's cells
+                // share its width
                 for row in m["rows"].as_array().unwrap() {
-                    assert_eq!(row, &m["heads"], "{width}: {m}");
+                    if sheet < 640.0 {
+                        assert_eq!(m["heads"], json!([0, 0, 0]), "{width}: {m}");
+                    } else {
+                        assert_eq!(row, &m["heads"], "{width}: {m}");
+                    }
                 }
             }
         }
-        browser.eval("try { localStorage.removeItem('sluice.grid') } catch {}").unwrap();
 
-        // ---- a theme switch: the picker applies at once, and the cookie keeps it
+        // ---- a pick: the picker applies at once, and the cookie keeps it
         browser.viewport(1440, "light").unwrap();
         browser.navigate(&home).unwrap();
         browser.wait("document.readyState === 'complete' && !!customElements.get('sluice-toggle')").unwrap();
-        let paper = "getComputedStyle(document.body).backgroundColor";
-        let americana = browser.eval(paper).unwrap();
+        let sluice = browser.eval(PAPER).unwrap();
         browser.eval("document.querySelector('details.settings').open = true").unwrap();
-        browser.eval("document.querySelector('input[name=theme][value=nord]').click()").unwrap();
+        browser.eval("document.querySelector('input[name=theme][value=nord-light]').click()").unwrap();
         browser.eval(FRAMES).unwrap();
-        assert_eq!(browser.eval("document.documentElement.dataset.theme").unwrap(), "nord");
-        // Nord's Snow Storm paper, nord6
-        assert_eq!(browser.eval(paper).unwrap(), "rgb(236, 239, 244)");
-        assert_ne!(browser.eval(paper).unwrap(), americana);
-        browser.eval("document.querySelector('input[name=appearance][value=dark]').click()").unwrap();
+        // Nord Light's Snow Storm paper, nord6
+        assert_eq!(browser.eval(PAPER).unwrap(), json!(["nord-light", "rgb(236, 239, 244)"]));
+        assert_ne!(browser.eval(PAPER).unwrap(), sluice);
+        browser.eval("document.querySelector('input[name=theme][value=nord-dark]').click()").unwrap();
         browser.eval(FRAMES).unwrap();
-        assert_eq!(browser.eval("document.documentElement.dataset.appearance").unwrap(), "dark");
         // Nord's Polar Night paper, nord0, under the light system preference
-        assert_eq!(browser.eval(paper).unwrap(), "rgb(46, 52, 64)");
-        // kept: a fresh load draws it from the cookies, with no script involved
+        assert_eq!(browser.eval(PAPER).unwrap(), json!(["nord-dark", "rgb(46, 52, 64)"]));
+        // kept: a fresh load draws it from the cookie, with the picker said
         browser.wait("new Promise(r => setTimeout(() => r(true), 300))").unwrap();
         browser.navigate(&home).unwrap();
         browser.wait("document.readyState === 'complete'").unwrap();
         assert_eq!(
-            browser.eval("[document.documentElement.dataset.theme, document.documentElement.dataset.appearance, document.querySelector('input[name=theme][value=nord]').checked]").unwrap(),
-            json!(["nord", "dark", true])
+            browser.eval("document.querySelector('input[name=theme][value=nord-dark]').checked").unwrap(),
+            true
         );
-        assert_eq!(browser.eval(paper).unwrap(), "rgb(46, 52, 64)");
-        // back to the default and the system: no attribute left behind
-        browser.eval("document.querySelector('details.settings').open = true").unwrap();
-        browser.eval("document.querySelector('input[name=theme][value=americana]').click()").unwrap();
-        browser.eval("document.querySelector('input[name=appearance][value=\"\"]').click()").unwrap();
-        browser.eval(FRAMES).unwrap();
-        assert_eq!(
-            browser.eval("[document.documentElement.hasAttribute('data-theme'), document.documentElement.hasAttribute('data-appearance')]").unwrap(),
-            json!([false, false])
-        );
-        assert_eq!(browser.eval(paper).unwrap(), americana);
-        // the appearance and theme rows are 44px targets on a phone
-        browser.viewport(390, "light").unwrap();
+        assert_eq!(browser.eval(PAPER).unwrap(), json!(["nord-dark", "rgb(46, 52, 64)"]));
+        // the theme rows are 44px targets on a phone
+        browser.viewport(390, "nord-dark").unwrap();
         browser.eval("document.querySelector('details.settings').open = true").unwrap();
         browser.eval(FRAMES).unwrap();
         assert_eq!(
-            browser.eval("[...document.querySelectorAll('.prefs .themes label, .prefs .seg label')].every(l => l.getBoundingClientRect().height >= 44)").unwrap(),
+            browser.eval("[...document.querySelectorAll('.prefs .themes label, .prefs label.check')].every(l => l.getBoundingClientRect().height >= 44)").unwrap(),
             true
         );
         assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), json!([]));
@@ -546,30 +531,98 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_switch_applies() {
             std::fs::create_dir_all(&dir).unwrap();
             for (name, url) in [("ui", &gallery), ("plan", &plan), ("home", &home)] {
                 for width in [390, 1440, 2560, 3840] {
-                    for appearance in ["light", "dark"] {
-                        browser.viewport(width, appearance).unwrap();
+                    for theme in ["light", "dark"] {
                         browser.navigate(url).unwrap();
                         browser.wait("document.readyState === 'complete'").unwrap();
-                        browser.eval("document.fonts.ready").unwrap();
+                        browser.viewport(width, theme).unwrap();
                         browser.eval(FRAMES).unwrap();
-                        browser.screenshot(&dir.join(format!("{name}-{width}-{appearance}.png"))).unwrap();
+                        browser.screenshot(&dir.join(format!("{name}-{width}-{theme}.png"))).unwrap();
                     }
                 }
             }
             for t in THEMES {
-                for appearance in ["light", "dark"] {
-                    for (name, url) in [("plan", &plan), ("home", &home)] {
-                        browser.viewport(1440, appearance).unwrap();
-                        browser.navigate(url).unwrap();
-                        browser.wait("document.readyState === 'complete'").unwrap();
-                        browser.eval(&format!("document.documentElement.dataset.theme = '{}'", t.id)).unwrap();
-                        browser.eval("document.fonts.ready").unwrap();
-                        browser.eval(FRAMES).unwrap();
-                        browser.screenshot(&dir.join(format!("theme-{}-{name}-1440-{appearance}.png", t.id))).unwrap();
-                    }
+                for (name, url) in [("plan", &plan), ("home", &home)] {
+                    browser.navigate(url).unwrap();
+                    browser.wait("document.readyState === 'complete'").unwrap();
+                    browser.viewport(1440, t.id).unwrap();
+                    browser.eval(FRAMES).unwrap();
+                    browser.screenshot(&dir.join(format!("theme-{}-{name}-1440.png", t.id))).unwrap();
                 }
             }
         }
+    })
+    .await
+    .unwrap();
+    server.abort();
+}
+
+/// The first open takes Sluice Light or Sluice Dark from the system's scheme, once: the page's
+/// script keeps it as the choice, so a later change of the system's scheme changes nothing;
+/// without script the stylesheet follows the system until a theme is picked.
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_the_first_open_follows_the_system_once_and_then_keeps_its_theme() {
+    let f = Fixture::new().await;
+    neutral::seed(&f.writer, f._home.path()).await;
+    let (addr, server) = serve(&f);
+    let base = format!("http://{addr}");
+    tokio::task::spawn_blocking(move || {
+        let home = format!("{base}/");
+        let scheme = |browser: &mut Chrome, scheme: &str| {
+            browser
+                .send(
+                    "Emulation.setEmulatedMedia",
+                    json!({"features": [{"name": "prefers-color-scheme", "value": scheme}]}),
+                )
+                .unwrap();
+        };
+        // without script no frame callback runs: the page is read once it has loaded
+        let load = |browser: &mut Chrome, script: bool| {
+            browser.navigate(&home).unwrap();
+            browser.wait("document.readyState === 'complete'").unwrap();
+            if script {
+                browser.eval(FRAMES).unwrap();
+            }
+        };
+        let checked = "document.querySelector('input[name=theme]:checked')?.value ?? null";
+        for (system, other, first) in [("dark", "light", "sluice-dark"), ("light", "dark", "sluice-light")] {
+            // a browser that has never chosen: a fresh profile, no cookie
+            let mut browser = Chrome::open("about:blank").unwrap();
+            scheme(&mut browser, system);
+            load(&mut browser, true);
+            assert_eq!(browser.eval("document.documentElement.dataset.theme").unwrap(), first, "{system}");
+            assert_eq!(browser.eval(checked).unwrap(), first, "{system}");
+            let paper = browser.eval(PAPER).unwrap();
+            // kept: the server draws it from now on, whatever the system says
+            browser.wait("new Promise(r => setTimeout(() => r(true), 300))").unwrap();
+            scheme(&mut browser, other);
+            load(&mut browser, true);
+            assert_eq!(browser.eval(PAPER).unwrap(), paper, "{system} then {other}");
+            assert_eq!(
+                browser.eval("document.documentElement.outerHTML.startsWith('<html lang=\"en\" data-theme=')").unwrap(),
+                true
+            );
+            // a pick replaces it, and survives the system's scheme changing back
+            browser.eval("document.querySelector('details.settings').open = true").unwrap();
+            browser.eval("document.querySelector('input[name=theme][value=gruvbox-light]').click()").unwrap();
+            browser.wait("new Promise(r => setTimeout(() => r(true), 300))").unwrap();
+            scheme(&mut browser, system);
+            load(&mut browser, true);
+            assert_eq!(browser.eval("document.documentElement.dataset.theme").unwrap(), "gruvbox-light");
+            assert_eq!(browser.eval(checked).unwrap(), "gruvbox-light");
+            assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), json!([]));
+        }
+        // without script nothing is kept: the stylesheet draws Sluice by the system's scheme
+        let mut browser = Chrome::open("about:blank").unwrap();
+        browser.send("Emulation.setScriptExecutionDisabled", json!({"value": true})).unwrap();
+        let mut papers = vec![];
+        for system in ["light", "dark"] {
+            scheme(&mut browser, system);
+            load(&mut browser, false);
+            let drawn = browser.eval(PAPER).unwrap();
+            assert_eq!(drawn[0], Value::Null, "{system}: {drawn}");
+            papers.push(drawn[1].clone());
+        }
+        assert_ne!(papers[0], papers[1], "{papers:?}");
     })
     .await
     .unwrap();

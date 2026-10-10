@@ -22,7 +22,22 @@ pub fn draw(root: &Component, unit: &UnitView, row: bool) -> TrustedHtml {
     ))
 }
 
-/// A view short enough to say on its unit's meta line ("engine opus"): one line of 60
+/// Whether a drawn view says nothing (a view of params alone, which the unit's Details hold).
+pub fn empty(html: &TrustedHtml) -> bool {
+    let mut tag = false;
+    !html.as_str().chars().any(|c| match c {
+        '<' => {
+            tag = true;
+            false
+        }
+        '>' => {
+            tag = false;
+            false
+        }
+        c => !tag && !c.is_whitespace(),
+    })
+}
+/// A view short enough to say on its unit's meta line ("land a1b2c3d"): one line of 60
 /// characters or fewer once its markup is out, no list or block in it.
 pub fn short(html: &TrustedHtml) -> bool {
     let html = html.as_str();
@@ -54,7 +69,7 @@ impl Draw<'_> {
     fn chars(&self) -> usize {
         if self.row { ROW_CHARS } else { 600 }
     }
-    /// On the unit page a value is named ("engine opus"): the matrix's column head names them
+    /// On the unit page a value is named ("land a1b2c3d"): the matrix's column head names them
     /// there.
     fn label(&self, name: &str) -> String {
         if self.row {
@@ -113,18 +128,9 @@ impl Draw<'_> {
                     let _ = write!(out, "<span class=\"uv-text\">{label}</span>");
                 }
             }
-            "Param" => {
-                let name = c.str_arg(0).unwrap_or("");
-                if let Some(value) = self.unit.params.get(name).filter(|v| !v.is_empty()) {
-                    let _ = write!(
-                        out,
-                        "<span class=\"uv-param\" title=\"{}\">{}{}</span>",
-                        esc(name),
-                        self.label(name),
-                        esc(&sluice_model::naming::cut(value, self.chars()))
-                    );
-                }
-            }
+            // a param is how the unit was made, not how it stands: the unit's Details say it,
+            // on its row and on its page
+            "Param" => {}
             "Output" => self.output(c.str_arg(0).unwrap_or(""), c.str_arg(1).unwrap_or(""), out),
             "StepStatus" => {
                 if let Some(step) = self.unit.stage_step(c.str_arg(0).unwrap_or("")) {
@@ -162,13 +168,13 @@ impl Draw<'_> {
                 let (body, _) = crate::markdown::excerpt(&self.unit.last_message, chars);
                 let _ = write!(
                     out,
-                    "<span class=\"uv-msg\"><span class=\"uv-from\">{}{}</span> · {}: {body}</span>",
+                    "<span class=\"uv-msg\"><b class=\"uv-from\">{}{}</b> {}: {body}</span>",
                     if self.unit.last_received {
                         "Note from "
                     } else {
                         ""
                     },
-                    esc(&self.unit.last_from),
+                    esc(&self.unit.sender()),
                     ui::ago(&self.unit.changed)
                 );
             }
@@ -202,6 +208,10 @@ impl Draw<'_> {
             .lines()
             .find(|l| !l.trim().is_empty())
             .unwrap_or("");
+        // a row shows what explains: a hash, an id, a path or a long token is its Details'
+        if self.row && ui::ValueSet::of_text(first) == ui::ValueSet::Detail {
+            return;
+        }
         let _ = write!(
             out,
             "<span class=\"uv-out{}\" title=\"{} {}{}\">{}{}{}</span>",

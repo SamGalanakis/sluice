@@ -314,12 +314,13 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
 
   ```json
   "title": "{spec}",
-  "view": "root = Stack([Param(\"engine\"), Output(\"land\", \"landed_sha\"), LastMessage(140)], \"row\")"
+  "view": "root = Stack([Output(\"land\", \"landed_sha\"), LastMessage(140)], \"row\")"
   ```
 
   The view's vocabulary is `Stack(children, direction?)`, `Text(text, tone?)`,
   `Markdown(text)`, `Link(label, href)`, `Param(name)`, `Output(stage, field)`,
   `StepStatus(stage)` and `LastMessage(chars?)`; a stage is a step id without `{unit}-`, and
+  a `Param` draws nothing (the unit's Details menu on its row and page lists its params), and
   `{param}` works in any string. `recipe_list` returns each recipe's `stages`, its `title` and
   `view` as written, and `title_error` or `view_error` when one does not check (the recipe still
   adds units; its block then shows a note instead of the summary). Nothing is stored with the

@@ -1177,39 +1177,17 @@ impl StepView {
     pub fn titled(&self) -> bool {
         !self.title.is_empty() && self.title != self.id.as_str()
     }
-    /// Its name's size in its band, by how long its heading runs (the stage before it counted):
-    /// a short id is set as huge as the band's name, a sentence a few sizes down so it wraps to
-    /// three lines at most.
-    pub fn title_size(&self) -> &'static str {
-        let chars = self.whole_heading().chars().count()
-            + if self.titled() {
-                self.stage.chars().count() + 3
-            } else {
-                0
-            };
-        match chars {
-            0..=16 => "",
-            17..=34 => " long",
-            35..=70 => " longer",
-            _ => " longest",
-        }
-    }
     /// Its progress is its current run's (`step_progress` while it runs).
     pub fn progress_live(&self) -> bool {
         self.progress.as_ref().is_some_and(|p| p.live)
     }
-    /// Its unit's strip's place on the band's grid: two of the ten columns after its unit's
-    /// name a stage while five or fewer fit, else a column a stage, wrapping past ten.
-    pub fn lane_style(&self) -> String {
-        super::unit_page::lane_style(self.lane.len(), 10)
-    }
-    /// Its unit's stage strip with its own stage marked, for its band.
+    /// Its unit's stage strip with its own stage marked, for its head.
     pub fn lane_html(&self) -> TrustedHtml {
         let href = self.href();
-        let label = format!("Stages of {}", self.lane_unit);
+        let label = "Stages of its unit";
         match self.lane.iter().position(|s| s.href == href) {
-            Some(at) => super::ui::stage_strip_at(&label, &self.lane, at),
-            None => super::ui::stage_strip(&label, &self.lane),
+            Some(at) => super::ui::stage_strip_at(label, &self.lane, at),
+            None => super::ui::stage_strip(label, &self.lane),
         }
     }
     /// Its doc as its page shows it: without its first line when that line is its title, so
@@ -1228,14 +1206,32 @@ impl StepView {
     pub fn runs_tag(&self) -> TrustedHtml {
         super::ui::tag(&format!("{} runs", self.caption()), "", None)
     }
-    /// Its `unit:` tag, a link to the unit's page.
-    pub fn unit_tag(&self, unit: &str) -> TrustedHtml {
-        super::ui::tag_link(
-            &format!("/projects/id/{}/units/{unit}", self.project),
-            &format!("unit: {unit}"),
-            "",
-            None,
-        )
+    /// What identifies it, behind its head's "⋯": its id, its unit and recipe, its fn, its
+    /// run and its tags.
+    pub fn details(&self) -> super::ui::Details {
+        let tags: Vec<&str> = self
+            .tags
+            .iter()
+            .map(String::as_str)
+            .filter(|t| !t.starts_with("unit:"))
+            .collect();
+        let mut details = super::ui::Details::new()
+            .id("Step", self.id.as_str())
+            .id("Unit", &self.lane_unit)
+            .text("Recipe", &self.lane_recipe)
+            .code("Function", &self.function);
+        if let Some((run, _)) = self.retries() {
+            let words = self.retries_words();
+            details = details.text(
+                "Run",
+                &if words.is_empty() {
+                    run.to_string()
+                } else {
+                    format!("{run}, {words}")
+                },
+            );
+        }
+        details.text("Tags", &tags.join(", "))
     }
     /// Its header's word on the questions on its thread nobody has answered: its own to the owner
     /// the coral "Awaiting your reply", leading to its Overview, where it is answered; else "2
@@ -3007,6 +3003,7 @@ async fn page_html(
     }
     let frame = super::Frame {
         head: step.band(&detail.project, unit).map_err(render_error)?,
+        inner: true,
         ..Default::default()
     };
     step.page_body(

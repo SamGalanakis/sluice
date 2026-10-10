@@ -256,8 +256,9 @@ async fn shared(f: &Fixture) -> ProjectId {
     id
 }
 
-/// Each unit's row says its own waits, by name and id, linked to the step and with what it is
-/// doing; a wait two rows share is said on each, never once over them or as a line.
+/// Each unit's row says its own waits, by name (its id when untitled), linked to the step and
+/// with what it is doing; a wait two rows share is said on each, never once over them or as a
+/// line.
 #[tokio::test]
 async fn a_units_row_says_its_own_waits_and_no_line_repeats_them() {
     let f = Fixture::new().await;
@@ -272,7 +273,7 @@ async fn a_units_row_says_its_own_waits_and_no_line_repeats_them() {
         assert!(
             row.contains(&format!(
                 "waits for <a href=\"/projects/id/{id}/steps/base\""
-            )) && row.contains("<code>base</code></a> (running)."),
+            )) && row.contains(">The substrate lands first</a> (running)."),
             "{unit}: {row}"
         );
     }
@@ -356,7 +357,7 @@ async fn a_steps_heading_is_its_title_whole_and_its_tabs_say_what_they_hold() {
         )
         .await;
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/w")).await;
-    let h1 = between(&page, "<h1 id=\"d-title\" class=\"sb-t longest\">", "</h1>");
+    let h1 = between(&page, "<h1 id=\"d-title\" class=\"sb-t\">", "</h1>");
     assert!(h1.ends_with("no aliases at all (FIG-5571)"), "{h1}");
     // the tab's own title stays cut
     assert!(between(&page, "<title>", "</title>").contains('…'));
@@ -367,7 +368,11 @@ async fn a_steps_heading_is_its_title_whole_and_its_tabs_say_what_they_hold() {
     );
     // the inbox's first view is For you; Inbox is the tray's name alone
     let (_, inbox) = f.get(&format!("/projects/id/{}/inbox", f.id)).await;
-    let seg = between(&inbox, "<nav class=\"seg\"", "</nav>");
+    let seg = between(
+        &inbox,
+        "<nav class=\"view-switch\" aria-label=\"Messages\">",
+        "</nav>",
+    );
     assert!(
         seg.contains(">For you</a>") && !seg.contains(">Inbox<"),
         "{seg}"

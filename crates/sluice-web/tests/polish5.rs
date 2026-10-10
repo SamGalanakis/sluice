@@ -203,9 +203,9 @@ async fn a_retried_step_that_has_not_run_says_so_under_its_header() {
     );
     // when it starts is Overview's to say (`polish6.rs`), not the header's
     assert!(!said.contains("It starts when"), "{said}");
-    // it sits under the header, before when its last run ended
+    // it sits under the head's state line, which says when its last run ended
     assert!(
-        page.find("d-retried").unwrap() < page.find("Last run ended").unwrap(),
+        page.find("Last run ended").unwrap() < page.find("d-retried").unwrap(),
         "{page}"
     );
     // once it runs again the header no longer says it: Runs and Now do
@@ -233,8 +233,8 @@ async fn a_step_is_named_one_way_on_its_page_its_thread_and_the_log() {
     .await;
     record(&f, id, status("l1-work", "pending", "running")).await;
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
-    let heading = between(&page, "<h1 id=\"d-title\" class=\"sb-t long\">", "</h1>")
-        .trim_start_matches("<h1 id=\"d-title\" class=\"sb-t long\">")
+    let heading = between(&page, "<h1 id=\"d-title\" class=\"sb-t\">", "</h1>")
+        .trim_start_matches("<h1 id=\"d-title\" class=\"sb-t\">")
         .to_owned();
     assert_eq!(
         heading,
@@ -248,10 +248,7 @@ async fn a_step_is_named_one_way_on_its_page_its_thread_and_the_log() {
     let (_, thread) = f
         .get(&format!("/projects/id/{id}/thread?thread=step-l1-work"))
         .await;
-    assert!(
-        thread.contains(&format!("<h1 class=\"longest\">{heading}</h1>")),
-        "{thread}"
-    );
+    assert!(thread.contains(&format!("<h1>{heading}</h1>")), "{thread}");
     assert!(
         thread.contains(">Message to work · FIG-1: Fix the cron driver</label>"),
         "{thread}"

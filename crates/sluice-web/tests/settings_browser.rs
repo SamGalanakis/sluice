@@ -134,6 +134,13 @@ async fn chromium_settings_commands_streams_geometry_and_screenshots() {
     })
     .await
     .unwrap();
+    // the browser's own failure first: a step it never reached leaves the callback waiting
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     callback.await.unwrap();
     let next = waiter.await.unwrap().unwrap();
     assert!(!next.timed_out);
@@ -144,12 +151,6 @@ async fn chromium_settings_commands_streams_geometry_and_screenshots() {
     );
     server.abort();
     let _ = server.await;
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
     writer.shutdown().await.unwrap();
 }
 const BROWSER: &str = r##"
@@ -172,7 +173,7 @@ try:
  def capture(name,width,theme):
   chrome.send('Emulation.setDeviceMetricsOverride',{'width':width,'height':1000,'deviceScaleFactor':1,'mobile':False})
   chrome.send('Emulation.setEmulatedMedia',{'features':[{'name':'prefers-color-scheme','value':theme}]})
-  chrome.eval("document.documentElement.removeAttribute('data-appearance')")
+  chrome.eval("document.documentElement.dataset.theme='sluice-"+theme+"'")
   chrome.eval('document.fonts.ready')
   chrome.eval('window.scrollTo(0,0);new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
   g=chrome.eval("(()=>{const content=document.querySelector('.settings-page, #projects, #functions').getBoundingClientRect(),nav=document.querySelector('#top-nav .switcher').getBoundingClientRect(),cog=document.querySelector('.project-settings')?.getBoundingClientRect();return {scroll:document.documentElement.scrollWidth,width:document.documentElement.clientWidth,left:content.left,nav:document.querySelector('#top-nav').getBoundingClientRect().left+parseFloat(getComputedStyle(document.querySelector('#top-nav')).paddingLeft),column:content.width,height:document.documentElement.scrollHeight,cog:cog&&{width:cog.width,height:cog.height}}})()")

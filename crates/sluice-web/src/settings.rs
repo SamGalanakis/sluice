@@ -457,36 +457,11 @@ impl ProjectSettingsView {
         )
         .map_err(render_error)
     }
-    /// The band: the project's name huge, what its settings hold, and how it stands.
+    /// The page's head: "Settings" (the nav's switcher names the project).
     pub fn head(&self) -> TrustedHtml {
-        let mut state = vec![if self.project.archived {
-            "Archived: off the index's projects and the switcher's list.".to_owned()
-        } else if self.project.paused {
-            "Paused: no new step starts until it is resumed.".to_owned()
-        } else {
-            "Active: its steps start as their waits are met.".to_owned()
-        }];
-        state.push(match self.resources.len() {
-            0 => "No resources of its own.".to_owned(),
-            n => format!(
-                "{} that its steps share.",
-                views::ui::count(n, "resource", "resources")
-            ),
-        });
-        let hours = self.retire_hours();
-        if !hours.is_empty() {
-            state.push(format!("Done units retire after {hours} hours."));
-        }
         TrustedHtml::owned(format!(
             "<div id=\"settings-band\" class=\"band-wrap\">{}</div>",
-            views::ui::band_head(
-                self.project.name.as_str(),
-                &TrustedHtml::owned(
-                    "<p>Its settings: its name and words, its icon, its resources, its board, when done units retire, pausing, archiving and deleting it.</p>"
-                        .into()
-                ),
-                &TrustedHtml::owned(views::ui::esc(&state.join(" "))),
-            )
+            views::ui::page_head("Settings", &TrustedHtml::default())
         ))
     }
     fn body(&self, feedback: &Feedback) -> Result<TrustedHtml, askama::Error> {

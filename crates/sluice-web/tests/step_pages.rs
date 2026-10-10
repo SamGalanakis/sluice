@@ -4,8 +4,8 @@
 //! its recipe (two recipes and a unit of none); in Chromium, the question to the owner swells
 //! first on Overview and is answered in place, Overview stands two to a row at 2560, a phone's
 //! question is a whole-width card with 44px buttons, and no page scrolls sideways from 320 to
-//! 3840px in light or dark. `SLUICE_STEP_SCREENS=<dir>` also saves each page at each width and
-//! appearance there.
+//! 3840px in Sluice Light or Dark. `SLUICE_STEP_SCREENS=<dir>` also saves each page at each width
+//! and theme there.
 
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
@@ -42,10 +42,12 @@ async fn a_steps_band_carries_its_name_state_stages_and_actions_and_a_units_band
     let n = neutral::seed(&f.writer, f._home.path()).await;
     let p = n.almanac;
 
-    // a step's own page: its band is the frame's, over the paper, before <main>
+    // a step's own page: its head is the frame's, on the paper under the tab row, before <main>
     let (status, html) = f.get(&format!("/projects/id/{p}/steps/a-6-review")).await;
     assert_eq!(status, 200);
-    let head = html.find("class=\"site-head").expect("the frame's head");
+    let head = html
+        .find("<div class=\"subnav\">")
+        .expect("the frame's row");
     let band = html
         .find("<header id=\"step-band\" class=\"d-head step-band\" data-step=\"a-6-review\">")
         .expect("the step's band");
@@ -53,18 +55,25 @@ async fn a_steps_band_carries_its_name_state_stages_and_actions_and_a_units_band
     let main = html.find("<main").unwrap();
     assert!(head < band && end < main, "{html}");
     let band_html = &html[band..end];
-    // its name huge (its stage muted before its title), its id, its state
-    assert!(band_html.contains("<h1 id=\"d-title\" class=\"sb-t longer\"><span class=\"d-stage\">review ·</span> Terns: the spring guide&#39;s entries</h1>"), "{band_html}");
-    assert!(band_html.contains("Copy step id"), "{band_html}");
-    assert!(band_html.contains("<p class=\"d-badges\">"), "{band_html}");
-    // its unit's stages from the article recipe, its own ringed, the unit linked
+    // its name at a reading size (its stage muted before its title), its Details' "⋯" with
+    // its id, its state
+    assert!(band_html.contains("<h1 id=\"d-title\" class=\"sb-t\"><span class=\"d-stage\">review ·</span> Terns: the spring guide&#39;s entries</h1><sluice-menu><details class=\"dm\""), "{band_html}");
     assert!(
-        band_html.contains("<p class=\"sb-lane-h\"><a href=\""),
+        band_html.contains("<dt>Step</dt>") && band_html.contains("Copy step"),
         "{band_html}"
     );
-    assert!(band_html.contains("article · 3 stages"), "{band_html}");
+    assert!(
+        band_html.contains("<dt>Recipe</dt><dd><span>article</span></dd>"),
+        "{band_html}"
+    );
+    assert!(band_html.contains("<p class=\"d-badges\">"), "{band_html}");
+    // its unit's stages from the article recipe, its own ringed, the unit linked in its crumbs
+    assert!(
+        band_html.contains("<nav class=\"crumbs\" aria-label=\"Breadcrumb\">"),
+        "{band_html}"
+    );
     assert_eq!(
-        strip(band_html, "a-6"),
+        strip(band_html, "its unit"),
         (
             neutral::ARTICLE.map(String::from).to_vec(),
             Some("review".to_owned())
@@ -101,14 +110,18 @@ async fn a_steps_band_carries_its_name_state_stages_and_actions_and_a_units_band
         assert!(at < main, "{unit}: the band is the frame's");
         let band = &html[at..main];
         assert!(band.contains("<h1 class=\"unit-h"), "{band}");
+        // its recipe is its Details', not its line's
         match recipe {
-            Some(r) => assert!(band.contains(&format!("recipe <code>{r}</code>")), "{band}"),
-            None => assert!(!band.contains("recipe <code>"), "{band}"),
+            Some(r) => assert!(
+                band.contains(&format!("<dt>Recipe</dt><dd><span>{r}</span></dd>")),
+                "{band}"
+            ),
+            None => assert!(!band.contains("<dt>Recipe</dt>"), "{band}"),
         }
-        let (names, here) = strip(band, unit);
+        let (names, here) = strip(band, "the unit");
         assert_eq!(names, stages, "{unit}");
         assert_eq!(here, None, "{unit}: a unit's own strip rings no stage");
-        // its steps as modules on the grid, each headed by its stage with its id under it;
+        // its steps as modules on the grid, each headed by its stage, its id in its Details;
         // the unit's title is in the band and never again in a module
         let detail = &html[main..];
         for stage in stages {
@@ -116,7 +129,7 @@ async fn a_steps_band_carries_its_name_state_stages_and_actions_and_a_units_band
             assert!(html.contains(&format!("id=\"us-{id}\"")), "{unit}: {id}");
             assert!(
                 detail.contains(&format!(
-                    "<h3 class=\"mod-t\" id=\"us-{id}\"><a href=\"/projects/id/{p}/steps/{id}\">{stage}</a></h3><p class=\"mod-meta\"><code>{id}</code></p>"
+                    "<h3 class=\"mod-t\" id=\"us-{id}\"><a href=\"/projects/id/{p}/steps/{id}\">{stage}</a></h3><sluice-menu><details class=\"dm\""
                 )),
                 "{unit}: {id} {detail}"
             );
@@ -174,9 +187,9 @@ async fn chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_quest
 
         // no page scrolls sideways, at any width, light or dark
         for width in [320, 390, 768, 1024, 1440, 1920, 2560, 3840] {
-            for appearance in ["light", "dark"] {
+            for theme in ["light", "dark"] {
                 for (name, url) in &pages {
-                    browser.viewport(width, appearance).unwrap();
+                    browser.viewport(width, theme).unwrap();
                     browser.navigate(url).unwrap();
                     browser.wait("document.readyState === 'complete'").unwrap();
                     browser.eval("document.fonts.ready").unwrap();
@@ -184,12 +197,12 @@ async fn chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_quest
                     assert_eq!(
                         browser.eval(FITS).unwrap(),
                         json!(true),
-                        "{name} at {width} {appearance} scrolls sideways"
+                        "{name} at {width} {theme} scrolls sideways"
                     );
                     if let Some(dir) = &screens {
                         std::fs::create_dir_all(dir).unwrap();
                         browser
-                            .screenshot(&dir.join(format!("{name}-{width}-{appearance}.png")))
+                            .screenshot(&dir.join(format!("{name}-{width}-{theme}.png")))
                             .unwrap();
                     }
                 }
@@ -201,7 +214,7 @@ async fn chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_quest
         browser.navigate(&failed).unwrap();
         browser.wait("document.readyState === 'complete'").unwrap();
         let band: Value = browser
-            .eval("(() => { const b = document.querySelector('header.site-head #step-band'); return [b.querySelector('h1#d-title').textContent, b.querySelector('[aria-current=step] .sc-name').textContent, [...b.querySelectorAll('.d-actions button')].map(x => x.textContent.trim())]; })()")
+            .eval("(() => { const b = document.querySelector('.page-top #step-band'); return [b.querySelector('h1#d-title').textContent, b.querySelector('[aria-current=step] .sc-name').textContent, [...b.querySelectorAll('.d-actions button')].map(x => x.textContent.trim())]; })()")
             .unwrap();
         assert_eq!(
             band,
@@ -214,7 +227,7 @@ async fn chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_quest
         browser.wait("document.querySelector('#tp-overview .d-failure')").unwrap();
         browser.eval(FRAMES).unwrap();
         let cols: Value = browser
-            .eval("(() => { const c = [...document.querySelectorAll('#tp-overview .ov > sluice-grid > .mod-col')].map(e => e.getBoundingClientRect()); return [c.length, Math.round(c[0].top) === Math.round(c[1].top), c[0].right < c[1].left]; })()")
+            .eval("(() => { const c = [...document.querySelectorAll('#tp-overview .ov > .sheet > .mod-col')].map(e => e.getBoundingClientRect()); return [c.length, Math.round(c[0].top) === Math.round(c[1].top), c[0].right < c[1].left]; })()")
             .unwrap();
         assert_eq!(cols, json!([2, true, true]));
         // and with no side, the first column's own modules two to a row: the question, then Now
@@ -235,7 +248,7 @@ async fn chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_quest
                 .unwrap();
             browser.eval(FRAMES).unwrap();
             let card: Value = browser
-                .eval("(() => { const q = document.querySelector('.swell-ask'), s = q.closest('sluice-grid').getBoundingClientRect(), r = q.getBoundingClientRect(); const buttons = [...q.querySelectorAll('sluice-answer button.q-toggle, form.q-close button')].map(b => b.getBoundingClientRect().height); return [Math.round(r.width) === Math.round(s.width), buttons.length >= 2, buttons.every(h => h >= 44)]; })()")
+                .eval("(() => { const q = document.querySelector('.swell-ask'), s = q.closest('.sheet').getBoundingClientRect(), r = q.getBoundingClientRect(); const buttons = [...q.querySelectorAll('sluice-answer button.q-toggle, form.q-close button')].map(b => b.getBoundingClientRect().height); return [Math.round(r.width) === Math.round(s.width), buttons.length >= 2, buttons.every(h => h >= 44)]; })()")
                 .unwrap();
             assert_eq!(card, json!([true, true, true]), "{url}");
         }

@@ -163,9 +163,12 @@ async fn a_busy_hour_lists_its_notable_runs_and_folds_the_successes_in_place() {
     let (listed, folded) = cell.split_once("<details").expect(cell);
     // listed: the failure, the overrun (10m where water-plants usually takes 2m), the long one
     assert_eq!(listed.matches("<li class=\"tt-run\">").count(), 3, "{cell}");
-    assert!(listed.contains("<b>sort-mail</b>"), "{listed}");
+    assert!(
+        listed.contains("<b>Sort the week&#39;s mail</b>"),
+        "{listed}"
+    );
     assert!(listed.contains("tt-failed"), "{listed}");
-    assert!(listed.contains("<b>file-receipts</b>"), "{listed}");
+    assert!(listed.contains("<b>File the receipts</b>"), "{listed}");
     assert!(listed.contains("10m</span>"), "{listed}");
     // folded: the eight plain successes, behind "+8 more" that opens in place and keeps
     // its state through a patch
@@ -194,25 +197,23 @@ async fn home_puts_what_needs_the_owner_first_and_its_question_is_answered_in_pl
     let n = neutral::seed(&f.writer, f._home.path()).await;
     let (status, home) = f.get("/").await;
     assert_eq!(status, 200);
-    // the band: sluice, the sentence across the projects, the question first, linked to For you
+    // the head: "All projects", the sentence across the projects under it, the question first,
+    // linked to For you; what finished last is on each project's module, not here
     let band = between(
         &home,
         "<div id=\"home-band\" class=\"band-wrap\">",
-        "</header>",
+        "<div class=\"subnav\">",
     );
+    assert!(band.contains("<h1>All projects</h1>"), "{band}");
     assert!(
-        band.contains("<h1 class=\"long\">sluice</h1>") || band.contains("<h1>sluice</h1>"),
-        "{band}"
-    );
-    assert!(
-        band.contains("<p class=\"band-summary\"><a class=\"ask\" href=\"#for-you\">1 question for you</a>, in almanac."),
+        band.contains("<p class=\"page-line\"><a class=\"ask\" href=\"#for-you\">1 question for you</a>, in almanac."),
         "{band}"
     );
     assert!(band.contains("Stopped: "), "{band}");
-    assert!(band.contains("Recently finished"), "{band}");
-    // nothing holds the runner in a test home: said on the band
+    assert!(!band.contains("Recently finished"), "{band}");
+    // nothing holds the runner in a test home: said under the sentence
     assert!(
-        band.contains("<div class=\"band-alert runner-off\" role=\"status\">"),
+        band.contains("<div class=\"page-alert runner-off\" role=\"status\">"),
         "{band}"
     );
     // For you: the question swollen, answerable here, and the way to its step
@@ -241,7 +242,7 @@ async fn home_puts_what_needs_the_owner_first_and_its_question_is_answered_in_pl
     );
     assert!(
         ask.contains(&format!(
-            "<a href=\"/projects/id/{}/steps/a-7-draft\">Open a-7-draft</a>",
+            "<a href=\"/projects/id/{}/steps/a-7-draft\">Open its step</a>",
             n.almanac
         )),
         "{ask}"
@@ -337,9 +338,9 @@ async fn the_day_sets_every_run_in_the_hour_it_started_with_how_it_ended_and_a_r
     .await;
     let router = f.router();
     let page = get_with(&router, "/day", "sluice_zone=0").await;
-    // the band: today's name, the runs counted by project
-    assert!(page.contains("<p class=\"band-summary\">"), "{page}");
-    let summary = between(&page, "<p class=\"band-summary\">", "</p>");
+    // the day line's sentence: the runs counted by project
+    assert!(page.contains("<p class=\"dl-said\">"), "{page}");
+    let summary = between(&page, "<p class=\"dl-said\">", "</p>");
     assert!(summary.contains(" in almanac"), "{summary}");
     assert!(summary.contains("failed"), "{summary}");
     assert!(
@@ -379,7 +380,9 @@ async fn the_day_sets_every_run_in_the_hour_it_started_with_how_it_ended_and_a_r
     // a-4-review failed two hours ago after 18m: in its hour, by its minute, on the sand
     let failed = row(&page, &hour(2 * 3600, 0));
     assert!(
-        failed.contains("<b>a-4</b> <span class=\"tt-stage\">review</span>"),
+        failed.contains(
+            "<b>Waders: the autumn guide&#39;s entries</b> <span class=\"tt-stage\">review</span>"
+        ),
         "{failed}"
     );
     assert!(
@@ -393,7 +396,9 @@ async fn the_day_sets_every_run_in_the_hour_it_started_with_how_it_ended_and_a_r
     // a-6-draft runs: the blue, ticking
     let running = row(&page, &hour(70 * 60, 0));
     assert!(
-        running.contains("<b>a-6</b> <span class=\"tt-stage\">draft</span>"),
+        running.contains(
+            "<b>Terns: the spring guide&#39;s entries</b> <span class=\"tt-stage\">draft</span>"
+        ),
         "{running}"
     );
     assert!(
@@ -403,7 +408,9 @@ async fn the_day_sets_every_run_in_the_hour_it_started_with_how_it_ended_and_a_r
     // a succeeded run: its check and how long, said in words for a screen reader
     let done = row(&page, &hour(3 * 3600, 0));
     assert!(
-        done.contains("<b>s-1</b> <span class=\"tt-stage\">scan</span>"),
+        done.contains(
+            "<b>Scan the checklist for renamed species</b> <span class=\"tt-stage\">scan</span>"
+        ),
         "{done}"
     );
     assert!(
@@ -416,11 +423,13 @@ async fn the_day_sets_every_run_in_the_hour_it_started_with_how_it_ended_and_a_r
     );
     // the long run started days ago: in the first row, its day and time
     let first = between(&page, "<section class=\"tt-row", "</section>");
-    assert!(first.contains("<b>survey</b>"), "{first}");
     assert!(
-        first.contains("<span class=\"tt-n\">run 2</span>"),
+        first.contains("<b>Survey the archive&#39;s photographs against the checklist</b>"),
         "{first}"
     );
+    // which run it is, the link's title says, not its line
+    assert!(first.contains("title=\"survey, run 2\""), "{first}");
+    assert!(!first.contains("class=\"tt-n\""), "{first}");
     // each run links its step's runs
     assert!(page.contains(&format!(
         "href=\"/projects/id/{}/steps/a-4-review?tab=runs\"",
@@ -431,13 +440,15 @@ async fn the_day_sets_every_run_in_the_hour_it_started_with_how_it_ended_and_a_r
     assert!(east.contains("hours on your clock (UTC+02:00)"), "{east}");
     let failed = row(&east, &hour(2 * 3600, 120));
     assert!(
-        failed.contains("<b>a-4</b> <span class=\"tt-stage\">review</span>"),
+        failed.contains(
+            "<b>Waders: the autumn guide&#39;s entries</b> <span class=\"tt-stage\">review</span>"
+        ),
         "{failed}"
     );
-    // a project's own day: its column alone, its name in the band, the tab current
+    // a project's own day: its column alone, the page's name, the tab current
     let own = get_with(&router, &format!("/projects/id/{}/day", n.chores), "").await;
-    assert!(own.contains("<h1>chores</h1>"), "{own}");
-    assert!(!own.contains("<b>a-4</b>"), "{own}");
+    assert!(own.contains("<h1>Day</h1>"), "{own}");
+    assert!(!own.contains("Waders"), "{own}");
     assert!(
         own.contains(&format!(
             "<a href=\"/projects/id/{}/day\" aria-current=\"page\">Day</a>",
@@ -528,7 +539,7 @@ async fn the_day_patches_only_when_its_runs_change() {
     run(&f, n.chores, "file-receipts", 60, None, "").await;
     let wire = read_for(&mut body, Duration::from_secs(4)).await;
     assert!(wire.contains("selector #day-view"), "{wire}");
-    assert!(wire.contains("<b>file-receipts</b>"), "{wire}");
+    assert!(wire.contains("<b>File the receipts</b>"), "{wire}");
     // a busy hour's runs: the patch folds its successes and lists what is notable
     seed_busy_hour(&f, n.chores).await;
     let wire = read_for(&mut body, Duration::from_secs(4)).await;

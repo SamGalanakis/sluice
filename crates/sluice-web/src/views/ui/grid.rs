@@ -1,9 +1,9 @@
-//! The Synthesis kit (DESIGN.md, The grid, The band, Modules, Status presentation): the parts
-//! every page composes on the module grid. The module grid and its show-grid switch, a module
-//! and its swell, a band section's head, a unit's stage strip, the summary sentence, the
-//! "Recently finished" strip, the margin module for a long run's progress, and the trace rail
-//! with its chain sentence. Each returns escaped HTML; the grid and the trace are Rocket
-//! components (`sluice-grid`, `sluice-trace`) that only behave: what they show is drawn here.
+//! The Synthesis kit (DESIGN.md, The grid, The page head, Modules, Details, Status
+//! presentation): the parts every page composes on the module grid. The module grid, a module
+//! and its swell, a band section's head, a unit's stage strip, the summary sentence, the page's
+//! head, what finished last, an item's Details behind its "⋯", the margin module for a long
+//! run's progress, and the trace rail with its chain sentence. Each returns escaped HTML; the
+//! trace is a Rocket component (`sluice-trace`) that only behaves: what it shows is drawn here.
 //!
 //! Generic by rule: a stage is whatever a unit's recipe names it, a count is a status table
 //! count, and a progress field is whatever a step reported. Nothing here knows a project.
@@ -15,51 +15,25 @@ use std::collections::{BTreeMap, BTreeSet};
 
 // ---- the module grid ---------------------------------------------------------------------------
 
-/// The module grid's host (`sluice-grid`): a sheet of `cols` columns (12) that modules span
-/// (`module_open`), with the construction grid drawn under them, hidden until the show-grid
-/// switch (`grid_toggle`, anywhere on the page) shows it: each column tinted and numbered,
-/// each module's span named in its corner. `id` names it for its switch.
+/// The module grid (`ui::grid_open`): a sheet of `cols` columns (12) that modules span
+/// (`module_open`). Layout only: it has no behaviour, so it is a plain element.
 ///
 /// The sheet is fluid and lays out by its own width (DESIGN.md, The grid): half its columns
 /// under 640px with every module across it, its columns from 640px (a module half the sheet or
-/// whole under 1200px), and twice its columns from 2000px. The overlay carries a cell for each
-/// of the twice-as-many columns: the first half of the sheet's columns (`gc`) show at every
-/// width, the rest of its columns (`gc-r`) from 640px, the doubled ones (`gc-w`) from 2000px.
+/// whole under 1200px), and twice its columns from 2000px.
 pub fn grid_open(id: &str, cols: u8) -> TrustedHtml {
     let cols = cols.clamp(1, 12);
-    let columns: String = (1..=2 * cols)
-        .map(|n| {
-            let class = if n > cols {
-                "gc gc-w"
-            } else if n > cols / 2 {
-                "gc gc-r"
-            } else {
-                "gc"
-            };
-            format!("<span class=\"{class}\"><span class=\"gc-n\">{n}</span></span>")
-        })
-        .collect();
     TrustedHtml::owned(format!(
-        "{}<div class=\"grid-ovl\" aria-hidden=\"true\">{columns}</div>",
-        Host::new("sluice-grid")
-            .some("id", id)
-            .attr("class", "sheet")
-            .attr("style", format!("--cols:{cols}"))
-            .keep("showing")
-            .open()
+        "<div{} class=\"sheet\" style=\"--cols:{cols}\">",
+        if id.is_empty() {
+            String::new()
+        } else {
+            format!(" id=\"{}\"", esc(id))
+        }
     ))
 }
 pub fn grid_close() -> TrustedHtml {
-    Host::new("sluice-grid").close()
-}
-/// The show-grid switch for the grid `id`: a pressed button while the construction grid shows,
-/// there only with script (the grid is a way of looking, not content).
-pub fn grid_toggle(id: &str) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<button type=\"button\" class=\"grid-toggle needs-js\" aria-controls=\"{}\" aria-pressed=\"false\" data-preserve-attr=\"aria-pressed\">{}Show grid</button>",
-        esc(id),
-        icon(Icon::Grid3x3, 16, "")
-    ))
+    TrustedHtml::owned("</div>".into())
 }
 
 // ---- a module --------------------------------------------------------------------------------
@@ -196,15 +170,16 @@ pub fn section_head(id: &str, name: &str, line: &str) -> TrustedHtml {
         }
     ))
 }
-/// A band's head over a table of strips: its name and line in the first `lead` columns, then
-/// each stage's name over its column.
-pub fn strip_head(id: &str, name: &str, line: &str, lead: u8, stages: &[&str]) -> TrustedHtml {
+/// A band's head over a table of strips: its name and line, then each stage's name over its
+/// column, the columns as wide as a row's cells (`strip_row_open`), so each name stands over its
+/// cell at every width.
+pub fn strip_head(id: &str, name: &str, line: &str, stages: &[&str]) -> TrustedHtml {
     let names: String = stages
         .iter()
         .map(|s| format!("<span class=\"sh-stage\">{}</span>", esc(s)))
         .collect();
     TrustedHtml::owned(format!(
-        "<div class=\"sec-h sec-strip\"{} style=\"--lead:{lead};--rest:{rest};--n:{n}\"><div class=\"sh-lead\"><h2>{}</h2>{}</div><div class=\"sh-stages\" aria-hidden=\"true\">{names}</div></div>",
+        "<div class=\"sec-h sec-strip\"{} style=\"--n:{n}\"><div class=\"sh-lead\"><h2>{}</h2>{}</div><div class=\"sh-stages\" aria-hidden=\"true\">{names}</div><span class=\"sh-end\" aria-hidden=\"true\"></span></div>",
         if id.is_empty() {
             String::new()
         } else {
@@ -216,19 +191,18 @@ pub fn strip_head(id: &str, name: &str, line: &str, lead: u8, stages: &[&str]) -
         } else {
             format!("<p class=\"sec-n\">{}</p>", esc(line))
         },
-        lead = lead.clamp(1, 11),
-        rest = 12 - lead.clamp(1, 11),
         n = stages.len().max(1),
     ))
 }
 
-/// A row under a `strip_head` of the same `lead`: its first child (the unit's head) on the
-/// lead's columns, then its `stage_strip` on the stage columns, so each stage sits under its
-/// name at every width; head and rows stack together when their container is narrow.
-pub fn strip_row_open(lead: u8) -> TrustedHtml {
+/// A row under a `strip_head` of `n` stages: its head (the unit's status and title) taking what
+/// the cells leave, then its `stage_strip`, each cell as wide as every other row's, so a cell
+/// stands under its stage's name; then the row's end (its Details). Head and cells stack when
+/// their container is narrow.
+pub fn strip_row_open(n: usize) -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<div class=\"strip-row\" style=\"--lead:{}\">",
-        lead.clamp(1, 11)
+        "<div class=\"strip-row\" style=\"--n:{}\">",
+        n.max(1)
     ))
 }
 pub fn strip_row_close() -> TrustedHtml {
@@ -525,7 +499,8 @@ pub fn stage_marks(label: &str, stages: &[Stage]) -> TrustedHtml {
 /// One unit as the summary counts it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UnitFact {
-    /// How the summary names it (its unit name, or a loose step's id).
+    /// Its name (its unit's, or a loose step's id): what a question to the owner is matched to
+    /// (home's squares), never said in the sentence.
     pub name: String,
     /// The recipe it came from, "" for none.
     pub recipe: String,
@@ -539,7 +514,7 @@ pub struct UnitFact {
     /// stream's version leaves it out; "" to say `quiet` as it stands.
     pub quiet_since: String,
 }
-/// What the band's summary sentence says (`summary_sentence`): built from the status table's
+/// What the summary sentence says (`summary_sentence`): built from the status table's
 /// counts, overruns, quiet runs and open questions alone, naming recipes by their own names.
 #[derive(Clone, Debug, Default)]
 pub struct Summary<'a> {
@@ -552,10 +527,11 @@ pub struct Summary<'a> {
     /// What a unit is called in the count ("unit", "units").
     pub noun: (&'a str, &'a str),
 }
-/// The band's summary sentence: "1 question for you. 1 failed, 1 cancelled. 2 article units
-/// and 1 scan unit at work: s-3 quiet for 53m, a-14 at 2.1× its usual time. 4 waiting. 11 of
-/// 19 units done; the last finished 57m ago." Each part left out when it has nothing to say; "Nothing
-/// has started yet." for a plan with no work at all.
+/// The summary sentence under the page's name: "1 question for you. 1 failed, 1 cancelled. 2
+/// article units and 1 scan unit at work: 1 quiet for 53m, 1 at 2.1× its usual time. 4
+/// waiting. 11 of 19 units done; the last finished 57m ago." It counts and names no unit (the
+/// rows do). Each part left out when it has nothing to say; "Nothing has started yet." for a
+/// plan with no work at all.
 pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
     let (one, many) = if s.noun.0.is_empty() {
         ("unit", "units")
@@ -616,19 +592,19 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
         } else {
             count(running.len(), one, many)
         };
-        // the quiet ones, longest quiet first, and those past their usual time, furthest
-        // first: up to two of each named, more counted with the first two named
+        // the quiet ones and those past their usual time, counted, the longest quiet and the
+        // furthest over said: the units are named on their rows, not here
         let mut quiet: Vec<(&UnitFact, f64)> = running
             .iter()
             .filter_map(|u| u.quiet.map(|q| (*u, q)))
             .collect();
         quiet.sort_by(|a, b| b.1.total_cmp(&a.1));
-        let mut over: Vec<(&UnitFact, f64)> = running
+        let over: Vec<f64> = running
             .iter()
             .filter(|u| u.quiet.is_none())
-            .filter_map(|u| u.over.map(|r| (*u, r)))
+            .filter_map(|u| u.over)
             .collect();
-        over.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let furthest = over.iter().copied().fold(0.0_f64, f64::max);
         // since it went quiet, ticking, when the page knows when that was
         let quiet_for = |unit: &UnitFact, secs: f64| {
             if unit.quiet_since.is_empty() {
@@ -638,53 +614,24 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
             }
         };
         let mut notes: Vec<String> = vec![];
-        if quiet.len() > NAMED {
-            notes.push(format!(
-                "{} quiet ({})",
+        match quiet.as_slice() {
+            [] => {}
+            [(u, q)] => notes.push(format!("1 quiet for {}", quiet_for(u, *q))),
+            [(u, q), ..] => notes.push(format!(
+                "{} quiet, the longest for {}",
                 quiet.len(),
-                and_more(
-                    quiet.iter().take(NAMED).map(|(u, q)| format!(
-                        "{} for {}",
-                        esc(&u.name),
-                        quiet_for(u, *q)
-                    )),
-                    quiet.len()
-                )
-            ));
-        } else {
-            notes.extend(
-                quiet
-                    .iter()
-                    .map(|(u, q)| format!("{} quiet for {}", esc(&u.name), quiet_for(u, *q))),
-            );
+                quiet_for(u, *q)
+            )),
         }
-        if over.len() > NAMED {
-            notes.push(format!(
-                "{} past their usual time ({})",
-                over.len(),
-                and_more(
-                    over.iter().take(NAMED).map(|(u, r)| format!(
-                        "{} at {}",
-                        esc(&u.name),
-                        ratio_text(*r)
-                    )),
-                    over.len()
-                )
-            ));
-        } else {
-            notes
-                .extend(over.iter().map(|(u, r)| {
-                    format!("{} at {} its usual time", esc(&u.name), ratio_text(*r))
-                }));
+        match over.len() {
+            0 => {}
+            1 => notes.push(format!("1 at {} its usual time", ratio_text(furthest))),
+            n => notes.push(format!(
+                "{n} past their usual time, the furthest at {}",
+                ratio_text(furthest)
+            )),
         }
-        // a named run follows a colon, a count a comma: "at work: s-3 quiet for 53m", "at
-        // work, 8 past their usual time (a-1 at 9.8×, a-2 at 5.7× and 6 more)"
-        let lead = match (quiet.len(), over.len()) {
-            (0, 0) => "",
-            (q, _) if q > NAMED => ", ",
-            (0, o) if o > NAMED => ", ",
-            _ => ": ",
-        };
+        let lead = if notes.is_empty() { "" } else { ": " };
         parts.push(format!("{} at work{lead}{}.", esc(&who), notes.join(", ")));
     }
     if waiting > 0 {
@@ -712,8 +659,6 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
     }
     TrustedHtml::owned(parts.join(" "))
 }
-/// How many quiet or overrunning units the summary sentence names before it counts the rest.
-pub const NAMED: usize = 2;
 /// What units of no recipe are called wherever they are counted: "1 unit without a recipe",
 /// "3 units without a recipe" (the summary sentence and the plan's head over them alike).
 pub fn no_recipe(n: usize, noun: (&str, &str)) -> String {
@@ -722,14 +667,6 @@ pub fn no_recipe(n: usize, noun: (&str, &str)) -> String {
         &format!("{} without a recipe", noun.0),
         &format!("{} without a recipe", noun.1),
     )
-}
-/// The first few named and the rest counted: "a and b", "a, b and 6 more" of `total`.
-fn and_more(named: impl Iterator<Item = String>, total: usize) -> String {
-    let mut items: Vec<String> = named.collect();
-    if total > items.len() {
-        items.push(format!("{} more", total - items.len()));
-    }
-    join(&items)
 }
 /// "a", "a and b", "a, b and c".
 fn join(items: &[String]) -> String {
@@ -740,50 +677,52 @@ fn join(items: &[String]) -> String {
     }
 }
 
-// ---- the band's head and its strip -------------------------------------------------------------
+// ---- the page's head and what finished last ---------------------------------------------------
 
-/// The band's head (`Frame::head`): the page's name huge at the left on the grid, its words and
-/// its summary sentence beside it. A long name takes a size down and the full width
-/// (`long` from 7 characters, `longer` from 13, `longest` from 21), so it never runs off.
-pub fn band_head(name: &str, lead: &TrustedHtml, summary: &TrustedHtml) -> TrustedHtml {
-    band_head_html(
-        &TrustedHtml::owned(esc(name)),
-        name.chars().count(),
-        lead,
-        summary,
+/// The page's head on the paper (`Frame::head`), under the slim nav bar: the page's name as its
+/// heading at a reading size (the project's name on its plan, the page's elsewhere), and on the
+/// plan and home only the summary sentence under it, one line of large body text.
+pub fn page_head(name: &str, line: &TrustedHtml) -> TrustedHtml {
+    page_head_html(&TrustedHtml::owned(esc(name)), line)
+}
+/// The page's head with its heading already drawn, the summary sentence under it.
+pub fn page_head_html(name: &TrustedHtml, line: &TrustedHtml) -> TrustedHtml {
+    page_head_with(
+        &TrustedHtml::default(),
+        name,
+        &TrustedHtml::default(),
+        &if line.as_str().is_empty() {
+            TrustedHtml::default()
+        } else {
+            TrustedHtml::owned(format!("<p class=\"page-line\">{line}</p>"))
+        },
     )
 }
-/// The band's head with its name already drawn (`name`, `chars` characters of words long): a
-/// step's name with its stage muted before its title.
-pub fn band_head_html(
-    name: &TrustedHtml,
-    chars: usize,
-    lead: &TrustedHtml,
-    summary: &TrustedHtml,
-) -> TrustedHtml {
-    let size = match chars {
-        0..=6 => "",
-        7..=12 => " class=\"long\"",
-        13..=20 => " class=\"longer\"",
-        _ => " class=\"longest\"",
-    };
-    let lead = if lead.as_str().is_empty() {
-        String::new()
-    } else {
-        format!("<div class=\"band-lead\">{lead}</div>")
-    };
-    let summary = if summary.as_str().is_empty() {
-        String::new()
-    } else {
-        format!("<p class=\"band-summary\">{summary}</p>")
-    };
-    TrustedHtml::owned(format!(
-        "<div class=\"band-head\"><h1{size}>{name}</h1>{}</div>",
-        if lead.is_empty() && summary.is_empty() {
-            String::new()
+/// The page's head with a muted note under its name instead of a summary sentence: what a
+/// page shows ("42 records on this page"), or why it cannot be drawn.
+pub fn page_head_note(name: &str, note: &TrustedHtml) -> TrustedHtml {
+    page_head_with(
+        &TrustedHtml::default(),
+        &TrustedHtml::owned(esc(name)),
+        &TrustedHtml::default(),
+        &if note.as_str().is_empty() {
+            TrustedHtml::default()
         } else {
-            format!("<div class=\"band-sub\">{lead}{summary}</div>")
-        }
+            TrustedHtml::owned(format!("<p class=\"page-note\">{note}</p>"))
+        },
+    )
+}
+/// The page's head whole: its way back (`crumbs`, a breadcrumb nav) over its name, what stands
+/// beside the name (`beside`: its Details' "⋯"), and what goes under it (`under`: its lines,
+/// its strip, its actions).
+pub fn page_head_with(
+    crumbs: &TrustedHtml,
+    name: &TrustedHtml,
+    beside: &TrustedHtml,
+    under: &TrustedHtml,
+) -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<div class=\"page-head\">{crumbs}<div class=\"ph-name\"><h1>{name}</h1>{beside}</div>{under}</div>"
     ))
 }
 /// One unit (or a step of no unit) whose run ended: when, its name and title, how long.
@@ -799,53 +738,138 @@ pub struct Finished {
     pub runs: usize,
     /// How it ended: done, or a state that needs a look.
     pub shown: Option<Shown>,
+    /// Where it belongs, when the list spans several (home's project name), said muted first.
+    pub place: String,
 }
-/// The band's strip of what finished most recently (`Frame::head`, after `band_head`), its
-/// heading's id `id`: its head and line in the first two columns, then up to five, newest first, each its clock time
-/// big, its name, its title and how long it took. Nothing when nothing has finished.
-pub fn recent_strip(id: &str, line: &str, items: &[Finished]) -> TrustedHtml {
+/// How many of what finished last a list shows.
+pub const LATEST: usize = 4;
+/// What finished last, newest first (the plan's Done head, home's Today): a line each, its clock
+/// time, its title (its name when it has none) and how long it took, linking to it. The name
+/// is not shown: it identifies, and its page has it. Nothing when nothing has finished.
+pub fn latest_list(label: &str, items: &[Finished]) -> TrustedHtml {
     if items.is_empty() {
         return TrustedHtml::default();
     }
-    let cells: String = items
+    let rows: String = items
         .iter()
-        .take(5)
+        .take(LATEST)
         .map(|f| {
             let took = format!(
                 "took {}{}",
                 duration_text(f.took),
                 if f.runs > 1 {
-                    format!(" · {} runs", f.runs)
+                    format!(", {} runs", f.runs)
                 } else {
                     String::new()
                 }
             );
             let ended = match f.shown {
                 Some(s) if s.spec().band != Band::Done => {
-                    format!("<span class=\"rf-how\">{}{}</span>", mark(s), esc(word(s)))
+                    format!("<span class=\"lt-how\">{}{}</span> ", mark(s), esc(word(s)))
                 }
                 _ => String::new(),
             };
             format!(
-                "<li><a href=\"{}\"><span class=\"rf-at\">{}</span><span class=\"rf-name\">{}</span><span class=\"rf-title\">{}</span><span class=\"rf-took\">{ended}{}</span></a></li>",
+                "<li><a href=\"{}\"><span class=\"lt-at\">{}</span><span class=\"lt-t\">{}{}</span><span class=\"lt-took\">{ended}{}</span></a></li>",
                 esc(&f.href),
                 clock(&f.at),
-                esc(&f.name),
-                esc(&f.title),
+                if f.place.is_empty() {
+                    String::new()
+                } else {
+                    format!("<span class=\"lt-place\">{}</span> ", esc(&f.place))
+                },
+                esc(if f.title.is_empty() { &f.name } else { &f.title }),
                 esc(&took)
             )
         })
         .collect();
-    let id = esc(id);
     TrustedHtml::owned(format!(
-        "<section class=\"band-strip\" aria-labelledby=\"{id}\"><div class=\"rf-head\"><h2 id=\"{id}\">Recently finished</h2>{}</div><ol class=\"rf-list\">{cells}</ol></section>",
-        if line.is_empty() {
-            String::new()
-        } else {
-            format!("<p>{}</p>", esc(line))
-        }
+        "<ol class=\"latest\" aria-label=\"{}\">{rows}</ol>",
+        esc(label)
     ))
 }
+
+// ---- details: what identifies an item, behind its "⋯" ------------------------------------------
+
+/// What identifies an item rather than explains it (its ids, run, fn, engine, tags, recipe,
+/// hashes and paths), kept behind one "⋯" control at the item's end (`Details::menu`): a
+/// `<details>` that opens without script, inside a `sluice-menu` (Escape and a click elsewhere
+/// close it, the focus back on its button). Each id is shown whole with a copy button.
+#[derive(Clone, Debug, Default)]
+pub struct Details {
+    rows: Vec<(String, String)>,
+}
+impl Details {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// An id, hash or path: whole, in data mono, with a copy button. Left out when empty.
+    pub fn id(mut self, name: &str, value: &str) -> Self {
+        if !value.is_empty() {
+            self.rows.push((
+                name.to_owned(),
+                super::copy(value, &format!("Copy {}", name.to_lowercase())).0,
+            ));
+        }
+        self
+    }
+    /// Words or a short value. Left out when empty.
+    pub fn text(mut self, name: &str, value: &str) -> Self {
+        if !value.is_empty() {
+            self.rows
+                .push((name.to_owned(), format!("<span>{}</span>", esc(value))));
+        }
+        self
+    }
+    /// A value in data mono with no copy (a fn's name, a tag). Left out when empty.
+    pub fn code(mut self, name: &str, value: &str) -> Self {
+        if !value.is_empty() {
+            self.rows
+                .push((name.to_owned(), format!("<code>{}</code>", esc(value))));
+        }
+        self
+    }
+    /// Values already drawn. Left out when empty.
+    pub fn html(mut self, name: &str, value: &TrustedHtml) -> Self {
+        if !value.as_str().is_empty() {
+            self.rows.push((name.to_owned(), value.0.clone()));
+        }
+        self
+    }
+    /// A link onward.
+    pub fn link(mut self, name: &str, href: &str, text: &str) -> Self {
+        if !href.is_empty() {
+            self.rows.push((
+                name.to_owned(),
+                format!("<a href=\"{}\">{}</a>", esc(href), esc(text)),
+            ));
+        }
+        self
+    }
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+    /// The "⋯" control for the item `about` ("Details of a-12"): a 44px button on a phone that
+    /// opens the Details panel, nothing when there is nothing to hold.
+    pub fn menu(&self, about: &str) -> TrustedHtml {
+        if self.rows.is_empty() {
+            return TrustedHtml::default();
+        }
+        let rows: String = self
+            .rows
+            .iter()
+            .map(|(name, value)| format!("<div><dt>{}</dt><dd>{value}</dd></div>", esc(name)))
+            .collect();
+        TrustedHtml::owned(format!(
+            "{}<details class=\"dm\" data-preserve-attr=\"open\"><summary class=\"dm-b\" aria-label=\"Details of {a}\" title=\"Details\" data-preserve-attr=\"aria-expanded\">{}</summary><div class=\"menu dm-p\" role=\"group\" aria-label=\"Details of {a}\"><p class=\"dm-h\">Details</p><dl class=\"dm-l\">{rows}</dl></div></details>{}",
+            super::menu_open(),
+            icon(Icon::Ellipsis, 18, ""),
+            super::menu_close(),
+            a = esc(about),
+        ))
+    }
+}
+
 /// A time of day: "17:49" as UTC on the server, the reader's own clock once the page's script
 /// reads it (`data-clock`); the day and minute in UTC in its title.
 pub fn clock(at: &str) -> TrustedHtml {
@@ -875,86 +899,159 @@ pub struct LongRun {
     pub fields: Vec<(String, serde_json::Value)>,
     pub at: String,
 }
-/// How a progress value is set, from its JSON type and length alone, never its name.
+/// How a progress value or an output's preview is set, decided from its JSON type and shape
+/// alone, never its name (DESIGN.md, Details).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueSet {
-    /// A number, a boolean, nothing, or a string of at most `SHORT_VALUE` characters: it may
-    /// be set at display size.
-    Short,
-    /// One unbroken token (an id, a hash, a path) or a list or object: body size in data mono,
-    /// broken anywhere.
-    Token,
-    /// Words: body size in the text face.
+    /// A number, a boolean, nothing, or a few short words: shown as it is (the first of them
+    /// that is a number or a word of at most `SHORT_VALUE` characters at display size).
+    Show,
+    /// What identifies rather than explains: a hash, an id, a path, a URL, a long unbroken
+    /// token, a list or an object. Kept in the item's Details.
+    Detail,
+    /// Words: shown clamped to two lines, the whole text in the item's Details.
     Prose,
 }
-/// The longest string a progress value may be to be set at display size.
+/// The longest string a value may be to be set at display size.
 pub const SHORT_VALUE: usize = 8;
+/// The longest a run of words may be to be shown whole rather than clamped as prose.
+pub const SHORT_WORDS: usize = 32;
+/// The longest unbroken token that still reads as a word.
+pub const LONG_TOKEN: usize = 24;
 impl ValueSet {
     pub fn of(value: &serde_json::Value) -> Self {
         match value {
-            serde_json::Value::String(s) if s.chars().count() <= SHORT_VALUE => ValueSet::Short,
-            serde_json::Value::String(s) if s.chars().any(char::is_whitespace) => ValueSet::Prose,
-            serde_json::Value::String(_) => ValueSet::Token,
-            serde_json::Value::Array(_) | serde_json::Value::Object(_) => ValueSet::Token,
-            _ => ValueSet::Short,
+            serde_json::Value::String(s) => Self::of_text(s),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => ValueSet::Detail,
+            _ => ValueSet::Show,
+        }
+    }
+    /// A string's shape: a URL, a path, a hash, an id or a long token identifies; a few words
+    /// show; more words are prose.
+    pub fn of_text(text: &str) -> Self {
+        let s = text.trim();
+        if s.contains("://") {
+            return ValueSet::Detail;
+        }
+        if s.split_whitespace().nth(1).is_none() {
+            return if token_identifies(s) {
+                ValueSet::Detail
+            } else {
+                ValueSet::Show
+            };
+        }
+        // words: a path or a hash among them makes them prose to clamp, never shown whole
+        let any_token = s.split_whitespace().any(token_identifies);
+        if s.chars().count() <= SHORT_WORDS && !any_token {
+            ValueSet::Show
+        } else {
+            ValueSet::Prose
+        }
+    }
+    /// Whether a value is a number or a word short enough for display size.
+    pub fn display(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Number(_) | serde_json::Value::Bool(_) => true,
+            serde_json::Value::String(s) => {
+                ValueSet::of_text(s) == ValueSet::Show && s.trim().chars().count() <= SHORT_VALUE
+            }
+            _ => false,
         }
     }
 }
-/// The margin module (`Swell::Margin`, two columns at the sheet's right): its name and words,
-/// its running time on the blue, then each progress field in the order reported (the first
-/// short one, a number say, at display size; an id or hash in data mono; words as text), then
-/// when it last reported and a link to its page.
-pub fn margin_module(run: &LongRun) -> TrustedHtml {
-    let value = |v: &serde_json::Value| match v {
-        serde_json::Value::String(s) => esc(s),
-        serde_json::Value::Null => "none".into(),
-        other => esc(&other.to_string()),
-    };
-    let mut fields = String::new();
-    let lead = run
-        .fields
-        .iter()
-        .position(|(_, v)| ValueSet::of(v) == ValueSet::Short);
-    for (i, (key, v)) in run.fields.iter().enumerate() {
-        fields.push_str(&format!(
-            "<div class=\"{}\"><dt>{}</dt><dd{}>{}</dd></div>",
-            if Some(i) == lead {
-                "mm-f mm-lead"
-            } else {
-                "mm-f"
-            },
-            esc(key),
-            if ValueSet::of(v) == ValueSet::Token {
-                " class=\"mm-token\""
-            } else {
-                ""
-            },
-            value(v)
-        ));
+/// One unbroken token that identifies rather than says: a path (a slash with a letter), a hash
+/// (seven or more hex digits), an id (letters and digits joined by a separator, six or more
+/// characters), or anything longer than `LONG_TOKEN`.
+fn token_identifies(t: &str) -> bool {
+    let t = t.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | '.' | ';' | ':' | '"' | '\''));
+    let n = t.chars().count();
+    let letters = t.chars().any(char::is_alphabetic);
+    let digits = t.chars().any(|c| c.is_ascii_digit());
+    if n > LONG_TOKEN {
+        return true;
     }
-    TrustedHtml::owned(format!(
-        "{open}<h3 class=\"mm-t\"><a href=\"{href}\">{title}</a></h3>{doc}<div class=\"mm-run\"><span class=\"mm-k\">{run_mark}running{n}</span><span class=\"mm-time\">{since}</span><span class=\"sweep\" aria-hidden=\"true\"></span></div>{fields}{at}{close}",
-        open = module_open(2, Swell::Margin, &format!("{}, running", run.name)).as_str(),
-        href = esc(&run.href),
-        title = esc(if run.title.is_empty() {
-            &run.name
+    if (t.contains('/') || t.contains('\\')) && letters {
+        return true;
+    }
+    if n >= 7 && t.chars().all(|c| c.is_ascii_hexdigit()) && digits {
+        return true;
+    }
+    n >= 6 && letters && digits && t.contains(['-', '_', ':', '#', '@'])
+}
+/// A value as words: a string as it is, nothing as "none", anything else as its JSON.
+fn value_text(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => "none".into(),
+        other => other.to_string(),
+    }
+}
+/// The margin module (`Swell::Margin`, two columns at the sheet's right): its title and words,
+/// its running time on the blue, then each progress field in the order reported as its shape
+/// says (`ValueSet`: the first number or short word at display size, other short values as they
+/// are, prose clamped to two lines), when it last reported, and its "⋯" Details holding its
+/// step, its run and every value whole, the hashes, ids and paths among them.
+pub fn margin_module(run: &LongRun) -> TrustedHtml {
+    let mut fields = String::new();
+    let lead = run.fields.iter().position(|(_, v)| ValueSet::display(v));
+    let mut details = Details::new().id("Step", &run.name).text(
+        "Run",
+        &if run.run > 0 {
+            run.run.to_string()
         } else {
-            &run.title
-        }),
+            String::new()
+        },
+    );
+    for (i, (key, v)) in run.fields.iter().enumerate() {
+        let text = value_text(v);
+        match ValueSet::of(v) {
+            ValueSet::Detail => {
+                details = details.id(key, &text);
+            }
+            ValueSet::Prose => {
+                details = details.text(key, &text);
+                fields.push_str(&format!(
+                    "<div class=\"mm-f mm-prose\"><dt>{}</dt><dd>{}</dd></div>",
+                    esc(key),
+                    esc(&text)
+                ));
+            }
+            ValueSet::Show => fields.push_str(&format!(
+                "<div class=\"{}\"><dt>{}</dt><dd>{}</dd></div>",
+                if Some(i) == lead {
+                    "mm-f mm-lead"
+                } else {
+                    "mm-f"
+                },
+                esc(key),
+                esc(&text)
+            )),
+        }
+    }
+    let shown_title = if run.title.is_empty() {
+        &run.name
+    } else {
+        &run.title
+    };
+    TrustedHtml::owned(format!(
+        "{open}<div class=\"mm-head\"><h3 class=\"mm-t\"><a href=\"{href}\">{title}</a></h3>{menu}</div>{doc}<div class=\"mm-run\"><span class=\"mm-k\">{run_mark}running</span><span class=\"mm-time\">{since}</span><span class=\"sweep\" aria-hidden=\"true\"></span></div>{fields}{at}{close}",
+        open = module_open(2, Swell::Margin, &format!("{shown_title}, running")).as_str(),
+        href = esc(&run.href),
+        title = esc(shown_title),
+        menu = details.menu(shown_title),
         doc = if run.doc.is_empty() {
             String::new()
         } else {
             format!("<p class=\"mm-doc\">{}</p>", esc(&run.doc))
         },
         run_mark = mark(Shown::Running),
-        n = if run.run > 1 {
-            format!(" · run {}", run.run)
-        } else {
-            String::new()
-        },
         since = since(&run.since),
         fields = if fields.is_empty() {
-            "<p class=\"mm-none\">It has reported no progress.</p>".to_owned()
+            if run.fields.is_empty() {
+                "<p class=\"mm-none\">It has reported no progress.</p>".to_owned()
+            } else {
+                String::new()
+            }
         } else {
             format!("<dl class=\"mm-fields\">{fields}</dl>")
         },
@@ -1134,8 +1231,7 @@ mod tests {
 
     #[test]
     fn the_summary_says_only_what_the_counts_say() {
-        let unit = |name: &str, recipe: &str, shown, over, quiet| UnitFact {
-            name: name.into(),
+        let unit = |recipe: &str, shown, over, quiet| UnitFact {
             recipe: recipe.into(),
             shown: Some(shown),
             over,
@@ -1143,12 +1239,12 @@ mod tests {
             ..UnitFact::default()
         };
         let units = [
-            unit("a-1", "article", Shown::Failed, None, None),
-            unit("a-2", "article", Shown::Cancelled, None, None),
-            unit("a-3", "article", Shown::Running, Some(2.14), None),
-            unit("s-1", "scan", Shown::Quiet, None, Some(3180.0)),
-            unit("a-4", "article", Shown::Pending, None, None),
-            unit("a-5", "article", Shown::Succeeded, None, None),
+            unit("article", Shown::Failed, None, None),
+            unit("article", Shown::Cancelled, None, None),
+            unit("article", Shown::Running, Some(2.14), None),
+            unit("scan", Shown::Quiet, None, Some(3180.0)),
+            unit("article", Shown::Pending, None, None),
+            unit("article", Shown::Succeeded, None, None),
         ];
         let html = summary_sentence(&Summary {
             asks: 1,
@@ -1159,7 +1255,7 @@ mod tests {
         });
         assert_eq!(
             html.as_str(),
-            "<a class=\"ask\" href=\"#for-you\">1 question for you</a>. 1 failed, 1 cancelled. 1 article unit and 1 scan unit at work: s-1 quiet for 53m, a-3 at 2.1× its usual time. 1 waiting. 1 of 6 units done."
+            "<a class=\"ask\" href=\"#for-you\">1 question for you</a>. 1 failed, 1 cancelled. 1 article unit and 1 scan unit at work: 1 quiet for 53m, 1 at 2.1× its usual time. 1 waiting. 1 of 6 units done."
         );
         assert_eq!(
             summary_sentence(&Summary::default()).as_str(),
@@ -1170,7 +1266,7 @@ mod tests {
     #[test]
     fn one_rule_says_how_far_past_its_usual_time_a_run_is() {
         // one decimal below ten, a whole number from ten, each rounded down: a cell, a chip
-        // and a step's band never say "20×" beside "19×"
+        // and a step's head never say "20×" beside "19×"
         assert_eq!(ratio_text(2.19), "2.1×");
         assert_eq!(ratio_text(4.5), "4.5×");
         assert_eq!(ratio_text(9.99), "9.9×");
@@ -1181,9 +1277,8 @@ mod tests {
     }
 
     #[test]
-    fn a_busy_summary_names_two_overruns_and_two_quiet_runs_and_counts_the_rest() {
-        let run = |name: &str, recipe: &str, over: Option<f64>, quiet: Option<f64>| UnitFact {
-            name: name.into(),
+    fn a_busy_summary_counts_its_overruns_and_quiet_runs_and_names_no_unit() {
+        let run = |recipe: &str, over: Option<f64>, quiet: Option<f64>| UnitFact {
             recipe: recipe.into(),
             shown: Some(if quiet.is_some() {
                 Shown::Quiet
@@ -1194,14 +1289,9 @@ mod tests {
             quiet,
             ..UnitFact::default()
         };
-        // eight past their usual time in any order, one unit of no recipe among them
         let ratios = [5.7, 2.2, 9.8, 3.1, 1.6, 4.0, 2.5, 1.2];
-        let mut units: Vec<UnitFact> = ratios
-            .iter()
-            .enumerate()
-            .map(|(i, r)| run(&format!("u-{i}"), "lane", Some(*r), None))
-            .collect();
-        units.push(run("x", "", Some(1.1), None));
+        let mut units: Vec<UnitFact> = ratios.iter().map(|r| run("lane", Some(*r), None)).collect();
+        units.push(run("", Some(1.1), None));
         let says = |units: &[UnitFact]| {
             summary_sentence(&Summary {
                 units,
@@ -1213,27 +1303,102 @@ mod tests {
         };
         assert_eq!(
             says(&units),
-            "8 lane units and 1 unit without a recipe at work, 9 past their usual time (u-2 at 9.8×, u-0 at 5.7× and 7 more)."
+            "8 lane units and 1 unit without a recipe at work: 9 past their usual time, the furthest at 9.8×."
         );
-        // three quiet: the two longest named, before the overruns
         units.extend([
-            run("q-1", "lane", None, Some(600.0)),
-            run("q-2", "lane", None, Some(4000.0)),
-            run("q-3", "lane", None, Some(120.0)),
+            run("lane", None, Some(600.0)),
+            run("lane", None, Some(4000.0)),
+            run("lane", None, Some(120.0)),
         ]);
         assert_eq!(
             says(&units),
-            "11 lane units and 1 unit without a recipe at work, 3 quiet (q-2 for 1h 6m, q-1 for 10m and 1 more), 9 past their usual time (u-2 at 9.8×, u-0 at 5.7× and 7 more)."
+            "11 lane units and 1 unit without a recipe at work: 3 quiet, the longest for 1h 6m, 9 past their usual time, the furthest at 9.8×."
         );
-        // two of each are still named one by one, after a colon
-        let few = [
-            run("a", "", Some(3.0), None),
-            run("b", "", Some(2.0), None),
-            run("c", "", None, Some(60.0)),
-        ];
+        assert_eq!(says(&[run("", None, None)]), "1 unit at work.");
+    }
+
+    #[test]
+    fn a_value_is_shown_or_kept_in_details_by_its_shape_alone() {
+        use serde_json::json;
+        let of = |v: serde_json::Value| ValueSet::of(&v);
+        // numbers, booleans and short words show
+        assert_eq!(of(json!(2)), ValueSet::Show);
+        assert_eq!(of(json!(true)), ValueSet::Show);
+        assert_eq!(of(json!("green")), ValueSet::Show);
+        assert_eq!(of(json!("3 of 7 done")), ValueSet::Show);
+        assert_eq!(of(json!("12/40")), ValueSet::Show);
+        // hashes, ids, paths, URLs and long tokens go to Details
         assert_eq!(
-            says(&few),
-            "3 units at work: c quiet for 1m, a at 3× its usual time, b at 2× its usual time."
+            of(json!("168272b5c838681da58f6457eda242e413485bd6")),
+            ValueSet::Detail
         );
+        assert_eq!(of(json!("168272b5c8")), ValueSet::Detail);
+        assert_eq!(of(json!("a-12-review")), ValueSet::Detail);
+        assert_eq!(of(json!("/srv/almanac/report.json")), ValueSet::Detail);
+        assert_eq!(of(json!("https://example.org/a")), ValueSet::Detail);
+        assert_eq!(
+            of(json!("abcdefghijklmnopqrstuvwxyzabcdef")),
+            ValueSet::Detail
+        );
+        assert_eq!(of(json!(["a", "b"])), ValueSet::Detail);
+        // prose stays, clamped, whole in Details; a path inside it never makes it a token
+        assert_eq!(
+            of(json!(
+                "Checked every entry against the field notes; two disagree."
+            )),
+            ValueSet::Prose
+        );
+        assert_eq!(
+            of(json!("2 red of 641 at /srv/almanac/report.json")),
+            ValueSet::Prose
+        );
+        // the first number or short word is set at display size
+        assert!(ValueSet::display(&json!(2)));
+        assert!(ValueSet::display(&json!("green")));
+        assert!(!ValueSet::display(&json!("3 of 7 done and more")));
+        assert!(!ValueSet::display(&json!("168272b5c8")));
+    }
+
+    #[test]
+    fn the_margin_keeps_what_identifies_in_its_details() {
+        use serde_json::json;
+        let html = margin_module(&LongRun {
+            name: "survey-watch".into(),
+            title: "Watches the survey".into(),
+            run: 4,
+            since: "2026-10-09T08:00:00Z".into(),
+            fields: vec![
+                (
+                    "head".into(),
+                    json!("168272b5c838681da58f6457eda242e413485bd6"),
+                ),
+                ("open".into(), json!(2)),
+                (
+                    "note".into(),
+                    json!("Checked every entry against the field notes; two disagree."),
+                ),
+            ],
+            ..LongRun::default()
+        })
+        .0;
+        let visible = html
+            .split("<details class=\"dm\"")
+            .next()
+            .unwrap()
+            .to_owned()
+            + html.split("</details>").nth(1).unwrap_or("");
+        assert!(!visible.contains("168272b5"), "{visible}");
+        assert!(!visible.contains("survey-watch"), "{visible}");
+        assert!(
+            visible.contains("<div class=\"mm-f mm-lead\"><dt>open</dt><dd>2</dd></div>"),
+            "{visible}"
+        );
+        assert!(visible.contains("mm-prose"), "{visible}");
+        let details = html.split("<details class=\"dm\"").nth(1).unwrap();
+        assert!(
+            details.contains("168272b5c838681da58f6457eda242e413485bd6"),
+            "{details}"
+        );
+        assert!(details.contains("survey-watch"), "{details}");
     }
 }

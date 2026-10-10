@@ -1,7 +1,7 @@
 //! The project page's plan on the neutral fixture (DESIGN.md, Pages): each unit drawn once in
 //! its band, For you and Stopped first, Running quiet first then the longest, a block a recipe
 //! with its stages as columns, a unit of no recipe its own small graph, loose steps one cell
-//! each, the long run's progress in the margin, Recently finished and the Done index; in
+//! each, the long run's progress in the margin, what finished last and the Done index; in
 //! Chromium no sideways scroll from 320px to 3840px, beside the board too.
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
@@ -32,9 +32,7 @@ async fn every_unit_of_the_fixture_is_drawn_once_in_its_band_in_rank() {
         assert_eq!(plan_html::place(&html, unit), band, "{unit}");
         // once: one row, module or line a unit
         let drawn = html.matches(&format!("data-unit=\"{unit}\"")).count()
-            + html
-                .matches(&format!("<code class=\"pl-did\">{unit}</code>"))
-                .count();
+            + plan_html::done_lines(&html, unit);
         assert_eq!(drawn, 1, "{unit}");
     }
     // the bands in order: For you and Stopped, Running, Waiting, Done
@@ -58,7 +56,7 @@ async fn every_unit_of_the_fixture_is_drawn_once_in_its_band_in_rank() {
     assert!(at(running, "<!--r:u-a-6-->") < at(running, "<!--r:u-index-->"));
     assert!(
         running.contains(
-            "Quiet first, then the longest. a-7 asks you above. survey runs in the margin."
+            "Quiet first, then the longest. 1 unit asks you above. 1 long run is in the margin."
         ),
         "{running}"
     );
@@ -80,9 +78,16 @@ async fn every_unit_of_the_fixture_is_drawn_once_in_its_band_in_rank() {
             .count(),
         1
     );
+    // a unit of one step draws its step's state in its stage's cell
+    assert!(
+        plan_html::row(&html, "s-3")
+            .contains("<li class=\"sc sc-look sc-quiet\" data-state=\"quiet\">"),
+        "{}",
+        plan_html::row(&html, "s-3")
+    );
     // the overrun: its chip on the row, how far on its live cell, its usual time said
     assert!(article.contains("class=\"overrun\""), "{article}");
-    assert!(article.contains(" · usually "), "{article}");
+    assert!(article.contains(", usually "), "{article}");
     assert!(plan_html::cell(&html, "a-6-draft").contains("sc-over"));
     // the unit of no recipe: its two gathers fan in to its merge, a connector an edge
     let index = plan_html::row(&html, "index");
@@ -103,12 +108,12 @@ async fn every_unit_of_the_fixture_is_drawn_once_in_its_band_in_rank() {
     let waiting = plan_html::band(&html, "plan-waiting");
     assert!(at(waiting, "<!--r:u-a-8-->") < at(waiting, "<!--r:u-a-9-->"));
     assert!(plan_html::row(&html, "a-8").contains("draft waits for <a"));
-    // Recently finished: the latest five, newest first; the Done index every one, folded
-    let recent = plan_html::between(&html, "<section class=\"band-strip\"", "</section>");
-    assert_eq!(recent.matches("<li>").count(), 5, "{recent}");
-    // by name, not anywhere in the markup: a project id can hold "a-1"
+    // Finished last at the head of Done: the latest four, newest first, by title; the Done
+    // index every one, folded
+    let recent = plan_html::between(&html, "<ol class=\"latest\"", "</ol>");
+    assert_eq!(recent.matches("<li>").count(), 4, "{recent}");
     assert!(
-        at(recent, "rf-name\">a-3<") < at(recent, "rf-name\">a-1<"),
+        at(recent, "/units/a-3\"") < at(recent, "/units/a-2\"") && !recent.contains("/units/a-1\""),
         "{recent}"
     );
     let done = plan_html::band(&html, "plan-done");
@@ -117,7 +122,7 @@ async fn every_unit_of_the_fixture_is_drawn_once_in_its_band_in_rank() {
     // the sentence over it all
     let summary = plan_html::summary(&html);
     assert!(
-        summary.starts_with("<p class=\"band-summary\"><a class=\"ask\"")
+        summary.starts_with("<p class=\"page-line\"><a class=\"ask\"")
             && summary.contains("1 question for you</a>. 2 failed, 1 cancelled.")
             && summary
                 .contains("2 article units, 1 scan unit and 2 units without a recipe at work"),
@@ -218,11 +223,11 @@ async fn chromium_the_plan_fits_every_width_from_a_phone_to_a_wide_screen() {
     let _ = server.await;
 }
 
-/// The band's name is sized by the band's own width, not the window's: with the drawer open
-/// beside the plan at 1440px the band is narrower, so the name takes the band's tablet row and
-/// a size for that width, and stays whole on one line.
+/// The page's head keeps one reading size: the project's name at 30px on one line with its
+/// Details' "⋯" beside it and the summary sentence under it, alone and with the drawer open
+/// beside the plan at 1440px, and nothing scrolls sideways.
 #[tokio::test(flavor = "multi_thread")]
-async fn chromium_the_bands_name_follows_the_band_and_stays_whole_beside_the_drawer() {
+async fn chromium_the_page_head_keeps_its_size_and_stays_whole_beside_the_drawer() {
     let f = Fixture::new().await;
     let n = neutral::seed(&f.writer, f._home.path()).await;
     let router = f.router();
@@ -233,30 +238,22 @@ async fn chromium_the_bands_name_follows_the_band_and_stays_whole_beside_the_dra
         let page = format!("http://{addr}/projects/id/{}", n.almanac);
         let mut browser = Chrome::open(&page).unwrap();
         browser
-            .wait("document.readyState === 'complete' && document.querySelector('.band-head h1')")
+            .wait("document.readyState === 'complete' && document.querySelector('.page-head h1')")
             .unwrap();
         browser.viewport(1440, "light").unwrap();
         const NAME: &str = r#"(() => {
-  const h1 = document.querySelector('.band-head > h1');
-  const band = document.querySelector('.band-in');
-  const pad = parseFloat(getComputedStyle(band).paddingLeft) + parseFloat(getComputedStyle(band).paddingRight);
-  const size = parseFloat(getComputedStyle(h1).fontSize);
-  const words = [...document.querySelectorAll('.band-sub')].map(e => e.getBoundingClientRect());
-  return {size, band: band.clientWidth - pad, cls: h1.className,
-          lines: Math.round(h1.getBoundingClientRect().height / (size * 0.8)),
-          right: h1.getBoundingClientRect().right, edge: band.getBoundingClientRect().right,
-          under: words.length > 0 && words[0].top >= h1.getBoundingClientRect().bottom - 1,
+  const h1 = document.querySelector('.page-head h1'), top = document.querySelector('.page-top');
+  const r = h1.getBoundingClientRect(), dm = document.querySelector('.ph-name details.dm').getBoundingClientRect();
+  const line = document.querySelector('.page-line').getBoundingClientRect();
+  return {size: getComputedStyle(h1).fontSize, lines: Math.round(r.height / 34),
+          beside: Math.abs(dm.top - r.top) < 8 && dm.left >= r.right,
+          under: line.top >= r.bottom - 1,
+          inside: r.right <= top.getBoundingClientRect().right + 0.5,
           scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth};
 })()"#;
-        // alone: "almanac" (seven letters, the long step) at 7.54% of a 1376px band
-        let alone = browser.eval(NAME).unwrap();
-        assert_eq!(alone["cls"], "long", "{alone}");
-        let band = alone["band"].as_f64().unwrap();
-        let size = alone["size"].as_f64().unwrap();
-        assert!((size - (band * 0.0754).clamp(64.0, 166.0)).abs() < 1.0, "{alone}");
-        assert_eq!(alone["lines"], 1, "{alone}");
-        assert_eq!(alone["under"], false, "beside its words at 1440 {alone}");
-        // the drawer open beside it: the band narrows, the name follows the band
+        let want = serde_json::json!({"size": "30px", "lines": 1, "beside": true, "under": true, "inside": true, "scroll": 0});
+        assert_eq!(browser.eval(NAME).unwrap(), want, "alone");
+        // the drawer open beside it: the head narrows and keeps its size
         browser
             .eval("history.replaceState(null,'','#step:a-6-draft');dispatchEvent(new HashChangeEvent('hashchange'))")
             .unwrap();
@@ -264,15 +261,7 @@ async fn chromium_the_bands_name_follows_the_band_and_stays_whole_beside_the_dra
             .wait("document.documentElement.classList.contains('drawer-open')")
             .unwrap();
         browser.wait("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))").unwrap();
-        let beside = browser.eval(NAME).unwrap();
-        let narrow = beside["band"].as_f64().unwrap();
-        assert!(narrow < band - 500.0, "the drawer narrows the band {beside}");
-        let size = beside["size"].as_f64().unwrap();
-        assert!((size - (narrow * 0.0754).clamp(64.0, 166.0)).abs() < 1.0, "{beside}");
-        assert_eq!(beside["lines"], 1, "the name stays whole {beside}");
-        assert!(beside["right"].as_f64().unwrap() <= beside["edge"].as_f64().unwrap() + 0.5, "{beside}");
-        assert_eq!(beside["under"], true, "a band this narrow sets its words under the name {beside}");
-        assert_eq!(beside["scroll"], 0, "{beside}");
+        assert_eq!(browser.eval(NAME).unwrap(), want, "beside the drawer");
     })
     .await
     .unwrap();

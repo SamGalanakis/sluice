@@ -184,7 +184,7 @@ async fn every_state_reads_the_same_on_every_surface() {
             sluice_model::shown::Band::Done => {
                 let line = between(
                     plan_html::band(plan, "plan-done"),
-                    &format!("<code class=\"pl-did\">{step}</code>"),
+                    &format!("/{step}\"><span class=\"pl-at\">"),
                     "</li>",
                 );
                 let item = &plan[..plan.find(line).unwrap() + line.len()];
@@ -250,7 +250,7 @@ async fn every_state_reads_the_same_on_every_surface() {
     let sum = plan_html::summary(&html);
     for said in [
         "1 failed, 1 cancelled, 1 stale.",
-        "5 units at work: s-quiet quiet for ",
+        "5 units at work: 1 quiet for ",
         "5 waiting.",
         "3 of 16 units done",
     ] {
@@ -601,8 +601,9 @@ async fn a_unit_reads_by_its_steps_on_the_shelf_and_its_page() {
         .await;
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
     let done = plan_html::band(&html, "plan-done");
-    let line = between(done, "<li ", "<code class=\"pl-did\">k</code>");
-    let line = &line[line.rfind("<li ").unwrap()..];
+    let at = done.find("/units/k\"><span class=\"pl-at\">").unwrap();
+    let line = &done[done[..at].rfind("<li ").unwrap()..];
+    let line = &line[..line.find("</li>").unwrap()];
     assert!(line.contains(&glyph(Shown::Skipped)), "{line}");
     let (_, page) = f.get(&format!("/projects/id/{id}/units/w")).await;
     assert!(

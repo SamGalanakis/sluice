@@ -555,7 +555,7 @@ async fn card(state: &views::DashboardState, project: ProjectId) -> String {
         "margin" => plan_html::region(&body, "m-work").to_owned(),
         "done" => {
             let at = body
-                .find("<code class=\"pl-did\">work</code>")
+                .find("/steps/work\"><span class=\"pl-at\">")
                 .expect("its line");
             body[at..at + body[at..].find("</li>").unwrap()].to_owned()
         }
@@ -636,7 +636,8 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
         "a pending step shows no timer: {html}"
     );
 
-    // the retry runs: the timer is the current run's, not the first's, and it says its run
+    // the retry runs: the timer is the current run's, not the first's, and its Details say
+    // which run
     run("2026-10-05T10:00:00Z", None).await;
     set("UPDATE steps SET status='running' WHERE project_id=?1").await;
     let html = card(&state, project).await;
@@ -645,7 +646,10 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
             && !html.contains("2026-10-05T09:00:00Z"),
         "{html}"
     );
-    assert!(html.contains("running · run 2"), "{html}");
+    assert!(
+        html.contains("<dt>Run</dt><dd><span>2</span></dd>"),
+        "{html}"
+    );
 
     // it succeeds: done, how long its last run took, static
     set("UPDATE runs SET finished_at='2026-10-05T12:14:30Z' WHERE project_id=?1 AND finished_at IS NULL").await;

@@ -148,13 +148,9 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
 async fn a_projects_messages_page_is_titled_messages_and_the_tray_stays_inbox() {
     let f = Fixture::new().await;
     let (_, project) = f.get(&format!("/projects/id/{}/inbox", f.id)).await;
-    // its name is the band's, its way back under it
+    // its name heads it; its way back is the tab row's Plan
     assert!(
-        project.contains("<h1 class=\"long\">Messages</h1>"),
-        "{project}"
-    );
-    assert!(
-        project.contains("<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/"),
+        project.contains("<div class=\"ph-name\"><h1>Messages</h1></div>"),
         "{project}"
     );
     assert!(
@@ -164,23 +160,18 @@ async fn a_projects_messages_page_is_titled_messages_and_the_tray_stays_inbox() 
     let (_, tray) = f.get("/inbox").await;
     assert!(tray.contains("<h1>Inbox</h1>"), "{tray}");
     let (_, history) = f.get(&format!("/projects/id/{}/history", f.id)).await;
-    // History wears the messages' band as For you and Questions do: its name, the way back to
-    // the plan and how many threads, in the frame's head before the page
+    // History wears the messages' head as For you and Questions do: its name, in the frame's
+    // head before the page; the threads' count is its section's
     let band = history
         .split("<div id=\"messages-band\" class=\"messages-band\">")
         .nth(1)
         .and_then(|b| b.split("<main").next())
         .unwrap_or_else(|| panic!("no band: {history}"));
-    assert!(band.contains("<h1 class=\"long\">History</h1>"), "{band}");
-    assert!(band.contains(" plan</a></nav>"), "{band}");
-    assert!(
-        band.contains("with a message to you or from you, read or not, the latest first."),
-        "{band}"
-    );
-    assert!(!history.contains("<h1>History</h1>"), "{history}");
+    assert!(band.contains("<h1>History</h1>"), "{band}");
+    assert_eq!(history.matches("<h1>History</h1>").count(), 1, "{history}");
     assert!(
         history.contains("/history\" aria-current=\"page\">History</a>"),
-        "its switch names History, the third view: {history}"
+        "its switch names History, the third view, in the tab row: {history}"
     );
 }
 
@@ -221,10 +212,11 @@ async fn a_message_box_to_a_step_not_running_says_when_it_is_read() {
         thread.contains("composer-note"),
         "the thread's page says it too"
     );
-    // the crumb names the step by its id: the band's h1 says its title
+    // the head says the step's title; its crumb leads back to the step, its id in Details
     assert!(
-        thread.contains("<div class=\"band-head\"><h1 class=\"longest\"><span class=\"d-stage\">")
-            && thread.contains(">step l2-work</a></nav>"),
+        thread.contains("<div class=\"ph-name\"><h1><span class=\"d-stage\">")
+            && thread.contains("/steps/l2-work\">Its step</a></nav>")
+            && thread.contains("<dt>Step</dt>"),
         "{thread}"
     );
     let (_, running) = f
@@ -251,10 +243,7 @@ async fn waits_on_names_each_step_it_takes_from_by_its_title_linked() {
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/reader")).await;
     let waits = between(&page, "<p class=\"gate wait-step\">", "</p>");
     assert!(waits.contains(&format!("<a class=\"sref-a\" href=\"/projects/id/{id}/steps/probe\" title=\"Probes the parser under load\">")), "{waits}");
-    assert!(
-        waits.contains("<code class=\"sref-id\">probe</code>"),
-        "{waits}"
-    );
+    assert!(!waits.contains("sref-id"), "the title alone: {waits}");
     assert!(
         waits.ends_with(" <span class=\"meta\">(running)</span>"),
         "{waits}"
@@ -310,9 +299,10 @@ async fn a_pending_step_that_ran_says_when_its_last_run_ended_and_an_empty_outpu
         .await
         .unwrap();
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/redo")).await;
-    let when = between(&page, "<p class=\"meta d-when\">", "</p>");
+    let when = between(&page, "<span class=\"meta d-when\">", "</p>");
+    let when = &when[..when.rfind("</span>").unwrap()];
     assert!(
-        when.starts_with("<p class=\"meta d-when\">Last run ended <time"),
+        when.starts_with("<span class=\"meta d-when\">Last run ended <time"),
         "{when}"
     );
     assert!(when.ends_with(" (took &lt;1s)."), "{when}");
@@ -509,12 +499,12 @@ async fn chromium_a_steps_heading_steps_down_on_a_phone_and_a_units_glyph_sits_b
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}/steps/l1-work")).unwrap();
         browser.wait("document.readyState === 'complete' && document.querySelector('h1')").unwrap();
         const SIZE: &str = "(() => { const h = document.querySelector('h1'); const s = getComputedStyle(h); return {size: s.fontSize, line: s.lineHeight}; })()";
-        // the band's name, its stage and a title of 26 characters ("long"): 68px over the band,
-        // a phone's 44px, so its state and tabs stay near the first screen
+        // the step's name, its stage and its title, at a reading size: 28px, a phone's 23px, so
+        // its state, its stages and its tabs stay on the first screen
         browser.viewport(390, "light").unwrap();
-        assert_eq!(browser.eval(SIZE).unwrap(), json!({"size": "44px", "line": "40.48px"}));
+        assert_eq!(browser.eval(SIZE).unwrap(), json!({"size": "23px", "line": "28px"}));
         browser.viewport(1440, "light").unwrap();
-        assert_eq!(browser.eval(SIZE).unwrap(), json!({"size": "68px", "line": "62.56px"}));
+        assert_eq!(browser.eval(SIZE).unwrap(), json!({"size": "28px", "line": "34px"}));
         browser.navigate(&format!("http://{addr}/projects/id/{id}/units/l1")).unwrap();
         browser.wait("document.querySelector('h1.unit-h')").unwrap();
         browser.viewport(390, "light").unwrap();
@@ -522,7 +512,7 @@ async fn chromium_a_steps_heading_steps_down_on_a_phone_and_a_units_glyph_sits_b
             .eval("(() => { const h = document.querySelector('h1.unit-h'), g = h.querySelector('.g'); return {top: g.getBoundingClientRect().top - h.getBoundingClientRect().top, size: getComputedStyle(h).fontSize}; })()")
             .unwrap();
         assert!(g["top"].as_f64().unwrap() < 8.0, "the glyph by the first line: {g}");
-        assert_eq!(g["size"], "32px", "{g}");
+        assert_eq!(g["size"], "26px", "{g}");
     })
     .await
     .unwrap();

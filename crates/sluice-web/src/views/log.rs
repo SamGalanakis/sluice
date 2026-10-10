@@ -292,7 +292,7 @@ fn who_html(
                         "<a href=\"/projects/id/{project}/steps/{}\"{}>{}</a>",
                         super::ui::esc(id),
                         if named.titled() { format!(" title=\"{}\"", super::ui::esc(&named.title)) } else { String::new() },
-                        named.html(48).0
+                        named.with_id_html(48).0
                     ),
                     true,
                 )
@@ -467,22 +467,9 @@ impl LogView {
         )
         .map_err(super::threads::render_error)
     }
-    /// The band: "Log" huge (a project's log, the project's name), what it holds and what this
-    /// page of it shows.
+    /// The page's head: "Log", and what this page of it shows ("42 records on this page; the
+    /// newest 3m ago").
     pub fn head(&self) -> TrustedHtml {
-        let project = self
-            .project
-            .and_then(|id| self.nav.projects.iter().find(|p| p.id == id));
-        let (name, lead) = match project {
-            Some(p) => (
-                p.name.clone(),
-                format!("The records {} keeps, the newest first.", p.name),
-            ),
-            None => (
-                "Log".to_owned(),
-                "The records sluice keeps for every project, the newest first.".to_owned(),
-            ),
-        };
         let shown: usize = self.rows.iter().map(|r| r.count.max(1)).sum();
         let what = match self.query.preset() {
             "step" => "step records",
@@ -492,23 +479,16 @@ impl LogView {
             "all" => "records",
             _ => "records of the kinds chosen",
         };
-        let summary = match (self.rows.first(), self.rows.last()) {
-            (Some(newest), Some(oldest)) => format!(
-                "{} {what} on this page, seq {} to {}; the newest {}.",
-                shown,
-                oldest.oldest.min(oldest.seq),
-                newest.seq,
+        let note = match self.rows.first() {
+            Some(newest) => format!(
+                "{shown} {what} on this page; the newest {}.",
                 super::ui::ago(&newest.at)
             ),
-            _ => format!("No {what} here."),
+            None => format!("No {what} here."),
         };
         TrustedHtml::owned(format!(
             "<div id=\"log-band\" class=\"band-wrap\">{}</div>",
-            super::ui::band_head(
-                &name,
-                &TrustedHtml::owned(format!("<p>{}</p>", super::ui::esc(&lead))),
-                &TrustedHtml::owned(summary),
-            )
+            super::ui::page_head_note("Log", &TrustedHtml::owned(note))
         ))
     }
 }
@@ -763,7 +743,7 @@ fn links(
     });
     if let Some(step) = field("step").or(asker) {
         let named = super::ui::StepRef::new(step, names.and_then(|n| n.naming.step(step)));
-        let (words, full) = if named.titled() { (named.html(48).0, named.title.clone()) } else { Default::default() };
+        let (words, full) = if named.titled() { (named.with_id_html(48).0, named.title.clone()) } else { Default::default() };
         links.push((step.to_owned(), format!("/projects/id/{project}/steps/{step}"), words, full));
     }
     if let Some(unit) = field("unit") {

@@ -270,9 +270,6 @@ impl ThreadView {
     pub fn last_id(&self) -> i64 {
         self.messages.last().map_or(0, MessageItem::id)
     }
-    /// Its step as the way back names it: the title (cut to 64), else "step <id>".
-    /// The way back to its step, by its id ("step a-6-draft"): the page's `h1` already
-    /// says its title.
     /// Its page's heading: a step's thread by its step's heading (its stage muted, its title
     /// whole), as the step's own page has it; any other by its name.
     pub fn heading_html(&self) -> TrustedHtml {
@@ -288,9 +285,11 @@ impl ThreadView {
             .filter(|s| s.titled())
             .map_or("", |s| s.title.as_str())
     }
+    /// The way back to its step, in words: "its step" (the page's `h1` already says its title,
+    /// and its Details its id).
     pub fn step_label(&self) -> String {
         self.step()
-            .map(|step| format!("step {step}"))
+            .map(|_| "Its step".to_owned())
             .unwrap_or_default()
     }
     pub fn last_at(&self) -> &str {
@@ -500,116 +499,80 @@ impl InboxView {
         };
         html.map_err(render_error)
     }
-    /// Its band (DESIGN.md, The inbox and threads; the region "messages-band"): its name huge
-    /// (Inbox, Messages, Questions, or a thread's step), its way back to its project's plan (and
-    /// a thread's step) and a sentence of what waits on the owner. History draws none.
+    /// Its head (DESIGN.md, The inbox and threads; the region "messages-band"): its name (Inbox,
+    /// Messages, Questions, History, or a thread's step). A thread's head has its way back to
+    /// its project's plan and its step over its name, and its Details (its thread's name).
     pub fn band(&self) -> TrustedHtml {
-        use super::ui::{band_head, band_head_html, count, esc};
-        let back = |extra: String| {
-            if self.project_name().is_empty() {
-                return extra;
-            }
-            format!(
-                "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"{}\">{}{} plan</a>{extra}</nav>",
-                esc(&self.base()),
-                super::icons::icon(super::icons::Icon::ArrowLeft, 16, ""),
-                esc(self.project_name())
-            )
-        };
+        use super::ui::{Details, esc, page_head, page_head_with};
         let head = match self.view {
-            MessageView::History => {
-                // the threads with the owner, the latest first, and how many wait on an answer
-                let mut said = format!(
-                    "{} with a message to you or from you, read or not, the latest first.",
-                    count(self.threads.len(), "thread", "threads")
-                );
-                let asks = self
-                    .threads
-                    .iter()
-                    .filter(|t| t.open_ask().is_some())
-                    .count();
-                if let Some(n) = super::questions_words(asks) {
-                    said.push_str(&format!(
-                        " <a class=\"ask\" href=\"#history-threads\">{n} for you</a>."
-                    ));
+            MessageView::Thread => match self.threads.first() {
+                None => page_head("Thread", &TrustedHtml::default()),
+                Some(thread) => {
+                    let mut crumbs = String::new();
+                    if !self.project_name().is_empty() {
+                        crumbs.push_str(&format!(
+                            "<a href=\"{}\">{}{} plan</a>",
+                            esc(&self.base()),
+                            super::icons::icon(super::icons::Icon::ArrowLeft, 16, ""),
+                            esc(self.project_name())
+                        ));
+                    }
+                    crumbs.push_str(&match thread.step() {
+                        Some(step) => format!(
+                            "<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{}/steps/{}\">{}</a>",
+                            thread.project,
+                            esc(step),
+                            esc(&thread.step_label())
+                        ),
+                        None => format!(
+                            "<span aria-hidden=\"true\">/</span><a href=\"{}/history\">History</a>",
+                            esc(&self.base())
+                        ),
+                    });
+                    let details = Details::new()
+                        .id("Thread", &thread.thread)
+                        .id("Step", thread.step().unwrap_or(""));
+                    page_head_with(
+                        &TrustedHtml::owned(format!(
+                            "<nav class=\"crumbs\" aria-label=\"Breadcrumb\">{crumbs}</nav>"
+                        )),
+                        &thread.heading_html(),
+                        &details.menu(&thread.name()),
+                        &TrustedHtml::default(),
+                    )
                 }
-                band_head(
-                    self.title(),
-                    &TrustedHtml::owned(back(String::new())),
-                    &TrustedHtml::owned(said),
-                )
-            }
-            MessageView::Thread => {
-                let Some(thread) = self.threads.first() else {
-                    return TrustedHtml::owned(format!(
-                        "<div id=\"messages-band\" class=\"messages-band\">{}</div>",
-                        band_head(
-                            "Thread",
-                            &TrustedHtml::owned(back(String::new())),
-                            &TrustedHtml::default()
-                        )
-                        .as_str()
-                    ));
-                };
-                let step = match thread.step() {
-                    Some(step) => format!(
-                        "<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{}/steps/{}\"{}>{}</a>",
-                        thread.project,
-                        esc(step),
-                        if thread.step_title().is_empty() {
-                            String::new()
-                        } else {
-                            format!(" title=\"{}\"", esc(thread.step_title()))
-                        },
-                        esc(&thread.step_label())
-                    ),
-                    None => format!(
-                        "<span aria-hidden=\"true\">/</span><a href=\"{}/history\">History</a>",
-                        esc(&self.base())
-                    ),
-                };
-                band_head_html(
-                    &thread.heading_html(),
-                    thread.name().chars().count().max(21),
-                    &TrustedHtml::owned(back(step)),
-                    &TrustedHtml::owned(format!(
-                        "{} on {}",
-                        count(thread.messages.len(), "message", "messages"),
-                        esc(&thread.project_name)
-                    )),
-                )
-            }
-            MessageView::Inbox | MessageView::Questions => {
-                let yours = self.for_you().len();
-                let mut said = match super::questions_words(yours) {
-                    Some(n) => format!("<a class=\"ask\" href=\"#yours-h\">{n} for you</a>."),
-                    None => "Nothing is waiting on you.".to_owned(),
-                };
-                if self.is_inbox() {
-                    let notes = self.unread_notes();
-                    if notes > 0 {
-                        said.push_str(&format!(" {} unread.", count(notes, "note", "notes")));
-                    }
-                } else {
-                    let between = self.between_agents().len();
-                    if between > 0 {
-                        said.push_str(&format!(" {between} between agents."));
-                    }
-                    let stopped = self.stopped().len();
-                    if stopped > 0 {
-                        said.push_str(&format!(" {stopped} nobody waits on."));
-                    }
-                }
-                band_head(
-                    self.title(),
-                    &TrustedHtml::owned(back(String::new())),
-                    &TrustedHtml::owned(said),
-                )
-            }
+            },
+            _ => page_head(self.title(), &TrustedHtml::default()),
         };
         TrustedHtml::owned(format!(
             "<div id=\"messages-band\" class=\"messages-band\">{}</div>",
             head.as_str()
+        ))
+    }
+    /// The messages' switch on the tab row's right (For you, Questions, History), drawn as the
+    /// plan's view switch is: the page it is on filled. A thread has none.
+    pub fn switch(&self) -> TrustedHtml {
+        use super::ui::esc;
+        if self.view == MessageView::Thread {
+            return TrustedHtml::default();
+        }
+        let links: String = [
+            ("inbox", "For you"),
+            ("questions", "Questions"),
+            ("history", "History"),
+        ]
+        .into_iter()
+        .map(|(slug, word)| {
+            let on = if slug == self.slug() {
+                " aria-current=\"page\""
+            } else {
+                ""
+            };
+            format!("<a href=\"{}/{slug}\"{on}>{word}</a>", esc(&self.base()))
+        })
+        .collect();
+        TrustedHtml::owned(format!(
+            "<nav class=\"view-switch\" aria-label=\"Messages\">{links}</nav>"
         ))
     }
     pub fn render(
@@ -629,6 +592,8 @@ impl InboxView {
             path,
             &super::Frame {
                 head: self.band(),
+                tools: self.switch(),
+                inner: self.view == MessageView::Thread,
                 ..Default::default()
             },
         )
@@ -791,8 +756,8 @@ impl Who {
                 .map_or_else(|| Who::Other(id.to_owned()), |s| Who::Step(s.clone())),
         }
     }
-    /// Its chip: a step a link to its page (the drawer opens it on the board), its title with
-    /// its id after it in data mono.
+    /// Its chip: a step a link to its page (the drawer opens it on the board), its stage and
+    /// title (its id when it has no title).
     pub fn html(&self, project: &ProjectId) -> TrustedHtml {
         use super::ui::esc;
         TrustedHtml::owned(match self {
@@ -811,11 +776,12 @@ impl Who {
             ),
         })
     }
-    /// Its name in plain words, as a sentence says it: a step's id, "the orchestrator", "you".
+    /// Its name in plain words, as a sentence says it: a step's name (`StepRef::label`), "the
+    /// orchestrator", "you".
     pub fn name(&self) -> String {
         match self {
             Who::This => "this step".into(),
-            Who::Step(step) => step.id.clone(),
+            Who::Step(step) => step.label(),
             Who::Orchestrator => "the orchestrator".into(),
             Who::Owner => "you".into(),
             Who::Anyone => "anyone".into(),
@@ -869,6 +835,20 @@ impl Entry {
     /// A reply to a message this conversation does not hold: its id, said in its line.
     pub fn reply_to(&self) -> Option<i64> {
         self.item.message.to_message.map(|m| m.0)
+    }
+    /// What identifies it, behind its line's "⋯": its id (each of a broadcast's), the message it
+    /// replies to and its thread.
+    pub fn details(&self) -> TrustedHtml {
+        let mut details = super::ui::Details::new().id("Message", &format!("#{}", self.item.id()));
+        for (_, id) in &self.also {
+            details = details.id("Also sent as", &format!("#{id}"));
+        }
+        if let Some(q) = self.reply_to() {
+            details = details.id("Reply to", &format!("#{q}"));
+        }
+        details
+            .id("Thread", &self.item.message.thread)
+            .menu(&format!("message {}", self.item.id()))
     }
     /// A broadcast's recipients in words: "to 10 steps", "to 3 recipients".
     pub fn also_words(&self) -> String {
@@ -939,6 +919,12 @@ pub struct Reply {
     pub from: Who,
 }
 impl Reply {
+    /// What identifies it, behind its line's "⋯": its id.
+    pub fn details(&self) -> TrustedHtml {
+        super::ui::Details::new()
+            .id("Message", &format!("#{}", self.item.id()))
+            .menu(&format!("reply {}", self.item.id()))
+    }
     /// Its first words as one line, under a question drawn as its first words.
     pub fn excerpt_html(&self) -> (TrustedHtml, bool) {
         crate::markdown::excerpt(&self.item.message.body, 360)

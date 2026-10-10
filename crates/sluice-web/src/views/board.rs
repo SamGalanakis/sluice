@@ -232,6 +232,8 @@ pub struct UnitView {
     pub last_message: String,
     /// Who sent its last message, its thread and its id (its page draws it as a message).
     pub last_from: String,
+    /// Its sender's stage when it is a step of another unit ("work"): its row names it so.
+    pub last_from_stage: String,
     pub last_thread: String,
     pub last_id: i64,
     /// Its last message was only sent to one of its steps (a note from another unit's): its
@@ -308,6 +310,7 @@ impl UnitView {
             rows: rows.into_values().collect(),
             last_message: String::new(),
             last_from: String::new(),
+            last_from_stage: String::new(),
             last_thread: String::new(),
             last_id: 0,
             last_received: false,
@@ -408,7 +411,12 @@ impl UnitView {
     }
     /// Its step at `stage` ("land"), when it has one.
     pub fn stage_step(&self, stage: &str) -> Option<&StepView> {
-        self.steps.iter().find(|s| s.stage == stage)
+        // a unit of one step carries no stage name of its own: its step is `<unit>-<stage>`
+        let id = format!("{}-{stage}", self.id);
+        self.steps
+            .iter()
+            .find(|s| s.stage == stage)
+            .or_else(|| self.steps.iter().find(|s| s.id.as_str() == id))
     }
     /// Its timeline: a row a step (named by its stage, else its id less the unit's prefix), a
     /// bar a run; `current` marks the step whose page shows it. None before anything ran.
@@ -447,6 +455,33 @@ impl UnitView {
             }
         }
         first.map(|step| (step, out))
+    }
+    /// A step of it named in words: its stage, else its id without the unit's prefix.
+    pub fn step_name(&self, step: &StepView) -> String {
+        if !step.stage.is_empty() {
+            return step.stage.clone();
+        }
+        let id = step.id.as_str();
+        id.strip_prefix(&format!("{}-", self.id))
+            .unwrap_or(id)
+            .to_owned()
+    }
+    /// Who sent its last message, in words: a step by its stage (its own or another unit's),
+    /// "orchestrator", "you" (the owner), or "another unit" for a step of no stage elsewhere;
+    /// never a step's id.
+    pub fn sender(&self) -> String {
+        match self.last_from.as_str() {
+            "" => String::new(),
+            "orchestrator" => "orchestrator".into(),
+            "owner" => "you".into(),
+            from => self
+                .steps
+                .iter()
+                .find(|s| s.id.as_str() == from)
+                .map(|s| self.step_name(s))
+                .or_else(|| Some(self.last_from_stage.clone()).filter(|s| !s.is_empty()))
+                .unwrap_or_else(|| "another unit".into()),
+        }
     }
     /// Its first step that put a question to the owner its run waits on: its row says so.
     pub fn asking_step(&self) -> Option<&StepView> {
@@ -521,6 +556,11 @@ pub struct ProjectView {
     pub hidden: usize,
     /// The project's board, drawn beside the plan (`docs("board")`), when it has one.
     pub panel: Option<super::panel::Panel>,
+    /// With a board, the view chosen (Plan, Both or Board: `VIEWS`): from `?view=`, else the
+    /// project's `sluice_view_<id>` cookie; `None` when none was chosen, so the page's script
+    /// (or, without it, the stylesheet) picks.
+    #[serde(skip)]
+    pub view: Option<&'static str>,
     /// Its steps' and units' names, and the recipes they came from.
     #[serde(skip)]
     pub names: std::sync::Arc<sluice_runtime::naming::ProjectNaming>,
@@ -620,6 +660,7 @@ impl ProjectView {
             recipe: String::new(),
             hidden: 0,
             panel: None,
+            view: None,
             names: Default::default(),
             usual: BTreeMap::new(),
             questions: vec![],
@@ -1149,6 +1190,12 @@ pub fn load_board(
         if let Some((message, at, from, thread, id, received)) = last.remove(unit.id.as_str()) {
             unit.last_message = message;
             unit.changed = at;
+            unit.last_from_stage = board
+                .names
+                .naming
+                .step(&from)
+                .map(|n| n.stage.clone())
+                .unwrap_or_default();
             unit.last_from = from;
             unit.last_thread = thread;
             unit.last_id = id;
@@ -1844,6 +1891,30 @@ pub struct BoardQuery {
     pub depth: Option<usize>,
     /// Only the units this recipe made.
     pub recipe: Option<String>,
+    /// The view chosen with a board: plan, both or board (`VIEWS`).
+    pub view: Option<String>,
+}
+/// The ways a project with a board is seen: the plan alone, both side by side, the board alone.
+pub const VIEWS: [&str; 3] = ["plan", "both", "board"];
+/// The cookie that keeps a project's view without script.
+pub fn view_cookie(project: ProjectId) -> String {
+    format!("sluice_view_{project}")
+}
+/// The view a page is drawn in: `?view=` when it names one, else the project's cookie.
+pub fn chosen_view(query: &BoardQuery, headers: &HeaderMap, project: ProjectId) -> Option<&'static str> {
+    let named = |v: &str| VIEWS.iter().copied().find(|w| *w == v);
+    if let Some(v) = query.view.as_deref().and_then(named) {
+        return Some(v);
+    }
+    let name = view_cookie(project);
+    headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|c| c.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .filter_map(|c| c.trim().split_once('='))
+        .find(|(n, _)| *n == name)
+        .and_then(|(_, v)| named(v))
 }
 impl BoardQuery {
     /// Filter and find in `view` as the page's query asks. The plan keeps a unit whole: a find
@@ -2003,8 +2074,21 @@ pub async fn project_page(
             )
                 .into_response());
         }
+        view.view = chosen_view(&query, &headers, project);
         let html = super::plan::render(&view, &shared, &Viewer::from_headers(&headers))?;
-        Ok(Html(html.0).into_response())
+        let mut response = Html(html.0).into_response();
+        // a view chosen by its link (without script) is kept for the next visit
+        if let Some(v) = query.view.as_deref().filter(|v| VIEWS.contains(v)) {
+            let cookie = format!(
+                "{}={v}; Path=/; Max-Age=34560000; SameSite=Lax",
+                view_cookie(project)
+            );
+            response.headers_mut().append(
+                axum::http::header::SET_COOKIE,
+                cookie.parse().expect("validated ASCII cookie"),
+            );
+        }
+        Ok(response)
     };
     page.await.unwrap_or_else(error_response)
 }
@@ -2016,6 +2100,7 @@ pub async fn project_stream(
     headers: HeaderMap,
 ) -> Response {
     let viewer = Viewer::from_headers(&headers);
+    let headers = std::sync::Arc::new(headers);
     let stop = state.stop.clone();
     let version = StreamQuery {
         project: Some(project),
@@ -2030,6 +2115,7 @@ pub async fn project_stream(
         let query = query.clone();
         let registry = registry.clone();
         let cache = cache.clone();
+        let headers = headers.clone();
         async move {
             let registry = registry.as_ref().map(|r| &r.0);
             // a deleted project is said where its plan was, and the stream stays open and quiet
@@ -2043,6 +2129,7 @@ pub async fn project_stream(
                 read => read?,
             };
             query.apply(&mut view)?;
+            view.view = chosen_view(&query, &headers, project);
             Ok(super::plan::draw(&view, &shared, &viewer)?.2)
         }
     };

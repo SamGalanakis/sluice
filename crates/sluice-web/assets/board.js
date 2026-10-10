@@ -1,13 +1,15 @@
 // The project page with its board beside the plan (docs("board")). Without script both
-// sections show (side by side from 1280px, one after the other below), the board's tools apply
-// with their Apply button and a Button posts the page. With script (its search is
-// `sluice-search`, the splitter `sluice-splitter`, the description's More and the board's
-// document `sluice-fold`: components.js):
-// - the view switch: Plan · Both · Board from 1280px, Plan · Board below; each remembered per
-//   project (localStorage), wide and narrow apart; until one is picked a phone shows the board
-//   (its live lanes are the quick check) unless the project needs attention (a failure, a
-//   cancel, a quiet run or a pause: `data-attention`), when it shows the plan, which leads
-//   with what stopped; the window between a phone and 1280px shows the plan;
+// sections show (side by side from 1280px, one after the other below) until a view is chosen by
+// its link (`?view=`, kept in the project's `sluice_view_<id>` cookie and drawn by the server),
+// the board's tools apply with their Apply button and a Button posts the page. With script (its
+// search is `sluice-search`, the splitter `sluice-splitter`, the description's More and the
+// board's document `sluice-fold`: components.js):
+// - the view switch: Plan · Both · Board from 1280px, Plan · Board below; a click shows the
+//   view at once and keeps it per project (localStorage, wide and narrow apart, and the cookie
+//   for the server's first paint); until one is picked the server's choice holds, else a phone
+//   shows the board (its live lanes are the quick check) unless the project needs attention (a
+//   failure, a cancel, a quiet run or a pause: `data-attention`), when it shows the plan, which
+//   leads with what stopped; the window between a phone and 1280px shows the plan;
 // - the board column's height and its "More below" cue;
 // - a board Button's say is sent without leaving the page, the answer shown under the board;
 // - a step whose state the live plan moves on is said once, politely, in #announce.
@@ -26,6 +28,7 @@ const page = () => document.querySelector("#project-board");
 // ---- the view: Plan · Both · Board ----------------------------------------------------------
 
 const chosen = {};  // this tab's choice, should storage refuse it
+const served = page()?.dataset.view;  // the server's: `?view=` or the project's cookie
 const mode = () => (WIDE.matches ? "wide" : "narrow");
 const viewKey = (m, id) => (m === "wide" ? `sluice.view-wide.${id}` : `sluice.view.${id}`);
 // an address that asks for a search, a Show, an Order, a step's chain or a recipe's units is
@@ -38,7 +41,7 @@ function viewOf(p) {
   if (!p.classList.contains("has-panel")) return "plan";
   const m = mode();
   const views = m === "wide" ? ["plan", "both", "board"] : ["plan", "board"];
-  const v = chosen[m] ?? store.get(viewKey(m, p.dataset.project));
+  const v = chosen[m] ?? store.get(viewKey(m, p.dataset.project)) ?? served;
   if (!(m in chosen) && planAsked()) return m === "wide" && v === "plan" ? "plan" : m === "wide" ? "both" : "plan";
   if (views.includes(v)) return v;
   if (m === "wide") return "both";
@@ -51,18 +54,21 @@ function sync() {
   if (!p) return;
   const view = viewOf(p);
   if (p.dataset.view !== view) p.dataset.view = view;
-  // the switch is in the page's row, under the band
+  // the switch is in the page's row, under its name
   for (const tab of document.querySelectorAll("[data-view-tab]")) {
     const on = String(tab.dataset.viewTab === view);
-    if (tab.getAttribute("aria-pressed") !== on) tab.setAttribute("aria-pressed", on);
+    if (tab.getAttribute("aria-current") !== on) tab.setAttribute("aria-current", on);
   }
 }
 document.addEventListener("click", event => {
   const tab = event.target.closest?.("[data-view-tab]");
   const p = tab && page();
-  if (!p) return;
-  chosen[mode()] = tab.dataset.viewTab;
-  store.set(viewKey(mode(), p.dataset.project), tab.dataset.viewTab);
+  if (!p || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  const view = tab.dataset.viewTab;
+  chosen[mode()] = view;
+  store.set(viewKey(mode(), p.dataset.project), view);
+  document.cookie = `sluice_view_${p.dataset.project}=${view}; Path=/; Max-Age=34560000; SameSite=Lax`;
   sync();
 });
 WIDE.addEventListener("change", sync);

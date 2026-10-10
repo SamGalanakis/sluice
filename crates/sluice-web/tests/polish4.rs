@@ -169,7 +169,8 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     assert!(
         asks.contains(&format!(
             "asks you: <a href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\">Land l1 first?</a>"
-        )) && asks.contains("<code class=\"sref-id\">l1-work</code>"),
+        )) && asks.contains("<span class=\"sref-t\">FIG-1: Fix the cron driver</span>")
+            && !asks.contains("sref-id"),
         "{asks}"
     );
     assert!(

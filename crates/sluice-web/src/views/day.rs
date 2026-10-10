@@ -59,6 +59,9 @@ pub struct DayRun {
     pub started_at: String,
     /// Its step is still in the plan (a done unit retires its steps, but their runs stay).
     pub kept: bool,
+    /// Its unit's title (a loose step's own), when its plan still names one: how a line names
+    /// it, its id being its page's; "" when it has none.
+    pub title: String,
 }
 impl DayRun {
     /// How long it ran, as of `now`.
@@ -84,6 +87,16 @@ impl DayRun {
             (self.unit.clone(), String::new())
         } else {
             (self.unit.clone(), self.step.clone())
+        }
+    }
+    /// Its name as a line says it: its title (else its unit's or step's name) in ink, and its
+    /// stage after it, muted.
+    pub fn label(&self) -> (String, String) {
+        let (name, rest) = self.name();
+        if self.title.is_empty() {
+            (name, rest)
+        } else {
+            (sluice_model::naming::cut(&self.title, 64), rest)
         }
     }
     /// What its usual time is reckoned by: its step past its unit's name, else its step.
@@ -305,7 +318,26 @@ pub fn load(
             outcome,
             started_at: began,
             kept: r.get(10)?,
+            title: String::new(),
         });
+    }
+    // each run named by its unit's title, as its plan names it now
+    let home = super::home_of(c);
+    let mut names = BTreeMap::new();
+    for run in &mut runs {
+        let naming = names.entry(run.project).or_insert_with(|| {
+            sluice_runtime::naming::for_project(c, &home, run.project).ok()
+        });
+        if let Some(naming) = naming {
+            let title = if run.unit.is_empty() {
+                naming.naming.step_title(&run.step)
+            } else {
+                naming.naming.unit_title(&run.unit)
+            };
+            if title != run.unit && title != run.step {
+                run.title = title.to_owned();
+            }
+        }
     }
     // for a project that ran nothing in the day: when it last did
     let mut last_before = BTreeMap::new();
@@ -481,37 +513,22 @@ impl DayView {
         }
         TrustedHtml::owned(parts.join(" "))
     }
-    /// The band's words beside the name: the date, what the page is, the reader's clock.
-    pub fn lead(&self) -> TrustedHtml {
-        let (_, date) = self.window.day_name(self.now);
-        let what = if self.project.is_some() {
-            "every run of the last 24 hours, by the hour it started"
-        } else {
-            "every run of the last 24 hours across the projects, by the hour it started"
-        };
-        TrustedHtml::owned(format!(
-            "<p>{} · {} · hours on {}</p>",
-            esc(&date),
-            esc(what),
-            esc(&if self.window.zone == 0 {
-                "UTC".to_owned()
-            } else {
-                format!("your clock ({})", zone_name(self.window.zone))
-            })
-        ))
-    }
-    /// The band: today's name huge (a project's own day, its name), the lead and the sentence.
+    /// The page's head: "Day" (the nav names a project's), and under it the date and whose
+    /// clock its hours are on.
     pub fn head(&self) -> TrustedHtml {
-        let name = match self.project {
-            Some(id) => self
-                .projects
-                .iter()
-                .find(|p| p.id == id)
-                .map(|p| p.name.clone())
-                .unwrap_or_default(),
-            None => self.window.day_name(self.now).0.to_owned(),
-        };
-        ui::band_head(&name, &self.lead(), &self.summary())
+        let (_, date) = self.window.day_name(self.now);
+        ui::page_head_note(
+            "Day",
+            &TrustedHtml::owned(format!(
+                "{} · the last 24 hours, hours on {}",
+                esc(&date),
+                esc(&if self.window.zone == 0 {
+                    "UTC".to_owned()
+                } else {
+                    format!("your clock ({})", zone_name(self.window.zone))
+                })
+            )),
+        )
     }
     pub fn title(&self) -> String {
         match self.project.and_then(|id| self.projects.iter().find(|p| p.id == id)) {
@@ -562,7 +579,7 @@ impl DayView {
                     None => LANES - 1,
                 };
                 ends[lane] = ends[lane].max(end);
-                let (name, rest) = run.name();
+                let (name, rest) = run.label();
                 let left = w.percent(start);
                 let kind = match run.outcome {
                     None => "dl-ended",
@@ -629,12 +646,13 @@ impl DayView {
             )
         };
         TrustedHtml::owned(format!(
-            "<section class=\"day-line\" aria-labelledby=\"day-line-h\">{}{body}{}</section>",
+            "<section class=\"day-line\" aria-labelledby=\"day-line-h\">{}<p class=\"dl-said\">{}</p>{body}{}</section>",
             ui::section_head(
                 "day-line-h",
                 "The day line",
                 "Each bar a run, start to end; stacked where runs overlapped"
             ),
+            self.summary(),
             if note.is_empty() {
                 String::new()
             } else {
@@ -797,10 +815,11 @@ impl DayView {
         html.push_str("</div>");
         html
     }
-    /// One run's line: ":15 a-1 draft run 2 ✓ 1h 04m".
+    /// One run's line: ":15 Terns: the spring guide draft ✓ 1h 04m"; its step and run number on
+    /// its link's title.
     fn run_item(&self, r: &DayRun, first: bool) -> String {
         let w = &self.window;
-        let (name, rest) = r.name();
+        let (name, rest) = r.label();
         // a run that started before the window, in its first row: its day too
         let at = if first && r.started < w.start {
             format!(
@@ -838,18 +857,19 @@ impl DayView {
             ),
         };
         format!(
-            "<li class=\"tt-run\"><span class=\"tt-m\">{at}</span><a class=\"tt-name\" href=\"{href}\"><b>{name}</b>{rest}</a>{n}{outcome}</li>",
+            "<li class=\"tt-run\"><span class=\"tt-m\">{at}</span><a class=\"tt-name\" href=\"{href}\" title=\"{ids}\"><b>{name}</b>{rest}</a>{outcome}</li>",
             href = esc(&r.href()),
+            // what identifies the run rides on its link, not its line: its step and run
+            ids = esc(&match (r.n, r.item) {
+                (1, i) if i < 0 => r.step.clone(),
+                (n, i) if i < 0 => format!("{}, run {n}", r.step),
+                (n, i) => format!("{}, item {i}, run {n}", r.step),
+            }),
             name = esc(&name),
             rest = if rest.is_empty() {
                 String::new()
             } else {
                 format!(" <span class=\"tt-stage\">{}</span>", esc(&rest))
-            },
-            n = match (r.n, r.item) {
-                (1, i) if i < 0 => String::new(),
-                (n, i) if i < 0 => format!("<span class=\"tt-n\">run {n}</span>"),
-                (n, i) => format!("<span class=\"tt-n\">item {i}{}</span>", if n > 1 { format!(" · run {n}") } else { String::new() }),
             },
         )
     }
@@ -861,7 +881,7 @@ impl DayView {
             .iter()
             .filter(|r| r.running())
             .map(|r| {
-                let (name, rest) = r.name();
+                let (name, rest) = r.label();
                 if rest.is_empty() { name } else { format!("{name} {rest}") }
             })
             .collect();
@@ -920,11 +940,11 @@ impl DayView {
         TrustedHtml::owned(out)
     }
 }
-/// The band's head (`ui::band_head`) named `id`, so a stream patches it in place.
+/// The page's head (`ui::page_head`) named `id`, so a stream patches it in place.
 pub fn band_with_id(head: &TrustedHtml, id: &str) -> TrustedHtml {
     TrustedHtml::owned(head.as_str().replacen(
-        "<div class=\"band-head\"",
-        &format!("<div id=\"{}\" class=\"band-head\"", esc(id)),
+        "<div class=\"page-head\"",
+        &format!("<div id=\"{}\" class=\"page-head\"", esc(id)),
         1,
     ))
 }
@@ -1165,6 +1185,7 @@ mod tests {
     #[test]
     fn a_run_is_named_by_its_unit_and_its_step() {
         let run = |unit: &str, step: &str| DayRun {
+            title: String::new(),
             project: ProjectId::new(),
             run_id: "r".into(),
             step: step.into(),

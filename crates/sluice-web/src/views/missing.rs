@@ -74,7 +74,6 @@ fn decode(text: &str) -> String {
 #[template(path = "missing.html")]
 struct Missing<'a> {
     status: u16,
-    message: &'a str,
     links: &'a [(String, String)],
 }
 
@@ -223,20 +222,25 @@ pub async fn page(
     let nav = NavView::new(&snapshot, project.map(|p| p.id), "").ok()?;
     let body = TrustedHtml::from_template(&Missing {
         status: status.as_u16(),
-        message,
         links: &links,
     })
     .ok()?;
-    // the band says what is missing, huge, and why in a sentence; the ways on are the page
-    let lead = if lead.is_empty() {
-        TrustedHtml::default()
-    } else {
-        TrustedHtml::owned(format!("<p>{}</p>", super::ui::esc(&lead)))
-    };
-    let said = if why.is_empty() {
-        format!("HTTP {}.", status.as_u16())
-    } else {
-        why.clone()
+    // the head says what is missing and why in a sentence; the ways on are the page
+    let said = [lead.as_str(), why.as_str()]
+        .into_iter()
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    // an error with no sentence of its own says its message, as a sentence
+    let said = match (said.is_empty(), message.trim()) {
+        (false, _) => said,
+        (true, "") => format!("HTTP {}.", status.as_u16()),
+        (true, m) => {
+            let mut chars = m.chars();
+            let first = chars.next().map(|c| c.to_uppercase().collect::<String>());
+            let end = if m.ends_with('.') { "" } else { "." };
+            format!("{}{}{end}", first.unwrap_or_default(), chars.as_str())
+        }
     };
     let html = super::render_framed(
         &heading,
@@ -247,7 +251,7 @@ pub async fn page(
         "",
         path,
         &super::Frame {
-            head: super::ui::band_head(&heading, &lead, &TrustedHtml::owned(super::ui::esc(&said))),
+            head: super::ui::page_head_note(&heading, &TrustedHtml::owned(super::ui::esc(&said))),
             ..super::Frame::default()
         },
     )

@@ -145,7 +145,7 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-menu",
         script: "components.js",
-        does: "A disclosure menu: a click elsewhere or Escape closes it, focus back on its summary; the arrows, Home and End move through its items.",
+        does: "A disclosure menu (the project switcher, display preferences, an item's Details behind its ⋯): its summary says aria-expanded, a click elsewhere or Escape closes it, focus back on its summary; the arrows, Home and End move through its items.",
         props: &[],
         events: &[],
         slots: &["summary", "menu"],
@@ -161,7 +161,7 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-toggle",
         script: "components.js",
-        does: "A display setting applied at once and kept by posting it to /settings: value types (every Types switch follows), the theme or the appearance.",
+        does: "A display setting applied at once and kept by posting it to /settings: value types (every Types switch follows) or the theme.",
         props: &[("setting", "string")],
         events: &["sluice-setting"],
         slots: &["control"],
@@ -202,14 +202,6 @@ pub const COMPONENTS: &[Component] = &[
         props: &[],
         events: &[],
         slots: &["list"],
-    },
-    Component {
-        tag: "sluice-grid",
-        script: "components.js",
-        does: "Shows the module grid's construction under its modules while its show-grid switch (aria-controls its id) is pressed: each column tinted and numbered, each module's span in its corner; the choice kept in this browser.",
-        props: &[("showing", "boolean")],
-        events: &["sluice-grid"],
-        slots: &["overlay", "modules"],
     },
     Component {
         tag: "sluice-trace",
@@ -339,8 +331,7 @@ pub fn types_toggle() -> TrustedHtml {
         "<button type=\"button\" class=\"types-toggle\" aria-pressed=\"false\" data-preserve-attr=\"aria-pressed\">Types<span class=\"sw\" aria-hidden=\"true\"></span></button>".into(),
     ))
 }
-/// A display setting's control in the display preferences (`setting` "theme", "appearance"
-/// or "types"):
+/// A display setting's control in the display preferences (`setting` "theme" or "types"):
 /// the host before it, then `setting_close`.
 pub fn setting_open(setting: &str) -> TrustedHtml {
     Host::new("sluice-toggle").attr("setting", setting).open()
@@ -349,7 +340,7 @@ pub fn setting_close() -> TrustedHtml {
     Host::new("sluice-toggle").close()
 }
 
-/// A menu's host (the project switcher, display preferences, the plan's More): its
+/// A menu's host (the project switcher, display preferences, an item's Details): its
 /// `<details>` with its summary and `.menu` go between this and `menu_close`.
 pub fn menu_open() -> TrustedHtml {
     Host::new("sluice-menu").open()

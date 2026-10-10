@@ -109,10 +109,8 @@ async fn every_page_draws_its_components_hosts_and_none_writes_one_by_hand() {
             &[
                 "sluice-search",
                 "sluice-trace",
-                "sluice-grid",
                 "sluice-splitter",
                 "sluice-drawer",
-                "sluice-fold",
             ][..],
         ),
         (
@@ -126,10 +124,7 @@ async fn every_page_draws_its_components_hosts_and_none_writes_one_by_hand() {
                 "sluice-toggle",
             ][..],
         ),
-        (
-            format!("{p}/units/alpha"),
-            &["sluice-grid", "sluice-conversation"][..],
-        ),
+        (format!("{p}/units/alpha"), &["sluice-conversation"][..]),
         (
             format!("{p}/thread?thread=step-alpha-build"),
             &[
@@ -444,10 +439,8 @@ async fn chromium_the_project_page_components_keep_their_state_through_a_patch()
         assert_eq!(browser.eval(width).unwrap(), json!(320));
         press(&mut browser, "ArrowLeft", 37, 0);
         browser.eval(FRAMES).unwrap();
-        // the plan's More menu open, the description's More open: a patch keeps them and the
-        // board's width
-        browser.eval("document.querySelector('details.about-more > summary').click()").unwrap();
-        browser.eval("document.querySelector('details.tool-more > summary').click()").unwrap();
+        // the head's Details open: a patch keeps it and the board's width
+        browser.eval("document.querySelector('#plan-band details.dm > summary').click()").unwrap();
         let version = browser.eval("document.body.dataset.signals").unwrap();
         rt.block_on(note(&f, "alpha-build", "The board moves."));
         rt.block_on(async {
@@ -467,8 +460,14 @@ async fn chromium_the_project_page_components_keep_their_state_through_a_patch()
         browser.wait("document.querySelector('li.sc[data-state=running] > #n-alpha-review')").unwrap();
         assert_ne!(browser.eval("document.body.dataset.signals").unwrap(), json!(null), "{version}");
         assert_eq!(
-            browser.eval(&format!("[{width}, document.querySelector('details.tool-more').open, document.querySelector('details.about-more').open]")).unwrap(),
-            json!([336, true, true])
+            browser.eval(&format!("[{width}, document.querySelector('#plan-band details.dm').open]")).unwrap(),
+            json!([336, true])
+        );
+        // opening another menu closes it: one menu open at a time
+        browser.eval("document.querySelector('details.tool-more > summary').click()").unwrap();
+        assert_eq!(
+            browser.eval("[document.querySelector('details.tool-more').open, document.querySelector('#plan-band details.dm').open]").unwrap(),
+            json!([true, false])
         );
         // the menu: ArrowDown moves into it, Escape closes it back on its summary
         browser.eval("document.querySelector('details.tool-more > summary').focus()").unwrap();
@@ -479,15 +478,11 @@ async fn chromium_the_project_page_components_keep_their_state_through_a_patch()
             browser.eval("[document.querySelector('details.tool-more').open, document.activeElement.matches('details.tool-more > summary')]").unwrap(),
             json!([false, true])
         );
-        // the description's More is kept for this project: open again after a reload, and the
-        // board as wide
+        // the board as wide after a reload
         browser.navigate(&page).unwrap();
         browser.wait(ready).unwrap();
         browser.eval(FRAMES).unwrap();
-        assert_eq!(
-            browser.eval(&format!("[{width}, document.querySelector('details.about-more').open]")).unwrap(),
-            json!([336, true])
-        );
+        assert_eq!(browser.eval(width).unwrap(), json!(336));
         // the search: the address and the stream follow as one types, the banner stays hidden
         // (the old stream ends on purpose), Escape clears
         browser.eval("document.querySelector('form.board-tools input[name=q]').focus()").unwrap();

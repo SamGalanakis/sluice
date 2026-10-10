@@ -119,6 +119,32 @@ pub fn bar(tally: &Tally, class: &str) -> TrustedHtml {
     ))
 }
 
+/// A project's mark (the nav's switcher, home's modules): its uploaded icon, else its icon
+/// text, else its initial in a square of the band's mark.
+pub fn project_mark(p: &super::ProjectView) -> TrustedHtml {
+    TrustedHtml::owned(if !p.icon_url.is_empty() {
+        format!(
+            "<img class=\"proj-icon\" src=\"{}\" alt=\"\">",
+            esc(&p.icon_url)
+        )
+    } else if !p.icon_text.is_empty() {
+        format!(
+            "<span class=\"proj-icon pi-text\" aria-hidden=\"true\">{}</span>",
+            esc(&p.icon_text)
+        )
+    } else {
+        format!(
+            "<span class=\"proj-icon pi-mono\" aria-hidden=\"true\">{}</span>",
+            esc(&p
+                .name
+                .chars()
+                .next()
+                .map(|c| c.to_uppercase().to_string())
+                .unwrap_or_default())
+        )
+    })
+}
+
 // ---- time and duration -----------------------------------------------------------------------
 
 /// Whole seconds of a duration, rounded to the millisecond first: durations come from julian-day
@@ -398,8 +424,8 @@ fn tone_class(tone: &str) -> String {
 
 /// How many characters of a step's title its name in words keeps (`StepRef::label`).
 pub const NAME_CHARS: usize = 48;
-/// How a page names a step: its title (its stage before it, muted: "land ·") and its id after
-/// it in data mono, muted; just its id when it has no title.
+/// How a page names a step: its title (its stage before it, muted: "land ·"); just its id when
+/// it has no title.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StepRef {
     pub id: String,
@@ -453,16 +479,13 @@ impl StepRef {
             esc(&self.title)
         ))
     }
-    /// A link's accessible name: its title cut to `chars` (its stage before it), then its id,
-    /// so the name starts with the words the link shows; its id alone without a title.
+    /// A link's accessible name: its title cut to `chars` (its stage before it); its id alone
+    /// without a title.
     pub fn link_name(&self, chars: usize) -> String {
-        if self.titled() {
-            format!("{} {}", self.text(chars), self.id)
-        } else {
-            self.id.clone()
-        }
+        self.text(chars)
     }
-    /// Its words, inline: title (with its stage) then its id, or the id alone.
+    /// Its words, inline: its stage and title, or its id alone when it has no title. The id is
+    /// not said beside a title: it identifies, and its page (and its Details) has it.
     pub fn html(&self, chars: usize) -> TrustedHtml {
         if !self.titled() {
             return TrustedHtml::owned(format!(
@@ -471,22 +494,22 @@ impl StepRef {
             ));
         }
         TrustedHtml::owned(format!(
-            "<span class=\"sref\">{}<span class=\"sref-t\">{}</span> <code class=\"sref-id\">{}</code></span>",
+            "<span class=\"sref\">{}<span class=\"sref-t\">{}</span></span>",
             self.stage_html(),
             esc(&sluice_model::naming::cut(&self.title, chars)),
-            esc(&self.id)
         ))
     }
-    /// Its id first, then its title (its stage is in its id): "a-7-publish The spring guide's
-    /// shorebird…", where the id is what tells one wait from the next.
-    pub fn id_first_html(&self, chars: usize) -> TrustedHtml {
+    /// Its words with its id after them in data mono, muted: the log's records, which name
+    /// exactly what each is about.
+    pub fn with_id_html(&self, chars: usize) -> TrustedHtml {
         if !self.titled() {
             return self.html(chars);
         }
         TrustedHtml::owned(format!(
-            "<span class=\"sref\"><code class=\"sref-id\">{}</code> <span class=\"sref-t\">{}</span></span>",
-            esc(&self.id),
-            esc(&sluice_model::naming::cut(&self.title, chars))
+            "<span class=\"sref\">{}<span class=\"sref-t\">{}</span> <code class=\"sref-id\">{}</code></span>",
+            self.stage_html(),
+            esc(&sluice_model::naming::cut(&self.title, chars)),
+            esc(&self.id)
         ))
     }
     fn stage_html(&self) -> String {

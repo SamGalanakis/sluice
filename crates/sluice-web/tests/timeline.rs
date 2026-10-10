@@ -332,7 +332,7 @@ async fn a_running_step_says_how_long_its_stage_usually_takes_from_three_done_un
     // its row says how long its stage usually takes; far past twice that, its live cell says
     // how far (once, for a reader too) and the row carries the overrun chip
     let row = plan_html::row(&html, "r1");
-    assert!(row.contains(" · usually 20m"), "{row}");
+    assert!(row.contains(", usually 20m"), "{row}");
     assert!(row.contains("class=\"overrun\""), "{row}");
     let cell = plan_html::cell(&html, "r1-work");
     assert!(
@@ -370,7 +370,7 @@ async fn a_running_step_says_how_long_its_stage_usually_takes_from_three_done_un
     );
     // a done unit's step says it after how long it took
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/d2-work")).await;
-    assert!(page.contains(" · took 30m · usually 20m</p>"), "{page}");
+    assert!(page.contains(" · took 30m · usually 20m</span>"), "{page}");
     // land ran in two done units only: too few to say
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/r1-land")).await;
     assert!(!page.contains("usually"), "{page}");
@@ -565,13 +565,13 @@ async fn an_ended_run_past_twice_its_usual_time_says_how_far_in_ink() {
         .await
         .unwrap();
     let (_, html) = f.get(&format!("/projects/id/{id}/steps/d1-fork")).await;
-    let when = between(&html, "<p class=\"meta d-when\">", "</p>");
+    let when = between(&html, "<span class=\"meta d-when\">", "</p>");
     assert!(
         when.contains("took 5m · usually 1m · <span class=\"over-x\">5× usual</span>"),
         "{when}"
     );
     // within twice its usual time, nothing more
     let (_, html) = f.get(&format!("/projects/id/{id}/steps/d2-fork")).await;
-    let when = between(&html, "<p class=\"meta d-when\">", "</p>");
+    let when = between(&html, "<span class=\"meta d-when\">", "</p>");
     assert!(!when.contains("over-x"), "{when}");
 }

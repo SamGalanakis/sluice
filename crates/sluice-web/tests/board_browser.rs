@@ -21,10 +21,10 @@ const GEOMETRY: &str = r#"(() => {
           left: page.left, right: page.right,
           navLeft: n.left + parseFloat(css.paddingLeft), navRight: n.right - parseFloat(css.paddingRight),
           plan: box('#plan-pane'),
-          board: box('#board-pane'), sum: box('.band-summary'),
+          board: box('#board-pane'), sum: box('.page-line'),
           navFits: (l => l.scrollWidth <= l.clientWidth)(document.querySelector('.subnav nav.links')), tabs: box('.view-switch'), split: box('.splitter'),
           view: document.querySelector('#project-board').dataset.view ?? null,
-          h1: box('.site-head h1'),
+          h1: box('.page-head h1'),
           // the page is as tall as its main column (or the window): nothing hangs below it
           below: document.documentElement.scrollHeight - Math.max(innerHeight,
             Math.ceil(document.querySelector('main').getBoundingClientRect().bottom + scrollY)),
@@ -220,7 +220,7 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         assert!(g["plan"].is_object() && g["board"].is_null(), "{g}");
         assert_eq!(
             browser
-                .eval("document.querySelector('[data-view-tab=plan]').getAttribute('aria-pressed')")
+                .eval("document.querySelector('[data-view-tab=plan]').getAttribute('aria-current')")
                 .unwrap(),
             "true"
         );
@@ -254,6 +254,49 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
             .unwrap();
         browser.wait(ready).unwrap();
         assert_eq!(browser.eval(GEOMETRY).unwrap()["view"], "board", "the pick is kept");
+        // At 1440px each choice of the switch shows its view at once, says it is the current
+        // one (filled), and is kept: a fresh load draws it from the server.
+        browser.viewport(1440, "light").unwrap();
+        let shown = "(() => { const v = s => document.querySelector(s)?.checkVisibility() ?? false; return [document.querySelector('#project-board').dataset.view, v('#plan-pane'), v('#board-pane'), [...document.querySelectorAll('[data-view-tab]')].filter(a => a.getAttribute('aria-current') === 'true').map(a => a.dataset.viewTab).join(), getComputedStyle(document.querySelector('[data-view-tab][aria-current=true]')).backgroundColor !== getComputedStyle(document.querySelector('[data-view-tab][aria-current=false]')).backgroundColor]; })()";
+        for (choice, plan, board) in [("plan", true, false), ("board", false, true), ("both", true, true)] {
+            browser
+                .eval(&format!("document.querySelector('[data-view-tab={choice}]').click()"))
+                .unwrap();
+            browser.eval("new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))").unwrap();
+            assert_eq!(browser.eval(shown).unwrap(), serde_json::json!([choice, plan, board, choice, true]), "{choice}");
+            browser
+                .navigate(&format!("{base}/projects/id/{lanes}"))
+                .unwrap();
+            browser.wait(ready).unwrap();
+            assert_eq!(browser.eval(shown).unwrap(), serde_json::json!([choice, plan, board, choice, true]), "{choice} kept");
+            assert_eq!(
+                browser.eval("document.documentElement.outerHTML.includes('data-view=')").unwrap(),
+                true
+            );
+        }
+        // Without script the switch is three links: the server draws the view each asks for
+        // and keeps it in a cookie for the next load.
+        browser.send("Emulation.setScriptExecutionDisabled", serde_json::json!({"value": true})).unwrap();
+        for (choice, plan, board) in [("plan", true, false), ("board", false, true), ("both", true, true)] {
+            browser
+                .navigate(&format!("{base}/projects/id/{lanes}?view={choice}"))
+                .unwrap();
+            browser.wait("document.readyState === 'complete'").unwrap();
+            let v = format!("(() => {{ const v = s => document.querySelector(s)?.checkVisibility() ?? false; return [document.querySelector('#project-board').dataset.view, v('#plan-pane'), v('#board-pane'), document.querySelector('[data-view-tab={choice}]').getAttribute('aria-current')]; }})()");
+            assert_eq!(browser.eval(&v).unwrap(), serde_json::json!([choice, plan, board, "true"]), "{choice} without script");
+            browser
+                .navigate(&format!("{base}/projects/id/{lanes}"))
+                .unwrap();
+            browser.wait("document.readyState === 'complete'").unwrap();
+            assert_eq!(browser.eval(&v).unwrap(), serde_json::json!([choice, plan, board, "true"]), "{choice} kept without script");
+        }
+        browser.send("Emulation.setScriptExecutionDisabled", serde_json::json!({"value": false})).unwrap();
+        browser
+            .navigate(&format!("{base}/projects/id/{lanes}"))
+            .unwrap();
+        browser.wait(ready).unwrap();
+        // the phone's choice is its own: the plan there, both on a wide window
+        browser.viewport(390, "light").unwrap();
         browser
             .eval("document.querySelector('[data-view-tab=plan]').click()")
             .unwrap();

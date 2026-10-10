@@ -19,7 +19,7 @@ use askama::Template;
 use sluice_model::{error::PublicError, shown::Band};
 use std::collections::BTreeSet;
 
-/// The grid every plan sits on, and its show-grid switch's target.
+/// The grid every plan sits on.
 pub const GRID: &str = "plan-grid";
 
 /// Where a unit not done is drawn.
@@ -89,13 +89,7 @@ fn quiet_secs(step: &StepView) -> Option<f64> {
 }
 /// A step's name in its unit's cell: its stage, else its id without the unit's prefix.
 fn short(unit: &UnitView, step: &StepView) -> String {
-    if !step.stage.is_empty() {
-        return step.stage.clone();
-    }
-    let id = step.id.as_str();
-    id.strip_prefix(&format!("{}-", unit.id))
-        .unwrap_or(id)
-        .to_owned()
+    unit.step_name(step)
 }
 /// A step as its cell: its state from the status table, its time, its page.
 fn stage_of(step: &StepView, name: &str) -> Stage {
@@ -330,7 +324,8 @@ impl<'a> Plan<'a> {
             })
             .collect()
     }
-    /// The band's head and its Recently finished, in one region its stream patches.
+    /// The page's head: the project's name, the summary sentence under it, and its Details
+    /// (the project's id and its words), in one region its stream patches.
     pub fn band(&self) -> TrustedHtml {
         let facts = self.facts();
         let ask_href = match self.view.project.asks.as_slice() {
@@ -345,34 +340,31 @@ impl<'a> Plan<'a> {
             last_done: last,
             noun: ("unit", "units"),
         });
-        // the description's first block, the rest folded under More (kept open per project)
-        let lead = if self.view.project.description.trim().is_empty() {
-            TrustedHtml::default()
-        } else {
-            let (first, rest) = self.view.about();
-            let mut lead = first.0;
-            if let Some(more) = rest {
-                lead.push_str(&format!(
-                    "{}<div class=\"md\">{}</div>{}",
-                    ui::more_open(
-                        "about-more",
-                        "More",
-                        "Less",
-                        ui::keyed("sluice.about", self.view.project.id).as_str(),
-                        false
-                    ),
-                    more.0,
-                    ui::more_close("")
-                ));
-            }
-            TrustedHtml::owned(lead)
-        };
-        let head = ui::band_head(&self.view.project.name, &lead, &summary);
-        let finished: Vec<ui::Finished> = self
-            .done
+        let project = &self.view.project;
+        let details = ui::Details::new()
+            .id("Project", &project.id.to_string())
+            .text("About", project.description.trim())
+            .link(
+                "Settings",
+                &format!("{}/settings", project.href()),
+                "Its settings",
+            );
+        let head = ui::page_head_with(
+            &TrustedHtml::default(),
+            &TrustedHtml::owned(esc(&project.name)),
+            &details.menu(&project.name),
+            &TrustedHtml::owned(format!("<p class=\"page-line\">{summary}</p>")),
+        );
+        TrustedHtml::owned(format!(
+            "<div id=\"plan-band\" class=\"plan-band\">{head}</div>"
+        ))
+    }
+    /// What finished last, newest first, for the Done head.
+    fn latest(&self) -> Vec<ui::Finished> {
+        self.done
             .iter()
             .filter(|u| !u.finished().is_empty())
-            .take(5)
+            .take(ui::LATEST)
             .map(|u| {
                 let (took, runs) = took(u);
                 ui::Finished {
@@ -387,22 +379,10 @@ impl<'a> Plan<'a> {
                     took,
                     runs,
                     shown: Some(Shown::Succeeded),
+                    place: String::new(),
                 }
             })
-            .collect();
-        let today = self
-            .done
-            .iter()
-            .filter(|u| since_secs(u.finished()).is_some_and(|s| s < 86_400.0))
-            .count();
-        let line = match today {
-            0 => "Newest first.".to_owned(),
-            n => format!("Newest first. {} in the last day.", n),
-        };
-        let strip = ui::recent_strip("plan-rf", &line, &finished);
-        TrustedHtml::owned(format!(
-            "<div id=\"plan-band\" class=\"plan-band\">{head}{strip}</div>"
-        ))
+            .collect()
     }
     /// The paper row's count line: "21 units · 52 steps".
     pub fn meta(&self) -> TrustedHtml {
@@ -413,8 +393,8 @@ impl<'a> Plan<'a> {
             ui::count(steps, "step", "steps")
         ))
     }
-    /// The paper row's tools: Find, the Plan · Both · Board switch with a board, Show grid and
-    /// the plan as Mermaid text.
+    /// The paper row's tools: Find, the Plan · Both · Board switch with a board, and the plan as
+    /// Mermaid text.
     pub fn tools(&self) -> TrustedHtml {
         let view = self.view;
         let href = view.href();
@@ -441,15 +421,9 @@ impl<'a> Plan<'a> {
             out.push_str(ui::search_close().as_str());
         }
         if view.panel.is_some() {
-            out.push_str(&format!(
-                "<div class=\"view-switch\" role=\"group\" aria-label=\"Show\"><button type=\"button\" data-view-tab=\"plan\" aria-pressed=\"false\" data-preserve-attr=\"aria-pressed\">{}Plan</button><button type=\"button\" data-view-tab=\"both\" aria-pressed=\"false\" data-preserve-attr=\"aria-pressed\">{}Both</button><button type=\"button\" data-view-tab=\"board\" aria-pressed=\"false\" data-preserve-attr=\"aria-pressed\">{}Board</button></div>",
-                icon(Icon::Workflow, 16, ""),
-                icon(Icon::Columns2, 16, ""),
-                icon(Icon::LayoutDashboard, 16, ""),
-            ));
+            out.push_str(&view_switch(&href, view.view));
         }
         if !view.plan_empty() {
-            out.push_str(ui::grid_toggle(GRID).as_str());
             out.push_str(&format!(
                 "{}<details class=\"tool-more\" data-preserve-attr=\"open\"><summary aria-label=\"More ways to see the plan\" title=\"More ways to see the plan\">{}</summary><div class=\"menu\"><a href=\"{}?format=mermaid&amp;all=true\">The plan as Mermaid text</a></div></details>{}",
                 ui::menu_open(),
@@ -570,48 +544,58 @@ impl<'a> Plan<'a> {
     fn ask_html(&self, a: &Ask<'_>, span: u8) -> String {
         let project = self.project();
         let ask = a.ask;
-        let from = if ask.step.is_empty() {
-            "the orchestrator".to_owned()
-        } else {
-            ask.step.clone()
+        // who asked, in words: its stage (its unit's title is under the question), else the
+        // orchestrator
+        let from = match (a.unit, a.step) {
+            (Some(unit), Some(step)) => short(unit, step),
+            _ if ask.step.is_empty() => "the orchestrator".to_owned(),
+            _ => "a step".to_owned(),
         };
         let when = a
             .question
             .map(|q| format!(" at {}, {}", ui::clock(&q.at), ui::ago(&q.at)))
             .unwrap_or_default();
-        let (attrs, meta, strip) = match (a.unit, a.step) {
+        let (attrs, meta, strip, details) = match (a.unit, a.step) {
             (Some(unit), Some(step)) => {
-                // the unit that asks: its id, its title, its recipe and how its run goes
-                let mut meta = format!("<b>{}</b>", esc(unit.id.as_str()));
+                // the unit that asks: its title and how its run goes
+                let mut meta = String::new();
                 if unit.titled() {
-                    meta.push_str(&format!(" {}", esc(&ui::cut(&unit.title, 90))));
+                    meta.push_str(&format!("<b>{}</b>", esc(&ui::cut(&unit.title, 90))));
                 }
-                if !unit.recipe.is_empty() {
-                    meta.push_str(&format!(" · {}", esc(&unit.recipe)));
-                }
-                if let Some(t) = step.timing.as_ref().filter(|_| step.running()) {
-                    meta.push_str(&format!(" · running {}", ui::since(&t.started)));
-                }
-                let usually = step.usually_text();
-                if !usually.is_empty() {
-                    meta.push_str(&format!(" · {}", esc(&usually)));
-                }
-                if let Some(ratio) = over(step) {
-                    meta.push_str(&format!(" {}", ui::overrun(ratio)));
+                let run = self.run_words(step);
+                if !run.is_empty() {
+                    if !meta.is_empty() {
+                        meta.push_str(" · ");
+                    }
+                    meta.push_str(&format!("running {run}"));
+                    if let Some(ratio) = over(step) {
+                        meta.push_str(&format!(" {}", ui::overrun(ratio)));
+                    }
                 }
                 let strip = if a.strip {
-                    ui::stage_strip(&format!("Stages of {}", unit.id), &strip(unit)).0
+                    ui::stage_strip(&format!("Stages of {}", unit.heading()), &strip(unit)).0
                 } else {
                     String::new()
                 };
                 (
                     self.attrs(unit),
-                    format!("<p class=\"mod-meta\">{meta}</p>"),
+                    if meta.is_empty() {
+                        String::new()
+                    } else {
+                        format!("<p class=\"mod-meta\">{meta}</p>")
+                    },
                     strip,
+                    self.unit_details(unit, Some(step)),
                 )
             }
-            _ => (String::new(), String::new(), String::new()),
+            _ => (
+                String::new(),
+                String::new(),
+                String::new(),
+                ui::Details::new(),
+            ),
         };
+        let details = details.text("Message", &ask.message.to_string());
         let body = a
             .question
             .map(|q| crate::markdown::render(&q.body).0)
@@ -629,11 +613,11 @@ impl<'a> Plan<'a> {
         );
         if let Some(step) = a.step {
             actions.push_str(&format!(
-                "<a href=\"{}\" data-step=\"{s}\">Open {s}</a><a class=\"quiet-act\" href=\"{}\">{}Message</a>",
+                "<a href=\"{}\" data-step=\"{}\">Open step</a><a class=\"quiet-act\" href=\"{}\">{}Message</a>",
                 esc(&step.href()),
+                esc(step.id.as_str()),
                 esc(&step.thread_href()),
                 icon(Icon::MessageSquare, 16, ""),
-                s = esc(step.id.as_str()),
             ));
         }
         actions.push_str(&format!(
@@ -662,15 +646,68 @@ impl<'a> Plan<'a> {
             )
         };
         format!(
-            "<div id=\"q-{m}\" class=\"pl-item pl-ask\" style=\"--span:{span}\"{attrs}>{open}{head}{meta}{strip}<div class=\"mod-body md\">{body}</div><div class=\"mod-actions\">{actions}</div>{close}</div>",
+            "<div id=\"q-{m}\" class=\"pl-item pl-ask\" style=\"--span:{span}\"{attrs}>{open}{head}{menu}{meta}{strip}<div class=\"mod-body md\">{body}</div><div class=\"mod-actions\">{actions}</div>{close}</div>",
             m = ask.message,
             open = ui::module_open(
                 span,
                 Swell::Ask,
                 &format!("Question for you: {}", ask.title)
             ),
+            menu = details.menu(&ask.title),
             close = ui::module_close(),
         )
+    }
+    /// How long a running step has run against its usual time: "1h 15m, usually 21m" (ticking),
+    /// ", silent 42m" after it when it is quiet; "" when it is not running.
+    fn run_words(&self, step: &StepView) -> String {
+        let Some(t) = step.timing.as_ref().filter(|_| step.running()) else {
+            return String::new();
+        };
+        let mut words = format!("<span class=\"pl-time\">{}</span>", ui::since(&t.started));
+        let usually = step.usually_text();
+        if !usually.is_empty() {
+            words.push_str(&format!(
+                "<span class=\"pl-usual\">, {}</span>",
+                esc(&usually)
+            ));
+        }
+        if step.shown() == Shown::Quiet && !step.active_at.is_empty() {
+            words.push_str(&format!(
+                "<span class=\"pl-usual\">, silent {}</span>",
+                ui::since(&step.active_at)
+            ));
+        }
+        words
+    }
+    /// What identifies a unit, behind its row's or module's "⋯": its id and recipe, the step
+    /// that says how it stands (its id, fn, run and tags), its params and its page.
+    fn unit_details(&self, unit: &UnitView, step: Option<&StepView>) -> ui::Details {
+        let mut details = ui::Details::new()
+            .id("Unit", unit.id.as_str())
+            .text("Recipe", &unit.recipe);
+        if let Some(step) = step {
+            details = details
+                .id("Step", step.id.as_str())
+                .code("Function", &step.function);
+            if let Some((run, _)) = step.retries() {
+                let words = format!("{run}, {}", step.retries_words());
+                details = details.text("Run", words.trim_end_matches(", "));
+            }
+            let tags: Vec<&str> = step
+                .tags
+                .iter()
+                .map(String::as_str)
+                .filter(|t| !t.starts_with("unit:"))
+                .collect();
+            details = details.text("Tags", &tags.join(", "));
+        }
+        for (name, value) in &unit.params {
+            details = match ui::ValueSet::of_text(value) {
+                ui::ValueSet::Detail => details.id(name, value),
+                _ => details.text(name, value),
+            };
+        }
+        details.link("Page", &unit_href(self.view, unit), "The unit's page")
     }
 
     /// Stopped: each failed, cancelled or stale unit on the sand, its failure's sentence and
@@ -703,9 +740,6 @@ impl<'a> Plan<'a> {
         let mut said = String::new();
         if let Some(step) = step {
             said.push_str(&esc(&short(unit, step)));
-            if let Some((n, _)) = step.retries() {
-                said.push_str(&format!(", run {n}"));
-            }
             if let Some(t) = step.timing.as_ref()
                 && let Some(end) = &t.finished
             {
@@ -716,18 +750,11 @@ impl<'a> Plan<'a> {
                 ));
             }
         }
-        let mut meta = format!("<b>{}</b>", esc(unit.id.as_str()));
-        if !unit.recipe.is_empty() {
-            meta.push_str(&format!(" · {}", esc(&unit.recipe)));
-        }
-        meta.push_str(&format!(
-            " {}",
-            ui::stage_marks(&format!("Stages of {}", unit.id), &strip(unit))
-        ));
+        let marks = ui::stage_marks(&format!("Stages of {}", unit.heading()), &strip(unit));
         let mut body = String::new();
         if let Some(step) = step {
             if !step.why().is_empty() {
-                body.push_str(&format!("<p>{}</p>", esc(step.why())));
+                body.push_str(&format!("<p class=\"pl-why\">{}</p>", esc(step.why())));
             }
             let next = step.next_step();
             if !next.is_empty() && shown == Shown::Failed {
@@ -738,7 +765,7 @@ impl<'a> Plan<'a> {
         if let Some(step) = step.filter(|s| s.retryable() && !s.retry_asks()) {
             let first = step.retry_first();
             actions.push_str(&format!(
-                "<form class=\"pl-retry\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><details class=\"pl-fb\" data-preserve-attr=\"open\"><summary class=\"{fb}\">{ic}Retry with feedback</summary><label class=\"vh\" for=\"fb-{s}\">Feedback for {s}'s next run</label><textarea id=\"fb-{s}\" name=\"message\" rows=\"3\" maxlength=\"16384\" placeholder=\"What its next run should do differently\" data-ignore-morph></textarea><button name=\"action\" value=\"retry\" class=\"primary\">Retry with this feedback</button></details><button name=\"action\" value=\"retry\">Retry</button></form>",
+                "<form class=\"pl-retry\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><details class=\"pl-fb\" data-preserve-attr=\"open\"><summary class=\"{fb}\">{ic}Retry with feedback</summary><label class=\"vh\" for=\"fb-{s}\">Feedback for the next run of {name}</label><textarea id=\"fb-{s}\" name=\"message\" rows=\"3\" maxlength=\"16384\" placeholder=\"What its next run should do differently\" data-ignore-morph></textarea><button name=\"action\" value=\"retry\" class=\"primary\">Retry with this feedback</button></details><button name=\"action\" value=\"retry\">Retry</button></form>",
                 h = esc(&step.href()),
                 rev = step.revision,
                 seen = esc(&step.seen()),
@@ -746,13 +773,14 @@ impl<'a> Plan<'a> {
                 fb = if first { "primary" } else { "" },
                 ic = icon(Icon::RotateCw, 16, ""),
                 s = esc(step.id.as_str()),
+                name = esc(&short(unit, step)),
             ));
         }
         if let Some(step) = step {
             actions.push_str(&format!(
-                "<a href=\"{}\" data-step=\"{s}\">Open {s}</a>",
+                "<a href=\"{}\" data-step=\"{}\">Open step</a>",
                 esc(&step.href()),
-                s = esc(step.id.as_str())
+                esc(step.id.as_str())
             ));
         }
         actions.push_str(&format!(
@@ -760,11 +788,15 @@ impl<'a> Plan<'a> {
             esc(&unit_href(self.view, unit))
         ));
         format!(
-            "<div id=\"s-{id}\" class=\"pl-item pl-stop\" style=\"--span:{span}\"{attrs} data-said=\"{states}\">{open}{pick}<span class=\"mod-k\">{role}{g}<b>{word}</b>{kind}<span class=\"quiet\">{said}</span></span><span class=\"mod-t\">{title}</span>{pick_end}<p class=\"mod-meta\">{meta}</p><div class=\"mod-body\">{body}</div><div class=\"mod-actions\">{actions}</div>{close}</div>",
+            "<div id=\"s-{id}\" class=\"pl-item pl-stop\" style=\"--span:{span}\"{attrs} data-said=\"{states}\">{open}{pick}<span class=\"mod-k\">{role}{g}<b>{word}</b>{kind}<span class=\"quiet\">{said}</span>{marks}</span><span class=\"mod-t\">{title}</span>{pick_end}{menu}<div class=\"mod-body\">{body}</div><div class=\"mod-actions\">{actions}</div>{close}</div>",
             id = esc(unit.id.as_str()),
             attrs = self.attrs(unit),
             states = esc(&states_said(unit)),
-            open = ui::module_open(span, Swell::Look, &format!("{}, {}", unit.id, shown.word())),
+            open = ui::module_open(
+                span,
+                Swell::Look,
+                &format!("{}, {}", unit.heading(), shown.word())
+            ),
             pick = ui::trace_button_open(),
             role = ui::trace_role(),
             g = ui::mark(shown),
@@ -777,12 +809,13 @@ impl<'a> Plan<'a> {
                 .unwrap_or_default(),
             title = esc(title(unit)),
             pick_end = ui::trace_button_close(),
+            menu = self.unit_details(unit, step).menu(title(unit)),
             close = ui::module_close(),
         )
     }
 
     /// Running or Waiting: a block a recipe (its columns its stages), then the units of no
-    /// recipe, each unit one row on the grid.
+    /// recipe, each unit one row.
     fn band_html(&self, id: &str, key: &str, name: &str, units: &[&UnitView], cols: u8) -> String {
         // the blocks: a recipe's units together, in the order of their first unit
         let mut groups: Vec<(&str, Vec<&UnitView>)> = vec![];
@@ -805,7 +838,6 @@ impl<'a> Plan<'a> {
         }
         for (recipe, rows) in &groups {
             let stages: Vec<&str> = rows[0].stages.iter().map(String::as_str).collect();
-            let (lead, cells) = widths(ROW, stages.len());
             let head = if recipe.is_empty() {
                 // a loose step is one cell; a unit of no recipe draws its own steps
                 let loose = rows.iter().filter(|u| u.steps.len() == 1).count();
@@ -830,7 +862,7 @@ impl<'a> Plan<'a> {
                 if single {
                     ui::section_head(key, name, &format!("{line} {words}.")).0
                 } else {
-                    group_head(title, &words, lead, &[])
+                    group_head(title, &words, &[])
                 }
             } else {
                 let tally: ui::Tally = rows.iter().map(|u| u.shown()).collect();
@@ -847,21 +879,11 @@ impl<'a> Plan<'a> {
                     esc(recipe)
                 );
                 if single {
-                    ui::strip_head(
-                        key,
-                        name,
-                        &format!("{line} {recipe}: {words}."),
-                        lead,
-                        &stages,
-                    )
-                    .0
-                    .replacen(
-                        &format!(" {}: ", esc(recipe)),
-                        &format!(" {link}: "),
-                        1,
-                    )
+                    ui::strip_head(key, name, &format!("{line} {recipe}: {words}."), &stages)
+                        .0
+                        .replacen(&format!(" {}: ", esc(recipe)), &format!(" {link}: "), 1)
                 } else {
-                    group_head(recipe, &words, lead, &stages).replacen(
+                    group_head(recipe, &words, &stages).replacen(
                         &format!("<h3>{}</h3>", esc(recipe)),
                         &format!("<h3>{link}</h3>"),
                         1,
@@ -869,8 +891,9 @@ impl<'a> Plan<'a> {
                 }
             };
             out.push_str(&format!(
-                "<div class=\"pl-group\" style=\"--lead:{lead};--cells:{cells};{}\">{}",
-                medium(cells),
+                "<div class=\"pl-group{}\" style=\"--n:{}\">{}",
+                if recipe.is_empty() { " pl-free" } else { "" },
+                stages.len().max(1),
                 rail_slot(&head)
             ));
             // a recipe whose view does not check: its rows go on without it, said once
@@ -890,34 +913,30 @@ impl<'a> Plan<'a> {
         out.push_str("</section>");
         out
     }
-    /// "Quiet first, then the longest. a-7 asks you above; survey runs in the margin."
+    /// "Quiet first, then the longest. 1 unit asks you above. 1 long run is in the margin."
     fn running_line(&self) -> String {
         let mut line = "Quiet first, then the longest.".to_owned();
-        let above: Vec<&str> = self
+        let above = self
             .asks
             .iter()
             .filter_map(|a| a.unit.map(|u| u.id.as_str()))
             .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        if !above.is_empty() {
+            .len();
+        if above > 0 {
             line.push_str(&format!(
-                " {} {} you above.",
-                join(&above),
-                if above.len() == 1 { "asks" } else { "ask" }
+                " {} you above.",
+                ui::count(above, "unit asks", "units ask")
             ));
         }
         if !self.margin.is_empty() {
-            let names: Vec<&str> = self.margin.iter().map(|u| u.id.as_str()).collect();
             line.push_str(&format!(
-                " {} {} in the margin.",
-                join(&names),
-                if names.len() == 1 { "runs" } else { "run" }
+                " {} in the margin.",
+                ui::count(self.margin.len(), "long run is", "long runs are")
             ));
         }
         line
     }
-    /// "3 waiting, all held by a-6-publish." or "3 waiting; 1 held up by a failure."
+    /// "3 waiting, all held by Review the spring guide." or "3 waiting; 1 held up by a failure."
     fn waiting_line(&self) -> String {
         let n = self.waiting.len();
         let firsts: BTreeSet<String> = self
@@ -925,7 +944,7 @@ impl<'a> Plan<'a> {
             .iter()
             .filter_map(|u| {
                 u.all_waits()
-                    .and_then(|(_, w)| w.first().map(|w| w.name.id.clone()))
+                    .and_then(|(_, w)| w.first().map(|w| w.name.text(60)))
             })
             .collect();
         let held = self
@@ -954,85 +973,74 @@ impl<'a> Plan<'a> {
         }
         line
     }
-    /// One unit's row: its head (the trace's button), its line, its cells, and what opens in
-    /// place when it is traced.
+    /// One unit's row: its head (the trace's button: its state, how long it has run against
+    /// its usual time, its title), its one line under it, its cells beside it at their recipe's
+    /// columns, its "⋯" at the end, and what opens in place when it is traced.
     fn row_html(&self, unit: &UnitView) -> String {
         let shown = unit.shown();
         let step = current(unit);
-        let mut facts = format!("<b class=\"pl-id\">{}</b>", esc(unit.id.as_str()));
-        if !unit.recipe.is_empty() {
-            facts.push_str(&format!(" · {}", esc(&unit.recipe)));
-        }
+        let mut state = String::new();
         let mut chip = String::new();
         if let Some(step) = step {
-            if let Some(t) = step.timing.as_ref().filter(|_| step.running()) {
-                if shown == Shown::Quiet && !step.active_at.is_empty() {
-                    facts.push_str(&format!(" · silent {}", ui::since(&step.active_at)));
-                }
-                facts.push_str(&format!(" · running {}", ui::since(&t.started)));
-                let usually = step.usually_text();
-                if !usually.is_empty() {
-                    facts.push_str(&format!(" · {}", esc(&usually)));
-                }
+            let run = self.run_words(step);
+            if !run.is_empty() {
+                state = run;
                 if let Some(ratio) = over(step) {
                     chip = ui::overrun(ratio).0;
                 }
-            } else if unit.steps.len() > 1 {
-                facts.push_str(&format!(" · {}", esc(&unit.tally_words())));
-            }
-            // a retried step's run and how the runs before it ended
-            let tries = step.retries_html();
-            if !tries.as_str().is_empty() {
-                facts.push_str(&format!(" · {}", tries.as_str()));
+            } else if unit.steps.len() > 1 && shown.spec().band != Band::Running {
+                // its steps by state, when they stand apart ("1 succeeded · 5 pending"); one
+                // state for all its steps is the word before it already
+                let tally = unit.tally_words();
+                if tally.contains('·') {
+                    state = format!("<span class=\"pl-usual\">, {}</span>", esc(&tally));
+                }
             }
         }
-        // what it said (its recipe's view, else its last message); a waiting unit what holds
-        // it first
+        // its one line: what it said last (its recipe's view, else its last message); a waiting
+        // unit what holds it
         let sub = if shown.spec().band == Band::Running {
             self.said_html(unit)
         } else {
-            format!("{}{}", waits_html(unit), self.said_html(unit))
-        };
-        let (lead, cells) = match (unit.stages.is_empty(), unit.steps.len()) {
-            (false, _) => widths(ROW, unit.stages.len()),
-            (true, 1) => (ROW - 2, 2),
-            (true, _) => {
-                let layers = layers(unit).len();
-                let cells = (2 * layers as u8).clamp(2, ROW - 4);
-                (ROW - cells, cells)
+            let waits = waits_html(unit);
+            if waits.is_empty() {
+                self.said_html(unit)
+            } else {
+                waits
             }
         };
-        let cells_html = if unit.stages.is_empty() && unit.steps.len() > 1 {
+        let (cells, graph) = match (unit.stages.is_empty(), unit.steps.len()) {
+            (false, _) => (unit.stages.len(), false),
+            (true, 1) => (1, false),
+            (true, _) => (layers(unit).len(), true),
+        };
+        let cells_html = if graph {
             self.graph_html(unit)
         } else {
-            ui::stage_strip(&format!("Stages of {}", unit.id), &strip(unit)).0
+            ui::stage_strip(&format!("Stages of {}", unit.heading()), &strip(unit)).0
         };
         format!(
-            "<div id=\"u-{id}\" class=\"pl-row rail-slot\" style=\"--lead:{lead};--cells:{cells};{m}\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-k\">{role}{g}<b>{word}</b>{chip}</span><span class=\"pl-t\">{title}</span><span class=\"pl-m\">{facts}</span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open {id}</a></div><div class=\"pl-cells{dense}\">{cells_html}</div>{more}{more_body}{more_end}</div>",
+            "<div id=\"u-{id}\" class=\"pl-row rail-slot{g}\" style=\"--cells:{cells}\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-head\"><span class=\"pl-k\"><span class=\"pl-w\">{role}{mark}<b>{word}</b></span>{state}{chip}</span> <span class=\"pl-t\">{title}</span></span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open the unit</a></div><div class=\"pl-cells\">{cells_html}</div><div class=\"pl-end\">{menu}</div>{more}{more_body}{more_end}</div>",
             id = esc(unit.id.as_str()),
-            m = medium(cells),
-            // five stages or more: a cell is too narrow for its overrun tag (the row's chip says it)
-            dense = if unit.stages.len() >= 5 {
-                " pl-dense"
-            } else {
-                ""
-            },
+            g = if graph { " pl-graphed" } else { "" },
             attrs = self.attrs(unit),
             rail = ui::rail(),
             pick = ui::trace_button_open(),
             role = ui::trace_role(),
-            g = ui::mark(shown),
+            mark = ui::mark(shown),
             word = esc(shown.word()),
             title = esc(title(unit)),
             pick_end = ui::trace_button_close(),
             href = esc(&unit_href(self.view, unit)),
+            menu = self.unit_details(unit, step).menu(title(unit)),
             more = ui::trace_more_open(),
             more_body = self.more_html(unit),
             more_end = ui::trace_more_close(),
         )
     }
-    /// A running unit's line: its recipe's view (the project's own summary of it), else its
-    /// last message.
+    /// A unit's one line: its recipe's view (the project's own summary of it, its params kept
+    /// in the row's Details), else its last message, its sender named in words and its text on
+    /// one line.
     fn said_html(&self, unit: &UnitView) -> String {
         if let Some(view) = self
             .view
@@ -1040,21 +1048,22 @@ impl<'a> Plan<'a> {
             .recipe_of(unit.id.as_str())
             .and_then(|r| r.view())
         {
-            return format!(
-                "<div class=\"pl-sub pl-view\">{}</div>",
-                super::unit_view::draw(view, unit, true)
-            );
+            let drawn = super::unit_view::draw(view, unit, true);
+            if super::unit_view::empty(&drawn) {
+                return String::new();
+            }
+            return format!("<div class=\"pl-sub pl-view\">{drawn}</div>");
         }
         if unit.last_message.trim().is_empty() {
             return String::new();
         }
         format!(
             "<p class=\"pl-sub\"><b>{}</b> {}: {}</p>",
-            esc(&unit.last_from),
+            esc(&unit.sender()),
             ui::ago(&unit.changed),
             esc(&crate::markdown::cut(
                 &crate::markdown::plain(&unit.last_message),
-                160
+                240
             ))
         )
     }
@@ -1074,14 +1083,13 @@ impl<'a> Plan<'a> {
             let waits = unit
                 .waits_of(step)
                 .first()
-                .map(|w| format!(", waits for {}", esc(&w.name.id)))
+                .map(|w| format!(", waits for {}", esc(&w.name.text(48))))
                 .unwrap_or_default();
             steps.push_str(&format!(
-                "<li><a href=\"{h}\" data-step=\"{s}\">{name}</a><code class=\"pl-fn\">{f}</code><span class=\"pl-st\">{g}{w}{time}{waits}</span></li>",
+                "<li><a href=\"{h}\" data-step=\"{s}\">{name}</a><span class=\"pl-st\">{g}{w}{time}{waits}</span></li>",
                 h = esc(&step.href()),
                 s = esc(step.id.as_str()),
                 name = esc(&short(unit, step)),
-                f = esc(&step.function),
                 g = ui::mark(shown),
                 w = esc(shown.word()),
             ));
@@ -1090,8 +1098,9 @@ impl<'a> Plan<'a> {
             "<p class=\"meta\">No message yet.</p>".to_owned()
         } else {
             format!(
-                "<p class=\"meta\"><b>{}</b> · {}</p><div class=\"md pl-said-t\">{}</div>",
-                esc(&unit.last_from),
+                "<p class=\"meta\"><b>{}{}</b> · {}</p><div class=\"md pl-said-t\">{}</div>",
+                if unit.last_received { "Note from " } else { "" },
+                esc(&unit.sender()),
                 ui::ago(&unit.changed),
                 crate::markdown::excerpt(&unit.last_message, 420).0
             )
@@ -1099,12 +1108,12 @@ impl<'a> Plan<'a> {
         let mut actions = String::new();
         if let Some(step) = current(unit) {
             actions.push_str(&format!(
-                "<a class=\"primary\" href=\"{}\" data-step=\"{s}\">Open {s}{}</a><a class=\"quiet-act\" href=\"{}\">{}Message</a>",
+                "<a class=\"primary\" href=\"{}\" data-step=\"{}\">Open step{}</a><a class=\"quiet-act\" href=\"{}\">{}Message</a>",
                 esc(&step.href()),
+                esc(step.id.as_str()),
                 icon(Icon::ArrowRight, 16, ""),
                 esc(&step.thread_href()),
                 icon(Icon::MessageSquare, 16, ""),
-                s = esc(step.id.as_str()),
             ));
         }
         actions.push_str(&format!(
@@ -1282,18 +1291,19 @@ impl<'a> Plan<'a> {
             ),
             _ => "Newest first.".to_owned(),
         };
+        let latest = ui::latest_list("Finished last", &self.latest());
         let mut items = String::new();
         for unit in &self.done {
             let (took, _) = took(unit);
             // a cancel the owner dismissed leaves its unit done, still said
-            let cancels: Vec<&str> = unit
+            let cancels: Vec<String> = unit
                 .steps
                 .iter()
                 .filter(|s| s.cancelled())
-                .map(|s| s.id.as_str())
+                .map(|s| short(unit, s))
                 .collect();
             items.push_str(&format!(
-                "<li data-said=\"{states}\"><a href=\"{h}\"><span class=\"pl-at\">{at}</span>{g}<code class=\"pl-did\">{id}</code><span class=\"pl-dt\">{t}</span><span class=\"pl-dk\">{k}</span></a></li>",
+                "<li data-said=\"{states}\"><a href=\"{h}\"><span class=\"pl-at\">{at}</span>{g}<span class=\"pl-dt\">{t}</span><span class=\"pl-dk\">{k}</span></a></li>",
                 h = esc(&unit_href(self.view, unit)),
                 states = esc(&states_said(unit)),
                 at = if unit.finished().is_empty() {
@@ -1306,13 +1316,9 @@ impl<'a> Plan<'a> {
                 } else {
                     Shown::Cancelled
                 }),
-                id = esc(unit.id.as_str()),
-                t = if unit.titled() {
-                    esc(&unit.title)
-                } else {
-                    String::new()
-                },
+                t = esc(title(unit)),
                 k = if !cancels.is_empty() {
+                    let cancels: Vec<&str> = cancels.iter().map(String::as_str).collect();
                     format!("{} cancelled", esc(&join(&cancels)))
                 } else if took > 0.0 {
                     format!("took {}", esc(&ui::duration_text(took)))
@@ -1325,7 +1331,7 @@ impl<'a> Plan<'a> {
         let open =
             self.view.show == "done" || !self.view.q.is_empty() || !self.view.recipe.is_empty();
         format!(
-            "<section id=\"plan-done\" class=\"pl-sec pl-done\" style=\"--span:{cols}\" data-span=\"{cols}\" aria-labelledby=\"done\">{head}<details class=\"pl-index\" data-preserve-attr=\"open\"{open}><summary>{chev}<span class=\"pl-show\">Show the {n}</span><span class=\"pl-hide\">Hide the {n}</span></summary><p class=\"meta pl-range\">{range}</p><ol class=\"pl-idx\">{items}</ol></details></section>",
+            "<section id=\"plan-done\" class=\"pl-sec pl-done\" style=\"--span:{cols}\" data-span=\"{cols}\" aria-labelledby=\"done\">{head}{latest}<details class=\"pl-index\" data-preserve-attr=\"open\"{open}><summary>{chev}<span class=\"pl-show\">Show the {n}</span><span class=\"pl-hide\">Hide the {n}</span></summary><p class=\"meta pl-range\">{range}</p><ol class=\"pl-idx\">{items}</ol></details></section>",
             head = ui::section_head("done", "Done", &line),
             open = if open { " open" } else { "" },
             chev = icon(Icon::ChevronDown, 16, "chev"),
@@ -1334,6 +1340,27 @@ impl<'a> Plan<'a> {
     }
 }
 
+/// The Plan · Both · Board switch: a link each, so a choice works without script (the page
+/// drawn in it and the choice kept in a cookie); with script `board.js` takes the click, shows
+/// the view at once and keeps it per project, wide and narrow apart. The chosen one is filled.
+fn view_switch(href: &str, chosen: Option<&str>) -> String {
+    let links: String = [
+        ("plan", "Plan", Icon::Workflow),
+        ("both", "Both", Icon::Columns2),
+        ("board", "Board", Icon::LayoutDashboard),
+    ]
+    .into_iter()
+    .map(|(key, word, glyph)| {
+        format!(
+            "<a href=\"{h}?view={key}\" data-view-tab=\"{key}\" aria-current=\"{on}\" data-preserve-attr=\"aria-current\">{i}{word}</a>",
+            h = esc(href),
+            on = chosen == Some(key),
+            i = icon(glyph, 16, ""),
+        )
+    })
+    .collect();
+    format!("<nav class=\"view-switch\" aria-label=\"View\">{links}</nav>")
+}
 /// "a", "a and b", "a, b and c".
 fn join(items: &[&str]) -> String {
     match items {
@@ -1351,8 +1378,8 @@ fn rail_slot(html: &str) -> String {
     format!("<div class=\"rail-slot\">{}{html}</div>", ui::rail())
 }
 /// A block's head inside a band: its recipe's name and count, each stage over its column.
-fn group_head(name: &str, line: &str, lead: u8, stages: &[&str]) -> String {
-    ui::strip_head("", name, line, lead, stages)
+fn group_head(name: &str, line: &str, stages: &[&str]) -> String {
+    ui::strip_head("", name, line, stages)
         .0
         .replacen(
             "class=\"sec-h sec-strip\"",
@@ -1361,30 +1388,6 @@ fn group_head(name: &str, line: &str, lead: u8, stages: &[&str]) -> String {
         )
         .replacen("<h2>", "<h3>", 1)
         .replacen("</h2>", "</h3>", 1)
-}
-/// A band of rows lays out on twelve columns of its own, the strip rule's (a head and its rows
-/// share them at every width), whatever share of the sheet the band takes.
-const ROW: u8 = 12;
-/// The same split on a medium sheet (under 1200px), where a row is narrow: a strip of three
-/// stages or more takes eight of the twelve columns, its head the other four.
-fn medium(cells: u8) -> String {
-    let cells = if cells >= 6 { 8 } else { cells };
-    format!("--lead-m:{};--cells-m:{cells}", ROW - cells)
-}
-/// How a row of `cols` columns splits for `n` stages: its head's columns and its cells'. A
-/// stage takes two columns while that leaves the head four, else one, else the cells share
-/// what is left.
-fn widths(cols: u8, n: usize) -> (u8, u8) {
-    let n = n.max(1) as u8;
-    let room = cols.saturating_sub(4).max(1);
-    let cells = if 2 * n <= room {
-        2 * n
-    } else if n <= room {
-        n
-    } else {
-        room
-    };
-    (cols - cells, cells)
 }
 /// A unit's steps in columns by their own chain: a step after the column of the latest step of
 /// its unit it waits for, in plan order within a column.
@@ -1405,8 +1408,8 @@ fn layers(unit: &UnitView) -> Vec<Vec<&StepView>> {
     }
     out
 }
-/// A unit's waits, said: "review waits for Terns `a-6-publish` (running)"; or what else holds
-/// its first step.
+/// A unit's waits, said: "review waits for publish · Terns (running)"; or what else holds its
+/// first step.
 fn waits_html(unit: &UnitView) -> String {
     if let Some((step, waits)) = unit.all_waits() {
         const NAMED: usize = 2;
@@ -1414,12 +1417,9 @@ fn waits_html(unit: &UnitView) -> String {
             .iter()
             .take(NAMED)
             .map(|w| {
+                // by its title in words; an untitled step by its id, its only name
                 let words = if w.name.titled() {
-                    format!(
-                        "{} <code>{}</code>",
-                        esc(&ui::cut(&w.name.title, 60)),
-                        esc(&w.name.id)
-                    )
+                    esc(&w.name.text(60))
                 } else {
                     format!("<code>{}</code>", esc(&w.name.id))
                 };
@@ -1525,6 +1525,7 @@ pub fn draw(
         head: plan.band(),
         meta: plan.meta(),
         tools: plan.tools(),
+        inner: false,
     };
     let batch = RenderedBatch::new(vec![
         PatchRegion::new("project-board", board_region(&body)),

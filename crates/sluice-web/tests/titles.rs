@@ -57,21 +57,26 @@ async fn a_recipe_with_a_view_draws_its_live_units_as_rows_under_its_stages_atte
         "{l3}"
     );
     assert!(!html.contains("board-edges"), "{html}");
-    // its title first, its id after it, and a way to its unit's page
+    // its title, and a way to its unit's page; its id, recipe and params in its Details
     let l1 = plan_html::row(&html, "l1");
     assert!(
-        l1.contains("<span class=\"pl-t\">FIG-1: Fix the cron driver</span><span class=\"pl-m\"><b class=\"pl-id\">l1</b> · lane"),
+        l1.contains("<span class=\"pl-t\">FIG-1: Fix the cron driver</span>")
+            && !l1.contains("pl-id"),
         "{l1}"
     );
     assert!(
         l1.contains(&format!("href=\"/projects/id/{id}/units/l1\"")),
         "{l1}"
     );
-    // the recipe's view draws its summary in the unit's row
     assert!(
-        l1.contains("<span class=\"uv-param\" title=\"ticket\">FIG-1</span>"),
+        l1.contains("<sluice-copy value=\"l1\">")
+            && l1.contains("<dt>Recipe</dt><dd><span>lane</span></dd>")
+            && l1.contains("<dt>ticket</dt><dd><span>FIG-1</span></dd>"),
         "{l1}"
     );
+    // the recipe's view draws its summary in the unit's row; a param is its Details', not
+    // drawn again
+    assert!(!l1.contains("uv-param"), "{l1}");
     // a recipe whose view does not check: its units are still rows, with one note
     let waiting = plan_html::band(&html, "plan-waiting");
     assert_eq!(
@@ -87,14 +92,16 @@ async fn a_recipe_with_a_view_draws_its_live_units_as_rows_under_its_stages_atte
 }
 
 #[tokio::test]
-async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
+async fn every_page_names_a_step_by_its_title_and_keeps_its_id_in_its_details() {
     let f = Fixture::new().await;
     let id = f.titled().await;
-    // the step's page: its stage and title the heading, its id under it, the tab its title
+    // the step's page: its stage and title the heading, its id in its Details, the tab its
+    // title
     let (status, step) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
     assert_eq!(status, StatusCode::OK, "{step}");
     assert!(
-        step.contains("<h1 id=\"d-title\" class=\"sb-t long\"><span class=\"d-stage\">work ·</span> FIG-1: Fix the cron driver</h1><p class=\"d-id\"><sluice-copy value=\"l1-work\"><code>l1-work</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy step id\""),
+        step.contains("<h1 id=\"d-title\" class=\"sb-t\"><span class=\"d-stage\">work ·</span> FIG-1: Fix the cron driver</h1><sluice-menu><details class=\"dm\"")
+            && step.contains("<dt>Step</dt><dd><sluice-copy value=\"l1-work\"><code>l1-work</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy step\""),
         "{step}"
     );
     assert!(
@@ -104,7 +111,7 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
     // a doc's first line is its title; the page says the rest of it once
     let (_, watch) = f.get(&format!("/projects/id/{id}/steps/watch")).await;
     assert!(
-        watch.contains("<h1 id=\"d-title\" class=\"sb-t long\">Watches main for red</h1>"),
+        watch.contains("<h1 id=\"d-title\" class=\"sb-t\">Watches main for red</h1>"),
         "{watch}"
     );
     assert!(
@@ -122,7 +129,8 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
         plain.contains("<h1 id=\"d-title\" class=\"sb-t\">plain</h1>") && !plain.contains("d-id"),
         "{plain}"
     );
-    // the unit's page: its title the heading, its id and recipe under it, its view in full
+    // the unit's page: its title the heading, its id, recipe and params in its Details; a view
+    // of a param alone draws nothing on it
     let (status, unit) = f.get(&format!("/projects/id/{id}/units/l2")).await;
     assert_eq!(status, StatusCode::OK, "{unit}");
     assert!(
@@ -130,22 +138,18 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
         "{unit}"
     );
     assert!(
-        unit.contains("<code>l2</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy unit id\"")
-            && unit.contains("</sluice-copy><span class=\"meta\"> · from recipe <code>lane</code>"),
+        unit.contains("<dt>Unit</dt><dd><sluice-copy value=\"l2\"><code>l2</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy unit\"")
+            && unit.contains("<dt>Recipe</dt><dd><span>lane</span></dd>")
+            && unit.contains("<dt>ticket</dt><dd><span>FIG-2</span></dd>"),
         "{unit}"
     );
-    // a view this short is said on the unit's meta line, not in a card of its own
     assert!(
-        unit.contains(
-            "<span aria-hidden=\"true\">·</span><div class=\"uv-line\"><div class=\"uv uv-page\">"
-        ) && !unit.contains("class=\"unit-view\""),
+        !unit.contains("uv-line")
+            && !unit.contains("class=\"unit-view\"")
+            && !unit.contains("uv-param"),
         "{unit}"
     );
-    // its view's values are named on its page ("ticket FIG-2"), and its log is a link away
-    assert!(
-        unit.contains("<span class=\"uv-param\" title=\"ticket\"><span class=\"uv-k\">ticket</span> FIG-2</span>"),
-        "{unit}"
-    );
+    // its log is a link away
     assert!(
         unit.contains(&format!(
             "<a href=\"/projects/id/{id}/log?unit=l2\">Log</a>"
@@ -156,16 +160,23 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
         unit.contains("<title>FIG-2: Stop the parser leak · titled · sluice</title>"),
         "{unit}"
     );
-    // home: a running step by its id, which tells one row from the next, then its title
+    // home: a running step by its stage and title, never its id
     let (_, home) = f.get("/").await;
     assert!(
-        home.contains("<span class=\"sref\"><code class=\"sref-id\">l1-work</code> <span class=\"sref-t\">FIG-1: Fix the cron driver</span></span>"),
+        home.contains("<span class=\"sref\"><span class=\"sref-stage\">work ·</span> <span class=\"sref-t\">FIG-1: Fix the cron driver</span></span>"),
         "{home}"
     );
-    assert!(home.contains("<code class=\"sref-id\">watch</code> <span class=\"sref-t\">Watches main for red</span>"), "{home}");
+    assert!(
+        home.contains("<span class=\"sref-t\">Watches main for red</span>"),
+        "{home}"
+    );
     // a failed step in the stopped rows too
-    assert!(home.contains("<code class=\"sref-id\">l2-work</code> <span class=\"sref-t\">FIG-2: Stop the parser leak</span>"), "{home}");
-    // the plan: a loose step's row is its title, its id after it
+    assert!(
+        home.contains("<span class=\"sref-t\">FIG-2: Stop the parser leak</span>"),
+        "{home}"
+    );
+    assert!(!home.contains("sref-id"), "{home}");
+    // the plan: a loose step's row is its title
     let (_, board) = f.get(&format!("/projects/id/{id}")).await;
     let watch = match plan_html::place(&board, "watch") {
         "margin" => plan_html::region(&board, "m-watch"),

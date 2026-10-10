@@ -119,16 +119,14 @@ async fn display_preferences_validate_cookies_and_empty_scope_stays_global() {
             Request::builder()
                 .method("POST")
                 .uri("/settings")
-                .body(Body::from(
-                    "theme=nord&appearance=dark&types=0&types=1&next=%2Ffns",
-                ))
+                .body(Body::from("theme=nord-dark&types=0&types=1&next=%2Ffns"))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), 303);
     assert_eq!(response.headers()["location"], "/fns");
-    assert_eq!(response.headers().get_all("set-cookie").iter().count(), 3);
+    assert_eq!(response.headers().get_all("set-cookie").iter().count(), 2);
     let response = router
         .oneshot(
             Request::builder()
@@ -178,7 +176,7 @@ async fn runner_line_follows_the_scheduler_lease_and_is_versioned() {
 }
 
 #[test]
-fn home_running_link_has_a_short_name_and_the_full_title_as_description() {
+fn home_running_link_has_a_short_name_and_the_full_title_as_its_tooltip() {
     let mut snapshot = fixture();
     let title =
         "Watch main tests and say on the thread which target went red, with its log".repeat(2);
@@ -202,25 +200,23 @@ fn home_running_link_has_a_short_name_and_the_full_title_as_description() {
         },
     );
     let html = HomeView::new(&snapshot).body().unwrap();
-    // its link reads as it shows: the id, then the title cut short; the whole title its
-    // description
+    // its link reads as it shows: the title cut short, no id beside it; the whole title its
+    // tooltip
     let link = html
         .as_str()
         .split("<a class=\"sref-a\"")
-        .find(|s| s.contains("watch-main-tests</code>"))
+        .find(|s| s.starts_with(" href=\"/projects/id/") && s.contains("/steps/watch-main-tests\""))
         .map(|s| &s[..s.find("</a>").unwrap()])
         .unwrap_or_else(|| panic!("{}", html.as_str()));
     assert!(
-        link.contains("<code class=\"sref-id\">watch-main-tests</code> <span class=\"sref-t\">Watch main tests"),
+        link.contains("<span class=\"sref-t\">Watch main tests"),
         "{link}"
     );
-    assert!(
-        link.contains(&format!("aria-description=\"{title}\"")),
-        "{link}"
-    );
+    assert!(!link.contains("sref-id"), "{link}");
+    assert!(link.contains(&format!("title=\"{title}\"")), "{link}");
     let shown = link.split("<span class=\"sref-t\">").nth(1).unwrap();
     assert!(
-        shown.split("</span>").next().unwrap().chars().count() <= 41,
+        shown.split("</span>").next().unwrap().chars().count() <= 57,
         "{shown}"
     );
 }

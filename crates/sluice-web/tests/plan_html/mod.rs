@@ -55,7 +55,7 @@ pub fn band<'a>(html: &'a str, id: &str) -> &'a str {
 }
 /// The band's summary sentence.
 pub fn summary(html: &str) -> &str {
-    between(html, "<p class=\"band-summary\">", "</p>")
+    between(html, "<p class=\"page-line\">", "</p>")
 }
 /// Where a unit is drawn: the band whose section holds its row or module, "done" in the index.
 pub fn place(html: &str, unit: &str) -> &'static str {
@@ -73,10 +73,22 @@ pub fn place(html: &str, unit: &str) -> &'static str {
             }
         }
     }
-    if has_region(html, "plan-done")
-        && band(html, "plan-done").contains(&format!("<code class=\"pl-did\">{unit}</code>"))
-    {
+    if done_lines(html, unit) > 0 {
         return "done";
     }
     ""
+}
+/// How many lines of the Done index lead to `unit` (its unit's page, or a loose step's own).
+pub fn done_lines(html: &str, unit: &str) -> usize {
+    if !has_region(html, "plan-done") {
+        return 0;
+    }
+    let done = band(html, "plan-done");
+    ["units", "steps"]
+        .iter()
+        .map(|kind| {
+            done.matches(&format!("/{kind}/{unit}\"><span class=\"pl-at\">"))
+                .count()
+        })
+        .sum()
 }

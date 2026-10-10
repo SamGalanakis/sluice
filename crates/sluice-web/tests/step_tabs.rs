@@ -355,9 +355,13 @@ async fn one_conversation_on_the_steps_thread_tab_its_thread_page_and_the_inbox(
             1,
             "{place}: {html}"
         );
-        // ids in data mono, times relative with the absolute one in their title
+        // ids in each message's Details, times relative with the absolute one in their title
         assert!(
-            html.contains(&format!("<code class=\"m-id\">#{}</code>", unread.0)),
+            !html.contains("class=\"m-id\"")
+                && html.contains(&format!(
+                    "<dt>Message</dt><dd><sluice-copy value=\"#{}\">",
+                    unread.0
+                )),
             "{place}: {html}"
         );
         assert!(html.contains("<time data-ago=\"2026-10-07T09:00:00Z\" datetime=\"2026-10-07T09:00:00Z\" title=\"2026-10-07 09:00 UTC\">"), "{place}: {html}");
@@ -451,8 +455,10 @@ async fn the_kit_gallery_draws_every_part_in_both_themes() {
     assert_eq!(status, axum::http::StatusCode::OK);
     for part in [
         "Status",
-        "The band",
-        "Step band",
+        "Page head",
+        "Step head",
+        "Details",
+        "Finished last",
         "Summary sentence",
         "Module grid",
         "Modules",
@@ -483,14 +489,14 @@ async fn the_kit_gallery_draws_every_part_in_both_themes() {
         assert!(html.contains(&format!("-h\">{part}</h2>")), "{part}");
     }
     assert_eq!(
-        html.matches("<div class=\"gal-th\" data-appearance=\"light\">")
+        html.matches("<div class=\"gal-th\" data-theme=\"sluice-light\">")
             .count(),
-        28
+        29
     );
     assert_eq!(
-        html.matches("<div class=\"gal-th\" data-appearance=\"dark\">")
+        html.matches("<div class=\"gal-th\" data-theme=\"sluice-dark\">")
             .count(),
-        28
+        29
     );
     // its two copies keep their ids apart
     let mut ids: Vec<&str> = html

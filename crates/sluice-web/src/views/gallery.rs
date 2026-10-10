@@ -39,6 +39,8 @@ pub struct Part {
 #[template(path = "gallery.html")]
 struct GalleryTemplate<'a> {
     parts: &'a [Part],
+    /// The page's theme family: each part is drawn in its light and its dark.
+    family: &'a str,
 }
 #[derive(Template)]
 #[template(
@@ -435,7 +437,6 @@ fn article(draft: Option<Shown>, review: Option<Shown>, publish: Option<Shown>) 
     ]
 }
 fn grid_part(prefix: &str) -> TrustedHtml {
-    let id = format!("{prefix}grid");
     let module = |span: u8, wide: ui::Wide, words: &str| {
         format!(
             "{}<p>{}</p>{}",
@@ -445,9 +446,8 @@ fn grid_part(prefix: &str) -> TrustedHtml {
         )
     };
     TrustedHtml::owned(format!(
-        "<div class=\"gal-row\">{}</div>{}{}{}{}{}{}{}{}",
-        ui::grid_toggle(&id),
-        ui::grid_open(&id, 12),
+        "{}{}{}{}{}{}{}{}",
+        ui::grid_open(&format!("{prefix}grid"), 12),
         module(6, ui::Wide::Keep, "Six columns"),
         module(4, ui::Wide::Keep, "Four"),
         module(2, ui::Wide::Keep, "Two"),
@@ -457,19 +457,32 @@ fn grid_part(prefix: &str) -> TrustedHtml {
         ui::grid_close(),
     ))
 }
+/// An invented unit's Details: what identifies it, behind its "⋯".
+fn unit_details(unit: &str, step: &str) -> ui::Details {
+    ui::Details::new()
+        .id("Unit", unit)
+        .text("Recipe", "article")
+        .id("Step", step)
+        .code("Function", "almanac.write")
+        .text("Run", "2, after 1 failed")
+        .text("region", "coast")
+        .link("Page", "#", "The unit's page")
+}
 fn modules_part() -> TrustedHtml {
     let ask = format!(
-        "{open}<p class=\"mod-k\">{q}<b>Question for you</b><span class=\"quiet\">from a-7-draft, 25m ago</span></p><p class=\"mod-t\">Shorebirds: the spring guide's entries</p><p class=\"mod-meta\"><b>a-7</b> · article · running 41m</p>{strip}<div class=\"mod-body\"><p>The checklist's spring dates changed under me. Use the new dates in this draft, or wait for a-11 to publish the revised checklist first?</p></div><div class=\"mod-actions\"><a class=\"primary\" href=\"#\">Answer</a><a href=\"#\">Open a-7-draft</a></div>{close}",
-        open = ui::module_open(6, ui::Swell::Ask, "a-7, question for you"),
+        "{open}<p class=\"mod-k\">{q}<b>Question for you</b><span class=\"quiet\">from draft, 25m ago</span></p><p class=\"mod-t\">Shorebirds: the spring guide's entries</p>{menu}<p class=\"mod-meta\"><b>Shorebirds: the spring guide</b> · running 41m, usually 30m</p>{strip}<div class=\"mod-body\"><p>The checklist's spring dates changed under me. Use the new dates in this draft, or wait for the revised checklist first?</p></div><div class=\"mod-actions\"><a class=\"primary\" href=\"#\">Answer</a><a href=\"#\">Open step</a></div>{close}",
+        open = ui::module_open(6, ui::Swell::Ask, "Question for you: Shorebirds"),
         q = super::icons::icon(super::icons::Icon::MessageSquare, 16, "ask-i"),
-        strip = ui::stage_strip("Stages of a-7", &article(Some(Shown::Running), None, None)),
+        menu = unit_details("a-7", "a-7-draft").menu("Shorebirds: the spring guide's entries"),
+        strip = ui::stage_strip("Stages of Shorebirds", &article(Some(Shown::Running), None, None)),
         close = ui::module_close(),
     );
     let look = format!(
-        "{open}<p class=\"mod-k\">{g}<b>failed</b><span class=\"quiet\">review, run 1, after 18m</span></p><p class=\"mod-t\">Waders: the autumn guide's entries</p><p class=\"mod-meta\"><b>a-6</b> · article {marks}</p><div class=\"mod-body\"><p>The style check found two entries without a photograph credit.</p></div><div class=\"mod-actions\"><button class=\"primary\" type=\"button\">Retry with feedback</button><button type=\"button\">Retry</button></div>{close}",
-        open = ui::module_open(4, ui::Swell::Look, "a-6, failed"),
+        "{open}<p class=\"mod-k\">{g}<b>failed</b><span class=\"quiet\">review, after 18m</span>{marks}</p><p class=\"mod-t\">Waders: the autumn guide's entries</p>{menu}<div class=\"mod-body\"><p>The style check found two entries without a photograph credit.</p></div><div class=\"mod-actions\"><button class=\"primary\" type=\"button\">Retry with feedback</button><button type=\"button\">Retry</button></div>{close}",
+        open = ui::module_open(4, ui::Swell::Look, "Waders, failed"),
         g = ui::mark(Shown::Failed),
-        marks = ui::stage_marks("Stages of a-6", &article(Some(Shown::Succeeded), Some(Shown::Failed), None)),
+        menu = unit_details("a-6", "a-6-review").menu("Waders: the autumn guide's entries"),
+        marks = ui::stage_marks("Stages of Waders", &article(Some(Shown::Succeeded), Some(Shown::Failed), None)),
         close = ui::module_close(),
     );
     TrustedHtml::owned(format!(
@@ -478,13 +491,46 @@ fn modules_part() -> TrustedHtml {
         ui::grid_close()
     ))
 }
+/// An item's Details: its "⋯" closed, as every row, module and head carries it, and open.
+fn details_part(prefix: &str) -> TrustedHtml {
+    let details = unit_details("a-12", "a-12-review");
+    let open = details
+        .menu("Terns: the spring guide's entries")
+        .as_str()
+        .replacen("<details class=\"dm\"", "<details class=\"dm\" open", 1)
+        .replace("Details of Terns", &format!("Details of Terns ({prefix}open)"));
+    TrustedHtml::owned(format!(
+        "<p class=\"meta gal-cap\">Closed, at an item's end</p><div class=\"gal-row gal-dm\"><span>Terns: the spring guide's entries</span>{}</div><p class=\"meta gal-cap\">Open: each id whole, with copy</p><div class=\"gal-row gal-dm gal-dm-open\"><span>Terns: the spring guide's entries</span>{open}</div>",
+        details.menu("Terns: the spring guide's entries")
+    ))
+}
+/// What finished last, as the plan's Done head and a project's module on home list it.
+fn latest_part() -> TrustedHtml {
+    let finished = [
+        ("a-5", "Plovers: the spring guide's entries", 3_420, 3_840.0, 2),
+        ("s-2", "Scan the photograph archive for credits", 3_900, 312.0, 1),
+        ("a-4", "Herons: the autumn guide's entries", 6_100, 2_520.0, 1),
+        ("a-3", "", 8_800, 1_980.0, 1),
+    ]
+    .map(|(name, title, ago, took, runs)| ui::Finished {
+        name: name.into(),
+        title: title.into(),
+        href: "#".into(),
+        at: before(ago),
+        took,
+        runs,
+        shown: Some(Shown::Succeeded),
+        place: String::new(),
+    });
+    ui::latest_list("Finished last", &finished)
+}
 fn heads_part() -> TrustedHtml {
     let row = |name: &str, title: &str, stages: Vec<ui::Stage>| {
         format!(
-            "{}<p class=\"mod-meta\"><b>{}</b> · {}</p>{}{}",
-            ui::strip_row_open(6),
-            ui::esc(name),
+            "{}<p class=\"mod-meta\"><b>{}</b><span class=\"vh\"> {}</span></p>{}{}",
+            ui::strip_row_open(3),
             ui::esc(title),
+            ui::esc(name),
             ui::stage_strip(&format!("Stages of {name}"), &stages),
             ui::strip_row_close()
         )
@@ -492,7 +538,7 @@ fn heads_part() -> TrustedHtml {
     TrustedHtml::owned(format!(
         "{}<p class=\"meta gal-cap\">Over a table of strips: each stage's name over its column, each row's stages under them</p><div class=\"gal-strips\">{}{}{}</div>",
         ui::section_head("", "Stopped", "1 failed · 1 cancelled"),
-        ui::strip_head("", "Running", "Quiet first, then the longest.", 6, &["draft", "review", "publish"]),
+        ui::strip_head("", "Running", "Quiet first, then the longest.", &["draft", "review", "publish"]),
         row("a-12", "Terns: the spring guide's entries", article(Some(Shown::Succeeded), Some(Shown::Running), None)),
         row("a-9", "Gannets: the spring guide's entries", article(Some(Shown::Succeeded), Some(Shown::Quiet), None)),
     ))
@@ -514,7 +560,7 @@ fn strips_part() -> TrustedHtml {
         ui::Stage::new("publish", Some(Shown::Pending)),
     ];
     TrustedHtml::owned(format!(
-        "<p class=\"meta gal-cap\">Done, running past its usual time ({}), not reached</p>{}<p class=\"meta gal-cap\">A run gone quiet; a note across the stages not reached</p>{}{}<p class=\"meta gal-cap\">Not reached, each saying why; a one-step recipe</p>{}{}<p class=\"meta gal-cap\">Small, in a line of words</p><p class=\"mod-meta\"><b>a-6</b> · article {}</p>",
+        "<p class=\"meta gal-cap\">Done, running past its usual time ({}), not reached</p>{}<p class=\"meta gal-cap\">A run gone quiet; a note across the stages not reached</p>{}{}<p class=\"meta gal-cap\">Not reached, each saying why; a one-step recipe</p>{}{}<p class=\"meta gal-cap\">Small, in a line of words</p><p class=\"mod-meta\">failed at review {}</p>",
         ui::overrun(2.14),
         ui::stage_strip("Stages of a-12", &article(Some(Shown::Succeeded), Some(Shown::Running), None)),
         ui::stage_strip("Stages of a-9", &quiet),
@@ -557,34 +603,21 @@ fn summary_part() -> TrustedHtml {
         })
     ))
 }
-fn band_part(prefix: &str) -> TrustedHtml {
-    let finished = [
-        ("a-5", "Plovers: the spring guide's entries", 3_420, 3_840.0, 2),
-        ("s-2", "Scan the photograph archive for credits", 3_900, 312.0, 1),
-        ("a-4", "Herons: the autumn guide's entries", 6_100, 2_520.0, 1),
-        ("a-3", "Gulls: the winter guide's entries", 8_800, 1_980.0, 1),
-        ("s-1", "Scan the checklist for renamed species", 10_400, 95.0, 1),
-    ]
-    .map(|(name, title, ago, took, runs)| ui::Finished {
-        name: name.into(),
-        title: title.into(),
-        href: "#".into(),
-        at: before(ago),
-        took,
-        runs,
-        shown: Some(Shown::Succeeded),
-    });
+fn head_part() -> TrustedHtml {
+    let details = ui::Details::new()
+        .id("Project", "01a2b3c4-5d6e-7f80-9a1b-2c3d4e5f6a7b")
+        .text("About", "The field guide's spring and autumn editions, written a section at a time.");
     TrustedHtml::owned(format!(
-        "<div class=\"gal-band\">{}{}</div>",
-        ui::band_head(
-            "almanac",
-            &TrustedHtml::owned("<p>The field guide's spring and autumn editions, written a section at a time and checked against the regional checklist.</p>".into()),
-            &TrustedHtml::owned("<a class=\"ask\" href=\"#\">1 question for you</a>. 1 failed, 1 cancelled. 2 article units and 1 scan unit at work: s-3 quiet for 53m, a-12 at 2.1× its usual time. 2 waiting. 3 of 10 units done; the last finished 57m ago.".into()),
-        ),
-        ui::recent_strip(&format!("{prefix}rf"), "Newest first. 5 in the last three hours.", &finished),
+        "<div class=\"gal-head\">{}</div>",
+        ui::page_head_with(
+            &TrustedHtml::default(),
+            &TrustedHtml::owned("almanac".into()),
+            &details.menu("almanac"),
+            &TrustedHtml::owned("<p class=\"page-line\"><a class=\"ask\" href=\"#\">1 question for you</a>. 1 failed, 1 cancelled. 2 article units and 1 scan unit at work: 1 quiet for 53m, 1 at 2.1× its usual time. 2 waiting. 3 of 10 units done; the last finished 57m ago.</p>".into()),
+        )
     ))
 }
-/// A step's band (`StepView::band`): a review stage of an invented article, failed on its
+/// A step's head (`StepView::band`): a review stage of an invented article, failed on its
 /// second run, its unit's three stages with its own ringed, Retry its next move.
 fn step_band_part(prefix: &str) -> Result<TrustedHtml, askama::Error> {
     use sluice_model::commands::StepStatus;
@@ -641,7 +674,7 @@ fn step_band_part(prefix: &str) -> Result<TrustedHtml, askama::Error> {
         .replace(" aria-describedby=\"", &format!(" aria-describedby=\"{prefix}"))
         .replace(" aria-controls=\"", &format!(" aria-controls=\"{prefix}"))
         .replace(" data-dialog=\"", &format!(" data-dialog=\"{prefix}"));
-    Ok(TrustedHtml::owned(format!("<div class=\"gal-band\">{html}</div>")))
+    Ok(TrustedHtml::owned(format!("<div class=\"gal-head\">{html}</div>")))
 }
 fn margin_part() -> TrustedHtml {
     let run = ui::LongRun {
@@ -655,6 +688,7 @@ fn margin_part() -> TrustedHtml {
             ("checked".into(), serde_json::json!(1240)),
             ("remaining".into(), serde_json::json!(310)),
             ("folder".into(), serde_json::json!("coast/2019-05")),
+            ("commit".into(), serde_json::json!("9f2c41d07be3a5")),
             ("last mismatch".into(), serde_json::json!("A sanderling filed as a dunlin.")),
         ],
         at: before(240),
@@ -666,15 +700,15 @@ fn margin_part() -> TrustedHtml {
 }
 fn trace_part(prefix: &str) -> TrustedHtml {
     let trace = ui::Trace::new([("a-13", "a-12"), ("a-14", "a-13"), ("a-12", "s-3"), ("a-15", "a-12")]);
-    let unit = |name: &str, recipe: &str, title: &str, stages: Vec<ui::Stage>| {
+    let unit = |name: &str, title: &str, stages: Vec<ui::Stage>| {
         format!(
-            "<div class=\"mod rail-slot\"{attrs}>{rail}{open}<span class=\"mod-meta\">{role}<b>{name}</b> · {recipe}</span><span class=\"mod-t\">{title}</span>{close}{strip}{more}<p class=\"meta\">Its steps, its last message and its buttons open here.</p>{more_end}</div>",
+            "<div class=\"mod rail-slot\"{attrs}>{rail}{open}<span class=\"mod-meta\">{role}</span><span class=\"mod-t\">{title}</span>{close}{strip}{more}<p class=\"meta\">Its steps, its last message and its buttons open here.</p>{more_end}</div>",
             attrs = trace.attrs(name),
             rail = ui::rail(),
             open = ui::trace_button_open(),
             role = ui::trace_role(),
             title = ui::esc(title),
-            strip = ui::stage_strip(&format!("Stages of {name}"), &stages),
+            strip = ui::stage_strip(&format!("Stages of {title}"), &stages),
             close = ui::trace_button_close(),
             more = ui::trace_more_open(),
             more_end = ui::trace_more_close(),
@@ -690,12 +724,12 @@ fn trace_part(prefix: &str) -> TrustedHtml {
     let scan = vec![ui::Stage::new("scan", Some(Shown::Quiet)).took(3_180.0)];
     let units = [
         head("Running"),
-        unit("s-3", "scan", "Scan the coast photographs for credits", scan),
-        unit("a-12", "article", "Terns: the spring guide's entries", article(Some(Shown::Running), None, None)),
+        unit("s-3", "Scan the coast photographs for credits", scan),
+        unit("a-12", "Terns: the spring guide's entries", article(Some(Shown::Running), None, None)),
         head("Waiting"),
-        unit("a-13", "article", "Skuas: the spring guide's entries", article(None, None, None)),
-        unit("a-14", "article", "Auks: the spring guide's entries", article(None, None, None)),
-        unit("a-15", "article", "An index of every spring entry", article(None, None, None)),
+        unit("a-13", "Skuas: the spring guide's entries", article(None, None, None)),
+        unit("a-14", "Auks: the spring guide's entries", article(None, None, None)),
+        unit("a-15", "An index of every spring entry", article(None, None, None)),
     ]
     .concat();
     TrustedHtml::owned(format!(
@@ -704,14 +738,14 @@ fn trace_part(prefix: &str) -> TrustedHtml {
         ui::trace_close(),
     ))
 }
-/// Every theme in one appearance: each a small page in its own tokens, its band with its name
-/// and a summary, then on its paper a unit's stages, the tags, prose with a link, the buttons.
+/// Every theme: each a small page in its own tokens, its band with its name and a summary, then
+/// on its paper a unit's stages, the tags, prose with a link, the buttons.
 fn themes_part() -> TrustedHtml {
     let cards: String = super::THEMES
         .iter()
         .map(|theme| {
             format!(
-                "<figure class=\"gal-themecard\" data-theme=\"{id}\"><div class=\"gt-band\"><span class=\"gt-name\">{name}</span><span class=\"gt-sum\"><a class=\"ask\" href=\"#\">1 question for you</a>. 1 failed. 2 article at work.</span></div><div class=\"gt-paper\">{strip}<p class=\"gal-row\">{ask}{attn}{live}{over}</p><p class=\"gt-text\">The draft cites the checklist; <a href=\"#\">its thread</a> has the reply. <span class=\"meta\">a-12 · article · 41m</span></p><p class=\"gal-row\"><button class=\"primary\" type=\"button\">Answer</button><button type=\"button\">Retry</button></p></div><figcaption class=\"meta\">{source}</figcaption></figure>",
+                "<figure class=\"gal-themecard\" data-theme=\"{id}\"><div class=\"gt-band\"><span class=\"gt-name\">{name}</span><span class=\"gt-sum\"><a class=\"ask\" href=\"#\">1 question for you</a>. 1 failed. 2 article at work.</span></div><div class=\"gt-paper\">{strip}<p class=\"gal-row\">{ask}{attn}{live}{over}</p><p class=\"gt-text\">The draft cites the checklist; <a href=\"#\">its thread</a> has the reply. <span class=\"meta\">running 41m</span></p><p class=\"gal-row\"><button class=\"primary\" type=\"button\">Answer</button><button type=\"button\">Retry</button></p></div><figcaption class=\"meta\">{source}</figcaption></figure>",
                 id = theme.id,
                 name = ui::esc(theme.name),
                 source = ui::esc(theme.source),
@@ -739,14 +773,16 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
         parts.push(Part { name, wide: false, about, built, light, dark })
     };
     add("Status", "Each state a step, unit or project can be in: its glyph, its word and what it means. The same glyph and word on every page.", "`ui::status`, `ui::glyph` or `ui::mark`, from the status table.", both(&|_| Ok(statuses()))?);
-    add("The band", "The navy title band at the top of a page: the page's name huge on the grid, its words and its summary sentence beside it, and under them what finished most recently, newest first. The sentence says only what the counts say: questions for you, what stopped, what runs (named by recipe, quiet first, then past its usual time), what waits and how much is done.", "`ui::band_head` and `ui::recent_strip` in `Frame::head` (`render_framed`); `ui::summary_sentence` from `ui::UnitFact`s.", both(&|p| Ok(band_part(p)))?);
-    add("Step band", "A step's own page carries it in the band: its way back, its stage muted before its title set huge, its id, its state, run and usual time, its words, its unit's stages with its own ringed, and its actions on the navy, the next move filled cream. In the drawer the same band heads the step a size down.", "`StepView::band` (`templates/step_band.html`) in `Frame::head`, the region a step's stream patches as `step-band`; `ui::stage_strip_at`.", both(&|p| step_band_part(p))?);
+    add("Page head", "The top of every page, on the paper under the slim navy bar (the mark, the projects, the current project with its icon, the Inbox): the page's name at a reading size, and on a plan and home only, the summary sentence under it. It says only what the counts say: questions for you, what stopped, what runs (named by recipe, quiet ones and overruns counted), what waits and how much is done. What identifies the page sits behind its ⋯.", "`ui::page_head`, `ui::page_head_with` in `Frame::head` (`render_framed`); `ui::summary_sentence` from `ui::UnitFact`s.", both(&|_| Ok(head_part()))?);
+    add("Step head", "A step's own page heads with it: its way back, its stage muted before its title, its state, run and usual time, its words, its unit's stages with its own ringed, and its actions, the next move filled. Its id, fn and tags are in its Details. In the drawer the same head tops the step.", "`StepView::band` (`templates/step_band.html`) in `Frame::head`, the region a step's stream patches as `step-band`; `ui::stage_strip_at`.", both(&|p| step_band_part(p))?);
+    add("Details", "What identifies an item rather than explains it (its ids, run, fn, engine, tags, recipe, hashes and paths) sits behind one ⋯ at the item's end, on every row, module and head. It opens without script, Escape closes it and gives the focus back, and each id is whole with a copy button.", "`ui::Details` and its `menu` (`sluice-menu`).", both(&|p| Ok(details_part(p)))?);
+    add("Finished last", "What finished most recently, newest first: its clock time, its title and how long it took, at the head of a plan's Done and on each project on home.", "`ui::latest_list` from `ui::Finished`s.", both(&|_| Ok(latest_part()))?);
     add("Summary sentence", "One sentence from the counts alone, with the question for you linked first.", "`ui::summary_sentence`.", both(&|_| Ok(summary_part()))?);
-    add("Module grid", "Twelve columns that every module spans, fluid at every width: six on a narrow sheet (every module across it), a module half or whole on a medium one, and twenty-four from 2000px, where a module keeps its share or halves so two whole-width ones stand side by side. Show grid draws the construction under the modules: each column tinted and numbered, each module's span in its corner, as the sheet has them now.", "`ui::grid_open`, `ui::module_open`, `ui::module_open_wide` with `ui::Wide`, `ui::grid_toggle` (`sluice-grid`).", both(&|p| Ok(grid_part(p)))?);
+    add("Module grid", "Twelve columns that every module spans, fluid at every width: six on a narrow sheet (every module across it), a module half or whole on a medium one, and twenty-four from 2000px, where a module keeps its share or halves so two whole-width ones stand side by side.", "`ui::grid_open`, `ui::module_open`, `ui::module_open_wide` with `ui::Wide`.", both(&|p| Ok(grid_part(p)))?);
     add("Modules", "A module is a unit (or a question, or a step) on the grid. The one that needs you swells: a question to you under the coral rule, its title a size up; a stopped one sits on the sand.", "`ui::module_open` with `ui::Swell`, `.mod-k`, `.mod-t`, `.mod-meta`, `.mod-body`, `.mod-actions`.", both(&|_| Ok(modules_part()))?);
     add("Section heads", "Each band of the page (For you, Stopped, Running, Waiting, Done) under a heavy rule, its name big and its count line at the right; over a table of strips, each stage's name over its column.", "`ui::section_head`, `ui::strip_head`, `ui::strip_row_open`.", both(&|_| Ok(heads_part()))?);
     add("Stage strip", "A unit's stages in its recipe's order, one cell each: an outline not reached (saying why when something holds it), sky when done with how long it took, blue while running with its time and a sweep, sand when it needs a look with its word. Past its usual time a run says how far, and a one-step recipe is one cell.", "`ui::stage_strip` from `ui::Stage`s (`ui::Cell::of` reads the status table), `ui::overrun`, `ui::stage_marks`.", both(&|_| Ok(strips_part()))?);
-    add("Margin module", "A step that has run far past any usual time, or reports progress, in the margin: its running time, then each field it reported, as it reported it.", "`ui::margin_module` from a `ui::LongRun`.", both(&|_| Ok(margin_part()))?);
+    add("Margin module", "A step that has run far past any usual time, or reports progress, in the margin: its running time, then each field it reported by its shape: a number or a short word as it is (the first at display size), words clamped to two lines, and a hash, an id or a path kept in its Details.", "`ui::margin_module` from a `ui::LongRun`; `ui::ValueSet`.", both(&|_| Ok(margin_part()))?);
     add("Trace", "Select a unit to trace its chain: it opens in place, what it waits for and what waits on it light up with a rail in the margin, the line says the chain, and the rest fades. Select it again, Clear trace or Escape clears; the arrows move between units.", "`ui::trace_open`, `ui::Trace::attrs`, `ui::rail`, `ui::trace_button_open`, `ui::trace_more_open` (`sluice-trace`).", both(&|p| Ok(trace_part(p)))?);
     add("Tags", "A small fact set apart: plain, muted once something is closed, gold when it wants a look, coral only for a question waiting on you, blue with the running glyph while live.", "`ui::tag`, `ui::tag_link`, `ui::ask_link`.", both(&|_| Ok(tags()))?);
     add("Buttons", "The filled button is the next move; the rest are plain; a delete is the dark danger button; a dimmed one cannot be pressed now.", "Plain `button`, `.primary`, `.danger`.", both(&|_| Ok(buttons()))?);
@@ -757,7 +793,7 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Conversation", "Messages in one column: a run from one sender under who sent it to whom, a line at each day and at the first unread, a question's answer under it, long ones folded, the message box at the end. A question for you has Answer and Close, and says where it went once answered.", "`threads::Conversation` in `sluice-conversation`, `sluice-composer`, `sluice-answer`.", both(&|p| conversation(p, &project))?);
     add("Empty states", "What a place says when it has nothing to show, and where to go instead.", "`ui::empty`, `ui::empty_with`.", both(&|_| Ok(empties()))?);
     add("Confirmation", "A step asks before Cancel, a succeeded step's Retry, Close all and a delete. Focus starts on the safe choice, Escape keeps things as they are, and you return to the button you pressed. Without script the question opens in place.", "`ui::Confirm` in `sluice-confirm`.", both(&|_| Ok(dialog()))?);
-    add("Menus", "The project switcher and display preferences: a click elsewhere or Escape closes one, the arrows, Home and End move through it.", "`ui::menu_open` (`sluice-menu`).", both(&|_| Ok(menus()))?);
+    add("Menus", "The project switcher, display preferences and an item's Details: a click elsewhere or Escape closes one, the arrows, Home and End move through it.", "`ui::menu_open` (`sluice-menu`).", both(&|_| Ok(menus()))?);
     add("Copy", "An id or a SHA in data mono, with a copy button that says Copied for a moment.", "`ui::copy` (`sluice-copy`).", both(&|_| Ok(copies()))?);
     add("Settings", "Display preferences apply at once and are kept for next time; every Show value types switch on a page follows.", "`ui::types_toggle`, `ui::setting_open` (`sluice-toggle`).", both(&|_| Ok(toggles()))?);
     add("Search", "A list filtered as you type (the functions), or the plan's tools showing what matches; Escape clears.", "`ui::search_open` (`sluice-search`).", both(&|p| Ok(searches(p)))?);
@@ -765,10 +801,10 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Notice", "What a page says at its top when something you asked for was not done, with what to do next and your words kept in their box. Read out as it appears.", "`ui::notice`: a refused step action comes back to the step's address, the notice held ten minutes under a key the server made.", both(&|_| Ok(notices()))?);
     add("Keys", "Listed under display preferences on every page: / finds on the plan (from a step or unit page too), the log and functions; [ and ] move the drawer to the step before or after; g then a letter goes to a section; ? opens the list. Never while typing in a field or under an open dialog.", "`sluice-keys`.", both(&|_| Ok(keys()))?);
     add("Splitter", "The line between the plan and an open step: drag it, or use the arrows (16px, 64px with Shift), Home and End; a double-click resets it, and its width is kept per project.", "`ui::splitter` (`sluice-splitter`).", both(&|p| Ok(splitters(p)))?);
-    add("Themes", "Each theme the display preferences offer, in light and dark: a well-loved colour scheme mapped onto sluice's roles, so its band is its deepest surface, its blue (or its nearest) runs, its done is calm, its yellow wants a look and one colour of its own asks you a question. Americana, the logo's palette, is the default.", "`data-theme` and `data-appearance` on the page (cookies `sluice_theme`, `sluice_appearance`); the tokens in `style.css`.", both(&|_| Ok(themes_part()))?);
+    add("Themes", "Each theme the display preferences offer, one list, each a complete look: a well-loved colour scheme in one of its schemes, mapped onto sluice's roles, so its band is its deepest surface, its blue (or its nearest) runs, its done is calm, its yellow wants a look and one colour of its own asks you a question. A first open takes Sluice Light or Sluice Dark by the system's scheme, and keeps it.", "`data-theme` on the page (the cookie `sluice_theme`); the tokens in `style.css`.", (themes_part(), TrustedHtml::default()));
     add("Components", "For whoever builds a page: every component, the attributes it reads and what it does. The server draws everything in it; the component only behaves.", "Rocket components in `components.js`, light DOM.", (components(), TrustedHtml::default()));
     for part in &mut parts {
-        part.wide = matches!(part.name, "Themes" | "The band" | "Step band" | "Module grid" | "Modules" | "Section heads" | "Trace");
+        part.wide = matches!(part.name, "Themes" | "Page head" | "Step head" | "Module grid" | "Modules" | "Section heads" | "Trace");
     }
     Ok(parts)
 }
@@ -777,9 +813,15 @@ async fn gallery(State(state): State<DashboardState>, headers: HeaderMap) -> Res
         let snapshot = state.snapshot(None).await?;
         let nav = NavView::new(&snapshot, None, "")?;
         let parts = parts().map_err(super::threads::render_error)?;
-        let body = TrustedHtml::from_template(&GalleryTemplate { parts: &parts })
+        let viewer = Viewer::from_headers(&headers);
+        // each part in the light and dark of the theme the page is in
+        let family = viewer
+            .theme
+            .and_then(|t| t.rsplit_once('-'))
+            .map_or("sluice", |(family, _)| family);
+        let body = TrustedHtml::from_template(&GalleryTemplate { parts: &parts, family })
             .map_err(super::threads::render_error)?;
-        super::render_layout("States and parts", &body, &nav, &Viewer::from_headers(&headers), "", "", "/_ui")
+        super::render_layout("States and parts", &body, &nav, &viewer, "", "", "/_ui")
             .map_err(super::threads::render_error)
     };
     match page.await {
@@ -839,10 +881,6 @@ async fn agent_docs(
                 )
             })
             .collect();
-        let lead = TrustedHtml::owned(
-            "<p>What the agents that drive sluice read: the same pages <code>sluice docs</code> and the MCP <code>docs</code> tool give them.</p>"
-                .into(),
-        );
         let (title, body, head) = match &topic {
             None => (
                 "Agent docs".to_owned(),
@@ -854,13 +892,12 @@ async fn agent_docs(
                         &super::ui::count(pages.len(), "page", "pages")
                     )
                 ),
-                super::ui::band_head(
+                super::ui::page_head_note(
                     "Agent docs",
-                    &lead,
-                    &TrustedHtml::owned(format!(
-                        "{} on plans, functions, threads, the inbox and the board, the overview first.",
-                        super::ui::count(pages.len(), "page", "pages")
-                    )),
+                    &TrustedHtml::owned(
+                        "What the agents that drive sluice read: the pages <code>sluice docs</code> and the MCP <code>docs</code> tool give them."
+                            .into(),
+                    ),
                 ),
             ),
             Some(t) => {
@@ -876,15 +913,7 @@ async fn agent_docs(
                         crate::markdown::render_from(page, 1),
                         back = super::icons::icon(super::icons::Icon::ArrowLeft, 16, ""),
                     ),
-                    super::ui::band_head(
-                        "Agent docs",
-                        &lead,
-                        &TrustedHtml::owned(format!(
-                            "{} <code>{}</code>",
-                            super::ui::esc(&first(page)),
-                            super::ui::esc(t.0.as_str())
-                        )),
-                    ),
+                    super::ui::page_head("Agent docs", &TrustedHtml::default()),
                 )
             }
         };

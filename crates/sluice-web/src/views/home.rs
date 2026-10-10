@@ -185,6 +185,7 @@ impl HomeProject {
                     took,
                     runs,
                     shown: Some(shown),
+                    place: String::new(),
                 });
             }
         }
@@ -330,7 +331,7 @@ impl HomeProject {
             } else {
                 format!(
                     "<span class=\"pm-who\">{}</span>",
-                    p.step_ref(&ask.step).id_first_html(40)
+                    p.step_ref(&ask.step).html(40)
                 )
             };
             html.push_str(&format!(
@@ -356,7 +357,7 @@ impl HomeProject {
                 "<li class=\"pm-row pm-stopped sr-{key}\">{glyph}<span class=\"pm-line\"><span class=\"pm-who\">{name}</span> <span class=\"pm-what\"><span class=\"pm-word\">{word}</span>{why}</span></span>{dismiss}</li>",
                 key = s.shown().key(),
                 glyph = ui::glyph(s.shown()),
-                name = id_first(&sref, &href),
+                name = step_link(&sref, &href),
                 word = esc(s.shown().word()),
                 why = if s.headline.is_empty() {
                     String::new()
@@ -396,7 +397,7 @@ impl HomeProject {
                 "<li class=\"pm-row pm-running{q}\">{glyph}<span class=\"pm-line\"><span class=\"pm-who\">{name}</span> <span class=\"pm-what\">{word}running for <span class=\"pm-for\">{since}</span>{usual}</span></span></li>",
                 q = if run.quiet { " pm-quiet" } else { "" },
                 glyph = ui::glyph(shown),
-                name = id_first(&sref, &run.href),
+                name = step_link(&sref, &run.href),
                 // a run that is not plainly running says how first: "quiet · running for 9d"
                 word = if shown == Shown::Running {
                     String::new()
@@ -425,27 +426,12 @@ impl HomeProject {
         if self.finished.is_empty() {
             return TrustedHtml::default();
         }
-        let items: Vec<String> = self
-            .finished
-            .iter()
-            .take(3)
-            .map(|f| {
-                format!(
-                    "<li><a href=\"{}\">{}</a> {} <span class=\"pm-took\">{}took {}</span></li>",
-                    esc(&f.href),
-                    esc(&f.name),
-                    ui::clock(&f.at),
-                    match f.shown {
-                        Some(s) if s.spec().band != Band::Done => format!("{} · ", esc(s.word())),
-                        _ => String::new(),
-                    },
-                    esc(&ui::duration_text(f.took))
-                )
-            })
-            .collect();
         TrustedHtml::owned(format!(
-            "<div class=\"pm-done\"><p class=\"pm-done-h\">Finished last</p><ol>{}</ol></div>",
-            items.join("")
+            "<div class=\"pm-done\"><p class=\"pm-done-h\">Finished last</p>{}</div>",
+            ui::latest_list(
+                &format!("Finished last in {}", self.project.name),
+                &self.finished[..self.finished.len().min(3)]
+            )
         ))
     }
     /// Its module: its name and size, its words, its sentence and squares, its rows, what
@@ -510,22 +496,9 @@ impl HomeProject {
     }
 }
 
-/// A step named id first, its title after it, linked: on a project's module the id tells one
-/// row from the next.
-fn id_first(sref: &ui::StepRef, href: &str) -> String {
-    format!(
-        "<a class=\"sref-a\" href=\"{}\"{}>{}</a>",
-        esc(href),
-        if sref.titled() {
-            format!(
-                " title=\"{t}\" aria-description=\"{t}\"",
-                t = esc(&sref.title)
-            )
-        } else {
-            String::new()
-        },
-        sref.id_first_html(40)
-    )
+/// A step named by its stage and title, linked (its id is on its page and in its Details).
+fn step_link(sref: &ui::StepRef, href: &str) -> String {
+    sref.link(href, 56, false).0
 }
 /// The page: every project, the open questions to the owner and the day, from what was read.
 #[derive(Clone, Debug)]
@@ -693,52 +666,28 @@ impl HomeView {
         }
         TrustedHtml::owned(parts.join(" "))
     }
-    /// The band's words beside the name: the day and the projects.
-    pub fn lead(&self) -> TrustedHtml {
-        let (weekday, date) = match &self.day {
-            Some(d) => d.window.day_name(self.now),
-            None => day::Window::at(self.now, 0).day_name(self.now),
-        };
-        let paused = self.projects.iter().filter(|p| p.project.paused).count();
-        TrustedHtml::owned(format!(
-            "<p>{} {} · {}{}</p>",
-            esc(weekday),
-            esc(&date),
-            esc(&ui::count(self.projects.len(), "project", "projects")),
-            match paused {
-                0 => String::new(),
-                1 if self.projects.len() == 1 => ", paused".to_owned(),
-                1 => ", one of them paused".to_owned(),
-                n => format!(", {n} of them paused"),
-            }
-        ))
-    }
-    /// The band's head: "sluice" huge, its words and sentence; the runner stopped; what
-    /// finished last across the projects.
+    /// The page's head: "All projects", the sentence across them under it, and the runner
+    /// stopped when it is. What each project finished last is on its module.
     pub fn head(&self) -> TrustedHtml {
-        let mut recent: Vec<ui::Finished> = self
-            .projects
-            .iter()
-            .flat_map(|p| {
-                p.finished.iter().map(move |f| ui::Finished {
-                    name: format!("{} · {}", p.project.name, f.name),
-                    ..f.clone()
-                })
-            })
-            .collect();
-        recent.sort_by(|a, b| b.at.cmp(&a.at));
         let alert = if self.runner_stopped {
             format!(
-                "<div class=\"band-alert runner-off\" role=\"status\">{}<p><strong>Runner stopped.</strong> No step starts until <code>sluice loop</code> runs; running steps carry on.</p></div>",
+                "<div class=\"page-alert runner-off\" role=\"status\">{}<p><strong>Runner stopped.</strong> No step starts until <code>sluice loop</code> runs; running steps carry on.</p></div>",
                 icons::icon(icons::Icon::TriangleAlert, 20, "ro-icon")
             )
         } else {
             String::new()
         };
         TrustedHtml::owned(format!(
-            "<div id=\"home-band\" class=\"band-wrap\">{}{alert}{}</div>",
-            ui::band_head("sluice", &self.lead(), &self.summary()),
-            ui::recent_strip("home-recent", "Across the projects, newest first.", &recent)
+            "<div id=\"home-band\" class=\"band-wrap\">{}</div>",
+            ui::page_head_with(
+                &TrustedHtml::default(),
+                &TrustedHtml::owned("All projects".into()),
+                &TrustedHtml::default(),
+                &TrustedHtml::owned(format!(
+                    "<p class=\"page-line\">{}</p>{alert}",
+                    self.summary()
+                )),
+            )
         ))
     }
     /// For you: each question to the owner swollen, answerable here; one answered in the last
@@ -794,7 +743,7 @@ impl HomeView {
                 })?,
                 place = esc(&place),
                 open = match &step {
-                    Some(s) => format!("Open {}", esc(&s.id)),
+                    Some(_) => "Open its step".to_owned(),
                     None => "Open its thread".into(),
                 },
             ));
@@ -1054,7 +1003,7 @@ fn function_body(
         groups: &groups,
     })
 }
-/// The functions' band: its name, whose catalogue it is, and its counts.
+/// The functions' head: its name and its counts.
 fn function_head(snapshot: &DashboardSnapshot, nav: &NavView) -> TrustedHtml {
     let groups = function_groups(snapshot, nav);
     let all: usize = groups.iter().map(|g| g.functions.len()).sum();
@@ -1086,17 +1035,9 @@ fn function_head(snapshot: &DashboardSnapshot, nav: &NavView) -> TrustedHtml {
             ui::count(broken, "one", "of them")
         ));
     }
-    let whose = match nav.selected {
-        Some(_) => format!("Every function a step of {} can run.", nav.label),
-        None => "Every function a step can run, as a project with none of its own sees them.".into(),
-    };
     TrustedHtml::owned(format!(
         "<div id=\"fns-band\" class=\"band-wrap\">{}</div>",
-        ui::band_head(
-            "Functions",
-            &TrustedHtml::owned(format!("<p>{}</p>", esc(&whose))),
-            &TrustedHtml::owned(esc(&summary)),
-        )
+        ui::page_head_note("Functions", &TrustedHtml::owned(esc(&summary)))
     ))
 }
 pub fn render_functions(

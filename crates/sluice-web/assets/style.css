@@ -1,10 +1,11 @@
 /* sluice dashboard: linked from every page as /static/style.css. The world is Synthesis
-   (DESIGN.md): the National Park Service's Unigrid in the logo's Americana palette. A heavy
-   navy title band carries the page's name huge, its summary sentence and a strip of what just
-   finished; cream paper below holds a visible twelve-column module grid. The channel's blue is
-   the one active colour (running), sky is done, sand needs a look, and coral is spent once: an
-   open question to the owner. Type is Schibsted Grotesk, with JetBrains Mono for ids,
-   durations and data. Corners are square. Light is cream paper, dark is navy paper. */
+   (DESIGN.md): the National Park Service's Unigrid in the logo's palette. A slim navy nav bar
+   over cream paper; on the paper each page's name at a reading size (on a plan and home the
+   summary sentence under it), its row of sections, then a twelve-column module grid. What
+   identifies an item sits behind its "⋯". The channel's blue is the one active colour
+   (running), sky is done, sand needs a look, and coral is spent once: an open question to the
+   owner. Type is Schibsted Grotesk, with JetBrains Mono for ids, durations and data. Corners
+   are square. Sluice Light is cream paper, Sluice Dark navy paper. */
 :root {
   --font-sans: "Schibsted Grotesk Variable", "Schibsted Grotesk", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SFMono-Regular",
@@ -26,13 +27,15 @@
    its text, `navy` the heavy rules and the filled button (the text's colour in the dark), `band`
    the title band (the theme's deepest surface), `run` running's fill (the one active colour),
    `sky` done, `sand` needs a look, `coral` an open question to the owner and nothing else.
-   Each token is light-dark() of its light and dark value, so `color-scheme` picks the
-   appearance: the system's, or `data-appearance` light or dark. A theme is `data-theme` on
-   <html> (none: Americana); a part of the gallery that carries either attribute draws itself
+   Each family's token is light-dark() of its light and dark value, and a theme is a family in
+   one scheme: `data-theme` on <html> is `<family>-light` or `<family>-dark`, whose suffix sets
+   `color-scheme`. With no theme chosen yet (a first open without script) the page is Sluice's
+   palette in the system's scheme. A part of the gallery that carries `data-theme` draws itself
    in it, because the derived tokens are worked out again on every element that names one.
    Values adjusted from a theme's published ones for contrast are noted in DESIGN.md, Themes. */
 :root, [data-theme] {
-  /* Americana, the default: the logo's navy, cream, the channel's blue, sky, sand, coral */
+  /* Sluice (Light and Dark), the default: the logo's navy, cream, the channel's blue, sky,
+     sand, coral */
   --paper: light-dark(oklch(0.98 0.017 88), oklch(0.235 0.068 263));
   --paper-2: light-dark(oklch(0.955 0.022 86), oklch(0.27 0.072 263));
   --paper-raised: light-dark(oklch(0.993 0.008 88), oklch(0.285 0.075 263));
@@ -62,7 +65,7 @@
   --idle: light-dark(oklch(0.52 0.03 262), oklch(0.7 0.03 262));
 }
 
-[data-theme="solarized"] {
+[data-theme^="solarized-"] {
   /* Solarized (Ethan Schoonover, MIT): base03 to base3 and the eight accents */
   --paper: light-dark(#fdf6e3, #002b36);
   --paper-2: light-dark(#eee8d5, #073642);
@@ -93,7 +96,7 @@
   --idle: light-dark(#657b83, #839496);
 }
 
-[data-theme="nord"] {
+[data-theme^="nord-"] {
   /* Nord (Arctic Ice Studio, MIT): Polar Night, Snow Storm, Frost and Aurora */
   --paper: light-dark(#eceff4, #2e3440);
   --paper-2: light-dark(#e5e9f0, #3b4252);
@@ -124,7 +127,7 @@
   --idle: light-dark(#5f6b80, #a3adbf);
 }
 
-[data-theme="gruvbox"] {
+[data-theme^="gruvbox-"] {
   /* Gruvbox (Pavel Pertsev, MIT/X11): light0 to dark0_hard, the neutral, faded and bright accents */
   --paper: light-dark(#fbf1c7, #282828);
   --paper-2: light-dark(#f2e5bc, #32302f);
@@ -155,7 +158,7 @@
   --idle: light-dark(#7c6f64, #a89984);
 }
 
-[data-theme="catppuccin"] {
+[data-theme^="catppuccin-"] {
   /* Catppuccin (MIT): Latte for the light, Mocha for the dark and the band */
   --paper: light-dark(#eff1f5, #1e1e2e);
   --paper-2: light-dark(#e6e9ef, #181825);
@@ -186,7 +189,7 @@
   --idle: light-dark(#6c6f85, #9399b2);
 }
 
-[data-theme="rose-pine"] {
+[data-theme^="rose-pine-"] {
   /* Rosé Pine (MIT): Dawn for the light, the dark variant for the dark and the band */
   --paper: light-dark(#faf4ed, #191724);
   --paper-2: light-dark(#f2e9e1, #1f1d2e);
@@ -217,7 +220,7 @@
   --idle: light-dark(#797593, #908caa);
 }
 
-[data-theme="flexoki"] {
+[data-theme^="flexoki-"] {
   /* Flexoki (Steph Ango, MIT, stephango.com/flexoki): paper, black and the 50 to 950 ramps */
   --paper: light-dark(#FFFCF0, #1C1B1A);
   --paper-2: light-dark(#F2F0E5, #282726);
@@ -249,7 +252,7 @@
 }
 
 /* the tokens every theme derives from its roles, worked out where a theme is named */
-:root, [data-theme], [data-appearance] {
+:root, [data-theme] {
   --rule: color-mix(in oklch, var(--navy) 22%, transparent);
   --rule-faint: color-mix(in oklch, var(--navy) 11%, transparent);
   --line: light-dark(color-mix(in oklch, var(--navy) 70%, transparent),
@@ -257,9 +260,6 @@
   --band-muted: color-mix(in oklch, var(--band-ink) 74%, transparent);
   --band-rule: color-mix(in oklch, var(--band-ink) 30%, transparent);
   --band-hover: color-mix(in oklch, var(--band-ink) 12%, transparent);
-  --grid-col: light-dark(color-mix(in oklch, var(--focus) 7%, transparent),
-                         color-mix(in oklch, var(--focus) 10%, transparent));
-  --grid-edge: color-mix(in oklch, var(--focus) 55%, transparent);
   --lift: 0 1px 2px light-dark(color-mix(in oklch, var(--band) 10%, transparent), transparent),
           0 14px 32px light-dark(color-mix(in oklch, var(--band) 16%, transparent),
                                  color-mix(in oklch, black 55%, transparent));
@@ -267,8 +267,8 @@
                       color-mix(in oklch, black 60%, transparent));
 }
 :root { color-scheme: light dark; }
-[data-appearance="light"] { color-scheme: light; }
-[data-appearance="dark"] { color-scheme: dark; }
+[data-theme$="-light"] { color-scheme: light; }
+[data-theme$="-dark"] { color-scheme: dark; }
 
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -344,18 +344,16 @@ p { margin: 0; }
 .scroll { overflow-x: auto; }
 .num { text-align: right; }
 
-/* ---- the frame (DESIGN.md, The band and The grid): the band across the window, its content
-   inside the gutter; under it on the paper the page's own row (its sections, a find, the grid
-   switch), then the page. Fluid at every width: the column is the window less a gutter each
-   side (less the drawer beside it), with no cap, its edges shared by the band, the row and the
-   page. `<main>` is the `frame` container, so what sits in it lays out by the room it has, the
-   drawer counted, not by the window. --------------------------------------------------------- */
+/* ---- the frame (DESIGN.md, The nav bar, The page head and The grid): the slim navy nav bar
+   across the window, its content inside the gutter; under it on the paper the page's head (its
+   name, the plan's and home's summary sentence) and its row (its sections, a count line, a find
+   and the view switch), then the page. Fluid at every width: the column is the window less a
+   gutter each side (less the drawer beside it), with no cap, its edges shared by the bar, the
+   head, the row and the page. `<main>` is the `frame` container, so what sits in it lays out by
+   the room it has, the drawer counted, not by the window. ------------------------------------ */
 .site-head { background: var(--band); color: var(--band-ink); }
-.band-in, .subnav { padding: 0 var(--gutter); }
-/* the band's content is the `band` container: its name and its layout follow the room it has
-   (the drawer beside it counted), not the window */
-.band-in { container: band / inline-size; }
-main { display: grid; padding: 30px 0 72px; container: frame / inline-size;
+.band-in, .page-top { padding: 0 var(--gutter); }
+main { display: grid; padding: 14px 0 72px; container: frame / inline-size;
        grid-template-columns: [full-start] var(--gutter) [col-start] minmax(0, 1fr) [col-end]
                               var(--gutter) [full-end]; }
 main > *, #graph > * { grid-column: col; }
@@ -366,12 +364,10 @@ main > *, #graph > * { grid-column: col; }
 
 /* the band's top row: the mark and the name, Projects, the project, Inbox with the coral
    count; the live line and display preferences at the right */
-nav.top { display: flex; flex-wrap: wrap; align-items: center; gap: 0 26px; min-height: 54px;
+nav.top { display: flex; align-items: center; gap: 0 24px; min-height: 52px;
           font-size: 14px; font-weight: 600; }
-.band-in:has(> .band-head) > nav.top, .band-in:has(> .band-strip) > nav.top {
-  box-shadow: inset 0 -1px 0 var(--band-rule); }
 nav.top > a, nav.top details.switcher > summary { display: flex; align-items: center; gap: 8px;
-  min-height: 54px; color: var(--band-ink); }
+  min-height: 52px; color: var(--band-ink); }
 nav.top a.brand { gap: 10px; font-size: 16px; font-weight: 800; letter-spacing: -0.01em; }
 nav.top .mark { display: block; flex: none; }
 nav.top > a[aria-current], details.switcher.current > summary {
@@ -391,10 +387,23 @@ html[data-stream="live"] .live + sluice-menu > details.settings,
 
 /* ---- the project switcher: its button is the project's name, a menu of every project ---- */
 details.switcher { position: relative; flex: none; }
-details.switcher > summary { list-style: none; cursor: pointer; user-select: none; gap: 6px; }
+details.switcher > summary { list-style: none; cursor: pointer; user-select: none; gap: 8px; }
 details.switcher > summary::-webkit-details-marker { display: none; }
 details.switcher > summary .chev { color: var(--band-muted); }
+/* the current project: its mark and its name, bold, in a box of the band's rule, so it reads as
+   where the page is and as a choice to change */
+nav.top details.switcher > summary:has(> .proj-icon) { padding: 0 10px 0 8px; min-height: 36px; margin: 8px 0;
+  box-shadow: inset 0 0 0 1px var(--band-rule); font-size: 15px; font-weight: 750; }
+details.switcher > summary:has(> .proj-icon):hover, details.switcher[open] > summary:has(> .proj-icon) {
+  background: var(--band-hover); color: var(--band-ink); }
+details.switcher.current > summary:has(> .proj-icon) { box-shadow: inset 0 0 0 1px var(--band-rule),
+  inset 0 -3px 0 var(--band-mark); }
 .sw-name { max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a project with no icon of its own: its initial in a square of the band's mark */
+.proj-icon.pi-mono, .proj-icon.pi-text { display: inline-grid; place-items: center; font-size: 12px;
+  font-weight: 800; line-height: 1; }
+.proj-icon.pi-mono { background: var(--band-mark); color: var(--band-ink); }
+.proj-icon.pi-text { font-size: 16px; }
 .icon { flex: none; }  /* every Lucide icon keeps its size in a flex row */
 .chev { flex: none; color: var(--ink-muted); transition: transform 120ms ease-out; }
 details.switcher[open] .chev { transform: rotate(180deg); }
@@ -464,8 +473,8 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; box-shadow: inset 
 .prefs .themes .tick { flex: none; visibility: hidden; }  /* its slot keeps the names aligned */
 .prefs .themes label:has(:checked) .tick { visibility: visible; }
 .prefs .themes .swatch { margin-left: auto; }
-/* a theme's swatch, drawn in its own tokens (the chip carries its data-theme, in the page's
-   appearance): its band across the top, its paper under it with a square of its running blue
+/* a theme's swatch, drawn in its own tokens (the chip carries its data-theme, so its own
+   scheme too): its band across the top, its paper under it with a square of its running blue
    and a square of its question colour */
 .swatch { position: relative; display: inline-flex; align-items: flex-end; gap: 4px; flex: none;
   width: 58px; height: 26px; padding: 0 6px 4px; overflow: hidden;
@@ -474,18 +483,6 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; box-shadow: inset 
 .swatch > i { display: block; width: 10px; height: 10px; }
 .swatch > .sw-run { background: var(--run); }
 .swatch > .sw-ask { background: var(--coral); }
-/* the appearance: three choices in one segmented row, the chosen one filled */
-.prefs .appearance { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule-faint); }
-.prefs .seg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-              box-shadow: inset 0 0 0 1px var(--rule); }
-.prefs .seg label { position: relative; display: grid; place-items: center; min-height: 36px;
-  padding: 0 6px; cursor: pointer; text-align: center; font-size: 13px; font-weight: 600;
-  line-height: 1.15; color: var(--ink-muted); }
-.prefs .seg label + label { box-shadow: inset 1px 0 0 var(--rule); }
-.prefs .seg label:hover { color: var(--ink); background: var(--paper-2); }
-.prefs .seg input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
-.prefs .seg label:has(:checked) { background: var(--navy); color: var(--on-navy); }
-.prefs .seg label:has(:focus-visible) { outline: 2px solid var(--focus); outline-offset: 1px; z-index: 1; }
 .prefs label.check { display: flex; align-items: center; gap: 10px; min-height: 36px;
   margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule-faint); cursor: pointer; }
 .prefs label.check input { width: 16px; height: 16px; margin: 0; flex: none; accent-color: var(--navy); }
@@ -499,42 +496,31 @@ form.prefs:has(sluice-toggle:defined) .save { display: none; }
         transform: translateY(-300%); }
 .skip:focus { transform: none; box-shadow: var(--lift); }
 
-/* ---- the band's head (`ui::band_head`): the page's name huge at the left on the grid, its
-   description and its summary sentence beside it; a strip under them (`ui::recent_strip`).
-   The name is fluid in the band's own width (cqi of `band`, so the drawer beside it counts):
-   150px at 1440, 88px at most on a phone, 240px at most on a wide screen; a longer name steps
-   down in proportion. The words keep their measure at every width. ------------------------ */
-.band-head { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
-             column-gap: var(--col-gap); align-items: end;
-             padding: clamp(22px, calc(14px + 1.15cqi), 60px) 0 clamp(22px, calc(16px + 0.94cqi), 52px); }
-.band-head > h1 { grid-column: span 5; margin: 0 0 -0.03em -0.045em;
-  font-size: clamp(88px, 10.9cqi, 240px); line-height: .8; font-weight: 900;
-  letter-spacing: -0.04em; overflow-wrap: anywhere; text-wrap: balance; }
-.band-head > h1.long { font-size: clamp(64px, 7.54cqi, 166px); }
-.band-head > h1.longer { grid-column: 1 / -1; font-size: clamp(46px, 5.55cqi, 122px); line-height: .9;
-                         margin-bottom: 20px; }
-.band-head > h1.longest { grid-column: 1 / -1; font-size: clamp(34px, 3.77cqi, 84px); line-height: .95;
-                          margin-bottom: 18px; }
-.band-sub { grid-column: span 7; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
-            column-gap: var(--col-gap); align-items: end; }
-.band-head > h1:is(.longer, .longest) + .band-sub { grid-column: 1 / -1;
-  grid-template-columns: repeat(12, minmax(0, 1fr)); }
-.band-lead { grid-column: span 3; font-size: clamp(14px, calc(11px + 0.21cqi), 18px); line-height: 1.45;
-             color: var(--band-muted); max-width: 52ch; }
-.band-lead p + p { margin-top: 6px; }
-.band-summary { grid-column: span 4; font-size: clamp(18px, calc(14.8px + 0.3cqi), 26px);
-                line-height: 1.3; font-weight: 650; letter-spacing: -0.01em; text-wrap: pretty;
-                max-width: 34em; }
-.band-head > h1:is(.longer, .longest) + .band-sub > .band-lead { grid-column: span 5; }
-.band-head > h1:is(.longer, .longest) + .band-sub > .band-summary { grid-column: span 7; }
-.band-summary a { text-decoration: underline; text-decoration-thickness: 1px;
-                  text-underline-offset: 4px; text-decoration-color: var(--band-rule); }
-.band-summary a.ask { text-decoration-color: var(--coral); text-decoration-thickness: 2px; }
-.band-sub > :only-child { grid-column: 1 / -1; }
+/* ---- the page's head (`ui::page_head`): on the paper under the nav bar, the page's name at a
+   reading size (30px, 26px on a phone), its Details' "⋯" beside it, and on a plan and home the
+   summary sentence under it, one line of large body text that wraps only where it must; a
+   muted note instead on a page that says what it shows. ------------------------------------- */
+.page-top { container: band / inline-size; }
+.page-head { padding: 14px 0 6px; }
+.ph-name { display: flex; align-items: flex-start; gap: 4px 10px; min-width: 0; }
+.ph-name > sluice-menu > details.dm { margin-top: 1px; }
+.ph-name > h1, .page-head > h1 { margin: 0; font-size: 30px; line-height: 34px; font-weight: 850;
+  letter-spacing: -0.025em; overflow-wrap: anywhere; text-wrap: balance; min-width: 0; }
+.page-line { margin-top: 2px; font-size: 17px; line-height: 24px; font-weight: 500;
+             letter-spacing: -0.005em; text-wrap: pretty; }
+.page-line a { text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.page-line a.ask { text-decoration-color: var(--coral); text-decoration-thickness: 2px; }
+.page-note { margin-top: 2px; font-size: 14px; line-height: 20px; color: var(--ink-muted);
+             max-width: var(--measure); }
+.page-note code { font-size: 12.5px; }
+.page-head .crumbs { margin: 0 0 6px; font-size: 13px; }
+.page-alert { display: flex; gap: 10px; align-items: flex-start; margin: 8px 0 0; padding: 8px 14px;
+  width: fit-content; max-width: 100%; background: var(--sand-pale); box-shadow: inset 0 2px 0 var(--navy); }
+.page-alert .ro-icon { flex: none; margin-top: 1px; color: var(--sand-ink); }
 
 /* ---- the page's row on the paper: its sections as tabs, a count line, a find and switches -- */
-.subnav-in { display: flex; flex-wrap: wrap; align-items: center; gap: 0 28px; min-height: 62px;
-              padding: 8px 0; border-bottom: 1px solid var(--rule); }
+.subnav-in { display: flex; flex-wrap: wrap; align-items: center; gap: 0 28px; min-height: 44px;
+              padding: 0; border-bottom: 1px solid var(--rule); }
 nav.links { display: flex; flex-wrap: wrap; gap: 0 22px; font-size: 14px; font-weight: 650; }
 nav.links > a { display: flex; align-items: center; min-height: 44px; color: var(--ink-muted);
                 text-decoration: none; }
@@ -544,50 +530,37 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 .subnav-tools { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
                 min-width: 0; }
 
-/* ---- a tablet's band (718 to 972px of band, a 761 to 1023px window, or the band beside the
-   drawer): the name on a row of its own, its words and sentence across the band under it;
-   Recently finished's head over its items ---------------------------------------------------- */
-@container band (min-width: 718px) and (max-width: 972.98px) {
-  .band-head { row-gap: 18px; }
-  .band-head > h1 { grid-column: 1 / -1; margin-bottom: 0; }
-  .band-sub, .band-head > h1:is(.longer, .longest) + .band-sub { grid-column: 1 / -1;
-    grid-template-columns: repeat(12, minmax(0, 1fr)); }
-  .band-sub > .band-lead, .band-head > h1:is(.longer, .longest) + .band-sub > .band-lead { grid-column: span 5; }
-  .band-sub > .band-summary, .band-head > h1:is(.longer, .longest) + .band-sub > .band-summary { grid-column: span 7; }
-  .band-sub > :only-child { grid-column: 1 / -1; }
-}
-
-/* ---- the frame on a phone (to 760px): the band's row wraps, the live line under it, the name
-   over its words, every part one column; the row's tools on a line of their own; targets 44px */
+/* ---- the frame on a phone (to 760px): the nav bar one row of 48px (the wordmark and the way
+   to every project give way to the switcher, whose menu has them; the live line a square), the
+   page's name a size down, the row's sections a line that scrolls, its tools on a line of their
+   own; targets 44px */
 @media (max-width: 760px) {
-  main { padding: 20px 0 48px; }
-  nav.top { gap: 0 18px; }
+  main { padding: 14px 0 48px; }
+  nav.top { gap: 0 14px; min-height: 48px; }
   nav.top > a, nav.top details.switcher > summary { min-height: 48px; }
-  nav.top a.brand .wordmark { font-size: 16px; }
-  /* the live line and display preferences share the band's second row, at its right (a
-     break before them, so they never land at the row's left with the menu off the screen) */
-  nav.top::after { content: ""; order: 4; flex-basis: 100%; height: 0; }
-  .live { order: 5; margin-left: auto; min-height: 44px; }
-  details.settings { order: 6; margin-left: auto; margin-right: 0; }
-  html[data-stream="live"] details.settings { margin-left: 0; }
-  .subnav-in { gap: 4px 18px; }
-  .subnav-tools { margin-left: 0; flex-basis: 100%; }
-  .subnav-tools > :not(.grid-toggle) { flex: 1 1 12rem; min-width: 0; }
+  nav.top > a.home, nav.top a.brand .wordmark { display: none; }
+  /* the switcher gives way first: its name shortens so the bar stays one row at 320px */
+  nav.top details.switcher { flex: 0 1 auto; min-width: 0; }
+  nav.top details.switcher > summary:has(> .proj-icon) { min-height: 36px; margin: 6px 0; min-width: 0; }
+  .sw-name { min-width: 0; max-width: none; }
+  .live { font-size: 0; gap: 0; }
+  details.settings { margin-right: 0; }
+  .subnav-in { gap: 0 18px; min-height: 0; }
+  nav.links { gap: 0 16px; font-size: 13.5px; }
+  .subnav-meta { display: none; }
+  .subnav-tools { margin: 0 0 6px; flex-basis: 100%; flex-wrap: nowrap; gap: 8px; }
+  .subnav-tools > * { min-width: 0; }
+  .subnav .subnav-tools :is(sluice-search, .pl-find) { flex: 1 1 auto; min-width: 0; }
+  .subnav .subnav-tools .q-field { flex: 1 1 auto; min-width: 0; max-width: none; }
+  .subnav-tools .view-switch a { padding: 0 10px; }
   .subnav-tools :is(button, input, select, a) { min-height: 44px; }
-  .prefs .themes label, .prefs .appearance label, .prefs label.check { min-height: 44px; }
+  .prefs .themes label, .prefs label.check { min-height: 44px; }
+  .page-head { padding: 12px 0 8px; }
+  .ph-name > h1, .page-head > h1 { font-size: 26px; line-height: 31px; }
+  .page-line { font-size: 15px; line-height: 21px; }
 }
 
-/* a phone's band (under 718px of band): the name over its words, every part one column */
-@container band (max-width: 717.98px) {
-  .band-head { grid-template-columns: minmax(0, 1fr); row-gap: 14px; }
-  .band-head > h1 { grid-column: 1 / -1; margin: 0 0 0 -0.04em; }
-  .band-head > h1:is(.longer, .longest) { margin-bottom: 0; }
-  .band-sub, .band-head > h1:is(.longer, .longest) + .band-sub { grid-column: 1 / -1;
-    grid-template-columns: minmax(0, 1fr); row-gap: 12px; }
-  .band-sub > *, .band-head > h1:is(.longer, .longest) + .band-sub > * { grid-column: 1 / -1 !important; }
-}
-
-/* ---- the module grid (`ui::grid_open`, `sluice-grid`): a sheet of modules, the `sheet`
+/* ---- the module grid (`ui::grid_open`, `.sheet`): a sheet of modules, the `sheet`
    container, so its columns follow its own width (the drawer and a board beside it counted),
    never the window's. Underneath it is always twice its columns in tracks (24 for twelve),
    whose lines at 12 or 6 columns are a subset, so nothing jumps between its four modes:
@@ -597,39 +570,21 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
    wide (2000px and over): 24 columns, a module twice its span (its fraction kept), or its
    span when it halves (`data-wide="halve"`: two whole-width modules side by side).
    `--take` is the columns a module takes in its sheet's mode, `--per` the tracks a column. -- */
-sluice-grid { position: relative; display: grid; align-items: start; container: sheet / inline-size;
+.sheet { display: grid; align-items: start; container: sheet / inline-size;
               grid-template-columns: repeat(calc(var(--cols, 12) * 2), minmax(0, 1fr));
               column-gap: var(--col-gap); row-gap: max(16px, var(--col-gap)); }
-sluice-grid > * { --take: var(--span, var(--cols, 12)); --per: 2;
+.sheet > * { --take: var(--span, var(--cols, 12)); --per: 2;
                   grid-column: span calc(var(--take) * var(--per)); min-width: 0; }
-sluice-grid > .grid-ovl { display: none; position: absolute; inset: 0; z-index: 2;
-  grid-column: 1 / -1; grid-template-columns: inherit; column-gap: inherit; pointer-events: none; }
-sluice-grid[showing] > .grid-ovl { display: grid; }
-.gc { position: relative; grid-column: span 2; background: var(--grid-col);
-      box-shadow: inset 1px 0 0 var(--grid-edge), inset -1px 0 0 var(--grid-edge); }
-.gc-w { display: none; }
-.gc-n { position: absolute; top: -22px; left: 0; font: 600 11px/16px var(--font-mono);
-        color: var(--run-ink); }
-sluice-grid[showing] > [data-span] { position: relative; counter-reset: take var(--take); }
-sluice-grid[showing] > [data-span]::after { content: counter(take) " col"; position: absolute;
-  top: 6px; right: 6px; z-index: 3; padding: 1px 5px; background: var(--run); color: var(--on-run);
-  font: 600 11px/16px var(--font-mono); pointer-events: none; }
 @container sheet (max-width: 639.98px) {
-  sluice-grid > * { grid-column: 1 / -1; --take: round(down, calc(var(--cols, 12) / 2), 1); }
-  .gc { grid-column: span 4; }
-  .gc-r { display: none; }
+  .sheet > * { grid-column: 1 / -1; --take: round(down, calc(var(--cols, 12) / 2), 1); }
 }
 @container sheet (min-width: 640px) and (max-width: 1199.98px) {
-  sluice-grid > * { --take: min(var(--cols, 12), max(6, round(up, var(--span, 12), 6))); }
+  .sheet > * { --take: min(var(--cols, 12), max(6, round(up, var(--span, 12), 6))); }
 }
 @container sheet (min-width: 2000px) {
-  sluice-grid > * { --per: 1; --take: calc(var(--span, var(--cols, 12)) * 2); }
-  sluice-grid > [data-wide="halve"] { --take: var(--span, var(--cols, 12)); }
-  .gc { grid-column: span 1; }
-  .gc-w { display: block; }
+  .sheet > * { --per: 1; --take: calc(var(--span, var(--cols, 12)) * 2); }
+  .sheet > [data-wide="halve"] { --take: var(--span, var(--cols, 12)); }
 }
-.grid-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; }
-.grid-toggle[aria-pressed="true"] { background: var(--run); color: var(--on-run); box-shadow: none; }
 .mod-col { display: flex; flex-direction: column; gap: max(16px, var(--col-gap)); }
 
 /* ---- a module (`ui::module_open`) and its swell -------------------------------------------- */
@@ -670,28 +625,31 @@ sluice-grid[showing] > [data-span]::after { content: counter(take) " col"; posit
          gap: 6px 12px; min-height: 56px; padding-bottom: 10px; border-top: 3px solid var(--navy); }
 .sec-h h2 { margin: 0; font-size: 30px; line-height: 1; font-weight: 850; letter-spacing: -0.03em; }
 .sec-n { font-size: 13px; color: var(--ink-muted); }
-.sec-strip { display: grid; align-items: end; column-gap: var(--col-gap);
-             grid-template-columns: repeat(12, minmax(0, 1fr)); }
-.sh-lead { grid-column: span var(--lead); }
+/* a strip head (`ui::strip_head`) and the rows under it (the plan's units, `ui::strip_row_open`)
+   share one track list: the lead takes what the cells leave, the stages `--cell` wide each so
+   every stage sits under its name, then the row's end. Where the sheet is under 640px the lead
+   stands over the stages, the head's names give way and each row's cells share its width. */
+.sec-strip, .strip-row, .pl-row { --cell: clamp(68px, 6cqi, 104px);
+  display: grid; align-items: center; column-gap: var(--col-gap);
+  grid-template-columns: minmax(0, 1fr) calc(var(--n, 1) * var(--cell) + (var(--n, 1) - 1) * 8px) 34px; }
+.sec-strip { align-items: end; }
+.sh-lead, .strip-row > :first-child { grid-column: 1; min-width: 0; }
 .sh-lead .sec-n { margin-top: 6px; }
-.sh-stages { grid-column: span var(--rest); display: grid; column-gap: var(--col-gap);
-             grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
+.sh-stages { grid-column: 2; display: grid; column-gap: 8px;
+             grid-template-columns: repeat(var(--n), var(--cell)); }
+.sh-end { grid-column: 3; }
 .sh-stage { font-size: 13px; font-weight: 650; color: var(--ink-muted); overflow-wrap: anywhere; }
-/* a row under a strip head (`ui::strip_row_open`): its lead on the head's lead columns, its
-   strip on the stage columns, so each stage sits under its name at every width; the head and
-   its rows stack together (lead over stages, the stages across) when their container, the
-   nearest sheet, else the frame, is under 640px */
-.strip-row { display: grid; align-items: center; column-gap: var(--col-gap);
-             grid-template-columns: repeat(12, minmax(0, 1fr)); }
-.strip-row > * { grid-column: span var(--lead, 6); min-width: 0; }
-.strip-row > .strip { grid-column: span calc(12 - var(--lead, 6)); }
+.strip-row > .strip { grid-column: 2; grid-template-columns: repeat(var(--n), var(--cell));
+                      column-gap: 8px; }
 @container sheet (max-width: 639.98px) {
-  .sec-strip, .strip-row { grid-template-columns: minmax(0, 1fr); row-gap: 10px; }
-  :is(.sh-lead, .sh-stages, .strip-row > *, .strip-row > .strip) { grid-column: 1 / -1; }
+  .sec-strip, .strip-row { grid-template-columns: minmax(0, 1fr); row-gap: 8px; }
+  .sh-stages, .sh-end { display: none; }
+  .strip-row > .strip { grid-column: 1; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
 }
 @container frame (max-width: 639.98px) {
-  .sec-strip, .strip-row { grid-template-columns: minmax(0, 1fr); row-gap: 10px; }
-  :is(.sh-lead, .sh-stages, .strip-row > *, .strip-row > .strip) { grid-column: 1 / -1; }
+  .sec-strip, .strip-row { grid-template-columns: minmax(0, 1fr); row-gap: 8px; }
+  .sh-stages, .sh-end { display: none; }
+  .strip-row > .strip { grid-column: 1; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
 }
 
 /* ---- the stage strip (`ui::stage_strip`): a cell a stage, in recipe order ----------------- */
@@ -745,34 +703,30 @@ sluice-grid[showing] > [data-span]::after { content: counter(take) " col"; posit
 .mk-look { background: var(--sand-ink); }
 .mk-empty { box-shadow: inset 0 0 0 1px var(--rule); }
 
-/* ---- the band's strip of what just finished (`ui::recent_strip`) ------------------------- */
-.band-strip { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
-              column-gap: var(--col-gap); padding: 14px 0 22px; border-top: 1px solid var(--band-rule); }
-.rf-head { grid-column: span 2; display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; }
-.rf-head h2 { margin: 0; font-size: 20px; line-height: 1.1; font-weight: 850; letter-spacing: -0.02em;
-              color: var(--band-ink); }
-.rf-head p { font-size: 13px; color: var(--band-muted); }
-.rf-list { grid-column: span 10; list-style: none; margin: 0; padding: 0; display: grid;
-           grid-template-columns: repeat(5, minmax(0, 1fr)); column-gap: var(--col-gap); }
-.rf-list a { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding-top: 2px; }
-.rf-at { font: 600 22px/1.05 var(--font-mono); letter-spacing: -0.02em; }
-.rf-name { font-size: 13px; font-weight: 750; }
-.rf-title { font-size: 13px; line-height: 1.35; color: var(--band-muted); display: -webkit-box;
-            -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 40ch; }
-@container band (min-width: 718px) and (max-width: 972.98px) {
-  .band-strip { row-gap: 10px; }
-  .rf-head, .rf-list { grid-column: 1 / -1; }
-  .rf-head { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
-}
-.rf-took { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--band-accent); }
-.rf-how { display: inline-flex; align-items: center; gap: 4px; color: var(--sand); font-weight: 650; }
-.rf-how .g { color: inherit; width: 13px; height: 13px; margin: 0; }
+/* ---- what finished last (`ui::latest_list`): a line each, its clock time in data mono, its
+   title, how long it took; the plan's Done head and a project's module on home -------------- */
+.latest { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.latest a { display: grid; grid-template-columns: 3.2em minmax(0, 1fr) auto; align-items: baseline;
+            gap: 0 10px; min-height: 30px; padding: 5px 0; border-top: 1px solid var(--rule-faint);
+            font-size: 13.5px; line-height: 19px; text-decoration: none; }
+.latest li:first-child a { border-top: 0; }
+.latest a:hover .lt-t { text-decoration: underline; }
+.lt-at { font: 600 12.5px/19px var(--font-mono); color: var(--ink-muted); }
+.lt-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.lt-place { color: var(--ink-muted); font-weight: 500; }
+.lt-took { font-size: 12.5px; color: var(--sky-ink); white-space: nowrap; }
+.lt-how { display: inline-flex; align-items: center; gap: 4px; color: var(--sand-ink); font-weight: 650; }
+.lt-how .g { color: inherit; width: 13px; height: 13px; margin: 0; }
 
 /* ---- the margin module (`ui::margin_module`): a long run's progress as it reported it ---- */
-.mm-t { margin: 0; font-size: 17px; line-height: 1.15; font-weight: 800; letter-spacing: -0.01em; }
+.mm-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; }
+.mm-t { margin: 0; min-width: 0; font-size: 17px; line-height: 1.15; font-weight: 800;
+        letter-spacing: -0.01em; display: -webkit-box; -webkit-box-orient: vertical;
+        -webkit-line-clamp: 4; overflow: hidden; }
 .mm-t a { text-decoration: none; }
 .mm-t a:hover { text-decoration: underline; }
-.mm-doc { font-size: 13px; color: var(--ink-muted); }
+.mm-doc { font-size: 13px; color: var(--ink-muted); display: -webkit-box; -webkit-box-orient: vertical;
+          -webkit-line-clamp: 3; overflow: hidden; }
 .mm-run { position: relative; overflow: hidden; padding: 10px 12px 12px; background: var(--run);
           color: var(--on-run); }
 .mm-k { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; }
@@ -785,24 +739,63 @@ sluice-grid[showing] > [data-span]::after { content: counter(take) " col"; posit
 .mm-lead { border-top: 1.5px solid var(--navy); padding-top: 12px; }
 .mm-lead dd { font-size: 30px; line-height: 1; font-weight: 900; letter-spacing: -0.03em;
               font-variant-numeric: tabular-nums; }
-/* an id, a hash, a path or a list: body size in data mono, broken anywhere (ui::ValueSet) */
-.mm-f dd.mm-token { font: 13px/1.4 var(--font-mono); overflow-wrap: anywhere; }
+/* words: two lines at most, the whole text in the module's Details (ui::ValueSet) */
+.mm-prose dd { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+               overflow: hidden; overflow-wrap: anywhere; }
 .mm-at, .mm-none { font-size: 12.5px; color: var(--ink-muted); }
 
+/* ---- an item's Details (`ui::Details`, DESIGN.md, Details): what identifies an item rather
+   than explains it, behind one "⋯" at its end (a row's last cell, a module's top right, beside a
+   page's or a step's name). A `<details>` in a `sluice-menu`: it opens without script, a click
+   elsewhere or Escape closes it. Each id whole in data mono with its copy button. On a phone
+   the button is 44px and the panel a sheet along the window's foot. ------------------------ */
+details.dm { position: relative; flex: none; }
+details.dm > summary { display: grid; place-items: center; width: 34px; height: 34px; list-style: none;
+  cursor: pointer; color: var(--ink-muted); -webkit-user-select: none; user-select: none; }
+details.dm > summary::-webkit-details-marker { display: none; }
+details.dm > summary:hover, details.dm[open] > summary { color: var(--ink); background: var(--paper-2);
+  box-shadow: inset 0 0 0 1px var(--rule); }
+.dm-p { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; width: max-content;
+  min-width: 260px; max-width: min(440px, calc(100vw - 2 * var(--gutter))); padding: 10px 14px 12px;
+  background: var(--paper-raised); color: var(--ink); box-shadow: inset 0 3px 0 var(--navy), var(--lift);
+  font: 400 13px/18px var(--font-sans); letter-spacing: 0; text-align: left; white-space: normal;
+  cursor: auto; }
+.dm-h { margin: 2px 0 8px; font-size: 12px; font-weight: 750; color: var(--ink-muted); }
+.dm-l { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 14px; margin: 0;
+        align-items: baseline; }
+.dm-l > div { display: contents; }
+.dm-l dt { color: var(--ink-muted); font-weight: 600; white-space: nowrap; }
+.dm-l dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.dm-l code { padding: 0; background: none; font-size: 12.5px; }
+.dm-l sluice-copy > .copy { opacity: 1; }
+/* in a module, at its top right; its kind's line keeps clear of it */
+.mod > sluice-menu > details.dm { position: absolute; top: 8px; right: 8px; }
+.swell-ask > sluice-menu > details.dm { top: 14px; right: 0; }
+.mod:has(> sluice-menu > details.dm) :is(.mod-k, .mm-head) { padding-right: 40px; }
+@media (max-width: 760px) {
+  details.dm > summary { width: 44px; height: 44px; }
+  .dm-p { position: fixed; top: auto; left: var(--gutter); right: var(--gutter); bottom: 16px;
+          width: auto; min-width: 0; max-width: none; max-height: 70vh; overflow-y: auto; }
+  .mod > sluice-menu > details.dm { top: 2px; right: 2px; }
+  .mod:has(> sluice-menu > details.dm) :is(.mod-k, .mm-head) { padding-right: 48px; }
+}
+
 /* ---- select to trace (`ui::trace_open`, `sluice-trace`) ------------------------------------ */
-sluice-trace { display: block; }
-.trace-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; min-height: 61px;
-              padding: 12px 0; margin-bottom: 24px; border-bottom: 1px solid var(--rule); }
+sluice-trace { display: block; position: relative; }
+/* the trace's line says the chain while a unit is traced, held at the window's top as the
+   owner scrolls along it; at rest it takes no room (still a polite region for a screen reader) */
+.trace-line { position: sticky; top: 0; z-index: 6; display: flex; flex-wrap: wrap; align-items: center;
+              gap: 6px 18px; min-height: 52px; padding: 8px 0; margin-bottom: 16px;
+              background: var(--paper); border-bottom: 1.5px solid var(--navy); }
+sluice-trace:not([tracing]) > .trace-line { position: absolute; width: 1px; height: 1px; min-height: 0;
+  margin: 0; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .trace-said { flex: 1 1 420px; display: flex; align-items: center; gap: 10px; min-width: 0;
-              font-size: 15px; font-weight: 500; color: var(--ink-muted); }
+              font-size: 15px; font-weight: 650; color: var(--ink); }
 .trace-said .icon { flex: none; }
-sluice-trace[tracing] > .trace-line { border-bottom: 1.5px solid var(--navy); }
-sluice-trace[tracing] .trace-said { color: var(--ink); font-weight: 650; }
 .trace-clear[hidden] { display: none; }
 .trace-clear { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; font-size: 13px; }
 .trace-pick { display: block; width: 100%; padding: 0; box-shadow: none; text-align: left;
               font: inherit; font-weight: inherit; background: none; }
-.trace-pick:hover { background: var(--paper-2); }
 [data-unit] { transition: opacity .35s var(--ease-out), box-shadow .2s ease-out; }
 sluice-trace[tracing] [data-trace="faded"] { opacity: .25; }
 sluice-trace[tracing] [data-trace="selected"] { box-shadow: 0 0 0 2px var(--navy); }
@@ -849,16 +842,6 @@ sluice-trace[tracing] [data-trace="selected"] { box-shadow: 0 0 0 2px var(--navy
   .rail[data-rail]::before { left: 4px; }
   .rail:is([data-rail~="node"], [data-rail~="chosen"])::after { left: -1px; transform: scale(.8);
     transform-origin: left top; }
-}
-@container band (max-width: 717.98px) {
-  .band-strip { grid-template-columns: minmax(0, 1fr); row-gap: 6px; }
-  .rf-head, .rf-list { grid-column: 1 / -1; }
-  .rf-list { grid-template-columns: minmax(0, 1fr); }
-  .rf-list a { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 10px;
-               padding: 8px 0; border-top: 1px solid var(--band-rule); }
-  .rf-at { font-size: 17px; }
-  .rf-title { display: none; }
-  .rf-list a { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .sweep::after { animation: none; transform: none; opacity: .6; }
@@ -981,20 +964,6 @@ sluice-copy > .copy[data-copied] { opacity: 1; }
    line; a filter that hides boxes says so at its end */
 .board-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
                margin: 0 0 12px; font-size: 13px; line-height: 18px; }
-.board-tools .seg { display: flex; gap: 2px; margin: 0; padding: 2px; min-width: 0;
-                    border: 1px solid var(--rule-faint); border-radius: 0;
-                    background: var(--paper-raised); }
-.board-tools .seg label { position: relative; display: inline-flex; align-items: center;
-                          gap: 5px; padding: 3px 10px; border-radius: 0;
-                          color: var(--ink-muted); font-weight: 500; cursor: pointer;
-                          white-space: nowrap; -webkit-user-select: none; user-select: none; }
-.board-tools .seg label:hover { color: var(--ink); }
-.board-tools .seg label:has(:checked) { color: var(--ink); background: var(--paper-2);
-                                        box-shadow: 0 0 0 1px var(--rule); }
-.board-tools .seg label:has(:focus-visible) { outline: 2px solid var(--focus); outline-offset: 1px; }
-.board-tools .seg input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0;
-                          pointer-events: none; }
-.board-tools .seg .n { font-size: 12px; font-weight: 400; color: var(--ink-muted); }
 .board-tools select { height: 30px; padding: 0 8px; font-size: 13px; max-width: 14rem;
                       color: var(--ink); cursor: pointer; }
 .board-tools button { height: 30px; font-size: 13px; }
@@ -1105,148 +1074,79 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--ink) 86%, var(--pa
                  place-items: center; border: 0; border-radius: 0;
                  background: var(--paper-raised); color: var(--ink-muted); cursor: pointer; }
 .drawer .close:hover { color: var(--ink); background: var(--paper-2); }
-/* ---- a step's band (DESIGN.md, A step's page): on its own page the frame's title band carries
-   it (`Frame::head`), in the drawer it heads the step on the band's navy. Its way back, its name
-   huge (its stage muted before its title, its id under it in data mono), its state, run and
-   usual time, its words, its unit's stages with its own ringed, and its actions on the navy:
-   square, a cream line, the next move filled cream. ------------------------------------------ */
-.step-band { padding: 22px 0 26px; color: var(--band-ink); }
-/* a solid glyph's mark is cut in what it sits on: the band, a done cell's sky, a look's sand */
-.step-band, .unit-band, .messages-band { --glyph-cut: var(--band); }
-:is(.step-band, .unit-band) .sc-done { --glyph-cut: var(--sky); }
-:is(.step-band, .unit-band) .sc-look { --glyph-cut: var(--sand); }
+/* ---- a step's head (DESIGN.md, A step's page): on its own page the frame's head on the
+   paper (`Frame::head`), in the drawer the top of the step. Its way back, its name at a reading
+   size (its stage muted before its title) with its Details' "⋯", its state and how long it has
+   run against its usual time, its words, its unit's stages with its own ringed, its actions
+   (the next move filled navy). ----------------------------------------------------------------- */
+.step-band { padding: 14px 0 10px; }
 .swell-look { --glyph-cut: var(--sand-pale); }
-:is(.site-head, .step-band) .crumbs { margin: 0 0 16px; color: var(--band-muted); }
-:is(.site-head, .step-band) .d-stage { color: var(--band-muted); }
+.crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; color: var(--ink-muted); }
+.crumbs a { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-muted);
+            text-decoration: none; }
+.crumbs a:hover { color: var(--ink); text-decoration: underline; }
+.step-band .crumbs { margin: 0 0 6px; font-size: 13px; }
 sluice-copy > button.copy { box-shadow: none; }
-:is(.site-head, .step-band) .crumbs a { color: var(--band-muted); }
-:is(.site-head, .step-band) .crumbs a:hover { color: var(--band-ink); text-decoration: underline;
-                             text-decoration-color: var(--band-accent); }
-.sb-top { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); align-items: end;
-          column-gap: var(--col-gap); row-gap: 18px; }
-.sb-name { grid-column: span 7; min-width: 0; }
-.sb-side { grid-column: span 5; display: flex; flex-direction: column; gap: 10px; min-width: 0;
-           padding-bottom: 4px; }
-/* its name is fluid like the band's: 96px at 1440 (68, 48, 36 for a longer one), a phone's
-   floor, more on a wide screen */
-.sb-t { margin: 0 0 0 -0.04em; font-size: clamp(56px, calc(96px + (100vw - 1440px) * 0.0667), 154px); line-height: .88; font-weight: 900;
-        letter-spacing: -0.04em; color: var(--band-ink); overflow-wrap: anywhere;
-        text-wrap: balance; }
-.sb-t.long { font-size: clamp(44px, calc(68px + (100vw - 1440px) * 0.0472), 109px); line-height: .92; }
-.sb-t.longer { font-size: clamp(32px, calc(48px + (100vw - 1440px) * 0.0333), 77px); line-height: 1;
-               letter-spacing: -0.035em; }
-.sb-t.longest { font-size: clamp(26px, calc(36px + (100vw - 1440px) * 0.025), 58px); line-height: 1.08;
-                letter-spacing: -0.03em; }
-.sb-t .d-stage { color: var(--band-muted); font-weight: 700; }
-.step-band .d-id { margin-top: 14px; display: flex; align-items: center; gap: 4px; }
-.step-band .d-id code { padding: 0; background: none; color: var(--band-muted); font-size: 14px; }
-.step-band sluice-copy > .copy { color: var(--band-muted); box-shadow: none; }
-.step-band sluice-copy > .copy:hover { color: var(--band-ink); background: none; }
-.step-band :is(.g, .icon) { color: inherit; }
-.d-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0; }
-.step-band .d-badges .tag { height: 32px; padding: 0 12px; gap: 6px; font-size: 14px;
-                            color: var(--band-ink); box-shadow: inset 0 0 0 1.5px var(--band-ink); }
-.step-band .d-badges .tag .g, .step-band .d-badges .tag .g svg { width: 16px; height: 16px; }
-.step-band .tag.attn { background: var(--sand); color: var(--on-sand); box-shadow: none; }
-.step-band .tag.ask { color: var(--on-coral); }
-.step-band .tries, .step-band .d-usual { font-size: 14px; color: var(--band-muted); }
-.step-band .d-usual.over { color: var(--band-ink); font-weight: 650; }
-/* a live overrun on the band and a unit's step: the attention fill, its own text on it; an
+.sb-name { display: flex; align-items: flex-start; gap: 4px 10px; min-width: 0; }
+.sb-t { margin: 0; min-width: 0; font-size: 28px; line-height: 34px; font-weight: 850;
+        letter-spacing: -0.025em; overflow-wrap: anywhere; text-wrap: balance; }
+.sb-t .d-stage { color: var(--ink-muted); font-weight: 700; }
+.sb-name > sluice-menu > details.dm { margin-top: 1px; }
+.d-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 8px 0 0; }
+.step-band .d-badges .tag { height: 28px; padding: 0 10px; gap: 6px; font-size: 13.5px; }
+.step-band .d-badges .tag .g, .step-band .d-badges .tag .g svg { width: 15px; height: 15px; }
+.step-band .d-usual { font-size: 13.5px; }
+.step-band .d-usual.over { color: var(--ink); font-weight: 650; }
+/* a live overrun on a step's head and a unit's step: the attention fill, its own text on it; an
    ended one (history) in plain ink */
 :is(.step-band, .u-step) .over-x { display: inline-flex; align-items: center; padding: 1px 6px;
   background: var(--sand); color: var(--on-sand); font-size: 12.5px; font-weight: 700; }
-.step-band .d-when .over-x { padding: 0; background: none; color: var(--band-ink); font-weight: 600; }
-.step-band .d-doc { font-size: clamp(15px, calc(12px + 0.2vw), 19px); line-height: 1.45; color: var(--band-muted);
-                    max-width: var(--measure); overflow-wrap: anywhere; }
-.step-band :is(.d-when, .d-retried, .d-resume) { color: var(--band-muted); font-size: 14px;
-                                                line-height: 20px; max-width: var(--measure);
-                                                overflow-wrap: anywhere; }
+.step-band .d-when { font-size: 13.5px; }
+.step-band .d-when .over-x { padding: 0; background: none; color: var(--ink); font-weight: 600; }
+.step-band .d-doc { margin-top: 8px; font-size: 15px; line-height: 1.45; color: var(--ink-muted);
+                    max-width: var(--measure); overflow-wrap: anywhere; display: -webkit-box;
+                    -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.step-band :is(.d-retried, .d-resume) { margin-top: 8px; color: var(--ink-muted); font-size: 14px;
+                                       line-height: 20px; max-width: var(--measure); overflow-wrap: anywhere; }
 .d-retried { display: flex; align-items: flex-start; gap: 6px; }
 .d-retried .icon { flex: none; margin-top: 2px; }
-.step-band .d-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.step-band .d-meta code, .step-band .d-resume code { padding: 0; background: none;
-                                                    color: var(--band-muted); }
-.step-band .d-meta .tag { color: var(--band-ink); box-shadow: inset 0 0 0 1px var(--band-rule); }
-.step-band .d-meta a.tag:hover { box-shadow: inset 0 0 0 1px var(--band-ink); }
-/* its unit's stages: the unit in the first two columns, a stage a column after it */
-.sb-lane { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); align-items: center;
-           column-gap: var(--col-gap); row-gap: 10px; margin-top: 24px; padding-top: 16px;
-           border-top: 1px solid var(--band-rule); }
-.sb-lane-h { grid-column: span 2; display: flex; flex-direction: column; gap: 2px; min-width: 0;
-             font-size: 13px; color: var(--band-muted); }
-.sb-lane-h a { font-size: 15px; font-weight: 750; color: var(--band-ink); }
-.sb-lane .strip { grid-column: 3 / span var(--lane, 10); row-gap: 10px;
-                  grid-template-columns: repeat(var(--lane-n, 10), minmax(0, 1fr)); }
-/* the strip on the navy: a stage not reached is a cream outline; the step's own stage ringed */
-.site-head .sc-empty, .step-band .sc-empty { box-shadow: inset 0 0 0 1px var(--band-rule);
-                                            color: var(--band-muted); }
-.site-head .sc-run, .step-band .sc-run { box-shadow: inset 0 0 0 1px var(--band-accent); }
-.sc-here { outline: 2px solid var(--band-ink); outline-offset: 3px; }
-/* its actions on the navy */
+.step-band .d-resume code { padding: 0; background: none; }
+/* its unit's stages, each cell sized to its stage, its own ringed */
+.sb-lane { margin-top: 14px; }
+.sb-lane .strip, .ub-lane .strip { grid-template-columns: repeat(var(--n), minmax(0, 132px));
+                                   row-gap: 8px; }
+.sc-here { outline: 2px solid var(--navy); outline-offset: 3px; }
+/* its actions: square, a navy line, the next move filled navy */
 .step-band .d-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px;
-                        margin-top: 24px; }
+                        margin-top: 16px; }
 .step-band .d-actions > form { display: contents; }
 .step-band .d-actions details:not(.confirm-flow) { order: 9; flex-basis: 100%; }
 .step-band .d-actions > a.d-thread:first-of-type { margin-left: auto; }
 .step-band .d-actions :is(button, .confirm-flow > summary) { display: inline-flex; align-items: center;
-  min-height: 44px; padding: 0 18px; background: transparent; color: var(--band-ink);
-  box-shadow: inset 0 0 0 1.5px var(--band-ink); border: 0; font-weight: 650; }
-.step-band .d-actions :is(button, .confirm-flow > summary):hover {
-  background: color-mix(in oklch, var(--band-ink) 14%, transparent); }
-.step-band .d-actions button.primary { background: var(--band-ink); color: var(--band); box-shadow: none;
-                            font-weight: 750; }
-.step-band .d-actions button.primary:hover { background: color-mix(in oklch, var(--band-ink) 86%, var(--band)); }
-.step-band .confirm-flow > form { color: var(--ink); }
-.step-band .d-actions .confirm-flow > form button { color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--navy); }
-.step-band .d-actions .confirm-flow > form button:is(.primary, .danger) { color: var(--on-navy); }
+  min-height: 44px; padding: 0 18px; font-weight: 650; }
 .step-band .d-actions details:not(.confirm-flow) > summary { min-height: 44px; display: inline-flex;
-  align-items: center; color: var(--band-muted); }
+  align-items: center; color: var(--ink-muted); }
 .step-band .d-actions details[open]:not(.confirm-flow) > textarea { max-width: var(--measure); }
 .step-band textarea { width: 100%; }
 .step-band a.d-thread { display: inline-flex; align-items: center; min-height: 44px;
-                        color: var(--band-muted); }
-.step-band a.d-thread:hover { color: var(--band-ink); }
-.step-band ::selection { background: var(--band-ink); color: var(--band); }
-.step-band :focus-visible { outline-color: var(--band-ink); }
-/* in the drawer: the band's navy across the drawer's top, its name a size a drawer holds, its
-   parts stacked; the close button sits on it */
-article#step-detail { display: flow-root; }  /* its band's margins stay its own */
-.step-band.in-drawer { margin: calc(-1 * var(--d-pad-t, 20px)) calc(-1 * var(--d-pad-x, 24px)) 0;
-  padding: 18px var(--d-pad-x, 24px) 20px; background: var(--band); }
-.step-band.in-drawer .sb-top, .step-band.in-drawer .sb-lane { display: block; }
+                        color: var(--ink-muted); }
+.step-band a.d-thread:hover { color: var(--ink); }
+/* in the drawer: the head across the drawer's top under its close button, its name a size a
+   drawer holds, three lines at most */
+article#step-detail { display: flow-root; }  /* its head's margins stay its own */
+.step-band.in-drawer { padding: 0 0 14px; }
 .step-band.in-drawer .sb-name { padding-right: 52px; }
-.step-band.in-drawer .sb-side { margin-top: 12px; }
-.step-band.in-drawer .sb-t { margin: 0; font-size: 28px; line-height: 1.12; letter-spacing: -0.025em;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3;
-  overflow: hidden; }
-.step-band.in-drawer .d-id { margin-top: 8px; }
-.step-band.in-drawer .sb-lane { margin-top: 16px; padding-top: 12px; }
-.step-band.in-drawer .sb-lane-h { flex-direction: row; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 8px; }
+.step-band.in-drawer .sb-t { font-size: 24px; line-height: 30px; display: -webkit-box;
+  -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 .step-band.in-drawer .sb-lane .strip { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
-.step-band.in-drawer .d-actions { margin-top: 16px; }
 /* a narrow strip keeps each stage's name whole: its state is its glyph (and its words for a
    screen reader), not the word beside the name */
 .step-band.in-drawer .sb-lane .sc-word { display: none; }
 @media (max-width: 1023.98px) { :is(.sb-lane, .ub-lane) .sc-word { display: none; } }
-/* a tablet or a narrow window: the name over its words, a size down */
-@media (min-width: 761px) and (max-width: 1100px) {
-  .sb-name, .sb-side, h1.unit-h, .ub-side { grid-column: 1 / -1; }
-  .sb-t, h1.unit-h { font-size: 76px; }
-  .sb-t.long, h1.unit-h.long { font-size: 56px; }
-  .sb-t.longer, h1.unit-h.longer { font-size: 40px; }
-  .sb-t.longest, h1.unit-h.longest { font-size: 30px; }
-  .sb-lane-h { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; gap: 4px 10px; }
-  .sb-lane .strip { grid-column: 1 / -1; }
-}
 @media (max-width: 760px) {
-  .step-band { padding: 18px 0 20px; }
-  .sb-name, .sb-side { grid-column: 1 / -1; }
-  .sb-t { font-size: 56px; }
-  .sb-t.long { font-size: 44px; }
-  .sb-t.longer { font-size: 32px; }
-  .sb-t.longest { font-size: 26px; }
-  .sb-lane-h { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; gap: 4px 10px; }
-  .sb-lane .strip, .ub-lane .strip { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .step-band { padding: 12px 0 10px; }
+  .sb-t { font-size: 23px; line-height: 28px; }
+  .sb-lane .strip, .ub-lane .strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .step-band .d-actions :is(button, .confirm-flow > summary) { flex: 1 1 auto; justify-content: center; }
 }
 
@@ -1256,34 +1156,34 @@ article#step-detail { display: flow-root; }  /* its band's margins stay its own 
    drawer, a phone); two to a row from 900px of sheet; from 2000px more modules to a row, never
    longer lines. -------------------------------------------------------------------------------- */
 .ov { container: ov / inline-size; }
-.ov > sluice-grid { row-gap: 26px; }
+.ov > .sheet { row-gap: 26px; }
 .ov .mod-col { gap: 26px; }
 /* by its sheet's mode (DESIGN.md, The module grid): the columns one over the other on a narrow
    sheet and to 900px; 7 and 5 twelfths to 2000px; from there halves, the side's modules two to
    a row (and with no side, the first column's two to a row); from 3000px a third and two
    thirds, so three modules stand in a row */
 @container sheet (min-width: 640px) and (max-width: 899.98px) {
-  .ov > sluice-grid > .mod-col { --take: 12; }
+  .ov > .sheet > .mod-col { --take: 12; }
 }
 @container sheet (min-width: 900px) and (max-width: 1199.98px) {
-  .ov > sluice-grid > .mod-col { --take: var(--span); }
+  .ov > .sheet > .mod-col { --take: var(--span); }
 }
 @container sheet (min-width: 2000px) {
-  .ov > sluice-grid > .mod-col { --take: 12; }
-  .ov:not(.ov-two) > sluice-grid > .mod-col { --take: 24; }
-  .ov.ov-two > sluice-grid > .mod-col[data-span="5"],
-  .ov:not(.ov-two) > sluice-grid > .mod-col {
+  .ov > .sheet > .mod-col { --take: 12; }
+  .ov:not(.ov-two) > .sheet > .mod-col { --take: 24; }
+  .ov.ov-two > .sheet > .mod-col[data-span="5"],
+  .ov:not(.ov-two) > .sheet > .mod-col {
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start;
     column-gap: var(--col-gap); }
 }
 @container sheet (min-width: 3000px) {
-  .ov.ov-two > sluice-grid > .mod-col[data-span="7"] { --take: 8; }
-  .ov.ov-two > sluice-grid > .mod-col[data-span="5"] { --take: 16; }
+  .ov.ov-two > .sheet > .mod-col[data-span="7"] { --take: 8; }
+  .ov.ov-two > .sheet > .mod-col[data-span="5"] { --take: 16; }
 }
 /* nothing in the first column (a step done with no words or outputs of its own): its waits and
    what it comes after take the sheet, as many to a row as fit */
-.ov > sluice-grid > .mod-col[data-span="7"]:not(:has(> *)) { display: none; }
-.ov:has(> sluice-grid > .mod-col[data-span="7"]:not(:has(> *))) .mod-col[data-span="5"] {
+.ov > .sheet > .mod-col[data-span="7"]:not(:has(> *)) { display: none; }
+.ov:has(> .sheet > .mod-col[data-span="7"]:not(:has(> *))) .mod-col[data-span="5"] {
   grid-column: 1 / -1; display: grid; column-gap: var(--col-gap); align-items: start;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); }
 /* a module of a step is titled on a heavy rule; its words at the reading measure */
@@ -1554,7 +1454,7 @@ code.v { border: 0; background: none; padding: 0; }
    nav's current section's mark, in the page's ink); a count after a word in muted figures. The
    bar sticks to the top of what scrolls (the window; in the drawer, under its close band) and
    scrolls sideways inside itself on a narrow screen, so the page never does */
-.tabs { margin-top: 20px; min-width: 0; }
+.tabs { margin-top: 4px; min-width: 0; }
 .tabbar { position: sticky; top: 0; z-index: 4; margin: 0 0 24px; background: var(--paper);
           box-shadow: inset 0 -1px 0 var(--rule-faint); }
 .drawer .tabbar { top: calc(60px - var(--d-pad-t)); background: var(--paper-raised); }
@@ -1652,7 +1552,9 @@ code.v { border: 0; background: none; padding: 0; }
 .m-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin: 0;
           font-size: 12.5px; line-height: 20px; color: var(--ink-muted); }
 .m-meta .tag { height: 20px; }
-.m-id { padding: 0; border: 0; background: none; font-size: 11.5px; color: var(--ink-muted); }
+.m-meta > sluice-menu > details.dm { margin-left: auto; }
+.m-meta details.dm > summary { width: 28px; height: 24px; }
+@media (max-width: 760px) { .m-meta details.dm > summary { width: 44px; height: 44px; } }
 .m-q { display: inline-flex; align-items: center; gap: 4px; font-weight: 700; color: var(--ink); }
 .m-q svg { width: 15px; height: 15px; }
 .m-to { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 4px; }
@@ -1730,10 +1632,10 @@ li.m.q-done > .md, li.m.q-done > .m-body { opacity: 0.7; }
 /* its questions and notes by the sheet's mode: one to a row to 900px, two to 2000px, three
    from there and four from 3000px, each at its reading measure */
 .q-sheet { margin-top: 12px; }
-.q-sheet > sluice-grid { row-gap: 26px; }
-@container sheet (min-width: 640px) and (max-width: 899.98px) { .q-sheet > sluice-grid > .mod { --take: 12; } }
-@container sheet (min-width: 2000px) { .q-sheet > sluice-grid > .mod { --take: 8; } }
-@container sheet (min-width: 3000px) { .q-sheet > sluice-grid > .mod { --take: 6; } }
+.q-sheet > .sheet { row-gap: 26px; }
+@container sheet (min-width: 640px) and (max-width: 899.98px) { .q-sheet > .sheet > .mod { --take: 12; } }
+@container sheet (min-width: 2000px) { .q-sheet > .sheet > .mod { --take: 8; } }
+@container sheet (min-width: 3000px) { .q-sheet > .sheet > .mod { --take: 6; } }
 .q-sheet article.item { margin: 0; padding: 0; border-inline: 0; border-bottom: 0; background: none; }
 .q-sheet article.item.swell-ask { padding-top: 14px; border-top: 6px solid var(--coral); }
 .q-sheet article.item:not(.swell-ask) { padding-top: 12px; border-top: 1.5px solid var(--navy); }
@@ -1783,7 +1685,6 @@ details.kinds > summary::-webkit-details-marker { display: none; }
 details.kinds[open] .chev { transform: rotate(180deg); }
 details.kinds[open] > summary { margin-bottom: 6px; }
 .log-note { margin: 0 0 10px; max-width: var(--measure); }
-nav.seg.presets { margin-top: 12px; }
 form.filters fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap;
                         gap: 4px 12px; align-items: center; }
 form.filters legend { float: left; margin-right: 8px; font-size: 13px; line-height: 18px;
@@ -1808,15 +1709,6 @@ button.primary { background: var(--navy); color: var(--on-navy); box-shadow: non
 button.primary:hover { background: var(--navy-deep); }
 button:disabled { opacity: .5; cursor: default; }
 .pager { display: flex; gap: 14px; margin: 12px 0; font-size: 12.5px; }
-nav.seg { justify-self: start; display: flex; gap: 2px; margin: 12px 0 0; padding: 2px;
-          border: 1px solid var(--rule-faint); border-radius: 0; background: var(--paper-raised);
-          font-size: 12.5px; }
-nav.seg a { padding: 2px 10px; border-radius: 0; text-decoration: none;
-            color: var(--ink-muted); font-weight: 500; }
-nav.seg a:hover { color: var(--ink); }
-.history-lead { margin: 10px 0 0; max-width: var(--measure); }
-nav.seg a[aria-current] { color: var(--ink); background: var(--paper-2);
-                          box-shadow: 0 0 0 1px var(--rule); }
 table.log { font-size: 12.5px; }
 table.log td { padding: 3px 8px; vertical-align: baseline; line-height: 1.45; }
 /* the record a link names (a failure's "Its log record"): on the secondary fill, its seq in ink */
@@ -1863,7 +1755,6 @@ table.log .kind { font: 12px var(--font-mono); white-space: nowrap;
    find on one bar, the groups' index, then each group a section of entries on the grid ------- */
 /* a band name of seven to twelve letters with no space (Functions) stays whole on the smallest
    phone: under 328px of band (a 360px window) the long step follows the band */
-@container band (max-width: 327.98px) { .band-head > h1.long { font-size: 20cqi; } }
 .fnpage { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; min-width: 0; }
 .fn-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px; margin: 0; }
 .picker { font-size: 13.5px; color: var(--ink-muted); display: flex; gap: 8px; align-items: center; }
@@ -1950,7 +1841,6 @@ article.item { background: var(--paper-raised); border: 1px solid var(--rule-fai
 /* a page's own title on the paper (a run's file): the page title's face at 22/28 */
 h1.title-long { font-size: 22px; line-height: 28px; overflow-wrap: anywhere; }
 @media (max-width: 720px) { h1.title-long { font-size: 19px; line-height: 25px; } }
-.step-band .d-meta a.tag { text-decoration: none; }
 /* its engine's or fn's own one paragraph: prose at the reading measure, set apart by a hairline */
 .err-said { margin-top: 8px; padding-left: 12px; border-left: 1px solid var(--rule);
             font-size: 14px; line-height: 21px; color: var(--ink-muted);
@@ -2098,63 +1988,30 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
   .act-body { padding-left: 8px; }
 }
 
-/* ---- a unit's page (DESIGN.md, A unit's page): its band carries its name huge beside its id,
-   recipe and how its steps stand, its stage strip under a cream rule on the frame's columns; on
-   the paper its steps are modules, three to a row (one on a phone, four past 2000px of sheet),
-   the one asking the owner on the coral rule, a stop on the sand; then its timeline and its
-   last message. ------------------------------------------------------------------------------ */
-.unit-band { padding: 22px 0 26px; color: var(--band-ink); }
-.ub-top { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); align-items: end;
-          column-gap: var(--col-gap); row-gap: 16px; }
-h1.unit-h { grid-column: span 7; display: flex; align-items: flex-start; gap: 14px; margin: 0;
-            font-size: clamp(56px, calc(96px + (100vw - 1440px) * 0.0667), 154px); line-height: .88;
-            font-weight: 900; letter-spacing: -0.04em;
-            overflow-wrap: anywhere; text-wrap: balance; color: var(--band-ink); }
-h1.unit-h.long { font-size: clamp(44px, calc(72px + (100vw - 1440px) * 0.05), 115px); line-height: .92; }
-h1.unit-h.longer { font-size: clamp(32px, calc(48px + (100vw - 1440px) * 0.0333), 77px); line-height: 1;
-                   letter-spacing: -0.035em; }
-h1.unit-h.longest { font-size: clamp(26px, calc(36px + (100vw - 1440px) * 0.025), 58px); line-height: 1.08;
-                    letter-spacing: -0.03em; }
+/* ---- a unit's page (DESIGN.md, A unit's page): its head on the paper (its way back, its glyph
+   and title at a reading size with its Details' "⋯", how its steps stand, its stage strip); its
+   steps are modules, three to a row (one on a phone, four past 2000px of sheet), the one asking
+   the owner on the coral rule, a stop on the sand; then its timeline and its last message. -- */
+h1.unit-h { display: flex; align-items: flex-start; gap: 10px; }
 h1.unit-h > span { min-width: 0; }
-h1.unit-h > .g { flex: none; margin-top: .12em; color: var(--band-ink); }
-h1.unit-h .g, h1.unit-h .g svg { width: 28px; height: 28px; }
+h1.unit-h > .g { flex: none; margin-top: 7px; }
+h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
 .p-title .g, .p-title .g svg { width: 22px; height: 22px; }
-.ub-side { grid-column: span 5; display: flex; flex-direction: column; gap: 8px; min-width: 0;
-           padding-bottom: 4px; }
-.unit-band .d-id { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.unit-band :is(.d-id code, .meta, .meta code) { padding: 0; background: none; color: var(--band-muted); }
-.unit-band .d-id > sluice-copy code { font-size: 14px; }
-.unit-band sluice-copy > .copy { color: var(--band-muted); box-shadow: none; }
-.unit-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; font-size: 15px;
-            line-height: 22px; }
-.unit-band .unit-sum a { color: var(--band-ink); }
-/* a short view said on the band's line: "engine opus" */
+.unit-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin-top: 4px;
+            font-size: 14px; line-height: 21px; }
+/* a short view said on the head's line: "engine opus" */
 .unit-sum .uv-line .uv, .unit-sum .uv-line .uv-stack { display: inline-flex; flex-wrap: wrap;
                                                        align-items: baseline; gap: 2px 10px; }
-.unit-band .uv, .unit-band .uv * { color: inherit; }
-.unit-band .uv-k { color: var(--band-muted); }
-.ub-lane { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--band-rule);
-           display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--col-gap); }
-.ub-lane .strip { grid-column: 1 / span var(--lane, 12); row-gap: 10px;
-                  grid-template-columns: repeat(var(--lane-n, 12), minmax(0, 1fr)); }
-.unit-band ::selection { background: var(--band-ink); color: var(--band); }
-.unit-band :focus-visible { outline-color: var(--band-ink); }
+.ub-lane { margin-top: 14px; }
 @media (max-width: 760px) {
-  .unit-band { padding: 18px 0 20px; }
-  h1.unit-h, .ub-side { grid-column: 1 / -1; }
-  /* the strip across the band, three stages a row, each wide enough for its name and time */
-  .ub-lane .strip { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  h1.unit-h { font-size: 56px; }
-  h1.unit-h.long { font-size: 44px; }
-  h1.unit-h.longer { font-size: 32px; }
-  h1.unit-h.longest { font-size: 26px; }
-  h1.unit-h .g, h1.unit-h .g svg { width: 20px; height: 20px; }
+  h1.unit-h .g, h1.unit-h .g svg { width: 18px; height: 18px; }
+  h1.unit-h > .g { margin-top: 6px; }
 }
 /* its steps by the sheet's mode: one to a row on a narrow sheet, two from 640px, three from
    1200px, four from 2000px and six from 3000px */
-.u-sheet > sluice-grid { row-gap: 22px; }
-@container sheet (min-width: 2000px) { .u-sheet > sluice-grid > .u-step { --take: 6; } }
-@container sheet (min-width: 3000px) { .u-sheet > sluice-grid > .u-step { --take: 4; } }
+.u-sheet > .sheet { row-gap: 22px; }
+@container sheet (min-width: 2000px) { .u-sheet > .sheet > .u-step { --take: 6; } }
+@container sheet (min-width: 3000px) { .u-sheet > .sheet > .u-step { --take: 4; } }
 .u-step { padding: 12px 0 14px; border-top: 1.5px solid var(--navy); }
 .u-step.swell-ask { border-top: 6px solid var(--coral); }
 .u-step.swell-look { padding: 12px 14px 14px; }
@@ -2355,7 +2212,6 @@ details.read-today .item { opacity: .85; }
 /* ---- a page that cannot be drawn (`views::missing`): the band says what is missing and why;
    on the paper the ways on, each a heavy link -------------------------------------------------- */
 .missing { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; min-width: 0; }
-.missing-why { margin: 0 0 22px; max-width: var(--measure); color: var(--ink-muted); overflow-wrap: anywhere; }
 .missing-links { list-style: none; display: grid; gap: 0; margin: 0 0 18px; padding: 0; max-width: 60ch; }
 .missing-links li { border-bottom: 1px solid var(--rule); }
 .missing-links a { display: flex; align-items: center; min-height: 48px; font-size: 17px; font-weight: 750;
@@ -2383,13 +2239,9 @@ details.read-today .item { opacity: .85; }
   details.about .clip { max-height: calc(min(var(--lines, 2) * 2, 4) * 22px); }
   .drawer { width: 100vw; border-left: 0; --d-pad-t: 16px; --d-pad-x: 16px; --a-bleed: 10px; }
   /* tap targets at least 44px tall */
-  .pager a, nav.seg a, form.filters label, details.kinds > summary {
+  .pager a, form.filters label, details.kinds > summary {
     min-height: 44px; display: inline-flex; align-items: center; }
-  /* the board's toolbar in two lines: which boxes show across the width, its choices
-     sharing it; then the tag and the order */
-  .board-tools .seg:first-child { flex: 1 1 100%; }
-  .board-tools .seg label { flex: 1 1 auto; justify-content: center; min-height: 44px;
-                            padding: 0 8px; }
+  /* the board's toolbar: its tag and its order sharing the width */
   .board-tools select, .board-tools button { height: 44px; }
   .board-tools select { flex: 1 1 auto; min-width: 0; max-width: none; }
   .pager a { padding: 0 6px; }
@@ -2443,8 +2295,6 @@ details.read-today .item { opacity: .85; }
    them to a row; a band of rows lays out on twelve columns of its own, the strip rule's, its
    block heads and rows subgrids of them. From 2000px Running and Waiting stand side by side.
    ============================================================================================ */
-.plan-band { display: contents; }
-.band-in:has(> .plan-band) > nav.top { box-shadow: inset 0 -1px 0 var(--band-rule); }
 .plan-pane > .match-note:not(:empty), .plan-pane > .focus-note { margin: 0 0 14px; }
 .pl-sec { display: grid; align-content: start; min-width: 0;
           grid-template-columns: repeat(calc(var(--take, 12) * var(--per, 1)), minmax(0, 1fr));
@@ -2477,47 +2327,67 @@ details.read-today .item { opacity: .85; }
 .pl-fb > button { order: 2; }
 .pl-retry { display: contents; }
 
-/* a band of rows: its head (a recipe's block head, or the band's own), then a row a unit, each
-   its head at the left on `--lead` columns and its cells on the rest */
-.pl-rows { grid-template-columns: repeat(12, minmax(0, 1fr)); row-gap: 0; }
-.pl-group, .pl-rows .rail-slot, .pl-row { display: grid; grid-column: 1 / -1;
-  grid-template-columns: subgrid; align-items: start; min-width: 0; }
-.pl-group + .pl-group { margin-top: 26px; }
+/* a band of rows: its head (a recipe's block head, or the band's own), then a row a unit. A row
+   is its head (its state, how long it has run against its usual time and its overrun, then its
+   title, on two lines at most), its one line under it (what it said last, or what holds it),
+   its cells close beside it, each `--cell` wide, so a block's cells stand in their recipe's
+   columns under the head's stage names, and its "⋯" at the end. */
+.pl-rows { row-gap: 0; }
+.pl-group, .pl-rows .rail-slot:not(.pl-row) { display: block; grid-column: 1 / -1; min-width: 0; }
+.pl-group + .pl-group { margin-top: 22px; }
 .pl-rows .sec-h { grid-column: 1 / -1; }
-.pl-rows .sec-strip { grid-template-columns: subgrid; }
-.pl-rows .sh-lead { grid-column: span var(--lead); }
-.pl-rows .sh-stages { grid-column: span var(--cells) / -1; }
-.pl-group > .uv-broken { grid-column: 1 / -1; margin: 4px 0 8px; }
-.sec-group { min-height: 44px; border-top-width: 1.5px; padding: 18px 0 8px; }
+.pl-group > .uv-broken { margin: 4px 0 8px; }
+.sec-group { min-height: 40px; border-top-width: 1.5px; padding: 14px 0 6px; }
 .sec-group h3 { margin: 0; font-size: 19px; line-height: 1.1; font-weight: 800; letter-spacing: -0.015em; }
-.pl-row { padding: 14px 0; border-top: 1px solid var(--rule); }
-.pl-group > .rail-slot + .pl-row { border-top-color: var(--rule-faint); }
-.pl-row + .pl-row { border-top-color: var(--rule-faint); }
-.pl-lead { grid-column: span var(--lead); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.pl-cells { grid-column: span var(--cells) / -1; min-width: 0; container-type: inline-size; }
-/* a narrow row's cells leave the overrun to the row's chip (its words stay for a reader) */
-@container (max-width: 479.98px) { .pl-cells .sc-over { display: none; } }
-.pl-dense .sc-over { display: none; }
-/* a running or stopped cell's time a size its cell holds: 20px, smaller as six stages share a
-   narrow row */
+.pl-row { padding: 10px 0; border-top: 1px solid var(--rule-faint); min-height: 76px; }
+.pl-group > .rail-slot + .pl-row, .pl-rows > .pl-group:first-child .pl-row:first-of-type { border-top-color: var(--rule); }
+.pl-lead { grid-column: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pl-cells { grid-column: 2; min-width: 0; }
+.pl-end { grid-column: 3; align-self: center; display: flex; justify-content: flex-end; }
+.pl-cells .strip:not(.pl-layer .strip) { grid-template-columns: repeat(var(--n), var(--cell)); column-gap: 8px;
+                                         min-height: 52px; }
+.pl-cells .sc { min-height: 52px; padding: 0 7px; }
+.pl-cells .sc > a.sc-a { margin: 0 -7px; padding: 0 7px; }
+/* in a row the cell's state is its glyph (and its words for a reader): the row's head says it */
+.pl-cells .sc-top .sc-word { display: none; }
+/* a unit of no recipe: its own graph, as wide as its layers */
+.pl-free .pl-row.pl-graphed { grid-template-columns: minmax(0, 1fr) auto 34px; }
+/* a running or stopped cell's time a size its cell holds */
 .pl-cells .strip:not(.pl-layer .strip) :is(.sc-run, .sc-look) .sc-time {
-  font-size: clamp(13px, calc((100cqi - (var(--n, 1) - 1) * var(--col-gap)) / var(--n, 1) * 0.18), 20px); }
-.pl-row > .trace-more { grid-column: 1 / -1; margin-top: 14px; }
-.pl-row .trace-pick { display: flex; flex-direction: column; gap: 2px; margin: -4px -6px; padding: 4px 6px;
-                      color: inherit; max-width: var(--measure); }
-.pl-k { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-size: 13px; line-height: 18px; }
-.pl-k b { font-weight: 750; }
-.pl-k .g { margin: 0; width: 14px; height: 14px; }
-.pl-t { font-size: 16px; line-height: 1.25; font-weight: 750; letter-spacing: -0.005em;
-        display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-.pl-m { font-size: 13px; line-height: 18px; color: var(--ink-muted); }
-.pl-m .pl-id, .pl-m b { color: var(--ink); font-weight: 700; }
+  font-size: clamp(13px, calc(var(--cell) * 0.17), 19px); }
+/* a cell narrower than its overrun tag leaves it to the row's chip (its words stay for a reader) */
+@container sheet (max-width: 1199.98px) { .pl-cells .sc-over { display: none; } }
+/* a narrow lead (a board or the drawer beside the plan) keeps the title in sight: three lines
+   for its state and its title together */
+@container sheet (max-width: 1199.98px) { .pl-head { -webkit-line-clamp: 3; } }
+.pl-row > .trace-more { grid-column: 1 / -1; margin-top: 12px; }
+/* the row's head is the trace's button: plain words, never a box of its own */
+.pl-row .trace-pick { display: block; margin: 0; padding: 0; color: inherit; max-width: var(--measure);
+                      background: none; box-shadow: none; }
+.pl-row .trace-pick:hover .pl-t { text-decoration: underline; text-underline-offset: 3px;
+                                  text-decoration-thickness: 1px; }
+.pl-head { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+           font-size: 15.5px; line-height: 21px; }
+.pl-k { display: inline; margin-right: 4px; font-size: 13px; line-height: 21px; }
+.pl-k > :is(.pl-w, .pl-time, .overrun) { white-space: nowrap; }
+.pl-k b { font-weight: 750; margin-left: 4px; }
+.pl-k .g { display: inline-block; vertical-align: -2px; margin: 0; width: 14px; height: 14px; }
+.pl-k .g svg { width: 14px; height: 14px; }
+.pl-time { margin-left: 6px; font-weight: 650; }
+.pl-usual { color: var(--ink-muted); }
+.pl-k .overrun { margin-left: 6px; vertical-align: 1px; }
+.pl-k .trace-role { margin-right: 4px; }
+.pl-t { font-weight: 750; letter-spacing: -0.005em; }
 .pl-sub { max-width: var(--measure); font-size: 13px; line-height: 18px; color: var(--ink-muted);
-          overflow-wrap: anywhere; }
-.pl-sub b { color: var(--ink); font-weight: 600; }
-.pl-sub code { font-size: 12px; background: none; padding: 0; color: var(--ink); }
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-sub b { color: var(--ink); font-weight: 650; }
 .pl-sub a { color: inherit; }
-.pl-view .uv-in-row { color: var(--ink-muted); }
+.pl-view .uv-in-row { color: var(--ink-muted); display: block; overflow: hidden; text-overflow: ellipsis;
+                      white-space: nowrap; }
+.pl-view .uv-in-row :is(.uv-stack, .uv-msg, .uv-md, .uv-msg p, .uv-md p) { display: inline; }
+.pl-view .uv-in-row .uv-stack > * + *::before { content: " · "; }
+.pl-view .uv-from { color: var(--ink); font-weight: 650; }
+.pl-why { font-size: 14px; line-height: 20px; }
 .nojs { display: none; }
 /* the page's row: the plan's other ways to look, a quiet menu at its end */
 .subnav-tools .pl-find { margin: 0; flex-wrap: nowrap; }
@@ -2538,15 +2408,15 @@ details.read-today .item { opacity: .85; }
 /* the selected unit: ringed, its parts open under it */
 sluice-trace[tracing] .pl-row[data-trace="selected"] { box-shadow: 0 0 0 2px var(--navy);
   border-top-color: transparent; padding-left: 10px; padding-right: 10px; }
+/* a unit's steps opened in place: the stage, its state and time, what it waits for */
 .pl-more { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 5fr) minmax(0, 2fr);
            gap: 12px var(--col-gap); align-items: start; }
 .pl-mh { margin: 0 0 6px; font-size: 13px; font-weight: 750; }
 .pl-steps ol { list-style: none; margin: 0; padding: 0; }
-.pl-steps li { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto; gap: 2px 10px;
+.pl-steps li { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 2px 10px;
                align-items: baseline; padding: 4px 0; border-top: 1px solid var(--rule-faint);
                font-size: 13px; line-height: 18px; }
 .pl-steps li > a { font-weight: 650; }
-.pl-fn { font-size: 12px; background: none; padding: 0; color: var(--ink-muted); }
 .pl-st { display: inline-flex; align-items: center; gap: 4px; justify-self: end; text-align: right;
          color: var(--ink-muted); }
 .pl-st .g { margin: 0; width: 13px; height: 13px; }
@@ -2565,8 +2435,6 @@ sluice-trace[tracing] .pl-row[data-trace="selected"] { box-shadow: 0 0 0 2px var
 .pl-wire path { fill: none; stroke: var(--line); stroke-width: 1.5; }
 
 /* the margin: a long run's progress, at the sheet's right beside the bands */
-.pl-margin .mm-f dd { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8;
-                      overflow: hidden; overflow-wrap: anywhere; }
 .pl-margin { grid-column: span calc(var(--take, 2) * var(--per, 1)) / -1; grid-row: 1 / span var(--rows);
              display: flex; flex-direction: column; gap: max(16px, var(--col-gap)); min-width: 0; }
 
@@ -2580,17 +2448,17 @@ sluice-trace[tracing] .pl-row[data-trace="selected"] { box-shadow: 0 0 0 2px var
 .pl-index .pl-hide, .pl-index[open] .pl-show { display: none; }
 .pl-index[open] .pl-hide { display: inline; }
 .pl-range { margin: 12px 0 8px; }
+.pl-done > .latest { max-width: 720px; margin: 2px 0 14px; }
 .pl-idx { list-style: none; margin: 0; padding: 12px 14px; background: var(--paper-2);
           columns: 3 22rem; column-gap: calc(var(--col-gap) * 2); }
 .pl-idx li { break-inside: avoid; border-bottom: 1px solid var(--rule-faint); }
-.pl-idx a { display: grid; grid-template-columns: 3.4em 14px minmax(0, auto) minmax(0, 1fr) auto;
+.pl-idx a { display: grid; grid-template-columns: 3.4em 14px minmax(0, 1fr) auto;
             align-items: baseline; gap: 0 8px; padding: 5px 0; font-size: 13px; line-height: 18px;
             text-decoration: none; }
 .pl-idx a:hover .pl-dt { text-decoration: underline; }
 .pl-at { font: 600 12.5px/18px var(--font-mono); color: var(--ink-muted); }
 .pl-idx .g { width: 14px; height: 14px; margin: 0; align-self: center; }
 .pl-idx .g svg { width: 14px; height: 14px; }
-.pl-did { font-size: 12px; background: none; padding: 0; font-weight: 600; }
 .pl-dt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-dk { color: var(--sky-ink); white-space: nowrap; font-size: 12.5px; }
 
@@ -2608,26 +2476,28 @@ sluice-drawer#step-drawer .drawer .close:hover { background: var(--paper-2); }
   .pl-margin { grid-row: 1 / span var(--rows-w, var(--rows)); }
 }
 @container sheet (max-width: 1199.98px) {
-  .pl-rows .sh-lead, .pl-lead { grid-column: span var(--lead-m, var(--lead)); }
-  .pl-rows .sh-stages, .pl-cells { grid-column: span var(--cells-m, var(--cells)) / -1; }
   .pl-sec > .pl-item { grid-column: span min(12, calc(var(--take, 12) * var(--per, 1))); }
   /* the long runs after Running, before Waiting */
-  sluice-grid > :is(#plan-waiting, #plan-done) { order: 10; }
+  .sheet > :is(#plan-waiting, #plan-done) { order: 10; }
   .pl-margin { grid-column: 1 / -1; grid-row: auto; order: 9; display: grid;
                grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); }
 }
 @container sheet (max-width: 639.98px) {
-  /* a phone's row: its cells wrap, each wide enough for its name and time */
-  .pl-cells .strip:not(.pl-layer .strip) { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
-                                            row-gap: 6px; }
-  .pl-rows .sh-stages { display: none; }
-  .pl-sec > .pl-item, .pl-lead, .pl-cells, .pl-rows .sh-lead, .pl-rows .sh-stages { grid-column: 1 / -1; }
-  .pl-row { row-gap: 10px; }
+  /* a phone's row: its head, its "⋯" beside it, its cells across the row under them */
+  .pl-row, .pl-free .pl-row.pl-graphed { grid-template-columns: minmax(0, 1fr) 44px; row-gap: 8px;
+                                         align-items: start; }
+  .pl-lead { grid-column: 1; }
+  .pl-end { grid-column: 2; grid-row: 1; align-self: start; }
+  .pl-cells { grid-column: 1 / -1; grid-row: 2; }
+  .pl-cells .strip:not(.pl-layer .strip) { grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
+  .pl-cells .sc-time { font-size: 13px !important; }
+  .pl-sec > .pl-item { grid-column: 1 / -1; }
+  .pl-head { -webkit-line-clamp: 3; }
   .pl-graph { --cell: 48px; }
   .pl-more { grid-template-columns: minmax(0, 1fr); }
   .pl-more .mod-actions { flex-direction: row; }
   .pl-idx { columns: 1; padding: 8px 10px; }
-  .pl-idx a { grid-template-columns: 3.4em 14px minmax(0, auto) minmax(0, 1fr); }
+  .pl-idx a { grid-template-columns: 3.4em 14px minmax(0, 1fr); }
   .pl-dk { grid-column: 3 / -1; }
 }
 @media (max-width: 759.98px) {
@@ -2729,17 +2599,17 @@ sluice-search:defined .apply { display: none; }
 .focus-note { margin: calc(-1 * var(--space-xs)) 0 var(--space-md); max-width: var(--measure); }
 .focus-note code { font-size: 12.5px; }
 
-/* -- the switch: on the summary line, at its right end, as wide as its words -- */
-.view-switch { display: none; flex: none; gap: 2px; margin-left: auto; padding: 2px;
-               border: 1px solid var(--rule-faint); border-radius: 0;
-               background: var(--paper-raised); }
-.view-switch button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px;
-                      padding: 2px 12px 2px 10px; border: 0; border-radius: 0;
-                      background: transparent; color: var(--ink-muted);
-                      font: 500 13px/18px var(--font-sans); }
-.view-switch button:hover { color: var(--ink); background: transparent; }
-.view-switch button[aria-pressed="true"] { color: var(--ink); background: var(--paper-2);
-                                           box-shadow: 0 0 0 1px var(--rule); }
+/* -- the view switch: Plan · Both · Board, one segmented control under a navy line, the chosen
+   view filled navy with cream (so it reads as chosen in every theme), the others muted words.
+   Links, so it works without script; with script board.js shows the view at once -- */
+.view-switch { display: flex; flex: none; box-shadow: inset 0 0 0 1.5px var(--navy); }
+.view-switch a { display: inline-flex; align-items: center; gap: 6px; min-height: 38px;
+                 padding: 0 14px 0 12px; color: var(--ink-muted); text-decoration: none;
+                 font: 650 13.5px/18px var(--font-sans); }
+.view-switch a + a { box-shadow: inset 1.5px 0 0 var(--rule); }
+.view-switch a:hover { color: var(--ink); background: var(--paper-2); }
+.view-switch a:is([aria-current="true"], [aria-current="page"]) { background: var(--navy); color: var(--on-navy); box-shadow: none; }
+.view-switch a:is([aria-current="true"], [aria-current="page"]) + a { box-shadow: none; }
 
 /* -- the splitter: a grip on a hairline that lights when it is used -- */
 .splitter { display: none; position: relative; justify-content: center; align-items: center;
@@ -2759,12 +2629,10 @@ sluice-search:defined .apply { display: none; }
 html.resizing, html.resizing * { cursor: col-resize !important; -webkit-user-select: none;
                                  user-select: none; }
 
-/* the board alone: the plan's pane steps away; the band keeps its summary sentence over it and
-   the paper row its switch */
-@media (scripting: enabled) {
-  .view-switch { display: flex; }
-  html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane { display: none; }
-}
+/* the board alone: the plan's pane steps away; the page's head keeps its summary sentence over
+   it and the row its switch */
+html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane { display: none; }
+.project-page[data-view="plan"] > .board-side { display: none; }
 @media (max-width: 1279px) and (scripting: enabled) {
   .view-switch [data-view-tab="both"] { display: none; }
   .project-page:not([data-view="board"]) > .board-side { display: none; }
@@ -2815,12 +2683,11 @@ html.resizing, html.resizing * { cursor: col-resize !important; -webkit-user-sel
      a row can still be read across (prose keeps its own 72ch) */
   .project-page[data-view="board"] .board-scroll { max-width: 1680px; }
   .project-page[data-view="board"] .board-pane .ou-table { width: 100%; }
-  .project-page[data-view="plan"] > .board-side { display: none; }
   /* the drawer takes the side: the plan shows, the board and the switch step away */
   html.drawer-open .project-page.has-panel .board-side, html.drawer-open .view-switch { display: none; }
 }
 @media (max-width: 720px) {
-  .view-switch button { min-height: 44px; padding: 0 14px 0 12px; }
+  .view-switch a { min-height: 44px; }
   .more-fold > summary { min-height: 44px; margin-top: 0; }
   .board-tools .q-field { flex-basis: 100%; max-width: none; }
   .board-tools input[type=search] { height: 44px; }
@@ -2999,30 +2866,24 @@ details.gates > summary { margin-top: 0; font-size: 14px; color: var(--ink); }
    it, muted ("land ·"); its id after it in data mono, muted. Without a title, its id. ---- */
 .sref-t { font-weight: 500; color: var(--ink); }
 .sref-stage { color: var(--ink-muted); font-weight: 500; white-space: nowrap; }
-code.sref-id, .d-id code {
+code.sref-id {
   font: 400 12.5px/18px var(--font-mono); color: var(--ink-muted); border: 0;
   background: none; padding: 0; white-space: nowrap; }
 a.sref-a { text-decoration: none; color: inherit; }
 a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px; }
 /* a status as its glyph and word (views::ui::status) */
 .st { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-/* the step's and unit's page: the title is the heading, the id under it in data mono */
+/* a step's stage, muted before its title */
 .d-stage { color: var(--ink-muted); }
-.d-id { margin: 2px 0 0; flex-basis: 100%; }
-.unit-page .d-id { margin: 4px 0 8px; }
 
-/* a recipe's view: its parts on one line in a row, a block on the unit page */
-.uv-in-row .uv-stack.uv-r, .uv-in-row .uv-stack.uv-c { display: flex; flex-wrap: wrap;
-  align-items: baseline; gap: 2px 10px; }
+/* a recipe's view: its parts on one line in a row (the row's one line, `.pl-view`), a block on
+   the unit page */
 .uv-page .uv-stack.uv-r { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
 .uv-page .uv-stack.uv-c { display: grid; gap: 6px; }
-.uv-param { color: var(--ink); font-weight: 500; }
 .uv-out { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink);
           overflow-wrap: anywhere; }
 .uv-out .g, .uv-out .g svg { width: 12px; height: 12px; vertical-align: -1px; margin-right: 3px; }
 .uv-msg { overflow-wrap: anywhere; }
-.uv-in-row .uv-msg { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1;
-                     line-clamp: 1; overflow: hidden; flex-basis: 100%; }
 .uv-from { color: var(--ink); font-weight: 500; }
 .uv-text.muted { color: var(--ink-muted); }
 .uv-link { color: var(--ink); text-underline-offset: 3px;
@@ -3085,10 +2946,10 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
 }
 .gal-pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 @container (min-width: 900px) { .gal-pair:not(.gal-wide) { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.gal-band { margin: 0 -16px; padding: 0 16px; background: var(--band); color: var(--band-ink);
-            container: band / inline-size; }  /* the band's part lays out by its own width */
-.gal-band a { text-decoration: none; }
-.gal-band a:hover { color: var(--band-accent); }
+.gal-head { container: band / inline-size; }
+.gal-dm { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+          max-width: 520px; padding: 8px 0; border-top: 1px solid var(--rule); }
+.gal-dm-open { margin-bottom: 220px; }
 .gal-summary { font-size: 19px; line-height: 1.3; font-weight: 650; max-width: 40em; }
 .gal-margin { max-width: 260px; }
 .gal-strips { display: grid; gap: 12px; }
@@ -3215,8 +3076,7 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
 .tt-name { min-width: 0; text-decoration: none; overflow-wrap: anywhere; }
 .tt-name b { font-weight: 750; }
 .tt-name:hover { text-decoration: underline; }
-.tt-stage, .tt-n { color: var(--ink-muted); }
-.tt-n { font-size: 12px; }
+.tt-stage { color: var(--ink-muted); }
 .tt-out { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding-left: 6px;
           font: 500 12px/18px var(--font-mono); color: var(--ink-muted); white-space: nowrap;
           font-variant-numeric: tabular-nums; }
@@ -3269,23 +3129,14 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
    the frame container, "a phone's content" is under 640px of it) */
 main { container: frame / inline-size; }
 
-/* ---- a page's band drawn in one piece (`Frame::head` wrapped to patch as one region): the
-   wrapper gives no box, so its head, alert and strip sit on the band as they would alone ---- */
-.band-wrap { display: contents; }
-.band-in:has(> .band-wrap > :is(.band-head, .band-strip)) > nav.top {
-  box-shadow: inset 0 -1px 0 var(--band-rule); }
-/* the runner stopped: said on the band, under its sentence, since nothing new starts anywhere */
-.band-alert { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 22px; padding: 12px 14px;
-              background: var(--sand); color: var(--on-sand); font-size: 15px; line-height: 22px; }
-.band-alert .ro-icon { flex: none; margin-top: 1px; color: var(--sand-mark); }
-.band-alert code { background: color-mix(in oklch, var(--on-sand) 10%, transparent); }
-/* code in the band's words: a chip of the band's own ink, never the paper's */
-.band-head code { background: color-mix(in oklch, var(--band-ink) 14%, transparent); color: inherit; }
+/* a page's head drawn in one piece (`Frame::head` wrapped to patch as one region): the wrapper
+   gives no box */
+.band-wrap, .plan-band, .messages-band { display: contents; }
 
 /* ---- home (`views::home`): For you beside Today, each project a module, the index ------------ */
 .home { display: grid; grid-template-columns: minmax(0, 1fr); gap: 44px; min-width: 0; }
 .home > * { min-width: 0; }
-.home > .vh + sluice-grid { margin-top: 0; }
+.home > .vh + .sheet { margin-top: 0; }
 .fy-none { padding: 18px 0 4px; color: var(--ink-muted); max-width: var(--measure); }
 .fy-q { margin-top: 4px; }
 .fy-q + .fy-q { margin-top: 28px; }
@@ -3368,7 +3219,6 @@ main { container: frame / inline-size; }
 .pm-done-h { font-weight: 700; }
 .pm-done ol { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 2px 16px; }
 .pm-done time { font-family: var(--font-mono); font-size: 12px; }
-.pm-took { color: var(--ink-muted); }
 .pm-open { display: flex; flex-wrap: wrap; gap: 4px 20px; margin-top: auto; padding-top: 16px;
            font-size: 14px; font-weight: 650; }
 .pm-open a { display: inline-flex; align-items: center; min-height: 32px; }
@@ -3395,12 +3245,6 @@ main { container: frame / inline-size; }
    filters on one bar, then its records under a section head ---------------------------------- */
 .logpage { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; min-width: 0; }
 .log-tools { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 28px; padding: 0 0 18px; }
-.logpage nav.seg.presets { margin: 0; padding: 0; border: 0; background: none; gap: 0;
-                           box-shadow: inset 0 0 0 1.5px var(--navy); font-size: 13.5px; }
-.logpage nav.seg a { display: inline-flex; align-items: center; min-height: 38px; padding: 0 14px;
-                     color: var(--ink); font-weight: 600; }
-.logpage nav.seg a + a { box-shadow: inset 1px 0 0 var(--rule); }
-.logpage nav.seg a[aria-current] { background: var(--navy); color: var(--on-navy); box-shadow: none; }
 .logpage sluice-search { flex: 1 1 520px; min-width: 0; }
 .logpage form.filters { margin: 0; gap: 10px 18px; font-size: 13.5px; }
 .logpage form.filters label.field input { height: 38px; width: 13rem; max-width: 100%; }
@@ -3418,7 +3262,7 @@ main { container: frame / inline-size; }
 .logpage .pager { margin: 18px 0 0; font-size: 14px; font-weight: 650; }
 .logpage .pager a { display: inline-flex; align-items: center; min-height: 32px; }
 @container frame (max-width: 639.98px) {
-  .logpage nav.seg a { min-height: 44px; padding: 0 10px; }
+  .logpage .view-switch a { min-height: 44px; padding: 0 10px; }
   .logpage form.filters label.field { flex: 1 1 100%; }
   .logpage form.filters label.field input { flex: 1; width: auto; height: 44px; }
   .logpage form.filters .apply, .logpage details.kinds > summary { min-height: 44px; }
@@ -3564,7 +3408,6 @@ main { container: frame / inline-size; }
 /* ---- history (`templates/history.html`): every thread with the owner, a module each on the
    grid, as many to a row as fit; one with an open question to the owner under the coral rule -- */
 .histpage { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
-.histpage .history-lead { margin: 10px 0 26px; }
 .histpage .hist-grid { display: grid; gap: 28px var(--col-gap);
                        grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); }
 .histpage article.item.hist { margin: 0; padding: 12px 0 0; background: none; border: 0;

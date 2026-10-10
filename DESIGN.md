@@ -1,6 +1,6 @@
 ---
 name: sluice dashboard
-description: Synthesis. The National Park Service Unigrid in the logo's Americana palette: a heavy navy title band with the page's name huge, cream paper below on a visible module grid, the channel's blue for what runs, coral only for a question to the owner.
+description: Synthesis. The National Park Service Unigrid in the logo's palette: a slim navy nav bar over cream paper, the page's name at a reading size and its sentence under it, a twelve-column module grid, what identifies an item behind its ⋯, the channel's blue for what runs, coral only for a question to the owner.
 colors:
   paper: "oklch(0.98 0.017 88)"
   paper-2: "oklch(0.955 0.022 86)"
@@ -132,13 +132,13 @@ grid:
   sheet-wide-from: "2000px"
   phone-below: "760px"
 components:
-  band:
+  band-nav:
     backgroundColor: "{colors.band}"
     textColor: "{colors.band-ink}"
-    padding: "0 32px"
-  band-nav:
-    textColor: "{colors.band-ink}"
-    height: "54px"
+    height: "52px"
+  page-head:
+    textColor: "{colors.ink}"
+    typography: "30px/34px 850"
   inbox-count:
     backgroundColor: "{colors.coral}"
     textColor: "{colors.on-coral}"
@@ -210,13 +210,14 @@ components:
 **Synthesis.** The dashboard is a park map for work. Its parent is the National Park Service
 Unigrid (Massimo Vignelli, 1977): a heavy black title band carrying the place's name huge, a
 module grid everything sits on, and information set in one grotesque at a few decisive sizes.
-Synthesis keeps that structure and sets it in the logo's Americana palette: the band is the
-logo's navy, the paper its cream, the channel's blue is the one active colour, sky is done,
-sand needs a look, and coral is spent on one thing only, an open question to the owner.
+Synthesis keeps the grid and the type and sets them in the logo's palette, with the band cut to
+a slim navy nav bar so the work starts near the top of the screen: the paper is the logo's
+cream, the channel's blue is the one active colour, sky is done, sand needs a look, and coral
+is spent on one thing only, an open question to the owner.
 
 The owner opens the dashboard between other work, often on a second screen or a phone, to
 answer one question within seconds: does anything need me, and is the work moving? The page
-answers in its order. The band says it in one sentence; under it the paper lists what needs the
+answers in its order. The page's head says it in one sentence; under it the paper lists what needs the
 owner first and what is done last: **For you** (a question to the owner) → **Stopped**
 (failed, cancelled, stale) → **Running** (quiet first, then the longest past its usual time) →
 **Waiting** → **Done** (a dense index, folded). The module that needs the owner swells. A
@@ -237,8 +238,8 @@ outputs and the project's board document. Nothing in view code assumes a project
 - **Stage columns** come from a unit's recipe's own steps, in recipe order. A project with
   several recipes gets a block per recipe, each with its own columns. A unit of no recipe draws
   its own small graph; a one-step unit is one cell.
-- **"Recently finished"** is the units (or steps of no unit) whose run ended most recently,
-  with when and how long they took.
+- **"Finished last"** is the units (or steps of no unit) whose run ended most recently, by
+  title, with when and how long they took.
 - **A long run** (a step running far past any usual time, or reporting `step_progress`) shows
   its progress fields in the margin module, as it reported them: sluice never reads or names
   them.
@@ -255,9 +256,9 @@ outputs and the project's board document. Nothing in view code assumes a project
 ## Palette
 
 Roles, not hues. Each is a token (`assets/style.css`), `light-dark()` of its light and dark
-value, so the page's `color-scheme` picks the appearance: the system's, or the one the display
-preferences chose (`data-appearance`). These are Americana's, the default theme; every other
-theme (below, Themes) maps the same roles.
+value, so a theme's scheme (its id's `-light` or `-dark`) picks the side, and with no theme
+chosen the system's. These are Sluice's (Sluice Light and Sluice Dark); every other theme
+(below, Themes) maps the same roles.
 
 - **Paper** (`paper`, cream): the page. `paper-2` is a sunk well and a hover; `paper-raised` a
   menu or the drawer.
@@ -265,14 +266,14 @@ theme (below, Themes) maps the same roles.
 - **Navy** (`navy`): the heavy rules (a band section's 3px head rule, a stopped module's 2px),
   the filled button, the selected ring. In the dark it turns cream, so a rule stays the
   heaviest thing on the paper.
-- **The band** (`band`, `band-ink`, `band-muted`, `band-rule`, `band-accent`): the logo's navy
+- **The nav bar** (`band`, `band-ink`, `band-muted`, `band-rule`, `band-accent`): the logo's navy
   in the light, a deeper navy than the paper in the dark, cream text, sky for what the band
   links to and how long things took.
 - **The band's mark** (`band-mark`): the logo's blue on the band, the current place's underline
   and the live square.
 - **Run** (`run`): the channel's blue, the one active colour: a running cell's fill (cream on
-  it), a running mark (edged in `run-ink`), the overlay's tag, the grid switch pressed.
-  `run-ink` is the blue as text, `focus` the focus ring (and the overlay's tint).
+  it), a running mark (edged in `run-ink`). `run-ink` is the blue as text, `focus` the focus
+  ring.
 - **Sky** (`sky`): done. A done cell's fill and a done mark's (edged in `sky-ink`); `sky-ink`
   its glyph; `sweep` the bright sky of the sweep along a running cell's foot.
 - **Sand** (`sand`, `sand-pale`, `sand-ink`, `sand-mark`): needs a look: failed, cancelled,
@@ -283,30 +284,38 @@ theme (below, Themes) maps the same roles.
   failure is never coral.
 
 **The One Coral Rule.** Coral marks a question waiting on the owner, nothing else.
-**The One Blue Rule.** Blue fills only what is running now (and the grid switch while it is
-pressed, which is the construction's own colour).
+**The One Blue Rule.** Blue fills only what is running now.
 
-Dark is navy paper (`paper-dark`), never black; the band goes deeper than the paper so it still
-reads as the heaviest thing on the page. Text holds 4.5:1 in both, large text 3:1.
+Sluice Dark is navy paper (`paper-dark`), never black; the nav bar goes deeper than the paper
+so it still reads as the heaviest thing on the page. Text holds 4.5:1 in both, large text
+3:1.
 
 The derived tokens (`rule`, `rule-faint`, `line` from `navy`; `band-muted`, `band-rule`,
-`band-hover` from `band-ink`; `grid-col`, `grid-edge` from `focus`; `lift`, `scrim` from
-`band`) are worked out in one block, again on any element that names a theme or an appearance,
-so a part of the gallery in another theme or appearance draws itself whole. Page CSS uses the
-tokens only, never a literal colour.
+`band-hover` from `band-ink`; `lift`, `scrim` from `band`) are worked out in one block, again
+on any element that names a theme, so a part of the gallery in another theme draws itself
+whole. Page CSS uses the tokens only, never a literal colour.
 
 ## Themes
 
-Americana is the default and the brand. Beside it the display preferences offer six themes made
-from well-loved colour schemes, each adapted to sluice's roles and each a light and dark pair;
-the appearance (Match system, Light, Dark) is chosen apart from the theme. The theme is
-`data-theme` on `<html>` (none for Americana) and the `sluice_theme` cookie; the appearance
-`data-appearance` and `sluice_appearance` (none follows the system). Both are server-drawn,
-so a page without script is drawn in them; with script the picker applies at once
+There is no light or dark setting: there is one list of themes, and a theme is a whole look in
+one scheme. Sluice Light and Sluice Dark are the brand; beside them the display preferences
+offer twelve more made from well-loved colour schemes, each adapted to sluice's roles: Solarized
+Light and Dark, Nord Light and Nord, Gruvbox Light and Dark, Catppuccin Latte and Mocha, Rosé
+Pine Dawn and Rosé Pine, Flexoki Light and Dark. A theme's id is `<family>-light` or
+`<family>-dark` (`views::THEMES`): `data-theme` on `<html>` and the `sluice_theme` cookie,
+server-drawn, so a page without script is drawn in it; with script the picker applies at once
 (`sluice-toggle`). The picker shows each theme's swatch in its own tokens: its band over its
 paper, a square of its running colour and one of its question colour.
 
-**Mapping by role, not hue.** The band is the theme's deepest surface (for a light pair it
+**The first open.** With no cookie the page names no theme and the stylesheet draws Sluice
+Light or Sluice Dark by the system's scheme. With script, that first page keeps what it drew as
+the choice (`nav.js` posts it to `/settings` once); from then on only a pick in the picker
+changes the theme, whatever the system's scheme does. Without script nothing is kept, and the
+system's scheme decides until a theme is picked.
+
+**Mapping by role, not hue.** A family's block (`[data-theme^="nord-"]`) maps every role as
+`light-dark()` of its light and dark theme, and the theme's suffix sets its `color-scheme`. The
+band is the theme's deepest surface (for a light pair it
 borrows the scheme's darkest base, as Unigrid's band is black); paper and paper-2 its base and
 its next surface; ink its text, ink-muted its comment or subtle text; navy, the heavy rules and
 the filled button, its strongest text colour; run its blue (or its nearest); sky a pale wash
@@ -314,7 +323,8 @@ of its cyan or green, its glyph the full hue; sand its yellow; and the question 
 vivid colour no other role uses. Status never rests on colour alone in any theme: every state
 keeps its glyph and its word.
 
-**Held by a test** (`tests/themes.rs`), which reads every theme's tokens from the stylesheet:
+**Held by a test** (`tests/themes.rs`), which reads each of the fourteen themes' tokens from
+the stylesheet, in its own scheme:
 text at 4.5:1 (ink and ink-muted on paper, paper-2, paper-raised, sand-pale and sky; run-ink
 and sand-ink on paper and paper-2; band-ink, band-muted and band-accent on the band; the text on
 running, sand, coral and navy fills), 3:1 for the focus ring on paper and paper-2 and for status
@@ -324,7 +334,7 @@ from every other role's, running apart from done, and the band no lighter than t
 
 | Theme | Source and licence | Light | Dark |
 |---|---|---|---|
-| **Americana** | the logo's own palette | cream paper, the logo's navy band | navy paper, a deeper navy band |
+| **Sluice** | the logo's own palette | cream paper, the logo's navy band | navy paper, a deeper navy band |
 | **Solarized** | Ethan Schoonover, [ethanschoonover.com/solarized](https://ethanschoonover.com/solarized), MIT | base3 paper, base03 band | base03 paper, a deeper base03 band |
 | **Nord** | Arctic Ice Studio, [nordtheme.com](https://www.nordtheme.com), MIT | Snow Storm paper (nord6), Polar Night band (nord0) | Polar Night paper (nord0), a deeper Polar Night band |
 | **Gruvbox** | Pavel Pertsev, [github.com/morhetz/gruvbox](https://github.com/morhetz/gruvbox), MIT/X11 | light0 paper, dark0_hard band | dark0 paper, dark0_hard band |
@@ -377,17 +387,14 @@ One family: **Schibsted Grotesk** (variable, 400 to 900) for display and text, w
 cdn.jsdelivr.net (`@fontsource-variable/schibsted-grotesk@5.3.0`,
 `@fontsource-variable/jetbrains-mono@5.3.0`), the only third-party requests a page makes.
 
-- The band's name: fluid in the band's own width, `clamp(88px, 10.9cqi, 240px)` of the `band`
-  container (150px at 1440, 88px on a phone; the drawer beside the page narrows the band and
-  the name with it, so it stays whole), 900,
-  line-height 0.8, -0.04em; a longer name steps down in proportion (`long` from 7 characters,
-  104px at 1440, 64px on a phone; `longer` across the band from 13, 76px, 46px; `longest` from
-  21, 52px, 34px) and wraps anywhere rather than run off. The band's words grow a little with
-  it (the summary sentence 18 to 26px, the description 14 to 18px) and keep their measure.
-- A band section's head: 30px, 850, -0.03em. A question's title in its module: 23px, 800. The
-  summary sentence: 19px at 1440, 650. A module's title: 16px, 750, two lines at most.
+- The page's name (`ui::page_head`): 30px/34px, 850, -0.025em (26px on a phone), balanced
+  and wrapping anywhere rather than running off; a step's name 28px/34px (23px on a phone,
+  24px in the drawer, three lines at most there). The summary sentence under it: 17px/24px, 500
+  (15px on a phone), one line where it fits. A page's note in its place: 14px in `ink-muted`.
+- A band section's head: 30px, 850, -0.03em. A question's title in its module: 23px, 800. A
+  module's title: 16px, 750, two lines at most.
 - Body 15/22; meta 13/18 in `ink-muted`; a running cell's time 20px 800.
-- Data: JetBrains Mono 12.5px; a clock time in the band's strip 22px 600.
+- Data: JetBrains Mono 12.5px.
 - Tabular figures only on numeric data (`time`, durations, counts, `.num`), never page-wide:
   Schibsted's tabular figures widen its punctuation.
 - Long tokens (ids, paths) wrap (`overflow-wrap: anywhere`), so a page never scrolls sideways.
@@ -396,18 +403,19 @@ cdn.jsdelivr.net (`@fontsource-variable/schibsted-grotesk@5.3.0`,
 ## The grid
 
 **Fluid at every width, 320px to 3840px.** There is no frame cap: the column is the window less
-a gutter each side (less the step drawer when it stands beside the page), and the band, the
-page's row and the page share its edges. The gutter grows with the window,
+a gutter each side (less the step drawer when it stands beside the page), and the nav bar, the
+page's head, its row and the page share its edges. The gutter grows with the window,
 `clamp(16px, 10px + 1.5vw, 64px)` (16px on a phone, 32 at 1440, 48 at 2560, 64 at 3840), and
 so does the gap between columns, `clamp(8px, 4px + 0.8vw, 28px)`. A wide screen gets more
 modules a row, never longer lines: prose keeps `--measure` (68ch) at every width.
 
 **Lay out by the box, not the window.** `main` is the `frame` container and every sheet the
 `sheet` container, so what sits in them follows the room it has, the drawer and a board beside
-the plan counted. Media queries are for the frame outside `main` (the band and the row), and
+the plan counted. Media queries are for the frame outside `main` (the nav bar, the head and the
+row), and
 for input (pointer, hover, motion, colour scheme).
 
-**The sheet** (`ui::grid_open`, `sluice-grid`) has four modes, by its own width:
+**The sheet** (`ui::grid_open`, a plain `div.sheet`) has four modes, by its own width:
 
 | sheet | columns | a module of span N (twelfths) |
 |---|---|---|
@@ -423,54 +431,77 @@ for input (pointer, hover, motion, colour scheme).
   swell, label, ui::Wide::Halve)` (or `ui::column_open_wide`, or `data-wide="halve"` beside
   `style="--span:N"`) halves it instead, so two whole-width modules stand side by side from
   2000px. A child with no span takes the whole sheet.
-- **Show grid** (`ui::grid_toggle`, in the page's row under the band) draws the real
-  construction over the sheet: each column of the mode tinted and numbered above in data
-  mono (6, 12 or 24 of them: the overlay's cells are `gc`, `gc-r` from 640px and `gc-w` from
-  2000px), each module's span in the mode in its corner ("8 col", a CSS counter of what it
-  takes now). It is kept in the browser until switched off. It is a way of looking, so it
-  needs script and is not there without it.
+- Nothing is drawn over the sheet: the grid is the layout, not a picture of it.
 - **Strip tables.** A plan's stages sit on fixed columns: a band's strip head
-  (`ui::strip_head(…, lead, stages)`) names each stage over its column, and each row under it
-  (`ui::strip_row_open(lead)`: the unit's head, then its `ui::stage_strip`) lays out on the
-  same twelve inner columns, so each cell stands under its name at every width. Where their
-  container (the nearest sheet, else the frame) is under 640px both stack, lead over stages,
-  the stages across the whole width. A head and its rows share one container.
+  (`ui::strip_head(…, stages)`) names each stage over its column, and each row under it (a
+  plan's unit, or `ui::strip_row_open(n)`: its lead, then its `ui::stage_strip`) shares one
+  track list: the lead takes what the cells leave, the cells `--cell` wide each
+  (`clamp(68px, 6cqi, 104px)`) close beside it, then the row's "⋯". So each cell stands under
+  its name at every width. Where the sheet is under 640px the lead stands over the cells, the
+  head's names give way and each row's cells share its width.
 - The trace rail sits in the gutter and narrows with it (28px from 1200px, the gutter less a
   pixel below).
 - **Narrow end.** At 320 and 390 nothing clips and the page never scrolls sideways; every
   control is 44px tall on a phone.
 
-## The band
+## The frame
 
-The page header is the navy title band (`templates/layout.html`), across the window:
+The page's frame (`templates/layout.html`, `render_framed`) is a slim nav bar and the page's
+head on the paper under it.
 
-- **Its top row** (`nav#top-nav`, 54px): the mark and "sluice", "Projects" (on a project's
-  pages), the project switcher (the project's name, or "Projects" on the index), Inbox with its
-  coral count, then at the right the live line (a square in `band-mark` and "Live" while the
-  page's stream is, from `html[data-stream]`) and display preferences (the theme, the
-  appearance, value types). The current place carries a 3px underline in `band-mark`. On a phone the row wraps: the live line and display
-  preferences take a second row at the right.
-- **Its head** (`Frame::head`, drawn with `render_framed`): the page's name huge at the left
-  on the grid (five columns), its description in `band-muted` and its summary sentence beside
-  it (`ui::band_head`); then a strip under a `band-rule`: "Recently finished"
-  (`ui::recent_strip`), up to five units, newest first, each its clock time big, its name, its
-  title and how long it took. The band lays out by its own width (the `band` container, so
-  the drawer beside it counts): from 718 to 972px of band (a 761 to 1023px window, or 1440
-  with the drawer open) the name takes a row of its own, its words and sentence across the
-  band under it, and the strip's head stands over its five items. Under 718px (a phone) the
-  name stands over its words, everything one column, and the strip is a list of 44px rows.
-- **Under it on the paper**, the page's own row (`.subnav`): its sections as tabs (Plan,
-  Messages, Log, Functions, Settings; the current one under a 2px ink bar), a count line
-  (`Frame::meta`), and at the right its tools (`Frame::tools`: a find field, the grid switch).
-  A hairline closes it.
+- **The nav bar** (`nav#top-nav`, 52px; 48px on a phone): the mark and "sluice", "Projects",
+  the project switcher (its button the current project's icon and name in a box of the band's
+  rule, the menu every project), Inbox with its coral count, then at the right the live line (a
+  square in `band-mark` and "Live" while the page's stream is, from `html[data-stream]`) and
+  display preferences (the theme, value types). The current place carries a 3px underline in
+  `band-mark`. On a phone the wordmark and Projects give way to the switcher (whose menu has
+  them), its name shortens before anything wraps, and the live line is its square.
+- **The page's head** (`Frame::head`, `ui::page_head` and `ui::page_head_with`): on the paper,
+  its crumbs when it is one thing in a tab (a step's way back to its plan and its unit), its name
+  at 30px with its Details' "⋯" beside it, and under it on a plan and on home only the summary
+  sentence (`ui::summary_sentence`), one line of large body text where it fits; a page that says
+  what it shows has a muted note in its place (`ui::page_head_note`: the Log's records, the
+  Day's date and clock, the Functions' counts). No page carries a description blurb.
+- **The row** (`.subnav`): its sections as tabs (Plan, Day, Messages, Log, Functions, Settings;
+  the current one under a 2px ink bar), a count line (`Frame::meta`), and at the right its tools
+  (`Frame::tools`: a find field and the view switch on a plan, the messages' switch on For you,
+  Questions and History). A hairline closes it. On a phone the tabs wrap and the tools take a
+  line of their own.
+- **One thing inside a tab** (a step, a unit, a thread: `Frame::inner`): the row comes first
+  and the head under it, so the row stays where the plan has it.
 
-A page without its own head draws the band's top row alone and its heading on the paper.
+The budget: at 1440px the plan's first section starts within 200px of the top (a test holds
+it within 220), about 260px on a phone.
+
+**The view switch** (Plan · Both · Board on a project with a board, Plan · Board below 1280px)
+is a segmented bar of links in the row: the current view filled navy with cream
+(`aria-current`), the others muted words. A link asks the server for its view (`?view=`, kept
+in the project's `sluice_view_<id>` cookie), so it works without script; with script
+`board.js` shows the view at once and keeps it per project. The messages' switch (For you,
+Questions, History) and the log's presets are the same bar.
+
+## Details
+
+What identifies an item rather than explains it (its step, unit and run ids, its run number
+and earlier runs, its fn, engine and model, its tags, its recipe, its params, a message's id, a
+hash or a path) is kept behind one "⋯" at the item's end: `ui::Details`, drawn by its `menu`.
+It is a `<details>` (so it opens without script) inside a `sluice-menu` (Escape and a click
+elsewhere close it and give the focus back to its button, which says `aria-expanded`), 44px on
+a phone, where it opens as a sheet at the bottom of the window. Its panel lists each value with
+its name; an id is whole in data mono with a copy button. Every row, module, head and message
+has one; ids stay addressable (the find takes them, URLs carry them, and a step's Inputs,
+Outputs and Runs tabs stay whole).
+
+**A value by its shape** (`ui::ValueSet`), never its name: a number, a boolean or a short word
+shows; a hash, an id, a path, a URL or a long token goes to the Details; prose shows clamped to
+two lines, whole in the Details. A message line on a row names its sender in words (the
+sending step's stage, "orchestrator" or "you") and keeps to one line.
 
 ## Modules
 
 A module is a unit, a question or a step on the grid: an `article` spanning whole columns,
 square, with a rule over it. Its parts: `.mod-k` (its kind's line: a glyph, a word, who and
-when), `.mod-t` (its title), `.mod-meta` (its id in ink and its facts), a stage strip,
+when), `.mod-t` (its title), `.mod-meta` (its facts; what identifies it in its Details), a stage strip,
 `.mod-body` (prose at the measure), `.mod-actions` (44px buttons).
 
 - **The swell**: the module that needs the owner grows. A question to the owner
@@ -482,11 +513,10 @@ when), `.mod-t` (its title), `.mod-meta` (its id in ink and its facts), a stage 
   each under a 3px navy rule, its name at 30px at the left and its count line at the right
   ("1 failed · 1 cancelled").
 - **The margin module** (`ui::margin_module`): two columns at the sheet's right; a long run's
-  name and words, its running time on the blue with the sweep, then each progress field as it
-  reported it, when it last reported and a link to its page. A value is set by its JSON type
-  and length alone, never its name (`ui::ValueSet`): the first short one (a number, a boolean,
-  or a string of at most eight characters) at display size, an unbroken token (an id, a hash,
-  a path) or a list in data mono at body size, words as text.
+  title (linking its page) with its Details, its words, its running time on the blue with the
+  sweep, then the progress fields that read at a glance, when it last reported. A value is set
+  by its shape alone (`ui::ValueSet`): the first short one at display size, prose clamped to
+  two lines; an id, a hash, a path or a list only in its Details.
 
 ## Status presentation
 
@@ -542,10 +572,10 @@ draws:
 - **The One Blue Rule.** Blue fills only what runs now.
 
 **The summary sentence** (`ui::summary_sentence`): "1 question for you. 1 failed, 1
-cancelled. 2 article units and 1 scan unit at work: s-3 quiet for 53m, a-12 at 2.1× its usual
-time. 2 waiting. 3 of 10 units done; the last finished 57m ago." Up to two quiet runs and two
-overruns are named one by one; past two it counts them and names the first two: "… at work,
-8 past their usual time (a-12 at 9.8×, a-11 at 5.7× and 6 more)". Each recipe is named by its
+cancelled. 2 article units and 1 scan unit at work: 1 quiet for 53m, 1 at 2.1× its usual
+time. 2 waiting. 3 of 10 units done; the last finished 57m ago." It names no unit: quiet runs
+and overruns are counted, the furthest said ("8 past their usual time, the furthest at 9.8×"),
+and the rows under it name them. Each recipe is named by its
 own name with the unit after it ("1 unit without a recipe" for one of no recipe, as the
 plan's head over them says it too), each part is left out
 when it has nothing to say, and the question links to where it is answered, under a coral
@@ -609,7 +639,6 @@ The display preferences end with the Keys, "What each state and part means" (the
 
 The components:
 
-- **`sluice-grid`**: the module grid's construction under its show-grid switch (above).
 - **`sluice-trace`**: select to trace (above).
 - **`sluice-tabs`**: an ARIA tablist over its panels (arrows wrap, Home and End); the choice in
   `$$tab`, its `current`, and with `url` in `?tab=`; without script every panel stands stacked.
@@ -619,14 +648,16 @@ The components:
 - **`sluice-conversation`**, **`sluice-composer`**, **`sluice-answer`**: a conversation (Jump
   to latest, Mark read), the message box (sends as JSON, keeps its text through a patch) and a
   question's Answer and Close.
-- **`sluice-menu`**: the project switcher, display preferences and the plan's More: a click
-  elsewhere or Escape closes it; the arrows, Home and End move through it.
+- **`sluice-menu`**: the project switcher, display preferences, the plan's More and every
+  Details "⋯": a click elsewhere or Escape closes it and gives the focus back, its button says
+  `aria-expanded`; the arrows, Home and End move through it.
 - **`sluice-copy`**: an id or a SHA in data mono with a copy button.
-- **`sluice-toggle`**: a display setting applied at once and kept by `/settings`.
+- **`sluice-toggle`**: a display setting (the theme, value types) applied at once and kept by
+  `/settings`.
 - **`sluice-search`**: the board's search, the functions' find, a form of filters.
 - **`sluice-banner`**: the stream line ("Updates paused. Reconnecting…", "Updates stopped at
   14:02." with Reconnect) and the build line ("sluice was updated · Reload"); the stream's
-  phase is also `html[data-stream]`, which the band's live line reads.
+  phase is also `html[data-stream]`, which the nav bar's live line reads.
 - **`sluice-keys`**: `/` finds, `[` and `]` move the drawer, `g` then a letter goes to a page,
   `?` lists them; never while typing or under a dialog.
 - **`sluice-splitter`**, **`sluice-drawer`**: the board's splitter and the step drawer.
@@ -660,51 +691,50 @@ The parts:
 
 The pages compose these parts; each lane that redraws one writes its section here.
 
-- **A project's plan** (`/projects/id/<p>`, `views::plan`): the band with the project's name,
-  its description (the rest under More), its summary sentence and Recently finished (the five
-  latest done units, newest first); the row with Plan, Messages, Log, Functions, Settings, the
-  count line ("103 units · 475 steps"), Find, the Plan · Both · Board switch when the project
-  has a board, Show grid and a quiet menu; the trace line; then the sheet. Each live unit is
-  drawn once, in the first band that holds it:
+- **A project's plan** (`/projects/id/<p>`, `views::plan`): the head with the project's name,
+  its Details (its id, its description, its settings) and its summary sentence; the row with
+  its sections, the count line ("103 units · 475 steps"), Find, the Plan · Both · Board switch
+  when the project has a board and a quiet menu; the trace line (said to a screen reader, seen
+  only while tracing); then the sheet. Each live unit is drawn once, in the first band that
+  holds it:
   - **For you**: each open question to the owner a swelled module (the coral rule, the
-    question as its title, who asked and when, the unit's id, title and recipe, its stage strip
-    the first time a unit asks, the question's body, Answer primary, Open, Message, Close
-    question). Beside it, **Stopped**: each failed, cancelled or stale unit a module on the
-    sand (its glyph and word, its failure's kind in a word, the stage, run and when it ended,
-    its stage marks, the failure's sentence and what to try next, Retry with feedback first
-    when a bare Retry would fail again, Retry, Open, Unit page). Failures before cancels, in
-    plan order.
+    question as its title, who asked in words and when, the unit's title and how long it has
+    run, its stage strip the first time a unit asks, the question's body, Answer primary, Open
+    step, Message, Close question, its Details). Beside it, **Stopped**: each failed, cancelled
+    or stale unit a module on the sand (its glyph and word, its failure's kind in a word, its
+    stage marks, the failure's sentence and what to try next, Retry with feedback first when a
+    bare Retry would fail again, Retry, Open step, Unit page, its Details). Failures before
+    cancels, in plan order.
   - **Running**, quiet first then the longest running, and **Waiting**, in plan order, as rows:
     a block a recipe (its name, linking to every unit it made, its count by state, its stages
-    as the columns over its rows), then the units of no recipe and the loose steps. A row is the
-    unit's trace button (its glyph and word, the overrun chip past twice its usual time, its
-    title, its id, recipe, how long it has run, been silent and usually takes, a retried step's
-    run), under it the recipe's `view` (else its last message), a waiting unit what holds it in
-    words (each source by title with its id in mono, linked, and what it is doing), and its
-    cells at the right: a cell a stage on a recipe's columns (half a row while the head keeps a
-    third), a unit of no recipe its own small graph (its steps in columns by their own chain,
-    a connector an edge, never a line between units), a loose step one cell. Selecting a row
-    opens its steps, last message and actions in place.
+    as the columns over its rows), then the units of no recipe and the loose steps. A row (72 to
+    88px at 1440) is the unit's trace button: its glyph and word, how long it has run against
+    its usual time ("1h 51m, usually 21m", how long silent when quiet) and the overrun chip past
+    twice it, then its title, two lines at most; under it one line, what holds a waiting unit
+    (each source by title, linked, and what it is doing) or the recipe's `view` (else its last
+    message, its sender in words); its cells close beside it, sized to them, on the recipe's
+    columns (a unit of no recipe its own small graph, a loose step one cell); its Details at
+    the end. Selecting a row opens its steps, last message and actions in place.
   - **The margin**: a long run alone (no recipe, reporting progress, or past four times the
     longest usual time) as the sky module in the sheet's last two columns, down beside the
     bands; its title opens the step in the drawer.
-  - **Done**: its count and when the last finished, the index folded behind "Show the n done
-    units" (open for Show: Done, a find or a recipe's every unit), a dense list newest first in
-    columns: finish time, glyph, id, title, how long it took.
+  - **Done**: its count and when the last finished; what finished last, the latest four by
+    title with their clock time and how long they took (`ui::latest_list`); then the index
+    folded behind "Show the n done units" (open for Show: Done, a find or a recipe's every
+    unit), a dense list newest first in columns: finish time, glyph, title, how long it took.
   The sheet's modes: on a medium sheet (under 1200px, a board or the drawer beside it) a row's
-  strip takes eight of its twelve columns, the modules sit two to a band's row and the long
+  cells narrow to 68px each, the modules sit two to a band's row and the long
   runs go side by side under Running; under 640px everything stacks; from 2000px the bands of
   modules set twice as many to a row and Running and Waiting stand side by side. Every band
   is a patch region and every unit one inside it, so a change patches the bands a unit moved
   between and nothing else; a step whose state moves on is said once to a screen reader. The
   step drawer opens beside the plan from any cell, Open or margin title, on paper under the
   heavy navy rule a band's head wears, a hairline at its edge, lifted off the plan.
-- **A step's page** (`/projects/id/<p>/steps/<s>`): the band carries the step (the gallery's
-  Step band, `StepView::band`): its way back, its stage in the band's muted ink before its
-  title set huge (fluid: 96px at 1440, a phone's 56, stepping down for a longer name), its id
-  in data mono, its state, run and usual time, its words, then its unit's stage strip (two
-  columns a stage, its own stage ringed in band ink) and its actions on the navy, the next move
-  filled cream. The tabs follow on the paper. Overview is modules on the sheet: the question
+- **A step's page** (`/projects/id/<p>/steps/<s>`): under the row, its head (the gallery's
+  Step head, `StepView::band`): its way back to its plan and its unit, its stage muted before
+  its title at 28px with its Details (its id, unit, recipe, fn, run and tags), its state and how
+  long it has run against its usual time, its words, then its unit's stage strip (its own
+  stage ringed) and its actions, the next move filled. Its tabs follow. Overview is modules on the sheet: the question
   to the owner swells first on the coral rule, answered in place; then why it failed on the
   sand, or Now (its live turn: last words, its calls by tool as tiles, named exactly as the
   engine's transcript names them, and its latest calls); beside them, as titled modules, what
@@ -714,26 +744,29 @@ The pages compose these parts; each lane that redraws one writes its section her
   row, and at a third and two thirds from 3000px: more modules a row, never longer lines.
   Activity is its turns as rows numbered in data mono, the running one on the run rule;
   Messages the conversation; Inputs and Outputs field tables with where each came from; Runs
-  its unit's timeline over its runs. In the drawer the same band heads the step a size down,
-  three lines at most, across the drawer's top.
-- **A unit's page** (`/projects/id/<p>/units/<u>`): the band carries its name huge beside its
-  id, recipe and how its steps stand, its stage strip from its recipe under a band rule. On the
-  sheet its steps are modules (two a row from 640px of sheet, three from 1200, four from 2000,
-  six from 3000), each headed by its stage name with its id under it, its own title only when
-  it differs from the unit's (which the band already says), the one asking the owner on the
+  its unit's timeline over its runs. In the drawer the same head tops the step a size down,
+  three lines at most.
+- **A unit's page** (`/projects/id/<p>/units/<u>`): under the row, its head: its way back,
+  its glyph and title with its Details (its id, recipe and params), how its steps stand, its
+  stage strip. On the sheet its steps are modules (two a row from 640px of sheet, three from
+  1200, four from 2000, six from 3000), each headed by its stage name with its Details, its own
+  title only when it differs from the unit's (which the head already says), the one asking the
+  owner on the
   coral rule, a stop on the sand, a running one
   on the run rule; then its timeline and its last message.
-- **The inbox, Questions and a thread**: a band of their own (the name, the way back, a
-  sentence of what waits on the owner, its count linking the questions). Questions to the owner
+- **The inbox, Questions and a thread**: the head names the page (a thread its step's title,
+  its way back over it and its Details); the messages' switch is in the row. Questions to the
+  owner
   come first as swelled modules on the coral rule, answered in place (Answer and Close 44px; on
   a phone a whole-width card), one a row to 900px of sheet, two to 2000, three from there and
   four from 3000; then those between agents, the ones nobody waits on and the unread notes.
-  A conversation's messages are rows apart by hairlines, an open question to the owner on the
-  coral rule with its reply under it, the message box under the navy rule.
-- **Home** (`/`, `views::home`): the projects as a cover and an index. The band: "sluice"
-  huge, the date and the projects counted, one sentence across them (the questions first, in
-  coral, then what runs and where, then what stopped where), the runner stopped on the sand
-  when it is, and Recently finished across the projects. On the paper, For you (eight
+  A conversation's messages are rows apart by hairlines, each with its Details (its id, its
+  thread, what it replies to), an open question to the owner on the coral rule with its reply
+  under it, the message box under the navy rule.
+- **Home** (`/`, `views::home`): the projects as a cover and an index. The head: "All
+  projects" and one sentence across them (the questions first, in coral, then what runs and
+  where, then what stopped where), the runner stopped on the sand when it is; what each project
+  finished last is on its own module. On the paper, For you (eight
   columns: each open question to the owner swollen under the coral rule, its title at 23px,
   its words, Answer and Close in place, the way to its step; an answered one the line that
   says so) beside Today (four, on the sky: a project's last day in a line, the way to the
@@ -742,18 +775,19 @@ The pages compose these parts; each lane that redraws one writes its section her
   question: the coral swell; something stopped: the sand swell): its name at 46px, its
   state's glyph and size, its words, its summary sentence, a 9px square a unit (coral asks,
   sand needs a look, blue runs, an outline waits, sky done), its rows (questions, stopped
-  steps, running steps by id then title, "running for 1h 10m" against "usually 30m" or the
-  overrun chip), what it finished last and the way to its plan and its day. Then the Index, a
+  steps, running steps by title, "running for 1h 10m" against "usually 30m" or the overrun
+  chip), what it finished last by title and the way to its plan and its day. Then the Index, a
   table of every project's units by band, archived ones muted, its counts 10ch each so on a
   wide screen they stand together at the right.
-- **Day** (`/day`, `/projects/id/<p>/day`, `views::day`): the day as a timetable. The band:
-  today's name huge (a project's own day, its name), the date and the reader's clock, the
-  day's sentence. The day line: a row a project, its name in the first 132px, its runs as 5px
+- **Day** (`/day`, `/projects/id/<p>/day`, `views::day`): the day as a timetable. The head:
+  "Day", its note the date and the reader's clock. The day line under the day's sentence: a
+  row a project, its name in the first 132px, its runs as 5px
   bars on 7px tracks (sky done, blue running, sand-ink needing a look), the hours along the top
   in data mono, the rule at now in the run blue; quick successes are counted, not drawn. The
   timetable: a 64px hour column (the hour 22px, its day where it changes, its runs counted),
-  then a column a project; each run a line: its minute in mono, its unit in ink and its step
-  muted, its run number, then at the right its glyph and duration (sky-ink check), its word on
+  then a column a project; each run a line: its minute in mono, its unit's title in ink and its
+  stage muted (its step and run in the link's title), then at the right its glyph and duration
+  (sky-ink check), its word on
   the sand chip when it needs a look, or "running 43m" on the blue; a line is at most 480px, so
   its outcome stays by its name on a wide screen. A busy hour (more than six in a cell) lists
   only its notable runs (not a success, an hour or longer, or past twice its stage's usual time
@@ -763,39 +797,42 @@ The pages compose these parts; each lane that redraws one writes its section her
   says what runs. `nav.js` keeps the reader's zone in a cookie and moves the rule and the
   running bars with the clock; the page's version is its runs, so it patches only when they
   change.
-- **Log** (`views::log`): the band says "Log" (a project's log, its name) and what the page
-  shows ("42 records on this page, seq … to …"); under it the presets as one navy-ruled
-  segmented bar beside the filters, the note on what is left out, then Records under a
+- **Log** (`views::log`): the head says "Log" and, as its note, what the page shows ("42
+  records on this page; the newest …"). The log is the records whole, so it keeps each record's
+  seq and names its step by title with its id after it; under the head the presets as one
+  view-switch bar beside the filters, the note on what is left out, then Records under a
   band section's head, the table under a 2px navy rule with seq, time and kind in data mono.
-- **Functions** (`/fns`): the band says whose catalogue and counts it; the picker and the
+- **Functions** (`/fns`): the head says "Functions" and counts them in its note; the picker and
+  the
   find on one bar, the groups' index, then each group under a band section's head, its
   entries on the grid as many to a row as fit 400px, each under a hairline (a broken one under
   the navy rule), its name in data mono.
-- **Settings** (`/projects/id/<p>/settings`): the band names the project and how it stands
-  (active, paused or archived; its resources; when done units retire). On the paper the
+- **Settings** (`/projects/id/<p>/settings`): the head says "Settings"; how the project stands
+  (active, paused or archived; its resources; when done units retire) heads its sections. The
   sections' index stands sticky in a quarter of the width, at most 300px (a scrolling row of
   tabs on a phone), each section beside it under a band section's head, each field a row (its
   name, then its form at 78ch); pause and archive are rows with a square switch; Delete sits on
   the sand under its rule. (`settings.css` is folded into `style.css`.)
-- **History** (`/history`): the third of the message views, under the same band as For you
-  and Questions (its name, the way back, how many threads and how many hold a question for the
-  owner); the threads with the owner, a module each on the grid, as many to a row as fit
+- **History** (`/history`): the third of the message views, its head its name as For you
+  and Questions; the threads with the owner, counted in their section's head, a module each on
+  the grid, as many to a row as fit
   360px; one with an open question under the coral rule.
-- **A page that cannot be drawn** (`views::missing`): the band says what is missing, huge,
-  and why; the paper lists the ways on, each a heavy link with its arrow.
-- **Agent docs** (`/docs`): the band names them; the index a row of topic modules; a topic
+- **A page that cannot be drawn** (`views::missing`): the head says what is missing and, as
+  its note, why; the paper lists the ways on, each a heavy link with its arrow.
+- **Agent docs** (`/docs`): the head names them; the index a row of topic modules; a topic
   its markdown at the measure in eight columns, every topic listed sticky beside it.
 
 ## Accessibility
 
-Keyboard everywhere with a visible focus ring; 4.5:1 text in both themes; 44px targets on a
+Keyboard everywhere with a visible focus ring; 4.5:1 text in every theme; 44px targets on a
 phone; usable at 390px with nothing scrolling sideways; status never colour alone; every
 region that updates says so politely; reduced motion honoured.
 
 ## Do's and Don'ts
 
 ### Do:
-- Do set the page's name huge in the band and let the grid carry the order.
+- Do keep the head slim (the name, one sentence) and let the grid carry the order.
+- Do put what identifies an item behind its "⋯"; show what explains it.
 - Do put what needs the owner first, and let that one module swell.
 - Do show state with the glyph's shape and its word first, colour second.
 - Do keep every page a server-rendered picture that works without JavaScript.

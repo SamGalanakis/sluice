@@ -76,19 +76,6 @@ pub fn stages(unit: &UnitView) -> Vec<Stage> {
         .collect()
 }
 
-/// A stage strip's place on a band's grid of `room` columns: two columns a stage while half the
-/// room holds them all, else a column a stage, wrapping past the room, so its cells sit on the
-/// frame's columns. Its style: `--lane`, the
-/// columns the strip spans, and `--lane-n`, its cells a row.
-pub fn lane_style(stages: usize, room: usize) -> String {
-    let stages = stages.max(1);
-    let (span, cells) = if stages * 2 <= room {
-        (stages * 2, stages)
-    } else {
-        (stages.min(room), stages.min(room))
-    };
-    format!("--lane:{span};--lane-n:{cells}")
-}
 /// The unit's page as drawn: its band and its detail, the regions its stream patches.
 struct Drawn {
     band: TrustedHtml,
@@ -112,20 +99,21 @@ impl UnitPage<'_> {
     fn ordered(&self) -> Vec<&StepView> {
         ordered(self.unit)
     }
-    fn lane_style(&self) -> String {
-        lane_style(self.unit.steps.len(), 12)
-    }
     fn strip(&self) -> TrustedHtml {
-        ui::stage_strip(&format!("Stages of {}", self.unit.id), &stages(self.unit))
+        ui::stage_strip("Stages of the unit", &stages(self.unit))
     }
-    /// Its name's size in the band, by how long its heading runs.
-    fn title_size(&self) -> &'static str {
-        match self.unit.whole_heading().chars().count() {
-            0..=6 => "",
-            7..=16 => " long",
-            17..=40 => " longer",
-            _ => " longest",
+    /// What identifies it, behind its head's "⋯": its id, its recipe and its params.
+    fn details(&self) -> TrustedHtml {
+        let mut details = ui::Details::new()
+            .id("Unit", self.unit.id.as_str())
+            .text("Recipe", &self.unit.recipe);
+        for (name, value) in &self.unit.params {
+            details = match ui::ValueSet::of_text(value) {
+                ui::ValueSet::Detail => details.id(name, value),
+                _ => details.text(name, value),
+            };
         }
+        details.menu(self.unit.whole_heading())
     }
     /// A step's name inside its unit, the unit's title being in the band: its stage, else its
     /// id past the unit's ("draft" for a-12-draft), else its id.
@@ -181,7 +169,7 @@ impl UnitPage<'_> {
                     "<a href=\"{}\">{}{}</a>{}",
                     ui::esc(&w.href),
                     if w.unit { "unit " } else { "" },
-                    w.name.id_first_html(40).as_str(),
+                    w.name.html(60).as_str(),
                     if w.note.is_empty() {
                         String::new()
                     } else {
@@ -206,7 +194,8 @@ fn draw(
     let recipe = view.names.recipe_of(unit.id.as_str()).map(|r| r.as_ref());
     let drawn_view = recipe
         .and_then(|r| r.view())
-        .map(|root| super::unit_view::draw(root, unit, false));
+        .map(|root| super::unit_view::draw(root, unit, false))
+        .filter(|drawn| !super::unit_view::empty(drawn));
     let page = |band| UnitPage {
         unit,
         project: &view.project,
@@ -336,6 +325,7 @@ pub async fn unit_page(
         let nav = NavView::new(&shared, Some(project), "plan")?;
         let frame = super::Frame {
             head: drawn.regions[0].html.clone(),
+            inner: true,
             ..Default::default()
         };
         super::render_framed(
@@ -363,7 +353,7 @@ pub async fn unit_page(
 fn gone(id: &str, unit: &UnitName, href: &str) -> Result<TrustedHtml, askama::Error> {
     #[derive(Template)]
     #[template(
-        source = "{% if band %}<div id=\"unit-band\" class=\"unit-band\" data-gone><div class=\"band-head\"><h1>{{ unit }}</h1></div></div>{% else %}<div id=\"unit-detail\" class=\"gone\" data-gone><p class=\"d-gone\">This unit left the plan; it may have retired. <a href=\"{{ href }}\">Search the log for it</a></p></div>{% endif %}",
+        source = "{% if band %}<div id=\"unit-band\" class=\"unit-band\" data-gone><div class=\"page-head\"><div class=\"ph-name\"><h1>{{ unit }}</h1></div></div></div>{% else %}<div id=\"unit-detail\" class=\"gone\" data-gone><p class=\"d-gone\">This unit left the plan; it may have retired. <a href=\"{{ href }}\">Search the log for it</a></p></div>{% endif %}",
         ext = "html"
     )]
     struct Gone<'a> {
