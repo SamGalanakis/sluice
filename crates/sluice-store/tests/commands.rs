@@ -627,7 +627,11 @@ async fn legacy_dismissal_is_rewritten_without_refreshing_undo_time() {
     );
     f.reads.snapshot(move |sql| {
         let row: (i64, Option<i64>, String) = sql.query_row("SELECT cursor,unread_alert_min,heartbeat_at FROM readers WHERE thread='a' AND stream='dismissed'", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-        assert_eq!(row, (1, Some(1), "2000-01-01T00:00:00Z".into()));
+        // The mark binds to the cancel it holds: the step's work generation and its generation,
+        // which under schema 3 is the revision that added it (the fixture's plan is rev 2).
+        let generation: i64 = sql.query_row("SELECT generation FROM steps WHERE step_id='a'", [], |r| r.get(0))?;
+        assert_eq!(generation, 2);
+        assert_eq!(row, (1, Some(generation), "2000-01-01T00:00:00Z".into()));
         assert_eq!(sql.query_row("SELECT count(*) FROM readers WHERE thread='b' AND stream='dismissed'", [], |r| r.get::<_,i64>(0))?, 0);
         assert_eq!(sluice_store::messages::dismissed(sql, project)?, ["a".into(), "c".into(), "d".into()].into_iter().collect());
         assert!(sluice_store::messages::dismissed_lately(sql, project, 10.0)?.is_empty());
