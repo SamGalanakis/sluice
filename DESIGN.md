@@ -509,7 +509,9 @@ status is never colour alone: every state has its Lucide glyph and its word.
 
 Each cell's state is said in words to a screen reader, and a cell with a page links to it.
 `ui::stage_marks` draws the same strip as 12px squares in a line of words; `ui::overrun` is
-the sand chip with the timer, "2.1× usual".
+the sand chip with the timer, "2.1× usual". Every overrun on every page is said by one rule,
+`ui::ratio_text`: one decimal below ten ("5×" when whole), a whole number from ten, rounded
+down.
 
 ### Status ramp
 

@@ -342,12 +342,21 @@ impl Cell {
         format!("sc sc-{}", self.key())
     }
 }
-/// "2.1×" (one decimal, a whole number past 10).
+/// How many times its usual time a run has taken, the one rule every page says it by (a stage's
+/// cell, the overrun chip, a step's band and timer, the summary sentence): "2.1×", one decimal
+/// below ten ("5×" when it is whole) and a whole number from ten, each rounded down, so no two
+/// places disagree and none says more than it has run.
 pub fn ratio_text(ratio: f64) -> String {
-    if ratio >= 10.0 {
-        format!("{}×", ratio.round() as i64)
+    let r = if ratio >= 10.0 {
+        ratio.floor()
     } else {
-        format!("{:.1}×", (ratio * 10.0).floor() / 10.0)
+        (ratio * 10.0).floor() / 10.0
+    };
+    // a whole number without its ".0": "5×"
+    if r.fract() == 0.0 {
+        format!("{r:.0}×")
+    } else {
+        format!("{r:.1}×")
     }
 }
 /// The overrun chip: a running step past its stage's usual time, "2.1× usual", on the sand
@@ -1159,6 +1168,19 @@ mod tests {
     }
 
     #[test]
+    fn one_rule_says_how_far_past_its_usual_time_a_run_is() {
+        // one decimal below ten, a whole number from ten, each rounded down: a cell, a chip
+        // and a step's band never say "20×" beside "19×"
+        assert_eq!(ratio_text(2.19), "2.1×");
+        assert_eq!(ratio_text(4.5), "4.5×");
+        assert_eq!(ratio_text(9.99), "9.9×");
+        assert_eq!(ratio_text(5.0), "5×");
+        assert_eq!(ratio_text(10.0), "10×");
+        assert_eq!(ratio_text(19.7), "19×");
+        assert!(overrun(19.7).as_str().contains("<span>19× usual</span>"));
+    }
+
+    #[test]
     fn a_busy_summary_names_two_overruns_and_two_quiet_runs_and_counts_the_rest() {
         let run = |name: &str, recipe: &str, over: Option<f64>, quiet: Option<f64>| UnitFact {
             name: name.into(),
@@ -1211,7 +1233,7 @@ mod tests {
         ];
         assert_eq!(
             says(&few),
-            "3 units at work: c quiet for 1m, a at 3.0× its usual time, b at 2.0× its usual time."
+            "3 units at work: c quiet for 1m, a at 3× its usual time, b at 2× its usual time."
         );
     }
 }

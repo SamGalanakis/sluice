@@ -1648,7 +1648,9 @@ done units in the plan, of how long the stage's step took when it succeeded (its
 scatter's last round; never a value set by hand), worked out when the board is read, once per
 recipe and stage, never stored; with fewer than three such steps there is none. A running unit's
 row on the plan says it ("usually 40m"), and past twice it the row's overrun chip and the live
-cell say how many times ("2.4×"), as the step's header does ("4.5× usual").
+cell say how many times ("2.4×"), as the step's header does ("4.5× usual"), each by one rule
+(`ui::ratio_text`): one decimal below ten ("5×" when whole), a whole number from ten, rounded
+down, so the cell and the header never disagree.
 
 **The unit view.** A recipe's `view` is an OpenUI Lang program with its own vocabulary, drawn on
 the server inside the frame sluice owns (the unit's row on the plan, the unit page), every value escaped:

@@ -1459,14 +1459,14 @@ impl StepView {
             _ => false,
         }
     }
-    /// How many times its usual time it has run, once past twice that: "2.5×" (down to a half
-    /// below ten, whole above, so it changes seldom); "" otherwise.
+    /// How many times its usual time it has run, once past twice that: "2.5×"
+    /// (`ui::ratio_text`, as its cell and chip say it); "" otherwise.
     pub fn overrun_times(&self) -> String {
         if !self.overrun() {
             return String::new();
         }
         match (self.usually, self.shown_timing()) {
-            (Some(usually), Some(t)) => times_text(t.seconds / usually),
+            (Some(usually), Some(t)) => super::ui::ratio_text(t.seconds / usually),
             _ => String::new(),
         }
     }
@@ -1505,7 +1505,7 @@ impl StepView {
             {
                 line.push_str(&format!(
                     " · <span class=\"over-x\">{} usual</span>",
-                    times_text(seconds / usually)
+                    super::ui::ratio_text(seconds / usually)
                 ));
             }
             line
@@ -3343,18 +3343,4 @@ async fn run_file_html(
         &format!("/projects/id/{project}/runs/{run}/files/{name}"),
     )
     .map_err(render_error)
-}
-/// How many times its usual time a run took or has taken: "2.5×", to a half below ten and
-/// whole above, so it changes seldom.
-fn times_text(times: f64) -> String {
-    let times = if times < 10.0 {
-        (times * 2.0).floor() / 2.0
-    } else {
-        times.floor()
-    };
-    if times.fract() == 0.0 {
-        format!("{times:.0}×")
-    } else {
-        format!("{times:.1}×")
-    }
 }
