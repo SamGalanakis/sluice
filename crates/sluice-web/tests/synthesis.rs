@@ -190,8 +190,18 @@ async fn the_frame_draws_the_band_and_the_row_under_it_and_the_gallery_every_pri
         "{plan}"
     );
     assert!(plan.contains(&format!("<a class=\"project-settings\" href=\"/projects/id/{}/settings\" aria-label=\"Project settings\">Settings</a>", n.almanac)), "{plan}");
-    // two themes: cream paper and navy paper
-    assert_eq!(plan.matches("name=\"theme\" value=\"").count(), 3, "{plan}");
+    // seven themes, each with its swatch, and three appearances
+    assert_eq!(plan.matches("name=\"theme\" value=\"").count(), 7, "{plan}");
+    assert_eq!(
+        plan.matches("<span class=\"swatch\" data-theme=\"").count(),
+        7,
+        "{plan}"
+    );
+    assert_eq!(
+        plan.matches("name=\"appearance\" value=\"").count(),
+        3,
+        "{plan}"
+    );
     let (status, gallery) = f.get("/_ui").await;
     assert_eq!(status, 200);
     for (part, marks) in [
@@ -360,16 +370,16 @@ async fn chromium_the_grid_switch_and_the_trace_and_the_band_on_a_phone() {
         assert_eq!(browser.eval(&format!("getComputedStyle({grid}.querySelector('.grid-ovl')).display")).unwrap(), "none");
         browser.eval("document.querySelector('button.grid-toggle[aria-controls=\"l-grid\"]').click()").unwrap();
         browser.eval(FRAMES).unwrap();
-        let shown = browser.eval(&format!("(g => ({{showing: g.hasAttribute('showing'), pressed: document.querySelector('button.grid-toggle[aria-controls=\"l-grid\"]').getAttribute('aria-pressed'), overlay: getComputedStyle(g.querySelector('.grid-ovl')).display, numbers: [...g.querySelectorAll('.gc')].filter(c => c.checkVisibility()).map(c => c.textContent).join(' '), tag: getComputedStyle(g.querySelector(':scope > .mod'), '::after').content, cols: getComputedStyle(g).gridTemplateColumns.split(' ').length, first: (r => Math.round(r.width))(g.querySelector(':scope > .mod').getBoundingClientRect()), col: (r => Math.round(r.width))(g.querySelector('.gc').getBoundingClientRect())}}))({grid})")).unwrap();
+        let shown = browser.eval(&format!("(g => ({{showing: g.hasAttribute('showing'), pressed: document.querySelector('button.grid-toggle[aria-controls=\"l-grid\"]').getAttribute('aria-pressed'), overlay: getComputedStyle(g.querySelector('.grid-ovl')).display, numbers: [...g.querySelectorAll('.gc')].filter(c => c.checkVisibility()).map(c => c.textContent).join(' '), tag: getComputedStyle(g.querySelector(':scope > .mod')).counterReset, cols: [...g.querySelectorAll('.gc')].filter(c => c.checkVisibility()).length, gap: parseFloat(getComputedStyle(g).columnGap), first: (r => Math.round(r.width))(g.querySelector(':scope > .mod').getBoundingClientRect()), col: (r => Math.round(r.width))(g.querySelector('.gc').getBoundingClientRect())}}))({grid})")).unwrap();
         assert_eq!(shown["showing"], true, "{shown}");
         assert_eq!(shown["pressed"], "true", "{shown}");
         assert_eq!(shown["overlay"], "grid", "{shown}");
         assert_eq!(shown["numbers"], "1 2 3 4 5 6 7 8 9 10 11 12", "{shown}");
-        assert_eq!(shown["tag"], "\"6 col\"", "{shown}");
+        assert_eq!(shown["tag"], "take 6", "{shown}");
         assert_eq!(shown["cols"], 12, "{shown}");
         // a six-column module is six columns and five gaps of the construction
-        let (first, col) = (shown["first"].as_f64().unwrap(), shown["col"].as_f64().unwrap());
-        assert!((first - (6.0 * col + 5.0 * 16.0)).abs() <= 2.0, "{shown}");
+        let (first, col, gap) = (shown["first"].as_f64().unwrap(), shown["col"].as_f64().unwrap(), shown["gap"].as_f64().unwrap());
+        assert!((first - (6.0 * col + 5.0 * gap)).abs() <= 2.0, "{shown}");
         // kept in this browser: the next page shows it too, until switched off
         browser.navigate(&gallery).unwrap();
         browser.wait("!!customElements.get('sluice-grid') && document.querySelector('#l-grid').hasAttribute('showing')").unwrap();

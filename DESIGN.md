@@ -32,7 +32,7 @@ colors:
   coral: "oklch(0.69 0.2 30)"
   on-coral: "oklch(0.2 0.08 262)"
   idle: "oklch(0.52 0.03 262)"
-  logo-blue: "oklch(0.617 0.2 257)"
+  band-mark: "oklch(0.617 0.2 257)"
   paper-dark: "oklch(0.235 0.068 263)"
   paper-2-dark: "oklch(0.27 0.072 263)"
   paper-raised-dark: "oklch(0.285 0.075 263)"
@@ -51,7 +51,7 @@ colors:
 typography:
   display:
     fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, system-ui, sans-serif"
-    fontSize: "150px"
+    fontSize: "clamp(88px, 10.4vw, 240px)"
     fontWeight: 900
     lineHeight: "0.8"
     letterSpacing: "-0.04em"
@@ -120,14 +120,16 @@ spacing:
   gutter: "16px"
   lg: "22px"
   xl: "30px"
-  frame-margin: "32px"
-  frame-margin-phone: "16px"
+  gutter: "clamp(16px, calc(10px + 1.5vw), 64px)"
+  col-gap: "clamp(8px, calc(4px + 0.8vw), 28px)"
 grid:
-  frame: "1440px"
+  frame: "fluid"
   columns: 12
-  columns-phone: 6
-  column-gap: "16px"
-  column-gap-phone: "8px"
+  columns-narrow: 6
+  columns-wide: 24
+  sheet-narrow-below: "640px"
+  sheet-regular-from: "1200px"
+  sheet-wide-from: "2000px"
   phone-below: "760px"
 components:
   band:
@@ -252,9 +254,10 @@ outputs and the project's board document. Nothing in view code assumes a project
 
 ## Palette
 
-Roles, not hues. Each is a token on `:root` (`assets/style.css`), `light-dark()` of its light
-and dark value; with no theme chosen a page follows the system, and the display preferences
-offer Light and Dark.
+Roles, not hues. Each is a token (`assets/style.css`), `light-dark()` of its light and dark
+value, so the page's `color-scheme` picks the appearance: the system's, or the one the display
+preferences chose (`data-appearance`). These are Americana's, the default theme; every other
+theme (below, Themes) maps the same roles.
 
 - **Paper** (`paper`, cream): the page. `paper-2` is a sunk well and a hover; `paper-raised` a
   menu or the drawer.
@@ -265,11 +268,13 @@ offer Light and Dark.
 - **The band** (`band`, `band-ink`, `band-muted`, `band-rule`, `band-accent`): the logo's navy
   in the light, a deeper navy than the paper in the dark, cream text, sky for what the band
   links to and how long things took.
+- **The band's mark** (`band-mark`): the logo's blue on the band, the current place's underline
+  and the live square.
 - **Run** (`run`): the channel's blue, the one active colour: a running cell's fill (cream on
-  it), the overlay's tag, the grid switch pressed. `run-ink` is the blue as text, `focus` the
-  focus ring.
-- **Sky** (`sky`): done. A done cell's fill; `sky-ink` its glyph; `sweep` the bright sky of the
-  sweep along a running cell's foot and a done mark.
+  it), a running mark (edged in `run-ink`), the overlay's tag, the grid switch pressed.
+  `run-ink` is the blue as text, `focus` the focus ring (and the overlay's tint).
+- **Sky** (`sky`): done. A done cell's fill and a done mark's (edged in `sky-ink`); `sky-ink`
+  its glyph; `sweep` the bright sky of the sweep along a running cell's foot.
 - **Sand** (`sand`, `sand-pale`, `sand-ink`, `sand-mark`): needs a look: failed, cancelled,
   stale, quiet, an overrun. A look cell and the overrun chip are sand with navy on them; a
   stopped module sits on `sand-pale`.
@@ -284,6 +289,87 @@ pressed, which is the construction's own colour).
 Dark is navy paper (`paper-dark`), never black; the band goes deeper than the paper so it still
 reads as the heaviest thing on the page. Text holds 4.5:1 in both, large text 3:1.
 
+The derived tokens (`rule`, `rule-faint`, `line` from `navy`; `band-muted`, `band-rule`,
+`band-hover` from `band-ink`; `grid-col`, `grid-edge` from `focus`; `lift`, `scrim` from
+`band`) are worked out in one block, again on any element that names a theme or an appearance,
+so a part of the gallery in another theme or appearance draws itself whole. Page CSS uses the
+tokens only, never a literal colour.
+
+## Themes
+
+Americana is the default and the brand. Beside it the display preferences offer six themes made
+from well-loved colour schemes, each adapted to sluice's roles and each a light and dark pair;
+the appearance (Match system, Light, Dark) is chosen apart from the theme. The theme is
+`data-theme` on `<html>` (none for Americana) and the `sluice_theme` cookie; the appearance
+`data-appearance` and `sluice_appearance` (none follows the system). Both are server-drawn,
+so a page without script is drawn in them; with script the picker applies at once
+(`sluice-toggle`). The picker shows each theme's swatch in its own tokens: its band over its
+paper, a square of its running colour and one of its question colour.
+
+**Mapping by role, not hue.** The band is the theme's deepest surface (for a light pair it
+borrows the scheme's darkest base, as Unigrid's band is black); paper and paper-2 its base and
+its next surface; ink its text, ink-muted its comment or subtle text; navy, the heavy rules and
+the filled button, its strongest text colour; run its blue (or its nearest); sky a pale wash
+of its cyan or green, its glyph the full hue; sand its yellow; and the question its one warm or
+vivid colour no other role uses. Status never rests on colour alone in any theme: every state
+keeps its glyph and its word.
+
+**Held by a test** (`tests/themes.rs`), which reads every theme's tokens from the stylesheet:
+text at 4.5:1 (ink and ink-muted on paper, paper-2, paper-raised, sand-pale and sky; run-ink
+and sand-ink on paper and paper-2; band-ink, band-muted and band-accent on the band; the text on
+running, sand, coral and navy fills), 3:1 for the focus ring on paper and paper-2 and for status
+marks (sky-ink on paper and sky, sand-ink on sand-pale, sand-mark on sand, idle on paper,
+band-mark and the coral count on the band), the question colour at least 0.1 apart in Oklab
+from every other role's, running apart from done, and the band no lighter than the paper.
+
+| Theme | Source and licence | Light | Dark |
+|---|---|---|---|
+| **Americana** | the logo's own palette | cream paper, the logo's navy band | navy paper, a deeper navy band |
+| **Solarized** | Ethan Schoonover, [ethanschoonover.com/solarized](https://ethanschoonover.com/solarized), MIT | base3 paper, base03 band | base03 paper, a deeper base03 band |
+| **Nord** | Arctic Ice Studio, [nordtheme.com](https://www.nordtheme.com), MIT | Snow Storm paper (nord6), Polar Night band (nord0) | Polar Night paper (nord0), a deeper Polar Night band |
+| **Gruvbox** | Pavel Pertsev, [github.com/morhetz/gruvbox](https://github.com/morhetz/gruvbox), MIT/X11 | light0 paper, dark0_hard band | dark0 paper, dark0_hard band |
+| **Catppuccin** | Catppuccin, [catppuccin.com](https://catppuccin.com), MIT | Latte base, Mocha base band | Mocha base, Mocha crust band |
+| **Rosé Pine** | Rosé Pine, [rosepinetheme.com](https://rosepinetheme.com), MIT | Dawn base, Main base band | Main base, a deeper Main band |
+| **Flexoki** | Steph Ango, [stephango.com/flexoki](https://stephango.com/flexoki), MIT | paper, black band | base-950 paper, black band |
+
+The roles in each (light / dark; one value when both are the same):
+
+| Role | Solarized | Nord | Gruvbox | Catppuccin | Rosé Pine | Flexoki |
+|---|---|---|---|---|---|---|
+| paper | base3 / base03 | nord6 / nord0 | light0 / dark0 | Latte base / Mocha base | Dawn base / Main base | paper / base-950 |
+| paper-2 | base2 / base02 | nord5 / nord1 | light0_soft / dark0_soft | mantle / mantle | overlay / surface | base-50 / base-900 |
+| ink | base02 / base2 | nord0 / nord6 | dark1 / light1 | text / text | text / text | black / base-200 |
+| ink-muted | base01* / base1 | nord3 / nord4–3 mix* | dark3 / light3 | subtext1 / subtext0 | subtle* / subtle* | base-600* / base-400 |
+| navy (rules, filled button) | base03 / base1 | nord1 / nord4 | dark0 / light2 | text / subtext1 | text / text | black / base-200 |
+| band | base03 / deeper base03* | nord0 / deeper nord0* | dark0_hard | Mocha base / crust | Main base / deeper base* | black |
+| band-accent, band-mark | cyan, blue | nord8, nord8 | bright_aqua, bright_yellow | sky, blue | foam, rose | cyan-400, blue-400 |
+| run (on-run) | blue* (base3 / base03) | nord10* / nord9 (nord6 / nord0) | faded_blue / bright_blue | blue* / blue (base / crust) | pine / Moon pine | blue-600 / blue-400 |
+| sky, sky-ink | cyan wash, cyan* | nord8 wash, nord7* | aqua wash, faded / bright aqua | sky wash, sapphire* / sky | foam wash, foam* | cyan-50 / cyan-900*, cyan-600 / cyan-400 |
+| sand (on-sand) | yellow (base03) | nord13 (nord0) | neutral / bright yellow (dark0_hard) | yellow (crust) | gold (base) | yellow-400 (black) |
+| sand-ink | yellow* | nord13* / nord13 | faded_yellow* / bright_yellow | yellow* | gold* | yellow-700* / yellow-400 |
+| question (coral, on-coral) | magenta* (base03) | nord12* (nord0) | bright_purple (dark0_hard) | Latte pink / Mocha red (crust) | love* (base) | orange-600 / orange-400 |
+
+\* Adjusted from the published value for contrast, or a surface the scheme lacks designed in its
+spirit. Solarized: ink-muted base01 darkened to #4f646b (4.39:1 on base2 otherwise); running
+blue darkened to #1f6fa8 for base3 text (#268bd2 gives 3.6:1), its text #1c6aa3 and #4fa6e0;
+sky-ink #1d7a73; sand-ink #7d5f00 and #c99a12 (yellow #b58900 is 3.0:1 as text on base3);
+magenta lifted to #e2639f with base03 on it (base3 on #d33682 is 4.2:1); the dark band
+#00212b and the dark sky #083a45 designed deeper than base03. Nord: the light running fill
+#4c6f99 and text #4a6b94 (nord10 #5e81ac is 3.9:1 under nord6); muted in the dark #c0c8d6
+between nord4 and nord3; sky-ink #3f7a87; sand-ink #7d5f1a; the question nord12 lifted to
+#d6907a (nord0 on #d08770 is 4.4:1); the dark band #242933. Gruvbox: sand-ink #8f5a0f (faded
+yellow #b57614 is 3.3:1); the question is bright_purple #d3869b in both, since its orange sits
+too near its yellow. Catppuccin: Latte blue darkened to #1a5ce0 (base on #1e66f5 is 4.3:1),
+text #1e5fe0; sky-ink #13788c; sand-ink #8f5a0c; the dark question is Mocha red #f38ba8, as
+Mocha's pink sits too near its text. Rosé Pine: Dawn's subtle darkened to #625d80 and Main's
+lifted to #a29eba (4.2:1 on sky and sand-pale otherwise); sky-ink #3d7a85; sand-ink #8f5d17;
+Dawn's love lifted to #c26d85 with base on it (4.2:1); the dark band #12101b. Flexoki:
+base-600 darkened to #64635e (4.47:1 on base-50); yellow-700 to #7a5c01 as text on base-50;
+the dark sky cyan-900 #122F2C (cyan-850 gives the muted text 4.3:1); the dark running text
+blue-300 #66A0C8 (blue-400 is 4.4:1 on base-950); the light paper-2 base-50, the dark paper
+base-950 so the black band stays the deepest. The washes (sky, sand-pale) are the theme's hue
+mixed into its paper. Every value is in `assets/style.css`, one block a theme.
+
 ## Type
 
 One family: **Schibsted Grotesk** (variable, 400 to 900) for display and text, with
@@ -291,11 +377,13 @@ One family: **Schibsted Grotesk** (variable, 400 to 900) for display and text, w
 cdn.jsdelivr.net (`@fontsource-variable/schibsted-grotesk@5.3.0`,
 `@fontsource-variable/jetbrains-mono@5.3.0`), the only third-party requests a page makes.
 
-- The band's name: 150px, 900, line-height 0.8, -0.04em (88px on a phone); a longer name
-  steps down (`long` 104px from 7 characters, 64px on a phone; `longer` 76px across the band
-  from 13, 46px; `longest` 52px from 21, 34px) and wraps anywhere rather than run off.
+- The band's name: fluid, `clamp(88px, 10.4vw, 240px)` (150px at 1440, 88px on a phone), 900,
+  line-height 0.8, -0.04em; a longer name steps down in proportion (`long` from 7 characters,
+  104px at 1440, 64px on a phone; `longer` across the band from 13, 76px, 46px; `longest` from
+  21, 52px, 34px) and wraps anywhere rather than run off. The band's words grow a little with
+  it (the summary sentence 18 to 26px, the description 14 to 18px) and keep their measure.
 - A band section's head: 30px, 850, -0.03em. A question's title in its module: 23px, 800. The
-  summary sentence: 19px, 650. A module's title: 16px, 750, two lines at most.
+  summary sentence: 19px at 1440, 650. A module's title: 16px, 750, two lines at most.
 - Body 15/22; meta 13/18 in `ink-muted`; a running cell's time 20px 800.
 - Data: JetBrains Mono 12.5px; a clock time in the band's strip 22px 600.
 - Tabular figures only on numeric data (`time`, durations, counts, `.num`), never page-wide:
@@ -305,18 +393,50 @@ cdn.jsdelivr.net (`@fontsource-variable/schibsted-grotesk@5.3.0`,
 
 ## The grid
 
-A frame 1440px wide at most, centred, with a 32px margin (16px on a phone): its columns are
-`--column` (1376px) at most. Every page's content and the band's content share those edges.
+**Fluid at every width, 320px to 3840px.** There is no frame cap: the column is the window less
+a gutter each side (less the step drawer when it stands beside the page), and the band, the
+page's row and the page share its edges. The gutter grows with the window,
+`clamp(16px, 10px + 1.5vw, 64px)` (16px on a phone, 32 at 1440, 48 at 2560, 64 at 3840), and
+so does the gap between columns, `clamp(8px, 4px + 0.8vw, 28px)`. A wide screen gets more
+modules a row, never longer lines: prose keeps `--measure` (68ch) at every width.
 
-- **Twelve columns**, 16px apart (six columns, 8px apart, below 760px). Modules span whole
-  columns (`ui::module_open(span, …)`); on a phone every module spans all six.
+**Lay out by the box, not the window.** `main` is the `frame` container and every sheet the
+`sheet` container, so what sits in them follows the room it has, the drawer and a board beside
+the plan counted. Media queries are for the frame outside `main` (the band and the row), and
+for input (pointer, hover, motion, colour scheme).
+
+**The sheet** (`ui::grid_open`, `sluice-grid`) has four modes, by its own width:
+
+| sheet | columns | a module of span N (twelfths) |
+|---|---|---|
+| under 640px (narrow) | 6 | across the whole sheet |
+| 640 to 1199px (medium) | 12 | half (6) when N is 6 or less, else whole |
+| 1200 to 1999px (regular) | 12 | N |
+| 2000px and over (wide) | 24 | 2N, its fraction kept; N when it halves |
+
+- Underneath, the sheet is always twice its columns in tracks (24 for twelve), and the lines
+  of 12 or 6 columns are a subset of them, so nothing jumps between modes.
+- **A module's wide behaviour.** `ui::module_open(span, swell, label)` and
+  `ui::column_open(span)` keep their fraction on a wide sheet. `ui::module_open_wide(span,
+  swell, label, ui::Wide::Halve)` (or `ui::column_open_wide`, or `data-wide="halve"` beside
+  `style="--span:N"`) halves it instead, so two whole-width modules stand side by side from
+  2000px. A child with no span takes the whole sheet.
 - **Show grid** (`ui::grid_toggle`, in the page's row under the band) draws the real
-  construction over the sheet (`ui::grid_open`, `sluice-grid`): each column tinted with the
-  logo's blue and numbered above in data mono, each module's span named in its corner ("6
-  col"). It is kept in the browser until switched off. It is a way of looking, so it needs
-  script and is not there without it.
-- A plan's stages sit on fixed columns: a band's strip head (`ui::strip_head`) names each
-  stage over its column, and every unit's strip under it uses the same columns.
+  construction over the sheet: each column of the mode tinted and numbered above in data
+  mono (6, 12 or 24 of them: the overlay's cells are `gc`, `gc-r` from 640px and `gc-w` from
+  2000px), each module's span in the mode in its corner ("8 col", a CSS counter of what it
+  takes now). It is kept in the browser until switched off. It is a way of looking, so it
+  needs script and is not there without it.
+- **Strip tables.** A plan's stages sit on fixed columns: a band's strip head
+  (`ui::strip_head(…, lead, stages)`) names each stage over its column, and each row under it
+  (`ui::strip_row_open(lead)`: the unit's head, then its `ui::stage_strip`) lays out on the
+  same twelve inner columns, so each cell stands under its name at every width. Where their
+  container (the nearest sheet, else the frame) is under 640px both stack, lead over stages,
+  the stages across the whole width. A head and its rows share one container.
+- The trace rail sits in the gutter and narrows with it (28px from 1200px, the gutter less a
+  pixel below).
+- **Narrow end.** At 320 and 390 nothing clips and the page never scrolls sideways; every
+  control is 44px tall on a phone.
 
 ## The band
 
@@ -324,16 +444,18 @@ The page header is the navy title band (`templates/layout.html`), across the win
 
 - **Its top row** (`nav#top-nav`, 54px): the mark and "sluice", "Projects" (on a project's
   pages), the project switcher (the project's name, or "Projects" on the index), Inbox with its
-  coral count, then at the right the live line (a blue square and "Live" while the page's
-  stream is, from `html[data-stream]`) and display preferences. The current place carries a
-  3px underline in the logo's blue. On a phone the row wraps: the live line and display
+  coral count, then at the right the live line (a square in `band-mark` and "Live" while the
+  page's stream is, from `html[data-stream]`) and display preferences (the theme, the
+  appearance, value types). The current place carries a 3px underline in `band-mark`. On a phone the row wraps: the live line and display
   preferences take a second row at the right.
 - **Its head** (`Frame::head`, drawn with `render_framed`): the page's name huge at the left
   on the grid (five columns), its description in `band-muted` and its summary sentence beside
   it (`ui::band_head`); then a strip under a `band-rule`: "Recently finished"
   (`ui::recent_strip`), up to five units, newest first, each its clock time big, its name, its
-  title and how long it took. On a phone the name stands over its words, everything one column,
-  and the strip is a list of rows.
+  title and how long it took. From 761 to 1023px the name takes a row of its own, its words
+  and sentence across the band under it, and the strip's head stands over its five items. On a
+  phone (to 760px) the name stands over its words, everything one column, and the strip is a
+  list of 44px rows.
 - **Under it on the paper**, the page's own row (`.subnav`): its sections as tabs (Plan,
   Messages, Log, Functions, Settings; the current one under a 2px ink bar), a count line
   (`Frame::meta`), and at the right its tools (`Frame::tools`: a find field, the grid switch).

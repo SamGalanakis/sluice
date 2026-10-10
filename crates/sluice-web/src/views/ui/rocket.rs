@@ -161,7 +161,7 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-toggle",
         script: "components.js",
-        does: "A display setting applied at once and kept by posting it to /settings: value types (every Types switch follows) or the theme.",
+        does: "A display setting applied at once and kept by posting it to /settings: value types (every Types switch follows), the theme or the appearance.",
         props: &[("setting", "string")],
         events: &["sluice-setting"],
         slots: &["control"],
@@ -351,7 +351,8 @@ pub fn types_toggle() -> TrustedHtml {
         "<button type=\"button\" class=\"types-toggle\" aria-pressed=\"false\" data-preserve-attr=\"aria-pressed\">Types<span class=\"sw\" aria-hidden=\"true\"></span></button>".into(),
     ))
 }
-/// A display setting's control in the display preferences (`setting` "theme" or "types"):
+/// A display setting's control in the display preferences (`setting` "theme", "appearance"
+/// or "types"):
 /// the host before it, then `setting_close`.
 pub fn setting_open(setting: &str) -> TrustedHtml {
     Host::new("sluice-toggle").attr("setting", setting).open()

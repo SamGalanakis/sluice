@@ -172,7 +172,7 @@ try:
  def capture(name,width,theme):
   chrome.send('Emulation.setDeviceMetricsOverride',{'width':width,'height':1000,'deviceScaleFactor':1,'mobile':False})
   chrome.send('Emulation.setEmulatedMedia',{'features':[{'name':'prefers-color-scheme','value':theme}]})
-  chrome.eval("document.documentElement.removeAttribute('data-theme')")
+  chrome.eval("document.documentElement.removeAttribute('data-appearance')")
   chrome.eval('document.fonts.ready')
   chrome.eval('window.scrollTo(0,0);new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
   g=chrome.eval("(()=>{const content=document.querySelector('.settings-page, #projects, #functions').getBoundingClientRect(),nav=document.querySelector('#top-nav .switcher').getBoundingClientRect(),cog=document.querySelector('.project-settings')?.getBoundingClientRect();return {scroll:document.documentElement.scrollWidth,width:document.documentElement.clientWidth,left:content.left,nav:document.querySelector('#top-nav').getBoundingClientRect().left+parseFloat(getComputedStyle(document.querySelector('#top-nav')).paddingLeft),column:content.width,height:document.documentElement.scrollHeight,cog:cog&&{width:cog.width,height:cog.height}}})()")

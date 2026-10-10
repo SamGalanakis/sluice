@@ -199,7 +199,9 @@ impl Chrome {
             "Emulation.setEmulatedMedia",
             json!({"features":[{"name":"prefers-color-scheme","value":theme}]}),
         )?;
-        self.eval("document.documentElement.removeAttribute('data-theme');document.fonts.ready")?;
+        self.eval(
+            "document.documentElement.removeAttribute('data-appearance');document.fonts.ready",
+        )?;
         self.eval("window.scrollTo(0,0);new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))")?;
         Ok(())
     }

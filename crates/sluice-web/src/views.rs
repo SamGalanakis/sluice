@@ -56,12 +56,70 @@ impl fmt::Display for TrustedHtml {
     }
 }
 
-/// The two themes: cream paper and navy paper (DESIGN.md). With neither chosen a page follows
-/// the system.
-pub const THEMES: [(&str, &str); 2] = [("light", "Light"), ("dark", "Dark")];
+/// A theme (DESIGN.md, Themes): a palette mapped onto every role, light and dark. Its id is
+/// `data-theme` on the page and the `sluice_theme` cookie; the first, Americana, is the default
+/// and names neither.
+pub struct Theme {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// Where its colours come from: the scheme, its author and its licence.
+    pub source: &'static str,
+}
+pub const THEMES: [Theme; 7] = [
+    Theme {
+        id: "americana",
+        name: "Americana",
+        source: "The logo's own palette (the default)",
+    },
+    Theme {
+        id: "solarized",
+        name: "Solarized",
+        source: "Solarized, Ethan Schoonover (MIT)",
+    },
+    Theme {
+        id: "nord",
+        name: "Nord",
+        source: "Nord, Arctic Ice Studio (MIT)",
+    },
+    Theme {
+        id: "gruvbox",
+        name: "Gruvbox",
+        source: "Gruvbox, Pavel Pertsev (MIT/X11)",
+    },
+    Theme {
+        id: "catppuccin",
+        name: "Catppuccin",
+        source: "Catppuccin Latte and Mocha (MIT)",
+    },
+    Theme {
+        id: "rose-pine",
+        name: "Rosé Pine",
+        source: "Rosé Pine and its Dawn (MIT)",
+    },
+    Theme {
+        id: "flexoki",
+        name: "Flexoki",
+        source: "Flexoki, Steph Ango (MIT)",
+    },
+];
+/// The default theme's id: it is drawn with no `data-theme` and kept with no cookie.
+pub const DEFAULT_THEME: &str = THEMES[0].id;
+/// An appearance: `data-appearance` and the `sluice_appearance` cookie. With neither chosen a
+/// page follows the system.
+pub const APPEARANCES: [(&str, &str); 2] = [("light", "Light"), ("dark", "Dark")];
+fn is_theme(id: &str) -> bool {
+    THEMES.iter().any(|t| t.id == id)
+}
+fn is_appearance(id: &str) -> bool {
+    APPEARANCES.iter().any(|(a, _)| *a == id)
+}
+/// The display preferences a page is drawn with, from its cookies.
 #[derive(Clone, Debug, Default)]
 pub struct Viewer {
+    /// A theme other than the default, by id.
     pub theme: Option<String>,
+    /// Light or dark; `None` follows the system.
+    pub appearance: Option<String>,
     pub types: bool,
 }
 impl Viewer {
@@ -75,8 +133,11 @@ impl Viewer {
         {
             if let Some((name, value)) = cookie.trim().split_once('=') {
                 match name {
-                    "sluice_theme" if THEMES.iter().any(|(id, _)| *id == value) => {
+                    "sluice_theme" if is_theme(value) && value != DEFAULT_THEME => {
                         viewer.theme = Some(value.into())
+                    }
+                    "sluice_appearance" if is_appearance(value) => {
+                        viewer.appearance = Some(value.into())
                     }
                     "sluice_types" => viewer.types = value == "1",
                     _ => {}
@@ -85,8 +146,13 @@ impl Viewer {
         }
         viewer
     }
+    /// The theme's id, the default's when none is chosen.
     pub fn theme_id(&self) -> &str {
-        self.theme.as_deref().unwrap_or("")
+        self.theme.as_deref().unwrap_or(DEFAULT_THEME)
+    }
+    /// The appearance's id, "" when the page follows the system.
+    pub fn appearance_id(&self) -> &str {
+        self.appearance.as_deref().unwrap_or("")
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -561,7 +627,8 @@ struct Layout<'a> {
     viewer: &'a Viewer,
     stream: &'a str,
     signals: String,
-    themes: &'a [(&'a str, &'a str)],
+    themes: &'a [Theme],
+    appearances: &'a [(&'a str, &'a str)],
     path: &'a str,
     style_url: String,
     nav_url: String,
@@ -612,6 +679,7 @@ pub fn render_framed(
         stream,
         signals: serde_json::json!({"ver":version,"stale":false}).to_string(),
         themes: &THEMES,
+        appearances: &APPEARANCES,
         path,
         style_url: asset_url("style.css"),
         nav_url: asset_url("nav.js"),
@@ -871,24 +939,31 @@ pub async fn display_preferences(body: axum::body::Bytes) -> Response {
     }
     let values: url::form_urlencoded::Parse<'_> = url::form_urlencoded::parse(&body);
     let mut theme = None;
+    let mut appearance = None;
     let mut types = None;
     let mut next = "/".to_owned();
     for (name, value) in values {
         match name.as_ref() {
             "theme" => theme = Some(value.into_owned()),
+            "appearance" => appearance = Some(value.into_owned()),
             "types" => types = Some(value.into_owned()),
             "next" => next = value.into_owned(),
             _ => {}
         }
     }
-    // an empty theme is "Match system": the cookie goes, and the page follows the OS
+    // the default theme and "Match system" are no cookie: the page draws Americana, following
+    // the OS
     if theme
         .as_deref()
-        .is_some_and(|t| !t.is_empty() && !THEMES.iter().any(|(id, _)| *id == t))
+        .is_some_and(|t| !t.is_empty() && !is_theme(t))
+        || appearance
+            .as_deref()
+            .is_some_and(|a| !a.is_empty() && !is_appearance(a))
         || types.as_deref().is_some_and(|t| t != "0" && t != "1")
     {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    let theme = theme.map(|t| if t == DEFAULT_THEME { String::new() } else { t });
     if !next.starts_with('/')
         || next.starts_with("//")
         || next.contains('\\')
@@ -897,7 +972,11 @@ pub async fn display_preferences(body: axum::body::Bytes) -> Response {
         next = "/".into();
     }
     let mut response = axum::response::Redirect::to(&next).into_response();
-    for (name, value) in [("sluice_theme", theme), ("sluice_types", types)] {
+    for (name, value) in [
+        ("sluice_theme", theme),
+        ("sluice_appearance", appearance),
+        ("sluice_types", types),
+    ] {
         if let Some(value) = value {
             let age = if value.is_empty() { 0 } else { 34_560_000 };
             let cookie = format!("{name}={value}; Path=/; Max-Age={age}; SameSite=Lax; HttpOnly");

@@ -436,18 +436,24 @@ fn article(draft: Option<Shown>, review: Option<Shown>, publish: Option<Shown>) 
 }
 fn grid_part(prefix: &str) -> TrustedHtml {
     let id = format!("{prefix}grid");
+    let module = |span: u8, wide: ui::Wide, words: &str| {
+        format!(
+            "{}<p>{}</p>{}",
+            ui::module_open_wide(span, ui::Swell::Plain, words, wide),
+            ui::esc(words),
+            ui::module_close()
+        )
+    };
     TrustedHtml::owned(format!(
-        "<div class=\"gal-row\">{}</div>{}{}<p>Six columns</p>{}{}<p>Four</p>{}{}<p>Two</p>{}{}<p>Twelve</p>{}{}",
+        "<div class=\"gal-row\">{}</div>{}{}{}{}{}{}{}{}",
         ui::grid_toggle(&id),
         ui::grid_open(&id, 12),
-        ui::module_open(6, ui::Swell::Plain, "Six columns"),
-        ui::module_close(),
-        ui::module_open(4, ui::Swell::Plain, "Four columns"),
-        ui::module_close(),
-        ui::module_open(2, ui::Swell::Plain, "Two columns"),
-        ui::module_close(),
-        ui::module_open(12, ui::Swell::Plain, "Twelve columns"),
-        ui::module_close(),
+        module(6, ui::Wide::Keep, "Six columns"),
+        module(4, ui::Wide::Keep, "Four"),
+        module(2, ui::Wide::Keep, "Two"),
+        module(12, ui::Wide::Keep, "Twelve"),
+        module(12, ui::Wide::Halve, "Twelve, halved on a wide sheet"),
+        module(12, ui::Wide::Halve, "Twelve, halved on a wide sheet"),
         ui::grid_close(),
     ))
 }
@@ -473,10 +479,22 @@ fn modules_part() -> TrustedHtml {
     ))
 }
 fn heads_part() -> TrustedHtml {
+    let row = |name: &str, title: &str, stages: Vec<ui::Stage>| {
+        format!(
+            "{}<p class=\"mod-meta\"><b>{}</b> · {}</p>{}{}",
+            ui::strip_row_open(6),
+            ui::esc(name),
+            ui::esc(title),
+            ui::stage_strip(&format!("Stages of {name}"), &stages),
+            ui::strip_row_close()
+        )
+    };
     TrustedHtml::owned(format!(
-        "{}<p class=\"meta gal-cap\">Over a table of strips: each stage's name over its column</p>{}",
+        "{}<p class=\"meta gal-cap\">Over a table of strips: each stage's name over its column, each row's stages under them</p><div class=\"gal-strips\">{}{}{}</div>",
         ui::section_head("", "Stopped", "1 failed · 1 cancelled"),
         ui::strip_head("", "Running", "Quiet first, then the longest.", 6, &["draft", "review", "publish"]),
+        row("a-12", "Terns: the spring guide's entries", article(Some(Shown::Succeeded), Some(Shown::Running), None)),
+        row("a-9", "Gannets: the spring guide's entries", article(Some(Shown::Succeeded), Some(Shown::Quiet), None)),
     ))
 }
 fn strips_part() -> TrustedHtml {
@@ -626,6 +644,30 @@ fn trace_part(prefix: &str) -> TrustedHtml {
         ui::trace_close(),
     ))
 }
+/// Every theme in one appearance: each a small page in its own tokens, its band with its name
+/// and a summary, then on its paper a unit's stages, the tags, prose with a link, the buttons.
+fn themes_part() -> TrustedHtml {
+    let cards: String = super::THEMES
+        .iter()
+        .map(|theme| {
+            format!(
+                "<figure class=\"gal-themecard\" data-theme=\"{id}\"><div class=\"gt-band\"><span class=\"gt-name\">{name}</span><span class=\"gt-sum\"><a class=\"ask\" href=\"#\">1 question for you</a>. 1 failed. 2 article at work.</span></div><div class=\"gt-paper\">{strip}<p class=\"gal-row\">{ask}{attn}{live}{over}</p><p class=\"gt-text\">The draft cites the checklist; <a href=\"#\">its thread</a> has the reply. <span class=\"meta\">a-12 · article · 41m</span></p><p class=\"gal-row\"><button class=\"primary\" type=\"button\">Answer</button><button type=\"button\">Retry</button></p></div><figcaption class=\"meta\">{source}</figcaption></figure>",
+                id = theme.id,
+                name = ui::esc(theme.name),
+                source = ui::esc(theme.source),
+                strip = ui::stage_strip(
+                    "Stages of a-12",
+                    &article(Some(Shown::Succeeded), Some(Shown::Running), Some(Shown::Failed))
+                ),
+                ask = ui::tag("Awaiting your reply", "ask", None),
+                attn = ui::tag("quiet 42m", "attn", None),
+                live = ui::tag("live", "live", Some(ui::mark(Shown::Running))),
+                over = ui::overrun(2.1),
+            )
+        })
+        .collect();
+    TrustedHtml::owned(format!("<div class=\"gal-themes\">{cards}</div>"))
+}
 /// Every part, drawn twice: once per theme of the house pair, with its ids apart.
 pub fn parts() -> Result<Vec<Part>, askama::Error> {
     let project = project();
@@ -639,9 +681,9 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Status", "Each state a step, unit or project can be in: its glyph, its word and what it means. The same glyph and word on every page.", "`ui::status`, `ui::glyph` or `ui::mark`, from the status table.", both(&|_| Ok(statuses()))?);
     add("The band", "The navy title band at the top of a page: the page's name huge on the grid, its words and its summary sentence beside it, and under them what finished most recently, newest first. The sentence says only what the counts say: questions for you, what stopped, what runs (named by recipe, quiet first, then past its usual time), what waits and how much is done.", "`ui::band_head` and `ui::recent_strip` in `Frame::head` (`render_framed`); `ui::summary_sentence` from `ui::UnitFact`s.", both(&|p| Ok(band_part(p)))?);
     add("Summary sentence", "One sentence from the counts alone, with the question for you linked first.", "`ui::summary_sentence`.", both(&|_| Ok(summary_part()))?);
-    add("Module grid", "Twelve columns (six on a phone) that every module spans. Show grid draws the construction under the modules: each column tinted and numbered, each module's span in its corner.", "`ui::grid_open`, `ui::module_open`, `ui::grid_toggle` (`sluice-grid`).", both(&|p| Ok(grid_part(p)))?);
+    add("Module grid", "Twelve columns that every module spans, fluid at every width: six on a narrow sheet (every module across it), a module half or whole on a medium one, and twenty-four from 2000px, where a module keeps its share or halves so two whole-width ones stand side by side. Show grid draws the construction under the modules: each column tinted and numbered, each module's span in its corner, as the sheet has them now.", "`ui::grid_open`, `ui::module_open`, `ui::module_open_wide` with `ui::Wide`, `ui::grid_toggle` (`sluice-grid`).", both(&|p| Ok(grid_part(p)))?);
     add("Modules", "A module is a unit (or a question, or a step) on the grid. The one that needs you swells: a question to you under the coral rule, its title a size up; a stopped one sits on the sand.", "`ui::module_open` with `ui::Swell`, `.mod-k`, `.mod-t`, `.mod-meta`, `.mod-body`, `.mod-actions`.", both(&|_| Ok(modules_part()))?);
-    add("Section heads", "Each band of the page (For you, Stopped, Running, Waiting, Done) under a heavy rule, its name big and its count line at the right; over a table of strips, each stage's name over its column.", "`ui::section_head`, `ui::strip_head`.", both(&|_| Ok(heads_part()))?);
+    add("Section heads", "Each band of the page (For you, Stopped, Running, Waiting, Done) under a heavy rule, its name big and its count line at the right; over a table of strips, each stage's name over its column.", "`ui::section_head`, `ui::strip_head`, `ui::strip_row_open`.", both(&|_| Ok(heads_part()))?);
     add("Stage strip", "A unit's stages in its recipe's order, one cell each: an outline not reached (saying why when something holds it), sky when done with how long it took, blue while running with its time and a sweep, sand when it needs a look with its word. Past its usual time a run says how far, and a one-step recipe is one cell.", "`ui::stage_strip` from `ui::Stage`s (`ui::Cell::of` reads the status table), `ui::overrun`, `ui::stage_marks`.", both(&|_| Ok(strips_part()))?);
     add("Margin module", "A step that has run far past any usual time, or reports progress, in the margin: its running time, then each field it reported, as it reported it.", "`ui::margin_module` from a `ui::LongRun`.", both(&|_| Ok(margin_part()))?);
     add("Trace", "Select a unit to trace its chain: it opens in place, what it waits for and what waits on it light up with a rail in the margin, the line says the chain, and the rest fades. Select it again, Clear trace or Escape clears; the arrows move between units.", "`ui::trace_open`, `ui::Trace::attrs`, `ui::rail`, `ui::trace_button_open`, `ui::trace_more_open` (`sluice-trace`).", both(&|p| Ok(trace_part(p)))?);
@@ -662,9 +704,10 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Notice", "What a page says at its top when something you asked for was not done, with what to do next and your words kept in their box. Read out as it appears.", "`ui::notice`: a refused step action comes back to the step's address, the notice held ten minutes under a key the server made.", both(&|_| Ok(notices()))?);
     add("Keys", "Listed under display preferences on every page: / finds on the plan (from a step or unit page too), the log and functions; [ and ] move the drawer to the step before or after; g then a letter goes to a section; ? opens the list. Never while typing in a field or under an open dialog.", "`sluice-keys`.", both(&|_| Ok(keys()))?);
     add("Splitter", "The line between the plan and an open step: drag it, or use the arrows (16px, 64px with Shift), Home and End; a double-click resets it, and its width is kept per project.", "`ui::splitter` (`sluice-splitter`).", both(&|p| Ok(splitters(p)))?);
+    add("Themes", "Each theme the display preferences offer, in light and dark: a well-loved colour scheme mapped onto sluice's roles, so its band is its deepest surface, its blue (or its nearest) runs, its done is calm, its yellow wants a look and one colour of its own asks you a question. Americana, the logo's palette, is the default.", "`data-theme` and `data-appearance` on the page (cookies `sluice_theme`, `sluice_appearance`); the tokens in `style.css`.", both(&|_| Ok(themes_part()))?);
     add("Components", "For whoever builds a page: every component, the attributes it reads and what it does. The server draws everything in it; the component only behaves.", "Rocket components in `components.js`, light DOM.", (components(), TrustedHtml::default()));
     for part in &mut parts {
-        part.wide = matches!(part.name, "The band" | "Module grid" | "Modules" | "Section heads" | "Trace");
+        part.wide = matches!(part.name, "Themes" | "The band" | "Module grid" | "Modules" | "Section heads" | "Trace");
     }
     Ok(parts)
 }

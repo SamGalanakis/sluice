@@ -149,7 +149,7 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                         }
                         ("board", _) => {
                             assert!(plan.is_object(), "{label}: {g}");
-                            // From 1280px the page takes the window (to 2400px): the plan, the
+                            // From 1280px the page takes the frame's column: the plan, the
                             // splitter, the board; the switch offers Plan · Both · Board.
                             let board = &g["board"];
                             assert!(g["tabs"].is_object() && g["split"].is_object(), "{label}: {g}");
@@ -162,7 +162,9 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                             assert!(near(&g["split"]["left"], plan["right"].as_f64().unwrap()), "{label}: {g}");
                             assert!(near(&board["right"], g["right"].as_f64().unwrap()), "{label}: {g}");
                             let page = right - left;
-                            assert!((page - (vw - 64.0).min(2400.0)).abs() < 1.0, "{label}: {g}");
+                            // the frame's fluid column, the band's content on the same edges
+                            let column = g["navRight"].as_f64().unwrap() - g["navLeft"].as_f64().unwrap();
+                            assert!((page - column).abs() < 1.0 && page > vw - 140.0, "{label}: {g}");
                             assert!(plan["width"].as_f64().unwrap() >= 560.0, "{label}: {g}");
                         }
                         _ => {
@@ -186,7 +188,10 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
             let g = browser.eval(GEOMETRY).unwrap();
             let label = format!("cliff {width}");
             check(&g, &label);
-            assert!(near(&g["left"], 32.0) && near(&g["right"], g["width"].as_f64().unwrap() - 32.0), "{label}: {g}");
+            // the frame's fluid gutter each side, the band's edges
+            let gutter = (10.0 + 0.015 * width as f64).clamp(16.0, 64.0);
+            assert!(near(&g["left"], gutter) && near(&g["right"], g["width"].as_f64().unwrap() - gutter), "{label}: {g}");
+            assert!(near(&g["left"], g["navLeft"].as_f64().unwrap()) && near(&g["right"], g["navRight"].as_f64().unwrap()), "{label}: {g}");
             let (tabs, sum, plan) = (&g["tabs"], &g["sum"], &g["plan"]);
             assert!(near(&tabs["right"], plan["right"].as_f64().unwrap()), "{label}: {g}");
             assert!(tabs["top"].as_f64().unwrap() >= sum["top"].as_f64().unwrap() - 1.0, "{label}: {g}");

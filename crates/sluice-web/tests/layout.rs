@@ -119,14 +119,16 @@ async fn display_preferences_validate_cookies_and_empty_scope_stays_global() {
             Request::builder()
                 .method("POST")
                 .uri("/settings")
-                .body(Body::from("theme=dark&types=0&types=1&next=%2Ffns"))
+                .body(Body::from(
+                    "theme=nord&appearance=dark&types=0&types=1&next=%2Ffns",
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), 303);
     assert_eq!(response.headers()["location"], "/fns");
-    assert_eq!(response.headers().get_all("set-cookie").iter().count(), 2);
+    assert_eq!(response.headers().get_all("set-cookie").iter().count(), 3);
     let response = router
         .oneshot(
             Request::builder()

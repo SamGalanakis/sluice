@@ -658,14 +658,16 @@ define("sluice-copy", {
 // ---- sluice-toggle -----------------------------------------------------------------------------
 // A display setting applied at once and kept by posting it to /settings, which sets the cookie
 // every page is drawn from: `setting` "types" (a Types switch's aria-pressed, or the display
-// preferences' checkbox; every one on the page follows, and `show-types` on <html>) or "theme"
-// (its id as `data-theme` on <html>; "Match system" removes it, so the page follows the OS).
+// preferences' checkbox; every one on the page follows, and `show-types` on <html>), "theme"
+// (its id as `data-theme` on <html>; the default, Americana, removes it) or "appearance"
+// (light or dark as `data-appearance` on <html>; "Match system" removes it, so the page follows
+// the OS).
 const keepSetting = (name, value) =>
   fetch("/settings", { method: "POST", keepalive: true, body: new URLSearchParams({ [name]: value }) }).catch(() => {});
 define("sluice-toggle", {
   props: ({ string }) => ({ setting: string }),
   manifest: {
-    slots: [{ name: "control", description: "button.types-toggle[aria-pressed], a types checkbox, or the theme radios." }],
+    slots: [{ name: "control", description: "button.types-toggle[aria-pressed], a types checkbox, or the theme or appearance radios." }],
     events: [{ name: "sluice-setting", description: "A setting changed (on document); detail.setting and detail.value." }],
   },
   setup({ host, props, cleanup }) {
@@ -690,10 +692,11 @@ define("sluice-toggle", {
     on(host, "change", (event) => {
       const input = event.target;
       if (input.name === "types" && input.type === "checkbox") types(input.checked);
-      if (input.name === "theme") {
-        if (input.value) root.dataset.theme = input.value;
-        else delete root.dataset.theme;
-        keepSetting("theme", input.value);
+      if (input.name === "theme" || input.name === "appearance") {
+        const key = input.name;
+        if (input.value && input.value !== "americana") root.dataset[key] = input.value;
+        else delete root.dataset[key];
+        keepSetting(key, input.value);
         say(input.value);
       }
     });

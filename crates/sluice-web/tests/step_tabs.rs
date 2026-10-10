@@ -473,19 +473,20 @@ async fn the_kit_gallery_draws_every_part_in_both_themes() {
         "Notice",
         "Keys",
         "Splitter",
+        "Themes",
         "Components",
     ] {
         assert!(html.contains(&format!("-h\">{part}</h2>")), "{part}");
     }
     assert_eq!(
-        html.matches("<div class=\"gal-th\" data-theme=\"light\">")
+        html.matches("<div class=\"gal-th\" data-appearance=\"light\">")
             .count(),
-        26
+        27
     );
     assert_eq!(
-        html.matches("<div class=\"gal-th\" data-theme=\"dark\">")
+        html.matches("<div class=\"gal-th\" data-appearance=\"dark\">")
             .count(),
-        26
+        27
     );
     // its two copies keep their ids apart
     let mut ids: Vec<&str> = html

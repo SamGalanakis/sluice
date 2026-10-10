@@ -9,13 +9,12 @@
   --font-sans: "Schibsted Grotesk Variable", "Schibsted Grotesk", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SFMono-Regular",
                Menlo, monospace;
-  --measure: 68ch;    /* prose: about 72 characters a line of the text face */
-  /* the grid: twelve columns (six on a phone) of the frame, 16px between them (8px) */
-  --frame: 1440px;    /* the frame, its side margins included */
-  --gutter: 32px;     /* the margin beside the frame's columns */
-  --column: calc(var(--frame) - 2 * var(--gutter));  /* the columns' width at most */
-  --cols: 12;
-  --col-gap: 16px;
+  --measure: 68ch;    /* prose: about 72 characters a line of the text face, at every width */
+  /* the frame is fluid: the window less a gutter each side, which grows with the window (16px
+     on a phone, 32 at 1440, 48 at 2560, 64 at 3840); the gap between grid columns grows with
+     it (8px to 28px). Wide screens get more modules a row, never longer lines. */
+  --gutter: clamp(16px, calc(10px + 1.5vw), 64px);
+  --col-gap: clamp(8px, calc(4px + 0.8vw), 28px);
   --nav-pad: 10px;
   --plane-pad: 12px;
   --drawer-w: min(680px, 45vw);  /* the step drawer beside the page, from 1200px */
@@ -23,53 +22,253 @@
   --ease-out: cubic-bezier(.16, 1, .3, 1);
 }
 
-/* ---- the palette: light (cream paper) and dark (navy paper), each colour light-dark(), so an
-   unpicked page follows the OS. The selectors are bare attributes as well as :root's, so a
-   part of the gallery that carries data-theme draws itself in that theme. Roles, not hues:
-   `paper` the page, `ink` its text, `navy` the heavy rules and the filled button (cream in the
-   dark), `band` the title band, `run` running's blue, `sky` done, `sand` needs a look, `coral`
-   an open question to the owner and nothing else. ------------------------------------------ */
-:root:not([data-theme]), [data-theme="light"], [data-theme="dark"] {
-  color-scheme: light dark;
+/* ---- the palette (DESIGN.md, Palette and Themes). Roles, not hues: `paper` the page, `ink`
+   its text, `navy` the heavy rules and the filled button (the text's colour in the dark), `band`
+   the title band (the theme's deepest surface), `run` running's fill (the one active colour),
+   `sky` done, `sand` needs a look, `coral` an open question to the owner and nothing else.
+   Each token is light-dark() of its light and dark value, so `color-scheme` picks the
+   appearance: the system's, or `data-appearance` light or dark. A theme is `data-theme` on
+   <html> (none: Americana); a part of the gallery that carries either attribute draws itself
+   in it, because the derived tokens are worked out again on every element that names one.
+   Values adjusted from a theme's published ones for contrast are noted in DESIGN.md, Themes. */
+:root, [data-theme] {
+  /* Americana, the default: the logo's navy, cream, the channel's blue, sky, sand, coral */
   --paper: light-dark(oklch(0.98 0.017 88), oklch(0.235 0.068 263));
-  --paper-2: light-dark(oklch(0.955 0.022 86), oklch(0.27 0.072 263));   /* hover, a sunk well */
-  --paper-raised: light-dark(oklch(0.993 0.008 88), oklch(0.285 0.075 263));  /* a menu, the drawer */
+  --paper-2: light-dark(oklch(0.955 0.022 86), oklch(0.27 0.072 263));
+  --paper-raised: light-dark(oklch(0.993 0.008 88), oklch(0.285 0.075 263));
   --ink: light-dark(oklch(0.22 0.07 262), oklch(0.955 0.022 88));
   --ink-muted: light-dark(oklch(0.46 0.05 262), oklch(0.8 0.035 88));
   --navy: light-dark(oklch(0.308 0.112 262), oklch(0.955 0.022 88));
   --navy-deep: light-dark(oklch(0.22 0.09 262), oklch(0.995 0.008 88));
   --on-navy: light-dark(oklch(0.98 0.017 88), oklch(0.235 0.068 263));
-  --rule: light-dark(oklch(0.308 0.112 262 / 22%), oklch(0.955 0.022 88 / 22%));
-  --rule-faint: light-dark(oklch(0.308 0.112 262 / 11%), oklch(0.955 0.022 88 / 12%));
   --band: light-dark(oklch(0.308 0.112 262), oklch(0.17 0.055 264));
   --band-ink: oklch(0.98 0.017 88);
-  --band-muted: oklch(0.98 0.017 88 / 74%);
-  --band-rule: oklch(0.98 0.017 88 / 30%);
-  --band-accent: oklch(0.82 0.09 232);                  /* sky, on the band */
-  --run: oklch(0.5 0.19 258);                           /* running's fill, cream on it */
+  --band-accent: oklch(0.82 0.09 232);
+  --band-mark: oklch(0.617 0.2 257);
+  --run: oklch(0.5 0.19 258);
   --on-run: oklch(0.98 0.017 88);
-  --run-ink: light-dark(oklch(0.42 0.17 258), oklch(0.76 0.12 252));  /* the blue as text */
+  --run-ink: light-dark(oklch(0.42 0.17 258), oklch(0.76 0.12 252));
   --focus: light-dark(oklch(0.5 0.19 258), oklch(0.72 0.15 250));
-  --sky: light-dark(oklch(0.94 0.03 232), oklch(0.34 0.06 240));      /* done's fill */
-  --sky-ink: light-dark(oklch(0.42 0.09 240), oklch(0.84 0.07 232));  /* done's glyph */
+  --sky: light-dark(oklch(0.94 0.03 232), oklch(0.34 0.06 240));
+  --sky-ink: light-dark(oklch(0.42 0.09 240), oklch(0.84 0.07 232));
   --sweep: oklch(0.82 0.09 232);
-  --sand: oklch(0.85 0.09 80);                          /* a look's fill, navy on it */
+  --sand: oklch(0.85 0.09 80);
   --on-sand: oklch(0.22 0.07 262);
-  --sand-mark: oklch(0.47 0.1 62);                      /* a look's glyph on the sand */
-  --sand-pale: light-dark(oklch(0.95 0.04 84), oklch(0.3 0.045 72));  /* a stopped module */
-  --sand-ink: light-dark(oklch(0.47 0.1 62), oklch(0.84 0.11 80));    /* a look's glyph */
-  --coral: oklch(0.69 0.2 30);                          /* the logo's coral corners */
+  --sand-mark: oklch(0.47 0.1 62);
+  --sand-pale: light-dark(oklch(0.95 0.04 84), oklch(0.3 0.045 72));
+  --sand-ink: light-dark(oklch(0.47 0.1 62), oklch(0.84 0.11 80));
+  --coral: oklch(0.69 0.2 30);
   --on-coral: oklch(0.2 0.08 262);
   --idle: light-dark(oklch(0.52 0.03 262), oklch(0.7 0.03 262));
-  --line: light-dark(oklch(0.308 0.112 262 / 70%), oklch(0.955 0.022 88 / 55%));
-  --grid-col: light-dark(oklch(0.617 0.2 257 / 6%), oklch(0.72 0.15 250 / 9%));
-  --grid-edge: light-dark(oklch(0.617 0.2 257 / 55%), oklch(0.72 0.15 250 / 55%));
-  --lift: 0 1px 2px light-dark(oklch(0.308 0.112 262 / 10%), transparent),
-          0 14px 32px light-dark(oklch(0.308 0.112 262 / 16%), oklch(0.08 0.04 263 / 60%));
-  --scrim: light-dark(oklch(0.2 0.06 262 / 45%), oklch(0.08 0.04 263 / 62%));
 }
-[data-theme="light"] { color-scheme: light; }
-[data-theme="dark"] { color-scheme: dark; }
+
+[data-theme="solarized"] {
+  /* Solarized (Ethan Schoonover, MIT): base03 to base3 and the eight accents */
+  --paper: light-dark(#fdf6e3, #002b36);
+  --paper-2: light-dark(#eee8d5, #073642);
+  --paper-raised: light-dark(#fdf6e3, #073642);
+  --ink: light-dark(#073642, #eee8d5);
+  --ink-muted: light-dark(#4f646b, #93a1a1);
+  --navy: light-dark(#002b36, #93a1a1);
+  --navy-deep: light-dark(#00212b, #fdf6e3);
+  --on-navy: light-dark(#fdf6e3, #002b36);
+  --band: light-dark(#002b36, #00212b);
+  --band-ink: #fdf6e3;
+  --band-accent: #2aa198;
+  --band-mark: #268bd2;
+  --run: light-dark(#1f6fa8, #268bd2);
+  --on-run: light-dark(#fdf6e3, #00212b);
+  --run-ink: light-dark(#1c6aa3, #4fa6e0);
+  --focus: #268bd2;
+  --sky: light-dark(#dcebdc, #083a45);
+  --sky-ink: light-dark(#1d7a73, #2aa198);
+  --sweep: #93d6cf;
+  --sand: #b58900;
+  --on-sand: #002b36;
+  --sand-mark: #002b36;
+  --sand-pale: light-dark(#f5ebc9, #15373a);
+  --sand-ink: light-dark(#7d5f00, #c99a12);
+  --coral: #e2639f;
+  --on-coral: #002b36;
+  --idle: light-dark(#657b83, #839496);
+}
+
+[data-theme="nord"] {
+  /* Nord (Arctic Ice Studio, MIT): Polar Night, Snow Storm, Frost and Aurora */
+  --paper: light-dark(#eceff4, #2e3440);
+  --paper-2: light-dark(#e5e9f0, #3b4252);
+  --paper-raised: light-dark(#f4f6f9, #3b4252);
+  --ink: light-dark(#2e3440, #eceff4);
+  --ink-muted: light-dark(#4c566a, #c0c8d6);
+  --navy: light-dark(#3b4252, #d8dee9);
+  --navy-deep: light-dark(#2e3440, #eceff4);
+  --on-navy: light-dark(#eceff4, #2e3440);
+  --band: light-dark(#2e3440, #242933);
+  --band-ink: #eceff4;
+  --band-accent: #88c0d0;
+  --band-mark: #88c0d0;
+  --run: light-dark(#4c6f99, #81a1c1);
+  --on-run: light-dark(#eceff4, #2e3440);
+  --run-ink: light-dark(#4a6b94, #88c0d0);
+  --focus: light-dark(#5e81ac, #88c0d0);
+  --sky: light-dark(#d5e6ec, #3a4a5a);
+  --sky-ink: light-dark(#3f7a87, #8fbcbb);
+  --sweep: #88c0d0;
+  --sand: #ebcb8b;
+  --on-sand: #2e3440;
+  --sand-mark: #2e3440;
+  --sand-pale: light-dark(#f3ead6, #45443f);
+  --sand-ink: light-dark(#7d5f1a, #ebcb8b);
+  --coral: #d6907a;
+  --on-coral: #2e3440;
+  --idle: light-dark(#5f6b80, #a3adbf);
+}
+
+[data-theme="gruvbox"] {
+  /* Gruvbox (Pavel Pertsev, MIT/X11): light0 to dark0_hard, the neutral, faded and bright accents */
+  --paper: light-dark(#fbf1c7, #282828);
+  --paper-2: light-dark(#f2e5bc, #32302f);
+  --paper-raised: light-dark(#f9f5d7, #3c3836);
+  --ink: light-dark(#3c3836, #ebdbb2);
+  --ink-muted: light-dark(#665c54, #bdae93);
+  --navy: light-dark(#282828, #d5c4a1);
+  --navy-deep: light-dark(#1d2021, #fbf1c7);
+  --on-navy: light-dark(#fbf1c7, #282828);
+  --band: #1d2021;
+  --band-ink: #fbf1c7;
+  --band-accent: #8ec07c;
+  --band-mark: #fabd2f;
+  --run: light-dark(#076678, #83a598);
+  --on-run: light-dark(#fbf1c7, #1d2021);
+  --run-ink: light-dark(#076678, #83a598);
+  --focus: light-dark(#076678, #83a598);
+  --sky: light-dark(#e3e6c4, #34392f);
+  --sky-ink: light-dark(#427b58, #8ec07c);
+  --sweep: #8ec07c;
+  --sand: light-dark(#d79921, #fabd2f);
+  --on-sand: #1d2021;
+  --sand-mark: #1d2021;
+  --sand-pale: light-dark(#f5e3a8, #3d3522);
+  --sand-ink: light-dark(#8f5a0f, #fabd2f);
+  --coral: #d3869b;
+  --on-coral: #1d2021;
+  --idle: light-dark(#7c6f64, #a89984);
+}
+
+[data-theme="catppuccin"] {
+  /* Catppuccin (MIT): Latte for the light, Mocha for the dark and the band */
+  --paper: light-dark(#eff1f5, #1e1e2e);
+  --paper-2: light-dark(#e6e9ef, #181825);
+  --paper-raised: light-dark(#f5f6f9, #313244);
+  --ink: light-dark(#4c4f69, #cdd6f4);
+  --ink-muted: light-dark(#5c5f77, #a6adc8);
+  --navy: light-dark(#4c4f69, #bac2de);
+  --navy-deep: light-dark(#1e1e2e, #cdd6f4);
+  --on-navy: light-dark(#eff1f5, #1e1e2e);
+  --band: light-dark(#1e1e2e, #11111b);
+  --band-ink: #cdd6f4;
+  --band-accent: #89dceb;
+  --band-mark: #89b4fa;
+  --run: light-dark(#1a5ce0, #89b4fa);
+  --on-run: light-dark(#eff1f5, #11111b);
+  --run-ink: light-dark(#1e5fe0, #89b4fa);
+  --focus: light-dark(#1e66f5, #89b4fa);
+  --sky: light-dark(#d6ecf3, #243447);
+  --sky-ink: light-dark(#13788c, #89dceb);
+  --sweep: #89dceb;
+  --sand: light-dark(#df8e1d, #f9e2af);
+  --on-sand: #11111b;
+  --sand-mark: #11111b;
+  --sand-pale: light-dark(#f4e8d6, #33302f);
+  --sand-ink: light-dark(#8f5a0c, #f9e2af);
+  --coral: light-dark(#ea76cb, #f38ba8);
+  --on-coral: #11111b;
+  --idle: light-dark(#6c6f85, #9399b2);
+}
+
+[data-theme="rose-pine"] {
+  /* Rosé Pine (MIT): Dawn for the light, the dark variant for the dark and the band */
+  --paper: light-dark(#faf4ed, #191724);
+  --paper-2: light-dark(#f2e9e1, #1f1d2e);
+  --paper-raised: light-dark(#fffaf3, #26233a);
+  --ink: light-dark(#464261, #e0def4);
+  --ink-muted: light-dark(#625d80, #a29eba);
+  --navy: light-dark(#464261, #e0def4);
+  --navy-deep: light-dark(#26233a, #fffaf3);
+  --on-navy: light-dark(#faf4ed, #191724);
+  --band: light-dark(#191724, #12101b);
+  --band-ink: #e0def4;
+  --band-accent: #9ccfd8;
+  --band-mark: #ebbcba;
+  --run: light-dark(#286983, #3e8fb0);
+  --on-run: light-dark(#faf4ed, #12101b);
+  --run-ink: light-dark(#286983, #9ccfd8);
+  --focus: light-dark(#286983, #c4a7e7);
+  --sky: light-dark(#dceaea, #21303a);
+  --sky-ink: light-dark(#3d7a85, #9ccfd8);
+  --sweep: #9ccfd8;
+  --sand: light-dark(#ea9d34, #f6c177);
+  --on-sand: #191724;
+  --sand-mark: #191724;
+  --sand-pale: light-dark(#f6e6cf, #2e2830);
+  --sand-ink: light-dark(#8f5d17, #f6c177);
+  --coral: light-dark(#c26d85, #eb6f92);
+  --on-coral: #191724;
+  --idle: light-dark(#797593, #908caa);
+}
+
+[data-theme="flexoki"] {
+  /* Flexoki (Steph Ango, MIT, stephango.com/flexoki): paper, black and the 50 to 950 ramps */
+  --paper: light-dark(#FFFCF0, #1C1B1A);
+  --paper-2: light-dark(#F2F0E5, #282726);
+  --paper-raised: light-dark(#FFFCF0, #282726);
+  --ink: light-dark(#100F0F, #CECDC3);
+  --ink-muted: light-dark(#64635e, #9F9D96);
+  --navy: light-dark(#100F0F, #CECDC3);
+  --navy-deep: light-dark(#100F0F, #FFFCF0);
+  --on-navy: light-dark(#FFFCF0, #100F0F);
+  --band: #100F0F;
+  --band-ink: #FFFCF0;
+  --band-accent: #3AA99F;
+  --band-mark: #4385BE;
+  --run: light-dark(#205EA6, #4385BE);
+  --on-run: light-dark(#FFFCF0, #100F0F);
+  --run-ink: light-dark(#205EA6, #66A0C8);
+  --focus: light-dark(#205EA6, #4385BE);
+  --sky: light-dark(#DDF1E4, #122F2C);
+  --sky-ink: light-dark(#24837B, #3AA99F);
+  --sweep: #87D3C3;
+  --sand: #D0A215;
+  --on-sand: #100F0F;
+  --sand-mark: #100F0F;
+  --sand-pale: light-dark(#FAEEC6, #3A2D04);
+  --sand-ink: light-dark(#7a5c01, #D0A215);
+  --coral: light-dark(#BC5215, #DA702C);
+  --on-coral: light-dark(#FFFCF0, #100F0F);
+  --idle: #878580;
+}
+
+/* the tokens every theme derives from its roles, worked out where a theme is named */
+:root, [data-theme], [data-appearance] {
+  --rule: color-mix(in oklch, var(--navy) 22%, transparent);
+  --rule-faint: color-mix(in oklch, var(--navy) 11%, transparent);
+  --line: light-dark(color-mix(in oklch, var(--navy) 70%, transparent),
+                     color-mix(in oklch, var(--navy) 55%, transparent));
+  --band-muted: color-mix(in oklch, var(--band-ink) 74%, transparent);
+  --band-rule: color-mix(in oklch, var(--band-ink) 30%, transparent);
+  --band-hover: color-mix(in oklch, var(--band-ink) 12%, transparent);
+  --grid-col: light-dark(color-mix(in oklch, var(--focus) 7%, transparent),
+                         color-mix(in oklch, var(--focus) 10%, transparent));
+  --grid-edge: color-mix(in oklch, var(--focus) 55%, transparent);
+  --lift: 0 1px 2px light-dark(color-mix(in oklch, var(--band) 10%, transparent), transparent),
+          0 14px 32px light-dark(color-mix(in oklch, var(--band) 16%, transparent),
+                                 color-mix(in oklch, black 55%, transparent));
+  --scrim: light-dark(color-mix(in oklch, var(--band) 45%, transparent),
+                      color-mix(in oklch, black 60%, transparent));
+}
+:root { color-scheme: light dark; }
+[data-appearance="light"] { color-scheme: light; }
+[data-appearance="dark"] { color-scheme: dark; }
 
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -144,16 +343,17 @@ p { margin: 0; }
 .scroll { overflow-x: auto; }
 .num { text-align: right; }
 
-/* ---- the frame (DESIGN.md, The band): the navy title band across the window, its content on
-   the frame's columns; under it on the paper the page's own row (its sections, a find, the
-   grid switch), then the page. Every part sits on one column, centred, its edges shared:
-   `--column` wide at most, `--gutter` beside it. ------------------------------------------ */
+/* ---- the frame (DESIGN.md, The band and The grid): the band across the window, its content
+   inside the gutter; under it on the paper the page's own row (its sections, a find, the grid
+   switch), then the page. Fluid at every width: the column is the window less a gutter each
+   side (less the drawer beside it), with no cap, its edges shared by the band, the row and the
+   page. `<main>` is the `frame` container, so what sits in it lays out by the room it has, the
+   drawer counted, not by the window. --------------------------------------------------------- */
 .site-head { background: var(--band); color: var(--band-ink); }
-.band-in, .subnav { padding: 0 max(var(--gutter), calc((100% - var(--column)) / 2)); }
-main { display: grid; padding: 30px 0 72px;
-       grid-template-columns: [full-start] minmax(var(--gutter), 1fr)
-                              [col-start] minmax(0, var(--column)) [col-end]
-                              minmax(var(--gutter), 1fr) [full-end]; }
+.band-in, .subnav { padding: 0 var(--gutter); }
+main { display: grid; padding: 30px 0 72px; container: frame / inline-size;
+       grid-template-columns: [full-start] var(--gutter) [col-start] minmax(0, 1fr) [col-end]
+                              var(--gutter) [full-end]; }
 main > *, #graph > * { grid-column: col; }
 .site-head a { text-decoration: none; }
 .site-head a:hover { color: var(--band-accent); }
@@ -171,7 +371,7 @@ nav.top > a, nav.top details.switcher > summary { display: flex; align-items: ce
 nav.top a.brand { gap: 10px; font-size: 16px; font-weight: 800; letter-spacing: -0.01em; }
 nav.top .mark { display: block; flex: none; }
 nav.top > a[aria-current], details.switcher.current > summary {
-  box-shadow: inset 0 -3px 0 oklch(0.617 0.2 257); }
+  box-shadow: inset 0 -3px 0 var(--band-mark); }
 .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px;
          height: 20px; padding: 0 6px; background: var(--coral); color: var(--on-coral);
          font-size: 12px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
@@ -180,7 +380,7 @@ nav.top > a[aria-current], details.switcher.current > summary {
 /* the page's stream: "Live" while it is, set from the stream's banner (`html[data-stream]`) */
 .live { display: none; margin-left: auto; align-items: center; gap: 8px; color: var(--band-muted);
         font-weight: 500; white-space: nowrap; }
-.live::before { content: ""; width: 8px; height: 8px; background: oklch(0.617 0.2 257); }
+.live::before { content: ""; width: 8px; height: 8px; background: var(--band-mark); }
 html[data-stream="live"] .live { display: flex; }
 html[data-stream="live"] .live + sluice-menu > details.settings,
 .live[hidden] + sluice-menu > details.settings { margin-left: 0; }
@@ -221,7 +421,7 @@ details.settings > summary { display: grid; place-items: center; width: 44px; he
   list-style: none; cursor: pointer; color: var(--band-muted); user-select: none; }
 details.settings > summary::-webkit-details-marker { display: none; }
 details.settings > summary:hover, details.settings[open] > summary { color: var(--band-ink);
-  background: oklch(0.98 0.017 88 / 12%); }
+  background: var(--band-hover); }
 details.settings > summary:focus-visible { outline-offset: -4px; }
 details.settings .menu { -webkit-user-select: none; user-select: none; }  /* toggles, not text */
 details.settings .menu { right: 10px; width: 264px; max-width: calc(100vw - 2 * var(--gutter));
@@ -260,14 +460,28 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; box-shadow: inset 
 .prefs .themes .tick { flex: none; visibility: hidden; }  /* its slot keeps the names aligned */
 .prefs .themes label:has(:checked) .tick { visibility: visible; }
 .prefs .themes .swatch { margin-left: auto; }
-.prefs .themes .swatch-pair { margin-left: auto; display: inline-flex; flex: none; }
-.swatch-pair .swatch { width: 29px; padding: 0 0 0 7px; }
-/* a theme's swatch: "Aa" in its ink on its paper under a strip of its band, in its own tokens
-   (the chip carries its data-theme) */
-.swatch { display: inline-flex; align-items: flex-end; flex: none; width: 58px; height: 26px;
-  padding: 0 7px 3px; overflow: hidden; background: linear-gradient(var(--band) 0 8px, var(--paper) 0);
-  color: var(--ink); box-shadow: inset 0 0 0 1px var(--rule); font: 850 13px/1 var(--font-sans);
-  letter-spacing: -0.01em; }
+/* a theme's swatch, drawn in its own tokens (the chip carries its data-theme, in the page's
+   appearance): its band across the top, its paper under it with a square of its running blue
+   and a square of its question colour */
+.swatch { position: relative; display: inline-flex; align-items: flex-end; gap: 4px; flex: none;
+  width: 58px; height: 26px; padding: 0 6px 4px; overflow: hidden;
+  background: linear-gradient(var(--band) 0 9px, var(--paper) 0);
+  box-shadow: inset 0 0 0 1px var(--rule); }
+.swatch > i { display: block; width: 10px; height: 10px; }
+.swatch > .sw-run { background: var(--run); }
+.swatch > .sw-ask { background: var(--coral); }
+/* the appearance: three choices in one segmented row, the chosen one filled */
+.prefs .appearance { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule-faint); }
+.prefs .seg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+              box-shadow: inset 0 0 0 1px var(--rule); }
+.prefs .seg label { position: relative; display: grid; place-items: center; min-height: 36px;
+  padding: 0 6px; cursor: pointer; text-align: center; font-size: 13px; font-weight: 600;
+  line-height: 1.15; color: var(--ink-muted); }
+.prefs .seg label + label { box-shadow: inset 1px 0 0 var(--rule); }
+.prefs .seg label:hover { color: var(--ink); background: var(--paper-2); }
+.prefs .seg input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.prefs .seg label:has(:checked) { background: var(--navy); color: var(--on-navy); }
+.prefs .seg label:has(:focus-visible) { outline: 2px solid var(--focus); outline-offset: 1px; z-index: 1; }
 .prefs label.check { display: flex; align-items: center; gap: 10px; min-height: 36px;
   margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule-faint); cursor: pointer; }
 .prefs label.check input { width: 16px; height: 16px; margin: 0; flex: none; accent-color: var(--navy); }
@@ -282,24 +496,30 @@ form.prefs:has(sluice-toggle:defined) .save { display: none; }
 .skip:focus { transform: none; box-shadow: var(--lift); }
 
 /* ---- the band's head (`ui::band_head`): the page's name huge at the left on the grid, its
-   description and its summary sentence beside it; a strip under them (`ui::recent_strip`) -- */
+   description and its summary sentence beside it; a strip under them (`ui::recent_strip`).
+   The name is fluid: 150px at 1440, 88px at most on a phone, 240px at most on a wide screen;
+   a longer name steps down in proportion. The words keep their measure at every width. ----- */
 .band-head { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
-             column-gap: var(--col-gap); align-items: end; padding: 30px 0 28px; }
-.band-head > h1 { grid-column: span 5; margin: 0 0 -0.03em -0.045em; font-size: 150px;
-  line-height: .8; font-weight: 900; letter-spacing: -0.04em; overflow-wrap: anywhere;
-  text-wrap: balance; }
-.band-head > h1.long { font-size: 104px; }
-.band-head > h1.longer { grid-column: 1 / -1; font-size: 76px; line-height: .9; margin-bottom: 20px; }
-.band-head > h1.longest { grid-column: 1 / -1; font-size: 52px; line-height: .95; margin-bottom: 18px; }
+             column-gap: var(--col-gap); align-items: end;
+             padding: clamp(22px, calc(14px + 1.1vw), 60px) 0 clamp(22px, calc(16px + 0.9vw), 52px); }
+.band-head > h1 { grid-column: span 5; margin: 0 0 -0.03em -0.045em;
+  font-size: clamp(88px, 10.4vw, 240px); line-height: .8; font-weight: 900;
+  letter-spacing: -0.04em; overflow-wrap: anywhere; text-wrap: balance; }
+.band-head > h1.long { font-size: clamp(64px, 7.2vw, 166px); }
+.band-head > h1.longer { grid-column: 1 / -1; font-size: clamp(46px, 5.3vw, 122px); line-height: .9;
+                         margin-bottom: 20px; }
+.band-head > h1.longest { grid-column: 1 / -1; font-size: clamp(34px, 3.6vw, 84px); line-height: .95;
+                          margin-bottom: 18px; }
 .band-sub { grid-column: span 7; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
             column-gap: var(--col-gap); align-items: end; }
 .band-head > h1:is(.longer, .longest) + .band-sub { grid-column: 1 / -1;
   grid-template-columns: repeat(12, minmax(0, 1fr)); }
-.band-lead { grid-column: span 3; font-size: 14px; line-height: 1.45; color: var(--band-muted);
-             max-width: 52ch; }
+.band-lead { grid-column: span 3; font-size: clamp(14px, calc(11px + 0.2vw), 18px); line-height: 1.45;
+             color: var(--band-muted); max-width: 52ch; }
 .band-lead p + p { margin-top: 6px; }
-.band-summary { grid-column: span 4; font-size: 19px; line-height: 1.3; font-weight: 650;
-                letter-spacing: -0.01em; text-wrap: pretty; }
+.band-summary { grid-column: span 4; font-size: clamp(18px, calc(14.8px + 0.29vw), 26px);
+                line-height: 1.3; font-weight: 650; letter-spacing: -0.01em; text-wrap: pretty;
+                max-width: 34em; }
 .band-head > h1:is(.longer, .longest) + .band-sub > .band-lead { grid-column: span 5; }
 .band-head > h1:is(.longer, .longest) + .band-sub > .band-summary { grid-column: span 7; }
 .band-summary a { text-decoration: underline; text-decoration-thickness: 1px;
@@ -316,54 +536,91 @@ nav.links > a { display: flex; align-items: center; min-height: 44px; color: var
 nav.links > a:hover { color: var(--ink); }
 nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(--ink); }
 .subnav-meta { font-size: 13px; color: var(--ink-muted); }
-.subnav-tools { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.subnav-tools { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+                min-width: 0; }
 
-/* ---- the frame on a phone: a 16px margin; the band's row wraps, the live line under it, the
-   name 88px over its words, every part one column; targets 44px ----------------------------- */
+/* ---- a tablet's band (761 to 1023px): the name on a row of its own, its words and sentence
+   across the band under it; Recently finished's head over its items ------------------------- */
+@media (min-width: 761px) and (max-width: 1023px) {
+  .band-head { row-gap: 18px; }
+  .band-head > h1 { grid-column: 1 / -1; margin-bottom: 0; }
+  .band-sub, .band-head > h1:is(.longer, .longest) + .band-sub { grid-column: 1 / -1;
+    grid-template-columns: repeat(12, minmax(0, 1fr)); }
+  .band-sub > .band-lead, .band-head > h1:is(.longer, .longest) + .band-sub > .band-lead { grid-column: span 5; }
+  .band-sub > .band-summary, .band-head > h1:is(.longer, .longest) + .band-sub > .band-summary { grid-column: span 7; }
+  .band-sub > :only-child { grid-column: 1 / -1; }
+}
+
+/* ---- the frame on a phone (to 760px): the band's row wraps, the live line under it, the name
+   over its words, every part one column; the row's tools on a line of their own; targets 44px */
 @media (max-width: 760px) {
-  :root { --gutter: 16px; --col-gap: 8px; --cols: 6; }
   main { padding: 20px 0 48px; }
   nav.top { gap: 0 18px; }
   nav.top > a, nav.top details.switcher > summary { min-height: 48px; }
   nav.top a.brand .wordmark { font-size: 16px; }
-  /* the live line and display preferences share the band's second row, at its right */
+  /* the live line and display preferences share the band's second row, at its right (a
+     break before them, so they never land at the row's left with the menu off the screen) */
+  nav.top::after { content: ""; order: 4; flex-basis: 100%; height: 0; }
   .live { order: 5; margin-left: auto; min-height: 44px; }
   details.settings { order: 6; margin-left: auto; margin-right: 0; }
   html[data-stream="live"] details.settings { margin-left: 0; }
-  .band-head { grid-template-columns: minmax(0, 1fr); row-gap: 14px; padding: 22px 0 22px; }
-  .band-head > h1 { grid-column: 1 / -1; font-size: 88px; margin: 0 0 0 -0.04em; }
-  .band-head > h1.long { font-size: 64px; }
-  .band-head > h1.longer { font-size: 46px; margin-bottom: 0; }
-  .band-head > h1.longest { font-size: 34px; margin-bottom: 0; }
+  .band-head { grid-template-columns: minmax(0, 1fr); row-gap: 14px; }
+  .band-head > h1 { grid-column: 1 / -1; margin: 0 0 0 -0.04em; }
+  .band-head > h1:is(.longer, .longest) { margin-bottom: 0; }
   .band-sub, .band-head > h1:is(.longer, .longest) + .band-sub { grid-column: 1 / -1;
     grid-template-columns: minmax(0, 1fr); row-gap: 12px; }
   .band-sub > *, .band-head > h1:is(.longer, .longest) + .band-sub > * { grid-column: 1 / -1 !important; }
-  .band-summary { font-size: 18px; }
   .subnav-in { gap: 4px 18px; }
   .subnav-tools { margin-left: 0; flex-basis: 100%; }
-  .prefs .themes label, .prefs label.check { min-height: 44px; }
+  .subnav-tools > :not(.grid-toggle) { flex: 1 1 12rem; min-width: 0; }
+  .subnav-tools :is(button, input, select, a) { min-height: 44px; }
+  .prefs .themes label, .prefs .appearance label, .prefs label.check { min-height: 44px; }
 }
 
-/* ---- the module grid (`ui::grid_open`, `sluice-grid`): twelve columns of the frame (six on
-   a phone) that modules span; the construction under them while the switch is pressed ------ */
-sluice-grid { position: relative; display: grid; align-items: start;
-              grid-template-columns: repeat(var(--cols, 12), minmax(0, 1fr));
-              column-gap: var(--col-gap); row-gap: 16px; }
-sluice-grid > * { grid-column: span var(--span, 12); min-width: 0; }
+/* ---- the module grid (`ui::grid_open`, `sluice-grid`): a sheet of modules, the `sheet`
+   container, so its columns follow its own width (the drawer and a board beside it counted),
+   never the window's. Underneath it is always twice its columns in tracks (24 for twelve),
+   whose lines at 12 or 6 columns are a subset, so nothing jumps between its four modes:
+   narrow (under 640px): 6 columns, every module across the whole sheet;
+   medium (640 to 1199px): 12 columns, a module half the sheet (span 6 or less) or whole;
+   regular (1200 to 1999px): 12 columns, a module its span;
+   wide (2000px and over): 24 columns, a module twice its span (its fraction kept), or its
+   span when it halves (`data-wide="halve"`: two whole-width modules side by side).
+   `--take` is the columns a module takes in its sheet's mode, `--per` the tracks a column. -- */
+sluice-grid { position: relative; display: grid; align-items: start; container: sheet / inline-size;
+              grid-template-columns: repeat(calc(var(--cols, 12) * 2), minmax(0, 1fr));
+              column-gap: var(--col-gap); row-gap: max(16px, var(--col-gap)); }
+sluice-grid > * { --take: var(--span, var(--cols, 12)); --per: 2;
+                  grid-column: span calc(var(--take) * var(--per)); min-width: 0; }
 sluice-grid > .grid-ovl { display: none; position: absolute; inset: 0; z-index: 2;
   grid-column: 1 / -1; grid-template-columns: inherit; column-gap: inherit; pointer-events: none; }
 sluice-grid[showing] > .grid-ovl { display: grid; }
-.gc { position: relative; background: var(--grid-col);
+.gc { position: relative; grid-column: span 2; background: var(--grid-col);
       box-shadow: inset 1px 0 0 var(--grid-edge), inset -1px 0 0 var(--grid-edge); }
+.gc-w { display: none; }
 .gc-n { position: absolute; top: -22px; left: 0; font: 600 11px/16px var(--font-mono);
         color: var(--run-ink); }
-sluice-grid[showing] > [data-span] { position: relative; }
-sluice-grid[showing] > [data-span]::after { content: attr(data-span) " col"; position: absolute;
+sluice-grid[showing] > [data-span] { position: relative; counter-reset: take var(--take); }
+sluice-grid[showing] > [data-span]::after { content: counter(take) " col"; position: absolute;
   top: 6px; right: 6px; z-index: 3; padding: 1px 5px; background: var(--run); color: var(--on-run);
   font: 600 11px/16px var(--font-mono); pointer-events: none; }
+@container sheet (max-width: 639.98px) {
+  sluice-grid > * { grid-column: 1 / -1; --take: round(down, calc(var(--cols, 12) / 2), 1); }
+  .gc { grid-column: span 4; }
+  .gc-r { display: none; }
+}
+@container sheet (min-width: 640px) and (max-width: 1199.98px) {
+  sluice-grid > * { --take: min(var(--cols, 12), max(6, round(up, var(--span, 12), 6))); }
+}
+@container sheet (min-width: 2000px) {
+  sluice-grid > * { --per: 1; --take: calc(var(--span, var(--cols, 12)) * 2); }
+  sluice-grid > [data-wide="halve"] { --take: var(--span, var(--cols, 12)); }
+  .gc { grid-column: span 1; }
+  .gc-w { display: block; }
+}
 .grid-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; }
 .grid-toggle[aria-pressed="true"] { background: var(--run); color: var(--on-run); box-shadow: none; }
-.mod-col { display: flex; flex-direction: column; gap: 16px; }
+.mod-col { display: flex; flex-direction: column; gap: max(16px, var(--col-gap)); }
 
 /* ---- a module (`ui::module_open`) and its swell -------------------------------------------- */
 .mod { position: relative; display: flex; flex-direction: column; min-width: 0;
@@ -410,6 +667,22 @@ sluice-grid[showing] > [data-span]::after { content: attr(data-span) " col"; pos
 .sh-stages { grid-column: span var(--rest); display: grid; column-gap: var(--col-gap);
              grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
 .sh-stage { font-size: 13px; font-weight: 650; color: var(--ink-muted); overflow-wrap: anywhere; }
+/* a row under a strip head (`ui::strip_row_open`): its lead on the head's lead columns, its
+   strip on the stage columns, so each stage sits under its name at every width; the head and
+   its rows stack together (lead over stages, the stages across) when their container, the
+   nearest sheet, else the frame, is under 640px */
+.strip-row { display: grid; align-items: center; column-gap: var(--col-gap);
+             grid-template-columns: repeat(12, minmax(0, 1fr)); }
+.strip-row > * { grid-column: span var(--lead, 6); min-width: 0; }
+.strip-row > .strip { grid-column: span calc(12 - var(--lead, 6)); }
+@container sheet (max-width: 639.98px) {
+  .sec-strip, .strip-row { grid-template-columns: minmax(0, 1fr); row-gap: 10px; }
+  :is(.sh-lead, .sh-stages, .strip-row > *, .strip-row > .strip) { grid-column: 1 / -1; }
+}
+@container frame (max-width: 639.98px) {
+  .sec-strip, .strip-row { grid-template-columns: minmax(0, 1fr); row-gap: 10px; }
+  :is(.sh-lead, .sh-stages, .strip-row > *, .strip-row > .strip) { grid-column: 1 / -1; }
+}
 
 /* ---- the stage strip (`ui::stage_strip`): a cell a stage, in recipe order ----------------- */
 .strip { list-style: none; margin: 0; padding: 0; display: grid; column-gap: var(--col-gap);
@@ -457,8 +730,8 @@ sluice-grid[showing] > [data-span]::after { content: attr(data-span) " col"; pos
            line-height: 18px; white-space: nowrap; }
 .marks { display: inline-flex; gap: 3px; vertical-align: middle; }
 .mk { display: block; width: 12px; height: 12px; }
-.mk-done { background: var(--sweep); }
-.mk-run { background: var(--run); }
+.mk-done { background: var(--sky); box-shadow: inset 0 0 0 1.5px var(--sky-ink); }
+.mk-run { background: var(--run); box-shadow: inset 0 0 0 1.5px var(--run-ink); }
 .mk-look { background: var(--sand-ink); }
 .mk-empty { box-shadow: inset 0 0 0 1px var(--rule); }
 
@@ -475,7 +748,12 @@ sluice-grid[showing] > [data-span]::after { content: attr(data-span) " col"; pos
 .rf-at { font: 600 22px/1.05 var(--font-mono); letter-spacing: -0.02em; }
 .rf-name { font-size: 13px; font-weight: 750; }
 .rf-title { font-size: 13px; line-height: 1.35; color: var(--band-muted); display: -webkit-box;
-            -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+            -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 40ch; }
+@media (min-width: 761px) and (max-width: 1023px) {
+  .band-strip { row-gap: 10px; }
+  .rf-head, .rf-list { grid-column: 1 / -1; }
+  .rf-head { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+}
 .rf-took { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--band-accent); }
 .rf-how { display: inline-flex; align-items: center; gap: 4px; color: var(--sand); font-weight: 650; }
 .rf-how .g { color: inherit; width: 13px; height: 13px; margin: 0; }
@@ -526,7 +804,8 @@ sluice-trace[tracing] [data-trace="selected"] { box-shadow: 0 0 0 2px var(--navy
 /* the rail: in the margin at a unit's left, its line from the first lit unit to the last and a
    square at each, filled for the one selected */
 .rail-slot { position: relative; }
-.rail { position: absolute; left: -28px; top: 0; bottom: 0; width: 28px; pointer-events: none;
+.rail { --rail-w: clamp(15px, calc(var(--gutter) - 1px), 28px); position: absolute;
+        left: calc(-1 * var(--rail-w)); top: 0; bottom: 0; width: var(--rail-w); pointer-events: none;
         --rail-gap: 16px; --rail-node: 30px; }
 .rail[data-rail]::before { content: ""; position: absolute; left: 9px; width: 2px; background: var(--navy);
   top: calc(var(--rail-node) + 7px); bottom: 0; animation: draw .45s var(--ease-out) both; }
@@ -544,19 +823,21 @@ sluice-trace[tracing] [data-trace="selected"] { box-shadow: 0 0 0 2px var(--navy
               linear-gradient(var(--navy), var(--navy)) 14px 6px / 11px 2px no-repeat; }
 @keyframes draw { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 0 0); } }
 
-@media (max-width: 760px) {
-  sluice-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  sluice-grid > * { grid-column: 1 / -1; }
-  .gc:nth-child(n+7) { display: none; }
-  sluice-grid[showing] > [data-span]::after { content: "6 col"; }
-  .sec-strip { grid-template-columns: repeat(6, minmax(0, 1fr)); row-gap: 10px; }
-  .sh-lead, .sh-stages { grid-column: 1 / -1; }
-  .strip { column-gap: 6px; }
+@container frame (max-width: 639.98px) {
+  .strip, .sh-stages { column-gap: 6px; }
   .sc { min-height: 48px; padding: 0 6px; }
   .sc > a.sc-a { margin: 0 -6px; padding: 0 6px; }
   .sc-run .sc-time, .sc-look .sc-time { font-size: 14px; }
   .sc-name { font-size: 11px; }
   .sec-h h2 { font-size: 28px; }
+}
+/* the rail sits in the gutter, so it narrows with it under 1200px */
+@media (max-width: 1199.98px) {
+  .rail[data-rail]::before { left: 4px; }
+  .rail:is([data-rail~="node"], [data-rail~="chosen"])::after { left: -1px; transform: scale(.8);
+    transform-origin: left top; }
+}
+@media (max-width: 760px) {
   .band-strip { grid-template-columns: minmax(0, 1fr); row-gap: 6px; }
   .rf-head, .rf-list { grid-column: 1 / -1; }
   .rf-list { grid-template-columns: minmax(0, 1fr); }
@@ -564,10 +845,7 @@ sluice-trace[tracing] [data-trace="selected"] { box-shadow: 0 0 0 2px var(--navy
                padding: 8px 0; border-top: 1px solid var(--band-rule); }
   .rf-at { font-size: 17px; }
   .rf-title { display: none; }
-  .rail { left: -15px; width: 15px; }
-  .rail[data-rail]::before { left: 4px; }
-  .rail:is([data-rail~="node"], [data-rail~="chosen"])::after { left: -1px; transform: scale(.8);
-    transform-origin: left top; }
+  .rf-list a { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .sweep::after { animation: none; transform: none; opacity: .6; }
@@ -878,12 +1156,9 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--ink) 86%, var(--pa
   .drawer { width: var(--drawer-w); box-shadow: none; }
   html.drawer-open body { padding-right: var(--drawer-w); }
   html.drawer-open main {
-    grid-template-columns: [full-start] minmax(var(--gutter), 1fr) [col-start]
-                           minmax(0, var(--column)) [col-end] minmax(var(--drawer-gap), 0fr)
-                           [full-end]; }
-  html.drawer-open :is(.band-in, .subnav) {
-    padding-left: max(var(--gutter), calc(100% - var(--column) - var(--drawer-gap)));
-    padding-right: var(--drawer-gap); }
+    grid-template-columns: [full-start] var(--gutter) [col-start] minmax(0, 1fr) [col-end]
+                           var(--drawer-gap) [full-end]; }
+  html.drawer-open :is(.band-in, .subnav) { padding-right: var(--drawer-gap); }
 }
 /* the close button stays at the top on a band of its own: clear at rest, opaque once the
    drawer scrolls (`scrolled`, set by static/sluice.js), so what passes under it is hidden whole, never half-covered */
@@ -947,7 +1222,7 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--ink) 86%, var(--pa
 /* outputs a run before the one going now set: said so, and set back in muted ink */
 .d-key.is-earlier dl.fields { color: var(--ink-muted); }
 /* what a page says at its top when something asked for was not done */
-.notice { display: flex; align-items: flex-start; gap: 10px; max-width: var(--column);
+.notice { display: flex; align-items: flex-start; gap: 10px;
           margin: 0 0 18px; padding: 10px 14px; border-radius: 0;
           border: 1px solid color-mix(in oklch, var(--sand-ink) 55%, transparent);
           background: color-mix(in srgb, var(--sand-ink) 9%, var(--paper-raised)); }
@@ -2068,8 +2343,7 @@ details.read-today .item { opacity: .85; }
 
 /* ==== page shell: the project page, its plan and its board ======================================
    (Plan beside the project's Board; docs("board") is an OpenUI program drawn on the server.)
-   From 1280px a project page with a board takes the window's width up to --page-max, nav
-   included, so their edges stay shared: the plan (at least --plan-min) | the splitter | the
+   From 1280px a project page with a board sets, on the frame's fluid column: the plan (at least --plan-min) | the splitter | the
    board (--board-w; the splitter sets it per project, within 320px and the lesser of 65% of
    the page and what leaves the plan its least). The Plan · Both · Board switch shows one or
    both; below 1280px it is Plan · Board, one at a time; without script both show, one after
@@ -2082,7 +2356,6 @@ details.read-today .item { opacity: .85; }
   --board-gap: 32px;    /* the splitter's track between plan and board */
   --board-min: 320px;
   --plan-min: 560px;
-  --page-max: 2400px;   /* the widest a project page with a board grows */
 }
 .project-page { min-width: 0; }
 .plan-pane { min-width: 0; container: plan / inline-size; }
@@ -2213,12 +2486,6 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 }
 /* a project page with a board spans the window above a phone's width, so its edges hold when
    the board joins the plan at 1280px */
-@media (min-width: 721px) {
-  html:has(.project-page.has-panel) { --column: var(--page-max); --gutter: 32px; }
-}
-@media (min-width: 1200px) {
-  html.drawer-open:has(.project-page.has-panel) { --gutter: 24px; }  /* the drawer's side keeps the nav its room */
-}
 @media (min-width: 1280px) {
   /* the default board width; the splitter's, inline on the page, wins */
   .project-page.has-panel { --board-w: clamp(400px, 36%, 1040px);
@@ -2785,10 +3052,22 @@ a.node.mx-dot:hover { background: var(--paper-2); }
 .gal-band a:hover { color: var(--band-accent); }
 .gal-summary { font-size: 19px; line-height: 1.3; font-weight: 650; max-width: 40em; }
 .gal-margin { max-width: 260px; }
+.gal-strips { display: grid; gap: 12px; }
+/* the themes: a small page per theme in its own tokens, as many to a row as fit */
+.gal-themes { display: grid; gap: var(--col-gap); grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
+.gal-themecard { margin: 0; min-width: 0; background: var(--paper); color: var(--ink);
+                 box-shadow: inset 0 0 0 1px var(--rule); }
+.gt-band { display: grid; gap: 6px; padding: 14px 14px 12px; background: var(--band); color: var(--band-ink); }
+.gt-name { font-size: 30px; line-height: .9; font-weight: 900; letter-spacing: -0.035em; }
+.gt-sum { font-size: 13.5px; line-height: 1.3; font-weight: 650; }
+.gt-sum a { text-decoration-thickness: 2px; text-decoration-color: var(--coral); text-underline-offset: 3px; }
+.gt-paper { display: grid; gap: 10px; padding: 12px 14px 14px; }
+.gt-text { font-size: 14px; line-height: 1.4; }
+.gal-themecard figcaption { padding: 0 14px 12px; }
 .gal-units { display: flex; flex-direction: column; gap: 16px; padding-left: 28px; }
 .gal-trace .mod { padding: 8px 0; }
 .gal-trace .mod .strip { margin-top: 8px; }
-@media (max-width: 760px) { .gal-units { padding-left: 16px; } }
+@media (max-width: 1199.98px) { .gal-units { padding-left: clamp(16px, var(--gutter), 28px); } }
 .gallery { container-type: inline-size; }
 .gal-th { min-width: 0; padding: 14px 16px 18px; border: 1px solid var(--rule);
           border-radius: 0; background: var(--paper); color: var(--ink); }
