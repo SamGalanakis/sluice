@@ -550,7 +550,11 @@ def cutover():
     backups = install / 'backups'
     backups.mkdir(parents=True, exist_ok=True)
     backup = backups / ('pre-schema%d-%s.db' % (schema, time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())))
-    with ro() as source, sqlite3.connect(str(backup)) as copy: source.backup(copy)
+    with ro() as source, sqlite3.connect(str(backup)) as copy:
+        source.backup(copy)
+        # One self-contained file: a WAL-mode backup grows -wal and -shm files beside it as soon
+        # as anything reads it, the plan check below included.
+        copy.execute('PRAGMA journal_mode=DELETE')
     source.close(); copy.close()
     say('backup: %s' % backup)
     # 10. Migrate with the candidate, under the fence, holding the writer lock.

@@ -248,6 +248,12 @@ def check_incompatible():
     cells['plan_get'] = bad[0][1] if bad else ('ok', '%d project(s)' % len(exported))
     if not alive(record): cells['coordinator'] = ('FAIL', 'crash: candidate coordinator exited: ' + log_tail('coordinator'))
     stop(record); started.remove(record)
+    # Fold the candidate's log into the database first: the last connection to close a WAL
+    # database checkpoints it, so an old release that opened the copy only to refuse it would
+    # otherwise rewrite its pages without changing a row.
+    folded = sqlite3.connect(str(copy / 'sluice.db'))
+    folded.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    folded.close()
     # The old release must refuse the converted copy before it changes a byte: its coordinator
     # (the writer) and a local read (log_read) both open the database themselves.
     before = database_bytes()

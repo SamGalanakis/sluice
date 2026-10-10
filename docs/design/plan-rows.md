@@ -2801,12 +2801,16 @@ first, with the old release's own code, and converts only a copy that reached ze
    on any failure; remove the copy and the worktree unless `--keep`.
 
 **The harness's command line** (lane G's helper calls it; lane H2 builds it): `cutover-rehearsal
---home <copy> --author cutover --reason <R> --json`, run with `SLUICE_HOME` the copy and no route
-to the user service manager (`XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` point into the
-scratch directory). It prints one JSON object, `{"refused": [CancelRefusal…], "blockers":
-[{kind, identity, project_id, resource}…]}` (each refusal in the `cutover.refused` fixture's
-shape; the blockers as `drain` status lists them), and exits 0 when both are empty, 1 when the
-play ran but left either, and 2 or more on an error of its own (said on stderr). The helper
+rehearse --home <copy> --deadline <RFC 3339> --sha <candidate sha> [--report <file>]`, run with
+`SLUICE_HOME` the copy and no route to the user service manager (`XDG_RUNTIME_DIR` and
+`DBUS_SESSION_BUS_ADDRESS` point into the scratch directory). The cancel's reason is the
+deadline's (`schema-3 cutover at <deadline>: stopped at the deadline; retry it after the
+cutover`) and its author `cutover`. It prints the play's `CutoverReport` as JSON on stdout (or
+to `--report`), with `refused` in the `cutover.refused` fixture's shape, and on stderr one line
+per stopped run, refused cancel and blocker left; it exits 0 at zero blockers with no refused
+cancel, 1 when the play ran but left either, and 2 on an error of its own (said on stderr).
+`cutover-rehearsal oracle --home <copy> [--out <file>]` prints every plan's documents replayed
+revision by revision with the old release's patch semantics, for the legacy fixtures. The helper
 builds it from this checkout's `tools/cutover-rehearsal`, copied into a `git worktree` of the
 old release's commit beside a copy of that commit's `Cargo.lock` (the harness is its own
 workspace, `[workspace]` in its `Cargo.toml`, with `path` dependencies `../../crates/<crate>`),

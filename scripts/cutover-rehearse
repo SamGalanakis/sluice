@@ -152,7 +152,7 @@ def harness():
     shutil.copy(checkout / 'Cargo.lock', checkout / 'tools/cutover-rehearsal/Cargo.lock')
     target = prefix / '.build/rehearsal-target'
     say('building the harness against %s (%s)' % (old.name[:12], target))
-    built = subprocess.run(['cargo', '--config', 'build.target-dir=' + json.dumps(str(target)), 'build', '--release',
+    built = subprocess.run(['cargo', '--config', 'build.target-dir=' + json.dumps(str(target)), 'build', '--target-dir', str(target), '--release',
         '--manifest-path', str(checkout / 'tools/cutover-rehearsal/Cargo.toml')], stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr)
     if built.returncode: finish('building the rehearsal harness against %s failed' % sha[:12])
     return target / 'release/cutover-rehearsal'
@@ -186,7 +186,10 @@ try:
     # 2. The old release plays the deadline on the copy.
     binary = harness()
     say('playing the deadline with %s on the copy (%d run(s) live)' % (old.name[:12], len(affected)))
-    played = subprocess.run([str(binary), '--home', str(copy), '--author', 'cutover', '--reason', reason, '--json'],
+    # The harness prints its cutover report (CutoverReport) on stdout, a line per stopped run,
+    # refusal and blocker on stderr, and exits 0 at zero blockers with no refused cancel, 1 when
+    # the play left either, 2 on its own error. Its reason is the deadline's, as `reason` here.
+    played = subprocess.run([str(binary), 'rehearse', '--home', str(copy), '--deadline', when, '--sha', result['sha']],
         env=env, cwd=scratch, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=3600)
     try: play = json.loads(played.stdout)
     except json.JSONDecodeError: play = None

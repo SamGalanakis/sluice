@@ -85,41 +85,60 @@ fn old_binary() -> PathBuf {
     // One build per merge base, whichever test asks first.
     let lock = std::fs::File::create(cache.join("lock")).unwrap();
     lock.lock().unwrap();
-    let binary = cache.join("target/debug/sluice");
-    if !binary.is_file() {
-        let source = cache.join("src");
-        let _ = std::fs::remove_dir_all(&source);
-        std::fs::create_dir_all(&source).unwrap();
-        let mut archive = Command::new("git")
-            .arg("-C")
-            .arg(&repo)
-            .args(["archive", &sha])
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let status = Command::new("tar")
-            .arg("-x")
-            .arg("-C")
-            .arg(&source)
-            .stdin(archive.stdout.take().unwrap())
-            .status()
-            .unwrap();
-        assert!(
-            status.success() && archive.wait().unwrap().success(),
-            "unpacking {sha}"
-        );
-        let built = Command::new("cargo")
-            .current_dir(&source)
-            .arg("--config")
-            .arg(format!(
-                "build.target-dir={}",
-                serde_json::to_string(&cache.join("target")).unwrap()
-            ))
-            .args(["build", "-p", "sluice", "--bin", "sluice", "--locked"])
-            .output()
-            .unwrap();
-        assert!(built.status.success(), "building {sha}: {}", text(&built));
+    // Where cargo put it, as it reports: a cargo wrapper may override the target directory.
+    let path = cache.join("binary");
+    if let Ok(binary) = std::fs::read_to_string(&path).map(PathBuf::from)
+        && binary.is_file()
+    {
+        return binary;
     }
+    let source = cache.join("src");
+    let _ = std::fs::remove_dir_all(&source);
+    std::fs::create_dir_all(&source).unwrap();
+    let mut archive = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["archive", &sha])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let status = Command::new("tar")
+        .arg("-x")
+        .arg("-C")
+        .arg(&source)
+        .stdin(archive.stdout.take().unwrap())
+        .status()
+        .unwrap();
+    assert!(
+        status.success() && archive.wait().unwrap().success(),
+        "unpacking {sha}"
+    );
+    let built = Command::new("cargo")
+        .current_dir(&source)
+        .arg("--config")
+        .arg(format!(
+            "build.target-dir={}",
+            serde_json::to_string(&cache.join("target")).unwrap()
+        ))
+        .args([
+            "build",
+            "-p",
+            "sluice",
+            "--bin",
+            "sluice",
+            "--locked",
+            "--message-format=json-render-diagnostics",
+        ])
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "building {sha}: {}", text(&built));
+    let binary = String::from_utf8_lossy(&built.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|message| message["target"]["name"] == "sluice")
+        .find_map(|message| message["executable"].as_str().map(PathBuf::from))
+        .unwrap_or_else(|| panic!("building {sha} names no sluice executable"));
+    std::fs::write(&path, binary.to_string_lossy().as_bytes()).unwrap();
     binary
 }
 
@@ -1042,7 +1061,6 @@ fn compat_check_with_a_prepared_copy_runs_the_compatible_check_and_leaves_the_co
 }
 
 #[test]
-#[ignore = "integration (rw/pn-cutover): needs lane B's converter behind `sluice home migrate`; builds the old release"]
 fn compat_check_incompatible_converts_a_drained_copy_and_the_old_release_refuses_it_unchanged() {
     let scratch = Scratch::new();
     scratch.project(&[("w", "fixture.echo")]);
@@ -1152,8 +1170,8 @@ fn rehearse_reports_the_old_release_refusing_a_cancel_and_converts_nothing() {
     let args = std::fs::read_to_string(scratch.gate.root.path().join("harness.args")).unwrap();
     let copy = report["copy"].as_str().unwrap();
     assert!(
-        args.contains(&format!("--home\n{copy}\n"))
-            && args.contains("--reason\nschema-")
+        args.starts_with(&format!("rehearse\n--home\n{copy}\n"))
+            && args.contains("--deadline\n2026-10-12T18:00:00Z\n")
             && args.contains(&format!("SLUICE_HOME={copy} DBUS=unix:path=")),
         "{args}"
     );
@@ -1185,7 +1203,6 @@ fn rehearse_checks_the_blockers_itself_and_never_converts_a_copy_with_live_work(
 }
 
 #[test]
-#[ignore = "integration (rw/pn-cutover): needs lane H2's tools/cutover-rehearsal and lane B's converter; builds the old release"]
 fn rehearse_plays_the_deadline_with_the_old_release_converts_the_copy_and_passes_the_compat_check()
 {
     let scratch = Scratch::new();
