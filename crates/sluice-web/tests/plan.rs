@@ -106,7 +106,11 @@ async fn every_unit_of_the_fixture_is_drawn_once_in_its_band_in_rank() {
     // Recently finished: the latest five, newest first; the Done index every one, folded
     let recent = plan_html::between(&html, "<section class=\"band-strip\"", "</section>");
     assert_eq!(recent.matches("<li>").count(), 5, "{recent}");
-    assert!(at(recent, "a-3") < at(recent, "a-1"), "{recent}");
+    // by name, not anywhere in the markup: a project id can hold "a-1"
+    assert!(
+        at(recent, "rf-name\">a-3<") < at(recent, "rf-name\">a-1<"),
+        "{recent}"
+    );
     let done = plan_html::band(&html, "plan-done");
     assert!(done.contains("5 units · 11 steps"), "{done}");
     assert!(done.contains("<details class=\"pl-index\" data-preserve-attr=\"open\">"));
