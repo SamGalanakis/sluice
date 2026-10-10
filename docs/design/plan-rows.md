@@ -2334,13 +2334,18 @@ runs it as `scripts/deploy --schema-cutover --deadline <RFC 3339 time or +<n>m>
 9. **Back up** the database (backup API) to `<install>/backups/pre-schema3-<timestamp>.db`.
 10. **Migrate**: the candidate's `sluice home migrate` (§10.2) under the fence, holding the
     home's writer lock. Its preconditions (§10.3) are checked again inside its transaction.
-11. **Select and start** the candidate (`coordinator --maintenance`, serve, loop) and verify:
+11. **Select and start** the candidate (`coordinator --maintenance`, `serve --no-runner`) and verify:
     integrity, `plan_get` of every project equals the backup's `plans.doc` (§10.5),
     the first plan edit in `plan_history` is at each project's anchor revision from the
     conversion report, or its first logged revision in the backup when unanchored, and the
-    dashboard answers. Retained dynamic records may precede that edit; page past them.
+    dashboard answers. Retained dynamic records may precede that edit; page past them. Defer
+    loop until step 12 because activation against the fenced installation can make it exit.
 12. **Unfence, release.** `install unfence`, then `release` with author `cutover`, which
-    unpauses exactly the drain's recorded projects.
+    unpauses exactly the drain's recorded projects. Check the recorded coordinator and serve,
+    re-create any inactive service with the same deploy arguments, and start loop. Require all
+    three services active and `maintenance.scheduler_owner` set within 60 s. That owner lasts
+    while the loop's lease connection is open; coordinator startup and disconnect clear it.
+    A failure restores the drain and stops fenced with a named service or scheduler-lease timeout.
 13. **Report** one line, `cutover <sha> · schema 3 · <n> projects · <m> revisions converted ·
     cancel requested for <k> runs · <c> calls stopped`, then one line per affected run,
     `stopped <project> <step or call:<id>> <run> requested=<cancel|stop>
@@ -2475,7 +2480,7 @@ the processes holding its database or `coordinator.lock` open, never by a comman
 After a post-migration failure, repair the cause and run `scripts/deploy --schema-cutover
 --resume-checks`. The retry requires the `schema-3 cutover` fence, the home and the recorded
 candidate at schema 3, and a successful migration recorded in
-`<install>/schema-cutover-checkpoint.json`. It stops and re-creates the candidate services,
+`<install>/schema-cutover-checkpoint.json`. It stops and re-creates coordinator and serve,
 repeats step 11 against the recorded backup and conversion anchors, then performs steps 12
 and 13 with the original report's deadline and run outcomes. It needs no new deadline or
 rehearsal and refuses a different candidate. A failed retry keeps the fence and drain.

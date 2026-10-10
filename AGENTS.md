@@ -31,8 +31,8 @@
 ## Shipping
 
 Deploy-started services are transient units created with `systemd-run --collect`. Stop and
-re-create them with the same deploy arguments. Do not use `systemctl --user restart`: a serve
-restart can race the port, exit and be collected.
+re-create them with the same deploy arguments.
+Never `systemctl restart` a deploy-started transient unit; re-create it with `systemd-run` as deploy does, or re-run deploy.
 
 - `scripts/ship [REF] [--dry-run]` takes a branch that already passed `scripts/check` to a
   verified live deploy. From any worktree, with a clean tree, it rebases REF (default `HEAD`;
@@ -87,7 +87,9 @@ restart can race the port, exit and be collected.
   cause and run `scripts/deploy --schema-cutover --resume-checks` with the same scratch or live
   installation selection. It requires the `schema-3 cutover` fence and a home at the recorded
   candidate's schema. It checks the recorded backup and each project's baseline, then unfences,
-  releases the drain and prints the original cutover report. The plan-rows lanes land together
+  releases the drain, re-creates inactive services and waits up to 60 s for the loop's scheduler
+  lease before printing the original cutover report. Fenced checks start only coordinator and
+  serve; the loop starts after unfence and drain release. The plan-rows lanes land together
   from one integration branch (`docs/design/plan-rows.md` §12); none is shipped alone.
 
 ## UI changes

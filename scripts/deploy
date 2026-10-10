@@ -161,22 +161,27 @@ def start_process(binary, arguments, name, release_dir):
 def unit_active(unit):
     return subprocess.run(['systemctl', '--user', 'is-active', '--quiet', unit]).returncode == 0
 def alive(record):
-    if 'pid' in record: return start_time(record['pid']) == record['start']
+    if 'pid' in record:
+        try:
+            fields = pathlib.Path('/proc', str(record['pid']), 'stat').read_text().rsplit(')', 1)[1].split()
+            return fields[19] == record['start'] and fields[0] != 'Z'
+        except (FileNotFoundError, ProcessLookupError): return False
     return unit_active(record['unit'])
-def wait_for_coordinator(binary, record):
+def wait_for_coordinator(binary, record, seconds=None):
     # Ready means the coordinator answered a cheap read. It answers reads while
     # its startup pass still adopts the runs it found; writes wait for that pass.
-    deadline = time.monotonic() + READY_SECONDS
+    seconds = READY_SECONDS if seconds is None else seconds
+    deadline = time.monotonic() + seconds
     while True:
         if not alive(record): raise RuntimeError('maintenance coordinator exited during startup')
         if (home / 'coordinator.sock').exists():
             try:
                 answered = subprocess.run([str(binary), 'tool', 'rpc', '{"command":"projects_list"}'], env=env, stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=max(1, deadline - time.monotonic())).returncode == 0
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=max(.1, deadline - time.monotonic())).returncode == 0
             except subprocess.TimeoutExpired:
                 answered = False
             if answered: return
-        if time.monotonic() > deadline: raise RuntimeError('maintenance coordinator did not answer within %d s' % READY_SECONDS)
+        if time.monotonic() > deadline: raise RuntimeError('maintenance coordinator did not answer within %g s' % seconds)
         time.sleep(.2)
 def unfence(binary):
     # The release handshake gives the coordinator a bounded time to answer. If it
@@ -201,33 +206,37 @@ def stop_services():
     # auto-started one, and stopping an unloaded unit is not an error here.
     previous = json.loads((install / 'services.json').read_text()) if (install / 'services.json').exists() else {}
     for record in previous.values():
-        if 'pid' in record: stop_process(record)
-        else:
-            stopped = subprocess.run(['systemctl', '--user', 'stop', record['unit']], capture_output=True, text=True)
-            if stopped.returncode:
-                loaded = subprocess.run(['systemctl', '--user', 'show', record['unit'], '--property=LoadState', '--value'], capture_output=True, text=True)
-                if loaded.stdout.strip() != 'not-found':
-                    raise RuntimeError('stop %s: %s' % (record['unit'], stopped.stderr.strip()))
+        stop_service(record)
     if not fixture:
         for unit in AUTO_COORDINATORS:
             subprocess.run(['systemctl', '--user', 'stop', unit], check=False, stderr=subprocess.DEVNULL)
     return previous
-def start_services(binary, release_dir):
-    commands = {'coordinator': ['coordinator', '--maintenance'], 'serve': ['serve', '--no-runner', '--port', os.environ.get('SLUICE_DEPLOY_PORT', '3065')], 'loop': ['loop']}
+def stop_service(record):
+    if 'pid' in record: stop_process(record)
+    else:
+        stopped = subprocess.run(['systemctl', '--user', 'stop', record['unit']], capture_output=True, text=True)
+        if stopped.returncode:
+            loaded = subprocess.run(['systemctl', '--user', 'show', record['unit'], '--property=LoadState', '--value'], capture_output=True, text=True)
+            if loaded.stdout.strip() != 'not-found':
+                raise RuntimeError('stop %s: %s' % (record['unit'], stopped.stderr.strip()))
+def service_commands():
+    return {'coordinator': ['coordinator', '--maintenance'], 'serve': ['serve', '--no-runner', '--port', os.environ.get('SLUICE_DEPLOY_PORT', '3065')], 'loop': ['loop']}
+def start_service(binary, release_dir, name, arguments):
+    if fixture: return start_process(binary, arguments, name, release_dir)
+    digest = hashlib.sha256(os.fsencode(install)).hexdigest()[:16]
+    unit = ('sluice-test-' if testing else 'sluice-') + digest + '-' + name
+    subprocess.run(['systemd-run', '--user', '--quiet', '--collect', '--service-type=exec', '--property=Restart=no', '--unit', unit,
+        '--setenv=SLUICE_HOME=' + str(home), '--setenv=SLUICE_INSTALL_DIR=' + str(install),
+        # Test services name the run units they launch sluice-test-* too.
+        *(['--setenv=SLUICE_TEST=1'] if testing else []),
+        # The user manager's PATH lacks the engines (codex, claude, devin) and uv.
+        '--setenv=PATH=' + os.environ['PATH'], '--setenv=HOME=' + str(pathlib.Path.home()), '--', str(binary), *arguments], check=True)
+    return dict(unit=unit + '.service', release=str(release_dir))
+def start_services(binary, release_dir, include_loop=True):
     services = {}
-    for name, arguments in commands.items():
-        if fixture:
-            services[name] = start_process(binary, arguments, name, release_dir)
-        else:
-            digest = hashlib.sha256(os.fsencode(install)).hexdigest()[:16]
-            unit = ('sluice-test-' if testing else 'sluice-') + digest + '-' + name
-            subprocess.run(['systemd-run', '--user', '--quiet', '--collect', '--service-type=exec', '--property=Restart=no', '--unit', unit,
-                '--setenv=SLUICE_HOME=' + str(home), '--setenv=SLUICE_INSTALL_DIR=' + str(install),
-                # Test services name the run units they launch sluice-test-* too.
-                *(['--setenv=SLUICE_TEST=1'] if testing else []),
-                # The user manager's PATH lacks the engines (codex, claude, devin) and uv.
-                '--setenv=PATH=' + os.environ['PATH'], '--setenv=HOME=' + str(pathlib.Path.home()), '--', str(binary), *arguments], check=True)
-            services[name] = dict(unit=unit + '.service', release=str(release_dir))
+    for name, arguments in service_commands().items():
+        if name == 'loop' and not include_loop: continue
+        services[name] = start_service(binary, release_dir, name, arguments)
         publish('services.json', services)
         if name == 'coordinator':
             wait_for_coordinator(binary, services[name])
@@ -236,6 +245,31 @@ def start_services(binary, release_dir):
         if not alive(record): raise RuntimeError('%s exited during restart' % name)
     subprocess.run([str(binary), 'doctor', '--json'], env=env, check=True, stdout=sys.stderr)
     return services
+def ensure_cutover_services(binary, release_dir):
+    deadline = time.monotonic() + 60
+    services = json.loads((install / 'services.json').read_text())
+    for name, arguments in service_commands().items():
+        if time.monotonic() >= deadline: raise RuntimeError('loop did not hold the scheduler lease within 60 s after cutover release')
+        if name not in services or not alive(services[name]):
+            say('re-creating ' + name + ' after cutover release')
+            if name in services: stop_service(services[name])
+            services[name] = start_service(binary, release_dir, name, arguments)
+            publish('services.json', services)
+        if name == 'coordinator': wait_for_coordinator(binary, services[name], seconds=max(.1, deadline - time.monotonic()))
+    while True:
+        if time.monotonic() >= deadline: raise RuntimeError('loop did not hold the scheduler lease within 60 s after cutover release')
+        for name in service_commands():
+            if not alive(services[name]): raise RuntimeError('%s exited after cutover release' % name)
+        # This owner is set while the loop's lease connection is open, and cleared
+        # on disconnect or coordinator startup. Neither maintenance coordinator nor
+        # serve --no-runner acquires it. Doctor only checks host/release readiness.
+        with sqlite3.connect('file:%s?mode=ro' % (home / 'sluice.db'), uri=True, timeout=1) as db:
+            owner = db.execute('SELECT scheduler_owner FROM maintenance WHERE singleton=1').fetchone()
+        db.close()
+        if owner and owner[0]:
+            say('checked: coordinator, serve and loop active; loop holds the scheduler lease')
+            return
+        time.sleep(.2)
 def prune_releases(keep):
     # A live guardian's /proc executable is the strongest pin. Retain all release
     # identities recorded in nonterminal home rows too, including uncertain launch.
@@ -616,11 +650,13 @@ def finish_cutover(checkpoint):
     def log_line(line, **fields):
         print(line, flush=True)
         log_deploy(cutover=line, **fields)
-    # 11. Select and start the candidate, then check it against the backup.
+    # 11. Start the coordinator and serve for fenced checks. The loop starts in
+    # step 12: it cannot activate against the fenced installation.
     control(program, 'select', str(release), str(home))
+    release_attempted = False
     try:
         stop_services()
-        start_services(program, release)
+        start_services(program, release, include_loop=False)
         if query('PRAGMA integrity_check')[0][0] != 'ok': raise RuntimeError('integrity_check failed on the migrated home')
         with sqlite3.connect('file:%s?mode=ro' % backup, uri=True) as before:
             plans = before.execute('SELECT p.project_id, p.name, d.rev, d.doc, (SELECT min(rev) FROM plan_edits WHERE project_id=p.project_id) FROM plans d JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL ORDER BY p.name').fetchall()
@@ -661,10 +697,30 @@ def finish_cutover(checkpoint):
         say('checked: integrity, %d plan(s) equal to the backup, history to each baseline, the dashboard answers' % len(plans))
         # 12. Unfence, then release the drain.
         unfence(program)
+        # Release may commit even if its reply is lost. Every subsequent failure
+        # must restore the drain, including a nonzero release CLI exit.
+        release_attempted = True
         released = subprocess.run([str(program), 'drain', '--release'], env=cutover_env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
         if released.returncode: raise RuntimeError('release: %s' % reply_error(released).get('message'))
+        ensure_cutover_services(program, release)
     except Exception as error:
         control(program, 'fence', 'schema-3 cutover')
+        if release_attempted:
+            try:
+                # Ordinary activation cannot pass the restored fence. If the
+                # coordinator died, re-create its maintenance service first.
+                services = json.loads((install / 'services.json').read_text())
+                record = services.get('coordinator')
+                if record is None or not alive(record):
+                    if record is not None: stop_service(record)
+                    record = start_service(program, release, 'coordinator', service_commands()['coordinator'])
+                    services['coordinator'] = record
+                    publish('services.json', services)
+                wait_for_coordinator(program, record, seconds=60)
+                drained = subprocess.run([str(program), 'drain', '--no-wait'], env=cutover_env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+                if drained.returncode: raise RuntimeError(reply_error(drained).get('message'))
+            except Exception as restore_error:
+                error = RuntimeError('%s; drain restoration failed: %s' % (error, restore_error))
         log_deploy(cutover='failed after the migration', failure=str(error))
         sys.exit('deploy: the cutover failed after the migration: %s. The installation stays fenced; repair and run scripts/deploy --schema-cutover --resume-checks, or restore %s together with %s (§10.7)' % (error, backup, old.name[:12]))
     # 13. The report.

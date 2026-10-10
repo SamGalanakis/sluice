@@ -493,6 +493,31 @@ impl Scratch {
             .unwrap()
             .success()
     }
+    fn assert_scheduler_ready(&self) {
+        let services: Value = serde_json::from_slice(
+            &std::fs::read(self.gate.install.join("services.json")).unwrap(),
+        )
+        .unwrap();
+        for name in ["coordinator", "serve", "loop"] {
+            let record = &services[name];
+            let pid = record["pid"].as_u64().unwrap();
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .unwrap_or_else(|error| panic!("{name} is absent: {error}"));
+            let fields: Vec<_> = stat
+                .rsplit(')')
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .collect();
+            assert_eq!(Some(fields[19]), record["start"].as_str(), "{name}");
+            assert_ne!(fields[0], "Z", "{name} exited");
+        }
+        assert!(
+            self.value("SELECT scheduler_owner FROM maintenance WHERE singleton=1")
+                .is_some(),
+            "the loop must hold the scheduler lease when deploy returns"
+        );
+    }
 }
 fn start_time(pid: u32) -> String {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
@@ -959,6 +984,7 @@ fn cutover_cancels_the_running_steps_stops_the_calls_settles_and_reports_how_eac
         "stopped p call:{call} {call_run} requested=stop outcome=failed:process_lost advice=call-again"
     )));
     // Unfenced, released, the candidate selected and the home at its schema.
+    scratch.assert_scheduler_ready();
     assert_eq!(scratch.fence(), None);
     assert_eq!(
         scratch.value("SELECT mode FROM maintenance").as_deref(),
@@ -1041,7 +1067,8 @@ fn cutover_preserves_an_imported_revision_and_checks_its_baseline() {
 #[test]
 fn cutover_resumes_failed_checks_after_repair_and_refuses_the_wrong_fence_or_schema() {
     let mut scratch = Scratch::new();
-    scratch.tool("project_create", json!({"name": "p"}));
+    scratch.project(&[("w", "fixture.wait")]);
+    let stopped_run = scratch.live_run("step_id='w'");
     // A candidate that serves the real home but returns a wrong plan while the fault marker
     // exists. The release manifest includes both the wrapper and its real binary.
     let candidate = &scratch.releases.candidate;
@@ -1050,15 +1077,74 @@ fn cutover_resumes_failed_checks_after_repair_and_refuses_the_wrong_fence_or_sch
         candidate.join("bin/sluice-real"),
     )
     .unwrap();
-    std::fs::write(candidate.join("bin/sluice"),
-        "#!/bin/sh\nif [ \"$1\" = tool ] && [ \"$2\" = plan_get ] && [ -f \"$SLUICE_HOME/fail-plan-check\" ]; then\n  printf '%s\\n' '{\"rev\":0,\"plan\":{}}'\n  exit 0\nfi\nexec \"$(dirname \"$0\")/sluice-real\" \"$@\"\n"
-    ).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(
+    executable::write(
         candidate.join("bin/sluice"),
-        std::fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
+        r#"#!/bin/sh
+if [ "$1" = tool ] && [ "$2" = plan_get ] && [ -f "$SLUICE_HOME/fail-plan-check" ]; then
+  printf '%s\n' '{"rev":0,"plan":{}}'
+  exit 0
+fi
+# Reproduce the live loop's fenced activation refusal deterministically.
+if [ "$1" = loop ] && [ -f "$SLUICE_INSTALL_DIR/fence.json" ]; then
+  echo 'busy: maintenance: schema-3 cutover' >&2
+  exit 1
+fi
+if [ "$1" = loop ] && [ -f "$SLUICE_HOME/loop-without-lease" ]; then
+  exec /bin/sleep 120
+fi
+if [ "$1" = loop ] && [ -f "$SLUICE_HOME/lose-coordinator-on-loop" ]; then
+  exec /usr/bin/python3 - "$SLUICE_INSTALL_DIR/services.json" <<'PY'
+import json, os, pathlib, signal, sys, time
+pid = json.loads(pathlib.Path(sys.argv[1]).read_text())['coordinator']['pid']
+os.kill(pid, signal.SIGTERM)
+time.sleep(120)
+PY
+fi
+if [ "$1" = drain ] && [ "$2" = --release ] && [ -f "$SLUICE_HOME/lose-release-reply" ]; then
+  "$(dirname "$0")/sluice-real" "$@" >/dev/null || exit $?
+  exec /usr/bin/python3 - "$SLUICE_INSTALL_DIR/services.json" <<'PY'
+import json, os, pathlib, signal, sys, time
+pid = json.loads(pathlib.Path(sys.argv[1]).read_text())['coordinator']['pid']
+os.kill(pid, signal.SIGTERM)
+deadline = time.monotonic() + 10
+while time.monotonic() < deadline:
+    try:
+        state = pathlib.Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()[0]
+        if state == 'Z': break
+    except FileNotFoundError: break
+    time.sleep(.05)
+print(json.dumps({'error':'storage', 'message':'fixture release reply lost'}), file=sys.stderr)
+sys.exit(1)
+PY
+fi
+if [ "$1" = drain ] && [ "$2" = --release ] && [ -f "$SLUICE_HOME/lose-services-on-release" ]; then
+  "$(dirname "$0")/sluice-real" "$@" || exit $?
+  exec /usr/bin/python3 - "$SLUICE_INSTALL_DIR/services.json" <<'PY'
+import json, os, pathlib, signal, sys, time
+path = pathlib.Path(sys.argv[1])
+services = json.loads(path.read_text())
+for record in services.values():
+    try: os.kill(record['pid'], signal.SIGTERM)
+    except ProcessLookupError: pass
+deadline = time.monotonic() + 10
+while True:
+    active = []
+    for record in services.values():
+        try:
+            state = pathlib.Path('/proc', str(record['pid']), 'stat').read_text().rsplit(')', 1)[1].split()[0]
+            if state != 'Z': active.append(record['pid'])
+        except FileNotFoundError: pass
+    if not active: break
+    if time.monotonic() >= deadline: sys.exit('fixture services did not stop')
+    time.sleep(.05)
+# Keep a dead loop record even when deploy correctly deferred starting it.
+services.setdefault('loop', services['serve'])
+path.write_text(json.dumps(services))
+PY
+fi
+exec "$(dirname "$0")/sluice-real" "$@"
+"#,
+    );
     let mut manifest: Manifest =
         serde_json::from_slice(&std::fs::read(candidate.join("manifest.json")).unwrap()).unwrap();
     let mut digests = BTreeMap::new();
@@ -1080,7 +1166,7 @@ fn cutover_resumes_failed_checks_after_repair_and_refuses_the_wrong_fence_or_sch
     scratch.releases.candidate = renamed;
     let marker = scratch.gate.home.join("fail-plan-check");
     std::fs::write(&marker, "fault").unwrap();
-    let output = scratch.cutover(&["--deadline", "+0s"]);
+    let output = scratch.cutover(&["--deadline", "+0s", "--cancel-grace", "2"]);
     assert!(!output.status.success(), "{}", text(&output));
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("plan_get p differs"),
@@ -1138,14 +1224,73 @@ fn cutover_resumes_failed_checks_after_repair_and_refuses_the_wrong_fence_or_sch
     assert!(!output.status.success(), "{}", text(&output));
     assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
     std::fs::remove_file(marker).unwrap();
+    // A live loop process alone is insufficient. A lease timeout must preserve
+    // recovery through the same checkpoint and restore the drain after release.
+    let no_lease = scratch.gate.home.join("loop-without-lease");
+    std::fs::write(&no_lease, "fault").unwrap();
+    let output = scratch.cutover(&["--resume-checks"]);
+    assert!(
+        !output.status.success()
+            && String::from_utf8_lossy(&output.stderr)
+                .contains("loop did not hold the scheduler lease within 60 s"),
+        "{}",
+        text(&output)
+    );
+    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
+    assert_eq!(
+        scratch.value("SELECT mode FROM maintenance").as_deref(),
+        Some("drain")
+    );
+    let progress: Value = serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
+    assert_ne!(progress["completed"], true);
+    std::fs::remove_file(no_lease).unwrap();
+    // Recovery must re-create a maintenance coordinator through the restored
+    // installation fence before it can restore the released drain.
+    let lose_coordinator = scratch.gate.home.join("lose-coordinator-on-loop");
+    std::fs::write(&lose_coordinator, "fault").unwrap();
+    let output = scratch.cutover(&["--resume-checks"]);
+    assert!(
+        !output.status.success()
+            && String::from_utf8_lossy(&output.stderr)
+                .contains("coordinator exited after cutover release")
+            && !String::from_utf8_lossy(&output.stderr).contains("drain restoration failed"),
+        "{}",
+        text(&output)
+    );
+    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
+    assert_eq!(
+        scratch.value("SELECT mode FROM maintenance").as_deref(),
+        Some("drain")
+    );
+    std::fs::remove_file(lose_coordinator).unwrap();
+    // A committed release can lose its acknowledgment. Restore the drain even
+    // when the CLI reports failure, rather than treating that as no release.
+    let lose_reply = scratch.gate.home.join("lose-release-reply");
+    std::fs::write(&lose_reply, "fault").unwrap();
+    let output = scratch.cutover(&["--resume-checks"]);
+    assert!(
+        !output.status.success()
+            && String::from_utf8_lossy(&output.stderr).contains("fixture release reply lost")
+            && !String::from_utf8_lossy(&output.stderr).contains("drain restoration failed"),
+        "{}",
+        text(&output)
+    );
+    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
+    assert_eq!(
+        scratch.value("SELECT mode FROM maintenance").as_deref(),
+        Some("drain")
+    );
+    std::fs::remove_file(lose_reply).unwrap();
     // A --collect service that already exited must not prevent service re-creation.
     let services_path = scratch.gate.install.join("services.json");
     let mut services: Value =
         serde_json::from_slice(&std::fs::read(&services_path).unwrap()).unwrap();
     services["collected"] = json!({"unit": format!("sluice-test-collected-{}.service", sluice_model::ids::InvocationId::new()), "release":scratch.releases.candidate});
     std::fs::write(&services_path, serde_json::to_vec(&services).unwrap()).unwrap();
+    std::fs::write(scratch.gate.home.join("lose-services-on-release"), "fault").unwrap();
     let output = scratch.cutover(&["--resume-checks"]);
     assert!(output.status.success(), "{}", text(&output));
+    scratch.assert_scheduler_ready();
     assert_eq!(scratch.fence(), None);
     assert_eq!(
         scratch.value("SELECT mode FROM maintenance").as_deref(),
@@ -1153,7 +1298,7 @@ fn cutover_resumes_failed_checks_after_repair_and_refuses_the_wrong_fence_or_sch
     );
     assert_eq!(serde_json::to_value(scratch.report()).unwrap(), original);
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("1 revisions converted"),
+        String::from_utf8_lossy(&output.stdout).contains("2 revisions converted"),
         "{}",
         text(&output)
     );
@@ -1163,6 +1308,47 @@ fn cutover_resumes_failed_checks_after_repair_and_refuses_the_wrong_fence_or_sch
             .count(),
         1
     );
+    // Hold the project paused so retry visibly returns its step to pending. The
+    // recovered loop must admit it as soon as the project is unpaused.
+    for (name, args) in [
+        ("project_update", json!({"project":"p","paused":true})),
+        (
+            "step_retry",
+            json!({"project":"p","steps":"w","reason":"retry after cutover"}),
+        ),
+    ] {
+        let output = scratch
+            .gate
+            .command(
+                &scratch.releases.candidate.join("bin/sluice"),
+                &["tool", name, &args.to_string()],
+            )
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+    }
+    assert_eq!(
+        scratch
+            .value("SELECT status FROM steps WHERE step_id='w'")
+            .as_deref(),
+        Some("pending")
+    );
+    let output = scratch
+        .gate
+        .command(
+            &scratch.releases.candidate.join("bin/sluice"),
+            &[
+                "tool",
+                "project_update",
+                r#"{"project":"p","paused":false}"#,
+            ],
+        )
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    let admitted = scratch.live_run("step_id='w'");
+    assert_ne!(admitted, stopped_run);
+    assert!(scratch.unit_active(&admitted));
     // A completed cutover is not a resumable fenced cutover.
     assert!(!scratch.cutover(&["--resume-checks"]).status.success());
 }

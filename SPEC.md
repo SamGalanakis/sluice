@@ -172,8 +172,8 @@ installation selects:
 7. **Back up** the database (backup API) to `<install>/backups/pre-schema3-<time>.db`, then
    **migrate** with the candidate's `sluice home migrate`. A failed migration leaves the home
    unchanged and stops fenced.
-8. **Select and start** the candidate (as an ordinary deploy's steps 5 to 7) and check: the
-   integrity check, every project's `plan_get` equal to the backup's plan at its revision
+8. **Select and start** the candidate's coordinator and serve, deferring loop until step 9.
+   Check integrity, every project's `plan_get` equal to the backup's plan at its revision
    (compact serialization, `docs/design/plan-rows.md` §10.5), the first plan edit in `plan_history`
    at each project's baseline revision from the conversion report, or its first logged revision
    in the backup for an unanchored project, and the dashboard answering (`/` with 200, a project
@@ -182,10 +182,15 @@ installation selects:
    post-migration failure, run `scripts/deploy --schema-cutover --resume-checks`. It requires
    the `schema-3 cutover` fence, the home and recorded candidate at schema 3, and the recorded
    successful migration checkpoint at `<install>/schema-cutover-checkpoint.json`. It re-creates
-   the candidate services and repeats these checks against the recorded backup. It then
+   coordinator and serve and repeats these checks against the recorded backup. It then
    performs step 9, preserving the original deadline and run outcomes. No deadline or rehearsal
    is needed for this retry; a different candidate is refused.
-9. **Unfence**, then **release** the drain (author `cutover`), and **report**: one line `cutover
+9. **Unfence**, then **release** the drain (author `cutover`). Check coordinator, serve and loop,
+   re-creating any inactive service with deploy's original launch arguments. Start loop here,
+   after the fenced checks. Require all three services active and the loop's scheduler lease
+   held (`maintenance.scheduler_owner` set) within 60 s, or fail fenced and restore the drain.
+   This also applies to
+   `--resume-checks`. Then **report**: one line `cutover
    <sha> · schema 3 · <n> projects · <m> revisions converted · cancel requested for <k> runs ·
    <c> calls stopped`, then a line per run, `stopped <project> <step or call:<id>> <run>
    requested=<cancel|stop> outcome=<succeeded|failed:<kind>> advice=<none|retry|read-then-retry|call-again>`,
