@@ -591,8 +591,8 @@ fn supplied_shapes_are_checked_in_order() {
 /// the incremental path.
 #[test]
 fn validation_counterexamples_match_the_whole_plan_compiler() {
-    use sluice_reference::{Plan, harness::Open};
-    let compile = |document: &Value| Plan::parse_json(document.to_string().as_bytes(), &Open);
+    use sluice_reference::{Plan as Reference, harness::Open};
+    let compile = |document: &Value| Reference::parse_json(document.to_string().as_bytes(), &Open);
     let cases = fixture("validation.differential");
     let cases = cases.as_array().unwrap();
     let names: BTreeSet<_> = cases.iter().map(|c| c["case"].as_str().unwrap()).collect();

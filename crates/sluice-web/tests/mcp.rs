@@ -207,7 +207,6 @@ fn flat_edits_decode_to_the_folded_commands() {
         )
         .is_err()
     );
-    assert!(decode("plan_patch", json!({"project":"p"})).is_err());
     assert!(decode("plan_edit", json!({"project":"p","ops":[]})).is_err());
     for (args, subtree) in [
         (

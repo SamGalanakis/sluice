@@ -73,7 +73,7 @@ fn tool_errors_and_bad_arguments_exit_1() {
             .unwrap()
             .contains("JSON object")
     );
-    let args = tool(home.path(), "plan_patch", r#"{"project":"p"}"#);
+    let args = tool(home.path(), "plan_edit", r#"{"project":"p"}"#);
     assert_eq!(args.status.code(), Some(1));
     assert!(
         stderr(&args)["message"]
@@ -305,7 +305,7 @@ fn a_project_through_the_tools() {
         .lines()
         .map(|line| line.split_whitespace().next().unwrap().to_owned())
         .collect();
-    for name in ["projects_list", "plan_patch", "fn_call", "verify", "status"] {
+    for name in ["projects_list", "plan_edit", "fn_call", "verify", "status"] {
         assert!(names.iter().any(|n| n == name), "{name} not listed");
     }
     for gone in ["init", "plan", "fn"] {
@@ -325,12 +325,12 @@ fn a_project_through_the_tools() {
     let project_id = stdout(&created)["project_id"].as_str().unwrap().to_owned();
     let patched = tool(
         home.path(),
-        "plan_patch",
+        "plan_edit",
         &json!({
             "project": "demo", "rev": 1, "reason": "plan",
-            "ops": [{"op": "add", "path": "/inputs", "value": {"n": "int"}},
-                    {"op": "add", "path": "/steps/a",
-                     "value": {"run": "core.echo", "in": {"value": {"default": 1}}}}],
+            "ops": [{"op": "input.put", "name": "n", "declaration": "int"},
+                    {"op": "step.add", "step": "a",
+                     "spec": {"run": "core.echo", "in": {"value": {"default": 1}}}}],
         })
         .to_string(),
     );
@@ -344,8 +344,8 @@ fn a_project_through_the_tools() {
     assert!(got.status.success());
     let stale = tool(
         home.path(),
-        "plan_patch",
-        r#"{"project":"demo","rev":1,"reason":"x","ops":[]}"#,
+        "plan_edit",
+        r#"{"project":"demo","rev":1,"reason":"x","ops":[{"op":"step.remove","steps":["a"]}]}"#,
     );
     assert_eq!(stale.status.code(), Some(1));
     // id selectors reach the same project
@@ -746,10 +746,10 @@ fn project_with_steps(home: &Path) {
     tool(home, "project_create", r#"{"name":"p","description":""}"#);
     let patched = tool(
         home,
-        "plan_patch",
+        "plan_edit",
         r#"{"project":"p","rev":1,"reason":"threads","ops":[
-            {"op":"add","path":"/steps/q","value":{"run":"core.external","outputs":{"ok":"boolean"}}},
-            {"op":"add","path":"/steps/r","value":{"run":"core.external","outputs":{"ok":"boolean"}}}]}"#,
+            {"op":"step.add","step":"q","spec":{"run":"core.external","outputs":{"ok":"boolean"}}},
+            {"op":"step.add","step":"r","spec":{"run":"core.external","outputs":{"ok":"boolean"}}}]}"#,
     );
     assert!(
         patched.status.success(),
@@ -922,10 +922,10 @@ fn next_times_out_and_wakes_on_everything_with_all() {
     );
     let patched = tool(
         home.path(),
-        "plan_patch",
+        "plan_edit",
         r#"{"project":"p","rev":1,"reason":"plan",
-            "ops":[{"op":"add","path":"/steps/a",
-                    "value":{"run":"core.echo","in":{"value":{"default":1}}}}]}"#,
+            "ops":[{"op":"step.add","step":"a",
+                    "spec":{"run":"core.echo","in":{"value":{"default":1}}}}]}"#,
     );
     assert!(patched.status.success());
     // Nothing a coordinator wakes on arrived yet: the request times out.

@@ -39,6 +39,8 @@ use sluice_reference::{
     interop::{model_limits, model_signatures, model_state, recipe_catalogs},
     ops, plan_shape,
 };
+// Today's whole-plan compiler, as the test-only reference keeps it.
+use sluice_reference::Plan as Reference;
 use std::sync::Arc;
 
 /// The model's view of the generated catalog.
@@ -59,8 +61,7 @@ impl Model {
 /// reconciles every tick).
 fn settle(case: &mut EditCase) {
     let fixture = Fixture::new();
-    let before =
-        sluice_reference::Plan::parse(&ops::document_of(&case.base), &fixture.signatures).unwrap();
+    let before = Reference::parse(&ops::document_of(&case.base), &fixture.signatures).unwrap();
     for id in before.steps().keys() {
         case.state.steps.entry(id.clone()).or_default();
     }
@@ -407,7 +408,7 @@ proptest! {
     fn compile_rows_compiles_what_today_compiles(document in generate::plan(14)) {
         let fixture = Fixture::new();
         let model = Model::new();
-        let reference = sluice_reference::Plan::parse(&document, &fixture.signatures).unwrap();
+        let reference = Reference::parse(&document, &fixture.signatures).unwrap();
         let rows = support::rows(&serde_json::to_value(&document).unwrap());
         let plan = compile_rows(&rows, &model.signatures).unwrap();
         prop_assert_eq!(plan_shape!(plan), plan_shape!(reference));
@@ -420,7 +421,7 @@ proptest! {
         let model = Model::new();
         if let Ok(applied) = ops::apply(&case.base, &case.ops, case.start, &fixture.recipes, &fixture.signatures) {
             let document = ops::document_of(&applied.rows);
-            let theirs = sluice_reference::Plan::parse(&document, &fixture.signatures);
+            let theirs = Reference::parse(&document, &fixture.signatures);
             let ours = compile_rows(&applied.rows, &model.signatures);
             match (theirs, ours) {
                 (Ok(theirs), Ok(ours)) => prop_assert_eq!(plan_shape!(ours), plan_shape!(theirs)),

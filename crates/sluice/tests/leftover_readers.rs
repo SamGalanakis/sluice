@@ -21,13 +21,19 @@ const PATTERNS: [&str; 8] = [
     "FrozenPlan",
 ];
 
-/// What may still name the legacy document: the converter's legacy replay, lane H's test-only
-/// reference and the files that build or read legacy homes on purpose.
-const EXEMPT: [&str; 10] = [
+/// What may still name the legacy document: the converter's legacy replay and its tests, lane
+/// H's test-only reference, the files that build or read legacy homes on purpose, and the
+/// tests that prove the removed tool is unknown.
+const EXEMPT: [&str; 13] = [
     "crates/sluice-store/src/convert.rs",
     "crates/sluice-reference/",
     "crates/sluice-model/tests/fixtures/",
     "crates/sluice-store/tests/legacy_replay.rs",
+    // the converter's own tests, which read the legacy homes they convert
+    "crates/sluice-store/tests/convert.rs",
+    // the tests that hold plan_patch unknown to every transport and the command decoder
+    "crates/sluice/tests/tool_contracts.rs",
+    "crates/sluice-model/tests/command_plan_rows.rs",
     "crates/sluice/tests/schema_migrate.rs",
     "crates/sluice/tests/leftover_readers.rs",
     "tests/fixtures/",

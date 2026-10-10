@@ -3,13 +3,10 @@
 //! contract; every JSON example there is a fixture under `tests/fixtures/plan_rows/` that
 //! these types round-trip.
 //!
-//! These types sit beside the schema-1 ones they replace (`commands::EditPreview`,
-//! `commands::EditResult`, `events::Event::PlanEdit`'s `ops`, `PatchOperation`): the
-//! implementing lanes switch the commands, events and store over to them and delete the old
-//! ones. Nothing here is wired into dispatch yet, and nothing here reads or writes state. The
-//! model-to-store handoff (`PlanEditCommit`, `PreparedPlanEdit` with its `CertifiedPlan`),
-//! the preparation read set (`PreparationReads`, `ScopedState`) and the schema cutover's report
-//! (`CutoverReport`) are pinned here too.
+//! The commands, the `plan.edit` record and the store speak these types; nothing here reads
+//! or writes state. The model-to-store handoff (`PlanEditCommit`, `PreparedPlanEdit` with its
+//! `CertifiedPlan`), the preparation read set (`PreparationReads`, `ScopedState`) and the
+//! schema cutover's report (`CutoverReport`) are pinned here too.
 
 use crate::{
     commands::{KeptUnit, PlanViewFormat, ProjectIdentity, StepStatus, UnsupportedInput},

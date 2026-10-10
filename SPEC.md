@@ -256,7 +256,7 @@ and its records, a status change and its records, a message and its record) comm
 transaction.
 
 Everything below describes schema 3 (schema 3; lands with the plan-rows cutover). Until it
-lands, a home is schema 1: 23 tables, the plan stored whole in `plans.doc`, edits as RFC 6902
+lands, a home is schema 1: 23 tables, the plan stored whole as a document in `plans`, edits as RFC 6902
 `ops` in `plan_edits`, columns added after homes existed added by the writer when it opens one,
 and every release refusing any other table count or schema.
 
@@ -2226,7 +2226,7 @@ the object to use instead (`"sol"` with effort `xhigh` →
 `{"type":"fusion","main":{"model":"claude-opus-5-5","effort":"high"},"sidekick":{"model":"swe-2","effort":"high"}}`).
 An edit refuses a string model before it reaches a launch: `step_add`, `unit_add` (after its
 recipe's expansion and `inputs` overrides), `step_update`, `step_set_input`, `plan_edit` and
-`unit_update` (`plan_patch` before schema 3) refuse (`invalid`, with that same message, and
+`unit_update` refuse (`invalid`, with that same message, and
 `steps.<id>.in.model: …` in `errors`) a new step,
 or a step whose fn or `model` binding they change, when it is an agent step and its `model`
 binds a literal that is not an object, or reads a plan input whose value is not one;

@@ -245,7 +245,7 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
     gate.boot(&release.join("bin/sluice"), false);
     let sluice_model::commands::CommandReply::Project(project) = gate.rpc(json!({"command":"project_create","args":{"name":"release-fixture","description":"","icon":null,"resources":{},"author":"release-test"}})).unwrap() else { panic!("project") };
     let selector = json!({"kind":"id","value":project.project_id});
-    gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"add","path":"/steps/wait","value":{"run":"fixture.wait","in":{"value":{"default":7}}}}],"start":true,"dry_run":false,"reason":"pinned fixture","author":"release-test"}})).unwrap();
+    gate.rpc(json!({"command":"plan_edit","args":{"project":selector,"rev":1,"ops":[{"op":"step.add","step":"wait","spec":{"run":"fixture.wait","in":{"value":{"default":7}}}}],"start":true,"dry_run":false,"reason":"pinned fixture","author":"release-test"}})).unwrap();
     let scheduler = gate
         .command(&release.join("bin/sluice"), &["loop"])
         .stdout(Stdio::null())

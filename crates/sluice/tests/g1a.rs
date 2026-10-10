@@ -165,7 +165,13 @@ fn boot_callbacks_restart_adoption_lease_and_direct_caller_death() {
     let CommandReply::Project(p)=gate.rpc(json!({"command":"project_create","args":{"name":"fixture","description":"G1a","icon":null,"resources":{"cpu":1},"author":"gate"}}))else{panic!("create")};
     let project = p.project_id;
     let selector = json!({"kind":"id","value":project});
-    gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"replace","path":"","value":{"inputs":{},"outputs":{"answer":{"source":"last/value"}},"steps":{"seed":{"run":"core.echo","in":{"value":{"default":7}}},"submit":{"run":"fixture.submit","in":{"value":{"source":"seed/value"}},"outputs":{"submitted":"boolean"}},"long":{"run":"fixture.wait","in":{"value":{"source":"submit/submitted"}},"needs":{"cpu":1}},"last":{"run":"core.echo","in":{"value":{"source":"long/value"}}}}}}],"start":true,"dry_run":false,"reason":"fixture","author":"gate"}}));
+    gate.rpc(json!({"command":"plan_edit","args":{"project":selector,"rev":1,"ops":[
+        {"op":"output.put","name":"answer","source":"last/value"},
+        {"op":"step.add","step":"seed","spec":{"run":"core.echo","in":{"value":{"default":7}}}},
+        {"op":"step.add","step":"submit","spec":{"run":"fixture.submit","in":{"value":{"source":"seed/value"}},"outputs":{"submitted":"boolean"}}},
+        {"op":"step.add","step":"long","spec":{"run":"fixture.wait","in":{"value":{"source":"submit/submitted"}},"needs":{"cpu":1}}},
+        {"op":"step.add","step":"last","spec":{"run":"core.echo","in":{"value":{"source":"long/value"}}}}
+    ],"start":true,"dry_run":false,"reason":"fixture","author":"gate"}}));
     std::thread::sleep(Duration::from_millis(150));
     assert_eq!(
         gate.status(project)["steps"]["seed"]["status"],
@@ -288,7 +294,7 @@ fn boot_callbacks_restart_adoption_lease_and_direct_caller_death() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":2,"ops":[{"op":"add","path":"/steps/late","value":{"run":"core.echo","in":{"value":{"default":123}}}}],"start":true,"dry_run":false,"reason":"auto-start has no scheduler","author":"gate"}}));
+    gate.rpc(json!({"command":"plan_edit","args":{"project":selector,"rev":2,"ops":[{"op":"step.add","step":"late","spec":{"run":"core.echo","in":{"value":{"default":123}}}}],"start":true,"dry_run":false,"reason":"auto-start has no scheduler","author":"gate"}}));
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(gate.status(project)["steps"]["late"]["status"], "pending");
 }
@@ -335,7 +341,10 @@ fn production_coordinator_adopts_and_cancels_legacy_units_and_launches_productio
     let CommandReply::Project(p)=gate.rpc(json!({"command":"project_create","args":{"name":"legacy","description":"unit names","icon":null,"resources":{},"author":"gate"}}))else{panic!("create")};
     let project = p.project_id;
     let selector = json!({"kind":"id","value":project});
-    gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"replace","path":"","value":{"steps":{"legacy":{"run":"fixture.wait","in":{"value":{"default":1}}},"fresh":{"run":"fixture.wait","in":{"value":{"default":2}},"paused":true}}}}],"start":true,"dry_run":false,"reason":"fixture","author":"gate"}}));
+    gate.rpc(json!({"command":"plan_edit","args":{"project":selector,"rev":1,"ops":[
+        {"op":"step.add","step":"legacy","spec":{"run":"fixture.wait","in":{"value":{"default":1}}}},
+        {"op":"step.add","step":"fresh","spec":{"run":"fixture.wait","in":{"value":{"default":2}},"paused":true}}
+    ],"start":true,"dry_run":false,"reason":"fixture","author":"gate"}}));
     let lease = gate.lease("legacy").unwrap();
     let mut legacy = String::new();
     wait("legacy step dispatched", || {

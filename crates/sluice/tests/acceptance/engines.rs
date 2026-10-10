@@ -490,7 +490,7 @@ fn g3(engine: &str) {
     if engine == "codex" {
         inputs["model"] = json!({"default":{"type":"normal","model":"sol","effort":"low"}});
     }
-    gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"replace","path":"","value":{"inputs":{},"outputs":{},"steps":{"work":{"run":"agent.run","in":inputs,"outputs":{"word":"string"}}}}}],"start":true,"dry_run":false,"reason":"scratch engine gate","author":"fixture"}}));
+    gate.rpc(json!({"command":"plan_edit","args":{"project":selector,"rev":1,"ops":[{"op":"step.add","step":"work","spec":{"run":"agent.run","in":inputs,"outputs":{"word":"string"}}}],"start":true,"dry_run":false,"reason":"scratch engine gate","author":"fixture"}}));
     gate.scheduling();
     let mut run = String::new();
     gate.wait(Duration::from_secs(30), |g| {
@@ -725,7 +725,7 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
         gate.boot();
         let CommandReply::Project(project)=gate.rpc(json!({"command":"project_create","args":{"name":"adapter-gate","description":"Public adapter fixture","resources":{},"icon":null,"author":"fixture"}})) else {panic!("project reply")};
         let selector = json!({"kind":"id","value":project.project_id});
-        gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"replace","path":"","value":{"inputs":{},"outputs":{},"steps":{"work":{"run":"agent.run","in":{"engine":{"default":engine},"cwd":{"default":cwd},"spec":{"default":"Complete the labelled fixture turn"},"listen":{"default":true}},"outputs":{"word":"string"}}}}}],"start":true,"dry_run":false,"reason":"public fixture","author":"fixture"}}));
+        gate.rpc(json!({"command":"plan_edit","args":{"project":selector,"rev":1,"ops":[{"op":"step.add","step":"work","spec":{"run":"agent.run","in":{"engine":{"default":engine},"cwd":{"default":cwd},"spec":{"default":"Complete the labelled fixture turn"},"listen":{"default":true}},"outputs":{"word":"string"}}}],"start":true,"dry_run":false,"reason":"public fixture","author":"fixture"}}));
         gate.scheduling();
         let mut prior = String::new();
         let mut first_session = Value::Null;

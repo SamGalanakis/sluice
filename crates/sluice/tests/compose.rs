@@ -151,7 +151,13 @@ impl Gate {
         self.data(json!({"command":"status","args":{"project":self.selector(),"selection":{"steps":null,"tags":null},"all":true}}))
     }
     fn plan(&self, steps: Value) {
-        self.rpc(json!({"command":"plan_patch","args":{"project":self.selector(),"rev":1,"ops":[{"op":"replace","path":"","value":{"inputs":{},"steps":steps,"outputs":{}}}],"start":true,"dry_run":false,"reason":"fixture","author":"test"}}));
+        let ops: Vec<Value> = steps
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(step, spec)| json!({"op":"step.add","step":step,"spec":spec}))
+            .collect();
+        self.rpc(json!({"command":"plan_edit","args":{"project":self.selector(),"rev":1,"ops":ops,"start":true,"dry_run":false,"reason":"fixture","author":"test"}}));
     }
     fn lease(&self) -> UnixStream {
         let mut stream = UnixStream::connect(self.home.join("coordinator.sock")).unwrap();

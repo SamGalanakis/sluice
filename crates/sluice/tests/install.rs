@@ -188,7 +188,7 @@ fn p7_install_maintenance_boot_serves_edits_retry_and_status_without_admission()
     gate.boot(Path::new(env!("CARGO_BIN_EXE_sluice")), true);
     let CommandReply::Project(project) = gate.rpc(json!({"command":"project_create","args":{"name":"p","description":"","icon":null,"resources":{},"author":"test"}})).unwrap() else { panic!("project") };
     let selector = json!({"kind":"id","value":project.project_id});
-    gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"add","path":"/steps/work","value":{"run":"fixture.echo","in":{"value":{"default":1}}}}],"start":true,"dry_run":false,"author":"test","reason":"maintenance edit"}})).unwrap();
+    gate.rpc(json!({"command":"plan_edit","args":{"project":selector,"rev":1,"ops":[{"op":"step.add","step":"work","spec":{"run":"fixture.echo","in":{"value":{"default":1}}}}],"start":true,"dry_run":false,"author":"test","reason":"maintenance edit"}})).unwrap();
     gate.rpc(json!({"command":"step_set_output","args":{"project":selector,"step":"work","outputs":{"value":1},"force":true,"reason":"fixture terminal result","author":"test"}})).unwrap();
     gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"maintenance feedback","author":"test","reason":"maintenance"}})).unwrap();
     assert!(gate.rpc(json!({"command":"status","args":{"project":selector,"selection":{"steps":null,"tags":null}}})).is_ok());

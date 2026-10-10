@@ -135,7 +135,7 @@ fn fn_launched(engine: &str, real: bool) {
     if engine == "codex" && real {
         inputs["model"] = json!({"default":{"type":"normal","model":"sol","effort":"low"}});
     }
-    gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"replace","path":"","value":{"inputs":{},"outputs":{},"steps":{"work":{"run":"g3.worker","in":inputs,"outputs":{"word":"string"}},"next":{"run":"core.echo","in":{"value":{"source":"work/word"}}}}}}],"start":true,"dry_run":false,"reason":"scratch fn-launched engine gate","author":"fixture"}}));
+    gate.rpc(json!({"command":"plan_edit","args":{"project":selector,"rev":1,"ops":[{"op":"step.add","step":"work","spec":{"run":"g3.worker","in":inputs,"outputs":{"word":"string"}}},{"op":"step.add","step":"next","spec":{"run":"core.echo","in":{"value":{"source":"work/word"}}}}],"start":true,"dry_run":false,"reason":"scratch fn-launched engine gate","author":"fixture"}}));
     gate.scheduling();
     let mut run = String::new();
     gate.wait(
