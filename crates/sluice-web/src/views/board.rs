@@ -1552,6 +1552,7 @@ fn run_timings(
             to: r.get(6)?,
             ended: r.get(7)?,
             outcome,
+            error,
         });
     }
     Ok(runs
@@ -1587,6 +1588,17 @@ fn run_timings(
                 .iter()
                 .filter_map(|s| s.outcome)
                 .collect();
+            // its last two runs' failures, the one before first: its retry advice reads them
+            // (`failure::Advice`), as its page's Runs does
+            let recent = all[all.len().saturating_sub(2)..]
+                .iter()
+                .map(|r| {
+                    let took = r.from.zip(r.to).map(|(from, to)| (to - from) * 86_400.0);
+                    r.error
+                        .as_deref()
+                        .map(|e| super::failure::Failure::parse(e, took))
+                })
+                .collect();
             let timing = RunTiming {
                 started: first.started.clone(),
                 finished,
@@ -1594,6 +1606,8 @@ fn run_timings(
                 earlier,
                 seconds: (to - from) * 86_400.0,
                 spans,
+                recent,
+                ran: all.len(),
             };
             Some((step, timing))
         })
@@ -1611,6 +1625,8 @@ struct Run {
     to: Option<f64>,
     ended: Option<f64>,
     outcome: Option<Shown>,
+    /// Its result's error, when it ended other than succeeded.
+    error: Option<String>,
 }
 /// A step's runs as its timeline draws them, oldest first: a run a span, a scatter's round of
 /// item runs one span from its first start to its last end (running while any item is).

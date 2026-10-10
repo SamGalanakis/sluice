@@ -796,16 +796,34 @@ impl<'a> Plan<'a> {
             if !step.why().is_empty() {
                 body.push_str(&format!("<p class=\"pl-why\">{}</p>", esc(step.why())));
             }
+            // what to try next, as its page says it (`failure::Advice`)
             let next = step.next_step();
             if !next.is_empty() && shown == Shown::Failed {
                 body.push_str(&format!("<p class=\"meta\">{}</p>", esc(&next)));
+            }
+            // a cancel that set a failure aside keeps it readable
+            if let Some(f) = step
+                .failure
+                .as_ref()
+                .filter(|f| f.cancelled && !f.set_aside.is_empty())
+            {
+                body.push_str(&format!(
+                    "<p class=\"meta pl-aside\" title=\"It had failed: {w}\">It had failed: {w}</p>",
+                    w = esc(&f.set_aside)
+                ));
             }
         }
         let mut actions = String::new();
         if let Some(step) = step.filter(|s| s.retryable() && !s.retry_asks()) {
             let first = step.retry_first();
+            // a failure that repeated: Retry with feedback leads, the bare Retry is quiet
+            let bare = if step.advice().repeated() {
+                " class=\"quiet-act\""
+            } else {
+                ""
+            };
             actions.push_str(&format!(
-                "<form class=\"pl-retry\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><details class=\"pl-fb\" data-preserve-attr=\"open\"><summary class=\"{fb}\">{ic}Retry with feedback</summary><label class=\"vh\" for=\"fb-{s}\">Feedback for the next run of {name}</label><textarea id=\"fb-{s}\" name=\"message\" rows=\"3\" maxlength=\"16384\" placeholder=\"What its next run should do differently\" data-ignore-morph></textarea><button name=\"action\" value=\"retry\" class=\"primary\">Retry with this feedback</button></details><button name=\"action\" value=\"retry\">Retry</button></form>",
+                "<form class=\"pl-retry\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><details class=\"pl-fb\" data-preserve-attr=\"open\"><summary class=\"{fb}\">{ic}Retry with feedback</summary><label class=\"vh\" for=\"fb-{s}\">Feedback for the next run of {name}</label><textarea id=\"fb-{s}\" name=\"message\" rows=\"3\" maxlength=\"16384\" placeholder=\"What its next run should do differently\" data-ignore-morph></textarea><button name=\"action\" value=\"retry\" class=\"primary\">Retry with this feedback</button></details><button name=\"action\" value=\"retry\"{bare}>Retry</button></form>",
                 h = esc(&step.href()),
                 rev = step.revision,
                 seen = esc(&step.seen()),
@@ -860,7 +878,20 @@ impl<'a> Plan<'a> {
                 .unwrap_or_default(),
             title = esc(title(unit)),
             pick_end = ui::trace_button_close(),
-            menu = self.unit_details(unit, step).menu(title(unit)),
+            // a failure's Cancel and Cancel and dismiss, under what identifies it
+            menu = self
+                .unit_details(unit, step)
+                .actions(
+                    "Set it aside",
+                    step.map(|s| {
+                        s.set_aside_actions(
+                            &format!("{}#s-{}", self.view.href(), unit.id),
+                            &format!("{}#undo-{}", self.view.href(), s.id),
+                        )
+                    })
+                    .unwrap_or_default(),
+                )
+                .menu(title(unit)),
             close = ui::module_close(),
         )
     }

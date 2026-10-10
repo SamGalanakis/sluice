@@ -523,6 +523,12 @@ impl step::CommandService for SocketOwnerCommands {
                         dismissed: command.action == step::Action::Dismiss,
                     })
                 }
+                // the page sends a cancel and then its dismissal
+                step::Action::CancelDismiss => {
+                    return Err(PublicError::BadRequest {
+                        message: "cancel and dismiss is sent as a cancel, then a dismissal".into(),
+                    });
+                }
                 step::Action::Cancel => CommandRequest::StepCancel(StepCancel {
                     expected_rev: Some(Revision(command.revision)),
                     project,

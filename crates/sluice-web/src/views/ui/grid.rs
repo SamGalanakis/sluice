@@ -712,6 +712,10 @@ pub fn latest_list(label: &str, items: &[Finished]) -> TrustedHtml {
 #[derive(Clone, Debug, Default)]
 pub struct Details {
     rows: Vec<(String, String)>,
+    /// What can be done to the item that is no next move (a failure's Cancel, set aside):
+    /// drawn under its rows, under a head of their own (`acts`).
+    actions: Vec<String>,
+    acts: &'static str,
 }
 impl Details {
     pub fn new() -> Self {
@@ -760,13 +764,20 @@ impl Details {
         }
         self
     }
+    /// Actions under the rows, headed `head` ("Set it aside"): each already drawn (a
+    /// `ui::Confirm`'s opener and form). Left out when there are none.
+    pub fn actions(mut self, head: &'static str, actions: Vec<TrustedHtml>) -> Self {
+        self.acts = head;
+        self.actions = actions.into_iter().map(|a| a.0).collect();
+        self
+    }
     pub fn is_empty(&self) -> bool {
-        self.rows.is_empty()
+        self.rows.is_empty() && self.actions.is_empty()
     }
     /// The "⋯" control for the item `about` ("Details of a-12"): a 44px button on a phone that
     /// opens the Details panel, nothing when there is nothing to hold.
     pub fn menu(&self, about: &str) -> TrustedHtml {
-        if self.rows.is_empty() {
+        if self.is_empty() {
             return TrustedHtml::default();
         }
         let rows: String = self
@@ -774,8 +785,17 @@ impl Details {
             .iter()
             .map(|(name, value)| format!("<div><dt>{}</dt><dd>{value}</dd></div>", esc(name)))
             .collect();
+        let rows = if self.actions.is_empty() {
+            format!("<dl class=\"dm-l\">{rows}</dl>")
+        } else {
+            format!(
+                "<dl class=\"dm-l\">{rows}</dl><div class=\"dm-acts\" role=\"group\" aria-label=\"{h}\"><p class=\"dm-h\">{h}</p>{}</div>",
+                self.actions.concat(),
+                h = esc(self.acts),
+            )
+        };
         TrustedHtml::owned(format!(
-            "{}<details class=\"dm\" data-preserve-attr=\"open\"><summary class=\"dm-b\" aria-label=\"Details of {a}\" title=\"Details\" data-preserve-attr=\"aria-expanded\">{}</summary><div class=\"menu dm-p\" role=\"group\" aria-label=\"Details of {a}\" data-preserve-attr=\"style\"><p class=\"dm-h\">Details</p><dl class=\"dm-l\">{rows}</dl></div></details>{}",
+            "{}<details class=\"dm\" data-preserve-attr=\"open\"><summary class=\"dm-b\" aria-label=\"Details of {a}\" title=\"Details\" data-preserve-attr=\"aria-expanded\">{}</summary><div class=\"menu dm-p\" role=\"group\" aria-label=\"Details of {a}\" data-preserve-attr=\"style\"><p class=\"dm-h\">Details</p>{rows}</div></details>{}",
             super::menu_open(),
             icon(Icon::Ellipsis, 18, ""),
             super::menu_close(),

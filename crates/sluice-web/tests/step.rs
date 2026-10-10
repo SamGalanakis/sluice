@@ -225,7 +225,8 @@ async fn router_uses_injected_exact_signatures_and_owner_commands() {
     assert!(body.contains("Messages · none yet"));
     for (body, status) in [
         ("action=retry&revision=0", StatusCode::CONFLICT),
-        ("action=cancel&revision=2", StatusCode::CONFLICT),
+        // a failed step holds nothing to pause (its Cancel sets it aside: `failed_dismiss.rs`)
+        ("action=pause&revision=2", StatusCode::CONFLICT),
         (
             "action=retry&revision=2&message=Try+again",
             StatusCode::SEE_OTHER,

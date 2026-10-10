@@ -707,8 +707,13 @@ The pages compose these parts; each lane that redraws one writes its section her
     each name whole, its state its glyph), the question's body, Answer primary, Open
     step, Message, Close question, its Details). Beside it, **Stopped**: each failed, cancelled
     or stale unit a module on the sand (its glyph and word, its failure's kind in a word, its
-    stage marks, the failure's sentence and what to try next, Retry with feedback first when a
-    bare Retry would fail again, Retry, Open step, Unit page, its Details). Failures before
+    stage marks, the failure's sentence and what to try next (one advice with the step page,
+    `failure::Advice`), Retry with feedback first, the bare Retry quiet when the failure
+    repeated, Open step, Unit page, its Details). A failure's Details end with "Set it aside"
+    under a hairline: Cancel and Cancel and dismiss, each an outlined row opening its
+    confirmation ("Cancel <title>? It stays stopped and can be dismissed; Retry still works.";
+    Cancel and dismiss says Undo brings back the cancel, not the failure); with script both
+    post in place, Cancel and dismiss handing the focus to Undo. Failures before
     cancels, in plan order. A cancelled card ends with a quiet Dismiss (a plain form, no
     confirm): its unit then stops marking the plan and the summary, and stands in Done's index
     as "b cancelled and dismissed". The dismissal persists through record retention and later
@@ -720,7 +725,8 @@ The pages compose these parts; each lane that redraws one writes its section her
     focus. Retry, retry feedback, Cancel and Close question also post in place, including forms
     moved into the confirmation dialog. A failed post shows a notice beside the form and keeps
     its typed feedback. Without script, the forms keep their POST and redirect round trip.
-    A failure is never dismissed. A card's stage names it on a unit of several; a step's
+    A failure is never dismissed as it is: it is cancelled first (a cancel that set a failure
+    aside says "It had failed: …" under its sentence). A card's stage names it on a unit of several; a step's
     id never heads or leads a card. A card or row is its unit's trace button, named "Trace
     <title>", its state and time its description.
   - **Running**, quiet first then the longest running, and **Waiting**, in plan order, as rows:
@@ -753,7 +759,9 @@ The pages compose these parts; each lane that redraws one writes its section her
   its title at 28px with its Details (its id, unit, recipe, fn, run and tags), its state and how
   long it has run, its words, then its unit's stage strip (its own
   stage ringed) and its actions, the next move filled: Retry with feedback as on the plan's
-  Stopped cards (its box folded under it, Retry beside it), a cancel's quiet Dismiss. Why it failed reads in order: its headline, the words its run said and its last failed
+  Stopped cards (its box folded under it, Retry beside it; on a failure that repeated it leads
+  to the box standing open in why it failed and the bare Retry is quiet), a cancel's quiet
+  Dismiss; a failure's Details hold Set it aside as its card's do. Why it failed reads in order: its headline, the words its run said and its last failed
   call, then the advice (ink at body size), then, when a failure repeated the run before, the
   feedback box standing open, so the owner reads why before writing. Its tabs follow. Overview is modules on the sheet: the question
   to the owner swells first on the coral rule, answered in place; then why it failed on the

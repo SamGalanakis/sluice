@@ -780,6 +780,15 @@ details.dm > summary:hover, details.dm[open] > summary { color: var(--ink); back
 .dm-md :is(ul, ol) { padding-left: 18px; }
 .dm-md > :last-child { margin-bottom: 0; }
 .dm-l sluice-copy > .copy { opacity: 1; }
+/* what can be done to the item that is no next move (a failure's Cancel and Cancel and
+   dismiss), under a hairline after what identifies it; each opens its confirmation */
+.dm-acts { display: grid; gap: 6px; margin-top: 12px; padding-top: 10px;
+           box-shadow: inset 0 1px 0 var(--rule-faint); }
+.dm-acts > .dm-h { margin: 0 0 2px; }
+.dm-acts .confirm-flow > summary { display: flex; width: 100%; min-height: 36px; padding: 0 12px;
+  border: 0; background: none; box-shadow: inset 0 0 0 1.5px var(--navy); color: var(--ink);
+  font-weight: 650; }
+.dm-acts .confirm-flow > summary:hover { background: var(--paper-2); }
 /* in a module, at its top right; its kind's line keeps clear of it */
 .mod > sluice-menu > details.dm { position: absolute; top: 8px; right: 8px; }
 .swell-ask > sluice-menu > details.dm { top: 14px; right: 0; }
@@ -789,6 +798,7 @@ details.dm > summary:hover, details.dm[open] > summary { color: var(--ink); back
   .dm-p { position: fixed; top: auto; left: var(--gutter); right: var(--gutter); bottom: 16px;
           width: auto; min-width: 0; max-width: none; max-height: 70vh; overflow-y: auto; }
   .mod > sluice-menu > details.dm { top: 2px; right: 2px; }
+  .dm-acts .confirm-flow > summary { min-height: 44px; }
   .mod:has(> sluice-menu > details.dm) :is(.mod-k, .mm-head) { padding-right: 48px; }
 }
 
@@ -1126,6 +1136,11 @@ sluice-copy > button.copy { box-shadow: none; }
                         margin-top: 16px; }
 .step-band .d-actions > form { display: contents; }
 .step-band .d-actions > a.d-thread:first-of-type { margin-left: auto; }
+/* a failure that repeated: Retry with feedback leads, to its box under why it failed */
+.step-band .d-actions a.d-fb { display: inline-flex; align-items: center; gap: 8px; min-height: 44px;
+  padding: 0 18px; background: var(--navy); color: var(--on-navy); font-weight: 700;
+  text-decoration: none; }
+.step-band .d-actions a.d-fb:hover { background: var(--navy-deep); }
 .step-band .d-actions :is(button, .confirm-flow > summary) { display: inline-flex; align-items: center;
   min-height: 44px; padding: 0 18px; font-weight: 650; }
 /* Retry with feedback, as on the plan's Stopped cards (.pl-fb): its box on a line of its own */
@@ -1157,7 +1172,7 @@ article#step-detail { display: flow-root; }  /* its head's margins stay its own 
   .step-band { padding: 12px 0 10px; }
   .sb-t { font-size: 23px; line-height: 28px; }
   .sb-lane .strip, .ub-lane .strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .step-band .d-actions :is(button, .confirm-flow > summary, .pl-fb > summary) { flex: 1 1 auto;
+  .step-band .d-actions :is(button, .confirm-flow > summary, .pl-fb > summary, a.d-fb) { flex: 1 1 auto;
     justify-content: center; }
   .step-band .d-actions button.quiet-act { flex: none; }
 }
@@ -2335,6 +2350,9 @@ details.read-today .item { opacity: .85; }
 .pl-fb > textarea { order: 1; flex: 1 1 100%; min-height: 72px; resize: vertical; }
 .pl-fb > button { order: 2; }
 .pl-retry, .pl-dismiss { display: contents; }
+/* the failure a cancel set aside: two lines at most, whole in its title and on its page */
+.pl-stop .pl-aside { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+                     line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .pl-stop .mod-actions button.quiet-act { padding: 0 10px; color: var(--ink-muted); font-weight: 600; }
 .pl-stop .mod-actions button.quiet-act:hover { color: var(--ink); text-decoration: underline; }
 /* a cancel dismissed lately: one polite line a cancel, with its Undo, for ten minutes */

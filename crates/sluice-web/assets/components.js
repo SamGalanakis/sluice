@@ -182,6 +182,8 @@ define("sluice-tabs", {
       for (let d = target.closest("details:not([open])"); d; d = d.parentElement?.closest("details:not([open])")) d.open = true;
       if (target.matches("details:not([open])")) target.open = true;
       if (scroll) target.scrollIntoView({ block: "start" });
+      // a box the link leads to takes the focus (the band's Retry with feedback)
+      if (target.matches("textarea, input:not([type=hidden])")) target.focus({ preventScroll: true });
       return true;
     };
     on(document, "click", (event) => {

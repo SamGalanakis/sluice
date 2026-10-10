@@ -578,7 +578,7 @@ async fn chromium_conversations_answers_copies_and_the_dialog_take_the_keyboard(
         // the dialog: focus starts on keep, Tab stays in it, Escape closes it back on its opener
         browser.navigate(&gallery).unwrap();
         browser.wait("document.readyState === 'complete' && customElements.get('sluice-confirm')").unwrap();
-        browser.eval("document.querySelector('.gal-th sluice-confirm:not([disabled]) summary').click()").unwrap();
+        browser.eval("document.querySelector('.gal-th sluice-confirm:not(.dm-acts > *):not([disabled]) summary').click()").unwrap();
         assert_eq!(
             browser.eval("[document.querySelector('#confirmation').open, document.activeElement.matches('[data-keep]')]").unwrap(),
             json!([true, true])
@@ -668,9 +668,9 @@ async fn chromium_without_script_every_page_still_reads() {
         assert_eq!(browser.eval("document.querySelector('form.prefs .save').checkVisibility()").unwrap(), true);
         browser.navigate(&format!("{base}/_ui")).unwrap();
         browser.wait("document.readyState === 'complete'").unwrap();
-        browser.eval("document.querySelector('.gal-th sluice-confirm:not([disabled]) summary').click()").unwrap();
+        browser.eval("document.querySelector('.gal-th sluice-confirm:not(.dm-acts > *):not([disabled]) summary').click()").unwrap();
         assert_eq!(
-            browser.eval("document.querySelector('.gal-th sluice-confirm:not([disabled]) form').checkVisibility()").unwrap(),
+            browser.eval("document.querySelector('.gal-th sluice-confirm:not(.dm-acts > *):not([disabled]) form').checkVisibility()").unwrap(),
             true
         );
     })

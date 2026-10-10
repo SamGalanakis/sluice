@@ -4,7 +4,7 @@
 //! pane its agent left.
 use serde::Serialize;
 use sluice_model::error::PublicError;
-use sluice_model::shown::{cancel_reason, is_cancel};
+use sluice_model::shown::{cancel_reason, is_cancel, split_set_aside};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Failure {
@@ -25,6 +25,9 @@ pub struct Failure {
     pub trace: String,
     /// How to resume its agent's session, as the failure says it ("To resume it, …").
     pub resume: String,
+    /// A cancel of a step that had failed: the failure it set aside, its kind and first line
+    /// as the cancel keeps them (`shown::set_aside`); "" for any other.
+    pub set_aside: String,
 }
 
 impl Failure {
@@ -60,15 +63,22 @@ impl Failure {
         let after = took
             .map(|s| format!(" after {}", super::ui::duration_text(s)))
             .unwrap_or_default();
+        let mut set_aside = String::new();
         let (kind, headline): (String, String) = match error {
-            PublicError::Cancelled { message } => (
-                "cancelled".into(),
-                if message == "cancel requested" || message.is_empty() {
-                    "Cancelled while it ran.".into()
-                } else {
-                    format!("Cancelled: {}", sentence(message))
-                },
-            ),
+            PublicError::Cancelled { message } => {
+                let (reason, failed) = split_set_aside(message);
+                set_aside = failed.unwrap_or_default().to_owned();
+                (
+                    "cancelled".into(),
+                    if failed.is_some() && reason.is_empty() {
+                        "Cancelled after it failed.".into()
+                    } else if reason == "cancel requested" || reason.is_empty() {
+                        "Cancelled while it ran.".into()
+                    } else {
+                        format!("Cancelled: {}", sentence(reason))
+                    },
+                )
+            }
             PublicError::AgentFailure { kind, .. } => {
                 let headline = match kind.as_str() {
                     "Cancelled" => "Cancelled while it ran.".into(),
@@ -163,6 +173,7 @@ impl Failure {
             session,
             trace,
             resume,
+            set_aside,
         }
     }
     /// The resume hint with its tool call apart, so the call can be set as code: (before, call,
@@ -242,7 +253,10 @@ impl Failure {
             }
             "quota" => "Retry once its engine's usage cap resets.",
             "auth" => "Sign its engine in again on this machine, then Retry.",
-            "engine exited" | "engine fault" => {
+            "engine exited" => {
+                "Its engine started, then exited partway through. Read what it said: a refusal or a limit will happen again, so Retry with feedback; a crash usually passes, so Retry."
+            }
+            "engine fault" => {
                 "An engine that would not start or take its input is most often a passing fault: Retry."
             }
             "lost" => {
@@ -261,6 +275,70 @@ impl Failure {
             .strip_prefix("Cancelled: ")
             .unwrap_or(&self.headline)
     }
+}
+/// What to try next on a failed step: one decision, read from the step's own failure and its
+/// last two runs', for every surface that advises (the plan's Stopped card, the drawer, the
+/// step's band and its Overview), so none of them contradicts another.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Advice {
+    /// Nothing to say: it did not fail, a cancel set it aside, or only its own words can say.
+    None,
+    /// Its run before the last (this number) failed the same way: a bare Retry would most
+    /// likely fail again, so Retry with feedback leads.
+    Repeated(usize),
+    /// Its failure kind's own advice (`Failure::next_step`).
+    Kind(&'static str),
+}
+impl Advice {
+    /// `step`: the step's own stored failure, when it failed (a cancel among them); `runs`: how
+    /// many runs it has had in its current generation; `last` and `before`: its last run's
+    /// failure and the one before it, when they failed.
+    pub fn of(
+        step: Option<&Failure>,
+        runs: usize,
+        last: Option<&Failure>,
+        before: Option<&Failure>,
+    ) -> Self {
+        let Some(step) = step.filter(|f| !f.cancelled) else {
+            return Advice::None;
+        };
+        if runs >= 2
+            && let (Some(last), Some(before)) = (last, before)
+            && alike(last, before)
+        {
+            return Advice::Repeated(runs - 1);
+        }
+        match step.next_step() {
+            "" => Advice::None,
+            text => Advice::Kind(text),
+        }
+    }
+    /// The failure repeated: Retry with feedback leads and the bare Retry is quiet.
+    pub fn repeated(&self) -> bool {
+        matches!(self, Advice::Repeated(_))
+    }
+    /// What it says under why it failed ("" for none).
+    pub fn text(&self) -> String {
+        match self {
+            Advice::None => String::new(),
+            Advice::Repeated(n) => format!(
+                "Run {n} failed the same way, so a bare Retry would most likely fail again. Retry with feedback, or change its inputs."
+            ),
+            Advice::Kind(text) => (*text).to_owned(),
+        }
+    }
+}
+/// Two runs failed the same way: neither a cancel, the same kind, and the same words (or,
+/// with none, the same sentence).
+fn alike(last: &Failure, before: &Failure) -> bool {
+    !last.cancelled
+        && !before.cancelled
+        && last.kind == before.kind
+        && if last.said.trim().is_empty() {
+            last.headline == before.headline
+        } else {
+            last.said.trim() == before.said.trim()
+        }
 }
 fn message_of(error: &PublicError) -> &str {
     match error {

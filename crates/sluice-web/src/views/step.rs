@@ -241,6 +241,9 @@ pub struct RunView {
     /// A cancelled run's one line, as the run keeps who stopped it: "Cancelled after 1h 18m by
     /// cli, which retried it." ("" for any other run).
     pub cancelled_by: String,
+    /// A failed run whose failure the owner set aside since, by a cancel of its step: who and
+    /// why, "You cancelled it after it failed: superseded." ("" for any other run).
+    pub set_aside: String,
     /// What started it, after its step's first run (`load_restarts`): Runs says it under its
     /// status, and Now for the run going.
     pub restart: Option<Restart>,
@@ -646,6 +649,13 @@ pub struct RunTiming {
     /// timeline. What changes in them changes `runs`, `started` or `finished` too.
     #[serde(skip)]
     pub spans: Vec<super::timeline::RunSpan>,
+    /// Its last two runs' failures, the one before first (none for a run that did not fail):
+    /// what its retry advice reads (`failure::Advice`).
+    #[serde(skip)]
+    pub recent: Vec<Option<super::failure::Failure>>,
+    /// How many runs it has had in its current generation, each item's apart (its Runs' count).
+    #[serde(skip)]
+    pub ran: usize,
 }
 /// What holds a pending step back: its own pause or its project's.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -1616,45 +1626,32 @@ impl StepView {
     pub fn retry_first(&self) -> bool {
         self.shown() == Shown::Failed
     }
-    /// A failed step whose run before its last failed the same way (the same kind and the same
-    /// words): that run's number. A bare Retry would most likely fail a third time, so its
-    /// next step says so and its feedback box stands open under why it failed.
-    pub fn failed_alike(&self) -> Option<usize> {
-        if !self.failed() || self.runs.len() < 2 {
-            return None;
-        }
-        let n = self.runs.len();
-        let (Some(last), Some(before)) = (&self.runs[n - 1].failure, &self.runs[n - 2].failure)
-        else {
-            return None;
-        };
-        let alike = !last.cancelled
-            && !before.cancelled
-            && last.kind == before.kind
-            && if last.said.trim().is_empty() {
-                last.headline == before.headline
-            } else {
-                last.said.trim() == before.said.trim()
-            };
-        alike.then_some(n - 1)
-    }
-    /// What to try next under why it failed: its kind's advice (`Failure::next_step`), unless
-    /// the run before failed the same way.
-    pub fn next_step(&self) -> String {
-        if let Some(n) = self.failed_alike() {
-            return format!(
-                "Run {n} failed the same way, so a bare Retry would most likely fail again. Retry with feedback, or change its inputs."
-            );
-        }
-        self.failure
+    /// What to try next under why it failed (`failure::Advice`): one decision from its own
+    /// failure and its last two runs' (read with its card's timer, so the plan's card, the
+    /// drawer, its band and its Overview read the same runs and never disagree).
+    pub fn advice(&self) -> super::failure::Advice {
+        let (runs, recent) = self
+            .timing
             .as_ref()
-            .map(|f| f.next_step().to_owned())
-            .unwrap_or_default()
+            .map_or((0, &[][..]), |t| (t.ran, t.recent.as_slice()));
+        let at = |i: usize| {
+            recent
+                .len()
+                .checked_sub(i)
+                .and_then(|n| recent.get(n))
+                .and_then(Option::as_ref)
+        };
+        let failure = self.failure.as_ref().filter(|_| self.failed());
+        super::failure::Advice::of(failure, runs, at(1), at(2))
+    }
+    /// The advice in words ("" for none).
+    pub fn next_step(&self) -> String {
+        self.advice().text()
     }
     /// Its retry's feedback box stands open in Why it failed, under the advice, rather than
-    /// folded in its band: the failure repeated (`failed_alike`) and Retry asks no confirm.
+    /// folded in its band: the failure repeated and Retry asks no confirm.
     pub fn feedback_in_why(&self) -> bool {
-        self.retryable() && !self.retry_asks() && self.failed_alike().is_some()
+        self.retryable() && !self.retry_asks() && self.advice().repeated()
     }
     pub fn retryable(&self) -> bool {
         matches!(
@@ -1784,6 +1781,80 @@ impl StepView {
             danger: true,
             ..Default::default()
         }
+    }
+    /// Its failure's own words lead its page (Why it failed), so its last run's Runs entry
+    /// does not repeat them: a failure, not a cancel (one that set a failure aside keeps it
+    /// on its run).
+    pub fn failure_leads(&self) -> bool {
+        self.shown() == Shown::Failed
+    }
+    /// A failure can be set aside: it failed, not by a cancel, so Cancel turns it into one the
+    /// owner can dismiss (`step_cancel` on a failed step).
+    pub fn can_set_aside(&self) -> bool {
+        self.shown() == Shown::Failed
+    }
+    /// A failure's Cancel and its Cancel and dismiss, each a confirmation, for its ⋯ Details
+    /// (none for any other step). `next`: the page to come back to without script (the plan's
+    /// card, its Undo), which with script names what takes the focus.
+    pub fn set_aside_actions(&self, cancel_next: &str, dismiss_next: &str) -> Vec<TrustedHtml> {
+        if !self.can_set_aside() {
+            return vec![];
+        }
+        let name = if self.titled() {
+            self.name().text(60)
+        } else {
+            self.id.to_string()
+        };
+        let confirm =
+            |opener: &str, action: &'static str, next: &str, copy: String, confirm: &str| {
+                super::ui::Confirm {
+                    opener: opener.into(),
+                    title: format!("{opener} {name}?"),
+                    action: format!("{}/actions", self.href()),
+                    hidden: vec![
+                        ("revision", self.revision.to_string()),
+                        ("seen", self.seen()),
+                        ("action", action.into()),
+                        ("next", next.to_owned()),
+                    ],
+                    copy,
+                    reason: Some("Why set it aside?"),
+                    reason_value: self.kept.clone(),
+                    confirm: confirm.into(),
+                    keep: "Keep it failed",
+                    ..Default::default()
+                }
+            };
+        vec![
+            confirm(
+                "Cancel",
+                "cancel",
+                cancel_next,
+                "It stays stopped and can be dismissed; Retry still works. Its failure stays on its Runs.".into(),
+                "Cancel it",
+            )
+            .html(),
+            confirm(
+                "Cancel and dismiss",
+                "cancel_dismiss",
+                dismiss_next,
+                "It is cancelled and set aside: it stays on its unit, but no longer marks the unit or its project. Undo brings back the cancel, not the failure; Retry still works.".into(),
+                "Cancel and dismiss",
+            )
+            .html(),
+        ]
+    }
+    /// Its head's ⋯ Details: what identifies it, and on a failure its Cancel and Cancel and
+    /// dismiss (`set_aside_actions`). In the drawer (not its `page`) they come back to the plan.
+    pub fn band_details(&self, page: bool) -> super::ui::Details {
+        let (cancel, dismiss) = if page {
+            (self.href(), self.href())
+        } else {
+            let plan = format!("/projects/id/{}", self.project);
+            (plan.clone(), format!("{plan}#undo-{}", self.id))
+        };
+        self.details()
+            .actions("Set it aside", self.set_aside_actions(&cancel, &dismiss))
     }
     /// Cancel applies: running and not already stopping (a cancel asked for is not offered
     /// again), or pending work outside sluice (`step_cancel` takes no other).
@@ -2412,6 +2483,7 @@ pub fn load_detail(
             seconds,
             profile: String::new(),
             cancelled_by: String::new(),
+            set_aside: String::new(),
             restart: None,
         });
     }
@@ -2477,7 +2549,41 @@ fn load_cancels(
     step: &mut StepView,
 ) -> sluice_store::Result<()> {
     let id = step.id.to_string();
+    // a failure set aside by a cancel since: its run keeps its failure, and says who set it
+    // aside (the cancel kept on the run)
+    let aside = step
+        .failure
+        .as_ref()
+        .is_some_and(|f| f.cancelled && !f.set_aside.is_empty());
     for run in &mut step.runs {
+        if aside && run.outcome == Outcome::Ended(Shown::Failed) && !run.finished.is_empty() {
+            let kept: Option<String> = c
+                .prepare_cached(
+                    "SELECT json_extract(stopped,'$.cancel') FROM runs WHERE run_id=?1",
+                )?
+                .query_row([run.id.to_string()], |r| r.get(0))
+                .optional()?
+                .flatten();
+            if let Some(kept) = kept {
+                let kept: serde_json::Value = serde_json::from_str(&kept)?;
+                let by = kept["author"].as_str().unwrap_or("").trim();
+                let who = match by.strip_prefix("step:").unwrap_or(by) {
+                    "" => String::new(),
+                    "owner" => ", by you".into(),
+                    "orchestrator" => ", by the orchestrator".into(),
+                    by => format!(", by {by}"),
+                };
+                let words = kept["reason"].as_str().unwrap_or("");
+                let (reason, _) = sluice_model::shown::split_set_aside(words);
+                let reason = reason.trim().trim_end_matches('.');
+                run.set_aside = if reason.is_empty() {
+                    format!("Cancelled after it failed{who}.")
+                } else {
+                    format!("Cancelled after it failed{who}: {reason}.")
+                };
+            }
+            continue;
+        }
         if run.outcome != Outcome::Ended(Shown::Cancelled) || run.finished.is_empty() {
             continue;
         }
@@ -2639,6 +2745,9 @@ pub enum Action {
     Unpause,
     Retry,
     Cancel,
+    /// Cancel a failed step and set the cancel aside at once (`step_cancel`, then
+    /// `StepDismiss`): one confirmation for both.
+    CancelDismiss,
     /// Set a cancel aside (`StepDismiss`): no plan edit, so no revision to match.
     Dismiss,
     Undismiss,
@@ -2695,6 +2804,7 @@ impl Action {
             Self::Unpause => "Unpause",
             Self::Retry => "Retry",
             Self::Cancel => "Cancel",
+            Self::CancelDismiss => "Cancel and dismiss",
             Self::Dismiss => "Dismiss",
             Self::Undismiss => "Undo",
         }
@@ -2865,7 +2975,8 @@ async fn try_action(
     let word = step.shown().word();
     let valid = match form.action {
         Action::Retry => step.retryable(),
-        Action::Cancel => step.cancellable(),
+        Action::Cancel => step.cancellable() || step.can_set_aside(),
+        Action::CancelDismiss => step.can_set_aside(),
         Action::Pause => step.pausable() && !step.paused,
         Action::Unpause => step.paused,
         Action::Dismiss => step.cancelled() && !step.dismissed,
@@ -2884,7 +2995,7 @@ async fn try_action(
     }
     // past here what was typed waits in the box its button opens
     let dialog = match form.action {
-        Action::Cancel => true,
+        Action::Cancel | Action::CancelDismiss => true,
         Action::Retry => step.retry_asks(),
         _ => false,
     };
@@ -2917,29 +3028,52 @@ async fn try_action(
     } else {
         format!("{}/steps/{id}", view.href())
     };
-    match commands
-        .0
-        .execute(OwnerCommand {
-            project,
-            step: Some(id.clone()),
-            action: form.action.clone(),
-            revision,
-            message: form.message,
-            author: "owner",
-        })
-        .await
-    {
-        Ok(()) => Ok(next),
-        Err(PublicError::Conflict { .. }) => refuse(
-            StatusCode::CONFLICT,
-            format!(
-                "Nothing was done: the plan changed again as you acted. {} once more to try.",
-                form.action.word()
-            ),
-        ),
-        Err(PublicError::NotFound { message }) => Err(Err(PublicError::NotFound { message })),
-        Err(e) => refuse(crate::http::status_of(&e), format!("Nothing was done: {e}")),
+    // Cancel and dismiss is the cancel, then its dismissal: one confirmation for both
+    let steps: &[Action] = match form.action {
+        Action::CancelDismiss => &[Action::Cancel, Action::Dismiss],
+        _ => std::slice::from_ref(&form.action),
+    };
+    for (i, action) in steps.iter().enumerate() {
+        let sent = commands
+            .0
+            .execute(OwnerCommand {
+                project,
+                step: Some(id.clone()),
+                action: action.clone(),
+                revision,
+                message: form.message.clone(),
+                author: "owner",
+            })
+            .await;
+        match sent {
+            Ok(()) => {}
+            // the cancel went through, its dismissal did not: say so, nothing typed to keep
+            Err(e) if i > 0 => {
+                return Err(Ok(Refusal {
+                    status: crate::http::status_of(&e),
+                    words: format!("Cancelled, but not dismissed: {e} Dismiss sets it aside."),
+                    keeps: false,
+                    dialog: false,
+                }));
+            }
+            Err(PublicError::Conflict { .. }) => {
+                return refuse(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "Nothing was done: the plan changed again as you acted. {} once more to try.",
+                        form.action.word()
+                    ),
+                );
+            }
+            Err(PublicError::NotFound { message }) => {
+                return Err(Err(PublicError::NotFound { message }));
+            }
+            Err(e) => {
+                return refuse(crate::http::status_of(&e), format!("Nothing was done: {e}"));
+            }
+        }
     }
+    Ok(next)
 }
 /// `?activity=all` draws every turn and call of its activity outline, not only the latest;
 /// `?tab=` the tab its page opens on (Overview when it has no such tab).
