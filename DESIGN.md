@@ -653,8 +653,35 @@ The pages compose these parts; each lane that redraws one writes its section her
   Find and Show grid; the trace line; then on the sheet For you (six columns) beside Stopped
   (four), the margin module in the last two, Running and Waiting as strip tables per recipe,
   Done folded to an index. The matrix and the plan list live units only.
-- **A step, its thread, the inbox**: Unigrid's step board and phone question, on the same
-  band and grid.
+- **A step's page** (`/projects/id/<p>/steps/<s>`): the band carries the step (the gallery's
+  Step band, `StepView::band`): its way back, its stage in the band's muted ink before its
+  title set huge (fluid: 96px at 1440, a phone's 56, stepping down for a longer name), its id
+  in data mono, its state, run and usual time, its words, then its unit's stage strip (two
+  columns a stage, its own stage ringed in band ink) and its actions on the navy, the next move
+  filled cream. The tabs follow on the paper. Overview is modules on the sheet: the question
+  to the owner swells first on the coral rule, answered in place; then why it failed on the
+  sand, or Now (its live turn: last words, its calls by tool as tiles, named exactly as the
+  engine's transcript names them, and its latest calls); beside them, as titled modules, what
+  it waits on (or when it starts), what it comes after, its progress and its key output. The
+  columns stand one over the other on a narrow sheet (the drawer, a phone, to 900px of sheet),
+  at seven and five twelfths to 2000px, as halves from there with the side's modules two to a
+  row, and at a third and two thirds from 3000px: more modules a row, never longer lines.
+  Activity is its turns as rows numbered in data mono, the running one on the run rule;
+  Messages the conversation; Inputs and Outputs field tables with where each came from; Runs
+  its unit's timeline over its runs. In the drawer the same band heads the step a size down,
+  three lines at most, across the drawer's top.
+- **A unit's page** (`/projects/id/<p>/units/<u>`): the band carries its name huge beside its
+  id, recipe and how its steps stand, its stage strip from its recipe under a band rule. On the
+  sheet its steps are modules (two a row from 640px of sheet, three from 1200, four from 2000,
+  six from 3000), the one asking the owner on the coral rule, a stop on the sand, a running one
+  on the run rule; then its timeline and its last message.
+- **The inbox, Questions and a thread**: a band of their own (the name, the way back, a
+  sentence of what waits on the owner, its count linking the questions). Questions to the owner
+  come first as swelled modules on the coral rule, answered in place (Answer and Close 44px; on
+  a phone a whole-width card), one a row to 900px of sheet, two to 2000, three from there and
+  four from 3000; then those between agents, the ones nobody waits on and the unread notes.
+  A conversation's messages are rows apart by hairlines, an open question to the owner on the
+  coral rule with its reply under it, the message box under the navy rule.
 - **Home** (`/`): the projects as a cover and an index; the log, functions and settings on the
   same frame.
 
