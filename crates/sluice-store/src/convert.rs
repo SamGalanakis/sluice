@@ -14,6 +14,11 @@
 //! and foreign keys clean, **no live work** (no attempt not terminal, run not finished, lease
 //! waiting or held, or call running), and every project's history complete and replayable.
 //! A blocker is reported, never deleted or rewritten to pass.
+//!
+//! A project whose logged history starts above rev 1 (one the Python importer brought in) is
+//! anchored (§10.4.1): its earliest completion snapshot that replays through the later logged
+//! revisions to the stored plan, or with none and one logged revision the stored plan itself,
+//! becomes an imported baseline revision, and the revisions after it convert as any other.
 
 use crate::{
     Result, StoreError,
@@ -132,10 +137,44 @@ pub struct ProjectConversion {
     pub records_rewritten: u64,
     /// Attempts whose completion snapshot was removed.
     pub attempt_snapshots_removed: u64,
+    /// The imported baseline of a project whose logged history starts above rev 1 (§10.4.1).
+    pub anchor: Option<Anchor>,
+}
+/// An imported baseline (§10.4.1): the revision whose document the history now starts from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Anchor {
+    /// The baseline's revision `k`.
+    pub rev: u64,
+    /// Logged revisions at or below `k`, whose own edits the baseline holds.
+    pub folded_edits: u64,
+    /// Where the baseline document came from.
+    pub source: AnchorSource,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorSource {
+    /// An attempt's completion snapshot of revision `k`.
+    Snapshot,
+    /// The stored plan (one logged revision and no snapshot reproduces it).
+    Current,
+}
+impl AnchorSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Snapshot => "snapshot",
+            Self::Current => "current",
+        }
+    }
+}
+impl Anchor {
+    fn to_json(&self) -> Value {
+        json!({"rev": self.rev, "folded_edits": self.folded_edits, "source": self.source.as_str()})
+    }
 }
 impl ConversionReport {
     /// `{from_schema, projects: [{project_id, name, revisions, steps, inputs, outputs,
-    /// records_rewritten, attempt_snapshots_removed}], warnings}`.
+    /// records_rewritten, attempt_snapshots_removed, anchor}], anchored: [{project_id, name,
+    /// rev, folded_edits, source}], warnings}`; `anchor` is null for a project with its whole
+    /// history.
     pub fn to_json(&self) -> Value {
         json!({
             "from_schema": self.from_schema,
@@ -148,7 +187,15 @@ impl ConversionReport {
                 "outputs": p.outputs,
                 "records_rewritten": p.records_rewritten,
                 "attempt_snapshots_removed": p.attempt_snapshots_removed,
+                "anchor": p.anchor.as_ref().map(Anchor::to_json),
             })).collect::<Vec<_>>(),
+            "anchored": self.projects.iter().filter_map(|p| {
+                let anchor = p.anchor.as_ref()?;
+                let mut entry = anchor.to_json();
+                entry["project_id"] = json!(p.project_id.to_string());
+                entry["name"] = json!(p.name);
+                Some(entry)
+            }).collect::<Vec<_>>(),
             "warnings": self.warnings,
         })
     }
@@ -160,6 +207,7 @@ struct Converted {
     name: String,
     rows: PlanRows,
     revisions: Vec<RevisionRow>,
+    anchor: Option<Anchor>,
 }
 struct RevisionRow {
     rev: i64,
@@ -198,6 +246,11 @@ pub fn convert_home(database: &Path) -> Result<ConversionReport> {
         .iter()
         .map(|plan| (plan.project.to_string(), plan.name.as_str()))
         .collect();
+    let anchors: HashMap<String, i64> = converted
+        .iter()
+        .filter_map(|plan| Some((plan.project.to_string(), plan.anchor.as_ref()?.rev as i64)))
+        .collect();
+    let no_changes: Vec<PlanChange> = vec![];
     let mut warnings = vec![];
     let mut rewrites = vec![];
     // A blocked project's records are not checked: its own blocker already names it.
@@ -206,6 +259,22 @@ pub fn convert_home(database: &Path) -> Result<ConversionReport> {
         .filter(|r| !blocked.contains(&r.project))
     {
         let name = names.get(&record.project).copied().unwrap_or("?");
+        // A record of a revision the imported baseline folded (§10.4.1): rev k's carries the
+        // baseline's changes, an earlier one none, and each keeps its author and reason.
+        if let Some(&anchor) = anchors.get(&record.project)
+            && record.rev <= anchor
+        {
+            warnings.push(format!(
+                "project {name} ({}): plan.edit record {} at rev {} is folded into the imported baseline at rev {anchor}",
+                record.project, record.seq, record.rev
+            ));
+            let changes = match edits.get(&(record.project.clone(), record.rev)) {
+                Some(row) if record.rev == anchor => &row.changes,
+                _ => &no_changes,
+            };
+            rewrites.push((record, changes));
+            continue;
+        }
         match edits.get(&(record.project.clone(), record.rev)) {
             None => blockers.push(format!(
                 "project {name} ({}): plan.edit record {} at rev {}: no plan_edits row for its revision",
@@ -270,6 +339,7 @@ pub fn convert_home(database: &Path) -> Result<ConversionReport> {
             outputs: plan.rows.outputs.len() as u64,
             records_rewritten: 0,
             attempt_snapshots_removed: 0,
+            anchor: plan.anchor.clone(),
         });
     }
     let old_steps: i64 = tx.query_row("SELECT count(*) FROM steps_v1", [], |r| r.get(0))?;
@@ -697,13 +767,14 @@ fn replay_projects(
     for (project, rev, document, name) in plans {
         let label = format!("project {name} ({project})");
         match replay_project(sql, &project, rev, &document) {
-            Ok((rows, revisions)) => converted.push(Converted {
+            Ok((rows, revisions, anchor)) => converted.push(Converted {
                 project: project
                     .parse()
                     .map_err(|_| StoreError::InvalidDatabase("invalid ProjectId".into()))?,
                 name,
                 rows,
                 revisions,
+                anchor,
             }),
             Err(Blocker(blocker)) => {
                 blockers.push(format!("{label}: {blocker}"));
@@ -743,16 +814,17 @@ fn replay_projects(
 struct Blocker(String);
 
 /// One project's replay: every revision's rows checked against its document, the final
-/// document against `plans.doc`, and the step and input rows against it.
+/// document against `plans.doc`, and the step and input rows against it. A project whose
+/// logged history starts above rev 1 starts from its anchor (§10.4.1).
 fn replay_project(
     sql: &Connection,
     project: &str,
     rev: i64,
     stored: &str,
-) -> std::result::Result<(PlanRows, Vec<RevisionRow>), Blocker> {
+) -> std::result::Result<(PlanRows, Vec<RevisionRow>, Option<Anchor>), Blocker> {
     let fail = |message: String| Blocker(message);
     let storage = |error: rusqlite::Error| Blocker(format!("history unreadable: {error}"));
-    let edits: Vec<(i64, i64, String, String, String, String)> = sql
+    let edits: Vec<Edit> = sql
         .prepare(
             "SELECT rev,seq,at,author,reason,ops FROM plan_edits WHERE project_id=?1 ORDER BY rev",
         )
@@ -770,37 +842,121 @@ fn replay_project(
         .map_err(storage)?
         .collect::<rusqlite::Result<_>>()
         .map_err(storage)?;
-    // 1: history is complete and starts at the initializer's origin.
-    for (index, (found, ..)) in edits.iter().enumerate() {
-        let expected = index as i64 + 1;
+    let edits: Vec<(Edit, Vec<Value>)> = edits
+        .into_iter()
+        .map(|edit| {
+            let ops: Value = serde_json::from_str(&edit.5)
+                .map_err(|e| fail(format!("rev {}: its ops are not JSON: {e}", edit.0)))?;
+            match ops {
+                Value::Array(ops) => Ok((edit, ops)),
+                _ => Err(fail(format!("rev {}: its ops are not a list", edit.0))),
+            }
+        })
+        .collect::<std::result::Result<_, _>>()?;
+    // 1: the logged history is contiguous up to plans.rev, and starts at the initializer's
+    // origin or at an anchor.
+    let Some(first) = edits.first().map(|((rev, ..), _)| *rev) else {
+        return Err(fail(format!(
+            "history is empty: unknown origin (revisions must be 1 to {rev})"
+        )));
+    };
+    for (index, ((found, ..), _)) in edits.iter().enumerate() {
+        let expected = first + index as i64;
         if *found != expected {
             return Err(fail(format!(
-                "history is incomplete at rev {expected}: unknown origin (revisions must be 1 to {rev})"
+                "history is incomplete at rev {expected}: unknown origin (revisions must be {} to {rev})",
+                first
             )));
         }
     }
-    if edits.len() as i64 != rev {
+    if first + edits.len() as i64 - 1 != rev {
         return Err(fail(format!(
-            "history is incomplete at rev {}: unknown origin (revisions must be 1 to {rev})",
-            edits.len() + 1
+            "history is incomplete at rev {}: unknown origin (revisions must be {} to {rev})",
+            first + edits.len() as i64,
+            first
         )));
     }
     let mut document = json!({"steps": {}});
     let mut previous: Option<PlanRows> = None;
     let mut revisions = vec![];
-    for (rev, seq, at, author, reason, ops) in edits {
-        let ops: Value = serde_json::from_str(&ops)
-            .map_err(|e| fail(format!("rev {rev}: its ops are not JSON: {e}")))?;
-        let ops = ops
-            .as_array()
-            .ok_or_else(|| fail(format!("rev {rev}: its ops are not a list")))?;
-        if rev == 1 && !ops.is_empty() {
+    let mut anchor = None;
+    let mut after = 0;
+    if first == 1 {
+        if !edits[0].1.is_empty() {
             return Err(fail(
                 "rev 1: unknown origin (the project was not created empty)".into(),
             ));
         }
+    } else {
+        let stored_value: Value = serde_json::from_str(stored).map_err(|e| {
+            fail(format!(
+                "rev {rev}: the stored plan is not strict JSON: {e}"
+            ))
+        })?;
+        let (k, baseline, source) = match snapshot_anchor(
+            sql,
+            project,
+            first,
+            &edits,
+            &stored_value,
+        )
+        .map_err(storage)?
+        {
+            Some((k, baseline)) => (k, baseline, AnchorSource::Snapshot),
+            None if edits.len() == 1 => (rev, stored_value, AnchorSource::Current),
+            None => {
+                return Err(fail(format!(
+                    "history starts at rev {first}: unknown origin (no completion snapshot replays through revs {first} to {rev} to the stored plan, and more than one revision is logged)"
+                )));
+            }
+        };
+        let folded = edits.iter().filter(|((r, ..), _)| *r <= k).count();
+        let (seq, at) = match edits.iter().find(|((r, ..), _)| *r == k) {
+            Some(((_, seq, at, ..), _)) => (*seq, at.clone()),
+            None => baseline_slot(sql, project, edits[0].0.1)
+                .map_err(storage)?
+                .ok_or_else(|| {
+                    fail(format!(
+                        "rev {k}: no record sequence is free below rev {first}'s for the imported baseline"
+                    ))
+                })?,
+        };
+        let map = strict_map(&baseline).map_err(|e| {
+            fail(format!(
+                "rev {k}: the imported baseline is not strict JSON: {e}"
+            ))
+        })?;
+        let mut rows = PlanRows::from_document(&map, None)
+            .map_err(|e| fail(format!("rev {k}: the imported baseline has no rows: {e}")))?;
+        rows.header.rev = Revision(k as u64);
+        if compact(&rows.to_document()) != compact(&map) {
+            return Err(fail(format!(
+                "rev {k}: the rows do not export the imported baseline"
+            )));
+        }
+        revisions.push(RevisionRow {
+            rev: k,
+            seq,
+            at,
+            author: "sluice".into(),
+            reason: format!("imported baseline: history before rev {k} was not logged"),
+            changes: rows.changes_from(None),
+        });
+        previous = Some(rows);
+        document = baseline;
+        after = k;
+        anchor = Some(Anchor {
+            rev: k as u64,
+            folded_edits: folded as u64,
+            source,
+        });
+    }
+    for ((rev, seq, at, author, reason, _), ops) in edits {
+        if rev <= after {
+            continue;
+        }
         // 2: the RFC 6902 operations with the legacy semantics, no validation.
-        legacy_patch(&mut document, ops).map_err(|e| fail(format!("rev {rev}: {e}")))?;
+        legacy_patch(&mut document, &ops).map_err(|e| fail(format!("rev {rev}: {e}")))?;
         let replayed = strict_map(&document).map_err(|e| {
             fail(format!(
                 "rev {rev}: the replayed plan is not strict JSON: {e}"
@@ -889,7 +1045,95 @@ fn replay_project(
             "rev {rev}: the input rows are not the plan's inputs"
         )));
     }
-    Ok((rows, revisions))
+    Ok((rows, revisions, anchor))
+}
+
+/// A logged `plan_edits` row: rev, seq, at, author, reason and its ops' text.
+type Edit = (i64, i64, String, String, String, String);
+
+/// §10.4.1's anchor: the earliest revision `k` (from `first - 1` on) of which an attempt's
+/// completion snapshot, replayed through the logged revisions after `k`, is the stored plan
+/// (§10.5). Each revision's distinct documents are tried in the order their attempts were
+/// created; a patch that does not apply rules a candidate out. Read before §10.4 step 8
+/// removes the snapshots.
+fn snapshot_anchor(
+    sql: &Connection,
+    project: &str,
+    first: i64,
+    edits: &[(Edit, Vec<Value>)],
+    stored: &Value,
+) -> rusqlite::Result<Option<(i64, Value)>> {
+    let last = edits.last().map_or(first - 1, |((rev, ..), _)| *rev);
+    let candidates: Vec<i64> = sql
+        .prepare(
+            "SELECT DISTINCT r FROM (
+               SELECT json_extract(provenance,'$.runtime.completion.revision') AS r FROM attempts
+                 WHERE project_id=?1 AND json_type(provenance,'$.runtime.completion.revision')='integer'
+               UNION ALL
+               SELECT json_extract(request,'$.provenance.runtime.completion.revision') FROM attempts
+                 WHERE project_id=?1 AND json_type(request,'$.provenance.runtime.completion.revision')='integer')
+             WHERE r BETWEEN ?2 AND ?3 ORDER BY r",
+        )?
+        .query_map(params![project, first - 1, last], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let target = compact(stored);
+    let mut documents = sql.prepare(
+        "SELECT d FROM (
+           SELECT json_extract(provenance,'$.runtime.completion.document') AS d,created_at,attempt_id
+             FROM attempts WHERE project_id=?1
+               AND json_type(provenance,'$.runtime.completion.revision')='integer'
+               AND json_extract(provenance,'$.runtime.completion.revision')=?2
+           UNION ALL
+           SELECT json_extract(request,'$.provenance.runtime.completion.document'),created_at,attempt_id
+             FROM attempts WHERE project_id=?1
+               AND json_type(request,'$.provenance.runtime.completion.revision')='integer'
+               AND json_extract(request,'$.provenance.runtime.completion.revision')=?2)
+         WHERE json_type(d)='object' GROUP BY d ORDER BY min(created_at),min(attempt_id)",
+    )?;
+    for k in candidates {
+        let texts: Vec<String> = documents
+            .query_map(params![project, k], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for text in texts {
+            let Ok(baseline) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            let mut document = baseline.clone();
+            let applies = edits
+                .iter()
+                .filter(|((rev, ..), _)| *rev > k)
+                .all(|(_, ops)| legacy_patch(&mut document, ops).is_ok());
+            if applies && compact(&document) == target {
+                return Ok(Some((k, baseline)));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The imported baseline's `seq` and `at` when it sits below the first logged revision: the
+/// highest record sequence below that revision's no record of the project holds (history
+/// orders and pages by it), and the project's creation time.
+fn baseline_slot(
+    sql: &Connection,
+    project: &str,
+    first_seq: i64,
+) -> rusqlite::Result<Option<(i64, String)>> {
+    let mut seq = first_seq - 1;
+    let mut taken =
+        sql.prepare("SELECT EXISTS(SELECT 1 FROM records WHERE seq=?1 AND project_id=?2)")?;
+    while seq > 0 && taken.query_row(params![seq, project], |r| r.get::<_, bool>(0))? {
+        seq -= 1;
+    }
+    if seq <= 0 {
+        return Ok(None);
+    }
+    let at: String = sql.query_row(
+        "SELECT created_at FROM projects WHERE project_id=?1",
+        [project],
+        |r| r.get(0),
+    )?;
+    Ok(Some((seq, at)))
 }
 
 /// Rows that stay but move between two revisions' rows.

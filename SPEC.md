@@ -272,7 +272,12 @@ edit history into row changes and checks each revision's rows against the replay
 checks the final rows against the stored document, rewrites retained `plan.edit` records and
 removes the plan snapshots stored in attempts. A project whose history is incomplete (a
 revision missing, or a rev 1 its creation did not make) blocks the conversion by name and
-revision; it is never collapsed into a new baseline. A table whose columns a home gained in
+revision; it is never collapsed into a new baseline. The exception is a project whose logged
+history starts above rev 1 (the Python importer's): it is anchored at the earliest revision
+whose completion snapshot replays through the later logged revisions to the stored plan, or,
+with one logged revision and no such snapshot, at the stored plan. That revision becomes an
+imported baseline (author `sluice`), the revisions at or below it are folded into it, and the
+report lists each anchor with its folded edits. A table whose columns a home gained in
 another order is rebuilt in schema 3's order with the same rows. A restore of a schema-1 or schema-2 backup
 converts its private destination the same way, with the same refusal: a backup holding live
 work is refused (`invalid`, `this backup holds live work (…); a schema-changing restore needs a

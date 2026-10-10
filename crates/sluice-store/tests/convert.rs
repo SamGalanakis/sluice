@@ -19,7 +19,7 @@ use sluice_model::{
 };
 use sluice_store::{
     ReadPool, RetrySafety, StoreError, Writer, backup,
-    convert::{self, convert_home, schema_fingerprint},
+    convert::{self, Anchor, AnchorSource, convert_home, schema_fingerprint},
     plans, projects,
 };
 use std::{
@@ -849,6 +849,18 @@ fn gapped_malformed_and_unknown_histories_are_blocked_and_leave_the_home_untouch
             ],
         ),
         (
+            "imported",
+            revisions.clone(),
+            stored.clone(),
+            Box::new(|c| {
+                c.execute("DELETE FROM plan_edits WHERE rev=1", []).unwrap();
+            }),
+            vec![
+                "project imported (",
+                "history starts at rev 2: unknown origin (no completion snapshot replays through revs 2 to 7 to the stored plan, and more than one revision is logged)",
+            ],
+        ),
+        (
             "live",
             revisions.clone(),
             stored.clone(),
@@ -896,6 +908,308 @@ fn gapped_malformed_and_unknown_histories_are_blocked_and_leave_the_home_untouch
         let public = convert_home(&database).unwrap_err().into_public(false);
         assert!(matches!(public, PublicError::Invalid { .. }), "{name}");
     }
+}
+
+/// A project the Python importer brought in: its logged history is `revisions` from rev
+/// `first` (each with a record), and `snapshots` are terminal attempts' completion snapshots
+/// `(revision, document)`, created in that order, in both `request` and `provenance`.
+fn imported_project(
+    c: &Connection,
+    name: &str,
+    first: i64,
+    revisions: &[Value],
+    stored: &Value,
+    snapshots: &[(i64, Value)],
+) -> ProjectId {
+    let id = ProjectId::new();
+    let p = id.to_string();
+    c.execute(
+        "INSERT INTO projects(project_id,name,created_at) VALUES (?1,?2,'2026-09-28T10:48:41Z')",
+        params![p, name],
+    )
+    .unwrap();
+    // Below the first logged revision's record: another project's (free for this one) and
+    // this project's own (taken), as an import leaves them.
+    c.execute(
+        "INSERT INTO records(project_id,at,kind,payload) VALUES (NULL,'2026-09-28T00:00:00Z','home.note','{\"kind\":\"home.note\"}')",
+        [],
+    )
+    .unwrap();
+    record(c, &p, "project.update", json!({"kind": "project.update"}));
+    for (index, ops) in revisions.iter().enumerate() {
+        let rev = first + index as i64;
+        let reason = format!("r{rev}");
+        let payload =
+            json!({"kind": "plan.edit", "rev": rev, "author": "sam", "reason": reason, "ops": ops});
+        let (seq, at) = record(c, &p, "plan.edit", payload);
+        c.execute(
+            "INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,ops) VALUES (?1,?2,?3,?4,'sam',?5,?6)",
+            params![p, rev, seq, at, reason, ops.to_string()],
+        )
+        .unwrap();
+    }
+    c.execute(
+        "INSERT INTO plans(project_id,rev,doc) VALUES (?1,?2,?3)",
+        params![p, first + revisions.len() as i64 - 1, stored.to_string()],
+    )
+    .unwrap();
+    project_rows(c, &p, stored);
+    for (n, (revision, document)) in snapshots.iter().enumerate() {
+        let snapshot = json!({"runtime": {"completion": {
+            "revision": revision, "document": document, "signatures": {}
+        }}});
+        c.execute(
+            "INSERT INTO attempts(attempt_id,project_id,phase,request,inputs_hash,provenance,created_at,finished_at) VALUES (?1,?2,'terminal',?3,'hash',?4,?5,'now')",
+            params![
+                sluice_model::ids::AttemptId::new().to_string(),
+                p,
+                json!({"provenance": snapshot}).to_string(),
+                snapshot.to_string(),
+                format!("2026-10-01T00:00:{n:02}Z")
+            ],
+        )
+        .unwrap();
+    }
+    id
+}
+
+/// An imported plan's documents: rev 1 as the importer wrote it (no history row), then three
+/// logged revisions (a step added, a section appended, a tag replaced).
+fn imported() -> (Vec<Value>, Vec<Value>) {
+    let d1 = json!({"inputs": {"repo": "string"}, "steps": {"a": a_v1()}});
+    let d2 = json!({"inputs": {"repo": "string"}, "steps": {"a": a_v1(), "b": b_v1()}});
+    let d3 = json!({"inputs": {"repo": "string"}, "steps": {"a": a_v1(), "b": b_v1()},
+        "outputs": {"final": {"source": "b/value"}}});
+    let mut d4 = d3.clone();
+    d4["steps"]["a"]["tags"] = json!(["unit:u", "exit"]);
+    let ops = vec![
+        json!([{"op": "add", "path": "/steps/b", "value": b_v1()}]),
+        json!([{"op": "add", "path": "/outputs", "value": {"final": {"source": "b/value"}}}]),
+        json!([{"op": "replace", "path": "/steps/a/tags", "value": ["unit:u", "exit"]}]),
+    ];
+    (vec![d1, d2, d3, d4], ops)
+}
+
+/// §10.4.1: a project whose logged history starts above rev 1 is anchored at the earliest
+/// revision whose completion snapshot replays through the later logged revisions to the stored
+/// plan (a snapshot that does not, earlier or of the same revision, is passed over), or with no
+/// snapshot and one logged revision at the stored plan. The baseline is that revision's row
+/// (author `sluice`), the revisions after it convert as any other, each revision at or below it
+/// is folded with its record kept, and the report lists each anchor.
+#[tokio::test]
+async fn imported_projects_are_anchored_at_an_exact_baseline() {
+    let (docs, ops) = imported();
+    let stored = docs[3].clone();
+    let home = ScratchHome::new().unwrap();
+    let database = home.path().join("sluice.db");
+    let (whole, partial, single) = {
+        let c = legacy_home(home.path(), 1);
+        // The importer's rev 1 survives in a snapshot, after one that does not replay to the
+        // stored plan: the whole history is recovered.
+        let mut stale = docs[0].clone();
+        stale["steps"]["a"]["run"] = json!("other");
+        let whole = imported_project(
+            &c,
+            "whole",
+            2,
+            &ops,
+            &stored,
+            &[
+                (1, stale.clone()),
+                (1, docs[0].clone()),
+                (3, docs[2].clone()),
+            ],
+        );
+        // The earliest snapshot is rev 2's (rev 1's is stale): rev 2's own edit is folded.
+        let partial = imported_project(
+            &c,
+            "partial",
+            2,
+            &ops,
+            &stored,
+            &[(1, stale), (2, docs[1].clone()), (3, docs[2].clone())],
+        );
+        // One logged revision and no snapshot: the stored plan is the baseline.
+        let single = imported_project(&c, "single", 4, &ops[2..], &stored, &[]);
+        (whole, partial, single)
+    };
+    let report = convert_home(&database).unwrap();
+    let anchor = |name: &str| {
+        report
+            .projects
+            .iter()
+            .find(|p| p.name == name)
+            .unwrap()
+            .clone()
+    };
+    let expect = [
+        (
+            whole,
+            "whole",
+            1,
+            0,
+            AnchorSource::Snapshot,
+            vec![1, 2, 3, 4],
+        ),
+        (
+            partial,
+            "partial",
+            2,
+            1,
+            AnchorSource::Snapshot,
+            vec![2, 3, 4],
+        ),
+        (single, "single", 4, 1, AnchorSource::Current, vec![4]),
+    ];
+    let json = report.to_json();
+    let c = Connection::open(&database).unwrap();
+    for (project, name, k, folded, source, revs) in expect {
+        let converted = anchor(name);
+        assert_eq!(
+            converted.anchor,
+            Some(Anchor {
+                rev: k,
+                folded_edits: folded,
+                source
+            }),
+            "{name}"
+        );
+        assert_eq!(converted.revisions, revs.len() as u64, "{name}");
+        assert!(
+            json["anchored"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["name"] == name
+                    && a["rev"] == k
+                    && a["folded_edits"] == folded
+                    && a["source"] == source.as_str()),
+            "{name}: {json}"
+        );
+        let p = project.to_string();
+        // The stored plan exports exactly, and the history from the baseline rebuilds it.
+        let exported = plans::export_plan(&c, project).unwrap();
+        assert_eq!(compact(&exported.document), compact(&stored), "{name}");
+        type Row = (i64, i64, String, String, String);
+        let rows: Vec<Row> = c
+            .prepare("SELECT rev,seq,author,reason,changes FROM plan_edits WHERE project_id=?1 ORDER BY rev")
+            .unwrap()
+            .query_map([&p], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(rows.iter().map(|r| r.0).collect::<Vec<_>>(), revs, "{name}");
+        let (_, seq, author, reason, changes) = &rows[0];
+        assert_eq!(author, "sluice", "{name}");
+        assert_eq!(
+            reason,
+            &format!("imported baseline: history before rev {k} was not logged"),
+            "{name}"
+        );
+        let baseline: Vec<PlanChange> = serde_json::from_str(changes).unwrap();
+        let rows_at_k = PlanRows::from_document(&map(docs[k as usize - 1].clone()), None).unwrap();
+        assert_eq!(
+            baseline,
+            rows_at_k.changes_from(None),
+            "{name}: rev {k}'s document"
+        );
+        let logged_seq: i64 = c
+            .query_row(
+                "SELECT min(seq) FROM records WHERE project_id=?1 AND kind='plan.edit'",
+                [&p],
+                |r| r.get(0),
+            )
+            .unwrap();
+        if k == 1 {
+            // Below the first logged revision, on a sequence no record of the project holds.
+            assert!(*seq < logged_seq, "{name}");
+            let held: bool = c
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM records WHERE seq=?1 AND project_id=?2)",
+                    params![seq, p],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(!held, "{name}");
+        } else {
+            assert_eq!(*seq, logged_seq, "{name}: rev {k}'s own row");
+        }
+        let history: Vec<Vec<PlanChange>> = rows
+            .iter()
+            .map(|r| serde_json::from_str(&r.4).unwrap())
+            .collect();
+        let rebuilt = rebuild(&history);
+        let current = plans::read_plan_rows(&c, project).unwrap();
+        assert_eq!(
+            (
+                rebuilt.header.root_order,
+                rebuilt.inputs,
+                rebuilt.outputs,
+                rebuilt.steps
+            ),
+            (
+                current.header.root_order,
+                current.inputs,
+                current.outputs,
+                current.steps
+            ),
+            "{name}: the history from the baseline rebuilds the rows"
+        );
+        assert_indexes(&c, project);
+        // Each folded revision's record is kept, rev k's carrying the baseline's changes.
+        let folded_records: Vec<(i64, String)> = c
+            .prepare("SELECT seq,payload FROM records WHERE project_id=?1 AND kind='plan.edit' AND json_extract(payload,'$.rev')<=?2")
+            .unwrap()
+            .query_map(params![p, k as i64], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(folded_records.len() as u64, folded, "{name}");
+        for (record, payload) in folded_records {
+            let payload: Value = serde_json::from_str(&payload).unwrap();
+            assert_eq!(
+                payload["reason"],
+                format!("r{k}"),
+                "{name}: keeps its reason"
+            );
+            assert_eq!(payload["changes"], serde_json::to_value(&baseline).unwrap());
+            assert!(
+                report.warnings.iter().any(|w| w.contains(&format!(
+                    "plan.edit record {record} at rev {k} is folded into the imported baseline at rev {k}"
+                ))),
+                "{name}: {:?}",
+                report.warnings
+            );
+        }
+        // The snapshots were read before they were removed.
+        let left: i64 = c
+            .query_row(
+                "SELECT count(*) FROM attempts WHERE project_id=?1 AND (json_type(provenance,'$.runtime.completion') IS NOT NULL OR json_type(request,'$.provenance.runtime.completion') IS NOT NULL)",
+                [&p],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "{name}");
+    }
+    assert_eq!(schema_fingerprint(&c).unwrap(), fresh_fingerprint());
+    drop(c);
+    // The converted home opens, and paged history starts at the baseline.
+    let reads = ReadPool::open(home.path(), 1).unwrap();
+    let (page, _) = reads
+        .snapshot(move |c| plans::history(c, partial, None, None, 10))
+        .await
+        .unwrap();
+    let edits: Vec<(u64, String)> = page
+        .iter()
+        .filter_map(|r| match &r.event {
+            HistoryEvent::PlanEdit(edit) => Some((edit.rev.0, edit.author.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        edits,
+        vec![(2, "sluice".into()), (3, "sam".into()), (4, "sam".into())]
+    );
 }
 
 /// A restore of a schema-1 backup converts it on its private destination; one holding live
@@ -975,11 +1289,11 @@ fn a_schema_changing_restore_converts_and_refuses_live_work() {
 }
 
 /// A read-only backup copy of a live home (`SLUICE_CONVERT_COPY=<copy of sluice.db>`): its
-/// live work is refused by name; with that work ended on the scratch copy only, a project
-/// whose rev 1 has no history row (the Python importer's) is the only other blocker; given an
-/// explicit origin on the scratch copy (the earliest document the database holds exactly),
-/// every project converts with round-trip equality at every revision from it, exports its
-/// stored plan, rebuilds from its history, and the home is schema-equivalent to a fresh one.
+/// live work is refused by name; with that work ended on the scratch copy only, it converts,
+/// a project whose rev 1 has no history row (the Python importer's) anchored at its exact
+/// baseline (§10.4.1); every project round-trips at every revision from its first, exports
+/// its stored plan, rebuilds from its history, and the home is schema-equivalent to a fresh
+/// one.
 #[test]
 #[ignore = "needs SLUICE_CONVERT_COPY: a backup-API copy of a home's sluice.db"]
 fn a_copy_of_the_live_home_converts() {
@@ -1013,100 +1327,40 @@ fn a_copy_of_the_live_home_converts() {
             .collect::<Result<_, _>>()
             .unwrap()
     };
-    // The converter's verdict on the copy as it is.
-    let mut exact_from = std::collections::HashMap::new();
-    match convert_home(&copy) {
-        Ok(_) => {}
-        Err(StoreError::ConversionBlocked(blockers)) => {
-            eprintln!("blocked: {blockers:#?}");
-            for blocker in &blockers {
-                assert!(
-                    blocker.contains("history is incomplete at rev 1: unknown origin"),
-                    "only imported projects (rev 1 has no history row) may block: {blocker}"
-                );
-            }
-            // Scratch only: give each such project the earliest document the database knows
-            // exactly (a completion snapshot's, else the stored plan) as an explicit origin, so
-            // every later revision's replay is still checked against its document and the
-            // stored plan.
-            let c = Connection::open(&copy).unwrap();
-            for blocker in &blockers {
-                let project = blocker
-                    .split('(')
-                    .nth(1)
-                    .unwrap()
-                    .split(')')
-                    .next()
-                    .unwrap()
-                    .to_owned();
-                let (rev, doc): (i64, String) = c
-                    .query_row(
-                        "SELECT r,d FROM (
-                           SELECT json_extract(request,'$.provenance.runtime.completion.revision') r,
-                             json_extract(request,'$.provenance.runtime.completion.document') d
-                           FROM attempts WHERE project_id=?1
-                             AND json_type(request,'$.provenance.runtime.completion') IS NOT NULL
-                           UNION ALL SELECT rev,doc FROM plans WHERE project_id=?1)
-                         ORDER BY r LIMIT 1",
-                        [&project],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
-                    .unwrap();
-                let seq: i64 = c
-                    .query_row(
-                        "SELECT min(seq) FROM plan_edits WHERE project_id=?1",
-                        [&project],
-                        |r| r.get(0),
-                    )
-                    .unwrap();
-                c.execute(
-                    "INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,ops) VALUES (?1,1,?2,'import','import','imported','[]')",
-                    params![project, seq],
-                )
-                .unwrap();
-                c.execute(
-                    "UPDATE plan_edits SET ops='[]' WHERE project_id=?1 AND rev>1 AND rev<?2",
-                    params![project, rev],
-                )
-                .unwrap();
-                let doc: Value = serde_json::from_str(&doc).unwrap();
-                let origin = json!({"op": "replace", "path": "", "value": doc});
-                if rev == 1 {
-                    // The origin goes before rev 2's own operations.
-                    let ops: String = c
-                        .query_row(
-                            "SELECT ops FROM plan_edits WHERE project_id=?1 AND rev=2",
-                            [&project],
-                            |r| r.get(0),
-                        )
-                        .unwrap();
-                    let mut ops: Vec<Value> = serde_json::from_str(&ops).unwrap();
-                    ops.insert(0, origin);
-                    c.execute(
-                        "UPDATE plan_edits SET ops=?2 WHERE project_id=?1 AND rev=2",
-                        params![project, Value::Array(ops).to_string()],
-                    )
-                    .unwrap();
-                } else {
-                    c.execute(
-                        "UPDATE plan_edits SET ops=?3 WHERE project_id=?1 AND rev=?2",
-                        params![project, rev, json!([origin]).to_string()],
-                    )
-                    .unwrap();
-                }
-                eprintln!("scratch origin for {project}: exact from rev {rev}");
-                exact_from.insert(project, rev);
-            }
-        }
-        Err(other) => panic!("{other:?}"),
-    }
+    // The copy converts as it is: a project the Python importer brought in (no rev-1 history
+    // row) is anchored at its exact baseline (§10.4.1).
     let started = std::time::Instant::now();
-    let report = convert_home(&copy).unwrap();
+    let report = match convert_home(&copy) {
+        Ok(report) => report,
+        Err(StoreError::ConversionBlocked(blockers)) => panic!("blocked: {blockers:#?}"),
+        Err(other) => panic!("{other:?}"),
+    };
     eprintln!(
         "converted in {:?}: {}",
         started.elapsed(),
         serde_json::to_string_pretty(&report.to_json()).unwrap()
     );
+    let exact_from: std::collections::HashMap<String, u64> = report
+        .projects
+        .iter()
+        .map(|p| {
+            (
+                p.project_id.to_string(),
+                p.anchor.as_ref().map_or(1, |a| a.rev),
+            )
+        })
+        .collect();
+    for project in &report.projects {
+        if let Some(anchor) = &project.anchor {
+            eprintln!(
+                "anchored {} at rev {} ({} folded edits, from the {} plan)",
+                project.name,
+                anchor.rev,
+                anchor.folded_edits,
+                anchor.source.as_str()
+            );
+        }
+    }
     let c = Connection::open(&copy).unwrap();
     assert_eq!(schema_fingerprint(&c).unwrap(), fresh_fingerprint());
     let mut revisions = 0;
@@ -1144,7 +1398,7 @@ fn a_copy_of_the_live_home_converts() {
         eprintln!(
             "{name}: {} revisions ok (round trip checked from rev {})",
             changes.len(),
-            exact_from.get(&project.to_string()).copied().unwrap_or(1)
+            exact_from[&project.to_string()]
         );
     }
     eprintln!("{revisions} revisions converted");
