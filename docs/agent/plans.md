@@ -573,7 +573,11 @@ a reason (a step already paused keeps its own); `status` shows it as `paused` an
 `waiting`, and so does the dashboard. It returns the edit result with the selected `steps`.
 A plan may also set `"paused": "<reason>"` on a step directly. `project_update(project, paused=true)` holds the whole project.
 `step_cancel(project, steps=[...], reason=...)` stops running steps; each fails with the error
-`{"error": "cancelled", "message": <reason>}` and `step_retry` runs it again.
+`{"error": "cancelled", "message": <reason>}` and `step_retry` runs it again. On a failed step it
+sets the failure aside: the step stays failed (what waits on it stays held, `step_retry` still
+runs it), its error becomes a cancel whose message keeps the failure, `"<reason> (it had failed:
+<kind>: <first line>)"`, and the owner can then dismiss it on the dashboard; its runs keep their
+own results. A step already failed as a cancel is left as it is.
 `step_settle(project, step, reason)` stops a finishing step's agent instead and succeeds it on
 its submission (agent steps, above).
 

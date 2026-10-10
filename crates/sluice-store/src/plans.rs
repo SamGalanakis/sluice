@@ -866,7 +866,10 @@ pub(crate) fn validate_message(body: &str) -> Result<()> {
 }
 
 /// Cancellation records intent for admitted work. Pending outside work can fail
-/// immediately because there is no process or hold to clean up.
+/// immediately because there is no process or hold to clean up. A failed step's cancel sets its
+/// failure aside: the step stays failed (its dependents held as they were, Retry as before) and
+/// its error becomes a cancel whose words keep the failure (`shown::set_aside`), so the owner
+/// can dismiss it; its runs keep their own results. One already cancelled is left as it is.
 pub fn step_cancel(
     tx: &mut WriteTransaction<'_>,
     context: &PlanContext,
@@ -878,23 +881,58 @@ pub fn step_cancel(
     let state = read_state(tx.sql(), context.project)?;
     for id in &selected {
         match state.status(id) {
-            StepStatus::Running => {}
+            StepStatus::Running | StepStatus::Failed => {}
             StepStatus::Pending if context.plan.steps()[id].is_external() => {}
             _ => {
                 return Err(invalid(format!(
-                    "step {id} must be running or pending external work"
+                    "step {id} must be running, failed or pending external work"
                 )));
             }
         }
     }
+    let mut changed = false;
     for id in &selected {
+        let status = state.status(id);
+        // a failed step's failure, which its cancel keeps in its words; a cancel already is
+        // left as it is
+        let failure = if status == StepStatus::Failed {
+            let stored: Option<String> = tx.sql().query_row(
+                "SELECT error FROM steps WHERE project_id=?1 AND step_id=?2",
+                params![context.project.to_string(), id.as_str()],
+                |r| r.get(0),
+            )?;
+            let error = match stored.as_deref() {
+                Some(stored) => serde_json::from_str::<PublicError>(stored).unwrap_or_else(|_| {
+                    PublicError::FnFailure {
+                        message: stored.to_owned(),
+                    }
+                }),
+                None => PublicError::FnFailure {
+                    message: String::new(),
+                },
+            };
+            if stored
+                .as_deref()
+                .is_some_and(sluice_model::shown::stored_is_cancel)
+            {
+                continue;
+            }
+            Some(error)
+        } else {
+            None
+        };
+        let reason = match &failure {
+            Some(error) => sluice_model::shown::set_aside(&request.reason, error),
+            None => request.reason.clone(),
+        };
+        changed = true;
         let author = request.author.clone().unwrap_or_default();
         let record = tx.append_record(
             Some(context.project),
             Event::StepCancel {
                 step: id.clone(),
                 author: author.clone(),
-                reason: request.reason.clone(),
+                reason: reason.clone(),
             },
         )?;
         mark_stopped(
@@ -903,11 +941,22 @@ pub fn step_cancel(
             id,
             "cancel",
             &author,
-            &request.reason,
+            &reason,
             &record.at,
         )?;
-        let status = state.status(id);
-        if status == StepStatus::Running {
+        if status == StepStatus::Failed {
+            // still failed: only its error turns into the cancel, a new result beside the old
+            let error = PublicError::Cancelled { message: reason };
+            tx.sql().execute(
+                "UPDATE steps SET error=?3 WHERE project_id=?1 AND step_id=?2",
+                params![
+                    context.project.to_string(),
+                    id.as_str(),
+                    serde_json::to_string(&error)?
+                ],
+            )?;
+            snapshot_result(tx, context.project, id, None, None)?;
+        } else if status == StepStatus::Running {
             tx.sql().execute("UPDATE attempts SET cancel_requested=1 WHERE project_id=?1 AND step_id=?2 AND phase<>'terminal'",params![context.project.to_string(),id.as_str()])?;
         } else {
             let error = PublicError::Cancelled {
@@ -925,7 +974,9 @@ pub fn step_cancel(
             )?;
         }
     }
-    tx.changed(Some(context.project), "status");
+    if changed {
+        tx.changed(Some(context.project), "status");
+    }
     Ok(selected)
 }
 

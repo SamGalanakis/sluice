@@ -519,6 +519,56 @@ pub fn cancel_reason(message: &str) -> Option<&str> {
         .strip_prefix("cancelled: ")
         .or_else(|| (message == "cancelled").then_some(""))
 }
+/// The words that join a failed step's cancel to the failure it set aside (`set_aside`).
+pub const SET_ASIDE: &str = "it had failed: ";
+/// The words a cancel of a failed step keeps, so the failure it set aside stays readable
+/// wherever the cancel is (the step's error, its `step.cancel` record and its run's kept
+/// cancel): "<reason> (it had failed: <what>)", or "it had failed: <what>" with no reason.
+/// `what` is the failure's kind and the first line of its message, cut to 200 characters.
+pub fn set_aside(reason: &str, failure: &PublicError) -> String {
+    // an agent's failure by its own kind, any other by the error's
+    let value = serde_json::to_value(failure).unwrap_or_default();
+    let kind = match (value["error"].as_str(), value["kind"].as_str()) {
+        (Some("agent_failure"), Some(kind)) => kind,
+        (Some(error), _) => error,
+        (None, _) => "failed",
+    }
+    .to_owned();
+    let message = value["message"].as_str().unwrap_or_default();
+    let line = message
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    let mut what = if line.is_empty() {
+        kind
+    } else {
+        format!("{kind}: {line}")
+    };
+    if what.chars().count() > 200 {
+        what = what.chars().take(199).collect::<String>() + "…";
+    }
+    let reason = reason.trim();
+    if reason.is_empty() {
+        format!("{SET_ASIDE}{what}")
+    } else {
+        format!("{reason} ({SET_ASIDE}{what})")
+    }
+}
+/// A cancel's words apart from the failure it set aside (`set_aside`): its own reason, and
+/// the failure's kind and first line when it kept one.
+pub fn split_set_aside(words: &str) -> (&str, Option<&str>) {
+    if let Some(what) = words.strip_prefix(SET_ASIDE) {
+        return ("", Some(what));
+    }
+    match words.rfind(&format!(" ({SET_ASIDE}")) {
+        Some(at) if words.ends_with(')') => (
+            &words[..at],
+            Some(&words[at + 2 + SET_ASIDE.len()..words.len() - 1]),
+        ),
+        _ => (words, None),
+    }
+}
 /// `is_cancel` as an SQLite expression over the error at `path` in the JSON `doc` (a record's
 /// payload): the same rule, so the log's Errors filter and the pages never disagree. True (1) or
 /// false (0), never null.
@@ -664,5 +714,42 @@ mod tests {
         ] {
             assert_eq!(stored_is_cancel(stored), cancel, "{stored}");
         }
+    }
+
+    #[test]
+    fn a_failed_steps_cancel_keeps_the_failure_it_set_aside() {
+        let failure = PublicError::AgentFailure {
+            kind: "EngineExited".into(),
+            message: "\nclaude: transcript record exceeds 1 MiB\npane at failure".into(),
+            session: None,
+        };
+        let words = set_aside("superseded by the new lane", &failure);
+        assert_eq!(
+            words,
+            "superseded by the new lane (it had failed: EngineExited: claude: transcript record exceeds 1 MiB)"
+        );
+        assert_eq!(
+            split_set_aside(&words),
+            (
+                "superseded by the new lane",
+                Some("EngineExited: claude: transcript record exceeds 1 MiB")
+            )
+        );
+        let bare = set_aside(
+            " ",
+            &PublicError::FnFailure {
+                message: "boom".into(),
+            },
+        );
+        assert_eq!(bare, "it had failed: fn_failure: boom");
+        assert_eq!(split_set_aside(&bare), ("", Some("fn_failure: boom")));
+        assert_eq!(split_set_aside("pivot (later)"), ("pivot (later)", None));
+        let long = set_aside(
+            "",
+            &PublicError::FnFailure {
+                message: "x".repeat(400),
+            },
+        );
+        assert!(long.chars().count() < 240 && long.ends_with('…'), "{long}");
     }
 }

@@ -368,7 +368,10 @@ const TOOLS: &[(&str, &str)] = &[
     ("step_set_input", "set a step's extra inputs"),
     ("step_set_output", "set a step's outputs by hand"),
     ("step_retry", "retry failed, stale or skipped steps"),
-    ("step_cancel", "cancel running or pending steps"),
+    (
+        "step_cancel",
+        "cancel running, pending external or failed steps",
+    ),
     (
         "step_submit",
         "a run's outputs, submitted by the step itself",

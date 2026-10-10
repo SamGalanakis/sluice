@@ -687,3 +687,175 @@ async fn dismissal_does_not_hide_a_failure_or_follow_a_recreated_step() {
         "the same step id with a new generation needs a new mark"
     );
 }
+
+/// A failed step can be cancelled: the cancel is recorded the usual way and its error turns
+/// into a cancel that keeps the failure in its words, while the step stays failed (its
+/// dependents held as before) and its run keeps its own result. Cancelling it again is a no-op;
+/// it can then be dismissed and undismissed like any cancel, and Retry still works.
+#[tokio::test]
+async fn a_failed_step_is_cancelled_set_aside_dismissed_and_still_retried() {
+    let f = Fixture::new(json!({"steps":{
+        "a":{"run":"echo","in":{"value":{"default":1}}},
+        "b":{"run":"echo","in":{"value":{"source":"a/value"}}}}}))
+    .await;
+    let project = f.context.project;
+    let run = RunId::new();
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            let attempt = AttemptId::new();
+            tx.sql().execute(
+                "INSERT INTO attempts(attempt_id,project_id,step_id,generation,work_generation,phase,request,inputs_hash,created_at) VALUES (?1,?2,'a',1,1,'terminal','{}','hash','2026-10-01T00:00:00Z')",
+                params![attempt.to_string(), project.to_string()],
+            )?;
+            tx.sql().execute(
+                "INSERT INTO runs(run_id,project_id,attempt_id,step_id,generation,work_generation,created_at,started_at,finished_at,result) VALUES (?1,?2,?3,'a',1,1,'2026-10-01T00:00:00Z','2026-10-01T00:00:00Z','2026-10-01T00:04:00Z',?4)",
+                params![run.to_string(), project.to_string(), attempt.to_string(), json!({"status":"failed","error":{"error":"fn_failure","message":"fixture failure"}}).to_string()],
+            )?;
+            tx.changed(Some(project), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    f.fail_projection("a").await;
+    let cancel = |reason: &'static str| {
+        let context = f.context.clone();
+        f.writer.write(RetrySafety::NonIdempotent, move |tx| {
+            plans::step_cancel(
+                tx,
+                &context,
+                StepCancel {
+                    expected_rev: None,
+                    project: ProjectSelector::Id(context.project),
+                    selection: StepSelection {
+                        steps: Some(vec![id("a")]),
+                        tags: None,
+                    },
+                    reason: reason.into(),
+                    author: Some("owner".into()),
+                },
+            )
+        })
+    };
+    // a step that never failed or ran is refused, as before
+    let refused = {
+        let context = f.context.clone();
+        f.writer
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                plans::step_cancel(
+                    tx,
+                    &context,
+                    StepCancel {
+                        expected_rev: None,
+                        project: ProjectSelector::Id(context.project),
+                        selection: StepSelection {
+                            steps: Some(vec![id("b")]),
+                            tags: None,
+                        },
+                        reason: String::new(),
+                        author: None,
+                    },
+                )
+            })
+            .await
+    };
+    assert!(refused.is_err());
+    let before = f.counts().await;
+    cancel("set aside for the new lane").await.unwrap();
+    let words = "set aside for the new lane (it had failed: fn_failure: fixture failure)";
+    let reads = f.reads.clone();
+    let read = move || {
+        let reads = reads.clone();
+        let run = run.to_string();
+        async move {
+            reads
+                .snapshot(move |c| {
+                    let step: (String, String) = c.query_row(
+                        "SELECT status,error FROM steps WHERE project_id=?1 AND step_id='a'",
+                        [project.to_string()],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )?;
+                    let run: (String, String) = c.query_row(
+                        "SELECT result,stopped FROM runs WHERE run_id=?1",
+                        [run],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )?;
+                    let records: Vec<String> = c
+                        .prepare("SELECT payload FROM records WHERE project_id=?1 AND kind='step.cancel' ORDER BY seq")?
+                        .query_map([project.to_string()], |r| r.get(0))?
+                        .collect::<rusqlite::Result<_>>()?;
+                    let result: String = c.query_row(
+                        "SELECT r.error FROM steps s JOIN step_results r USING(result_id) WHERE s.project_id=?1 AND s.step_id='a'",
+                        [project.to_string()],
+                        |r| r.get(0),
+                    )?;
+                    Ok((step, run, records, result))
+                })
+                .await
+                .unwrap()
+        }
+    };
+    let ((status, error), (result, stopped), records, kept) = read().await;
+    assert_eq!(status, "failed", "it stays failed");
+    let error: Value = serde_json::from_str(&error).unwrap();
+    assert_eq!(error, json!({"error":"cancelled","message":words}));
+    assert_eq!(serde_json::from_str::<Value>(&kept).unwrap(), error);
+    // its run keeps its own failure, and who set it aside beside it
+    let result: Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["error"]["message"], "fixture failure");
+    let stopped: Value = serde_json::from_str(&stopped).unwrap();
+    assert_eq!(stopped["cancel"]["author"], "owner");
+    assert_eq!(stopped["cancel"]["reason"], words);
+    // the usual record, the failure kept in its words
+    assert_eq!(records.len(), 1);
+    let record: Value = serde_json::from_str(&records[0]).unwrap();
+    assert_eq!(
+        (record["author"].clone(), record["reason"].clone()),
+        (json!("owner"), json!(words))
+    );
+    // a new result beside the failure's; no status change, so no status record
+    let after = f.counts().await;
+    assert_eq!((after.0 - before.0, after.1 - before.1), (1, 1));
+    let state = f.state().await;
+    assert_eq!(state.status(&id("a")), StepStatus::Failed);
+    assert_eq!(
+        state.status(&id("b")),
+        StepStatus::Pending,
+        "b is held as before"
+    );
+    // cancelling a cancel is a no-op: nothing written
+    cancel("again").await.unwrap();
+    assert_eq!(f.counts().await, after);
+    assert_eq!(read().await.2.len(), 1);
+    // dismissed and undismissed like any cancel
+    let mark = |dismissed: bool| {
+        f.writer.write(RetrySafety::NonIdempotent, move |tx| {
+            sluice_store::messages::dismiss(
+                tx,
+                StepDismiss {
+                    project,
+                    step: id("a"),
+                    dismissed,
+                },
+            )
+        })
+    };
+    mark(true).await.unwrap();
+    assert!(dismissal(&f).await);
+    mark(false).await.unwrap();
+    assert!(!dismissal(&f).await);
+    mark(true).await.unwrap();
+    assert_eq!(f.state().await.status(&id("b")), StepStatus::Pending);
+    // Retry still works, and brings the step back from its dismissal
+    let context = f.context.clone();
+    let request = retry_request(project, &["a"], None);
+    let retried = f
+        .writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            plans::step_retry(tx, &context, request, &mut Hooks::default())
+        })
+        .await
+        .unwrap();
+    assert_eq!(retried.steps, vec![id("a")]);
+    assert_eq!(f.state().await.status(&id("a")), StepStatus::Pending);
+    assert!(!dismissal(&f).await);
+}
