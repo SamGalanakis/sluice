@@ -95,7 +95,7 @@ impl Publication {
     }
     /// How many refreshes found a change and republished the views.
     pub fn publications(&self) -> u64 {
-        self.publications.load(Ordering::Relaxed)
+        self.publications.load(Ordering::SeqCst)
     }
     async fn publish_locked(
         &self,
@@ -119,7 +119,6 @@ impl Publication {
         }) {
             return Ok(());
         }
-        self.publications.fetch_add(1, Ordering::Relaxed);
         let mut views = BTreeMap::new();
         let mut jobs: BTreeMap<Option<ProjectId>, ArtifactJob> = BTreeMap::new();
         for (project, registry) in registries {
@@ -226,6 +225,9 @@ impl Publication {
             );
         }
         *self.views.write().unwrap_or_else(|e| e.into_inner()) = views;
+        // Counted once the views are in place: a reader that reads this count before the views
+        // never keys new signatures with an old count (`Catalog::generation`).
+        self.publications.fetch_add(1, Ordering::SeqCst);
         *published = Some((version, projects));
         Ok(())
     }

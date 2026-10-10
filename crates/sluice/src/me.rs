@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use sluice_model::{
     commands::{MessageView, StepStatus},
     error::PublicError,
-    ids::{ProjectId, ProjectSelector, RunId, StepId},
-    plan::{Plan, effective_inputs},
+    ids::{ProjectId, ProjectSelector, Revision, RunId, StepId},
+    plan::{Plan, compile_rows, effective_inputs},
     types::Type,
 };
 use sluice_runtime::{
@@ -123,24 +123,19 @@ pub fn catalog(registry: &Registry) -> Catalog {
     )
 }
 
+/// The project's plan compiled from its rows, at the revision the snapshot sees (`sluice me`
+/// runs in its own process, with no plan cache: a cold compile).
 fn plan_at(
     sql: &Connection,
     project: ProjectId,
     signatures: &Catalog,
-) -> Result<Plan, PublicError> {
-    let doc: String = sql
-        .query_row(
-            "SELECT doc FROM plans WHERE project_id=?1",
-            [project.to_string()],
-            |r| r.get(0),
-        )
-        .map_err(sluice_store::StoreError::from)
-        .map_err(|e| e.into_public(true))?;
-    let document: sluice_model::rpc::JsonMap = sluice_model::rpc::decode_json(doc.as_bytes())?;
-    Plan::parse(&document, signatures).map_err(|errors| PublicError::Invalid {
+) -> Result<(Revision, Plan), PublicError> {
+    let rows = plans::read_plan_rows(sql, project).map_err(|e| e.into_public(true))?;
+    let plan = compile_rows(&rows, signatures).map_err(|errors| PublicError::Invalid {
         message: "the stored plan does not validate".into(),
         errors: errors.iter().map(|e| e.to_string()).collect(),
-    })
+    })?;
+    Ok((rows.header.rev, plan))
 }
 
 /// The step's context: project, step, fn, doc, status (and `queued` for a step
@@ -186,7 +181,7 @@ fn build(
     step: &StepId,
     run: Option<RunId>,
 ) -> Result<(Value, Option<sluice_model::attempt::AttemptNote>), sluice_store::StoreError> {
-    let plan = plan_at(sql, project, signatures).map_err(sluice_store::StoreError::from)?;
+    let (rev, plan) = plan_at(sql, project, signatures).map_err(sluice_store::StoreError::from)?;
     let state = plans::read_state(sql, project)?;
     let name: String = sql.query_row(
         "SELECT name FROM projects WHERE project_id=?1",
@@ -269,7 +264,7 @@ fn build(
     }
     // Queued on resources, like status: a pending step whose needs do not fit.
     let queued = if status == StepStatus::Pending && !declaration.needs.is_empty() {
-        resources::admit_order(sql, project, &plan)?
+        resources::admit_order(sql, project, rev, &plan)?
             .into_iter()
             .find(|candidate| &candidate.step == step)
             .and_then(|candidate| {

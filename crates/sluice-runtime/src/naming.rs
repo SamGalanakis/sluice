@@ -1,11 +1,12 @@
-//! Each project's step and unit names (`sluice_model::naming`), read from its stored plan, its
+//! Each project's step and unit names (`sluice_model::naming`), read from its step rows, its
 //! recipe files and the prompt files its steps name, and kept per process while none of them
-//! changes: recomputed when the plan's rev or a recipe file changes, and at least every minute
-//! so an edited prompt file shows.
+//! changes: keyed by the plan's revision and the recipe files' generation (plan-rows §3,
+//! `recipe_generation`), and recomputed at least every minute so an edited prompt file shows.
 use rusqlite::Connection;
 use sluice_model::{
-    ids::ProjectId,
+    ids::{ProjectId, Revision, UnitName},
     naming::{Naming, name_plan},
+    plan_rows::{RecipeGeneration, RowSelection, StepProjection},
     recipe::Recipe,
 };
 use std::{
@@ -20,11 +21,25 @@ const FRESH: Duration = Duration::from_secs(60);
 /// How much of a prompt file is read for its title.
 const PROMPT_BYTES: u64 = 4096;
 
-/// A project's names and the recipes they came from (the ones that check, by name).
-#[derive(Debug, Default)]
+/// A project's names, the recipes they came from (the ones that check, by name), and what
+/// they were worked out from: the plan's revision and the recipe files' generation.
+#[derive(Debug)]
 pub struct ProjectNaming {
     pub naming: Naming,
     pub recipes: indexmap::IndexMap<String, Arc<Recipe>>,
+    pub rev: Revision,
+    pub recipe_generation: RecipeGeneration,
+}
+/// No names yet: a plan at no revision, before any recipe was read.
+impl Default for ProjectNaming {
+    fn default() -> Self {
+        Self {
+            naming: Naming::default(),
+            recipes: Default::default(),
+            rev: Revision(0),
+            recipe_generation: RecipeGeneration(String::new()),
+        }
+    }
 }
 impl ProjectNaming {
     /// The recipe a unit was made from, when one matches it.
@@ -34,10 +49,26 @@ impl ProjectNaming {
             .filter(|u| !u.recipe.is_empty())
             .and_then(|u| self.recipes.get(&u.recipe))
     }
+    /// The name of the recipe a unit matches now, if any (`plan_read`'s `recipe`).
+    pub fn recipe_name(&self, unit: &str) -> Option<&str> {
+        self.naming
+            .unit(unit)
+            .map(|u| u.recipe.as_str())
+            .filter(|name| !name.is_empty())
+    }
+    /// The units a recipe matches now, in name order: a `recipe` filter resolved to units.
+    pub fn units_of(&self, recipe: &str) -> Vec<UnitName> {
+        self.naming
+            .units
+            .iter()
+            .filter(|(_, unit)| unit.recipe == recipe)
+            .filter_map(|(name, _)| name.parse().ok())
+            .collect()
+    }
 }
 struct Kept {
-    rev: i64,
-    recipes: String,
+    rev: Revision,
+    recipes: RecipeGeneration,
     at: Instant,
     names: Arc<ProjectNaming>,
 }
@@ -58,7 +89,8 @@ pub fn for_project(
         [project.to_string()],
         |r| r.get(0),
     )?;
-    let recipes = recipe_files(home, project);
+    let rev = Revision(rev as u64);
+    let recipes = crate::plan_cache::recipe_generation(home, project);
     let key = (home.to_owned(), project);
     if let Some(kept) = cache().lock().unwrap_or_else(|e| e.into_inner()).get(&key)
         && kept.rev == rev
@@ -67,12 +99,13 @@ pub fn for_project(
     {
         return Ok(kept.names.clone());
     }
-    let doc: String = sql.query_row(
-        "SELECT doc FROM plans WHERE project_id=?1",
-        [project.to_string()],
-        |r| r.get(0),
+    // Titles read every step's declaration (its doc and prompt), once per revision.
+    let rows = sluice_store::plans::read_steps(
+        sql,
+        project,
+        &RowSelection::default(),
+        StepProjection::Full,
     )?;
-    let doc: serde_json::Value = serde_json::from_str(&doc)?;
     let entries = crate::dispatch_ext::load_recipes(home, project).unwrap_or_default();
     // the project's own recipes before the global ones, each by name
     let mut usable: Vec<(bool, String, Arc<Recipe>)> = entries
@@ -88,67 +121,27 @@ pub fn for_project(
         .collect();
     usable.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     let ordered: Vec<&Recipe> = usable.iter().map(|(_, _, r)| r.as_ref()).collect();
-    let empty = serde_json::Map::new();
-    let steps = doc
-        .get("steps")
-        .and_then(|s| s.as_object())
-        .unwrap_or(&empty);
-    let naming = name_plan(steps, &ordered, &mut |path| prompt_head(path));
+    let naming = name_plan(&rows.steps, &ordered, &mut |path| prompt_head(path));
     let names = Arc::new(ProjectNaming {
         naming,
         recipes: usable
             .into_iter()
             .map(|(_, name, recipe)| (name, recipe))
             .collect(),
+        rev: rows.rev,
+        recipe_generation: recipes.clone(),
     });
     let mut held = cache().lock().unwrap_or_else(|e| e.into_inner());
     held.insert(
         key,
         Kept {
-            rev,
+            rev: rows.rev,
             recipes,
             at: Instant::now(),
             names: names.clone(),
         },
     );
     Ok(names)
-}
-
-/// The recipe files a project sees, by name, size and modification time: names change with them.
-fn recipe_files(home: &Path, project: ProjectId) -> String {
-    let mut out = String::new();
-    for dir in [
-        home.join("recipes"),
-        home.join("projects")
-            .join(project.to_string())
-            .join("recipes"),
-    ] {
-        let Ok(files) = std::fs::read_dir(&dir) else {
-            out.push('|');
-            continue;
-        };
-        let mut found: Vec<String> = files
-            .flatten()
-            .filter_map(|f| {
-                let meta = f.metadata().ok()?;
-                let at = meta
-                    .modified()
-                    .ok()?
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .ok()?
-                    .as_nanos();
-                Some(format!(
-                    "{}:{}:{at}",
-                    f.file_name().to_string_lossy(),
-                    meta.len()
-                ))
-            })
-            .collect();
-        found.sort();
-        out.push_str(&found.join(","));
-        out.push('|');
-    }
-    out
 }
 
 /// A prompt file's opening (what its title is read from), cached by path, size and time.

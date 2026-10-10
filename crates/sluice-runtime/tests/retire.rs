@@ -112,12 +112,9 @@ impl Fixture {
     }
     async fn patch(&self, ops: Value) {
         let rev = self.rev().await;
-        self.call(
-            "plan_patch",
-            json!({"rev":rev,"ops":ops,"dry_run":false,"reason":"fixture","start":true}),
-        )
-        .await
-        .unwrap();
+        self.call("plan_edit", json!({"rev":rev,"ops":ops,"reason":"fixture"}))
+            .await
+            .unwrap();
     }
     /// Record a done core.external step's outputs, as an orchestrator would.
     async fn finish(&self, step: &str) {
@@ -183,11 +180,9 @@ impl Fixture {
 fn request(name: &str, args: Value) -> CommandRequest {
     decode_json(&serde_json::to_vec(&json!({"command":name,"args":args})).unwrap()).unwrap()
 }
+/// A reply's object, whatever its variant (`{"reply": …, "data": …}` on the wire).
 fn data(reply: CommandReply) -> Value {
-    let CommandReply::Data(v) = reply else {
-        panic!("expected data, got {reply:?}")
-    };
-    v.into_value()
+    serde_json::to_value(&reply).unwrap()["data"].take()
 }
 fn external(unit: &str) -> Value {
     json!({"run":"core.external","outputs":{"ok":"boolean"},"tags":[format!("unit:{unit}")]})
@@ -204,12 +199,12 @@ async fn age() {
 /// failing is failed.
 async fn lanes(f: &Fixture) {
     f.patch(json!([
-        {"op":"add","path":"/steps/old","value":external("old")},
-        {"op":"add","path":"/steps/ta-x","value":external("ta-x")},
-        {"op":"add","path":"/steps/held","value":external("held")},
-        {"op":"add","path":"/steps/reader","value":{"run":"fixture.echo","in":{"value":{"source":"held/ok"}},"tags":["unit:reader"]}},
-        {"op":"add","path":"/steps/live","value":external("live")},
-        {"op":"add","path":"/steps/failing","value":external("failing")}
+        {"op":"step.add","step":"old","spec":external("old")},
+        {"op":"step.add","step":"ta-x","spec":external("ta-x")},
+        {"op":"step.add","step":"held","spec":external("held")},
+        {"op":"step.add","step":"reader","spec":{"run":"fixture.echo","in":{"value":{"source":"held/ok"}},"tags":["unit:reader"]}},
+        {"op":"step.add","step":"live","spec":external("live")},
+        {"op":"step.add","step":"failing","spec":external("failing")}
     ]))
     .await;
     for step in ["old", "ta-x", "held"] {
@@ -385,7 +380,7 @@ async fn an_edit_between_the_look_and_the_prune_skips_the_round() {
         .unwrap();
     assert_eq!(names(&candidate.units), ["old", "ta-x"]);
     // An orchestrator edits the plan in between.
-    f.patch(json!([{"op":"add","path":"/steps/new","value":external("new")}]))
+    f.patch(json!([{"op":"step.add","step":"new","spec":external("new")}]))
         .await;
     let rev = f.rev().await;
     let outcome = retire::apply(&f.broker, candidate).await;
@@ -409,7 +404,7 @@ async fn each_project_is_looked_at_once_per_interval() {
     let start = Instant::now();
     let done = retirer.pass(&f.broker, start).await.unwrap();
     assert!(matches!(done.as_slice(), [(_, Retirement::Retired(_))]));
-    f.patch(json!([{"op":"add","path":"/steps/later","value":external("later")}]))
+    f.patch(json!([{"op":"step.add","step":"later","spec":external("later")}]))
         .await;
     f.finish("later").await;
     age().await;

@@ -1015,10 +1015,11 @@ fn parse_completion(value: &str) -> Result<CompletionResult> {
     })
 }
 
-/// Terminal settlement uses admission data; reconciliation uses current data.
-/// A registry/plan error cannot undo the result or cleanup-backed hold release.
+/// Terminal settlement uses what the attempt froze at admission (its outputs contract,
+/// inputs and identity), never a plan: reconciliation alone uses the current plan. A plan that
+/// no longer compiles (`Err`, its message) cannot undo the result or the cleanup-backed hold
+/// release.
 pub struct CompletionContext<'a> {
-    pub admitted: &'a PlanContext,
     pub current: std::result::Result<&'a PlanContext, &'a str>,
 }
 pub fn complete(
@@ -1030,7 +1031,6 @@ pub fn complete(
     complete_frozen(
         tx,
         CompletionContext {
-            admitted: context,
             current: Ok(context),
         },
         request,
@@ -1043,7 +1043,6 @@ pub fn complete_frozen(
     request: Complete,
     hooks: &mut impl ExecutionHooks,
 ) -> Result<Option<CompletionResult>> {
-    let context = completion.admitted;
     let id = &request.identity;
     let prior: Option<(Option<String>,Option<String>)> = tx.sql().query_row("SELECT completion_id,result FROM runs WHERE run_id=?1 AND attempt_id=?2 AND project_id=?3 AND step_id=?4 AND generation=?5 AND work_generation=?6",params![id.run.to_string(),id.attempt.to_string(),id.project.to_string(),id.step.as_str(),plans::sql_counter(id.generation.0)?,plans::sql_counter(id.work.0)?],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
     if let Some((Some(completion), Some(result))) = prior {
@@ -1054,9 +1053,6 @@ pub fn complete_frozen(
     }
     if current_callback(tx, id)?.is_none_or(|phase| phase == "terminal") {
         return Ok(None);
-    }
-    if context.project != id.project {
-        return Err(plans::invalid("completion project mismatch"));
     }
     if let Ok(current) = completion.current {
         if current.project != id.project {

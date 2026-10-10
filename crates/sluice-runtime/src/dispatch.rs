@@ -33,6 +33,17 @@ impl Catalog {
             .map(|p| p.catalog(project))
             .unwrap_or_else(|| Self(self.0.clone(), None))
     }
+    /// The catalog's publication count (plan-rows §3's `catalog_generation`): an edit's
+    /// preparation and the plan cache key their compiled plans by it, so any republication
+    /// makes them compile again. Read it before reading a view's signatures. A catalog without
+    /// a publication (fixed signatures) is generation 0.
+    pub fn generation(&self) -> sluice_model::plan_rows::CatalogGeneration {
+        sluice_model::plan_rows::CatalogGeneration(
+            self.1
+                .as_ref()
+                .map_or(0, |publication| publication.publications()),
+        )
+    }
     pub fn core() -> Self {
         let mut entries = IndexMap::new();
         for descriptor in crate::builtins::core::descriptors() {

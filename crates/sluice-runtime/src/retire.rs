@@ -3,9 +3,10 @@
 //! `RETIRE_INTERVAL`, as one edit by `sluice`, and only when something qualifies.
 use crate::{coordinator::Coordinator, execution::ExecutionHost};
 use sluice_model::{
-    commands::{CommandReply, CommandRequest, EditOptions, PlanPrune, PruneResult},
+    commands::{CommandReply, CommandRequest, EditOptions, PlanPrune},
     error::PublicError,
     ids::{ProjectId, ProjectSelector, Revision, UnitName},
+    plan_rows::PruneResult,
     units::prune_closed,
 };
 use sluice_store::{

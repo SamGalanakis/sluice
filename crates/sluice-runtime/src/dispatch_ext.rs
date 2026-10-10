@@ -1,7 +1,7 @@
 //! Remaining coordinator commands. Reads use short snapshots; waits hold no SQLite lease.
 use crate::{
     calls::public,
-    coordinator::{Coordinator, context},
+    coordinator::{Coordinator, cached_context, context},
     execution::ExecutionHost,
 };
 use indexmap::IndexMap;
@@ -10,7 +10,6 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::*,
-    edit::{self, EditSnapshot, PlanEdit},
     error::PublicError,
     events::Event,
     gates::{self, CachedResources, Gate},
@@ -176,20 +175,6 @@ pub async fn dispatch_ext<H: ExecutionHost>(
                     .map_err(public)?,
             )?
         }
-        CommandRequest::UnitAdd(request) => {
-            let mut log = crate::coordinator::EditLog::start();
-            let author = request.edit.author.clone();
-            let reply = edit_extension(broker, PlanEdit::UnitAdd(request), &mut log).await;
-            log.finish(Some(("unit_add", author.as_deref())), &reply);
-            reply?
-        }
-        CommandRequest::PlanPrune(request) => {
-            let mut log = crate::coordinator::EditLog::start();
-            let author = request.edit.author.clone();
-            let reply = edit_extension(broker, PlanEdit::PlanPrune(request), &mut log).await;
-            log.finish(Some(("plan_prune", author.as_deref())), &reply);
-            reply?
-        }
         CommandRequest::PlanHistory { project, since_rev } => data(
             broker
                 .reads()
@@ -200,11 +185,12 @@ pub async fn dispatch_ext<H: ExecutionHost>(
                 .map_err(public)?,
         )?,
         CommandRequest::StepContext { project, step } => {
+            let cache = broker.plan_cache();
             let (mut out, note) = broker
                 .reads()
                 .snapshot(move |sql| {
                     let id = messages::resolve_project(sql, &project)?;
-                    let ctx = context(sql, id, &catalog)?;
+                    let ctx = cached_context(sql, id, &catalog, &cache)?;
                     step_context(sql, &ctx, &step)
                 })
                 .await
@@ -258,11 +244,14 @@ pub async fn dispatch_ext<H: ExecutionHost>(
         CommandRequest::Docs { topic } => data(crate::docs::docs(topic.as_deref())?)?,
         CommandRequest::PlanSetInput(request) => {
             if request.edit.dry_run {
+                // Not a plan edit: a runtime value. Its preview is the whole plan simulated
+                // before and after the value (`scope: all`), from the cached compiled plan.
+                let cache = broker.plan_cache();
                 let preview = broker
                     .reads()
                     .snapshot(move |sql| {
                         let id = messages::resolve_project(sql, &request.project)?;
-                        let ctx = context(sql, id, &catalog)?;
+                        let ctx = cached_context(sql, id, &catalog, &cache)?;
                         if request.edit.expected.is_some_and(|rev| rev != ctx.revision) {
                             return Err(PublicError::Conflict {
                                 message: "plan revision changed".into(),
@@ -298,10 +287,11 @@ pub async fn dispatch_ext<H: ExecutionHost>(
                             &before,
                             &ctx.plan,
                             &after,
-                            &cached_resources(sql, id, &ctx.plan)?,
+                            &cached_resources(sql, id, ctx.revision, &ctx.plan)?,
                         );
-                        Ok(EditPreview {
-                            ops: vec![],
+                        Ok(sluice_model::plan_rows::EditPreview {
+                            scope: sluice_model::plan_rows::PreviewScope::All,
+                            changes: vec![],
                             would_start: simulated.would_start,
                             would_queue: simulated.would_queue.into_keys().collect(),
                             would_skip: simulated.would_skip.into_keys().collect(),
@@ -363,11 +353,12 @@ fn sql_value(value: &Value) -> Result<rusqlite::types::Value, PublicError> {
 fn cached_resources(
     sql: &Connection,
     id: ProjectId,
+    rev: Revision,
     plan: &sluice_model::plan::Plan,
 ) -> sluice_store::Result<CachedResources> {
     let mut cached = CachedResources::default();
     let state = plans::read_state(sql, id)?;
-    for (name, status) in resources::status(sql, id, plan)? {
+    for (name, status) in resources::status(sql, id, rev, plan)? {
         let running_needs: u64 = plan
             .steps()
             .iter()
@@ -381,195 +372,6 @@ fn cached_resources(
         cached.capacities.insert(name, status.resource.capacity);
     }
     Ok(cached)
-}
-
-async fn edit_extension<H: ExecutionHost>(
-    broker: &Coordinator<H>,
-    edit: PlanEdit,
-    log: &mut crate::coordinator::EditLog,
-) -> Result<CommandReply, PublicError> {
-    let (project, age) = match &edit {
-        PlanEdit::UnitAdd(request) => (request.project.clone(), None),
-        PlanEdit::PlanPrune(request) => (request.project.clone(), Some(request.older_than_seconds)),
-        _ => return Err(bad("unsupported extension edit")),
-    };
-    // Prepared and worked out down to its rows in a read snapshot; the writer commits it
-    // while the snapshot's rows hold (see `OutsideEdit`), and after EDIT_TRIES tries that
-    // found them changed, or for an age-filtered prune, applies the prepared edit itself.
-    for attempt in 0..=crate::coordinator::EDIT_TRIES {
-        let staged = attempt < crate::coordinator::EDIT_TRIES;
-        let (catalog, home, project, edit, cache) = (
-            broker.catalog().clone(),
-            broker.home().to_owned(),
-            project.clone(),
-            edit.clone(),
-            broker.plan_cache(),
-        );
-        let mark = broker.writer().row_mark();
-        let prepared = log
-            .preparing(broker.reads().snapshot(move |sql| {
-                let id = messages::resolve_project(sql, &project)?;
-                let signatures = catalog.for_project(Some(id));
-                let (revision, plan) = cache.compiled(sql, id, &catalog, &signatures)?;
-                let (witness, state) = plans::Witness::read_with_state(sql, id)?;
-                let evidence = age
-                    .map(|age| {
-                        let ctx = plans::PlanContext {
-                            project: id,
-                            revision,
-                            plan: (*plan).clone(),
-                        };
-                        plans::prune_eligible_age(sql, &ctx, age)
-                    })
-                    .transpose()?;
-                let limits = resources::declarations(sql, id)?
-                    .into_iter()
-                    .map(|(name, resource)| {
-                        (
-                            name,
-                            match resource.declaration {
-                                resources::Capacity::Fixed(n) => {
-                                    sluice_model::plan::ResourceLimit::Fixed(n)
-                                }
-                                resources::Capacity::Function(_) => {
-                                    sluice_model::plan::ResourceLimit::Dynamic
-                                }
-                            },
-                        )
-                    })
-                    .collect();
-                let prepared = edit::prepare_edit(
-                    &EditSnapshot {
-                        revision,
-                        plan: &plan,
-                        state: &state,
-                        signatures: &signatures,
-                        recipes: &load_recipes(&home, id)?,
-                        resources: &cached_resources(sql, id, &plan)?,
-                        limits: &limits,
-                        prune_eligible: evidence.as_ref().map(|e| e.units()),
-                    },
-                    edit,
-                )?;
-                crate::models::check_edit(&plan, &prepared.plan, &state.inputs)?;
-                // A dry run writes nothing: it is answered from the snapshot.
-                if prepared.dry_run {
-                    return Ok(Err(prepared.preview));
-                }
-                let warnings = crate::coordinator::board_drops(sql, id, &plan, &prepared.plan)?;
-                if !staged || evidence.is_some() {
-                    return Ok(Ok((
-                        Prepared::Direct(id, Box::new(prepared), evidence),
-                        warnings,
-                    )));
-                }
-                let prune = prepared.prune.clone();
-                let effect = plans::edit_effect(
-                    sql,
-                    id,
-                    prepared,
-                    plans::Current {
-                        revision,
-                        document: plan.document(),
-                        state: &state,
-                        prepared_with: true,
-                    },
-                )
-                .map(|mut effect| {
-                    let plan = effect.take_plan().map(|(revision, plan)| {
-                        crate::coordinator::CachedPlan::new(id, revision, signatures.0, plan)
-                    });
-                    (Box::new(effect), plan)
-                });
-                Ok(Ok((
-                    Prepared::Staged {
-                        id,
-                        witness,
-                        effect,
-                        prune,
-                    },
-                    warnings,
-                )))
-            }))
-            .await
-            .map_err(public)?;
-        let (prepared, warnings) = match prepared {
-            Ok(prepared) => prepared,
-            Err(preview) => return Ok(CommandReply::Preview(preview)),
-        };
-        let (reply, held) = broker
-            .writer()
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                let started = std::time::Instant::now();
-                let committed = commit_prepared(tx, prepared, mark)?;
-                Ok((committed, started.elapsed()))
-            })
-            .await?;
-        log.writer += held;
-        if let Some((reply, plan)) = reply {
-            if let Some(plan) = plan {
-                broker.plan_cache().put(plan);
-            }
-            return Ok(crate::coordinator::with_board_warnings(reply, warnings));
-        }
-        log.retries += 1;
-    }
-    // The last try applies the edit directly, so it never comes back for another.
-    Err(PublicError::Storage {
-        message: "plan edit was not committed".into(),
-    })
-}
-/// Commit a prepared unit_add or plan_prune, or None when it was staged from rows that
-/// have changed since `mark` (nothing is written).
-fn commit_prepared(
-    tx: &mut sluice_store::WriteTransaction<'_>,
-    prepared: Prepared,
-    mark: sluice_store::RowMark,
-) -> sluice_store::Result<Option<(CommandReply, Option<crate::coordinator::CachedPlan>)>> {
-    crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
-    Ok(Some(match prepared {
-        Prepared::Staged {
-            id,
-            witness,
-            effect,
-            prune,
-        } => {
-            if !witness.holds_since(tx, id, mark)? {
-                return Ok(None);
-            }
-            let (effect, plan) = effect?;
-            let result = plans::commit_effect(tx, *effect)?;
-            (crate::coordinator::edit_reply(result, None, prune), plan)
-        }
-        Prepared::Direct(id, prepared, evidence) => {
-            let prune = prepared.prune.clone();
-            let result = if let Some(evidence) = evidence {
-                plans::apply_prune(tx, id, *prepared, &evidence)?
-            } else {
-                plans::apply_edit(tx, id, *prepared)?
-            };
-            (crate::coordinator::edit_reply(result, None, prune), None)
-        }
-    }))
-}
-/// A unit_add or plan_prune prepared from a read snapshot: worked out down to its rows
-/// for the writer to commit while the snapshot holds, or (an age-filtered prune, or the
-/// last try) for the writer to apply.
-enum Prepared {
-    Staged {
-        id: ProjectId,
-        witness: plans::Witness,
-        effect: sluice_store::Result<(
-            Box<plans::EditEffect>,
-            Option<crate::coordinator::CachedPlan>,
-        )>,
-        prune: Option<sluice_model::units::PruneSet>,
-    },
-    Direct(
-        ProjectId,
-        Box<edit::PreparedEdit>,
-        Option<plans::PruneEligibility>,
-    ),
 }
 
 async fn log_wait<H: ExecutionHost>(
@@ -690,7 +492,7 @@ async fn step_wait<H: ExecutionHost>(
     let (steps, tags) = (std::sync::Arc::new(steps), std::sync::Arc::new(tags));
     let mut compiled: Option<(Revision, std::sync::Arc<sluice_model::plan::Plan>)> = None;
     loop {
-        let catalog = broker.catalog().clone();
+        let (catalog, cache) = (broker.catalog().clone(), broker.plan_cache());
         let (steps, tags, cached) = (steps.clone(), tags.clone(), compiled.clone());
         let until = until.clone();
         let (result, plan) = broker
@@ -704,7 +506,16 @@ async fn step_wait<H: ExecutionHost>(
                 let rev = Revision(rev as u64);
                 let plan = match cached {
                     Some((at, plan)) if at == rev => plan,
-                    _ => std::sync::Arc::new(context(sql, project, &catalog)?.plan),
+                    _ => {
+                        cache
+                            .current(
+                                sql,
+                                project,
+                                catalog.generation(),
+                                &catalog.for_project(Some(project)),
+                            )?
+                            .1
+                    }
                 };
                 let mut errors: Vec<String> = steps
                     .iter()
@@ -908,7 +719,7 @@ fn step_context(
     if !step.needs.is_empty() {
         out["needs"] = json!(step.needs);
     }
-    if resources::admit_order(sql, ctx.project, &ctx.plan)?
+    if resources::admit_order(sql, ctx.project, ctx.revision, &ctx.plan)?
         .iter()
         .any(|candidate| candidate.step == *id)
     {

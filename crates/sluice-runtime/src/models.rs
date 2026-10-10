@@ -10,6 +10,7 @@ use serde_json::Value;
 use sluice_model::{
     error::PublicError,
     gates::ValueRef,
+    ids::StepId,
     plan::{Binding, Plan, Step},
     rpc::JsonMap,
     types::Type,
@@ -87,11 +88,21 @@ fn refuse(found: Vec<(String, String)>) -> Result<(), PublicError> {
 }
 
 /// Refuse an edit from `old` to `new` that adds an agent step whose model binds a string, or
-/// changes an agent step's model (or its fn) so that it does. `inputs` are the plan inputs'
-/// values. Steps whose fn and model binding are unchanged are not looked at.
-pub(crate) fn check_edit(old: &Plan, new: &Plan, inputs: &JsonMap) -> Result<(), PublicError> {
+/// changes an agent step's model (or its fn) so that it does. `written` are the steps the edit
+/// writes (its `step.put`s): no other step is looked at, so the check costs what the edit
+/// changes. `inputs` are the plan inputs' values the edit's preparation read. Steps whose fn
+/// and model binding are unchanged are skipped.
+pub(crate) fn check_edit<'a>(
+    old: &Plan,
+    new: &Plan,
+    written: impl IntoIterator<Item = &'a StepId>,
+    inputs: &JsonMap,
+) -> Result<(), PublicError> {
     let mut found = vec![];
-    for (id, step) in new.steps() {
+    for (id, step) in written
+        .into_iter()
+        .filter_map(|id| new.steps().get(id).map(|step| (id, step)))
+    {
         if !agent_model(step) {
             continue;
         }

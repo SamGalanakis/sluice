@@ -719,6 +719,107 @@ async fn a_submitted_run_is_finishing_and_a_settled_one_succeeds_with_the_record
     );
 }
 
+/// Complete a run with the current plan unavailable (`current` is its compile error), as the
+/// coordinator does when the project's fn catalog is broken.
+async fn finish_without_plan(
+    f: &Fixture,
+    run: &Reservation,
+    kind: CompletionKind,
+    outputs: serde_json::Value,
+) -> CompletionResult {
+    let identity = run.identity.clone();
+    f.writer
+        .write(RetrySafety::Idempotent, move |tx| {
+            complete_frozen(
+                tx,
+                CompletionContext {
+                    current: Err("project registry blocked: x.broken/fn.json: not json"),
+                },
+                Complete {
+                    completion_id: identity.run.to_string(),
+                    identity,
+                    kind,
+                    outputs: map(outputs),
+                    processes_gone: true,
+                    submission_version: None,
+                },
+                &mut Hooks::default(),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+/// Completion is decided from what the attempt froze at admission, never from a plan: an
+/// attempt with no plan snapshot in its provenance completes while the current plan cannot be
+/// compiled, its outputs checked against its own frozen contract, and its frozen declaration
+/// is the step's stored row.
+#[tokio::test]
+async fn a_run_completes_from_its_frozen_contract_with_no_snapshot_and_no_plan() {
+    let f = agentish().await;
+    let run = f.reserve("work", json!({})).await;
+    f.start(&run).await;
+    let project = f.context.project;
+    let attempt = run.identity.attempt;
+    let (request, provenance, stored): (serde_json::Value, serde_json::Value, serde_json::Value) =
+        f.reads
+            .snapshot(move |sql| {
+                let (request, provenance): (String, String) = sql.query_row(
+                    "SELECT request,provenance FROM attempts WHERE attempt_id=?1",
+                    [attempt.to_string()],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                let stored: String = sql.query_row(
+                    "SELECT declaration FROM steps WHERE project_id=?1 AND step_id='work'",
+                    [project.to_string()],
+                    |r| r.get(0),
+                )?;
+                Ok((
+                    serde_json::from_str(&request)?,
+                    serde_json::from_str(&provenance)?,
+                    serde_json::from_str(&stored)?,
+                ))
+            })
+            .await
+            .unwrap();
+    assert_eq!(request["declaration"], stored);
+    assert!(request["provenance"]["runtime"]["completion"].is_null());
+    assert!(provenance["runtime"]["completion"].is_null());
+    assert_eq!(request["declared"], json!({"summary":"string"}));
+
+    let result = finish_without_plan(
+        &f,
+        &run,
+        CompletionKind::Succeeded,
+        json!({"summary":"fixed","session":"s-1"}),
+    )
+    .await;
+    assert_eq!(result.status, StepStatus::Succeeded, "{result:?}");
+    assert_eq!(result.error, None);
+    assert_eq!(f.state().await.status(&id("work")), StepStatus::Succeeded);
+    // The plan never reconciled after it, and the run's result was kept all the same.
+    assert!(result.result.is_some());
+
+    // A second run whose outputs break the frozen contract fails on that contract alone.
+    f.retry(&["work"], None).await;
+    let next = f.reserve("work", json!({})).await;
+    f.start(&next).await;
+    let failed = finish_without_plan(
+        &f,
+        &next,
+        CompletionKind::Succeeded,
+        json!({"summary":3,"session":"s-2"}),
+    )
+    .await;
+    assert_eq!(failed.status, StepStatus::Failed);
+    assert!(
+        matches!(&failed.error, Some(PublicError::Invalid { errors, .. }) if errors.iter().any(|e| e.contains("summary"))),
+        "{:?}",
+        failed.error
+    );
+}
+
 /// `work` runs an agent-like open fn and declares outputs; `next` reads one of them, `gated`
 /// waits on another, and `many` scatters.
 async fn rolling() -> Fixture {
@@ -921,4 +1022,37 @@ async fn progress_outlives_its_run_and_clears_when_the_next_run_starts() {
     let failed = read(&f).await.unwrap();
     assert!(!failed.live && !failed.superseded);
     assert_eq!(failed.fresher("green"), Some(&json!(false)));
+}
+
+/// Admission reads the plan the caller compiled only at the revision it was compiled at: a
+/// revision fixes the plan's rows, so the stored revision alone says whether it is stale.
+#[tokio::test]
+async fn admission_order_refuses_a_plan_compiled_at_another_revision() {
+    let f = agentish().await;
+    let (project, plan, rev) = (
+        f.context.project,
+        f.context.plan.clone(),
+        f.context.revision,
+    );
+    let (current, stale) = f
+        .reads
+        .snapshot(move |sql| {
+            Ok((
+                sluice_store::resources::admit_order(sql, project, rev, &plan).map(|a| a.len()),
+                sluice_store::resources::admit_order(
+                    sql,
+                    project,
+                    sluice_model::ids::Revision(rev.0 + 1),
+                    &plan,
+                )
+                .map(|a| a.len()),
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(current.unwrap(), 0);
+    assert!(
+        matches!(stale, Err(sluice_store::StoreError::Public(PublicError::Conflict { ref message, .. })) if message == "compiled plan is stale"),
+        "{stale:?}"
+    );
 }

@@ -7,7 +7,7 @@ use sluice_model::{
     commands::{NextResult, Settles, StepStatus},
     error::PublicError,
     events::{Event, Record, UnitStep},
-    ids::{ProjectId, RecordSeq, RunId, UnitName, WorkGeneration},
+    ids::{ProjectId, RecordSeq, Revision, RunId, UnitName, WorkGeneration},
     plan::{FnSignature, Plan},
     rpc::JsonMap,
     types::Type,
@@ -127,7 +127,7 @@ async fn singleton_settles_once_per_generation_without_open_exception() {
     let copy = plan.clone();
     let events = w
         .write(RetrySafety::NonIdempotent, move |tx| {
-            record_settlements(tx, p, &copy)
+            record_settlements(tx, p, Revision(1), &copy)
         })
         .await
         .unwrap();
@@ -135,7 +135,10 @@ async fn singleton_settles_once_per_generation_without_open_exception() {
     let copy = plan.clone();
     assert!(
         w.write(RetrySafety::NonIdempotent, move |tx| record_settlements(
-            tx, p, &copy
+            tx,
+            p,
+            Revision(1),
+            &copy
         ))
         .await
         .unwrap()
@@ -152,7 +155,7 @@ async fn singleton_settles_once_per_generation_without_open_exception() {
             "UPDATE steps SET work_generation=work_generation+1 WHERE project_id=?1",
             [p.to_string()],
         )?;
-        record_settlements(tx, p, &copy)?;
+        record_settlements(tx, p, Revision(1), &copy)?;
         Ok(())
     })
     .await
@@ -579,7 +582,7 @@ async fn queued_work_is_startable_but_paused_external_and_failed_gates_can_settl
     .unwrap();
     let emitted = w
         .write(RetrySafety::NonIdempotent, move |tx| {
-            record_settlements(tx, p, &plan)
+            record_settlements(tx, p, Revision(1), &plan)
         })
         .await
         .unwrap();
@@ -624,7 +627,10 @@ async fn delivery_with_running_cleanup_does_not_settle_and_certificate_survives_
     let copy = plan.clone();
     assert!(
         w.write(RetrySafety::NonIdempotent, move |tx| record_settlements(
-            tx, p, &copy
+            tx,
+            p,
+            Revision(1),
+            &copy
         ))
         .await
         .unwrap()
@@ -637,7 +643,7 @@ async fn delivery_with_running_cleanup_does_not_settle_and_certificate_survives_
                 "UPDATE steps SET status='succeeded' WHERE project_id=?1",
                 [p.to_string()],
             )?;
-            record_settlements(tx, p, &copy)
+            record_settlements(tx, p, Revision(1), &copy)
         })
         .await
         .unwrap()
@@ -653,7 +659,10 @@ async fn delivery_with_running_cleanup_does_not_settle_and_certificate_survives_
     .unwrap();
     assert!(
         w.write(RetrySafety::NonIdempotent, move |tx| record_settlements(
-            tx, p, &plan
+            tx,
+            p,
+            Revision(1),
+            &plan
         ))
         .await
         .unwrap()

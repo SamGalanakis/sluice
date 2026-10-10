@@ -87,9 +87,10 @@ impl Fixture {
             server,
         };
         f.patch(json!([
-            {"op":"add","path":"/inputs","value":{"value":"int","enabled":"boolean"}},
-            {"op":"add","path":"/steps/pre","value":{"run":"core.external","outputs":{"ok":"boolean"},"tags":["unit:pre","exit"]}},
-            {"op":"add","path":"/steps/work","value":{"run":"fixture.submit","in":{"value":{"source":"value"}},"after":["enabled"],"outputs":{"ready":"boolean"}}}
+            {"op":"input.put","name":"value","declaration":"int"},
+            {"op":"input.put","name":"enabled","declaration":"boolean"},
+            {"op":"step.add","step":"pre","spec":{"run":"core.external","outputs":{"ok":"boolean"},"tags":["unit:pre","exit"]}},
+            {"op":"step.add","step":"work","spec":{"run":"fixture.submit","in":{"value":{"source":"value"}},"after":["enabled"],"outputs":{"ready":"boolean"}}}
         ])).await;
         f
     }
@@ -108,7 +109,12 @@ impl Fixture {
             .unwrap()
     }
     async fn patch(&self, ops: Value) {
-        self.call("plan_patch",json!({"rev":self.rev().await,"ops":ops,"dry_run":false,"reason":"fixture","start":true})).await.unwrap();
+        self.call(
+            "plan_edit",
+            json!({"rev":self.rev().await,"ops":ops,"reason":"fixture"}),
+        )
+        .await
+        .unwrap();
     }
     async fn input(&self, name: &str, value: Value, dry_run: bool) -> CommandReply {
         self.call(
@@ -143,11 +149,9 @@ impl Fixture {
 fn request(name: &str, args: Value) -> CommandRequest {
     decode_json(&serde_json::to_vec(&json!({"command":name,"args":args})).unwrap()).unwrap()
 }
+/// A reply's object, whatever its variant (`{"reply": …, "data": …}` on the wire).
 fn data(reply: CommandReply) -> Value {
-    let CommandReply::Data(v) = reply else {
-        panic!("expected data, got {reply:?}")
-    };
-    v.into_value()
+    serde_json::to_value(&reply).unwrap()["data"].take()
 }
 fn options(dry_run: bool) -> Value {
     json!({"dry_run":dry_run,"reason":"test"})
@@ -415,7 +419,7 @@ async fn context_docs_query_and_views_use_the_coordinator_snapshot() {
     )
     .await
     .unwrap();
-    f.patch(json!([{"op":"add","path":"/steps/work/after","value":["pre","enabled"]},{"op":"add","path":"/steps/work/doc","value":"<script>alert('x')</script>"}] )).await;
+    f.patch(json!([{"op":"step.update","step":"work","changes":{"after":["pre","enabled"],"doc":"<script>alert('x')</script>"}}])).await;
     f.call("ask", json!({"to":"work","body":"question","owner":true}))
         .await
         .unwrap();
@@ -773,7 +777,7 @@ async fn prune_uses_age_evidence_and_backup_is_online_and_refuses_overwrite() {
     let CommandReply::Preview(preview) = preview else {
         panic!("preview")
     };
-    assert!(preview.ops.is_empty());
+    assert!(preview.changes.is_empty());
     let before = f.rev().await;
     f.call(
         "plan_prune",
@@ -795,7 +799,7 @@ async fn prune_uses_age_evidence_and_backup_is_online_and_refuses_overwrite() {
         "axxbyy",
         "y",
     ];
-    f.patch(json!(names.iter().map(|name| json!({"op":"add","path":format!("/steps/{name}"),"value":{"run":"core.external","outputs":{"done":"boolean"},"tags":[format!("unit:{name}")]}})).collect::<Vec<_>>())).await;
+    f.patch(json!(names.iter().map(|name| json!({"op":"step.add","step":name,"spec":{"run":"core.external","outputs":{"done":"boolean"},"tags":[format!("unit:{name}")]}})).collect::<Vec<_>>())).await;
     for name in names {
         f.call(
             "step_set_output",
@@ -1227,7 +1231,7 @@ async fn input_preview_reports_cached_resource_queue_and_stale_work() {
     f.call("project_update", json!({"resources":{"cpu":1}}))
         .await
         .unwrap();
-    f.patch(json!([{"op":"add","path":"/steps/work/needs","value":{"cpu":1}}]))
+    f.patch(json!([{"op":"step.update","step":"work","changes":{"needs":{"cpu":1}}}]))
         .await;
     f.call("project_update", json!({"resources":{"cpu":0}}))
         .await
@@ -1490,11 +1494,11 @@ async fn step_wait_settled_counts_held_steps_but_not_work_that_can_still_move() 
     let f = Fixture::new().await;
     f.broker.acquire_scheduler("test".into()).await.unwrap();
     // later waits on pre, which waits for its outputs by hand: both are held.
-    f.patch(json!([{"op":"add","path":"/steps/later","value":{"run":"fixture.echo","in":{"value":{"default":1}},"after":["pre"]}}])).await;
+    f.patch(json!([{"op":"step.add","step":"later","spec":{"run":"fixture.echo","in":{"value":{"default":1}},"after":["pre"]}}])).await;
     let settled = |ids: &'static [&'static str]| wait_args(steps(ids), json!("settled"), 0);
     assert!(waited(f.call("step_wait", settled(&["later"])).await.unwrap()).met);
     // work starts once its inputs are set, and a step waiting on running work is not settled.
-    f.patch(json!([{"op":"add","path":"/steps/after-work","value":{"run":"fixture.echo","in":{"value":{"default":1}},"after":["work"]}}])).await;
+    f.patch(json!([{"op":"step.add","step":"after-work","spec":{"run":"fixture.echo","in":{"value":{"default":1}},"after":["work"]}}])).await;
     let running = spawn_call(
         &f,
         "step_wait",
@@ -1617,7 +1621,7 @@ async fn log_read_filters_step_status_by_status_and_messages_by_recipient() {
     )
     .await
     .unwrap();
-    f.patch(json!([{"op":"add","path":"/steps/extra","value":{"run":"core.external","outputs":{"ok":"boolean"}}}])).await;
+    f.patch(json!([{"op":"step.add","step":"extra","spec":{"run":"core.external","outputs":{"ok":"boolean"}}}])).await;
     f.call(
         "step_cancel",
         json!({"selection":steps(&["extra"]),"reason":"not needed"}),
@@ -1704,7 +1708,7 @@ async fn standing_log_wait_sleeps_through_unrelated_records_and_wakes_on_the_fir
         .await
         .unwrap();
     f.input("value", json!(1), false).await;
-    f.patch(json!([{"op":"add","path":"/steps/extra","value":{"run":"core.external","outputs":{"ok":"boolean"}}}])).await;
+    f.patch(json!([{"op":"step.add","step":"extra","spec":{"run":"core.external","outputs":{"ok":"boolean"}}}])).await;
     f.call(
         "step_set_output",
         json!({"step":"extra","outputs":{"ok":true},"force":true,"reason":"by hand"}),
@@ -1811,7 +1815,7 @@ async fn status_names_steps_and_units_and_recipe_list_reports_titles_and_views_o
         .await
         .unwrap();
     }
-    f.patch(json!([{"op":"add","path":"/steps/watch","value":{"run":"core.external","doc":"Watches main for red\nand says so","outputs":{"ok":"boolean"}}}])).await;
+    f.patch(json!([{"op":"step.add","step":"watch","spec":{"run":"core.external","doc":"Watches main for red\nand says so","outputs":{"ok":"boolean"}}}])).await;
     let status = data(
         f.call("status", json!({"selection":{"steps":null,"tags":null}}))
             .await

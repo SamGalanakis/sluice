@@ -152,10 +152,10 @@ impl Fixture {
         self.client.command(request(name, args)).await
     }
     async fn rev(&self) -> u64 {
-        let CommandReply::Data(plan) = self.call("plan_get", json!({})).await.unwrap() else {
-            panic!("plan")
-        };
-        plan.into_value()["rev"].as_u64().unwrap()
+        let plan = self.call("plan_get", json!({})).await.unwrap();
+        serde_json::to_value(&plan).unwrap()["data"]["rev"]
+            .as_u64()
+            .unwrap()
     }
     /// One edit, timed from the client: its reply is an edit result at a new revision
     /// (or, for a prune that removes nothing, at the same one).
@@ -197,10 +197,13 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
     assert_eq!(steps.len(), UNITS * SUFFIXES.len());
     // The whole plan in one edit, every step paused so nothing is launched.
     let rev = f.rev().await;
+    let adds: Vec<Value> = steps
+        .iter()
+        .map(|(step, spec)| json!({"op":"step.add","step":step,"spec":spec}))
+        .collect();
     f.call(
-        "plan_patch",
-        json!({"rev":rev,"ops":[{"op":"replace","path":"","value":{"steps":steps}}],
-            "dry_run":false,"reason":"seed","start":false}),
+        "plan_edit",
+        json!({"rev":rev,"ops":adds,"reason":"seed","start":false}),
     )
     .await
     .unwrap();
@@ -208,11 +211,11 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
     let mut took = vec![];
     let rev = f.rev().await;
     took.push((
-        "plan_patch",
+        "plan_edit",
         f.timed(
-            "plan_patch",
-            json!({"rev":rev,"ops":[{"op":"add","path":"/steps/fig-4140-rm/tags/-","value":"probe"}],
-                "dry_run":false,"reason":"probe","start":true}),
+            "plan_edit",
+            json!({"rev":rev,"ops":[{"op":"step.update","step":"fig-4140-rm","changes":{"doc":"probe"}}],
+                "reason":"probe"}),
         )
         .await,
     ));
@@ -273,13 +276,13 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
     eprintln!("edit times on {} steps: {took:?}", UNITS * SUFFIXES.len());
 
     // A write made while an edit is being prepared does not wait for it: the edit holds
-    // the one writer only to check what it was prepared from and write its rows. (It used
-    // to hold it for the whole edit.)
+    // the one writer only to check its tokens and write its rows; it is never prepared in
+    // the writer.
     let rev = f.rev().await;
     let patch = f.call(
-        "plan_patch",
-        json!({"rev":rev,"ops":[{"op":"add","path":"/steps/fig-4141-rm/tags/-","value":"held"}],
-            "dry_run":false,"reason":"probe","start":true}),
+        "plan_edit",
+        json!({"rev":rev,"ops":[{"op":"step.update","step":"fig-4141-rm","changes":{"doc":"held"}}],
+            "reason":"probe"}),
     );
     let slot = async {
         tokio::time::sleep(Duration::from_millis(30)).await;
@@ -304,8 +307,8 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
     );
 
     // Two edits prepared from one revision: the first commits and the second, finding
-    // the plan changed when it reaches the writer, is prepared again there and commits
-    // after it. A plan_patch prepared at the old revision is refused as stale.
+    // the plan changed when it reaches the writer, is prepared again outside it and commits
+    // after it. A plan_edit that names the old revision is refused as stale.
     let rev = f.rev().await;
     let add = |step: &str| {
         json!({"step":step,"spec":{"run":"fixture.echo","in":{"value":{"default":step}}},
@@ -315,9 +318,9 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
         f.call("step_add", add("race-a")),
         f.call("step_add", add("race-b")),
         f.call(
-            "plan_patch",
-            json!({"rev":rev,"ops":[{"op":"add","path":"/steps/race-c","value":{"run":"fixture.echo","in":{"value":{"default":1}},"paused":true}}],
-                "dry_run":false,"reason":"race","start":true}),
+            "plan_edit",
+            json!({"rev":rev,"ops":[{"op":"step.add","step":"race-c","spec":{"run":"fixture.echo","in":{"value":{"default":1}},"paused":true}}],
+                "reason":"race"}),
         ),
     );
     let mut revs = vec![];
@@ -338,7 +341,7 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
             assert!(current_rev.is_some_and(|current| current.0 > rev));
             assert_eq!(revs, [rev + 1, rev + 2]);
         }
-        other => panic!("plan_patch at rev {rev}: {other:?}"),
+        other => panic!("plan_edit at rev {rev}: {other:?}"),
     }
     assert_eq!(f.rev().await, *revs.last().unwrap());
     f.close().await;
