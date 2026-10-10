@@ -12,6 +12,7 @@ pub mod ids;
 pub mod naming;
 pub mod openui;
 pub mod plan;
+pub mod plan_index;
 pub mod plan_rows;
 pub mod recipe;
 pub mod rpc;

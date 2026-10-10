@@ -1,14 +1,16 @@
 #[path = "../../../tests/support/home.rs"]
 mod home;
 #[allow(dead_code)]
+#[path = "support/plan_rows.rs"]
+mod plan_rows;
+#[allow(dead_code)]
 pub mod support {
     use super::home::ScratchHome;
     use rusqlite::params;
     use serde_json::{Value, json};
     use sluice_model::{
         commands::*,
-        edit::PreparedEdit,
-        gates::{CachedResources, StateSnapshot},
+        gates::StateSnapshot,
         ids::*,
         plan::{FnSignature, Plan, SignatureProvider},
         rpc::{JsonMap, decode_json},
@@ -58,38 +60,6 @@ pub mod support {
     pub fn plan(doc: Value) -> Plan {
         Plan::parse(&map(doc), &Signatures).unwrap()
     }
-    pub fn edit(context: &PlanContext, doc: Value) -> PreparedEdit {
-        let state = StateSnapshot::default();
-        let recipes = Default::default();
-        let limits = Default::default();
-        let resources = CachedResources::default();
-        let request = sluice_model::edit::PlanEdit::Patch(PlanPatch {
-            project: ProjectSelector::Id(context.project),
-            rev: context.revision,
-            ops: vec![PatchOperation::Replace {
-                path: "".into(),
-                value: doc.try_into().unwrap(),
-            }],
-            start: true,
-            dry_run: false,
-            reason: "change".into(),
-            author: Some("sam".into()),
-        });
-        sluice_model::edit::prepare_edit(
-            &sluice_model::edit::EditSnapshot {
-                revision: context.revision,
-                plan: &context.plan,
-                state: &state,
-                signatures: &Signatures,
-                recipes: &recipes,
-                limits: &limits,
-                resources: &resources,
-                prune_eligible: None,
-            },
-            request,
-        )
-        .unwrap()
-    }
     pub struct Fixture {
         pub home: ScratchHome,
         pub writer: Writer,
@@ -102,16 +72,19 @@ pub mod support {
             assert!(home.root().exists());
             assert_eq!(ScratchHome::validate(home.path()).unwrap(), home.path());
             let writer = Writer::open(home.path()).unwrap();
-            let project = ProjectId::new();
-            let plan = plan(doc);
+            let plan = plan(doc.clone());
             let copy = plan.clone();
-            writer
+            let (project, revision) = writer
                 .write(RetrySafety::NonIdempotent, move |tx| {
-                    tx.sql().execute(
-                        "INSERT INTO projects(project_id,name,created_at) VALUES (?1,'p','now')",
-                        [project.to_string()],
+                    let project = super::plan_rows::create_project(tx, "p")?;
+                    let rev = super::plan_rows::commit_document(
+                        tx,
+                        project,
+                        &map(doc),
+                        Some(&copy),
+                        None,
                     )?;
-                    plans::initialize_plan(tx, project, &copy)
+                    Ok((project, rev))
                 })
                 .await
                 .unwrap();
@@ -122,7 +95,7 @@ pub mod support {
                 reads,
                 context: PlanContext {
                     project,
-                    revision: Revision(1),
+                    revision,
                     plan,
                 },
             }
@@ -148,18 +121,18 @@ pub mod support {
                 .unwrap()
         }
         pub async fn apply(&mut self, doc: Value) {
-            let prepared = edit(&self.context, doc);
-            let plan = prepared.plan.clone();
+            let plan = plan(doc.clone());
+            let copy = plan.clone();
             let project = self.context.project;
-            let result = self
+            let revision = self
                 .writer
                 .write(RetrySafety::NonIdempotent, move |tx| {
-                    plans::apply_edit(tx, project, prepared)
+                    super::plan_rows::commit_document(tx, project, &map(doc), Some(&copy), None)
                 })
                 .await
                 .unwrap();
             self.context.plan = plan;
-            self.context.revision = result.rev;
+            self.context.revision = revision;
         }
         pub async fn manual(&self, step: &str, outputs: Value, force: bool) -> ResultId {
             let context = self.context.clone();
@@ -536,28 +509,6 @@ impl PlanInputSetter for Inputs {
         )
     }
 }
-struct Initializer(sluice_model::plan::Plan);
-impl projects::PlanInitializer for Initializer {
-    fn initialize(
-        &self,
-        tx: &mut WriteTransaction<'_>,
-        project: ProjectId,
-        author: &str,
-    ) -> Result<()> {
-        plans::initialize_plan(tx, project, &self.0)?;
-        let r = tx.append_record(
-            Some(project),
-            Event::PlanEdit {
-                rev: Revision(1),
-                author: author.into(),
-                reason: "project created".into(),
-                ops: vec![],
-            },
-        )?;
-        tx.sql().execute("INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,ops) VALUES (?1,1,?2,?3,?4,'project created','[]')",rusqlite::params![project.to_string(),r.seq.0,r.at,author])?;
-        Ok(())
-    }
-}
 struct ResourceAdapter;
 impl projects::ResourceSettings for ResourceAdapter {
     fn set_resources(
@@ -818,7 +769,7 @@ async fn project_adapters_initialize_and_rename_with_real_resources() {
                     resources: Some(json!({"lane":2})),
                     author: "sam".into(),
                 },
-                &Initializer(plan(json!({"steps":{}}))),
+                &projects::EmptyPlanInitializer,
                 &ResourceAdapter,
             )
         })
@@ -845,28 +796,74 @@ async fn project_adapters_initialize_and_rename_with_real_resources() {
     assert_eq!(p.resources_rev, Revision(2));
 }
 
+/// A prune prepared before a retry of its member is stale at commit (the retry moved the
+/// state epoch), so it writes nothing and the retried work stays.
 #[tokio::test]
 async fn prepared_prune_rechecks_done_after_retry() {
     let f = Fixture::new(json!({"steps":{"work":{"run":"empty"}}})).await;
     f.manual("work", json!({}), false).await;
-    let state = f.state().await;
-    let edit=sluice_model::edit::prepare_edit(&sluice_model::edit::EditSnapshot{
-        revision:f.context.revision,plan:&f.context.plan,state:&state,signatures:&Signatures,recipes:&Default::default(),limits:&Default::default(),resources:&Default::default(),prune_eligible:None
-    },sluice_model::edit::PlanEdit::PlanPrune(serde_json::from_value(json!({"project":ProjectSelector::Id(f.context.project),"older_than_seconds":0,"edit":{"dry_run":false,"reason":"prune completed work"}})).unwrap())).unwrap();
-    assert!(edit.prune.is_some());
-    assert!(!edit.plan.steps().contains_key(&id("work")));
+    let context = f.context.clone();
+    let (commit, evidence) = f
+        .reads
+        .snapshot(move |c| prune_commit(c, &context, time::OffsetDateTime::now_utc()))
+        .await
+        .unwrap();
+    assert_eq!(commit.state.removed, vec![id("work")]);
     f.retry(&["work"], Some("resume unfinished review")).await;
     let project = f.context.project;
+    let before = f.counts().await;
     let result = f
         .writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            plans::apply_edit(tx, project, edit)
+            plans::commit_plan_edit(tx, project, &commit, Some(&evidence))
         })
-        .await;
-    assert!(
-        result.is_err(),
-        "stale prune deleted explicitly retried pending work: {result:?}"
+        .await
+        .unwrap();
+    assert_eq!(
+        result,
+        plans::CommitOutcome::Stale,
+        "stale prune must not delete explicitly retried pending work"
     );
+    assert_eq!(f.counts().await, before);
+    assert_eq!(f.state().await.status(&id("work")), StepStatus::Pending);
+}
+
+/// A prune of every done unit the evidence names, as its preparation would hand it over.
+fn prune_commit(
+    c: &rusqlite::Connection,
+    context: &PlanContext,
+    cutoff: time::OffsetDateTime,
+) -> Result<(
+    sluice_model::plan_rows::PlanEditCommit,
+    plans::PruneEligibility,
+)> {
+    let evidence = plans::prune_eligible(c, context, cutoff)?;
+    let units: Vec<UnitName> = evidence.units().to_vec();
+    let members: Vec<StepId> = context
+        .plan
+        .units()
+        .iter()
+        .filter(|(name, _)| units.contains(name))
+        .flat_map(|(_, unit)| unit.steps.clone())
+        .collect();
+    let current = plans::read_plan_rows(c, context.project)?;
+    let mut next = current.clone();
+    next.steps.retain(|row| !members.contains(&row.step));
+    let mut commit = crate::plan_rows::rows_commit(
+        c,
+        context.project,
+        &current,
+        &next,
+        None,
+        "sluice",
+        "retire done units",
+    );
+    commit.prune = Some(sluice_model::units::PruneSet {
+        units,
+        steps: members,
+        kept: Default::default(),
+    });
+    Ok((commit, evidence))
 }
 
 #[tokio::test]
@@ -1481,62 +1478,59 @@ async fn scatter_siblings_freeze_empty_and_nonempty_ranges_before_late_feedback(
 
 #[tokio::test]
 async fn age_filtered_prune_freezes_cutoff_and_current_results() {
-    // Same status and plan revision do not prove that the current result is old.
+    // Same status and plan revision do not prove that the current result is old: a new
+    // result moves the state epoch (the commit is stale), and evidence frozen before it is
+    // refused even under tokens read after it.
     for replace_result in [false, true] {
-        let f = Fixture::new(json!({"steps":{"work":{"run":"empty","tags":["unit:done"]}}})).await;
-        f.manual("work", json!({}), false).await;
-        let context = f.context.clone();
-        let cutoff = time::OffsetDateTime::now_utc();
-        let (edit, evidence) = f
-            .reads
-            .snapshot(move |c| {
-                let excluded =
-                    plans::prune_eligible(c, &context, cutoff - time::Duration::hours(1))?;
-                assert!(excluded.units().is_empty());
-                let evidence = plans::prune_eligible(c, &context, cutoff)?;
-                assert_eq!(evidence.units(), &["done".parse::<UnitName>().unwrap()]);
-                let state = plans::read_state(c, context.project)?;
-                let edit = sluice_model::edit::prepare_edit(
-                    &sluice_model::edit::EditSnapshot {
-                        revision: context.revision,
-                        plan: &context.plan,
-                        state: &state,
-                        signatures: &Signatures,
-                        recipes: &Default::default(),
-                        limits: &Default::default(),
-                        resources: &Default::default(),
-                        prune_eligible: Some(evidence.units()),
-                    },
-                    sluice_model::edit::PlanEdit::PlanPrune(serde_json::from_value(json!({
-                        "project": ProjectSelector::Id(context.project), "older_than_seconds": 1,
-                        "edit": {"dry_run": false, "reason": "prune old results"}
-                    }))?),
-                )?;
-                Ok((edit, evidence))
-            })
-            .await
-            .unwrap();
-        if replace_result {
+        for fresh_tokens in [false, true] {
+            let f =
+                Fixture::new(json!({"steps":{"work":{"run":"empty","tags":["unit:done"]}}})).await;
             f.manual("work", json!({}), false).await;
-        }
-        let before = f.counts().await;
-        let project = f.context.project;
-        let result = f
-            .writer
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                plans::apply_prune(tx, project, edit, &evidence)
-            })
-            .await;
-        if replace_result {
-            assert!(matches!(
-                result,
-                Err(sluice_model::error::PublicError::Conflict { .. })
-            ));
+            let context = f.context.clone();
+            let cutoff = time::OffsetDateTime::now_utc();
+            let (mut commit, evidence) = f
+                .reads
+                .snapshot(move |c| {
+                    let excluded =
+                        plans::prune_eligible(c, &context, cutoff - time::Duration::hours(1))?;
+                    assert!(excluded.units().is_empty());
+                    let found = prune_commit(c, &context, cutoff)?;
+                    assert_eq!(found.1.units(), &["done".parse::<UnitName>().unwrap()]);
+                    Ok(found)
+                })
+                .await
+                .unwrap();
+            if replace_result {
+                f.manual("work", json!({}), false).await;
+            }
+            let before = f.counts().await;
+            let project = f.context.project;
+            let result = f
+                .writer
+                .write(RetrySafety::NonIdempotent, move |tx| {
+                    if fresh_tokens {
+                        commit.tokens = crate::plan_rows::tokens(tx.sql(), project);
+                    }
+                    plans::commit_plan_edit(tx, project, &commit, Some(&evidence))
+                })
+                .await;
+            match (replace_result, fresh_tokens) {
+                (false, _) => {
+                    assert_eq!(
+                        result.unwrap(),
+                        plans::CommitOutcome::Committed(Revision(3))
+                    );
+                    assert!(!f.state().await.steps.contains_key(&id("work")));
+                    continue;
+                }
+                (true, false) => assert_eq!(result.unwrap(), plans::CommitOutcome::Stale),
+                (true, true) => assert!(matches!(
+                    result,
+                    Err(sluice_model::error::PublicError::Conflict { .. })
+                )),
+            }
             assert_eq!(f.counts().await, before);
             assert_eq!(f.state().await.status(&id("work")), StepStatus::Succeeded);
-        } else {
-            assert_eq!(result.unwrap().rev, Revision(2));
-            assert!(!f.state().await.steps.contains_key(&id("work")));
         }
     }
 }

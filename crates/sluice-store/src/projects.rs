@@ -11,6 +11,7 @@ use sluice_model::{
     error::PublicError,
     events::Event,
     ids::{InvocationId, ProjectId, ProjectName, ProjectSelector, Revision, RunId},
+    plan_rows::{PlanChange, RootSection},
     rpc::{JsonMap, JsonValue},
 };
 use std::{
@@ -298,7 +299,8 @@ pub struct Retirement {
 /// The newest plan edit automatic retiring made (author `sluice`), if any.
 pub fn last_retirement(c: &Connection, id: ProjectId) -> Result<Option<Retirement>> {
     Ok(c.query_row(
-        "SELECT rev,at,json_array_length(ops) FROM plan_edits
+        "SELECT rev,at,(SELECT count(*) FROM json_each(changes)
+           WHERE json_extract(value,'$.op')='step.delete') FROM plan_edits
          WHERE project_id=?1 AND author=?2 AND reason LIKE 'retire done units%'
          ORDER BY rev DESC LIMIT 1",
         rusqlite::params![id.to_string(), RETIRE_AUTHOR],
@@ -418,9 +420,20 @@ impl PlanInitializer for EmptyPlanInitializer {
         project: ProjectId,
         author: &str,
     ) -> Result<()> {
+        // A new plan has all three sections, empty: `{"inputs": {}, "outputs": {}, "steps": {}}`.
+        let origin = vec![PlanChange::HeaderPut {
+            root_order: vec![
+                RootSection::Inputs,
+                RootSection::Outputs,
+                RootSection::Steps,
+            ],
+        }];
         tx.sql().execute(
-            "INSERT INTO plans(project_id,rev,doc) VALUES (?1,1,?2)",
-            [project.to_string(), json!({"steps":{}}).to_string()],
+            "INSERT INTO plans(project_id,rev,root_order,state_epoch) VALUES (?1,1,?2,0)",
+            [
+                project.to_string(),
+                json!(["inputs", "outputs", "steps"]).to_string(),
+            ],
         )?;
         let record = tx.append_record(
             Some(project),
@@ -428,10 +441,10 @@ impl PlanInitializer for EmptyPlanInitializer {
                 rev: Revision(1),
                 author: author.into(),
                 reason: "project created".into(),
-                ops: Vec::new(),
+                changes: origin.clone(),
             },
         )?;
-        tx.sql().execute("INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,ops) VALUES (?1,1,?2,?3,?4,'project created','[]')",rusqlite::params![project.to_string(),record.seq.0,record.at,author])?;
+        tx.sql().execute("INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,changes) VALUES (?1,1,?2,?3,?4,'project created',?5)",rusqlite::params![project.to_string(),record.seq.0,record.at,author,serde_json::to_string(&origin)?])?;
         tx.changed(Some(project), "plan");
         Ok(())
     }
@@ -1176,6 +1189,8 @@ pub fn project_delete(
         "steps",
         "step_results",
         "inputs",
+        "plan_refs",
+        "plan_outputs",
         "plan_edits",
         "plans",
         "resources",

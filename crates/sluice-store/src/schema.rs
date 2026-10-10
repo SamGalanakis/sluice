@@ -8,78 +8,26 @@ use sluice_model::{error::PublicError, ids::HomeId};
 
 pub const DATABASE_FILE: &str = "sluice.db";
 pub const FORMAT_MAJOR: i64 = 1;
-/// Changes only for a change that older binaries cannot read. A run's pinned `sluice` reads
-/// this database itself and refuses any other version, so a bump would break `step_submit` for
-/// every run started before the deploy. Additive columns keep this version: a fresh home gets
-/// them from the schema, and the writer adds them to an existing home (`ADDED_COLUMNS`).
-pub const SCHEMA_VERSION: i64 = 1;
-pub const RECORD_PAYLOAD_VERSION: i64 = 1;
-const APPLICATION_ID: i64 = 0x534c5543;
-const SCHEMA: &str = include_str!("../migrations/0001.sql");
-/// Columns added after homes existed, as `(table, column, definition)`. The writer adds the
-/// missing ones when it opens a home, before anything else touches it.
-const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
-    ("projects", "board", "TEXT"),
-    (
-        "projects",
-        "board_rev",
-        "INTEGER NOT NULL DEFAULT 0 CHECK (board_rev >= 0)",
-    ),
-    // Retired (the board's document replaced its slots); kept for pinned older releases.
-    ("projects", "board_slots", "TEXT"),
-    // The board's document (`board_doc_write`, `board_doc_edit`): its markdown, revision and
-    // last edit.
-    ("projects", "board_doc", "TEXT"),
-    (
-        "projects",
-        "board_doc_rev",
-        "INTEGER NOT NULL DEFAULT 0 CHECK (board_doc_rev >= 0)",
-    ),
-    ("projects", "board_doc_at", "TEXT"),
-    ("projects", "board_doc_author", "TEXT"),
-    // A running step's latest values (`step_progress`), kept until its next run starts.
-    (
-        "steps",
-        "progress",
-        "TEXT CHECK (progress IS NULL OR json_type(progress) = 'object')",
-    ),
-    ("steps", "progress_at", "TEXT"),
-    ("steps", "progress_run", "TEXT"),
-    // Automatic retiring of done units: the age in seconds (null is off) and the keep patterns.
-    (
-        "projects",
-        "prune_done_after",
-        "INTEGER CHECK (prune_done_after IS NULL OR prune_done_after > 0)",
-    ),
-    (
-        "projects",
-        "prune_keep",
-        "TEXT CHECK (prune_keep IS NULL OR json_type(prune_keep) = 'array')",
-    ),
-    // When the owner marked a message read (`mark_read`): what the inbox's "Read today" lists.
-    ("messages", "read_at", "TEXT"),
-    // Who stopped or retried a run, and why (`{"cancel": {author, reason, at}, "retry": {…}}`),
-    // kept on the run so a trimmed log does not lose it.
-    (
-        "runs",
-        "stopped",
-        "TEXT CHECK (stopped IS NULL OR json_type(stopped) = 'object')",
-    ),
-];
-/// Views added after homes existed, as `(name, definition)`: the writer creates the missing
-/// ones with the columns. A view is no table, so a release that counts the home's tables
-/// (every pinned one does) reads a home that has it. `board_slots` is retired with the slots
-/// but kept: a pinned older release may read it.
-const ADDED_VIEWS: &[(&str, &str)] = &[(
-    "board_slots",
-    "CREATE VIEW board_slots AS SELECT p.project_id AS project_id, s.key AS key,
-  json_extract(s.value, '$.markdown') AS markdown, json_extract(s.value, '$.at') AS updated_at,
-  json_extract(s.value, '$.author') AS author
-  FROM projects p, json_each(p.board_slots) s WHERE p.deleted_at IS NULL",
-)];
-/// The board columns briefly shipped as schema 2. A home or backup marked 2 is schema 1 with
-/// those columns, and its writer marks it 1 again. Remove once no home or backup is marked 2.
-const BOARD_INTERIM_SCHEMA: i64 = 2;
+/// Changes only for a change that older binaries cannot read: a run's pinned `sluice` reads
+/// this database itself and refuses any other version, so a new version needs a drained,
+/// fenced migration with no live consumers of the old one (`convert::convert_home`). Schema 2
+/// stays reserved for the historical interim board layout; normalized plans are schema 3.
+/// Additive changes keep this version (`ADDED_COLUMNS`, `ADDED_VIEWS`).
+pub const SCHEMA_VERSION: i64 = 3;
+/// One record payload version per home: every record of a schema-3 home is written at 2.
+pub const RECORD_PAYLOAD_VERSION: i64 = 2;
+pub(crate) const APPLICATION_ID: i64 = 0x534c5543;
+/// The complete schema-3 DDL a fresh home is created from.
+pub(crate) const SCHEMA: &str = include_str!("../migrations/0003.sql");
+/// The tables a schema-3 home has (`sqlite_%` excluded).
+pub(crate) const TABLES: i64 = 27;
+/// Columns added to schema 3 after homes existed, as `(table, column, definition)`. The writer
+/// adds the missing ones when it opens a home, before anything else touches it. Empty: every
+/// schema-1 addition is folded into `0003.sql`.
+const ADDED_COLUMNS: &[(&str, &str, &str)] = &[];
+/// Views added to schema 3 after homes existed, as `(name, definition)`: the writer creates the
+/// missing ones with the columns. Empty in schema 3.
+const ADDED_VIEWS: &[(&str, &str)] = &[];
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -91,6 +39,25 @@ pub enum StoreError {
     UnsupportedFormat { found: i64 },
     #[error("unsupported schema version {found}; expected {SCHEMA_VERSION}")]
     UnsupportedSchema { found: i64 },
+    /// A home (or backup) at schema 1 or 2: only `sluice home migrate` (or a restore's private
+    /// copy) converts it; opening never does.
+    #[error("this home is at schema {found}; run \"sluice home migrate\" to bring it to schema 3")]
+    MigrationRequired { found: i64 },
+    /// A schema-changing restore of a backup that holds live work, refused before anything is
+    /// written: the restored home's adoption would reach the original home's units.
+    #[error(
+        "this backup holds live work ({attempts} attempts, {runs} runs, {leases} leases, {calls} calls); a schema-changing restore needs a backup taken with nothing live"
+    )]
+    LiveWorkInBackup {
+        attempts: u64,
+        runs: u64,
+        leases: u64,
+        calls: u64,
+    },
+    /// The conversion's preconditions failed; nothing was written. Each blocker names the
+    /// project, the check and the revision.
+    #[error("conversion to schema 3 is blocked: {}", .0.join("; "))]
+    ConversionBlocked(Vec<String>),
     #[error("unrecognized or incomplete sluice database: {0}")]
     InvalidDatabase(String),
     #[error("store writer is closed")]
@@ -117,6 +84,22 @@ impl StoreError {
                 retryable: idempotent,
             },
             Self::Public(error) => error,
+            Self::LiveWorkInBackup {
+                attempts,
+                runs,
+                leases,
+                calls,
+            } => sluice_model::plan_rows::PlanRowsError::LiveWorkInBackup {
+                attempts,
+                runs,
+                leases,
+                calls,
+            }
+            .into(),
+            Self::ConversionBlocked(blockers) => PublicError::Invalid {
+                message: "conversion to schema 3 is blocked".into(),
+                errors: blockers,
+            },
             Self::WriterLocked => PublicError::Busy {
                 message: self.to_string(),
                 retryable: false,
@@ -156,6 +139,12 @@ impl StoreError {
     }
 }
 
+impl From<sluice_model::plan_rows::PlanRowsError> for StoreError {
+    fn from(error: sluice_model::plan_rows::PlanRowsError) -> Self {
+        Self::Public(error.into())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, StoreError>;
 
 pub(crate) fn lock_home(home: &Path) -> Result<File> {
@@ -190,7 +179,7 @@ pub(crate) fn open_writer(home: &Path, timeout: Duration) -> Result<Connection> 
     )?;
     let user_version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if tables != 0 {
-        verify_schema(&connection, true)?;
+        verify_schema(&connection)?;
     } else if user_version != 0 {
         return Err(StoreError::UnsupportedSchema {
             found: user_version,
@@ -218,26 +207,10 @@ pub(crate) fn open_writer(home: &Path, timeout: Duration) -> Result<Connection> 
     Ok(connection)
 }
 
-/// Bring a restored copy forward (the copy is private to its restore).
-pub(crate) fn upgrade_copy(database: &Path) -> Result<()> {
-    let mut connection = Connection::open_with_flags(
-        database,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    connection.pragma_update(None, "foreign_keys", true)?;
-    verify_schema(&connection, true)?;
-    conform(&mut connection)?;
-    crate::messages::upgrade_dismissals(&mut connection)
-}
-
-/// Add a verified home's missing `ADDED_COLUMNS` and mark it `SCHEMA_VERSION`, in one
-/// immediate transaction; a home already in shape is left alone.
+/// Add a verified home's missing `ADDED_COLUMNS` and `ADDED_VIEWS`, in one immediate
+/// transaction; a home already in shape is left alone.
 fn conform(connection: &mut Connection) -> Result<()> {
-    let marked: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    if marked == SCHEMA_VERSION
-        && missing_columns(connection)?.is_empty()
-        && missing_views(connection)?.is_empty()
-    {
+    if missing_columns(connection)?.is_empty() && missing_views(connection)?.is_empty() {
         return Ok(());
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -249,11 +222,6 @@ fn conform(connection: &mut Connection) -> Result<()> {
     for definition in missing_views(&transaction)? {
         transaction.execute_batch(definition)?;
     }
-    transaction.execute(
-        "UPDATE home_meta SET schema_version=?1 WHERE singleton=1",
-        [SCHEMA_VERSION],
-    )?;
-    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
     verify(connection)
 }
@@ -303,7 +271,7 @@ fn missing_views(connection: &Connection) -> Result<Vec<&'static str>> {
 }
 
 fn verify(connection: &Connection) -> Result<()> {
-    verify_schema(connection, false)?;
+    verify_schema(connection)?;
     if let Some((table, column, _)) = missing_columns(connection)?.first() {
         return Err(StoreError::InvalidDatabase(format!(
             "{table}.{column} is missing until the home's writer opens it"
@@ -312,8 +280,9 @@ fn verify(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// `writer`: a home marked with the interim board schema passes, for the writer to conform.
-fn verify_schema(connection: &Connection, writer: bool) -> Result<()> {
+/// The home's identity and version: format 1, schema 3 (a schema-1 or -2 home is
+/// `MigrationRequired`), its user_version equal, sluice's application_id and the 27 tables.
+pub(crate) fn verify_schema(connection: &Connection) -> Result<()> {
     let has_meta: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='home_meta')",
         [],
@@ -340,7 +309,10 @@ fn verify_schema(connection: &Connection, writer: bool) -> Result<()> {
     if major != FORMAT_MAJOR {
         return Err(StoreError::UnsupportedFormat { found: major });
     }
-    if schema != SCHEMA_VERSION && !(writer && schema == BOARD_INTERIM_SCHEMA) {
+    if matches!(schema, 1 | 2) {
+        return Err(StoreError::MigrationRequired { found: schema });
+    }
+    if schema != SCHEMA_VERSION {
         return Err(StoreError::UnsupportedSchema { found: schema });
     }
     if home.parse::<HomeId>().is_err() {
@@ -363,9 +335,9 @@ fn verify_schema(connection: &Connection, writer: bool) -> Result<()> {
         [],
         |r| r.get(0),
     )?;
-    if tables != 23 {
+    if tables != TABLES {
         return Err(StoreError::InvalidDatabase(format!(
-            "expected 23 tables, found {tables}"
+            "expected {TABLES} tables, found {tables}"
         )));
     }
     Ok(())

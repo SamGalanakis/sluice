@@ -127,8 +127,8 @@ async fn trimming_keeps_messages_calls_results_and_authored_edits_queryable() {
         let m=note_on(tx, p, "t")?;
         tx.sql().execute("INSERT INTO calls(call_id,project_id,fn,status,inputs,outputs,created_at,finished_at) VALUES (?1,?2,'test','succeeded','{}','{}','now','now')",params![RunId::new().to_string(),p.to_string()])?;
         tx.sql().execute("INSERT INTO step_results(result_id,project_id,step_id,generation,declaration,status,outputs,recorded_at,removed_at) VALUES (?1,?2,'removed',1,'{}','succeeded','{}','now','now')",params![ResultId::new().to_string(),p.to_string()])?;
-        let edit=tx.append_record(Some(p),Event::PlanEdit {rev:Revision(1),author:"editor".into(),reason:"test".into(),ops:vec![]})?;
-        tx.sql().execute("INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,ops) VALUES (?1,1,?2,?3,'editor','test','[]')",params![p.to_string(),edit.seq.0,edit.at])?;Ok(m.id)
+        let edit=tx.append_record(Some(p),Event::PlanEdit {rev:Revision(1),author:"editor".into(),reason:"test".into(),changes:vec![]})?;
+        tx.sql().execute("INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,changes) VALUES (?1,1,?2,?3,'editor','test','[]')",params![p.to_string(),edit.seq.0,edit.at])?;Ok(m.id)
     }).await.unwrap();
     append(&w, Some(p), 12).await;
     w.write(RetrySafety::NonIdempotent, move |tx| {
@@ -214,7 +214,7 @@ async fn invalid_filters_and_future_payload_versions_fail_explicitly() {
     }
     w.write(RetrySafety::NonIdempotent, move |tx| {
         tx.sql().execute(
-            "UPDATE records SET payload_version=2 WHERE project_id=?1",
+            "UPDATE records SET payload_version=3 WHERE project_id=?1",
             [p.to_string()],
         )?;
         tx.changed(Some(p), "log");

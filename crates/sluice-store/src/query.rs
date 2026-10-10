@@ -10,10 +10,19 @@
 //! - `messages`: id, project_id, thread, from, to, title, body, needs_reply,
 //!   reply_to, answer, ui, input, data, run_id, at, claimed_by, resolved_by, closed_at.
 //! - `steps`: project_id, step_id, position, generation, work_generation,
-//!   declaration, status, unit, paused, outputs, error, skipped, manual,
-//!   inputs_hash, result_id, run_ids, instances, total, done, delivery_cursor,
-//!   progress, progress_at, progress_run (a running step's latest `step_progress` values,
-//!   never final, cleared when its next run starts).
+//!   declaration (the step as written), status, unit, paused, run, priority, needs (copies of
+//!   the declaration's fields), outputs, error, skipped, manual, inputs_hash, result_id,
+//!   run_ids, instances, total, done, delivery_cursor, progress, progress_at, progress_run
+//!   (a running step's latest `step_progress` values, never final, cleared when its next run
+//!   starts).
+//! - `plans`: project_id, rev, root_order (the plan's present sections in order), state_epoch.
+//! - `inputs`: project_id, name, position, declaration (as written), value, generation.
+//! - `plan_outputs`: project_id, name, position, binding (`{"source": "<ref>"}`).
+//! - `plan_refs`: project_id, consumer_kind (`step`, `output`), consumer_id, slot, ordinal,
+//!   kind (`binding`, `gate`, `output`), source_kind (`step`, `input`, `unit`), source_id,
+//!   source_port, source_path: every reference a step or plan output makes.
+//! - `plan_edges`: project_id, source_step, target_step, kind (`data`, `gate`), via_unit.
+//! - `step_tags`: project_id, step_id, tag.
 //! - `runs`: run_id, project_id, attempt_id, step_id, generation, work_generation,
 //!   item_index, prev_run, unit, unit_name, boot_id, guardian_pid, guardian_start,
 //!   cgroup, socket_challenge, release_id, protocol_major, assigned_after,
@@ -26,7 +35,8 @@
 //! JSON-valued columns remain JSON text; use `json_extract` or `json_each` to
 //! inspect them. For example: `SELECT step_id, status FROM steps WHERE project_id
 //! = ?`; `SELECT id, "from", "to", body FROM messages WHERE thread = ? ORDER BY id`.
-//! Other public views are `log`, `step_changes`, `edits`, and `questions`.
+//! Other public views are `log`, `step_changes`, `questions` and `edits` (project_id, rev, seq,
+//! at, author, reason, changes: each plan revision's row changes).
 
 use std::{
     io::{self, Write},

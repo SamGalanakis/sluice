@@ -24,8 +24,8 @@ async fn setup() -> (ScratchHome, Writer, ProjectId) {
     writer.write(RetrySafety::NonIdempotent, move |tx| {
         let p = project.to_string();
         tx.sql().execute("INSERT INTO projects(project_id,name,created_at) VALUES (?1,'p','now')", [&p])?;
-        tx.sql().execute("INSERT INTO plans(project_id,rev,doc) VALUES (?1,2,'{}')", [&p])?;
-        tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status) VALUES (?1,'a',0,'{}','pending')", [&p])?;
+        tx.sql().execute("INSERT INTO plans(project_id,rev,root_order) VALUES (?1,2,'[\"steps\"]')", [&p])?;
+        tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status,unit,paused,run,priority) VALUES (?1,'a',0,'{\"run\":\"x\"}','pending','a','false','x',0)", [&p])?;
         tx.sql().execute("INSERT INTO step_results(result_id,project_id,step_id,generation,unit,declaration,status,outputs,recorded_at,removed_at) VALUES (?1,?2,'removed',1,'old-unit','{}','succeeded','{\"value\":3}','now','later')", (ResultId::new().to_string(), &p))?;
         let attempt = AttemptId::new().to_string();
         let run = RunId::new().to_string();
@@ -38,7 +38,7 @@ async fn setup() -> (ScratchHome, Writer, ProjectId) {
             tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",body,needs_reply,at) VALUES (?1,?2,'t','test',?3,?4,'now')", (seq, &p, format!("m{n}"), i64::from(n == 1)))?;
         }
         tx.sql().execute("INSERT INTO records(project_id,at,kind,payload,step_id) VALUES (?1,'now','step.status','{\"kind\":\"step.status\",\"from\":\"pending\",\"to\":\"running\"}','a')", [&p])?;
-        tx.sql().execute("INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,ops) VALUES (?1,2,6,'now','test','fixture','[]')", [&p])?;
+        tx.sql().execute("INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,changes) VALUES (?1,2,6,'now','test','fixture','[]')", [&p])?;
         tx.changed(Some(project), "status");
         Ok(())
     }).await.unwrap();

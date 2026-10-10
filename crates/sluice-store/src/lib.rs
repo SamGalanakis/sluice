@@ -3,6 +3,8 @@
 pub mod artifacts;
 pub mod attempts;
 pub mod backup;
+pub mod convert;
+pub mod cost;
 pub mod messages;
 pub mod plans;
 pub mod projects;

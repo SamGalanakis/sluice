@@ -11,12 +11,13 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "kind", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum Event {
+    /// An authored plan revision: its resolved row changes (record payload version 2).
     #[serde(rename = "plan.edit")]
     PlanEdit {
         rev: Revision,
         author: String,
         reason: String,
-        ops: Vec<PatchOperation>,
+        changes: Vec<crate::plan_rows::PlanChange>,
     },
     #[serde(rename = "plan.input")]
     PlanInput {
