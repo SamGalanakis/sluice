@@ -472,8 +472,10 @@ async fn chromium_the_grid_switch_and_the_trace_and_the_band_on_a_phone() {
         browser.wait("document.readyState === 'complete'").unwrap();
         browser.eval(FRAMES).unwrap();
         let band = browser.eval("(b => { const h = b.querySelector('h1').getBoundingClientRect(), l = b.querySelector('.band-lead').getBoundingClientRect(), s = b.querySelector('.band-summary').getBoundingClientRect(); return {size: getComputedStyle(b.querySelector('h1')).fontSize, whole: b.querySelector('h1').getBoundingClientRect().height < 80, stacked: l.top >= h.bottom - 1 && s.top >= l.bottom - 1, left: Math.abs(h.left - s.left) < 12, items: [...document.querySelectorAll('.band-strip .rf-list a')].map(a => Math.round(a.getBoundingClientRect().left)).filter((x, i, all) => all.indexOf(x) === i).length}; })(document.querySelector('.gal-band .band-head').parentElement)").unwrap();
-        // a name of seven letters steps down from 88px so it stays whole
-        assert_eq!(band["size"], "64px", "{band}");
+        // a name of seven letters steps down from 88px so it stays whole: 64px, or a fifth of a
+        // band narrower than 328px (the gallery's part is)
+        let size: f64 = band["size"].as_str().unwrap().trim_end_matches("px").parse().unwrap();
+        assert!((56.0..=64.0).contains(&size), "{band}");
         assert_eq!(band["whole"], true, "{band}");
         assert_eq!(band["stacked"], true, "{band}");
         assert_eq!(band["left"], true, "{band}");

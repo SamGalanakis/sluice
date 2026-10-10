@@ -3018,7 +3018,8 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
 }
 .gal-pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 @container (min-width: 900px) { .gal-pair:not(.gal-wide) { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.gal-band { margin: 0 -16px; padding: 0 16px; background: var(--band); color: var(--band-ink); }
+.gal-band { margin: 0 -16px; padding: 0 16px; background: var(--band); color: var(--band-ink);
+            container: band / inline-size; }  /* the band's part lays out by its own width */
 .gal-band a { text-decoration: none; }
 .gal-band a:hover { color: var(--band-accent); }
 .gal-summary { font-size: 19px; line-height: 1.3; font-weight: 650; max-width: 40em; }
