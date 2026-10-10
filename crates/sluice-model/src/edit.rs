@@ -657,3 +657,84 @@ fn invalid(errors: Vec<PathError>) -> PublicError {
         errors: errors.iter().map(ToString::to_string).collect(),
     }
 }
+
+// ---- lane D seams: lane C's edit API (docs/design/plan-rows.md §6.4, §7.6, §7.8, §8) ---
+//
+// Lane D (runtime) codes against these as the contract pins them (`prepare_plan_edit`,
+// `preparation_reads`, `EditBase`, `EditOptions3`) and, where the contract is silent (how a
+// typed tool is lowered to `PlanOp`s, §7.8), against the smallest consistent shape, noted in
+// lane D's report. Lane C's implementation replaces this block on the integration branch.
+
+/// The certified compiled base an edit is prepared from (plan-rows §8).
+pub struct EditBase<'a, P: SignatureProvider> {
+    /// The base compiled against `catalog_generation`'s signatures, at `tokens.plan_rev`.
+    pub plan: std::sync::Arc<Plan>,
+    pub catalog_generation: crate::plan_rows::CatalogGeneration,
+    pub tokens: crate::plan_rows::ValidationTokens,
+    /// The read set's state, every round together (§6.4).
+    pub state: &'a crate::plan_rows::ScopedState,
+    /// The current catalog's signatures for the project: every fn it can see.
+    pub signatures: &'a P,
+    pub recipes: &'a IndexMap<String, RecipeEntry>,
+    pub resources: &'a CachedResources,
+    pub limits: &'a IndexMap<String, ResourceLimit>,
+}
+/// An edit's options, whatever tool made it (plan-rows §8: the fields are pinned).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EditOptions3 {
+    pub rev: Option<Revision>,
+    pub dry_run: bool,
+    pub preview_scope: crate::plan_rows::PreviewScope,
+    pub start: bool,
+    pub reason: String,
+    pub author: Option<String>,
+}
+/// An edit command lowered to operations (plan-rows §7.8), with the tool's own reports.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Lowered {
+    /// Empty for a typed no-op: nothing is prepared or committed.
+    pub ops: Vec<crate::plan_rows::PlanOp>,
+    pub options: EditOptions3,
+    /// The tool's `steps` report; `None` keeps what preparation reports (`plan_edit`'s adds).
+    pub steps: Option<Vec<StepId>>,
+    /// `step_set_input`'s report.
+    pub inputs: Option<InputChanges>,
+    /// `plan_prune`'s removal set (its `units` and `kept` are the reply's).
+    pub prune: Option<PruneSet>,
+}
+/// What lowering `command` reads beside the compiled base (a typed tool's selected steps'
+/// state, a prune's units' members).
+pub fn lowering_reads(
+    _base: &Plan,
+    _command: &CommandRequest,
+) -> crate::plan_rows::PreparationReads {
+    todo!("lane C: the typed tools' lowering (plan-rows §7.8)")
+}
+/// Lower an edit command to operations against the base (plan-rows §7.6, §7.8): `plan_edit`'s
+/// own operations, `unit_update`'s and `unit_remove`'s one operation, each typed tool's.
+/// `prune_eligible` is the store's age evidence for an age-filtered `plan_prune`.
+pub fn lower(
+    _base: &Plan,
+    _state: &crate::plan_rows::ScopedState,
+    _prune_eligible: Option<&[UnitName]>,
+    _command: CommandRequest,
+) -> Result<Lowered, PublicError> {
+    todo!("lane C: the typed tools' lowering (plan-rows §7.8)")
+}
+/// The next round's reads (plan-rows §6.4) given what the rounds so far read.
+pub fn preparation_reads(
+    _base: &Plan,
+    _ops: &[crate::plan_rows::PlanOp],
+    _round: &crate::plan_rows::ScopedState,
+) -> crate::plan_rows::PreparationReads {
+    todo!("lane C: preparation_reads (plan-rows §6.4, §8)")
+}
+/// Prepare an edit outside the writer: the store payload, the reply's parts and the
+/// certified compiled candidate (plan-rows §4, §8.1).
+pub fn prepare_plan_edit(
+    _base: &EditBase<'_, impl SignatureProvider>,
+    _ops: Vec<crate::plan_rows::PlanOp>,
+    _options: EditOptions3,
+) -> Result<crate::plan_rows::PreparedPlanEdit, PublicError> {
+    todo!("lane C: prepare_plan_edit (plan-rows §8)")
+}

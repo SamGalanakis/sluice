@@ -294,6 +294,10 @@ struct Inner {
     rows: Arc<RowLog>,
 }
 
+/// The name of the writer's OS thread: work that must never run in the writer (an edit's
+/// preparation) checks it.
+pub const WRITER_THREAD: &str = "sluice-sqlite-writer";
+
 /// Clones share one actor. Explicit shutdown closes admission, drains accepted
 /// commands and joins on a blocking thread. Last-handle drop closes the queue;
 /// the thread drains it and releases its flock without blocking Drop.
@@ -322,7 +326,7 @@ impl Writer {
         let rows = Arc::new(RowLog::default());
         let actor_rows = rows.clone();
         let thread = std::thread::Builder::new()
-            .name("sluice-sqlite-writer".into())
+            .name(WRITER_THREAD.into())
             .spawn(move || {
                 let opened = schema::lock_home(&actor_home).and_then(|lock| {
                     let db = schema::open_writer(&actor_home, options.busy_timeout)?;

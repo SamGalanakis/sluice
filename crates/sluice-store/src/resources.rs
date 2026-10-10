@@ -12,7 +12,7 @@ use sluice_model::{
     error::PublicError,
     events::Event,
     gates::{GateDecision, StateSnapshot, StepState, readiness},
-    ids::{LeaseId, ProjectId, RunId, StepId},
+    ids::{LeaseId, ProjectId, Revision, RunId, StepId},
     plan::{Pause, Plan, SignatureProvider},
     types::Type,
 };
@@ -703,8 +703,14 @@ pub fn release_stopped_run(tx: &mut WriteTransaction<'_>, run_id: RunId) -> Resu
 }
 
 /// Uses the model's readiness evaluator with one durable projection snapshot.
-/// The supplied compiled plan must match the stored plan, preventing stale reads.
-pub fn admit_order(conn: &Connection, project: ProjectId, plan: &Plan) -> Result<Vec<Admission>> {
+/// The supplied compiled plan must be the stored plan's revision `rev`, preventing stale
+/// reads: a revision fixes the plan's rows.
+pub fn admit_order(
+    conn: &Connection,
+    project: ProjectId,
+    rev: Revision,
+    plan: &Plan,
+) -> Result<Vec<Admission>> {
     let (paused, deleted): (bool, bool) = conn.query_row(
         "SELECT paused,deleted_at IS NOT NULL FROM projects WHERE project_id=?",
         [project.to_string()],
@@ -717,12 +723,12 @@ pub fn admit_order(conn: &Connection, project: ProjectId, plan: &Plan) -> Result
     if paused || deleted || mode != "normal" {
         return Ok(vec![]);
     }
-    let doc: String = conn.query_row(
-        "SELECT doc FROM plans WHERE project_id=?",
+    let stored: i64 = conn.query_row(
+        "SELECT rev FROM plans WHERE project_id=?",
         [project.to_string()],
         |r| r.get(0),
     )?;
-    if serde_json::from_str::<Value>(&doc)? != serde_json::to_value(plan)? {
+    if u64::try_from(stored).ok() != Some(rev.0) {
         return Err(conflict("compiled plan is stale"));
     }
     let mut state = StateSnapshot::default();
@@ -788,11 +794,12 @@ pub fn admit_order(conn: &Connection, project: ProjectId, plan: &Plan) -> Result
 pub fn status(
     conn: &Connection,
     project: ProjectId,
+    rev: Revision,
     plan: &Plan,
 ) -> Result<BTreeMap<String, ResourceStatus>> {
     let holds = held(conn, project)?;
     let sections = leases(conn, project)?;
-    let ready = admit_order(conn, project, plan)?;
+    let ready = admit_order(conn, project, rev, plan)?;
     let mut queued = BTreeMap::<String, usize>::new();
     for step in ready {
         for resource in fits(conn, project, &step.needs)?.blocked {

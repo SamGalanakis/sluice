@@ -63,7 +63,7 @@ pub async fn reconcile_project<H: ExecutionHost>(
             .write(RetrySafety::Idempotent, move |tx| {
                 lease(tx, &lease_owner)?;
                 plans::reconcile(tx, &copy)?;
-                crate::watch::record_settlements(tx, project, &copy.plan)?;
+                crate::watch::record_settlements(tx, project, copy.revision, &copy.plan)?;
                 resources::grant_leases(tx, project)?;
                 Ok(())
             })
@@ -81,7 +81,7 @@ pub async fn reconcile_project<H: ExecutionHost>(
                     .cloned()
                     .collect();
                 order.extend(
-                    resources::admit_order(sql, project, &copy.plan)?
+                    resources::admit_order(sql, project, copy.revision, &copy.plan)?
                         .into_iter()
                         .map(|a| a.step),
                 );
@@ -302,7 +302,7 @@ pub async fn reconcile_project<H: ExecutionHost>(
                     if count.is_some() && keep && instances.get(index.to_string()).is_some_and(|v|v["status"]=="succeeded"){continue;}
                     let mut inputs=inputs.clone();if let Some(name)=&step.scatter {inputs.0.insert(name.clone(),inputs.0[name].as_value().as_array().expect("checked scatter")[index].clone().try_into()?);}
                     let capability=new_capability();let attempt=AttemptId::new();let run=RunId::new();
-                    let provenance:JsonMap=serde_json::from_value(json!({"runtime":{"capability":capability,"execution":execution,"completion":crate::execution::FrozenPlan::from_context(&copy)},"files":fingerprints}))?;
+                    let provenance:JsonMap=serde_json::from_value(json!({"runtime":{"capability":capability,"execution":execution,"admitted_rev":copy.revision},"files":fingerprints}))?;
                     let reservation=attempts::reserve(tx,&copy,Reserve{step:step.id.clone(),attempt,run,item_index:if count.is_some(){index as i64}else{-1},item_count:count.map(|n|n as u64),inputs:inputs.clone(),inputs_hash:hash,provenance,release_id:crate::install::release_id("runtime-v1"),protocol_major:1},&mut Hooks)?;
                     if let Some(job) = execution.as_ref().and_then(|e| e.job) { crate::registry::pin_run(tx,job,run)?; }
                     let id=&reservation.identity;
@@ -419,7 +419,7 @@ async fn record_queues<H: ExecutionHost>(
     let owner = owner.to_owned();
     broker.writer().write(RetrySafety::Idempotent, move |tx| {
         lease(tx, &owner)?;
-        for candidate in resources::admit_order(tx.sql(), context.project, &context.plan)? {
+        for candidate in resources::admit_order(tx.sql(), context.project, context.revision, &context.plan)? {
             let fit = resources::fits(tx.sql(), context.project, &candidate.needs)?;
             if fit.fits() { continue; }
             let event = Event::StepQueued {

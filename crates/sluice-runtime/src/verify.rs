@@ -9,7 +9,8 @@ use sluice_model::{
     gates::{StateSnapshot, StepState},
     hash::InputsHash,
     ids::{ProjectId, ProjectSelector, StepId},
-    plan::{Binding, FnSignature, Pause, Plan},
+    plan::{Binding, FnSignature, Pause, Plan, compile_rows, output_references, step_index},
+    plan_rows::{PlanRows, ReferenceRow},
     rpc::{JsonMap, decode_json},
     types::{Type, check_value_at},
 };
@@ -92,7 +93,10 @@ struct ProjectData {
     id: ProjectId,
     name: String,
     paused: bool,
-    doc: Option<String>,
+    /// The plan's authored rows, `None` when the project has no plan row.
+    rows: Option<PlanRows>,
+    /// The rebuildable indexes as stored (plan-rows §2.3).
+    stored: Indexes,
     inputs: Vec<String>,
     steps: Vec<String>,
     attempts: Vec<String>,
@@ -115,7 +119,9 @@ pub async fn verify<R: VerificationRegistry>(
         let mut data=vec![];
         for (id,name,paused) in rows{
             let id:ProjectId=parse_id(id)?;
-            let doc=sql.query_row("SELECT (SELECT doc FROM plans WHERE project_id=?1)",[id.to_string()],|r|r.get::<_,Option<String>>(0))?;
+            let planned:bool=sql.query_row("SELECT EXISTS(SELECT 1 FROM plans WHERE project_id=?1)",[id.to_string()],|r|r.get(0))?;
+            let rows=if planned {Some(sluice_store::plans::read_plan_rows(sql,id)?)} else {None};
+            let stored=Indexes::read(sql,id)?;
             let mut inputs=vec![];let mut steps=vec![];let mut attempts=vec![];let mut results=vec![];let mut resources=vec![];
             for (query,target) in [
                 ("SELECT json_object('name',name,'declaration',json(declaration),'value',json(value),'has_value',value IS NOT NULL) FROM inputs WHERE project_id=?1 ORDER BY position",&mut inputs),
@@ -127,7 +133,7 @@ pub async fn verify<R: VerificationRegistry>(
                 let mut stmt=sql.prepare(query)?;
                 *target=stmt.query_map([id.to_string()],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
             }
-            data.push(ProjectData{id,name,paused,doc,inputs,steps,attempts,results,resources});
+            data.push(ProjectData{id,name,paused,rows,stored,inputs,steps,attempts,results,resources});
         }
         // Home calls have frozen attempts as well, without a project plan.
         let mut stmt=sql.prepare("SELECT json_object('id',attempt_id,'step',step_id,'request',json(request),'inputs_hash',inputs_hash,'phase',phase,'run',(SELECT run_id FROM runs WHERE attempt_id=a.attempt_id)) FROM attempts a WHERE project_id IS NULL ORDER BY created_at")?;
@@ -195,12 +201,12 @@ fn check_project(
         &format!("projects/{}/.env", d.id),
         problems,
     );
-    let plan = match d.doc.as_deref() {
+    let plan = match &d.rows {
         None => {
             add(problems, format!("{at}: plan"), "plan is missing");
             None
         }
-        Some(raw) => match Plan::parse_json(raw.as_bytes(), &reg.signatures) {
+        Some(rows) => match compile_rows(rows, &reg.signatures) {
             Ok(p) => Some(p),
             Err(e) => {
                 for e in e {
@@ -210,6 +216,10 @@ fn check_project(
             }
         },
     };
+    if let Some(rows) = &d.rows {
+        let rebuilt = Indexes::rebuild(rows, plan.as_ref());
+        compare_indexes(&at, &rebuilt, &d.stored, plan.is_some(), problems);
+    }
     let mut state = StateSnapshot {
         paused: if d.paused { Pause::Yes } else { Pause::No },
         ..StateSnapshot::default()
@@ -432,6 +442,253 @@ fn check_project(
         }
     }
 }
+/// A plan's rebuildable indexes (plan-rows §2.3) as comparable sets: `steps.unit` by step,
+/// `step_tags` rows, `plan_refs` rows and `plan_edges` rows, each in its stored spelling.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Indexes {
+    /// step → unit.
+    pub units: std::collections::BTreeMap<String, String>,
+    /// (step, tag).
+    pub tags: std::collections::BTreeSet<(String, String)>,
+    /// (consumer kind, consumer, slot, ordinal, kind, source kind, source, port, path).
+    pub refs: std::collections::BTreeSet<RefRow>,
+    /// (source step, target step, kind, via unit or "").
+    pub edges: std::collections::BTreeSet<(String, String, String, String)>,
+}
+/// A `plan_refs` row in its stored spelling.
+pub type RefRow = (
+    String,
+    String,
+    String,
+    u32,
+    String,
+    String,
+    String,
+    String,
+    String,
+);
+fn word<T: Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+fn ref_row(row: &ReferenceRow) -> RefRow {
+    (
+        word(&row.consumer_kind),
+        row.consumer_id.clone(),
+        row.slot.clone(),
+        row.ordinal,
+        word(&row.kind),
+        word(&row.source_kind),
+        row.source_id.clone(),
+        row.source_port.clone(),
+        row.source_path.clone(),
+    )
+}
+impl Indexes {
+    /// The indexes as stored, in the caller's snapshot.
+    fn read(sql: &rusqlite::Connection, project: ProjectId) -> sluice_store::Result<Self> {
+        let p = project.to_string();
+        let mut out = Self::default();
+        let mut stmt = sql.prepare("SELECT step_id,unit FROM steps WHERE project_id=?1")?;
+        for row in stmt.query_map([&p], |r| Ok((r.get(0)?, r.get(1)?)))? {
+            let (step, unit) = row?;
+            out.units.insert(step, unit);
+        }
+        let mut stmt = sql.prepare("SELECT step_id,tag FROM step_tags WHERE project_id=?1")?;
+        for row in stmt.query_map([&p], |r| Ok((r.get(0)?, r.get(1)?)))? {
+            out.tags.insert(row?);
+        }
+        let mut stmt = sql.prepare(
+            "SELECT consumer_kind,consumer_id,slot,ordinal,kind,source_kind,source_id,source_port,source_path
+             FROM plan_refs WHERE project_id=?1",
+        )?;
+        for row in stmt.query_map([&p], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+                r.get(8)?,
+            ))
+        })? {
+            out.refs.insert(row?);
+        }
+        let mut stmt = sql.prepare(
+            "SELECT source_step,target_step,kind,via_unit FROM plan_edges WHERE project_id=?1",
+        )?;
+        for row in stmt.query_map([&p], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))? {
+            out.edges.insert(row?);
+        }
+        Ok(out)
+    }
+    /// The indexes rebuilt from the declarations alone (plan-rows §2.5): each step's
+    /// `step_index`, each plan output's `output_references`, and the edges those references
+    /// expand to. A unit gate expands through the unit's current exit steps, which only a
+    /// compiled plan knows: with no plan (it does not compile) the edges are not rebuilt.
+    pub fn rebuild(rows: &PlanRows, plan: Option<&Plan>) -> Self {
+        let steps: std::collections::HashSet<&str> =
+            rows.steps.iter().map(|s| s.step.as_str()).collect();
+        let is_step = |name: &str| steps.contains(name);
+        let mut out = Self::default();
+        for row in &rows.steps {
+            let index = step_index(&row.step, &row.declaration, &is_step);
+            out.units
+                .insert(row.step.to_string(), index.unit.to_string());
+            for tag in index.tags {
+                out.tags.insert((row.step.to_string(), tag));
+            }
+            out.refs.extend(index.references.iter().map(ref_row));
+        }
+        for row in &rows.outputs {
+            out.refs.extend(
+                output_references(&row.name, &row.binding)
+                    .iter()
+                    .map(ref_row),
+            );
+        }
+        if let Some(plan) = plan {
+            out.edges = derive_edges(&out.refs, &steps, plan);
+        }
+        out
+    }
+}
+/// `plan_edges` from the step consumers' references (plan-rows §2.5): a `data` edge per
+/// distinct step a binding reads, a `gate` edge per distinct step a gate names or reads a
+/// boolean from, and for each `unit:u` gate a `gate` edge from each current exit step of `u`
+/// with `via_unit` u. Both ends are current steps.
+fn derive_edges(
+    refs: &std::collections::BTreeSet<RefRow>,
+    steps: &std::collections::HashSet<&str>,
+    plan: &Plan,
+) -> std::collections::BTreeSet<(String, String, String, String)> {
+    let mut edges = std::collections::BTreeSet::new();
+    for (consumer_kind, target, _, _, kind, source_kind, source, _, _) in refs {
+        if consumer_kind != "step" || !steps.contains(target.as_str()) {
+            continue;
+        }
+        match (kind.as_str(), source_kind.as_str()) {
+            ("binding", "step") if steps.contains(source.as_str()) => {
+                edges.insert((source.clone(), target.clone(), "data".into(), String::new()));
+            }
+            ("gate", "step") if steps.contains(source.as_str()) => {
+                edges.insert((source.clone(), target.clone(), "gate".into(), String::new()));
+            }
+            ("gate", "unit") => {
+                let exits = source
+                    .parse::<sluice_model::ids::UnitName>()
+                    .ok()
+                    .and_then(|unit| plan.units().get(&unit))
+                    .map(|unit| unit.exits.clone())
+                    .unwrap_or_default();
+                for exit in exits {
+                    edges.insert((
+                        exit.to_string(),
+                        target.clone(),
+                        "gate".into(),
+                        source.clone(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    edges
+}
+/// Each difference between the rebuilt and the stored indexes, as a problem at the index row.
+/// `edges` is false when the plan does not compile: its edges could not be rebuilt
+/// (`Indexes::rebuild`), so the stored ones are not compared.
+pub fn compare_indexes(
+    at: &str,
+    rebuilt: &Indexes,
+    stored: &Indexes,
+    edges: bool,
+    problems: &mut Vec<Problem>,
+) {
+    let mut steps: std::collections::BTreeSet<&String> = rebuilt.units.keys().collect();
+    steps.extend(stored.units.keys());
+    for step in steps {
+        let (want, have) = (rebuilt.units.get(step), stored.units.get(step));
+        if want != have {
+            add(
+                problems,
+                format!("{at}: index#steps.{step}.unit"),
+                format!(
+                    "stored unit {} differs from the declaration's {}",
+                    have.map_or("(none)", String::as_str),
+                    want.map_or("(none)", String::as_str)
+                ),
+            );
+        }
+    }
+    for tag in rebuilt.tags.symmetric_difference(&stored.tags) {
+        let what = if stored.tags.contains(tag) {
+            "stored tag the declaration lacks"
+        } else {
+            "declared tag missing from the index"
+        };
+        add(
+            problems,
+            format!("{at}: index#step_tags.{}.{}", tag.0, tag.1),
+            what,
+        );
+    }
+    for row in rebuilt.refs.symmetric_difference(&stored.refs) {
+        let what = if stored.refs.contains(row) {
+            "stored reference the declarations do not make"
+        } else {
+            "declared reference missing from the index"
+        };
+        add(
+            problems,
+            format!(
+                "{at}: index#plan_refs.{}.{}.{}[{}]",
+                row.0, row.1, row.2, row.3
+            ),
+            format!(
+                "{what}: {} {} {}{}{}",
+                row.4,
+                row.5,
+                row.6,
+                if row.7.is_empty() {
+                    String::new()
+                } else {
+                    format!("/{}", row.7)
+                },
+                if row.8.is_empty() {
+                    String::new()
+                } else {
+                    format!(".{}", row.8)
+                }
+            ),
+        );
+    }
+    if !edges {
+        return;
+    }
+    for edge in rebuilt.edges.symmetric_difference(&stored.edges) {
+        let what = if stored.edges.contains(edge) {
+            "stored edge the declarations do not make"
+        } else {
+            "declared edge missing from the index"
+        };
+        let via = if edge.3.is_empty() {
+            String::new()
+        } else {
+            format!(" via unit:{}", edge.3)
+        };
+        add(
+            problems,
+            format!("{at}: index#plan_edges.{}", edge.1),
+            format!("{what}: {} {} after {}{via}", edge.2, edge.1, edge.0),
+        );
+    }
+}
 fn merged_schema(request: &Value) -> Result<IndexMap<String, Type>, PublicError> {
     let mut schema = IndexMap::new();
     for key in ["returns", "declared"] {
@@ -652,4 +909,151 @@ pub fn inspect_fns(
         }
     }
     inspection
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn r(
+        consumer: &str,
+        slot: &str,
+        ordinal: u32,
+        kind: &str,
+        source: (&str, &str, &str, &str),
+    ) -> RefRow {
+        let consumer_kind = if kind == "output" { "output" } else { "step" };
+        (
+            consumer_kind.into(),
+            consumer.into(),
+            slot.into(),
+            ordinal,
+            kind.into(),
+            source.0.into(),
+            source.1.into(),
+            source.2.into(),
+            source.3.into(),
+        )
+    }
+    /// The indexes of `gate` (unit build) reading `work/final`, and `notes` gated on unit
+    /// build and reading `repo`, with the plan output `notes` reading `notes/final`.
+    fn indexes() -> Indexes {
+        Indexes {
+            units: [("work", "build"), ("gate", "build"), ("notes", "notes")]
+                .into_iter()
+                .map(|(s, u)| (s.into(), u.into()))
+                .collect(),
+            tags: [
+                ("work", "unit:build"),
+                ("gate", "unit:build"),
+                ("gate", "exit"),
+            ]
+            .into_iter()
+            .map(|(s, t)| (s.into(), t.into()))
+            .collect(),
+            refs: [
+                r(
+                    "gate",
+                    "in.items",
+                    0,
+                    "binding",
+                    ("step", "work", "final", ""),
+                ),
+                r("notes", "after", 0, "gate", ("unit", "build", "", "")),
+                r("notes", "in.cwd", 0, "binding", ("input", "repo", "", "")),
+                r(
+                    "notes",
+                    "source",
+                    0,
+                    "output",
+                    ("step", "notes", "final", ""),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            edges: [
+                ("work", "gate", "data", ""),
+                ("gate", "notes", "gate", "build"),
+            ]
+            .into_iter()
+            .map(|(a, b, c, d)| (a.into(), b.into(), c.into(), d.into()))
+            .collect(),
+        }
+    }
+
+    #[test]
+    fn matching_indexes_report_nothing() {
+        let mut problems = vec![];
+        compare_indexes("project p", &indexes(), &indexes(), true, &mut problems);
+        assert_eq!(problems, []);
+    }
+
+    #[test]
+    fn a_hand_corrupted_index_row_is_reported_where_it_is() {
+        let rebuilt = indexes();
+        let mut stored = indexes();
+        // A reference re-pointed by hand, a unit changed, a tag dropped and an edge left
+        // behind by a removal that forgot it.
+        stored.refs.remove(&r(
+            "notes",
+            "in.cwd",
+            0,
+            "binding",
+            ("input", "repo", "", ""),
+        ));
+        stored.refs.insert(r(
+            "notes",
+            "in.cwd",
+            0,
+            "binding",
+            ("input", "repo2", "", ""),
+        ));
+        stored.units.insert("notes".into(), "build".into());
+        stored.tags.remove(&("gate".into(), "exit".into()));
+        stored
+            .edges
+            .insert(("gone".into(), "notes".into(), "data".into(), String::new()));
+        let mut problems = vec![];
+        compare_indexes("project p", &rebuilt, &stored, true, &mut problems);
+        let found: Vec<(String, String)> = problems
+            .into_iter()
+            .map(|p| (p.r#where, p.message))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (
+                    "project p: index#steps.notes.unit".to_owned(),
+                    "stored unit build differs from the declaration's notes".to_owned()
+                ),
+                (
+                    "project p: index#step_tags.gate.exit".to_owned(),
+                    "declared tag missing from the index".to_owned()
+                ),
+                (
+                    "project p: index#plan_refs.step.notes.in.cwd[0]".to_owned(),
+                    "declared reference missing from the index: binding input repo".to_owned()
+                ),
+                (
+                    "project p: index#plan_refs.step.notes.in.cwd[0]".to_owned(),
+                    "stored reference the declarations do not make: binding input repo2".to_owned()
+                ),
+                (
+                    "project p: index#plan_edges.notes".to_owned(),
+                    "stored edge the declarations do not make: data notes after gone".to_owned()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn edges_are_not_compared_when_the_plan_does_not_compile() {
+        let rebuilt = Indexes {
+            edges: Default::default(),
+            ..indexes()
+        };
+        let mut problems = vec![];
+        compare_indexes("project p", &rebuilt, &indexes(), false, &mut problems);
+        assert_eq!(problems, []);
+    }
 }

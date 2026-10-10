@@ -473,12 +473,6 @@ fn witness_scan(
     Ok(true)
 }
 
-pub(crate) fn wire_step(plan: &Plan, id: &StepId) -> Result<Value> {
-    plan_steps(plan.document())
-        .and_then(|steps| steps.get(id.as_str()))
-        .cloned()
-        .ok_or_else(|| invalid("compiled step is missing its document"))
-}
 /// A plan document's `steps` object, read in place.
 fn plan_steps(document: &JsonMap) -> Option<&serde_json::Map<String, Value>> {
     document
@@ -1757,4 +1751,57 @@ pub fn prune_eligible_age(
         .checked_sub(time::Duration::seconds(seconds))
         .ok_or_else(|| invalid("prune age too large"))?;
     prune_eligible(sql, context, cutoff)
+}
+
+// ---- lane D seams: lane B's pinned store API (docs/design/plan-rows.md §8) -------------
+//
+// Lane D (runtime) codes against these signatures as the contract pins them; lane B's
+// implementation replaces this block on the integration branch (rw/pn-cutover). Nothing in
+// lane D's branch implements them.
+
+/// `commit_plan_edit`'s outcome: the new (or, for an empty change set, the current) revision,
+/// or `Stale`: a token no longer holds and nothing was written; the edit is prepared again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitOutcome {
+    Committed(Revision),
+    Stale,
+}
+
+/// Every authored row of the plan, each collection in position order (a whole-plan read).
+pub fn read_plan_rows(
+    _sql: &Connection,
+    _project: ProjectId,
+) -> Result<sluice_model::plan_rows::PlanRows> {
+    todo!("lane B: plans::read_plan_rows (plan-rows §8)")
+}
+
+/// The selected steps' rows, compact (covering indexes, no declaration) or full.
+pub fn read_steps(
+    _sql: &Connection,
+    _project: ProjectId,
+    _selection: &sluice_model::plan_rows::RowSelection,
+    _projection: sluice_model::plan_rows::StepProjection,
+) -> Result<sluice_model::plan_rows::StepRows> {
+    todo!("lane B: plans::read_steps (plan-rows §8)")
+}
+
+/// Exactly the read set (plan-rows §6.4): the listed steps' state, the listed inputs' values,
+/// the project's pause, the listed resources' leases and each competitor resource's pending
+/// steps. Never a declaration, never a step outside the list.
+pub fn read_scoped_state(
+    _sql: &Connection,
+    _project: ProjectId,
+    _reads: &sluice_model::plan_rows::PreparationReads,
+) -> Result<sluice_model::plan_rows::ScopedState> {
+    todo!("lane B: plans::read_scoped_state (plan-rows §8, §6.4)")
+}
+
+/// Commit a prepared edit as plan-rows §4 says, given the store payload only.
+pub fn commit_plan_edit(
+    _tx: &mut WriteTransaction<'_>,
+    _project: ProjectId,
+    _commit: &sluice_model::plan_rows::PlanEditCommit,
+    _prune: Option<&PruneEligibility>,
+) -> Result<CommitOutcome> {
+    todo!("lane B: plans::commit_plan_edit (plan-rows §4, §8)")
 }

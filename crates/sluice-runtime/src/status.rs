@@ -7,7 +7,7 @@ use sluice_model::{
     commands::{StatusQuery, StatusView, StepStatus},
     error::PublicError,
     gates::{resolve_reference, wait_reasons},
-    ids::{ProjectId, StepId, UnitName},
+    ids::{ProjectId, Revision, StepId, UnitName},
     plan::Pause,
     status::{self, LastMessage, StepFacts},
     types::BoundValue,
@@ -33,10 +33,11 @@ fn step_id(raw: String) -> sluice_store::Result<StepId> {
 fn queued(
     sql: &Connection,
     id: ProjectId,
+    rev: Revision,
     plan: &sluice_model::Plan,
 ) -> sluice_store::Result<BTreeMap<StepId, (Vec<String>, String)>> {
     let mut out = BTreeMap::new();
-    for candidate in resources::admit_order(sql, id, plan)? {
+    for candidate in resources::admit_order(sql, id, rev, plan)? {
         let fit = resources::fits(sql, id, &candidate.needs)?;
         if !fit.fits() {
             out.insert(
@@ -51,9 +52,10 @@ fn queued(
 fn resources_value(
     sql: &Connection,
     id: ProjectId,
+    rev: Revision,
     plan: &sluice_model::Plan,
 ) -> sluice_store::Result<BTreeMap<String, Value>> {
-    Ok(resources::status(sql, id, plan)?
+    Ok(resources::status(sql, id, rev, plan)?
         .into_iter()
         .map(|(n, r)| {
             (
@@ -91,8 +93,8 @@ pub(crate) fn status(
         let p = sluice_store::projects::resolve(sql, &sluice_model::ids::ProjectSelector::Id(id))?;
         (json!({"project_id":id,"name":p.name}), p.board_rev)
     };
-    let queued = queued(sql, id, plan)?;
-    let resources = resources_value(sql, id, plan)?;
+    let queued = queued(sql, id, ctx.revision, plan)?;
+    let resources = resources_value(sql, id, ctx.revision, plan)?;
     let paused = state.paused.is_paused();
     let mut finishing = sluice_store::attempts::finishing(sql, id)?;
     // each step's and unit's title (SPEC §13), derived from the plan, its recipes and prompts
@@ -240,17 +242,18 @@ pub(crate) fn status(
     Ok(out)
 }
 
-/// The units view's rows for a plan already compiled, as `status(view: "units")` builds them:
-/// what a board's `Units` draws. `wanted` keeps the units in those states; done units are
-/// left out (and counted) unless `wanted` names `settled`.
+/// The units view's rows for a plan already compiled at `rev`, as `status(view: "units")`
+/// builds them: what a board's `Units` draws. `wanted` keeps the units in those states; done
+/// units are left out (and counted) unless `wanted` names `settled`.
 pub fn unit_rows(
     sql: &Connection,
     id: ProjectId,
+    rev: Revision,
     plan: &sluice_model::Plan,
     wanted: Option<&[sluice_model::commands::UnitState]>,
 ) -> sluice_store::Result<status::UnitsView> {
     let state = plans::read_state(sql, id)?;
-    let queued = queued(sql, id, plan)?;
+    let queued = queued(sql, id, rev, plan)?;
     let finishing = sluice_store::attempts::finishing(sql, id)?;
     let facts = facts(sql, id, &queued, finishing)?;
     let last = last_messages(sql, id)?;

@@ -118,28 +118,27 @@ pub fn whole_heading(text: &str) -> Option<String> {
     Some(whole_title(line)).filter(|t| !t.is_empty())
 }
 
-/// Name every step and unit of a plan. `steps` is the plan document's `steps` (raw, in plan
-/// order); `recipes` the project's recipes, the preferred first (a unit takes the first that
-/// matches it); `read` reads a prompt file (its first 16 KiB will do), `None` when it cannot.
+/// Name every step and unit of a plan from its step rows: `steps` in position order, each
+/// with its unit (the `steps.unit` index) and its declaration as written (a full read; a row
+/// read without one is named by its id alone); `recipes` the project's recipes, the preferred
+/// first (a unit takes the first that matches it); `read` reads a prompt file (its first
+/// 16 KiB will do), `None` when it cannot.
 pub fn name_plan(
-    steps: &Map<String, Value>,
+    steps: &[crate::plan_rows::StepRowView],
     recipes: &[&Recipe],
     read: &mut dyn FnMut(&str) -> Option<String>,
 ) -> Naming {
     let mut units: IndexMap<String, Map<String, Value>> = IndexMap::new();
-    for (id, step) in steps {
-        let unit = step
-            .get("tags")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .find_map(|t| t.strip_prefix("unit:"))
-            .unwrap_or(id);
+    for row in steps {
+        let declaration = row
+            .declaration
+            .as_ref()
+            .and_then(|declaration| serde_json::to_value(declaration).ok())
+            .unwrap_or_else(|| Value::Object(Map::new()));
         units
-            .entry(unit.to_owned())
+            .entry(row.unit.to_string())
             .or_default()
-            .insert(id.clone(), step.clone());
+            .insert(row.step.to_string(), declaration);
     }
     let mut naming = Naming::default();
     // a file's title whole; a param's text and every title are cut from it
@@ -261,7 +260,37 @@ fn own_title(step: &Value, file_title: &mut dyn FnMut(&str) -> Option<String>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plan_rows::{PauseValue, StepRowView};
     use serde_json::json;
+
+    /// Full step rows of a `steps` map in its order, each unit as `steps.unit` keeps it.
+    fn rows(steps: &Value) -> Vec<StepRowView> {
+        steps
+            .as_object()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(position, (id, step))| {
+                let unit = step["tags"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .find_map(|t| t.strip_prefix("unit:"))
+                    .unwrap_or(id);
+                StepRowView {
+                    step: id.parse().unwrap(),
+                    position: position as u64,
+                    run: step["run"].as_str().unwrap_or_default().into(),
+                    unit: unit.parse().unwrap(),
+                    priority: 0,
+                    paused: PauseValue::Flag(false),
+                    status: crate::commands::StepStatus::Pending,
+                    declaration: Some(serde_json::from_value(step.clone()).unwrap()),
+                }
+            })
+            .collect()
+    }
 
     fn lane() -> Recipe {
         Recipe::parse(
@@ -311,7 +340,7 @@ mod tests {
             "none": {"run": "x.y", "in": {}}
         });
         let recipe = lane();
-        let naming = name_plan(steps.as_object().unwrap(), &[&recipe], &mut |path| {
+        let naming = name_plan(&rows(&steps), &[&recipe], &mut |path| {
             (path == "/specs/fig-1.md").then(|| "# Cron fires on Postgres (FIG-1)\n".to_owned())
         });
         let unit = naming.unit("fig-1").unwrap();
@@ -330,6 +359,25 @@ mod tests {
     }
 
     #[test]
+    fn units_come_from_the_rows_index_and_a_compact_row_is_named_by_its_id() {
+        let mut steps = rows(&json!({
+            "a": {"run": "x.y", "doc": "Write the brief"},
+            "b": {"run": "x.y", "in": {"spec": {"default": "# Review it"}}}
+        }));
+        // `steps.unit` says both belong to unit u, whatever the declaration carries.
+        for row in &mut steps {
+            row.unit = "u".parse().unwrap();
+        }
+        steps[1].declaration = None;
+        let naming = name_plan(&steps, &[], &mut |_| None);
+        assert_eq!(naming.units.keys().collect::<Vec<_>>(), ["u"]);
+        assert_eq!(naming.step("a").unwrap().stage, "");
+        assert_eq!(naming.step_title("a"), "Write the brief");
+        assert_eq!(naming.step_title("b"), "b");
+        assert_eq!(naming.unit_title("u"), "Write the brief");
+    }
+
+    #[test]
     fn a_recipe_unit_without_a_title_borrows_its_prompt_for_every_stage() {
         let recipe = Recipe::parse(
             "two",
@@ -345,9 +393,7 @@ mod tests {
             "m-work": {"run": "b", "tags": ["unit:m"], "in": {"spec": {"file": "/s.md"}}},
             "m-other": {"run": "c", "tags": ["unit:m"]}
         });
-        let naming = name_plan(steps.as_object().unwrap(), &[&recipe], &mut |_| {
-            Some("# Ship it".into())
-        });
+        let naming = name_plan(&rows(&steps), &[&recipe], &mut |_| Some("# Ship it".into()));
         assert_eq!(naming.unit("l").unwrap().recipe, "two");
         assert_eq!(naming.unit_title("l"), "Ship it");
         assert_eq!(naming.step("l-fork").unwrap().title, "Ship it");

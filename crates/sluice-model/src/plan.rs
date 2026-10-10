@@ -1308,3 +1308,30 @@ pub(crate) fn prepare_patch(
         preview.reconciled,
     ))
 }
+
+// ---- lane D seams: lane C's pinned model API (docs/design/plan-rows.md §8) -------------
+//
+// Lane D (runtime) codes against these signatures as the contract pins them; lane C's
+// implementation replaces this block on the integration branch (rw/pn-cutover).
+
+/// Compile the plan from its rows, never through a document (a cold compile).
+pub fn compile_rows(
+    _rows: &crate::plan_rows::PlanRows,
+    _signatures: &impl SignatureProvider,
+) -> Result<Plan, Vec<PathError>> {
+    todo!("lane C: compile_rows (plan-rows §8)")
+}
+
+/// A step's rebuildable index rows from its declaration alone (plan-rows §2.5).
+pub fn step_index(
+    _step: &StepId,
+    _declaration: &JsonMap,
+    _is_step: &dyn Fn(&str) -> bool,
+) -> crate::plan_rows::StepIndexRows {
+    todo!("lane C: step_index (plan-rows §2.5, §8)")
+}
+
+/// A plan output's `plan_refs` row (plan-rows §2.5).
+pub fn output_references(_name: &str, _binding: &JsonMap) -> Vec<crate::plan_rows::ReferenceRow> {
+    todo!("lane C: output_references (plan-rows §2.5, §8)")
+}

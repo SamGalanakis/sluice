@@ -6,7 +6,7 @@ use sluice_model::{
     error::PublicError,
     events::{Event, Record, UnitStep},
     gates::{GateDecision, evaluate_step},
-    ids::{ProjectId, ProjectSelector, RecordSeq, WorkGeneration},
+    ids::{ProjectId, ProjectSelector, RecordSeq, Revision, WorkGeneration},
     plan::Plan,
     rpc::JsonMap,
 };
@@ -18,19 +18,24 @@ use std::{path::Path, time::Duration};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
-/// Called by reconciliation after status, pause and plan edits, in their transaction.
+/// Called by reconciliation after status, pause and plan edits, in their transaction, with
+/// the plan compiled at `rev` (the stored revision, or the call is refused as stale).
 /// A generation certificate survives feed trimming; outputs and membership freeze here.
+/// Only the units whose steps' generations moved since their last settlement are looked at:
+/// every step's generation is read at once, and a unit whose stamp its last settlement
+/// already recorded is skipped before its state is evaluated.
 pub fn record_settlements(
     tx: &mut WriteTransaction<'_>,
     project: ProjectId,
+    rev: Revision,
     plan: &Plan,
 ) -> sluice_store::Result<Vec<Record>> {
-    let stored: String = tx.sql().query_row(
-        "SELECT doc FROM plans WHERE project_id=?1",
+    let stored: i64 = tx.sql().query_row(
+        "SELECT rev FROM plans WHERE project_id=?1",
         [project.to_string()],
         |r| r.get(0),
     )?;
-    if serde_json::from_str::<Value>(&stored)? != serde_json::to_value(plan)? {
+    if u64::try_from(stored).ok() != Some(rev.0) {
         return Err(PublicError::Conflict {
             message: "settlement plan is stale".into(),
             current_rev: None,
@@ -44,26 +49,32 @@ pub fn record_settlements(
         |r| r.get(0),
     )?;
     let mut settings: Value = serde_json::from_str(&raw)?;
+    let generations: std::collections::HashMap<String, (i64, i64)> = tx
+        .sql()
+        .prepare("SELECT step_id,generation,work_generation FROM steps WHERE project_id=?1")?
+        .query_map([project.to_string()], |r| {
+            Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?)))
+        })?
+        .collect::<Result<_, _>>()?;
     let mut emitted = vec![];
     for unit in plan.units().values() {
-        if !unit.settled(plan, &state) {
-            continue;
-        }
         let mut stamp = vec![];
         let mut work = 1;
         for id in &unit.steps {
-            let (generation, w): (i64, i64) = tx.sql().query_row(
-                "SELECT generation,work_generation FROM steps WHERE project_id=?1 AND step_id=?2",
-                (project.to_string(), id.as_str()),
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?;
+            let (generation, w) =
+                *generations
+                    .get(id.as_str())
+                    .ok_or_else(|| PublicError::Conflict {
+                        message: format!("settlement step {id} has no row"),
+                        current_rev: None,
+                    })?;
             stamp.push(json!([id, generation, w]));
             work = work.max(w);
         }
         let key = format!("{project}/{}", unit.name);
         let stamp = Value::Array(stamp);
         let previous = &settings["settlements"][&key];
-        if previous["signature"] == stamp {
+        if previous["signature"] == stamp || !unit.settled(plan, &state) {
             continue;
         }
         if let Some(previous_work) = previous["work"].as_i64() {

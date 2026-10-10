@@ -1102,6 +1102,12 @@ pub enum CommandRequest {
     BoardDocWrite(BoardDocWrite),
     BoardDocEdit(BoardDocEdit),
     PlanPatch(PlanPatch),
+    /// `plan_edit` (plan-rows §7.6).
+    PlanEdit(crate::plan_rows::PlanEditRequest),
+    /// `unit_update` (plan-rows §7.7).
+    UnitUpdate(crate::plan_rows::UnitUpdate),
+    /// `unit_remove` (plan-rows §7.7).
+    UnitRemove(crate::plan_rows::UnitRemove),
     StepAdd(StepAdd),
     UnitAdd(UnitAdd),
     StepUpdate(StepUpdate),
@@ -1227,11 +1233,11 @@ pub enum CommandReply {
         name: ProjectName,
         deleted: bool,
     },
-    Edit(EditResult),
-    Preview(EditPreview),
+    Edit(crate::plan_rows::EditResult),
+    Preview(crate::plan_rows::EditPreview),
     Retry(RetryResult),
-    Inputs(InputEditResult),
-    Pruned(PruneResult),
+    Inputs(crate::plan_rows::InputEditResult),
+    Pruned(crate::plan_rows::PruneResult),
     /// The retired message_post's reply, kept for the binaries that sent it.
     Posted {
         id: MessageId,
