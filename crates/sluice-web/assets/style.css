@@ -351,6 +351,9 @@ p { margin: 0; }
    drawer counted, not by the window. --------------------------------------------------------- */
 .site-head { background: var(--band); color: var(--band-ink); }
 .band-in, .subnav { padding: 0 var(--gutter); }
+/* the band's content is the `band` container: its name and its layout follow the room it has
+   (the drawer beside it counted), not the window */
+.band-in { container: band / inline-size; }
 main { display: grid; padding: 30px 0 72px; container: frame / inline-size;
        grid-template-columns: [full-start] var(--gutter) [col-start] minmax(0, 1fr) [col-end]
                               var(--gutter) [full-end]; }
@@ -497,27 +500,28 @@ form.prefs:has(sluice-toggle:defined) .save { display: none; }
 
 /* ---- the band's head (`ui::band_head`): the page's name huge at the left on the grid, its
    description and its summary sentence beside it; a strip under them (`ui::recent_strip`).
-   The name is fluid: 150px at 1440, 88px at most on a phone, 240px at most on a wide screen;
-   a longer name steps down in proportion. The words keep their measure at every width. ----- */
+   The name is fluid in the band's own width (cqi of `band`, so the drawer beside it counts):
+   150px at 1440, 88px at most on a phone, 240px at most on a wide screen; a longer name steps
+   down in proportion. The words keep their measure at every width. ------------------------ */
 .band-head { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
              column-gap: var(--col-gap); align-items: end;
-             padding: clamp(22px, calc(14px + 1.1vw), 60px) 0 clamp(22px, calc(16px + 0.9vw), 52px); }
+             padding: clamp(22px, calc(14px + 1.15cqi), 60px) 0 clamp(22px, calc(16px + 0.94cqi), 52px); }
 .band-head > h1 { grid-column: span 5; margin: 0 0 -0.03em -0.045em;
-  font-size: clamp(88px, 10.4vw, 240px); line-height: .8; font-weight: 900;
+  font-size: clamp(88px, 10.9cqi, 240px); line-height: .8; font-weight: 900;
   letter-spacing: -0.04em; overflow-wrap: anywhere; text-wrap: balance; }
-.band-head > h1.long { font-size: clamp(64px, 7.2vw, 166px); }
-.band-head > h1.longer { grid-column: 1 / -1; font-size: clamp(46px, 5.3vw, 122px); line-height: .9;
+.band-head > h1.long { font-size: clamp(64px, 7.54cqi, 166px); }
+.band-head > h1.longer { grid-column: 1 / -1; font-size: clamp(46px, 5.55cqi, 122px); line-height: .9;
                          margin-bottom: 20px; }
-.band-head > h1.longest { grid-column: 1 / -1; font-size: clamp(34px, 3.6vw, 84px); line-height: .95;
+.band-head > h1.longest { grid-column: 1 / -1; font-size: clamp(34px, 3.77cqi, 84px); line-height: .95;
                           margin-bottom: 18px; }
 .band-sub { grid-column: span 7; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
             column-gap: var(--col-gap); align-items: end; }
 .band-head > h1:is(.longer, .longest) + .band-sub { grid-column: 1 / -1;
   grid-template-columns: repeat(12, minmax(0, 1fr)); }
-.band-lead { grid-column: span 3; font-size: clamp(14px, calc(11px + 0.2vw), 18px); line-height: 1.45;
+.band-lead { grid-column: span 3; font-size: clamp(14px, calc(11px + 0.21cqi), 18px); line-height: 1.45;
              color: var(--band-muted); max-width: 52ch; }
 .band-lead p + p { margin-top: 6px; }
-.band-summary { grid-column: span 4; font-size: clamp(18px, calc(14.8px + 0.29vw), 26px);
+.band-summary { grid-column: span 4; font-size: clamp(18px, calc(14.8px + 0.3cqi), 26px);
                 line-height: 1.3; font-weight: 650; letter-spacing: -0.01em; text-wrap: pretty;
                 max-width: 34em; }
 .band-head > h1:is(.longer, .longest) + .band-sub > .band-lead { grid-column: span 5; }
@@ -539,9 +543,10 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 .subnav-tools { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
                 min-width: 0; }
 
-/* ---- a tablet's band (761 to 1023px): the name on a row of its own, its words and sentence
-   across the band under it; Recently finished's head over its items ------------------------- */
-@media (min-width: 761px) and (max-width: 1023px) {
+/* ---- a tablet's band (718 to 972px of band, a 761 to 1023px window, or the band beside the
+   drawer): the name on a row of its own, its words and sentence across the band under it;
+   Recently finished's head over its items ---------------------------------------------------- */
+@container band (min-width: 718px) and (max-width: 972.98px) {
   .band-head { row-gap: 18px; }
   .band-head > h1 { grid-column: 1 / -1; margin-bottom: 0; }
   .band-sub, .band-head > h1:is(.longer, .longest) + .band-sub { grid-column: 1 / -1;
@@ -564,17 +569,21 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
   .live { order: 5; margin-left: auto; min-height: 44px; }
   details.settings { order: 6; margin-left: auto; margin-right: 0; }
   html[data-stream="live"] details.settings { margin-left: 0; }
+  .subnav-in { gap: 4px 18px; }
+  .subnav-tools { margin-left: 0; flex-basis: 100%; }
+  .subnav-tools > :not(.grid-toggle) { flex: 1 1 12rem; min-width: 0; }
+  .subnav-tools :is(button, input, select, a) { min-height: 44px; }
+  .prefs .themes label, .prefs .appearance label, .prefs label.check { min-height: 44px; }
+}
+
+/* a phone's band (under 718px of band): the name over its words, every part one column */
+@container band (max-width: 717.98px) {
   .band-head { grid-template-columns: minmax(0, 1fr); row-gap: 14px; }
   .band-head > h1 { grid-column: 1 / -1; margin: 0 0 0 -0.04em; }
   .band-head > h1:is(.longer, .longest) { margin-bottom: 0; }
   .band-sub, .band-head > h1:is(.longer, .longest) + .band-sub { grid-column: 1 / -1;
     grid-template-columns: minmax(0, 1fr); row-gap: 12px; }
   .band-sub > *, .band-head > h1:is(.longer, .longest) + .band-sub > * { grid-column: 1 / -1 !important; }
-  .subnav-in { gap: 4px 18px; }
-  .subnav-tools { margin-left: 0; flex-basis: 100%; }
-  .subnav-tools > :not(.grid-toggle) { flex: 1 1 12rem; min-width: 0; }
-  .subnav-tools :is(button, input, select, a) { min-height: 44px; }
-  .prefs .themes label, .prefs .appearance label, .prefs label.check { min-height: 44px; }
 }
 
 /* ---- the module grid (`ui::grid_open`, `sluice-grid`): a sheet of modules, the `sheet`
@@ -749,7 +758,7 @@ sluice-grid[showing] > [data-span]::after { content: counter(take) " col"; posit
 .rf-name { font-size: 13px; font-weight: 750; }
 .rf-title { font-size: 13px; line-height: 1.35; color: var(--band-muted); display: -webkit-box;
             -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 40ch; }
-@media (min-width: 761px) and (max-width: 1023px) {
+@container band (min-width: 718px) and (max-width: 972.98px) {
   .band-strip { row-gap: 10px; }
   .rf-head, .rf-list { grid-column: 1 / -1; }
   .rf-head { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
@@ -773,7 +782,10 @@ sluice-grid[showing] > [data-span]::after { content: counter(take) " col"; posit
 .mm-f dt { font-size: 12px; font-weight: 650; color: var(--ink-muted); }
 .mm-f dd { margin: 2px 0 0; font-size: 14px; line-height: 1.35; }
 .mm-lead { border-top: 1.5px solid var(--navy); padding-top: 12px; }
-.mm-lead dd { font-size: 30px; line-height: 1; font-weight: 900; letter-spacing: -0.03em; }
+.mm-lead dd { font-size: 30px; line-height: 1; font-weight: 900; letter-spacing: -0.03em;
+              font-variant-numeric: tabular-nums; }
+/* an id, a hash, a path or a list: body size in data mono, broken anywhere (ui::ValueSet) */
+.mm-f dd.mm-token { font: 13px/1.4 var(--font-mono); overflow-wrap: anywhere; }
 .mm-at, .mm-none { font-size: 12.5px; color: var(--ink-muted); }
 
 /* ---- select to trace (`ui::trace_open`, `sluice-trace`) ------------------------------------ */
@@ -837,7 +849,7 @@ sluice-trace[tracing] [data-trace="selected"] { box-shadow: 0 0 0 2px var(--navy
   .rail:is([data-rail~="node"], [data-rail~="chosen"])::after { left: -1px; transform: scale(.8);
     transform-origin: left top; }
 }
-@media (max-width: 760px) {
+@container band (max-width: 717.98px) {
   .band-strip { grid-template-columns: minmax(0, 1fr); row-gap: 6px; }
   .rf-head, .rf-list { grid-column: 1 / -1; }
   .rf-list { grid-template-columns: minmax(0, 1fr); }
@@ -1708,8 +1720,8 @@ table.log .kind { font: 12px var(--font-mono); white-space: nowrap;
 /* ---- the functions (`/fns`): its band says whose catalogue and how many; the picker and the
    find on one bar, the groups' index, then each group a section of entries on the grid ------- */
 /* a band name of seven to twelve letters with no space (Functions) stays whole on the smallest
-   phone: under 360px the long step follows the window */
-@media (max-width: 359.98px) { .band-head > h1.long { font-size: 18vw; } }
+   phone: under 328px of band (a 360px window) the long step follows the band */
+@container band (max-width: 327.98px) { .band-head > h1.long { font-size: 20cqi; } }
 .fnpage { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; min-width: 0; }
 .fn-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px; margin: 0; }
 .picker { font-size: 13.5px; color: var(--ink-muted); display: flex; gap: 8px; align-items: center; }

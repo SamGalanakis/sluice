@@ -51,7 +51,7 @@ colors:
 typography:
   display:
     fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, system-ui, sans-serif"
-    fontSize: "clamp(88px, 10.4vw, 240px)"
+    fontSize: "clamp(88px, 10.9cqi, 240px)"
     fontWeight: 900
     lineHeight: "0.8"
     letterSpacing: "-0.04em"
@@ -377,7 +377,9 @@ One family: **Schibsted Grotesk** (variable, 400 to 900) for display and text, w
 cdn.jsdelivr.net (`@fontsource-variable/schibsted-grotesk@5.3.0`,
 `@fontsource-variable/jetbrains-mono@5.3.0`), the only third-party requests a page makes.
 
-- The band's name: fluid, `clamp(88px, 10.4vw, 240px)` (150px at 1440, 88px on a phone), 900,
+- The band's name: fluid in the band's own width, `clamp(88px, 10.9cqi, 240px)` of the `band`
+  container (150px at 1440, 88px on a phone; the drawer beside the page narrows the band and
+  the name with it, so it stays whole), 900,
   line-height 0.8, -0.04em; a longer name steps down in proportion (`long` from 7 characters,
   104px at 1440, 64px on a phone; `longer` across the band from 13, 76px, 46px; `longest` from
   21, 52px, 34px) and wraps anywhere rather than run off. The band's words grow a little with
@@ -452,10 +454,11 @@ The page header is the navy title band (`templates/layout.html`), across the win
   on the grid (five columns), its description in `band-muted` and its summary sentence beside
   it (`ui::band_head`); then a strip under a `band-rule`: "Recently finished"
   (`ui::recent_strip`), up to five units, newest first, each its clock time big, its name, its
-  title and how long it took. From 761 to 1023px the name takes a row of its own, its words
-  and sentence across the band under it, and the strip's head stands over its five items. On a
-  phone (to 760px) the name stands over its words, everything one column, and the strip is a
-  list of 44px rows.
+  title and how long it took. The band lays out by its own width (the `band` container, so
+  the drawer beside it counts): from 718 to 972px of band (a 761 to 1023px window, or 1440
+  with the drawer open) the name takes a row of its own, its words and sentence across the
+  band under it, and the strip's head stands over its five items. Under 718px (a phone) the
+  name stands over its words, everything one column, and the strip is a list of 44px rows.
 - **Under it on the paper**, the page's own row (`.subnav`): its sections as tabs (Plan,
   Messages, Log, Functions, Settings; the current one under a 2px ink bar), a count line
   (`Frame::meta`), and at the right its tools (`Frame::tools`: a find field, the grid switch).
@@ -480,7 +483,10 @@ when), `.mod-t` (its title), `.mod-meta` (its id in ink and its facts), a stage 
   ("1 failed · 1 cancelled").
 - **The margin module** (`ui::margin_module`): two columns at the sheet's right; a long run's
   name and words, its running time on the blue with the sweep, then each progress field as it
-  reported it (the first one large), when it last reported and a link to its page.
+  reported it, when it last reported and a link to its page. A value is set by its JSON type
+  and length alone, never its name (`ui::ValueSet`): the first short one (a number, a boolean,
+  or a string of at most eight characters) at display size, an unbroken token (an id, a hash,
+  a path) or a list in data mono at body size, words as text.
 
 ## Status presentation
 
@@ -535,8 +541,11 @@ draws:
 
 **The summary sentence** (`ui::summary_sentence`): "1 question for you. 1 failed, 1
 cancelled. 2 article units and 1 scan unit at work: s-3 quiet for 53m, a-12 at 2.1× its usual
-time. 2 waiting. 3 of 10 units done; the last finished 57m ago." Each recipe is named by its
-own name with the unit after it ("1 other unit" for one of no recipe), each part is left out
+time. 2 waiting. 3 of 10 units done; the last finished 57m ago." Up to two quiet runs and two
+overruns are named one by one; past two it counts them and names the first two: "… at work,
+8 past their usual time (a-12 at 9.8×, a-11 at 5.7× and 6 more)". Each recipe is named by its
+own name with the unit after it ("1 unit without a recipe" for one of no recipe, as the
+plan's head over them says it too), each part is left out
 when it has nothing to say, and the question links to where it is answered, under a coral
 underline. A quiet run's time ticks on the page.
 
@@ -716,8 +725,10 @@ The pages compose these parts; each lane that redraws one writes its section her
   then a column a project; each run a line: its minute in mono, its unit in ink and its step
   muted, its run number, then at the right its glyph and duration (sky-ink check), its word on
   the sand chip when it needs a look, or "running 43m" on the blue; a line is at most 480px, so
-  its outcome stays by its name on a wide screen. A long hour flows into
-  columns as wide as the screen allows; four projects or more stack under each hour below
+  its outcome stays by its name on a wide screen. A busy hour (more than six in a cell) lists
+  only its notable runs (not a success, an hour or longer, or past twice its stage's usual time
+  that day) and folds the successes behind a muted "+23 more succeeded, 1m to 12m" that opens
+  in place; a long list flows into columns as wide as the screen allows; four projects or more stack under each hour below
   1100px of content, every project below 640px. The current hour ends on the now rule and
   says what runs. `nav.js` keeps the reader's zone in a cookie and moves the rule and the
   running bars with the clock; the page's version is its runs, so it patches only when they

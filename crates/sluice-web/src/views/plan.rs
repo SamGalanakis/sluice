@@ -814,11 +814,11 @@ impl<'a> Plan<'a> {
                     (0, n) => ui::count(n, "loose step", "loose steps"),
                     (n, 0) => format!(
                         "{}: each draws its own steps",
-                        ui::count(n, "unit of no recipe", "units of no recipe")
+                        ui::no_recipe(n, ("unit", "units"))
                     ),
                     (n, m) => format!(
                         "{} and {}",
-                        ui::count(n, "unit of no recipe", "units of no recipe"),
+                        ui::no_recipe(n, ("unit", "units")),
                         ui::count(m, "loose step", "loose steps")
                     ),
                 };

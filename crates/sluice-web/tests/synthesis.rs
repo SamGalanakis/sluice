@@ -146,6 +146,32 @@ fn the_frame_and_band_primitives_escape_what_they_are_given() {
     let margin = margin.as_str();
     assert!(margin.starts_with("<article class=\"mod swell-margin\" style=\"--span:2\" data-span=\"2\" aria-label=\"survey, running\">"), "{margin}");
     assert!(margin.contains("<div class=\"mm-f mm-lead\"><dt>checked</dt><dd>1240</dd></div><div class=\"mm-f\"><dt>note</dt><dd>&lt;b&gt;</dd></div>"), "{margin}");
+    // display size only for a short value: a hash reported first is a token in data mono, the
+    // first number the lead, words plain text; decided from each value, never its name
+    let hashed = ui::margin_module(&ui::LongRun {
+        name: "survey".into(),
+        fields: vec![
+            (
+                "count".into(),
+                json!("86aeeb2d5a4982dbb8d18bb269842c0c72f06979"),
+            ),
+            ("head".into(), json!("Rolling the workspace forward")),
+            ("message".into(), json!(42)),
+            ("ids".into(), json!(["a", "b"])),
+            ("red".into(), json!(0)),
+        ],
+        since: "2026-10-08T00:00:00Z".into(),
+        ..Default::default()
+    });
+    let hashed = hashed.as_str();
+    assert!(hashed.contains("<div class=\"mm-f\"><dt>count</dt><dd class=\"mm-token\">86aeeb2d5a4982dbb8d18bb269842c0c72f06979</dd></div><div class=\"mm-f\"><dt>head</dt><dd>Rolling the workspace forward</dd></div><div class=\"mm-f mm-lead\"><dt>message</dt><dd>42</dd></div><div class=\"mm-f\"><dt>ids</dt><dd class=\"mm-token\">[&quot;a&quot;,&quot;b&quot;]</dd></div><div class=\"mm-f\"><dt>red</dt><dd>0</dd></div>"), "{hashed}");
+    // nothing short: no lead at all
+    let long = ui::margin_module(&ui::LongRun {
+        name: "survey".into(),
+        fields: vec![("head".into(), json!("f7b1a3c9d2e8"))],
+        ..Default::default()
+    });
+    assert!(!long.as_str().contains("mm-lead"), "{}", long.as_str());
     let trace = ui::Trace::new([("b", "a\""), ("c", "b")]);
     assert_eq!(
         trace.attrs("b").as_str(),

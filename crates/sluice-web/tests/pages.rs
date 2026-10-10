@@ -103,6 +103,91 @@ fn row<'a>(page: &'a str, hour: &str) -> &'a str {
         .map_or(rest.len(), |e| e + 10)]
 }
 
+/// Seconds ago for `minute` minutes into the clock hour that began between ten and eleven
+/// hours back, so every run seeded with it starts in that one hour.
+fn in_busy_hour(minute: u64) -> u64 {
+    let start = (now() - 10 * 3600) / 3600 * 3600;
+    now() - (start + minute * 60)
+}
+/// A busy hour of chores: eight water-plants successes of 2m, one of them past twice that
+/// (10m), a failed sort-mail and an hour-long file-receipts success.
+async fn seed_busy_hour(f: &Fixture, chores: ProjectId) {
+    for k in 0..8 {
+        run(
+            f,
+            chores,
+            "water-plants",
+            in_busy_hour(2 + k),
+            Some(120),
+            "succeeded",
+        )
+        .await;
+    }
+    run(
+        f,
+        chores,
+        "water-plants",
+        in_busy_hour(20),
+        Some(600),
+        "succeeded",
+    )
+    .await;
+    run(f, chores, "sort-mail", in_busy_hour(25), Some(90), "failed").await;
+    run(
+        f,
+        chores,
+        "file-receipts",
+        in_busy_hour(30),
+        Some(3720),
+        "succeeded",
+    )
+    .await;
+}
+/// The chores cell of a timetable row.
+fn chores_cell(row: &str) -> &str {
+    let from = row
+        .find("<p class=\"tt-pname\">chores</p>")
+        .unwrap_or_else(|| panic!("no chores cell: {row}"));
+    let rest = &row[from..];
+    &rest[..rest.find("<div class=\"tt-c\">").unwrap_or(rest.len())]
+}
+
+#[tokio::test]
+async fn a_busy_hour_lists_its_notable_runs_and_folds_the_successes_in_place() {
+    let f = Fixture::new().await;
+    let n = neutral::seed(&f.writer, f._home.path()).await;
+    seed_busy_hour(&f, n.chores).await;
+    let router = f.router();
+    let page = get_with(&router, "/day", "sluice_zone=0").await;
+    let cell = chores_cell(row(&page, &hour(in_busy_hour(0), 0)));
+    let (listed, folded) = cell.split_once("<details").expect(cell);
+    // listed: the failure, the overrun (10m where water-plants usually takes 2m), the long one
+    assert_eq!(listed.matches("<li class=\"tt-run\">").count(), 3, "{cell}");
+    assert!(listed.contains("<b>sort-mail</b>"), "{listed}");
+    assert!(listed.contains("tt-failed"), "{listed}");
+    assert!(listed.contains("<b>file-receipts</b>"), "{listed}");
+    assert!(listed.contains("10m</span>"), "{listed}");
+    // folded: the eight plain successes, behind "+8 more" that opens in place and keeps
+    // its state through a patch
+    assert!(
+        folded.starts_with(&format!(
+            " class=\"tt-more\" id=\"tt-more-{}-{}\" data-preserve-attr=\"open\"><summary>+8 more succeeded, 2m to 2m</summary>",
+            (now() - 10 * 3600) / 3600 * 3600,
+            n.chores
+        )),
+        "{folded}"
+    );
+    assert_eq!(
+        folded.matches("<li class=\"tt-run\">").count(),
+        8,
+        "{folded}"
+    );
+    assert!(!folded.contains("tt-look"), "{folded}");
+    // a quiet hour is never folded
+    let quiet = row(&page, &hour(3 * 3600, 0));
+    assert!(!quiet.contains("tt-more"), "{quiet}");
+}
+
 #[tokio::test]
 async fn home_puts_what_needs_the_owner_first_and_its_question_is_answered_in_place() {
     let f = Fixture::new().await;
@@ -444,6 +529,42 @@ async fn the_day_patches_only_when_its_runs_change() {
     let wire = read_for(&mut body, Duration::from_secs(4)).await;
     assert!(wire.contains("selector #day-view"), "{wire}");
     assert!(wire.contains("<b>file-receipts</b>"), "{wire}");
+    // a busy hour's runs: the patch folds its successes and lists what is notable
+    seed_busy_hour(&f, n.chores).await;
+    let wire = read_for(&mut body, Duration::from_secs(4)).await;
+    assert!(wire.contains("+8 more succeeded, 2m to 2m"), "{wire}");
+    // one more plain success joins the fold; a failure in that hour is listed
+    run(
+        &f,
+        n.chores,
+        "water-plants",
+        in_busy_hour(40),
+        Some(120),
+        "succeeded",
+    )
+    .await;
+    let wire = read_for(&mut body, Duration::from_secs(4)).await;
+    assert!(wire.contains("+9 more succeeded, 2m to 2m"), "{wire}");
+    run(
+        &f,
+        n.chores,
+        "water-plants",
+        in_busy_hour(45),
+        Some(130),
+        "failed",
+    )
+    .await;
+    let wire = read_for(&mut body, Duration::from_secs(4)).await;
+    let cell = chores_cell(
+        &wire[wire
+            .find(&format!("tt-more-{}-", (now() - 10 * 3600) / 3600 * 3600))
+            .map_or(0, |at| {
+                wire[..at].rfind("<section class=\"tt-row").unwrap_or(0)
+            })..],
+    );
+    let listed = cell.split("<details").next().unwrap();
+    assert!(listed.contains("tt-failed\">"), "{cell}");
+    assert_eq!(listed.matches("tt-failed").count(), 2, "{cell}");
 }
 
 async fn serve(router: Router) -> (String, tokio::task::JoinHandle<()>) {

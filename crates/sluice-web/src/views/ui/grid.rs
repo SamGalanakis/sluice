@@ -527,64 +527,102 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
         parts.push(format!("{}.", esc(&stops.join(", "))));
     }
     if !running.is_empty() {
-        // how many of each recipe, in the order a recipe first appears; a unit of no recipe
-        // is "other"
+        // how many of each recipe, in the order a recipe first appears
         let mut by: Vec<(&str, usize)> = vec![];
         for unit in &running {
-            let name = if unit.recipe.is_empty() {
-                ""
-            } else {
-                unit.recipe.as_str()
-            };
-            match by.iter_mut().find(|(r, _)| *r == name) {
+            match by.iter_mut().find(|(r, _)| *r == unit.recipe.as_str()) {
                 Some((_, n)) => *n += 1,
-                None => by.push((name, 1)),
+                None => by.push((unit.recipe.as_str(), 1)),
             }
         }
         // each recipe's count names the recipe and the unit ("2 article units and 1 scan
-        // unit"); a unit of no recipe is "other"
+        // unit"); units of no recipe are "units without a recipe" (`NO_RECIPE`)
         let named = by.iter().any(|(r, _)| !r.is_empty());
         let who = if named {
             join(
                 &by.iter()
                     .map(|(r, n)| {
-                        let r = if r.is_empty() { "other" } else { r };
-                        count(*n, &format!("{r} {one}"), &format!("{r} {many}"))
+                        if r.is_empty() {
+                            no_recipe(*n, (one, many))
+                        } else {
+                            count(*n, &format!("{r} {one}"), &format!("{r} {many}"))
+                        }
                     })
                     .collect::<Vec<_>>(),
             )
         } else {
             count(running.len(), one, many)
         };
-        let mut notes: Vec<(f64, String)> = vec![];
-        for unit in &running {
-            if let Some(secs) = unit.quiet {
-                // since it went quiet, ticking, when the page knows when that was
-                let time = if unit.quiet_since.is_empty() {
-                    esc(&duration_text(secs))
-                } else {
-                    since(&unit.quiet_since).0
-                };
-                notes.push((f64::MAX, format!("{} quiet for {time}", esc(&unit.name))));
-            } else if let Some(r) = unit.over {
-                notes.push((
-                    r,
-                    format!("{} at {} its usual time", esc(&unit.name), ratio_text(r)),
-                ));
-            }
-        }
-        // quiet first, then the furthest past its usual time
-        notes.sort_by(|a, b| b.0.total_cmp(&a.0));
-        let notes: Vec<String> = notes.into_iter().map(|(_, n)| n).collect();
-        parts.push(format!(
-            "{} at work{}.",
-            esc(&who),
-            if notes.is_empty() {
-                String::new()
+        // the quiet ones, longest quiet first, and those past their usual time, furthest
+        // first: up to two of each named, more counted with the first two named
+        let mut quiet: Vec<(&UnitFact, f64)> = running
+            .iter()
+            .filter_map(|u| u.quiet.map(|q| (*u, q)))
+            .collect();
+        quiet.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let mut over: Vec<(&UnitFact, f64)> = running
+            .iter()
+            .filter(|u| u.quiet.is_none())
+            .filter_map(|u| u.over.map(|r| (*u, r)))
+            .collect();
+        over.sort_by(|a, b| b.1.total_cmp(&a.1));
+        // since it went quiet, ticking, when the page knows when that was
+        let quiet_for = |unit: &UnitFact, secs: f64| {
+            if unit.quiet_since.is_empty() {
+                esc(&duration_text(secs))
             } else {
-                format!(": {}", notes.join(", "))
+                since(&unit.quiet_since).0
             }
-        ));
+        };
+        let mut notes: Vec<String> = vec![];
+        if quiet.len() > NAMED {
+            notes.push(format!(
+                "{} quiet ({})",
+                quiet.len(),
+                and_more(
+                    quiet.iter().take(NAMED).map(|(u, q)| format!(
+                        "{} for {}",
+                        esc(&u.name),
+                        quiet_for(u, *q)
+                    )),
+                    quiet.len()
+                )
+            ));
+        } else {
+            notes.extend(
+                quiet
+                    .iter()
+                    .map(|(u, q)| format!("{} quiet for {}", esc(&u.name), quiet_for(u, *q))),
+            );
+        }
+        if over.len() > NAMED {
+            notes.push(format!(
+                "{} past their usual time ({})",
+                over.len(),
+                and_more(
+                    over.iter().take(NAMED).map(|(u, r)| format!(
+                        "{} at {}",
+                        esc(&u.name),
+                        ratio_text(*r)
+                    )),
+                    over.len()
+                )
+            ));
+        } else {
+            notes
+                .extend(over.iter().map(|(u, r)| {
+                    format!("{} at {} its usual time", esc(&u.name), ratio_text(*r))
+                }));
+        }
+        // a named run follows a colon, a count a comma: "at work: s-3 quiet for 53m", "at
+        // work, 8 past their usual time (a-1 at 9.8×, a-2 at 5.7× and 6 more)"
+        let lead = match (quiet.len(), over.len()) {
+            (0, 0) => "",
+            (q, _) if q > NAMED => ", ",
+            (0, o) if o > NAMED => ", ",
+            _ => ": ",
+        };
+        parts.push(format!("{} at work{lead}{}.", esc(&who), notes.join(", ")));
     }
     if waiting > 0 {
         parts.push(format!("{waiting} waiting."));
@@ -610,6 +648,25 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
         parts.push("Nothing has started yet.".into());
     }
     TrustedHtml::owned(parts.join(" "))
+}
+/// How many quiet or overrunning units the summary sentence names before it counts the rest.
+pub const NAMED: usize = 2;
+/// What units of no recipe are called wherever they are counted: "1 unit without a recipe",
+/// "3 units without a recipe" (the summary sentence and the plan's head over them alike).
+pub fn no_recipe(n: usize, noun: (&str, &str)) -> String {
+    count(
+        n,
+        &format!("{} without a recipe", noun.0),
+        &format!("{} without a recipe", noun.1),
+    )
+}
+/// The first few named and the rest counted: "a and b", "a, b and 6 more" of `total`.
+fn and_more(named: impl Iterator<Item = String>, total: usize) -> String {
+    let mut items: Vec<String> = named.collect();
+    if total > items.len() {
+        items.push(format!("{} more", total - items.len()));
+    }
+    join(&items)
 }
 /// "a", "a and b", "a, b and c".
 fn join(items: &[String]) -> String {
@@ -742,9 +799,35 @@ pub struct LongRun {
     pub fields: Vec<(String, serde_json::Value)>,
     pub at: String,
 }
+/// How a progress value is set, from its JSON type and length alone, never its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ValueSet {
+    /// A number, a boolean, nothing, or a string of at most `SHORT_VALUE` characters: it may
+    /// be set at display size.
+    Short,
+    /// One unbroken token (an id, a hash, a path) or a list or object: body size in data mono,
+    /// broken anywhere.
+    Token,
+    /// Words: body size in the text face.
+    Prose,
+}
+/// The longest string a progress value may be to be set at display size.
+pub const SHORT_VALUE: usize = 8;
+impl ValueSet {
+    pub fn of(value: &serde_json::Value) -> Self {
+        match value {
+            serde_json::Value::String(s) if s.chars().count() <= SHORT_VALUE => ValueSet::Short,
+            serde_json::Value::String(s) if s.chars().any(char::is_whitespace) => ValueSet::Prose,
+            serde_json::Value::String(_) => ValueSet::Token,
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => ValueSet::Token,
+            _ => ValueSet::Short,
+        }
+    }
+}
 /// The margin module (`Swell::Margin`, two columns at the sheet's right): its name and words,
-/// its running time on the blue, then each progress field (the first one large), then when it
-/// last reported and a link to its page.
+/// its running time on the blue, then each progress field in the order reported (the first
+/// short one, a number say, at display size; an id or hash in data mono; words as text), then
+/// when it last reported and a link to its page.
 pub fn margin_module(run: &LongRun) -> TrustedHtml {
     let value = |v: &serde_json::Value| match v {
         serde_json::Value::String(s) => esc(s),
@@ -752,11 +835,24 @@ pub fn margin_module(run: &LongRun) -> TrustedHtml {
         other => esc(&other.to_string()),
     };
     let mut fields = String::new();
+    let lead = run
+        .fields
+        .iter()
+        .position(|(_, v)| ValueSet::of(v) == ValueSet::Short);
     for (i, (key, v)) in run.fields.iter().enumerate() {
         fields.push_str(&format!(
-            "<div class=\"{}\"><dt>{}</dt><dd>{}</dd></div>",
-            if i == 0 { "mm-f mm-lead" } else { "mm-f" },
+            "<div class=\"{}\"><dt>{}</dt><dd{}>{}</dd></div>",
+            if Some(i) == lead {
+                "mm-f mm-lead"
+            } else {
+                "mm-f"
+            },
             esc(key),
+            if ValueSet::of(v) == ValueSet::Token {
+                " class=\"mm-token\""
+            } else {
+                ""
+            },
             value(v)
         ));
     }
@@ -992,6 +1088,63 @@ mod tests {
         assert_eq!(
             summary_sentence(&Summary::default()).as_str(),
             "Nothing has started yet."
+        );
+    }
+
+    #[test]
+    fn a_busy_summary_names_two_overruns_and_two_quiet_runs_and_counts_the_rest() {
+        let run = |name: &str, recipe: &str, over: Option<f64>, quiet: Option<f64>| UnitFact {
+            name: name.into(),
+            recipe: recipe.into(),
+            shown: Some(if quiet.is_some() {
+                Shown::Quiet
+            } else {
+                Shown::Running
+            }),
+            over,
+            quiet,
+            ..UnitFact::default()
+        };
+        // eight past their usual time in any order, one unit of no recipe among them
+        let ratios = [5.7, 2.2, 9.8, 3.1, 1.6, 4.0, 2.5, 1.2];
+        let mut units: Vec<UnitFact> = ratios
+            .iter()
+            .enumerate()
+            .map(|(i, r)| run(&format!("u-{i}"), "lane", Some(*r), None))
+            .collect();
+        units.push(run("x", "", Some(1.1), None));
+        let says = |units: &[UnitFact]| {
+            summary_sentence(&Summary {
+                units,
+                noun: ("unit", "units"),
+                ..Summary::default()
+            })
+            .as_str()
+            .to_owned()
+        };
+        assert_eq!(
+            says(&units),
+            "8 lane units and 1 unit without a recipe at work, 9 past their usual time (u-2 at 9.8×, u-0 at 5.7× and 7 more)."
+        );
+        // three quiet: the two longest named, before the overruns
+        units.extend([
+            run("q-1", "lane", None, Some(600.0)),
+            run("q-2", "lane", None, Some(4000.0)),
+            run("q-3", "lane", None, Some(120.0)),
+        ]);
+        assert_eq!(
+            says(&units),
+            "11 lane units and 1 unit without a recipe at work, 3 quiet (q-2 for 1h 6m, q-1 for 10m and 1 more), 9 past their usual time (u-2 at 9.8×, u-0 at 5.7× and 7 more)."
+        );
+        // two of each are still named one by one, after a colon
+        let few = [
+            run("a", "", Some(3.0), None),
+            run("b", "", Some(2.0), None),
+            run("c", "", None, Some(60.0)),
+        ];
+        assert_eq!(
+            says(&few),
+            "3 units at work: c quiet for 1m, a at 3.0× its usual time, b at 2.0× its usual time."
         );
     }
 }

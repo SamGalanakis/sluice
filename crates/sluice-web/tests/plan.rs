@@ -115,9 +115,17 @@ async fn every_unit_of_the_fixture_is_drawn_once_in_its_band_in_rank() {
     assert!(
         summary.starts_with("<p class=\"band-summary\"><a class=\"ask\"")
             && summary.contains("1 question for you</a>. 2 failed, 1 cancelled.")
-            && summary.contains("2 article units, 1 scan unit and 2 other units at work"),
+            && summary
+                .contains("2 article units, 1 scan unit and 2 units without a recipe at work"),
         "{summary}"
     );
+    // the head over the units of no recipe says them the same way
+    assert!(
+        html.contains("1 unit without a recipe and 1 loose step")
+            || html.contains("1 unit without a recipe: each draws its own steps"),
+        "{html}"
+    );
+    assert!(!html.contains("of no recipe"), "{html}");
 }
 
 #[tokio::test]
@@ -138,7 +146,7 @@ async fn three_loose_steps_are_a_cell_each() {
             "{row}"
         );
     }
-    // no recipe, no "unit of no recipe": loose steps, said so
+    // no recipe, no "unit without a recipe": loose steps, said so
     assert!(html.contains("1 loose step."), "{html}");
     assert!(!html.contains("each draws its own steps"), "{html}");
     // a loose step's links lead to its own page, not a unit page
@@ -199,6 +207,68 @@ async fn chromium_the_plan_fits_every_width_from_a_phone_to_a_wide_screen() {
                 }
             }
         }
+    })
+    .await
+    .unwrap();
+    server.abort();
+    let _ = server.await;
+}
+
+/// The band's name is sized by the band's own width, not the window's: with the drawer open
+/// beside the plan at 1440px the band is narrower, so the name takes the band's tablet row and
+/// a size for that width, and stays whole on one line.
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_the_bands_name_follows_the_band_and_stays_whole_beside_the_drawer() {
+    let f = Fixture::new().await;
+    let n = neutral::seed(&f.writer, f._home.path()).await;
+    let router = f.router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    tokio::task::spawn_blocking(move || {
+        let page = format!("http://{addr}/projects/id/{}", n.almanac);
+        let mut browser = Chrome::open(&page).unwrap();
+        browser
+            .wait("document.readyState === 'complete' && document.querySelector('.band-head h1')")
+            .unwrap();
+        browser.viewport(1440, "light").unwrap();
+        const NAME: &str = r#"(() => {
+  const h1 = document.querySelector('.band-head > h1');
+  const band = document.querySelector('.band-in');
+  const pad = parseFloat(getComputedStyle(band).paddingLeft) + parseFloat(getComputedStyle(band).paddingRight);
+  const size = parseFloat(getComputedStyle(h1).fontSize);
+  const words = [...document.querySelectorAll('.band-sub')].map(e => e.getBoundingClientRect());
+  return {size, band: band.clientWidth - pad, cls: h1.className,
+          lines: Math.round(h1.getBoundingClientRect().height / (size * 0.8)),
+          right: h1.getBoundingClientRect().right, edge: band.getBoundingClientRect().right,
+          under: words.length > 0 && words[0].top >= h1.getBoundingClientRect().bottom - 1,
+          scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth};
+})()"#;
+        // alone: "almanac" (seven letters, the long step) at 7.54% of a 1376px band
+        let alone = browser.eval(NAME).unwrap();
+        assert_eq!(alone["cls"], "long", "{alone}");
+        let band = alone["band"].as_f64().unwrap();
+        let size = alone["size"].as_f64().unwrap();
+        assert!((size - (band * 0.0754).clamp(64.0, 166.0)).abs() < 1.0, "{alone}");
+        assert_eq!(alone["lines"], 1, "{alone}");
+        assert_eq!(alone["under"], false, "beside its words at 1440 {alone}");
+        // the drawer open beside it: the band narrows, the name follows the band
+        browser
+            .eval("history.replaceState(null,'','#step:a-6-draft');dispatchEvent(new HashChangeEvent('hashchange'))")
+            .unwrap();
+        browser
+            .wait("document.documentElement.classList.contains('drawer-open')")
+            .unwrap();
+        browser.wait("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))").unwrap();
+        let beside = browser.eval(NAME).unwrap();
+        let narrow = beside["band"].as_f64().unwrap();
+        assert!(narrow < band - 500.0, "the drawer narrows the band {beside}");
+        let size = beside["size"].as_f64().unwrap();
+        assert!((size - (narrow * 0.0754).clamp(64.0, 166.0)).abs() < 1.0, "{beside}");
+        assert_eq!(beside["lines"], 1, "the name stays whole {beside}");
+        assert!(beside["right"].as_f64().unwrap() <= beside["edge"].as_f64().unwrap() + 0.5, "{beside}");
+        assert_eq!(beside["under"], true, "a band this narrow sets its words under the name {beside}");
+        assert_eq!(beside["scroll"], 0, "{beside}");
     })
     .await
     .unwrap();
