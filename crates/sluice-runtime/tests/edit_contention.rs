@@ -10,6 +10,7 @@ mod home;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::*,
+    cost::{self, Measurement, PreparationPoint},
     error::PublicError,
     rpc::{FnInvocation, JsonMap, decode_json},
 };
@@ -17,7 +18,6 @@ use sluice_process::guardian::{AdoptionAttempt, AdoptionHost, FnHost, GuardianPr
 use sluice_runtime::{
     coordinator::Coordinator,
     dispatch::Catalog,
-    edits::{barrier, counters},
     execution::{ExecutionHost, Launch, LaunchOutcome},
 };
 use std::{
@@ -117,14 +117,15 @@ async fn a_high_fanout_edit_held_three_times_is_refused_busy_and_writes_nothing(
     let rev = plan_rev(b.clone(), project.clone()).await;
     let entries = history(b.clone(), project.clone()).await;
 
-    counters::reset();
     let arrived = Arc::new(Barrier::new(2));
     let release = Arc::new(Barrier::new(2));
     let (a, r) = (arrived.clone(), release.clone());
-    barrier::set(Some(Arc::new(move || {
+    // The only edit this binary prepares from here on is the one held.
+    let hook = cost::hook_preparations(move |_: &PreparationPoint| {
         a.wait();
         r.wait();
-    })));
+    });
+    let measurement = Measurement::start();
     // Retyping the input every reader reads: its preparation re-checks all 2,000 of them.
     let edit = tokio::spawn({
         let (b, project) = (b.clone(), project.clone());
@@ -158,7 +159,7 @@ async fn a_high_fanout_edit_held_three_times_is_refused_busy_and_writes_nothing(
         wait(release.clone()).await.unwrap();
     }
     let refused = edit.await.unwrap().unwrap_err();
-    barrier::set(None);
+    drop(hook);
     assert_eq!(
         refused,
         PublicError::Busy {
@@ -166,10 +167,14 @@ async fn a_high_fanout_edit_held_three_times_is_refused_busy_and_writes_nothing(
             retryable: true,
         }
     );
-    let counts = counters::read();
+    let counts = measurement.costs();
     assert_eq!(counts.writer_preparations, 0);
     assert_eq!(
-        (counts.stale, counts.contended, counts.committed),
+        (
+            counts.preparations.stale,
+            counts.preparations.contended,
+            counts.preparations.committed
+        ),
         (2, 1, 0)
     );
     // Nothing was written: the revision and the history stand.

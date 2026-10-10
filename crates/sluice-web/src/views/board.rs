@@ -17,7 +17,7 @@ use sluice_model::{
     error::PublicError,
     shown::Band as Placed,
     gates::{Gate, GateDecision, StateSnapshot, evaluate_step},
-    ids::{ProjectId, Revision, StepId, UnitName},
+    ids::{ProjectId, ProjectSelector, Revision, StepId, UnitName},
     plan::{FnSignature, Plan, SignatureProvider},
     types::Type,
 };
@@ -1816,7 +1816,13 @@ async fn load(
                 load_board(c, &shared, project, &plans, &version, &provider)?
             };
             let loaded = if panel {
-                super::panel::gather(c, project, Some(&plan), &board, None)?
+                super::panel::gather(
+                    c,
+                    project,
+                    Some((Revision(board.revision), &plan)),
+                    &board,
+                    None,
+                )?
             } else {
                 None
             };
@@ -1964,36 +1970,29 @@ pub(crate) fn error_response(e: PublicError) -> Response {
     };
     (code, e.to_string()).into_response()
 }
-/// The board's `?format=mermaid`: the `plan_view` tool's Mermaid for the project.
+/// The board's `?format=mermaid`: the `plan_view` tool's Mermaid for the project, drawn from
+/// the graph index (nothing is compiled).
 async fn plan_mermaid(
     state: &DashboardState,
     project: ProjectId,
-    registry: Option<&Registry>,
     all: bool,
 ) -> Result<String, PublicError> {
-    let exact = registry.map(|r| r.0.signatures(project)).transpose()?;
-    let catalog = state.catalog.catalog(Some(project))?;
-    let plans = state.plans.clone();
     state
         .reads
         .snapshot(move |c| {
-            let (_, plan) = match &exact {
-                Some(exact) => {
-                    plans.plan(c, project, &format!("registry:{}", exact.version), exact)?
-                }
-                None => plans.plan(
-                    c,
-                    project,
-                    &format!("catalog:{}", catalog.version),
-                    &CatalogSignatures(&catalog),
-                )?,
-            };
             sluice_runtime::dispatch_ext::render_plan_view(
                 c,
+                &super::home_of(c),
                 project,
-                &plan,
-                sluice_model::commands::PlanViewFormat::Mermaid,
-                all,
+                sluice_model::plan_rows::PlanViewQuery {
+                    project: ProjectSelector::Id(project),
+                    format: sluice_model::commands::PlanViewFormat::Mermaid,
+                    all,
+                    units: None,
+                    steps: None,
+                    status: None,
+                    recipe: None,
+                },
             )
         })
         .await
@@ -2016,7 +2015,7 @@ pub async fn project_page(
         };
         query.apply(&mut view)?;
         if mermaid {
-            let text = plan_mermaid(&state, project, registry, query.all.unwrap_or(false)).await?;
+            let text = plan_mermaid(&state, project, query.all.unwrap_or(false)).await?;
             return Ok((
                 [(
                     axum::http::header::CONTENT_TYPE,

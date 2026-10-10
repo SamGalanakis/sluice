@@ -22,12 +22,12 @@
 
 use crate::{
     Result, StoreError,
-    cost::{self, Counter},
     plans::{insert_edge, insert_reference},
     schema::{APPLICATION_ID, FORMAT_MAJOR, SCHEMA, SCHEMA_VERSION},
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Value, json};
+use sluice_model::cost::{self, Counter};
 use sluice_model::{
     ids::{ProjectId, Revision},
     plan_index::{output_references, plan_edges, step_index},

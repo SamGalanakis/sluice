@@ -1,4 +1,7 @@
 #[allow(dead_code)]
+#[path = "../../sluice-store/tests/support/plan_rows.rs"]
+mod plan_rows;
+#[allow(dead_code)]
 #[path = "../../../tests/support/messages.rs"]
 mod stored_messages;
 use indexmap::IndexMap;
@@ -8,7 +11,8 @@ use sluice_model::{
     error::PublicError,
     events::{Event, Record, UnitStep},
     ids::{ProjectId, RecordSeq, Revision, RunId, UnitName, WorkGeneration},
-    plan::{FnSignature, Plan},
+    plan::{FnSignature, Plan, compile_rows},
+    plan_rows::PlanRows,
     rpc::JsonMap,
     types::Type,
 };
@@ -38,19 +42,18 @@ async fn setup() -> (Home, Writer, ReadPool, ProjectId) {
     (h, w, r, p)
 }
 async fn project(w: &Writer, name: &str) -> ProjectId {
-    let p = ProjectId::new();
     let name = name.to_string();
     w.write(RetrySafety::NonIdempotent, move |tx| {
-        tx.sql().execute(
-            "INSERT INTO projects(project_id,name,created_at) VALUES (?1,?2,'now')",
-            (p.to_string(), name),
-        )?;
-        tx.changed(Some(p), "projects");
-        Ok(())
+        plan_rows::create_project(tx, &name)
     })
     .await
-    .unwrap();
-    p
+    .unwrap()
+}
+/// A plan document compiled from its rows, and the document, to commit as the project's plan.
+fn compile(doc: &[u8], signatures: &IndexMap<String, FnSignature>) -> (JsonMap, Plan) {
+    let doc: JsonMap = serde_json::from_slice(doc).unwrap();
+    let rows = PlanRows::from_document(&doc, None).unwrap();
+    (doc, compile_rows(&rows, signatures).unwrap())
 }
 fn options(p: ProjectId) -> NextOptions {
     NextOptions {
@@ -111,10 +114,9 @@ async fn singleton_settles_once_per_generation_without_open_exception() {
             ..FnSignature::default()
         },
     )]);
-    let plan = Plan::parse_json(br#"{"steps":{"one":{"run":"test.fn"}}}"#, &signatures).unwrap();
-    let copy = plan.clone();
+    let (doc, plan) = compile(br#"{"steps":{"one":{"run":"test.fn"}}}"#, &signatures);
     w.write(RetrySafety::NonIdempotent, move |tx| {
-        sluice_store::plans::initialize_plan(tx, p, &copy)?;
+        plan_rows::commit_document(tx, p, &doc, None, None)?;
         tx.sql().execute(
             "UPDATE steps SET status='succeeded',outputs=?2 WHERE project_id=?1",
             (p.to_string(), json!({"value":"old"}).to_string()),
@@ -127,7 +129,7 @@ async fn singleton_settles_once_per_generation_without_open_exception() {
     let copy = plan.clone();
     let events = w
         .write(RetrySafety::NonIdempotent, move |tx| {
-            record_settlements(tx, p, Revision(1), &copy)
+            record_settlements(tx, p, Revision(2), &copy)
         })
         .await
         .unwrap();
@@ -137,7 +139,7 @@ async fn singleton_settles_once_per_generation_without_open_exception() {
         w.write(RetrySafety::NonIdempotent, move |tx| record_settlements(
             tx,
             p,
-            Revision(1),
+            Revision(2),
             &copy
         ))
         .await
@@ -155,7 +157,7 @@ async fn singleton_settles_once_per_generation_without_open_exception() {
             "UPDATE steps SET work_generation=work_generation+1 WHERE project_id=?1",
             [p.to_string()],
         )?;
-        record_settlements(tx, p, Revision(1), &copy)?;
+        record_settlements(tx, p, Revision(2), &copy)?;
         Ok(())
     })
     .await
@@ -567,10 +569,9 @@ async fn queued_work_is_startable_but_paused_external_and_failed_gates_can_settl
             },
         ),
     ]);
-    let plan=Plan::parse_json(br#"{"steps":{"ready":{"run":"test.fn","needs":{"lane":1}},"paused":{"run":"test.fn","paused":true},"ext":{"run":"core.external"},"failed":{"run":"test.fn"},"gate":{"run":"test.fn","after":["failed"]}}}"#,&signatures).unwrap();
-    let copy = plan.clone();
+    let (doc, plan) = compile(br#"{"steps":{"ready":{"run":"test.fn","needs":{"lane":1}},"paused":{"run":"test.fn","paused":true},"ext":{"run":"core.external"},"failed":{"run":"test.fn"},"gate":{"run":"test.fn","after":["failed"]}}}"#, &signatures);
     w.write(RetrySafety::NonIdempotent, move |tx| {
-        sluice_store::plans::initialize_plan(tx, p, &copy)?;
+        plan_rows::commit_document(tx, p, &doc, None, None)?;
         tx.sql().execute(
             "UPDATE steps SET status='failed' WHERE project_id=?1 AND step_id='failed'",
             [p.to_string()],
@@ -582,7 +583,7 @@ async fn queued_work_is_startable_but_paused_external_and_failed_gates_can_settl
     .unwrap();
     let emitted = w
         .write(RetrySafety::NonIdempotent, move |tx| {
-            record_settlements(tx, p, Revision(1), &plan)
+            record_settlements(tx, p, Revision(2), &plan)
         })
         .await
         .unwrap();
@@ -621,15 +622,14 @@ async fn queued_work_is_startable_but_paused_external_and_failed_gates_can_settl
 async fn delivery_with_running_cleanup_does_not_settle_and_certificate_survives_trim() {
     let (_h, w, _r, p) = setup().await;
     let signatures = IndexMap::from([("test.fn".into(), FnSignature::default())]);
-    let plan=Plan::parse_json(br#"{"steps":{"u-work":{"run":"test.fn","tags":["unit:u","exit"]},"u-clean":{"run":"test.fn","tags":["unit:u"],"after":["u-work"]}}}"#,&signatures).unwrap();
-    let copy = plan.clone();
-    w.write(RetrySafety::NonIdempotent,move|tx|{sluice_store::plans::initialize_plan(tx,p,&copy)?;tx.sql().execute("UPDATE steps SET status=CASE WHEN step_id='u-work' THEN 'succeeded' ELSE 'running' END WHERE project_id=?1",[p.to_string()])?;tx.changed(Some(p),"status");Ok(())}).await.unwrap();
+    let (doc, plan) = compile(br#"{"steps":{"u-work":{"run":"test.fn","tags":["unit:u","exit"]},"u-clean":{"run":"test.fn","tags":["unit:u"],"after":["u-work"]}}}"#, &signatures);
+    w.write(RetrySafety::NonIdempotent,move|tx|{plan_rows::commit_document(tx,p,&doc,None,None)?;tx.sql().execute("UPDATE steps SET status=CASE WHEN step_id='u-work' THEN 'succeeded' ELSE 'running' END WHERE project_id=?1",[p.to_string()])?;tx.changed(Some(p),"status");Ok(())}).await.unwrap();
     let copy = plan.clone();
     assert!(
         w.write(RetrySafety::NonIdempotent, move |tx| record_settlements(
             tx,
             p,
-            Revision(1),
+            Revision(2),
             &copy
         ))
         .await
@@ -643,7 +643,7 @@ async fn delivery_with_running_cleanup_does_not_settle_and_certificate_survives_
                 "UPDATE steps SET status='succeeded' WHERE project_id=?1",
                 [p.to_string()],
             )?;
-            record_settlements(tx, p, Revision(1), &copy)
+            record_settlements(tx, p, Revision(2), &copy)
         })
         .await
         .unwrap()
@@ -661,7 +661,7 @@ async fn delivery_with_running_cleanup_does_not_settle_and_certificate_survives_
         w.write(RetrySafety::NonIdempotent, move |tx| record_settlements(
             tx,
             p,
-            Revision(1),
+            Revision(2),
             &plan
         ))
         .await

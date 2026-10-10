@@ -37,8 +37,11 @@ fn document(doc: Value) -> JsonMap {
 /// `doc` compiled from its rows against `signatures`, as a page's plan is: for tests that draw a
 /// step from a plan without a home.
 pub fn compile(doc: Value, signatures: &impl SignatureProvider) -> Plan {
-    compile_rows(&PlanRows::from_document(&document(doc), None), signatures)
-        .unwrap_or_else(|e| panic!("the plan compiles: {e:?}"))
+    compile_rows(
+        &PlanRows::from_document(&document(doc), None).expect("the document converts to rows"),
+        signatures,
+    )
+    .unwrap_or_else(|e| panic!("the plan compiles: {e:?}"))
 }
 
 /// Make `doc` `project`'s plan in one edit by the owner: each section, input, output and step
@@ -62,7 +65,8 @@ pub fn put_by(
     reason: &str,
 ) -> sluice_store::Result<Revision> {
     let base = plans::read_plan_rows(tx.sql(), project)?;
-    let rows = PlanRows::from_document(&document(doc), Some(&base));
+    let rows = PlanRows::from_document(&document(doc), Some(&base))
+        .expect("the document converts to rows");
     let plan = compile_rows(&rows, &Open).unwrap_or_else(|e| panic!("the plan compiles: {e:?}"));
     let mut changes = vec![];
     if rows.header.root_order != base.header.root_order {

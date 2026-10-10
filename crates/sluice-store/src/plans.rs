@@ -1,11 +1,9 @@
 //! Plan and result commands composed inside one writer transaction.
 
-use crate::{
-    Result, StoreError, WriteTransaction,
-    cost::{self, Counter},
-};
+use crate::{Result, StoreError, WriteTransaction};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
+use sluice_model::cost::{self, Counter};
 use sluice_model::{
     commands::{ProjectIdentity, RetryResult, StepSelection, StepStatus},
     error::PublicError,

@@ -59,7 +59,11 @@ mod support {
         }
     }
     pub fn plan(doc: Value) -> Plan {
-        Plan::parse(&map(doc), &Signatures).unwrap()
+        sluice_model::plan::compile_rows(
+            &sluice_model::plan_rows::PlanRows::from_document(&map(doc), None).unwrap(),
+            &Signatures,
+        )
+        .unwrap()
     }
     pub struct Fixture {
         pub _home: ScratchHome,

@@ -1,7 +1,7 @@
 //! Remaining coordinator commands. Reads use short snapshots; waits hold no SQLite lease.
 use crate::{
     calls::public,
-    coordinator::{Coordinator, cached_context, context},
+    coordinator::{Coordinator, cached_context},
     execution::ExecutionHost,
 };
 use indexmap::IndexMap;
@@ -741,12 +741,13 @@ fn step_context(
     Ok((out, note))
 }
 
-/// Render the graph rows read by the caller. No document or fn catalog is needed.
+/// `plan_view`'s text for a project, in the caller's read snapshot (plan-rows §7.9): read from
+/// the graph index, so no document, compile or fn catalog is needed.
 pub fn render_plan_view(
-    name: &str,
-    graph: &sluice_model::plan_rows::GraphRows,
-    format: PlanViewFormat,
-    omitted: &str,
-) -> String {
-    plan_values::render_graph(name, graph, format, omitted)
+    sql: &Connection,
+    home: &std::path::Path,
+    project: ProjectId,
+    query: sluice_model::plan_rows::PlanViewQuery,
+) -> sluice_store::Result<String> {
+    plan_tools::plan_view(sql, home, project, query)
 }

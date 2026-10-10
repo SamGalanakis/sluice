@@ -156,7 +156,7 @@ impl SettingsState {
                     let signatures = format!("settings:{}", shared.functions.version);
                     let provider = CatalogSignatures(&shared.functions);
                     match plans.plan(c, id, &signatures, &provider) {
-                        Ok((_, plan)) => Some(resources::status(c, id, &plan)?),
+                        Ok((rev, plan)) => Some(resources::status(c, id, rev, &plan)?),
                         Err(StoreError::Public(PublicError::Invalid { .. })) => None,
                         Err(e) => return Err(e),
                     }

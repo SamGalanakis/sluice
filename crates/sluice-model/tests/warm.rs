@@ -9,8 +9,9 @@ mod support;
 use serde_json::json;
 use sluice_model::{
     StateSnapshot,
+    cost::Measurement,
     ids::StepId,
-    plan::{EditBase, full_compiles, prepare_plan_edit, reset_counters},
+    plan::{EditBase, prepare_plan_edit},
     plan_rows::{PlanOp, ScopedState},
 };
 use sluice_reference::{generate, interop::model_signatures};
@@ -40,7 +41,7 @@ fn warm_edits_compile_no_plan_whole() {
     let signatures = model_signatures(&generate::catalog());
     let mut plan = Arc::new(support::compile(base_document(), &signatures).unwrap());
     let state = StateSnapshot::default();
-    reset_counters();
+    let measurement = Measurement::start();
     let edits = [
         vec![op(json!({"op": "step.add", "step": "d",
             "spec": {"run": "t.late", "in": {"x": {"source": "a/sum"}}}}))],
@@ -60,7 +61,11 @@ fn warm_edits_compile_no_plan_whole() {
             .unwrap_or_else(|error| panic!("edit {index}: {error:?}"));
         plan = prepared.compiled.plan.clone();
     }
-    assert_eq!(full_compiles(), 0, "a warm edit compiled a plan whole");
+    assert_eq!(
+        measurement.costs().full_compiles,
+        0,
+        "a warm edit compiled a plan whole"
+    );
     assert!(plan.steps().contains_key(&id("d")));
     assert!(!plan.steps().contains_key(&id("c")));
     assert!(plan.outputs().contains_key("late"));

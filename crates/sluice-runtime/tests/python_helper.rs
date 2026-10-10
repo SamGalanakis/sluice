@@ -1,4 +1,7 @@
 //! Real uv, isolated scratch PEP 723 bundles, and minimal framed callback servers.
+#[allow(dead_code)]
+#[path = "../../sluice-store/tests/support/plan_rows.rs"]
+mod plan_rows;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::CommandRequest,
@@ -707,10 +710,7 @@ impl sluice_store::attempts::ExecutionHooks for Hooks {
 }
 #[tokio::test]
 async fn helper_rejection_applies_or_conflicts_in_real_store_and_duplicate_completion_is_stable() {
-    use sluice_model::{
-        commands::*,
-        plan::{FnSignature, Plan},
-    };
+    use sluice_model::{commands::*, plan::FnSignature};
     use sluice_store::{
         RetrySafety, Writer,
         attempts::*,
@@ -730,10 +730,14 @@ async fn helper_rejection_applies_or_conflicts_in_real_store_and_duplicate_compl
                 ..FnSignature::default()
             },
         );
-        let plan=Plan::parse(&map(json!({"steps":{"work":{"run":"core.external","outputs":{"ready":"boolean"}},"land":{"run":"empty","after":["work"]}}})),&signatures).unwrap();
+        let doc = map(
+            json!({"steps":{"work":{"run":"core.external","outputs":{"ready":"boolean"}},"land":{"run":"empty","after":["work"]}}}),
+        );
+        let rows = sluice_model::plan_rows::PlanRows::from_document(&doc, None).unwrap();
+        let plan = sluice_model::plan::compile_rows(&rows, &signatures).unwrap();
         let context = PlanContext {
             project,
-            revision: Revision(1),
+            revision: Revision(2),
             plan,
         };
         let copy = context.clone();
@@ -743,7 +747,11 @@ async fn helper_rejection_applies_or_conflicts_in_real_store_and_duplicate_compl
                     "INSERT INTO projects(project_id,name,created_at) VALUES (?1,'p','now')",
                     [project.to_string()],
                 )?;
-                plans::initialize_plan(tx, project, &copy.plan)?;
+                tx.sql().execute(
+                    "INSERT INTO plans(project_id,rev,root_order) VALUES (?1,1,'[\"steps\"]')",
+                    [project.to_string()],
+                )?;
+                plan_rows::commit_document(tx, project, &doc, None, None)?;
                 plans::step_set_output(
                     tx,
                     &copy,

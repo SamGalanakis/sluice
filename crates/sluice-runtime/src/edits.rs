@@ -10,19 +10,21 @@ use crate::{
     dispatch::Catalog,
     plan_cache::{PlanCache, recipe_generation},
 };
+use indexmap::IndexMap;
 use rusqlite::Connection;
 use sluice_model::{
-    commands::{CommandRequest, KeptUnit, ProjectIdentity},
-    edit::{EditBase, InputChanges, lower, lowering_reads, preparation_reads, prepare_plan_edit},
+    commands::{CommandRequest, EditOptions, KeptUnit, ProjectIdentity, StepSelection},
+    cost::{self, Counter, PreparationPoint},
+    edit::{self, InputChanges, Lowered, prepare_lowered},
     error::PublicError,
-    gates::CachedResources,
-    ids::{ProjectId, ProjectSelector, Revision, StepId},
-    plan::Plan,
+    ids::{ProjectId, ProjectSelector, Revision, StepId, UnitName},
+    plan::{EditBase, Plan, PrepareOptions, SignatureProvider, preparation_reads},
     plan_rows::{
         CertifiedPlan, EDIT_TRIES, EditPreview, EditResult, InputEditResult, PlanRowsError,
         PreparationReads, PreparedPlanEdit, PreviewScope, PruneResult, ScopedState,
         ValidationTokens,
     },
+    recipe::RecipeEntry,
     units::{PruneHolder, PruneSet},
 };
 use sluice_store::{
@@ -36,95 +38,6 @@ use std::{
 };
 
 pub use sluice_model::commands::CommandReply;
-
-/// Preparations counted process-wide (plan-rows §11), for the tests that measure them: reset
-/// and read by the test.
-pub mod counters {
-    use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
-
-    static STARTED: AtomicU64 = AtomicU64::new(0);
-    static COMMITTED: AtomicU64 = AtomicU64::new(0);
-    static STALE: AtomicU64 = AtomicU64::new(0);
-    static CONTENDED: AtomicU64 = AtomicU64::new(0);
-    static ANSWERED: AtomicU64 = AtomicU64::new(0);
-    static WRITER: AtomicU64 = AtomicU64::new(0);
-
-    /// The counts since the last `reset`.
-    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-    pub struct Preparations {
-        /// Edit preparations started.
-        pub started: u64,
-        /// Preparations whose commit went through.
-        pub committed: u64,
-        /// Preparations found stale and prepared again.
-        pub stale: u64,
-        /// Edits whose last allowed preparation was stale too: refused `busy`.
-        pub contended: u64,
-        /// Preparations answered without the writer: a dry run's preview or a typed no-op.
-        pub dry_run: u64,
-        /// Preparations that ran on the store writer's thread: always 0.
-        pub writer_preparations: u64,
-    }
-    pub fn read() -> Preparations {
-        Preparations {
-            started: STARTED.load(SeqCst),
-            committed: COMMITTED.load(SeqCst),
-            stale: STALE.load(SeqCst),
-            contended: CONTENDED.load(SeqCst),
-            dry_run: ANSWERED.load(SeqCst),
-            writer_preparations: WRITER.load(SeqCst),
-        }
-    }
-    pub fn reset() {
-        for counter in [&STARTED, &COMMITTED, &STALE, &CONTENDED, &ANSWERED, &WRITER] {
-            counter.store(0, SeqCst);
-        }
-    }
-    /// A preparation starts here, on whatever thread runs it.
-    pub(crate) fn started() {
-        STARTED.fetch_add(1, SeqCst);
-        if std::thread::current().name() == Some(sluice_store::writer::WRITER_THREAD) {
-            WRITER.fetch_add(1, SeqCst);
-        }
-    }
-    pub(crate) fn committed() {
-        COMMITTED.fetch_add(1, SeqCst);
-    }
-    pub(crate) fn stale() {
-        STALE.fetch_add(1, SeqCst);
-    }
-    pub(crate) fn contended() {
-        CONTENDED.fetch_add(1, SeqCst);
-    }
-    pub(crate) fn answered() {
-        ANSWERED.fetch_add(1, SeqCst);
-    }
-}
-
-/// A hook every preparation is held at, for the contention tests (plan-rows §11: "a
-/// barrier-driven test holds a high-fanout edit's preparation at a barrier"): it runs once per
-/// preparation, inside its read snapshot, after the preparation has read and worked out
-/// everything and before its result goes to the writer, so a test can move the state under
-/// it. Unset (always, outside those tests) it costs one read of an uncontended lock. It is
-/// process-wide: a test that sets it runs alone in its binary or clears it before others
-/// prepare.
-pub mod barrier {
-    use std::sync::{Arc, RwLock};
-
-    type Hook = Arc<dyn Fn() + Send + Sync>;
-    static HOOK: RwLock<Option<Hook>> = RwLock::new(None);
-
-    /// Hold every preparation at `hook` from now on (`None` releases them).
-    pub fn set(hook: Option<Hook>) {
-        *HOOK.write().unwrap_or_else(|e| e.into_inner()) = hook;
-    }
-    pub(crate) fn hold() {
-        let hook = HOOK.read().unwrap_or_else(|e| e.into_inner()).clone();
-        if let Some(hook) = hook {
-            hook();
-        }
-    }
-}
 
 /// The project an edit command edits; `None` for any other command. Every edit tool goes
 /// through the pipeline.
@@ -186,7 +99,10 @@ pub(crate) enum Prepared<T> {
 
 /// The retry rule (plan-rows §4): prepare in a read snapshot, hand the result to `commit`
 /// (which answers `None` when it found the preparation stale, having written nothing), and
-/// prepare again; the `EDIT_TRIES`th stale preparation is refused `EditContended`.
+/// prepare again; the `EDIT_TRIES`th stale preparation is refused `EditContended`. Each
+/// preparation is counted by outcome (`sluice_model::cost`), and passes the preparation probe
+/// (`cost::preparation_point`) inside its snapshot, once it has worked everything out and
+/// before the writer sees it, so §11's contention gate can move the state under it.
 pub(crate) async fn pipeline<T, P, C, F>(
     reads: &ReadPool,
     log: &mut EditLog,
@@ -195,37 +111,39 @@ pub(crate) async fn pipeline<T, P, C, F>(
 ) -> Result<CommandReply, PublicError>
 where
     T: Send + 'static,
-    P: Fn(&Connection) -> sluice_store::Result<Prepared<T>> + Send + Sync + 'static,
+    P: Fn(&Connection) -> sluice_store::Result<(ProjectId, Prepared<T>)> + Send + Sync + 'static,
     C: FnMut(T) -> F,
     F: std::future::Future<Output = Result<Option<CommandReply>, PublicError>>,
 {
-    for tries in 1..=EDIT_TRIES {
+    for attempt in 1..=EDIT_TRIES {
         let prepare = prepare.clone();
         let prepared = log
             .preparing(reads.snapshot(move |sql| {
-                counters::started();
-                let prepared = prepare(sql);
-                barrier::hold();
-                prepared
+                if std::thread::current().name() == Some(sluice_store::writer::WRITER_THREAD) {
+                    cost::count(Counter::WriterPreparations);
+                }
+                let (project, prepared) = prepare(sql)?;
+                cost::preparation_point(&PreparationPoint { project, attempt });
+                Ok(prepared)
             }))
             .await
             .map_err(|e| e.into_public(true))?;
         match prepared {
             Prepared::Answer(reply) => {
-                counters::answered();
+                cost::count(Counter::PreparationsDryRun);
                 return Ok(*reply);
             }
             Prepared::Commit(staged) => match commit(*staged).await? {
                 Some(reply) => {
-                    counters::committed();
+                    cost::count(Counter::PreparationsCommitted);
                     return Ok(reply);
                 }
-                None if tries < EDIT_TRIES => {
-                    counters::stale();
+                None if attempt < EDIT_TRIES => {
+                    cost::count(Counter::PreparationsStale);
                     log.retries += 1;
                 }
                 None => {
-                    counters::contended();
+                    cost::count(Counter::PreparationsContended);
                     log.retries += 1;
                 }
             },
@@ -399,16 +317,19 @@ fn merge(into: &mut ScopedState, round: ScopedState) {
 
 /// The read set of an edit's operations against `base` (plan-rows §6.4): read in rounds
 /// inside the caller's snapshot, starting from what lowering read, until a round adds nothing.
+#[allow(clippy::too_many_arguments)]
 fn read_rounds(
     sql: &Connection,
     project: ProjectId,
-    base: &Plan,
+    base: &EditBase<'_, impl SignatureProvider>,
     ops: &[sluice_model::plan_rows::PlanOp],
+    scope: PreviewScope,
     read: &mut ReadSoFar,
     state: &mut ScopedState,
 ) -> sluice_store::Result<()> {
     loop {
-        let fresh = read.take_new(&preparation_reads(base, ops, state));
+        let wanted = preparation_reads(&EditBase { state, ..*base }, ops, scope);
+        let fresh = read.take_new(&wanted);
         if is_empty(&fresh) {
             return Ok(());
         }
@@ -416,11 +337,178 @@ fn read_rounds(
     }
 }
 
+/// An edit command's options for preparation (plan-rows §8's `EditOptions3`): a typed tool's
+/// `edit` options with its `start`, the author's default applied as the tools apply it.
+fn options(edit: &EditOptions, start: bool) -> PrepareOptions {
+    PrepareOptions {
+        rev: edit.expected,
+        dry_run: edit.dry_run,
+        preview_scope: edit.preview_scope,
+        start,
+        reason: edit.reason.clone(),
+        author: edit.author.clone().unwrap_or_default(),
+    }
+}
+
+/// The steps a typed tool's selection names in the base (by id or by tag), for the state its
+/// lowering reads. An unknown id is left to the lowering, which refuses it.
+fn selected(base: &Plan, selection: &StepSelection) -> Vec<StepId> {
+    let mut steps: Vec<StepId> = selection.steps.clone().unwrap_or_default();
+    for tag in selection.tags.as_deref().unwrap_or_default() {
+        steps.extend(base.tagged(tag).cloned());
+    }
+    steps
+}
+
+/// What lowering `command` reads beside the compiled base (plan-rows §7.8): the stored
+/// state of `step_set_input`'s selected steps (a running one is left alone), and of every
+/// step for `plan_prune`, which decides which units are done and what their removal keeps.
+fn lowering_reads(base: &Plan, command: &CommandRequest) -> PreparationReads {
+    let steps = match command {
+        CommandRequest::StepSetInput(request) => selected(base, &request.selection),
+        CommandRequest::PlanPrune(_) => base.steps().keys().cloned().collect(),
+        _ => vec![],
+    };
+    PreparationReads {
+        steps,
+        ..PreparationReads::default()
+    }
+}
+
+/// Lower an edit command to operations against the base (plan-rows §7.6 to §7.8): `plan_edit`'s
+/// own operations, `unit_update`'s and `unit_remove`'s one operation, and each typed tool's
+/// lowering, with the options it is prepared under. `eligible` is the store's age evidence for
+/// an age-filtered `plan_prune`.
+fn lower(
+    base: &Plan,
+    state: &ScopedState,
+    eligible: Option<&[UnitName]>,
+    recipes: &IndexMap<String, RecipeEntry>,
+    signatures: &impl SignatureProvider,
+    command: &CommandRequest,
+) -> Result<(Lowered, PrepareOptions), PublicError> {
+    use edit::ReplySteps;
+    Ok(match command {
+        CommandRequest::PlanEdit(request) => (
+            Lowered {
+                ops: request.ops.clone(),
+                steps: ReplySteps::Added,
+                inputs: None,
+                prune: None,
+            },
+            PrepareOptions {
+                rev: request.rev,
+                dry_run: request.dry_run,
+                preview_scope: request.preview_scope,
+                start: request.start,
+                reason: request.reason.clone(),
+                author: request.author.clone().unwrap_or_default(),
+            },
+        ),
+        CommandRequest::UnitUpdate(request) => (
+            edit::unit_update(base, &request.unit, &request.changes)?,
+            PrepareOptions {
+                rev: request.rev,
+                dry_run: request.dry_run,
+                preview_scope: request.preview_scope,
+                start: true,
+                reason: request.reason.clone(),
+                author: request.author.clone().unwrap_or_default(),
+            },
+        ),
+        CommandRequest::UnitRemove(request) => (
+            edit::unit_remove(base, &request.unit)?,
+            PrepareOptions {
+                rev: request.rev,
+                dry_run: request.dry_run,
+                preview_scope: request.preview_scope,
+                start: true,
+                reason: request.reason.clone(),
+                author: request.author.clone().unwrap_or_default(),
+            },
+        ),
+        CommandRequest::StepAdd(request) => (
+            edit::step_add(base, &request.step, &request.spec)?,
+            options(&request.edit, request.start),
+        ),
+        CommandRequest::StepUpdate(request) => (
+            edit::step_update(base, &request.step, &request.changes)?,
+            options(&request.edit, true),
+        ),
+        CommandRequest::StepRemove(request) => (
+            edit::step_remove(base, &request.selection)?,
+            options(&request.edit, true),
+        ),
+        CommandRequest::EdgeAdd(request) => (
+            edit::edge(base, &request.step, &request.after, true)?,
+            options(&request.edit, true),
+        ),
+        CommandRequest::EdgeRemove(request) => (
+            edit::edge(base, &request.step, &request.after, false)?,
+            options(&request.edit, true),
+        ),
+        CommandRequest::UnitAdd(request) => (
+            edit::unit_add(
+                base,
+                recipes,
+                signatures,
+                &request.recipe,
+                &request.unit,
+                &request.params,
+                &request.after,
+                &request.inputs,
+                &request.tags,
+            )?,
+            options(&request.edit, request.start),
+        ),
+        CommandRequest::StepSetInput(request) => (
+            edit::step_set_input(
+                base,
+                &|id| state.state.status(id),
+                &request.selection,
+                &request.inputs,
+            )?,
+            options(&request.edit, true),
+        ),
+        CommandRequest::UnitTag(request) => (
+            edit::unit_tag(base, &request.unit, &request.add, &request.remove)?,
+            options(&request.edit, true),
+        ),
+        CommandRequest::StepPause(request) => (
+            edit::step_pause(
+                base,
+                &request.selection,
+                request.subtree,
+                request.paused,
+                &request.edit.reason,
+            )?,
+            options(&request.edit, true),
+        ),
+        CommandRequest::PlanPrune(request) => (
+            edit::plan_prune(
+                base,
+                &state.state,
+                request.units.as_deref(),
+                request.tags.as_deref(),
+                request.older_than_seconds,
+                request.keep.as_deref(),
+                eligible,
+            )?,
+            options(&request.edit, true),
+        ),
+        _ => {
+            return Err(PublicError::BadRequest {
+                message: "command is not a plan edit".into(),
+            });
+        }
+    })
+}
+
 /// Prepare one edit in a read snapshot (plan-rows §4's preparation). Never in the writer.
 pub(crate) fn prepare(
     sql: &Connection,
     input: &Preparation,
-) -> sluice_store::Result<Prepared<Staged>> {
+) -> sluice_store::Result<(ProjectId, Prepared<Staged>)> {
     let selector = edit_selector(&input.command)
         .ok_or_else(|| PublicError::BadRequest {
             message: "command is not a plan edit".into(),
@@ -470,17 +558,25 @@ pub(crate) fn prepare(
         }
         _ => None,
     };
+    let declarations = sluice_store::resources::declarations(sql, project)?;
+    let capacities: IndexMap<String, Option<u64>> = declarations
+        .iter()
+        .map(|(name, resource)| (name.clone(), resource.capacity))
+        .collect();
+    let limits = crate::coordinator::resource_limits(sql, project)?;
+    let recipes = crate::dispatch_ext::load_recipes(&input.home, project)?;
     let mut read = ReadSoFar::default();
     let mut state = ScopedState::default();
     let first = read.take_new(&lowering_reads(&base, &input.command));
     merge(&mut state, plans::read_scoped_state(sql, project, &first)?);
-    let lowered = lower(
+    let (lowered, options) = lower(
         &base,
         &state,
         evidence.as_ref().map(PruneEligibility::units),
-        input.command.clone(),
+        &recipes,
+        &signatures,
+        &input.command,
     )?;
-    let options = lowered.options.clone();
     if lowered.ops.is_empty() {
         // A typed no-op (plan-rows §7.8): nothing to prepare or commit; the revision stays.
         let preview = EditPreview {
@@ -492,23 +588,29 @@ pub(crate) fn prepare(
             would_stale: vec![],
             errors: vec![],
         };
-        return Ok(Prepared::Answer(Box::new(if options.dry_run {
-            CommandReply::Preview(preview)
-        } else {
-            edit_reply(
-                EditResult {
-                    project: identity,
-                    rev,
-                    preview,
-                    steps: lowered.steps,
-                    board_warnings: vec![],
-                },
-                lowered.inputs,
-                lowered.prune,
-            )
-        })));
+        let steps = match lowered.steps {
+            edit::ReplySteps::These(steps) => Some(steps),
+            _ => None,
+        };
+        return Ok((
+            project,
+            Prepared::Answer(Box::new(if options.dry_run {
+                CommandReply::Preview(preview)
+            } else {
+                edit_reply(
+                    EditResult {
+                        project: identity,
+                        rev,
+                        preview,
+                        steps,
+                        board_warnings: vec![],
+                    },
+                    lowered.inputs,
+                    lowered.prune,
+                )
+            })),
+        ));
     }
-    let limits = crate::coordinator::resource_limits(sql, project)?;
     if options.preview_scope == PreviewScope::All {
         // A full dry run simulates the whole plan before and after (plan-rows §6.3): it reads
         // every step's state, every input's value and every resource, not a read set.
@@ -521,20 +623,31 @@ pub(crate) fn prepare(
         });
         merge(&mut state, plans::read_scoped_state(sql, project, &all)?);
     }
-    read_rounds(sql, project, &base, &lowered.ops, &mut read, &mut state)?;
-    let recipes = crate::dispatch_ext::load_recipes(&input.home, project)?;
-    let mut prepared = prepare_plan_edit(
+    let edit_base = EditBase {
+        plan: &base,
+        tokens: &tokens,
+        state: &ScopedState::default(),
+        signatures: &signatures,
+        recipes: &recipes,
+        capacities: &capacities,
+        limits: &limits,
+    };
+    let scope = options.preview_scope;
+    read_rounds(
+        sql,
+        project,
+        &edit_base,
+        &lowered.ops,
+        scope,
+        &mut read,
+        &mut state,
+    )?;
+    let mut prepared = prepare_lowered(
         &EditBase {
-            plan: base.clone(),
-            catalog_generation: generation,
-            tokens,
             state: &state,
-            signatures: &signatures,
-            recipes: &recipes,
-            resources: &CachedResources::default(),
-            limits: &limits,
+            ..edit_base
         },
-        lowered.ops,
+        lowered,
         options,
     )?;
     // The steps the edit writes, and only those, are checked for a retired model string.
@@ -549,33 +662,27 @@ pub(crate) fn prepare(
         })
         .collect();
     crate::models::check_edit(&base, &prepared.compiled.plan, written, &state.state.inputs)?;
-    if lowered.steps.is_some() {
-        prepared.steps = lowered.steps;
-    }
-    if lowered.inputs.is_some() {
-        prepared.inputs = lowered.inputs;
-    }
-    // `plan_prune`'s removal set goes to the store beside its age evidence (plan-rows §8).
-    if lowered.prune.is_some() {
-        prepared.commit.prune = lowered.prune.clone();
-    }
     if prepared.dry_run {
-        return Ok(Prepared::Answer(Box::new(CommandReply::Preview(
-            prepared.preview,
-        ))));
+        return Ok((
+            project,
+            Prepared::Answer(Box::new(CommandReply::Preview(prepared.preview))),
+        ));
     }
     prepared.board_warnings =
         crate::coordinator::board_drops(sql, project, &base, &prepared.compiled.plan)?;
     let inputs = prepared.inputs.take();
     let prune = prepared.commit.prune.clone();
-    Ok(Prepared::Commit(Box::new(Staged {
+    Ok((
         project,
-        identity,
-        edit: prepared,
-        inputs,
-        prune,
-        evidence,
-    })))
+        Prepared::Commit(Box::new(Staged {
+            project,
+            identity,
+            edit: prepared,
+            inputs,
+            prune,
+            evidence,
+        })),
+    ))
 }
 
 #[cfg(test)]
@@ -626,32 +733,38 @@ mod tests {
         let home = Home::new();
         let writer = Writer::open(&home.0).unwrap();
         let reads = ReadPool::open(&home.0, 4).unwrap();
+        let project = ProjectId::new();
         writer
-            .write(RetrySafety::NonIdempotent, |tx| {
+            .write(RetrySafety::NonIdempotent, move |tx| {
                 tx.sql().execute(
                     "INSERT INTO projects(project_id,name,description,created_at)
                      VALUES (?1,'barrier','before','now')",
-                    [ProjectId::new().to_string()],
+                    [project.to_string()],
                 )?;
                 tx.changed(None, "projects");
                 Ok(())
             })
             .await
             .unwrap();
-        counters::reset();
-        // Each preparation is held at the barrier hook (the test's side of it releases it)
-        // after it has read the epoch, like a 2,000-reader preparation still working.
+        // Each preparation is held at the preparation probe (the test's side of it releases
+        // it) after it has read the epoch, like a 2,000-reader preparation still working.
         let arrived = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
         let (a, r) = (arrived.clone(), release.clone());
-        barrier::set(Some(Arc::new(move || {
-            a.wait();
-            r.wait();
-        })));
+        let hook = cost::hook_preparations(move |point: &PreparationPoint| {
+            if point.project == project {
+                a.wait();
+                r.wait();
+            }
+        });
+        let measurement = cost::Measurement::start();
         let prepare = Arc::new(move |sql: &Connection| {
             let seen = epoch(sql)?;
             let fanout: Vec<i64> = (0..2000).collect();
-            Ok(Prepared::Commit(Box::new((seen, fanout.len() as i64))))
+            Ok((
+                project,
+                Prepared::Commit(Box::new((seen, fanout.len() as i64))),
+            ))
         });
         let committed = Arc::new(Mutex::new(0_usize));
         let edit = {
@@ -704,7 +817,7 @@ mod tests {
             wait(release.clone()).await.unwrap();
         }
         let error = edit.await.unwrap().unwrap_err();
-        barrier::set(None);
+        drop(hook);
         assert_eq!(
             error,
             PublicError::Busy {
@@ -719,10 +832,13 @@ mod tests {
             .unwrap();
         assert_eq!(after, "before", "nothing was written");
         assert_eq!(moved, EDIT_TRIES as i64);
-        let counts = counters::read();
-        assert_eq!(counts.started, 3);
+        let counts = measurement.costs();
         assert_eq!(
-            (counts.stale, counts.contended, counts.committed),
+            (
+                counts.preparations.stale,
+                counts.preparations.contended,
+                counts.preparations.committed
+            ),
             (2, 1, 0)
         );
         assert_eq!(counts.writer_preparations, 0);

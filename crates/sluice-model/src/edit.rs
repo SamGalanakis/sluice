@@ -10,7 +10,7 @@
 //! or empty changes.
 
 use crate::{
-    commands::{CommandRequest, StepSelection, StepStatus, UnsupportedInput},
+    commands::{StepSelection, StepStatus, UnsupportedInput},
     error::PublicError,
     gates::{Gate, StateSnapshot},
     ids::{StepId, UnitName},

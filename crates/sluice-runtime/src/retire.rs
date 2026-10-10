@@ -103,6 +103,7 @@ pub async fn apply<H: ExecutionHost>(broker: &Coordinator<H>, candidate: Candida
         edit: EditOptions {
             expected: Some(candidate.rev),
             dry_run: false,
+            preview_scope: Default::default(),
             reason: reason(candidate.after),
             author: Some(RETIRE_AUTHOR.into()),
         },

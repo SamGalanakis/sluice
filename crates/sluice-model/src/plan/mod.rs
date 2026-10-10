@@ -16,7 +16,7 @@ mod prepare;
 
 pub use crate::plan_index::{output_references, step_index};
 pub use crate::plan_rows::CertifiedPlan;
-pub use compile::{compile_rows, full_compiles, reset_counters};
+pub use compile::compile_rows;
 pub use index::step_edges;
 pub use prepare::{EditBase, PrepareOptions, preparation_reads, prepare_plan_edit};
 

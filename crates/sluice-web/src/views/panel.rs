@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use sluice_model::{
     commands::{CommandRequest, Say, UnitState},
     error::PublicError,
-    ids::{ProjectId, ProjectSelector},
+    ids::{ProjectId, ProjectSelector, Revision},
     openui::{self, Board, Component, Problem, Value as Ui},
     plan::Plan,
     status::UnitRow,
@@ -222,11 +222,17 @@ pub async fn load(
                 ),
             };
             let plan = match plan {
-                Ok((_, plan)) => Some(plan),
+                Ok(plan) => Some(plan),
                 Err(sluice_store::StoreError::Public(PublicError::Invalid { .. })) => None,
                 Err(e) => return Err(e),
             };
-            gather(c, project, plan.as_deref(), &view, draft)
+            gather(
+                c,
+                project,
+                plan.as_ref().map(|(rev, plan)| (*rev, plan.as_ref())),
+                &view,
+                draft,
+            )
         })
         .await
         .map_err(|e| e.into_public(true))?;
@@ -235,11 +241,12 @@ pub async fn load(
 
 /// Read what the board shows inside the caller's transaction: its program (or `draft`), and
 /// the units, outputs and steps its components name. `None` when the project has no board.
-/// `plan` is the stored plan compiled, `None` when it does not compile.
+/// `plan` is the stored plan compiled, with the revision it was compiled at, `None` when it
+/// does not compile.
 pub(crate) fn gather(
     c: &rusqlite::Connection,
     project: ProjectId,
-    plan: Option<&Plan>,
+    plan: Option<(Revision, &Plan)>,
     view: &board::ProjectView,
     draft: Option<String>,
 ) -> sluice_store::Result<Option<Loaded>> {
@@ -370,13 +377,13 @@ pub(crate) fn gather(
     for filter in wants_units {
         let rows = match plan {
             None => Err("the plan cannot be compiled, so its units are unknown".into()),
-            Some(plan) => {
+            Some((compiled_rev, plan)) => {
                 let wanted: Vec<UnitState> = filter
                     .iter()
                     .filter_map(|s| serde_json::from_value(json!(s)).ok())
                     .collect();
                 let wanted = (!filter.is_empty()).then_some(wanted.as_slice());
-                sluice_runtime::status::unit_rows(c, project, plan, wanted)
+                sluice_runtime::status::unit_rows(c, project, compiled_rev, plan, wanted)
                     .map_err(|e| e.into_public(true).to_string())
                     .map(|v| UnitsData {
                         looks: v

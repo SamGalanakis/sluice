@@ -494,25 +494,91 @@ impl<H: ExecutionHost> Coordinator<H> {
         match request {
             CommandRequest::FnList { project } => {
                 let id = crate::calls::resolve(self.reads(), project).await?;
-                data(self.inner.catalog.1.as_ref().ok_or_else(|| conflict("registry unavailable"))?.listing(id))
+                data(
+                    self.inner
+                        .catalog
+                        .1
+                        .as_ref()
+                        .ok_or_else(|| conflict("registry unavailable"))?
+                        .listing(id),
+                )
             }
             CommandRequest::FnGet { name, project } => {
                 let id = crate::calls::resolve(self.reads(), project).await?;
-                data(self.inner.catalog.1.as_ref().ok_or_else(|| conflict("registry unavailable"))?.detail(id, &name)?)
+                data(
+                    self.inner
+                        .catalog
+                        .1
+                        .as_ref()
+                        .ok_or_else(|| conflict("registry unavailable"))?
+                        .detail(id, &name)?,
+                )
             }
-            CommandRequest::FnSave { manifest, main_py, project } => {
-                let publication = self.inner.catalog.1.as_ref().ok_or_else(|| conflict("registry unavailable"))?;
-                let saved = crate::registry::save(&publication.registry, self.writer(),
-                    &serde_json::to_value(manifest).map_err(storage)?, &main_py, project).await?;
+            CommandRequest::FnSave {
+                manifest,
+                main_py,
+                project,
+            } => {
+                let publication = self
+                    .inner
+                    .catalog
+                    .1
+                    .as_ref()
+                    .ok_or_else(|| conflict("registry unavailable"))?;
+                let saved = crate::registry::save(
+                    &publication.registry,
+                    self.writer(),
+                    &serde_json::to_value(manifest).map_err(storage)?,
+                    &main_py,
+                    project,
+                )
+                .await?;
                 self.refresh_registry().await?;
-                data(json!({"name":saved.name,"scope":saved.scope.label(),"path":saved.path,"generation":saved.generation}))
+                data(
+                    json!({"name":saved.name,"scope":saved.scope.label(),"path":saved.path,"generation":saved.generation}),
+                )
             }
-            CommandRequest::ProjectsList=>{let values=self.reads().snapshot(projects::list).await.map_err(|e|e.into_public(true))?;Ok(CommandReply::Projects(values))},
-            CommandRequest::ProjectCreate{name,description,icon,resources,author}=>{
-                let icon=icon.map(read_icon).transpose()?;
-                let project=self.writer().write(RetrySafety::NonIdempotent,move|tx|projects::project_create(tx,projects::CreateProject{name,description,icon,resources:Some(serde_json::to_value(resources)?),author:author.unwrap_or_else(||"cli".into())},&projects::EmptyPlanInitializer,&ResourceSettings((*catalog).clone()))).await?;
-                artifacts::recover(self.writer(),self.home()).await.map_err(|e|e.into_public(false))?; Ok(CommandReply::Project(ProjectIdentity{project_id:project.project_id,name:project.name}))
-            },
+            CommandRequest::ProjectsList => {
+                let values = self
+                    .reads()
+                    .snapshot(projects::list)
+                    .await
+                    .map_err(|e| e.into_public(true))?;
+                Ok(CommandReply::Projects(values))
+            }
+            CommandRequest::ProjectCreate {
+                name,
+                description,
+                icon,
+                resources,
+                author,
+            } => {
+                let icon = icon.map(read_icon).transpose()?;
+                let project = self
+                    .writer()
+                    .write(RetrySafety::NonIdempotent, move |tx| {
+                        projects::project_create(
+                            tx,
+                            projects::CreateProject {
+                                name,
+                                description,
+                                icon,
+                                resources: Some(serde_json::to_value(resources)?),
+                                author: author.unwrap_or_else(|| "cli".into()),
+                            },
+                            &projects::EmptyPlanInitializer,
+                            &ResourceSettings((*catalog).clone()),
+                        )
+                    })
+                    .await?;
+                artifacts::recover(self.writer(), self.home())
+                    .await
+                    .map_err(|e| e.into_public(false))?;
+                Ok(CommandReply::Project(ProjectIdentity {
+                    project_id: project.project_id,
+                    name: project.name,
+                }))
+            }
             CommandRequest::PlanGet { project } => self
                 .reads()
                 .snapshot(move |sql| {
@@ -527,60 +593,192 @@ impl<H: ExecutionHost> Coordinator<H> {
                 .await
                 .map_err(|e| e.into_public(true))
                 .map(CommandReply::Plan),
-            CommandRequest::Status(query)=>{let cache=self.inner.plans.clone();self.reads().snapshot(move|sql|crate::status::status(sql,&catalog,&cache,query)).await.map_err(|e|e.into_public(true)).and_then(data)},
-            CommandRequest::BoardDocRead(request) => self.reads().snapshot(move |sql| {
-                let doc = projects::board_doc_read(sql, &request.project)?;
-                Ok(json!({
-                    "rev": doc.rev,
-                    "updated_at": doc.at,
-                    "author": doc.author,
-                    "numbered": sluice_model::doc::numbered(&doc.markdown),
-                    "markdown": doc.markdown,
-                }))
-            }).await.map_err(|e| e.into_public(true)).and_then(data),
-            CommandRequest::BoardGet { project } => self.reads().snapshot(move |sql| {
-                let p = projects::resolve(sql, &project)?;
-                Ok(CommandReply::Board(sluice_model::commands::BoardView {
-                    project: ProjectIdentity { project_id: p.project_id, name: p.name },
-                    rev: p.board_rev,
-                    program: p.board,
-                }))
-            }).await.map_err(|e| e.into_public(true)),
+            CommandRequest::Status(query) => {
+                let cache = self.inner.plans.clone();
+                self.reads()
+                    .snapshot(move |sql| crate::status::status(sql, &catalog, &cache, query))
+                    .await
+                    .map_err(|e| e.into_public(true))
+                    .and_then(data)
+            }
+            CommandRequest::BoardDocRead(request) => self
+                .reads()
+                .snapshot(move |sql| {
+                    let doc = projects::board_doc_read(sql, &request.project)?;
+                    Ok(json!({
+                        "rev": doc.rev,
+                        "updated_at": doc.at,
+                        "author": doc.author,
+                        "numbered": sluice_model::doc::numbered(&doc.markdown),
+                        "markdown": doc.markdown,
+                    }))
+                })
+                .await
+                .map_err(|e| e.into_public(true))
+                .and_then(data),
+            CommandRequest::BoardGet { project } => self
+                .reads()
+                .snapshot(move |sql| {
+                    let p = projects::resolve(sql, &project)?;
+                    Ok(CommandReply::Board(sluice_model::commands::BoardView {
+                        project: ProjectIdentity {
+                            project_id: p.project_id,
+                            name: p.name,
+                        },
+                        rev: p.board_rev,
+                        program: p.board,
+                    }))
+                })
+                .await
+                .map_err(|e| e.into_public(true)),
             command if edits::edit_selector(&command).is_some() => self.edit(command).await,
             command if project_mutation(&command) => {
                 let command = match command {
                     CommandRequest::ProjectUpdate(mut update) => {
-                        update.icon = update.icon.map(|icon| read_icon(icon).map(IconUpload::from)).transpose()?;
+                        update.icon = update
+                            .icon
+                            .map(|icon| read_icon(icon).map(IconUpload::from))
+                            .transpose()?;
                         CommandRequest::ProjectUpdate(update)
                     }
                     command => command,
                 };
                 let plans = self.inner.plans.clone();
-                let reply = self.writer().write(RetrySafety::NonIdempotent, move |tx| mutate_project(tx, &catalog, &plans, command)).await?;
-                if matches!(reply, CommandReply::Project(_)) { artifacts::recover(self.writer(), self.home()).await.map_err(|e|e.into_public(false))?; }
+                let reply = self
+                    .writer()
+                    .write(RetrySafety::NonIdempotent, move |tx| {
+                        mutate_project(tx, &catalog, &plans, command)
+                    })
+                    .await?;
+                if matches!(reply, CommandReply::Project(_)) {
+                    artifacts::recover(self.writer(), self.home())
+                        .await
+                        .map_err(|e| e.into_public(false))?;
+                }
                 Ok(reply)
-            },
-            CommandRequest::StepSubmit(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{let version=attempts::step_submit(tx,request)?;if version.is_none(){return Err(conflict("stale submission").into());}Ok(CommandReply::Ack)}).await,
-            CommandRequest::Submission{run}=>data(self.submissions(run).await?),
-            CommandRequest::StepProgress(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|attempts::step_progress(tx,request)).await.and_then(data),
-            CommandRequest::StepSettle(request)=>self.step_settle(request).await,
+            }
+            CommandRequest::StepSubmit(request) => {
+                self.writer()
+                    .write(RetrySafety::NonIdempotent, move |tx| {
+                        let version = attempts::step_submit(tx, request)?;
+                        if version.is_none() {
+                            return Err(conflict("stale submission").into());
+                        }
+                        Ok(CommandReply::Ack)
+                    })
+                    .await
+            }
+            CommandRequest::Submission { run } => data(self.submissions(run).await?),
+            CommandRequest::StepProgress(request) => self
+                .writer()
+                .write(RetrySafety::Idempotent, move |tx| {
+                    attempts::step_progress(tx, request)
+                })
+                .await
+                .and_then(data),
+            CommandRequest::StepSettle(request) => self.step_settle(request).await,
             CommandRequest::Ask(_) | CommandRequest::Say(_) | CommandRequest::Reply(_) => {
                 let plans = self.inner.plans.clone();
-                self.writer().write(RetrySafety::NonIdempotent, move |tx| {
-                    let post = message_post(tx.sql(), request)?;
-                    post_message(tx, &catalog, &plans, post).map(CommandReply::Receipt)
-                }).await
+                self.writer()
+                    .write(RetrySafety::NonIdempotent, move |tx| {
+                        let post = message_post(tx.sql(), request)?;
+                        post_message(tx, &catalog, &plans, post).map(CommandReply::Receipt)
+                    })
+                    .await
             }
             CommandRequest::MessagePost(request) => {
                 let post = bridge_post(request)?;
                 let plans = self.inner.plans.clone();
-                self.writer().write(RetrySafety::NonIdempotent, move |tx| Ok(CommandReply::Posted { id: post_message(tx, &catalog, &plans, post)?.id })).await
+                self.writer()
+                    .write(RetrySafety::NonIdempotent, move |tx| {
+                        Ok(CommandReply::Posted {
+                            id: post_message(tx, &catalog, &plans, post)?.id,
+                        })
+                    })
+                    .await
             }
-            CommandRequest::Messages(request)=>self.reads().snapshot(move|sql|{let id=messages_project(sql,&request.project)?;let identity=if request.owner {sluice_store::messages::OWNER_STREAM} else {sluice_store::messages::ORCHESTRATOR_STREAM};let messages=sluice_store::messages::messages(sql,id,request.view,request.thread.as_deref(),request.since,identity)?;Ok(CommandReply::Messages(MessagePage{project:projects_identity(sql,id)?,last_id:messages.last().map(|m|m.id),messages}))}).await.map_err(|e|e.into_public(true)),
-            CommandRequest::AcquireLease(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|{let lease=resources::request_lease_keyed(tx,request.run,&request.resource,request.amount,&format!("callback/{}/{}",request.run,request.request_id))?;let state=resources::leases(tx.sql(),run_project(tx.sql(),request.run)?)?.into_iter().find(|l|l.id==lease).ok_or_else(||conflict("lease missing"))?.state;Ok(CommandReply::Lease{lease,state})}).await,
-            CommandRequest::ReleaseLease(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|{resources::release_lease(tx,request.lease,request.run)?;Ok(CommandReply::Ack)}).await,
-            CommandRequest::RegisterCompletionAction(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|{if !attempts::register_completion_action(tx,request,&Hooks)?{return Err(conflict("stale action registration").into());}Ok(CommandReply::Ack)}).await,
-            CommandRequest::LogRead(request)=>self.reads().snapshot(move|sql|{let project=request.project.as_ref().map(|p|messages_project(sql,p)).transpose()?;Ok(CommandReply::Records(records::read_records(sql,project,&records::RecordFilter::from(&request))?.into_page()?))}).await.map_err(|e|e.into_public(true)),
+            CommandRequest::Messages(request) => self
+                .reads()
+                .snapshot(move |sql| {
+                    let id = messages_project(sql, &request.project)?;
+                    let identity = if request.owner {
+                        sluice_store::messages::OWNER_STREAM
+                    } else {
+                        sluice_store::messages::ORCHESTRATOR_STREAM
+                    };
+                    let messages = sluice_store::messages::messages(
+                        sql,
+                        id,
+                        request.view,
+                        request.thread.as_deref(),
+                        request.since,
+                        identity,
+                    )?;
+                    Ok(CommandReply::Messages(MessagePage {
+                        project: projects_identity(sql, id)?,
+                        last_id: messages.last().map(|m| m.id),
+                        messages,
+                    }))
+                })
+                .await
+                .map_err(|e| e.into_public(true)),
+            CommandRequest::AcquireLease(request) => {
+                self.writer()
+                    .write(RetrySafety::Idempotent, move |tx| {
+                        let lease = resources::request_lease_keyed(
+                            tx,
+                            request.run,
+                            &request.resource,
+                            request.amount,
+                            &format!("callback/{}/{}", request.run, request.request_id),
+                        )?;
+                        let state =
+                            resources::leases(tx.sql(), run_project(tx.sql(), request.run)?)?
+                                .into_iter()
+                                .find(|l| l.id == lease)
+                                .ok_or_else(|| conflict("lease missing"))?
+                                .state;
+                        Ok(CommandReply::Lease { lease, state })
+                    })
+                    .await
+            }
+            CommandRequest::ReleaseLease(request) => {
+                self.writer()
+                    .write(RetrySafety::Idempotent, move |tx| {
+                        resources::release_lease(tx, request.lease, request.run)?;
+                        Ok(CommandReply::Ack)
+                    })
+                    .await
+            }
+            CommandRequest::RegisterCompletionAction(request) => {
+                self.writer()
+                    .write(RetrySafety::Idempotent, move |tx| {
+                        if !attempts::register_completion_action(tx, request, &Hooks)? {
+                            return Err(conflict("stale action registration").into());
+                        }
+                        Ok(CommandReply::Ack)
+                    })
+                    .await
+            }
+            CommandRequest::LogRead(request) => self
+                .reads()
+                .snapshot(move |sql| {
+                    let project = request
+                        .project
+                        .as_ref()
+                        .map(|p| messages_project(sql, p))
+                        .transpose()?;
+                    Ok(CommandReply::Records(
+                        records::read_records(
+                            sql,
+                            project,
+                            &records::RecordFilter::from(&request),
+                        )?
+                        .into_page()?,
+                    ))
+                })
+                .await
+                .map_err(|e| e.into_public(true)),
             _ => Err(PublicError::not_implemented("command dispatch extension")),
         }
     }
@@ -1374,7 +1572,7 @@ impl<H: ExecutionHost> Coordinator<H> {
             run_project,
         };
         let prepare = Arc::new(
-            move |sql: &Connection| -> sluice_store::Result<Prepared<edits::Staged>> {
+            move |sql: &Connection| -> sluice_store::Result<(ProjectId, Prepared<edits::Staged>)> {
                 edits::prepare(sql, &preparation)
             },
         );
@@ -2366,25 +2564,6 @@ fn run_speaks(command: &CommandRequest, run: RunId, project: ProjectId) -> bool 
     };
     !owner && speaker == Some(run) && *selector == ProjectSelector::Id(project)
 }
-/// The project's plan compiled cold from its rows, at the revision the caller's snapshot or
-/// transaction sees (a whole-plan read and compile: for readers without the plan cache).
-pub(crate) fn context(
-    sql: &Connection,
-    project: ProjectId,
-    catalog: &Catalog,
-) -> sluice_store::Result<PlanContext> {
-    let rev: i64 = sql.query_row(
-        "SELECT rev FROM plans WHERE project_id=?1",
-        [project.to_string()],
-        |r| r.get(0),
-    )?;
-    let plan = crate::plan_cache::compile_cold(sql, project, &catalog.for_project(Some(project)))?;
-    Ok(PlanContext {
-        project,
-        revision: Revision(rev as u64),
-        plan,
-    })
-}
 /// The project's plan at the revision the caller's snapshot or transaction sees, from the plan
 /// cache (compiled cold and kept on a miss).
 pub(crate) fn cached_context(
@@ -2697,7 +2876,8 @@ fn callback_mutation(
 
 /// A plan edit command's name and author, for its log line; None for any other command.
 fn edit_label(command: &CommandRequest) -> Option<(&'static str, Option<String>)> {
-    sluice_model::commands::edit_label(command).map(|(kind, author)| (kind, author.map(str::to_owned)))
+    sluice_model::commands::edit_label(command)
+        .map(|(kind, author)| (kind, author.map(str::to_owned)))
 }
 
 /// What one plan edit cost, logged once it is answered: the time spent preparing it from

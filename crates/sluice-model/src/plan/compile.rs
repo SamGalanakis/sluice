@@ -24,22 +24,7 @@ use crate::{
     units::derive_unit,
 };
 use indexmap::{IndexMap, IndexSet};
-use std::sync::{
-    Arc, OnceLock,
-    atomic::{AtomicU64, Ordering as Atomic},
-};
-
-static FULL_COMPILES: AtomicU64 = AtomicU64::new(0);
-
-/// How many whole compiles (`compile_rows`) this process has run since the last reset: lane
-/// H's `full_compiles` counter (§11). Process-wide.
-pub fn full_compiles() -> u64 {
-    FULL_COMPILES.load(Atomic::SeqCst)
-}
-/// Reset the model's cost counters (`full_compiles`).
-pub fn reset_counters() {
-    FULL_COMPILES.store(0, Atomic::SeqCst);
-}
+use std::sync::{Arc, OnceLock};
 
 /// One row's net change.
 #[derive(Debug, Clone, PartialEq)]
@@ -111,7 +96,7 @@ pub fn compile_rows(
     rows: &PlanRows,
     signatures: &impl SignatureProvider,
 ) -> Result<Plan, Vec<PathError>> {
-    FULL_COMPILES.fetch_add(1, Atomic::SeqCst);
+    crate::cost::count(crate::cost::Counter::FullCompiles);
     let present = |section| rows.header.root_order.contains(&section);
     let delta = Delta {
         root_order: rows.header.root_order.clone(),

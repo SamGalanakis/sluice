@@ -5,7 +5,7 @@
 use serde_json::{Value, json};
 use sluice_model::{
     ids::{Revision, StepId},
-    plan::{FnSignature, Plan, SignatureProvider},
+    plan::{FnSignature, SignatureProvider, compile_rows},
     plan_index::{output_references, plan_edges, step_index},
     plan_rows::*,
     rpc::JsonMap,
@@ -326,12 +326,19 @@ fn plan_edges_are_the_expanded_dependencies() {
             "e": {"run": "x", "after": ["unit:d"]}
         }
     });
-    let compiled = Plan::parse(&map(plan.clone()), &Open);
+    let compiled = compile_rows(
+        &PlanRows::from_document(&map(plan.clone()), None).unwrap(),
+        &Open,
+    );
     // c reads an output b does not declare: today's compiler refuses it, the edges still come.
     assert!(compiled.is_err());
     let mut valid = plan.clone();
     valid["steps"]["c"]["in"]["x"] = json!({"default": "1"});
-    let compiled = Plan::parse(&map(valid.clone()), &Open).unwrap();
+    let compiled = compile_rows(
+        &PlanRows::from_document(&map(valid.clone()), None).unwrap(),
+        &Open,
+    )
+    .unwrap();
     let rows = PlanRows::from_document(&map(valid), None).unwrap();
     let edges = plan_edges(&rows);
     let expanded: BTreeSet<(String, String)> = compiled

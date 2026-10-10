@@ -1,10 +1,13 @@
+#[allow(dead_code)]
+#[path = "../../sluice-store/tests/support/plan_rows.rs"]
+mod plan_rows;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use sluice_model::{
     error::PublicError,
     hash::InputsHash,
     ids::{AttemptId, ProjectId, ProjectSelector, RunId},
-    plan::{FnSignature, Plan},
+    plan::FnSignature,
     rpc::JsonMap,
     types::Type,
 };
@@ -42,20 +45,19 @@ fn registry() -> Arc<FixedRegistry> {
     )])))
 }
 async fn project(w: &Writer, doc: Value) -> ProjectId {
-    let p = ProjectId::new();
-    let reg = registry();
-    let plan = Plan::parse(&serde_json::from_value::<JsonMap>(doc).unwrap(), &reg.0).unwrap();
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let name = format!(
+        "p{}",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    );
+    let doc = serde_json::from_value::<JsonMap>(doc).unwrap();
     w.write(RetrySafety::NonIdempotent, move |tx| {
-        tx.sql().execute(
-            "INSERT INTO projects(project_id,name,created_at) VALUES (?1,?2,'now')",
-            (p.to_string(), p.to_string()),
-        )?;
-        sluice_store::plans::initialize_plan(tx, p, &plan)?;
-        Ok(())
+        let p = plan_rows::create_project(tx, &name)?;
+        plan_rows::commit_document(tx, p, &doc, None, None)?;
+        Ok(p)
     })
     .await
-    .unwrap();
-    p
+    .unwrap()
 }
 #[tokio::test]
 async fn fresh_and_working_paused_archived_homes_verify_without_writes() {

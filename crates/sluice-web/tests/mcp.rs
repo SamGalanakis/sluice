@@ -29,7 +29,7 @@ impl CommandService for Commands {
                 CommandRequest::PlanGet { .. } => Err(PublicError::NotFound {
                     message: "missing project".into(),
                 }),
-                CommandRequest::PlanPatch(_) => Err(PublicError::Conflict {
+                CommandRequest::PlanEdit(_) => Err(PublicError::Conflict {
                     message: "plan is at rev 7".into(),
                     current_rev: Some(Revision(7)),
                 }),
@@ -69,7 +69,12 @@ fn every_v2_tool_has_a_shared_strict_schema() {
         "board_doc_write",
         "board_doc_edit",
         "plan_get",
-        "plan_patch",
+        "plan_read",
+        "step_get",
+        "unit_get",
+        "unit_update",
+        "unit_remove",
+        "plan_edit",
         "step_add",
         "recipe_list",
         "unit_add",
@@ -147,22 +152,22 @@ fn every_v2_tool_has_a_shared_strict_schema() {
             .contains(&json!("confirm_name"))
     );
     assert!(
-        schema("plan_patch")["required"]
+        schema("plan_edit")["required"]
             .as_array()
             .unwrap()
-            .contains(&json!("rev"))
+            .contains(&json!("reason"))
     );
     assert!(schema("unit_add")["properties"].get("tags").is_some());
     assert!(schema("unit_add")["properties"].get("inputs").is_some());
     assert!(
         mcp::tools()
             .iter()
-            .find(|t| t.name == "plan_patch")
+            .find(|t| t.name == "plan_edit")
             .unwrap()
             .description
             .as_ref()
             .unwrap()
-            .contains("rev: the revision you read")
+            .contains("rev: the revision read earlier")
     );
 }
 #[test]
@@ -203,6 +208,7 @@ fn flat_edits_decode_to_the_folded_commands() {
         .is_err()
     );
     assert!(decode("plan_patch", json!({"project":"p"})).is_err());
+    assert!(decode("plan_edit", json!({"project":"p","ops":[]})).is_err());
     for (args, subtree) in [
         (
             json!({"project":"p","steps":"one","subtree":true,"reason":"hold"}),
@@ -321,8 +327,8 @@ async fn errors_keep_the_common_envelope_and_authorship() {
     for (name, args, code) in [
         ("plan_get", json!({"project":"missing"}), "not_found"),
         (
-            "plan_patch",
-            json!({"project":"p","rev":1,"ops":[],"reason":"stale","author":"editor"}),
+            "plan_edit",
+            json!({"project":"p","rev":1,"ops":[{"op":"step.remove","steps":["a"]}],"reason":"stale","author":"editor"}),
             "conflict",
         ),
         (
@@ -350,7 +356,7 @@ async fn errors_keep_the_common_envelope_and_authorship() {
         }
     }
     let recorded = commands.0.lock().unwrap();
-    let CommandRequest::PlanPatch(request) = &recorded[1] else {
+    let CommandRequest::PlanEdit(request) = &recorded[1] else {
         panic!()
     };
     assert_eq!(request.author.as_deref(), Some("editor"));
