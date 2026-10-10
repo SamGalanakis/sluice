@@ -146,7 +146,10 @@ async fn a_projects_messages_page_is_titled_messages_and_the_tray_stays_inbox() 
     let f = Fixture::new().await;
     let (_, project) = f.get(&format!("/projects/id/{}/inbox", f.id)).await;
     // its name is the band's, its way back under it
-    assert!(project.contains("<h1 class=\"long\">Messages</h1>"), "{project}");
+    assert!(
+        project.contains("<h1 class=\"long\">Messages</h1>"),
+        "{project}"
+    );
     assert!(
         project.contains("<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/"),
         "{project}"

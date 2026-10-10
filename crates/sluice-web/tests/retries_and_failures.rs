@@ -352,7 +352,11 @@ async fn a_failure_links_its_own_log_record_which_the_log_marks() {
     );
     // "Why it failed" on its page
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/l2-work")).await;
-    let why = between(&page, "<article class=\"mod swell-look d-sec d-failure\"", "</article>");
+    let why = between(
+        &page,
+        "<article class=\"mod swell-look d-sec d-failure\"",
+        "</article>",
+    );
     assert!(
         why.contains(&format!(
             "<p class=\"meta err-log\"><a href=\"{href}\">Its log record {seq}</a></p>"

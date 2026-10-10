@@ -1,8 +1,6 @@
 //! Owned conversation projections, loaded with navigation in one SQLite snapshot.
 use super::ui::StepRef;
-use super::{
-    DashboardSnapshot, FunctionCatalog, NavView, TrustedHtml, Viewer, load_snapshot,
-};
+use super::{DashboardSnapshot, FunctionCatalog, NavView, TrustedHtml, Viewer, load_snapshot};
 use askama::Template;
 use rusqlite::OptionalExtension;
 use sluice_model::{
@@ -408,7 +406,10 @@ impl InboxView {
     pub fn yours_line(&self) -> String {
         match self.for_you().len() {
             0 => String::new(),
-            n => format!("{} waiting on you", super::ui::count(n, "question", "questions")),
+            n => format!(
+                "{} waiting on you",
+                super::ui::count(n, "question", "questions")
+            ),
         }
     }
     /// The notes not read yet, across their threads (a thread card says how many it holds).
@@ -566,10 +567,7 @@ impl InboxView {
                 if self.is_inbox() {
                     let notes = self.unread_notes();
                     if notes > 0 {
-                        said.push_str(&format!(
-                            " {} unread.",
-                            count(notes, "note", "notes")
-                        ));
+                        said.push_str(&format!(" {} unread.", count(notes, "note", "notes")));
                     }
                 } else {
                     let between = self.between_agents().len();

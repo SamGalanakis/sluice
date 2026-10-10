@@ -229,7 +229,11 @@ async fn a_steps_overview_draws_its_open_question_whole_to_answer_and_its_header
     assert!(!actions.contains("awaiting reply"), "{actions}");
     // Overview: first, above Now, whole, its list kept, with Answer and Close in the shared
     // component
-    let asked = between(&page, "<article class=\"mod swell-ask d-sec d-ask\"", "</article>");
+    let asked = between(
+        &page,
+        "<article class=\"mod swell-ask d-sec d-ask\"",
+        "</article>",
+    );
     assert!(asked.contains("Its question for you</h3>"), "{asked}");
     assert!(
         page.find("d-sec d-ask").unwrap() < page.find("d-sec d-now").unwrap(),

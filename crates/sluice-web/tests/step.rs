@@ -498,7 +498,10 @@ async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawe
     let html = step.body("").unwrap();
     let html = html.as_str();
     assert!(html.contains("finishing · running for <time"), "{html}");
-    assert!(html.contains("<h4 id=\"ov-fin-h\">Finishing</h4>"), "{html}");
+    assert!(
+        html.contains("<h4 id=\"ov-fin-h\">Finishing</h4>"),
+        "{html}"
+    );
     assert!(html.contains("datetime=\"2026-10-05T09:30:00Z\""), "{html}");
     assert!(
         html.contains("release <sluice-copy value=\"0123456789ab\"><code>0123456789ab</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy release\""),
@@ -952,7 +955,9 @@ async fn a_running_step_says_what_it_is_doing_now() {
     let now = &now[..now.find("</article>").unwrap()];
     // Now is the Overview tab's first module, its head a level under the drawer's panel heads
     assert!(
-        now.contains("aria-labelledby=\"ov-now-h\"><div class=\"mod-h\"><h4 id=\"ov-now-h\">Now</h4>"),
+        now.contains(
+            "aria-labelledby=\"ov-now-h\"><div class=\"mod-h\"><h4 id=\"ov-now-h\">Now</h4>"
+        ),
         "{now}"
     );
     // its latest exchange as messages: its own latest (to the orchestrator), its first words
@@ -1009,7 +1014,8 @@ async fn a_running_step_says_what_it_is_doing_now() {
     // on its own page its name is the band's h1, and the page's sections h2 and h3 under it
     let band = step.band("p", None).unwrap();
     assert!(
-        band.as_str().contains("<h1 id=\"d-title\" class=\"sb-t\">work</h1>"),
+        band.as_str()
+            .contains("<h1 id=\"d-title\" class=\"sb-t\">work</h1>"),
         "{}",
         band.as_str()
     );

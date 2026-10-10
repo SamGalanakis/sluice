@@ -577,7 +577,9 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
     assert!(!html.contains("<h3>Question</h3>"));
     // a question is a one-message conversation, as a step's Thread tab draws it: with no title
     // of its own its body is said once, whole, never cut into a heading over itself
-    let card = &html[html.find("class=\"mod swell-ask item q\"").expect("its card")..];
+    let card = &html[html
+        .find("class=\"mod swell-ask item q\"")
+        .expect("its card")..];
     let card = &card[..card.find("</article>").unwrap()];
     assert!(!card.contains("<h3>"), "{card}");
     assert!(!card.contains("class=\"m-title\""), "{card}");

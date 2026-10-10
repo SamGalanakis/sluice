@@ -582,10 +582,7 @@ async fn a_running_steps_now_leads_with_its_live_turn() {
     );
     // nothing comes before it but the module's head
     let body = &before[before.find("</div>").unwrap()..];
-    assert!(
-        body == "</div>" && !before.contains("convo"),
-        "{before}"
-    );
+    assert!(body == "</div>" && !before.contains("convo"), "{before}");
     // its calls by tool, as the transcript names each tool, and its latest calls before it
     assert!(turn.contains("<ul class=\"now-tools\""), "{turn}");
     drop(f.writer);

@@ -58,7 +58,10 @@ async fn a_steps_band_carries_its_name_state_stages_and_actions_and_a_units_band
     assert!(band_html.contains("Copy step id"), "{band_html}");
     assert!(band_html.contains("<p class=\"d-badges\">"), "{band_html}");
     // its unit's stages from the article recipe, its own ringed, the unit linked
-    assert!(band_html.contains("<p class=\"sb-lane-h\"><a href=\""), "{band_html}");
+    assert!(
+        band_html.contains("<p class=\"sb-lane-h\"><a href=\""),
+        "{band_html}"
+    );
     assert!(band_html.contains("article · 3 stages"), "{band_html}");
     assert_eq!(
         strip(band_html, "a-6"),
@@ -68,8 +71,14 @@ async fn a_steps_band_carries_its_name_state_stages_and_actions_and_a_units_band
         )
     );
     // its actions in the band, and none on the paper
-    assert!(band_html.contains("<div class=\"d-actions\">"), "{band_html}");
-    assert!(!html[main..].contains("<div class=\"d-actions\">"), "{html}");
+    assert!(
+        band_html.contains("<div class=\"d-actions\">"),
+        "{band_html}"
+    );
+    assert!(
+        !html[main..].contains("<div class=\"d-actions\">"),
+        "{html}"
+    );
 
     // a unit of one step draws no strip of its own in the step's band
     let (_, scan) = f.get(&format!("/projects/id/{p}/steps/s-3-scan")).await;
@@ -85,7 +94,9 @@ async fn a_steps_band_carries_its_name_state_stages_and_actions_and_a_units_band
     ] {
         let (status, html) = f.get(&format!("/projects/id/{p}/units/{unit}")).await;
         assert_eq!(status, 200, "{unit}");
-        let at = html.find("<div id=\"unit-band\" class=\"unit-band\">").unwrap();
+        let at = html
+            .find("<div id=\"unit-band\" class=\"unit-band\">")
+            .unwrap();
         let main = html.find("<main").unwrap();
         assert!(at < main, "{unit}: the band is the frame's");
         let band = &html[at..main];

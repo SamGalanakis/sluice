@@ -188,7 +188,10 @@ async fn a_step_draws_only_the_tabs_it_has_something_for_with_their_counts() {
     // its key output leads Overview; its last message after it
     let overview = between(&html, "id=\"tp-overview\"", "<!--/r:tp-overview-->");
     // its only output: no way to "all" of one
-    assert!(overview.contains("<h3 id=\"ov-key-h\">Its output</h3></div>"), "{overview}");
+    assert!(
+        overview.contains("<h3 id=\"ov-key-h\">Its output</h3></div>"),
+        "{overview}"
+    );
     assert!(overview.contains("Built &#60;12&#62; crates"), "{overview}");
     assert!(
         overview.contains("<h3 id=\"ov-last-h\">Its last message</h3>")

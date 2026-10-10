@@ -70,7 +70,10 @@ pub fn stage_of(unit: &UnitView, step: &StepView) -> Stage {
 }
 /// The unit's stage strip's cells, in its strip's order.
 pub fn stages(unit: &UnitView) -> Vec<Stage> {
-    ordered(unit).into_iter().map(|s| stage_of(unit, s)).collect()
+    ordered(unit)
+        .into_iter()
+        .map(|s| stage_of(unit, s))
+        .collect()
 }
 
 /// A stage strip's place on a band's grid of `room` columns: two columns a stage while half the

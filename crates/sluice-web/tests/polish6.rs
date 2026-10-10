@@ -314,7 +314,11 @@ async fn a_lane_row_says_its_question_and_a_note_to_many_is_drawn_once() {
     assert!(own.contains("</a> to the orchestrator: <a href="), "{own}");
     // the unit page draws the note as its thread does: once, to 2 steps
     let (_, unit) = f.get(&format!("/projects/id/{id}/units/l3")).await;
-    let last = between(&unit, "<article class=\"mod d-sec unit-last\"", "</article>");
+    let last = between(
+        &unit,
+        "<article class=\"mod d-sec unit-last\"",
+        "</article>",
+    );
     assert!(last.contains("<summary>to 2 steps</summary>"), "{last}");
     assert_eq!(last.matches("Heads up").count(), 1, "{last}");
     // the sender's Messages counts each copy and says the note is drawn once

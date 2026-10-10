@@ -1182,7 +1182,11 @@ impl StepView {
     /// three lines at most.
     pub fn title_size(&self) -> &'static str {
         let chars = self.whole_heading().chars().count()
-            + if self.titled() { self.stage.chars().count() + 3 } else { 0 };
+            + if self.titled() {
+                self.stage.chars().count() + 3
+            } else {
+                0
+            };
         match chars {
             0..=16 => "",
             17..=34 => " long",
@@ -2104,7 +2108,11 @@ impl StepView {
     /// plan and its unit, its name huge, its state and its actions. `unit`: its unit's id and
     /// title ("" when it has none), named in the way back by its title, or by its id when that
     /// title is the step's own (the `h1` says it already).
-    pub fn band(&self, project: &str, unit: Option<(&str, &str)>) -> Result<TrustedHtml, askama::Error> {
+    pub fn band(
+        &self,
+        project: &str,
+        unit: Option<(&str, &str)>,
+    ) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&StepBand {
             step: self,
             page: true,
@@ -3064,24 +3072,28 @@ async fn page_html(
         head: step.band(&detail.project, unit).map_err(render_error)?,
         ..Default::default()
     };
-    step.page_body(&detail.project, &shown.tab, notice.map(|n| n.words.as_str()))
-        .and_then(|body| {
-            super::render_framed(
-                &format!("{} · {}", step.tab_title(), detail.project),
-                &body,
-                &nav,
-                &Viewer::from_headers(headers),
-                &format!(
-                    "{}/stream?page=true{}",
-                    step.href(),
-                    if shown.all() { "&activity=all" } else { "" }
-                ),
-                &drawn,
-                &step.href(),
-                &frame,
-            )
-        })
-        .map_err(render_error)
+    step.page_body(
+        &detail.project,
+        &shown.tab,
+        notice.map(|n| n.words.as_str()),
+    )
+    .and_then(|body| {
+        super::render_framed(
+            &format!("{} · {}", step.tab_title(), detail.project),
+            &body,
+            &nav,
+            &Viewer::from_headers(headers),
+            &format!(
+                "{}/stream?page=true{}",
+                step.href(),
+                if shown.all() { "&activity=all" } else { "" }
+            ),
+            &drawn,
+            &step.href(),
+            &frame,
+        )
+    })
+    .map_err(render_error)
 }
 #[derive(Deserialize)]
 pub struct StepStreamQuery {
