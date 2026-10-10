@@ -335,8 +335,25 @@ async fn input_preview_validates_without_changing_inputs_history_revisions_or_ve
 async fn history_survives_feed_retention_and_filters_revisions() {
     let f = Fixture::new().await;
     f.input("value", json!(4), false).await;
-    let all = data(f.call("plan_history", json!({})).await.unwrap());
-    assert_eq!(all.as_array().unwrap().len(), 3);
+    let entries = |reply: CommandReply| -> Vec<Value> {
+        let CommandReply::History(page) = reply else {
+            panic!("a history page: {reply:?}")
+        };
+        serde_json::to_value(page).unwrap()["entries"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    let edits = |entries: &[Value]| -> Vec<Value> {
+        entries
+            .iter()
+            .filter(|e| e["kind"] == "plan.edit")
+            .cloned()
+            .collect()
+    };
+    let all = entries(f.call("plan_history", json!({})).await.unwrap());
+    assert_eq!(all.len(), 3);
+    assert!(all.iter().any(|e| e["kind"] == "plan.input"));
     f.broker
         .writer()
         .write(RetrySafety::Idempotent, move |tx| {
@@ -344,14 +361,16 @@ async fn history_survives_feed_retention_and_filters_revisions() {
         })
         .await
         .unwrap();
-    let after = data(f.call("plan_history", json!({})).await.unwrap());
+    // The plan's edits are never trimmed, and the feed kept its last record (the input's).
+    let after = entries(f.call("plan_history", json!({})).await.unwrap());
+    assert_eq!(edits(&after), edits(&all));
     assert_eq!(after, all);
-    let filtered = data(
+    let filtered = entries(
         f.call("plan_history", json!({"since_rev":1}))
             .await
             .unwrap(),
     );
-    assert_eq!(filtered.as_array().unwrap().len(), 2);
+    assert_eq!(filtered.len(), 2);
     assert_eq!(filtered[0]["kind"], "plan.edit");
     f.close().await;
 }
@@ -955,10 +974,23 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
         ),
         ("BoardDocRead", "board_doc_read", json!({})),
         (
-            "PlanPatch",
-            "plan_patch",
-            json!({"rev":f.rev().await,"ops":[],"dry_run":true,"reason":"test"}),
+            "PlanEdit",
+            "plan_edit",
+            json!({"rev":f.rev().await,"ops":[{"op":"step.update","step":"work","changes":{"doc":"doc"}}],"dry_run":true,"reason":"test"}),
         ),
+        (
+            "UnitUpdate",
+            "unit_update",
+            json!({"unit":"work","changes":{"work":{"doc":"doc"}},"dry_run":true,"reason":"test"}),
+        ),
+        (
+            "UnitRemove",
+            "unit_remove",
+            json!({"unit":"work","dry_run":true,"reason":"test"}),
+        ),
+        ("PlanRead", "plan_read", json!({"limit":1})),
+        ("StepGet", "step_get", json!({"step":"work"})),
+        ("UnitGet", "unit_get", json!({"unit":"work"})),
         (
             "StepAdd",
             "step_add",
@@ -1159,7 +1191,12 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
                 | "BoardDocRead"
                 | "BoardDocWrite"
                 | "BoardDocEdit"
-                | "PlanPatch"
+                | "PlanEdit"
+                | "UnitUpdate"
+                | "UnitRemove"
+                | "PlanRead"
+                | "StepGet"
+                | "UnitGet"
                 | "StepAdd"
                 | "UnitAdd"
                 | "StepUpdate"

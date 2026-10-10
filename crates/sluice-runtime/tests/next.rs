@@ -41,13 +41,25 @@ async fn setup() -> (Home, Writer, ReadPool, ProjectId) {
     let p = project(&w, "p").await;
     (h, w, r, p)
 }
+/// A project with an empty plan at rev 1, and no record of either: these tests count records.
 async fn project(w: &Writer, name: &str) -> ProjectId {
+    let p = ProjectId::new();
     let name = name.to_string();
     w.write(RetrySafety::NonIdempotent, move |tx| {
-        plan_rows::create_project(tx, &name)
+        tx.sql().execute(
+            "INSERT INTO projects(project_id,name,created_at) VALUES (?1,?2,'now')",
+            (p.to_string(), name),
+        )?;
+        tx.sql().execute(
+            "INSERT INTO plans(project_id,rev,root_order) VALUES (?1,1,'[\"steps\"]')",
+            [p.to_string()],
+        )?;
+        tx.changed(Some(p), "projects");
+        Ok(())
     })
     .await
-    .unwrap()
+    .unwrap();
+    p
 }
 /// A plan document compiled from its rows, and the document, to commit as the project's plan.
 fn compile(doc: &[u8], signatures: &IndexMap<String, FnSignature>) -> (JsonMap, Plan) {

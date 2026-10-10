@@ -112,7 +112,9 @@ async fn a_high_fanout_edit_held_three_times_is_refused_busy_and_writes_nothing(
         )["entries"]
             .as_array()
             .unwrap()
-            .len()
+            .iter()
+            .filter(|entry| entry["kind"] == "plan.edit")
+            .count()
     };
     let rev = plan_rev(b.clone(), project.clone()).await;
     let entries = history(b.clone(), project.clone()).await;
@@ -177,7 +179,8 @@ async fn a_high_fanout_edit_held_three_times_is_refused_busy_and_writes_nothing(
         ),
         (2, 1, 0)
     );
-    // Nothing was written: the revision and the history stand.
+    // Nothing was written: the revision and the plan's edits stand (the independent writes
+    // add their own step.output records to the history).
     assert_eq!(plan_rev(b.clone(), project.clone()).await, rev);
     assert_eq!(history(b.clone(), project.clone()).await, entries);
     let plan = data(

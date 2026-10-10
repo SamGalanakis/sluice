@@ -145,7 +145,11 @@ impl Fixture {
     }
     /// Every plan edit as (author, reason).
     async fn edits(&self) -> Vec<(String, String)> {
-        data(self.call("plan_history", json!({})).await.unwrap())
+        let CommandReply::History(page) = self.call("plan_history", json!({})).await.unwrap()
+        else {
+            panic!("a history page")
+        };
+        serde_json::to_value(page).unwrap()["entries"]
             .as_array()
             .unwrap()
             .iter()

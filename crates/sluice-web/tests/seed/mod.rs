@@ -180,15 +180,24 @@ pub fn put_by(
         },
         state: StateDelta {
             removed,
-            added,
+            added: added.clone(),
             transitions: vec![],
         },
         prune: None,
     };
-    match plans::commit_plan_edit(tx, project, &commit, None)? {
-        CommitOutcome::Committed(rev) => Ok(rev),
+    let rev = match plans::commit_plan_edit(tx, project, &commit, None)? {
+        CommitOutcome::Committed(rev) => rev,
         CommitOutcome::Stale => panic!("a fixture's plan edit went stale"),
+    };
+    // The runs and attempts a test inserts by hand are of generation 1 (the columns' default):
+    // the steps this put adds are made of it too, as a plan put at rev 1 once made them.
+    for step in &added {
+        tx.sql().execute(
+            "UPDATE steps SET generation=1 WHERE project_id=?1 AND step_id=?2",
+            (project.to_string(), step.as_str()),
+        )?;
     }
+    Ok(rev)
 }
 
 /// A step's incoming `plan_edges` (plan-rows §2.5): a data edge from each step its bindings

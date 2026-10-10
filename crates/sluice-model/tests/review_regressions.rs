@@ -260,17 +260,17 @@ fn step_add_wire_accepts_start_false() {
 }
 
 #[test]
-fn plan_patch_wire_accepts_start_false() {
+fn plan_edit_wire_accepts_start_false() {
     let result = decode_json::<CommandRequest>(
-        br#"{"command":"plan_patch","args":{
+        br#"{"command":"plan_edit","args":{
         "project":{"kind":"name","value":"review"},"rev":1,
-        "ops":[{"op":"add","path":"/steps/a","value":{"run":"work"}}],"start":false,
+        "ops":[{"op":"step.add","step":"a","spec":{"run":"work"}}],"start":false,
         "dry_run":false,"reason":"review","author":null}}"#,
     );
-    assert!(
-        result.is_ok(),
-        "start=false cannot enter the patch path: {result:?}"
-    );
+    let Ok(CommandRequest::PlanEdit(edit)) = result else {
+        panic!("start=false cannot enter the plan_edit path: {result:?}");
+    };
+    assert!(!edit.start);
 }
 
 #[test]

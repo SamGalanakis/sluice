@@ -1580,9 +1580,9 @@ async fn a_run_sets_its_projects_board_and_reads_it_back() {
             )
         ]
     );
-    // A run's plan edit that takes a step the board names gets the warning (its run is on
-    // this release); the reply its attempt keeps for a repeat leaves it out, so a release
-    // that does not know board warnings still decodes it.
+    // A run's plan edit that takes a step the board names gets the warning, and a repeat of
+    // the same callback gets the reply its attempt kept, warning and all: no release that
+    // does not know board warnings survives the schema-3 cutover (plan-rows §1).
     b.command(request(json!({"command":"step_add","args":{"project":{"kind":"id","value":p},"step":"extra","spec":{"run":"fixture.echo","in":{"value":{"default":1}}},"start":false,"edit":{"dry_run":false,"reason":"test","author":"test"}}})))
         .await
         .unwrap();
@@ -1619,8 +1619,7 @@ async fn a_run_sets_its_projects_board_and_reads_it_back() {
         )
         .await
         .unwrap();
-    assert!(!format!("{replay:?}").contains("names step"), "{replay:?}");
-    assert!(format!("{replay:?}").contains("Edit"), "{replay:?}");
+    assert_eq!(format!("{replay:?}"), format!("{first:?}"));
 }
 
 /// A board that names a step not in the plan is set with a warning per name; a plan edit
@@ -2048,12 +2047,19 @@ async fn a_run_completes_from_its_attempt_after_the_plan_moved_on() {
     )
     .await
     .unwrap();
-    let status = data_of(
-        &b,
-        json!({"command":"status","args":{"project":project,"selection":{"steps":null,"tags":null}}}),
-    )
-    .await;
-    assert_eq!(status["steps"]["work"]["status"], "succeeded", "{status}");
+    let CommandReply::Step(work) = b
+        .command(request(
+            json!({"command":"step_get","args":{"project":project,"step":"work","compact":true}}),
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("a step")
+    };
+    let sluice_model::plan_rows::StepView::Compact(work) = work.step else {
+        panic!("a compact step")
+    };
+    assert_eq!(work.status, StepStatus::Succeeded);
 }
 
 /// The edit pipeline's refusals: what a caller supplies empty is refused before anything is

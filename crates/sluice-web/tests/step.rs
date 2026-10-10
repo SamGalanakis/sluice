@@ -225,9 +225,9 @@ async fn router_uses_injected_exact_signatures_and_owner_commands() {
     assert!(body.contains("Messages · none yet"));
     for (body, status) in [
         ("action=retry&revision=0", StatusCode::CONFLICT),
-        ("action=cancel&revision=1", StatusCode::CONFLICT),
+        ("action=cancel&revision=2", StatusCode::CONFLICT),
         (
-            "action=retry&revision=1&message=Try+again",
+            "action=retry&revision=2&message=Try+again",
             StatusCode::SEE_OTHER,
         ),
     ] {
@@ -286,7 +286,7 @@ async fn router_uses_injected_exact_signatures_and_owner_commands() {
                 .uri(format!("{path}/actions"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(
-                    "action=cancel&revision=1&message=Stop+to+replan",
+                    "action=cancel&revision=2&message=Stop+to+replan",
                 ))
                 .unwrap(),
         )
@@ -1187,7 +1187,7 @@ async fn a_refused_action_comes_back_to_its_step_saying_why_with_its_feedback_ke
     {
         let calls = fake.0.lock().unwrap();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].revision, 1);
+        assert_eq!(calls[0].revision, 2);
         assert_eq!(calls[0].message, "Look again");
     }
     // the step changed since: nothing is done, and its page says so over it, the feedback in
@@ -1240,7 +1240,7 @@ async fn a_refused_action_comes_back_to_its_step_saying_why_with_its_feedback_ke
     );
     assert_eq!(fake.0.lock().unwrap().len(), 1, "nothing more was done");
     // an action that no longer applies says so; a script gets JSON with the matching code
-    let response = post("action=cancel&revision=1".into(), "application/json").await;
+    let response = post("action=cancel&revision=2".into(), "application/json").await;
     assert_eq!(response.status(), StatusCode::CONFLICT);
     let json: serde_json::Value = serde_json::from_str(&body(response).await).unwrap();
     assert_eq!(json["error"], "conflict", "{json}");

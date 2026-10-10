@@ -100,7 +100,13 @@ async fn fresh_and_working_paused_archived_homes_verify_without_writes() {
 async fn plan_compiler_reports_every_bad_input_and_unknown_function() {
     let (_h, w, r) = setup().await;
     let p = project(&w, json!({"steps":{}})).await;
-    w.write(RetrySafety::NonIdempotent,move|tx|{tx.sql().execute("UPDATE plans SET doc=?2 WHERE project_id=?1",(p.to_string(),json!({"steps":{"a":{"run":"test.echo","in":{"value":{"default":3}}},"b":{"run":"missing"}}}).to_string()))?;tx.changed(Some(p),"plan");Ok(())}).await.unwrap();
+    // The store keeps what an edit wrote; only a compile checks it.
+    let broken: JsonMap = serde_json::from_value(json!({"steps":{"a":{"run":"test.echo","in":{"value":{"default":3}}},"b":{"run":"missing"}}})).unwrap();
+    w.write(RetrySafety::NonIdempotent, move |tx| {
+        plan_rows::commit_document(tx, p, &broken, None, None)
+    })
+    .await
+    .unwrap();
     let problems = verify(&r, registry(), Some(ProjectSelector::Id(p)))
         .await
         .unwrap();
@@ -116,7 +122,7 @@ async fn plan_compiler_reports_every_bad_input_and_unknown_function() {
 async fn typed_state_unknown_inputs_outputs_and_changed_graph_hash_are_checked() {
     let (_h, w, r) = setup().await;
     let p=project(&w,json!({"inputs":{"v":"string"},"steps":{"s":{"run":"test.echo","in":{"value":{"default":"old"}}}}})).await;
-    w.write(RetrySafety::NonIdempotent,move|tx|{tx.sql().execute("UPDATE inputs SET value='3' WHERE project_id=?1",[p.to_string()])?;tx.sql().execute("INSERT INTO inputs(project_id,name,position,declaration,value) VALUES (?1,'gone',1,'{}','1')",[p.to_string()])?;tx.sql().execute("UPDATE steps SET status='succeeded',outputs=?2,inputs_hash='bad' WHERE project_id=?1",(p.to_string(),json!({"value":2}).to_string()))?;tx.changed(Some(p),"status");Ok(())}).await.unwrap();
+    w.write(RetrySafety::NonIdempotent,move|tx|{tx.sql().execute("UPDATE inputs SET value='3' WHERE project_id=?1",[p.to_string()])?;tx.sql().execute("INSERT INTO inputs(project_id,name,position,declaration,value) VALUES (?1,'gone',1,'\"string\"','1')",[p.to_string()])?;tx.sql().execute("UPDATE steps SET status='succeeded',outputs=?2,inputs_hash='bad' WHERE project_id=?1",(p.to_string(),json!({"value":2}).to_string()))?;tx.changed(Some(p),"status");Ok(())}).await.unwrap();
     let problems = verify(&r, registry(), None).await.unwrap();
     for part in [
         "inputs.v",

@@ -671,7 +671,13 @@ pub(crate) fn prepare(
     prepared.board_warnings =
         crate::coordinator::board_drops(sql, project, &base, &prepared.compiled.plan)?;
     let inputs = prepared.inputs.take();
-    let prune = prepared.commit.prune.clone();
+    // The store rechecks a prune's removal set only beside its age evidence: a prune with no
+    // age filter (`older_than_seconds` 0) commits as any removal does.
+    let prune = if evidence.is_some() {
+        prepared.commit.prune.clone()
+    } else {
+        prepared.commit.prune.take()
+    };
     Ok((
         project,
         Prepared::Commit(Box::new(Staged {

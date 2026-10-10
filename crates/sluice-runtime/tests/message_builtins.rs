@@ -74,11 +74,12 @@ impl Fixture {
                     (project.to_string(),),
                 )?;
                 tx.sql().execute(
-                    "INSERT INTO plans(project_id,rev,doc) VALUES (?1,1,'{}')",
+                    "INSERT INTO plans(project_id,rev,root_order) VALUES (?1,1,'[\"steps\"]')",
                     (project.to_string(),),
                 )?;
                 tx.sql().execute(
-                    "INSERT INTO steps(project_id,step_id,position,declaration) VALUES (?1,'work',0,'{}')",
+                    "INSERT INTO steps(project_id,step_id,position,declaration,unit,run,paused,priority)
+                     VALUES (?1,'work',0,'{\"run\":\"test.fn\"}','work','test.fn','false',0)",
                     (project.to_string(),),
                 )?;
                 tx.changed(Some(project), "plan");

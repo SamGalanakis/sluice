@@ -405,7 +405,7 @@ fn client_config() -> ClientConfig {
 }
 async fn exercise(client: &rmcp::service::RunningService<rmcp::RoleClient, ClientConfig>) {
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 51);
+    assert_eq!(tools.len(), 56);
     let result = client
         .call_tool(CallToolRequestParams::new("projects_list"))
         .await
@@ -676,7 +676,7 @@ fn unknown_tools_and_arguments_suggest_the_nearest_names() {
     );
     assert_eq!(
         message("step_wiat", json!({})),
-        "unknown tool step_wiat; did you mean step_wait?"
+        "unknown tool step_wiat; did you mean step_wait or step_get?"
     );
     assert_eq!(
         message(
