@@ -655,8 +655,55 @@ The pages compose these parts; each lane that redraws one writes its section her
   Done folded to an index. The matrix and the plan list live units only.
 - **A step, its thread, the inbox**: Unigrid's step board and phone question, on the same
   band and grid.
-- **Home** (`/`): the projects as a cover and an index; the log, functions and settings on the
-  same frame.
+- **Home** (`/`, `views::home`): the projects as a cover and an index. The band: "sluice"
+  huge, the date and the projects counted, one sentence across them (the questions first, in
+  coral, then what runs and where, then what stopped where), the runner stopped on the sand
+  when it is, and Recently finished across the projects. On the paper, For you (eight
+  columns: each open question to the owner swollen under the coral rule, its title at 23px,
+  its words, Answer and Close in place, the way to its step; an answered one the line that
+  says so) beside Today (four, on the sky: a project's last day in a line, the way to the
+  timetable); with no question For you is one line and Today a row across. Then Projects: a
+  module a project, as many to a row as fit 460px each, what needs the owner first (a
+  question: the coral swell; something stopped: the sand swell): its name at 46px, its
+  state's glyph and size, its words, its summary sentence, a 9px square a unit (coral asks,
+  sand needs a look, blue runs, an outline waits, sky done), its rows (questions, stopped
+  steps, running steps by id then title, "running for 1h 10m" against "usually 30m" or the
+  overrun chip), what it finished last and the way to its plan and its day. Then the Index, a
+  table of every project's units by band, archived ones muted.
+- **Day** (`/day`, `/projects/id/<p>/day`, `views::day`): the day as a timetable. The band:
+  today's name huge (a project's own day, its name), the date and the reader's clock, the
+  day's sentence. The day line: a row a project, its name in the first 132px, its runs as 5px
+  bars on 7px tracks (sky done, blue running, sand-ink needing a look), the hours along the top
+  in data mono, the rule at now in the run blue; quick successes are counted, not drawn. The
+  timetable: a 64px hour column (the hour 22px, its day where it changes, its runs counted),
+  then a column a project; each run a line: its minute in mono, its unit in ink and its step
+  muted, its run number, then at the right its glyph and duration (sky-ink check), its word on
+  the sand chip when it needs a look, or "running 43m" on the blue. A long hour flows into
+  columns as wide as the screen allows; four projects or more stack under each hour below
+  1100px of content, every project below 640px. The current hour ends on the now rule and
+  says what runs. `nav.js` keeps the reader's zone in a cookie and moves the rule and the
+  running bars with the clock; the page's version is its runs, so it patches only when they
+  change.
+- **Log** (`views::log`): the band says "Log" (a project's log, its name) and what the page
+  shows ("42 records on this page, seq … to …"); under it the presets as one navy-ruled
+  segmented bar beside the filters, the note on what is left out, then Records under a
+  band section's head, the table under a 2px navy rule with seq, time and kind in data mono.
+- **Functions** (`/fns`): the band says whose catalogue and counts it; the picker and the
+  find on one bar, the groups' index, then each group under a band section's head, its
+  entries on the grid as many to a row as fit 400px, each under a hairline (a broken one under
+  the navy rule), its name in data mono.
+- **Settings** (`/projects/id/<p>/settings`): the band names the project and how it stands
+  (active, paused or archived; its resources; when done units retire). On the paper the
+  sections' index stands sticky in the first three columns (a scrolling row of tabs on a
+  phone), each section in the other nine under a band section's head, each field a row (its
+  name, then its form at 78ch); pause and archive are rows with a square switch; Delete sits on
+  the sand under its rule. (`settings.css` is folded into `style.css`.)
+- **History** (`/history`): the threads with the owner, a module each on the grid, as many to
+  a row as fit 360px; one with an open question under the coral rule.
+- **A page that cannot be drawn** (`views::missing`): the band says what is missing, huge,
+  and why; the paper lists the ways on, each a heavy link with its arrow.
+- **Agent docs** (`/docs`): the band names them; the index a row of topic modules; a topic
+  its markdown at the measure in eight columns, every topic listed sticky beside it.
 
 ## Accessibility
 

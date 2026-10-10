@@ -74,9 +74,6 @@ fn decode(text: &str) -> String {
 #[template(path = "missing.html")]
 struct Missing<'a> {
     status: u16,
-    heading: &'a str,
-    lead: &'a str,
-    why: &'a str,
     message: &'a str,
     links: &'a [(String, String)],
 }
@@ -226,14 +223,22 @@ pub async fn page(
     let nav = NavView::new(&snapshot, project.map(|p| p.id), "").ok()?;
     let body = TrustedHtml::from_template(&Missing {
         status: status.as_u16(),
-        heading: &heading,
-        lead: &lead,
-        why: &why,
         message,
         links: &links,
     })
     .ok()?;
-    let html = super::render_layout(
+    // the band says what is missing, huge, and why in a sentence; the ways on are the page
+    let lead = if lead.is_empty() {
+        TrustedHtml::default()
+    } else {
+        TrustedHtml::owned(format!("<p>{}</p>", super::ui::esc(&lead)))
+    };
+    let said = if why.is_empty() {
+        format!("HTTP {}.", status.as_u16())
+    } else {
+        why.clone()
+    };
+    let html = super::render_framed(
         &heading,
         &body,
         &nav,
@@ -241,6 +246,10 @@ pub async fn page(
         "",
         "",
         path,
+        &super::Frame {
+            head: super::ui::band_head(&heading, &lead, &TrustedHtml::owned(super::ui::esc(&said))),
+            ..super::Frame::default()
+        },
     )
     .ok()?;
     Some((status, Html(html.as_str().to_owned())).into_response())

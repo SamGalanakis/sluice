@@ -264,11 +264,13 @@ async fn every_state_reads_the_same_on_every_surface() {
     // the index: the same counts from the store (the plan's blocked, held, queued and outside
     // steps there are pending), the running steps by how each reads
     let (_, home) = f.get("/").await;
-    let row = between(&home, " states</span>", "</ul></li>");
+    // home's module: its squares say every state that needs a look, its rows each running one
+    let row = between(&home, "aria-label=\"states\"", "</article>");
+    let squares = between(row, "<p class=\"pm-squares\"", ">");
     for state in [Shown::Failed, Shown::Cancelled, Shown::Stale, Shown::Quiet] {
         assert!(
-            row.contains(&format!("b-{}", state.key())),
-            "{state:?}: {row}"
+            squares.contains(&format!(" {}", state.word())),
+            "{state:?}: {squares}"
         );
     }
     for state in [
@@ -280,7 +282,7 @@ async fn every_state_reads_the_same_on_every_surface() {
         assert!(row.contains(&glyph(state)), "{state:?}: {row}");
     }
     assert!(
-        row.contains("<span class=\"tag muted\">stopping</span>"),
+        row.contains("<span class=\"pm-word\">stopping</span> · running for"),
         "{row}"
     );
     // the tab title counts what needs attention (the fixture's lanes has a failure too)
@@ -361,15 +363,12 @@ async fn a_failure_ranks_before_running_work_on_every_surface() {
         .unwrap();
     let (_, page) = f.get("/").await;
     // the index's rows (the nav's switcher lists them in the same order)
-    let home = between(&page, "<div id=\"projects\">", "data-page-title");
-    let at = |name: &str| home.find(&format!(" {name}</span>")).unwrap();
+    let home = between(&page, "<div class=\"proj-grid\">", "</section>");
+    let at = |name: &str| home.find(&format!("aria-label=\"{name}\"")).unwrap();
     assert!(at("mixed") < at("aaa-stale"), "{home}");
     assert!(at("aaa-stale") < at("aab-calm"), "{home}");
-    let row = between(home, " aaa-stale</span>", "</li>");
-    let head = &home[home[..at("aaa-stale")]
-        .rfind("<li class=\"proj\">")
-        .unwrap()..at("aaa-stale")];
-    assert!(head.contains(&glyph(Shown::Stale)), "{head}{row}");
+    let head = between(home, "aria-label=\"aaa-stale\"", "</p>");
+    assert!(head.contains(&glyph(Shown::Stale)), "{head}");
 }
 
 fn mark(state: Shown) -> String {

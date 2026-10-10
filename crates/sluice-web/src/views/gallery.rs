@@ -778,11 +778,28 @@ async fn agent_docs(
                 )
             })
             .collect();
-        let (title, body) = match &topic {
+        let lead = TrustedHtml::owned(
+            "<p>What the agents that drive sluice read: the same pages <code>sluice docs</code> and the MCP <code>docs</code> tool give them.</p>"
+                .into(),
+        );
+        let (title, body, head) = match &topic {
             None => (
                 "Agent docs".to_owned(),
                 format!(
-                    "<div class=\"agent-docs\"><h1>Agent docs</h1><p class=\"lead\">What the agents that drive sluice read: the same pages <code>sluice docs</code> and the MCP <code>docs</code> tool give them.</p><ul class=\"docs-index\">{index}</ul></div>"
+                    "<div class=\"agent-docs\">{}<ul class=\"docs-index docs-cards\">{index}</ul></div>",
+                    super::ui::section_head(
+                        "docs-topics",
+                        "Topics",
+                        &super::ui::count(pages.len(), "page", "pages")
+                    )
+                ),
+                super::ui::band_head(
+                    "Agent docs",
+                    &lead,
+                    &TrustedHtml::owned(format!(
+                        "{} on plans, functions, threads, the inbox and the board, the overview first.",
+                        super::ui::count(pages.len(), "page", "pages")
+                    )),
                 ),
             ),
             Some(t) => {
@@ -794,14 +811,23 @@ async fn agent_docs(
                 (
                     format!("{} · Agent docs", first(page)),
                     format!(
-                        "<div class=\"agent-docs\"><nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/docs\">{back}Agent docs</a></nav><div class=\"md docs-page\">{}</div><nav class=\"docs-index docs-more\" aria-label=\"Agent docs\"><ul>{index}</ul></nav></div>",
+                        "<div class=\"agent-docs docs-read\"><div class=\"docs-body\"><nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/docs\">{back}Agent docs</a></nav><div class=\"md docs-page\">{}</div></div><nav class=\"docs-index docs-more\" aria-label=\"Agent docs\"><p class=\"docs-more-h\">Every page</p><ul>{index}</ul></nav></div>",
                         crate::markdown::render_from(page, 1),
                         back = super::icons::icon(super::icons::Icon::ArrowLeft, 16, ""),
+                    ),
+                    super::ui::band_head(
+                        "Agent docs",
+                        &lead,
+                        &TrustedHtml::owned(format!(
+                            "{} <code>{}</code>",
+                            super::ui::esc(&first(page)),
+                            super::ui::esc(t.0.as_str())
+                        )),
                     ),
                 )
             }
         };
-        super::render_layout(
+        super::render_framed(
             &title,
             &TrustedHtml::owned(body),
             &nav,
@@ -809,6 +835,10 @@ async fn agent_docs(
             "",
             "",
             "/docs",
+            &super::Frame {
+                head,
+                ..super::Frame::default()
+            },
         )
         .map_err(super::threads::render_error)
     };

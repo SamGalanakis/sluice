@@ -361,27 +361,44 @@ impl StreamQuery {
             .unwrap_or_default()
     }
 }
+/// Home's stream: its body, its band and the nav, drawn again as its pages are.
 pub async fn home_stream(
     State(state): State<DashboardState>,
+    registry: Option<axum::Extension<crate::views::board::Registry>>,
     Query(query): Query<StreamQuery>,
     headers: HeaderMap,
 ) -> Response {
-    response(state, query, headers, false).await
+    let viewer = Viewer::from_headers(&headers);
+    let zone = crate::views::day::zone(&headers);
+    let registry = registry.map(|r| r.0);
+    let stop = state.stop.clone();
+    let watch = state.watch(None);
+    let loader = move || {
+        let state = state.clone();
+        let viewer = viewer.clone();
+        let registry = registry.clone();
+        async move {
+            home::home_batch(&state, registry.as_ref(), &viewer, zone)
+                .await
+                .map(|(batch, _, _)| batch)
+        }
+    };
+    Sse::new(page_events(
+        watch,
+        loader,
+        query.version(VersionSignal::Page),
+        VersionSignal::Page,
+        stop,
+    ))
+    .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+    .into_response()
 }
 pub async fn functions_stream(
     State(state): State<DashboardState>,
     Query(query): Query<StreamQuery>,
     headers: HeaderMap,
 ) -> Response {
-    response(state, query, headers, true).await
-}
-async fn response(
-    state: DashboardState,
-    query: StreamQuery,
-    headers: HeaderMap,
-    functions: bool,
-) -> Response {
-    let project = if functions { query.project } else { None };
+    let project = query.project;
     if let Some(project) = project {
         match state.snapshot(Some(project)).await {
             Ok(s) if s.projects.iter().any(|p| p.id == project) => {}
@@ -395,7 +412,7 @@ async fn response(
     let loader = move || {
         let state = state.clone();
         let viewer = viewer.clone();
-        async move { home::batch(&state.snapshot(project).await?, project, functions, &viewer) }
+        async move { home::batch(&state.snapshot(project).await?, project, true, &viewer) }
     };
     Sse::new(page_events(
         watch,

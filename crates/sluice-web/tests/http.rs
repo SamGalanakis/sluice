@@ -607,7 +607,7 @@ async fn a_dead_link_is_a_page_for_a_browser_and_json_for_a_client() {
             .starts_with("text/html")
     );
     let page = text_body(response).await;
-    assert!(page.contains("<h1>No such step</h1>"), "{page}");
+    assert!(page.contains(">No such step</h1>"), "{page}");
     assert!(page.contains("web has no step nope now."), "{page}");
     assert!(page.contains(&format!(
         "href=\"/projects/id/{}\">Back to the web plan",
@@ -620,12 +620,12 @@ async fn a_dead_link_is_a_page_for_a_browser_and_json_for_a_client() {
     assert!(page.contains("id=\"top-nav\""), "inside the layout");
     let unknown = format!("/projects/id/{}", ProjectId::new());
     let page = text_body(get_with(&fixture, &unknown, &html).await).await;
-    assert!(page.contains("<h1>No such project</h1>"), "{page}");
+    assert!(page.contains(">No such project</h1>"), "{page}");
     // an address whose id is no project id at all is the same calm page, never "Invalid URL"
     let response = get_with(&fixture, "/projects/id/nope", &html).await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let page = text_body(response).await;
-    assert!(page.contains("<h1>No such project</h1>"), "{page}");
+    assert!(page.contains(">No such project</h1>"), "{page}");
     assert!(!page.contains("Invalid URL"), "{page}");
     // the band sits in a header, its landmark named apart from the settings' index
     assert!(
@@ -635,12 +635,12 @@ async fn a_dead_link_is_a_page_for_a_browser_and_json_for_a_client() {
         "{page}"
     );
     let page = text_body(get_with(&fixture, "/nowhere", &html).await).await;
-    assert!(page.contains("<h1>Nothing here</h1>"), "{page}");
+    assert!(page.contains(">Nothing here</h1>"), "{page}");
     // a run's file names the run and the file
     let run = sluice_model::ids::RunId::new();
     let file = format!("/projects/id/{}/runs/{run}/files/nope.txt", fixture.id);
     let page = text_body(get_with(&fixture, &file, &html).await).await;
-    assert!(page.contains("<h1>No such run file</h1>"), "{page}");
+    assert!(page.contains(">No such run file</h1>"), "{page}");
     assert!(
         page.contains(&format!("Run {run} is not a run of this project.")),
         "{page}"

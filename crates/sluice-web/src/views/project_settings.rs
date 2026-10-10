@@ -9,10 +9,6 @@ pub fn registration() -> PageRegistration {
                 .unwrap_or_default()
         },
         nav: |_| vec![],
-        assets: &[Asset {
-            names: &["settings.css"],
-            media_type: "text/css",
-            bytes: include_bytes!("../../assets/settings.css"),
-        }],
+        assets: &[],
     }
 }

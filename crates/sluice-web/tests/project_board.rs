@@ -1026,17 +1026,16 @@ async fn a_paused_step_is_named_and_counted_paused_on_every_surface() {
         ),
         (1, 1, 3)
     );
-    let home = sluice_web::views::home::HomeView::new(&snapshot)
-        .body()
-        .unwrap();
-    let home = home.as_str();
-    let row = home
-        .split("<li class=\"proj\">")
-        .find(|row| row.contains(" held</span>"))
-        .unwrap_or_else(|| panic!("no row for held: {home}"));
+    // home's module counts it paused: its squares say each unit's state
+    let (_, home) = f.get("/").await;
+    let module = home
+        .split("<article class=\"mod")
+        .find(|m| m.contains("aria-label=\"held\""))
+        .unwrap_or_else(|| panic!("no module for held: {home}"));
+    let squares = module.split("<p class=\"pm-squares\"").nth(1).unwrap();
     assert!(
-        row.contains("1 of 3 · <span class=\"p-paused\">1 paused</span>"),
-        "{row}"
+        squares.contains("aria-label=\"3 units: ") && squares.contains("1 paused"),
+        "{squares}"
     );
     let (_, step) = f.get(&format!("/projects/id/{held}/steps/hold")).await;
     let hold = between(&step, "<p class=\"d-hold\">", "</p>");
