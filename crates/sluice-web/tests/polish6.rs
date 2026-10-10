@@ -507,7 +507,10 @@ async fn chromium_a_code_block_keeps_its_lines_and_the_keys_find_and_move() {
             .wait(&format!("location.hash === '#step:{next}' && document.querySelector('#step-detail[data-step=\"{next}\"] #d-title')"))
             .unwrap();
         press(&mut browser, "[", "BracketLeft");
-        browser.wait("location.hash === '#step:l1-work'").unwrap();
+        // back, and drawn: a field put in before its detail streams in would be replaced
+        browser
+            .wait("location.hash === '#step:l1-work' && document.querySelector('#step-detail[data-step=\"l1-work\"] #d-title')")
+            .unwrap();
         // typing in a field is the field's
         browser
             .eval("(() => { const t = document.createElement('textarea'); t.id = 'probe'; document.querySelector('#step-detail').append(t); t.focus(); })()")
