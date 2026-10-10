@@ -129,16 +129,25 @@ deploy: each run's guardian stays pinned to its own release, and the new coordin
 **Incompatible cutover** (schema 3; lands with the plan-rows cutover). A release whose schema
 differs from the home's (its manifest's `schema`) is never deployed as above: no run pinned to
 the old schema may outlive it. `scripts/deploy --schema-cutover --deadline <time>
-[--cancel-grace <s>] [--dry-run]` rehearses the conversion and `scripts/compat-check
---incompatible` on a copy, prints the notice the orchestrator sends every session, drains the
-home (§2.6), and at the deadline (or once nothing is live) fences the installation and cancels
-every step run still live with `step_cancel` (author `cutover`, reason `schema-3 cutover at
-<deadline>: stopped at the deadline; retry it after the cutover`), stopping after
-`--cancel-grace` the units of runs and direct calls still live. It then stops the services,
-backs the database up, runs `sluice home migrate`, selects and starts the new release, checks
-every project's exported plan against the backup, unfences, releases the drain, and reports each
-run it stopped (`<install>/cutover-<time>.json`) so its orchestrator can retry it. `--dry-run`
-lists what would be stopped and changes nothing.
+[--cancel-grace <s>] [--settle-timeout <s>] [--dry-run]` first rehearses on a private copy of
+the home (`scripts/cutover-rehearse`): the old release, with a test adoption host that cannot
+reach any production unit, plays the deadline on the copy, and only once the copy has no live
+work does the new release convert it and `scripts/compat-check --incompatible` check it. It then
+prints the notice the orchestrator sends every session and drains the home (§2.6). At the
+deadline (or once nothing is live) it fences the installation, then requests the cancel of every
+step still running with one `step_cancel` per step (author `cutover`, reason `schema-3 cutover at
+<deadline>: stopped at the deadline; retry it after the cutover`) and verifies that each of its
+live attempts carries the request before any unit is stopped. A refused cancel (the old release
+compiles the plan before it cancels, so a missing fn refuses it) stops the cutover still fenced,
+naming each affected step, run and attempt. After `--cancel-grace` it stops the units of runs
+and direct calls still live, waits until nothing is live (at most `--settle-timeout`, else it
+stops fenced), stops the services, backs the database up, runs `sluice home migrate`, selects
+and starts the new release, checks every project's exported plan against the backup, unfences
+and releases the drain. A cancel request does not decide how a run ends: a settled run still
+succeeds and a scatter step keeps its first failure. The report
+(`<install>/cutover-<time>.json`) lists each run the deadline reached with what was asked of it,
+how it actually ended and whether to retry it. `--dry-run` lists what would be stopped and
+changes nothing.
 
 ### 2.3 Home layout
 
@@ -237,7 +246,7 @@ The home has one maintenance mode: `normal` or `drain`.
   recorded projects and returns to `normal`.
 
 A schema cutover (§2.2) drains with a deadline (schema 3; lands with the plan-rows cutover):
-work still live at the deadline is cancelled, not waited for.
+work still live at the deadline has its cancel requested and its unit stopped, not waited for.
 
 ## 3. Storage
 
@@ -261,8 +270,11 @@ migrate` converts a schema-1 or schema-2 database in one transaction (nothing ch
 failure): it refuses while an attempt, run, lease or call is live, replays every project's whole
 edit history into row changes and checks each revision's rows against the replayed document,
 checks the final rows against the stored document, rewrites retained `plan.edit` records and
-removes the plan snapshots stored in attempts. A restore converts its private destination the
-same way.
+removes the plan snapshots stored in attempts. A restore of a schema-1 or schema-2 backup
+converts its private destination the same way, with the same refusal: a backup holding live
+work is refused (`invalid`, `this backup holds live work (…); a schema-changing restore needs a
+backup taken with nothing live`), because the restored home's adoption would reach the original
+home's units by their recorded names.
 
 The plan is stored as rows, never as a document: `plans` (`rev`, `root_order`: the present root
 sections in order, `state_epoch`), `inputs` (each plan input's declaration exactly as written,
@@ -272,8 +284,10 @@ state). Positions order each collection; a new row is appended after the last, a
 leaves a gap. `steps.unit`, `step_tags` (one row per step tag), `plan_refs` (every binding, gate
 and plan-output reference, by consumer and slot) and `plan_edges` (the dependency graph, unit
 gates expanded to the unit's exit steps) are indexes the writer keeps in step with the
-declarations in the same transaction; `verify` rebuilds and compares them. `steps.paused`,
-`steps.run` and `steps.priority` are generated from the declaration. `plans.state_epoch` grows
+declarations in the same transaction (a removed step's or output's references go with it);
+`verify` rebuilds and compares them. `steps.paused`, `steps.run`, `steps.priority` and
+`steps.needs` are copies of the declaration's fields that a `CHECK` holds equal to it, so the
+compact reads use covering indexes and never read a declaration. `plans.state_epoch` grows
 whenever a step's status or results, a plan input's value, the project's pause or its resources
 change. `plan_get` assembles the document from the rows.
 
@@ -689,14 +703,18 @@ state or readiness it changes, and the ready steps competing for the resources o
 
 - Every edit tool takes an optional `rev`; a stale one is `conflict` with `current_rev`. An edit
   prepared against a plan or state that changed before it commits is prepared again, never
-  committed stale. `order.set` requires `rev`.
+  committed stale; when the third preparation is stale too, the edit is refused `busy` with
+  `retryable: true` and nothing is written. Preparation never runs in the writer. `order.set`
+  requires `rev`.
 - A running step may change only `paused` and `tags`, and may not be removed.
 - `start: false` (`plan_edit`, `step_add`, `unit_add`) adds steps with `"paused": true` unless a
   step sets `paused` itself.
 - An edit that changes nothing (an edge already there, tags or pauses as they are, a prune that
   removes nothing) commits nothing: no rev, record or history row. Its reply is the edit result
   with the current `rev` and empty `preview.changes`. `step_set_input` refuses one instead
-  (`bad_request`).
+  (`bad_request`). What a caller supplies may not be empty: `plan_edit` with no `ops`, an
+  operation's empty `changes`, `steps` or `after`, and `unit_update` with no member or a member
+  with no field are `bad_request`.
 - Removing a finished step keeps its result as an `outcomes` row; a pending step leaves none.
 - A new row goes after its collection's last; removing one renumbers nothing; only `order.set`
   reorders a collection.

@@ -1,0 +1,197 @@
+[
+  {
+    "case": "append",
+    "before": {
+      "a": 0,
+      "b": 1
+    },
+    "keys": [
+      "a",
+      "b",
+      "c"
+    ],
+    "positions": {
+      "a": 0,
+      "b": 1,
+      "c": 2
+    },
+    "renumbered": false,
+    "puts": [
+      "c"
+    ],
+    "deletes": []
+  },
+  {
+    "case": "remove_leaves_gap",
+    "before": {
+      "a": 0,
+      "b": 1,
+      "c": 2
+    },
+    "keys": [
+      "a",
+      "c"
+    ],
+    "positions": {
+      "a": 0,
+      "c": 2
+    },
+    "renumbered": false,
+    "puts": [],
+    "deletes": [
+      "b"
+    ]
+  },
+  {
+    "case": "append_after_gap",
+    "before": {
+      "a": 0,
+      "c": 2
+    },
+    "keys": [
+      "a",
+      "c",
+      "d"
+    ],
+    "positions": {
+      "a": 0,
+      "c": 2,
+      "d": 3
+    },
+    "renumbered": false,
+    "puts": [
+      "d"
+    ],
+    "deletes": []
+  },
+  {
+    "case": "insert_before_survivor",
+    "before": {
+      "a": 0
+    },
+    "keys": [
+      "b",
+      "a"
+    ],
+    "positions": {
+      "b": 0,
+      "a": 1
+    },
+    "renumbered": true,
+    "puts": [
+      "b",
+      "a"
+    ],
+    "deletes": []
+  },
+  {
+    "case": "insert_between_survivors",
+    "before": {
+      "a": 0,
+      "c": 1
+    },
+    "keys": [
+      "a",
+      "b",
+      "c"
+    ],
+    "positions": {
+      "a": 0,
+      "b": 1,
+      "c": 2
+    },
+    "renumbered": true,
+    "puts": [
+      "b",
+      "c"
+    ],
+    "deletes": []
+  },
+  {
+    "case": "insert_into_gap",
+    "before": {
+      "a": 0,
+      "c": 2
+    },
+    "keys": [
+      "a",
+      "b",
+      "c"
+    ],
+    "positions": {
+      "a": 0,
+      "b": 1,
+      "c": 2
+    },
+    "renumbered": true,
+    "puts": [
+      "b"
+    ],
+    "deletes": []
+  },
+  {
+    "case": "move",
+    "before": {
+      "a": 0,
+      "b": 1,
+      "c": 2
+    },
+    "keys": [
+      "c",
+      "a",
+      "b"
+    ],
+    "positions": {
+      "c": 0,
+      "a": 1,
+      "b": 2
+    },
+    "renumbered": true,
+    "puts": [
+      "c",
+      "a",
+      "b"
+    ],
+    "deletes": []
+  },
+  {
+    "case": "replace_whole_section",
+    "before": {
+      "a": 0,
+      "b": 1
+    },
+    "keys": [
+      "c",
+      "b"
+    ],
+    "positions": {
+      "c": 0,
+      "b": 1
+    },
+    "renumbered": true,
+    "puts": [
+      "c"
+    ],
+    "deletes": [
+      "a"
+    ]
+  },
+  {
+    "case": "from_empty",
+    "before": {},
+    "keys": [
+      "x",
+      "y"
+    ],
+    "positions": {
+      "x": 0,
+      "y": 1
+    },
+    "renumbered": false,
+    "puts": [
+      "x",
+      "y"
+    ],
+    "deletes": []
+  }
+]

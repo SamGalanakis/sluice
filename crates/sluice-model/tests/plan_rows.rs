@@ -4,11 +4,15 @@
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sluice_model::{
+    commands::StepStatus,
     error::PublicError,
     ids::{ProjectId, ProjectSelector, Revision, StepId, UnitName},
     plan_rows::*,
 };
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 const DOCUMENT: &str = include_str!("../../../docs/design/plan-rows.md");
 
@@ -363,6 +367,21 @@ fn refusals_have_their_pinned_kind_and_message() {
             "stale_rev" => PlanRowsError::StaleRev {
                 current: Revision(43),
             },
+            "no_steps" => PlanRowsError::Empty {
+                path: "ops[1].steps".into(),
+                what: "step",
+            },
+            "no_entries" => PlanRowsError::Empty {
+                path: "ops[2].after".into(),
+                what: "entry",
+            },
+            "edit_contended" => PlanRowsError::EditContended,
+            "live_work_in_backup" => PlanRowsError::LiveWorkInBackup {
+                attempts: 2,
+                runs: 2,
+                leases: 1,
+                calls: 0,
+            },
             // Validation keeps the existing `invalid` shape, with per-operation paths.
             "invalid_ops" => continue,
             other => panic!("unknown case {other}"),
@@ -453,5 +472,264 @@ fn request_schemas_name_their_public_fields() {
     assert_eq!(
         required(serde_json::to_value(schemars::schema_for!(PlanRead)).unwrap()),
         ["project"]
+    );
+}
+
+/// The supplied-shape refusals (§7.6): only what a caller sends is checked, the first refusal
+/// wins, and the fixtures' own requests pass.
+#[test]
+fn supplied_shapes_are_checked_in_order() {
+    fn edit(ops: Value, extra: Value) -> PlanEditRequest {
+        let mut request = json!({"project": "lash", "reason": "r", "ops": ops});
+        for (key, value) in extra.as_object().unwrap() {
+            request[key] = value.clone();
+        }
+        serde_json::from_value(wire_request(request)).unwrap()
+    }
+    let message = |error: PlanRowsError| match PublicError::from(error) {
+        PublicError::BadRequest { message } => message,
+        other => panic!("{other:?}"),
+    };
+    let refused =
+        |ops: Value, extra: Value| message(edit(ops, extra).check_supplied().unwrap_err());
+    let update = json!({"op": "step.update", "step": "a", "changes": {"priority": 1}});
+    assert_eq!(
+        refused(json!([]), json!({})),
+        "ops: name at least one operation"
+    );
+    assert_eq!(
+        refused(
+            json!([{"op": "step.update", "step": "a", "changes": {}}]),
+            json!({})
+        ),
+        "ops[0].changes: name at least one field"
+    );
+    assert_eq!(
+        refused(
+            json!([update, {"op": "step.remove", "steps": []}]),
+            json!({})
+        ),
+        "ops[1].steps: name at least one step"
+    );
+    assert_eq!(
+        refused(
+            json!([update, update, {"op": "edge.remove", "step": "a", "after": []}]),
+            json!({})
+        ),
+        "ops[2].after: name at least one entry"
+    );
+    assert_eq!(
+        refused(
+            json!([{"op": "unit.update", "unit": "u", "changes": {}}]),
+            json!({})
+        ),
+        "ops[0].changes: name at least one step"
+    );
+    assert_eq!(
+        refused(
+            json!([{"op": "unit.update", "unit": "u", "changes": {"u-a": {"priority": 1}, "u-b": {}}}]),
+            json!({})
+        ),
+        "ops[0].changes.u-b: name at least one field"
+    );
+    // Empty lists come before the options, and preview_scope before order.set's rev.
+    assert_eq!(
+        refused(
+            json!([{"op": "step.remove", "steps": []}]),
+            json!({"preview_scope": "all"})
+        ),
+        "ops[0].steps: name at least one step"
+    );
+    let order = json!({"op": "order.set", "collection": "steps", "ids": []});
+    assert_eq!(
+        refused(json!([order]), json!({"preview_scope": "all"})),
+        "preview_scope \"all\" needs dry_run: true"
+    );
+    assert_eq!(
+        refused(json!([order]), json!({})),
+        "order.set needs rev: the revision whose order it lists"
+    );
+    // An empty collection's order.set lists no ids, and that is a valid (no-op) operation.
+    edit(json!([order]), json!({"rev": 4}))
+        .check_supplied()
+        .unwrap();
+    edit(
+        json!([order]),
+        json!({"rev": 4, "preview_scope": "all", "dry_run": true}),
+    )
+    .check_supplied()
+    .unwrap();
+    request::<PlanEditRequest>("plan_edit.request")
+        .check_supplied()
+        .unwrap();
+    request::<PlanEditRequest>("plan_edit.dry_run.request")
+        .check_supplied()
+        .unwrap();
+
+    let unit = |changes: Value| -> UnitUpdate {
+        serde_json::from_value(wire_request(
+            json!({"project": "lash", "unit": "u", "reason": "r", "changes": changes}),
+        ))
+        .unwrap()
+    };
+    assert_eq!(
+        message(unit(json!({})).check_supplied().unwrap_err()),
+        "changes: name at least one step"
+    );
+    assert_eq!(
+        message(unit(json!({"u-a": {}})).check_supplied().unwrap_err()),
+        "changes.u-a: name at least one field"
+    );
+    request::<UnitUpdate>("unit_update.request")
+        .check_supplied()
+        .unwrap();
+}
+
+/// The validation matrix's counterexamples (§6.1), checked against today's whole-plan
+/// compiler: each `base` compiles, and each `candidate` (the base with `ops` applied) fails
+/// with exactly `errors`. Lane H's harness runs the same cases through the incremental path.
+#[test]
+fn validation_counterexamples_match_the_whole_plan_compiler() {
+    use sluice_model::plan::{FnSignature, Plan, SignatureProvider};
+    struct Open;
+    impl SignatureProvider for Open {
+        fn signature(&self, _: &str) -> Option<FnSignature> {
+            Some(FnSignature {
+                open: true,
+                ..Default::default()
+            })
+        }
+    }
+    let compile = |document: &Value| Plan::parse_json(document.to_string().as_bytes(), &Open);
+    let cases = fixture("validation.differential");
+    let cases = cases.as_array().unwrap();
+    let names: BTreeSet<_> = cases.iter().map(|c| c["case"].as_str().unwrap()).collect();
+    for required in [
+        "output_put_missing_source",
+        "input_put_collides_with_untouched_step",
+    ] {
+        assert!(
+            names.contains(required),
+            "the review's counterexample {required}"
+        );
+    }
+    for case in cases {
+        let name = case["case"].as_str().unwrap();
+        let _: Vec<PlanOp> = exact_value(name, case["ops"].clone());
+        compile(&case["base"]).unwrap_or_else(|e| panic!("{name}: base does not compile: {e:?}"));
+        let expected: Vec<String> = serde_json::from_value(case["errors"].clone()).unwrap();
+        let found: Vec<String> = match (compile(&case["candidate"]), case.get("values")) {
+            (Err(errors), _) => errors.iter().map(ToString::to_string).collect(),
+            (Ok(plan), Some(values)) => plan
+                .validate_input_values(&serde_json::from_value(values.clone()).unwrap())
+                .expect_err(name)
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            (Ok(_), None) => panic!("{name}: the candidate compiles"),
+        };
+        assert_eq!(found, expected, "{name}");
+    }
+}
+
+/// §10.6's positions, by a reference of its four steps: assign retain/append/gap, compare the
+/// complete key sequence with the document's, renumber when they differ.
+#[test]
+fn replayed_positions_follow_the_complete_sequence_rule() {
+    fn assign(before: &BTreeMap<String, u64>, keys: &[String]) -> (BTreeMap<String, u64>, bool) {
+        let mut next = before.values().max().map_or(0, |m| m + 1);
+        let tentative: BTreeMap<String, u64> = keys
+            .iter()
+            .map(|k| {
+                let position = before.get(k).copied().unwrap_or_else(|| {
+                    next += 1;
+                    next - 1
+                });
+                (k.clone(), position)
+            })
+            .collect();
+        let mut sequence: Vec<_> = tentative.iter().collect();
+        sequence.sort_by_key(|(_, p)| **p);
+        if sequence
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .eq(keys.iter().map(String::as_str))
+        {
+            (tentative, false)
+        } else {
+            let renumbered = keys.iter().cloned().zip(0..).collect();
+            (renumbered, true)
+        }
+    }
+    for case in fixture("replay.positions").as_array().unwrap() {
+        let name = case["case"].as_str().unwrap();
+        let before: BTreeMap<String, u64> = serde_json::from_value(case["before"].clone()).unwrap();
+        let keys: Vec<String> = serde_json::from_value(case["keys"].clone()).unwrap();
+        let (positions, renumbered) = assign(&before, &keys);
+        let mut puts: Vec<_> = positions
+            .iter()
+            .filter(|(k, p)| before.get(*k) != Some(p))
+            .collect();
+        puts.sort_by_key(|(_, p)| **p);
+        let puts: Vec<String> = puts.into_iter().map(|(k, _)| k.clone()).collect();
+        let deletes: Vec<String> = before
+            .keys()
+            .filter(|k| !positions.contains_key(*k))
+            .cloned()
+            .collect();
+        let expected: BTreeMap<String, u64> =
+            serde_json::from_value(case["positions"].clone()).unwrap();
+        assert_eq!(positions, expected, "{name}: positions");
+        assert_eq!(json!(renumbered), case["renumbered"], "{name}: renumbered");
+        assert_eq!(json!(puts), case["puts"], "{name}: puts");
+        assert_eq!(json!(deletes), case["deletes"], "{name}: deletes");
+        // The positions always give the document's order back.
+        let mut order: Vec<_> = positions.iter().collect();
+        order.sort_by_key(|(_, p)| **p);
+        assert!(
+            order.iter().map(|(k, _)| *k).eq(keys.iter()),
+            "{name}: order"
+        );
+    }
+}
+
+/// The cutover's report (§10.1): its shape, and advice that follows each run's actual outcome,
+/// never the request.
+#[test]
+fn cutover_report_advice_follows_the_actual_outcome() {
+    let report: CutoverReport = exact("cutover.report");
+    let _: CancelRefusal = exact("cutover.refused");
+    assert!(report.refused.is_empty());
+    for run in &report.stopped {
+        assert!(
+            run.step.is_some() != run.call.is_some(),
+            "a step run or a call"
+        );
+        let advice = match (&run.call, &run.step_status, run.step_error.as_deref()) {
+            (Some(_), _, _) => RetryAdvice::CallAgain,
+            (None, Some(StepStatus::Succeeded), _) => RetryAdvice::None,
+            (None, None, _) if run.outcome.status == StepStatus::Succeeded => RetryAdvice::None,
+            (None, _, Some("cancelled")) => RetryAdvice::Retry,
+            (None, _, _) => RetryAdvice::ReadThenRetry,
+        };
+        assert_eq!(run.advice, advice, "{run:?}");
+        assert_eq!(
+            run.requested,
+            if run.call.is_some() {
+                StopRequest::Stop
+            } else {
+                StopRequest::Cancel
+            }
+        );
+    }
+    let outcomes: BTreeSet<_> = report
+        .stopped
+        .iter()
+        .map(|r| (r.outcome.status.clone(), r.advice))
+        .map(|(s, a)| format!("{s:?}/{a:?}"))
+        .collect();
+    assert!(
+        outcomes.len() >= 4,
+        "the fixture covers a settled success, a cancel, an earlier scatter failure and a call"
     );
 }

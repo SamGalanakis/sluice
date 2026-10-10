@@ -6,7 +6,10 @@
 //! These types sit beside the schema-1 ones they replace (`commands::EditPreview`,
 //! `commands::EditResult`, `events::Event::PlanEdit`'s `ops`, `PatchOperation`): the
 //! implementing lanes switch the commands, events and store over to them and delete the old
-//! ones. Nothing here is wired into dispatch yet, and nothing here reads or writes state.
+//! ones. Nothing here is wired into dispatch yet, and nothing here reads or writes state. The
+//! model-to-store handoff (`PlanEditCommit`, `PreparedPlanEdit` with its `CertifiedPlan`),
+//! the preparation read set (`PreparationReads`, `ScopedState`) and the schema cutover's report
+//! (`CutoverReport`) are pinned here too.
 
 use crate::{
     commands::{KeptUnit, PlanViewFormat, ProjectIdentity, StepStatus, UnsupportedInput},
@@ -269,7 +272,9 @@ pub struct StepIndexRows {
     pub references: Vec<ReferenceRow>,
 }
 /// Everything an edit writes to the authored rows and their indexes. The store applies it
-/// as given and derives nothing.
+/// as given and derives nothing but the four `CHECK`-held step columns (`paused`, `run`,
+/// `priority`, `needs`), which it writes with their `CHECK`'s own expression. A removed
+/// step's or output's `plan_refs` go by trigger, its tags and edges by cascade.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RowDelta {
     /// The authored row changes, in the logged order (`PlanChange`).
@@ -301,26 +306,94 @@ pub struct StateDelta {
     pub added: Vec<StepId>,
     pub transitions: Vec<StatusTransition>,
 }
-/// An edit worked out outside the writer from a certified base. The writer commits it only
-/// while `tokens` hold (and `rev`, when the caller gave one, is current).
+/// What the writer commits: the rows and state an edit changes, and the tokens it was worked
+/// out from. The store's whole input; it never sees a compiled plan. The writer commits it
+/// only while `tokens` hold (and `rev`, when the caller gave one, is current).
 #[derive(Debug, Clone, PartialEq)]
-pub struct PreparedPlanEdit {
+pub struct PlanEditCommit {
     pub tokens: ValidationTokens,
     /// The caller's explicit revision: a mismatch is `conflict`, never a re-preparation.
     pub rev: Option<Revision>,
-    pub dry_run: bool,
     pub author: String,
     pub reason: String,
     pub rows: RowDelta,
     pub state: StateDelta,
+    /// `plan_prune`'s removal set; the store's age evidence is checked beside it.
+    pub prune: Option<crate::units::PruneSet>,
+}
+
+/// The compiled candidate a preparation certifies: compiled (sharing structure with the base)
+/// against the signature provider of `catalog_generation`, which answers for every fn the
+/// project sees, so a step the edit adds may use a fn the base never used; and validated.
+/// It is the plan at `base_rev + 1` when the edit changes rows, else the base itself. The
+/// coordinator installs it in its plan cache after `Committed`, only over the entry
+/// `(base_rev, catalog_generation)`; it drops it after `Stale`, a conflict, an error or a dry
+/// run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CertifiedPlan {
+    pub plan: std::sync::Arc<crate::plan::Plan>,
+    pub base_rev: Revision,
+    pub catalog_generation: CatalogGeneration,
+}
+
+/// An edit worked out outside the writer from a certified base: the store payload, the
+/// reply's parts and the compiled candidate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedPlanEdit {
+    pub commit: PlanEditCommit,
+    pub dry_run: bool,
     pub preview: EditPreview,
     /// The reply's `steps` (see each tool).
     pub steps: Option<Vec<StepId>>,
     pub board_warnings: Vec<String>,
     /// `step_set_input`'s report.
     pub inputs: Option<crate::edit::InputChanges>,
-    /// `plan_prune`'s removal set; the store's age evidence is checked beside it.
-    pub prune: Option<crate::units::PruneSet>,
+    pub compiled: CertifiedPlan,
+}
+
+/// What a preparation reads beside the compiled base, in its one snapshot: wider than the
+/// preview's affected set (an unchanged source's status and outputs, a gate's referent, a
+/// unit's exits). Read in rounds until a round adds no step.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PreparationReads {
+    /// State and outputs of: the affected steps, every incoming source of each (bindings,
+    /// fan-in elements, gates), the exit steps of each unit they gate on, and the competitors'
+    /// sources.
+    pub steps: Vec<StepId>,
+    /// Current values of the plan inputs affected steps or changed outputs read, and of the
+    /// inputs the edit puts or removes.
+    pub inputs: Vec<String>,
+    /// Resources an affected step needs: capacities and their `waiting` and `held` leases.
+    pub resources: Vec<String>,
+    /// Resources whose pending competitors (`steps_needs`) are read.
+    pub competitors: Vec<String>,
+}
+/// A live lease on a resource a read set names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseRow {
+    pub resource: String,
+    /// `None` for a home lease or another project's.
+    pub project: Option<ProjectId>,
+    pub step: Option<StepId>,
+    pub held: bool,
+    pub amount: u64,
+    pub priority: i64,
+}
+/// A pending step that needs a resource, read from `steps_needs` without its declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompetitorRow {
+    pub resource: String,
+    pub step: StepId,
+    pub priority: i64,
+    pub needs: JsonMap,
+}
+/// `read_scoped_state`'s answer: exactly the read set. `state.steps` holds only the listed
+/// steps; a step absent from it was not read and must not be taken as `pending`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScopedState {
+    pub state: crate::gates::StateSnapshot,
+    pub leases: Vec<LeaseRow>,
+    pub competitors: Vec<CompetitorRow>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -1055,7 +1128,7 @@ impl PlanCursor {
 pub enum PlanRowsError {
     /// `limit` 0.
     Limit,
-    /// `plan_edit` (or `unit_update`'s `changes`) with nothing to do.
+    /// A `plan_edit` request with no operations.
     NoOps,
     /// An empty list or object where at least one item is needed (a `step.update`'s
     /// `changes`, a `step.remove`'s `steps`, an `edge.add`'s `after`, …): `what` names the item.
@@ -1083,6 +1156,16 @@ pub enum PlanRowsError {
     /// An explicit `rev` that is not the current one.
     StaleRev {
         current: Revision,
+    },
+    /// The third preparation of an edit was stale too: nothing was written, send it again.
+    /// Preparation never moves into the writer.
+    EditContended,
+    /// A schema-changing restore of a backup that holds live work (§10.2 of the contract).
+    LiveWorkInBackup {
+        attempts: u64,
+        runs: u64,
+        leases: u64,
+        calls: u64,
     },
 }
 impl From<PlanRowsError> for PublicError {
@@ -1117,6 +1200,195 @@ impl From<PlanRowsError> for PublicError {
                 message: format!("plan is at rev {current}"),
                 current_rev: Some(current),
             },
+            PlanRowsError::EditContended => PublicError::Busy {
+                message: format!(
+                    "the plan's state kept changing while this edit was prepared ({EDIT_TRIES} tries); send it again"
+                ),
+                retryable: true,
+            },
+            PlanRowsError::LiveWorkInBackup {
+                attempts,
+                runs,
+                leases,
+                calls,
+            } => PublicError::Invalid {
+                message: format!(
+                    "this backup holds live work ({attempts} attempts, {runs} runs, {leases} leases, {calls} calls); a schema-changing restore needs a backup taken with nothing live"
+                ),
+                errors: vec![],
+            },
         }
     }
+}
+
+/// How many preparations an edit gets before it is refused `busy` (`EditContended`).
+pub const EDIT_TRIES: usize = 3;
+
+// ---- supplied shapes --------------------------------------------------------------------
+
+impl PlanOp {
+    /// The refusal of an empty list or empty changes the caller supplied in this operation
+    /// (`ops[<index>]…`). Only supplied operations are checked: a typed tool's lowering never
+    /// builds one, and may build no operation at all.
+    pub fn check_supplied(&self, index: usize) -> Result<(), PlanRowsError> {
+        let empty = |field: &str, what: &'static str| PlanRowsError::Empty {
+            path: format!("ops[{index}].{field}"),
+            what,
+        };
+        match self {
+            Self::StepUpdate { changes, .. } if changes.is_empty() => {
+                Err(empty("changes", "field"))
+            }
+            Self::StepRemove { steps } if steps.is_empty() => Err(empty("steps", "step")),
+            Self::EdgeAdd { after, .. } | Self::EdgeRemove { after, .. } if after.is_empty() => {
+                Err(empty("after", "entry"))
+            }
+            Self::UnitUpdate { changes, .. } => {
+                check_unit_changes(changes, &format!("ops[{index}].changes"))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+fn check_unit_changes(
+    changes: &IndexMap<StepId, StepChanges>,
+    path: &str,
+) -> Result<(), PlanRowsError> {
+    if changes.is_empty() {
+        return Err(PlanRowsError::Empty {
+            path: path.to_owned(),
+            what: "step",
+        });
+    }
+    match changes.iter().find(|(_, c)| c.is_empty()) {
+        Some((step, _)) => Err(PlanRowsError::Empty {
+            path: format!("{path}.{step}"),
+            what: "field",
+        }),
+        None => Ok(()),
+    }
+}
+impl PlanEditRequest {
+    /// The first refusal of what the caller supplied, in this order: no operations, each
+    /// operation's empty lists (`PlanOp::check_supplied`), `preview_scope: "all"` without
+    /// `dry_run`, `order.set` without `rev`.
+    pub fn check_supplied(&self) -> Result<(), PlanRowsError> {
+        if self.ops.is_empty() {
+            return Err(PlanRowsError::NoOps);
+        }
+        for (index, op) in self.ops.iter().enumerate() {
+            op.check_supplied(index)?;
+        }
+        check_options(self.preview_scope, self.dry_run)?;
+        if self.rev.is_none()
+            && self
+                .ops
+                .iter()
+                .any(|op| matches!(op, PlanOp::OrderSet { .. }))
+        {
+            return Err(PlanRowsError::OrderNeedsRev);
+        }
+        Ok(())
+    }
+}
+impl UnitUpdate {
+    /// `unit_update`'s supplied shape: at least one member, each with at least one field.
+    pub fn check_supplied(&self) -> Result<(), PlanRowsError> {
+        check_unit_changes(&self.changes, "changes")?;
+        check_options(self.preview_scope, self.dry_run)
+    }
+}
+fn check_options(scope: PreviewScope, dry_run: bool) -> Result<(), PlanRowsError> {
+    if scope == PreviewScope::All && !dry_run {
+        return Err(PlanRowsError::PreviewAllNeedsDryRun);
+    }
+    Ok(())
+}
+
+// ---- the cutover report ------------------------------------------------------------------
+//
+// What `scripts/deploy --schema-cutover` writes to `<install>/cutover-<timestamp>.json` (and
+// the rehearsal helper reports for its copy): each run the deadline reached, the request made
+// of it and how it actually ended. The cutover records cancellation intent; existing completion
+// precedence decides outcomes (a settled run succeeds; a scatter step keeps its first failure).
+
+/// What the cutover asked of a live run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StopRequest {
+    /// `step_cancel` (author `cutover`), its intent verified before the unit was stopped.
+    Cancel,
+    /// A direct call's unit stopped: a call has no cancel.
+    Stop,
+}
+/// How a run ended, read after the zero-blocker check.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunOutcome {
+    /// `succeeded` or `failed`.
+    pub status: StepStatus,
+    /// The failure's kind (`cancelled`, `process_lost`, `fn_failure`, …); absent on success.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+/// What the orchestrator should do, from the actual outcome, never from the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RetryAdvice {
+    /// It succeeded (a settled run, or a step that succeeded as a whole).
+    None,
+    /// The step failed `cancelled`: retry it after the cutover.
+    Retry,
+    /// The step failed with its own error (a scatter instance's earlier failure, its own
+    /// failure, `process_lost`): read the error, then retry.
+    ReadThenRetry,
+    /// A direct call ended `process_lost`: call it again.
+    CallAgain,
+}
+/// One run the deadline reached. A step run has `step`; a direct call has `call`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StoppedRun {
+    /// The project's name; null for a call without a project.
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<StepId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<String>,
+    pub run: crate::ids::RunId,
+    pub requested: StopRequest,
+    /// This run's own completion.
+    pub outcome: RunOutcome,
+    /// The step's status after it, which a scatter step decides over its instances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_status: Option<StepStatus>,
+    /// The step's error kind, which may be an earlier instance's failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_error: Option<String>,
+    pub advice: RetryAdvice,
+}
+/// A cancel the old release refused, or a step left without verified intent: the cutover
+/// stops still fenced, stopping no unit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CancelRefusal {
+    pub project: String,
+    pub step: StepId,
+    pub runs: Vec<crate::ids::RunId>,
+    pub attempts: Vec<crate::ids::AttemptId>,
+    pub error: PublicError,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CutoverReport {
+    /// The candidate's commit.
+    pub sha: String,
+    pub schema: u32,
+    pub deadline: String,
+    /// The cancel's reason, naming the cutover.
+    pub reason: String,
+    pub projects: u64,
+    pub revisions: u64,
+    pub stopped: Vec<StoppedRun>,
+    pub refused: Vec<CancelRefusal>,
 }

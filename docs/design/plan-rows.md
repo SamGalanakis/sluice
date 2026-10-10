@@ -3,9 +3,11 @@
 This is the single reference the plan-normalize lanes (B to H) build against. It replaces the
 stored plan document with normalized rows: edits cost what they change, reads can be scoped, and
 agents get scoped read tools and one atomic edit tool. Lane A pinned it on `rw/pn-contracts`
-(base `5cb6bb7`). The design follows the study `plan-normalize.md`: where the study left a
-choice open this document decides it (marked **Decision**), and where the study is wrong about
-the code it says so (marked **Correction**). Section 13 lists every decision.
+(base `5cb6bb7`) and revised it after the astra review (round 2, rebased on `775d57c`, the
+shipped dashboard redesign). The design follows the study `plan-normalize.md`: where the study
+left a choice open this document decides it (marked **Decision**), and where the study is wrong
+about the code it says so (marked **Correction**). Section 13 lists every decision, and which
+ones round 2 changed.
 
 Owner rulings (2026-10-10) this contract rests on:
 
@@ -17,8 +19,9 @@ Owner rulings (2026-10-10) this contract rests on:
    plan is exported as a document on demand; it is never stored or written as state: no dual
    write, no derived copy.
 4. **The drain has a deadline.** Notice, drain, deadline, migration: runs still live at the
-   deadline are cancelled by the deploy tooling with a reason naming the cutover, so their
-   orchestrators can retry them afterwards (§10.1).
+   deadline have their cancel requested by the deploy tooling with a reason naming the cutover,
+   and the report says how each actually ended, so their orchestrators can retry them
+   afterwards (§10.1).
 
 The Rust types are in `sluice_model::plan_rows` (written `plan_rows::X` below). Every JSON block
 marked `fixture=<name>` is the file `crates/sluice-model/tests/fixtures/plan_rows/<name>.json`;
@@ -105,19 +108,27 @@ CREATE TABLE plan_edits (
 -- inputs: unchanged columns. `declaration` is now the authored declaration exactly as written
 -- ("string", {"type": …} or {"type": …, "doc": …}); `value` stays the runtime value.
 
--- steps: unchanged columns except these four (and `unit` becomes NOT NULL).
+-- steps: unchanged columns except these five (`unit` becomes NOT NULL; `paused` changes; `run`,
+-- `priority` and `needs` are new). Each of the last four is a plain column whose CHECK holds it
+-- equal to the declaration, so no write can let it drift, and the writer sets it with that
+-- same expression (§4). They are not generated columns: SQLite never reads an index holding a
+-- generated column as covering (checked on the bundled 3.53.2, VIRTUAL and STORED alike), and
+-- compact reads must not touch the declaration.
 --   unit     TEXT NOT NULL                       -- rebuildable index (§2.3)
---   paused   TEXT GENERATED ALWAYS AS (
+--   paused   TEXT NOT NULL CHECK (paused IS (
 --              CASE json_type(declaration, '$.paused')
 --                WHEN 'true' THEN 'true'
 --                WHEN 'text' THEN json_quote(json_extract(declaration, '$.paused'))
---                ELSE 'false' END) VIRTUAL
---   run      TEXT GENERATED ALWAYS AS (json_extract(declaration, '$.run')) VIRTUAL
---   priority INTEGER GENERATED ALWAYS AS (coalesce(json_extract(declaration, '$.priority'), 0)) VIRTUAL
+--                ELSE 'false' END))
+--   run      TEXT NOT NULL CHECK (run IS json_extract(declaration, '$.run'))
+--   priority INTEGER NOT NULL CHECK (priority IS coalesce(json_extract(declaration, '$.priority'), 0))
+--   needs    TEXT CHECK (needs IS json_extract(declaration, '$.needs'))
 -- The schema-1 index steps_status is replaced by the covering indexes below.
 CREATE INDEX steps_compact ON steps(project_id, position, step_id, run, priority, unit, paused, status);
 CREATE INDEX steps_unit_compact ON steps(project_id, unit, position, step_id, run, priority, paused, status);
 CREATE INDEX steps_status_compact ON steps(project_id, status, position, step_id, run, priority, unit, paused);
+-- The steps that need resources, for admission competitors (§6.3) and the settings page.
+CREATE INDEX steps_needs ON steps(project_id, status, step_id, needs, priority) WHERE needs IS NOT NULL;
 
 CREATE TABLE plan_outputs (
   project_id TEXT NOT NULL REFERENCES plans(project_id) ON DELETE CASCADE,
@@ -180,6 +191,16 @@ BEGIN UPDATE plans SET state_epoch = state_epoch + 1 WHERE project_id = NEW.proj
 CREATE TRIGGER resources_delete_state_epoch AFTER DELETE ON resources WHEN OLD.project_id IS NOT NULL
 BEGIN UPDATE plans SET state_epoch = state_epoch + 1 WHERE project_id = OLD.project_id; END;
 
+-- A removed consumer takes its references with it, whatever removed it (an edit, a prune, a
+-- unit removal, a project deletion): plan_refs cannot cascade from steps, whose consumers it
+-- shares with plan outputs.
+CREATE TRIGGER steps_refs_delete AFTER DELETE ON steps
+BEGIN DELETE FROM plan_refs WHERE project_id = OLD.project_id AND consumer_kind = 'step'
+  AND consumer_id = OLD.step_id; END;
+CREATE TRIGGER plan_outputs_refs_delete AFTER DELETE ON plan_outputs
+BEGIN DELETE FROM plan_refs WHERE project_id = OLD.project_id AND consumer_kind = 'output'
+  AND consumer_id = OLD.name; END;
+
 -- Public view for `query` (§2.6).
 CREATE VIEW edits AS SELECT project_id, rev, seq, at, author, reason, changes FROM plan_edits;
 ```
@@ -189,13 +210,20 @@ CREATE VIEW edits AS SELECT project_id, rev, seq, at, author, reason, changes FR
 - `plans.root_order` is constrained to its eleven possible values instead of "a JSON array".
 - `plan_edits` has no `base_rev` (it is always `rev - 1`) and no `change_version` (the schema
   and the record payload version say it). The record has neither either (§5.2).
-- `steps.paused` becomes a generated column (no writer can let it drift from the declaration);
-  `run` and `priority` are generated too. `steps.unit` stays a maintained column: a step's unit
-  needs its tag list searched, which a generated column cannot do.
-- Compact reads must not decode declarations, and reading a virtual column from the row computes
-  it from `declaration`. So compact reads go through the three **covering** indexes, one per
-  access path (by position, by unit, by status). The study's `steps_run_position` is dropped: no
-  tool filters by fn.
+- `steps.paused`, `run`, `priority` and `needs` are plain columns held equal to the
+  declaration by a `CHECK` (no writer can let them drift), written with the CHECK's own
+  expression. **Round 2:** they were generated columns, but SQLite never uses an index holding a
+  generated column as a covering index, so every compact read would have loaded the row and its
+  declaration. `steps.unit` stays a maintained index column: a step's unit needs its tag list
+  searched, which a `CHECK` cannot express; `verify` compares it.
+- Compact reads must not decode declarations, so they go through the three **covering**
+  indexes, one per access path (by position, by unit, by status); `EXPLAIN QUERY PLAN` says
+  `USING COVERING INDEX` for each (lane H, §11). `steps_needs` is the partial covering index of
+  the steps that need resources: admission competitors and the settings page read it without a
+  declaration. The study's `steps_run_position` is dropped: no tool filters by fn.
+- The `plan_refs` triggers delete a removed step's or output's references in the transaction
+  that removes it, so no removal path can leave a reference that would falsely block a later
+  removal of its source (round 2).
 - `state_epoch` is maintained by triggers, so no write path can forget it. Over-counting is
   harmless (an extra re-preparation), under-counting is a bug the triggers rule out. Leases do
   **not** move it: they affect only the advisory `would_queue`, and moving the epoch on every
@@ -215,8 +243,8 @@ Table order in `project_delete` becomes: … `steps`, `step_results`, `inputs`, 
 | `plan_outputs.(name, position, binding)` | Authoritative: each plan output as written, and its place. |
 | `steps.(step_id, position, declaration)` | Authoritative: each step as written (bindings, outputs, scatter, tags, pause, gates, needs, priority), and its place. |
 | `inputs.value`, `steps.status` … `progress_run`, `generation`, `work_generation` | Runtime state, as in schema 1. |
-| `steps.unit`, `step_tags`, `plan_refs`, `plan_edges` | **Rebuildable indexes**, written from the declarations in the same transaction as the change that makes them. Never an edit target; `verify` rebuilds and compares them. |
-| `steps.paused`, `steps.run`, `steps.priority` | Generated from `steps.declaration`. |
+| `steps.unit`, `step_tags`, `plan_refs`, `plan_edges` | **Rebuildable indexes**, written from the declarations in the same transaction as the change that makes them (a removed consumer's rows go by cascade or trigger). Never an edit target; `verify` rebuilds and compares them, and lane H requires exact equality after every removal and prune (§11). |
+| `steps.paused`, `steps.run`, `steps.priority`, `steps.needs` | Copies of declaration fields, held equal to it by `CHECK`s. |
 | `plans.state_epoch` | The execution-state witness, moved by triggers. |
 
 The plan **document** is never stored. `export_plan` (§8) assembles it from the authoritative
@@ -313,15 +341,18 @@ store command commits it (lane B).
 
 **Preparation** (outside the writer, in one read snapshot): resolve the project; if the request
 gave `rev` and the plan is at another one, refuse `conflict` (`plan is at rev N`,
-`current_rev`) without preparing. Read the tokens and the rows the operations touch, apply the
-operations to a candidate (§7.6), validate it incrementally (§6.1), reconcile the affected
-runtime state, and build the preview (§6.3). The result is a `plan_rows::PreparedPlanEdit`:
-`tokens`, the caller's `rev`, `rows: RowDelta` (the logged changes plus every index row they
-imply), `state: StateDelta` (removed and added steps, status transitions), `preview`, `steps`,
-`board_warnings`, and for `step_set_input` and `plan_prune` their reports. A dry run returns the
-preview here and never reaches the writer.
+`current_rev`) without preparing. Read the tokens, apply the operations to a candidate (§7.6),
+validate it incrementally (§6.1), reconcile the affected runtime state, and build the preview
+(§6.3). What preparation reads is its **read set** (§6.4), read in rounds within the one
+snapshot; it is wider than the preview's affected set. The result is a
+`plan_rows::PreparedPlanEdit` (§8): the store payload `commit: PlanEditCommit` (`tokens`, the
+caller's `rev`, `author`, `reason`, `rows: RowDelta`: the logged changes plus every index row
+they imply, `state: StateDelta`: removed and added steps, status transitions, and `prune`), the
+reply's parts (`preview`, `steps`, `board_warnings`, and for `step_set_input` and `plan_prune`
+their reports), and `compiled`: the certified compiled candidate (§8.1). A dry run returns the
+preview here and never reaches the writer; its candidate is dropped.
 
-**Commit** (`plans::commit_plan_edit`, in the writer):
+**Commit** (`plans::commit_plan_edit`, in the writer, given the `PlanEditCommit` only):
 
 1. Check the project is live and the home admits plan edits (drain, §10.1).
 2. Re-read `plans.rev`, `plans.state_epoch` and `projects.board_rev`. A request `rev` that is
@@ -330,16 +361,19 @@ preview here and never reaches the writer.
 3. If `rows.changes` is empty, write nothing: the reply is the edit result at the current `rev`
    with `preview.changes` `[]`.
 4. For each step in `state.removed`: archive its outcome (`snapshot_result` when finished, then
-   `removed_at`), then delete its row (its `step_tags` and `plan_edges` go by cascade).
+   `removed_at`), then delete its row. Its `step_tags` and `plan_edges` go by cascade and its
+   consumer `plan_refs` (`consumer_kind = 'step'`, `consumer_id` the step) by the
+   `steps_refs_delete` trigger, in this transaction (round 2).
 5. Apply `rows.changes` (a set, §5.1): `header.put` updates `root_order`; deletes remove input
-   rows (with their values) and output rows; puts insert or update `(position, declaration)`.
-   A put that moves a row first moves it above the collection's current maximum, so no two rows
-   ever share a position mid-transaction. A newly inserted step row (`state.added`) is
-   `pending` with `generation` the new revision.
+   rows (with their values) and output rows (their `plan_refs` by trigger); puts insert or
+   update `(position, declaration)`, and a step put sets `paused`, `run`, `priority` and `needs`
+   with the expressions their `CHECK`s state (§2.2). A put that moves a row first moves it above
+   the collection's current maximum, so no two rows ever share a position mid-transaction. A
+   newly inserted step row (`state.added`) is `pending` with `generation` the new revision.
 6. Write the index rows: for each `rows.step_index` entry set `steps.unit` and replace the
    step's `step_tags` and its consumer `plan_refs`; for each `rows.output_refs` entry replace
-   that output's `plan_refs` (an `output.delete` deletes them); for each `rows.edges` entry
-   replace that target's incoming `plan_edges`.
+   that output's `plan_refs`; for each `rows.edges` entry replace that target's incoming
+   `plan_edges`.
 7. Apply `state.transitions` (status, skip reasons, error; a finished one snapshots its
    result) with a `step.status` record each, as `write_status_changes` does today.
 8. Append the `plan.edit` record (payload version 2, §5.2) and insert the `plan_edits` row with
@@ -348,12 +382,18 @@ preview here and never reaches the writer.
    when step 4 or 7 wrote anything).
 
 Steps 4 to 9 commit together or not at all. The triggers move `state_epoch` as a side effect.
+After `Committed`, the coordinator installs `compiled` in its plan cache (§8.1); after `Stale`,
+a conflict or any error it drops it.
 
-**Re-preparation.** A stale commit is prepared again from a new snapshot, at most
-`EDIT_TRIES` (3) times. **Decision:** after that the coordinator prepares in the writer, from
-the writer's own connection: the incremental preparation is bounded by the edit's affected set,
-so this cannot stall the writer the way a whole-plan compile did. A whole-plan compile is never
-run inside the writer.
+**Re-preparation** (round 2; replaces decision 11's writer fallback). A stale commit is
+prepared again from a new snapshot, outside the writer, at most `EDIT_TRIES` (3) preparations
+in all. When the third is stale too, the edit is refused `busy` with `retryable: true`
+(`PlanRowsError::EditContended`, message `the plan's state kept changing while this edit was
+prepared (3 tries); send it again`); nothing was written. **Decision:** preparation never runs
+in the writer, incremental or not: an affected set can be the whole plan (a high-fanout input,
+staleness down a long chain, every ready competitor of a resource), so "incremental" is no bound
+on writer time. A caller retries the edit as it would any `busy`; an explicit `rev` still means
+what it meant. Lane D's barrier test (§11) holds it.
 
 **Running steps.** A step running in the base may, in the candidate, differ only in `paused`
 and `tags`, and may not be removed (`steps.<id>: cannot remove or change a running step except
@@ -652,10 +692,11 @@ certificate.
 
 | Change | Re-checks |
 |---|---|
-| Added or changed step | Its id (format, reserved `owner`/`orchestrator`, the shared input/step namespace); its `run` visible to the project; required fn inputs bound and no unknown inputs (extra inputs and declared outputs only on open fns); literal defaults against their types; file-binding syntax; scatter; declared outputs; tags (format, one `unit:` tag, the singleton-unit collision rule); gate syntax and each gate's referent; priority; `needs` against the project's resources **only if `needs` changed**. Every source it reads must exist and fit. |
-| Changed input declaration | The input's current value against the new type; every binding, boolean gate and plan output that reads the input (`plan_refs_source`). |
+| Added or changed step | Its id (format, reserved `owner`/`orchestrator`, the shared namespace against every plan input of the candidate); its `run` visible to the project; required fn inputs bound and no unknown inputs (extra inputs and declared outputs only on open fns); literal defaults against their types; file-binding syntax; scatter; declared outputs; tags (format, one `unit:` tag, the singleton-unit collision rule); gate syntax and each gate's referent; priority; `needs` against the project's resources **only if `needs` changed**. Every source it reads must exist and fit. |
+| Added or changed plan input (`input.put`) (round 2) | Its name (format `^[a-z0-9][a-z0-9_-]*$`) and its declaration (a type string, or `{"type": …}` / `{"type": …, "doc": …}` with a valid type), at `inputs.<name>`; the shared namespace against **every** step of the candidate, untouched ones included, reported as today's whole-plan pass reports it, at the step: `steps.<id>: plan inputs and steps share one namespace`; the input's current runtime value, if it has one, against the new type, at `inputs.<name>` (as `validate_input_values`); and every reader of the input: each binding (nested paths and fan-in elements included), boolean gate and plan output that reads it (`plan_refs_source`, `source_kind = 'input'`), re-typed against the new declaration. |
+| Added or changed plan output (`output.put`) (round 2) | Its name format, at `outputs.<name>`; the binding's shape (`outputs.<name>: expected {"source": "<ref>"}`); and its source: the step or plan input it names exists in the candidate, the step has that output, and the path is valid for its type (`Plan::reference_type`: `outputs.<name>: unknown step <s>`, `… unknown plan input <i>`, `… step <s> (fn <f>) has no output <o>`, or the path's error). Plan outputs have no readers, so nothing else is re-checked. |
 | Changed step output type (a changed `run`, `outputs` or `scatter`) | Every reader of the step's outputs: bindings (including nested paths and fan-in elements), boolean gates and plan outputs. |
-| Removed step or input | Every surviving reference to it is refused (`steps.<id>.in.<x>: unknown step <s>`, …). |
+| Removed step or input | Every surviving reference to it, from steps and plan outputs, is refused (`steps.<id>.in.<x>: unknown step <s>`, `outputs.<name>: unknown plan input <i>`, …). A removed plan output has no readers. |
 | Changed tags, `after` or a binding that moves a step between units, or changes edges inside a unit, or adds or removes an `exit` tag | The old and new unit's membership, entry and exit steps; every `unit:u` gate on either unit (existence, "a unit cannot depend on its own exits"); their expanded edges. |
 | Any added edge | Cycles: remove superseded edges, add the batch's new edges, then search from each added edge's target for its source. The whole batch is checked together, so two edges harmless alone cannot form a cycle together. |
 | Recipe expansion (`unit.add`) | Params, substitution, id collisions with the candidate, suffix overrides (`after`, `inputs`), reserved tags, the new unit's entry steps, and the expanded steps' external references. |
@@ -667,6 +708,158 @@ Existing exception policies stay: a lowered resource capacity never refuses an e
 not change a step's `needs`, and a retired fn model string never refuses an edit that does not
 change that step. Error paths are those of today's whole-plan validation
 (`steps.notes.in.cwd: repo is int, which does not fit string: int is not string`).
+
+The matrix is checked differentially (lane C against lane H's reference compiler): for any base
+plan and operations, the incremental validator accepts exactly when today's whole-plan
+compilation of the candidate does, with the same errors. The review's two counterexamples to
+the first matrix are pinned, with three more of the new rows, as the differential fixture
+`validation.differential` (`crates/sluice-model/tests/plan_rows.rs` checks each `candidate`
+against today's compiler now; lane H's harness applies each case's `ops` to its `base` and
+compares the incremental result with them):
+
+```json fixture=validation.differential
+[
+  {
+    "case": "output_put_missing_source",
+    "base": {
+      "steps": {
+        "work": {
+          "run": "custom.open"
+        }
+      }
+    },
+    "ops": [
+      {
+        "op": "output.put",
+        "name": "notes",
+        "source": "review/final"
+      }
+    ],
+    "candidate": {
+      "outputs": {
+        "notes": {
+          "source": "review/final"
+        }
+      },
+      "steps": {
+        "work": {
+          "run": "custom.open"
+        }
+      }
+    },
+    "errors": [
+      "outputs.notes: unknown step review"
+    ]
+  },
+  {
+    "case": "input_put_collides_with_untouched_step",
+    "base": {
+      "steps": {
+        "repo": {
+          "run": "custom.open"
+        }
+      }
+    },
+    "ops": [
+      {
+        "op": "input.put",
+        "name": "repo",
+        "declaration": "string"
+      }
+    ],
+    "candidate": {
+      "inputs": {
+        "repo": "string"
+      },
+      "steps": {
+        "repo": {
+          "run": "custom.open"
+        }
+      }
+    },
+    "errors": [
+      "steps.repo: plan inputs and steps share one namespace"
+    ]
+  },
+  {
+    "case": "output_put_missing_input",
+    "base": {
+      "steps": {}
+    },
+    "ops": [
+      {
+        "op": "output.put",
+        "name": "notes",
+        "source": "brief"
+      }
+    ],
+    "candidate": {
+      "outputs": {
+        "notes": {
+          "source": "brief"
+        }
+      },
+      "steps": {}
+    },
+    "errors": [
+      "outputs.notes: unknown plan input brief"
+    ]
+  },
+  {
+    "case": "input_put_bad_name",
+    "base": {
+      "steps": {}
+    },
+    "ops": [
+      {
+        "op": "input.put",
+        "name": "Repo",
+        "declaration": "string"
+      }
+    ],
+    "candidate": {
+      "inputs": {
+        "Repo": "string"
+      },
+      "steps": {}
+    },
+    "errors": [
+      "inputs.Repo: ids match ^[a-z0-9][a-z0-9_-]*$"
+    ]
+  },
+  {
+    "case": "input_put_value_no_longer_fits",
+    "base": {
+      "inputs": {
+        "limit": "string"
+      },
+      "steps": {}
+    },
+    "values": {
+      "limit": "ten"
+    },
+    "ops": [
+      {
+        "op": "input.put",
+        "name": "limit",
+        "declaration": "int"
+      }
+    ],
+    "candidate": {
+      "inputs": {
+        "limit": "int"
+      },
+      "steps": {}
+    },
+    "errors": [
+      "inputs.limit: expected int, got \"ten\""
+    ]
+  }
+]
+```
+
+`values` are the plan inputs' current runtime values, checked against the candidate's
+declarations as `Plan::validate_input_values` does; `errors` are the `PathError`s in order.
 
 ### 6.2 Whole-plan passes that remain
 
@@ -683,7 +876,8 @@ counts it (§11).
 others. Its **affected set** is: every step the edit adds or changes; every step whose
 reconciled state (status, skip reasons, error, inputs hash, readiness) the edit changes; and,
 for each step whose `needs` or `priority` changed, the ready steps competing for the same
-resources. Within the affected set: `would_start` lists the pending, ready, executable steps
+resources. The affected set decides what the preview lists, not what preparation may read
+(§6.4). Within the affected set: `would_start` lists the pending, ready, executable steps
 (never `core.external`), `would_queue` those of them admission would queue on cached
 capacities, `would_skip` and `would_stale` the steps becoming skipped or stale, and `errors` the
 failures the reconciliation produces.
@@ -692,6 +886,29 @@ failures the reconciliation produces.
 after. It is allowed only with `dry_run: true`; otherwise `bad_request` (`preview_scope "all"
 needs dry_run: true`). The reply's `preview.scope` says which was used. A preview never runs a
 fn or a capacity callback.
+
+### 6.4 The preparation read set (round 2)
+
+Reconciling and validating the affected set needs state outside it: changing `b` to read `a/out`
+needs `a`'s status and output though `a` is unchanged, and a gate needs its referent's status.
+So preparation reads a **read set** (`plan_rows::PreparationReads`), separate from the affected
+set, in one read snapshot (`plans::read_scoped_state`, §8):
+
+| Read | What | Why |
+|---|---|---|
+| `steps` | Status, outputs, inputs hash, skip reasons, error, instances (scatter and fan-in) and result of: every step in the affected set; every **incoming source** of each (each step its bindings read, fan-in elements included, and each step its gates name or read a boolean from), unchanged ones included; the **exit steps** of every unit an affected step gates on with `unit:u`; and each admission competitor below. | Reference resolution (`gates::resolve`) and gate evaluation read the source's status and outputs; staleness compares inputs hashes; a unit gate reads its exits. |
+| `inputs` | Current values of every plan input an affected step or a changed output reads, and of every input the edit puts or removes. | Bindings and boolean gates read values; `input.put` re-checks the value (§6.1). |
+| `project_pause` | The project's pause. | A paused project starts nothing (`would_start`). |
+| `resources` | For each resource an affected step needs: its cached capacity and limit, and its `waiting` and `held` leases. | `would_queue`. |
+| `competitors` | For each such resource, the pending steps that need it (`steps_needs`, no declaration read) with their priority; their own incoming sources join `steps` so their readiness can be decided. | Admission order among ready steps. |
+
+Preparation reads in rounds inside the snapshot: it starts from the operations' targets (and a
+unit operation's members); each round adds the sources, input values, unit exits, resources and
+competitors of the steps the previous round added to the affected set; it ends when a round adds
+none. A step outside the read set is never consulted: `StateSnapshot::status`'s default of
+`pending` for a missing step must not stand in for an unread one (lane C asserts it in debug
+builds). The read set is bounded by the affected set and its one-hop neighbourhood, not by the
+plan; lane H counts `state_rows_read` (§11).
 
 ## 7. Tools
 
@@ -1153,13 +1370,20 @@ defines them, `steps` in position order.
 author?)` (`plan_rows::PlanEditRequest`) applies `ops` as one edit.
 
 - `ops` is a closed union (`plan_rows::PlanOp`, below); an unknown `op` or field is
-  `bad_request`. An empty `ops` is `bad_request` (`ops: name at least one operation`).
+  `bad_request`. An empty `ops` in a `plan_edit` request is `bad_request` (`ops: name at
+  least one operation`). That refusal, and the ones for empty lists below, apply to what a
+  caller **supplies** (`PlanEditRequest::check_supplied`, `UnitUpdate::check_supplied`), never
+  to what a typed tool lowers to (§7.8).
 - Operations apply **in order to one candidate**: each sees what the ones before it did (a
   `step.update` can follow the `step.add` of the same step; an `edge.add` on `unit:u` can follow
   the `unit.add` that made `u`). The candidate is then validated once (§6.1) and committed whole
   or not at all, so a source and its readers can be removed together.
-- A malformed operation (an empty `changes`, `steps` or `after`) is `bad_request` naming the
-  first one (`ops[2].after: name at least one entry`).
+- A malformed supplied operation is `bad_request` naming the first one: an empty
+  `step.update` `changes` (`ops[0].changes: name at least one field`), `step.remove` `steps`
+  (`ops[1].steps: name at least one step`), `edge.add` or `edge.remove` `after` (`ops[2].after:
+  name at least one entry`), `unit.update` `changes` (`ops[3].changes: name at least one
+  step`) or one member's changes in it (`ops[3].changes.<step>: name at least one field`).
+  `order.set` of an empty collection with `ids: []` is valid (it changes nothing).
 - A refusal of an operation itself (a missing target, an existing id, a non-member) is
   collected for every operation, and all are returned in one `invalid` with paths
   `ops[<i>].<field>: …`; validation of the candidate runs only when no operation was refused,
@@ -1170,7 +1394,9 @@ author?)` (`plan_rows::PlanEditRequest`) applies `ops` as one edit.
 - The reply's `steps` are the ids the edit's `step.add` and `unit.add` operations added, in
   operation order (a unit's in recipe order); absent when none (**Decision**).
 - An edit whose net effect changes nothing commits nothing: the reply has the current `rev` and
-  empty `preview.changes`.
+  empty `preview.changes`, and no record or history row is written.
+- `check_supplied` also refuses `preview_scope: "all"` without `dry_run` and `order.set`
+  without `rev`, in that order after the empty checks; the first refusal is returned.
 
 | `op` | Fields | Effect | Refused (path `ops[i]…`) |
 |---|---|---|---|
@@ -1553,17 +1779,28 @@ arguments, gains `preview_scope` (in `EditOptions`), and keeps its own error kin
 refusals (`not_found` for an unknown step, `bad_request` for an existing one), which the
 pipeline reports per operation and the tool maps back.
 
+**Typed no-ops (round 2).** Lowering may produce an **empty normalized list**: an edge already
+there, tags or pauses already as asked, a prune whose closure is empty. The pipeline then
+prepares nothing, commits nothing and keeps the revision: the reply is the edit result at the
+current `rev` with empty `preview.changes`, the tool's `steps` report (`step_pause`'s selection,
+`unit_tag`'s unit, `plan_prune`'s `[]` with its `units` and `kept`), and no record or history
+row. Lowering never constructs an operation with an empty list or empty changes (no
+`step.remove {steps: []}`, no `step.update` with no field, no `edge.add` with no entry), so the
+supplied-shape refusals of §7.6 never fire on a typed tool. One typed tool keeps its own
+refusal: `step_set_input` whose inputs change no selected step is `bad_request` (`step_set_input
+changes nothing`), as today.
+
 | Tool | Operations |
 |---|---|
 | `step_add` | `step.add {step, spec}` with the tool's `start` |
 | `step_update` | `step.update {step, changes}` |
 | `step_remove` | `step.remove {steps: selection}` |
-| `step_pause` | one `step.update {paused}` per selected step whose pause changes (today's rules for the reason) |
-| `unit_tag` | one `step.update {tags}` per member whose tags change |
-| `edge_add`, `edge_remove` | `edge.add` / `edge.remove` |
+| `step_pause` | one `step.update {paused}` per selected step whose pause changes (today's rules for the reason); none when no pause changes |
+| `unit_tag` | one `step.update {tags}` per member whose tags change; none when none changes |
+| `edge_add`, `edge_remove` | `edge.add` / `edge.remove` with the entries not already there (for `edge_remove`: those there); none when that leaves no entry |
 | `unit_add` | `unit.add` with the tool's `start` |
-| `step_set_input` | one `step.update {in}` per selected, non-running step that takes every input; its report is kept (`InputEditResult`) |
-| `plan_prune` | `step.remove {steps: the closure}`, committed only while the store's age evidence holds; its report is kept (`PruneResult`) |
+| `step_set_input` | one `step.update {in}` per selected, non-running step that takes every input and whose bindings change; its report is kept (`InputEditResult`); no such step is its own `bad_request` |
+| `plan_prune` | `step.remove {steps: the closure}` when the closure is not empty, else nothing; committed only while the store's age evidence holds; its report is kept (`PruneResult`) |
 | `plan_set_input` | not a plan edit: a runtime value (moves `state_epoch`, never `rev`) |
 
 ```json fixture=plan_prune.reply
@@ -1717,7 +1954,7 @@ may edit its own project with the new tools), `edit::edit_label`, and `docs/rust
 |---|---|---|
 | `limit` 0 | `bad_request` | `limit must be 1 to 1000` |
 | empty `ops` | `bad_request` | `ops: name at least one operation` |
-| an empty `changes`, `steps` or `after` | `bad_request` | `<path>: name at least one field`, `… step`, `… entry` |
+| a supplied empty `changes`, `steps` or `after` (§7.6) | `bad_request` | `<path>: name at least one field`, `… step`, `… entry` |
 | `preview_scope: "all"` without `dry_run` | `bad_request` | `preview_scope "all" needs dry_run: true` |
 | `order.set` without `rev` | `bad_request` | `order.set needs rev: the revision whose order it lists` |
 | unreadable cursor | `bad_request` | `cursor is not one plan_read returned` |
@@ -1726,7 +1963,9 @@ may edit its own project with the new tools), `edit::edit_label`, and `docs/rust
 | `step_get` of a missing step | `not_found` | `no step <id>` |
 | `unit_get` of a missing unit | `not_found` | `no unit <name>` |
 | explicit stale `rev` | `conflict` | `plan is at rev <n>`, with `current_rev` |
+| the third preparation stale too (§4) | `busy`, `retryable: true` | `the plan's state kept changing while this edit was prepared (3 tries); send it again` |
 | refused operations or candidate | `invalid` | `invalid plan edit`, `errors` with `ops[i]…` or plan paths |
+| a schema-changing restore of a backup holding live work (§10.2) | `invalid` | `this backup holds live work (<a> attempts, <r> runs, <l> leases, <c> calls); a schema-changing restore needs a backup taken with nothing live` |
 
 ```json fixture=errors
 [
@@ -1749,6 +1988,20 @@ may edit its own project with the new tools), `edit::edit_label`, and `docs/rust
     "error": {
       "error": "bad_request",
       "message": "ops[0].changes: name at least one field"
+    }
+  },
+  {
+    "case": "no_steps",
+    "error": {
+      "error": "bad_request",
+      "message": "ops[1].steps: name at least one step"
+    }
+  },
+  {
+    "case": "no_entries",
+    "error": {
+      "error": "bad_request",
+      "message": "ops[2].after: name at least one entry"
     }
   },
   {
@@ -1809,6 +2062,14 @@ may edit its own project with the new tools), `edit::edit_label`, and `docs/rust
     }
   },
   {
+    "case": "edit_contended",
+    "error": {
+      "error": "busy",
+      "message": "the plan's state kept changing while this edit was prepared (3 tries); send it again",
+      "retryable": true
+    }
+  },
+  {
     "case": "invalid_ops",
     "error": {
       "error": "invalid",
@@ -1817,6 +2078,14 @@ may edit its own project with the new tools), `edit::edit_label`, and `docs/rust
         "ops[1].step: no step relase",
         "steps.review.in.spec: work/final is int, which does not fit string: int is not string"
       ]
+    }
+  },
+  {
+    "case": "live_work_in_backup",
+    "error": {
+      "error": "invalid",
+      "message": "this backup holds live work (2 attempts, 2 runs, 1 leases, 0 calls); a schema-changing restore needs a backup taken with nothing live",
+      "errors": []
     }
   }
 ]
@@ -1838,14 +2107,16 @@ pub fn read_references(sql: &Connection, project: ProjectId,
                        selection: &ReferenceSelection) -> Result<ReferenceRows>;
 pub fn read_graph(sql: &Connection, project: ProjectId, selection: &RowSelection)
     -> Result<GraphRows>;
+pub fn read_scoped_state(sql: &Connection, project: ProjectId, reads: &PreparationReads)
+    -> Result<ScopedState>;                                   // §6.4 (round 2)
 pub fn export_plan(sql: &Connection, project: ProjectId) -> Result<ExportedPlan>;
 pub fn commit_plan_edit(tx: &mut WriteTransaction<'_>, project: ProjectId,
-                        edit: PreparedPlanEdit, prune: Option<&PruneEligibility>)
-    -> Result<CommitOutcome>;   // Committed(EditResult) | Stale
+                        commit: &PlanEditCommit, prune: Option<&PruneEligibility>)
+    -> Result<CommitOutcome>;   // Committed(Revision) | Stale
 pub fn history(sql: &Connection, project: ProjectId, since_rev: Option<Revision>,
                after_seq: Option<RecordSeq>, limit: u32)
     -> Result<(Vec<HistoryRecord>, Option<RecordSeq>)>;   // (page, next_after_seq)
-pub enum CommitOutcome { Committed(EditResult), Stale }
+pub enum CommitOutcome { Committed(Revision), Stale }
 
 // sluice-model (lane C)
 pub fn compile_rows(rows: &PlanRows, signatures: &impl SignatureProvider)
@@ -1853,9 +2124,10 @@ pub fn compile_rows(rows: &PlanRows, signatures: &impl SignatureProvider)
 pub fn step_index(step: &StepId, declaration: &JsonMap, is_step: &dyn Fn(&str) -> bool)
     -> StepIndexRows;
 pub fn output_references(name: &str, binding: &JsonMap) -> Vec<ReferenceRow>;
+pub fn preparation_reads(base: &Plan, ops: &[PlanOp], round: &ScopedState)
+    -> PreparationReads;                                      // the next round's reads, §6.4
 pub fn prepare_plan_edit(base: &EditBase<'_, impl SignatureProvider>, ops: Vec<PlanOp>,
                          options: EditOptions3) -> Result<PreparedPlanEdit, PublicError>;
-impl Plan { pub fn apply(&self, rows: &RowDelta) -> Result<Plan, Vec<PathError>>; }
 
 // sluice-model, pure (lane B, beside the types)
 impl PlanRows {
@@ -1872,33 +2144,61 @@ Rules:
   `limit` reads one extra row to set `more`.
 - `read_graph` returns the selected steps (compact), every `plan_edges` row with a selected
   endpoint, and the other endpoints as `boundary`.
+- `read_scoped_state` reads exactly the read set (§6.4): the listed steps' state, the listed
+  inputs' values, the project's pause, the listed resources' capacities and live leases, and
+  each listed competitor resource's pending steps from `steps_needs`. It never reads a
+  declaration and never a step outside the list; it counts `state_rows_read` (§11).
 - `export_plan` and `read_plan_rows` are whole-plan reads (counted, §11).
 - `compile_rows` never goes through a document: it compiles from rows. **Decision:** the
   compiled type keeps the name `Plan` and its query methods (`inputs`, `outputs`, `steps`,
   `units`, `dependencies`, `topological_order`, `reference_type`) so readers port mechanically;
-  it loses `document`, `transport`, `patch` and `parse*`, and gains `apply`, which returns a new
-  snapshot sharing structure with `self` (O(change), not O(plan): a persistent map, never a
-  clone of an `IndexMap`).
+  it loses `document`, `transport`, `patch` and `parse*`. Its maps are persistent, so a
+  candidate built from a base shares structure with it (O(change), never a clone of an
+  `IndexMap`).
 - `step_index` and `output_references` are pure and manifest-free (§2.5); the store writes what
   they return, `verify` recomputes and compares.
-- `EditBase` is the certified compiled base, its tokens, the scoped runtime state the
-  operations need (statuses and values of the affected set), the recipe catalog, cached
-  capacities and resource limits; `EditOptions3` is `rev`, `dry_run`, `preview_scope`, `start`,
-  `reason`, `author` (lane C names them finally; the fields are pinned here).
+- `EditBase` is the certified compiled base (`Arc<Plan>` with the `catalog_generation` it was
+  compiled against), its tokens, the `ScopedState` of the read set (§6.4, all rounds), the
+  signature provider for the current catalog (it answers for every fn the project can see, so
+  a step the edit adds may use a fn the base never used), the recipe catalog, cached capacities
+  and resource limits; `EditOptions3` is `rev`, `dry_run`, `preview_scope`, `start`, `reason`,
+  `author` (lane C names them finally; the fields are pinned here).
 - `PlanRows::from_document` assigns positions by §10.6's rule relative to `base`; with no base,
   `0 … n-1`.
 
-The runtime (lane D) owns the plan cache (`(project) → (rev, catalog_generation, Arc<Plan>)`,
-built cold by `compile_rows`, moved forward by `Plan::apply` after a commit),
-`recipe_generation(home, project) -> RecipeGeneration`, and naming keyed by
-`(rev, recipe_generation)`.
+### 8.1 The compiled-plan handoff (round 2)
+
+`RowDelta` holds declarations and index rows, not compiled signatures, and a step the edit adds
+can use a fn the base plan never used, so the cache cannot be moved forward from the store's
+payload. **Decision:** preparation produces the compiled candidate itself.
+
+- `prepare_plan_edit` returns `PreparedPlanEdit { commit: PlanEditCommit, dry_run, preview,
+  steps, board_warnings, inputs, compiled: CertifiedPlan }`. `PlanEditCommit` is all the store gets:
+  `tokens`, `rev`, `author`, `reason`, `rows: RowDelta`, `state: StateDelta`, `prune`. The
+  store's input stays rows and state; it never sees a compiled plan.
+- `CertifiedPlan` is `{plan: Arc<Plan>, base_rev, catalog_generation}`: the candidate compiled
+  (incrementally, sharing structure with the base) against the signature provider of
+  `catalog_generation`, and validated by §6.1. It describes the plan at `base_rev + 1` when
+  `commit.rows.changes` is not empty, else it is the base itself.
+- The runtime's plan cache is `(project) → (rev, catalog_generation, Arc<Plan>)`, built cold by
+  `compile_rows`. After `CommitOutcome::Committed(rev)` the coordinator installs `compiled.plan`
+  as `(rev, compiled.catalog_generation)` **only if** the cache still holds `(base_rev, the same
+  catalog_generation)` for the project; otherwise (another edit was installed first, or the
+  catalog was republished) it drops the candidate and the next reader compiles cold. After
+  `Stale`, a `conflict`, any error, or a dry run, the candidate is dropped.
+- A catalog publication that changes a signature some step uses invalidates the entry (§6.2).
+
+The runtime (lane D) owns the plan cache, `recipe_generation(home, project) ->
+RecipeGeneration`, and naming keyed by `(rev, recipe_generation)`.
 
 ## 9. Readers to migrate
 
-Every reader of `plans.doc`, of `plan_edits.ops`, of a whole compiled document or of
-`FrozenPlan`, at `5cb6bb7`, and the lane that moves it. A lane may not leave one behind: lane H
-greps for `plans.doc`, `doc FROM plans`, `.document()`, `transport()`, `PatchOperation`,
-`plan_patch` and `FrozenPlan` outside the converter and fixtures.
+Every reader of `plans.doc`, of `plan_edits.ops`, of a whole compiled document, of the document
+parser or of `FrozenPlan`, at `775d57c` (the shipped dashboard redesign; round 2 re-checked the
+dashboard rows against it), and the lane that moves it. A lane may not leave one behind: lane H
+greps for `plans.doc`, `doc FROM plans`, `.document()`, `transport()`, `Plan::parse`,
+`PatchOperation`, `plan_patch` and `FrozenPlan` outside the converter, lane H's reference crate
+and fixtures.
 
 | File: functions | Reads | Replacement | Lane |
 |---|---|---|---|
@@ -1910,7 +2210,7 @@ greps for `plans.doc`, `doc FROM plans`, `.document()`, `transport()`, `PatchOpe
 | `sluice-store/src/schema.rs`, `migrations/`, `records.rs`, `backup.rs` (`restore_into_fresh_home`), `query.rs` (view docs) | schema 1 | §2, §10 | B |
 | `sluice-store/src/resources.rs`: `admit_order` | `plans.doc` equality | `plans.rev` equality | D |
 | `sluice-store/src/attempts.rs`: `reserve` (`wire_step`), `CompletionContext`, `complete_frozen` | compiled document | the step's stored declaration; completion from the attempt's frozen contract and identity | D |
-| `sluice-runtime/src/coordinator.rs`: `context`, `PlanCache`, `CachedPlan`, `OutsideEdit`, `commit_outside`, `board_drops`, `callback_mutation`, `mutate_project`, the completion path (`FrozenPlan` decode), `EditLog` (`preview.ops.len()`) | `plans.doc`, document, snapshot | cold `compile_rows`, `Plan::apply`, tokens, no snapshot, `changes.len()` | D |
+| `sluice-runtime/src/coordinator.rs`: `context`, `PlanCache`, `CachedPlan`, `OutsideEdit`, `commit_outside`, `board_drops`, `callback_mutation`, `mutate_project`, the completion path (`FrozenPlan` decode), `EditLog` (`preview.ops.len()`) | `plans.doc`, document, snapshot | cold `compile_rows`, the certified candidate installed after commit (§8.1), tokens, the read set (§6.4), no snapshot, `changes.len()` | D |
 | `coordinator.rs`: `PlanGet` dispatch | compiles | `export_plan`, no compile | E |
 | `coordinator.rs`: `served_while_adopting`, `edit_project`, `project_mutation`, `callback` allowlist | command lists | §7.10 | E |
 | `sluice-runtime/src/execution.rs`: `FrozenPlan`, `FrozenSignature`, `FrozenDeclaration`; `scheduler.rs` admission provenance | stores the document in attempts | deleted; provenance keeps `capability`, `execution`, `files`; `rev` as scalar `admitted_rev` | D |
@@ -1926,9 +2226,10 @@ greps for `plans.doc`, `doc FROM plans`, `.document()`, `transport()`, `PatchOpe
 | `sluice-web/src/views/panel.rs`: `load`, `gather` | `plans.doc` (`gather`'s `plan_edits.seq` check stays) | rows of the steps, tags and units the board program names | F |
 | `sluice-web/src/settings.rs`: `SettingsState::snapshot` | `plans.doc` | resource-needing steps' compact rows and `needs` | F |
 | `sluice-web/src/views/log.rs`: `load` (the retire fold's `ops.len()`), `summary` | `Event::PlanEdit.ops` | `changes` (the fold counts `step.delete`) | F |
-| `sluice-web/src/views/step.rs`: `load_detail` ("who paused it") | `plan.edit` payloads searched for the pointer `"/steps/<id>/paused"` | the latest `plan_edits` row whose `changes` hold a `step.put` of the step with a `paused` declaration (`json_each` over `changes`) | F |
+| `sluice-web/src/views/step.rs`: `load_detail` ("who paused it") | `plan.edit` payloads searched for the pointer `"/steps/<id>/paused"` | the latest actual pause transition in the step's current incarnation (§9.1) | F |
+| `sluice-web/src/views/gallery.rs`: `step_band_part` (added by the redesign) | `Plan::parse_json` of an inline document | `compile_rows` of hand-built `PlanRows` (or lane C's test constructor) | F |
 | `sluice-web/src/views.rs` (`plans: PlanCache`), `examples/dashboard_fixture/` | compiled cache; `initialize_plan`, `DELETE FROM plans` | rows; fixtures build through `project_create` and edits | F |
-| `sluice-model/src/plan.rs`: `Plan.document`, `PlanDocument::compile`, `Plan::parse*`, `patch`, `ancestor_orders`, `restore_order`, `PlanPatchData`, `prepare_patch`, `apply_edit` | document | `compile_rows`, `Plan::apply`; the RFC 6902 replay moves into the converter only | C (B for the converter's copy) |
+| `sluice-model/src/plan.rs`: `Plan.document`, `PlanDocument::compile`, `Plan::parse*`, `patch`, `ancestor_orders`, `restore_order`, `PlanPatchData`, `prepare_patch`, `apply_edit` | document | `compile_rows`, the candidate of §8.1; the RFC 6902 replay moves into the converter only, and the whole compiler into lane H's test-only reference crate first (§12) | C (B for the converter's copy, H for the reference) |
 | `sluice-model/src/edit.rs`: `PlanEdit`, `PreparedEdit`, `prepare_edit`, `EditSnapshot` | document | `prepare_plan_edit`, `PreparedPlanEdit` | C |
 | `sluice-model/src/recipe.rs`: `Recipe::expand` (`document` for collisions and staging) | document | the candidate's ids and an incremental compile of the expanded unit | C |
 | `sluice-model/src/gates.rs`: `simulate_edit` | both whole plans | impact simulation; the whole one only for `preview_scope: "all"` | C |
@@ -1941,10 +2242,33 @@ Tests that build plans through `initialize_plan`, `DELETE FROM plans` or `plan_p
 (`sluice-store/tests/{commands,completion,results,lifetimes,review_p2,leases,messages,records,query}.rs`,
 `sluice-runtime/tests/{coordinator,next,verify,python_helper,edit_replies,retire,adopt_fast,dispatch_ext,scheduler,plan_scale,agent_models}.rs`,
 `sluice/tests/{compose,me,cli,release,g1a,install,tool_descriptions}.rs` and
-`acceptance/{fn_launched,engines}.rs`, `sluice-web/tests/{page_load,project_board,mcp}.rs`,
-`board_fixture/`, `sluice-model/tests/review_regressions.rs`) move with the lane that owns the
+`acceptance/{fn_launched,engines}.rs`, `sluice-web/tests/{page_load,project_board,step,mcp}.rs`,
+`board_fixture/`, `neutral/`, `sluice-model/tests/{review_regressions,plan_semantics,units_order}.rs`)
+move with the lane that owns the
 code they exercise; each is ported to the behaviour it meant, never by rewriting SQL strings
 mechanically.
+
+### 9.1 Who paused a step (round 2)
+
+Every `step.put` carries the whole declaration, so a later tag or doc edit of a paused step
+also holds `paused`; "the latest put with a `paused` key" would credit that edit. The step page
+attributes the pause to the latest **actual transition**: walking the project's `plan_edits`
+newest first and, within each row, the changes for this step (`json_each` over `changes`,
+`op = 'step.put' AND step = <id>`, or `op = 'step.delete' AND step = <id>`):
+
+1. A `step.delete` of the step ends the walk: what came before belongs to an earlier
+   incarnation of the id and is never credited.
+2. Compare each `step.put`'s `paused` (absent reads as not paused) with the `paused` of the
+   step's next older put in the same incarnation (none, when the walk reaches a delete or rev 1:
+   the step was added, and adding it paused is a transition).
+3. The first put, newest first, whose `paused` differs (paused from not, not from paused, or a
+   reason changed to another reason or to `true`) is the edit credited: its `author` and `at`.
+
+The step's current declaration must be paused for the line to show at all (today's `hold`).
+The walk stops at the first transition, so a step paused long ago and edited often reads back
+through its own puts only; lane F tests a pause, then a tag edit, then a doc edit (the pause's
+author stays), a reason change (the new author), and a remove and re-add (only the new
+incarnation counts).
 
 ## 10. Migration contract
 
@@ -1952,63 +2276,210 @@ mechanically.
 
 The cutover never waits forever: it has a deadline (owner ruling). The deploy tooling (lane G)
 runs it as `scripts/deploy --schema-cutover --deadline <RFC 3339 time or +<n>m>
-[--cancel-grace <seconds, default 300>] [--dry-run] [REF]`.
+[--cancel-grace <seconds, default 300>] [--settle-timeout <seconds, default 300>] [--dry-run]
+[REF]`.
 
-1. **Rehearse** (before the notice): build and gate the candidate; on a private copy of the
-   home (SQLite backup API, fn and recipe trees, never a `.env`, no route to the user's service
-   manager) run the candidate's `sluice home migrate`, then `scripts/compat-check
-   --incompatible` (§10.8). A failure stops here; nothing live changed.
+1. **Rehearse** (before the notice): build and gate the candidate, then run the rehearsal
+   helper (§10.10) on a private copy of the home. On the copy, the **old** release, with a test
+   adoption host that cannot reach production services, plays steps 3 to 7 (the drain, the
+   cancels, the lost-process settlement); only once the copy has zero blockers does the
+   candidate convert it and `scripts/compat-check --incompatible --copy` run against it. A
+   failure stops here; nothing live changed.
 2. **Notice.** The orchestrator tells every Claude session using sluice the cutover deadline.
    The tooling prints the text to send: `sluice cutover to schema 3 at <deadline>: new work is
-   refused from now; runs still live at <deadline> are cancelled ("<reason>") — retry them
-   after the cutover.`
+   refused from now; runs still live at <deadline> get a cancel request ("<reason>") — check
+   how each ended in the cutover report and retry it after the cutover.`
 3. **Drain**, from the notice: `sluice drain --author cutover` under the old release. It pauses
    every project not paused, records them, and refuses new plan work and user calls (SPEC §2.6).
 4. **Wait** until `drain` status has no blockers or the deadline comes, whichever is first.
-5. **Fence** (`install fence "schema-3 cutover"`) at that moment. Lane G confirms that the old
-   release accepts `step_cancel` while fenced; if it does not, step 6's cancels go first and the
-   fence follows them.
-6. **Deadline stop.** For each step run still live: `step_cancel` (old release) with author
-   `cutover` and reason `R` = `schema-3 cutover at <deadline>: stopped at the deadline; retry it
-   after the cutover`. This is the existing cancel, so it writes the existing records: a
-   `step.cancel {step, author: "cutover", reason: R}` now, and when the run ends a `step.status
-   {from: "running", to: "failed", error: {"error": "cancelled", "message": "cancel
-   requested"}}`; the dashboard shows the step cancelled and the orchestrator retries it after
-   the cutover. Wait up to `--cancel-grace` for those runs to end. Then stop the transient unit
-   of every run still live, step runs and direct calls alike (there is no call cancel): a step
-   run's attempt is already marked cancel-requested, so its completion still records
-   `cancelled`; a call's records `failed` with `process_lost`. The old coordinator (restarted
-   with `--maintenance` if needed) observes and records those ends. Re-read the blockers until
-   none remain; if any remain after a bounded wait, stop fenced and report. No new record kind.
-7. **Stop** the coordinator, serve and loop units and verify that no process of the home is
+5. **Fence**, then cancel (round 2: the review settled the order; the cancel-first fallback is
+   gone). `install fence "schema-3 cutover"` at that moment, before any cancel. The fence
+   refuses a non-maintenance coordinator start and every new payload launch
+   (`Installation::admission_guard`, `payload_guard`), while the running old coordinator keeps
+   serving commands: `step_cancel` is not among the commands the drain refuses
+   (`drain::check_command`) and commits in an ordinary writer transaction. If the old
+   coordinator is not running, the tooling starts it with `--maintenance` first.
+6. **Request the cancels and verify them.** From a read-only snapshot, list the live step
+   attempts (`phase <> 'terminal'`, a `step_id`) and group them by distinct (project, step).
+   For each, **one** `step_cancel` (old release) with author `cutover` and reason `R` =
+   `schema-3 cutover at <deadline>: stopped at the deadline; retry it after the cutover`. It
+   writes the existing records (`step.cancel {step, author: "cutover", reason: R}`) and sets
+   `cancel_requested` on the step's nonterminal attempts. Then re-read and **verify the
+   intent**: every attempt of each cancelled step that is still nonterminal has
+   `cancel_requested = 1`.
+   - **A refused cancel stops the cutover still fenced.** The old dispatch compiles the whole
+     plan against the current catalog before it cancels (`coordinator::context`), so a missing
+     or changed fn refuses it (`invalid`, `invalid stored plan`) before any intent is stored;
+     `step_cancel` also refuses a step that is no longer running (`step <id> must be running or
+     pending external work`). Before counting a refusal, the tooling re-reads: a step whose
+     attempts all became terminal meanwhile is not one. On a refusal, or an attempt left
+     without intent, nothing is stopped: the drain and the fence stay, and the report's
+     `refused` (`plan_rows::CancelRefusal`, fixture `cutover.refused`) names each affected
+     project, step, run and attempt with the refusal's kind and message. The operator removes
+     the cause (restores the fn, or ends the step by hand) and runs the cutover again, or
+     unfences and releases. **Decision:** no predecessor release removes the cancel's compile
+     dependency; a refusal needs catalog drift on a drained home, and stopping fenced is safe.
+   - A unit is stopped only for an attempt whose cancel intent was verified, or for a direct
+     call (a call has no cancel).
+7. **Settle, then the bounded zero-blocker check.** Wait up to `--cancel-grace` for the
+   cancelled runs to end. Then stop the transient unit of every run still live (step runs with
+   verified intent, and direct calls); the old coordinator records each end through its
+   existing completion and adoption paths. Then re-read the drain blockers (attempts not
+   terminal, runs not finished, leases waiting or held, calls running) until none remain, for at
+   most `--settle-timeout`; if any remain, stop fenced and report them. A cancel
+   acknowledgement never proves the bookkeeping finished: only zero blockers lets the cutover
+   stop services or convert. No new record kind.
+8. **Stop** the coordinator, serve and loop units and verify that no process of the home is
    left (guardians, their children, database readers): by unit and cgroup, never by `pgrep -f`.
-8. **Back up** the database (backup API) to `<install>/backups/pre-schema3-<timestamp>.db`.
-9. **Migrate**: the candidate's `sluice home migrate` (§10.2) under the fence, holding the
-   home's writer lock.
-10. **Select and start** the candidate (`coordinator --maintenance`, serve, loop) and verify:
-    integrity, `plan_get` of every project equals the backup's `plans.doc` (§10.5), `plan_history`
-    reaches rev 1, the dashboard answers.
-11. **Unfence, release.** `install unfence`, then `release` with author `cutover`, which
+9. **Back up** the database (backup API) to `<install>/backups/pre-schema3-<timestamp>.db`.
+10. **Migrate**: the candidate's `sluice home migrate` (§10.2) under the fence, holding the
+    home's writer lock. Its preconditions (§10.3) are checked again inside its transaction.
+11. **Select and start** the candidate (`coordinator --maintenance`, serve, loop) and verify:
+    integrity, `plan_get` of every project equals the backup's `plans.doc` (§10.5),
+    `plan_history` reaches rev 1, the dashboard answers.
+12. **Unfence, release.** `install unfence`, then `release` with author `cutover`, which
     unpauses exactly the drain's recorded projects.
-12. **Report** one line, `cutover <sha> · schema 3 · <n> projects · <m> revisions converted ·
-    stopped <k> runs`, then each stopped run as `stopped <project> <step or call> <run>
-    cancelled|process_lost`, appended to `<install>/deploy.log` and written whole to
-    `<install>/cutover-<timestamp>.json` so the orchestrators can retry them.
+13. **Report** one line, `cutover <sha> · schema 3 · <n> projects · <m> revisions converted ·
+    cancel requested for <k> runs · <c> calls stopped`, then one line per affected run,
+    `stopped <project> <step or call:<id>> <run> requested=<cancel|stop>
+    outcome=<succeeded|failed:<error kind>> advice=<none|retry|read-then-retry|call-again>`,
+    appended to `<install>/deploy.log`; the whole `plan_rows::CutoverReport` (fixture
+    `cutover.report`) is written to `<install>/cutover-<timestamp>.json` so the orchestrators
+    can retry.
 
-`--dry-run` runs step 1 on a copy and prints the notice text and what step 6 would stop now
-(each live run's project, step or call, run id, start time and pinned release); it changes
-nothing. Neither `--skip-compat` nor an earlier rehearsal skips steps 6 and 9's zero-blocker
-checks.
+**What a cancel request ends in** (round 2; replaces decision 26's promise that every stopped
+step ends `failed` with `cancelled`). The cutover records cancellation **intent**; it does not
+decide outcomes, and existing completion precedence holds (`attempts::complete_frozen`):
+
+- a run whose settle intent was recorded (`step_settle` with a submission) completes
+  `succeeded` with the settled outputs, cancel or not (`cancelled && settle.is_none()`);
+- a run that finishes by itself before its unit is stopped records its own result;
+- a cancelled run otherwise records `failed` with `cancelled` (`cancel requested`); a stopped
+  call records `failed` with `process_lost`;
+- a scatter step's status is decided over its instances, and its error is the first failed
+  instance's, which may be a failure from before the cancel.
+
+So the report lists each affected run's **actual terminal outcome** beside the request, read
+after step 7: the run's own completion (`outcome`) and its step's resulting status and error
+(`step_status`, `step_error`). Advice follows the outcome, never the request: a succeeded run
+(or a step that succeeded as a whole) → `none`; a step failed with `cancelled` → `retry`; a step
+failed with any other error (a scatter instance's earlier failure, a run's own failure, a
+step's `process_lost`) → `read-then-retry`, because the error is the step's own and may come
+back; a call → `call-again`. The report never restricts outcomes to `cancelled` or
+`process_lost`.
+
+```json fixture=cutover.report
+{
+  "sha": "4f1c2d3e",
+  "schema": 3,
+  "deadline": "2026-10-12T18:00:00Z",
+  "reason": "schema-3 cutover at 2026-10-12T18:00:00Z: stopped at the deadline; retry it after the cutover",
+  "projects": 6,
+  "revisions": 1874,
+  "stopped": [
+    {
+      "project": "lash",
+      "step": "normalize-work",
+      "run": "0199c3b0-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+      "requested": "cancel",
+      "outcome": {
+        "status": "failed",
+        "error": "cancelled"
+      },
+      "step_status": "failed",
+      "step_error": "cancelled",
+      "advice": "retry"
+    },
+    {
+      "project": "lash",
+      "step": "review-work",
+      "run": "0199c3b0-2b3c-7d4e-8f50-6b7c8d9e0f1a",
+      "requested": "cancel",
+      "outcome": {
+        "status": "succeeded"
+      },
+      "step_status": "succeeded",
+      "advice": "none"
+    },
+    {
+      "project": "lash",
+      "step": "tests-scatter",
+      "run": "0199c3b0-3c4d-7e5f-8061-7c8d9e0f1a2b",
+      "requested": "cancel",
+      "outcome": {
+        "status": "failed",
+        "error": "cancelled"
+      },
+      "step_status": "failed",
+      "step_error": "fn_failure",
+      "advice": "read-then-retry"
+    },
+    {
+      "project": null,
+      "call": "0199c3b0-4d5e-7f60-8172-8d9e0f1a2b3c",
+      "run": "0199c3b0-4d5e-7f60-8172-8d9e0f1a2b3d",
+      "requested": "stop",
+      "outcome": {
+        "status": "failed",
+        "error": "process_lost"
+      },
+      "advice": "call-again"
+    }
+  ],
+  "refused": []
+}
+```
+
+A cutover stopped by a refused cancel writes the same report with `stopped` empty and
+`refused` filled, and says `cutover stopped fenced: <k> cancels refused` on its one line:
+
+```json fixture=cutover.refused
+{
+  "project": "lash",
+  "step": "normalize-work",
+  "runs": [
+    "0199c3b0-1a2b-7c3d-8e4f-5a6b7c8d9e0f"
+  ],
+  "attempts": [
+    "0199c3b0-1a2b-7c3d-8e4f-5a6b7c8d9e10"
+  ],
+  "error": {
+    "error": "invalid",
+    "message": "invalid stored plan",
+    "errors": [
+      "steps.normalize-work.run: unknown fn agent.lane"
+    ]
+  }
+}
+```
+
+`--dry-run` runs step 1 and prints the notice and what steps 6 and 7 would do now (each live
+run's project, step or call, run id, start time, pinned release, and whether its step has
+settle intent); it changes nothing. Neither `--skip-compat` nor an earlier rehearsal skips step
+6's verification, step 7's zero-blocker check or the converter's own preconditions.
 
 ### 10.2 The converter
 
-`sluice_store::convert::convert_home(database, mode) -> Result<ConversionReport>` (lane B);
+`sluice_store::convert::convert_home(database) -> Result<ConversionReport>` (lane B), with one
+set of preconditions wherever it runs (round 2; replaces decision 22's `Restore` mode).
 `sluice home migrate [--dry-run] [--json]` (lane G) runs it on `SLUICE_HOME`'s database while
-holding `coordinator.lock`. `--dry-run` converts a backup-API copy in a scratch directory and
-prints the report without touching the home. `mode` is `Live` (the cutover; §10.3's blockers
-refuse) or `Restore` (`restore_into_fresh_home` converting its private destination: nothing runs
-there, so blockers are reported, not refused, and the restored nonterminal work is left for the
-new coordinator's adoption, isolated in that unselected home).
+holding `coordinator.lock`; `--dry-run` converts a backup-API copy in a scratch directory and
+prints the report without touching the home. `restore_into_fresh_home` runs it on its private
+destination when the backup is at schema 1 or 2.
+
+**A schema-changing restore refuses a backup holding live work.** A restore keeps every
+identity: run and attempt ids, and each run's recorded unit name and cgroup. Adoption in the
+restored home looks those up (`Coordinator::adopt_until` reads `runs.unit_name` and
+`runs.cgroup` of every nonterminal attempt; `OsAdoptionHost::reconcile` queries that unit in
+the same user service manager and can stop its cgroup), so the restored home's coordinator would
+reach, and could stop, the **original** home's live units: another directory is not isolation.
+So conversion's zero-blocker precondition (§10.3) holds for a restore too, and such a backup is
+refused before anything is written: `StoreError::LiveWorkInBackup`, public `invalid`, message
+`this backup holds live work (<a> attempts, <r> runs, <l> leases, <c> calls); a schema-changing
+restore needs a backup taken with nothing live`. Restoring one would need a separately specified
+offline recovery path that never contacts the original units and resolves the copied work before
+any adoption starts; it is not part of this cutover. A same-schema restore (a schema-3 backup
+into a schema-3 binary) converts nothing and is unchanged.
 
 - **Inputs:** the database file at schema 1 or 2. Nothing else: no fn manifest, recipe file or
   `.env` is read, because historical conversion never reinterprets old revisions with today's
@@ -2018,13 +2489,14 @@ new coordinator's adoption, isolated in that unselected home).
 - **Report** (JSON with `--json`): `{from_schema, projects: [{project_id, name, revisions,
   steps, inputs, outputs, records_rewritten, attempt_snapshots_removed}], warnings: [...]}`.
 
-### 10.3 Preconditions (Live mode, checked inside the transaction)
+### 10.3 Preconditions (every conversion, checked inside the transaction)
 
 - `home_meta`: format 1, schema 1 or 2, `user_version` equal, `application_id` sluice's, 23
   tables, integrity and foreign keys clean.
 - **Zero blockers:** no attempt with `phase <> 'terminal'`, no run with `finished_at IS NULL`,
   no lease `waiting` or `held`, no call `running`. Pending calls are not blockers (they have no
-  process and run after the release).
+  process and run after the release). A blocker is never deleted or rewritten to pass: only the
+  old release's own cancel, completion and adoption paths end live work (§10.1, §10.10).
 - Every per-project check of §10.4 passes. A blocker names the project, the check and the rev.
 
 ### 10.4 Per project (every `plans` row)
@@ -2071,22 +2543,130 @@ Whitespace in the stored text does not count. **Decision:** stricter than the st
 
 ### 10.6 Positions in replayed history
 
-Legacy documents order collections by object order. **Decision:** a revision's rows take
-positions by schema 3's own rules relative to the previous revision's rows: a key that stays
-keeps its position, a new key is appended at `max + 1`, a removed key leaves a gap, so a
-revision's changes name only what that revision changed. When a revision's order of surviving
-keys differs from the previous order (a `move`, or a section replaced whole), that collection is
-renumbered `0 … n-1` in the new order and every row whose position changed gets a put. The same
-holds for `root_order` (a change is a `header.put`). Rev 1 of a converted project is
-`[{"op": "header.put", "root_order": ["steps"]}]`. Final positions may therefore differ from
-schema 1's dense `steps.position`; only the order is preserved.
+Legacy documents order collections by object order, and legacy patching keeps a replacement
+subtree in the order it was supplied (`Plan::patch` restores only the maps above each touched
+path), so replacing `{"a": …}` with `{"b": …, "a": …}` puts a new key before a surviving one
+without moving any survivor. **Decision** (round 2; replaces decision 25's survivor-order
+test): for each collection (`inputs`, `outputs`, `steps`) at each revision, given the previous
+revision's rows and the replayed document's keys in order:
+
+1. **Assign tentatively** by schema 3's own rules: a key that stays keeps its position; each new
+   key, in document order, is appended at `max + 1` of the previous rows (0 when there were
+   none), then the next; a removed key leaves a gap.
+2. **Compare the complete key sequence** of the tentative rows, ordered by position, with the
+   document's key sequence.
+3. If they are equal, keep the tentative positions: the revision's changes are a put for each
+   new key and each key whose declaration changed, and a delete for each removed key.
+4. If they differ (a key inserted before or between survivors, a `move`, a section replaced
+   whole in another order), **renumber** the collection `0 … n-1` in the document's order: a
+   put for each new key, each changed key, and each key whose position differs from its
+   previous one; a delete for each removed key.
+
+`root_order` follows the same comparison: a revision whose present sections, in order, differ
+from the previous revision's has a `header.put`. Rev 1 of a converted project is `[{"op":
+"header.put", "root_order": ["steps"]}]`. Final positions may differ from schema 1's dense
+`steps.position`; only the order is preserved, and §10.4 step 3 checks it at every revision.
+
+The rule is pinned by `replay.positions`, which `tests/plan_rows.rs` runs through a reference
+implementation of steps 1 to 4 kept in that test; lane B's `PlanRows::from_document` must give
+the same `positions`, `puts` and `deletes` (keys only; a put for a changed declaration comes on
+top). Each case's `before` is the previous rows' positions, `keys` the replayed document's
+order:
+
+```json fixture=replay.positions
+[
+  {
+    "case": "append",
+    "before": {"a": 0, "b": 1},
+    "keys": ["a", "b", "c"],
+    "positions": {"a": 0, "b": 1, "c": 2},
+    "renumbered": false,
+    "puts": ["c"],
+    "deletes": []
+  },
+  {
+    "case": "remove_leaves_gap",
+    "before": {"a": 0, "b": 1, "c": 2},
+    "keys": ["a", "c"],
+    "positions": {"a": 0, "c": 2},
+    "renumbered": false,
+    "puts": [],
+    "deletes": ["b"]
+  },
+  {
+    "case": "append_after_gap",
+    "before": {"a": 0, "c": 2},
+    "keys": ["a", "c", "d"],
+    "positions": {"a": 0, "c": 2, "d": 3},
+    "renumbered": false,
+    "puts": ["d"],
+    "deletes": []
+  },
+  {
+    "case": "insert_before_survivor",
+    "before": {"a": 0},
+    "keys": ["b", "a"],
+    "positions": {"b": 0, "a": 1},
+    "renumbered": true,
+    "puts": ["b", "a"],
+    "deletes": []
+  },
+  {
+    "case": "insert_between_survivors",
+    "before": {"a": 0, "c": 1},
+    "keys": ["a", "b", "c"],
+    "positions": {"a": 0, "b": 1, "c": 2},
+    "renumbered": true,
+    "puts": ["b", "c"],
+    "deletes": []
+  },
+  {
+    "case": "insert_into_gap",
+    "before": {"a": 0, "c": 2},
+    "keys": ["a", "b", "c"],
+    "positions": {"a": 0, "b": 1, "c": 2},
+    "renumbered": true,
+    "puts": ["b"],
+    "deletes": []
+  },
+  {
+    "case": "move",
+    "before": {"a": 0, "b": 1, "c": 2},
+    "keys": ["c", "a", "b"],
+    "positions": {"c": 0, "a": 1, "b": 2},
+    "renumbered": true,
+    "puts": ["c", "a", "b"],
+    "deletes": []
+  },
+  {
+    "case": "replace_whole_section",
+    "before": {"a": 0, "b": 1},
+    "keys": ["c", "b"],
+    "positions": {"c": 0, "b": 1},
+    "renumbered": true,
+    "puts": ["c"],
+    "deletes": ["a"]
+  },
+  {
+    "case": "from_empty",
+    "before": {},
+    "keys": ["x", "y"],
+    "positions": {"x": 0, "y": 1},
+    "renumbered": false,
+    "puts": ["x", "y"],
+    "deletes": []
+  }
+]
+```
+
+`puts` are in position order and `deletes` in key order, as §5.1 lists changes.
 
 ### 10.7 After the cutover
 
 - Ordinary schema-3 startup refuses a schema-1 or schema-2 home (`MigrationRequired`). Offline
-  homes and old backups use the same converter; `restore_into_fresh_home` runs it in `Restore`
-  mode.
-- Before production resumes (step 11), a failed cutover recovers by restoring the step-8 backup
+  homes and old backups use the same converter, with the same preconditions; a restore of an
+  old backup holding live work is refused (§10.2).
+- Before production resumes (step 12), a failed cutover recovers by restoring the step-9 backup
   and the old release together. After it, selecting the old binary alone is invalid (it refuses
   schema 3): recover forward, or by a controlled restore that accounts for the changes since.
 
@@ -2094,13 +2674,16 @@ schema 1's dense `steps.position`; only the order is preserved.
 
 `scripts/compat-check` gains `--incompatible`, chosen automatically when the candidate's release
 manifest `schema` (a new integer field written by `build-release`) differs from the home's
-`schema_version`. In that mode it requires that no live run is pinned to any release (a pin is
-an error, not a skip), converts the copy with the candidate's `sluice home migrate`, starts the
+`schema_version`, and `--copy DIR`, which runs against a prepared private copy (the rehearsal
+helper's, §10.10) instead of taking its own. In incompatible mode it requires that no live run
+is pinned to any release in the database it checks (a pin is an error, not a skip), converts
+that copy with the candidate's `sluice home migrate` (unweakened preconditions), starts the
 candidate's coordinator on it and runs `log_read`, `status`, `plan_get` for every project,
 `plan_history` (first page), `plan_read` and `step_context` for one step; then it runs the
 selected (old) release's `status` against the converted copy, which must refuse with an
-unsupported-schema error and leave the copy's bytes unchanged. Ordinary compatible deploys keep
-today's mode.
+unsupported-schema error and leave the copy's bytes unchanged. Run on a copy of a home with
+live work, it fails on the pins by design: the rehearsal helper is what brings a copy to zero
+blockers first. Ordinary compatible deploys keep today's mode.
 
 ### 10.9 The AGENTS.md rule
 
@@ -2117,6 +2700,54 @@ AGENTS.md):
 with a shipping note that `scripts/ship` ships compatible changes only and a schema change goes
 out through `scripts/deploy --schema-cutover --deadline <time>`.
 
+### 10.10 The rehearsal helper (round 2)
+
+A copy of a home with live work holds exactly the attempts, runs and leases the drain counts as
+blockers, so converting it, or running `compat-check --incompatible` on it, fails before the
+deadline handling is ever exercised. The rehearsal therefore plays the deadline on the copy
+first, with the old release's own code, and converts only a copy that reached zero blockers.
+
+`scripts/cutover-rehearse --candidate <release dir> [--old <release dir>] [--deadline <time>]
+[--keep] [--json]` (lane G owns the script, its report and its place in `--schema-cutover` and
+`--dry-run`; lane H owns the harness and the test adoption host it builds):
+
+1. **Copy.** As `compat-check` copies today: the home's `sluice.db` by the SQLite backup API
+   (the live file opened read-only), `config.json`, the fn and recipe trees, never a `.env`,
+   into `/tmp/cr.*`. The copy is a scratch home: no installation selects it, nothing from it
+   is registered with the user service manager, and the helper runs as a plain child process.
+2. **Play the deadline with the old release.** The harness `cutover-rehearsal` (lane H) is a
+   small binary outside the workspace (`tools/cutover-rehearsal/`, its own `Cargo.toml`,
+   listed in the workspace's `exclude`), built against the **old** release's crates: the helper
+   checks out the old release's commit (from its manifest; `--old`, default the selected
+   release) into a temporary worktree and builds the harness with `path` dependencies on it.
+   It opens the old coordinator in process on the copy (`Coordinator::open(copy, catalog,
+   RehearsalHost)`, with the catalog the old coordinator builds for that home, so a cancel the
+   catalog would refuse is refused here too, and no scheduler loop) with H's `RehearsalHost`:
+   its `FnHost`, `ExecutionHost` and `AdoptionHost` never call `systemd-run` or `systemctl`,
+   never signal
+   a PID, never opens a cgroup or a socket outside the copy, and launches nothing: every
+   reconcile reports the guardian gone with its processes proven gone. The harness then runs
+   the cutover's steps 3 to 7 with the old code: `drain` (author `cutover`), `step_cancel`
+   once per (project, step) with live attempts and the same reason, the intent check, and one
+   adoption pass, which settles every nonterminal attempt through the old completion path
+   (cancelled when intent was stored, lost otherwise; calls `process_lost`) and releases their
+   leases. It re-reads the blockers: any left, or any refused cancel, fails the rehearsal and
+   reports them as the cutover would (`CancelRefusal`), which is the real cutover's step-6 risk
+   found early.
+3. **Convert, only at zero blockers.** The candidate's `sluice home migrate --json` on the copy,
+   with its unweakened preconditions, then `scripts/compat-check --incompatible --copy <copy>
+   --release <candidate>` (§10.8).
+4. **Report** what the play cancelled and how each run ended there (the same `CutoverReport`
+   shape, `stopped` from the copy), the conversion report and the compat table; exit non-zero
+   on any failure; remove the copy and the worktree unless `--keep`.
+
+Production preconditions are never weakened: the converter has no switch to skip blockers, the
+helper never deletes or rewrites a blocker row itself (only the old release's own cancel,
+completion and adoption code ends live work on the copy), and nothing in the helper can reach a
+production unit, cgroup, socket or the live database file. Lane H tests the host's isolation (a
+reconcile of a unit name that exists in the user manager touches nothing) and the helper end to
+end on a scratch home with a live rolling run.
+
 ## 11. Cost counters and test budgets
 
 Lanes B and C count, lane H reads. The counters are process-wide (the writer runs on its own
@@ -2130,6 +2761,9 @@ thread), reset and read by the test that measures:
 | `full_exports` | B | `export_plan` and `read_plan_rows` calls |
 | `full_compiles` | C | `compile_rows` calls |
 | `positions_renumbered` | B | rows whose position changed other than by their own put |
+| `state_rows_read` | B | step, input, lease and competitor rows `read_scoped_state` read (round 2) |
+| `preparations` | D | edit preparations started, by outcome (`committed`, `stale`, `contended`, `dry_run`) (round 2) |
+| `writer_preparations` | D | preparations run on the writer's thread: always 0 (round 2) |
 
 Release gates (lane H):
 
@@ -2139,10 +2773,23 @@ Release gates (lane H):
 - No ordinary edit on a warm cache calls `export_plan`, `read_plan_rows` or `compile_rows`
   (`full_exports = full_compiles = 0`).
 - Removal and prune renumber nothing (`positions_renumbered = 0`).
-- A compact `plan_read`, `step_get(compact)` and `unit_get(compact)` decode no declaration; lane
-  H also checks their query plans use the covering indexes (`EXPLAIN QUERY PLAN`: `USING
-  COVERING INDEX`).
-- A high-fanout edit (one input read by n steps) scales with n, not with the plan.
+- After every removal (`step.remove`, `unit.remove`, a removing `step_update` chain) and every
+  prune, rebuilding the indexes from the declarations (`step_index`, `output_references`, edge
+  derivation) equals the stored `steps.unit`, `step_tags`, `plan_refs` and `plan_edges`
+  exactly; in particular no `plan_refs` row names a removed consumer, and removing the source a
+  removed reader read is then accepted (round 2).
+- A compact `plan_read`, `step_get(compact)` and `unit_get(compact)`, and the competitor read
+  of `read_scoped_state`, decode no declaration; lane H also checks their query plans use the
+  covering indexes (`EXPLAIN QUERY PLAN`: `USING COVERING INDEX` on `steps_compact`,
+  `steps_unit_compact`, `steps_status_compact` and `steps_needs`).
+- A high-fanout edit (one input read by n steps) scales with n, not with the plan, and its
+  `state_rows_read` is bounded by the affected set and its sources (§6.4).
+- **Contention (round 2).** A barrier-driven test holds a high-fanout edit's preparation (one
+  input read by 2,000 steps) at a barrier three times, and between releases commits an
+  independent status write that moves `state_epoch`: the edit is refused `busy` with
+  `retryable: true` and `EditContended`'s message after its third stale preparation, nothing
+  is written, `writer_preparations` stays 0, and an independent small write issued while the
+  preparations wait commits within the independent-write budget below.
 - Cold compile and the cold recipe-matching cache are measured and reported separately, with no
   budget.
 - `plan_scale`'s concurrent-write test uses a preparation barrier, not a sleep.
@@ -2154,62 +2801,122 @@ small external boundary ≤ 200 ms; an independent small write during an edit's 
 
 ## 12. Lanes
 
-A **HARD** edge: the lane cannot integrate until the named lane has landed. A **SOFT** edge:
-coordinate, but work against the pinned interface. Every lane: works in its own worktree from
-this branch; gates with `scripts/check`; changes the SPEC sections it implements, removing their
-"(schema 3; lands with the plan-rows cutover)" marks only when the whole cutover lands (lane G);
-deletes what it supersedes (no shims, no dual paths); commits as the owner without AI
-attribution.
+**Round 2: B, C, D, E and F are one atomic integration group.** Their cutovers cannot land one
+by one: the coordinator's preparation uses the APIs C removes and B replaces
+(`coordinator.rs`'s edit path: `edit::prepare_edit` over an `EditSnapshot`, then
+`plans::edit_effect` with the compiled `plan.document()`), the log renders
+the `Event::PlanEdit.ops` field B removes (`views/log.rs`), and the dashboard compiles with the
+parser C removes (`views/board.rs`, `panel.rs`, `settings.rs`, `gallery.rs`). Making B wait on C
+only exposes a cycle (C's edit path needs B's store, D needs both, E and F need D). So:
+
+- **Each lane implements independently**, in its own worktree from this branch (`rw/pn-b` …
+  `rw/pn-f`), against the pinned interfaces of this document. A lane's branch need not build
+  the whole workspace: its gate is **scoped**: `cargo fmt --check`, Clippy with `-D warnings`
+  and `cargo test --locked` for the crates and test targets it owns (each lane lists them),
+  with the other lanes' consumers left as they are. Where a scoped test needs another lane's
+  piece, it uses a hand-built value of the pinned type (B writes hand-built `PlanEditCommit`s;
+  F reads hand-built rows), never a shim in production code.
+- **One integration branch**, `rw/pn-cutover`, combines the group's cutover commits (in the
+  order B, C, D, E, F, conflicts resolved there), then G's and H's. The workspace gate
+  `scripts/check` runs only there, and must pass there before anything lands; so do H's release
+  gates (§11) and G's rehearsal (§10.10) on a copy of the live home.
+- **Intermediate states are never deployed or landed.** No lane branch and no partial
+  combination is pushed to `main`, shipped or deployed; `scripts/ship` refuses an incompatible
+  ref anyway (lane G). The integration branch lands as one push and goes live only through
+  `scripts/deploy --schema-cutover` (§10.1).
+- **H solely owns the test-only reference**: today's compiler, patch semantics, edit
+  preparation and whole-plan simulation, moved verbatim into `crates/sluice-reference`
+  (`publish = false`, a dev-dependency only; never linked into a binary), and the differential
+  harness over it. C consumes it as a dev-dependency and never keeps its own copy. H delivers
+  the reference first, before C deletes anything.
+
+A **HARD** edge: the lane cannot finish (its done-when) until the named piece exists. A **SOFT**
+edge: coordinate, but work against the pinned interface. Every lane: works in its own worktree
+from this branch; changes the SPEC sections it implements, removing their "(schema 3; lands
+with the plan-rows cutover)" marks only on the integration branch (lane G does it once the whole
+cutover passes); deletes what it supersedes (no shims, no dual paths); commits as the owner
+without AI attribution.
+
+```
+A (contracts) ──┬──> H1 (reference crate + harness) ──> C ──┐
+                ├──> B ─────────────────────────────────────┤
+                ├──> D ─────────────────────────────────────┤
+                ├──> E ─────────────────────────────────────┼──> integration rw/pn-cutover
+                ├──> F ─────────────────────────────────────┤      (B+C+D+E+F, then G, H2)
+                ├──> G (tooling, rehearsal helper) ─────────┤      scripts/check, §11 gates,
+                └──> H2 (fixtures, gates, rehearsal host) ──┘      rehearsal on a live copy
+                                                                     │
+                                                       one landing ──┴──> deploy --schema-cutover
+```
+
+**Critical path:** A → H1 (the reference crate) → C (incremental model, differential tests
+green) → integration (B, C, D, E, F combined, `scripts/check`) → H2's gates and G's rehearsal on
+the integration branch → landing and the cutover. B, D, E, F, G and H2 run in parallel with H1
+and C; the longest of them that is not C usually sets the integration date.
 
 ### Lane B: storage and history
 
 - **Scope.** `migrations/0003.sql`; `schema.rs` (version 3, 27 tables, `MigrationRequired`,
-  `RECORD_PAYLOAD_VERSION` 2, no `ADDED_*`); `plans.rs` row reads and writes (§8),
-  `commit_plan_edit`, history paging; `projects.rs` (initializer, `last_retirement`, delete
-  order); `records.rs`; `events.rs` `Event::PlanEdit`; `backup.rs` restore conversion;
-  `query.rs` view docs; the converter `sluice-store/src/convert.rs` with the legacy RFC 6902
-  replay confined to it (`json-patch` leaves every other path); `PlanRows::{to_document,
-  from_document}` in `plan_rows.rs`; the store's cost counters.
-- **Edges.** HARD A. SOFT C (`step_index`, `output_references`, `PreparedPlanEdit`; until C
-  lands, B tests write rows built by hand). D and G depend on B.
+  `RECORD_PAYLOAD_VERSION` 2, no `ADDED_*`); `plans.rs` row reads and writes (§8, including
+  `read_scoped_state`), `commit_plan_edit` over `PlanEditCommit`, history paging; the
+  `CHECK`-held step columns and the `plan_refs` triggers (§2.2); `projects.rs` (initializer,
+  `last_retirement`, delete order); `records.rs`; `events.rs` `Event::PlanEdit`; `backup.rs`
+  restore conversion and its live-work refusal; `query.rs` view docs; the converter
+  `sluice-store/src/convert.rs` with the legacy RFC 6902 replay confined to it (`json-patch`
+  leaves every other path) and §10.6's positions; `PlanRows::{to_document, from_document}` in
+  `plan_rows.rs`; the store's cost counters.
+- **Scoped gate.** `sluice-store` and `sluice-model`'s `plan_rows` tests.
+- **Edges.** HARD A. SOFT C (`step_index`, `output_references`, `PlanEditCommit`; B tests write
+  rows and commits built by hand). Integration group.
 - **Done when.** A fresh home is schema 3 with §2.2's DDL; `commit_plan_edit` applies a
-  hand-built `PreparedPlanEdit` exactly as §4 says (no-op, stale, conflict, removal, order.set's
-  two-phase positions); history pages as §5.4; the converter converts a schema-1 and a schema-2
-  fixture home with gapped, malformed and well-formed histories (blockers named) and a copy of
-  the live home (read-only backup, deleted afterwards) with round-trip equality at every
-  revision; converted and fresh homes are schema-equivalent; `scripts/check` green.
+  hand-built `PlanEditCommit` exactly as §4 says (no-op, stale, conflict, removal with its
+  `plan_refs` gone, order.set's two-phase positions); a step-column write that disagrees with
+  its declaration is refused by its `CHECK`; history pages as §5.4; `from_document` passes
+  `replay.positions`; the converter converts a schema-1 and a schema-2 fixture home with
+  gapped, malformed and well-formed histories (blockers named) and a copy of the live home
+  (read-only backup, deleted afterwards) with round-trip equality at every revision; a restore
+  of a backup with a live attempt is refused with §10.2's message and writes nothing;
+  converted and fresh homes are schema-equivalent; the scoped gate green.
 
 ### Lane C: incremental model
 
-- **Scope.** `sluice-model`: `compile_rows`, the persistent compiled `Plan` and `Plan::apply`,
-  `step_index`, `output_references`, `prepare_plan_edit` and `PlanOp` application (§7.6),
-  incremental validation (§6.1), cycle checks on edge deltas, unit membership and exits deltas,
+- **Scope.** `sluice-model`: `compile_rows`, the persistent compiled `Plan`, the certified
+  candidate (`CertifiedPlan`, §8.1), `step_index`, `output_references`, `preparation_reads`
+  and `prepare_plan_edit` over the read set (§6.4), `PlanOp` application (§7.6) with
+  `check_supplied` and the typed no-op lowering (§7.8), incremental validation (§6.1, the input
+  and output rows included), cycle checks on edge deltas, unit membership and exits deltas,
   impact reconciliation and preview (§6.3), recipe expansion against the candidate; deletes
   `Plan.document`, `patch`, `PlanPatchData`, `prepare_patch`, `edit::PlanEdit`/`PreparedEdit`/
   `prepare_edit`, the whole-plan `simulate_edit` on ordinary edits (kept for `"all"`).
-- **Edges.** HARD A. Integrates with B (`PreparedPlanEdit` is its output, B's input) and D.
-- **Done when.** Differential property tests (generated plans and atomic op sequences)
-  agree with the old compiler kept as a test-only reference: acceptance, rejection paths, ordered
-  export after every accepted edit, nested paths, fan-in, scatter, open outputs, boolean gates,
-  unit membership and exits, singleton collisions, unit-gate cycles, batches that cycle only
-  together, distant readers of changed types, staleness restored when hashes match again,
-  running-step rules, no-ops, `start: false`, recipe overrides; `full_compiles` stays 0 on warm
-  edits; `scripts/check` green.
+- **Scoped gate.** `sluice-model`.
+- **Edges.** HARD A and H1 (the reference crate it tests against). Integration group.
+- **Done when.** Differential property tests (generated plans and atomic op sequences) agree
+  with H's reference: acceptance, rejection paths and messages (`validation.differential`
+  included), ordered export after every accepted edit, nested paths, fan-in, scatter, open
+  outputs, boolean gates, unit membership and exits, singleton collisions, unit-gate cycles,
+  batches that cycle only together, distant readers of changed types, input and output puts,
+  staleness restored when hashes match again, running-step rules, no-ops (typed and net),
+  `start: false`, recipe overrides; a step added with a fn the base never used compiles into
+  the candidate; preparation never consults a step outside its read set (debug assertion);
+  `full_compiles` stays 0 on warm edits; the scoped gate green.
 
 ### Lane D: runtime and completion
 
-- **Scope.** `coordinator.rs` (plan cache, tokens, preparation outside the writer with §4's
-  retry rule, edit dispatch for every edit tool), `scheduler.rs` and `attempts.rs` (no
-  `FrozenPlan`; completion from the attempt's frozen contract and identity; `admitted_rev`
-  scalar), `execution.rs`, `resources.rs::admit_order`, `watch.rs`, `verify.rs` (index rebuild
-  and compare), `naming.rs` (§8 keys), `dispatch_ext.rs` (`edit_extension`, input preview,
-  `step_context`), `me.rs`, the model's `naming::name_plan` over rows.
-- **Edges.** HARD A. Final integration HARD B and C. Can delete `FrozenPlan` and port readers
-  against the pinned APIs first.
-- **Done when.** Every edit tool runs through the one pipeline; completion succeeds with the
-  catalog broken and with no snapshot in the attempt; no reader in §9 owned by D reads a
-  document; `verify` reports a hand-corrupted index row; frozen completion after plan and
-  registry changes passes; `scripts/check` green.
+- **Scope.** `coordinator.rs` (plan cache and §8.1's install rule, tokens, preparation outside
+  the writer with §4's retry rule and `EditContended`, edit dispatch for every edit tool),
+  `scheduler.rs` and `attempts.rs` (no `FrozenPlan`; completion from the attempt's frozen
+  contract and identity; `admitted_rev` scalar), `execution.rs`, `resources.rs::admit_order`,
+  `watch.rs`, `verify.rs` (index rebuild and compare), `naming.rs` (§8 keys), `dispatch_ext.rs`
+  (`edit_extension`, input preview, `step_context`), `me.rs`, the model's `naming::name_plan`
+  over rows.
+- **Scoped gate.** `sluice-runtime` (its unit tests and the integration tests it owns).
+- **Edges.** HARD A. SOFT B and C (it codes against their pinned APIs). Integration group.
+- **Done when.** Every edit tool runs through the one pipeline; the barrier test of §11
+  passes (`busy`, nothing written, `writer_preparations` 0); a committed edit installs its
+  candidate only over its own base; completion succeeds with the catalog broken and with no
+  snapshot in the attempt; no reader in §9 owned by D reads a document; `verify` reports a
+  hand-corrupted index row; frozen completion after plan and registry changes passes; green on
+  the integration branch.
 
 ### Lane E: tools and agent docs
 
@@ -2222,66 +2929,83 @@ attribution.
   with `unit_get`, `step_get` or `plan_read`. Use the typed tools for single changes and
   `plan_edit` for an atomic batch. Pass `rev` when a change depends on an earlier read.
   `plan_get` exports the whole plan. A preview describes the edit's affected work; ask for a
-  full dry run explicitly."
-- **Edges.** HARD A. Final behaviour HARD B, C and D.
+  full dry run explicitly. An edit refused `busy` is retried as is."
+- **Scoped gate.** `sluice-model`'s command tests and the `sluice` crate's tool tests.
+- **Edges.** HARD A. Integration group (final behaviour needs B, C and D).
 - **Done when.** Every tool in §7 decodes from MCP, HTTP and `sluice tool` with the same flat
   arguments and returns the fixtures' shapes; `plan_patch` is unknown everywhere (tools,
-  helper allowlists, docs); tool-description tests pass; `scripts/check` green.
+  helper allowlists, docs); tool-description tests pass; green on the integration branch.
 
 ### Lane F: dashboard readers
 
-- **Scope.** `views/board.rs` (`PlanCache::compile`, `load_board`, `load_step`,
-  `plan_mermaid`), `views/panel.rs`, `settings.rs`, `views/log.rs` (`changes` in sentences and
-  the retire fold), `views.rs`, `examples/dashboard_fixture/`, the web tests' fixtures. Loaders
-  only: rendering, templates and layout are not this lane's.
-- **Edges.** HARD A. Starts after the Synthesis redesign ships (it rewrites these loaders on
-  the shipped dashboard; no other lane edits `board.rs`). Final integration HARD B and D.
-- **Done when.** No dashboard reader reads a document or compiles per request; every page it
-  touches passes AGENTS.md's Chromium checks (390, 1440 and 2560 px, light and dark, each
-  screenshot looked at) on a scratch home; `scripts/check` green.
+- **Scope.** The loaders of the shipped dashboard (`775d57c`): `views/board.rs`
+  (`PlanCache::compile`, `load_board`, `load_step`, `plan_mermaid`), `views/panel.rs`,
+  `settings.rs` (through `steps_needs`), `views/log.rs` (`changes` in sentences and the retire
+  fold), `views/step.rs::load_detail` (§9.1), `views/gallery.rs::step_band_part`, `views.rs`,
+  `examples/dashboard_fixture/`, the web tests' fixtures. Loaders only: rendering, templates and
+  layout are not this lane's.
+- **Scoped gate.** `sluice-web`.
+- **Edges.** HARD A. Unblocked: the redesign it builds on is on main as `775d57c`, and no other
+  lane edits these files. Integration group (final behaviour needs B and D).
+- **Done when.** No dashboard reader reads a document or compiles per request; §9.1's pause
+  cases pass; every page it touches passes AGENTS.md's Chromium checks (390, 1440 and 2560 px,
+  light and dark, each screenshot looked at) on a scratch home built from the integration
+  branch; green there.
 
 ### Lane G: deployment and the cutover
 
 - **Scope.** `scripts/deploy --schema-cutover` (§10.1: `--deadline`, `--cancel-grace`,
-  `--dry-run`, the notice text, the final report and `cutover-<ts>.json`), `scripts/compat-check
-  --incompatible` (§10.8), `scripts/build-release` (manifest `schema`), `scripts/ship` (refuses
-  an incompatible ref; the cutover is run deliberately), `sluice home migrate` (CLI over B's
-  converter), SPEC §2.2, §2.6 and §3's cutover text, AGENTS.md's shipping notes, and the
-  rehearsal on a copy of the live home.
-- **Edges.** HARD A and B. Final acceptance HARD D (and E for the smoke tools).
+  `--settle-timeout`, `--dry-run`, fence then cancel, the intent check, the refusal stop, the
+  bounded zero-blocker check, the notice text, the report and `cutover-<ts>.json` as
+  `CutoverReport`), `scripts/cutover-rehearse` (§10.10, with H's harness),
+  `scripts/compat-check --incompatible --copy` (§10.8), `scripts/build-release` (manifest
+  `schema`), `scripts/ship` (refuses an incompatible ref), `sluice home migrate` (CLI over B's
+  converter), SPEC §2.2, §2.6 and §3's cutover text, AGENTS.md's shipping notes.
+- **Edges.** HARD A. Its migrate CLI and end-to-end tests need B and H2; it joins the
+  integration branch after the group.
 - **Done when.** `--dry-run` lists what would be stopped and changes nothing; a scratch
   installation with a live rolling run (a scratch home, test-mode units) goes through notice,
-  drain, deadline cancel (records as §10.1 step 6), migration and release, the report naming the
-  stopped run; `compat-check --incompatible` proves the old binary refuses before mutation; a
-  rehearsal on a copy of the live home converts with zero blockers after a simulated drain.
+  drain, fence, cancel request and verified intent, settlement, migration and release, the
+  report naming the run and its actual outcome; a scratch run with settle intent reports
+  `succeeded` / `none`; a scratch catalog drift makes the cancel refuse and the cutover stop
+  fenced with `refused` filled and no unit stopped; `compat-check --incompatible` proves the
+  old binary refuses before mutation; the rehearsal helper takes a copy of the live home with
+  live work to zero blockers with the old release, converts it and passes the compat check.
 
 ### Lane H: independent verification
 
-- **Scope.** The old compiler and patch semantics as a test-only reference (never linked into
-  production); differential generators; replay fixtures for schema 1 and 2 (absent root fields,
+- **Scope.** H1, first: `crates/sluice-reference` (today's compiler, patch semantics, edit
+  preparation and whole-plan simulation, test-only) and the differential harness and generators
+  over it, consumed by C. H2: replay fixtures for schema 1 and 2 (absent root fields,
   normalized old input rows, trimmed records, malformed and gapped history, interrupted
-  conversion, backup and restore); the counters and budgets of §11; schema equivalence;
-  `plan_scale` tightened; compatibility tests; Chromium evidence from F.
-- **Edges.** Starts after A (fixtures and generators against the pinned types). Final HARD B
-  to G.
-- **Done when.** Every gate of §11 passes; every historical revision of a read-only live backup
-  converts with round-trip equality; the grep of §9 finds no leftover reader.
+  conversion, backup and restore, a backup with live work); `tools/cutover-rehearsal` and its
+  `RehearsalHost` (§10.10); the counters and gates of §11; schema equivalence; `plan_scale`
+  tightened; compatibility tests; Chromium evidence from F.
+- **Edges.** H1: HARD A, and C's HARD dependency. H2: HARD A; final on the integration branch.
+- **Done when.** H1: the reference compiles every plan today's compiler does with the same
+  results, and `validation.differential` runs through it. H2: every gate of §11 passes on the
+  integration branch; every historical revision of a read-only live backup converts with
+  round-trip equality; the grep of §9 finds no leftover reader; the rehearsal host's isolation
+  test passes.
 
 ## 13. Decisions
+
+Round 2 (after the astra review) changed decisions 3, 4, 11, 22, 25 and 26 and added 28 to 36;
+each is marked.
 
 | # | Decision | Where |
 |---|---|---|
 | 1 | `root_order` constrained to its eleven values | §2.2 |
 | 2 | No `base_rev` or `change_version` columns or fields | §2.2, §5.2 |
-| 3 | `steps.paused`, `run`, `priority` generated; `unit` maintained | §2.2 |
-| 4 | Three covering indexes serve compact reads; no `steps_run_position` | §2.2 |
+| 3 | **Round 2:** `steps.paused`, `run`, `priority` and `needs` are plain columns held equal to the declaration by `CHECK`s (were generated: SQLite never covers an index holding a generated column); `unit` maintained | §2.2 |
+| 4 | Three covering indexes serve compact reads, and **round 2** `steps_needs` serves resource competitors; no `steps_run_position` | §2.2 |
 | 5 | `state_epoch` moved by triggers; leases excluded | §2.2, §3 |
 | 6 | `board_slots` column and view dropped | §2.1 |
 | 7 | Put into an absent section adds it at its canonical place; sections never removed | §2.4 |
 | 8 | New projects start with all three sections, as SPEC always said | §2.4 |
 | 9 | One record payload version (2) for every kind | §5.2 |
 | 10 | `recipe_generation` is a digest, not a counter | §3 |
-| 11 | After three stale preparations, prepare incrementally in the writer | §4 |
+| 11 | **Round 2, reversed:** preparation never runs in the writer; the third stale preparation is refused `busy`, `retryable: true` (`EditContended`) | §4 |
 | 12 | Net effect per id decides added, changed, removed | §4 |
 | 13 | `reason` required by `plan_edit`, `unit_update`, `unit_remove` | §7.1 |
 | 14 | `plan_read` filters never `not_found`; default `limit` 200 | §7.3 |
@@ -2292,9 +3016,18 @@ attribution.
 | 19 | Typed tools gain `preview_scope` and keep their own error kinds | §7.8 |
 | 20 | New typed reply variants for the read tools | §7.10 |
 | 21 | The compiled type keeps the name `Plan` and its query API | §8 |
-| 22 | Converter `Restore` mode for private restore destinations | §10.2 |
+| 22 | **Round 2, reversed:** one converter mode; a schema-changing restore refuses a backup holding live work (`LiveWorkInBackup`) | §10.2 |
 | 23 | Snapshot mismatches in terminal attempts are warnings | §10.4 |
 | 24 | Round-trip equality is compact-serialization byte equality | §10.5 |
-| 25 | Replayed positions follow schema 3's append-and-gap rule; reorders renumber | §10.6 |
-| 26 | Deadline stop uses `step_cancel` (author `cutover`); calls end `process_lost` | §10.1 |
+| 25 | **Round 2:** replayed positions are assigned retain/append/gap, then the complete key sequence is compared with the document's and the collection renumbered whenever they differ | §10.6 |
+| 26 | **Round 2:** fence, then one `step_cancel` per (project, step) (author `cutover`) with the intent verified before any unit stops; a refusal stops the cutover fenced; the cutover records intent only, existing completion precedence holds, and the report gives each run's actual outcome and advice; calls end `process_lost` | §10.1 |
 | 27 | Release manifest gains `schema`; `compat-check --incompatible` | §10.8 |
+| 28 | **Round 2:** triggers delete a removed step's or output's `plan_refs`; index-rebuild equality is required after every removal and prune | §2.2, §4, §11 |
+| 29 | **Round 2:** preparation reads a read set (sources, inputs, unit exits, pause, holds, competitors) separate from the preview's affected set | §6.4 |
+| 30 | **Round 2:** preparation returns a certified compiled candidate beside the store payload (`PlanEditCommit`); it is installed only after commit over its own base | §8.1 |
+| 31 | **Round 2:** empty-list refusals apply to supplied requests only; typed lowering may yield no operations and commits nothing; `step_set_input` keeps its refusal | §7.6, §7.8 |
+| 32 | **Round 2:** input and output puts have their own validation rows, checked differentially (`validation.differential`) | §6.1 |
+| 33 | **Round 2:** the rehearsal helper plays the deadline on a copy with the old release and a test adoption host, and converts only at zero blockers | §10.10 |
+| 34 | **Round 2:** B to F are one atomic integration group on `rw/pn-cutover`; H owns the test-only reference crate | §12 |
+| 35 | **Round 2:** "who paused it" is the latest actual pause transition in the step's current incarnation | §9.1 |
+| 36 | **Round 2:** the cutover report is `plan_rows::CutoverReport` | §10.1 |

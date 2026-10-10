@@ -67,8 +67,11 @@
   version-scoped migrations (`ADDED_COLUMNS` and `ADDED_VIEWS` for the current version). Never
   re-pin a running executable by changing database metadata.
 - `scripts/ship` ships compatible changes only. A schema change goes out through
-  `scripts/deploy --schema-cutover --deadline <time>` (SPEC §2.2): notice, drain, the runs still
-  live at the deadline cancelled with a reason naming the cutover, then the migration.
+  `scripts/deploy --schema-cutover --deadline <time>` (SPEC §2.2): a rehearsal on a copy, the
+  notice, the drain, at the deadline the fence and then a cancel request (with a reason naming
+  the cutover) for each run still live, nothing converted until nothing is live, then the
+  migration; the report says how each run actually ended. The plan-rows lanes land together
+  from one integration branch (`docs/design/plan-rows.md` §12); none is shipped alone.
 
 ## UI changes
 

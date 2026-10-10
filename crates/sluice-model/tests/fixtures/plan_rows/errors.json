@@ -21,6 +21,20 @@
     }
   },
   {
+    "case": "no_steps",
+    "error": {
+      "error": "bad_request",
+      "message": "ops[1].steps: name at least one step"
+    }
+  },
+  {
+    "case": "no_entries",
+    "error": {
+      "error": "bad_request",
+      "message": "ops[2].after: name at least one entry"
+    }
+  },
+  {
     "case": "preview_all_needs_dry_run",
     "error": {
       "error": "bad_request",
@@ -78,6 +92,14 @@
     }
   },
   {
+    "case": "edit_contended",
+    "error": {
+      "error": "busy",
+      "message": "the plan's state kept changing while this edit was prepared (3 tries); send it again",
+      "retryable": true
+    }
+  },
+  {
     "case": "invalid_ops",
     "error": {
       "error": "invalid",
@@ -86,6 +108,14 @@
         "ops[1].step: no step relase",
         "steps.review.in.spec: work/final is int, which does not fit string: int is not string"
       ]
+    }
+  },
+  {
+    "case": "live_work_in_backup",
+    "error": {
+      "error": "invalid",
+      "message": "this backup holds live work (2 attempts, 2 runs, 1 leases, 0 calls); a schema-changing restore needs a backup taken with nothing live",
+      "errors": []
     }
   }
 ]

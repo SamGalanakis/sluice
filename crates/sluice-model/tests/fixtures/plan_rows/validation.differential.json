@@ -1,0 +1,138 @@
+[
+  {
+    "case": "output_put_missing_source",
+    "base": {
+      "steps": {
+        "work": {
+          "run": "custom.open"
+        }
+      }
+    },
+    "ops": [
+      {
+        "op": "output.put",
+        "name": "notes",
+        "source": "review/final"
+      }
+    ],
+    "candidate": {
+      "outputs": {
+        "notes": {
+          "source": "review/final"
+        }
+      },
+      "steps": {
+        "work": {
+          "run": "custom.open"
+        }
+      }
+    },
+    "errors": [
+      "outputs.notes: unknown step review"
+    ]
+  },
+  {
+    "case": "input_put_collides_with_untouched_step",
+    "base": {
+      "steps": {
+        "repo": {
+          "run": "custom.open"
+        }
+      }
+    },
+    "ops": [
+      {
+        "op": "input.put",
+        "name": "repo",
+        "declaration": "string"
+      }
+    ],
+    "candidate": {
+      "inputs": {
+        "repo": "string"
+      },
+      "steps": {
+        "repo": {
+          "run": "custom.open"
+        }
+      }
+    },
+    "errors": [
+      "steps.repo: plan inputs and steps share one namespace"
+    ]
+  },
+  {
+    "case": "output_put_missing_input",
+    "base": {
+      "steps": {}
+    },
+    "ops": [
+      {
+        "op": "output.put",
+        "name": "notes",
+        "source": "brief"
+      }
+    ],
+    "candidate": {
+      "outputs": {
+        "notes": {
+          "source": "brief"
+        }
+      },
+      "steps": {}
+    },
+    "errors": [
+      "outputs.notes: unknown plan input brief"
+    ]
+  },
+  {
+    "case": "input_put_bad_name",
+    "base": {
+      "steps": {}
+    },
+    "ops": [
+      {
+        "op": "input.put",
+        "name": "Repo",
+        "declaration": "string"
+      }
+    ],
+    "candidate": {
+      "inputs": {
+        "Repo": "string"
+      },
+      "steps": {}
+    },
+    "errors": [
+      "inputs.Repo: ids match ^[a-z0-9][a-z0-9_-]*$"
+    ]
+  },
+  {
+    "case": "input_put_value_no_longer_fits",
+    "base": {
+      "inputs": {
+        "limit": "string"
+      },
+      "steps": {}
+    },
+    "values": {
+      "limit": "ten"
+    },
+    "ops": [
+      {
+        "op": "input.put",
+        "name": "limit",
+        "declaration": "int"
+      }
+    ],
+    "candidate": {
+      "inputs": {
+        "limit": "int"
+      },
+      "steps": {}
+    },
+    "errors": [
+      "inputs.limit: expected int, got \"ten\""
+    ]
+  }
+]
