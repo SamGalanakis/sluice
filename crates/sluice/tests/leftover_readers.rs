@@ -4,9 +4,7 @@
 //! `plans.doc`, `doc FROM plans`, `.document()`, `transport()`, `Plan::parse`,
 //! `PatchOperation`, `plan_patch` or `FrozenPlan`.
 //!
-//! It holds only once the whole group has moved its readers, so it is ignored until
-//! `rw/pn-cutover` holds them. Run there with
-//! `cargo test -p sluice --test leftover_readers -- --include-ignored`.
+//! `scripts/check` runs it with the rest of the workspace's tests.
 
 use std::path::{Path, PathBuf};
 
@@ -74,7 +72,6 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 #[test]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover once every lane moved its readers"]
 fn no_reader_of_the_stored_plan_document_is_left() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let root = root.canonicalize().unwrap();

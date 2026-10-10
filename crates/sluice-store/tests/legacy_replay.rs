@@ -5,9 +5,8 @@
 //! `tools/cutover-rehearsal`), and every check is lane H's independent reading of the rows
 //! (`tests/support/plan_rows.rs`), never the converter's own code.
 //!
-//! Each test is a gate of the integration branch: it needs lane B's schema 3 and converter,
-//! so it is ignored until `rw/pn-cutover` holds them. Run there with
-//! `cargo test -p sluice-store --test legacy_replay -- --include-ignored`.
+//! Each test runs in `scripts/check` but the live-backup gate, which needs a backup-API copy
+//! of a live home and the old release's oracle (see its own doc).
 #[path = "../../../tests/support/home.rs"]
 mod home;
 #[path = "../../../tests/support/plan_rows.rs"]
@@ -274,7 +273,6 @@ fn fresh_schema() -> std::collections::BTreeMap<String, String> {
 }
 
 #[test]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lane B)"]
 fn every_legacy_home_converts_with_round_trip_equality_at_every_revision() {
     let fresh = fresh_schema();
     for name in ["schema1", "schema1_old", "schema2"] {
@@ -301,7 +299,6 @@ fn every_legacy_home_converts_with_round_trip_equality_at_every_revision() {
 }
 
 #[test]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lane B)"]
 fn each_defect_blocks_the_conversion_naming_its_project_and_rev_and_writes_nothing() {
     let defects: Vec<Value> = serde_json::from_str(&read("defects.json")).unwrap();
     for defect in defects {
@@ -330,7 +327,6 @@ fn each_defect_blocks_the_conversion_naming_its_project_and_rev_and_writes_nothi
 }
 
 #[test]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lane B)"]
 fn a_backup_holding_live_work_is_refused_with_its_counts_and_nothing_is_written() {
     let live = expected("live")["live"].clone();
     let home = ScratchHome::new().unwrap();
@@ -358,7 +354,6 @@ fn a_backup_holding_live_work_is_refused_with_its_counts_and_nothing_is_written(
 }
 
 #[test]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lane B)"]
 fn a_schema_3_store_refuses_a_legacy_home_on_open_without_touching_it() {
     for (name, schema) in [("schema1", 1), ("schema1_old", 1), ("schema2", 2)] {
         let home = ScratchHome::new().unwrap();
@@ -387,7 +382,6 @@ fn a_schema_3_store_refuses_a_legacy_home_on_open_without_touching_it() {
 }
 
 #[test]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lane B)"]
 fn a_fresh_home_is_schema_3_and_its_compact_reads_use_the_covering_indexes() {
     let home = ScratchHome::new().unwrap();
     drop(Writer::open(home.path()).unwrap());

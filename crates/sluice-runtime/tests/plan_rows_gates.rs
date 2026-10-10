@@ -12,9 +12,9 @@
 //!   thread, while an independent write commits within its budget;
 //! - cold compile and cold recipe matching are measured and reported.
 //!
-//! Each needs the integration group (B, C and D for the pipeline and its counters, E for the
-//! tools), so each is ignored until `rw/pn-cutover` holds them. Run there with
-//! `cargo test -p sluice-runtime --test plan_rows_gates -- --include-ignored --test-threads 1`.
+//! Each measures the whole pipeline (the store's rows and counters, the model's preparation,
+//! the runtime's cache and the tools); a measurement holds the counters to itself
+//! (`cost::Measurement`), so the gates run beside each other in `scripts/check`.
 #[allow(dead_code)]
 #[path = "../../../tests/support/home.rs"]
 mod home;
@@ -230,7 +230,6 @@ fn filler(n: usize, prefix: &str) -> Vec<Value> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lanes B, C, D and E)"]
 async fn the_same_local_edit_costs_the_same_at_198_1980_and_19800_steps() {
     let mut seen: Vec<(usize, &str, Costs)> = Vec::new();
     for size in [198, 1980, 19800] {
@@ -293,7 +292,6 @@ async fn the_same_local_edit_costs_the_same_at_198_1980_and_19800_steps() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lanes B, C, D and E)"]
 async fn no_ordinary_edit_on_a_warm_cache_exports_or_compiles_the_whole_plan() {
     let plan = Plan::new(json!({"cpu": 2})).await;
     let recipes = plan
@@ -385,7 +383,6 @@ async fn no_ordinary_edit_on_a_warm_cache_exports_or_compiles_the_whole_plan() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lanes B, C, D and E)"]
 async fn removal_and_prune_renumber_nothing_and_leave_exactly_the_derived_indexes() {
     let plan = Plan::new(json!({})).await;
     plan.edit(json!([
@@ -488,7 +485,6 @@ async fn removal_and_prune_renumber_nothing_and_leave_exactly_the_derived_indexe
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lanes B, C, D and E)"]
 async fn compact_reads_and_the_competitor_read_decode_no_declaration() {
     let mut decoded_by_competitors = Vec::new();
     for competitors in [2, 60] {
@@ -537,7 +533,6 @@ async fn compact_reads_and_the_competitor_read_decode_no_declaration() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lanes B, C, D and E)"]
 async fn a_high_fanout_edit_scales_with_its_readers_not_with_the_plan() {
     let mut seen = Vec::new();
     for (readers, unrelated) in [(50, 0), (50, 2000), (100, 0)] {
@@ -587,7 +582,6 @@ async fn a_high_fanout_edit_scales_with_its_readers_not_with_the_plan() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lanes B, C, D and E)"]
 async fn three_stale_preparations_end_busy_with_nothing_written_and_none_on_the_writer() {
     let plan = Plan::new(json!({})).await;
     let mut ops = vec![
@@ -680,7 +674,6 @@ async fn three_stale_preparations_end_busy_with_nothing_written_and_none_on_the_
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lanes B, C, D and E)"]
 async fn cold_compile_and_cold_recipe_matching_are_measured_and_reported() {
     let plan = Plan::new(json!({})).await;
     let recipes = plan

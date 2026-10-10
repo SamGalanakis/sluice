@@ -10,7 +10,7 @@ use sluice_model::{
     recipe::Recipe,
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant, SystemTime},
@@ -106,20 +106,8 @@ pub fn for_project(
         &RowSelection::default(),
         StepProjection::Full,
     )?;
-    let entries = crate::dispatch_ext::load_recipes(home, project).unwrap_or_default();
     // the project's own recipes before the global ones, each by name
-    let mut usable: Vec<(bool, String, Arc<Recipe>)> = entries
-        .values()
-        .filter_map(|e| {
-            let recipe = e.recipe.as_ref().ok()?;
-            Some((
-                e.scope != "project",
-                e.name.clone(),
-                Arc::new(recipe.clone()),
-            ))
-        })
-        .collect();
-    usable.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+    let usable = ordered_recipes(home, project);
     let ordered: Vec<&Recipe> = usable.iter().map(|(_, _, r)| r.as_ref()).collect();
     let naming = name_plan(&rows.steps, &ordered, &mut |path| prompt_head(path));
     let names = Arc::new(ProjectNaming {
@@ -142,6 +130,83 @@ pub fn for_project(
         },
     );
     Ok(names)
+}
+
+/// The project's recipes in matching order: its own before the home's, each by name, the ones
+/// that check.
+fn ordered_recipes(home: &Path, project: ProjectId) -> Vec<(bool, String, Arc<Recipe>)> {
+    let entries = crate::dispatch_ext::load_recipes(home, project).unwrap_or_default();
+    let mut usable: Vec<(bool, String, Arc<Recipe>)> = entries
+        .values()
+        .filter_map(|e| {
+            let recipe = e.recipe.as_ref().ok()?;
+            Some((
+                e.scope != "project",
+                e.name.clone(),
+                Arc::new(recipe.clone()),
+            ))
+        })
+        .collect();
+    usable.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+    usable
+}
+
+/// The recipe each unit matches now, by unit name (`plan_read`'s and `unit_get`'s `recipe`, and
+/// the `recipe` filter), inside the caller's read snapshot. Matching needs only each member's
+/// id and fn (`Recipe::match_unit`: the recipe's step ids for the unit and their `run`s), so it
+/// reads the compact step rows and never a declaration (plan-rows §7.3, §9). Kept per process
+/// while the plan's revision and the recipe files' generation stay the same.
+pub fn unit_recipes(
+    sql: &Connection,
+    home: &Path,
+    project: ProjectId,
+) -> sluice_store::Result<Arc<BTreeMap<String, String>>> {
+    type Matches = Mutex<
+        HashMap<(PathBuf, ProjectId), (Revision, RecipeGeneration, Arc<BTreeMap<String, String>>)>,
+    >;
+    static MATCHES: OnceLock<Matches> = OnceLock::new();
+    let matches = MATCHES.get_or_init(Default::default);
+    let rev = sluice_store::plans::plan_revision(sql, project)?;
+    let generation = crate::plan_cache::recipe_generation(home, project);
+    let key = (home.to_owned(), project);
+    if let Some((kept_rev, kept_generation, units)) =
+        matches.lock().unwrap_or_else(|e| e.into_inner()).get(&key)
+        && *kept_rev == rev
+        && *kept_generation == generation
+    {
+        return Ok(units.clone());
+    }
+    let rows = sluice_store::plans::read_steps(
+        sql,
+        project,
+        &RowSelection::default(),
+        StepProjection::Compact,
+    )?;
+    let mut members: indexmap::IndexMap<String, serde_json::Map<String, serde_json::Value>> =
+        Default::default();
+    for row in &rows.steps {
+        members
+            .entry(row.unit.to_string())
+            .or_default()
+            .insert(row.step.to_string(), serde_json::json!({ "run": row.run }));
+    }
+    let recipes = ordered_recipes(home, project);
+    let units: BTreeMap<String, String> = members
+        .iter()
+        .filter_map(|(unit, steps)| {
+            let (_, name, _) = recipes
+                .iter()
+                .find(|(_, _, recipe)| recipe.match_unit(unit, steps).is_some())?;
+            Some((unit.clone(), name.clone()))
+        })
+        .collect();
+    let units = Arc::new(units);
+    let mut held = matches.lock().unwrap_or_else(|e| e.into_inner());
+    if held.len() > 256 {
+        held.clear();
+    }
+    held.insert(key, (rows.rev, generation, units.clone()));
+    Ok(units)
 }
 
 /// A prompt file's opening (what its title is read from), cached by path, size and time.

@@ -19,14 +19,7 @@ fn recipes(
     home: &Path,
     project: ProjectId,
 ) -> sluice_store::Result<BTreeMap<String, String>> {
-    let naming = naming::for_project(sql, home, project)?;
-    Ok(naming
-        .naming
-        .units
-        .iter()
-        .filter(|(_, u)| !u.recipe.is_empty())
-        .map(|(id, u)| (id.to_string(), u.recipe.clone()))
-        .collect())
+    Ok((*naming::unit_recipes(sql, home, project)?).clone())
 }
 fn views(
     sql: &Connection,

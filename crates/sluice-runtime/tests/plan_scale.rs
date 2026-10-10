@@ -9,10 +9,10 @@
 //! revision is refused as a conflict.
 //!
 //! Schema 3's edits cost what they change (rows, not the document), so these are the
-//! contract's budgets, where schema 1's were 1,000, 2,500 and 750 ms. It needs the
-//! integration group (B, C, D and E) and is ignored until `rw/pn-cutover` holds it. Run
-//! there with `cargo test -p sluice-runtime --test plan_scale -- --include-ignored`; if the
-//! integration runner's measurement says otherwise, §11 keeps the old bounds until it does.
+//! contract's budgets, where schema 1's were 1,000, 2,500 and 750 ms; the integration branch
+//! measured about 8 to 18 ms for the local edits, 81 ms for the unit addition and 2 ms for
+//! the independent write in a debug build. If a runner's measurement says otherwise, §11
+//! keeps the old bounds until it does.
 #[allow(dead_code)]
 #[path = "../../../tests/support/home.rs"]
 mod home;
@@ -162,8 +162,10 @@ impl Fixture {
         args["project"] = json!({"kind":"id","value":self.project});
         self.client.command(request(name, args)).await.map(payload)
     }
+    /// The plan's revision, from a compact read: no export, so the measured edits' costs
+    /// are the edits' own.
     async fn rev(&self) -> u64 {
-        self.call("plan_get", json!({})).await.unwrap()["rev"]
+        self.call("plan_read", json!({"limit": 1})).await.unwrap()["rev"]
             .as_u64()
             .unwrap()
     }
@@ -194,7 +196,6 @@ fn edit(reason: &str) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lanes B, C, D and E)"]
 async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
     let f = Fixture::new().await;
     let mut ops = Vec::new();
