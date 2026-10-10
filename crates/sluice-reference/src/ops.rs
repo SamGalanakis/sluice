@@ -23,6 +23,13 @@
 //! type (a ref that is not a boolean, an unknown input) is the candidate's validation, at
 //! `steps.<id>.after[k]`. Every operation is checked; a refused one changes nothing, and the
 //! ones after it see the candidate without it.
+//!
+//! Net effect (decided 2026-10-10): a row is put only when its position or its data changes
+//! (`hash::data_equal`, so key order alone is no change). A row whose data the edit leaves
+//! equal keeps its stored bytes; a changed one is stored as the operations wrote it. An edit
+//! that changes no row's data or position commits nothing. `start: false` appends
+//! `"paused": true` at the end of every added declaration that lacks `paused`, a `unit.add`'s
+//! included.
 
 use crate::{
     gates::ValueRef,
@@ -149,8 +156,9 @@ fn map_value(map: &JsonMap) -> Value {
 
 /// The net row changes from `base` to `candidate` (§4, §5.1): `header.put` when the root
 /// order differs; a delete for each key only in `base`; a put for each key only in
-/// `candidate`, or in both with another position or a declaration whose compact serialization
-/// differs. Header first, then deletes (inputs, outputs, steps) each in key order, then puts
+/// `candidate`, or in both with another position or a declaration whose data differs
+/// (`hash::data_equal`: JSON value equality, key order aside, `1` unlike `1.0` and `-0.0`
+/// unlike `0.0`). Header first, then deletes (inputs, outputs, steps) each in key order, then puts
 /// (inputs, outputs, steps) each in position order.
 pub fn changes(base: &PlanRows, candidate: &PlanRows) -> Vec<PlanChange> {
     let mut out = vec![];
@@ -181,7 +189,8 @@ pub fn changes(base: &PlanRows, candidate: &PlanRows) -> Vec<PlanChange> {
     for row in sorted(&candidate.inputs, |r| r.position) {
         let old = base.inputs.iter().find(|o| o.name == row.name);
         if old.is_none_or(|o| {
-            o.position != row.position || compact(&o.declaration) != compact(&row.declaration)
+            o.position != row.position
+                || !same(o.declaration.as_value(), row.declaration.as_value())
         }) {
             out.push(PlanChange::InputPut {
                 name: row.name.clone(),
@@ -192,9 +201,7 @@ pub fn changes(base: &PlanRows, candidate: &PlanRows) -> Vec<PlanChange> {
     }
     for row in sorted(&candidate.outputs, |r| r.position) {
         let old = base.outputs.iter().find(|o| o.name == row.name);
-        if old.is_none_or(|o| {
-            o.position != row.position || compact(&o.binding) != compact(&row.binding)
-        }) {
+        if old.is_none_or(|o| o.position != row.position || !same_map(&o.binding, &row.binding)) {
             out.push(PlanChange::OutputPut {
                 name: row.name.clone(),
                 position: row.position,
@@ -205,7 +212,7 @@ pub fn changes(base: &PlanRows, candidate: &PlanRows) -> Vec<PlanChange> {
     for row in sorted(&candidate.steps, |r| r.position) {
         let old = base.steps.iter().find(|o| o.step == row.step);
         if old.is_none_or(|o| {
-            o.position != row.position || compact(&o.declaration) != compact(&row.declaration)
+            o.position != row.position || !same_map(&o.declaration, &row.declaration)
         }) {
             out.push(PlanChange::StepPut {
                 step: row.step.clone(),
@@ -223,9 +230,13 @@ fn removed<T>(base: &[T], candidate: &[T], key: impl Fn(&T) -> String) -> Vec<St
         .filter(|name| !kept.contains(name))
         .collect()
 }
-/// Compact serialization, for declaration equality (decision 24's byte equality).
-fn compact<T: serde::Serialize>(value: &T) -> String {
-    serde_json::to_string(value).expect("JSON serializes")
+/// Whether two declarations hold the same data: today's typed no-op rule
+/// (`hash::data_equal`, key order aside). A change that leaves the data equal is no change.
+fn same(left: &Value, right: &Value) -> bool {
+    crate::hash::data_equal(left, right).expect("strict declarations")
+}
+fn same_map(left: &JsonMap, right: &JsonMap) -> bool {
+    same(&map_value(left), &map_value(right))
 }
 
 /// What applying the operations made.
@@ -749,6 +760,29 @@ pub fn apply(
                     JsonValue::try_from(Value::Bool(true)).expect("bool"),
                 );
             }
+        }
+    }
+    // A row whose data the edit leaves equal keeps its stored bytes (its key order as written
+    // before), whatever the operations did to it on the way.
+    for row in &base.inputs {
+        if let Some((_, declaration)) = work.inputs.get_mut(&row.name)
+            && same(declaration.as_value(), row.declaration.as_value())
+        {
+            *declaration = row.declaration.clone();
+        }
+    }
+    for row in &base.outputs {
+        if let Some((_, binding)) = work.outputs.get_mut(&row.name)
+            && same_map(binding, &row.binding)
+        {
+            *binding = row.binding.clone();
+        }
+    }
+    for row in &base.steps {
+        if let Some((_, declaration)) = work.steps.get_mut(row.step.as_str())
+            && same_map(declaration, &row.declaration)
+        {
+            *declaration = row.declaration.clone();
         }
     }
     Ok(Applied {

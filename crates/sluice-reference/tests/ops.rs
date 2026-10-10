@@ -333,3 +333,35 @@ fn the_contract_edit_example_is_accepted_with_its_change_kinds() {
         json!(["work", "review"])
     );
 }
+
+#[test]
+fn an_update_that_leaves_the_data_equal_changes_nothing_and_keeps_the_stored_bytes() {
+    let base =
+        json!({"steps": {"a": {"run": "x", "in": {"p": {"default": 1}, "q": {"default": -0.0}}}}});
+    let case = EditCase::new(
+        &map(base.clone()),
+        op_list(json!([
+            {"op": "step.update", "step": "a", "changes": {"run": null}},
+            {"op": "step.update", "step": "a",
+                "changes": {"in": {"q": {"default": -0.0}, "p": {"default": 1}}, "run": "x"}},
+        ])),
+    )
+    .unwrap();
+    let applied = ops::apply(&case.base, &case.ops, true, &IndexMap::new(), &Open).unwrap();
+    assert_eq!(ops::changes(&case.base, &applied.rows), []);
+    assert_eq!(exported(&applied), serde_json::to_string(&base).unwrap());
+    // a signed zero, or an int that becomes a float, is a change of data
+    for value in [json!(0.0), json!(1.0)] {
+        let key = if value == json!(0.0) { "q" } else { "p" };
+        let mut bindings = json!({"p": {"default": 1}, "q": {"default": -0.0}});
+        bindings[key]["default"] = value;
+        let applied = apply(
+            base.clone(),
+            json!([{"op": "step.update", "step": "a", "changes": {"in": bindings}}]),
+            true,
+        )
+        .unwrap();
+        let base_rows = EditCase::new(&map(base.clone()), vec![]).unwrap().base;
+        assert_eq!(ops::changes(&base_rows, &applied.rows).len(), 1, "{key}");
+    }
+}
