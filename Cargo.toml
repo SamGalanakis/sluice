@@ -9,6 +9,8 @@ members = [
     "crates/sluice-web",
     "crates/sluice",
 ]
+# Built against the release a schema cutover replaces, never this tree's crates (§10.10).
+exclude = ["tools/cutover-rehearsal"]
 
 [workspace.package]
 version = "0.1.0"

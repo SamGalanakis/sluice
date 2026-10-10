@@ -1,0 +1,1777 @@
+{
+  "from_schema": 1,
+  "projects": [
+    {
+      "name": "alpha",
+      "archived": false,
+      "revisions": [
+        {
+          "rev": 1,
+          "document": {
+            "steps": {}
+          }
+        },
+        {
+          "rev": 2,
+          "document": {
+            "steps": {
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "rev": 3,
+          "document": {
+            "steps": {
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              }
+            },
+            "inputs": {
+              "repo": "string",
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            }
+          }
+        },
+        {
+          "rev": 4,
+          "document": {
+            "steps": {
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              },
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              }
+            },
+            "inputs": {
+              "repo": "string",
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            }
+          }
+        },
+        {
+          "rev": 5,
+          "document": {
+            "steps": {
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              },
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              }
+            },
+            "inputs": {
+              "repo": "string",
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {
+              "result": {
+                "source": "b/value"
+              }
+            }
+          }
+        },
+        {
+          "rev": 6,
+          "document": {
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "d": {
+                "run": "fixture.echo",
+                "in": {
+                  "value": {
+                    "default": "d"
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              }
+            },
+            "inputs": {
+              "repo": "string",
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {
+              "result": {
+                "source": "b/value"
+              }
+            }
+          }
+        },
+        {
+          "rev": 7,
+          "document": {
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              }
+            },
+            "inputs": {
+              "repo": "string",
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {
+              "result": {
+                "source": "b/value"
+              }
+            }
+          }
+        },
+        {
+          "rev": 8,
+          "document": {
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              },
+              "e": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              }
+            },
+            "inputs": {
+              "repo": "string",
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {
+              "result": {
+                "source": "b/value"
+              }
+            }
+          }
+        },
+        {
+          "rev": 9,
+          "document": {
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              },
+              "f": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              }
+            },
+            "inputs": {
+              "repo": "string",
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {
+              "result": {
+                "source": "b/value"
+              }
+            }
+          }
+        },
+        {
+          "rev": 10,
+          "document": {
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              },
+              "f": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              }
+            },
+            "inputs": {
+              "repo": "string",
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            }
+          }
+        },
+        {
+          "rev": 11,
+          "document": {
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              },
+              "f": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              }
+            },
+            "inputs": {
+              "repo": "string",
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {}
+          }
+        },
+        {
+          "rev": 12,
+          "document": {
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              },
+              "f": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              }
+            },
+            "inputs": {
+              "repo": {
+                "type": "string",
+                "doc": "The repo"
+              },
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {}
+          }
+        },
+        {
+          "rev": 13,
+          "document": {
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              },
+              "f": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              },
+              "g": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                }
+              }
+            },
+            "inputs": {
+              "repo": {
+                "type": "string",
+                "doc": "The repo"
+              },
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {}
+          }
+        },
+        {
+          "rev": 14,
+          "document": {
+            "inputs": {
+              "repo": {
+                "type": "string",
+                "doc": "The repo"
+              },
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {},
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              },
+              "f": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              },
+              "g": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build"
+              }
+            }
+          }
+        },
+        {
+          "rev": 15,
+          "document": {
+            "inputs": {
+              "repo": {
+                "type": "string",
+                "doc": "The repo"
+              },
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {},
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              },
+              "f": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              },
+              "g": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build",
+                "tags": [
+                  "late"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "rev": 16,
+          "document": {
+            "inputs": {
+              "repo": {
+                "type": "string",
+                "doc": "The repo"
+              },
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {},
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              },
+              "f": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              },
+              "g": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build",
+                "tags": [
+                  "late"
+                ]
+              },
+              "h": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build",
+                "tags": [
+                  "late"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "rev": 17,
+          "document": {
+            "inputs": {
+              "repo": {
+                "type": "string",
+                "doc": "The repo"
+              },
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {},
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                }
+              },
+              "f": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              },
+              "g": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build",
+                "tags": [
+                  "late"
+                ]
+              },
+              "h": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build",
+                "tags": [
+                  "late"
+                ]
+              },
+              "fig-1-fork": {
+                "run": "fixture.echo",
+                "in": {
+                  "value": {
+                    "default": "fork"
+                  }
+                },
+                "tags": [
+                  "unit:fig-1"
+                ]
+              },
+              "fig-1-work": {
+                "run": "fixture.echo",
+                "after": [
+                  "fig-1-fork"
+                ],
+                "in": {
+                  "value": {
+                    "source": "fig-1-fork/value"
+                  }
+                },
+                "tags": [
+                  "unit:fig-1"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "rev": 18,
+          "document": {
+            "inputs": {
+              "repo": {
+                "type": "string",
+                "doc": "The repo"
+              },
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {},
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                },
+                "paused": "hold b"
+              },
+              "f": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              },
+              "g": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build",
+                "tags": [
+                  "late"
+                ]
+              },
+              "h": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build",
+                "tags": [
+                  "late"
+                ]
+              },
+              "fig-1-fork": {
+                "run": "fixture.echo",
+                "in": {
+                  "value": {
+                    "default": "fork"
+                  }
+                },
+                "tags": [
+                  "unit:fig-1"
+                ]
+              },
+              "fig-1-work": {
+                "run": "fixture.echo",
+                "after": [
+                  "fig-1-fork"
+                ],
+                "in": {
+                  "value": {
+                    "source": "fig-1-fork/value"
+                  }
+                },
+                "tags": [
+                  "unit:fig-1"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "rev": 19,
+          "document": {
+            "inputs": {
+              "repo": {
+                "type": "string",
+                "doc": "The repo"
+              },
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {},
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                },
+                "paused": "hold b"
+              },
+              "f": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              },
+              "g": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build",
+                "tags": [
+                  "late"
+                ]
+              },
+              "h": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build",
+                "tags": [
+                  "late"
+                ]
+              },
+              "fig-1-fork": {
+                "run": "fixture.echo",
+                "in": {
+                  "value": {
+                    "default": "fork"
+                  }
+                },
+                "tags": [
+                  "unit:fig-1",
+                  "wave-3"
+                ]
+              },
+              "fig-1-work": {
+                "run": "fixture.echo",
+                "after": [
+                  "fig-1-fork"
+                ],
+                "in": {
+                  "value": {
+                    "source": "fig-1-fork/value"
+                  }
+                },
+                "tags": [
+                  "unit:fig-1",
+                  "wave-3"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "rev": 20,
+          "document": {
+            "inputs": {
+              "repo": {
+                "type": "string",
+                "doc": "The repo"
+              },
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {},
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 5,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                },
+                "paused": "hold b"
+              },
+              "f": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              },
+              "g": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build",
+                "tags": [
+                  "late"
+                ]
+              },
+              "h": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?",
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build",
+                "tags": [
+                  "late"
+                ]
+              },
+              "fig-1-fork": {
+                "run": "fixture.echo",
+                "in": {
+                  "value": {
+                    "default": "fork"
+                  }
+                },
+                "tags": [
+                  "unit:fig-1",
+                  "wave-3"
+                ]
+              },
+              "fig-1-work": {
+                "run": "fixture.echo",
+                "after": [
+                  "fig-1-fork"
+                ],
+                "in": {
+                  "value": {
+                    "source": "fig-1-fork/value"
+                  }
+                },
+                "tags": [
+                  "unit:fig-1",
+                  "wave-3"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "rev": 21,
+          "document": {
+            "inputs": {
+              "repo": {
+                "type": "string",
+                "doc": "The repo"
+              },
+              "limit": {
+                "type": "int",
+                "doc": "How many"
+              }
+            },
+            "outputs": {},
+            "steps": {
+              "c": {
+                "run": "fixture.echo",
+                "paused": "after review",
+                "priority": 7,
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "source": "repo"
+                  }
+                }
+              },
+              "a": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "b": {
+                "run": "fixture.echo",
+                "tags": [
+                  "unit:build",
+                  "exit"
+                ],
+                "after": [
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "a/value"
+                  }
+                },
+                "paused": "hold b"
+              },
+              "f": {
+                "run": "fixture.echo",
+                "scatter": "value",
+                "in": {
+                  "value": {
+                    "default": [
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "paused": true
+              },
+              "g": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build",
+                "tags": [
+                  "late"
+                ]
+              },
+              "h": {
+                "run": "fixture.echo",
+                "after": [
+                  "unit:build?",
+                  "a"
+                ],
+                "in": {
+                  "value": {
+                    "source": "c/value"
+                  }
+                },
+                "doc": "Gate on build",
+                "tags": [
+                  "late"
+                ]
+              },
+              "fig-1-fork": {
+                "run": "fixture.echo",
+                "in": {
+                  "value": {
+                    "default": "fork"
+                  }
+                },
+                "tags": [
+                  "unit:fig-1",
+                  "wave-3"
+                ]
+              },
+              "fig-1-work": {
+                "run": "fixture.echo",
+                "after": [
+                  "fig-1-fork"
+                ],
+                "in": {
+                  "value": {
+                    "source": "fig-1-fork/value"
+                  }
+                },
+                "tags": [
+                  "unit:fig-1",
+                  "wave-3"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "steps": 8,
+      "inputs": 2,
+      "outputs": 0,
+      "plan_edit_records": 17,
+      "attempt_snapshots": 3
+    },
+    {
+      "name": "beta",
+      "archived": false,
+      "revisions": [
+        {
+          "rev": 1,
+          "document": {
+            "steps": {}
+          }
+        }
+      ],
+      "steps": 0,
+      "inputs": 0,
+      "outputs": 0,
+      "plan_edit_records": 1,
+      "attempt_snapshots": 0
+    },
+    {
+      "name": "gamma",
+      "archived": true,
+      "revisions": [
+        {
+          "rev": 1,
+          "document": {
+            "steps": {}
+          }
+        },
+        {
+          "rev": 2,
+          "document": {
+            "steps": {
+              "x": {
+                "run": "fixture.submit",
+                "in": {
+                  "value": {
+                    "default": true
+                  }
+                },
+                "outputs": {
+                  "extra": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "rev": 3,
+          "document": {
+            "steps": {
+              "x": {
+                "run": "fixture.submit",
+                "in": {
+                  "value": {
+                    "default": true
+                  }
+                },
+                "outputs": {
+                  "extra": "string"
+                }
+              }
+            },
+            "inputs": {
+              "k": "boolean"
+            }
+          }
+        },
+        {
+          "rev": 4,
+          "document": {
+            "steps": {
+              "x": {
+                "run": "fixture.submit",
+                "in": {
+                  "value": {
+                    "source": "k"
+                  }
+                },
+                "outputs": {
+                  "extra": "string"
+                }
+              }
+            },
+            "inputs": {
+              "k": "boolean"
+            }
+          }
+        },
+        {
+          "rev": 5,
+          "document": {
+            "steps": {
+              "x": {
+                "run": "fixture.submit",
+                "in": {
+                  "value": {
+                    "source": "k"
+                  }
+                },
+                "outputs": {
+                  "extra": "string"
+                }
+              }
+            },
+            "inputs": {
+              "k": "boolean"
+            },
+            "outputs": {
+              "out": {
+                "source": "x/value"
+              }
+            }
+          }
+        }
+      ],
+      "steps": 1,
+      "inputs": 1,
+      "outputs": 1,
+      "plan_edit_records": 5,
+      "attempt_snapshots": 0
+    }
+  ],
+  "deleted": [
+    "delta"
+  ],
+  "warnings": [
+    {
+      "project": "alpha",
+      "about": "the completion snapshot of an attempt of step a"
+    },
+    {
+      "project": "gamma",
+      "about": "the plan.edit record of rev 3 (author)"
+    }
+  ]
+}

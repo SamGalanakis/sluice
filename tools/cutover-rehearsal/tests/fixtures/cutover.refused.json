@@ -1,0 +1,17 @@
+{
+  "project": "lash",
+  "step": "normalize-work",
+  "runs": [
+    "0199c3b0-1a2b-7c3d-8e4f-5a6b7c8d9e0f"
+  ],
+  "attempts": [
+    "0199c3b0-1a2b-7c3d-8e4f-5a6b7c8d9e10"
+  ],
+  "error": {
+    "error": "invalid",
+    "message": "invalid stored plan",
+    "errors": [
+      "steps.normalize-work.run: unknown fn agent.lane"
+    ]
+  }
+}

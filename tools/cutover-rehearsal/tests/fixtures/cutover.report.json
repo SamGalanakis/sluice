@@ -1,0 +1,59 @@
+{
+  "sha": "4f1c2d3e",
+  "schema": 3,
+  "deadline": "2026-10-12T18:00:00Z",
+  "reason": "schema-3 cutover at 2026-10-12T18:00:00Z: stopped at the deadline; retry it after the cutover",
+  "projects": 6,
+  "revisions": 1874,
+  "stopped": [
+    {
+      "project": "lash",
+      "step": "normalize-work",
+      "run": "0199c3b0-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+      "requested": "cancel",
+      "outcome": {
+        "status": "failed",
+        "error": "cancelled"
+      },
+      "step_status": "failed",
+      "step_error": "cancelled",
+      "advice": "retry"
+    },
+    {
+      "project": "lash",
+      "step": "review-work",
+      "run": "0199c3b0-2b3c-7d4e-8f50-6b7c8d9e0f1a",
+      "requested": "cancel",
+      "outcome": {
+        "status": "succeeded"
+      },
+      "step_status": "succeeded",
+      "advice": "none"
+    },
+    {
+      "project": "lash",
+      "step": "tests-scatter",
+      "run": "0199c3b0-3c4d-7e5f-8061-7c8d9e0f1a2b",
+      "requested": "cancel",
+      "outcome": {
+        "status": "failed",
+        "error": "cancelled"
+      },
+      "step_status": "failed",
+      "step_error": "fn_failure",
+      "advice": "read-then-retry"
+    },
+    {
+      "project": null,
+      "call": "0199c3b0-4d5e-7f60-8172-8d9e0f1a2b3c",
+      "run": "0199c3b0-4d5e-7f60-8172-8d9e0f1a2b3d",
+      "requested": "stop",
+      "outcome": {
+        "status": "failed",
+        "error": "process_lost"
+      },
+      "advice": "call-again"
+    }
+  ],
+  "refused": []
+}

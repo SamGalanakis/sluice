@@ -1,0 +1,58 @@
+[
+  {
+    "case": "gap",
+    "about": "a revision missing from plan_edits",
+    "project": "alpha",
+    "rev": 3,
+    "sql": "DELETE FROM plan_edits WHERE rev=3 AND project_id=(SELECT project_id FROM projects WHERE name='alpha' AND deleted_at IS NULL);"
+  },
+  {
+    "case": "origin",
+    "about": "rev 1 is not the empty initializer",
+    "project": "beta",
+    "rev": 1,
+    "sql": "UPDATE plan_edits SET ops='[{\"op\":\"add\",\"path\":\"/inputs\",\"value\":{}}]' WHERE rev=1 AND project_id=(SELECT project_id FROM projects WHERE name='beta' AND deleted_at IS NULL);"
+  },
+  {
+    "case": "patch",
+    "about": "a revision whose ops do not apply",
+    "project": "alpha",
+    "rev": 4,
+    "sql": "UPDATE plan_edits SET ops='[{\"op\":\"remove\",\"path\":\"/steps/nowhere\"}]' WHERE rev=4 AND project_id=(SELECT project_id FROM projects WHERE name='alpha' AND deleted_at IS NULL);"
+  },
+  {
+    "case": "final",
+    "about": "the replayed document is not plans.doc",
+    "project": "gamma",
+    "rev": 5,
+    "sql": "UPDATE plans SET doc=json_set(doc,'$.steps.x.doc','drifted') WHERE project_id=(SELECT project_id FROM projects WHERE name='gamma' AND deleted_at IS NULL);"
+  },
+  {
+    "case": "steps_row",
+    "about": "a steps row's declaration differs from the document",
+    "project": "alpha",
+    "rev": 21,
+    "sql": "UPDATE steps SET declaration=json_set(declaration,'$.doc','drifted') WHERE step_id='c' AND project_id=(SELECT project_id FROM projects WHERE name='alpha' AND deleted_at IS NULL);"
+  },
+  {
+    "case": "steps_set",
+    "about": "the step ids differ from the document's",
+    "project": "alpha",
+    "rev": 21,
+    "sql": "DELETE FROM steps WHERE step_id='h' AND project_id=(SELECT project_id FROM projects WHERE name='alpha' AND deleted_at IS NULL);"
+  },
+  {
+    "case": "inputs_set",
+    "about": "the input names differ from the document's",
+    "project": "gamma",
+    "rev": 5,
+    "sql": "DELETE FROM inputs WHERE name='k' AND project_id=(SELECT project_id FROM projects WHERE name='gamma' AND deleted_at IS NULL);"
+  },
+  {
+    "case": "orphan_record",
+    "about": "a plan.edit record whose rev has no plan_edits row",
+    "project": "alpha",
+    "rev": 99,
+    "sql": "INSERT INTO records(project_id, at, kind, payload) VALUES ((SELECT project_id FROM projects WHERE name='alpha' AND deleted_at IS NULL), '2026-10-09T00:00:00Z', 'plan.edit', '{\"kind\":\"plan.edit\",\"rev\":99,\"author\":\"x\",\"reason\":\"\",\"ops\":[]}');"
+  }
+]

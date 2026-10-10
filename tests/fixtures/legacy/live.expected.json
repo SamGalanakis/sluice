@@ -1,0 +1,59 @@
+{
+  "from_schema": 1,
+  "projects": [
+    {
+      "name": "live",
+      "archived": false,
+      "revisions": [
+        {
+          "rev": 1,
+          "document": {
+            "steps": {}
+          }
+        },
+        {
+          "rev": 2,
+          "document": {
+            "steps": {
+              "tests-main": {
+                "run": "fixture.echo",
+                "tags": [
+                  "rolling"
+                ],
+                "in": {
+                  "value": {
+                    "default": 1
+                  }
+                }
+              },
+              "build": {
+                "run": "fixture.echo",
+                "needs": {
+                  "cpu": 1
+                },
+                "in": {
+                  "value": {
+                    "default": 2
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "steps": 2,
+      "inputs": 0,
+      "outputs": 0,
+      "plan_edit_records": 2,
+      "attempt_snapshots": 2
+    }
+  ],
+  "deleted": [],
+  "warnings": [],
+  "live": {
+    "attempts": 3,
+    "runs": 3,
+    "leases": 1,
+    "calls": 1
+  }
+}
