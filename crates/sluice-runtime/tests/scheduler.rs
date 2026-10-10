@@ -88,7 +88,7 @@ impl Fixture {
             panic!("project reply")
         };
         let project = p.project_id;
-        command(&broker,json!({"command":"plan_patch","args":{"project":json!({"kind":"id","value":project}),"rev":1,"ops":[{"op":"replace","path":"","value":doc}],"start":true,"dry_run":false,"reason":"test","author":"test"}})).await;
+        command(&broker,json!({"command":"plan_edit","args":{"project":json!({"kind":"id","value":project}),"rev":1,"ops":ops_of(&doc),"start":true,"dry_run":false,"reason":"test","author":"test"}})).await;
         broker.acquire_scheduler("test".into()).await.unwrap();
         Self {
             home,
@@ -117,8 +117,24 @@ impl Fixture {
         command(&self.broker,json!({"command":"step_retry","args":{"project":json!({"kind":"id","value":self.project}),"selection":{"steps":["each"],"tags":null},"message":"try again","reason":"test","author":"test"}})).await;
     }
     async fn patch(&self, rev: u64, ops: Value) {
-        command(&self.broker,json!({"command":"plan_patch","args":{"project":json!({"kind":"id","value":self.project}),"rev":rev,"ops":ops,"start":true,"dry_run":false,"reason":"test","author":"test"}})).await;
+        command(&self.broker,json!({"command":"plan_edit","args":{"project":json!({"kind":"id","value":self.project}),"rev":rev,"ops":ops,"start":true,"dry_run":false,"reason":"test","author":"test"}})).await;
     }
+}
+/// The `plan_edit` operations that build a plan document from an empty plan: each input,
+/// output and step put in the document's order.
+fn ops_of(doc: &Value) -> Value {
+    let section = |name: &str| doc[name].as_object().cloned().unwrap_or_default();
+    let mut ops = vec![];
+    for (name, declaration) in section("inputs") {
+        ops.push(json!({"op":"input.put","name":name,"declaration":declaration}));
+    }
+    for (name, binding) in section("outputs") {
+        ops.push(json!({"op":"output.put","name":name,"source":binding["source"]}));
+    }
+    for (step, spec) in section("steps") {
+        ops.push(json!({"op":"step.add","step":step,"spec":spec}));
+    }
+    Value::Array(ops)
 }
 async fn command(b: &Coordinator<Fake>, v: Value) -> CommandReply {
     b.command(decode_json(&serde_json::to_vec(&v).unwrap()).unwrap())
@@ -237,7 +253,7 @@ async fn changed_scatter_hash_replaces_every_item_and_predecessor() {
     f.retry().await;
     f.patch(
         2,
-        json!([{"op":"replace","path":"/steps/each/in/value/default","value":[2,1]}]),
+        json!([{"op":"step.update","step":"each","changes":{"in":{"value":{"default":[2,1]}}}}]),
     )
     .await;
     f.tick().await;
@@ -280,7 +296,7 @@ async fn pause_precedes_skip_and_zero_capacity_does_not_block_plain_work() {
     assert_eq!(f.status().await["steps"]["held"]["status"], "pending");
     f.patch(
         2,
-        json!([{"op":"replace","path":"/steps/held/paused","value":false}]),
+        json!([{"op":"step.update","step":"held","changes":{"paused":false}}]),
     )
     .await;
     f.tick().await;
@@ -338,7 +354,7 @@ async fn section_waiter_grants_before_plan_admission_even_without_new_ready_work
     command(&f.broker,json!({"command":"acquire_lease","args":{"run":run,"resource":"cpu","amount":1,"priority":0,"request_id":"section"}})).await;
     f.patch(
         2,
-        json!([{"op":"replace","path":"/steps/pending/paused","value":false}]),
+        json!([{"op":"step.update","step":"pending","changes":{"paused":false}}]),
     )
     .await;
     f.tick().await;
@@ -383,7 +399,7 @@ async fn pause_running_does_not_cancel_and_lease_conflict_fences_admission() {
     f.tick().await;
     f.patch(
         2,
-        json!([{"op":"add","path":"/steps/active/paused","value":true}]),
+        json!([{"op":"step.update","step":"active","changes":{"paused":true}}]),
     )
     .await;
     let launch = f.launches()[0].clone();

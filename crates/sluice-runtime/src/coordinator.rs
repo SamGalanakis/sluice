@@ -513,7 +513,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 artifacts::recover(self.writer(),self.home()).await.map_err(|e|e.into_public(false))?; Ok(CommandReply::Project(ProjectIdentity{project_id:project.project_id,name:project.name}))
             },
             CommandRequest::PlanGet{project}=>self.reads().snapshot(move|sql|{let id=messages_project(sql,&project)?;let ctx=context(sql,id,&catalog)?;Ok(json!({"project":projects_identity(sql,id)?,"rev":ctx.revision,"plan":ctx.plan.document()}))}).await.map_err(|e|e.into_public(true)).and_then(data),
-            CommandRequest::Status(query)=>self.reads().snapshot(move|sql|crate::status::status(sql,&catalog,query)).await.map_err(|e|e.into_public(true)).and_then(data),
+            CommandRequest::Status(query)=>{let cache=self.inner.plans.clone();self.reads().snapshot(move|sql|crate::status::status(sql,&catalog,&cache,query)).await.map_err(|e|e.into_public(true)).and_then(data)},
             CommandRequest::BoardDocRead(request) => self.reads().snapshot(move |sql| {
                 let doc = projects::board_doc_read(sql, &request.project)?;
                 Ok(json!({
@@ -589,11 +589,12 @@ impl<H: ExecutionHost> Coordinator<H> {
             message,
         };
         let id = step.clone();
+        let cache = self.inner.plans.clone();
         let (project, identity, frozen, submission) = self
             .reads()
             .snapshot(move |sql| {
                 let project = messages_project(sql, &project)?;
-                let ctx = context(sql, project, &catalog)?;
+                let ctx = cached_context(sql, project, &catalog, &cache)?;
                 let spec = ctx.plan.steps().get(&id).ok_or_else(|| PublicError::NotFound {
                     message: format!("no step {id}"),
                 })?;

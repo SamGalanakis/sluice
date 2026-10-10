@@ -120,10 +120,8 @@ impl Served {
         self.client.command(request(name, args)).await
     }
     async fn plan(&self) -> Value {
-        let CommandReply::Data(v) = self.call("plan_get", json!({})).await.unwrap() else {
-            panic!("plan")
-        };
-        v.into_value()
+        let reply = self.call("plan_get", json!({})).await.unwrap();
+        serde_json::to_value(&reply).unwrap()["data"].take()
     }
     async fn close(self) {
         self.stop.cancel();
@@ -248,7 +246,7 @@ async fn unit_add_refuses_a_string_model_and_takes_an_object_from_inputs() {
 }
 
 #[tokio::test]
-async fn step_add_step_set_input_and_plan_patch_refuse_a_string_model() {
+async fn step_add_step_set_input_and_plan_edit_refuse_a_string_model() {
     let home = home::ScratchHome::new().unwrap();
     let served = serve(&home, catalog(json!("Any?"))).await;
     project(&served).await;
@@ -276,9 +274,9 @@ async fn step_add_step_set_input_and_plan_patch_refuse_a_string_model() {
     let (message, _) = refused(
         served
             .call(
-                "plan_patch",
-                json!({"rev":rev,"ops":[{"op":"add","path":"/steps/w","value":worker(json!({"default":"sol"}))}],
-                       "dry_run":false,"reason":"patch"}),
+                "plan_edit",
+                json!({"rev":rev,"ops":[{"op":"step.add","step":"w","spec":worker(json!({"default":"sol"}))}],
+                       "reason":"edit"}),
             )
             .await,
     );
@@ -304,9 +302,9 @@ async fn step_add_step_set_input_and_plan_patch_refuse_a_string_model() {
     let rev = served.plan().await["rev"].clone();
     served
         .call(
-            "plan_patch",
-            json!({"rev":rev,"ops":[{"op":"add","path":"/inputs","value":{"model":"Any"}}],
-                   "dry_run":false,"reason":"input"}),
+            "plan_edit",
+            json!({"rev":rev,"ops":[{"op":"input.put","name":"model","declaration":"Any"}],
+                   "reason":"input"}),
         )
         .await
         .unwrap();

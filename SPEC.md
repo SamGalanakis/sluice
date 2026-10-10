@@ -918,6 +918,11 @@ A coordinator that starts finds runs whose guardians are still alive and watches
 and fails runs whose guardian and payload are gone without a completion (`lost`, error
 `process_lost`). A live run that no step or call references is stopped (`run.orphan`). A
 completion is journalled by the guardian and acknowledged durably by the coordinator.
+(schema 3; lands with the plan-rows cutover) A run's result is decided from what its attempt
+froze when it was admitted (its outputs contract, its inputs and its identity), never from a
+plan: the attempt keeps no copy of the plan, only the revision it was admitted at
+(`admitted_rev`), and the project's current plan only reconciles after the result, so a plan
+that no longer compiles (a broken fn catalog) never fails a completion.
 
 A starting coordinator answers at once. Its first adoption pass adopts runs concurrently, at
 most 16 at a time. During that pass it serves reads, the scheduler lease and the runs' own

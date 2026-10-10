@@ -63,7 +63,7 @@ async fn setup() -> (home::ScratchHome, Coordinator<Fake>, Fake, ProjectId) {
         .await
         .unwrap();
     let CommandReply::Project(p)=broker.command(request(json!({"command":"project_create","args":{"name":"p","description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap()else{panic!("project")};
-    broker.command(request(json!({"command":"plan_patch","args":{"project":json!({"kind":"id","value":p.project_id}),"rev":1,"ops":[{"op":"add","path":"/steps/work","value":{"run":"fixture.submit","in":{"value":{"default":1}},"outputs":{"submitted":"boolean"}}}],"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
+    broker.command(request(json!({"command":"plan_edit","args":{"project":json!({"kind":"id","value":p.project_id}),"rev":1,"ops":[{"op":"step.add","step":"work","spec":{"run":"fixture.submit","in":{"value":{"default":1}},"outputs":{"submitted":"boolean"}}}],"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
     (home, broker, fake, p.project_id)
 }
 fn guardian(l: &Launch) -> GuardianIdentity {
@@ -557,10 +557,10 @@ async fn receipts_follow_durable_listening_whether_the_guardian_polls_or_watches
         }
         step
     };
-    b.command(request(json!({"command":"plan_patch","args":{"project":json!({"kind":"id","value":p}),"rev":1,"ops":[
-        {"op":"add","path":"/steps/polled","value":step(None)},
-        {"op":"add","path":"/steps/watched","value":step(None)},
-        {"op":"add","path":"/steps/quiet","value":step(Some(false))},
+    b.command(request(json!({"command":"plan_edit","args":{"project":json!({"kind":"id","value":p}),"rev":1,"ops":[
+        {"op":"step.add","step":"polled","spec":step(None)},
+        {"op":"step.add","step":"watched","spec":step(None)},
+        {"op":"step.add","step":"quiet","spec":step(Some(false))},
     ],"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
     let say = |to: &'static str| speak(&b, p, "say", json!({"to":to,"body":"hello"}));
     // Pending: the next run is assigned it.
@@ -1840,7 +1840,7 @@ async fn agent_setup() -> (
         .await
         .unwrap();
     let CommandReply::Project(p)=broker.command(request(json!({"command":"project_create","args":{"name":"p","description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap()else{panic!("project")};
-    broker.command(request(json!({"command":"plan_patch","args":{"project":json!({"kind":"id","value":p.project_id}),"rev":1,"ops":[{"op":"add","path":"/steps/work","value":{"run":"agent.run","in":{"engine":{"default":"codex"},"cwd":{"default":repo},"spec":{"default":"Fix it"}},"outputs":{"summary":"string"}}}],"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
+    broker.command(request(json!({"command":"plan_edit","args":{"project":json!({"kind":"id","value":p.project_id}),"rev":1,"ops":[{"op":"step.add","step":"work","spec":{"run":"agent.run","in":{"engine":{"default":"codex"},"cwd":{"default":repo},"spec":{"default":"Fix it"}},"outputs":{"summary":"string"}}}],"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
     (home, broker, fake, p.project_id, repo)
 }
 fn git(repo: &std::path::Path, args: &[&str]) -> String {
@@ -1989,5 +1989,185 @@ async fn step_settle_refuses_a_fn_that_composes_its_agent_with_the_way_by_hand()
     assert!(
         matches!(&refused, Err(PublicError::Invalid { message, .. }) if message.contains("is succeeded, not finishing")),
         "{refused:?}"
+    );
+}
+
+/// A run admitted before its plan moved on completes from what its attempt froze: the attempt
+/// keeps no plan snapshot, only the revision it was admitted at, and later edits (a new step,
+/// the running step's own tags) change nothing about its result.
+#[tokio::test]
+async fn a_run_completes_from_its_attempt_after_the_plan_moved_on() {
+    let (_home, b, f, p) = setup().await;
+    b.acquire_scheduler("s".into()).await.unwrap();
+    reconcile_project(&b, p, "s").await.unwrap();
+    let l = f.0.lock().unwrap()[0].clone();
+    run_started(&b, &l).await;
+    let attempt = l.identity.attempt;
+    let (frozen, provenance): (Value, Value) = b
+        .reads()
+        .snapshot(move |sql| {
+            let (request, provenance): (String, String) = sql.query_row(
+                "SELECT request,provenance FROM attempts WHERE attempt_id=?1",
+                [attempt.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            Ok((
+                serde_json::from_str(&request)?,
+                serde_json::from_str(&provenance)?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(provenance["runtime"]["admitted_rev"], 2);
+    assert!(
+        provenance["runtime"].get("completion").is_none(),
+        "{provenance}"
+    );
+    assert!(frozen["provenance"]["runtime"].get("completion").is_none());
+    assert_eq!(frozen["declaration"]["run"], "fixture.submit");
+    // The plan moves on while it runs: a step added, the running step retagged.
+    let project = json!({"kind":"id","value":p});
+    let CommandReply::Edit(edit) = b
+        .command(request(json!({"command":"plan_edit","args":{"project":project,"reason":"later","ops":[
+            {"op":"step.add","step":"later","spec":{"run":"fixture.echo","in":{"value":{"default":2}},"paused":true}},
+            {"op":"step.update","step":"work","changes":{"tags":["while-running"]}}
+        ]}})))
+        .await
+        .unwrap()
+    else {
+        panic!("an edit result")
+    };
+    assert_eq!(edit.rev, Revision(3));
+    b.complete(
+        journal(
+            &b,
+            &l,
+            PayloadResult::Succeeded(decode_json(br#"{"value":1,"submitted":true}"#).unwrap()),
+        )
+        .await,
+    )
+    .await
+    .unwrap();
+    let status = data_of(
+        &b,
+        json!({"command":"status","args":{"project":project,"selection":{"steps":null,"tags":null}}}),
+    )
+    .await;
+    assert_eq!(status["steps"]["work"]["status"], "succeeded", "{status}");
+}
+
+/// The edit pipeline's refusals: what a caller supplies empty is refused before anything is
+/// prepared, an explicit stale revision is a conflict naming the current one, and a run's
+/// callback may not edit another project.
+#[tokio::test]
+async fn plan_edit_refuses_empty_supplies_and_a_stale_revision_before_preparing() {
+    let (_home, b, _f, p) = setup().await;
+    let project = json!({"kind":"id","value":p});
+    let refused = |args: Value| {
+        let b = b.clone();
+        async move {
+            b.command(request(json!({"command":"plan_edit","args":args})))
+                .await
+        }
+    };
+    let no_ops = refused(json!({"project":project,"ops":[],"reason":"none"}))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        no_ops,
+        PublicError::BadRequest {
+            message: "ops: name at least one operation".into()
+        }
+    );
+    let all = refused(
+        json!({"project":project,"reason":"all","preview_scope":"all",
+        "ops":[{"op":"step.update","step":"work","changes":{"doc":"x"}}]}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        all,
+        PublicError::BadRequest {
+            message: "preview_scope \"all\" needs dry_run: true".into()
+        }
+    );
+    let stale = refused(json!({"project":project,"rev":1,"reason":"stale",
+        "ops":[{"op":"step.update","step":"work","changes":{"doc":"x"}}]}))
+    .await
+    .unwrap_err();
+    assert_eq!(
+        stale,
+        PublicError::Conflict {
+            message: "plan is at rev 2".into(),
+            current_rev: Some(Revision(2)),
+        }
+    );
+    let empty_unit = b
+        .command(request(json!({"command":"unit_update","args":{"project":project,"unit":"work","changes":{},"reason":"none"}})))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        empty_unit,
+        PublicError::BadRequest {
+            message: "changes: name at least one step".into()
+        }
+    );
+}
+
+/// `verify` rebuilds every index row from the declarations and reports each stored one that
+/// differs: a reference re-pointed by hand, a step's unit changed and an edge deleted.
+#[tokio::test]
+async fn verify_reports_a_hand_corrupted_index_row() {
+    let (_home, b, _f, p) = setup().await;
+    let project = json!({"kind":"id","value":p});
+    b.command(request(json!({"command":"plan_edit","args":{"project":project,"reason":"reader","ops":[
+        {"op":"step.add","step":"reader","spec":{"run":"fixture.echo","in":{"value":{"source":"work/submitted"}}}}
+    ]}})))
+    .await
+    .unwrap();
+    let registry = Arc::new(b.catalog().clone());
+    let index_problems = |problems: Vec<sluice_runtime::verify::Problem>| {
+        problems
+            .into_iter()
+            .filter(|p| p.r#where.contains(": index#"))
+            .map(|p| format!("{}: {}", p.r#where.split_once(": ").unwrap().1, p.message))
+            .collect::<Vec<_>>()
+    };
+    let clean = sluice_runtime::verify::verify(b.reads(), registry.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(index_problems(clean), Vec::<String>::new());
+    b.writer()
+        .write(sluice_store::RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE plan_refs SET source_port='value' WHERE project_id=?1 AND consumer_id='reader'",
+                [p.to_string()],
+            )?;
+            tx.sql().execute(
+                "UPDATE steps SET unit='elsewhere' WHERE project_id=?1 AND step_id='reader'",
+                [p.to_string()],
+            )?;
+            tx.sql().execute(
+                "DELETE FROM plan_edges WHERE project_id=?1 AND target_step='reader'",
+                [p.to_string()],
+            )?;
+            tx.changed(Some(p), "plan");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let found = index_problems(
+        sluice_runtime::verify::verify(b.reads(), registry, None)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        found,
+        [
+            "index#steps.reader.unit: stored unit elsewhere differs from the declaration's reader",
+            "index#plan_refs.step.reader.in.value[0]: declared reference missing from the index: binding step work/submitted",
+            "index#plan_refs.step.reader.in.value[0]: stored reference the declarations do not make: binding step work/value",
+            "index#plan_edges.reader: declared edge missing from the index: data reader after work",
+        ]
     );
 }

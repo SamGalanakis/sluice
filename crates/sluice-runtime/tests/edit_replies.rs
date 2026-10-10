@@ -7,6 +7,7 @@ use sluice_model::{
     commands::*,
     error::PublicError,
     ids::*,
+    plan_rows::EditResult,
     rpc::{FnInvocation, JsonMap, decode_json},
 };
 use sluice_process::guardian::{AdoptionAttempt, AdoptionHost, FnHost, GuardianPresence};
@@ -94,17 +95,19 @@ impl Fixture {
     async fn rev(&self) -> u64 {
         self.plan().await["rev"].as_u64().unwrap()
     }
+    /// One `plan_edit` of these operations at the current revision.
     async fn patch(&self, ops: Value) {
         let rev = self.rev().await;
-        self.call(
-            "plan_patch",
-            json!({"rev":rev,"ops":ops,"dry_run":false,"reason":"fixture","start":true}),
-        )
-        .await
-        .unwrap();
+        self.call("plan_edit", json!({"rev":rev,"ops":ops,"reason":"fixture"}))
+            .await
+            .unwrap();
     }
     async fn history_len(&self) -> usize {
-        data(self.call("plan_history", json!({})).await.unwrap())
+        data(
+            self.call("plan_history", json!({"limit":1000}))
+                .await
+                .unwrap(),
+        )["entries"]
             .as_array()
             .unwrap()
             .len()
@@ -127,11 +130,9 @@ impl Fixture {
 fn request(name: &str, args: Value) -> CommandRequest {
     decode_json(&serde_json::to_vec(&json!({"command":name,"args":args})).unwrap()).unwrap()
 }
+/// A reply's object, whatever its variant (`{"reply": …, "data": …}` on the wire).
 fn data(reply: CommandReply) -> Value {
-    let CommandReply::Data(v) = reply else {
-        panic!("expected data, got {reply:?}")
-    };
-    v.into_value()
+    serde_json::to_value(&reply).unwrap()["data"].take()
 }
 fn edit(reason: &str) -> Value {
     json!({"dry_run":false,"reason":reason})
@@ -150,11 +151,11 @@ fn ids(values: &[StepId]) -> Vec<&str> {
 }
 
 const CHAIN: &str = r#"[
-  {"op":"add","path":"/inputs","value":{"go":"boolean"}},
-  {"op":"add","path":"/steps/a","value":{"run":"core.external","outputs":{"ok":"boolean"}}},
-  {"op":"add","path":"/steps/b","value":{"run":"fixture.echo","in":{"value":{"source":"a/ok"}}}},
-  {"op":"add","path":"/steps/c","value":{"run":"fixture.echo","in":{"value":{"default":1}},"after":["b"]}},
-  {"op":"add","path":"/steps/d","value":{"run":"fixture.echo","in":{"value":{"default":2}},"after":["go"],"tags":["unit:lone"]}}
+  {"op":"input.put","name":"go","declaration":"boolean"},
+  {"op":"step.add","step":"a","spec":{"run":"core.external","outputs":{"ok":"boolean"}}},
+  {"op":"step.add","step":"b","spec":{"run":"fixture.echo","in":{"value":{"source":"a/ok"}}}},
+  {"op":"step.add","step":"c","spec":{"run":"fixture.echo","in":{"value":{"default":1}},"after":["b"]}},
+  {"op":"step.add","step":"d","spec":{"run":"fixture.echo","in":{"value":{"default":2}},"after":["go"],"tags":["unit:lone"]}}
 ]"#;
 
 #[tokio::test]
@@ -166,7 +167,7 @@ async fn edits_that_change_nothing_commit_no_revision_or_history() {
     let unchanged = |reply: CommandReply| {
         let result = edited(reply);
         assert_eq!(result.rev, Revision(rev));
-        assert!(result.preview.ops.is_empty(), "{result:?}");
+        assert!(result.preview.changes.is_empty(), "{result:?}");
     };
     // An edge already there.
     unchanged(
@@ -204,9 +205,9 @@ async fn edits_that_change_nothing_commit_no_revision_or_history() {
         .await
         .unwrap(),
     );
-    // A patch whose result is the plan as it is.
+    // A plan_edit whose net effect is the plan as it is.
     unchanged(
-        f.call("plan_patch", json!({"rev":rev,"ops":[{"op":"replace","path":"/steps/c/after","value":["b"]}],"dry_run":false,"reason":"same","start":true}))
+        f.call("plan_edit", json!({"rev":rev,"ops":[{"op":"step.update","step":"c","changes":{"after":["b"]}}],"reason":"same"}))
             .await
             .unwrap(),
     );
@@ -222,7 +223,7 @@ async fn edits_that_change_nothing_commit_no_revision_or_history() {
         panic!("prune reply")
     };
     assert_eq!(pruned.edit.rev, Revision(rev));
-    assert!(pruned.units.is_empty() && pruned.edit.preview.ops.is_empty());
+    assert!(pruned.units.is_empty() && pruned.edit.preview.changes.is_empty());
     // step_set_input still refuses an edit that changes nothing.
     let refused = f
         .call(
@@ -239,21 +240,17 @@ async fn edits_that_change_nothing_commit_no_revision_or_history() {
     assert_eq!(f.history_len().await, history);
     let plan_before = f.plan().await;
     let log_before = f.call("log_read", json!({"limit":1000})).await.unwrap();
+    // A batch with a refused operation or an invalid candidate writes nothing at all.
+    let three = json!({"op":"step.update","step":"c","changes":{"in":{"value":{"default":3}}}});
     for ops in [
-        json!([{ "op":"replace", "path":"/steps/c/in/value/default", "value":3 },
-               { "op":"test", "path":"/steps/d/in/value/default", "value":99 }]),
-        json!([{ "op":"replace", "path":"/steps/c/in/value/default", "value":3 },
-               { "op":"remove", "path":"/steps/absent" }]),
-        json!([{ "op":"replace", "path":"/steps/c/in/value/default", "value":3 },
-               { "op":"replace", "path":"/steps/d/run", "value":"missing" }]),
+        json!([three, { "op":"step.update", "step":"absent", "changes":{"doc":"x"} }]),
+        json!([three, { "op":"step.remove", "steps":["absent"] }]),
+        json!([three, { "op":"step.update", "step":"d", "changes":{"run":"missing"} }]),
     ] {
         assert!(
-            f.call(
-                "plan_patch",
-                json!({"rev":rev,"ops":ops,"dry_run":false,"reason":"refused","start":true})
-            )
-            .await
-            .is_err()
+            f.call("plan_edit", json!({"rev":rev,"ops":ops,"reason":"refused"}))
+                .await
+                .is_err()
         );
         assert_eq!(f.plan().await, plan_before);
         assert_eq!(f.rev().await, rev);
@@ -265,8 +262,8 @@ async fn edits_that_change_nothing_commit_no_revision_or_history() {
     }
     let stale = f
         .call(
-            "plan_patch",
-            json!({"rev":rev-1,"ops":[],"dry_run":false,"reason":"stale","start":true}),
+            "plan_edit",
+            json!({"rev":rev-1,"ops":[three],"reason":"stale"}),
         )
         .await
         .unwrap_err();
@@ -390,11 +387,11 @@ async fn step_set_input_reports_changed_and_unsupported_steps() {
 async fn prune_reports_removed_units_and_each_kept_unit_with_its_holder() {
     let f = Fixture::new().await;
     f.patch(json!([
-        {"op":"add","path":"/steps/old","value":{"run":"core.external","outputs":{"ok":"boolean"}}},
-        {"op":"add","path":"/steps/held","value":{"run":"core.external","outputs":{"ok":"boolean"}}},
-        {"op":"add","path":"/steps/out","value":{"run":"core.external","outputs":{"ok":"boolean"}}},
-        {"op":"add","path":"/steps/reader","value":{"run":"fixture.echo","in":{"value":{"source":"held/ok"}}}},
-        {"op":"add","path":"/outputs","value":{"final":{"source":"out/ok"}}}
+        {"op":"step.add","step":"old","spec":{"run":"core.external","outputs":{"ok":"boolean"}}},
+        {"op":"step.add","step":"held","spec":{"run":"core.external","outputs":{"ok":"boolean"}}},
+        {"op":"step.add","step":"out","spec":{"run":"core.external","outputs":{"ok":"boolean"}}},
+        {"op":"step.add","step":"reader","spec":{"run":"fixture.echo","in":{"value":{"source":"held/ok"}}}},
+        {"op":"output.put","name":"final","source":"out/ok"}
     ]))
     .await;
     for step in ["old", "held", "out"] {
@@ -488,8 +485,8 @@ async fn projects_list_reports_settings_and_icons_from_a_path() {
     let icon = f.home.root().join("icon.png");
     std::fs::write(&icon, PNG).unwrap();
     f.patch(json!([
-        {"op":"add","path":"/steps/a","value":{"run":"core.external","outputs":{"ok":"boolean"}}},
-        {"op":"add","path":"/steps/b","value":{"run":"core.external","outputs":{"ok":"boolean"}}}
+        {"op":"step.add","step":"a","spec":{"run":"core.external","outputs":{"ok":"boolean"}}},
+        {"op":"step.add","step":"b","spec":{"run":"core.external","outputs":{"ok":"boolean"}}}
     ]))
     .await;
     f.call(
@@ -593,12 +590,13 @@ async fn projects_list_reports_settings_and_icons_from_a_path() {
 async fn status_says_why_every_pending_step_waits() {
     let f = Fixture::new().await;
     f.patch(json!([
-        {"op":"add","path":"/inputs","value":{"go":"boolean","n":"int"}},
-        {"op":"add","path":"/steps/ext","value":{"run":"core.external","outputs":{"ok":"boolean"}}},
-        {"op":"add","path":"/steps/reads","value":{"run":"fixture.echo","in":{"value":{"source":"ext/ok"}}}},
-        {"op":"add","path":"/steps/gated","value":{"run":"fixture.echo","in":{"value":{"source":"n"}},"after":["go"]}},
-        {"op":"add","path":"/steps/held","value":{"run":"fixture.echo","in":{"value":{"default":1}},"paused":"by hand"}},
-        {"op":"add","path":"/steps/free","value":{"run":"fixture.echo","in":{"value":{"default":1}}}}
+        {"op":"input.put","name":"go","declaration":"boolean"},
+        {"op":"input.put","name":"n","declaration":"int"},
+        {"op":"step.add","step":"ext","spec":{"run":"core.external","outputs":{"ok":"boolean"}}},
+        {"op":"step.add","step":"reads","spec":{"run":"fixture.echo","in":{"value":{"source":"ext/ok"}}}},
+        {"op":"step.add","step":"gated","spec":{"run":"fixture.echo","in":{"value":{"source":"n"}},"after":["go"]}},
+        {"op":"step.add","step":"held","spec":{"run":"fixture.echo","in":{"value":{"default":1}},"paused":"by hand"}},
+        {"op":"step.add","step":"free","spec":{"run":"fixture.echo","in":{"value":{"default":1}}}}
     ]))
     .await;
     let status = f.status().await;

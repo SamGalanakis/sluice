@@ -69,6 +69,7 @@ fn resources_value(
 pub(crate) fn status(
     sql: &Connection,
     catalog: &Catalog,
+    cache: &crate::plan_cache::PlanCache,
     query: StatusQuery,
 ) -> sluice_store::Result<Value> {
     if query.view == StatusView::Units && query.brief {
@@ -80,7 +81,7 @@ pub(crate) fn status(
         ));
     }
     let id = sluice_store::messages::resolve_project(sql, &query.project)?;
-    let ctx = crate::coordinator::context(sql, id, catalog)?;
+    let ctx = crate::coordinator::cached_context(sql, id, catalog, cache)?;
     let plan = &ctx.plan;
     let state = plans::read_state(sql, id)?;
     let selected = status::select(

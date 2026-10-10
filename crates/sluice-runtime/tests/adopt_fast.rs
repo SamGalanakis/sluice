@@ -186,7 +186,7 @@ async fn project(broker: &Coordinator<Fake>, name: &str) -> ProjectId {
         panic!("project")
     };
     let id = created.project_id;
-    broker.command(request(json!({"command":"plan_patch","args":{"project":selector(id),"rev":1,"ops":[{"op":"add","path":"/steps/work","value":{"run":"fixture.submit","in":{"value":{"default":1}},"outputs":{"submitted":"boolean"}}}],"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
+    broker.command(request(json!({"command":"plan_edit","args":{"project":selector(id),"rev":1,"ops":[{"op":"step.add","step":"work","spec":{"run":"fixture.submit","in":{"value":{"default":1}},"outputs":{"submitted":"boolean"}}}],"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
     id
 }
 /// A home with one nonterminal run per name, launched under scheduler lease "s"
@@ -688,9 +688,9 @@ async fn concurrent_lost_runs_in_one_project_release_every_hold() {
     };
     let id = created.project_id;
     let ops: Vec<Value> = (0..4)
-        .map(|n| json!({"op":"add","path":format!("/steps/w{n}"),"value":{"run":"fixture.submit","in":{"value":{"default":n}},"outputs":{"submitted":"boolean"},"needs":{"lane":1}}}))
+        .map(|n| json!({"op":"step.add","step":format!("w{n}"),"spec":{"run":"fixture.submit","in":{"value":{"default":n}},"outputs":{"submitted":"boolean"},"needs":{"lane":1}}}))
         .collect();
-    broker.command(request(json!({"command":"plan_patch","args":{"project":selector(id),"rev":1,"ops":ops,"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
+    broker.command(request(json!({"command":"plan_edit","args":{"project":selector(id),"rev":1,"ops":ops,"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
     broker.acquire_scheduler("s".into()).await.unwrap();
     reconcile_project(&broker, id, "s").await.unwrap();
     broker.release_scheduler("s".into()).await.unwrap();
@@ -893,9 +893,9 @@ async fn held_watches_leave_the_connection_pool_two_per_run() {
         .unwrap();
     let id = project(&broker, "many").await;
     let ops: Vec<Value> = (0..35)
-        .map(|n| json!({"op":"add","path":format!("/steps/w{n}"),"value":{"run":"fixture.submit","in":{"value":{"default":n}},"outputs":{"submitted":"boolean"}}}))
+        .map(|n| json!({"op":"step.add","step":format!("w{n}"),"spec":{"run":"fixture.submit","in":{"value":{"default":n}},"outputs":{"submitted":"boolean"}}}))
         .collect();
-    broker.command(request(json!({"command":"plan_patch","args":{"project":selector(id),"rev":2,"ops":ops,"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
+    broker.command(request(json!({"command":"plan_edit","args":{"project":selector(id),"rev":2,"ops":ops,"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
     broker.acquire_scheduler("s".into()).await.unwrap();
     reconcile_project(&broker, id, "s").await.unwrap();
     broker.release_scheduler("s".into()).await.unwrap();

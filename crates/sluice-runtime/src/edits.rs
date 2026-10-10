@@ -20,7 +20,8 @@ use sluice_model::{
     plan::Plan,
     plan_rows::{
         CertifiedPlan, EDIT_TRIES, EditPreview, EditResult, InputEditResult, PlanRowsError,
-        PreparationReads, PreparedPlanEdit, PruneResult, ScopedState, ValidationTokens,
+        PreparationReads, PreparedPlanEdit, PreviewScope, PruneResult, ScopedState,
+        ValidationTokens,
     },
     units::{PruneHolder, PruneSet},
 };
@@ -153,9 +154,9 @@ pub(crate) fn check_supplied(command: &CommandRequest) -> Result<(), PublicError
 pub(crate) enum Prepared<T> {
     /// Answered without the writer: a dry run's preview, or a typed no-op's result at the
     /// current revision (nothing is committed).
-    Answer(CommandReply),
+    Answer(Box<CommandReply>),
     /// For the writer to commit while its tokens hold.
-    Commit(T),
+    Commit(Box<T>),
 }
 
 /// The retry rule (plan-rows §4): prepare in a read snapshot, hand the result to `commit`
@@ -185,9 +186,9 @@ where
         match prepared {
             Prepared::Answer(reply) => {
                 counters::answered();
-                return Ok(reply);
+                return Ok(*reply);
             }
-            Prepared::Commit(staged) => match commit(staged).await? {
+            Prepared::Commit(staged) => match commit(*staged).await? {
                 Some(reply) => {
                     counters::committed();
                     return Ok(reply);
@@ -464,7 +465,7 @@ pub(crate) fn prepare(
             would_stale: vec![],
             errors: vec![],
         };
-        return Ok(Prepared::Answer(if options.dry_run {
+        return Ok(Prepared::Answer(Box::new(if options.dry_run {
             CommandReply::Preview(preview)
         } else {
             edit_reply(
@@ -478,11 +479,23 @@ pub(crate) fn prepare(
                 lowered.inputs,
                 lowered.prune,
             )
-        }));
+        })));
+    }
+    let limits = crate::coordinator::resource_limits(sql, project)?;
+    if options.preview_scope == PreviewScope::All {
+        // A full dry run simulates the whole plan before and after (plan-rows §6.3): it reads
+        // every step's state, every input's value and every resource, not a read set.
+        let resources: Vec<String> = limits.keys().cloned().collect();
+        let all = read.take_new(&PreparationReads {
+            steps: base.steps().keys().cloned().collect(),
+            inputs: base.inputs().keys().cloned().collect(),
+            resources: resources.clone(),
+            competitors: resources,
+        });
+        merge(&mut state, plans::read_scoped_state(sql, project, &all)?);
     }
     read_rounds(sql, project, &base, &lowered.ops, &mut read, &mut state)?;
     let recipes = crate::dispatch_ext::load_recipes(&input.home, project)?;
-    let limits = crate::coordinator::resource_limits(sql, project)?;
     let mut prepared = prepare_plan_edit(
         &EditBase {
             plan: base.clone(),
@@ -515,21 +528,27 @@ pub(crate) fn prepare(
     if lowered.inputs.is_some() {
         prepared.inputs = lowered.inputs;
     }
+    // `plan_prune`'s removal set goes to the store beside its age evidence (plan-rows §8).
+    if lowered.prune.is_some() {
+        prepared.commit.prune = lowered.prune.clone();
+    }
     if prepared.dry_run {
-        return Ok(Prepared::Answer(CommandReply::Preview(prepared.preview)));
+        return Ok(Prepared::Answer(Box::new(CommandReply::Preview(
+            prepared.preview,
+        ))));
     }
     prepared.board_warnings =
         crate::coordinator::board_drops(sql, project, &base, &prepared.compiled.plan)?;
     let inputs = prepared.inputs.take();
-    let prune = lowered.prune.or_else(|| prepared.commit.prune.clone());
-    Ok(Prepared::Commit(Staged {
+    let prune = prepared.commit.prune.clone();
+    Ok(Prepared::Commit(Box::new(Staged {
         project,
         identity,
         edit: prepared,
         inputs,
         prune,
         evidence,
-    }))
+    })))
 }
 
 #[cfg(test)]
@@ -603,7 +622,7 @@ mod tests {
             let fanout: Vec<i64> = (0..2000).collect();
             a.wait();
             r.wait();
-            Ok(Prepared::Commit((seen, fanout.len() as i64)))
+            Ok(Prepared::Commit(Box::new((seen, fanout.len() as i64))))
         });
         let committed = Arc::new(Mutex::new(0_usize));
         let edit = {

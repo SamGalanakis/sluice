@@ -59,15 +59,15 @@ fn project(home: &Path) {
     );
     let patched = tool(
         home,
-        "plan_patch",
+        "plan_edit",
         &json!({
             "project": "demo", "rev": 1, "reason": "plan",
-            "ops": [{"op": "add", "path": "/steps/a",
-                     "value": {"run": "core.echo", "in": {"value": {"default": 1}}, "doc": "adds"}},
-                    {"op": "add", "path": "/steps/b",
-                     "value": {"run": "core.external",
-                               "in": {"seen": {"source": "a/value"}},
-                               "outputs": {"word": "string"}, "doc": "b"}}],
+            "ops": [{"op": "step.add", "step": "a",
+                     "spec": {"run": "core.echo", "in": {"value": {"default": 1}}, "doc": "adds"}},
+                    {"op": "step.add", "step": "b",
+                     "spec": {"run": "core.external",
+                              "in": {"seen": {"source": "a/value"}},
+                              "outputs": {"word": "string"}, "doc": "b"}}],
         })
         .to_string(),
     );
@@ -220,12 +220,12 @@ fn dirty_project(home: &Path) -> std::path::PathBuf {
     assert!(created.status.success());
     let patched = tool(
         home,
-        "plan_patch",
+        "plan_edit",
         &json!({
             "project": "demo", "rev": 1, "reason": "plan",
-            "ops": [{"op": "add", "path": "/steps/w",
-                     "value": {"run": "core.external", "in": {"cwd": {"default": repo}},
-                               "outputs": {"word": "string"}}}],
+            "ops": [{"op": "step.add", "step": "w",
+                     "spec": {"run": "core.external", "in": {"cwd": {"default": repo}},
+                              "outputs": {"word": "string"}}}],
         })
         .to_string(),
     );
