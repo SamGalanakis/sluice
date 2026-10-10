@@ -22,8 +22,13 @@ const PATTERNS: [&str; 8] = [
 /// What may still name the legacy document: the converter's legacy replay and its tests, lane
 /// H's test-only reference, the files that build or read legacy homes on purpose, and the
 /// tests that prove the removed tool is unknown.
-const EXEMPT: [&str; 13] = [
+const EXEMPT: [&str; 15] = [
     "crates/sluice-store/src/convert.rs",
+    // the cutover's own tests, whose scratch homes the schema-1 release serves (and edits)
+    // before the cutover, and the cutover's check of the converted plans against the schema-1
+    // backup
+    "crates/sluice/tests/cutover.rs",
+    "scripts/deploy",
     "crates/sluice-reference/",
     "crates/sluice-model/tests/fixtures/",
     "crates/sluice-store/tests/legacy_replay.rs",
