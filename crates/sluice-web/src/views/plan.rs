@@ -1008,9 +1008,15 @@ impl<'a> Plan<'a> {
             ui::stage_strip(&format!("Stages of {}", unit.id), &strip(unit)).0
         };
         format!(
-            "<div id=\"u-{id}\" class=\"pl-row rail-slot\" style=\"--lead:{lead};--cells:{cells};{m}\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-k\">{role}{g}<b>{word}</b>{chip}</span><span class=\"pl-t\">{title}</span><span class=\"pl-m\">{facts}</span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open {id}</a></div><div class=\"pl-cells\">{cells_html}</div>{more}{more_body}{more_end}</div>",
+            "<div id=\"u-{id}\" class=\"pl-row rail-slot\" style=\"--lead:{lead};--cells:{cells};{m}\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-k\">{role}{g}<b>{word}</b>{chip}</span><span class=\"pl-t\">{title}</span><span class=\"pl-m\">{facts}</span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open {id}</a></div><div class=\"pl-cells{dense}\">{cells_html}</div>{more}{more_body}{more_end}</div>",
             id = esc(unit.id.as_str()),
             m = medium(cells),
+            // five stages or more: a cell is too narrow for its overrun tag (the row's chip says it)
+            dense = if unit.stages.len() >= 5 {
+                " pl-dense"
+            } else {
+                ""
+            },
             attrs = self.attrs(unit),
             rail = ui::rail(),
             pick = ui::trace_button_open(),

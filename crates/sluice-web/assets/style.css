@@ -2380,6 +2380,7 @@ details.read-today .item { opacity: .85; }
 .pl-cells { grid-column: span var(--cells) / -1; min-width: 0; container-type: inline-size; }
 /* a narrow row's cells leave the overrun to the row's chip (its words stay for a reader) */
 @container (max-width: 479.98px) { .pl-cells .sc-over { display: none; } }
+.pl-dense .sc-over { display: none; }
 /* a running or stopped cell's time a size its cell holds: 20px, smaller as six stages share a
    narrow row */
 .pl-cells .strip:not(.pl-layer .strip) :is(.sc-run, .sc-look) .sc-time {
@@ -2499,6 +2500,10 @@ sluice-drawer#step-drawer .drawer .close:hover { background: var(--paper-2); }
                grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); }
 }
 @container sheet (max-width: 639.98px) {
+  /* a phone's row: its cells wrap, each wide enough for its name and time */
+  .pl-cells .strip:not(.pl-layer .strip) { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+                                            row-gap: 6px; }
+  .pl-rows .sh-stages { display: none; }
   .pl-sec > .pl-item, .pl-lead, .pl-cells, .pl-rows .sh-lead, .pl-rows .sh-stages { grid-column: 1 / -1; }
   .pl-row { row-gap: 10px; }
   .pl-graph { --cell: 48px; }
