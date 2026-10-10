@@ -719,7 +719,9 @@ The pages compose these parts; each lane that redraws one writes its section her
 - **A unit's page** (`/projects/id/<p>/units/<u>`): the band carries its name huge beside its
   id, recipe and how its steps stand, its stage strip from its recipe under a band rule. On the
   sheet its steps are modules (two a row from 640px of sheet, three from 1200, four from 2000,
-  six from 3000), the one asking the owner on the coral rule, a stop on the sand, a running one
+  six from 3000), each headed by its stage name with its id under it, its own title only when
+  it differs from the unit's (which the band already says), the one asking the owner on the
+  coral rule, a stop on the sand, a running one
   on the run rule; then its timeline and its last message.
 - **The inbox, Questions and a thread**: a band of their own (the name, the way back, a
   sentence of what waits on the owner, its count linking the questions). Questions to the owner

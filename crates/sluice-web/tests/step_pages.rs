@@ -108,10 +108,25 @@ async fn a_steps_band_carries_its_name_state_stages_and_actions_and_a_units_band
         let (names, here) = strip(band, unit);
         assert_eq!(names, stages, "{unit}");
         assert_eq!(here, None, "{unit}: a unit's own strip rings no stage");
-        // its steps as modules on the grid, headed by name
+        // its steps as modules on the grid, each headed by its stage with its id under it;
+        // the unit's title is in the band and never again in a module
+        let detail = &html[main..];
         for stage in stages {
             let id = format!("{unit}-{stage}");
             assert!(html.contains(&format!("id=\"us-{id}\"")), "{unit}: {id}");
+            assert!(
+                detail.contains(&format!(
+                    "<h3 class=\"mod-t\" id=\"us-{id}\"><a href=\"/projects/id/{p}/steps/{id}\">{stage}</a></h3><p class=\"mod-meta\"><code>{id}</code></p>"
+                )),
+                "{unit}: {id} {detail}"
+            );
+        }
+        if unit == "a-6" {
+            let title = "Terns: the spring guide&#39;s entries";
+            assert!(band.contains(title), "{band}");
+            let steps = &detail[detail.find("id=\"unit-steps\"").unwrap()..];
+            let steps = &steps[..steps.find("unit-tl").unwrap_or(steps.len())];
+            assert!(!steps.contains(title), "{steps}");
         }
     }
 }

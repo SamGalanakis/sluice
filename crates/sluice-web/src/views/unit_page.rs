@@ -127,6 +127,31 @@ impl UnitPage<'_> {
             _ => " longest",
         }
     }
+    /// A step's name inside its unit, the unit's title being in the band: its stage, else its
+    /// id past the unit's ("draft" for a-12-draft), else its id.
+    fn stage_name(&self, step: &StepView) -> String {
+        if !step.stage.is_empty() {
+            return step.stage.clone();
+        }
+        step.id
+            .as_str()
+            .strip_prefix(&format!("{}-", self.unit.id))
+            .unwrap_or(step.id.as_str())
+            .to_owned()
+    }
+    /// A step's own title, when it says something the unit's does not: "" when it has none
+    /// or it is the unit's title again.
+    fn own_title(&self, step: &StepView) -> String {
+        let unit = [self.unit.title.as_str(), self.unit.whole.as_str()];
+        if !step.titled()
+            || unit.contains(&step.title.as_str())
+            || unit.contains(&step.whole_heading())
+        {
+            String::new()
+        } else {
+            step.whole_heading().to_owned()
+        }
+    }
     /// A step's module: the question to the owner swells, a stop needs a look, the rest plain.
     fn module(&self, step: &StepView) -> TrustedHtml {
         let swell = if step.asking.is_some() {
