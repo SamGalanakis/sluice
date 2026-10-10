@@ -57,6 +57,8 @@ pub struct DayRun {
     pub outcome: Option<Shown>,
     /// Its start as stored (RFC 3339), for a ticking "running for".
     pub started_at: String,
+    /// Its step is still in the plan (a done unit retires its steps, but their runs stay).
+    pub kept: bool,
 }
 impl DayRun {
     /// How long it ran, as of `now`.
@@ -91,12 +93,22 @@ impl DayRun {
             (name, _) => name,
         }
     }
+    /// Its step's runs while the plan keeps the step, else its records on the project's log,
+    /// which keeps them after the step is retired.
     pub fn href(&self) -> String {
-        format!(
-            "/projects/id/{}/steps/{}?tab=runs",
-            self.project,
-            url_part(&self.step)
-        )
+        if self.kept {
+            format!(
+                "/projects/id/{}/steps/{}?tab=runs",
+                self.project,
+                url_part(&self.step)
+            )
+        } else {
+            format!(
+                "/projects/id/{}/log?step={}",
+                self.project,
+                url_part(&self.step)
+            )
+        }
     }
 }
 fn url_part(text: &str) -> String {
@@ -253,7 +265,7 @@ pub fn load(
     let only = project.map(|p| p.to_string()).unwrap_or_default();
     let mut q = c.prepare_cached(
         "WITH numbered AS (SELECT r.project_id,r.run_id,r.step_id,r.unit,r.item_index,coalesce(r.started_at,r.created_at) AS began,r.finished_at,r.result,row_number() OVER (PARTITION BY r.project_id,r.step_id ORDER BY r.created_at,r.run_id) AS n FROM runs r WHERE r.step_id IS NOT NULL AND (?1='' OR r.project_id=?1)) \
-         SELECT n.project_id,n.run_id,n.step_id,coalesce(n.unit,s.unit,''),n.n,n.item_index,n.began,n.finished_at,json_extract(n.result,'$.status'),json_extract(n.result,'$.error') FROM numbered n JOIN projects p ON p.project_id=n.project_id AND p.deleted_at IS NULL LEFT JOIN steps s ON s.project_id=n.project_id AND s.step_id=n.step_id \
+         SELECT n.project_id,n.run_id,n.step_id,coalesce(n.unit,s.unit,''),n.n,n.item_index,n.began,n.finished_at,json_extract(n.result,'$.status'),json_extract(n.result,'$.error'),s.step_id IS NOT NULL FROM numbered n JOIN projects p ON p.project_id=n.project_id AND p.deleted_at IS NULL LEFT JOIN steps s ON s.project_id=n.project_id AND s.step_id=n.step_id \
          WHERE n.finished_at IS NULL OR julianday(n.finished_at)>=julianday(?2) ORDER BY n.began,n.run_id",
     )?;
     let mut rows = q.query((&only, &since))?;
@@ -292,6 +304,7 @@ pub fn load(
             ended: finished.as_deref().and_then(super::timestamp),
             outcome,
             started_at: began,
+            kept: r.get(10)?,
         });
     }
     // for a project that ran nothing in the day: when it last did
@@ -1162,8 +1175,14 @@ mod tests {
             ended: Some(30),
             outcome: Some(Shown::Succeeded),
             started_at: String::new(),
+            kept: true,
         };
         assert_eq!(run("a-1", "a-1-draft").name(), ("a-1".into(), "draft".into()));
+        // a step the plan still has links its runs; a retired one its records on the log
+        let kept = run("a-1", "a-1-draft");
+        assert!(kept.href().ends_with("/steps/a-1-draft?tab=runs"), "{}", kept.href());
+        let gone = DayRun { kept: false, ..kept };
+        assert!(gone.href().ends_with("/log?step=a-1-draft"), "{}", gone.href());
         assert_eq!(run("", "survey").name(), ("survey".into(), String::new()));
         assert_eq!(run("index", "index-merge").name(), ("index".into(), "merge".into()));
         assert!(run("", "x").quick());

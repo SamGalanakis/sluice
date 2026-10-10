@@ -279,6 +279,8 @@ body {
 }
 /* numerals line up only where they are data: Schibsted's tabular figures widen its colons */
 time, .num, .dur-v, .tk, .n, .tnum { font-variant-numeric: tabular-nums; }
+/* a clock time sits in a sentence: Schibsted's tabular figures would widen its colon (13 : 32) */
+time[data-clock] { font-variant-numeric: normal; }
 ::selection { background: var(--run); color: var(--on-run); }
 * { scrollbar-width: thin; scrollbar-color: var(--rule) transparent; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -2140,6 +2142,8 @@ h1.unit-h .g, h1.unit-h .g svg { width: 28px; height: 28px; }
 @media (max-width: 760px) {
   .unit-band { padding: 18px 0 20px; }
   h1.unit-h, .ub-side { grid-column: 1 / -1; }
+  /* the strip across the band, three stages a row, each wide enough for its name and time */
+  .ub-lane .strip { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   h1.unit-h { font-size: 56px; }
   h1.unit-h.long { font-size: 44px; }
   h1.unit-h.longer { font-size: 32px; }
