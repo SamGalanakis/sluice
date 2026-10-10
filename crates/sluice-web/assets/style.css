@@ -1718,6 +1718,9 @@ table.log .kind { font: 12px var(--font-mono); white-space: nowrap;
                  color: var(--ink-muted); }
 /* ---- the functions (`/fns`): its band says whose catalogue and how many; the picker and the
    find on one bar, the groups' index, then each group a section of entries on the grid ------- */
+/* a band name of seven to twelve letters with no space (Functions) stays whole on the smallest
+   phone: under 360px the long step follows the window */
+@media (max-width: 359.98px) { .band-head > h1.long { font-size: 18vw; } }
 .fnpage { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; min-width: 0; }
 .fn-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px; margin: 0; }
 .picker { font-size: 13.5px; color: var(--ink-muted); display: flex; gap: 8px; align-items: center; }
@@ -3135,7 +3138,7 @@ a.node.mx-dot:hover { background: var(--paper-2); }
 .tt-runs { list-style: none; margin: 0; padding: 0; }
 .tt-many { columns: 300px; column-gap: var(--col-gap); }
 .tt-run { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-height: 22px;
-          break-inside: avoid; font-size: 13px; line-height: 20px; }
+          break-inside: avoid; font-size: 13px; line-height: 20px; max-width: 480px; }
 .tt-m { flex: none; min-width: 2.6em; font: 500 11.5px/20px var(--font-mono); color: var(--ink-muted);
         font-variant-numeric: tabular-nums; }
 .tt-name { min-width: 0; text-decoration: none; overflow-wrap: anywhere; }
@@ -3243,7 +3246,7 @@ main { container: frame / inline-size; }
 .td-all { padding-top: 10px; border-top: 1px solid var(--rule); font-size: 14px; font-weight: 650; }
 .td-all a::after, .pm-open a::after { content: " →"; }
 /* each project a module: as many to a row as fit at least 460px each */
-.proj-grid { display: grid; gap: 40px var(--col-gap);
+.proj-grid { display: grid; gap: 40px var(--col-gap); align-items: start;
              grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); }
 .pm { gap: 0; padding-top: 14px; }
 .pm.swell-ask { padding-top: 14px; }
@@ -3300,10 +3303,11 @@ main { container: frame / inline-size; }
 .pm-open a { display: inline-flex; align-items: center; min-height: 32px; }
 /* the index: every project's units by where they stand */
 .ix { font-size: 14px; }
-.ix th[scope=row] { font-weight: 700; color: var(--ink); font-size: 14px; overflow-wrap: anywhere; }
+.ix th[scope=row] { font-weight: 700; color: var(--ink); font-size: 14px; overflow-wrap: break-word; }
 .ix thead th { border-bottom: 2px solid var(--navy); font-weight: 650; }
-.ix td.num, .ix th.num { width: 7%; }
-.ix .ix-at { width: 12%; text-align: right; color: var(--ink-muted); font-size: 13px; white-space: nowrap; }
+/* the counts keep their own width, so on a wide screen they stand together at the right */
+.ix td.num, .ix th.num { width: 10ch; }
+.ix .ix-at { width: 12ch; text-align: right; color: var(--ink-muted); font-size: 13px; white-space: nowrap; }
 .ix tfoot th, .ix tfoot td { font-weight: 800; color: var(--ink); border-bottom: 0; border-top: 1px solid var(--rule); }
 .ix-archived th[scope=row] a, .ix-archived td { color: var(--ink-muted); }
 @container frame (max-width: 639.98px) {
@@ -3352,17 +3356,17 @@ main { container: frame / inline-size; }
 }
 
 /* ---- a project's settings (`settings.rs`, `templates/settings.html`): the band names the
-   project; on the paper its sections' index stands in the first three columns, sticky, and
+   project; on the paper its sections' index stands in a quarter (at most 300px), sticky, and
    each section in the rest under a band section's head; each field a row: its name, then its
    form at the measure. Remove and Clear are the quiet half of their pairs --------------------- */
-.settings-page { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--col-gap);
+.settings-page { display: grid; grid-template-columns: min(25%, 300px) minmax(0, 1fr); column-gap: var(--col-gap);
                  align-items: start; min-width: 0; }
-.settings-page > * { grid-column: 4 / -1; min-width: 0; }
+.settings-page > * { grid-column: 2 / -1; min-width: 0; }
 .settings-page > #settings-live { grid-column: 1 / -1; }
 .settings-page .settings-lead { margin: 0 0 22px; font-size: 13px; color: var(--ink-muted);
                                 display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .settings-page .settings-lead:not(:has(.tag)) { display: none; }
-.settings-index { grid-column: 1 / span 3; grid-row: 2 / span 20; position: sticky; top: 16px; z-index: 5;
+.settings-index { grid-column: 1; grid-row: 2 / span 20; position: sticky; top: 16px; z-index: 5;
                   display: flex; flex-direction: column; gap: 0; padding: 0; margin: 0;
                   border-top: 3px solid var(--navy); font-size: 14px; font-weight: 650; }
 .settings-index a { display: flex; align-items: center; min-height: 40px; padding: 0 2px;
@@ -3375,7 +3379,7 @@ main { container: frame / inline-size; }
 .settings-page h2[id] { scroll-margin-top: 16px; }
 .settings-page .setting-help, .settings-page section > p { max-width: var(--measure); }
 .settings-fields { margin: 0; }
-.setting-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 7fr); gap: 16px;
+.setting-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 7fr); gap: 16px; max-width: calc(78ch + 20rem);
                padding: 16px 0; border-top: 1px solid var(--rule); }
 .setting-row:last-child { border-bottom: 1px solid var(--rule); }
 .setting-row dt { padding-top: 8px; font-size: 14px; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }

@@ -3,7 +3,7 @@
 //! started, on the reader's clock, with its outcome and a rule at now, and its stream patches
 //! only when the runs change; and in Chromium a question answered on home says so where it was
 //! asked, and no page scrolls sideways from 320px to 3840px. `SLUICE_PAGES_SCREENS=<dir>` also
-//! saves every page at 390, 1440 and 2560 in both themes.
+//! saves every page at each width in light and at 390, 1440 and 2560 in dark.
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
@@ -540,8 +540,9 @@ async fn chromium_no_page_scrolls_sideways_from_a_small_phone_to_a_wide_screen()
         let mut browser = Chrome::open(&format!("{base}/")).unwrap();
         for width in [320, 390, 768, 1024, 1440, 1920, 2560, 3840] {
             for theme in ["light", "dark"] {
-                let shoot = screens.is_some() && [390, 1440, 2560].contains(&width);
-                if theme == "dark" && !shoot {
+                // dark is checked and shot at the three review widths, light at every width
+                let shoot = screens.is_some() && (theme == "light" || [390, 1440, 2560].contains(&width));
+                if theme == "dark" && !(screens.is_some() && [390, 1440, 2560].contains(&width)) {
                     continue;
                 }
                 browser.viewport(width, theme).unwrap();

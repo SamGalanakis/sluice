@@ -669,7 +669,8 @@ The pages compose these parts; each lane that redraws one writes its section her
   sand needs a look, blue runs, an outline waits, sky done), its rows (questions, stopped
   steps, running steps by id then title, "running for 1h 10m" against "usually 30m" or the
   overrun chip), what it finished last and the way to its plan and its day. Then the Index, a
-  table of every project's units by band, archived ones muted.
+  table of every project's units by band, archived ones muted, its counts 10ch each so on a
+  wide screen they stand together at the right.
 - **Day** (`/day`, `/projects/id/<p>/day`, `views::day`): the day as a timetable. The band:
   today's name huge (a project's own day, its name), the date and the reader's clock, the
   day's sentence. The day line: a row a project, its name in the first 132px, its runs as 5px
@@ -678,7 +679,8 @@ The pages compose these parts; each lane that redraws one writes its section her
   timetable: a 64px hour column (the hour 22px, its day where it changes, its runs counted),
   then a column a project; each run a line: its minute in mono, its unit in ink and its step
   muted, its run number, then at the right its glyph and duration (sky-ink check), its word on
-  the sand chip when it needs a look, or "running 43m" on the blue. A long hour flows into
+  the sand chip when it needs a look, or "running 43m" on the blue; a line is at most 480px, so
+  its outcome stays by its name on a wide screen. A long hour flows into
   columns as wide as the screen allows; four projects or more stack under each hour below
   1100px of content, every project below 640px. The current hour ends on the now rule and
   says what runs. `nav.js` keeps the reader's zone in a cookie and moves the rule and the
@@ -694,8 +696,8 @@ The pages compose these parts; each lane that redraws one writes its section her
   the navy rule), its name in data mono.
 - **Settings** (`/projects/id/<p>/settings`): the band names the project and how it stands
   (active, paused or archived; its resources; when done units retire). On the paper the
-  sections' index stands sticky in the first three columns (a scrolling row of tabs on a
-  phone), each section in the other nine under a band section's head, each field a row (its
+  sections' index stands sticky in a quarter of the width, at most 300px (a scrolling row of
+  tabs on a phone), each section beside it under a band section's head, each field a row (its
   name, then its form at 78ch); pause and archive are rows with a square switch; Delete sits on
   the sand under its rule. (`settings.css` is folded into `style.css`.)
 - **History** (`/history`): the threads with the owner, a module each on the grid, as many to
