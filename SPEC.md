@@ -1322,7 +1322,7 @@ it covers that cancel only and writes no record; only a cancel can be dismissed)
 |---|---|
 | `/` | projects, most urgent first (by the state each reads as, below): each with its status glyph, progress (a bar segment a state, its paused steps counted as paused), its stopped steps as rows (glyph, title and id, the failure's headline; the failures first, at most four and "and n more", which leads to Show: Attention) and its running steps by title (their stage before it, their id after it in mono, "running for" their live time, and the coral "Awaiting your reply", leading to the step's Overview, when it has asked the owner a question its run waits on), each by its state's glyph (quiet, stopping, finishing or running); an open question to the owner no running step asked (the orchestrator's) a row of its own, its title then the coral tag, leading to its card in the project's inbox; projects with no steps and archived ones folded. "Runner stopped", nothing new starts, heads it in a box of its own while nothing holds the scheduler lease (no `loop`, no `serve` without `--no-runner`) |
 | `/projects/<name>` | redirects (307) to `/projects/id/<uuid>` |
-| `/projects/id/<p>` | the board; query `order=live\|plan` (live: each unit in its first state's band: the stopped units (a step failed, cancelled, stale or blocked first), then the running (quiet, stopping, finishing, running or outside), then the waiting; plan: every unit not done in one band; each band in layers by the waits between its units, the plan's order where they tie), `show=all\|active\|attention\|done` (which units: every one, not done, with a step in a state that needs attention (failed, cancelled, stale, quiet), done; a board it leaves empty says how many units it hid, "12 units hidden by Show: Attention.", with a "Show all" link to the same view under `show=all`), `q=` (a search: the steps whose id, title, doc or unit id contain every word of it, any case and order, at most 200 characters; units without one hide; the page says how many matched), `tag=`, `recipe=` (the units that recipe made, done ones too, the shelf drawn open with every one; a line over the board counts them by state, "4 units · 1 running · 3 done", with "Show everything"), `root=<step>` with `up=1`, `down=1` and `depth=N` (a step's chain: the step, what it comes after (`up`) and what comes after it (`down`), both when neither is given, at most N steps away (0 or none: any); other steps and the units left empty hide; a line over the board names it, "Showing the chain of <title>", or says the step is no longer in the plan, with "Show everything"; the tools' form carries these as hidden fields), `format=mermaid` (the `plan_view` Mermaid; `all=true` keeps the done units), `tab=` (with `#step:<s>`, the tab the drawer opens that step on: the drawer writes it while a step is open on a tab past Overview and takes it out when it closes; the board's own query leaves it alone). They combine; its `…/stream` takes the same query and draws the board under it. Every done unit (every step succeeded or skipped) is on one shelf after the rest, "n done units · m steps", closed unless `show=done` or a search matches in it, which draws the shelf and the matching units open; it draws the latest 20 finished, newest first, each with when it finished, and "Show all n" (`show=done`, or a search) draws every one; on it a one-step unit is its card, any other one line, its steps in the lane marks (`fork✓ work✓ rm–`), opening to its cards. A one-step unit is drawn as its card alone. The page's relations (the JSON of `<sluice-board>`'s `script.board-edges`, a region of its own) hold the plan's relations among what it draws (the units not done and the done units on the shelf, the plan's inputs and outputs), each marked `cross` (its ends in two units, or a plan input or output) and `line` (drawn: within a unit, or between units a source not yet succeeded or skipped and a waiting step the view shows in a unit not done); a step's waits on other units are also in words under its card (each source named by its title, stage and id), shown on a phone, without script, or when the view leaves a source out. No line runs up the page or into, out of or across a lane matrix: such a wait (`line` false) is said in words under its card at every width. On a phone the page opens on the plan while a step needs attention (failed, cancelled, stale or quiet) or is paused, else on the board |
+| `/projects/id/<p>` | the plan (**The plan**, below); query `show=all\|active\|attention\|done` (which units: every one, not done, with a step in a state that needs attention (failed, cancelled, stale, quiet), done; a board it leaves empty says how many units it hid, "12 units hidden by Show: Attention.", with a "Show all" link to the same view under `show=all`), `q=` (a find: the units whose id or title, or one of whose steps' id, title or doc, contain every word of it, any case and order, at most 200 characters, each kept whole; the others hide; the page says how many units matched), `tag=`, `recipe=` (the units that recipe made, done ones too, the Done index drawn open with every one; a line over the board counts them by state, "4 units · 1 running · 3 done", with "Show everything"), `root=<step>` with `up=1`, `down=1` and `depth=N` (a step's chain: the step, what it comes after (`up`) and what comes after it (`down`), both when neither is given, at most N steps away (0 or none: any); the units holding a step of it are drawn, whole, the others hide; a line over the board names it, "Showing the chain of <title>", or says the step is no longer in the plan, with "Show everything"; the tools' form carries these as hidden fields), `format=mermaid` (the `plan_view` Mermaid; `all=true` keeps the done units), `tab=` (with `#step:<s>`, the tab the drawer opens that step on: the drawer writes it while a step is open on a tab past Overview and takes it out when it closes; the board's own query leaves it alone). They combine; its `…/stream` takes the same query and draws the plan under it. Every done unit (every step succeeded or skipped) is a line of the Done index after the rest, "n units · m steps", folded unless `show=done`, a find or `recipe=` or a search matches in it, which draws the shelf and the matching units open; it draws the latest 20 finished, newest first, each with when it finished, and "Show all n" (`show=done`, or a search) draws every one; on it a one-step unit is its card, any other one line, its steps in the lane marks (`fork✓ work✓ rm–`), opening to its cards. A one-step unit is drawn as its card alone. The page's relations (the JSON of `<sluice-board>`'s `script.board-edges`, a region of its own) hold the plan's relations among what it draws (the units not done and the done units on the shelf, the plan's inputs and outputs), each marked `cross` (its ends in two units, or a plan input or output) and `line` (drawn: within a unit, or between units a source not yet succeeded or skipped and a waiting step the view shows in a unit not done); a step's waits on other units are also in words under its card (each source named by its title, stage and id), shown on a phone, without script, or when the view leaves a source out. No line runs up the page or into, out of or across a lane matrix: such a wait (`line` false) is said in words under its card at every width. On a phone the page opens on the plan while a step needs attention (failed, cancelled, stale or quiet) or is paused, else on the board |
 | `/projects/id/<p>/units/<u>` | one unit: its title, its id and recipe under it, its recipe's view drawn whole (below), its steps summed by state ("6 steps · 1 running · 4 pending · 1 succeeded") and a link to its log (`log?unit=`), its cards with the lines inside it (a done unit open, each wait on another unit in words under its card), its timeline (below) once something in it has run, its last message and who sent it (one note sent to several within a minute drawn once, "to 6 steps"), with a link to its thread |
 | `/projects/id/<p>/steps/<s>` | one step, under a way back to its plan and unit: its stage and title the heading, its id under it (the tab its stage and title, led by "Question ·" while its own question to the owner waits, kept by each patch), a pending or stale step retried since its last run started saying so under its header ("You retried it 2m ago, with feedback: <its first line>."; a pending step nothing holds says on Overview that it is ready and when it starts: "Ready: nothing holds it, so the runner starts it next.", or "Ready, but the runner is stopped: it starts when `sluice loop` runs."; a failed step whose run before failed the same way says so and opens its retry feedback), the rest of its doc, status, when it ended (from its result when no run is kept), how long its stage usually takes (below; "usually 40m" beside its status while pending or running, in ink once a run has gone past twice that, with how many times in the attention gold, "4.5× usual", after "took …" once ended; a pending step that ran says "Last run ended 12h ago (took 3m)."), a link to its log (`log?step=`), actions (Retry first and primary on a failed step, not on a cancelled one, asking first on a succeeded one, which says how many steps come after it; and a failure's "To resume …" hint under them), then tabs, each only when it has something to show: **Overview** (always; why it failed first on a failed step (one sentence from its failure kind, or a fn's from its traceback's last exception, a wall-clock cap's as the agent's; a link to the failure's own log record, `log?step=<s>&before=<seq+1>#r<seq>`, which the log marks; what to do next when its kind has a known remedy; what it said; a link opening Activity on its last failed call; its latest own message; the traceback and the pane at failure folded; its run's files), while it runs what it is doing now, live first (how long it has written nothing when quiet; its live turn: how long it has run, its calls by tool, what it said last, its last call and its activity in a line; then, on a retry, in plain words how the run before ended and who started this one, "Run 3 started 1h ago, after run 2 failed: <its sentence>. Sluice retried it on its own." (a cancel's "cancelled by cli: <reason>" from its record; "You retried it: <reason>, with feedback", the feedback linked; that run linked in Runs; a completion action's own wording never shown); its live progress; its own latest message to anyone and the latest to it since, as messages), what holds it (each step whose outputs it takes and that has not succeeded, by title and id, linked, with how it reads; a pause in words: "Paused by <who>: <reason>." from the plan edit that paused it, "Paused." when none names who, "Its project is paused."; when every step it waits on is pending too, the first step up its chain that holds it, neither pending nor done, "Held up by <title> <id> (running), before <its wait>"; and while no runner holds the scheduler lease, "The runner is stopped: nothing starts until `sluice loop` runs.") and what it comes after, queued, skipped, finishing, outside, progress kept from an ended run (§6.4), its key output (the first set of `summary`, `result`, `report`, `final`, `answer`, `verdict`, else up to three short outputs, else the first; under a line saying which run set them, a running step's "before this run"), a finished step's last message, a link to its chain on the plan (`?root=<s>&up=1&down=1`) when it comes after a step or one comes after it), **Activity** (an agent run's, below, its turns counted), **Messages** (`?tab=messages`, `?tab=thread` still opening it; its conversation, every message counted: its own thread `step-<s>` and every message it sent or was sent on another thread, its latest 60, a question's replies under it, with a message box to it; its messages counted), **Inputs** (each value and where it came from: a default, a step's output linked, a plan input, a file), **Outputs** (set of all: those not set yet named on one line; which run set them, "From run 2 · 1h ago", and an output another run set says which; a long value equal to an earlier one's says "Same as <name>"), **Runs** (its unit's timeline folded first, its own row marked; each run its ordinal, outcome (a cancelled run's one line from the record that stopped it: "Cancelled after 1h 18m by cli, which retried it."; a run after the first says what started it, from the retry recorded before it or its going stale: "You retried it: <reason>, with feedback.", "`fig-5571-land` sent it back, with feedback." (a completion action), "Sluice retried it on its own.", "An input it reads changed, so it ran again."), an agent run's calls by tool, kind in words, what it said (not on a failed step's last run, whose words lead the page), outputs, engine, session, run id and files; "No run of it is kept" when none is). `?tab=overview\|activity\|messages\|inputs\|outputs\|runs` opens a tab (Overview when the step has no such tab); an anchor in a tab (`#run-3`, a call's, `#message-<id>`, `#activity`) opens its tab on it; with script the chosen tab is kept through every stream patch and mirrored into `?tab=`, without it every tab's panel is drawn in turn under its own head. `?activity=all` draws every turn |
 | `/projects/id/<p>/runs/<run>/files/<name>` | one of a run's files as a page (a way back to its step's Runs, the run, its text with terminal escape sequences taken out; a long one "Jump to end" to `#file-end` under its last line, where a live run's file opens from its step's links), or with `?raw=1` as plain text, read-only: `pane-at-failure.txt` (its newest invocation's), `stderr.log`, `stderr-tail.log`, `summary.txt`, and an engine's record there, masked (`account::redact`): `codex.log`, `codex-wire.jsonl`, `devin-hooks.jsonl`, `devin.log`, `devin.json` (the run's own, else its newest invocation's); only a run of that project, only from its own directory, never through a link; a large file's last 2 MiB; a run name that is no run id is a 404 page |
@@ -1364,12 +1364,10 @@ stopping, finishing, running, outside (`external`), paused, held, queued, pendin
 (`manual`), succeeded, skipped. Each state has one glyph, word, lane mark, tone and band, and
 says whether it needs attention (failed, cancelled, stale, quiet). Whatever stands for several
 steps reads as the first of their states in that order: a unit (a failed step and a running
-one read failed), a project's glyph and its place on the index, a matrix row and its place,
-Live first's band (a project's glyph reads set by hand as succeeded; a cancel the owner
-dismissed (`step_dismiss`) stands as done for its unit and project: its unit's band and shelf,
-the project's glyph, place, tab title and attention tags, the index's rows, though its card, its
-page and the summary's plain counts still say cancelled); and every count counts each step once, under its state (the summary line
-and bar, a unit's sum, a matrix's head, `Count`, the tab title's counts of the states that need
+one read failed), a project's glyph and its place on the index, a unit's place on the plan (a project's glyph reads set by hand as succeeded; a cancel the owner
+dismissed (`step_dismiss`) stands as done for its unit and project: its unit's band (Done),
+the project's glyph, place, tab title and attention tags, the index's rows, though its Done line, its
+page and its stage cell still say cancelled); and every count counts each step once, under its state (a unit's sum, a recipe block's head, `Count`, the tab title's counts of the states that need
 attention). The facts are read once per page, with the store's snapshot, before any step is
 counted or drawn: a pause (the step's or its project's) makes a pending step paused; ready
 `core.external` work is outside; a step behind a failed or stale one is blocked; one reading a
@@ -1396,28 +1394,26 @@ on in the same words ("just now", "12m ago", "3d 12h ago"; a running time "45s",
 14m" or "3d 12h") and reads a time again at once when a stream patch writes the server's text
 back. That text is the clock's: a stream's version leaves it out, so ticking never patches.
 
-A step's card on the board carries a timer: while it runs, how long its current run has gone
+A step's cell on the plan carries a timer: while it runs, how long its current run has gone
 (its latest run in the step's current generation, so a retry starts it again; a scatter's latest
 round, from its first item's start), ticked by the page's script from the run's start; once it
 has succeeded or failed, how long that run took (start to end), still. A step set by hand, and
 one pending, stale or skipped, shows none; the title counts the step's runs. A running or
 failed step past its first run (a scatter's: past its first round) says "run 3" after the
 timer, after a mark for how each of its last three earlier runs ended ("+n" for more), read
-from each run's result in the step's current generation; a quiet run keeps it. The matrix pill,
-the phone's lane string ("land✗ (run 3)") and the step's badges say it too. A failed card's
-caption names its failure's kind in a word or two ("cap", "stalled", "quota", "auth", "engine exited", "engine fault",
-"lost", "no submit", "invalid", "rejected", "transient", else "failed"); its title, a cancel's
-too, is the failure's sentence, which is also said under a stopped card (failed or cancelled)
-and its lane matrix row, a link to the step. A step that asked the owner a question its run
-waits on says so under its card and its matrix row in the coral "Awaiting your reply", a link to
-its page, whose header's tag (coral, in place of the gold "n awaiting reply") leads to the
-question on Overview; the project's summary line leads with "1 question for you" in coral
-(several: to its inbox). The index's stopped rows link each failure's
+from each run's result in the step's current generation; a quiet run keeps it. Its unit's row and the
+step's badges say it. A stopped unit's module names its failure's kind in a word or two ("cap", "stalled", "quota", "auth", "engine exited", "engine fault",
+"lost", "no submit", "invalid", "rejected", "transient", else "failed"); the module
+says the failure's sentence under it (a cancel's too). A step that asked the owner a question
+its run waits on puts its unit under For you on the plan, the question whole, Answer leading
+to it on the step's Overview, whose header's tag (coral, in place of the gold "n awaiting
+reply") leads there too; the plan's summary sentence leads with "1 question for you", linked to
+For you. The index's stopped rows link each failure's
 sentence to its own log record, as the step page does. The page draws the
 time as of its render, so it reads right without script, and the version (below) leaves a
 ticking time's text out, so the clock alone never patches the page.
 
-A finishing step (§6.4) keeps its running glyph; its card's caption reads "finishing", and its
+A finishing step (§6.4) keeps its running glyph; its cell on the plan reads "finishing", and its
 drawer and page add a "finishing" badge and a Finishing section: when it submitted, the
 `step.submit` record's seq, its release, and that `step_settle` settles a run that lingers.
 
@@ -1503,11 +1499,12 @@ fingerprint of the HTML its stream patches (a ticking `<time data-since>`'s or
 `<time data-ago>`'s text left out: every time that ticks is one, the board's Units ages too), so
 a stream opened at it sends nothing until something shown changes. A page marks parts of what
 it patches as regions of their own (`<!--r:id-->…<!--/r:id-->` around the element of that id):
-the plan's head, its summary line, its relations (`#plan-edges`), each band, each unit's box or
-lane-matrix row, each matrix's head, the shelf, the plan's facts and the board's pane. A batch
-sends, for each region that changed, the smallest region around the change whose skeleton (its
-HTML with its own regions left out) is unchanged: one unit's state patches that unit's box, and
-the plan's relations go out only when the plan's shape or a line changes. A stream renders its
+the plan's band, its count line, each band of the sheet (For you, Stopped, Running, Waiting,
+Done, the margin; one with nothing in it a hidden placeholder, so it keeps its place), each
+question, stopped module, unit row and long run in it, the plan's facts and the board's pane.
+A batch sends, for each region that changed, the smallest region around the change whose
+skeleton (its HTML with its own regions left out) is unchanged: one unit's state patches that
+unit's row, and a unit moving between bands the bands it left and joined. A stream renders its
 page again only when a cheap token moves (the store's `change_versions`, which every commit
 bumps, and the function catalog's version), and at least every 30 s for what the clock alone
 changes (a run going quiet); the drawer and a step's page read that one step, not the board,
@@ -1582,42 +1579,46 @@ and a note when the program has no `Doc()`. Its Retiring section sets §6.11's
 spaces), and says whether retiring is on and when it last retired how many steps.
 
 **Steps by title.** Every page names a step by its title (§6.8), its stage before it ("land ·",
-muted) and its id after it in mono, muted: the index, the board's cards (a solo unit's title
-over its card, a unit's title in its box label), the unit and step pages and their tab titles,
+muted) and its id after it in mono, muted: the index, the plan (a unit's row its
+title over its id, a loose step's its own title), the unit and step pages and their tab titles,
 the log, threads and the inbox. A step whose title is its id shows the id alone.
 
-**The lane matrix.** A recipe with a `view` draws its units that are not done as matrices, one
-in each band its units fall in, first in that band (a failed lane's matrix under Stopped, above
-the running ones), each headed by the recipe's name and its units counted, each row once under the state its
-unit reads as ("3 units · 1 failed · 1 running · 1 pending"): a row per unit, in the status
-table's order of those states, the plan's order where they tie; a column per stage, its head
-the stage's name and what its cells hold that needs attention ("land · 2 failed"), the head row
-staying at the window's top while the rows scroll past, each cell
-the stage's card as a pill (glyph, caption, timer; a link to the step), a stage nothing has
-reached yet (pending, paused, blocked or held) a small mark (pending a dot, the others their
-glyph); the first column the unit's status glyph, its title linking to its unit page
-(two lines at most), its id in mono and any
-alarm, then a column, headed by what the view shows ("Ticket · last message"), with the view
-drawn in the row (its parts in a line, values cut to 140 characters, a message on one line). A
-matrix draws no lines and no line crosses it: every wait into, out of or within a matrix row is
-said in words under the row's title, each source by its id, so every row says what holds it; a
-source's title on hover and how it reads after it ("Waits for fig-5575-landed (running)"); a
-wait rows share is said on each, never again over the table. A running pill past twice its
-stage's usual time says how many times ("4×"), as the step's header does ("4.5× usual"). Its layout keys off the plan pane's width (a container): from 1100px of pane
-down its summary column goes under each row's title: its parts on the id line, its message a line
-of its own under it (two at most); and the board measures each matrix, so a
-table wider than its pane (a long pill) gives up its summary column, then its rows become lane
-strings (`data-fit`), and with the step drawer open or beside the board its stage columns are
-never clipped (without script a matrix too wide scrolls inside its box). On a phone (720 px and narrower) a row is a block: glyph and title, id, the stages
-as a lane string (each stage its status glyph and name, linking to its step, a live one past
-twice its usual time with its "4×"; two or more pending
-stages at its end "+4 to go", a unit with none started "Not started · 6 stages"), the view on
-its id line.
-A view whose program does not check draws the matrix without its summary and one note above it
-in the attention colour ("This recipe's view does not check, so its summary is left out: …").
-The board's search, `show` and `tag` filter its rows as they filter units. The recipe's name in
-its head links to `?recipe=<name>&show=all`, every unit it made, done ones too; the matrix itself
-stays the live units.
+**The plan.** The project page draws each unit that is not done once, in the first of these
+bands that holds it: **For you** (a step of it asked the owner a question someone waits on:
+the question whole, a module under the coral rule with Answer, Open, Message and Close
+question; the orchestrator's questions too), **Stopped** (it reads as failed, cancelled or
+stale: a module with its glyph and word, its failure's kind, its stage, run and when it ended,
+the failure's sentence and what to try next, Retry with feedback and Retry; failures first,
+then cancels, then stale, the plan's order where they tie), the **margin** (a long run: a unit
+of one step and no recipe running, not quiet, that reports progress fields or has run past four
+times the longest usual time of any stage, at least 2 h, or 6 h when none has one: its
+progress fields in the sheet's last two columns), **Running** (it reads as quiet, stopping,
+finishing, running or outside: quiet first, then by how long it has run, longest first) and
+**Waiting** (the rest, blocked ones included, in the plan's order); every done unit is a line of
+the **Done** index. Running and Waiting are rows in blocks: a recipe's units together, headed
+by its name (a link to `?recipe=<name>&show=all`, every unit it made, done ones too), its units
+counted by state and its stages as columns, then the units of no recipe and the loose steps.
+A row is its unit's glyph and word, an overrun chip past twice its usual time, its title, its
+id, recipe and times (running and silent for, usually, a retried step's run), its recipe's
+`view` drawn in it (else its last message and who sent it), a waiting unit's waits in words
+("draft waits for Terns: the spring guide's entries `a-6-publish` (running)"; the first two by
+title and id, linked to the step, "and n more"), and its cells: a cell a stage under the
+recipe's columns (its glyph or word, its time ticking while it runs, "2.4×" past twice its
+usual time; a link to the step that opens it in the drawer), a unit of no recipe its own steps
+in columns by their chain with a connector for each wait between them, a loose step one cell.
+No line is drawn between units. Selecting a unit (its row's button, a module's head) traces it:
+every unit up its chain and down it is marked, the rest fade, a sentence says the chain
+("Tracing a-8. It waits for a-6. a-9 waits on it."), the selected row opens its steps, its last
+message and its actions in place; the arrows move between units, Escape clears; the choice
+survives a patch. A view whose program does not check leaves its block's summary out and says
+so once over it ("This recipe's view does not check, so its summary is left out: …"). The
+band over the page says the project's summary sentence (the questions for the owner, the
+stopped counts, the units at work by recipe ("2 article units, 1 scan unit and 2 other units at
+work: s-3 quiet for 3h 2m, a-6 at 2.4× its usual time"), the waiting count and how many units
+are done and when the last finished) and Recently finished, the five latest done units, newest
+first. The find, `show`, `tag`, `recipe` and `root` keep or hide whole units. A step whose
+state the live plan moves on is said once to a screen reader ("alpha-review skipped"), also
+when its unit changes band.
 
 **The unit timeline.** A unit's runs on one time axis: a row per step in the unit's order,
 named by its stage (else its id less the unit's prefix) and linking to it, a bar per run of its
@@ -1640,19 +1641,18 @@ line of words ("work · 3 runs · 5h 12m · waited 6h").
 **Usual durations.** How long a recipe's stage usually takes is the median, over that recipe's
 done units in the plan, of how long the stage's step took when it succeeded (its last run, a
 scatter's last round; never a value set by hand), worked out when the board is read, once per
-recipe and stage, never stored; with fewer than three such steps there is none. A running card
-of that stage carries it in its timer's title ("…; its stage usually takes 40m") and words, and
-the page's script draws how far along the run is against it as a faint line in running's blue
-along the card's foot (full once past it), never the quiet gold.
+recipe and stage, never stored; with fewer than three such steps there is none. A running unit's
+row on the plan says it ("usually 40m"), and past twice it the row's overrun chip and the live
+cell say how many times ("2.4×"), as the step's header does ("4.5× usual").
 
 **The unit view.** A recipe's `view` is an OpenUI Lang program with its own vocabulary, drawn on
-the server inside the frame sluice owns (the matrix row, the unit page), every value escaped:
+the server inside the frame sluice owns (the unit's row on the plan, the unit page), every value escaped:
 `Stack(children, direction?)` (`col` or `row`), `Text(text, tone?)` (`muted`), `Markdown(text)`,
 `Link(label, href)` (an `http(s)://` or `/` href; another is drawn as text), `Param(name)` (the
 unit's param, its file's title for a file param; nothing when empty), `Output(step, field)` (a
 stage's output as the board's Output reads it, its progress first while fresher, nothing until
 set), `StepStatus(step)` (a stage's glyph, word and caption) and `LastMessage(chars?)` (the
-unit's last message and who sent it, in the matrix row only: the unit page says it whole; the
+unit's last message and who sent it, in the plan's row only: the unit page says it whole; the
 last one its own steps sent or said in their threads, else one sent to them, "Note from x";
 a unit whose step waits on the owner says "Question for you: <its title>" instead). A
 `step` is a stage name; `{param}` in any string is the unit's param. Every check (an unknown

@@ -497,13 +497,22 @@ impl<'a> Plan<'a> {
             ("plan-running", "running", "Running", &self.running),
             ("plan-waiting", "waiting", "Waiting", &self.waiting),
         ];
+        // from 2000px of sheet, Running and Waiting stand side by side when both are there
+        let both = !self.running.is_empty() && !self.waiting.is_empty();
         for (id, key, name, units) in bands {
             if !units.is_empty() {
                 rows += 1;
             }
             out.push_str(&band(
                 id,
-                (!units.is_empty()).then(|| self.band_html(id, key, name, units, cols)),
+                (!units.is_empty()).then(|| {
+                    let html = self.band_html(id, key, name, units, cols);
+                    if both {
+                        html.replacen(" data-span=", " data-wide=\"halve\" data-span=", 1)
+                    } else {
+                        html
+                    }
+                }),
             ));
         }
         if !self.done.is_empty() {
@@ -515,7 +524,8 @@ impl<'a> Plan<'a> {
         ));
         out.push_str(&band(
             "plan-margin",
-            (!self.margin.is_empty()).then(|| self.margin_html(rows.max(1))),
+            (!self.margin.is_empty())
+                .then(|| self.margin_html(rows.max(1), (rows - usize::from(both)).max(1))),
         ));
         out.push_str(ui::grid_close().as_str());
         out.push_str(ui::trace_close().as_str());
@@ -795,16 +805,32 @@ impl<'a> Plan<'a> {
         }
         for (recipe, rows) in &groups {
             let stages: Vec<&str> = rows[0].stages.iter().map(String::as_str).collect();
-            let (lead, cells) = widths(cols, stages.len());
+            let (lead, cells) = widths(ROW, stages.len());
             let head = if recipe.is_empty() {
-                let words = format!(
-                    "{}: each draws its own steps",
-                    ui::count(rows.len(), "unit of no recipe", "units of no recipe")
-                );
+                // a loose step is one cell; a unit of no recipe draws its own steps
+                let loose = rows.iter().filter(|u| u.steps.len() == 1).count();
+                let boxed = rows.len() - loose;
+                let words = match (boxed, loose) {
+                    (0, n) => ui::count(n, "loose step", "loose steps"),
+                    (n, 0) => format!(
+                        "{}: each draws its own steps",
+                        ui::count(n, "unit of no recipe", "units of no recipe")
+                    ),
+                    (n, m) => format!(
+                        "{} and {}",
+                        ui::count(n, "unit of no recipe", "units of no recipe"),
+                        ui::count(m, "loose step", "loose steps")
+                    ),
+                };
+                let title = if boxed == 0 {
+                    "Loose steps"
+                } else {
+                    "No recipe"
+                };
                 if single {
                     ui::section_head(key, name, &format!("{line} {words}.")).0
                 } else {
-                    group_head("No recipe", &words, lead, &[])
+                    group_head(title, &words, lead, &[])
                 }
             } else {
                 let tally: ui::Tally = rows.iter().map(|u| u.shown()).collect();
@@ -843,7 +869,8 @@ impl<'a> Plan<'a> {
                 }
             };
             out.push_str(&format!(
-                "<div class=\"pl-group\" style=\"--lead:{lead};--cells:{cells}\">{}",
+                "<div class=\"pl-group\" style=\"--lead:{lead};--cells:{cells};{}\">{}",
+                medium(cells),
                 rail_slot(&head)
             ));
             // a recipe whose view does not check: its rows go on without it, said once
@@ -856,10 +883,7 @@ impl<'a> Plan<'a> {
                 out.push_str(super::unit_view::broken(error).as_str());
             }
             for unit in rows {
-                out.push_str(&region(
-                    &format!("u-{}", unit.id),
-                    &self.row_html(unit, cols),
-                ));
+                out.push_str(&region(&format!("u-{}", unit.id), &self.row_html(unit)));
             }
             out.push_str("</div>");
         }
@@ -932,7 +956,7 @@ impl<'a> Plan<'a> {
     }
     /// One unit's row: its head (the trace's button), its line, its cells, and what opens in
     /// place when it is traced.
-    fn row_html(&self, unit: &UnitView, cols: u8) -> String {
+    fn row_html(&self, unit: &UnitView) -> String {
         let shown = unit.shown();
         let step = current(unit);
         let mut facts = format!("<b class=\"pl-id\">{}</b>", esc(unit.id.as_str()));
@@ -970,12 +994,12 @@ impl<'a> Plan<'a> {
             format!("{}{}", waits_html(unit), self.said_html(unit))
         };
         let (lead, cells) = match (unit.stages.is_empty(), unit.steps.len()) {
-            (false, _) => widths(cols, unit.stages.len()),
-            (true, 1) => (cols - 2, 2),
+            (false, _) => widths(ROW, unit.stages.len()),
+            (true, 1) => (ROW - 2, 2),
             (true, _) => {
                 let layers = layers(unit).len();
-                let cells = (2 * layers as u8).min(cols - 4).max(2);
-                (cols - cells, cells)
+                let cells = (2 * layers as u8).clamp(2, ROW - 4);
+                (ROW - cells, cells)
             }
         };
         let cells_html = if unit.stages.is_empty() && unit.steps.len() > 1 {
@@ -984,8 +1008,9 @@ impl<'a> Plan<'a> {
             ui::stage_strip(&format!("Stages of {}", unit.id), &strip(unit)).0
         };
         format!(
-            "<div id=\"u-{id}\" class=\"pl-row rail-slot\" style=\"--lead:{lead};--cells:{cells}\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-k\">{role}{g}<b>{word}</b>{chip}</span><span class=\"pl-t\">{title}</span><span class=\"pl-m\">{facts}</span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open {id}</a></div><div class=\"pl-cells\">{cells_html}</div>{more}{more_body}{more_end}</div>",
+            "<div id=\"u-{id}\" class=\"pl-row rail-slot\" style=\"--lead:{lead};--cells:{cells};{m}\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-k\">{role}{g}<b>{word}</b>{chip}</span><span class=\"pl-t\">{title}</span><span class=\"pl-m\">{facts}</span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open {id}</a></div><div class=\"pl-cells\">{cells_html}</div>{more}{more_body}{more_end}</div>",
             id = esc(unit.id.as_str()),
+            m = medium(cells),
             attrs = self.attrs(unit),
             rail = ui::rail(),
             pick = ui::trace_button_open(),
@@ -1166,9 +1191,11 @@ impl<'a> Plan<'a> {
     }
 
     /// The margin: each long run's progress as it reported it.
-    fn margin_html(&self, rows: usize) -> String {
+    /// The margin: the long runs, down the sheet's right beside `rows` of it (`wide` from
+    /// 2000px, where Running and Waiting share one).
+    fn margin_html(&self, rows: usize, wide: usize) -> String {
         let mut out = format!(
-            "<aside id=\"plan-margin\" class=\"pl-margin\" style=\"--span:2;--rows:{rows}\" data-span=\"2\" aria-label=\"Long runs\">"
+            "<aside id=\"plan-margin\" class=\"pl-margin\" style=\"--span:2;--rows:{rows};--rows-w:{wide}\" data-span=\"2\" aria-label=\"Long runs\">"
         );
         for unit in &self.margin {
             let Some(step) = unit.steps.first() else {
@@ -1328,6 +1355,15 @@ fn group_head(name: &str, line: &str, lead: u8, stages: &[&str]) -> String {
         )
         .replacen("<h2>", "<h3>", 1)
         .replacen("</h2>", "</h3>", 1)
+}
+/// A band of rows lays out on twelve columns of its own, the strip rule's (a head and its rows
+/// share them at every width), whatever share of the sheet the band takes.
+const ROW: u8 = 12;
+/// The same split on a medium sheet (under 1200px), where a row is narrow: a strip of three
+/// stages or more takes eight of the twelve columns, its head the other four.
+fn medium(cells: u8) -> String {
+    let cells = if cells >= 6 { 8 } else { cells };
+    format!("--lead-m:{};--cells-m:{cells}", ROW - cells)
 }
 /// How a row of `cols` columns splits for `n` stages: its head's columns and its cells'. A
 /// stage takes two columns while that leaves the head four, else one, else the cells share

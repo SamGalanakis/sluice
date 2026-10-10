@@ -2320,17 +2320,20 @@ details.read-today .item { opacity: .85; }
 
 /* ==== the plan (views::plan; DESIGN.md, Pages): the band's head and Recently finished, then on
    the module grid For you beside Stopped, the margin's long runs at the right, Running and
-   Waiting as rows of stage cells, a block a recipe, and Done folded to a dense index. A band
-   section is a grid of its own columns (`--span` twelfths of the sheet, the same gaps), so its
-   rows' heads and cells sit on the sheet's columns; a block, a row and a head are subgrids of it.
+   Waiting as rows of stage cells, a block a recipe, and Done folded to a dense index. A band of
+   modules (For you, Stopped) is a grid of the sheet's own tracks under it (`--take` x `--per`,
+   the sheet's mode), so its modules sit on the sheet's columns and a wide sheet sets more of
+   them to a row; a band of rows lays out on twelve columns of its own, the strip rule's, its
+   block heads and rows subgrids of them. From 2000px Running and Waiting stand side by side.
    ============================================================================================ */
 .plan-band { display: contents; }
 .band-in:has(> .plan-band) > nav.top { box-shadow: inset 0 -1px 0 var(--band-rule); }
 .plan-pane > .match-note:not(:empty), .plan-pane > .focus-note { margin: 0 0 14px; }
-.pl-sec { display: grid; align-content: start; grid-template-columns: repeat(var(--span), minmax(0, 1fr));
-          column-gap: var(--col-gap); row-gap: 16px; min-width: 0; }
+.pl-sec { display: grid; align-content: start; min-width: 0;
+          grid-template-columns: repeat(calc(var(--take, 12) * var(--per, 1)), minmax(0, 1fr));
+          column-gap: var(--col-gap); row-gap: max(16px, var(--col-gap)); }
 .pl-sec > * { grid-column: 1 / -1; min-width: 0; }
-.pl-sec > .pl-item { grid-column: span var(--span); }
+.pl-sec > .pl-item { grid-column: span calc(var(--span) * var(--per, 1)); }
 .pl-item > .mod { height: 100%; }
 .pl-item .trace-pick { display: flex; flex-direction: column; gap: 0; color: inherit; }
 .pl-item .trace-pick > .mod-k { margin: 0; }
@@ -2359,7 +2362,7 @@ details.read-today .item { opacity: .85; }
 
 /* a band of rows: its head (a recipe's block head, or the band's own), then a row a unit, each
    its head at the left on `--lead` columns and its cells on the rest */
-.pl-rows { row-gap: 0; }
+.pl-rows { grid-template-columns: repeat(12, minmax(0, 1fr)); row-gap: 0; }
 .pl-group, .pl-rows .rail-slot, .pl-row { display: grid; grid-column: 1 / -1;
   grid-template-columns: subgrid; align-items: start; min-width: 0; }
 .pl-group + .pl-group { margin-top: 26px; }
@@ -2374,7 +2377,13 @@ details.read-today .item { opacity: .85; }
 .pl-group > .rail-slot + .pl-row { border-top-color: var(--rule-faint); }
 .pl-row + .pl-row { border-top-color: var(--rule-faint); }
 .pl-lead { grid-column: span var(--lead); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.pl-cells { grid-column: span var(--cells) / -1; min-width: 0; }
+.pl-cells { grid-column: span var(--cells) / -1; min-width: 0; container-type: inline-size; }
+/* a narrow row's cells leave the overrun to the row's chip (its words stay for a reader) */
+@container (max-width: 479.98px) { .pl-cells .sc-over { display: none; } }
+/* a running or stopped cell's time a size its cell holds: 20px, smaller as six stages share a
+   narrow row */
+.pl-cells .strip:not(.pl-layer .strip) :is(.sc-run, .sc-look) .sc-time {
+  font-size: clamp(13px, calc((100cqi - (var(--n, 1) - 1) * var(--col-gap)) / var(--n, 1) * 0.18), 20px); }
 .pl-row > .trace-more { grid-column: 1 / -1; margin-top: 14px; }
 .pl-row .trace-pick { display: flex; flex-direction: column; gap: 2px; margin: -4px -6px; padding: 4px 6px;
                       color: inherit; max-width: var(--measure); }
@@ -2438,8 +2447,10 @@ sluice-trace[tracing] .pl-row[data-trace="selected"] { box-shadow: 0 0 0 2px var
 .pl-wire path { fill: none; stroke: var(--line); stroke-width: 1.5; }
 
 /* the margin: a long run's progress, at the sheet's right beside the bands */
-.pl-margin { grid-column: -3 / -1; grid-row: 1 / span var(--rows); display: flex; flex-direction: column;
-             gap: 16px; min-width: 0; }
+.pl-margin .mm-f dd { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8;
+                      overflow: hidden; overflow-wrap: anywhere; }
+.pl-margin { grid-column: span calc(var(--take, 2) * var(--per, 1)) / -1; grid-row: 1 / span var(--rows);
+             display: flex; flex-direction: column; gap: max(16px, var(--col-gap)); min-width: 0; }
 
 /* Done: its count, then the index folded, a dense list newest first, in columns */
 .pl-index > summary { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 18px;
@@ -2465,17 +2476,30 @@ sluice-trace[tracing] .pl-row[data-trace="selected"] { box-shadow: 0 0 0 2px var
 .pl-dt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-dk { color: var(--sky-ink); white-space: nowrap; font-size: 12.5px; }
 
-/* the step drawer's frame: paper under a navy rule at its edge, its close band on the paper */
-sluice-drawer#step-drawer > .drawer { background: var(--paper); border-left: 3px solid var(--navy);
-  box-shadow: var(--lift); }
+/* the step drawer's frame: paper under the heavy navy rule a band's head wears, a hairline at
+   its edge, lifted off the plan; its close band on the paper */
+sluice-drawer#step-drawer > .drawer { background: var(--paper); border-top: 3px solid var(--navy);
+  border-left: 1px solid var(--rule); box-shadow: var(--lift); }
 sluice-drawer#step-drawer .d-top.scrolled { background: var(--paper); box-shadow: 0 1px 0 var(--rule); }
 sluice-drawer#step-drawer .drawer .close { background: var(--paper); color: var(--ink); }
 sluice-drawer#step-drawer .drawer .close:hover { background: var(--paper-2); }
 
-@media (max-width: 760px) {
-  .pl-sec { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+/* the sheet's modes (rd-frame): a medium sheet sets a band's modules two to a row of a whole
+   band, the margin's long runs side by side under the bands; a narrow one stacks everything */
+@container sheet (min-width: 2000px) {
+  .pl-margin { grid-row: 1 / span var(--rows-w, var(--rows)); }
+}
+@container sheet (max-width: 1199.98px) {
+  .pl-rows .sh-lead, .pl-lead { grid-column: span var(--lead-m, var(--lead)); }
+  .pl-rows .sh-stages, .pl-cells { grid-column: span var(--cells-m, var(--cells)) / -1; }
+  .pl-sec > .pl-item { grid-column: span min(12, calc(var(--take, 12) * var(--per, 1))); }
+  /* the long runs after Running, before Waiting */
+  sluice-grid > :is(#plan-waiting, #plan-done) { order: 10; }
+  .pl-margin { grid-column: 1 / -1; grid-row: auto; order: 9; display: grid;
+               grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); }
+}
+@container sheet (max-width: 639.98px) {
   .pl-sec > .pl-item, .pl-lead, .pl-cells, .pl-rows .sh-lead, .pl-rows .sh-stages { grid-column: 1 / -1; }
-  .pl-margin { grid-column: 1 / -1; grid-row: auto; order: 9; }
   .pl-row { row-gap: 10px; }
   .pl-graph { --cell: 48px; }
   .pl-more { grid-template-columns: minmax(0, 1fr); }
@@ -2483,8 +2507,9 @@ sluice-drawer#step-drawer .drawer .close:hover { background: var(--paper-2); }
   .pl-idx { columns: 1; padding: 8px 10px; }
   .pl-idx a { grid-template-columns: 3.4em 14px minmax(0, auto) minmax(0, 1fr); }
   .pl-dk { grid-column: 3 / -1; }
-  .pl-index > summary, .pl-fb > summary { min-height: 44px; }
-  sluice-drawer#step-drawer > .drawer { border-left: 0; border-top: 3px solid var(--navy); }
+}
+@media (max-width: 759.98px) {
+  sluice-drawer#step-drawer > .drawer { border-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .pl-index[open] > summary .chev { transition: none; }

@@ -217,7 +217,11 @@ async fn the_search_finds_a_step_by_its_title() {
     let (_, html) = f.get(&format!("/projects/id/{id}?q=parser")).await;
     assert!(html.contains("2 units match “parser”."), "{html}");
     for (unit, found) in [("l2", true), ("probe", true), ("l1", false), ("l3", false)] {
-        assert_eq!(plan_html::place(&html, unit) != "", found, "{unit}: {html}");
+        assert_eq!(
+            !plan_html::place(&html, unit).is_empty(),
+            found,
+            "{unit}: {html}"
+        );
     }
     // a doc's title too
     let (_, html) = f.get(&format!("/projects/id/{id}?q=bare+heading")).await;
