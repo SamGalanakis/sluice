@@ -1,7 +1,7 @@
 //! The v2 board. Relations retain their gate form and unit endpoints.
 use super::step::{FieldView, RunTiming, StepView};
 use super::ui::{Shown, Tally};
-use super::{DashboardSnapshot, DashboardState, FunctionCatalog, NavView, TrustedHtml, Viewer};
+use super::{DashboardSnapshot, DashboardState, FunctionCatalog, TrustedHtml, Viewer};
 use crate::streams::{self, PatchRegion, RenderedBatch, StreamQuery, VersionSignal};
 use askama::Template;
 use axum::{
@@ -210,48 +210,6 @@ pub struct Wait {
     /// A line draws it; else only the words say it.
     pub line: bool,
 }
-/// The words of a step's waits: "Waits for a (running), b and c". `said` when a line does not
-/// say one of them, so the words show where the lines are drawn too. A name traces its source.
-/// Past three sources the rest are a count, "and 79 more", which opens the step, whose page
-/// lists every gate: the words stay a line or two at any fan-in.
-/// `brief` (a lane matrix's row) names each source by its id alone, its title on hover.
-pub fn waits_html(
-    step: &StepView,
-    waits: &[Wait],
-    brief: bool,
-) -> Result<TrustedHtml, askama::Error> {
-    const SHOWN: usize = 3;
-    #[derive(Template)]
-    #[template(
-        source = "<p class=\"waits{% if said %} said{% endif %}\">Waits for {% for w in named %}{% if !loop.first %}{% if loop.last && more == 0 %} and {% else %}, {% endif %}{% endif %}<a href=\"{{ w.href }}\"{% if !w.opens.is_empty() %} data-opens=\"{{ w.opens }}\"{% endif %} data-from=\"{{ w.key }}\" data-to=\"{{ to }}\">{% if w.unit %}unit {% endif %}{% if brief %}{{ w.name.id_html()|safe }}{% else %}{{ w.name.id_first_html(40)|safe }}{% endif %}</a>{% let off = !w.shown && !none %}{% if !w.note.is_empty() || off %} ({{ w.note }}{% if off %}{% if !w.note.is_empty() %}, {% endif %}not in this view{% endif %}){% endif %}{% endfor %}{% if more > 0 %} and <a href=\"{{ href }}\" data-opens=\"{{ id }}\">{{ more }} more</a>{% endif %}{% if none %}, not in this view{% endif %}</p>",
-        ext = "html"
-    )]
-    struct Words<'a> {
-        to: String,
-        href: String,
-        id: &'a str,
-        brief: bool,
-        named: &'a [Wait],
-        more: usize,
-        said: bool,
-        /// No source is in this view: said once, after them all.
-        none: bool,
-    }
-    if waits.is_empty() {
-        return Ok(TrustedHtml::owned(String::new()));
-    }
-    let shown = if waits.len() > SHOWN + 1 { SHOWN } else { waits.len() };
-    TrustedHtml::from_template(&Words {
-        to: step.key(),
-        href: step.href(),
-        brief,
-        id: step.id.as_str(),
-        named: &waits[..shown],
-        more: waits.len() - shown,
-        said: waits.iter().any(|w| !w.line),
-        none: waits.iter().all(|w| !w.shown),
-    })
-}
 #[derive(Clone, Debug, Serialize)]
 pub struct UnitView {
     pub id: UnitName,
@@ -394,15 +352,6 @@ impl UnitView {
     pub fn tally_words(&self) -> String {
         super::ui::states_words(&self.tally())
     }
-    /// What in it needs someone, for its label: "1 failed", "1 quiet"; "" when nothing does.
-    pub fn alarm(&self) -> String {
-        self.tally()
-            .iter()
-            .filter(|(s, _)| s.spec().attention)
-            .map(|(s, n)| format!("{n} {}", s.word()))
-            .collect::<Vec<_>>()
-            .join(" · ")
-    }
     /// A step in it needs someone (Show: Attention).
     pub fn needs_attention(&self) -> bool {
         self.steps.iter().any(|s| s.shown().spec().attention)
@@ -418,55 +367,11 @@ impl UnitView {
             .max()
             .unwrap_or("")
     }
-    /// How many lanes the box lays side by side: its widest row's cards.
-    pub fn lanes(&self) -> usize {
-        self.rows.iter().map(Vec::len).max().unwrap_or(0)
-    }
     pub fn waits_of(&self, step: &StepView) -> &[Wait] {
         self.waits
             .get(step.id.as_str())
             .map(Vec::as_slice)
             .unwrap_or_default()
-    }
-    /// A one-step unit's card names the unit too when the step's id does not already
-    /// (`build / compile`); `l-a1` in unit `l-a1`, or `a-12-draft` in `a-12`, says it.
-    pub fn names_unit(&self, step: &StepView) -> bool {
-        self.solo && !step.id.as_str().starts_with(self.id.as_str())
-    }
-    /// The unit's steps as its folded box writes them (its own page): each step's id without
-    /// the unit's prefix and its state's lane mark (`shown`), `draft✓ review✓ publish✓`.
-    pub fn lane(&self) -> String {
-        let prefix = format!("{}-", self.id);
-        self.steps
-            .iter()
-            .map(|s| {
-                // a step named as its unit is the unit: its mark alone
-                let short = if s.id.as_str() == self.id.as_str() {
-                    ""
-                } else {
-                    s.id.as_str().strip_prefix(&prefix).unwrap_or(s.id.as_str())
-                };
-                format!("{short}{}", s.shown().spec().lane)
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-    /// The lane string drawn: each stage its state's glyph and its short name, kept whole.
-    pub fn lane_html(&self) -> String {
-        let prefix = format!("{}-", self.id);
-        self.steps
-            .iter()
-            .map(|s| {
-                // a step named as its unit is the unit: its glyph alone
-                let short = if s.id.as_str() == self.id.as_str() {
-                    ""
-                } else {
-                    s.id.as_str().strip_prefix(&prefix).unwrap_or(s.id.as_str())
-                };
-                super::ui::stage(s.shown(), &super::ui::esc(short), false)
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
     }
     /// The one line's words for a screen reader: "6 steps done" ("…, 1 skipped").
     pub fn done_words(&self) -> String {
@@ -477,12 +382,6 @@ impl UnitView {
         } else {
             format!("{steps} done")
         }
-    }
-    pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
-        TrustedHtml::from_template(&UnitTemplate {
-            unit: self,
-            shelf: false,
-        })
     }
     /// It has a title apart from its id.
     pub fn titled(&self) -> bool {
@@ -503,11 +402,6 @@ impl UnitView {
         } else {
             &self.whole
         }
-    }
-    /// Its heading cut to `chars`: a link's accessible name stays short, the whole title its
-    /// description.
-    pub fn heading_cut(&self, chars: usize) -> String {
-        sluice_model::naming::cut(self.heading(), chars)
     }
     pub fn href(&self, project: &ProjectId) -> String {
         format!("/projects/id/{project}/units/{}", self.id)
@@ -597,13 +491,6 @@ impl PlanFacts {
             _ => None,
         }
     }
-}
-#[derive(Template)]
-#[template(path = "unit.html")]
-struct UnitTemplate<'a> {
-    unit: &'a UnitView,
-    /// Drawn on the done shelf.
-    shelf: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ProjectView {
@@ -1125,15 +1012,6 @@ impl ProjectView {
     pub fn about(&self) -> (TrustedHtml, Option<TrustedHtml>) {
         crate::markdown::render_folded(&self.project.description)
     }
-}
-/// Relations as the text of a `<script type="application/json">` the board reads its lines from:
-/// JSON with `<`, `>` and `&` written as escapes, so no text in it can end or open an element.
-fn script_json(relations: &[impl Serialize]) -> String {
-    serde_json::to_string(relations)
-        .expect("typed relations serialize")
-        .replace('<', "\\u003c")
-        .replace('>', "\\u003e")
-        .replace('&', "\\u0026")
 }
 /// What a page drew is gone: one calm line where it was (`id`'s element), with a way on.
 pub(crate) fn gone_html(id: &str, words: &str, href: &str, link: &str) -> TrustedHtml {

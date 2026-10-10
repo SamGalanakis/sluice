@@ -220,14 +220,6 @@ pub const COMPONENTS: &[Component] = &[
         slots: &["line", "units"],
     },
     Component {
-        tag: "sluice-board",
-        script: "sluice.js",
-        does: "Draws the lines between a unit's cards on its own page, traces a card's relations on hover or focus, and moves between cards with the arrows.",
-        props: &[],
-        events: &[],
-        slots: &["relations", "plane"],
-    },
-    Component {
         tag: "sluice-drawer",
         script: "sluice.js",
         does: "Opens a step beside the plan (over it below 1200px, a sheet on a phone) from #step:<id>, a stage's cell or any link with data-step, streams it, writes its tab into ?tab= and closes on Escape or a click away; [ and ] open the step before or after it in the plan's order.",
@@ -311,10 +303,6 @@ pub fn more_close(less: &str) -> TrustedHtml {
     ))
 }
 
-/// Words with a count after them, as a fold's summary says it: "Archived (3)".
-pub fn with_count(words: &str, n: usize) -> String {
-    format!("{words} ({n})")
-}
 /// A key kept in this browser for one thing: "sluice.about.<project>".
 pub fn keyed(prefix: &str, id: impl std::fmt::Display) -> String {
     format!("{prefix}.{id}")
@@ -478,13 +466,6 @@ pub fn keys_close() -> TrustedHtml {
     Host::new("sluice-keys").close()
 }
 
-/// The board's host around its relations and its plane.
-pub fn board_open() -> TrustedHtml {
-    Host::new("sluice-board").attr("class", "board").open()
-}
-pub fn board_close() -> TrustedHtml {
-    Host::new("sluice-board").close()
-}
 /// The drawer's tag: a project page's board region ends where it starts.
 pub const DRAWER: &str = "sluice-drawer";
 /// The step drawer, empty until a step opens in it (`base` the project's address). Its

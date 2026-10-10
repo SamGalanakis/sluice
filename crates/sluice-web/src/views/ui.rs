@@ -28,10 +28,6 @@ pub fn esc(text: &str) -> String {
 // ---- status ----------------------------------------------------------------------------------
 
 pub use sluice_model::shown::{Shown, Tally};
-/// The stored status a done count counts (`Tally::stored`), for a template.
-pub const SUCCEEDED: &sluice_model::commands::StepStatus =
-    &sluice_model::commands::StepStatus::Succeeded;
-
 /// A state's glyph (the Shape Carries It Rule): its Lucide icon from the status table, named for
 /// a screen reader by the state's word.
 pub fn glyph(shown: Shown) -> TrustedHtml {
@@ -491,21 +487,6 @@ impl StepRef {
             "<span class=\"sref\"><code class=\"sref-id\">{}</code> <span class=\"sref-t\">{}</span></span>",
             esc(&self.id),
             esc(&sluice_model::naming::cut(&self.title, chars))
-        ))
-    }
-    /// Its id alone, its title on hover.
-    pub fn id_html(&self) -> TrustedHtml {
-        if !self.titled() {
-            return self.html(0);
-        }
-        TrustedHtml::owned(format!(
-            "<span class=\"sref\"{}><code class=\"sref-id\">{}</code></span>",
-            if self.titled() {
-                format!(" title=\"{}\"", esc(&self.title))
-            } else {
-                String::new()
-            },
-            esc(&self.id)
         ))
     }
     fn stage_html(&self) -> String {

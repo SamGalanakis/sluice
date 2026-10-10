@@ -1348,55 +1348,6 @@ impl StepView {
             _ => "",
         }
     }
-    /// Its card's description for a screen reader: its doc, what it waits on, why it is
-    /// queued and why it stopped, each its own sentence.
-    pub fn description(&self) -> String {
-        let doc = self.doc.trim();
-        let mut parts: Vec<String> = vec![];
-        if !doc.is_empty() {
-            parts.push(doc.trim_end_matches('.').to_owned());
-        }
-        parts.extend(self.waits.iter().cloned());
-        parts.extend(self.queued.iter().map(|q| format!("queued: {q}")));
-        if !self.why().is_empty() {
-            parts.push(self.why().trim_end_matches('.').to_owned());
-        }
-        if parts.is_empty() {
-            String::new()
-        } else {
-            parts.join(". ") + "."
-        }
-    }
-    /// That sentence under its card or its matrix row, muted, a link to the step.
-    pub fn why_html(&self) -> TrustedHtml {
-        if self.why().is_empty() {
-            return TrustedHtml::owned(String::new());
-        }
-        TrustedHtml::owned(format!(
-            "<p class=\"why\"><a href=\"{}\" data-opens=\"{}\">{}</a></p>",
-            self.href(),
-            super::ui::esc(self.id.as_str()),
-            super::ui::esc(self.why())
-        ))
-    }
-    /// What its caption means, for the caption's title (no legend: each says itself): a
-    /// failure's or a cancel's one sentence.
-    pub fn caption_help(&self) -> String {
-        let shown = self.shown();
-        if let Some(failure) = self
-            .failure
-            .as_ref()
-            .filter(|_| matches!(shown, Shown::Failed | Shown::Cancelled))
-        {
-            failure.headline.clone()
-        } else if shown.spec().caption {
-            shown.spec().help.into()
-        } else {
-            self.total
-                .map(|total| format!("{} of its {total} items done", self.done))
-                .unwrap_or_default()
-        }
-    }
     /// The run times its card shows: a running step's current run, ticking; how long a
     /// succeeded (not set by hand) or failed step's last run took. Other steps show none.
     pub fn shown_timing(&self) -> Option<&RunTiming> {
@@ -1526,20 +1477,6 @@ impl StepView {
             (Some(usually), Some(t)) if self.overrun() => t.seconds / usually,
             _ => 0.0,
         }
-    }
-    /// A matrix pill's overrun after its timer: "2.5×" in the attention tone, its title in
-    /// words; "" while it runs within twice its usual time.
-    pub fn overrun_html(&self) -> TrustedHtml {
-        let times = self.overrun_times();
-        if times.is_empty() {
-            return TrustedHtml::owned(String::new());
-        }
-        // its timer's words say it for a reader (`timer_html`)
-        TrustedHtml::owned(format!(
-            "<span class=\"over-x\" title=\"{t} its usual time ({u})\" aria-hidden=\"true\">{t}</span>",
-            t = super::ui::esc(&times),
-            u = super::ui::esc(&self.usually_text()),
-        ))
     }
     /// How its last run ended, for its header: a finished step's "Ended 2h ago · took 4m"
     /// (with its usual time), one waiting to run again "Last run ended 12h ago (took 3m)".

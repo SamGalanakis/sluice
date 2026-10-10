@@ -627,8 +627,7 @@ The components:
   phase is also `html[data-stream]`, which the band's live line reads.
 - **`sluice-keys`**: `/` finds, `[` and `]` move the drawer, `g` then a letter goes to a page,
   `?` lists them; never while typing or under a dialog.
-- **`sluice-splitter`**, **`sluice-board`**, **`sluice-drawer`**: the board's splitter, the
-  plan's lines and the step drawer.
+- **`sluice-splitter`**, **`sluice-drawer`**: the board's splitter and the step drawer.
 
 The page's clock is no component: `nav.js` ticks every `<time>` (`data-since` a two-unit
 duration, `data-ago` "12m ago", `data-clock` a time of day on the reader's own clock), the

@@ -642,12 +642,6 @@ async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
     assert!(section.contains("by its last run"), "{section}");
 }
 
-/// The relations the unit page hands `<sluice-board>` to draw: its `script.board-edges`, JSON.
-fn edges_text(html: &str) -> &str {
-    const OPEN: &str = "<script type=\"application/json\" ";
-    let raw = between(html, OPEN, "</script>");
-    &raw[raw.find('>').unwrap() + 1..]
-}
 /// The plan reads without a key and draws no line between units: a one-step unit is one cell,
 /// a unit of no recipe its own small graph, a wait between units is said in words on the row
 /// that waits (a satisfied one is not), and the bands run Stopped, Running, Waiting (in plan
