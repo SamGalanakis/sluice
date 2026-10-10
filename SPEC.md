@@ -133,7 +133,7 @@ Any failure after the fence leaves the installation fenced and says so. Running 
 deploy: each run's guardian stays pinned to its own release, and the new coordinator adopts it
 (§7.9).
 
-**Incompatible cutover** (schema 3; lands with the plan-rows cutover). A release whose schema
+**Incompatible cutover**. A release whose schema
 differs from the home's (its manifest's `schema`) is never deployed as above: no run pinned to
 the old schema may outlive it. `scripts/deploy --schema-cutover --deadline <time> [--cancel-grace
 <s>] [--settle-timeout <s>] [--dry-run] [--candidate DIR] [--rehearsal FILE] [REF]` (`<time>` is
@@ -306,7 +306,7 @@ The home has one maintenance mode: `normal` or `drain`.
   finish. Draining again with another author is a `conflict`. `release` unpauses exactly the
   recorded projects and returns to `normal`.
 
-A schema cutover (§2.2) drains with a deadline (schema 3; lands with the plan-rows cutover):
+A schema cutover (§2.2) drains with a deadline:
 work still live at the deadline has its cancel requested and its unit stopped, not waited for.
 
 ## 3. Storage
@@ -316,10 +316,10 @@ use a pool of read-only connections and one snapshot per answer. Every logical c
 and its records, a status change and its records, a message and its record) commits in one
 transaction.
 
-Everything below describes schema 3 (schema 3; lands with the plan-rows cutover). Until it
-lands, a home is schema 1: 23 tables, the plan stored whole as a document in `plans`, edits as RFC 6902
-`ops` in `plan_edits`, columns added after homes existed added by the writer when it opens one,
-and every release refusing any other table count or schema.
+Everything below describes schema 3. A schema-1 home (the releases before the plan-rows
+cutover) has 23 tables, the plan stored whole as a document in `plans` and edits as RFC 6902
+`ops` in `plan_edits`; `sluice home migrate` converts it, and no schema-3 release opens it
+before then.
 
 **Schema 3.** A fresh home is created from `migrations/0003.sql` (27 STRICT tables).
 A binary refuses a home at any other schema: a schema-3 binary refuses a schema-1 or schema-2
@@ -575,8 +575,8 @@ if __name__ == "__main__":
 }
 ```
 
-A new project's plan is `{"inputs": {}, "outputs": {}, "steps": {}}` at rev 1 (schema 3; lands
-with the plan-rows cutover); until then it is `{"steps": {}}`. Project names, step ids, plan
+A new project's plan is `{"inputs": {}, "outputs": {}, "steps": {}}` at rev 1 (a
+schema-1 home's was `{"steps": {}}`). Project names, step ids, plan
 input and output names match `^[a-z0-9][a-z0-9_-]*$`; a project name may not look like a UUID;
 `owner` and `orchestrator` are not step ids. Plan inputs and steps share one namespace.
 
@@ -750,7 +750,7 @@ capacity; no cycles. Errors are a list with paths
 
 ### 6.10 Edits
 
-(schema 3; lands with the plan-rows cutover) Every edit tool (§12.4) becomes operations on one
+Every edit tool (§12.4) becomes operations on one
 candidate plan (`docs/design/plan-rows.md` §7.6): the operations apply in order, the candidate
 is validated for what they change (§6.9), and the edit commits its row changes, the runtime
 transitions they cause, one `plan_edits` row and one `plan.edit` record `{rev, author, reason,
@@ -991,7 +991,7 @@ A coordinator that starts finds runs whose guardians are still alive and watches
 and fails runs whose guardian and payload are gone without a completion (`lost`, error
 `process_lost`). A live run that no step or call references is stopped (`run.orphan`). A
 completion is journalled by the guardian and acknowledged durably by the coordinator.
-(schema 3; lands with the plan-rows cutover) A run's result is decided from what its attempt
+A run's result is decided from what its attempt
 froze when it was admitted (its outputs contract, its inputs and its identity), never from a
 plan: the attempt keeps no copy of the plan, only the revision it was admitted at
 (`admitted_rev`), and the project's current plan only reconciles after the result, so a plan
@@ -1186,7 +1186,7 @@ take none of these filters. Calls made without a project go to the home log (`pr
 Each log keeps at most 10,000 records; past that it is trimmed to 9,000 in the same transaction.
 A `since_seq` older than a log's trim floor, or newer than any seq the home has issued, is
 `cursor_expired`. `plan_edits` is never trimmed, so `plan_history` reaches rev 1. Records carry
-payload version 2 from schema 3 on (schema 3; lands with the plan-rows cutover); a converted
+payload version 2 from schema 3 on; a converted
 home's records are rewritten to it.
 
 ## 10. Waiting: `log_wait`, `step_wait`, `next`, `watch`
@@ -1318,7 +1318,7 @@ else `step:<SLUICE_STEP>` when set; else the MCP client's name; else `mcp` (MCP)
 
 Edit tools share `rev?`, `dry_run=false`, `preview_scope="impact"`, `reason=""` and `author?`
 (`plan_edit`, `unit_update` and `unit_remove` require `reason`) and return the edit result
-(§6.10) or, with `dry_run`, the preview. (schema 3; lands with the plan-rows cutover)
+(§6.10) or, with `dry_run`, the preview.
 `plan_edit` batches operations. Selection tools take `steps?`
 and/or `tags?` (a `unit:` tag selects the unit); naming neither is `bad_request`, an unknown
 step `not_found`.
@@ -1360,20 +1360,20 @@ outside its authority. The document tools refuse (`invalid`) while the board's p
 
 | tool | specific arguments |
 |---|---|
-| `plan_edit` (schema 3; lands with the plan-rows cutover) | `project`, `ops` (operations, below), `start=true`; `rev` required with `order.set` |
+| `plan_edit` | `project`, `ops` (operations, below), `start=true`; `rev` required with `order.set` |
 | `step_add` | `project`, `step`, `spec`, `start=true` |
 | `step_update` | `project`, `step`, `changes` (each key replaces that field, null removes it) |
 | `step_remove` | `project`, `steps?`, `tags?` |
 | `step_pause` | `project`, `steps?`, `tags?`, `subtree=false`, `paused=true` (sets `"paused"` to the `reason`, or `true` without one, a step already paused keeping its own; `false` removes it) |
 | `unit_add` | `project`, `recipe`, `unit`, `params={}`, `after={}`, `inputs={}`, `tags=[]`, `start=true` |
 | `unit_tag` | `project`, `unit`, `add=[]`, `remove=[]` |
-| `unit_update` (schema 3; lands with the plan-rows cutover) | `project`, `unit`, `changes` (`{step id: changes}`, each a member; as `step_update`'s) |
-| `unit_remove` (schema 3; lands with the plan-rows cutover) | `project`, `unit` (every member; running members or surviving references refuse it) |
+| `unit_update` | `project`, `unit`, `changes` (`{step id: changes}`, each a member; as `step_update`'s) |
+| `unit_remove` | `project`, `unit` (every member; running members or surviving references refuse it) |
 | `edge_add`, `edge_remove` | `project`, `step` (a step or `unit:<name>`: its entry steps), `after` (entries) |
 | `step_set_input` | `project`, `steps?`, `tags?`, `inputs` |
 | `plan_prune` | `project`, `units?`, `tags?`, `older_than=0` (seconds), `keep?` (unit-name patterns) |
 
-`plan_edit`'s `ops` (schema 3; lands with the plan-rows cutover) are a closed list applied in
+`plan_edit`'s `ops` are a closed list applied in
 order to one candidate, validated once and committed whole: `input.put {name, declaration}`,
 `input.remove {name}`, `output.put {name, source}`, `output.remove {name}`, `step.add {step,
 spec}`, `step.update {step, changes}`, `step.remove {steps}`, `edge.add` and `edge.remove {step,
@@ -1402,11 +1402,11 @@ removed steps.
 
 | tool | arguments | result |
 |---|---|---|
-| `plan_get` | `project` | `{project, rev, plan}`; (schema 3; lands with the plan-rows cutover) assembled from the plan's rows, without compiling it |
-| `plan_read` (schema 3; lands with the plan-rows cutover) | `project`, `units?`, `steps?`, `status?`, `recipe?`, `compact=true`, `limit=200`, `cursor?` | `{project, rev, state_epoch, recipe_generation, steps, next_cursor}`: the matching steps in plan order, compact `{id, unit, recipe, position, run, status, paused, priority}` or full (plus `spec`, the declaration, and `references`) |
-| `step_get` (schema 3; lands with the plan-rows cutover) | `project`, `step`, `compact=false` | `{project, rev, state_epoch, step}` |
-| `unit_get` (schema 3; lands with the plan-rows cutover) | `project`, `unit`, `compact=false` | `{project, rev, state_epoch, recipe_generation, unit: {id, recipe, entry_steps, exit_steps, done, settled, steps}}` |
-| `plan_history` | `project`, `since_rev?`, `after_seq?`, `limit=200` (schema 3; lands with the plan-rows cutover) | `{project, entries, next_after_seq}` (schema 3; lands with the plan-rows cutover): every edit (`plan.edit`, from rev 1) and the log's `plan.input`, `step.output`, `step.retry`, oldest first |
+| `plan_get` | `project` | `{project, rev, plan}`; assembled from the plan's rows, without compiling it |
+| `plan_read` | `project`, `units?`, `steps?`, `status?`, `recipe?`, `compact=true`, `limit=200`, `cursor?` | `{project, rev, state_epoch, recipe_generation, steps, next_cursor}`: the matching steps in plan order, compact `{id, unit, recipe, position, run, status, paused, priority}` or full (plus `spec`, the declaration, and `references`) |
+| `step_get` | `project`, `step`, `compact=false` | `{project, rev, state_epoch, step}` |
+| `unit_get` | `project`, `unit`, `compact=false` | `{project, rev, state_epoch, recipe_generation, unit: {id, recipe, entry_steps, exit_steps, done, settled, steps}}` |
+| `plan_history` | `project`, `since_rev?`, `after_seq?`, `limit=200` | `{project, entries, next_after_seq}`: every edit (`plan.edit`, from rev 1) and the log's `plan.input`, `step.output`, `step.retry`, oldest first |
 | `plan_set_input` | `project`, `name`, `value`, `rev?`, `dry_run`, `reason`, `author?` | `{ok: true}`, or the preview |
 | `step_set_output` | `project`, `step`, `outputs`, `force=false`, `reason`, `author?` | `{ok: true}` |
 | `step_retry` | `project`, `steps?`, `tags?`, `message?`, `reason`, `expected_rev?`, `author?` | `{project, steps, rearmed, stopped_at}` |
@@ -1416,7 +1416,7 @@ removed steps.
 | `step_settle` | `project`, `step`, `reason=""`, `author?` | `{project, step, run, outputs}` (§7.5) |
 | `status` | `project`, `steps?`, `tags?`, `brief=false`, `all=false`, `view="steps"`, `state?` | below |
 | `step_context` | `project`, `step` | below |
-| `plan_view` | `project`, `format="mermaid"`, `all=false`, `units?`, `steps?`, `status?`, `recipe?` (schema 3; lands with the plan-rows cutover) | text |
+| `plan_view` | `project`, `format="mermaid"`, `all=false`, `units?`, `steps?`, `status?`, `recipe?` | text |
 | `verify` | `project?` | `[{where, message}]` |
 
 `status`, steps view: `{project, rev, board_rev, paused, inputs, outputs, resources, steps: {id: {status,
@@ -1456,7 +1456,7 @@ status [done/total] / doc`, a class per status, done units left out with a `%% n
 steps) left out` comment unless `all`; or `format: "html"`, a standalone page with an SVG of the
 same graph.
 
-`plan_read` (schema 3; lands with the plan-rows cutover) filters by `units`, `steps`, `status`
+`plan_read` filters by `units`, `steps`, `status`
 (stored statuses) and `recipe` (the units it matches now): a list matches any of its values,
 filters combine with AND, an empty list matches nothing, and a name that matches nothing is no
 error. `limit` is 1 to 1000 (larger reads as 1000). `next_cursor`, passed back as `cursor` with
@@ -1508,7 +1508,7 @@ only a cancel can be dismissed), `backup`, `builtin`
 `register_completion_action` (run callbacks only).
 
 
-Read the unit or steps you need with `unit_get`, `step_get` or `plan_read`. Use the typed tools for single changes and `plan_edit` for an atomic batch. Pass `rev` when a change depends on an earlier read. `plan_get` exports the whole plan. A preview describes the edit's affected work; ask for a full dry run explicitly. An edit refused `busy` is retried as is. (schema 3; lands with the plan-rows cutover)
+Read the unit or steps you need with `unit_get`, `step_get` or `plan_read`. Use the typed tools for single changes and `plan_edit` for an atomic batch. Pass `rev` when a change depends on an earlier read. `plan_get` exports the whole plan. A preview describes the edit's affected work; ask for a full dry run explicitly. An edit refused `busy` is retried as is.
 
 ## 13. Dashboard
 
@@ -1529,7 +1529,7 @@ failed step, not on a cancelled one, which has a Dismiss instead; asking first o
 what to do next when its kind has a known remedy (and, when the failure repeated, the retry's
 feedback box open under it); its latest own message; the traceback and the pane at failure folded; its run's files), while it runs what it is doing now, live first (how long it has written nothing when quiet; its live turn: how long it has run, its calls counted (by tool only when it used more than
 one), what it said last, its last call and its activity in a line; then, on a retry, in plain words how the run before ended and who started this one, "Run 3 started 1h ago, after run 2 failed: <its sentence>. Sluice retried it on its own." (a cancel's "cancelled by cli: <reason>", as the run keeps it (`runs.stopped`) or else its
-record; "You retried it: <reason>, with feedback", the feedback linked; that run linked in Runs; a completion action's own wording never shown); its live progress; its own latest message to anyone and the latest to it since, as messages), what holds it (each step whose outputs it takes and that has not succeeded, by title and id, linked, with how it reads; a pause in words: "Paused by <who>: <reason>." from the plan edit that paused it (schema 3; lands with the plan-rows cutover: the edit that made its latest pause transition, read from the plan's history; an edit that only carried the pause along, or a pause of a step of the same id removed since, is never credited), "Paused." when none names who, "Its project is paused."; when every step it waits on is pending too, the first step up its chain that holds it, neither pending nor done, "Held up by <title> <id> (running), before <its wait>"; and while no runner holds the scheduler lease, "The runner is stopped: nothing starts until `sluice loop` runs.") and what it comes after, queued, skipped, finishing, outside, progress kept from an ended run (§6.4), its key output (the first set of `summary`, `result`, `report`, `final`, `answer`, `verdict`, else up to three short outputs, else the first; under a line saying which run set them, a running step's "before this run"), a finished step's last message, a link to its chain on the plan (`?root=<s>&up=1&down=1`) when it comes after a step or one comes after it), **Activity** (an agent run's, below, its turns counted), **Messages** (`?tab=messages`, `?tab=thread` still opening it; its conversation, every message counted: its own thread `step-<s>` and every message it sent or was sent on another thread, its latest 60, a question's replies under it, with a message box to it; its messages counted), **Inputs** (each value and where it came from: a default, a step's output linked, a plan input, a file), **Outputs** (set of all: those not set yet named on one line; which run set them, "From run 2 · 1h ago", and an output another run set says which; a long value equal to an earlier one's says "Same as <name>"), **Runs** (its unit's timeline first, its own row marked; each run its ordinal, outcome (a cancelled run's one line from who stopped it, as the run keeps it or else its record:
+record; "You retried it: <reason>, with feedback", the feedback linked; that run linked in Runs; a completion action's own wording never shown); its live progress; its own latest message to anyone and the latest to it since, as messages), what holds it (each step whose outputs it takes and that has not succeeded, by title and id, linked, with how it reads; a pause in words: "Paused by <who>: <reason>." from the plan edit that paused it (the edit that made its latest pause transition, read from the plan's history; an edit that only carried the pause along, or a pause of a step of the same id removed since, is never credited), "Paused." when none names who, "Its project is paused."; when every step it waits on is pending too, the first step up its chain that holds it, neither pending nor done, "Held up by <title> <id> (running), before <its wait>"; and while no runner holds the scheduler lease, "The runner is stopped: nothing starts until `sluice loop` runs.") and what it comes after, queued, skipped, finishing, outside, progress kept from an ended run (§6.4), its key output (the first set of `summary`, `result`, `report`, `final`, `answer`, `verdict`, else up to three short outputs, else the first; under a line saying which run set them, a running step's "before this run"), a finished step's last message, a link to its chain on the plan (`?root=<s>&up=1&down=1`) when it comes after a step or one comes after it), **Activity** (an agent run's, below, its turns counted), **Messages** (`?tab=messages`, `?tab=thread` still opening it; its conversation, every message counted: its own thread `step-<s>` and every message it sent or was sent on another thread, its latest 60, a question's replies under it, with a message box to it; its messages counted), **Inputs** (each value and where it came from: a default, a step's output linked, a plan input, a file), **Outputs** (set of all: those not set yet named on one line; which run set them, "From run 2 · 1h ago", and an output another run set says which; a long value equal to an earlier one's says "Same as <name>"), **Runs** (its unit's timeline first, its own row marked; each run its ordinal, outcome (a cancelled run's one line from who stopped it, as the run keeps it or else its record:
 "Cancelled after 1h 18m by cli, which retried it."; a run after the first says what started it, from the retry kept on the run before it (or
 recorded) or its going stale: "You retried it: <reason>, with feedback.", "`fig-5571-land` sent it back, with feedback." (a completion action), "Sluice retried it on its own.", "An input it reads changed, so it ran again."), an agent run's calls by tool, kind in words, what it said (not on a failed step's last run, whose words lead the page), outputs, engine, session, run id and files; "No run of it is kept" when none is). `?tab=overview\|activity\|messages\|inputs\|outputs\|runs` opens a tab (Overview when the step has no such tab); an anchor in a tab (`#run-3`, a call's, `#message-<id>`, `#activity`) opens its tab on it; with script the chosen tab is kept through every stream patch and mirrored into `?tab=`, without it every tab's panel is drawn in turn under its own head. `?activity=all` draws every turn |
 | `/projects/id/<p>/runs/<run>/files/<name>` | one of a run's files as a page (a way back to its step's Runs, the run, its text with terminal escape sequences taken out; a long one "Jump to end" to `#file-end` under its last line, where a live run's file opens from its step's links), or with `?raw=1` as plain text, read-only: `pane-at-failure.txt` (its newest invocation's), `stderr.log`, `stderr-tail.log`, `summary.txt`, and an engine's record there, masked (`account::redact`): `codex.log`, `codex-wire.jsonl`, `devin-hooks.jsonl`, `devin.log`, `devin.json` (the run's own, else its newest invocation's); only a run of that project, only from its own directory, never through a link; a large file's last 2 MiB; a run name that is no run id is a 404 page |
@@ -1539,7 +1539,7 @@ recorded) or its going stale: "You retried it: <reason>, with feedback.", "`fig-
 | `POST /projects/id/<p>/messages` | post an answer or reply as `owner` |
 | `POST /projects/id/<p>/messages/read` | mark messages read (`thread`, `through`); the pages send it only when the owner asks: a note's Mark read, Mark all read, or the thread page's button. Never on render, on sight or on opening a thread. The inbox lists the notes read in the last 24 hours under "Read today", from each message's `read_at` |
 | `POST /messages/close` | close several questions as `owner` (each `m=<project>/<message>`), then to `next` |
-| `/log`, `/projects/id/<p>/log` | the log, 50 records a page, each in a sentence (a failure as its step page says it, a cancel as a cancel, never JSON; the record under it), filtered by kinds, threads (`thread=`), one step (`step=`, its records and its thread's messages), one unit (`unit=`, its steps' records and threads and its own `unit.settled`) or failures (`errors=1`: steps that failed, failed calls, orphaned runs); a fn call that succeeded is left out unless `kind=call` asks for calls, a status record that changes nothing unless `kind=step.status` does, a lease record unless `kind=step.lease` does, a notification's delivery (`project.notify`) unless `kind=project.notify` does; a settled unit's row holds its steps' status changes in the six hours before it ("Unit u settled, 5 steps · 9 status changes", those linked to `log?unit=`, which lists each), and a question to the owner reads by its title ("fig-5576-work asked you: Land l1 first?"); any other message names its sender and recipient as pages name steps ("work · Ship the cron fix `fix-cron` to the orchestrator: …", the owner "You"), then its first words as plain text and one small link to its thread after them, and one note sent to several within a minute is one row ("… to 6 steps: Heads up…"). `/log` holds every project's records, each under its project's name. A sentence links its step, unit and thread; records in a row that say the same are one row counted ("×10"); `errors=1` leaves out the owner's cancels; a sentence is cut at 240 characters; sluice's own plan edits that retire done units within half an hour of each other are one row, whatever came between ("sluice retired done units 4 times: plan revs 1209 to 1212, 219 changes", each change a step retired (schema 3; lands with the plan-rows cutover)); a step's status changes within a minute are one row ("x pending → running → succeeded"), a failure always its own; a page with no records names the filters that left them out, each with a link that drops it |
+| `/log`, `/projects/id/<p>/log` | the log, 50 records a page, each in a sentence (a failure as its step page says it, a cancel as a cancel, never JSON; the record under it), filtered by kinds, threads (`thread=`), one step (`step=`, its records and its thread's messages), one unit (`unit=`, its steps' records and threads and its own `unit.settled`) or failures (`errors=1`: steps that failed, failed calls, orphaned runs); a fn call that succeeded is left out unless `kind=call` asks for calls, a status record that changes nothing unless `kind=step.status` does, a lease record unless `kind=step.lease` does, a notification's delivery (`project.notify`) unless `kind=project.notify` does; a settled unit's row holds its steps' status changes in the six hours before it ("Unit u settled, 5 steps · 9 status changes", those linked to `log?unit=`, which lists each), and a question to the owner reads by its title ("fig-5576-work asked you: Land l1 first?"); any other message names its sender and recipient as pages name steps ("work · Ship the cron fix `fix-cron` to the orchestrator: …", the owner "You"), then its first words as plain text and one small link to its thread after them, and one note sent to several within a minute is one row ("… to 6 steps: Heads up…"). `/log` holds every project's records, each under its project's name. A sentence links its step, unit and thread; records in a row that say the same are one row counted ("×10"); `errors=1` leaves out the owner's cancels; a sentence is cut at 240 characters; sluice's own plan edits that retire done units within half an hour of each other are one row, whatever came between ("sluice retired done units 4 times: plan revs 1209 to 1212, 219 changes", each change a step retired); a step's status changes within a minute are one row ("x pending → running → succeeded"), a failure always its own; a page with no records names the filters that left them out, each with a link that drops it |
 | `/fns` | the functions a project (`?project=`) or the home sees |
 | `/projects/id/<p>/settings` (GET, POST), `/preview`, `/icon`, `/delete` | project settings, under an index of its sections; each form keeps the settings revision it was drawn or last applied with while no one else changes its field (the live header carries each field's last change: its record's seq and author); when someone does, the form says "Changed by <author> since you opened this · Reload this field" and keeps its revision, so its Apply is refused ("Not applied: it changed since you opened it.") instead of writing over the change, and Reload this field draws the field anew; dashboard deletion confirms in a dialog, archives first if needed, and calls `project_delete` with the known name and current revision; live work blocks deletion; a resource's capacity is a number or the fn that reports it (the form's `capacity=number\|fn\|remove`, `number`, `capacity_fn`) |
 | `POST /projects/id/<p>/settings/board` | the Board section: `op=save\|clear`, `program`, `expected_rev`; the page with the outcome |
@@ -1903,7 +1903,7 @@ write that timed out, and connections dropped for want of a permit.
 | `coordinator [--maintenance]` | runs the home's coordinator in the foreground |
 | `install fence <reason> \| unfence \| select <release_dir> <home> \| status` | §2.2 |
 | `home schema` | `{"schema": n}`: the database schema this binary reads and writes (needs no home; `build-release` records it) |
-| `home migrate [--dry-run] [--json]` | (schema 3; lands with the plan-rows cutover) converts `SLUICE_HOME`'s schema-1 or schema-2 database to this binary's schema (§3), holding `coordinator.lock` (refused while a coordinator holds it); `--dry-run` converts a backup-API copy in a scratch directory and leaves the home untouched; `--json` prints the conversion report |
+| `home migrate [--dry-run] [--json]` | converts `SLUICE_HOME`'s schema-1 or schema-2 database to this binary's schema (§3), holding `coordinator.lock` (refused while a coordinator holds it); `--dry-run` converts a backup-API copy in a scratch directory and leaves the home untouched; `--json` prints the conversion report |
 | `tool [name [json\|-] [--field value]…]` | without a name, lists the tools; with one, runs it (its arguments as below) and prints its result as MCP returns it (`{"ok": true}` for an acknowledgement); `tool <name> --help` lists its fields |
 | `tool rpc '<request>'` | sends a raw wire request |
 | `next [-p P]… [--since-seq N \| --cursor FILE] [--me NAME] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; without a since it starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |
