@@ -1378,10 +1378,11 @@ fn write_indexes(sql: &Connection, plan: &Converted) -> Result<()> {
     Ok(())
 }
 
-/// An attempt with a completion snapshot: its id, project, step, declaration and the
-/// snapshot's declaration of its step.
+/// An attempt with a completion snapshot: its id, project, step, declaration, the snapshot's
+/// declaration of its step and its project's name.
 type Snapshot = (
     String,
+    Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -1397,18 +1398,28 @@ fn remove_snapshots(sql: &Connection, warnings: &mut Vec<String>) -> Result<BTre
         .prepare(
             "SELECT attempt_id,project_id,step_id,json_extract(request,'$.declaration'),
                CASE WHEN step_id IS NOT NULL THEN
-                 json_extract(request,'$.provenance.runtime.completion.document.steps.\"'||step_id||'\"') END
+                 json_extract(request,'$.provenance.runtime.completion.document.steps.\"'||step_id||'\"') END,
+               (SELECT name FROM projects p WHERE p.project_id=attempts.project_id)
              FROM attempts
              WHERE json_type(request,'$.provenance.runtime.completion') IS NOT NULL
                 OR json_type(provenance,'$.runtime.completion') IS NOT NULL",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        })?
         .collect::<rusqlite::Result<_>>()?;
     let mut update = sql.prepare(
         "UPDATE attempts SET request=json_remove(request,'$.provenance.runtime.completion'),
            provenance=json_remove(provenance,'$.runtime.completion') WHERE attempt_id=?1",
     )?;
-    for (attempt, project, step, declaration, snapshot) in snapshots {
+    for (attempt, project, step, declaration, snapshot, name) in snapshots {
         let parse = |text: &Option<String>| {
             text.as_deref()
                 .and_then(|text| serde_json::from_str::<Value>(text).ok())
@@ -1416,7 +1427,9 @@ fn remove_snapshots(sql: &Connection, warnings: &mut Vec<String>) -> Result<BTre
         };
         if step.is_some() && parse(&declaration) != parse(&snapshot) {
             warnings.push(format!(
-                "attempt {attempt} (step {}): its completion snapshot's declaration differs from the attempt's",
+                "project {} ({}): attempt {attempt} (step {}): its completion snapshot's declaration differs from the attempt's",
+                name.as_deref().unwrap_or("?"),
+                project.as_deref().unwrap_or_default(),
                 step.as_deref().unwrap_or_default()
             ));
         }

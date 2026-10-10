@@ -4,10 +4,6 @@
 //! blocked home is refused and left as it was, and a conversion killed at any moment leaves
 //! the home either untouched or converted whole, never between (one transaction). The legacy
 //! homes are `tests/fixtures/legacy/`, built by the old release.
-//!
-//! Each test needs lanes B and G (schema 3, the converter and its CLI) and E (the read
-//! tools), so each is ignored until `rw/pn-cutover` holds them. Run there with
-//! `cargo test -p sluice --test schema_migrate -- --include-ignored`.
 #[path = "../../../tests/support/plan_rows.rs"]
 mod plan_rows;
 #[allow(dead_code)]
@@ -71,7 +67,6 @@ fn dump(home: &Path) -> String {
 }
 
 #[test]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lanes B, E and G)"]
 fn home_migrate_converts_a_legacy_home_in_place_and_it_serves_its_plans_and_history() {
     let expected: Value = serde_json::from_str(&read("schema1.expected.json")).unwrap();
     let home = legacy_home("schema1", None);
@@ -156,7 +151,6 @@ fn home_migrate_converts_a_legacy_home_in_place_and_it_serves_its_plans_and_hist
 }
 
 #[test]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lanes B and G)"]
 fn home_migrate_dry_run_reports_the_conversion_and_changes_nothing() {
     let home = legacy_home("schema2", None);
     let database = home.path().join("sluice.db");
@@ -176,7 +170,6 @@ fn home_migrate_dry_run_reports_the_conversion_and_changes_nothing() {
 }
 
 #[test]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lanes B and G)"]
 fn home_migrate_refuses_a_blocked_home_and_live_work_and_leaves_each_as_it_was() {
     let defects: Vec<Value> = serde_json::from_str(&read("defects.json")).unwrap();
     for defect in defects {
@@ -254,7 +247,6 @@ fn bulk(revisions: usize) -> String {
 }
 
 #[test]
-#[ignore = "plan-rows integration gate: run on rw/pn-cutover (needs lanes B and G)"]
 fn a_conversion_killed_at_any_moment_leaves_the_home_untouched_or_converted_whole() {
     let home = legacy_home("schema1", Some(&bulk(1500)));
     let original = dump(home.path());
