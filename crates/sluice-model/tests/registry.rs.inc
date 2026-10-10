@@ -20,7 +20,6 @@ macro_rules! every_contract { ($m:ident) => {
         $m!(RunCapability);
         $m!(PathErrors);
         $m!(ValueRef);
-        $m!(PlanDocument);
         $m!(Type);
         $m!(ProjectIdentity);
         $m!(ProjectSummary);
@@ -74,9 +73,6 @@ macro_rules! every_contract { ($m:ident) => {
         $m!(CompletionActionConflict);
         $m!(TransientRetry);
         $m!(FileBinding);
-        $m!(Snapshot);
-        $m!(PlanPatchData);
-        $m!(PreparedEdit);
         $m!(RpcRequest);
         $m!(RpcReply);
         $m!(FnInvocation);

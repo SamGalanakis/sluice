@@ -1,43 +1,42 @@
-//! Parsed plan semantics. This module never reads files or invokes a function.
+//! Compiled plan semantics. This module never reads files or invokes a function.
+//!
+//! The plan's truth is its rows (`plan_rows::PlanRows`): each input, output and step as
+//! written, at its position. `compile_rows` compiles them whole (a cold cache, `verify`); an
+//! edit compiles only what it changes (`prepare_plan_edit`), on a candidate that shares
+//! structure with its certified base (`persistent`), so an edit costs what it changes, not
+//! the plan's size. The compiled `Plan` keeps today's query API (`inputs`, `outputs`, `steps`,
+//! `units`, `dependencies`, `topological_order`, `reference_type`) and, beside it, each row as
+//! written and the reverse indexes incremental validation reads (who reads a name, who gates
+//! on a unit, who needs a resource, who carries a tag).
+
+mod compile;
+mod index;
+mod ops;
+mod prepare;
+
+pub use crate::plan_index::{output_references, step_index};
+pub use crate::plan_rows::CertifiedPlan;
+pub use compile::{compile_rows, full_compiles, reset_counters};
+pub use index::step_edges;
+pub use prepare::{EditBase, PrepareOptions, preparation_reads, prepare_plan_edit};
+
+pub(crate) use compile::{Change, Delta, compile_delta};
+pub(crate) use index::{decl_dependencies, entry_error, unit_of};
+pub(crate) use ops::{Applied, apply_ops};
 
 use crate::{
-    commands::{EditPreview, EditResult, PatchOperation, RuntimeApi},
-    edit::PreparedEdit,
-    error::PublicError,
     gates::{Gate, Reference, ValueRef},
     hash::{EffectiveInput, InputsHash},
-    ids::{Revision, StepId, UnitName},
-    rpc::{JsonMap, JsonValue, decode_json},
+    ids::{StepId, UnitName},
+    persistent::{Ordered, Tree},
+    plan_rows::RootSection,
+    rpc::{JsonMap, JsonValue},
     types::{PathError, Type, check_value_at, fits, navigate},
-    units::{Unit, derive_units},
+    units::Unit,
 };
 use indexmap::{IndexMap, IndexSet};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Snapshot {
-    pub revision: Revision,
-    pub document: JsonMap,
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PlanPatchData {
-    pub expected: Revision,
-    pub ops: Vec<PatchOperation>,
-}
-/// Unvalidated wire document. Compile with a signature provider before use.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(transparent)]
-pub struct PlanDocument(JsonMap);
-pub async fn apply_edit(
-    _api: &impl RuntimeApi,
-    _edit: PreparedEdit,
-) -> Result<EditResult, PublicError> {
-    Err(PublicError::not_implemented("apply_edit"))
-}
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Declaration {
@@ -128,6 +127,8 @@ pub struct Step {
     pub tags: Vec<String>,
     pub needs: IndexMap<String, u64>,
     pub priority: i64,
+    /// The declaration exactly as written (the `steps` row's `declaration`).
+    pub declaration: JsonMap,
 }
 impl Step {
     pub fn is_external(&self) -> bool {
@@ -163,91 +164,225 @@ impl Step {
             .into_iter()
             .collect()
     }
+    /// Whether `self` and `other` mean the same work, `paused` and `tags` aside: what a
+    /// running step may change (and nothing else).
+    pub fn same_work(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.run == other.run
+            && self.signature == other.signature
+            && self.bindings == other.bindings
+            && self.extra_inputs == other.extra_inputs
+            && self.declared_outputs == other.declared_outputs
+            && self.scatter == other.scatter
+            && self.doc == other.doc
+            && self.after == other.after
+            && self.needs == other.needs
+            && self.priority == other.priority
+    }
 }
 
-/// Only whole-plan validation can construct this compiled, acyclic certificate.
-/// Queries retain plan order. Deserialize wire data as `PlanDocument` first.
-///
-/// ```compile_fail
-/// let plan: sluice_model::Plan =
-///     sluice_model::rpc::decode_json(br#"{"steps":{}}"#).unwrap();
-/// ```
-#[derive(Debug, Clone, PartialEq)]
+/// Who reads a name: a step (a binding or a gate) or a plan output.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Consumer {
+    Step(StepId),
+    Output(String),
+}
+
+/// A compiled, validated plan: only `compile_rows` and an edit's preparation make one. Its
+/// maps are persistent: a candidate built from a base shares every row and subtree the edit
+/// leaves alone. Queries keep plan order (each collection by position).
+#[derive(Clone)]
 pub struct Plan {
-    document: JsonMap,
-    inputs: IndexMap<String, Declaration>,
-    outputs: IndexMap<String, ValueRef>,
-    steps: IndexMap<StepId, Step>,
-    units: IndexMap<UnitName, Unit>,
-    dependencies: IndexMap<StepId, Vec<StepId>>,
-    order: Vec<StepId>,
+    root_order: Vec<RootSection>,
+    inputs: Ordered<String, Declaration>,
+    written_inputs: Tree<String, JsonValue>,
+    outputs: Ordered<String, ValueRef>,
+    written_outputs: Tree<String, JsonMap>,
+    steps: Ordered<StepId, Step>,
+    units: Ordered<UnitName, Unit>,
+    dependencies: Tree<StepId, Arc<[StepId]>>,
+    /// Name (a step id or a plan input) → the steps and outputs whose declarations read it.
+    readers: Tree<String, Tree<Consumer, ()>>,
+    /// Unit → the steps gating on it (`unit:<u>`).
+    unit_readers: Tree<UnitName, Tree<StepId, ()>>,
+    /// Resource → the steps that need it.
+    needing: Tree<String, Tree<StepId, ()>>,
+    /// Tag → the steps that carry it.
+    tagged: Tree<String, Tree<StepId, ()>>,
+    /// The whole topological order, worked out on first use.
+    order: OnceLock<Arc<[StepId]>>,
 }
-impl Serialize for Plan {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.document.serialize(serializer)
+impl PartialEq for Plan {
+    fn eq(&self, other: &Self) -> bool {
+        self.root_order == other.root_order
+            && self.inputs == other.inputs
+            && self.written_inputs == other.written_inputs
+            && self.outputs == other.outputs
+            && self.written_outputs == other.written_outputs
+            && self.steps == other.steps
+            && self.units == other.units
+            && self.dependencies == other.dependencies
     }
 }
-impl JsonSchema for Plan {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        "Plan".into()
-    }
-    fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        PlanDocument::json_schema(g)
-    }
-}
-impl PlanDocument {
-    pub fn compile(&self, signatures: &impl SignatureProvider) -> Result<Plan, Vec<PathError>> {
-        Plan::parse(&self.0, signatures)
+impl std::fmt::Debug for Plan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Plan")
+            .field("root_order", &self.root_order)
+            .field("inputs", &self.inputs)
+            .field("outputs", &self.outputs)
+            .field("steps", &self.steps.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
     }
 }
+
 impl Plan {
-    pub fn parse_json(
-        bytes: &[u8],
-        signatures: &impl SignatureProvider,
-    ) -> Result<Self, Vec<PathError>> {
-        let document =
-            decode_json(bytes).map_err(|error| vec![diagnostic("plan", error.to_string())])?;
-        parse_plan(document, signatures)
+    /// No sections, no rows.
+    pub(crate) fn empty() -> Self {
+        Self {
+            root_order: vec![],
+            inputs: Ordered::new(),
+            written_inputs: Tree::new(),
+            outputs: Ordered::new(),
+            written_outputs: Tree::new(),
+            steps: Ordered::new(),
+            units: Ordered::new(),
+            dependencies: Tree::new(),
+            readers: Tree::new(),
+            unit_readers: Tree::new(),
+            needing: Tree::new(),
+            tagged: Tree::new(),
+            order: OnceLock::new(),
+        }
     }
-    pub fn parse(
-        document: &JsonMap,
-        signatures: &impl SignatureProvider,
-    ) -> Result<Self, Vec<PathError>> {
-        parse_plan(document.clone(), signatures)
+    /// The present root sections, in document order.
+    pub fn root_order(&self) -> &[RootSection] {
+        &self.root_order
     }
-    /// `parse`, keeping the document it is given rather than a copy of it.
-    pub fn parse_owned(
-        document: JsonMap,
-        signatures: &impl SignatureProvider,
-    ) -> Result<Self, Vec<PathError>> {
-        parse_plan(document, signatures)
-    }
-    pub fn inputs(&self) -> &IndexMap<String, Declaration> {
+    pub fn inputs(&self) -> &Ordered<String, Declaration> {
         &self.inputs
     }
-    pub fn outputs(&self) -> &IndexMap<String, ValueRef> {
+    pub fn outputs(&self) -> &Ordered<String, ValueRef> {
         &self.outputs
     }
-    pub fn steps(&self) -> &IndexMap<StepId, Step> {
+    pub fn steps(&self) -> &Ordered<StepId, Step> {
         &self.steps
     }
-    pub fn units(&self) -> &IndexMap<UnitName, Unit> {
+    pub fn units(&self) -> &Ordered<UnitName, Unit> {
         &self.units
     }
     pub fn dependencies(&self, id: &StepId) -> &[StepId] {
         self.dependencies
             .get(id)
-            .map(Vec::as_slice)
+            .map(|dependencies| &**dependencies)
             .unwrap_or_default()
     }
+    /// Every step after the steps it depends on: a depth-first post-order from each step in
+    /// plan order. Worked out once per compiled plan, on first use.
     pub fn topological_order(&self) -> &[StepId] {
-        &self.order
+        self.order.get_or_init(|| {
+            self.cycle_free_order()
+                .expect("a compiled plan has no dependency cycle")
+                .into()
+        })
     }
-    pub fn document(&self) -> &JsonMap {
-        &self.document
+    /// A step's position.
+    pub fn position(&self, id: &StepId) -> Option<u64> {
+        self.steps.position(id)
     }
-    pub fn transport(&self) -> PlanDocument {
-        PlanDocument(self.document.clone())
+    /// A plan input's declaration exactly as written, and its position.
+    pub fn input_row(&self, name: &str) -> Option<(u64, &JsonValue)> {
+        Some((self.inputs.position(name)?, self.written_inputs.get(name)?))
+    }
+    /// A plan output's binding exactly as written, and its position.
+    pub fn output_row(&self, name: &str) -> Option<(u64, &JsonMap)> {
+        Some((
+            self.outputs.position(name)?,
+            self.written_outputs.get(name)?,
+        ))
+    }
+    /// The steps carrying `tag`, in no particular order.
+    pub fn tagged(&self, tag: &str) -> impl Iterator<Item = &StepId> {
+        self.tagged.get(tag).into_iter().flat_map(Tree::keys)
+    }
+    /// The steps that need `resource`, in no particular order.
+    pub fn needing(&self, resource: &str) -> impl Iterator<Item = &StepId> {
+        self.needing.get(resource).into_iter().flat_map(Tree::keys)
+    }
+    /// The steps and plan outputs whose declarations read `name` (a step or a plan input).
+    pub(crate) fn readers(&self, name: &str) -> impl Iterator<Item = &Consumer> {
+        self.readers.get(name).into_iter().flat_map(Tree::keys)
+    }
+    /// The steps gating on `unit:<unit>`.
+    pub(crate) fn unit_readers(&self, unit: &UnitName) -> impl Iterator<Item = &StepId> {
+        self.unit_readers.get(unit).into_iter().flat_map(Tree::keys)
+    }
+    /// The steps that depend on `id` (`dependencies` read backwards): its readers, and the
+    /// steps gating on its unit when it is one of the unit's exits.
+    pub fn dependents(&self, id: &StepId) -> IndexSet<StepId> {
+        let mut out: IndexSet<StepId> = self
+            .readers(id.as_str())
+            .filter_map(|consumer| match consumer {
+                Consumer::Step(step) => Some(step.clone()),
+                Consumer::Output(_) => None,
+            })
+            .filter(|step| self.dependencies(step).contains(id))
+            .collect();
+        if let Some(step) = self.steps.get(id) {
+            let unit = step.unit_name();
+            if self.units.get(&unit).is_some_and(|u| u.exits.contains(id)) {
+                out.extend(
+                    self.unit_readers(&unit)
+                        .filter(|reader| self.dependencies(reader).contains(id))
+                        .cloned(),
+                );
+            }
+        }
+        out
+    }
+    /// The topological order of every step, or the first dependency cycle found.
+    pub(crate) fn cycle_free_order(&self) -> Result<Vec<StepId>, Vec<StepId>> {
+        let mut marks = IndexMap::<&StepId, u8>::new();
+        let mut order = vec![];
+        for root in self.steps.keys() {
+            if marks.contains_key(root) {
+                continue;
+            }
+            let mut stack: Vec<(&StepId, usize)> = vec![(root, 0)];
+            marks.insert(root, 1);
+            while let Some((id, index)) = stack.last_mut() {
+                let dependencies = self.dependencies(id);
+                if *index == dependencies.len() {
+                    let id = *id;
+                    stack.pop();
+                    marks.insert(id, 2);
+                    order.push(id.clone());
+                    continue;
+                }
+                let next = &dependencies[*index];
+                *index += 1;
+                let Some((next, _)) = self.steps.get(next).map(|step| (&step.id, ())) else {
+                    continue;
+                };
+                match marks.get(next) {
+                    Some(1) => {
+                        let first = stack
+                            .iter()
+                            .position(|(id, _)| *id == next)
+                            .expect("ancestor");
+                        let mut cycle: Vec<_> =
+                            stack[first..].iter().map(|(id, _)| (*id).clone()).collect();
+                        cycle.push(next.clone());
+                        return Err(cycle);
+                    }
+                    Some(_) => {}
+                    None => {
+                        marks.insert(next, 1);
+                        stack.push((next, 0));
+                    }
+                }
+            }
+        }
+        Ok(order)
     }
     pub fn reference_type(&self, reference: &ValueRef) -> Result<Type, String> {
         let Reference { step, name, fields } = reference.parts()?;
@@ -269,49 +404,6 @@ impl Plan {
         navigate(&base, &fields.join("."))
             .map_err(|error| format!("{reference}: {}", error.message))
     }
-    /// RFC 6902 patch on a copy, then whole-graph validation. Failure leaves self untouched.
-    pub fn patch(
-        &self,
-        ops: &[PatchOperation],
-        signatures: &impl SignatureProvider,
-    ) -> Result<Self, Vec<PathError>> {
-        // The document as a JSON object, moved rather than serialized out of a copy.
-        let mut value = Value::Object(
-            self.document
-                .0
-                .iter()
-                .map(|(key, value)| (key.clone(), value.as_value().clone()))
-                .collect(),
-        );
-        for (index, operation) in ops.iter().enumerate() {
-            let path = match operation {
-                PatchOperation::Add { path, .. }
-                | PatchOperation::Remove { path }
-                | PatchOperation::Replace { path, .. }
-                | PatchOperation::Move { path, .. }
-                | PatchOperation::Copy { path, .. }
-                | PatchOperation::Test { path, .. } => path,
-            };
-            // serde_json::Map::remove uses swap removal with preserve_order. Keep the key
-            // order of the maps above each touched path, not a copy of the whole plan, and
-            // restore those maps only, leaving replacement subtrees in supplied order.
-            let mut orders = ancestor_orders(&value, path);
-            if let PatchOperation::Move { from, .. } = operation {
-                orders.extend(ancestor_orders(&value, from));
-            }
-            let patch: json_patch::Patch = serde_json::from_value(
-                serde_json::to_value(std::slice::from_ref(operation))
-                    .map_err(|error| vec![diagnostic("ops", error.to_string())])?,
-            )
-            .map_err(|error| vec![diagnostic("ops", error.to_string())])?;
-            json_patch::patch(&mut value, &patch)
-                .map_err(|error| vec![diagnostic(&format!("ops[{index}]"), error.to_string())])?;
-            for (parent, keys) in orders {
-                restore_order(&mut value, &parent, &keys);
-            }
-        }
-        Self::parse_owned(json_map(value)?, signatures)
-    }
     pub fn validate_input_values(&self, inputs: &JsonMap) -> Result<(), Vec<PathError>> {
         let mut errors = Vec::new();
         for (name, value) in &inputs.0 {
@@ -329,53 +421,6 @@ impl Plan {
             Ok(())
         } else {
             Err(errors)
-        }
-    }
-}
-
-/// A patched document as a strict map, its values moved in rather than deserialized
-/// from a copy. Anything `JsonValue` would refuse is converted as before, for the same
-/// refusal.
-fn json_map(value: Value) -> Result<JsonMap, Vec<PathError>> {
-    match value {
-        Value::Object(map) if map.values().all(crate::rpc::strict_value) => Ok(JsonMap(
-            map.into_iter()
-                .map(|(key, value)| {
-                    (
-                        key,
-                        JsonValue::try_from(value).expect("checked strict JSON"),
-                    )
-                })
-                .collect(),
-        )),
-        value => serde_json::from_value(value)
-            .map_err(|error| vec![diagnostic("plan", error.to_string())]),
-    }
-}
-/// The key order of every map above `path`, outermost first.
-fn ancestor_orders(value: &Value, path: &str) -> Vec<(String, Vec<String>)> {
-    path.match_indices('/')
-        .filter_map(|(offset, _)| {
-            let parent = &path[..offset];
-            let map = value.pointer(parent)?.as_object()?;
-            Some((parent.to_owned(), map.keys().cloned().collect()))
-        })
-        .collect()
-}
-/// Put the map at `parent` back in `keys` order, keys it did not have after them.
-fn restore_order(value: &mut Value, parent: &str, keys: &[String]) {
-    if let Some(new) = value.pointer_mut(parent).and_then(Value::as_object_mut) {
-        let known: std::collections::HashSet<&str> = keys.iter().map(String::as_str).collect();
-        let added: Vec<String> = new
-            .keys()
-            .filter(|key| !known.contains(key.as_str()))
-            .cloned()
-            .collect();
-        let mut remaining = std::mem::take(new);
-        for key in keys.iter().chain(&added) {
-            if let Some(value) = remaining.swap_remove(key) {
-                new.insert(key.clone(), value);
-            }
         }
     }
 }
@@ -402,15 +447,7 @@ fn closed(
     path: &str,
     errors: &mut Vec<PathError>,
 ) {
-    closed_keys(raw.keys(), keys, path, errors);
-}
-fn closed_keys<'k>(
-    present: impl Iterator<Item = &'k String>,
-    keys: &[&str],
-    path: &str,
-    errors: &mut Vec<PathError>,
-) {
-    for key in present.filter(|key| !keys.contains(&key.as_str())) {
+    for key in raw.keys().filter(|key| !keys.contains(&key.as_str())) {
         let path = if path.is_empty() {
             key.clone()
         } else {
@@ -426,7 +463,7 @@ fn closed_keys<'k>(
         ));
     }
 }
-fn valid_id(name: &str, path: &str, errors: &mut Vec<PathError>) -> bool {
+pub(crate) fn valid_id(name: &str, path: &str, errors: &mut Vec<PathError>) -> bool {
     if StepId::new(name).is_ok() {
         true
     } else {
@@ -506,7 +543,7 @@ fn reference(raw: &Value, path: &str, errors: &mut Vec<PathError>) -> Option<Val
         }
     }
 }
-fn binding(raw: &Value, path: &str, errors: &mut Vec<PathError>) -> Option<Binding> {
+pub(crate) fn binding(raw: &Value, path: &str, errors: &mut Vec<PathError>) -> Option<Binding> {
     let Some(map) = raw.as_object().filter(|map| {
         map.len() == 1
             && map
@@ -570,15 +607,27 @@ fn string_list(raw: &Value, path: &str, errors: &mut Vec<PathError>) -> Vec<Stri
         .into_iter()
         .collect()
 }
+pub(crate) fn map_value(map: &JsonMap) -> Value {
+    Value::Object(
+        map.0
+            .iter()
+            .map(|(key, value)| (key.clone(), value.as_value().clone()))
+            .collect(),
+    )
+}
 
-fn parse_step(
+/// A step's declaration on its own: its keys, fn, bindings' shapes, declared outputs, scatter,
+/// pause, tags, needs and priority. Bindings' sources and gates are checked against the rest of
+/// the plan afterwards (`check_bindings`, `compile_gates`). `None` when it cannot be a step.
+pub(crate) fn parse_step(
     id: StepId,
-    raw: &Value,
+    declaration: &JsonMap,
     signatures: &impl SignatureProvider,
     errors: &mut Vec<PathError>,
 ) -> Option<Step> {
     let path = format!("steps.{id}");
-    let raw = object(raw, &path, errors)?;
+    let value = map_value(declaration);
+    let raw = object(&value, &path, errors)?;
     closed(
         raw,
         &[
@@ -759,219 +808,117 @@ fn parse_step(
         tags,
         needs,
         priority,
+        declaration: declaration.clone(),
     })
 }
 
-/// The document is read in place, top-level entry by entry, and kept by the plan.
-fn parse_plan(
-    document: JsonMap,
-    signatures: &impl SignatureProvider,
-) -> Result<Plan, Vec<PathError>> {
-    fn top<'d>(document: &'d JsonMap, key: &str) -> Option<&'d Value> {
-        document.0.get(key).map(JsonValue::as_value)
-    }
-    crate::types::validate_json_map(&document, "plan")?;
-    let mut errors = Vec::new();
-    closed_keys(
-        document.0.keys(),
-        &["inputs", "outputs", "steps"],
-        "",
-        &mut errors,
-    );
-    let inputs = top(&document, "inputs")
-        .map(|value| declarations(value, "inputs", &mut errors))
-        .unwrap_or_default();
-    let mut steps = IndexMap::new();
-    match top(&document, "steps") {
-        None => errors.push(diagnostic("steps", "required, an object of id -> step")),
-        Some(value) => {
-            if let Some(map) = object(value, "steps", &mut errors) {
-                for (name, value) in map {
-                    let path = format!("steps.{name}");
-                    if !valid_id(name, &path, &mut errors) {
-                        continue;
-                    }
-                    if ["owner", "orchestrator"].contains(&name.as_str()) {
-                        errors.push(diagnostic(&path, "reserved message address"));
-                    }
-                    if inputs.contains_key(name) {
+/// A plan input's declaration (`inputs.<name>`): its name, then its type.
+pub(crate) fn parse_input(name: &str, raw: &JsonValue) -> (Option<Declaration>, Vec<PathError>) {
+    let mut errors = vec![];
+    let path = format!("inputs.{name}");
+    let declaration = valid_id(name, &path, &mut errors)
+        .then(|| declaration(raw.as_value(), &path, &mut errors))
+        .flatten();
+    (declaration, errors)
+}
+
+/// A plan output (`outputs.<name>`): its name, its shape (`{"source": "<ref>"}`) and its
+/// source against `plan`. The source, when the binding has one.
+pub(crate) fn check_output(
+    plan: &Plan,
+    name: &str,
+    binding_map: &JsonMap,
+) -> (Option<ValueRef>, Vec<PathError>) {
+    let mut errors = vec![];
+    let path = format!("outputs.{name}");
+    valid_id(name, &path, &mut errors);
+    let source = match binding(&map_value(binding_map), &path, &mut errors) {
+        Some(Binding::Source(reference)) => {
+            if let Err(error) = plan.reference_type(&reference) {
+                errors.push(diagnostic(&path, error));
+            }
+            Some(reference)
+        }
+        _ => {
+            errors.push(diagnostic(&path, "expected {\"source\": \"<ref>\"}"));
+            None
+        }
+    };
+    (source, errors)
+}
+
+/// A step's bindings against the plan: each source's type against its input's (item-wise for
+/// the scatter input, element-wise for a list source), and an open fn's extra inputs typed.
+pub(crate) fn check_bindings(plan: &Plan, step: &Step) -> (IndexMap<String, Type>, Vec<PathError>) {
+    let mut errors = vec![];
+    let mut extras = IndexMap::new();
+    let id = &step.id;
+    for (name, binding) in &step.bindings {
+        let path = format!("steps.{id}.in.{name}");
+        if let Some(target) = step.signature.inputs.get(name) {
+            let target = if step.scatter.as_ref() == Some(name) {
+                Type::List(Box::new(target.clone()))
+            } else {
+                target.clone()
+            };
+            check_binding(binding, &target, plan, &path, &mut errors);
+        } else if step.signature.open {
+            let mut ty = binding_type(binding, plan, &path, &mut errors);
+            if step.scatter.as_ref() == Some(name) {
+                let inner = match &ty {
+                    Type::Optional(inner) => inner.as_ref(),
+                    _ => &ty,
+                };
+                if let Binding::Default(value) = binding
+                    && !value.as_value().is_array()
+                {
+                    errors.push(diagnostic(&path, "the scatter input needs an array"));
+                }
+                ty = match inner {
+                    Type::List(item) => item.as_ref().clone(),
+                    Type::Any => Type::Any,
+                    _ => {
                         errors.push(diagnostic(
                             &path,
-                            "plan inputs and steps share one namespace",
+                            format!("the scatter input needs an array, not {ty}"),
                         ));
+                        Type::Any
                     }
-                    if let Some(step) = parse_step(
-                        name.parse().expect("checked id"),
-                        value,
-                        signatures,
-                        &mut errors,
-                    ) {
-                        steps.insert(step.id.clone(), step);
-                    }
-                }
-            }
-        }
-    }
-    let mut plan = Plan {
-        document,
-        inputs,
-        outputs: IndexMap::new(),
-        steps,
-        units: IndexMap::new(),
-        dependencies: IndexMap::new(),
-        order: vec![],
-    };
-    if let Some(value) = top(&plan.document, "outputs").cloned()
-        && let Some(map) = object(&value, "outputs", &mut errors)
-    {
-        for (name, value) in map {
-            let path = format!("outputs.{name}");
-            valid_id(name, &path, &mut errors);
-            if let Some(Binding::Source(reference)) = binding(value, &path, &mut errors) {
-                if let Err(error) = plan.reference_type(&reference) {
-                    errors.push(diagnostic(&path, error));
-                }
-                plan.outputs.insert(name.clone(), reference);
-            } else {
-                errors.push(diagnostic(&path, "expected {\"source\": \"<ref>\"}"));
-            }
-        }
-    }
-    let mut compiled_extras = Vec::new();
-    for (id, step) in &plan.steps {
-        let mut extras = IndexMap::new();
-        for (name, binding) in &step.bindings {
-            let path = format!("steps.{id}.in.{name}");
-            if let Some(target) = step.signature.inputs.get(name) {
-                let target = if step.scatter.as_ref() == Some(name) {
-                    Type::List(Box::new(target.clone()))
-                } else {
-                    target.clone()
                 };
-                check_binding(binding, &target, &plan, &path, &mut errors);
-            } else if step.signature.open {
-                let mut ty = binding_type(binding, &plan, &path, &mut errors);
-                if step.scatter.as_ref() == Some(name) {
-                    let inner = match &ty {
-                        Type::Optional(inner) => inner.as_ref(),
-                        _ => &ty,
-                    };
-                    if let Binding::Default(value) = binding
-                        && !value.as_value().is_array()
-                    {
-                        errors.push(diagnostic(&path, "the scatter input needs an array"));
-                    }
-                    ty = match inner {
-                        Type::List(item) => item.as_ref().clone(),
-                        Type::Any => Type::Any,
-                        _ => {
-                            errors.push(diagnostic(
-                                &path,
-                                format!("the scatter input needs an array, not {ty}"),
-                            ));
-                            Type::Any
-                        }
-                    };
-                }
-                extras.insert(name.clone(), ty);
             }
+            extras.insert(name.clone(), ty);
         }
-        compiled_extras.push((id.clone(), extras));
     }
-    for (id, extra) in compiled_extras {
-        plan.steps.get_mut(&id).expect("known step").extra_inputs = extra;
-    }
-    let mut compiled = Vec::new();
-    for id in plan.steps.keys() {
-        let mut gates = Vec::new();
-        if let Some(entries) = top(&plan.document, "steps")
-            .and_then(|steps| steps.get(id.as_str()))
-            .and_then(|step| step.get("after"))
-            .and_then(Value::as_array)
-        {
-            for (index, entry) in entries.iter().enumerate() {
-                if let Some(text) = entry.as_str() {
-                    match Gate::compile(text, &plan) {
-                        Ok(gate) => {
-                            if !gates.contains(&gate) {
-                                gates.push(gate);
-                            }
-                        }
-                        Err(error) => {
-                            errors.push(diagnostic(&format!("steps.{id}.after[{index}]"), error))
+    (extras, errors)
+}
+
+/// A step's gate entries (its declaration's `after`), compiled against the plan, each once.
+pub(crate) fn compile_gates(plan: &Plan, step: &Step) -> (Vec<Gate>, Vec<PathError>) {
+    let mut errors = vec![];
+    let mut gates = vec![];
+    if let Some(entries) = step
+        .declaration
+        .0
+        .get("after")
+        .and_then(|after| after.as_value().as_array())
+    {
+        for (index, entry) in entries.iter().enumerate() {
+            if let Some(text) = entry.as_str() {
+                match Gate::compile(text, plan) {
+                    Ok(gate) => {
+                        if !gates.contains(&gate) {
+                            gates.push(gate);
                         }
                     }
-                }
-            }
-        }
-        compiled.push((id.clone(), gates));
-    }
-    for (id, gates) in compiled {
-        plan.steps.get_mut(&id).expect("known step").after = gates;
-    }
-    // Invalid tags cannot enter invariant-bearing UnitName constructors.
-    if plan.steps.values().any(|step| {
-        step.tags.iter().any(|tag| {
-            tag.strip_prefix("unit:")
-                .is_some_and(|name| UnitName::new(name).is_err())
-        })
-    }) {
-        return Err(errors);
-    }
-    for (id, step) in &plan.steps {
-        if !step.tags.iter().any(|tag| tag.starts_with("unit:"))
-            && plan
-                .steps
-                .values()
-                .any(|other| other.tags.iter().any(|tag| tag == &format!("unit:{id}")))
-        {
-            errors.push(diagnostic(
-                &format!("steps.{id}.tags"),
-                "singleton unit name collides with a tagged unit",
-            ));
-        }
-    }
-    plan.units = derive_units(&plan);
-    for step in plan.steps.values() {
-        for gate in &step.after {
-            if let Gate::Unit { name, .. } = gate {
-                if !plan.units.contains_key(name) {
-                    errors.push(diagnostic(
-                        &format!("steps.{}.after", step.id),
-                        format!("no unit {name}"),
-                    ));
-                }
-                if *name == step.unit_name() {
-                    errors.push(diagnostic(
-                        &format!("steps.{}.after", step.id),
-                        "a unit cannot depend on its own exits",
-                    ));
+                    Err(error) => errors.push(diagnostic(
+                        &format!("steps.{}.after[{index}]", step.id),
+                        error,
+                    )),
                 }
             }
         }
     }
-    plan.dependencies = expanded_dependencies(&plan);
-    // Exits/entries depend on the expanded internal graph, including every gate form.
-    plan.units = derive_units(&plan);
-    match topological_order(&plan.dependencies) {
-        Ok(order) => plan.order = order,
-        Err(cycle) => errors.push(diagnostic(
-            &format!("steps.{}", cycle[0]),
-            format!(
-                "dependency cycle {}",
-                cycle
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" -> ")
-            ),
-        )),
-    }
-    if errors.is_empty() {
-        Ok(plan)
-    } else {
-        Err(errors)
-    }
+    (gates, errors)
 }
 
 fn binding_type(binding: &Binding, plan: &Plan, path: &str, errors: &mut Vec<PathError>) -> Type {
@@ -1070,31 +1017,28 @@ fn check_reference(
     }
 }
 
-pub(crate) fn expanded_dependencies(plan: &Plan) -> IndexMap<StepId, Vec<StepId>> {
-    plan.steps
-        .iter()
-        .map(|(id, step)| {
-            let mut dependencies: IndexSet<_> = step.data_dependencies().into_iter().collect();
-            for gate in &step.after {
-                match gate {
-                    Gate::Step { id, .. } => {
-                        dependencies.insert(id.clone());
-                    }
-                    Gate::Bool { reference, .. } => {
-                        if let Ok(Reference { step: Some(id), .. }) = reference.parts() {
-                            dependencies.insert(id);
-                        }
-                    }
-                    Gate::Unit { name, .. } => {
-                        if let Some(unit) = plan.units.get(name) {
-                            dependencies.extend(unit.exits.iter().cloned());
-                        }
-                    }
+/// A step's dependencies: the steps its bindings read (each once), then each gate's (a step
+/// gate's step, a boolean gate's step, a unit gate's exits).
+pub(crate) fn expanded_dependencies(plan: &Plan, step: &Step) -> Vec<StepId> {
+    let mut dependencies: IndexSet<_> = step.data_dependencies().into_iter().collect();
+    for gate in &step.after {
+        match gate {
+            Gate::Step { id, .. } => {
+                dependencies.insert(id.clone());
+            }
+            Gate::Bool { reference, .. } => {
+                if let Ok(Reference { step: Some(id), .. }) = reference.parts() {
+                    dependencies.insert(id);
                 }
             }
-            (id.clone(), dependencies.into_iter().collect())
-        })
-        .collect()
+            Gate::Unit { name, .. } => {
+                if let Some(unit) = plan.units.get(name) {
+                    dependencies.extend(unit.exits.iter().cloned());
+                }
+            }
+        }
+    }
+    dependencies.into_iter().collect()
 }
 /// Iterative DFS: bounded by graph size, with a deterministic cycle witness.
 pub fn topological_order(
@@ -1211,20 +1155,7 @@ pub fn validate_changed_needs(
         {
             continue;
         }
-        for (name, need) in &step.needs {
-            let path = format!("steps.{id}.needs.{name}");
-            match resources.get(name) {
-                None => errors.push(diagnostic(
-                    &path,
-                    format!("the project declares no resource {name}"),
-                )),
-                Some(ResourceLimit::Fixed(capacity)) if need > capacity => errors.push(diagnostic(
-                    &path,
-                    format!("asks for {need}, more than {name}'s capacity {capacity}"),
-                )),
-                _ => {}
-            }
-        }
+        errors.extend(needs_errors(step, resources));
     }
     if errors.is_empty() {
         Ok(())
@@ -1232,79 +1163,25 @@ pub fn validate_changed_needs(
         Err(errors)
     }
 }
-
-/// Prepare an atomic plan patch and its shared dry-run preview. The coordinator
-/// must recheck expected revision when committing this result. No state is written.
-pub(crate) fn prepare_patch(
-    revision: Revision,
-    before: &Plan,
-    state: &crate::gates::StateSnapshot,
-    edit: PlanPatchData,
-    signatures: &impl SignatureProvider,
-    resources: &crate::gates::CachedResources,
-    limits: &IndexMap<String, ResourceLimit>,
-) -> Result<(Plan, EditPreview, crate::gates::StateSnapshot), PublicError> {
-    if edit.expected != revision {
-        return Err(PublicError::Conflict {
-            message: "plan revision changed".into(),
-            current_rev: Some(revision),
-        });
-    }
-    let invalid = |errors: Vec<PathError>| PublicError::Invalid {
-        message: "invalid plan edit".into(),
-        errors: errors.iter().map(ToString::to_string).collect(),
-    };
-    let after = before.patch(&edit.ops, signatures).map_err(invalid)?;
+/// A step's `needs` against the project's resources.
+pub(crate) fn needs_errors(
+    step: &Step,
+    resources: &IndexMap<String, ResourceLimit>,
+) -> Vec<PathError> {
     let mut errors = vec![];
-    for (id, step) in before.steps() {
-        if state.status(id) != crate::commands::StepStatus::Running {
-            continue;
-        }
-        let allowed = after.steps().get(id).is_some_and(|new| {
-            let mut old = step.clone();
-            let mut new = new.clone();
-            old.paused = Pause::No;
-            new.paused = Pause::No;
-            old.tags.clear();
-            new.tags.clear();
-            old == new
-        });
-        if !allowed {
-            errors.push(diagnostic(
-                &format!("steps.{id}"),
-                "cannot remove or change a running step except paused and tags",
-            ));
+    for (name, need) in &step.needs {
+        let path = format!("steps.{}.needs.{name}", step.id);
+        match resources.get(name) {
+            None => errors.push(diagnostic(
+                &path,
+                format!("the project declares no resource {name}"),
+            )),
+            Some(ResourceLimit::Fixed(capacity)) if need > capacity => errors.push(diagnostic(
+                &path,
+                format!("asks for {need}, more than {name}'s capacity {capacity}"),
+            )),
+            _ => {}
         }
     }
-    if let Err(found) = validate_changed_needs(Some(before), &after, limits) {
-        errors.extend(found);
-    }
-    let mut projected = state.clone();
-    // Only ids present before and after this one patch retain their state.
-    projected
-        .steps
-        .retain(|id, _| before.steps().contains_key(id));
-    projected
-        .inputs
-        .0
-        .retain(|name, _| before.inputs().contains_key(name) && after.inputs().contains_key(name));
-    if let Err(found) = after.validate_input_values(&projected.inputs) {
-        errors.extend(found);
-    }
-    if !errors.is_empty() {
-        return Err(invalid(errors));
-    }
-    let preview = crate::gates::simulate_edit(before, state, &after, &projected, resources);
-    Ok((
-        after,
-        EditPreview {
-            ops: edit.ops,
-            would_start: preview.would_start,
-            would_queue: preview.would_queue.into_keys().collect(),
-            would_skip: preview.would_skip.into_keys().collect(),
-            would_stale: preview.would_stale,
-            errors: preview.errors.iter().map(ToString::to_string).collect(),
-        },
-        preview.reconciled,
-    ))
+    errors
 }

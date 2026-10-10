@@ -19,3 +19,4 @@ time.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+sluice-reference.workspace = true

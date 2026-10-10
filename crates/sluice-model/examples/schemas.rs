@@ -1,5 +1,4 @@
-use sluice_model::edit::PreparedEdit;
-use sluice_model::{commands::*, error::*, events::*, gates::*, ids::*, plan::*, rpc::*, types::*};
+use sluice_model::{commands::*, error::*, events::*, gates::*, ids::*, rpc::*, types::*};
 include!("../tests/registry.rs.inc");
 fn main() {
     let mut schemas = serde_json::Map::new();

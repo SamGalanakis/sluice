@@ -1,13 +1,14 @@
 //! The units view orders running units by how long they have run, exactly: two units started
 //! within a second of each other keep one order as the clock ticks, rather than swapping each
 //! time their whole-second ages round level.
+mod support;
+
 use indexmap::IndexMap;
 use serde_json::json;
 use sluice_model::{
-    FnSignature, Plan, StateSnapshot, StepState,
+    FnSignature, StateSnapshot, StepState,
     commands::StepStatus,
     ids::StepId,
-    rpc::decode_json,
     status::{StepFacts, units_view},
 };
 
@@ -28,11 +29,7 @@ fn running_units_keep_their_order_as_the_clock_ticks() {
     let document = json!({"steps":{
         "b-work":{"run":"work","tags":["unit:b"]},
         "a-work":{"run":"work","tags":["unit:a"]}}});
-    let plan = Plan::parse(
-        &decode_json(&serde_json::to_vec(&document).unwrap()).unwrap(),
-        &signatures,
-    )
-    .unwrap();
+    let plan = support::compile(document, &signatures).unwrap();
     let mut state = StateSnapshot::default();
     for step in ["a-work", "b-work"] {
         state.steps.insert(

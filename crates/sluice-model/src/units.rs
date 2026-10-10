@@ -20,69 +20,59 @@ pub struct Unit {
     pub entries: Vec<StepId>,
     pub exits: Vec<StepId>,
 }
-/// Direct internal edges determine entries/sinks. Valid unit gates always cross
-/// units, so expanding them cannot change internal entries or exits.
-pub(crate) fn derive_units(plan: &Plan) -> IndexMap<UnitName, Unit> {
-    let mut units = IndexMap::<UnitName, Unit>::new();
-    for (id, step) in plan.steps() {
-        let name = step.unit_name();
-        units
-            .entry(name.clone())
-            .or_insert_with(|| Unit {
-                name,
-                tagged: step.tags.iter().any(|tag| tag.starts_with("unit:")),
-                steps: vec![],
-                entries: vec![],
-                exits: vec![],
-            })
-            .steps
-            .push(id.clone());
-    }
-    for unit in units.values_mut() {
-        let mut used = IndexSet::new();
-        for id in &unit.steps {
-            let step = &plan.steps()[id];
-            let mut dependencies = step.data_dependencies();
-            for gate in &step.after {
-                match gate {
-                    Gate::Step { id, .. } => dependencies.push(id.clone()),
-                    Gate::Bool { reference, .. } => {
-                        if let Ok(Reference { step: Some(id), .. }) = reference.parts() {
-                            dependencies.push(id);
-                        }
-                    }
-                    Gate::Unit { name, .. } => {
-                        if let Some(other) = plan.units().get(name) {
-                            dependencies.extend(other.exits.iter().cloned());
-                        }
+/// A unit's entry and exit steps from its members (in plan order): an entry reads or gates on
+/// no other member; the exits are the members tagged `exit`, else those no other member
+/// depends on. Unit gates always cross units (a gate on its own unit is refused), so they
+/// never make an internal edge and are left out.
+pub(crate) fn derive_unit(plan: &Plan, name: UnitName, members: Vec<StepId>) -> Unit {
+    let tagged = plan.steps()[&members[0]]
+        .tags
+        .iter()
+        .any(|tag| tag.starts_with("unit:"));
+    let mut entries = vec![];
+    let mut used = IndexSet::new();
+    for id in &members {
+        let step = &plan.steps()[id];
+        let mut dependencies = step.data_dependencies();
+        for gate in &step.after {
+            match gate {
+                Gate::Step { id, .. } => dependencies.push(id.clone()),
+                Gate::Bool { reference, .. } => {
+                    if let Ok(Reference { step: Some(id), .. }) = reference.parts() {
+                        dependencies.push(id);
                     }
                 }
+                Gate::Unit { .. } => {}
             }
-            let internal: Vec<_> = dependencies
-                .into_iter()
-                .filter(|id| unit.steps.contains(id))
-                .collect();
-            if internal.is_empty() {
-                unit.entries.push(id.clone());
-            }
-            used.extend(internal);
         }
-        unit.exits = unit
-            .steps
+        let internal: Vec<_> = dependencies
+            .into_iter()
+            .filter(|id| members.contains(id))
+            .collect();
+        if internal.is_empty() {
+            entries.push(id.clone());
+        }
+        used.extend(internal);
+    }
+    let mut exits: Vec<StepId> = members
+        .iter()
+        .filter(|id| plan.steps()[*id].tags.iter().any(|tag| tag == "exit"))
+        .cloned()
+        .collect();
+    if exits.is_empty() {
+        exits = members
             .iter()
-            .filter(|id| plan.steps()[*id].tags.iter().any(|tag| tag == "exit"))
+            .filter(|id| !used.contains(*id))
             .cloned()
             .collect();
-        if unit.exits.is_empty() {
-            unit.exits = unit
-                .steps
-                .iter()
-                .filter(|id| !used.contains(*id))
-                .cloned()
-                .collect();
-        }
     }
-    units
+    Unit {
+        name,
+        tagged,
+        steps: members,
+        entries,
+        exits,
+    }
 }
 impl Unit {
     pub fn exit_success(&self, state: &StateSnapshot) -> bool {

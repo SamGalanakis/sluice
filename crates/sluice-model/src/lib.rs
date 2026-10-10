@@ -11,7 +11,9 @@ pub mod hash;
 pub mod ids;
 pub mod naming;
 pub mod openui;
+pub mod persistent;
 pub mod plan;
+pub mod plan_index;
 pub mod plan_rows;
 pub mod recipe;
 pub mod rpc;
@@ -21,7 +23,6 @@ pub mod types;
 pub mod units;
 
 pub use commands::RuntimeApi;
-pub use edit::{EditSnapshot, PlanEdit, PreparedEdit, prepare_edit};
 
 pub use gates::{CachedResources, DryRun, Gate, GateDecision, StateSnapshot, StepState, ValueRef};
 pub use plan::{Binding, Declaration, FnSignature, Pause, Plan, SignatureProvider, Step};

@@ -2,12 +2,15 @@
 
 use crate::{
     ids::{StepId, UnitName},
-    plan::{Declaration, Plan, SignatureProvider, declaration, diagnostic},
+    plan::{Declaration, SignatureProvider, declaration, diagnostic},
     rpc::{JsonMap, JsonValue, decode_json},
     types::{PathError, Type, check_value_at},
 };
 use indexmap::{IndexMap, IndexSet};
 use serde_json::{Map, Value};
+
+/// A staged expansion: the unit's steps by id, and each recipe suffix's step id.
+pub type Staged = (Map<String, Value>, IndexMap<String, String>);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Recipe {
@@ -442,7 +445,7 @@ impl Recipe {
         }
     }
 
-    /// Substitute params only. Staging and whole-plan validation belong to `expand`.
+    /// Substitute params only. Staging belongs to `stage`.
     pub fn substitute(&self, params: &JsonMap) -> Result<JsonMap, Vec<PathError>> {
         let mut errors = vec![];
         for key in params
@@ -484,15 +487,17 @@ impl Recipe {
             .map_err(|error| vec![diagnostic("steps", error.to_string())])
     }
 
-    /// Entries are derived by the plan core before any external staging gates are appended.
-    /// The supplied document supplies external references. No file or fn is executed.
-    pub fn expand(
+    /// A unit's steps from this recipe, staged: params checked and substituted, every step
+    /// tagged `unit:<unit>` (then its own tags, then `options.tags`), `"paused": true` added
+    /// when `options.start` is false, the `inputs` overrides bound as defaults, and each
+    /// suffix's step id. The `after` overrides need the unit's entry steps in the plan it joins,
+    /// so the caller appends them (`plan_edit`'s `unit.add`). No file or fn is executed.
+    pub fn stage(
         &self,
         params: &JsonMap,
         options: &ExpansionOptions,
-        document: &JsonMap,
         signatures: &impl SignatureProvider,
-    ) -> Result<JsonMap, Vec<PathError>> {
+    ) -> Result<Staged, Vec<PathError>> {
         let steps = self.substitute(params)?;
         let unit = params.0["unit"].as_value().as_str().expect("checked unit");
         let mut errors = reserved_tags(&options.tags, "tags");
@@ -599,38 +604,7 @@ impl Recipe {
         if !errors.is_empty() {
             return Err(errors);
         }
-        let staged = combined(document, &steps)?;
-        let compiled = Plan::parse(&staged, signatures)?;
-        let entries = &compiled.units()[&UnitName::new(unit).expect("checked unit")].entries;
-        for (suffix, gates) in &options.after {
-            let targets = if suffix == "*" {
-                entries
-                    .iter()
-                    .filter(|id| steps.contains_key(id.as_str()))
-                    .map(ToString::to_string)
-                    .collect()
-            } else {
-                vec![by[suffix].clone()]
-            };
-            for id in targets {
-                let step = steps[&id].as_object_mut().expect("checked step");
-                let old = step
-                    .get("after")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .map(|v| v.as_str().expect("validated gate").to_owned());
-                let gates: IndexSet<_> = old.chain(gates.iter().cloned()).collect();
-                step.insert("after".into(), serde_json::json!(gates));
-            }
-        }
-        Plan::parse(&combined(document, &steps)?, signatures)?;
-        Ok(JsonMap(
-            steps
-                .into_iter()
-                .map(|(k, v)| (k, JsonValue::try_from(v).expect("checked JSON")))
-                .collect(),
-        ))
+        Ok((steps, by))
     }
 }
 
@@ -713,23 +687,6 @@ fn unify(template: &Value, stored: &Value, bound: &mut IndexMap<String, Value>) 
         }
         _ => {}
     }
-}
-
-fn combined(document: &JsonMap, steps: &Map<String, Value>) -> Result<JsonMap, Vec<PathError>> {
-    let mut document = serde_json::to_value(document).expect("JSON map serializes");
-    let Some(existing) = document.get_mut("steps").and_then(Value::as_object_mut) else {
-        return Err(vec![diagnostic("steps", "expected an object")]);
-    };
-    let errors: Vec<_> = steps
-        .keys()
-        .filter(|id| existing.contains_key(*id))
-        .map(|id| diagnostic(&format!("steps.{id}"), "already exists in the plan"))
-        .collect();
-    if !errors.is_empty() {
-        return Err(errors);
-    }
-    existing.extend(steps.clone());
-    serde_json::from_value(document).map_err(|error| vec![diagnostic("plan", error.to_string())])
 }
 
 pub(crate) fn reserved_tags(tags: &[String], path: &str) -> Vec<PathError> {

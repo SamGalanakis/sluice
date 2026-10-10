@@ -1,16 +1,23 @@
-//! Convenience edits reduced to one validated patch and the plan core's simulation.
+//! The typed edit tools lowered to `plan_edit`'s operations (`docs/design/plan-rows.md` §7.8).
+//!
+//! Each tool resolves its own arguments against the certified base (selections by `steps` and
+//! `tags`, a unit's members) and becomes a list of `PlanOp`s for the one pipeline
+//! (`plan::prepare_plan_edit`, through `prepare_lowered`). It keeps its own refusals and their
+//! kinds (`not_found` for an unknown step or unit, `bad_request` for an existing one), which it
+//! reports before any operation is prepared. Lowering may produce no operation at all (an edge
+//! already there, tags or pauses as asked, a prune whose closure is empty): the edit then
+//! changes nothing and commits nothing. Lowering never builds an operation with an empty list
+//! or empty changes.
 
 use crate::{
-    commands::{
-        self, CommandRequest, EditOptions, EditPreview, PatchOperation, StepSelection, StepStatus,
-        UnsupportedInput,
-    },
+    commands::{CommandRequest, StepSelection, StepStatus, UnsupportedInput},
     error::PublicError,
-    gates::{CachedResources, StateSnapshot},
-    ids::{Revision, StepId, UnitName},
-    plan::{self, Plan, ResourceLimit, SignatureProvider, diagnostic},
+    gates::{Gate, StateSnapshot},
+    ids::{StepId, UnitName},
+    plan::{EditBase, Plan, PrepareOptions, SignatureProvider, diagnostic, prepare_plan_edit},
+    plan_rows::{PlanChange, PlanOp, PreparedPlanEdit, StepChanges},
     recipe::{ExpansionOptions, RecipeEntry, reserved_tags},
-    rpc::JsonValue,
+    rpc::{JsonMap, JsonValue},
     types::PathError,
     units::{PruneSet, prune_closed},
 };
@@ -19,39 +26,6 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum PlanEdit {
-    Patch(commands::PlanPatch),
-    StepAdd(commands::StepAdd),
-    UnitAdd(commands::UnitAdd),
-    StepUpdate(commands::StepUpdate),
-    StepRemove(commands::StepRemove),
-    EdgeAdd(commands::EdgeEdit),
-    EdgeRemove(commands::EdgeEdit),
-    StepSetInput(commands::StepSetInput),
-    UnitTag(commands::UnitTag),
-    StepPause(commands::StepPause),
-    PlanPrune(commands::PlanPrune),
-}
-impl TryFrom<CommandRequest> for PlanEdit {
-    type Error = PublicError;
-    fn try_from(command: CommandRequest) -> Result<Self, PublicError> {
-        Ok(match command {
-            CommandRequest::PlanPatch(edit) => Self::Patch(edit),
-            CommandRequest::StepAdd(edit) => Self::StepAdd(edit),
-            CommandRequest::UnitAdd(edit) => Self::UnitAdd(edit),
-            CommandRequest::StepUpdate(edit) => Self::StepUpdate(edit),
-            CommandRequest::StepRemove(edit) => Self::StepRemove(edit),
-            CommandRequest::EdgeAdd(edit) => Self::EdgeAdd(edit),
-            CommandRequest::EdgeRemove(edit) => Self::EdgeRemove(edit),
-            CommandRequest::StepSetInput(edit) => Self::StepSetInput(edit),
-            CommandRequest::UnitTag(edit) => Self::UnitTag(edit),
-            CommandRequest::StepPause(edit) => Self::StepPause(edit),
-            CommandRequest::PlanPrune(edit) => Self::PlanPrune(edit),
-            _ => return Err(bad("command is not a plan edit")),
-        })
-    }
-}
 /// A plan edit command's name and author, for the coordinator's log; None for any other
 /// command.
 pub fn edit_label(command: &CommandRequest) -> Option<(&'static str, Option<&str>)> {
@@ -72,449 +46,152 @@ pub fn edit_label(command: &CommandRequest) -> Option<(&'static str, Option<&str
     };
     Some((kind, options.author.as_deref()))
 }
-impl PlanEdit {
-    fn options(&self) -> Option<&EditOptions> {
-        Some(match self {
-            Self::Patch(_) => return None,
-            Self::StepAdd(e) => &e.edit,
-            Self::UnitAdd(e) => &e.edit,
-            Self::StepUpdate(e) => &e.edit,
-            Self::StepRemove(e) => &e.edit,
-            Self::EdgeAdd(e) | Self::EdgeRemove(e) => &e.edit,
-            Self::StepSetInput(e) => &e.edit,
-            Self::UnitTag(e) => &e.edit,
-            Self::StepPause(e) => &e.edit,
-            Self::PlanPrune(e) => &e.edit,
-        })
-    }
-}
 
-/// All inputs are immutable snapshots. For an age-filtered prune, the store must
-/// supply the units whose last finish time meets that request's cutoff.
-pub struct EditSnapshot<'a, P> {
-    /// The plan's revision.
-    pub revision: Revision,
-    /// The plan at `revision`, compiled with `signatures`.
-    pub plan: &'a Plan,
-    pub state: &'a StateSnapshot,
-    pub signatures: &'a P,
-    pub recipes: &'a IndexMap<String, RecipeEntry>,
-    pub resources: &'a CachedResources,
-    pub limits: &'a IndexMap<String, ResourceLimit>,
-    pub prune_eligible: Option<&'a [UnitName]>,
-}
+/// `step_set_input`'s report.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, JsonSchema)]
 pub struct InputChanges {
     pub changed: Vec<StepId>,
     pub running: Vec<StepId>,
     pub unsupported: Vec<UnsupportedInput>,
 }
-/// Prepared result for dispatch. Its candidate is already validated; the store
-/// still rechecks transactional revision and running-state preconditions.
-/// It is serialized for inspection, never deserialized as a certificate.
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
-pub struct PreparedEdit {
-    pub expected: Revision,
-    pub ops: Vec<PatchOperation>,
-    pub plan: Plan,
-    pub preview: EditPreview,
-    pub dry_run: bool,
-    pub author: Option<String>,
-    pub reason: String,
+
+/// What the reply's `steps` are for a lowered tool.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReplySteps {
+    /// The ids the edit's `step.add` and `unit.add` operations add (`step_add`, `unit_add`).
+    Added,
+    /// These steps, as the tool resolved them (`step_pause`, `unit_tag`, `unit_remove`,
+    /// `plan_prune`, `step_remove`).
+    These(Vec<StepId>),
+    /// The steps among these whose rows the edit puts, in plan order (`unit_update`).
+    Changed(IndexSet<StepId>),
+    /// None (`step_update`, `edge_add`, `edge_remove`, `step_set_input`).
+    None,
+}
+
+/// A typed tool's operations and the parts of its reply it keeps.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Lowered {
+    pub ops: Vec<PlanOp>,
+    pub steps: ReplySteps,
+    /// `step_set_input`'s report.
     pub inputs: Option<InputChanges>,
+    /// `plan_prune`'s removal set (the store checks its age evidence beside it).
     pub prune: Option<PruneSet>,
-    /// The steps the edit was about, reported in the edit result.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub steps: Option<Vec<StepId>>,
-    /// The state the edit leaves once reconciled, worked out from the state it was
-    /// prepared with: the store's to reuse when it commits against that same state.
-    #[serde(skip)]
-    pub reconciled: StateSnapshot,
 }
-/// Prepare one complete candidate with immutable provider context. The store must
-/// recheck revision and running state before committing; dry runs return the preview.
-pub fn prepare_edit(
-    context: &EditSnapshot<'_, impl SignatureProvider>,
-    edit: PlanEdit,
-) -> Result<PreparedEdit, PublicError> {
-    let (expected, dry_run, author, reason) = match &edit {
-        PlanEdit::Patch(request) => (
-            request.rev,
-            request.dry_run,
-            request.author.clone(),
-            request.reason.clone(),
-        ),
-        _ => {
-            let options = edit.options().expect("convenience edit options");
-            (
-                options.expected.unwrap_or(context.revision),
-                options.dry_run,
-                options.author.clone(),
-                options.reason.clone(),
-            )
+impl Lowered {
+    fn ops(ops: Vec<PlanOp>, steps: ReplySteps) -> Self {
+        Self {
+            ops,
+            steps,
+            inputs: None,
+            prune: None,
         }
-    };
-    if expected != context.revision {
-        return Err(PublicError::Conflict {
-            message: "plan revision changed".into(),
-            current_rev: Some(context.revision),
-        });
     }
-    let plan = context.plan;
-    let raw = plan
-        .document()
-        .0
-        .get("steps")
-        .and_then(|steps| steps.as_value().as_object())
-        .expect("validated steps");
-    let mut ops = vec![];
-    let mut inputs_report = None;
-    let mut prune_report = None;
-    let mut steps_report = None;
-    match edit {
-        PlanEdit::Patch(request) => {
-            ops = request.ops;
-            if !request.start {
-                // Apply the supplied patch first so root replacements and explicit
-                // pause fields are visible before staging newly introduced ids.
-                let candidate = plan.patch(&ops, context.signatures).map_err(invalid)?;
-                let candidate_raw = candidate.document().0.get("steps").map(JsonValue::as_value);
-                for id in candidate
-                    .steps()
-                    .keys()
-                    .filter(|id| !plan.steps().contains_key(*id))
-                {
-                    if candidate_raw
-                        .and_then(|steps| steps.get(id.as_str()))
-                        .and_then(|step| step.get("paused"))
-                        .is_none()
-                    {
-                        ops.push(add(&format!("{}/paused", step_path(id)), json!(true))?);
-                    }
-                }
-            }
-        }
-        PlanEdit::StepAdd(request) => {
-            if plan.steps().contains_key(&request.step) {
-                return Err(bad(format!("step {} already exists", request.step)));
-            }
-            let mut spec = request.spec;
-            if !request.start && !spec.0.contains_key("paused") {
-                spec.0
-                    .insert("paused".into(), JsonValue::try_from(json!(true))?);
-            }
-            ops.push(add(
-                &step_path(&request.step),
-                serde_json::to_value(spec).expect("JSON serializes"),
-            )?);
-        }
-        PlanEdit::UnitAdd(request) => {
-            let options = ExpansionOptions::from(&request);
-            let entry = context
-                .recipes
-                .get(&request.recipe)
-                .ok_or_else(|| missing(format!("no recipe {}", request.recipe)))?;
-            let recipe = entry.recipe.as_ref().map_err(|errors| {
-                invalid(
-                    errors
-                        .iter()
-                        .map(|e| {
-                            diagnostic(
-                                &e.path,
-                                format!("recipe {} ({}): {}", entry.name, entry.scope, e.message),
-                            )
-                        })
-                        .collect(),
-                )
-            })?;
-            let mut params = request.params;
-            if params
-                .0
-                .get("unit")
-                .is_some_and(|v| v.as_value().as_str() != Some(request.unit.as_str()))
-            {
-                return Err(invalid(vec![diagnostic(
-                    "params.unit",
-                    "must match the requested unit",
-                )]));
-            }
-            params
-                .0
-                .insert("unit".into(), JsonValue::try_from(json!(request.unit))?);
-            let expanded = recipe
-                .expand(&params, &options, plan.document(), context.signatures)
-                .map_err(|errors| {
-                    if errors
-                        .iter()
-                        .all(|error| error.message == "already exists in the plan")
-                    {
-                        bad(errors
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join("; "))
-                    } else {
-                        invalid(errors)
-                    }
-                })?;
-            let mut added = vec![];
-            for (id, spec) in expanded.0 {
-                ops.push(PatchOperation::Add {
-                    path: format!("/steps/{}", pointer(&id)),
-                    value: spec,
-                });
-                added.push(StepId::new(&id).map_err(|error| bad(error.to_string()))?);
-            }
-            steps_report = Some(added);
-        }
-        PlanEdit::StepUpdate(request) => {
-            let mut step = raw_step(raw, &request.step)?.clone();
-            if request.changes.0.is_empty() {
-                return Err(bad("changes: expected at least one field"));
-            }
-            if request.changes.0.contains_key("when") {
-                return Err(invalid(vec![diagnostic(
-                    &format!("steps.{}.when", request.step),
-                    "when is removed; use after entries",
-                )]));
-            }
-            let fields = step.as_object_mut().expect("validated step");
-            for (key, value) in request.changes.0 {
-                if value.as_value().is_null() {
-                    fields.shift_remove(&key);
-                } else {
-                    fields.insert(key, value.into_value());
-                }
-            }
-            if !crate::hash::data_equal(&step, raw_step(raw, &request.step)?)? {
-                ops.push(replace(&step_path(&request.step), step)?);
-            }
-        }
-        PlanEdit::StepRemove(request) => {
-            for id in select(plan, &request.selection)? {
-                ops.push(PatchOperation::Remove {
-                    path: step_path(&id),
-                });
-            }
-        }
-        PlanEdit::EdgeAdd(request) => ops = edges(plan, raw, &request, true)?,
-        PlanEdit::EdgeRemove(request) => ops = edges(plan, raw, &request, false)?,
-        PlanEdit::StepSetInput(request) => {
-            if request.inputs.0.is_empty() {
-                return Err(bad("inputs: expected at least one input"));
-            }
-            let mut report = InputChanges::default();
-            for id in select(plan, &request.selection)? {
-                if context.state.status(&id) == StepStatus::Running {
-                    report.running.push(id);
-                    continue;
-                }
-                let step = &plan.steps()[&id];
-                let unsupported: Vec<_> = request
-                    .inputs
-                    .0
-                    .keys()
-                    .filter(|name| {
-                        !step.signature.inputs.contains_key(*name)
-                            && !step.bindings.contains_key(*name)
-                    })
-                    .cloned()
-                    .collect();
-                if !unsupported.is_empty() {
-                    report.unsupported.push(UnsupportedInput {
-                        step: id,
-                        inputs: unsupported,
-                    });
-                    continue;
-                }
-                let old = raw_step(raw, &id)?;
-                let mut bindings = old.get("in").cloned().unwrap_or(json!({}));
-                for (name, value) in &request.inputs.0 {
-                    bindings
-                        .as_object_mut()
-                        .expect("validated bindings")
-                        .insert(name.clone(), json!({"default":value}));
-                }
-                if !old
-                    .get("in")
-                    .map(|old| crate::hash::data_equal(old, &bindings))
-                    .transpose()?
-                    .unwrap_or(false)
-                {
-                    ops.push(set_field(old, &id, "in", Some(bindings))?);
-                    report.changed.push(id);
-                }
-            }
-            if report.changed.is_empty() {
-                return Err(bad("step_set_input changes nothing"));
-            }
-            inputs_report = Some(report);
-        }
-        PlanEdit::UnitTag(request) => {
-            let mut errors = reserved_tags(&request.add, "add");
-            errors.extend(reserved_tags(&request.remove, "remove"));
-            errors.extend(
-                request
-                    .add
-                    .iter()
-                    .filter(|tag| request.remove.contains(tag))
-                    .map(|tag| diagnostic("add", format!("{tag} is removed too"))),
-            );
-            if !errors.is_empty() {
-                return Err(invalid(errors));
-            }
-            let unit = plan
-                .units()
-                .get(&request.unit)
-                .ok_or_else(|| missing(format!("no unit {}", request.unit)))?;
-            for id in &unit.steps {
-                let step = &plan.steps()[id];
-                let tags: IndexSet<_> = step
-                    .tags
-                    .iter()
-                    .filter(|tag| !request.remove.contains(tag))
-                    .cloned()
-                    .chain(request.add.iter().cloned())
-                    .collect();
-                if tags.iter().ne(step.tags.iter()) {
-                    ops.push(set_field(
-                        raw_step(raw, id)?,
-                        id,
-                        "tags",
-                        Some(json!(tags)),
-                    )?);
-                }
-            }
-            steps_report = Some(unit.steps.clone());
-        }
-        PlanEdit::StepPause(request) => {
-            let mut chosen = select(plan, &request.selection)?;
-            if request.subtree {
-                chosen = downstream(plan, &chosen);
-            }
-            // The reason is kept on each step it pauses; without one, `true`, and a
-            // step already paused keeps its own reason.
-            let reason = request.edit.reason.trim();
-            for id in &chosen {
-                let step = raw_step(raw, id)?;
-                let pause = match (request.paused, reason.is_empty()) {
-                    (false, _) => None,
-                    (true, true) if plan.steps()[id].paused.is_paused() => continue,
-                    (true, true) => Some(Value::Bool(true)),
-                    (true, false) => Some(Value::String(reason.to_owned())),
-                };
-                if step.get("paused") != pause.as_ref() {
-                    ops.push(set_field(step, id, "paused", pause)?);
-                }
-            }
-            steps_report = Some(chosen);
-        }
-        PlanEdit::PlanPrune(request) => {
-            if request.older_than_seconds > 0 && context.prune_eligible.is_none() {
-                return Err(bad(
-                    "age-filtered pruning requires store-supplied eligible units",
-                ));
-            }
-            let has_selection = request.units.is_some() || request.tags.is_some();
-            let explicit = request.units.unwrap_or_default();
-            let unknown: Vec<_> = explicit
+}
+
+/// Prepare a lowered tool through the one pipeline and give it its own reply parts.
+pub fn prepare_lowered(
+    base: &EditBase<'_, impl SignatureProvider>,
+    lowered: Lowered,
+    options: PrepareOptions,
+) -> Result<PreparedPlanEdit, PublicError> {
+    let Lowered {
+        ops,
+        steps,
+        inputs,
+        prune,
+    } = lowered;
+    let mut prepared = prepare_plan_edit(base, ops, options)?;
+    prepared.steps = match steps {
+        ReplySteps::Added => prepared.steps,
+        ReplySteps::These(steps) => Some(steps),
+        ReplySteps::Changed(members) => Some(
+            prepared
+                .commit
+                .rows
+                .changes
                 .iter()
-                .filter(|name| !plan.units().contains_key(*name))
-                .map(|name| diagnostic(&format!("units.{name}"), "no such unit"))
-                .collect();
-            if !unknown.is_empty() {
-                return Err(invalid(unknown));
-            }
-            let selected: Vec<UnitName> = if has_selection {
-                plan.units()
-                    .iter()
-                    .filter(|(name, unit)| {
-                        explicit.contains(name)
-                            || (unit.done(context.state)
-                                && request.tags.as_ref().is_some_and(|tags| {
-                                    unit.steps.iter().any(|id| {
-                                        plan.steps()[id].tags.iter().any(|tag| tags.contains(tag))
-                                    })
-                                }))
-                    })
-                    .map(|(name, _)| name.clone())
-                    .collect()
-            } else {
-                plan.units()
-                    .iter()
-                    .filter(|(_, unit)| unit.done(context.state))
-                    .map(|(name, _)| name.clone())
-                    .collect()
-            };
-            let selected: Vec<_> = selected
-                .into_iter()
-                .filter(|name| {
-                    context
-                        .prune_eligible
-                        .is_none_or(|units| units.contains(name))
+                .filter_map(|change| match change {
+                    PlanChange::StepPut { step, .. } if members.contains(step) => {
+                        Some(step.clone())
+                    }
+                    _ => None,
                 })
-                .collect();
-            let keep = request.keep.unwrap_or_default();
-            crate::units::check_keep("keep", &keep).map_err(invalid)?;
-            let closure = prune_closed(plan, context.state, &selected, &keep).map_err(invalid)?;
-            ops.extend(closure.steps.iter().map(|id| PatchOperation::Remove {
-                path: step_path(id),
-            }));
-            steps_report = Some(closure.steps.clone());
-            prune_report = Some(closure);
-        }
-    }
-    let (plan, preview, reconciled) = plan::prepare_patch(
-        context.revision,
-        plan,
-        context.state,
-        plan::PlanPatchData { expected, ops },
-        context.signatures,
-        context.resources,
-        context.limits,
-    )?;
-    Ok(PreparedEdit {
-        expected,
-        ops: preview.ops.clone(),
-        plan,
-        preview,
-        dry_run,
-        author,
-        reason,
-        inputs: inputs_report,
-        prune: prune_report,
-        steps: steps_report,
-        reconciled,
-    })
+                .collect(),
+        ),
+        ReplySteps::None => None,
+    };
+    prepared.inputs = inputs;
+    prepared.commit.prune = prune;
+    Ok(prepared)
 }
 
-/// The selected steps and every step downstream of them (reading from or gated on
-/// one, transitively), in plan order.
-fn downstream(plan: &Plan, selected: &[StepId]) -> Vec<StepId> {
-    let mut found: IndexSet<&StepId> = selected.iter().collect();
-    for id in plan.topological_order() {
-        if plan.dependencies(id).iter().any(|w| found.contains(w)) {
-            found.insert(id);
-        }
+/// `step_add`: one `step.add`; an existing id is the tool's own `bad_request`. Its `start`
+/// goes in the options.
+pub fn step_add(plan: &Plan, step: &StepId, spec: &JsonMap) -> Result<Lowered, PublicError> {
+    if plan.steps().contains_key(step) {
+        return Err(bad(format!("step {step} already exists")));
     }
-    plan.steps()
-        .keys()
-        .filter(|id| found.contains(id))
-        .cloned()
-        .collect()
+    Ok(Lowered::ops(
+        vec![PlanOp::StepAdd {
+            step: step.clone(),
+            spec: spec.clone(),
+        }],
+        ReplySteps::Added,
+    ))
 }
 
-fn edges(
+/// `step_update`: one `step.update`; an unknown step is `not_found`. Changes that leave the
+/// declaration's data as it is commit nothing.
+pub fn step_update(
     plan: &Plan,
-    raw: &serde_json::Map<String, Value>,
-    request: &commands::EdgeEdit,
+    step: &StepId,
+    changes: &StepChanges,
+) -> Result<Lowered, PublicError> {
+    if !plan.steps().contains_key(step) {
+        return Err(missing(format!("no step {step}")));
+    }
+    if changes.is_empty() {
+        return Err(bad("changes: expected at least one field"));
+    }
+    Ok(Lowered::ops(
+        vec![PlanOp::StepUpdate {
+            step: step.clone(),
+            changes: Box::new(changes.clone()),
+        }],
+        ReplySteps::None,
+    ))
+}
+
+/// `step_remove`: one `step.remove` of the selection; none when the selection is empty.
+pub fn step_remove(plan: &Plan, selection: &StepSelection) -> Result<Lowered, PublicError> {
+    let steps = select(plan, selection)?;
+    let ops = if steps.is_empty() {
+        vec![]
+    } else {
+        vec![PlanOp::StepRemove {
+            steps: steps.clone(),
+        }]
+    };
+    Ok(Lowered::ops(ops, ReplySteps::These(steps)))
+}
+
+/// `edge_add` and `edge_remove`: the target (a step, or `unit:<u>` for its entry steps) and
+/// each entry checked against the base as the tool always has (`invalid`), then one operation
+/// with the entries not already there (for `edge_remove`: those there); none when that leaves
+/// no entry.
+pub fn edge(
+    plan: &Plan,
+    step: &str,
+    after: &[String],
     adding: bool,
-) -> Result<Vec<PatchOperation>, PublicError> {
-    if request.after.is_empty() {
+) -> Result<Lowered, PublicError> {
+    if after.is_empty() {
         return Err(bad("after: name at least one gate entry"));
     }
     let mut errors = vec![];
-    let targets = if let Some(name) = request.step.strip_prefix("unit:") {
+    let targets = if let Some(name) = step.strip_prefix("unit:") {
         let name = UnitName::new(name).map_err(|error| bad(error.to_string()))?;
         plan.units()
             .get(&name)
@@ -524,7 +201,7 @@ fn edges(
                 vec![]
             })
     } else {
-        let id = StepId::new(&request.step).map_err(|error| bad(error.to_string()))?;
+        let id = StepId::new(step).map_err(|error| bad(error.to_string()))?;
         if !plan.steps().contains_key(&id) {
             errors.push(diagnostic(&format!("steps.{id}"), "no such step"));
             vec![]
@@ -532,9 +209,9 @@ fn edges(
             vec![id]
         }
     };
-    for entry in &request.after {
-        match crate::gates::Gate::compile(entry, plan) {
-            Ok(crate::gates::Gate::Unit { name, .. }) if !plan.units().contains_key(&name) => {
+    for entry in after {
+        match Gate::compile(entry, plan) {
+            Ok(Gate::Unit { name, .. }) if !plan.units().contains_key(&name) => {
                 errors.push(diagnostic("after", format!("no unit {name}")));
             }
             Err(error) => errors.push(diagnostic("after", error)),
@@ -544,44 +221,388 @@ fn edges(
     if !errors.is_empty() {
         return Err(invalid(errors));
     }
-    let mut ops = vec![];
-    for id in targets {
-        let step = raw_step(raw, &id)?;
-        let old: Vec<_> = step
+    let present = |entry: &String, id: &StepId| {
+        plan.steps()[id]
+            .declaration
+            .0
             .get("after")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .map(|v| v.as_str().expect("validated gate").to_owned())
-            .collect();
-        let new: Vec<_> = if adding {
-            old.iter()
-                .cloned()
-                .chain(request.after.iter().cloned())
-                .collect::<IndexSet<_>>()
-                .into_iter()
-                .collect()
-        } else {
-            old.iter()
-                .filter(|e| !request.after.contains(e))
-                .cloned()
-                .collect()
-        };
-        if old != new {
-            ops.push(set_field(
-                step,
-                &id,
-                "after",
-                if new.is_empty() {
-                    None
+            .and_then(|a| a.as_value().as_array())
+            .is_some_and(|old| old.iter().any(|e| e.as_str() == Some(entry.as_str())))
+    };
+    let entries: Vec<String> = after
+        .iter()
+        .collect::<IndexSet<_>>()
+        .into_iter()
+        .filter(|entry| {
+            targets.iter().any(|id| {
+                if adding {
+                    !present(entry, id)
                 } else {
-                    Some(json!(new))
-                },
-            )?);
+                    present(entry, id)
+                }
+            })
+        })
+        .cloned()
+        .collect();
+    let ops = match (entries.is_empty(), adding) {
+        (true, _) => vec![],
+        (false, true) => vec![PlanOp::EdgeAdd {
+            step: step.to_owned(),
+            after: entries,
+        }],
+        (false, false) => vec![PlanOp::EdgeRemove {
+            step: step.to_owned(),
+            after: entries,
+        }],
+    };
+    Ok(Lowered::ops(ops, ReplySteps::None))
+}
+
+/// `unit_add`: one `unit.add`, its expansion checked against the base first so the tool keeps
+/// its own refusals: an unknown recipe is `not_found`, ids already in the plan `bad_request`,
+/// a broken recipe or bad params `invalid`. Its `start` goes in the options.
+#[allow(clippy::too_many_arguments)]
+pub fn unit_add(
+    plan: &Plan,
+    recipes: &IndexMap<String, RecipeEntry>,
+    signatures: &impl SignatureProvider,
+    recipe: &str,
+    unit: &UnitName,
+    params: &JsonMap,
+    after: &IndexMap<String, Vec<String>>,
+    inputs: &IndexMap<String, JsonMap>,
+    tags: &[String],
+) -> Result<Lowered, PublicError> {
+    let entry = recipes
+        .get(recipe)
+        .ok_or_else(|| missing(format!("no recipe {recipe}")))?;
+    let found = entry.recipe.as_ref().map_err(|errors| {
+        invalid(
+            errors
+                .iter()
+                .map(|e| {
+                    diagnostic(
+                        &e.path,
+                        format!("recipe {} ({}): {}", entry.name, entry.scope, e.message),
+                    )
+                })
+                .collect(),
+        )
+    })?;
+    if params
+        .0
+        .get("unit")
+        .is_some_and(|v| v.as_value().as_str() != Some(unit.as_str()))
+    {
+        return Err(invalid(vec![diagnostic(
+            "params.unit",
+            "must match the requested unit",
+        )]));
+    }
+    let mut full = params.clone();
+    full.0
+        .insert("unit".into(), JsonValue::try_from(json!(unit))?);
+    let options = ExpansionOptions {
+        start: true,
+        tags: tags.to_vec(),
+        after: after.clone(),
+        inputs: inputs.clone(),
+    };
+    let (steps, _) = found.stage(&full, &options, signatures).map_err(invalid)?;
+    let collisions: Vec<_> = steps
+        .keys()
+        .filter(|id| StepId::new(*id).is_ok_and(|id| plan.steps().contains_key(&id)))
+        .map(|id| diagnostic(&format!("steps.{id}"), "already exists in the plan").to_string())
+        .collect();
+    if !collisions.is_empty() {
+        return Err(bad(collisions.join("; ")));
+    }
+    Ok(Lowered::ops(
+        vec![PlanOp::UnitAdd {
+            recipe: recipe.to_owned(),
+            unit: unit.clone(),
+            params: params.clone(),
+            after: after.clone(),
+            inputs: inputs.clone(),
+            tags: tags.to_vec(),
+        }],
+        ReplySteps::Added,
+    ))
+}
+
+/// `step_set_input`: one `step.update {in}` per selected step that is not running, takes
+/// every input and whose bindings change; its report kept. `status` is each selected step's
+/// stored status. No step changed is its own `bad_request`.
+pub fn step_set_input(
+    plan: &Plan,
+    status: &dyn Fn(&StepId) -> StepStatus,
+    selection: &StepSelection,
+    inputs: &JsonMap,
+) -> Result<Lowered, PublicError> {
+    if inputs.0.is_empty() {
+        return Err(bad("inputs: expected at least one input"));
+    }
+    let mut report = InputChanges::default();
+    let mut ops = vec![];
+    for id in select(plan, selection)? {
+        if status(&id) == StepStatus::Running {
+            report.running.push(id);
+            continue;
+        }
+        let step = &plan.steps()[&id];
+        let unsupported: Vec<_> = inputs
+            .0
+            .keys()
+            .filter(|name| {
+                !step.signature.inputs.contains_key(*name) && !step.bindings.contains_key(*name)
+            })
+            .cloned()
+            .collect();
+        if !unsupported.is_empty() {
+            report.unsupported.push(UnsupportedInput {
+                step: id,
+                inputs: unsupported,
+            });
+            continue;
+        }
+        let old = step
+            .declaration
+            .0
+            .get("in")
+            .map(|bindings| bindings.as_value().clone());
+        let mut bindings = old.clone().unwrap_or(json!({}));
+        for (name, value) in &inputs.0 {
+            bindings
+                .as_object_mut()
+                .ok_or_else(|| bad(format!("steps.{id}.in is not an object")))?
+                .insert(name.clone(), json!({"default": value}));
+        }
+        if !old
+            .map(|old| crate::hash::data_equal(&old, &bindings))
+            .transpose()?
+            .unwrap_or(false)
+        {
+            ops.push(PlanOp::StepUpdate {
+                step: id.clone(),
+                changes: Box::new(StepChanges {
+                    bindings: Some(Some(JsonValue::try_from(bindings)?)),
+                    ..StepChanges::default()
+                }),
+            });
+            report.changed.push(id);
         }
     }
-    Ok(ops)
+    if report.changed.is_empty() {
+        return Err(bad("step_set_input changes nothing"));
+    }
+    Ok(Lowered {
+        ops,
+        steps: ReplySteps::None,
+        inputs: Some(report),
+        prune: None,
+    })
 }
+
+/// `unit_tag`: one `step.update {tags}` per member whose tags change; none when none does.
+pub fn unit_tag(
+    plan: &Plan,
+    unit: &UnitName,
+    add: &[String],
+    remove: &[String],
+) -> Result<Lowered, PublicError> {
+    let mut errors = reserved_tags(add, "add");
+    errors.extend(reserved_tags(remove, "remove"));
+    errors.extend(
+        add.iter()
+            .filter(|tag| remove.contains(tag))
+            .map(|tag| diagnostic("add", format!("{tag} is removed too"))),
+    );
+    if !errors.is_empty() {
+        return Err(invalid(errors));
+    }
+    let members = &plan
+        .units()
+        .get(unit)
+        .ok_or_else(|| missing(format!("no unit {unit}")))?
+        .steps;
+    let mut ops = vec![];
+    for id in members {
+        let step = &plan.steps()[id];
+        let tags: IndexSet<_> = step
+            .tags
+            .iter()
+            .filter(|tag| !remove.contains(tag))
+            .cloned()
+            .chain(add.iter().cloned())
+            .collect();
+        if tags.iter().ne(step.tags.iter()) {
+            ops.push(PlanOp::StepUpdate {
+                step: id.clone(),
+                changes: Box::new(StepChanges {
+                    tags: Some(Some(JsonValue::try_from(json!(tags))?)),
+                    ..StepChanges::default()
+                }),
+            });
+        }
+    }
+    Ok(Lowered::ops(ops, ReplySteps::These(members.clone())))
+}
+
+/// `step_pause`: one `step.update {paused}` per selected step (and, with `subtree`, every step
+/// downstream of one) whose pause changes. Pausing keeps the reason on each step it pauses;
+/// without one, `true`, and a step already paused keeps its own reason.
+pub fn step_pause(
+    plan: &Plan,
+    selection: &StepSelection,
+    subtree: bool,
+    paused: bool,
+    reason: &str,
+) -> Result<Lowered, PublicError> {
+    let mut chosen = select(plan, selection)?;
+    if subtree {
+        chosen = downstream(plan, &chosen);
+    }
+    let reason = reason.trim();
+    let mut ops = vec![];
+    for id in &chosen {
+        let step = &plan.steps()[id];
+        let pause = match (paused, reason.is_empty()) {
+            (false, _) => None,
+            (true, true) if step.paused.is_paused() => continue,
+            (true, true) => Some(Value::Bool(true)),
+            (true, false) => Some(Value::String(reason.to_owned())),
+        };
+        if step.declaration.0.get("paused").map(JsonValue::as_value) != pause.as_ref() {
+            ops.push(PlanOp::StepUpdate {
+                step: id.clone(),
+                changes: Box::new(StepChanges {
+                    paused: Some(pause.map(JsonValue::try_from).transpose()?),
+                    ..StepChanges::default()
+                }),
+            });
+        }
+    }
+    Ok(Lowered::ops(ops, ReplySteps::These(chosen)))
+}
+
+/// `plan_prune`: one `step.remove` of the closure of the selected done units when it is not
+/// empty, else nothing; its report kept. `state` holds the stored state of every step of the
+/// units it considers; `eligible`, for an age-filtered prune, the units the store's evidence
+/// finds old enough.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_prune(
+    plan: &Plan,
+    state: &StateSnapshot,
+    units: Option<&[UnitName]>,
+    tags: Option<&[String]>,
+    older_than_seconds: u64,
+    keep: Option<&[String]>,
+    eligible: Option<&[UnitName]>,
+) -> Result<Lowered, PublicError> {
+    if older_than_seconds > 0 && eligible.is_none() {
+        return Err(bad(
+            "age-filtered pruning requires store-supplied eligible units",
+        ));
+    }
+    let has_selection = units.is_some() || tags.is_some();
+    let explicit = units.unwrap_or_default();
+    let unknown: Vec<_> = explicit
+        .iter()
+        .filter(|name| !plan.units().contains_key(*name))
+        .map(|name| diagnostic(&format!("units.{name}"), "no such unit"))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(invalid(unknown));
+    }
+    let selected: Vec<UnitName> = plan
+        .units()
+        .iter()
+        .filter(|(name, unit)| {
+            if !has_selection {
+                return unit.done(state);
+            }
+            explicit.contains(name)
+                || (unit.done(state)
+                    && tags.is_some_and(|tags| {
+                        unit.steps
+                            .iter()
+                            .any(|id| plan.steps()[id].tags.iter().any(|tag| tags.contains(tag)))
+                    }))
+        })
+        .map(|(name, _)| name.clone())
+        .filter(|name| eligible.is_none_or(|units| units.contains(name)))
+        .collect();
+    let keep = keep.unwrap_or_default();
+    crate::units::check_keep("keep", keep).map_err(invalid)?;
+    let closure = prune_closed(plan, state, &selected, keep).map_err(invalid)?;
+    let ops = if closure.steps.is_empty() {
+        vec![]
+    } else {
+        vec![PlanOp::StepRemove {
+            steps: closure.steps.clone(),
+        }]
+    };
+    Ok(Lowered {
+        ops,
+        steps: ReplySteps::These(closure.steps.clone()),
+        inputs: None,
+        prune: Some(closure),
+    })
+}
+
+/// `unit_update`: one `unit.update`; an unknown unit is `not_found` (`no unit <name>`). Its
+/// reply's steps are the members it changes.
+pub fn unit_update(
+    plan: &Plan,
+    unit: &UnitName,
+    changes: &IndexMap<StepId, StepChanges>,
+) -> Result<Lowered, PublicError> {
+    if !plan.units().contains_key(unit) {
+        return Err(crate::plan_rows::PlanRowsError::NoUnit { unit: unit.clone() }.into());
+    }
+    Ok(Lowered::ops(
+        vec![PlanOp::UnitUpdate {
+            unit: unit.clone(),
+            changes: changes.clone(),
+        }],
+        ReplySteps::Changed(changes.keys().cloned().collect()),
+    ))
+}
+
+/// `unit_remove`: one `unit.remove`; an unknown unit is `not_found` (`no unit <name>`). Its
+/// reply's steps are the members it removes, in plan order.
+pub fn unit_remove(plan: &Plan, unit: &UnitName) -> Result<Lowered, PublicError> {
+    let members = plan
+        .units()
+        .get(unit)
+        .ok_or_else(|| crate::plan_rows::PlanRowsError::NoUnit { unit: unit.clone() })?
+        .steps
+        .clone();
+    Ok(Lowered::ops(
+        vec![PlanOp::UnitRemove { unit: unit.clone() }],
+        ReplySteps::These(members),
+    ))
+}
+
+/// The selected steps and every step downstream of them (reading from or gated on one,
+/// transitively), in plan order.
+fn downstream(plan: &Plan, selected: &[StepId]) -> Vec<StepId> {
+    let mut found: IndexSet<StepId> = selected.iter().cloned().collect();
+    let mut index = 0;
+    while index < found.len() {
+        let id = found[index].clone();
+        index += 1;
+        found.extend(plan.dependents(&id));
+    }
+    let mut found: Vec<(u64, StepId)> = found
+        .into_iter()
+        .filter_map(|id| Some((plan.position(&id)?, id)))
+        .collect();
+    found.sort();
+    found.into_iter().map(|(_, id)| id).collect()
+}
+
+/// The steps a selection names (by id or by tag), in plan order. An unknown id is `not_found`.
 fn select(plan: &Plan, selection: &StepSelection) -> Result<Vec<StepId>, PublicError> {
     let steps = selection.steps.as_deref().unwrap_or_default();
     let tags = selection.tags.as_deref().unwrap_or_default();
@@ -596,51 +617,18 @@ fn select(plan: &Plan, selection: &StepSelection) -> Result<Vec<StepId>, PublicE
     if !unknown.is_empty() {
         return Err(missing(format!("no steps {}", unknown.join(", "))));
     }
-    Ok(plan
-        .steps()
-        .iter()
-        .filter(|(id, step)| steps.contains(id) || step.tags.iter().any(|tag| tags.contains(tag)))
-        .map(|(id, _)| id.clone())
-        .collect())
-}
-fn raw_step<'a>(
-    raw: &'a serde_json::Map<String, Value>,
-    id: &StepId,
-) -> Result<&'a Value, PublicError> {
-    raw.get(id.as_str())
-        .ok_or_else(|| missing(format!("no step {id}")))
-}
-fn pointer(value: &str) -> String {
-    value.replace('~', "~0").replace('/', "~1")
-}
-fn step_path(id: &StepId) -> String {
-    format!("/steps/{}", pointer(id.as_str()))
-}
-fn add(path: &str, value: Value) -> Result<PatchOperation, PublicError> {
-    Ok(PatchOperation::Add {
-        path: path.into(),
-        value: JsonValue::try_from(value)?,
-    })
-}
-fn replace(path: &str, value: Value) -> Result<PatchOperation, PublicError> {
-    Ok(PatchOperation::Replace {
-        path: path.into(),
-        value: JsonValue::try_from(value)?,
-    })
-}
-fn set_field(
-    step: &Value,
-    id: &StepId,
-    field: &str,
-    value: Option<Value>,
-) -> Result<PatchOperation, PublicError> {
-    let path = format!("{}/{}", step_path(id), pointer(field));
-    match value {
-        Some(value) if step.get(field).is_some() => replace(&path, value),
-        Some(value) => add(&path, value),
-        None => Ok(PatchOperation::Remove { path }),
+    let mut chosen: IndexSet<&StepId> = steps.iter().collect();
+    for tag in tags {
+        chosen.extend(plan.tagged(tag));
     }
+    let mut chosen: Vec<(u64, StepId)> = chosen
+        .into_iter()
+        .filter_map(|id| Some((plan.position(id)?, id.clone())))
+        .collect();
+    chosen.sort();
+    Ok(chosen.into_iter().map(|(_, id)| id).collect())
 }
+
 fn bad(message: impl Into<String>) -> PublicError {
     PublicError::BadRequest {
         message: message.into(),

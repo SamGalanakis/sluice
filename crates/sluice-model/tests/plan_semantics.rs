@@ -1,21 +1,21 @@
+mod support;
+
 use indexmap::IndexMap;
 use proptest::prelude::*;
 use serde_json::{Value, json};
 use sluice_model::{
     gates::ValueRef,
     ids::StepId,
-    plan::{FnSignature, Plan, topological_order},
-    rpc::{JsonMap, JsonValue, decode_json},
+    plan::{FnSignature, topological_order},
+    rpc::{JsonMap, decode_json},
     types::Type,
 };
+use support::compile;
 
 fn id(name: &str) -> StepId {
     name.parse().unwrap()
 }
 
-fn map(value: Value) -> JsonMap {
-    decode_json(&serde_json::to_vec(&value).unwrap()).unwrap()
-}
 fn signatures() -> IndexMap<String, FnSignature> {
     let signature = |inputs: Value, outputs: Value, open| FnSignature {
         inputs: inputs
@@ -82,20 +82,16 @@ fn worker(after: Value) -> Value {
 
 #[test]
 fn closed_shapes_and_value_errors_report_every_path() {
-    let errors = Plan::parse(
-        &map(
-            json!({"label":1,"rev":2,"inputs":{"Bad":"int", "no":{"doc":"missing type"}},"steps":{
+    let errors = compile(
+        json!({"inputs":{"Bad":"int", "no":{"doc":"missing type"}},"steps":{
         "a":{"run":"test.add","when":"yes","in":{"a":{"default":"x"}}},
         "b":{"run":"missing.fn","bogus":1},
         "c":{"run":"test.add","in":{"a":{"source":"missing"},"b":{"default":1,"source":"x"}}}}}),
-        ),
         &signatures(),
     )
     .unwrap_err();
     let paths: Vec<_> = errors.iter().map(|error| error.path.as_str()).collect();
     for path in [
-        "label",
-        "rev",
         "inputs.Bad",
         "inputs.no.type",
         "steps.a.when",
@@ -124,17 +120,12 @@ fn gate_typing_refuses_question_refs_and_not_step_unit_entries() {
         "unit:delivery#exit",
         "up/flag??",
     ] {
-        let mut doc = map(
-            json!({"inputs":{"required":"boolean"},"steps":{"up":external(),"down":worker(json!([entry]))}}),
-        );
         // The valid delivery unit is present, so !unit rejection is syntax, not lookup.
         let mut up = external();
         up["tags"] = json!(["unit:delivery"]);
-        doc.0.insert(
-            "steps".into(),
-            JsonValue::try_from(json!({"up":up,"down":worker(json!([entry]))})).unwrap(),
-        );
-        let errors = Plan::parse(&doc, &signatures()).unwrap_err();
+        let doc = json!({"inputs":{"required":"boolean"},
+            "steps":{"up":up,"down":worker(json!([entry]))}});
+        let errors = compile(doc, &signatures()).unwrap_err();
         assert!(
             errors
                 .iter()
@@ -164,8 +155,8 @@ fn refs_files_and_scatter_reject_malformed_shapes() {
         (json!({"source":[3,"bad..ref"]}), ".source["),
         (json!({"default":1,"file":"/tmp/x"}), "steps.a.in.value"),
     ] {
-        let errors = Plan::parse(
-            &map(json!({"steps":{"a":{"run":"core.echo","in":{"value":binding}}}})),
+        let errors = compile(
+            json!({"steps":{"a":{"run":"core.echo","in":{"value":binding}}}}),
             &signatures(),
         )
         .unwrap_err();
@@ -174,9 +165,13 @@ fn refs_files_and_scatter_reject_malformed_shapes() {
             "{errors:?}"
         );
     }
-    let errors=Plan::parse(&map(json!({"steps":{"a":{"run":"test.add","in":{"a":{"file":"/tmp/n"},"b":{"default":1}}}}})),&signatures()).unwrap_err();
+    let errors = compile(
+        json!({"steps":{"a":{"run":"test.add","in":{"a":{"file":"/tmp/n"},"b":{"default":1}}}}}),
+        &signatures(),
+    )
+    .unwrap_err();
     assert!(errors[0].message.contains("file binding is a string"));
-    assert!(Plan::parse_json(br#"{"steps":{},"steps":{}}"#, &signatures()).is_err());
+    assert!(decode_json::<JsonMap>(br#"{"steps":{},"steps":{}}"#).is_err());
 }
 
 #[test]
@@ -185,8 +180,8 @@ fn cycles_include_every_relation_and_expand_unit_entries_to_exits() {
         let mut a = external();
         a["tags"] = json!(["unit:lane", "exit"]);
         a["after"] = json!(["b"]);
-        let errors = Plan::parse(
-            &map(json!({"steps":{"a":a,"b":worker(json!([entry]))}})),
+        let errors = compile(
+            json!({"steps":{"a":a,"b":worker(json!([entry]))}}),
             &signatures(),
         )
         .unwrap_err();
@@ -197,14 +192,18 @@ fn cycles_include_every_relation_and_expand_unit_entries_to_exits() {
             "{entry}: {errors:?}"
         );
     }
-    let errors=Plan::parse(&map(json!({"steps":{"a":{"run":"core.external","tags":["unit:lane"],"after":["unit:lane?"]}}})),&signatures()).unwrap_err();
+    let errors = compile(
+        json!({"steps":{"a":{"run":"core.external","tags":["unit:lane"],"after":["unit:lane?"]}}}),
+        &signatures(),
+    )
+    .unwrap_err();
     assert!(
         errors
             .iter()
             .any(|error| error.message.contains("own exits"))
     );
-    let errors = Plan::parse(
-        &map(json!({"steps":{"a":{"run":"core.external","tags":["unit:lane"]},"lane":external()}})),
+    let errors = compile(
+        json!({"steps":{"a":{"run":"core.external","tags":["unit:lane"]},"lane":external()}}),
         &signatures(),
     )
     .unwrap_err();
@@ -231,7 +230,7 @@ proptest! {
         let result=topological_order(&graph);prop_assert_eq!(result.is_ok(),remaining.is_empty());
         if let Ok(order)=result {for (id,deps) in &graph {for dep in deps {prop_assert!(order.iter().position(|id|id==dep)<order.iter().position(|other|other==id));}}}
         let steps:serde_json::Map<_,_>=graph.iter().map(|(id,deps)|(id.to_string(),worker(json!(deps)))).collect();
-        prop_assert_eq!(Plan::parse(&map(json!({"steps":steps})),&signatures()).is_ok(),remaining.is_empty());
+        prop_assert_eq!(compile(json!({"steps":steps}),&signatures()).is_ok(),remaining.is_empty());
     }
 }
 
@@ -246,11 +245,33 @@ fn handoff_cycle_and_navigated_gate_cycle_are_rejected() {
             "b":worker(json!(["a/record.ok"]))}}),
     ];
     for value in cases {
-        let errors = Plan::parse(&map(value), &signatures()).unwrap_err();
+        let errors = compile(value, &signatures()).unwrap_err();
         assert!(
             errors
                 .iter()
                 .any(|error| error.message.contains("dependency cycle"))
         );
     }
+}
+
+/// A bare gate name that is not a step reads as a plan input: a boolean gate on the input, no
+/// dependency, and a `plan_refs` row whose source is that input (`plan_index::step_index`).
+#[test]
+fn a_bare_gate_name_that_is_no_step_is_an_input_ref() {
+    use sluice_model::{gates::Gate, plan::step_index, plan_rows::SourceKind};
+    let plan = compile(
+        json!({"inputs":{"go":"boolean"},"steps":{"a":worker(json!(["go"]))}}),
+        &signatures(),
+    )
+    .unwrap();
+    let step = &plan.steps()[&id("a")];
+    assert!(matches!(
+        &step.after[..],
+        [Gate::Bool { reference, negate: false }] if reference.0 == "go"
+    ));
+    assert!(plan.dependencies(&id("a")).is_empty());
+    let rows = step_index(&id("a"), &step.declaration, &|name| name == "a");
+    assert_eq!(rows.references.len(), 1);
+    assert_eq!(rows.references[0].source_kind, SourceKind::Input);
+    assert_eq!(rows.references[0].source_id, "go");
 }

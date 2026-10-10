@@ -2371,6 +2371,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sluice-reference",
  "thiserror",
  "time",
  "uuid",

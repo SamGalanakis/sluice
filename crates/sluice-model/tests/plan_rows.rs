@@ -586,20 +586,12 @@ fn supplied_shapes_are_checked_in_order() {
 }
 
 /// The validation matrix's counterexamples (§6.1), checked against today's whole-plan
-/// compiler: each `base` compiles, and each `candidate` (the base with `ops` applied) fails
-/// with exactly `errors`. Lane H's harness runs the same cases through the incremental path.
+/// compiler (the reference's): each `base` compiles, and each `candidate` (the base with `ops`
+/// applied) fails with exactly `errors`. `tests/incremental.rs` runs the same cases through
+/// the incremental path.
 #[test]
 fn validation_counterexamples_match_the_whole_plan_compiler() {
-    use sluice_model::plan::{FnSignature, Plan, SignatureProvider};
-    struct Open;
-    impl SignatureProvider for Open {
-        fn signature(&self, _: &str) -> Option<FnSignature> {
-            Some(FnSignature {
-                open: true,
-                ..Default::default()
-            })
-        }
-    }
+    use sluice_reference::{Plan, harness::Open};
     let compile = |document: &Value| Plan::parse_json(document.to_string().as_bytes(), &Open);
     let cases = fixture("validation.differential");
     let cases = cases.as_array().unwrap();

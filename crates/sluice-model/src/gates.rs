@@ -476,61 +476,7 @@ pub fn reconcile(plan: &Plan, state: &StateSnapshot) -> StateSnapshot {
         .0
         .retain(|name, _| plan.inputs().contains_key(name));
     for id in plan.topological_order() {
-        let step = &plan.steps()[id];
-        let status = next.status(id);
-        if matches!(status, StepStatus::Succeeded | StepStatus::Stale) {
-            let upstream_stale = step
-                .data_dependencies()
-                .iter()
-                .any(|id| next.status(id) == StepStatus::Stale);
-            let current_hash = inputs_hash(plan, &next, step);
-            let entry = next.steps.entry(id.clone()).or_default();
-            if entry.status == StepStatus::Succeeded
-                && (upstream_stale
-                    || current_hash.is_some_and(|hash| Some(hash) != entry.inputs_hash))
-            {
-                entry.status = StepStatus::Stale;
-            } else if entry.status == StepStatus::Stale
-                && !upstream_stale
-                && current_hash.is_some()
-                && current_hash == entry.inputs_hash
-            {
-                entry.status = StepStatus::Succeeded;
-            }
-        }
-        let status = next.status(id);
-        if !matches!(status, StepStatus::Pending | StepStatus::Skipped)
-            || step.paused.is_paused()
-            || next.paused.is_paused()
-        {
-            continue;
-        }
-        let decision = evaluate_step(plan, &next, step);
-        let entry = next.steps.entry(id.clone()).or_default();
-        entry.queued.clear();
-        match decision {
-            GateDecision::Skip(reasons) => {
-                entry.status = StepStatus::Skipped;
-                entry.skipped = reasons;
-                entry.error = None;
-            }
-            GateDecision::Invalid(errors) => {
-                entry.status = StepStatus::Failed;
-                entry.skipped.clear();
-                entry.error = Some(
-                    errors
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                );
-            }
-            GateDecision::Ready | GateDecision::Wait(_) => {
-                entry.status = StepStatus::Pending;
-                entry.skipped.clear();
-                entry.error = None;
-            }
-        }
+        reconcile_step(plan, &mut next, id);
     }
     // A hold removes old queue annotations without reevaluating the skip reason.
     for (id, entry) in &mut next.steps {
@@ -542,9 +488,68 @@ pub fn reconcile(plan: &Plan, state: &StateSnapshot) -> StateSnapshot {
     }
     next
 }
+/// One step of `reconcile`'s pass: `id`'s entry in `next`, given its own state there and its
+/// dependencies' (already reconciled). It reads `id` and its dependencies only.
+pub(crate) fn reconcile_step(plan: &Plan, next: &mut StateSnapshot, id: &StepId) {
+    let step = &plan.steps()[id];
+    let status = next.status(id);
+    if matches!(status, StepStatus::Succeeded | StepStatus::Stale) {
+        let upstream_stale = step
+            .data_dependencies()
+            .iter()
+            .any(|id| next.status(id) == StepStatus::Stale);
+        let current_hash = inputs_hash(plan, next, step);
+        let entry = next.steps.entry(id.clone()).or_default();
+        if entry.status == StepStatus::Succeeded
+            && (upstream_stale || current_hash.is_some_and(|hash| Some(hash) != entry.inputs_hash))
+        {
+            entry.status = StepStatus::Stale;
+        } else if entry.status == StepStatus::Stale
+            && !upstream_stale
+            && current_hash.is_some()
+            && current_hash == entry.inputs_hash
+        {
+            entry.status = StepStatus::Succeeded;
+        }
+    }
+    let status = next.status(id);
+    if !matches!(status, StepStatus::Pending | StepStatus::Skipped)
+        || step.paused.is_paused()
+        || next.paused.is_paused()
+    {
+        return;
+    }
+    let decision = evaluate_step(plan, next, step);
+    let entry = next.steps.entry(id.clone()).or_default();
+    entry.queued.clear();
+    match decision {
+        GateDecision::Skip(reasons) => {
+            entry.status = StepStatus::Skipped;
+            entry.skipped = reasons;
+            entry.error = None;
+        }
+        GateDecision::Invalid(errors) => {
+            entry.status = StepStatus::Failed;
+            entry.skipped.clear();
+            entry.error = Some(
+                errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
+        }
+        GateDecision::Ready | GateDecision::Wait(_) => {
+            entry.status = StepStatus::Pending;
+            entry.skipped.clear();
+            entry.error = None;
+        }
+    }
+}
 
-/// Cached capacities and already granted section leases; running step needs are
-/// added by the simulator. None means that a capacity fn has no cached value.
+/// Cached capacities, and what live leases hold of each resource: a running step's `needs`
+/// and its section leases alike (a running step holds its needs as leases). None means that a
+/// capacity fn has no cached value.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CachedResources {
     pub capacities: IndexMap<String, Option<u64>>,
@@ -562,8 +567,9 @@ pub struct DryRun {
     /// The after state as reconcile leaves it.
     pub reconciled: StateSnapshot,
 }
-/// Simulate a validated candidate edit using no execution or capacity callbacks.
-/// before_state/after_state allow plan-input and project-pause edits as well.
+/// Simulate a validated candidate edit, whole plan before and after (`preview_scope: "all"`),
+/// using no execution or capacity callbacks. before_state/after_state allow plan-input and
+/// project-pause edits as well. What is held is what `resources.leased` says.
 pub fn simulate_edit(
     before_plan: &Plan,
     before_state: &StateSnapshot,
@@ -576,12 +582,6 @@ pub fn simulate_edit(
     let mut result = DryRun::default();
     let mut held = resources.leased.clone();
     for (id, step) in after_plan.steps() {
-        if after.status(id) == StepStatus::Running {
-            for (name, need) in &step.needs {
-                let amount = held.entry(name.clone()).or_default();
-                *amount = amount.saturating_add(*need);
-            }
-        }
         let entry = after.steps.get(id);
         if after.status(id) == StepStatus::Stale && before.status(id) != StepStatus::Stale {
             result.would_stale.push(id.clone());

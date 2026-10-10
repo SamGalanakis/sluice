@@ -1,12 +1,15 @@
+mod support;
+
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use sluice_model::{
     FnSignature, GateDecision, Plan, StateSnapshot, StepState,
-    commands::{CommandRequest, StepStatus},
-    edit::{self, EditSnapshot, PlanEdit},
-    gates::{CachedResources, evaluate_step, reconcile},
-    ids::{Revision, StepId},
+    commands::{CommandRequest, StepSelection, StepStatus},
+    edit::{self, Lowered},
+    gates::{evaluate_step, reconcile},
+    ids::StepId,
     plan::inputs_hash,
+    plan_rows::{PlanOp, PreparedPlanEdit},
     rpc::{JsonMap, decode_json},
 };
 
@@ -26,33 +29,33 @@ fn signatures() -> IndexMap<String, FnSignature> {
     )])
 }
 fn parse(v: Value) -> Plan {
-    Plan::parse(&map(v), &signatures()).unwrap()
-}
-fn command(name: &str, mut args: Value) -> PlanEdit {
-    args["project"] = json!({"kind":"name", "value":"review"});
-    args["edit"] = json!({"expected":null,"dry_run":false,"reason":"review","author":null});
-    let request: CommandRequest =
-        decode_json(&serde_json::to_vec(&json!({"command":name,"args":args})).unwrap()).unwrap();
-    request.try_into().unwrap()
+    support::compile(v, &signatures()).unwrap()
 }
 fn prepare(
     p: &Plan,
     state: &StateSnapshot,
-    e: PlanEdit,
-) -> Result<edit::PreparedEdit, sluice_model::error::PublicError> {
-    edit::prepare_edit(
-        &EditSnapshot {
-            revision: Revision(1),
-            plan: p,
-            state,
+    lowered: Result<Lowered, sluice_model::error::PublicError>,
+) -> Result<PreparedPlanEdit, sluice_model::error::PublicError> {
+    let lowered = lowered?;
+    let plan = std::sync::Arc::new(p.clone());
+    let scoped = support::whole(p, state);
+    let tokens = support::tokens();
+    edit::prepare_lowered(
+        &sluice_model::plan::EditBase {
+            plan: &plan,
+            tokens: &tokens,
+            state: &scoped,
             signatures: &signatures(),
             recipes: &IndexMap::new(),
-            resources: &CachedResources::default(),
+            capacities: &IndexMap::new(),
             limits: &IndexMap::new(),
-            prune_eligible: None,
         },
-        e,
+        lowered,
+        support::options(),
     )
+}
+fn changes(value: Value) -> sluice_model::plan_rows::StepChanges {
+    serde_json::from_value(value).unwrap()
 }
 
 #[test]
@@ -117,14 +120,9 @@ fn adding_boolean_gate_does_not_stale_completed_work() {
             ..Default::default()
         },
     );
-    let e = prepare(
-        &p,
-        &state,
-        command("edge_add", json!({"step":"a","after":["flag"]})),
-    )
-    .unwrap();
+    let e = prepare(&p, &state, edit::edge(&p, "a", &["flag".into()], true)).unwrap();
     assert!(e.preview.would_stale.is_empty());
-    let after = e.plan;
+    let after = e.compiled.plan;
     assert_eq!(
         reconcile(&after, &state).status(&id("a")),
         StepStatus::Succeeded
@@ -167,22 +165,18 @@ fn running_step_cannot_change_signed_zero_input() {
         )]),
         ..Default::default()
     };
-    let result = prepare(
+    let result = support::prepare(
         &p,
         &state,
-        PlanEdit::Patch(sluice_model::commands::PlanPatch {
-            project: "review".parse().unwrap(),
-            rev: Revision(1),
-            start: true,
-            dry_run: false,
-            author: None,
-            reason: "review".into(),
-            ops: decode_json(br#"[{"op":"replace","path":"/steps/a/in/x/default","value":0.0}]"#)
-                .unwrap(),
-        }),
+        &signatures(),
+        vec![PlanOp::StepUpdate {
+            step: id("a"),
+            changes: Box::new(changes(json!({"in":{"x":{"default":0.0}}}))),
+        }],
+        support::options(),
     );
     if let Ok(prepared) = &result {
-        let after = &prepared.plan;
+        let after = &prepared.compiled.plan;
         assert_ne!(
             inputs_hash(&p, &state, &p.steps()[&id("a")]),
             inputs_hash(after, &state, &after.steps()[&id("a")])
@@ -200,11 +194,14 @@ fn bulk_input_signed_zero_change_must_not_be_discarded() {
     let result = prepare(
         &p,
         &StateSnapshot::default(),
-        command(
-            "step_set_input",
-            json!({
-                "selection":{"steps":["a"],"tags":null},"inputs":{"x":0.0}
-            }),
+        edit::step_set_input(
+            &p,
+            &|_| StepStatus::Pending,
+            &StepSelection {
+                steps: Some(vec![id("a")]),
+                tags: None,
+            },
+            &map(json!({"x":0.0})),
         ),
     );
     assert!(
@@ -228,15 +225,10 @@ fn step_update_signed_zero_change_is_preserved_and_stales_success() {
     let result = prepare(
         &p,
         &state,
-        command(
-            "step_update",
-            json!({
-                "step":"a","changes":{"in":{"x":{"default":0.0}}}
-            }),
-        ),
+        edit::step_update(&p, &id("a"), &changes(json!({"in":{"x":{"default":0.0}}}))),
     )
     .unwrap();
-    assert!(!result.ops.is_empty());
+    assert!(!result.commit.rows.changes.is_empty());
     assert_eq!(result.preview.would_stale, [id("a")]);
 }
 
