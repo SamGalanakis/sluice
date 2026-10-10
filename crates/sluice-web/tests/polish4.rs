@@ -229,13 +229,13 @@ async fn a_steps_overview_draws_its_open_question_whole_to_answer_and_its_header
     assert!(!actions.contains("awaiting reply"), "{actions}");
     // Overview: first, above Now, whole, its list kept, with Answer and Close in the shared
     // component
-    let asked = between(&page, "<section class=\"d-sec d-ask\">", "</section>");
-    assert!(asked.contains("<h3>Its question for you</h3>"), "{asked}");
+    let asked = between(&page, "<article class=\"mod swell-ask d-sec d-ask\"", "</article>");
+    assert!(asked.contains("Its question for you</h3>"), "{asked}");
     assert!(
         page.find("d-sec d-ask").unwrap() < page.find("d-sec d-now").unwrap(),
         "the question comes before Now"
     );
-    let now = between(&page, "<section class=\"d-sec d-now\">", "</section>");
+    let now = between(&page, "<article class=\"mod d-sec d-now\"", "</article>");
     assert!(!now.contains(&format!("ov-message-{q}")), "{now}");
     let item = between(asked, &format!("id=\"ov-message-{q}\""), "</sluice-answer>");
     assert!(
@@ -292,7 +292,7 @@ async fn an_answer_is_confirmed_in_its_place_with_or_without_script() {
     // the answered question keeps its place as one line; the open one is still a card
     let line = between(
         &inbox,
-        &format!("<article class=\"item q q-done\" id=\"item-{id}-{answered}\">"),
+        &format!("<article id=\"item-{id}-{answered}\" class=\"mod item q q-done\""),
         "</article>",
     );
     assert!(
@@ -314,7 +314,7 @@ async fn an_answer_is_confirmed_in_its_place_with_or_without_script() {
         "{line}"
     );
     assert!(inbox.contains(&format!(
-        "<article class=\"item q\" id=\"item-{id}-{waiting}\">"
+        "<article id=\"item-{id}-{waiting}\" class=\"mod swell-ask item q\""
     )));
     // the count says what waits, the answered one not among them
     assert!(
@@ -484,7 +484,7 @@ async fn a_pending_step_names_what_holds_its_chain_and_a_stopped_runner() {
         )
         .await;
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/c")).await;
-    let waits = between(&page, "<dl class=\"facts\">", "</dl>");
+    let waits = between(&page, "<div class=\"wait-list\">", "</article>");
     let root = between(waits, "<p class=\"gate wait-root\">", "</p>");
     assert!(
         root.contains("<span class=\"wr-lead\">Held up by</span>"),

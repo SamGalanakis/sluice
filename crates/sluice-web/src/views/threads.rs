@@ -1,7 +1,7 @@
 //! Owned conversation projections, loaded with navigation in one SQLite snapshot.
 use super::ui::StepRef;
 use super::{
-    DashboardSnapshot, FunctionCatalog, NavView, TrustedHtml, Viewer, load_snapshot, render_layout,
+    DashboardSnapshot, FunctionCatalog, NavView, TrustedHtml, Viewer, load_snapshot,
 };
 use askama::Template;
 use rusqlite::OptionalExtension;
@@ -404,6 +404,13 @@ impl InboxView {
             })
             .collect()
     }
+    /// "For you"'s count line: how many questions wait on the owner ("" for none).
+    pub fn yours_line(&self) -> String {
+        match self.for_you().len() {
+            0 => String::new(),
+            n => format!("{} waiting on you", super::ui::count(n, "question", "questions")),
+        }
+    }
     /// The notes not read yet, across their threads (a thread card says how many it holds).
     pub fn unread_notes(&self) -> usize {
         self.threads.iter().map(|t| t.messages.len()).sum()
@@ -492,6 +499,100 @@ impl InboxView {
         };
         html.map_err(render_error)
     }
+    /// Its band (DESIGN.md, The inbox and threads; the region "messages-band"): its name huge
+    /// (Inbox, Messages, Questions, or a thread's step), its way back to its project's plan (and
+    /// a thread's step) and a sentence of what waits on the owner. History draws none.
+    pub fn band(&self) -> TrustedHtml {
+        use super::ui::{band_head, band_head_html, count, esc};
+        let back = |extra: String| {
+            if self.project_name().is_empty() {
+                return extra;
+            }
+            format!(
+                "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"{}\">{}{} plan</a>{extra}</nav>",
+                esc(&self.base()),
+                super::icons::icon(super::icons::Icon::ArrowLeft, 16, ""),
+                esc(self.project_name())
+            )
+        };
+        let head = match self.view {
+            MessageView::History => return TrustedHtml::default(),
+            MessageView::Thread => {
+                let Some(thread) = self.threads.first() else {
+                    return TrustedHtml::owned(format!(
+                        "<div id=\"messages-band\" class=\"messages-band\">{}</div>",
+                        band_head(
+                            "Thread",
+                            &TrustedHtml::owned(back(String::new())),
+                            &TrustedHtml::default()
+                        )
+                        .as_str()
+                    ));
+                };
+                let step = match thread.step() {
+                    Some(step) => format!(
+                        "<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{}/steps/{}\"{}>{}</a>",
+                        thread.project,
+                        esc(step),
+                        if thread.step_title().is_empty() {
+                            String::new()
+                        } else {
+                            format!(" title=\"{}\"", esc(thread.step_title()))
+                        },
+                        esc(&thread.step_label())
+                    ),
+                    None => format!(
+                        "<span aria-hidden=\"true\">/</span><a href=\"{}/history\">History</a>",
+                        esc(&self.base())
+                    ),
+                };
+                band_head_html(
+                    &thread.heading_html(),
+                    thread.name().chars().count().max(21),
+                    &TrustedHtml::owned(back(step)),
+                    &TrustedHtml::owned(format!(
+                        "{} on {}",
+                        count(thread.messages.len(), "message", "messages"),
+                        esc(&thread.project_name)
+                    )),
+                )
+            }
+            MessageView::Inbox | MessageView::Questions => {
+                let yours = self.for_you().len();
+                let mut said = match super::questions_words(yours) {
+                    Some(n) => format!("<a class=\"ask\" href=\"#yours-h\">{n} for you</a>."),
+                    None => "Nothing is waiting on you.".to_owned(),
+                };
+                if self.is_inbox() {
+                    let notes = self.unread_notes();
+                    if notes > 0 {
+                        said.push_str(&format!(
+                            " {} unread.",
+                            count(notes, "note", "notes")
+                        ));
+                    }
+                } else {
+                    let between = self.between_agents().len();
+                    if between > 0 {
+                        said.push_str(&format!(" {between} between agents."));
+                    }
+                    let stopped = self.stopped().len();
+                    if stopped > 0 {
+                        said.push_str(&format!(" {stopped} nobody waits on."));
+                    }
+                }
+                band_head(
+                    self.title(),
+                    &TrustedHtml::owned(back(String::new())),
+                    &TrustedHtml::owned(said),
+                )
+            }
+        };
+        TrustedHtml::owned(format!(
+            "<div id=\"messages-band\" class=\"messages-band\">{}</div>",
+            head.as_str()
+        ))
+    }
     pub fn render(
         &self,
         viewer: &Viewer,
@@ -499,7 +600,7 @@ impl InboxView {
         stream: &str,
     ) -> Result<TrustedHtml, PublicError> {
         let nav = NavView::new(&self.nav, self.project, self.tab())?;
-        render_layout(
+        super::render_framed(
             &self.page_title(),
             &self.body()?,
             &nav,
@@ -507,6 +608,10 @@ impl InboxView {
             stream,
             &self.version(),
             path,
+            &super::Frame {
+                head: self.band(),
+                ..Default::default()
+            },
         )
         .map_err(render_error)
     }

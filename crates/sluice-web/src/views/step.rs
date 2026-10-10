@@ -516,6 +516,13 @@ pub struct StepView {
     /// A pending or stale step retried since its last run started: who retried it, when, and
     /// the feedback sent with it, said under its header until it runs (`load_restarts`).
     pub retried: Option<Restart>,
+    /// Its unit's stage strip (`ui::stage_strip`, its own stage marked), its unit's id and its
+    /// recipe's name, drawn in its band: empty for a step that is its unit alone
+    /// (`board::load_step`).
+    #[serde(skip)]
+    pub lane: Vec<super::ui::Stage>,
+    pub lane_unit: String,
+    pub lane_recipe: String,
 }
 /// What started a run after its step's first: a retry's author and reason (a completion
 /// action's, an orchestrator's, the owner's) and the feedback it sent with it; or an input it
@@ -974,6 +981,9 @@ impl StepView {
             kept: String::new(),
             downstream: 0,
             whole_title: String::new(),
+            lane: vec![],
+            lane_unit: String::new(),
+            lane_recipe: String::new(),
         };
         if let Some(failure) = failure {
             view.set_failure(failure);
@@ -1166,6 +1176,37 @@ impl StepView {
     /// It has a title apart from its id.
     pub fn titled(&self) -> bool {
         !self.title.is_empty() && self.title != self.id.as_str()
+    }
+    /// Its name's size in its band, by how long its heading runs (the stage before it counted):
+    /// a short id is set as huge as the band's name, a sentence a few sizes down so it wraps to
+    /// three lines at most.
+    pub fn title_size(&self) -> &'static str {
+        let chars = self.whole_heading().chars().count()
+            + if self.titled() { self.stage.chars().count() + 3 } else { 0 };
+        match chars {
+            0..=16 => "",
+            17..=34 => " long",
+            35..=70 => " longer",
+            _ => " longest",
+        }
+    }
+    /// Its progress is its current run's (`step_progress` while it runs).
+    pub fn progress_live(&self) -> bool {
+        self.progress.as_ref().is_some_and(|p| p.live)
+    }
+    /// Its unit's strip's place on the band's grid: two of the ten columns after its unit's
+    /// name a stage while five or fewer fit, else a column a stage, wrapping past ten.
+    pub fn lane_style(&self) -> String {
+        super::unit_page::lane_style(self.lane.len(), 10)
+    }
+    /// Its unit's stage strip with its own stage marked, for its band.
+    pub fn lane_html(&self) -> TrustedHtml {
+        let href = self.href();
+        let label = format!("Stages of {}", self.lane_unit);
+        match self.lane.iter().position(|s| s.href == href) {
+            Some(at) => super::ui::stage_strip_at(&label, &self.lane, at),
+            None => super::ui::stage_strip(&label, &self.lane),
+        }
     }
     /// Its doc as its page shows it: without its first line when that line is its title, so
     /// the page never says it twice.
@@ -1472,6 +1513,14 @@ impl StepView {
         match (self.usually, self.shown_timing()) {
             (Some(usually), Some(t)) => times_text(t.seconds / usually),
             _ => String::new(),
+        }
+    }
+    /// How many times its usual time it has run (its overrun chip's ratio), once past twice
+    /// that; 0 otherwise.
+    pub fn overrun_ratio(&self) -> f64 {
+        match (self.usually, self.shown_timing()) {
+            (Some(usually), Some(t)) if self.overrun() => t.seconds / usually,
+            _ => 0.0,
         }
     }
     /// A matrix pill's overrun after its timer: "2.5×" in the attention tone, its title in
@@ -2029,67 +2078,87 @@ impl StepView {
             })
             .collect()
     }
-    /// The step as the drawer draws it: its id a second-level heading under the page's; `tab`
-    /// the tab it opens on.
+    /// The step as the drawer draws it: its band its head, its id a second-level heading under
+    /// the page's; `tab` the tab it opens on.
     pub fn body(&self, tab: &str) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&StepTemplate {
             step: self,
             page: false,
             project: "",
+            unit: None,
             tab: self.tab_on(tab),
         })
     }
-    /// The step as its own page draws it (and that page's stream): its id the page's heading,
-    /// and the tab's title (`tab_title`, then `project`'s name), kept current by each patch.
+    /// The step as its own page draws it (and that page's stream), under its band: the tab's
+    /// title (`tab_title`, then `project`'s name), kept current by each patch.
     pub fn own_body(&self, project: &str, tab: &str) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&StepTemplate {
             step: self,
             page: true,
             project,
+            unit: None,
             tab: self.tab_on(tab),
         })
     }
-    /// Its own page: a way back to the plan (and its unit), then the step.
-    /// `unit`: its unit's id and title ("" when it has none), named in the way back by its
-    /// title, or by its id when that title is the step's own (the `h1` says it already).
-    pub fn page_body(
+    /// Its band on its own page (`Frame::head`, the region "step-band"): its way back to the
+    /// plan and its unit, its name huge, its state and its actions. `unit`: its unit's id and
+    /// title ("" when it has none), named in the way back by its title, or by its id when that
+    /// title is the step's own (the `h1` says it already).
+    pub fn band(&self, project: &str, unit: Option<(&str, &str)>) -> Result<TrustedHtml, askama::Error> {
+        TrustedHtml::from_template(&StepBand {
+            step: self,
+            page: true,
+            project,
+            unit,
+        })
+    }
+    /// Its own page's regions, as the page draws them and its stream patches them: its band and
+    /// its detail.
+    pub fn page_regions(
         &self,
         project: &str,
         unit: Option<(&str, &str)>,
         tab: &str,
+    ) -> Result<Vec<PatchRegion>, askama::Error> {
+        Ok(vec![
+            PatchRegion::new("step-band", self.band(project, unit)?),
+            PatchRegion::new("step-detail", self.own_body(project, tab)?),
+        ])
+    }
+    /// Its own page's body: a notice of what was not done, then the step.
+    pub fn page_body(
+        &self,
+        project: &str,
+        tab: &str,
         notice: Option<&str>,
     ) -> Result<TrustedHtml, askama::Error> {
-        #[derive(Template)]
-        #[template(
-            source = "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{{ step.project }}\" data-find-at=\"/projects/id/{{ step.project }}#find\">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, \"\")|safe }}{{ project }} plan</a>{% if let Some(unit) = unit %}<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{{ step.project }}/units/{{ unit.0 }}\"{% if !unit.1.is_empty() %} title=\"{{ unit.1 }}\"{% endif %}>{% if unit.1.is_empty() || unit.1 == step.title %}unit {{ unit.0 }}{% else %}{{ crate::views::ui::cut(unit.1, 64) }}{% endif %}</a>{% endif %}</nav>{% if let Some(words) = notice %}{{ crate::views::ui::notice(words)|safe }}{% endif %}{{ body|safe }}",
-            ext = "html"
-        )]
-        struct Page<'a> {
-            step: &'a StepView,
-            project: &'a str,
-            unit: Option<(&'a str, &'a str)>,
-            notice: Option<&'a str>,
-            body: TrustedHtml,
-        }
-        TrustedHtml::from_template(&Page {
-            step: self,
-            project,
-            unit,
-            notice,
-            body: self.own_body(project, tab)?,
-        })
+        let body = self.own_body(project, tab)?;
+        Ok(TrustedHtml::owned(match notice {
+            Some(words) => format!("{}{}", super::ui::notice(words).as_str(), body.as_str()),
+            None => body.0,
+        }))
     }
 }
 #[derive(Template)]
 #[template(path = "step.html")]
 struct StepTemplate<'a> {
     step: &'a StepView,
-    /// On its own page: its id is the page's `h1`.
+    /// On its own page: its band is the frame's, and its id the page's `h1` there.
     page: bool,
     /// On its own page, its project's name: the tab's title ends with it.
     project: &'a str,
+    /// Its unit, for its band's way back (the drawer draws none).
+    unit: Option<(&'a str, &'a str)>,
     /// The tab it opens on.
     tab: &'static str,
+}
+#[derive(Template)]
+#[template(path = "step_band.html")]
+struct StepBand<'a> {
+    step: &'a StepView,
+    page: bool,
+    project: &'a str,
+    unit: Option<(&'a str, &'a str)>,
 }
 impl StepTemplate<'_> {
     /// What the inputs' values are, said once under their head: their run's, or defaults.
@@ -2108,7 +2177,7 @@ impl StepTemplate<'_> {
     fn level(&self) -> u8 {
         if self.page { 2 } else { 3 }
     }
-    /// The Runs section's fold of the timeline: the step's own runs, or its unit's.
+    /// The Runs tab's timeline: the step's own runs, or its unit's.
     fn timeline_words(&self) -> &'static str {
         match &self.step.timeline {
             Some(t) if t.rows.len() > 1 => "Its unit's timeline",
@@ -2976,43 +3045,43 @@ async fn page_html(
     };
     super::activity::attach(state, &mut detail.step, shown.all()).await;
     let nav = NavView::new(&shared, Some(project), "plan")?;
-    // the version its stream's first batch has when it draws the same: nothing to patch. The
-    // kept feedback is the page's alone, in a box no patch empties (`data-ignore-morph`)
-    let drawn = detail
-        .step
-        .own_body(&detail.project, &shown.tab)
-        .map(|body| RenderedBatch::new(vec![PatchRegion::new("step-detail", body)]).version)
-        .map_err(render_error)?;
-    if let Some(notice) = notice {
-        detail.step.kept = notice.kept.clone();
-    }
-    let step = &detail.step;
     let unit = detail
         .unit
         .as_ref()
         .map(|(id, title)| (id.as_str(), title.as_str()));
-    step.page_body(
-        &detail.project,
-        unit,
-        &shown.tab,
-        notice.map(|n| n.words.as_str()),
-    )
-    .and_then(|body| {
-        super::render_layout(
-            &format!("{} · {}", step.tab_title(), detail.project),
-            &body,
-            &nav,
-            &Viewer::from_headers(headers),
-            &format!(
-                "{}/stream?page=true{}",
-                step.href(),
-                if shown.all() { "&activity=all" } else { "" }
-            ),
-            &drawn,
-            &step.href(),
-        )
-    })
-    .map_err(render_error)
+    // the version its stream's first batch has when it draws the same: nothing to patch. The
+    // kept feedback is the page's alone, in a box no patch empties (`data-ignore-morph`)
+    let drawn = detail
+        .step
+        .page_regions(&detail.project, unit, &shown.tab)
+        .map(|regions| RenderedBatch::new(regions).version)
+        .map_err(render_error)?;
+    let mut step = detail.step.clone();
+    if let Some(notice) = notice {
+        step.kept = notice.kept.clone();
+    }
+    let frame = super::Frame {
+        head: step.band(&detail.project, unit).map_err(render_error)?,
+        ..Default::default()
+    };
+    step.page_body(&detail.project, &shown.tab, notice.map(|n| n.words.as_str()))
+        .and_then(|body| {
+            super::render_framed(
+                &format!("{} · {}", step.tab_title(), detail.project),
+                &body,
+                &nav,
+                &Viewer::from_headers(headers),
+                &format!(
+                    "{}/stream?page=true{}",
+                    step.href(),
+                    if shown.all() { "&activity=all" } else { "" }
+                ),
+                &drawn,
+                &step.href(),
+                &frame,
+            )
+        })
+        .map_err(render_error)
 }
 #[derive(Deserialize)]
 pub struct StepStreamQuery {
@@ -3025,7 +3094,7 @@ pub struct StepStreamQuery {
 fn gone(project: ProjectId, id: &StepId, page: bool) -> Result<TrustedHtml, askama::Error> {
     #[derive(Template)]
     #[template(
-        source = "<article id=\"step-detail\" data-step=\"{{ id }}\" data-gone><header class=\"d-head\"><div class=\"hd\">{% if page %}<h1 id=\"d-title\">{{ id }}</h1>{% else %}<h2 id=\"d-title\">{{ id }}</h2>{% endif %}</div></header><p class=\"d-gone\">This step left the plan; it may have retired. <a href=\"/projects/id/{{ project }}/log?step={{ id }}\">Search the log for it</a></p></article>",
+        source = "<article id=\"step-detail\" data-step=\"{{ id }}\" data-gone>{% if !page %}<header class=\"d-head step-band in-drawer\"><div class=\"sb-top\"><div class=\"sb-name\"><h2 id=\"d-title\" class=\"sb-t\">{{ id }}</h2></div></div></header>{% endif %}<p class=\"d-gone\">This step left the plan; it may have retired. <a href=\"/projects/id/{{ project }}/log?step={{ id }}\">Search the log for it</a></p></article>",
         ext = "html"
     )]
     struct Gone<'a> {
@@ -3034,6 +3103,18 @@ fn gone(project: ProjectId, id: &StepId, page: bool) -> Result<TrustedHtml, aska
         page: bool,
     }
     TrustedHtml::from_template(&Gone { project, id, page })
+}
+/// A gone step's band on its own page: its id alone, in the band.
+fn gone_band(id: &StepId) -> Result<TrustedHtml, askama::Error> {
+    #[derive(Template)]
+    #[template(
+        source = "<header id=\"step-band\" class=\"d-head step-band\" data-gone><div class=\"sb-top\"><div class=\"sb-name\"><h1 id=\"d-title\" class=\"sb-t\">{{ id }}</h1></div></div></header>",
+        ext = "html"
+    )]
+    struct GoneBand<'a> {
+        id: &'a StepId,
+    }
+    TrustedHtml::from_template(&GoneBand { id })
 }
 pub async fn step_stream(
     State(state): State<DashboardState>,
@@ -3069,24 +3150,37 @@ pub async fn step_stream(
                 board::step_detail(&state, project, registry.as_ref().map(|r| &r.0), &id, false)
                     .await?;
             let Some(detail) = detail else {
+                let mut regions = vec![PatchRegion::new(
+                    "step-detail",
+                    gone(project, &id, own.page).map_err(render_error)?,
+                )];
+                // its own page's band keeps only its name: the step is gone
+                if own.page {
+                    regions.push(PatchRegion::new(
+                        "step-band",
+                        gone_band(&id).map_err(render_error)?,
+                    ));
+                }
                 return Ok(RenderedBatch {
                     version: format!("gone:{id}"),
-                    regions: vec![PatchRegion::new(
-                        "step-detail",
-                        gone(project, &id, own.page).map_err(render_error)?,
-                    )],
+                    regions,
                 });
             };
             let mut step = detail.step;
             super::activity::attach(&state, &mut step, all).await;
+            if own.page {
+                let unit = detail
+                    .unit
+                    .as_ref()
+                    .map(|(id, title)| (id.as_str(), title.as_str()));
+                return Ok(RenderedBatch::new(
+                    step.page_regions(&detail.project, unit, &tab)
+                        .map_err(render_error)?,
+                ));
+            }
             Ok(RenderedBatch::new(vec![PatchRegion::new(
                 "step-detail",
-                if own.page {
-                    step.own_body(&detail.project, &tab)
-                } else {
-                    step.body(&tab)
-                }
-                .map_err(render_error)?,
+                step.body(&tab).map_err(render_error)?,
             )]))
         }
     };

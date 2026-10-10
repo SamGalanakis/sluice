@@ -188,10 +188,10 @@ async fn a_step_draws_only_the_tabs_it_has_something_for_with_their_counts() {
     // its key output leads Overview; its last message after it
     let overview = between(&html, "id=\"tp-overview\"", "<!--/r:tp-overview-->");
     // its only output: no way to "all" of one
-    assert!(overview.contains("<h3>Its output</h3></div>"), "{overview}");
+    assert!(overview.contains("<h3 id=\"ov-key-h\">Its output</h3></div>"), "{overview}");
     assert!(overview.contains("Built &#60;12&#62; crates"), "{overview}");
     assert!(
-        overview.contains("<h3>Its last message</h3>")
+        overview.contains("<h3 id=\"ov-last-h\">Its last message</h3>")
             && overview.contains("<p class=\"m-text\">The summary is ready.</p>"),
         "{overview}"
     );
@@ -431,7 +431,7 @@ async fn an_open_question_to_the_owner_is_the_one_coral_tag() {
     let (_, inbox) = f.get("/inbox").await;
     // the questions list draws each question as the Thread tab's card: a one-message
     // conversation under who asked whom
-    let card = between(&inbox, "<article class=\"item q\"", "</article>");
+    let card = between(&inbox, "class=\"mod swell-ask item q\"", "</article>");
     assert!(card.contains("<li class=\"m m-ask m-yours\""), "{card}");
     assert!(
         card.contains("<span class=\"tag ask\">Awaiting your reply</span>"),

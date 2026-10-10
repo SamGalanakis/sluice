@@ -718,44 +718,6 @@ impl UnitView {
             (false, false) => format!("{reached_html} {rest_html}"),
         }
     }
-    /// The unit's own page: a way back to the plan, its id as the page's heading, its cards
-    /// (a done unit open), what it waits on and its last message.
-    pub fn page_body(
-        &self,
-        project: &super::ProjectView,
-        edges: &str,
-        recipe: Option<&sluice_model::recipe::Recipe>,
-        last: Option<&super::threads::Conversation>,
-    ) -> Result<TrustedHtml, askama::Error> {
-        #[derive(Template)]
-        #[template(path = "unit_page.html")]
-        struct UnitPage<'a> {
-            unit: &'a UnitView,
-            project: &'a super::ProjectView,
-            edges: &'a str,
-            last: Option<&'a super::threads::Conversation>,
-            js_url: String,
-            tab: String,
-            view: Option<TrustedHtml>,
-            /// The view is short enough for the meta line, not a card of its own.
-            view_short: bool,
-            view_error: Option<&'a str>,
-        }
-        let view = recipe
-            .and_then(|r| r.view())
-            .map(|root| super::unit_view::draw(root, self, false));
-        TrustedHtml::from_template(&UnitPage {
-            unit: self,
-            project,
-            edges,
-            last,
-            js_url: super::asset_url("sluice.js"),
-            tab: sluice_model::naming::cut(self.heading(), 48),
-            view_short: view.as_ref().is_some_and(super::unit_view::short),
-            view,
-            view_error: recipe.and_then(|r| r.view_error()),
-        })
-    }
     /// Its last message's thread, where the unit page's "Last message" leads.
     pub fn last_thread_href(&self, project: &ProjectId) -> String {
         super::threads::thread_url(*project, &self.last_thread)
@@ -1751,21 +1713,6 @@ impl ProjectView {
             .collect();
         script_json(&relations)
     }
-    /// The lines inside one unit, for its own page.
-    pub fn unit_edges_json(&self, unit: &UnitView) -> String {
-        let inside = |key: &str| self.facts.unit_of(key).is_some_and(|u| u == unit.id.as_str());
-        // on its own page a unit is its box: every relation inside it is a line, a lane's too
-        let relations: Vec<Relation> = self
-            .relations
-            .iter()
-            .filter(|r| inside(&r.from.key()) && inside(&r.to.key()))
-            .map(|r| Relation {
-                line: true,
-                ..r.clone()
-            })
-            .collect();
-        script_json(&relations)
-    }
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&ProjectTemplate {
             view: self,
@@ -2181,6 +2128,18 @@ pub fn load_step(
             .copied();
     }
     step.timeline = unit.timeline(Some(id));
+    // its unit's stages in its band: a unit of one step is the step alone
+    if unit.steps.len() > 1 {
+        // its own cell knows its stage's usual time
+        let own = super::unit_page::stage_of(&unit, &step);
+        let mut lane = super::unit_page::stages(&unit);
+        if let Some(cell) = lane.iter_mut().find(|s| s.href == own.href) {
+            *cell = own;
+        }
+        step.lane = lane;
+        step.lane_unit = unit.id.to_string();
+        step.lane_recipe = unit.recipe.clone();
+    }
     step.chained = !plan.dependencies(id).is_empty()
         || plan.steps().keys().any(|s| plan.dependencies(s).contains(id));
     // every step after it, near or far: what a succeeded step's Retry may send round again
@@ -2894,195 +2853,6 @@ pub async fn project_redirect(
     }
 }
 /// One unit's page body and the batch its stream patches, versioned by that HTML.
-fn unit_batch(
-    shared: &DashboardSnapshot,
-    view: &ProjectView,
-    unit: &UnitName,
-    viewer: &Viewer,
-    last: Option<&super::threads::Conversation>,
-) -> Result<RenderedBatch, PublicError> {
-    let mut unit = view
-        .units
-        .iter()
-        .find(|u| &u.id == unit)
-        .cloned()
-        .ok_or_else(|| PublicError::NotFound {
-            message: format!("unit {unit} not found"),
-        })?;
-    unit.open = unit.done;  // on its own page a done unit shows its cards
-    // a wait on another unit is said in words under its card: the page draws only the
-    // lines inside the unit
-    for wait in unit.waits.values_mut().flatten() {
-        wait.line = false;
-    }
-    let nav = NavView::new(shared, Some(view.project.id), "plan")?;
-    Ok(RenderedBatch::new(vec![
-        PatchRegion::new(
-            "unit-detail",
-            unit.page_body(
-                &view.project,
-                &view.unit_edges_json(&unit),
-                view.names.recipe_of(unit.id.as_str()).map(|r| r.as_ref()),
-                last,
-            )
-            .map_err(render_error)?,
-        ),
-        PatchRegion::new(
-            "top-nav",
-            super::render_nav(&nav, viewer, &format!("{}/units/{}", view.href(), unit.id))
-                .map_err(render_error)?,
-        ),
-    ]))
-}
-/// A unit's last message as the unit page draws it: one message of the shared conversation,
-/// read from the store by its id (none when the unit has no message).
-async fn unit_last(
-    state: &DashboardState,
-    view: &ProjectView,
-    unit: &UnitName,
-) -> Result<Option<super::threads::Conversation>, PublicError> {
-    let Some(id) = view
-        .units
-        .iter()
-        .find(|u| &u.id == unit)
-        .map(|u| u.last_id)
-        .filter(|id| *id > 0)
-    else {
-        return Ok(None);
-    };
-    let (project, name) = (view.project.id, view.project.name.clone());
-    state
-        .reads
-        .snapshot(move |c| {
-            let message =
-                sluice_store::messages::message(c, project, sluice_model::ids::MessageId(id))?;
-            let steps = super::threads::step_names(c, project)?;
-            // a note sent to several within a minute is drawn as its thread draws it, once,
-            // "to 6 steps": every copy of it is read
-            let mut ids = vec![];
-            if !message.is_question() {
-                let mut q = c.prepare_cached("SELECT id FROM messages WHERE project_id=?1 AND thread=?2 AND \"from\"=?3 AND body=?4 AND coalesce(title,'')=?5 AND needs_reply=0 AND abs(julianday(at)-julianday(?6))*86400<=60 AND id!=?7 ORDER BY id")?;
-                let rows = q.query_map(
-                    rusqlite::params![
-                        project.to_string(),
-                        message.thread,
-                        message.from,
-                        message.body,
-                        message.title.clone().unwrap_or_default(),
-                        message.at,
-                        id
-                    ],
-                    |r| r.get::<_, i64>(0),
-                )?;
-                ids = rows.collect::<Result<Vec<_>, _>>()?;
-            }
-            ids.push(id);
-            ids.sort_unstable();
-            let mut items = vec![];
-            for each in ids {
-                let message = if each == id {
-                    message.clone()
-                } else {
-                    sluice_store::messages::message(c, project, sluice_model::ids::MessageId(each))?
-                };
-                items.push(super::threads::item(c, project, &name, &steps, message)?);
-            }
-            Ok(Some(super::threads::Conversation::build(
-                super::threads::Build {
-                    project,
-                    subject: None,
-                    steps: &steps,
-                    unread: &BTreeSet::new(),
-                    most: None,
-                    excerpt: false,
-                    href: &|m| super::threads::thread_url(project, &m.message.thread),
-                },
-                items,
-            )))
-        })
-        .await
-        .map_err(|e| e.into_public(true))
-}
-pub async fn unit_page(
-    State(state): State<DashboardState>,
-    registry: Option<Extension<Registry>>,
-    Path((project, unit)): Path<(ProjectId, UnitName)>,
-    headers: HeaderMap,
-) -> Response {
-    let page = async {
-        let (shared, view) = snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await?;
-        let viewer = Viewer::from_headers(&headers);
-        let last = unit_last(&state, &view, &unit).await?;
-        let drawn = unit_batch(&shared, &view, &unit, &viewer, last.as_ref())?;
-        let nav = NavView::new(&shared, Some(project), "plan")?;
-        super::render_layout(
-            &format!(
-                "{} · {}",
-                sluice_model::naming::cut(view.names.naming.unit_title(unit.as_str()), 48),
-                view.project.name
-            ),
-            &drawn.regions[0].html,
-            &nav,
-            &viewer,
-            &format!("{}/units/{}/stream", view.href(), unit),
-            &drawn.version,
-            &format!("{}/units/{}", view.href(), unit),
-        )
-        .map_err(render_error)
-    };
-    match page.await {
-        Ok(html) => Html(html.0).into_response(),
-        Err(e) => error_response(e),
-    }
-}
-
-pub async fn unit_stream(
-    State(state): State<DashboardState>,
-    registry: Option<Extension<Registry>>,
-    Path((project, id)): Path<(ProjectId, UnitName)>,
-    Query(query): Query<StreamQuery>,
-    headers: HeaderMap,
-) -> Response {
-    let stop = state.stop.clone();
-    let version = query.version(VersionSignal::Page);
-    let viewer = Viewer::from_headers(&headers);
-    let watch = state.watch(Some(project));
-    let loader = move || {
-        let state = state.clone();
-        let registry = registry.clone();
-        let id = id.clone();
-        let viewer = viewer.clone();
-        async move {
-            let (shared, view) =
-                snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await?;
-            // a unit that left the plan (retired, or edited out) is said where it was drawn,
-            // and the stream stays open and quiet: its page never reconnects for it
-            if !view.units.iter().any(|u| u.id == id) {
-                return Ok(RenderedBatch::new(vec![PatchRegion::new(
-                    "unit-detail",
-                    gone_html(
-                        "unit-detail",
-                        "This unit left the plan; it may have retired.",
-                        &format!("{}/log?unit={id}", view.href()),
-                        "Search the log for it",
-                    ),
-                )]));
-            }
-            let last = unit_last(&state, &view, &id).await?;
-            unit_batch(&shared, &view, &id, &viewer, last.as_ref())
-        }
-    };
-    Sse::new(streams::page_events(
-        watch,
-        loader,
-        version,
-        VersionSignal::Page,
-        stop,
-    ))
-    .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
-    .into_response()
-}
-
 pub fn registration() -> super::PageRegistration {
     use super::{Asset, NavEntry, PageRegistration};
     use axum::routing::get;
@@ -3092,10 +2862,10 @@ pub fn registration() -> super::PageRegistration {
                 .route("/projects/{name}", get(project_redirect))
                 .route("/projects/id/{project}", get(project_page))
                 .route("/projects/id/{project}/stream", get(project_stream))
-                .route("/projects/id/{project}/units/{unit}", get(unit_page))
+                .route("/projects/id/{project}/units/{unit}", get(super::unit_page::unit_page))
                 .route(
                     "/projects/id/{project}/units/{unit}/stream",
-                    get(unit_stream),
+                    get(super::unit_page::unit_stream),
                 )
                 .route(
                     "/projects/id/{project}/steps/{step}",

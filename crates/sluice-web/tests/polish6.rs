@@ -152,12 +152,15 @@ async fn a_ready_step_says_so_and_when_it_starts_never_waits_on_the_runner_alone
         "{ready}"
     );
     // not under a "Waits on" of the runner alone, and no empty state's "Waits for …" either
-    assert!(!page.contains("<dl class=\"facts\">"), "{page}");
+    assert!(
+        !page.contains("<div class=\"wait-list\">") && !page.contains(">Waits on</h"),
+        "{page}"
+    );
     assert!(!page.contains("empty-state"), "{page}");
     // a step that waits says what holds it, with the runner line under its waits, not ready
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/b")).await;
     assert!(!page.contains("d-ready"), "{page}");
-    let waits = between(&page, "<dl class=\"facts\">", "</dl>");
+    let waits = between(&page, "<div class=\"wait-list\">", "</article>");
     assert!(
         waits
             .contains("The runner is stopped: nothing starts until <code>sluice loop</code> runs."),
@@ -311,7 +314,7 @@ async fn a_lane_row_says_its_question_and_a_note_to_many_is_drawn_once() {
     assert!(own.contains("</a> to the orchestrator: <a href="), "{own}");
     // the unit page draws the note as its thread does: once, to 2 steps
     let (_, unit) = f.get(&format!("/projects/id/{id}/units/l3")).await;
-    let last = between(&unit, "<section class=\"d-sec unit-last\"", "</section>");
+    let last = between(&unit, "<article class=\"mod d-sec unit-last\"", "</article>");
     assert!(last.contains("<summary>to 2 steps</summary>"), "{last}");
     assert_eq!(last.matches("Heads up").count(), 1, "{last}");
     // the sender's Messages counts each copy and says the note is drawn once
@@ -362,7 +365,7 @@ async fn a_question_to_the_orchestrator_shows_its_answer_under_it_on_overview() 
     )
     .await;
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/s")).await;
-    let last = between(&page, "<section class=\"d-sec d-last\">", "</section>");
+    let last = between(&page, "<article class=\"mod d-sec d-last\"", "</article>");
     let replies = between(last, "<ol class=\"m-replies\">", "</ol>");
     assert!(
         replies.contains("Option (b) is live: re-measure."),
@@ -574,14 +577,18 @@ async fn chromium_the_board_alone_keeps_its_tags_and_a_wide_screen_sets_overview
             .eval("document.querySelector('[data-view-tab=\"both\"]').click()")
             .unwrap();
 
-        // a wide screen: the asking step's question and Now side by side, in one row
+        // a wide screen: Overview's modules two to a row, its question and Now in the first
+        // column, what it waits on and its output beside them, side by side from the top
+        const TWO: &str = "(() => { const cols = [...document.querySelectorAll('#tp-overview .ov > sluice-grid > .mod-col')].map(c => c.getBoundingClientRect()); return [cols.length, cols.length === 2 && Math.round(cols[0].top) === Math.round(cols[1].top), cols.length === 2 && cols[0].right < cols[1].left, document.documentElement.scrollWidth <= innerWidth]; })()";
         browser.viewport(2400, "dark").unwrap();
         browser.navigate(&format!("http://{addr}/projects/id/{wide}/steps/l1-work")).unwrap();
         browser.wait("document.querySelector('#tp-overview .d-ask')").unwrap();
-        let row = browser
-            .eval("(() => { const o = document.querySelector('#tp-overview'), a = o.querySelector('.d-ask'), n = o.querySelector('.d-now'); return [getComputedStyle(o).display, Math.round(a.getBoundingClientRect().top) === Math.round(n.getBoundingClientRect().top), a.getBoundingClientRect().right < n.getBoundingClientRect().left, document.documentElement.scrollWidth <= innerWidth]; })()")
+        assert_eq!(browser.eval(TWO).unwrap(), json!([2, true, true, true]));
+        // its question swells first, above Now, in the first column
+        let order = browser
+            .eval("(() => { const a = document.querySelector('#tp-overview .d-ask').getBoundingClientRect(), n = document.querySelector('#tp-overview .d-now').getBoundingClientRect(); return a.bottom <= n.top && Math.round(a.left) === Math.round(n.left); })()")
             .unwrap();
-        assert_eq!(row, json!(["grid", true, true, true]));
+        assert_eq!(order, json!(true));
         // the column is the frame's, fluid (the window less its gutters), the band's content on
         // the same edges
         let edges = browser
@@ -589,15 +596,15 @@ async fn chromium_the_board_alone_keeps_its_tags_and_a_wide_screen_sets_overview
             .unwrap();
         assert_eq!(edges[0], edges[1], "{edges}");
         assert!(edges[0].as_f64().unwrap() > 2200.0, "{edges}");
-        // a narrow window keeps one column
-        browser.viewport(1440, "light").unwrap();
+        // a phone keeps one column
+        browser.viewport(390, "light").unwrap();
         browser.navigate(&format!("http://{addr}/projects/id/{wide}/steps/l1-work")).unwrap();
         browser.wait("document.querySelector('#tp-overview .d-ask')").unwrap();
         assert_eq!(
             browser
-                .eval("getComputedStyle(document.querySelector('#tp-overview')).display")
+                .eval("(() => { const cols = [...document.querySelectorAll('#tp-overview .ov > sluice-grid > .mod-col')].map(c => c.getBoundingClientRect()); return cols.length === 2 && cols[1].top >= cols[0].bottom; })()")
                 .unwrap(),
-            json!("block")
+            json!(true)
         );
         assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
     })

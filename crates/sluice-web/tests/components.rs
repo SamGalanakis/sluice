@@ -127,7 +127,7 @@ async fn every_page_draws_its_components_hosts_and_none_writes_one_by_hand() {
         ),
         (
             format!("{p}/units/alpha"),
-            &["sluice-board", "sluice-conversation"][..],
+            &["sluice-grid", "sluice-conversation"][..],
         ),
         (
             format!("{p}/thread?thread=step-alpha-build"),

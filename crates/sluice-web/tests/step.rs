@@ -498,7 +498,7 @@ async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawe
     let html = step.body("").unwrap();
     let html = html.as_str();
     assert!(html.contains("finishing · running for <time"), "{html}");
-    assert!(html.contains("<h4>Finishing</h4>"), "{html}");
+    assert!(html.contains("<h4 id=\"ov-fin-h\">Finishing</h4>"), "{html}");
     assert!(html.contains("datetime=\"2026-10-05T09:30:00Z\""), "{html}");
     assert!(
         html.contains("release <sluice-copy value=\"0123456789ab\"><code>0123456789ab</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy release\""),
@@ -668,7 +668,7 @@ fn a_cancelled_step_reads_as_cancelled_not_failed() {
     let html = html.as_str();
     assert!(html.contains("g-cancelled"), "{html}");
     assert!(
-        html.contains("<h4>Cancelled</h4><p class=\"err-line\">pivot: audit instead (Sam)</p>"),
+        html.contains("<h4 id=\"ov-fail-h\">Cancelled</h4><p class=\"err-line\">pivot: audit instead (Sam)</p>"),
         "{html}"
     );
     assert!(!html.contains("Why it failed"));
@@ -755,7 +755,7 @@ fn a_failure_leads_with_its_sentence_and_folds_the_pane() {
     assert!(view.retry_first());
     let html = view.body("").unwrap();
     let html = html.as_str();
-    assert!(html.contains("<h4>Why it failed</h4><p class=\"err-line\">Stopped at its wall-clock cap after 10h 0m.</p>"), "{html}");
+    assert!(html.contains("<h4 id=\"ov-fail-h\">Why it failed</h4><p class=\"err-line\">Stopped at its wall-clock cap after 10h 0m.</p>"), "{html}");
     assert!(
         html.contains("<p class=\"err-said\">engine operation deadline exceeded</p>"),
         "{html}"
@@ -947,12 +947,12 @@ async fn a_running_step_says_what_it_is_doing_now() {
     let drawer = step.body("").unwrap();
     let drawer = drawer.as_str();
     let now = &drawer[drawer
-        .find("<section class=\"d-sec d-now\">")
-        .expect("a Now section")..];
-    let now = &now[..now.find("</section>").unwrap()];
-    // Now is the Overview tab's first section, a level under the drawer's panel heads
+        .find("<article class=\"mod d-sec d-now\"")
+        .expect("a Now module")..];
+    let now = &now[..now.find("</article>").unwrap()];
+    // Now is the Overview tab's first module, its head a level under the drawer's panel heads
     assert!(
-        now.starts_with("<section class=\"d-sec d-now\"><h4>Now</h4>"),
+        now.contains("aria-labelledby=\"ov-now-h\"><div class=\"mod-h\"><h4 id=\"ov-now-h\">Now</h4>"),
         "{now}"
     );
     // its latest exchange as messages: its own latest (to the orchestrator), its first words
@@ -1006,12 +1006,19 @@ async fn a_running_step_says_what_it_is_doing_now() {
                 .find("<h3 class=\"tp-h\">Inputs</h3>")
                 .unwrap_or(usize::MAX)
     );
-    let page = step.page_body("p", None, "", None).unwrap();
+    // on its own page its name is the band's h1, and the page's sections h2 and h3 under it
+    let band = step.band("p", None).unwrap();
+    assert!(
+        band.as_str().contains("<h1 id=\"d-title\" class=\"sb-t\">work</h1>"),
+        "{}",
+        band.as_str()
+    );
+    let page = step.page_body("p", "", None).unwrap();
     let page = page.as_str();
-    assert!(page.contains("<h1 id=\"d-title\">work</h1>"), "{page}");
     assert!(
         page.contains("<h2 class=\"tp-h\">Overview</h2>")
-            && page.contains("<h3>Now</h3>")
+            && page.contains("<h3 id=\"ov-now-h\">Now</h3>")
+            && !page.contains("<h1")
             && !page.contains("<h4"),
         "{page}"
     );

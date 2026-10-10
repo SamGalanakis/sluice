@@ -339,7 +339,7 @@ async fn a_failed_step_opens_on_its_last_failed_call_and_why_it_failed_links_the
         );
         // Why it failed links to it, before the outline
         let why = &html[html.find("d-sec d-failure").unwrap()..];
-        let why = &why[..why.find("</section>").unwrap()];
+        let why = &why[..why.find("</article>").unwrap()];
         assert!(
             why.contains(&format!(
                 "<p class=\"act-why\"><a href=\"#{anchor}\">Its last failed call</a>: <span class=\"act-tool\">"
@@ -557,8 +557,8 @@ async fn a_running_steps_now_leads_with_its_live_turn() {
         .unwrap();
     f.laid.write(upto);
     let (_, html) = f.get(&f.page()).await;
-    let now = &html[html.find("<section class=\"d-sec d-now\">").unwrap()..];
-    let now = &now[..now.find("</section>").unwrap()];
+    let now = &html[html.find("<article class=\"mod d-sec d-now\"").unwrap()..];
+    let now = &now[..now.find("</article>").unwrap()];
     let turn = &now[now
         .find("<div class=\"now-turn is-running\">")
         .unwrap_or_else(|| panic!("{now}"))..];
@@ -572,18 +572,22 @@ async fn a_running_steps_now_leads_with_its_live_turn() {
         turn.contains("<p class=\"now-call\">"),
         "the call in flight: {turn}"
     );
-    assert!(
-        turn.contains(
-            "<a href=\"#activity\" data-tab-to=\"activity\">Its activity</a> · run 1 · 3 turns"
-        ),
-        "{turn}"
-    );
-    // nothing comes before it but the section's head
+    // its activity is named in the module's head, beside "Now"
     let before = &now[..now.find("<div class=\"now-turn").unwrap()];
     assert!(
-        !before.contains("<p") && !before.contains("convo"),
+        before.contains(
+            "<a href=\"#activity\" data-tab-to=\"activity\">Its activity</a> · run 1 · 3 turns"
+        ),
         "{before}"
     );
+    // nothing comes before it but the module's head
+    let body = &before[before.find("</div>").unwrap()..];
+    assert!(
+        body == "</div>" && !before.contains("convo"),
+        "{before}"
+    );
+    // its calls by tool, as the transcript names each tool, and its latest calls before it
+    assert!(turn.contains("<ul class=\"now-tools\""), "{turn}");
     drop(f.writer);
     drop(f.home);
 }

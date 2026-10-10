@@ -183,6 +183,32 @@ impl TurnView {
     }
 }
 impl TurnView {
+    /// Its calls by tool, most first, each tool named exactly as its engine's transcript names
+    /// it (`tools`, "Bash 8 · Edit 3"): Now's tiles.
+    pub fn tool_counts(&self) -> Vec<(String, usize)> {
+        self.tools
+            .split(" · ")
+            .filter_map(|part| {
+                let (tool, n) = part.rsplit_once(' ')?;
+                Some((tool.to_owned(), n.parse().ok()?))
+            })
+            .collect()
+    }
+    /// Its latest calls, newest first, `n` at most (a fold's calls among them): Now's "Last
+    /// calls".
+    pub fn latest_calls(&self, n: usize) -> Vec<&CallView> {
+        let mut calls: Vec<&CallView> = self
+            .items
+            .iter()
+            .flat_map(|item| match item {
+                Item::Call(call) => std::slice::from_ref(call).iter(),
+                Item::Looks { calls, .. } => calls.iter(),
+            })
+            .collect();
+        calls.reverse();
+        calls.truncate(n);
+        calls
+    }
     /// Its latest call, a fold's last one: the call in flight while the turn runs.
     pub fn last_call(&self) -> Option<&CallView> {
         match self.items.last()? {

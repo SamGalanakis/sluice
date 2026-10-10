@@ -577,7 +577,7 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
     assert!(!html.contains("<h3>Question</h3>"));
     // a question is a one-message conversation, as a step's Thread tab draws it: with no title
     // of its own its body is said once, whole, never cut into a heading over itself
-    let card = &html[html.find("<article class=\"item q\"").expect("its card")..];
+    let card = &html[html.find("class=\"mod swell-ask item q\"").expect("its card")..];
     let card = &card[..card.find("</article>").unwrap()];
     assert!(!card.contains("<h3>"), "{card}");
     assert!(!card.contains("class=\"m-title\""), "{card}");
@@ -601,10 +601,10 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
     );
     assert!(html.contains(r#"<div class="q-box" id="qbox-"#), "{html}");
     assert!(
-        html.contains("Questions for you <span class=\"n\">1</span>"),
+        html.contains("<h2>Questions for you</h2><p class=\"sec-n\">1 question waiting on you</p>"),
         "the inbox counts the questions put to the owner"
     );
-    assert!(html.contains("Nobody is waiting <span class=\"n\">3</span>"));
+    assert!(html.contains("<h2>Nobody is waiting</h2><p class=\"sec-n\">3 questions</p>"));
     assert!(html.contains("<summary>Close all 3</summary>"));
     assert!(html.contains("<sluice-confirm heading=\"Close all 3 questions?\">"));
     assert!(html.contains("data-keep>Keep them</button>"));
@@ -640,7 +640,7 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
         .find("<section class=\"q-group agents\"")
         .expect("between agents")..];
     assert!(
-        agents.contains("<h2 id=\"between-h\">Between agents <span class=\"n\">1</span></h2>"),
+        agents.contains("<div class=\"sec-h\" id=\"between-h\"><h2>Between agents</h2><p class=\"sec-n\">1 question</p></div>"),
         "{agents}"
     );
     assert!(agents.contains(">Answer as owner</button>"), "{agents}");

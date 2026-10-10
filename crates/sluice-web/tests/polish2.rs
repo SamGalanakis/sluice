@@ -181,7 +181,7 @@ async fn a_rerun_says_what_started_it_and_its_outputs_which_run_set_them() {
     .0;
     run(&f, id, "w", "2099-01-01T00:00:00Z", None, None).await;
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/w")).await;
-    let now = between(&page, "<section class=\"d-sec d-now\">", "</section>");
+    let now = between(&page, "<article class=\"mod d-sec d-now\"", "</article>");
     let why = between(now, "<p class=\"meta now-retry\">", "</p>");
     assert!(
         why.starts_with("<p class=\"meta now-retry\">Run 2 started <time"),
@@ -194,9 +194,9 @@ async fn a_rerun_says_what_started_it_and_its_outputs_which_run_set_them() {
         "{why}"
     );
     // its output, from the run before this one, says so and stands back
-    let key = between(&page, "<section class=\"d-sec d-key", "</section>");
+    let key = between(&page, "<article class=\"mod d-sec d-key", "</article>");
     assert!(
-        key.starts_with("<section class=\"d-sec d-key is-earlier\">"),
+        key.starts_with("<article class=\"mod d-sec d-key is-earlier\""),
         "{key}"
     );
     assert!(
@@ -330,7 +330,7 @@ async fn a_succeeded_steps_retry_asks_first_and_names_the_steps_that_may_run_aga
     // with no key output, its two short outputs stand on its Overview
     let overview = between(&page, "id=\"tp-overview\"", "<!--/r:tp-overview-->");
     assert!(
-        overview.contains("<h3>Its outputs</h3></div>"),
+        overview.contains("<h3 id=\"ov-key-h\">Its outputs</h3></div>"),
         "{overview}"
     );
     assert!(
@@ -352,7 +352,7 @@ async fn a_steps_heading_is_its_title_whole_and_its_tabs_say_what_they_hold() {
         )
         .await;
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/w")).await;
-    let h1 = between(&page, "<h1 id=\"d-title\">", "</h1>");
+    let h1 = between(&page, "<h1 id=\"d-title\" class=\"sb-t longest\">", "</h1>");
     assert!(h1.ends_with("no aliases at all (FIG-5571)"), "{h1}");
     // the tab's own title stays cut
     assert!(between(&page, "<title>", "</title>").contains('…'));
