@@ -1,0 +1,70 @@
+{
+  "project": {
+    "project_id": "0199c3a4-5b6e-7f80-9a1b-2c3d4e5f6a7b",
+    "name": "lash"
+  },
+  "rev": 42,
+  "preview": {
+    "scope": "impact",
+    "changes": [
+      {
+        "op": "input.put",
+        "name": "reviewer",
+        "position": 2,
+        "declaration": {
+          "type": "string",
+          "doc": "Who reviews"
+        }
+      },
+      {
+        "op": "step.put",
+        "step": "release",
+        "position": 12,
+        "declaration": {
+          "run": "agent.run",
+          "tags": [
+            "unit:release"
+          ],
+          "after": [
+            "tests-main",
+            "review"
+          ],
+          "in": {
+            "engine": {
+              "default": "claude"
+            },
+            "spec": {
+              "default": "Cut the release"
+            }
+          }
+        }
+      },
+      {
+        "op": "step.put",
+        "step": "review",
+        "position": 505,
+        "declaration": {
+          "run": "agent.review",
+          "after": [
+            "work"
+          ],
+          "in": {
+            "spec": {
+              "source": "work/final"
+            }
+          }
+        }
+      }
+    ],
+    "would_start": [
+      "review"
+    ],
+    "would_queue": [],
+    "would_skip": [],
+    "would_stale": [],
+    "errors": []
+  },
+  "steps": [
+    "review"
+  ]
+}

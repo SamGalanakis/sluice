@@ -1,0 +1,68 @@
+{
+  "project": {
+    "project_id": "0199c3a4-5b6e-7f80-9a1b-2c3d4e5f6a7c",
+    "name": "demo"
+  },
+  "rev": 7,
+  "state_epoch": 12,
+  "recipe_generation": "0e4d1c2b3a596877",
+  "steps": [
+    {
+      "id": "notes",
+      "unit": "notes",
+      "recipe": null,
+      "position": 2,
+      "run": "agent.run",
+      "status": "pending",
+      "paused": false,
+      "priority": 0,
+      "spec": {
+        "run": "agent.run",
+        "after": [
+          "unit:build"
+        ],
+        "in": {
+          "engine": {
+            "default": "claude"
+          },
+          "cwd": {
+            "source": "repo"
+          },
+          "spec": {
+            "source": "gate/items.0"
+          }
+        }
+      },
+      "references": [
+        {
+          "kind": "gate",
+          "slot": "after",
+          "ordinal": 0,
+          "source_kind": "unit",
+          "source_id": "build",
+          "source_port": "",
+          "source_path": ""
+        },
+        {
+          "kind": "binding",
+          "slot": "in.cwd",
+          "ordinal": 0,
+          "source_kind": "input",
+          "source_id": "repo",
+          "source_port": "",
+          "source_path": ""
+        },
+        {
+          "kind": "binding",
+          "slot": "in.spec",
+          "ordinal": 0,
+          "source_kind": "step",
+          "source_id": "gate",
+          "source_port": "items",
+          "source_path": "0"
+        }
+      ]
+    }
+  ],
+  "next_cursor": null
+}

@@ -1,0 +1,15 @@
+{
+  "project": "lash",
+  "ops": [
+    {
+      "op": "step.update",
+      "step": "tests-main",
+      "changes": {
+        "paused": null
+      }
+    }
+  ],
+  "dry_run": true,
+  "preview_scope": "all",
+  "reason": "Would resuming tests-main start anything else?"
+}

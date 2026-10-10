@@ -1,0 +1,91 @@
+[
+  {
+    "case": "limit",
+    "error": {
+      "error": "bad_request",
+      "message": "limit must be 1 to 1000"
+    }
+  },
+  {
+    "case": "no_ops",
+    "error": {
+      "error": "bad_request",
+      "message": "ops: name at least one operation"
+    }
+  },
+  {
+    "case": "no_changes",
+    "error": {
+      "error": "bad_request",
+      "message": "ops[0].changes: name at least one field"
+    }
+  },
+  {
+    "case": "preview_all_needs_dry_run",
+    "error": {
+      "error": "bad_request",
+      "message": "preview_scope \"all\" needs dry_run: true"
+    }
+  },
+  {
+    "case": "order_needs_rev",
+    "error": {
+      "error": "bad_request",
+      "message": "order.set needs rev: the revision whose order it lists"
+    }
+  },
+  {
+    "case": "cursor_malformed",
+    "error": {
+      "error": "bad_request",
+      "message": "cursor is not one plan_read returned"
+    }
+  },
+  {
+    "case": "cursor_mismatch",
+    "error": {
+      "error": "bad_request",
+      "message": "cursor belongs to another query: pass the same project and filters, or no cursor"
+    }
+  },
+  {
+    "case": "cursor_expired",
+    "error": {
+      "error": "cursor_expired",
+      "message": "the plan changed since this cursor was issued; read again without cursor"
+    }
+  },
+  {
+    "case": "no_step",
+    "error": {
+      "error": "not_found",
+      "message": "no step normalize-wrk"
+    }
+  },
+  {
+    "case": "no_unit",
+    "error": {
+      "error": "not_found",
+      "message": "no unit normalise"
+    }
+  },
+  {
+    "case": "stale_rev",
+    "error": {
+      "error": "conflict",
+      "message": "plan is at rev 43",
+      "current_rev": 43
+    }
+  },
+  {
+    "case": "invalid_ops",
+    "error": {
+      "error": "invalid",
+      "message": "invalid plan edit",
+      "errors": [
+        "ops[1].step: no step relase",
+        "steps.review.in.spec: work/final is int, which does not fit string: int is not string"
+      ]
+    }
+  }
+]

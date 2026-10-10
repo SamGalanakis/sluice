@@ -1,0 +1,35 @@
+{
+  "scope": "all",
+  "changes": [
+    {
+      "op": "step.put",
+      "step": "tests-main",
+      "position": 3,
+      "declaration": {
+        "run": "agent.run",
+        "tags": [
+          "unit:tests-main",
+          "rolling"
+        ],
+        "in": {
+          "engine": {
+            "default": "codex"
+          },
+          "spec": {
+            "default": "Run the main tests"
+          }
+        }
+      }
+    }
+  ],
+  "would_start": [
+    "tests-main",
+    "normalize-fork"
+  ],
+  "would_queue": [
+    "normalize-fork"
+  ],
+  "would_skip": [],
+  "would_stale": [],
+  "errors": []
+}

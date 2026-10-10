@@ -1,0 +1,11 @@
+{
+  "project": "lash",
+  "units": [
+    "normalize"
+  ],
+  "status": [
+    "pending",
+    "failed"
+  ],
+  "limit": 2
+}

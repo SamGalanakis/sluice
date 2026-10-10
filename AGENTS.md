@@ -60,8 +60,15 @@
 - `scripts/deploy` runs compat-check after the build and before the fence. A failure stops the
   deploy unless `--skip-compat "<reason>"` is given; the reason is printed and every deploy's
   compat outcome is appended to `<install>/deploy.log`.
-- `SCHEMA_VERSION` stays 1: a run's pinned `sluice` reads the database itself and refuses any
-  other version. Additive columns go in `ADDED_COLUMNS`.
+- Incompatible storage changes require a new schema version and a drained, fenced migration
+  with no live consumers of the old schema: a run's pinned `sluice` reads the database itself
+  and refuses any other version. Schema 2 remains reserved for the historical interim board
+  layout; normalized plans use schema 3 (`docs/design/plan-rows.md`). Additive changes use
+  version-scoped migrations (`ADDED_COLUMNS` and `ADDED_VIEWS` for the current version). Never
+  re-pin a running executable by changing database metadata.
+- `scripts/ship` ships compatible changes only. A schema change goes out through
+  `scripts/deploy --schema-cutover --deadline <time>` (SPEC §2.2): notice, drain, the runs still
+  live at the deadline cancelled with a reason naming the cutover, then the migration.
 
 ## UI changes
 

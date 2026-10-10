@@ -1,0 +1,34 @@
+{
+  "project": {
+    "project_id": "0199c3a4-5b6e-7f80-9a1b-2c3d4e5f6a7b",
+    "name": "lash"
+  },
+  "rev": 45,
+  "preview": {
+    "scope": "impact",
+    "changes": [
+      {
+        "op": "step.delete",
+        "step": "legacy-fork"
+      },
+      {
+        "op": "step.delete",
+        "step": "legacy-land"
+      },
+      {
+        "op": "step.delete",
+        "step": "legacy-work"
+      }
+    ],
+    "would_start": [],
+    "would_queue": [],
+    "would_skip": [],
+    "would_stale": [],
+    "errors": []
+  },
+  "steps": [
+    "legacy-fork",
+    "legacy-work",
+    "legacy-land"
+  ]
+}

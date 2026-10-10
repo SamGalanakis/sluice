@@ -126,6 +126,20 @@ Any failure after the fence leaves the installation fenced and says so. Running 
 deploy: each run's guardian stays pinned to its own release, and the new coordinator adopts it
 (§7.9).
 
+**Incompatible cutover** (schema 3; lands with the plan-rows cutover). A release whose schema
+differs from the home's (its manifest's `schema`) is never deployed as above: no run pinned to
+the old schema may outlive it. `scripts/deploy --schema-cutover --deadline <time>
+[--cancel-grace <s>] [--dry-run]` rehearses the conversion and `scripts/compat-check
+--incompatible` on a copy, prints the notice the orchestrator sends every session, drains the
+home (§2.6), and at the deadline (or once nothing is live) fences the installation and cancels
+every step run still live with `step_cancel` (author `cutover`, reason `schema-3 cutover at
+<deadline>: stopped at the deadline; retry it after the cutover`), stopping after
+`--cancel-grace` the units of runs and direct calls still live. It then stops the services,
+backs the database up, runs `sluice home migrate`, selects and starts the new release, checks
+every project's exported plan against the backup, unfences, releases the drain, and reports each
+run it stopped (`<install>/cutover-<time>.json`) so its orchestrator can retry it. `--dry-run`
+lists what would be stopped and changes nothing.
+
 ### 2.3 Home layout
 
 ```
@@ -222,30 +236,57 @@ The home has one maintenance mode: `normal` or `drain`.
   finish. Draining again with another author is a `conflict`. `release` unpauses exactly the
   recorded projects and returns to `normal`.
 
+A schema cutover (§2.2) drains with a deadline (schema 3; lands with the plan-rows cutover):
+work still live at the deadline is cancelled, not waited for.
+
 ## 3. Storage
 
-`sluice.db` is SQLite in WAL mode at schema 1, created from `migrations/0001.sql` (23 STRICT
-tables). The schema version changes only for a change older binaries cannot read: a run's pinned
-`sluice` reads the database itself and refuses any other version. Columns added later keep the
-version; the coordinator's writer adds any that are missing, and any view added later (and
-marks a home left at the interim board schema 2 as 1), in one transaction when it opens the
-home or a restore, before anything else touches it, and readers refuse a home still missing a
-column. New state is never a new table: every release counts the home's 23 tables and refuses
-any other number, so a pinned one could not read a home with a 24th. A board's document is
-therefore the columns `projects.board_doc` (its markdown), `board_doc_rev` (0 before the first
-write), `board_doc_at` and `board_doc_author`; the retired slots' column `projects.board_slots`
-and view `board_slots` stay, unread and unwritten, for the pinned releases that read them; and
-automatic retiring's setting (§6.11) is the columns
-`projects.prune_done_after` (seconds, null when off) and `projects.prune_keep` (a JSON array of
-patterns, null when none). Only
-the coordinator writes, through one writer task; reads use a pool of read-only connections and
-one snapshot per answer. Every logical change (an edit and its records, a status change and
-its records, a message and its record) commits in one transaction.
+`sluice.db` is SQLite in WAL mode. Only the coordinator writes, through one writer task; reads
+use a pool of read-only connections and one snapshot per answer. Every logical change (an edit
+and its records, a status change and its records, a message and its record) commits in one
+transaction.
 
-Tables: `home_meta`, `projects`, `plans`, `plan_edits`, `inputs`, `steps`, `attempts`, `runs`,
-`submissions`, `calls`, `step_results`, `resources`, `leases`, `messages`,
-`question_attachments`, `message_deliveries`, `readers`, `records`, `change_versions`,
-`maintenance`, `artifact_jobs`, `sessions`, `notification_attempts`.
+Everything below describes schema 3 (schema 3; lands with the plan-rows cutover). Until it
+lands, a home is schema 1: 23 tables, the plan stored whole in `plans.doc`, edits as RFC 6902
+`ops` in `plan_edits`, columns added after homes existed added by the writer when it opens one,
+and every release refusing any other table count or schema.
+
+**Schema 3.** A fresh home is created from `migrations/0003.sql` (27 STRICT tables).
+A binary refuses a home at any other schema: a schema-3 binary refuses a schema-1 or schema-2
+home with `migration required` (run `sluice home migrate`), and an older binary refuses a
+schema-3 home. Incompatible storage changes take a new schema version and a drained, fenced
+migration with no live consumer of the old schema (§2.2); schema 2 is reserved for the
+historical interim board layout. Additive changes use version-scoped migrations. `sluice home
+migrate` converts a schema-1 or schema-2 database in one transaction (nothing changes on any
+failure): it refuses while an attempt, run, lease or call is live, replays every project's whole
+edit history into row changes and checks each revision's rows against the replayed document,
+checks the final rows against the stored document, rewrites retained `plan.edit` records and
+removes the plan snapshots stored in attempts. A restore converts its private destination the
+same way.
+
+The plan is stored as rows, never as a document: `plans` (`rev`, `root_order`: the present root
+sections in order, `state_epoch`), `inputs` (each plan input's declaration exactly as written,
+its position and its runtime `value`), `plan_outputs` (each plan output's binding as written and
+its position) and `steps` (each step's declaration as written, its position and its runtime
+state). Positions order each collection; a new row is appended after the last, a removed one
+leaves a gap. `steps.unit`, `step_tags` (one row per step tag), `plan_refs` (every binding, gate
+and plan-output reference, by consumer and slot) and `plan_edges` (the dependency graph, unit
+gates expanded to the unit's exit steps) are indexes the writer keeps in step with the
+declarations in the same transaction; `verify` rebuilds and compares them. `steps.paused`,
+`steps.run` and `steps.priority` are generated from the declaration. `plans.state_epoch` grows
+whenever a step's status or results, a plan input's value, the project's pause or its resources
+change. `plan_get` assembles the document from the rows.
+
+Tables: `home_meta`, `projects`, `plans`, `plan_edits`, `plan_outputs`, `plan_refs`,
+`plan_edges`, `step_tags`, `inputs`, `steps`, `attempts`, `runs`, `submissions`, `calls`,
+`step_results`, `resources`, `leases`, `messages`, `question_attachments`,
+`message_deliveries`, `readers`, `records`, `change_versions`, `maintenance`, `artifact_jobs`,
+`sessions`, `notification_attempts`.
+
+A board's document is the columns `projects.board_doc` (its markdown), `board_doc_rev` (0 before
+the first write), `board_doc_at` and `board_doc_author`; automatic retiring's setting (§6.11) is
+the columns `projects.prune_done_after` (seconds, null when off) and `projects.prune_keep` (a
+JSON array of patterns, null when none).
 
 A step's row also carries its progress (§6.4): `progress` (the JSON object of latest values),
 `progress_at` (when it was last set) and `progress_run` (the run that set it), all null until a
@@ -262,12 +303,11 @@ record).
 
 Views for agents' queries (§12.4 `query`): `outcomes` (removed steps' results), `log` (each
 record as the log tools return it), `step_changes` (`step.status` records as rows), `edits`
-(`plan_edits`), `questions` (the questions, `ask`s, plus derived `state`
-open|answered|closed and `waiting`) and `board_slots` (retired: the slots the board's document
-replaced, kept for older releases). A step's tags are in its `declaration` (`steps.declaration`,
-`$.tags`), so `EXISTS (SELECT 1 FROM json_each(declaration, '$.tags') WHERE value = 'x')`
-selects the steps tagged `x`. Public tables are keyed by the immutable `project_id`, never by
-name.
+(`plan_edits`: `project_id, rev, seq, at, author, reason, changes`), `questions` (the questions,
+`ask`s, plus derived `state` open|answered|closed and `waiting`). A step's tags are rows of
+`step_tags`, so `EXISTS (SELECT 1 FROM step_tags t WHERE t.project_id = s.project_id AND
+t.step_id = s.step_id AND t.tag = 'x')` selects the steps tagged `x`. Public tables are keyed by
+the immutable `project_id`, never by name.
 
 Ids: projects, runs, attempts, results and invocations are UUIDv7; message ids and record
 seqs share one increasing integer sequence.
@@ -448,10 +488,10 @@ if __name__ == "__main__":
 }
 ```
 
-A new project's plan is `{"inputs": {}, "outputs": {}, "steps": {}}` at rev 1. Project names,
-step ids, plan input and output names match `^[a-z0-9][a-z0-9_-]*$`; a project name may not
-look like a UUID; `owner` and `orchestrator` are not step ids. Plan inputs and steps share one
-namespace.
+A new project's plan is `{"inputs": {}, "outputs": {}, "steps": {}}` at rev 1 (schema 3; lands
+with the plan-rows cutover); until then it is `{"steps": {}}`. Project names, step ids, plan
+input and output names match `^[a-z0-9][a-z0-9_-]*$`; a project name may not look like a UUID;
+`owner` and `orchestrator` are not step ids. Plan inputs and steps share one namespace.
 
 Step keys: `run` (the fn), `in` (bindings), `scatter`, `doc`, `outputs` (declared, open fns
 only), `paused` (`true` or a reason string), `after` (gate entries), `tags`, `needs`,
@@ -623,31 +663,43 @@ capacity; no cycles. Errors are a list with paths
 
 ### 6.10 Edits
 
-Every edit tool produces RFC 6902 ops against the plan document, validates the result, and
-commits the new plan, a `plan_edits` row and a `plan.edit` record `{rev, author, reason, ops}`
-in one transaction. The reply is the **edit result** `{project: {project_id, name}, rev,
-preview, steps?, board_warnings?}`, `preview` being `{ops, would_start, would_queue,
-would_skip, would_stale, errors}`, `steps` the steps the edit was about (`unit_add`'s new
-steps, `unit_tag`'s unit, `step_pause`'s selection, `plan_prune`'s removed steps) and
-`board_warnings` each step the project's board names (§13) that the edit took out of the plan,
-in `board_set`'s warning form; the edit is made all the same. It is worked out while the edit
-is prepared (outside the writer, unless the edit falls back to being prepared in it), from the
-plans before and after it and the board's program, without running the board's queries. A run on an older release, whose guardian does not know
-the field, gets the result without it, and the reply a run's attempt keeps for a repeated
-request leaves it out.
-With `dry_run: true` the reply is the preview alone and nothing is written. The simulation uses
-cached capacities and never runs fns; `core.external` steps never appear in `would_start`.
+(schema 3; lands with the plan-rows cutover) Every edit tool (§12.4) becomes operations on one
+candidate plan (`docs/design/plan-rows.md` §7.6): the operations apply in order, the candidate
+is validated for what they change (§6.9), and the edit commits its row changes, the runtime
+transitions they cause, one `plan_edits` row and one `plan.edit` record `{rev, author, reason,
+changes}` in one transaction. `changes` are the resolved rows, never the operations: `header.put
+{root_order}`, `input.put {name, position, declaration}`, `input.delete {name}`, `output.put
+{name, position, binding}`, `output.delete {name}`, `step.put {step, position, declaration}`
+(the whole declaration) and `step.delete {step}`, deletes before puts. Untouched rows never
+appear, so an edit costs what it changes, not the plan's size.
 
-- `plan_patch` requires the current `rev`; the other edit tools take an optional `rev` and
-  otherwise apply to the current plan. A stale `rev` is `conflict` with `current_rev`.
-- A running step may change only `paused` and `tags`.
-- `start: false` (`plan_patch`, `step_add`, `unit_add`) adds steps with `"paused": true`
-  unless a step sets `paused` itself.
-- An edit that changes nothing (an edge already there, tags or pauses as they are, a prune
-  that removes nothing, a patch that yields the same plan) commits nothing: no rev, record or
-  history row. Its reply is the edit result with the current `rev` and empty `preview.ops`.
-  `step_set_input` refuses one instead (`bad_request`).
+The reply is the **edit result** `{project: {project_id, name}, rev, preview, steps?,
+board_warnings?}`, `preview` being `{scope, changes, would_start, would_queue, would_skip,
+would_stale, errors}`, `steps` the steps the edit was about (`plan_edit`'s and `unit_add`'s new
+steps, `unit_tag`'s unit, `step_pause`'s selection, `plan_prune`'s and `unit_remove`'s removed
+steps, `unit_update`'s changed members) and `board_warnings` each step the project's board names
+(§13) that the edit took out of the plan, in `board_set`'s warning form; the edit is made all
+the same. It is worked out while the edit is prepared, from the steps the edit removes or
+retags and the board's program, without running the board's queries. With `dry_run: true` the reply is the preview alone and nothing is written. The
+preview's `scope` is `impact` by default: the steps the edit adds or changes, the steps whose
+state or readiness it changes, and the ready steps competing for the resources of a step whose
+`needs` or `priority` it changes. `preview_scope: "all"` previews the whole plan, and only with
+`dry_run: true` (else `bad_request`). The simulation uses cached capacities and never runs fns;
+`core.external` steps never appear in `would_start`.
+
+- Every edit tool takes an optional `rev`; a stale one is `conflict` with `current_rev`. An edit
+  prepared against a plan or state that changed before it commits is prepared again, never
+  committed stale. `order.set` requires `rev`.
+- A running step may change only `paused` and `tags`, and may not be removed.
+- `start: false` (`plan_edit`, `step_add`, `unit_add`) adds steps with `"paused": true` unless a
+  step sets `paused` itself.
+- An edit that changes nothing (an edge already there, tags or pauses as they are, a prune that
+  removes nothing) commits nothing: no rev, record or history row. Its reply is the edit result
+  with the current `rev` and empty `preview.changes`. `step_set_input` refuses one instead
+  (`bad_request`).
 - Removing a finished step keeps its result as an `outcomes` row; a pending step leaves none.
+- A new row goes after its collection's last; removing one renumbers nothing; only `order.set`
+  reorders a collection.
 
 ### 6.11 Retiring done units
 
@@ -995,7 +1047,7 @@ seqs have gaps. Kinds:
 
 | kind | fields |
 |---|---|
-| `plan.edit` | `rev, author, reason, ops` |
+| `plan.edit` | `rev, author, reason, changes` (§6.10; `ops`, RFC 6902, before schema 3) |
 | `plan.input` | `rev, author, reason, name, value` |
 | `step.output` | `rev, author, reason, step, outputs, force` |
 | `step.retry` | `rev, author, reason, step, work` |
@@ -1035,9 +1087,11 @@ returned when its kind passes `kinds` (and, when `threads` is given without `kin
 stale steps and messages to the orchestrator, and nothing else. `next` and `sluice watch`
 take none of these filters. Calls made without a project go to the home log (`project` null).
 
-Each log keeps at most 10,000 records; past that it is trimmed to 9,000 in the same
-transaction. A `since_seq` older than a log's trim floor, or newer than any seq the home has
-issued, is `cursor_expired`. `plan_edits` is never trimmed, so `plan_history` reaches rev 1.
+Each log keeps at most 10,000 records; past that it is trimmed to 9,000 in the same transaction.
+A `since_seq` older than a log's trim floor, or newer than any seq the home has issued, is
+`cursor_expired`. `plan_edits` is never trimmed, so `plan_history` reaches rev 1. Records carry
+payload version 2 from schema 3 on (schema 3; lands with the plan-rows cutover); a converted
+home's records are rewritten to it.
 
 ## 10. Waiting: `log_wait`, `step_wait`, `next`, `watch`
 
@@ -1166,10 +1220,12 @@ else `step:<SLUICE_STEP>` when set; else the MCP client's name; else `mcp` (MCP)
 
 ### 12.4 Tool reference
 
-Edit tools share `rev?`, `dry_run=false`, `reason=""` and `author?` (`plan_patch` requires
-`rev` and `reason`) and return the edit result (§6.10) or, with `dry_run`, the preview. Selection tools take
-`steps?` and/or `tags?` (a `unit:` tag selects the unit); naming neither is `bad_request`, an
-unknown step `not_found`.
+Edit tools share `rev?`, `dry_run=false`, `preview_scope="impact"`, `reason=""` and `author?`
+(`plan_edit`, `unit_update` and `unit_remove` require `reason`) and return the edit result
+(§6.10) or, with `dry_run`, the preview. (schema 3; lands with the plan-rows cutover)
+`plan_patch` is gone; `plan_edit` batches operations instead. Selection tools take `steps?`
+and/or `tags?` (a `unit:` tag selects the unit); naming neither is `bad_request`, an unknown
+step `not_found`.
 
 **Projects and fns**
 
@@ -1208,16 +1264,29 @@ outside its authority. The document tools refuse (`invalid`) while the board's p
 
 | tool | specific arguments |
 |---|---|
-| `plan_patch` | `project`, `rev`, `ops` (RFC 6902), `start=true` |
+| `plan_edit` (schema 3; lands with the plan-rows cutover) | `project`, `ops` (operations, below), `start=true`; `rev` required with `order.set` |
 | `step_add` | `project`, `step`, `spec`, `start=true` |
 | `step_update` | `project`, `step`, `changes` (each key replaces that field, null removes it) |
 | `step_remove` | `project`, `steps?`, `tags?` |
 | `step_pause` | `project`, `steps?`, `tags?`, `subtree=false`, `paused=true` (sets `"paused"` to the `reason`, or `true` without one, a step already paused keeping its own; `false` removes it) |
 | `unit_add` | `project`, `recipe`, `unit`, `params={}`, `after={}`, `inputs={}`, `tags=[]`, `start=true` |
 | `unit_tag` | `project`, `unit`, `add=[]`, `remove=[]` |
+| `unit_update` (schema 3; lands with the plan-rows cutover) | `project`, `unit`, `changes` (`{step id: changes}`, each a member; as `step_update`'s) |
+| `unit_remove` (schema 3; lands with the plan-rows cutover) | `project`, `unit` (every member; running members or surviving references refuse it) |
 | `edge_add`, `edge_remove` | `project`, `step` (a step or `unit:<name>`: its entry steps), `after` (entries) |
 | `step_set_input` | `project`, `steps?`, `tags?`, `inputs` |
 | `plan_prune` | `project`, `units?`, `tags?`, `older_than=0` (seconds), `keep?` (unit-name patterns) |
+
+`plan_edit`'s `ops` (schema 3; lands with the plan-rows cutover) are a closed list applied in
+order to one candidate, validated once and committed whole: `input.put {name, declaration}`,
+`input.remove {name}`, `output.put {name, source}`, `output.remove {name}`, `step.add {step,
+spec}`, `step.update {step, changes}`, `step.remove {steps}`, `edge.add` and `edge.remove {step,
+after}`, `unit.add {recipe, unit, params, after?, inputs?, tags?}`, `unit.update {unit,
+changes}`, `unit.remove {unit}` and `order.set {collection: steps|inputs|outputs, ids}` (every
+member once, in the new order). A refused operation is `invalid` with its path (`ops[1].step: no
+step x`), all of them at once; `steps` in the reply are the steps its adds added. `changes`
+(`step_update`, `step.update`, `unit_update`) take the step keys only; an unknown key is
+`bad_request`.
 
 `step_pause` with `subtree` also selects every step downstream of the selection (reading from
 or gated on one, transitively). `unit_add` reports the steps it added in `steps`, `unit_tag`
@@ -1237,8 +1306,11 @@ removed steps.
 
 | tool | arguments | result |
 |---|---|---|
-| `plan_get` | `project` | `{project, rev, plan}` |
-| `plan_history` | `project`, `since_rev?` | records: every edit (`plan.edit`, from rev 1) and the log's `plan.input`, `step.output`, `step.retry` |
+| `plan_get` | `project` | `{project, rev, plan}`; (schema 3; lands with the plan-rows cutover) assembled from the plan's rows, without compiling it |
+| `plan_read` (schema 3; lands with the plan-rows cutover) | `project`, `units?`, `steps?`, `status?`, `recipe?`, `compact=true`, `limit=200`, `cursor?` | `{project, rev, state_epoch, recipe_generation, steps, next_cursor}`: the matching steps in plan order, compact `{id, unit, recipe, position, run, status, paused, priority}` or full (plus `spec`, the declaration, and `references`) |
+| `step_get` (schema 3; lands with the plan-rows cutover) | `project`, `step`, `compact=false` | `{project, rev, state_epoch, step}` |
+| `unit_get` (schema 3; lands with the plan-rows cutover) | `project`, `unit`, `compact=false` | `{project, rev, state_epoch, recipe_generation, unit: {id, recipe, entry_steps, exit_steps, done, settled, steps}}` |
+| `plan_history` | `project`, `since_rev?`, `after_seq?`, `limit=200` (schema 3; lands with the plan-rows cutover) | `{project, entries, next_after_seq}` (schema 3; lands with the plan-rows cutover): every edit (`plan.edit`, from rev 1) and the log's `plan.input`, `step.output`, `step.retry`, oldest first |
 | `plan_set_input` | `project`, `name`, `value`, `rev?`, `dry_run`, `reason`, `author?` | `{ok: true}`, or the preview |
 | `step_set_output` | `project`, `step`, `outputs`, `force=false`, `reason`, `author?` | `{ok: true}` |
 | `step_retry` | `project`, `steps?`, `tags?`, `message?`, `reason`, `expected_rev?`, `author?` | `{project, steps, rearmed, stopped_at}` |
@@ -1248,7 +1320,7 @@ removed steps.
 | `step_settle` | `project`, `step`, `reason=""`, `author?` | `{project, step, run, outputs}` (§7.5) |
 | `status` | `project`, `steps?`, `tags?`, `brief=false`, `all=false`, `view="steps"`, `state?` | below |
 | `step_context` | `project`, `step` | below |
-| `plan_view` | `project`, `format="mermaid"`, `all=false` | text |
+| `plan_view` | `project`, `format="mermaid"`, `all=false`, `units?`, `steps?`, `status?`, `recipe?` (schema 3; lands with the plan-rows cutover) | text |
 | `verify` | `project?` | `[{where, message}]` |
 
 `status`, steps view: `{project, rev, board_rev, paused, inputs, outputs, resources, steps: {id: {status,
@@ -1287,6 +1359,17 @@ leases?, finishing?, attempt?}` (`finishing` §6.4, `attempt` §7.4); `submit.co
 status [done/total] / doc`, a class per status, done units left out with a `%% n done units (m
 steps) left out` comment unless `all`; or `format: "html"`, a standalone page with an SVG of the
 same graph.
+
+`plan_read` (schema 3; lands with the plan-rows cutover) filters by `units`, `steps`, `status`
+(stored statuses) and `recipe` (the units it matches now): a list matches any of its values,
+filters combine with AND, an empty list matches nothing, and a name that matches nothing is no
+error. `limit` is 1 to 1000 (larger reads as 1000). `next_cursor`, passed back as `cursor` with
+the same project and filters, reads the next page; it is `cursor_expired` once the plan's `rev`
+changed (or, for a `status` filter, its `state_epoch`; for a `recipe` filter, its recipes).
+`step_get` and `unit_get` of a missing step or unit are `not_found`. `plan_view`'s filters
+select what it draws; a step outside the selection that an edge joins to it is drawn as an
+`outside` boundary node. `plan_history` pages: `next_after_seq`, passed as `after_seq`, reads
+on.
 
 **Messages and the log**
 
@@ -2108,8 +2191,9 @@ the object to use instead (`"sol"` with effort `xhigh` →
 `{"type":"normal","model":"sol","effort":"xhigh"}`, `"fusion"` →
 `{"type":"fusion","main":{"model":"claude-opus-5-5","effort":"high"},"sidekick":{"model":"swe-2","effort":"high"}}`).
 An edit refuses a string model before it reaches a launch: `step_add`, `unit_add` (after its
-recipe's expansion and `inputs` overrides), `step_update`, `step_set_input` and `plan_patch`
-refuse (`invalid`, with that same message, and `steps.<id>.in.model: …` in `errors`) a new step,
+recipe's expansion and `inputs` overrides), `step_update`, `step_set_input`, `plan_edit` and
+`unit_update` (`plan_patch` before schema 3) refuse (`invalid`, with that same message, and
+`steps.<id>.in.model: …` in `errors`) a new step,
 or a step whose fn or `model` binding they change, when it is an agent step and its `model`
 binds a literal that is not an object, or reads a plan input whose value is not one;
 `plan_set_input` refuses setting a plan input that such a step's `model` reads to one. An agent

@@ -1,0 +1,17 @@
+{
+  "seq": 12,
+  "at": "2026-10-03T09:00:00Z",
+  "project": "0199c3a4-5b6e-7f80-9a1b-2c3d4e5f6a7b",
+  "kind": "plan.edit",
+  "rev": 1,
+  "author": "cli",
+  "reason": "project created",
+  "changes": [
+    {
+      "op": "header.put",
+      "root_order": [
+        "steps"
+      ]
+    }
+  ]
+}

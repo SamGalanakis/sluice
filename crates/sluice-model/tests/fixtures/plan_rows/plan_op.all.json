@@ -1,0 +1,103 @@
+[
+  {
+    "op": "input.put",
+    "name": "repo",
+    "declaration": "string"
+  },
+  {
+    "op": "input.remove",
+    "name": "old_repo"
+  },
+  {
+    "op": "output.put",
+    "name": "notes",
+    "source": "notes/final"
+  },
+  {
+    "op": "output.remove",
+    "name": "draft"
+  },
+  {
+    "op": "step.add",
+    "step": "review",
+    "spec": {
+      "run": "agent.review",
+      "in": {
+        "spec": {
+          "source": "work/final"
+        }
+      }
+    }
+  },
+  {
+    "op": "step.update",
+    "step": "review",
+    "changes": {
+      "priority": 5,
+      "doc": null
+    }
+  },
+  {
+    "op": "step.remove",
+    "steps": [
+      "scratch-a",
+      "scratch-b"
+    ]
+  },
+  {
+    "op": "edge.add",
+    "step": "unit:release",
+    "after": [
+      "unit:normalize"
+    ]
+  },
+  {
+    "op": "edge.remove",
+    "step": "release-land",
+    "after": [
+      "tests-main?"
+    ]
+  },
+  {
+    "op": "unit.add",
+    "recipe": "lane",
+    "unit": "normalize",
+    "params": {
+      "ticket": "FIG-6001"
+    },
+    "after": {
+      "fork": [
+        "main-green"
+      ]
+    },
+    "inputs": {
+      "work": {
+        "engine": "claude"
+      }
+    },
+    "tags": [
+      "wave-3"
+    ]
+  },
+  {
+    "op": "unit.update",
+    "unit": "normalize",
+    "changes": {
+      "normalize-work": {
+        "priority": 10
+      }
+    }
+  },
+  {
+    "op": "unit.remove",
+    "unit": "legacy"
+  },
+  {
+    "op": "order.set",
+    "collection": "inputs",
+    "ids": [
+      "repo",
+      "reviewer"
+    ]
+  }
+]

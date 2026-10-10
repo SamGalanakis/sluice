@@ -1,0 +1,53 @@
+{
+  "project": {
+    "project_id": "0199c3a4-5b6e-7f80-9a1b-2c3d4e5f6a7b",
+    "name": "lash"
+  },
+  "rev": 41,
+  "state_epoch": 9120,
+  "recipe_generation": "5f0c1e9a7b3d2468",
+  "unit": {
+    "id": "normalize",
+    "recipe": "lane",
+    "entry_steps": [
+      "normalize-fork"
+    ],
+    "exit_steps": [
+      "normalize-land"
+    ],
+    "done": false,
+    "settled": true,
+    "steps": [
+      {
+        "id": "normalize-fork",
+        "unit": "normalize",
+        "recipe": "lane",
+        "position": 502,
+        "run": "git.fork",
+        "status": "failed",
+        "paused": false,
+        "priority": 0
+      },
+      {
+        "id": "normalize-work",
+        "unit": "normalize",
+        "recipe": "lane",
+        "position": 503,
+        "run": "agent.run",
+        "status": "pending",
+        "paused": "after the release",
+        "priority": 10
+      },
+      {
+        "id": "normalize-land",
+        "unit": "normalize",
+        "recipe": "lane",
+        "position": 504,
+        "run": "agent.run",
+        "status": "pending",
+        "paused": false,
+        "priority": 0
+      }
+    ]
+  }
+}

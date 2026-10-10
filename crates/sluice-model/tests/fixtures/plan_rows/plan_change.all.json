@@ -1,0 +1,49 @@
+[
+  {
+    "op": "header.put",
+    "root_order": [
+      "inputs",
+      "outputs",
+      "steps"
+    ]
+  },
+  {
+    "op": "input.delete",
+    "name": "old_repo"
+  },
+  {
+    "op": "output.delete",
+    "name": "draft"
+  },
+  {
+    "op": "step.delete",
+    "step": "scratch-a"
+  },
+  {
+    "op": "input.put",
+    "name": "repo",
+    "position": 0,
+    "declaration": "string"
+  },
+  {
+    "op": "output.put",
+    "name": "notes",
+    "position": 0,
+    "binding": {
+      "source": "notes/final"
+    }
+  },
+  {
+    "op": "step.put",
+    "step": "review",
+    "position": 503,
+    "declaration": {
+      "run": "agent.review",
+      "in": {
+        "spec": {
+          "source": "work/final"
+        }
+      }
+    }
+  }
+]

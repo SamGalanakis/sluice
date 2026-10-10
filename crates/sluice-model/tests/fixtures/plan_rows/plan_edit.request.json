@@ -1,0 +1,37 @@
+{
+  "project": "lash",
+  "rev": 41,
+  "reason": "Review the work before the release",
+  "ops": [
+    {
+      "op": "step.add",
+      "step": "review",
+      "spec": {
+        "run": "agent.review",
+        "after": [
+          "work"
+        ],
+        "in": {
+          "spec": {
+            "source": "work/final"
+          }
+        }
+      }
+    },
+    {
+      "op": "edge.add",
+      "step": "release",
+      "after": [
+        "review"
+      ]
+    },
+    {
+      "op": "input.put",
+      "name": "reviewer",
+      "declaration": {
+        "type": "string",
+        "doc": "Who reviews"
+      }
+    }
+  ]
+}

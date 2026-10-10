@@ -1,0 +1,60 @@
+{
+  "project": {
+    "project_id": "0199c3a4-5b6e-7f80-9a1b-2c3d4e5f6a7b",
+    "name": "lash"
+  },
+  "rev": 41,
+  "state_epoch": 9120,
+  "step": {
+    "id": "normalize-work",
+    "unit": "normalize",
+    "recipe": "lane",
+    "position": 503,
+    "run": "agent.run",
+    "status": "pending",
+    "paused": "after the release",
+    "priority": 10,
+    "spec": {
+      "run": "agent.run",
+      "tags": [
+        "unit:normalize"
+      ],
+      "after": [
+        "normalize-fork"
+      ],
+      "paused": "after the release",
+      "priority": 10,
+      "in": {
+        "engine": {
+          "default": "claude"
+        },
+        "cwd": {
+          "source": "normalize-fork/worktree"
+        },
+        "spec": {
+          "file": "/workspace/notes/lash/normalize.md"
+        }
+      }
+    },
+    "references": [
+      {
+        "kind": "gate",
+        "slot": "after",
+        "ordinal": 0,
+        "source_kind": "step",
+        "source_id": "normalize-fork",
+        "source_port": "",
+        "source_path": ""
+      },
+      {
+        "kind": "binding",
+        "slot": "in.cwd",
+        "ordinal": 0,
+        "source_kind": "step",
+        "source_id": "normalize-fork",
+        "source_port": "worktree",
+        "source_path": ""
+      }
+    ]
+  }
+}

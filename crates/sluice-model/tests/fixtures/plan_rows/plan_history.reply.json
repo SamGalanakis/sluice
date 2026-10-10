@@ -1,0 +1,90 @@
+{
+  "project": {
+    "project_id": "0199c3a4-5b6e-7f80-9a1b-2c3d4e5f6a7b",
+    "name": "lash"
+  },
+  "entries": [
+    {
+      "seq": 88140,
+      "at": "2026-10-10T13:40:02Z",
+      "project": "0199c3a4-5b6e-7f80-9a1b-2c3d4e5f6a7b",
+      "kind": "plan.input",
+      "rev": 41,
+      "author": "owner",
+      "reason": "",
+      "name": "reviewer_default",
+      "value": "sam"
+    },
+    {
+      "seq": 88177,
+      "at": "2026-10-10T13:51:45Z",
+      "project": "0199c3a4-5b6e-7f80-9a1b-2c3d4e5f6a7b",
+      "kind": "step.retry",
+      "rev": 41,
+      "author": "orchestrator",
+      "reason": "flake",
+      "step": "tests-main",
+      "work": 4
+    },
+    {
+      "seq": 88213,
+      "at": "2026-10-10T14:02:11Z",
+      "project": "0199c3a4-5b6e-7f80-9a1b-2c3d4e5f6a7b",
+      "kind": "plan.edit",
+      "rev": 42,
+      "author": "orchestrator",
+      "reason": "Review the work before the release",
+      "changes": [
+        {
+          "op": "input.put",
+          "name": "reviewer",
+          "position": 2,
+          "declaration": {
+            "type": "string",
+            "doc": "Who reviews"
+          }
+        },
+        {
+          "op": "step.put",
+          "step": "release",
+          "position": 12,
+          "declaration": {
+            "run": "agent.run",
+            "tags": [
+              "unit:release"
+            ],
+            "after": [
+              "tests-main",
+              "review"
+            ],
+            "in": {
+              "engine": {
+                "default": "claude"
+              },
+              "spec": {
+                "default": "Cut the release"
+              }
+            }
+          }
+        },
+        {
+          "op": "step.put",
+          "step": "review",
+          "position": 505,
+          "declaration": {
+            "run": "agent.review",
+            "after": [
+              "work"
+            ],
+            "in": {
+              "spec": {
+                "source": "work/final"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "next_after_seq": 88213
+}
