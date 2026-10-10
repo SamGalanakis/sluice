@@ -7,6 +7,7 @@
 //! a lane string's overrun, a live run file's end, the timeline's unreached stages, readable
 //! types, the owner's thread by name.
 mod board_fixture;
+mod plan_html;
 #[allow(dead_code)]
 #[path = "../../../tests/support/messages.rs"]
 mod stored_messages;
@@ -179,30 +180,35 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     let row = between(&page, "#step:l1-work\"", "</li>");
     assert!(!row.contains("tag ask"), "{row}");
 
-    // the plan: its summary counts them in coral, the matrix row and the box's card say so
+    // the plan: its summary counts them, linked to For you, where each is a module of its own
+    // under the coral rule, answered where it was asked
     let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
+    let summary = plan_html::summary(&plan);
+    assert!(summary.contains("3 questions for you</a>."), "{summary}");
+    let q = plan_html::question(&plan, lane);
+    assert!(q.contains("<article class=\"mod swell-ask\""), "{q}");
     assert!(
-        plan.contains(&format!(
-            "<a class=\"tag ask\" href=\"/projects/id/{id}/inbox\">3 questions for you</a>"
+        q.contains(&format!(
+            "<a class=\"primary\" href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\" data-opens=\"l1-work\">Answer"
         )),
+        "{q}"
+    );
+    assert!(q.contains("It touches <strong>two</strong> files."), "{q}");
+    assert!(
+        plan_html::question(&plan, boxed).contains("steps/kit-a#ov-message-"),
         "{plan}"
     );
-    let l1 = between(&plan, "<tr id=\"unit-l1\"", "</tr>");
     assert!(
-        l1.contains(&format!(
-            "<p class=\"card-ask\"><a class=\"tag ask\" href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\""
-        )),
-        "{l1}"
+        plan_html::question(&plan, orchestrator)
+            .contains(&format!("/projects/id/{id}/inbox#item-{id}-{orchestrator}")),
+        "{plan}"
     );
-    let l2 = between(&plan, "<tr id=\"unit-l2\"", "</tr>");
-    assert!(!l2.contains("card-ask"), "{l2}");
-    let kit = between(&plan, "<section id=\"unit-kit\"", "</section>");
-    assert!(
-        kit.contains(&format!("steps/kit-a#ov-message-{boxed}\"")),
-        "{kit}"
-    );
+    // the asking unit is drawn there, once: not again in Running
+    assert_eq!(plan_html::place(&plan, "l1"), "asks");
+    assert_ne!(plan_html::place(&plan, "l2"), "asks");
     // coral is spent on nothing else on the plan
-    assert_eq!(plan.matches("class=\"tag ask\"").count(), 3, "{plan}");
+    assert_eq!(plan.matches("swell-ask").count(), 3, "{plan}");
+    assert!(!plan.contains("class=\"tag ask\""), "{plan}");
 }
 
 #[tokio::test]

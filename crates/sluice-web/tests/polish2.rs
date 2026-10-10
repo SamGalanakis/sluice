@@ -9,6 +9,7 @@
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
+mod plan_html;
 #[allow(dead_code)]
 #[path = "../../../tests/support/messages.rs"]
 mod stored_messages;
@@ -255,28 +256,31 @@ async fn shared(f: &Fixture) -> ProjectId {
     id
 }
 
+/// Each unit's row says its own waits, by name and id, linked to the step and with what it is
+/// doing; a wait two rows share is said on each, never once over them or as a line.
 #[tokio::test]
-async fn a_lane_matrix_row_says_its_own_waits_and_no_line_repeats_them() {
+async fn a_units_row_says_its_own_waits_and_no_line_repeats_them() {
     let f = Fixture::new().await;
     let id = shared(&f).await;
     let (_, page) = f.get(&format!("/projects/id/{id}")).await;
-    let matrix = between(&page, "<section id=\"mx-", "</section>");
-    // every row says what holds it, so a wait two rows share is not said again over them
-    assert!(!matrix.contains("mx-shared"), "{matrix}");
-    // the rows that share it each say what holds them, by its id (how it reads after it); the
-    // other its own
+    assert!(
+        !page.contains("mx-shared") && !page.contains("board-edges"),
+        "{page}"
+    );
     for unit in ["a1", "a2"] {
-        let row = between(matrix, &format!("<tr id=\"unit-{unit}\""), "</tr>");
+        let row = plan_html::row(&page, unit);
         assert!(
             row.contains(&format!(
-                "Waits for <a href=\"/projects/id/{id}/steps/base\""
-            )) && row.contains("</a> (running)"),
+                "waits for <a href=\"/projects/id/{id}/steps/base\""
+            )) && row.contains("<code>base</code></a> (running)."),
             "{unit}: {row}"
         );
     }
-    let row = between(matrix, "<tr id=\"unit-a3\"", "</tr>");
+    let row = plan_html::row(&page, "a3");
     assert!(
-        row.contains("Waits for <a href=") && row.contains("<span class=\"sref-t\">other</span>"),
+        row.contains(&format!(
+            "waits for <a href=\"/projects/id/{id}/steps/other\""
+        )) && row.contains("<code>other</code></a> (running)."),
         "{row}"
     );
 }

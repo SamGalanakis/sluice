@@ -153,21 +153,16 @@ async fn a_quiet_board_patches_nothing_while_its_units_ages_tick() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_state_change_patches_only_the_regions_it_changed_and_never_the_plans_lines() {
+async fn a_state_change_patches_only_the_regions_it_changed() {
     let f = Fixture::new().await;
     let router = f.router();
     let path = format!("/projects/id/{}", f.id);
     let (_, page) = f.get(&path).await;
-    // the plan's relations are their own region: JSON in a script, not an attribute of the board
-    assert!(
-        page.contains(
-            "<script type=\"application/json\" id=\"plan-edges\" class=\"board-edges\">[{"
-        )
-    );
-    assert!(!page.contains("<sluice-board class=\"board\" edges="));
+    // the plan draws no relations for a script to draw lines from
+    assert!(!page.contains("class=\"board-edges\""));
     let mut body = open(&router, &format!("{path}/stream")).await;
     first_batch(&mut body).await;
-    // beta-build stays failed, for another reason: only its unit's cards and the board's
+    // beta-build stays failed, for another reason: only its stopped module and the board's
     // StepStatus say it
     let id = f.id;
     f.writer
@@ -186,12 +181,37 @@ async fn a_state_change_patches_only_the_regions_it_changed_and_never_the_plans_
         .unwrap();
     let wire = read_for(&mut body, Duration::from_secs(4)).await;
     let sent = selectors(&wire);
-    assert!(sent.contains(&"#unit-beta"), "{sent:?}");
-    assert!(
-        !sent.contains(&"#project-board") && !sent.contains(&"#plan-edges"),
-        "{sent:?}"
-    );
+    assert!(sent.contains(&"#s-beta"), "{sent:?}");
+    for whole in [
+        "#project-board",
+        "#plan-band",
+        "#plan-stopped",
+        "#plan-waiting",
+        "#plan-done",
+    ] {
+        assert!(!sent.contains(&whole), "{whole}: {sent:?}");
+    }
     assert!(wire.contains("Its fn failed: lint failed."), "{wire}");
+    assert!(
+        wire.len() < page.len() / 2,
+        "{} of {}",
+        wire.len(),
+        page.len()
+    );
+    // alpha-review starts: alpha moves from Waiting to Running, and the band's sentence says so;
+    // the stopped module and the Done index are not sent
+    sql(
+        &f,
+        "UPDATE steps SET status='running' WHERE project_id=?1 AND step_id='alpha-review'",
+    )
+    .await;
+    let wire = read_for(&mut body, Duration::from_secs(4)).await;
+    let sent = selectors(&wire);
+    assert!(sent.contains(&"#plan-band"), "{sent:?}");
+    assert!(wire.contains("data-unit=\"alpha\""), "{wire}");
+    for whole in ["#project-board", "#s-beta", "#plan-stopped", "#plan-done"] {
+        assert!(!sent.contains(&whole), "{whole}: {sent:?}");
+    }
     assert!(
         wire.len() < page.len() / 2,
         "{} of {}",
@@ -487,7 +507,7 @@ async fn chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refused_fie
         .await
         .unwrap();
     let mut browser = tokio::task::spawn_blocking(move || {
-        browser.wait("document.querySelector('#project-board .about').textContent.includes('Lanes, rewritten.')").unwrap();
+        browser.wait("document.querySelector('#plan-band').textContent.includes('Lanes, rewritten.')").unwrap();
         browser.wait("document.querySelector('#board-pane').textContent.includes('alpha-review') && [...document.querySelectorAll('#board-pane .ou-table td')].some(td=>td.textContent==='succeeded' && td.previousElementSibling?.textContent==='alpha-review')").unwrap();
         assert_eq!(browser.eval("document.querySelector('details.tool-more').open").unwrap(), true);
         assert_eq!(browser.eval("(()=>{const n=document.querySelector('[data-error-for=\"field-0\"]');return !n.hidden && n.textContent===note && note.length>0})()").unwrap(), true);
@@ -499,7 +519,7 @@ async fn chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refused_fie
     })
     .await
     .unwrap();
-    // one unit's state: its box alone is patched, in place
+    // one unit's state: its stopped module alone is patched, in place
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
             let error = PublicError::FnFailure {
@@ -515,8 +535,15 @@ async fn chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refused_fie
         .await
         .unwrap();
     tokio::task::spawn_blocking(move || {
-        browser.wait("document.querySelector('#n-beta-build').getAttribute('aria-description').includes('lint failed')").unwrap();
-        assert_eq!(browser.eval("plan.isConnected && document.querySelector('details.tool-more').open").unwrap(), true);
+        browser
+            .wait("document.querySelector('#s-beta').textContent.includes('lint failed')")
+            .unwrap();
+        assert_eq!(
+            browser
+                .eval("plan.isConnected && document.querySelector('details.tool-more').open")
+                .unwrap(),
+            true
+        );
     })
     .await
     .unwrap();

@@ -13,6 +13,7 @@ pub mod activity;
 pub mod failure;
 pub mod icons;
 pub mod missing;
+pub mod plan;
 pub mod step;
 pub mod threads;
 pub mod timeline;

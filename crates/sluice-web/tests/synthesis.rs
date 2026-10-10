@@ -216,7 +216,7 @@ async fn the_frame_draws_the_band_and_the_row_under_it_and_the_gallery_every_pri
         (
             "Summary sentence",
             &[
-                "<a class=\"ask\" href=\"#\">1 question for you</a>. 1 failed, 1 cancelled. 2 article and 1 scan at work: s-3 quiet for 53m, a-12 at 2.1× its usual time. 2 waiting. 3 of 10 units done; the last finished",
+                "<a class=\"ask\" href=\"#\">1 question for you</a>. 1 failed, 1 cancelled. 2 article units and 1 scan unit at work: s-3 quiet for 53m, a-12 at 2.1× its usual time. 2 waiting. 3 of 10 units done; the last finished",
             ][..],
         ),
         (
@@ -326,10 +326,21 @@ async fn every_page_renders_the_neutral_fixture() {
         "index",
         "survey",
         "Shorebirds: the spring guide",
-        "mx-band-running-article",
-        "mx-band-running-scan",
     ] {
         assert!(plan.contains(word), "{word}: {plan}");
+    }
+    // Running holds a block a recipe, each headed by its name over its stages' columns
+    let running = plan
+        .split("<!--r:plan-running-->")
+        .nth(1)
+        .and_then(|r| r.split("<!--/r:plan-running-->").next())
+        .unwrap_or_default();
+    for head in [
+        ">article</a></h3>",
+        ">scan</a></h3>",
+        "<span class=\"sh-stage\">draft</span>",
+    ] {
+        assert!(running.contains(head), "{head}: {running}");
     }
     let (_, inbox) = f.get("/inbox").await;
     assert!(

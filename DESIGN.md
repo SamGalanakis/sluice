@@ -534,9 +534,11 @@ draws:
 - **The One Blue Rule.** Blue fills only what runs now.
 
 **The summary sentence** (`ui::summary_sentence`): "1 question for you. 1 failed, 1
-cancelled. 2 article and 1 scan at work: s-3 quiet for 53m, a-12 at 2.1× its usual time. 2
-waiting. 3 of 10 units done; the last finished 57m ago." Each part is left out when it has
-nothing to say; the question links to where it is answered, under a coral underline.
+cancelled. 2 article units and 1 scan unit at work: s-3 quiet for 53m, a-12 at 2.1× its usual
+time. 2 waiting. 3 of 10 units done; the last finished 57m ago." Each recipe is named by its
+own name with the unit after it ("1 other unit" for one of no recipe), each part is left out
+when it has nothing to say, and the question links to where it is answered, under a coral
+underline. A quiet run's time ticks on the page.
 
 ## Select to trace
 

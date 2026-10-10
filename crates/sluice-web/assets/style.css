@@ -771,7 +771,7 @@ sluice-grid[showing] > [data-span]::after { content: counter(take) " col"; posit
 .mm-fields { margin: 0; display: flex; flex-direction: column; }
 .mm-f { padding: 9px 0; border-top: 1px solid var(--rule); }
 .mm-f dt { font-size: 12px; font-weight: 650; color: var(--ink-muted); }
-.mm-f dd { margin: 2px 0 0; font-size: 14px; line-height: 1.35; font-variant-numeric: tabular-nums; }
+.mm-f dd { margin: 2px 0 0; font-size: 14px; line-height: 1.35; }
 .mm-lead { border-top: 1.5px solid var(--navy); padding-top: 12px; }
 .mm-lead dd { font-size: 30px; line-height: 1; font-weight: 900; letter-spacing: -0.03em; }
 .mm-at, .mm-none { font-size: 12.5px; color: var(--ink-muted); }
@@ -877,16 +877,6 @@ sluice-trace[tracing] [data-trace="selected"] { box-shadow: 0 0 0 2px var(--navy
 /* ---- the project summary, its result ---------------------------------------------- */
 #summary { display: grid; gap: 10px; }
 .about { color: var(--ink-muted); max-width: var(--measure); }
-/* the summary: the bar over its counts and tags, the view switch beside both at the right;
-   a phone puts the switch on a row of its own under them */
-.sumline { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
-           gap: 6px 16px; }
-.sumline > .bar { grid-column: 1; }
-.sumline > .sum { grid-column: 1; }
-.sumline > .view-switch { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
-.sum { margin: 0; min-width: 0; display: flex; flex-wrap: wrap; align-items: center;
-       gap: 4px 10px; }
-.sum-tags { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
 .attn-note { font-size: 13px; color: var(--sand-ink); }
 /* a paused project says so in the pause's plum, its glyph before the words, as its tag does */
 .attn-note.paused-note { display: flex; align-items: center; gap: 6px; color: var(--ink-muted); }
@@ -989,7 +979,7 @@ sluice-copy > .copy[data-copied] { opacity: 1; }
 .fold-box > summary::-webkit-details-marker { display: none; }
 .fold-box > summary:hover { background: var(--paper-2); }
 /* its name: its title first, its id after it in data mono; it gives way before the lane */
-.fold-box > summary .fb-name, .shelf-step .fb-name { flex: 0 1 auto; min-width: 0; max-width: 62%;
+.fold-box > summary .fb-name { flex: 0 1 auto; min-width: 0; max-width: 62%;
   overflow: hidden; white-space: nowrap; font-size: 14px; line-height: 20px; }
 /* positioned: its visually hidden words stay inside its clip, never past the page's edge */
 .fb-meta { position: relative; flex: 1 1 auto; min-width: 0; font-size: 13px; line-height: 18px;
@@ -1743,7 +1733,6 @@ table.log td.what { position: relative; min-width: 14rem; width: 100%; padding-r
 .d-badges .over-x { font-size: 13px; }
 /* an ended run's overrun is history, not a call to act: ink, not the attention gold */
 .d-when .over-x { color: var(--ink); font-weight: 500; }
-.mx-lane .over-x { margin-left: 3px; font-size: 12px; }
 .log-x { margin-left: 2px; padding: 0 5px; border-radius: 999px; background: var(--paper-2);
          color: var(--ink-muted); font-size: 11.5px; font-weight: 600;
          font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -2102,18 +2091,6 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
   content: ""; position: absolute; left: 12px; bottom: 3px; height: 2px;
   width: calc((100% - 24px) * var(--along, 0)); pointer-events: none;
   background: color-mix(in srgb, var(--run-ink) 50%, transparent); }
-.node.mx-pill:has(> time[data-usually])::after { left: 8px; bottom: 2px;
-  width: calc((100% - 16px) * var(--along, 0)); }
-
-/* ---- the project page's title and its summary's attention tags ------------------------------ */
-.p-title { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; min-width: 0;
-           overflow-wrap: anywhere; }
-.p-title .proj-icon { width: 26px; height: 26px; }
-.sum .tag { text-decoration: none; font-weight: 600; }
-.sum .tag .g, .sum .tag .g svg { width: 14px; height: 14px; }
-.sum a.tag:hover { border-color: var(--ink); }
-.sum a.tag.t-failed { color: var(--ink); border-color: var(--ink); }
-.sum a.tag:not(.attn, .t-failed, .ask) { color: var(--ink-muted); }
 
 /* ---- the index: each stopped step a row, its failure's sentence muted under its name; a cancel
    after every failure, its name in muted ink ---------------------------------------------------- */
@@ -2341,6 +2318,178 @@ details.read-today .item { opacity: .85; }
 #functions { min-width: 0; }
 @media (max-width: 720px) { .picker button, .picker select, .fn-find input { min-height: 44px; } }
 
+/* ==== the plan (views::plan; DESIGN.md, Pages): the band's head and Recently finished, then on
+   the module grid For you beside Stopped, the margin's long runs at the right, Running and
+   Waiting as rows of stage cells, a block a recipe, and Done folded to a dense index. A band
+   section is a grid of its own columns (`--span` twelfths of the sheet, the same gaps), so its
+   rows' heads and cells sit on the sheet's columns; a block, a row and a head are subgrids of it.
+   ============================================================================================ */
+.plan-band { display: contents; }
+.band-in:has(> .plan-band) > nav.top { box-shadow: inset 0 -1px 0 var(--band-rule); }
+.plan-pane > .match-note:not(:empty), .plan-pane > .focus-note { margin: 0 0 14px; }
+.pl-sec { display: grid; align-content: start; grid-template-columns: repeat(var(--span), minmax(0, 1fr));
+          column-gap: var(--col-gap); row-gap: 16px; min-width: 0; }
+.pl-sec > * { grid-column: 1 / -1; min-width: 0; }
+.pl-sec > .pl-item { grid-column: span var(--span); }
+.pl-item > .mod { height: 100%; }
+.pl-item .trace-pick { display: flex; flex-direction: column; gap: 0; color: inherit; }
+.pl-item .trace-pick > .mod-k { margin: 0; }
+.pl-item .trace-pick:hover { background: none; }
+.pl-item .trace-pick:hover .mod-t { text-decoration: underline; text-underline-offset: 3px;
+                                     text-decoration-thickness: 1px; }
+.pl-item .trace-role { margin-right: 2px; }
+.pl-asks .mod-actions form, .pl-stop .mod-actions form { display: contents; }
+.pl-ask .mod-body { margin-top: 14px; font-size: 15px; line-height: 22px; }
+.pl-ask .mod-body > :first-child { margin-top: 0; }
+.ask-i { color: var(--coral); }
+.pl-ask .mod > .strip { margin-top: 16px; }
+.pl-ask .mod-actions button.quiet-act, .pl-stop .mod-actions button.quiet-act {
+  background: none; box-shadow: none; }
+/* Retry with feedback opens its box in place; Retry beside it sends none */
+.pl-fb { display: contents; }
+.pl-fb > summary { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 18px;
+                   list-style: none; cursor: pointer; font-weight: 700; box-shadow: inset 0 0 0 1.5px var(--navy); }
+.pl-fb > summary::-webkit-details-marker { display: none; }
+.pl-fb > summary.primary { background: var(--navy); color: var(--on-navy); box-shadow: none; }
+.pl-fb > summary.primary:hover { background: var(--navy-deep); }
+.pl-fb[open] > summary { order: 0; }
+.pl-fb > textarea { order: 1; flex: 1 1 100%; min-height: 72px; resize: vertical; }
+.pl-fb > button { order: 2; }
+.pl-retry { display: contents; }
+
+/* a band of rows: its head (a recipe's block head, or the band's own), then a row a unit, each
+   its head at the left on `--lead` columns and its cells on the rest */
+.pl-rows { row-gap: 0; }
+.pl-group, .pl-rows .rail-slot, .pl-row { display: grid; grid-column: 1 / -1;
+  grid-template-columns: subgrid; align-items: start; min-width: 0; }
+.pl-group + .pl-group { margin-top: 26px; }
+.pl-rows .sec-h { grid-column: 1 / -1; }
+.pl-rows .sec-strip { grid-template-columns: subgrid; }
+.pl-rows .sh-lead { grid-column: span var(--lead); }
+.pl-rows .sh-stages { grid-column: span var(--cells) / -1; }
+.pl-group > .uv-broken { grid-column: 1 / -1; margin: 4px 0 8px; }
+.sec-group { min-height: 44px; border-top-width: 1.5px; padding: 18px 0 8px; }
+.sec-group h3 { margin: 0; font-size: 19px; line-height: 1.1; font-weight: 800; letter-spacing: -0.015em; }
+.pl-row { padding: 14px 0; border-top: 1px solid var(--rule); }
+.pl-group > .rail-slot + .pl-row { border-top-color: var(--rule-faint); }
+.pl-row + .pl-row { border-top-color: var(--rule-faint); }
+.pl-lead { grid-column: span var(--lead); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pl-cells { grid-column: span var(--cells) / -1; min-width: 0; }
+.pl-row > .trace-more { grid-column: 1 / -1; margin-top: 14px; }
+.pl-row .trace-pick { display: flex; flex-direction: column; gap: 2px; margin: -4px -6px; padding: 4px 6px;
+                      color: inherit; max-width: var(--measure); }
+.pl-k { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-size: 13px; line-height: 18px; }
+.pl-k b { font-weight: 750; }
+.pl-k .g { margin: 0; width: 14px; height: 14px; }
+.pl-t { font-size: 16px; line-height: 1.25; font-weight: 750; letter-spacing: -0.005em;
+        display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.pl-m { font-size: 13px; line-height: 18px; color: var(--ink-muted); }
+.pl-m .pl-id, .pl-m b { color: var(--ink); font-weight: 700; }
+.pl-sub { max-width: var(--measure); font-size: 13px; line-height: 18px; color: var(--ink-muted);
+          overflow-wrap: anywhere; }
+.pl-sub b { color: var(--ink); font-weight: 600; }
+.pl-sub code { font-size: 12px; background: none; padding: 0; color: var(--ink); }
+.pl-sub a { color: inherit; }
+.pl-view .uv-in-row { color: var(--ink-muted); }
+.nojs { display: none; }
+/* the page's row: the plan's other ways to look, a quiet menu at its end */
+.subnav-tools .pl-find { margin: 0; flex-wrap: nowrap; }
+.subnav-tools .q-field { min-width: 200px; max-width: 280px; }
+.subnav-tools .pl-find input[type=search] { height: 38px; }
+.subnav-tools .tool-more { position: relative; }
+.subnav-tools .tool-more > summary { display: grid; place-items: center; width: 38px; height: 38px;
+  list-style: none; cursor: pointer; color: var(--ink-muted); }
+.subnav-tools .tool-more > summary::-webkit-details-marker { display: none; }
+.subnav-tools .tool-more > summary:hover, .subnav-tools .tool-more[open] > summary {
+  color: var(--ink); background: var(--paper-2); }
+.subnav-tools .tool-more .menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30;
+  min-width: 220px; padding: 4px; background: var(--paper-raised); box-shadow: inset 0 3px 0 var(--navy), var(--lift); }
+.subnav-tools .tool-more .menu a { display: block; padding: 8px 10px; color: var(--ink);
+  text-decoration: none; white-space: nowrap; }
+.subnav-tools .tool-more .menu a:hover { background: var(--paper-2); }
+@media (scripting: none) { .nojs { display: inline; font-size: 13px; } }
+/* the selected unit: ringed, its parts open under it */
+sluice-trace[tracing] .pl-row[data-trace="selected"] { box-shadow: 0 0 0 2px var(--navy);
+  border-top-color: transparent; padding-left: 10px; padding-right: 10px; }
+.pl-more { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 5fr) minmax(0, 2fr);
+           gap: 12px var(--col-gap); align-items: start; }
+.pl-mh { margin: 0 0 6px; font-size: 13px; font-weight: 750; }
+.pl-steps ol { list-style: none; margin: 0; padding: 0; }
+.pl-steps li { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto; gap: 2px 10px;
+               align-items: baseline; padding: 4px 0; border-top: 1px solid var(--rule-faint);
+               font-size: 13px; line-height: 18px; }
+.pl-steps li > a { font-weight: 650; }
+.pl-fn { font-size: 12px; background: none; padding: 0; color: var(--ink-muted); }
+.pl-st { display: inline-flex; align-items: center; gap: 4px; justify-self: end; text-align: right;
+         color: var(--ink-muted); }
+.pl-st .g { margin: 0; width: 13px; height: 13px; }
+.pl-said-t { font-size: 14px; line-height: 20px; max-width: var(--measure); }
+.pl-more .mod-actions { flex-direction: column; align-items: stretch; padding-top: 0; }
+/* the open step's cell on the plan: a ring apart from it */
+.sc-a.open { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* a unit of no recipe: its own small graph, its steps in columns by their own chain, a small
+   connector for each wait between them */
+.pl-graph { --cell: 56px; display: grid; align-items: start; column-gap: 0; min-width: 0; }
+.pl-layer { margin-top: calc(var(--off) * (var(--cell) + 8px)); min-width: 0; }
+.pl-graph .strip { grid-template-columns: minmax(0, 1fr); row-gap: 0; min-height: 0; }
+.pl-graph .sc { height: var(--cell); min-height: 0; margin: 4px 0; }
+.pl-wire { display: block; width: 28px; height: calc(var(--rows) * (var(--cell) + 8px)); overflow: visible; }
+.pl-wire path { fill: none; stroke: var(--line); stroke-width: 1.5; }
+
+/* the margin: a long run's progress, at the sheet's right beside the bands */
+.pl-margin { grid-column: -3 / -1; grid-row: 1 / span var(--rows); display: flex; flex-direction: column;
+             gap: 16px; min-width: 0; }
+
+/* Done: its count, then the index folded, a dense list newest first, in columns */
+.pl-index > summary { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 18px;
+                      list-style: none; cursor: pointer; font-weight: 700;
+                      box-shadow: inset 0 0 0 1.5px var(--navy); }
+.pl-index > summary::-webkit-details-marker { display: none; }
+.pl-index > summary:hover { background: var(--paper-2); }
+.pl-index[open] > summary .chev { transform: rotate(180deg); }
+.pl-index .pl-hide, .pl-index[open] .pl-show { display: none; }
+.pl-index[open] .pl-hide { display: inline; }
+.pl-range { margin: 12px 0 8px; }
+.pl-idx { list-style: none; margin: 0; padding: 12px 14px; background: var(--paper-2);
+          columns: 3 22rem; column-gap: calc(var(--col-gap) * 2); }
+.pl-idx li { break-inside: avoid; border-bottom: 1px solid var(--rule-faint); }
+.pl-idx a { display: grid; grid-template-columns: 3.4em 14px minmax(0, auto) minmax(0, 1fr) auto;
+            align-items: baseline; gap: 0 8px; padding: 5px 0; font-size: 13px; line-height: 18px;
+            text-decoration: none; }
+.pl-idx a:hover .pl-dt { text-decoration: underline; }
+.pl-at { font: 600 12.5px/18px var(--font-mono); color: var(--ink-muted); }
+.pl-idx .g { width: 14px; height: 14px; margin: 0; align-self: center; }
+.pl-idx .g svg { width: 14px; height: 14px; }
+.pl-did { font-size: 12px; background: none; padding: 0; font-weight: 600; }
+.pl-dt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-dk { color: var(--sky-ink); white-space: nowrap; font-size: 12.5px; }
+
+/* the step drawer's frame: paper under a navy rule at its edge, its close band on the paper */
+sluice-drawer#step-drawer > .drawer { background: var(--paper); border-left: 3px solid var(--navy);
+  box-shadow: var(--lift); }
+sluice-drawer#step-drawer .d-top.scrolled { background: var(--paper); box-shadow: 0 1px 0 var(--rule); }
+sluice-drawer#step-drawer .drawer .close { background: var(--paper); color: var(--ink); }
+sluice-drawer#step-drawer .drawer .close:hover { background: var(--paper-2); }
+
+@media (max-width: 760px) {
+  .pl-sec { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .pl-sec > .pl-item, .pl-lead, .pl-cells, .pl-rows .sh-lead, .pl-rows .sh-stages { grid-column: 1 / -1; }
+  .pl-margin { grid-column: 1 / -1; grid-row: auto; order: 9; }
+  .pl-row { row-gap: 10px; }
+  .pl-graph { --cell: 48px; }
+  .pl-more { grid-template-columns: minmax(0, 1fr); }
+  .pl-more .mod-actions { flex-direction: row; }
+  .pl-idx { columns: 1; padding: 8px 10px; }
+  .pl-idx a { grid-template-columns: 3.4em 14px minmax(0, auto) minmax(0, 1fr); }
+  .pl-dk { grid-column: 3 / -1; }
+  .pl-index > summary, .pl-fb > summary { min-height: 44px; }
+  sluice-drawer#step-drawer > .drawer { border-left: 0; border-top: 3px solid var(--navy); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pl-index[open] > summary .chev { transition: none; }
+}
+
 /* ==== page shell: the project page, its plan and its board ======================================
    (Plan beside the project's Board; docs("board") is an OpenUI program drawn on the server.)
    From 1280px a project page with a board sets, on the frame's fluid column: the plan (at least --plan-min) | the splitter | the
@@ -2373,7 +2522,6 @@ details.read-today .item { opacity: .85; }
 /* -- the summary, the description and the board's tools, top down -- */
 .plan-pane > .attn-note { margin-top: var(--space-sm); }
 .plan-pane > .about { margin-top: var(--space-md); }
-.plan-pane .sumline .bar { width: clamp(200px, 32%, 480px); }  /* the slivers read */
 .more-fold > summary { display: inline-flex; cursor: pointer; align-items: center; gap: 2px; margin-top: 2px;
                         list-style: none; font-size: 13px; line-height: 18px; font-weight: 500;
                         color: var(--ink-muted); border-radius: 0; }
@@ -2465,17 +2613,11 @@ html.resizing, html.resizing * { cursor: col-resize !important; -webkit-user-sel
                                  user-select: none; }
 html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag ends */
 
-/* the board alone: of the plan's pane only the summary line's switch stays, over the board */
+/* the board alone: the plan's pane steps away; the band keeps its summary sentence over it and
+   the paper row its switch */
 @media (scripting: enabled) {
-  .has-panel .view-switch { display: flex; }
-  html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane > :not(.sumline, .p-title) { display: none; }
-  html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane > .sumline {
-    margin-bottom: var(--space-lg); }
-}
-/* above a phone the board alone keeps its counts and tags (a question for you, a cancel) and
-   the switch, not the bar; a phone keeps the whole summary over it */
-@media (min-width: 721px) and (scripting: enabled) {
-  html:not(.drawer-open) .project-page[data-view="board"] .sumline > :not(.view-switch, .sum) { display: none; }
+  .view-switch { display: flex; }
+  html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane { display: none; }
 }
 @media (max-width: 1279px) and (scripting: enabled) {
   .view-switch [data-view-tab="both"] { display: none; }
@@ -2529,14 +2671,10 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
   .project-page[data-view="board"] .board-pane .ou-table { width: 100%; }
   .project-page[data-view="plan"] > .board-side { display: none; }
   /* the drawer takes the side: the plan shows, the board and the switch step away */
-  html.drawer-open .project-page.has-panel :is(.board-side, .view-switch) { display: none; }
+  html.drawer-open .project-page.has-panel .board-side, html.drawer-open .view-switch { display: none; }
 }
 @media (max-width: 720px) {
   .view-switch button { min-height: 44px; padding: 0 14px 0 12px; }
-  /* after the summary, on a line of its own */
-  .sumline { grid-template-columns: minmax(0, 1fr); }
-  .sumline > .view-switch { grid-column: 1; grid-row: auto; justify-self: start; margin: 6px 0 0; }
-  .plan-pane .sumline .bar { width: 120px; }
   .more-fold > summary { min-height: 44px; margin-top: 0; }
   .board-tools .q-field { flex-basis: 100%; max-width: none; }
   .board-tools input[type=search] { height: 44px; }
@@ -2673,25 +2811,12 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 }
 /* ==== end of page shell, continued ============================================================ */
 
-/* ==== the plan graph ==========================================================================
-   Kept apart from the page shell's rules (the splitter, the view switch, the board column)
-   so the two merge cleanly. The plan reads top down with no key: under Live first a band of
-   running units, then the stopped (failed, or held up by a failure), then the waiting, each
-   under its plain label; under Plan order one band. A band lays its units in layers by
-   dependency depth (the server's), each layer a centred row that wraps, so a line from a unit
-   to one that comes after it runs down to the next layer. A one-step unit is its card alone;
-   a unit of several steps is a box of rows. Every done unit is on the shelf at the end. On a
-   phone the layers stack in one column and a card's waits say in words what the lines say. */
-.boxes.graph { display: block; }
-.graph > .empty { text-align: left; }
-.band + .band, .graph > .layer + .band, .graph > .band + .layer,
-.graph > :is(.band, .layer) + .done-shelf { margin-top: 32px; }
-main :is(h2, h3).band-h { margin: 0 0 12px; font: 500 13px/18px var(--font-sans); color: var(--ink-muted); }
+/* ==== a unit's cards (its own page: unit.html) ==============================================
+   A unit's box lays its steps' cards in rows by dependency depth; a one-step unit is its card
+   alone; a step's waits and why it stopped are said in words under its card. */
 .layer { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start;
          gap: 16px 32px; }
 .layer + .layer { margin-top: 40px; }  /* room for the lines between layers */
-/* units no line joins: packed from the row's start, tallest first, so no hole implies a wait */
-.layer.loose { justify-content: flex-start; }
 .layer > .box { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .boxes.boxed .layer > .box:not(.solo) { padding: 16px 18px; border-radius: 0;
                                          background: var(--paper-2); }
@@ -2700,13 +2825,6 @@ main :is(h2, h3).band-h { margin: 0 0 12px; font: 500 13px/18px var(--font-sans)
 .box-label .box-alarm { color: var(--ink); font-weight: 600; }
 .node .uid { flex: none; font-size: 12.5px; line-height: 16px; color: var(--ink-muted);
              white-space: nowrap; }
-.boxes.units { flex-direction: column; align-items: stretch; }
-@container plan (min-width: 720px) {
-  .boxes.units { display: grid; align-items: stretch;
-                 grid-template-columns: repeat(auto-fill, minmax(min(100%, 296px), 1fr)); }
-  .boxes.units > :is(.empty, .box.wide) { grid-column: 1 / -1; }
-  .boxes.units > .box.done:not(:has(> details[open])) { grid-column: auto; align-self: start; }
-}
 /* a step's waits in words, "Waits for l-a1 (running) and l-d1": where no line says it (a
    phone, a page without script) or when the view leaves a source out (`away`). Each name
    links to its source, a target 24px tall. */
@@ -2735,7 +2853,6 @@ main :is(h2, h3).band-h { margin: 0 0 12px; font: 500 13px/18px var(--font-sans)
 /* a step's open question to the owner its run waits on: the coral "Awaiting your reply" under
    its card and its matrix row's title, a link to its page, where its Overview has Answer */
 .card-ask { margin: 4px 0 0; line-height: 20px; }
-.mx th.mx-unit .card-ask { margin-left: 24px; }
 /* a line from the card above passes behind the words under a card, as behind a label: they sit
    over the lines on the fill they are drawn on */
 :is(.stack, .box.solo) > :is(.why, .waits, .card-ask) { position: relative; z-index: 2; }
@@ -2743,61 +2860,27 @@ main :is(h2, h3).band-h { margin: 0 0 12px; font: 500 13px/18px var(--font-sans)
 .box.solo > :is(.why, .waits) { background: var(--paper); }
 /* a unit that a traced card names (a unit gate) */
 .plane.tracing .box.near { box-shadow: inset 0 0 0 1.5px var(--ink); }
-/* the done shelf: every done unit on one line at the end, "44 done units · 44 steps", closed
-   until opened (and open for a search that matches in it, or Show: Done); open, the one-step
-   units as their cards, then each other unit its own line in a grid of wider cells, so its
-   lane string reads. A unit traced while the shelf is closed rings the shelf's line. */
-.done-shelf { min-width: 0; }
-.done-shelf > summary { display: flex; align-items: center; gap: 8px; min-height: 44px;
-                        padding: 8px 14px 8px 18px; list-style: none; cursor: pointer;
-                        border-radius: 0; background: var(--paper-2);
-                        color: var(--ink); font: 500 14px/20px var(--font-sans); }
-.done-shelf > summary::-webkit-details-marker { display: none; }
-.done-shelf > summary:hover { background: var(--paper-2); }
-.done-shelf > summary .chev { margin-left: auto; flex: none; }
-.done-shelf[open] > summary .chev { transform: rotate(180deg); }
-.done-shelf[open] > summary { margin-bottom: 12px; }
-/* the latest done units first, one list on the box tone, a row each with when it finished: a
-   unit of several steps its fold (opening to its cards), a one-step unit a row that opens the
-   step; each says its title first and its id after it */
-.done-shelf > .boxes.shelf-list { display: block; padding: 4px 0; border-radius: 0;
-                                  background: var(--paper-2); }
-.done-shelf > .shelf-list > .box { background: none; border-radius: 0; }
-.done-shelf > .shelf-list > .box + .box { border-top: 1px solid var(--rule-faint); }
-.done-shelf > .shelf-list > .box.solo { display: block; padding: 0; }
-/* the title gives way, its id after it stays whole */
-:is(.fold-box > summary, .shelf-step) .fb-name > .sref { display: flex; align-items: baseline;
-  gap: 6px; min-width: 0; }
-:is(.fold-box > summary, .shelf-step) .fb-name .sref-t { min-width: 0; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; }
-:is(.fold-box > summary, .shelf-step) .fb-name .sref-id { flex: none; }
-.shelf-step.node { display: flex; align-items: center; gap: 8px; min-height: 44px; width: 100%;
-  max-width: none; box-sizing: border-box; padding: 8px 14px 8px 18px; border: 0; border-radius: 0;
-  background: none; }
-a.shelf-step.node:hover { background: var(--paper-2); }
-.shelf-step .fb-name { max-width: none; flex: 1 1 auto; }
-.shelf-step .fb-ago { margin-left: auto; }
-.shelf-step .took { flex: none; margin-left: auto; }
-.shelf-step .took + .fb-ago { margin-left: 0; }
+/* a done unit's box, folded (its own page): its name, its title giving way and its id after it
+   whole, then when it finished */
+.fold-box > summary .fb-name > .sref { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.fold-box > summary .fb-name .sref-t { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                                       white-space: nowrap; }
+.fold-box > summary .fb-name .sref-id { flex: none; }
 .fb-ago { flex: none; font-size: 12.5px; line-height: 18px; color: var(--ink-muted);
           white-space: nowrap; }
 .fold-box > summary .fb-ago { margin-left: auto; }
 .fold-box > summary .fb-ago + .chev { margin-left: 0; }
-.shelf-more { margin: 12px 0 0; }
-.plane.tracing .done-shelf.near > summary { box-shadow: inset 0 0 0 1.5px var(--ink); }
 @media (max-width: 720px) {
-  .done-shelf > summary { padding: 8px 10px 8px 12px; }
-  /* one column: each layer's units under each other, a one-step unit's card at the left with
-     its waits under it, a box across the width; a box's lanes stack as before */
-  .band + .band, .graph > :is(.band, .layer) + :is(.band, .layer, .done-shelf) { margin-top: 24px; }
-  .layer { flex-direction: column; align-items: stretch; gap: 14px; }
-  .layer + .layer { margin-top: 14px; }
-  .box.solo > .waits { margin-left: 11px; }  /* under the card's glyph, its words */
+  /* one column: a one-step unit's card at the left with its waits under it, a box across the
+     width; a box's lanes stack as before; a folded box's name wraps whole */
+  .box.solo > .waits { margin-left: 11px; }
   .box.solo { display: flex; flex-direction: column; align-items: flex-start; border-radius: 0; }
-  .solo-title { min-height: 0; }  /* one column: nothing to line up with */
+  .solo-title { min-height: 0; }
   .waits { display: block; }
   .box .rows .stack { margin: 0 0 var(--row-gap); }
   .box .rows .stack > .node { margin: 0; }
+  .fold-box > summary .fb-name > .sref { flex-wrap: wrap; column-gap: 6px; }
+  .fold-box > summary .fb-name .sref-t { white-space: normal; overflow: visible; }
 }
 /* a step's `after`: a few words, the steps it names folded under them, sorted and linked */
 .gate-list { display: flex; flex-wrap: wrap; gap: 4px 14px; }
@@ -2871,69 +2954,6 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
 .solo-title > span { text-wrap: balance; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
   line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 
-/* ---- the lane matrix: a recipe's live units, a row a unit, a column a stage --------------- */
-/* A lane matrix is a table, not a graph: no line enters, leaves or passes it. A wait to or from
-   one of its rows is said in words under the row's title. Inside a band it heads the band's
-   part, its own head an h3 under the band's label. */
-.matrix { position: relative; margin: 0 0 24px; }
-.band > .matrix:last-child { margin-bottom: 0; }
-.mx-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
-main .mx-h .mx-name { color: var(--ink); font-weight: 600; text-decoration: none; }
-main .mx-h a.mx-name:hover { text-decoration: underline; text-underline-offset: 3px; }
-.mx-tally { font-variant-numeric: tabular-nums; }
-/* clipped, not a scroller, so its stage heads stick to the page's top while its rows pass;
-   it never clips what it holds (the board fits each matrix to its pane: `data-fit`). Without
-   script nothing measures it, so it scrolls sideways on its own rather than cut a column. */
-.mx-wrap { overflow-x: clip; border-radius: 0; background: var(--paper-2);
-           padding: 6px 14px; }
-sluice-board:not(:defined) .mx-wrap { overflow-x: auto; }
-.mx { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 20px; }
-.mx thead th { font: 500 12.5px/18px var(--font-sans); color: var(--ink-muted);
-               text-align: center; padding: 6px 8px; white-space: nowrap;
-               position: sticky; top: 0; z-index: 3; background: var(--paper-2); }
-/* what a stage's column has that needs a look: "land · 2 failed" */
-.mx-hc { color: var(--ink); font-weight: 600; }
-.mx thead th:is(.mx-unit, .mx-sum) { text-align: left; }
-.mx tbody tr + tr > * { border-top: 1px solid var(--rule-faint); }
-.mx tbody th, .mx tbody td { padding: 8px 6px; vertical-align: middle; font-weight: 400; }
-.mx th.mx-unit { text-align: left; width: 34%; min-width: 13rem; padding: 8px 14px 8px 0; }
-.mx thead th.mx-unit { padding-left: 0; }
-.mx-who { display: flex; align-items: flex-start; gap: 8px; }
-.mx-who .g { margin-top: 2px; flex: none; }
-.mx-title { color: var(--ink); font-weight: 600; text-decoration: none;
-            display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-            line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
-.mx-title:hover { text-decoration: underline; text-underline-offset: 3px; }
-/* the id line: the unit's id, an alarm, and (without its column) the summary's parts after
-   them, its message a line of its own under them */
-.mx-idl { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; margin: 2px 0 0 24px; min-width: 0;
-          font-size: 13px; line-height: 18px; color: var(--ink-muted); }
-.mx-id { margin: 0; flex: none; }
-.mx-idl > .mx-id:not(:empty) + .mx-sum-phone .uv-stack > .uv-param:first-child::before {
-  content: "·"; margin-right: 6px; color: var(--ink-muted); font-weight: 400; }
-.mx-id .box-alarm { color: var(--ink); font-weight: 600; }
-.mx th.mx-unit :is(.waits, .why) { margin-left: 24px; }
-td.mx-sum { width: 30%; min-width: 9rem; padding-right: 14px; font-size: 13px; line-height: 18px;
-            color: var(--ink-muted); }
-td.mx-cell { text-align: center; white-space: nowrap; }
-.node.mx-pill { padding: 3px 8px; gap: 5px; min-height: 28px; box-sizing: border-box; }
-.node.mx-pill .took.live { min-width: 0; }
-/* a stage nothing has reached yet: a small muted dot, not a card (a paused, blocked or held one
-   its state's glyph), still a 24px link to its step */
-.node.mx-dot { display: inline-flex; align-items: center; justify-content: center; gap: 0;
-               width: 24px; height: 24px; padding: 0; border: 0; background: none;
-               color: var(--ink-muted); vertical-align: middle; }
-.node.mx-dot .g { margin: 0; width: 14px; height: 14px; }
-.node.mx-dot.is-pending::before { content: ""; width: 6px; height: 6px; border-radius: 50%;
-  background: color-mix(in srgb, var(--idle) 70%, transparent); }
-/* a reached-for state with its own glyph (paused, blocked, held) draws it, in its own tone */
-.node.mx-dot.is-blocked { color: var(--ink); }
-.node.mx-dot.is-held { color: var(--idle); }
-a.node.mx-dot:hover { background: var(--paper-2); }
-.node.mx-dot svg { width: 14px; height: 14px; }
-.plane.tracing .node.mx-dot:not(.near) { opacity: .5; }
-.mx-lane, .mx-sum-phone { display: none; }
-.plane.tracing .mx-row.near > th.mx-unit .mx-title { text-decoration: underline; }
 /* a recipe's view: its parts on one line in a row, a block on the unit page */
 .uv-in-row .uv-stack.uv-r, .uv-in-row .uv-stack.uv-c { display: flex; flex-wrap: wrap;
   align-items: baseline; gap: 2px 10px; }
@@ -2946,11 +2966,6 @@ a.node.mx-dot:hover { background: var(--paper-2); }
 .uv-msg { overflow-wrap: anywhere; }
 .uv-in-row .uv-msg { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1;
                      line-clamp: 1; overflow: hidden; flex-basis: 100%; }
-/* under a row's title the summary's parts flow on the id line, and its message is a line of its
-   own under them, two at most: never cut to a word or two */
-.mx-sum-phone .uv-in-row, .mx-sum-phone .uv-in-row .uv-stack { display: contents; }
-.mx-sum-phone .uv-in-row .uv-stack > :not(.uv-msg) { flex: none; }
-.mx-sum-phone .uv-in-row .uv-msg { flex: 1 0 100%; min-width: 0; -webkit-line-clamp: 2; line-clamp: 2; }
 .uv-from { color: var(--ink); font-weight: 500; }
 .uv-text.muted { color: var(--ink-muted); }
 .uv-link { color: var(--ink); text-underline-offset: 3px;
@@ -2962,60 +2977,6 @@ a.node.mx-dot:hover { background: var(--paper-2); }
 .uv-broken { display: flex; gap: 6px; align-items: flex-start; margin: 0 0 8px;
              font-size: 13px; line-height: 18px; color: var(--sand-ink); max-width: var(--measure); }
 .uv-broken svg { flex: none; margin-top: 2px; }
-/* Too narrow for its table (a phone, or the plan beside the open drawer or the board), a row
-   is a block: the unit, its stages as a lane string, its waits and its summary. The plan pane
-   is the container, so the drawer and the splitter count; the table's least width grows with
-   its stages. */
-.mx-lane a { display: inline-block; padding: 6px 0; color: inherit; text-decoration: none; }
-.mx-lane a + a { margin-left: 6px; }
-.mx-lane a:hover { text-decoration: underline; }
-/* The summary column gives way first: under 1100px of pane (a laptop with the drawer open, or
-   the plan beside the board), or wherever the board finds the table wider than its pane
-   (`data-fit="nosum"`); the summary then goes under the row's title. */
-@container plan (max-width: 1100px) {
-  .mx :is(th.mx-sum, td.mx-sum) { display: none; }
-  .matrix .mx-sum-phone { display: contents; }
-}
-.matrix[data-fit] .mx :is(th.mx-sum, td.mx-sum) { display: none; }
-.matrix[data-fit] .mx-sum-phone { display: contents; }
-/* the stages still to come at a lane's end: one muted note, not a ring each */
-.lane-rest { color: var(--ink-muted); white-space: nowrap; font-family: var(--font-sans); }
-.mx-lane a + .lane-rest { margin-left: 6px; }
-/* Then a row becomes a block: at 720px of pane and narrower, earlier for a matrix of many
-   stages, and wherever its stages alone are still wider than its pane (`data-fit="lane"`). */
-.matrix[data-fit="lane"] .mx-wrap { padding: 4px 12px; }
-.matrix[data-fit="lane"] :is(.mx, .mx tbody, .mx tr, .mx th.mx-unit) { display: block; width: auto; min-width: 0; }
-.matrix[data-fit="lane"] :is(.mx thead, .mx td) { display: none; }
-.matrix[data-fit="lane"] .mx tbody th { padding: 10px 0; }
-.matrix[data-fit="lane"] .mx-lane { display: block; margin: 4px 0 0 24px; white-space: normal; }
-@container plan (max-width: 720px) {
-  .matrix .mx-wrap { padding: 4px 12px; }
-  .matrix :is(.mx, .mx tbody, .mx tr, .mx th.mx-unit) { display: block; width: auto; min-width: 0; }
-  .matrix :is(.mx thead, .mx td) { display: none; }
-  .matrix .mx tbody th { padding: 10px 0; }
-  .matrix .mx-lane { display: block; margin: 4px 0 0 24px; white-space: normal; }
-}
-@container plan (max-width: 800px) {
-  :is(.mx-s5, .mx-s6, .mx-s7, .mx-s8, .mx-s9) .mx-wrap { padding: 4px 12px; }
-  :is(.mx-s5, .mx-s6, .mx-s7, .mx-s8, .mx-s9) :is(.mx, .mx tbody, .mx tr, .mx th.mx-unit) { display: block; width: auto; min-width: 0; }
-  :is(.mx-s5, .mx-s6, .mx-s7, .mx-s8, .mx-s9) :is(.mx thead, .mx td) { display: none; }
-  :is(.mx-s5, .mx-s6, .mx-s7, .mx-s8, .mx-s9) .mx tbody th { padding: 10px 0; }
-  :is(.mx-s5, .mx-s6, .mx-s7, .mx-s8, .mx-s9) .mx-lane { display: block; margin: 4px 0 0 24px; white-space: normal; }
-}
-@container plan (max-width: 920px) {
-  :is(.mx-s7, .mx-s8, .mx-s9) .mx-wrap { padding: 4px 12px; }
-  :is(.mx-s7, .mx-s8, .mx-s9) :is(.mx, .mx tbody, .mx tr, .mx th.mx-unit) { display: block; width: auto; min-width: 0; }
-  :is(.mx-s7, .mx-s8, .mx-s9) :is(.mx thead, .mx td) { display: none; }
-  :is(.mx-s7, .mx-s8, .mx-s9) .mx tbody th { padding: 10px 0; }
-  :is(.mx-s7, .mx-s8, .mx-s9) .mx-lane { display: block; margin: 4px 0 0 24px; white-space: normal; }
-}
-@media (max-width: 720px) {
-  /* a shelf row's name wraps whole on a phone, its id after its title */
-  :is(.fold-box > summary, .shelf-step) .fb-name > .sref { flex-wrap: wrap; column-gap: 6px; }
-  :is(.fold-box > summary, .shelf-step) .fb-name .sref-t { white-space: normal; overflow: visible; }
-  .shelf-step .fb-name { white-space: normal; overflow-wrap: anywhere; }
-}
-
 /* ---- /_ui, the kit's gallery: each part in the house pair's light and dark, side by side
    (stacked under 900px of the column) ------------------------------------------------------ */
 .gal-lead { margin: 10px 0 0; max-width: var(--measure); color: var(--ink-muted); }

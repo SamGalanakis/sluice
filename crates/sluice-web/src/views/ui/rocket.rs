@@ -222,7 +222,7 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-board",
         script: "sluice.js",
-        does: "Draws the plan's lines between its cards, traces a card's relations on hover or focus, and moves between cards with the arrows.",
+        does: "Draws the lines between a unit's cards on its own page, traces a card's relations on hover or focus, and moves between cards with the arrows.",
         props: &[],
         events: &[],
         slots: &["relations", "plane"],
@@ -230,7 +230,7 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-drawer",
         script: "sluice.js",
-        does: "Opens a step beside the board (over it below 1200px, a sheet on a phone) from #step:<id>, streams it, writes its tab into ?tab= and closes on Escape or a click away; [ and ] open the step before or after it in the board's order.",
+        does: "Opens a step beside the plan (over it below 1200px, a sheet on a phone) from #step:<id>, a stage's cell or any link with data-step, streams it, writes its tab into ?tab= and closes on Escape or a click away; [ and ] open the step before or after it in the plan's order.",
         props: &[("base", "string")],
         events: &[],
         slots: &["scrim", "drawer"],

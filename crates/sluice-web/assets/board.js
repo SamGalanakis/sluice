@@ -9,7 +9,8 @@
 //   cancel, a quiet run or a pause: `data-attention`), when it shows the plan, which leads
 //   with what stopped; the window between a phone and 1280px shows the plan;
 // - the board column's height and its "More below" cue;
-// - a board Button's say is sent without leaving the page, the answer shown under the board.
+// - a board Button's say is sent without leaving the page, the answer shown under the board;
+// - a step whose state the live plan moves on is said once, politely, in #announce.
 const WIDE = matchMedia("(min-width: 1280px)");
 const PHONE = matchMedia("(max-width: 720px)");  // a phone opens on the board, unless something needs attention
 const store = {
@@ -50,14 +51,15 @@ function sync() {
   if (!p) return;
   const view = viewOf(p);
   if (p.dataset.view !== view) p.dataset.view = view;
-  for (const tab of p.querySelectorAll("[data-view-tab]")) {
+  // the switch is in the page's row, under the band
+  for (const tab of document.querySelectorAll("[data-view-tab]")) {
     const on = String(tab.dataset.viewTab === view);
     if (tab.getAttribute("aria-pressed") !== on) tab.setAttribute("aria-pressed", on);
   }
 }
 document.addEventListener("click", event => {
   const tab = event.target.closest?.("[data-view-tab]");
-  const p = tab?.closest("#project-board");
+  const p = tab && page();
   if (!p) return;
   chosen[mode()] = tab.dataset.viewTab;
   store.set(viewKey(mode(), p.dataset.project), tab.dataset.viewTab);
@@ -166,6 +168,44 @@ document.addEventListener("submit", async event => {
     buttons.forEach(b => { b.disabled = false; });
   }
 });
+
+// ---- what the live plan moved on, said once ---------------------------------------------------
+// Each step's state in words: a stage cell's (its link's data-step, its hidden ": word"), and a
+// stopped module's or a Done line's data-said ("a-build succeeded|a-review skipped"), so a step
+// is still read when its unit changes band.
+function states() {
+  const out = new Map();
+  const plan = document.querySelector("#plan-pane");
+  if (!plan) return out;
+  for (const a of plan.querySelectorAll("li.sc[data-state] > a.sc-a[data-step]")) {
+    const word = a.querySelector(":scope > .vh")?.textContent.replace(/^:\s*/, "").split(",")[0].trim();
+    if (word) out.set(a.dataset.step, word);
+  }
+  for (const el of plan.querySelectorAll("[data-said]")) {
+    for (const pair of el.dataset.said.split("|")) {
+      const at = pair.indexOf(" ");
+      if (at > 0 && !out.has(pair.slice(0, at))) out.set(pair.slice(0, at), pair.slice(at + 1));
+    }
+  }
+  return out;
+}
+let known = states(), looking = 0;
+function said() {
+  looking = 0;
+  const now = states(), moved = [];
+  for (const [step, word] of now) {
+    const was = known.get(step);
+    if (was && was !== word) moved.push(`${step} ${word}`);
+  }
+  known = now;
+  const live = document.getElementById("announce");
+  if (!live || !moved.length) return;
+  live.textContent = "";
+  requestAnimationFrame(() => { live.textContent = moved.join(". "); });
+}
+new MutationObserver(() => { looking ||= requestAnimationFrame(said); })
+  .observe(document.querySelector("#content") ?? document.body,
+           { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state", "data-said"] });
 
 sync();
 new MutationObserver(sync).observe(document.querySelector("#content") ?? document.body,

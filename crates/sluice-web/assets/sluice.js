@@ -14,7 +14,8 @@ function currentStep() {
 }
 
 function markOpen(sid) {
-  for (const n of $$(".node.open")) {
+  // a card on a unit's page, a stage's cell on the plan
+  for (const n of $$(".open[id^='n-']")) {
     if (n.id !== `n-${sid}`) n.classList.remove("open");
   }
   const card = sid && document.getElementById(`n-${sid}`);
@@ -121,15 +122,11 @@ function drawEdges(host, data) {
   // passes them, not just their cards
   const tileEls = $$(".layer > .box", plane).filter(shown);
   const tiles = tileEls.map((t) => at(t.getBoundingClientRect()));
-  // A lane matrix is a table: the server draws no line to, from or past one (its waits are words
-  // in its rows). Should the page and the server ever disagree (a patch on its way), a line that
-  // would touch a matrix is left out rather than drawn through its cells.
-  const matrices = $$(".matrix", plane).filter(shown).map((m) => at(m.getBoundingClientRect()));
   // a box's label ("a-12") is passed like a card: a line into the box never strikes it
   const labels = $$(".layer > .box > .box-label", plane).filter(shown)
     .map((l) => ({ ...at(l.getBoundingClientRect()), tile: tileEls.indexOf(l.parentElement) }));
   for (const n of $$("[data-node]", plane)) {
-    if (!shown(n) || n.closest(".matrix")) continue;
+    if (!shown(n)) continue;
     const r = at(n.getBoundingClientRect());
     // a one-step unit's title over its card is the card's: a line into it ends above the title
     const title = n.parentElement?.matches(".box.solo.titled") && $(":scope > .solo-title", n.parentElement);
@@ -163,14 +160,12 @@ function drawEdges(host, data) {
     }
     return rowsOf.get(key);
   };
-  // Of the cards shown (a search may leave a step out), one path a pair (see merge). A line
-  // runs down, from the foot of its source to the top of the card that waits, and never past a
-  // lane matrix: one that would run up or through a matrix is not drawn, and its words under
-  // the waiting card say it instead (the server leaves such a wait to words already; this
-  // keeps a page caught between two patches honest).
+  // Of the cards shown, one path a pair (see merge). A line runs down, from the foot of its
+  // source to the top of the card that waits; one that would run up is not drawn, and its words
+  // under the waiting card say it instead.
   const down = (a, b) => {
     const [ra, rb] = [rect.get(a), rect.get(b)];
-    return rb.top - 1 > ra.bottom && !matrices.some((m) => m.top < rb.top && m.bottom > ra.bottom);
+    return rb.top - 1 > ra.bottom;
   };
   const listed = (Array.isArray(data) ? data : []).filter(([a, b]) => rect.has(a) && rect.has(b));
   const kept = new Set(listed.filter(([a, b]) => !down(a, b)).map(([a, b]) =>
@@ -295,14 +290,6 @@ function trace(host, key) {
   for (const n of $$(".node, .box[data-node]", host)) {
     n.classList.toggle("near", near.has(n.dataset.node));
   }
-  // a unit folded away on the closed shelf of done units: the shelf's line stands in for it
-  const shelves = new Set();
-  for (const k of near) {
-    const box = k.startsWith("u:") && $(`.box[data-node="${CSS.escape(k)}"]`, host);
-    const shelf = box && !shown(box) && box.closest("details.done-shelf");
-    if (shelf) shelves.add(shelf);
-  }
-  for (const s of $$("details.done-shelf", host)) s.classList.toggle("near", shelves.has(s));
   const plane = $(".plane", host);
   if (plane && !plane.classList.contains("tracing")) plane.classList.add("tracing");
 }
@@ -427,29 +414,6 @@ function restoreBoxes(host) {
   }
 }
 
-// A lane matrix never cuts a column off. Its stylesheet folds it by its pane's width (the
-// summary under the title from 1100px of pane, rows as lane strings from 720px, earlier for many
-// stages), but a pill's width is its content's (a long timer, a run's earlier glyphs), so the
-// board measures too: a table still wider than its wrap gives up its summary column
-// (`data-fit="nosum"`), then becomes lane strings (`data-fit="lane"`). Each fit starts from
-// the whole table, so a matrix that has room again gets its columns back.
-function fitMatrices(host) {
-  for (const m of $$(".matrix", host)) {
-    const wrap = $(":scope > .mx-wrap", m), table = wrap && $(":scope > .mx", wrap);
-    if (!table || !shown(m)) continue;
-    const css = getComputedStyle(wrap);
-    const room = () => wrap.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight);
-    const over = () => table.getBoundingClientRect().width > room() + 0.5;
-    if (m.hasAttribute("data-fit")) m.removeAttribute("data-fit");
-    let fit = null;
-    for (const next of ["nosum", "lane"]) {
-      if (!over()) break;
-      fit = next;
-      m.setAttribute("data-fit", fit);
-    }
-  }
-}
-
 // These classes change highlighting or animation, without changing card geometry.
 const presentation = new Set(["tracing", "near", "open", "flip", "on"]);
 const layoutClasses = (value) => (value || "").split(/\s+/)
@@ -470,8 +434,8 @@ rocket("sluice-board", {
   mode: "light",
   renderOnPropChange: false,
   manifest: {
-    slots: [{ name: "relations", description: "script.board-edges: the plan's relations as JSON, a region of its own." },
-            { name: "plane", description: ".plane: the bands, boxes, matrices and cards, then svg.edges, which this draws." }],
+    slots: [{ name: "relations", description: "script.board-edges: a unit's relations as JSON." },
+            { name: "plane", description: ".plane: the unit's box and cards, then svg.edges, which this draws." }],
     events: [],
   },
   setup({ host, cleanup }) {
@@ -485,12 +449,10 @@ rocket("sluice-board", {
     const listeners = new AbortController();
     // while the board's splitter is dragged the plan's edges hide and wait: one redraw at the
     // end ("sluice-resized"), not one per frame
-    // the matrices fit on every frame of a drag too: a column is never cut, even for a moment
     const redraw = () => {
       if (!active || frame) return;
       frame = requestAnimationFrame(() => {
         frame = 0;
-        fitMatrices(host);
         if (document.documentElement.classList.contains("resizing")) return;
         drawEdges(host, drawn(boardRelations(host)));
         const held = still ? null : $(`:is(${TRACES}):hover`, host) || focusKept();  // keep it lit
@@ -587,7 +549,6 @@ rocket("sluice-board", {
     });
   },
   onFirstRender({ host }) {
-    fitMatrices(host);
     drawEdges(host, drawn(boardRelations(host)));
   },
 });
@@ -738,8 +699,8 @@ rocket("sluice-drawer", {
           || evt.ctrlKey || evt.metaKey || evt.altKey || document.querySelector("dialog[open]")) return;
       const t = evt.target;
       if (t instanceof Element && t.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return;
-      // a matrix too narrow for its columns draws each row's stages as links in its lane line
-      const ids = [...new Set($$("sluice-board a[data-step], sluice-board .mx-lane a[data-opens]")
+      // a unit page's cards, or the plan's stage cells, in page order
+      const ids = [...new Set($$("sluice-board a[data-step], #project-board a.sc-a[data-step]")
         .filter(shown).map((a) => a.dataset.step || a.dataset.opens))];
       const at = ids.indexOf(sid);
       const next = ids[evt.key === "]" ? at + 1 : (at < 0 ? ids.length : at) - 1];

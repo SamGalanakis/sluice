@@ -11,6 +11,7 @@
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
+mod plan_html;
 #[allow(dead_code)]
 #[path = "../../../tests/support/messages.rs"]
 mod stored_messages;
@@ -269,25 +270,24 @@ async fn a_lane_row_says_its_question_and_a_note_to_many_is_drawn_once() {
         .await;
     }
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
-    // the asking row's summary is its question, not its last note
-    let l1 = between(&html, "<tr id=\"unit-l1\"", "</tr>");
-    let sum = between(l1, "<td class=\"mx-sum\">", "</td>");
+    // the asking unit is a question for you, its row not drawn again
+    assert_eq!(plan_html::place(&html, "l1"), "asks");
+    let q = plan_html::band(&html, "plan-asks");
     assert!(
-        sum.contains("<span class=\"uv-from\">Question for you</span>: Land the cron fix now?"),
-        "{sum}"
+        q.contains("Land the cron fix now?") && !q.contains("Heads up"),
+        "{q}"
     );
-    assert!(!sum.contains("Heads up"), "{sum}");
-    // a row with a message of its own says that one, not the note sent to it
-    let l2 = between(&html, "<tr id=\"unit-l2\"", "</tr>");
-    let sum = between(l2, "<td class=\"mx-sum\">", "</td>");
-    assert!(sum.contains("Parser leak found"), "{sum}");
-    // a row with nothing of its own says the note and who sent it
-    let l3 = between(&html, "<tr id=\"unit-l3\"", "</tr>");
-    let sum = between(l3, "<td class=\"mx-sum\">", "</td>");
+    // a stopped unit says why it stopped, not the note sent to it
+    let l2 = plan_html::stopped(&html, "l2");
     assert!(
-        sum.contains("<span class=\"uv-from\">Note from l1-work</span>")
-            && sum.contains("Heads up"),
-        "{sum}"
+        l2.contains("<b>failed</b>") && !l2.contains("Heads up"),
+        "{l2}"
+    );
+    // a row with nothing of its own says the note and who sent it
+    let l3 = plan_html::row(&html, "l3");
+    assert!(
+        l3.contains("<span class=\"uv-from\">Note from l1-work</span>") && l3.contains("Heads up"),
+        "{l3}"
     );
     // the log: the note is one row, its sender named as pages name a step and linked
     let (_, log) = f.get(&format!("/projects/id/{id}/log")).await;
@@ -483,13 +483,13 @@ async fn chromium_a_code_block_keeps_its_lines_and_the_keys_find_and_move() {
             .unwrap();
         assert_eq!(browser.eval("location.hash").unwrap(), json!(""));
 
-        // `]` and `[` move the drawer through the board, in its order as drawn
+        // `]` and `[` move the drawer through the plan's cells, in its order as drawn
         browser.navigate(&format!("{base}#step:l1-work")).unwrap();
         browser
             .wait("customElements.get('sluice-drawer') && document.querySelector('#step-detail[data-step=\"l1-work\"] #d-title')")
             .unwrap();
         let order = browser
-            .eval("[...new Set([...document.querySelectorAll('sluice-board a[data-step], sluice-board .mx-lane a[data-opens]')].filter(a => a.checkVisibility()).map(a => a.dataset.step || a.dataset.opens))]")
+            .eval("[...new Set([...document.querySelectorAll('#project-board a.sc-a[data-step]')].filter(a => a.checkVisibility()).map(a => a.dataset.step))]")
             .unwrap();
         let order: Vec<String> = serde_json::from_value(order).unwrap();
         let at = order.iter().position(|s| s == "l1-work").unwrap();
@@ -565,9 +565,9 @@ async fn chromium_the_board_alone_keeps_its_tags_and_a_wide_screen_sets_overview
         browser
             .wait("document.querySelector('.project-page[data-view=\"board\"]')")
             .unwrap();
-        // the board alone keeps the counts and the coral question tag, not the bar
+        // the board alone keeps the band's summary, its question first, and hides the plan
         let kept = browser
-            .eval("[document.querySelector('#p-sum .sum-tags').checkVisibility(), document.querySelector('#p-sum .sum-tags').textContent.includes('1 question for you'), document.querySelector('#p-sum .bar')?.checkVisibility() ?? false]")
+            .eval("[document.querySelector('.band-summary').checkVisibility(), document.querySelector('.band-summary').textContent.startsWith('1 question for you'), document.querySelector('#plan-pane').checkVisibility()]")
             .unwrap();
         assert_eq!(kept, json!([true, true, false]));
         browser

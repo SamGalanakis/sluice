@@ -570,7 +570,7 @@ define("sluice-keys", {
     cleanup(() => clearTimeout(go));
     const typing = (target) =>
       target instanceof Element && Boolean(target.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])"));
-    const finder = () => [...document.querySelectorAll("main [data-find]")].find((el) => el.checkVisibility?.() ?? true);
+    const finder = () => [...document.querySelectorAll(":is(main, .subnav) [data-find]")].find((el) => el.checkVisibility?.() ?? true);
     // arrived from `/` on a page with nothing to find: the find takes the focus, once
     if (location.hash === "#find") {
       history.replaceState(history.state, "", location.pathname + location.search);
