@@ -2,6 +2,9 @@
 # Prove that a candidate release can serve every release a live run is pinned to: start the
 # candidate's coordinator on a read-only copy of the home, then run the CLI calls an agent
 # makes with each pinned release binary against it. Never touches the live home or units.
+# A candidate whose schema differs from the home's is checked in incompatible mode instead:
+# the copy must hold nothing live, the candidate converts it and serves it, and the old release
+# must refuse it without changing it (docs/design/plan-rows.md §10.8).
 set -euo pipefail
 repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
 exec python3 - "$repo" "$@" <<'PY'
@@ -19,6 +22,13 @@ parser.add_argument('--mark-schema', type=int, metavar='N',
     help='after the candidate opens the copy, mark the copy at schema N, as a candidate that bumped '
     'the version would (proves the check catches it)')
 parser.add_argument('--keep', action='store_true', help='keep the scratch dir (its processes are still stopped)')
+parser.add_argument('--copy', metavar='DIR', help='check this prepared private copy of a home (scripts/cutover-rehearse\'s) '
+    'instead of copying the home; it is the caller\'s and is never removed')
+parser.add_argument('--incompatible', action='store_true', help='the incompatible mode (chosen by itself when the candidate\'s '
+    'manifest schema differs from the home\'s): nothing live may be pinned, the candidate\'s `sluice home migrate` '
+    'converts the copy, the candidate serves it, and the old release refuses it without changing it')
+parser.add_argument('--old', metavar='DIR', help='incompatible mode: the old release that must refuse the converted copy '
+    '(default: the selected release)')
 parser.add_argument('--timeout', type=float, default=60, help='seconds per CLI call (default 60)')
 args = parser.parse_args(sys.argv[2:])
 prefix = pathlib.Path(args.prefix).resolve()
@@ -26,10 +36,12 @@ install = pathlib.Path(os.environ.get('SLUICE_INSTALL_DIR', str(prefix / 'instal
 def selection():
     try: return json.loads((install / 'selection.json').read_text())
     except FileNotFoundError: return None
-if args.home: home = pathlib.Path(args.home).resolve()
+if args.copy: home = pathlib.Path(args.copy).resolve()
+elif args.home: home = pathlib.Path(args.home).resolve()
 elif 'SLUICE_HOME' in os.environ: home = pathlib.Path(os.environ['SLUICE_HOME']).resolve()
 elif selection(): home = pathlib.Path(selection()['home_path']).resolve()
 else: sys.exit('compat-check: no home: set SLUICE_HOME or --home (the installation selects none)')
+if args.copy and not (home / 'sluice.db').is_file(): sys.exit('compat-check: --copy %s holds no sluice.db' % home)
 if not (home / 'sluice.db').is_file():
     print('compat: no database at %s; nothing to check' % home)
     print('compat: 0 releases ok')
@@ -41,10 +53,29 @@ else:
     if not built: sys.exit('compat-check: no release under %s; pass --release' % releases)
     candidate = max(built, key=lambda p: p.stat().st_mtime_ns)
 if not (candidate / 'bin/sluice').is_file(): sys.exit('compat-check: %s has no bin/sluice' % candidate)
+def release_schema(release):
+    # Releases built before the manifest recorded a schema are schema 1.
+    try: return int(json.loads((pathlib.Path(release) / 'manifest.json').read_text()).get('schema', 1))
+    except FileNotFoundError: return 1
+def db_schema(path):
+    with sqlite3.connect('file:%s?mode=ro' % path, uri=True, timeout=30) as db:
+        found = db.execute('SELECT schema_version FROM home_meta WHERE singleton=1').fetchone()[0]
+    db.close()
+    return found
+home_schema = db_schema(home / 'sluice.db')
+candidate_schema = release_schema(candidate)
+incompatible = args.incompatible or candidate_schema != home_schema
+if incompatible:
+    if args.mark_schema is not None: sys.exit('compat-check: --mark-schema is for the compatible mode')
+    old = pathlib.Path(args.old).resolve() if args.old else (pathlib.Path(selection()['release_path']).resolve() if selection() else None)
+    if old is None or not (old / 'bin/sluice').is_file(): sys.exit('compat-check: incompatible mode needs the old release: pass --old')
+    if release_schema(old) == candidate_schema: sys.exit('compat-check: --incompatible, but the old release and the candidate are both schema %d' % candidate_schema)
+    if home_schema not in (release_schema(old), candidate_schema):
+        sys.exit('compat-check: the home is schema %d, neither the old release\'s %d nor the candidate\'s %d' % (home_schema, release_schema(old), candidate_schema))
 
 # Scratch layout. Short on purpose: Unix socket paths are limited to 108 bytes.
 scratch = pathlib.Path(tempfile.mkdtemp(prefix='cc.', dir='/tmp'))
-copy, scratch_install, bus = scratch / 'home', scratch / 'install', scratch / 'bus'
+copy, scratch_install, bus = (home if args.copy else scratch / 'home'), scratch / 'install', scratch / 'bus'
 started = []  # (pid, start time) of every process this script started
 def start_time(pid):
     try: return pathlib.Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()[19]
@@ -133,30 +164,129 @@ def cli(binary, *arguments, timeout):
         started.remove(record)
     return subprocess.CompletedProcess(child.args, child.returncode, stdout, stderr)
 
-try:
-    for p in (copy, scratch_install, bus):
-        if p == home or home in p.parents or p in home.parents: sys.exit('compat-check: scratch overlaps the home')
-        p.mkdir(mode=0o700)
-    # A consistent snapshot through SQLite's backup API; the live file is opened read-only.
-    with sqlite3.connect('file:%s?mode=ro' % (home / 'sluice.db'), uri=True) as live, \
-         sqlite3.connect(str(copy / 'sluice.db')) as snapshot:
-        live.backup(snapshot)
-    live.close(); snapshot.close()
-    config = {}
-    if (home / 'config.json').is_file():
-        try: config = json.loads((home / 'config.json').read_text())
-        except json.JSONDecodeError: config = {}
-    # The copy never notifies anyone and never listens on the live port.
-    for key in ('notify', 'unread_alert_min'): config.pop(key, None)
-    config['http'] = {'host': '127.0.0.1', 'port': 1}
-    (copy / 'config.json').write_text(json.dumps(config))
-    # Plans name project and global fns: copy their trees, never a .env.
-    skip = shutil.ignore_patterns('.env', '__pycache__')
-    for tree in ['projects', 'fns', 'recipes', *[d for d in config.get('fn_dirs', []) if isinstance(d, str) and not os.path.isabs(d)]]:
-        source = (home / tree).resolve()
-        if source.is_dir() and (source == home or home in source.parents) and not (copy / tree).exists():
-            shutil.copytree(source, copy / tree, symlinks=True, ignore=skip)
+def table_of(rows, header):
+    widths = [max(len(r[i]) for r in [header, *rows]) for i in range(len(header))]
+    for i, r in enumerate([header, *rows]):
+        print('  '.join(c.ljust(w) for c, w in zip(r, widths)).rstrip())
+        if i == 0: print('  '.join('-' * w for w in widths))
+def start_coordinator(binary, name):
+    log = (scratch / (name + '.log')).open('wb')
+    child = subprocess.Popen([str(binary), 'coordinator'], env=env, stdin=subprocess.DEVNULL,
+        stdout=log, stderr=log, start_new_session=True, cwd=scratch)
+    log.close()
+    record = (child.pid, start_time(child.pid))
+    started.append(record)
+    return child, record
+def log_tail(name):
+    text = (scratch / (name + '.log')).read_text(errors='replace').strip().splitlines()
+    return ('; '.join(text[-3:]) if text else 'no output')
+def await_coordinator(binary, child, name):
+    deadline = time.monotonic() + max(args.timeout, 120)
+    while time.monotonic() < deadline:
+        if child.poll() is not None:
+            return '%s coordinator exited %d: %s' % (name, child.returncode, log_tail(name))
+        if (copy / 'coordinator.sock').exists():
+            probe = cli(binary, 'tool', 'rpc', '{"command":"projects_list"}', timeout=10)
+            if probe is not None and probe.returncode == 0: return 'ok'
+        time.sleep(.2)
+    return '%s coordinator did not answer' % name
+def database_bytes():
+    # The database and its unmerged log; an absent log is an empty one. The shared-memory index
+    # is not content.
+    wal = copy / 'sluice.db-wal'
+    return (copy / 'sluice.db').read_bytes(), (wal.read_bytes() if wal.exists() else b'')
 
+def check_incompatible():
+    """§10.8: nothing live pinned; convert with the candidate; the candidate serves the
+    converted copy; the old release refuses it before it changes anything."""
+    db = sqlite3.connect('file:%s?mode=ro' % (copy / 'sluice.db'), uri=True)
+    pins = db.execute("SELECT r.run_id, coalesce(r.release_id, '(none)') FROM runs r JOIN attempts a USING(attempt_id) "
+                      "WHERE r.finished_at IS NULL OR a.phase <> 'terminal' ORDER BY r.created_at").fetchall()
+    db.close()
+    print('compat: incompatible: candidate %s (schema %d) on %s; old release %s (schema %d)' % (
+        candidate.name, candidate_schema, copy, old.name, release_schema(old)), flush=True)
+    if pins:
+        for run, release in pins: print('compat: pinned: live run %s is pinned to release %s' % (run, release[:12]))
+        print('compat: FAILED: %d live run(s) pinned in the copy: an incompatible check needs a copy with nothing live '
+              '(scripts/cutover-rehearse brings one to zero blockers)' % len(pins), flush=True)
+        return 1
+    if db_schema(copy / 'sluice.db') != candidate_schema:
+        migrated = cli(candidate / 'bin/sluice', 'home', 'migrate', '--json', timeout=max(args.timeout, 600))
+        if migrated is None or migrated.returncode:
+            detail = 'timeout' if migrated is None else (migrated.stderr.strip() or migrated.stdout.strip())[-400:]
+            print('compat: FAILED: the candidate\'s home migrate: %s' % detail, flush=True)
+            return 1
+        report = json.loads(migrated.stdout)
+        print('compat: converted from schema %s: %d project(s), %d revision(s), %d warning(s)' % (report.get('from_schema'),
+            len(report.get('projects', [])), sum(p.get('revisions', 0) for p in report.get('projects', [])), len(report.get('warnings', []))), flush=True)
+    else:
+        print('compat: the copy is already at schema %d' % candidate_schema, flush=True)
+    child, record = start_coordinator(candidate / 'bin/sluice', 'coordinator')
+    ready = await_coordinator(candidate / 'bin/sluice', child, 'coordinator')
+    if ready != 'ok':
+        print('compat: FAILED: ' + ready, flush=True)
+        return 1
+    db = sqlite3.connect('file:%s?mode=ro' % (copy / 'sluice.db'), uri=True)
+    projects = db.execute('SELECT project_id, name FROM projects WHERE deleted_at IS NULL ORDER BY name').fetchall()
+    target = db.execute('SELECT p.project_id, p.name, s.step_id FROM steps s JOIN projects p USING(project_id) '
+                        'WHERE p.archived = 0 AND p.deleted_at IS NULL ORDER BY s.rowid DESC LIMIT 1').fetchone()
+    db.close()
+    cells, failures = {}, []
+    def call(command, arguments, binary=candidate / 'bin/sluice'):
+        proc = cli(binary, 'tool', command, json.dumps(arguments), timeout=args.timeout)
+        return ('FAIL', 'timeout after %gs' % args.timeout) if proc is None else classify(command, proc)
+    if target:
+        project_id, name, step = target
+        for command, arguments in [('log_read', {'project': name, 'limit': 1}), ('status', {'project': name, 'steps': [step], 'brief': True}),
+                                   ('plan_history', {'project': name}), ('plan_read', {'project': name, 'steps': [step]}),
+                                   ('step_context', {'project': name, 'step': step})]:
+            cells[command] = call(command, arguments)
+    else:
+        cells.update({c: ('skip', 'no project or step to address') for c in ('log_read', 'status', 'plan_history', 'plan_read', 'step_context')})
+    exported = [(name, call('plan_get', {'project': 'id:' + project_id})) for project_id, name in projects]
+    bad = [(name, cell) for name, cell in exported if cell[0] != 'ok']
+    cells['plan_get'] = bad[0][1] if bad else ('ok', '%d project(s)' % len(exported))
+    if not alive(record): cells['coordinator'] = ('FAIL', 'crash: candidate coordinator exited: ' + log_tail('coordinator'))
+    stop(record); started.remove(record)
+    # The old release must refuse the converted copy before it changes a byte: its coordinator
+    # (the writer) and a local read (log_read) both open the database themselves.
+    before = database_bytes()
+    refusals = {}
+    child, old_record = start_coordinator(old / 'bin/sluice', 'old-coordinator')
+    try: child.wait(timeout=max(args.timeout, 60))
+    except subprocess.TimeoutExpired: pass
+    if alive(old_record):
+        stop(old_record)
+        refusals['coordinator'] = ('FAIL', 'the old coordinator started on the converted copy')
+    else:
+        tail = log_tail('old-coordinator')
+        refusals['coordinator'] = ('ok', '') if 'unsupported schema' in tail else ('FAIL', 'exited without an unsupported-schema error: ' + tail)
+    started.remove(old_record)
+    proc = cli(old / 'bin/sluice', 'tool', 'log_read', json.dumps({'project': target[1] if target else 'none', 'limit': 1}), timeout=args.timeout)
+    if proc is None: refusals['log_read'] = ('FAIL', 'timeout')
+    else:
+        said = (proc.stdout + proc.stderr).strip()
+        refusals['log_read'] = ('ok', '') if proc.returncode and 'unsupported schema' in said else ('FAIL', 'not refused for its schema: ' + said[-300:])
+    if database_bytes() != before: refusals['unchanged'] = ('FAIL', 'the old release changed the converted copy')
+    else: refusals['unchanged'] = ('ok', '')
+    header = ['release', 'role', *cells]
+    table_of([[candidate.name[:12], 'candidate', *[cells[c][0] for c in cells]]], header)
+    table_of([[old.name[:12], 'old', *[refusals[c][0] for c in refusals]]], ['release', 'role', 'coordinator refused', 'log_read refused', 'unchanged'])
+    for name, cell in bad: failures.append('%s plan_get %s: %s' % (candidate.name[:12], name, cell[1]))
+    failures += ['%s %s: %s' % (candidate.name[:12], c, d) for c, (v, d) in cells.items() if v == 'FAIL' and c != 'plan_get']
+    failures += ['%s %s: %s' % (old.name[:12], c, d) for c, (v, d) in refusals.items() if v == 'FAIL']
+    for c, (v, d) in cells.items():
+        if v not in ('ok', 'FAIL'): print('compat: note: %s %s %s: %s' % (candidate.name[:12], c, v, d))
+    for failure in failures: print('compat: ' + failure)
+    if failures:
+        print('compat: FAILED: incompatible check', flush=True)
+        return 1
+    print('compat: incompatible ok: the candidate serves the converted copy and %s refuses it' % old.name[:12], flush=True)
+    return 0
+
+def compatible():
+    """The compatible check: every release a live run is pinned to, the selected one and the
+    candidate run the agent calls against the candidate's coordinator on the copy."""
     db = sqlite3.connect('file:%s?mode=ro' % (copy / 'sluice.db'), uri=True)
     runs = db.execute("SELECT r.run_id, r.release_id, r.project_id, p.name, r.step_id FROM runs r "
                       "LEFT JOIN projects p USING(project_id) WHERE r.finished_at IS NULL ORDER BY r.created_at").fetchall()
@@ -278,6 +408,34 @@ try:
         print('compat: FAILED: %d of %d releases' % (len({r for r, _ in failures}), len(results)), flush=True)
         sys.exit(1)
     print('compat: %d releases ok' % len(results), flush=True)
+    return 0
+
+try:
+    for p in (scratch_install, bus) if args.copy else (copy, scratch_install, bus):
+        if p == home or home in p.parents or p in home.parents: sys.exit('compat-check: scratch overlaps the home')
+        p.mkdir(mode=0o700)
+    if args.copy: sys.exit(check_incompatible() if incompatible else compatible())
+    # A consistent snapshot through SQLite's backup API; the live file is opened read-only.
+    with sqlite3.connect('file:%s?mode=ro' % (home / 'sluice.db'), uri=True) as live, \
+         sqlite3.connect(str(copy / 'sluice.db')) as snapshot:
+        live.backup(snapshot)
+    live.close(); snapshot.close()
+    config = {}
+    if (home / 'config.json').is_file():
+        try: config = json.loads((home / 'config.json').read_text())
+        except json.JSONDecodeError: config = {}
+    # The copy never notifies anyone and never listens on the live port.
+    for key in ('notify', 'unread_alert_min'): config.pop(key, None)
+    config['http'] = {'host': '127.0.0.1', 'port': 1}
+    (copy / 'config.json').write_text(json.dumps(config))
+    # Plans name project and global fns: copy their trees, never a .env.
+    skip = shutil.ignore_patterns('.env', '__pycache__')
+    for tree in ['projects', 'fns', 'recipes', *[d for d in config.get('fn_dirs', []) if isinstance(d, str) and not os.path.isabs(d)]]:
+        source = (home / tree).resolve()
+        if source.is_dir() and (source == home or home in source.parents) and not (copy / tree).exists():
+            shutil.copytree(source, copy / tree, symlinks=True, ignore=skip)
+
+    sys.exit(check_incompatible() if incompatible else compatible())
 finally:
     cleanup()
 PY

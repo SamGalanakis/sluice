@@ -5,6 +5,7 @@ use std::{future::Future, path::PathBuf, pin::Pin};
 pub mod agent;
 pub mod coordinator;
 pub mod guardian;
+pub mod home;
 pub mod install;
 pub mod mcp;
 pub mod payload_exec;
@@ -24,6 +25,7 @@ macro_rules! register_modes {
 }
 register_modes! {
     "install" => install::run,
+    "home" => home::run,
     "coordinator" => coordinator::run,
     "serve" => serve::run,
     "loop" => scheduler::run,

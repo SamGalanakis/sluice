@@ -46,12 +46,24 @@ with tempfile.TemporaryDirectory(prefix='.stage-', dir=releases) as staging:
     if assets.is_dir():
         shutil.copytree(assets, stage / 'assets', dirs_exist_ok=True)
     # Builtin definitions are embedded, so no copied packs are installed.
+    # The schema the binary reads and writes: a release whose schema differs from the home's
+    # goes out only through scripts/deploy --schema-cutover. Asked of the binary itself, with a
+    # scratch home so nothing it starts can reach a real one.
+    probe = pathlib.Path(tempfile.mkdtemp(prefix='schema-', dir=prefix / '.build/tmp'))
+    try:
+        schema = json.loads(subprocess.check_output([str(stage / 'bin/sluice'), 'home', 'schema'], text=True,
+            env=dict({k: v for k, v in os.environ.items() if not k.startswith('SLUICE_') or k == 'SLUICE_TEST'},
+                     SLUICE_HOME=str(probe / 'home'), SLUICE_INSTALL_DIR=str(probe / 'install'))))['schema']
+    finally:
+        shutil.rmtree(probe, ignore_errors=True)
+    if not isinstance(schema, int) or schema < 1: sys.exit('build-release: bin/sluice reports no schema')
     files = {str(p.relative_to(stage)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(stage.rglob('*')) if p.is_file()}
     digest = hashlib.sha256(json.dumps(files, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
     release_id = sha + '-' + digest
     manifest = dict(release_id=release_id, git_sha=sha, guardian_protocol_major=1, guardian_protocol_minor=0, files=files,
                     private_tmux=json.loads((stage / 'tmux/tmux-manifest.json').read_text()),
-                    build_toolchain={tool: subprocess.check_output([tool, '--version'], text=True).strip() for tool in ['rustc', 'cargo', 'cc']})
+                    build_toolchain={tool: subprocess.check_output([tool, '--version'], text=True).strip() for tool in ['rustc', 'cargo', 'cc']},
+                    schema=schema)
     (stage / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     fsync_tree(stage)
     destination = releases / release_id

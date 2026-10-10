@@ -2458,6 +2458,18 @@ run's project, step or call, run id, start time, pinned release, and whether its
 settle intent); it changes nothing. Neither `--skip-compat` nor an earlier rehearsal skips step
 6's verification, step 7's zero-blocker check or the converter's own preconditions.
 
+**Lane G** pins these details: `--candidate DIR` takes the release `cutover-rehearse` checked
+instead of building REF; `--rehearsal FILE` takes that helper's passing `--json` report for the
+same candidate and selected release instead of rehearsing again (step 1 still happens, earlier);
+`--skip-compat` is refused with `--schema-cutover`. The old release drains with `SLUICE_AUTHOR=cutover
+sluice drain --no-wait` (its `drain` has no `--author`). In step 6 a step whose live attempts all
+carry `cancel_requested` already (a settle sets it) is not a refusal even when its cancel is
+refused. The report is written once step 7 ends (and again after the migration), so a failure
+in steps 8 to 12 still leaves each run's outcome; the deploy.log lines are JSON lines whose
+`cutover` field holds the line. Step 8 proves the home empty by its units (the automatic
+coordinator's, and any active `sluice-run-`/`sluice-test-` unit of a run in its database) and by
+the processes holding its database or `coordinator.lock` open, never by a command-line pattern.
+
 ### 10.2 The converter
 
 `sluice_store::convert::convert_home(database) -> Result<ConversionReport>` (lane B), with one
@@ -2724,8 +2736,11 @@ is pinned to any release in the database it checks (a pin is an error, not a ski
 that copy with the candidate's `sluice home migrate` (unweakened preconditions), starts the
 candidate's coordinator on it and runs `log_read`, `status`, `plan_get` for every project,
 `plan_history` (first page), `plan_read` and `step_context` for one step; then it runs the
-selected (old) release's `status` against the converted copy, which must refuse with an
-unsupported-schema error and leave the copy's bytes unchanged. Run on a copy of a home with
+selected (old) release against the converted copy, which must refuse with an unsupported-schema
+error and leave the copy's bytes unchanged: its `coordinator` (the writer) and its `tool
+log_read` (a local read), the two that open the database themselves. (**Lane G:** not `status`,
+which goes through a coordinator and, with none running and no route to the service manager,
+fails at activation before it reads anything.) Run on a copy of a home with
 live work, it fails on the pins by design: the rehearsal helper is what brings a copy to zero
 blockers first. Ordinary compatible deploys keep today's mode.
 
@@ -2784,6 +2799,20 @@ first, with the old release's own code, and converts only a copy that reached ze
 4. **Report** what the play cancelled and how each run ended there (the same `CutoverReport`
    shape, `stopped` from the copy), the conversion report and the compat table; exit non-zero
    on any failure; remove the copy and the worktree unless `--keep`.
+
+**The harness's command line** (lane G's helper calls it; lane H2 builds it): `cutover-rehearsal
+--home <copy> --author cutover --reason <R> --json`, run with `SLUICE_HOME` the copy and no route
+to the user service manager (`XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` point into the
+scratch directory). It prints one JSON object, `{"refused": [CancelRefusal…], "blockers":
+[{kind, identity, project_id, resource}…]}` (each refusal in the `cutover.refused` fixture's
+shape; the blockers as `drain` status lists them), and exits 0 when both are empty, 1 when the
+play ran but left either, and 2 or more on an error of its own (said on stderr). The helper
+builds it from this checkout's `tools/cutover-rehearsal`, copied into a `git worktree` of the
+old release's commit beside a copy of that commit's `Cargo.lock` (the harness is its own
+workspace, `[workspace]` in its `Cargo.toml`, with `path` dependencies `../../crates/<crate>`),
+with `cargo build --release` into `<prefix>/.build/rehearsal-target`; `--harness BIN` takes one
+already built. It never trusts the harness's word alone: it re-reads the copy's blockers itself,
+and reads each run's outcome from the copy as the cutover reads it from the home.
 
 Production preconditions are never weakened: the converter has no switch to skip blockers, the
 helper never deletes or rewrites a blocker row itself (only the old release's own cancel,

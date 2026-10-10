@@ -62,7 +62,8 @@ releases/<git-sha>-<sha256>/
   tmux/                     the private tmux 3.7c build and its tmux-manifest.json
   assets/                   the dashboard assets (the binary also embeds them)
   manifest.json             release_id, git_sha, guardian protocol, sha256 of every file,
-                            the private tmux manifest, the build toolchain
+                            the private tmux manifest, the build toolchain, and `schema`: the
+                            database schema its sluice reads and writes (absent: 1)
 ```
 
 The **launcher** execs `<install>/entry --installation-entry <install> <args…>`; the release
@@ -89,14 +90,18 @@ installation is the sibling directory `<home>.sluice-install`.
 **`scripts/build-release <prefix>`** runs `cargo build --workspace --bins --release --locked`
 with its target dir under `<prefix>/.build/target`, stages `bin/sluice`, `python/`, the private
 tmux (built once by `scripts/build-private-tmux` and cached under `<prefix>/.build`) and
-`assets/`, writes `manifest.json`, moves the stage to `releases/<release_id>` (an existing
+`assets/`, asks the staged binary its schema (`sluice home schema`, which prints `{"schema": n}`
+and needs no home), writes `manifest.json`, moves the stage to `releases/<release_id>` (an existing
 release id must have identical metadata), compiles the launcher into `<prefix>/bin/sluice` and
 prints the release path. It refuses a prefix on `PATH`, `/`, or `~/.local/bin`.
 
 **`scripts/deploy [REF] [--prefix DIR] [--skip-compat REASON]`** (REF defaults to `origin/main`)
 installs one commit:
 
-1. `git archive` the commit into a temporary source tree and run `build-release` there;
+1. `git archive` the commit into a temporary source tree; a commit whose `SCHEMA_VERSION`
+   differs from the home's `schema_version` is refused there, before anything is built (it goes
+   out only with `--schema-cutover`, below), and so is a built release whose manifest `schema`
+   differs; then run `build-release` in the tree;
 2. `scripts/compat-check` the new release: on a scratch copy of the home's database, with its
    coordinator cut off from systemd, every release an unfinished run is pinned to (plus the
    selected one and the candidate) runs `log_read`, `status`, `say`, a stale `step_submit` and
@@ -117,7 +122,9 @@ installs one commit:
    unfinished run in the home records.
 
 **`scripts/ship [REF] [--dry-run]`** takes a gated branch to a verified live deploy: it refuses a
-dirty tree, rebases onto `origin/main` (re-running `scripts/check` only when main changed a non-`*.md`
+dirty tree and a ref whose `SCHEMA_VERSION` differs from the selected home's (checked before
+anything moves and again on the rebased commit before the push: ship ships compatible changes
+only), rebases onto `origin/main` (re-running `scripts/check` only when main changed a non-`*.md`
 file the branch changed, else building), pushes with a bounded retry, deploys `origin/main` to the
 selected home, checks that every run live before the deploy is still running or finished with a
 result, that the three units are active and that the dashboard answers, and prints one line.
@@ -128,26 +135,80 @@ deploy: each run's guardian stays pinned to its own release, and the new coordin
 
 **Incompatible cutover** (schema 3; lands with the plan-rows cutover). A release whose schema
 differs from the home's (its manifest's `schema`) is never deployed as above: no run pinned to
-the old schema may outlive it. `scripts/deploy --schema-cutover --deadline <time>
-[--cancel-grace <s>] [--settle-timeout <s>] [--dry-run]` first rehearses on a private copy of
-the home (`scripts/cutover-rehearse`): the old release, with a test adoption host that cannot
-reach any production unit, plays the deadline on the copy, and only once the copy has no live
-work does the new release convert it and `scripts/compat-check --incompatible` check it. It then
-prints the notice the orchestrator sends every session and drains the home (§2.6). At the
-deadline (or once nothing is live) it fences the installation, then requests the cancel of every
-step still running with one `step_cancel` per step (author `cutover`, reason `schema-3 cutover at
-<deadline>: stopped at the deadline; retry it after the cutover`) and verifies that each of its
-live attempts carries the request before any unit is stopped. A refused cancel (the old release
-compiles the plan before it cancels, so a missing fn refuses it) stops the cutover still fenced,
-naming each affected step, run and attempt. After `--cancel-grace` it stops the units of runs
-and direct calls still live, waits until nothing is live (at most `--settle-timeout`, else it
-stops fenced), stops the services, backs the database up, runs `sluice home migrate`, selects
-and starts the new release, checks every project's exported plan against the backup, unfences
-and releases the drain. A cancel request does not decide how a run ends: a settled run still
-succeeds and a scatter step keeps its first failure. The report
-(`<install>/cutover-<time>.json`) lists each run the deadline reached with what was asked of it,
-how it actually ended and whether to retry it. `--dry-run` lists what would be stopped and
-changes nothing.
+the old schema may outlive it. `scripts/deploy --schema-cutover --deadline <time> [--cancel-grace
+<s>] [--settle-timeout <s>] [--dry-run] [--candidate DIR] [--rehearsal FILE] [REF]` (`<time>` is
+RFC 3339 or `+<n>m`; grace and timeout default to 300 s; `--candidate` takes an already built
+release instead of building REF, and `--skip-compat` is refused) runs from the release the
+installation selects:
+
+1. **Rehearse** on a private copy of the home (`scripts/cutover-rehearse`, below), or take
+   `--rehearsal FILE`, a passed rehearsal report of this candidate over the selected release.
+2. Print the **notice** the orchestrator sends every session: `sluice cutover to schema 3 at
+   <deadline>: new work is refused from now; runs still live at <deadline> get a cancel request
+   ("<reason>") — check how each ended in the cutover report and retry it after the cutover.`
+   The reason is `schema-3 cutover at <deadline>: stopped at the deadline; retry it after the
+   cutover`. `--dry-run` stops here, after listing each live run (project, step or `call:<id>`,
+   run, start, pinned release, settle intent and what the deadline would do to it); it changes
+   nothing.
+3. **Drain** with the old release (`sluice drain --no-wait`, author `cutover`, §2.6) and wait
+   until nothing is live or the deadline comes.
+4. **Fence** (`install fence "schema-3 cutover"`), starting the old coordinator with
+   `--maintenance` if none answers, then request **one `step_cancel` per live (project, step)**
+   with the old release (author `cutover`, the reason above) and **verify the intent**: every
+   live attempt of each step carries `cancel_requested` (a step whose attempts all ended
+   meanwhile, or whose live attempts all carry it already, as a settle leaves them, is no
+   refusal). A refused cancel (the old release compiles the plan before it cancels, so a
+   missing fn refuses it), or an attempt left without intent, stops the cutover still fenced
+   and drained, stopping nothing; the report's `refused` names each project, step, run and
+   attempt with the refusal.
+5. **Settle**: after `--cancel-grace`, stop the transient unit of each cancelled run and each
+   running call still live (by its recorded unit name, never a pattern); the old coordinator
+   records each end through its own completion and adoption paths. Then wait, at most
+   `--settle-timeout`, until no attempt, run, waiting or held lease or running call is left,
+   else stop fenced. The report is written now, so a later failure still says how each run
+   ended.
+6. **Stop** the services and prove nothing of the home is left: no active unit of the home's
+   coordinator or of any of its runs, and no process holding its database or writer lock.
+7. **Back up** the database (backup API) to `<install>/backups/pre-schema3-<time>.db`, then
+   **migrate** with the candidate's `sluice home migrate`. A failed migration leaves the home
+   unchanged and stops fenced.
+8. **Select and start** the candidate (as an ordinary deploy's steps 5 to 7) and check: the
+   integrity check, every project's `plan_get` equal to the backup's plan at its revision
+   (compact serialization, `docs/design/plan-rows.md` §10.5), `plan_history` reaching rev 1, and the
+   dashboard answering (`/` with 200, a project page without a server error). A failure stays fenced: recover forward, or
+   restore the backup together with the old release.
+9. **Unfence**, then **release** the drain (author `cutover`), and **report**: one line `cutover
+   <sha> · schema 3 · <n> projects · <m> revisions converted · cancel requested for <k> runs ·
+   <c> calls stopped`, then a line per run, `stopped <project> <step or call:<id>> <run>
+   requested=<cancel|stop> outcome=<succeeded|failed:<kind>> advice=<none|retry|read-then-retry|call-again>`,
+   printed and appended to `<install>/deploy.log` (each as a JSON line's `cutover` field), and
+   the whole report (`<install>/cutover-<deadline>.json`).
+
+A cancel request does not decide how a run ends: a settled run still succeeds, a run that
+finishes first keeps its own result, a scatter step keeps its first failure, a stopped call
+ends `process_lost`. So each report entry gives the run's own outcome, its step's status and
+error after it, and advice that follows the outcome: `none` for a success, `retry` for a step
+failed `cancelled`, `read-then-retry` for any other failure, `call-again` for a call.
+
+**`scripts/cutover-rehearse --candidate DIR [--old DIR] [--deadline <time>] [--home DIR]
+[--harness BIN] [--keep] [--json]`** copies the home as compat-check does into `/tmp/cr.*` (no
+route to the user service manager), builds the `tools/cutover-rehearsal` harness against a
+checkout of the old release's commit (or takes `--harness`) and lets it play the deadline on the
+copy with the old release's own code and a test adoption host: the drain, one `step_cancel` per
+live step, the intent check and one adoption pass. Only once its own re-read finds zero
+blockers does the candidate's `sluice home migrate` convert the copy and `scripts/compat-check
+--incompatible --copy` check it. It reports what the play stopped (the cutover report's shape),
+the conversion and the compat table, exits non-zero on any refusal, blocker or failure, and
+removes the copy and the checkout unless `--keep`.
+
+**`scripts/compat-check`** checks a candidate whose manifest `schema` differs from the home's
+(or with `--incompatible`) in incompatible mode: no run in the copy may be live (a pin is an
+error), the candidate's `sluice home migrate` converts the copy (unless it is already at the
+candidate's schema), the candidate's coordinator serves it (`log_read`, `status`, `plan_get` of
+every project, `plan_history`, `plan_read`, `step_context`), and the old release (`--old`,
+default the selected one) must refuse it: its coordinator exits on the unsupported schema and its
+`log_read` refuses, with the database bytes unchanged. `--copy DIR` checks a prepared private
+copy instead of copying the home, and never removes it.
 
 ### 2.3 Home layout
 
@@ -278,7 +339,11 @@ whose completion snapshot replays through the later logged revisions to the stor
 with one logged revision and no such snapshot, at the stored plan. That revision becomes an
 imported baseline (author `sluice`), the revisions at or below it are folded into it, and the
 report lists each anchor with its folded edits. A table whose columns a home gained in
-another order is rebuilt in schema 3's order with the same rows. A restore of a schema-1 or schema-2 backup
+another order is rebuilt in schema 3's order with the same rows. It holds the home's
+`coordinator.lock` while it runs (§14), and its report (`--json`) is `{from_schema, projects:
+[{project_id, name, revisions, steps, inputs, outputs, records_rewritten,
+attempt_snapshots_removed, anchor}], anchored: [{project_id, name, rev, folded_edits, source}],
+warnings}`. A restore of a schema-1 or schema-2 backup
 converts its private destination the same way, with the same refusal: a backup holding live
 work is refused (`invalid`, `this backup holds live work (…); a schema-changing restore needs a
 backup taken with nothing live`), because the restored home's adoption would reach the original
@@ -1837,6 +1902,8 @@ write that timed out, and connections dropped for want of a permit.
 | `loop` | takes the scheduler lease and holds it until SIGINT/SIGTERM |
 | `coordinator [--maintenance]` | runs the home's coordinator in the foreground |
 | `install fence <reason> \| unfence \| select <release_dir> <home> \| status` | §2.2 |
+| `home schema` | `{"schema": n}`: the database schema this binary reads and writes (needs no home; `build-release` records it) |
+| `home migrate [--dry-run] [--json]` | (schema 3; lands with the plan-rows cutover) converts `SLUICE_HOME`'s schema-1 or schema-2 database to this binary's schema (§3), holding `coordinator.lock` (refused while a coordinator holds it); `--dry-run` converts a backup-API copy in a scratch directory and leaves the home untouched; `--json` prints the conversion report |
 | `tool [name [json\|-] [--field value]…]` | without a name, lists the tools; with one, runs it (its arguments as below) and prints its result as MCP returns it (`{"ok": true}` for an acknowledgement); `tool <name> --help` lists its fields |
 | `tool rpc '<request>'` | sends a raw wire request |
 | `next [-p P]… [--since-seq N \| --cursor FILE] [--me NAME] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; without a since it starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |

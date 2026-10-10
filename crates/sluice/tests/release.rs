@@ -65,6 +65,7 @@ fn synthetic_release(root: &Path) -> PathBuf {
         files,
         private_tmux: serde_json::from_value(tmux).unwrap(),
         build_toolchain: BTreeMap::from([("rustc".into(), "fixture".into())]),
+        schema: 1,
     };
     std::fs::write(
         release.join("manifest.json"),
@@ -195,6 +196,11 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
     let release = PathBuf::from(String::from_utf8(build.stdout).unwrap().trim());
     let manifest = verify(&release).unwrap();
     assert!(release.ends_with(&manifest.release_id));
+    // The binary's own schema, asked of it at build time.
+    assert_eq!(
+        i64::from(manifest.schema),
+        sluice_store::schema::SCHEMA_VERSION
+    );
     for path in [
         "bin/sluice",
         "python/sluice_fn/__init__.py",

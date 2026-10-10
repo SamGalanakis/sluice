@@ -45,6 +45,11 @@ pub enum Mode {
         #[command(subcommand)]
         command: InstallCommand,
     },
+    /// The home's storage: the schema this release reads and writes.
+    Home {
+        #[command(subcommand)]
+        command: HomeCommand,
+    },
     Loop {},
     Guardian(RunArgs),
     PayloadExec(RunArgs),
@@ -170,6 +175,7 @@ impl Mode {
             Self::Coordinator { .. } => "coordinator",
             Self::Serve { .. } => "serve",
             Self::Install { .. } => "install",
+            Self::Home { .. } => "home",
             Self::Loop { .. } => "loop",
             Self::Guardian(_) => "guardian",
             Self::PayloadExec(_) => "payload-exec",
@@ -1834,6 +1840,13 @@ fn backup(home: &Path, path: &Path, force: bool) -> Result<(), PublicError> {
     let info = sluice_store::backup::backup(home, &path).map_err(|e| e.into_public(true))?;
     println!("{} {} bytes", info.path.display(), info.bytes);
     Ok(())
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HomeCommand {
+    /// Print `{"schema": N}`: the database schema this release reads and writes
+    /// (`scripts/build-release` records it in the release manifest).
+    Schema,
 }
 
 #[derive(Debug, Subcommand)]

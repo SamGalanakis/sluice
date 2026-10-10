@@ -24,8 +24,18 @@ fn dispatch() -> Result<(), PublicError> {
     modes::agent::structured(&cli.mode)?;
     let home = match home {
         Some(home) => home,
-        // Installation control never touches a home, and selects the first one.
-        None if matches!(cli.mode, Mode::Install { .. }) => PathBuf::new(),
+        // Installation control never touches a home, and selects the first one; a
+        // release's schema is a fact of the binary.
+        None if matches!(
+            cli.mode,
+            Mode::Install { .. }
+                | Mode::Home {
+                    command: sluice::cli::HomeCommand::Schema
+                }
+        ) =>
+        {
+            PathBuf::new()
+        }
         None => {
             return Err(PublicError::BadRequest {
                 message: "no Sluice home: set SLUICE_HOME, or select one with `sluice install \

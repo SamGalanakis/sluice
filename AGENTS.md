@@ -56,7 +56,12 @@
   shows as `refused` with its message but does not. It prints a release × command table, stops
   what it started by PID, removes the copy, and exits 0 when nothing failed (also when nothing
   is live). `--pinned DIR` adds a release; `--mark-schema N` marks the copy at schema
-  N once the candidate has opened it, to prove the check catches a bump.
+  N once the candidate has opened it, to prove the check catches a bump. A candidate whose
+  manifest `schema` differs from the home's (or `--incompatible`) is checked in incompatible
+  mode instead: no run in the copy may be live, the candidate's `sluice home migrate` converts
+  it, the candidate serves it, and the old release (`--old`, default the selected one) must
+  refuse it unchanged. `--copy DIR` checks a prepared copy (the rehearsal's) and never removes
+  it.
 - `scripts/deploy` runs compat-check after the build and before the fence. A failure stops the
   deploy unless `--skip-compat "<reason>"` is given; the reason is printed and every deploy's
   compat outcome is appended to `<install>/deploy.log`.
@@ -66,12 +71,16 @@
   layout; normalized plans use schema 3 (`docs/design/plan-rows.md`). Additive changes use
   version-scoped migrations (`ADDED_COLUMNS` and `ADDED_VIEWS` for the current version). Never
   re-pin a running executable by changing database metadata.
-- `scripts/ship` ships compatible changes only. A schema change goes out through
-  `scripts/deploy --schema-cutover --deadline <time>` (SPEC §2.2): a rehearsal on a copy, the
+- `scripts/ship` ships compatible changes only: it refuses a ref whose `SCHEMA_VERSION` differs
+  from the selected home's before anything moves, and `scripts/deploy` refuses such a commit
+  before building it. A schema change lands on main by hand and goes out through
+  `scripts/deploy --schema-cutover --deadline <time>` (SPEC §2.2): a rehearsal on a copy
+  (`scripts/cutover-rehearse --candidate <release>`, which `--rehearsal FILE` can reuse), the
   notice, the drain, at the deadline the fence and then a cancel request (with a reason naming
   the cutover) for each run still live, nothing converted until nothing is live, then the
-  migration; the report says how each run actually ended. The plan-rows lanes land together
-  from one integration branch (`docs/design/plan-rows.md` §12); none is shipped alone.
+  migration; `<install>/cutover-<time>.json` says how each run actually ended. `--dry-run`
+  rehearses and lists what the deadline would stop. The plan-rows lanes land together from one
+  integration branch (`docs/design/plan-rows.md` §12); none is shipped alone.
 
 ## UI changes
 

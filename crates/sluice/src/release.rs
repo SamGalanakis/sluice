@@ -17,6 +17,15 @@ pub struct Manifest {
     pub files: BTreeMap<String, String>,
     pub private_tmux: sluice_process::tmux::TmuxManifest,
     pub build_toolchain: BTreeMap<String, String>,
+    /// The database schema the release's `sluice` reads and writes (`sluice home schema`),
+    /// recorded by `scripts/build-release`. A release whose schema differs from the home's
+    /// goes out only through `scripts/deploy --schema-cutover`. Releases built before the
+    /// field existed are schema 1.
+    #[serde(default = "schema_one")]
+    pub schema: u32,
+}
+fn schema_one() -> u32 {
+    1
 }
 fn invalid(message: impl Into<String>) -> PublicError {
     PublicError::Invalid {

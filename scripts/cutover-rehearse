@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+# Rehearse a schema cutover on a private copy of the home (docs/design/plan-rows.md §10.10): the
+# old release plays the deadline on the copy (drain, one step_cancel per live step, the intent
+# check, one adoption pass) through the cutover-rehearsal harness and its test adoption host,
+# and only a copy that reached zero blockers is converted by the candidate and checked with
+# scripts/compat-check --incompatible --copy. Never touches the live home, its units or files.
+set -euo pipefail
+repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
+exec python3 - "$repo" "$@" <<'PY'
+import argparse, datetime, json, os, pathlib, re, shutil, signal, sqlite3, subprocess, sys, tempfile, time
+parser = argparse.ArgumentParser(prog='scripts/cutover-rehearse', description=
+    'Play the schema cutover\'s deadline on a private copy of the home with the old release, then '
+    'convert the copy with the candidate and check it. Exits non-zero on any failure.')
+parser.add_argument('--candidate', required=True, metavar='DIR', help='the candidate release (built by scripts/build-release)')
+parser.add_argument('--old', metavar='DIR', help='the old release (default: the selected release)')
+parser.add_argument('--deadline', metavar='TIME', help='the deadline the cancel reason names (RFC 3339; default now)')
+parser.add_argument('--home', help='home to copy (default: SLUICE_HOME, else the installation\'s selected home)')
+parser.add_argument('--prefix', default=str(pathlib.Path.home() / '.local/share/sluice'))
+parser.add_argument('--harness', metavar='BIN', help='a cutover-rehearsal harness already built against the old release '
+    '(default: build tools/cutover-rehearsal against a checkout of the old release\'s commit)')
+parser.add_argument('--keep', action='store_true', help='keep the copy and the checkout')
+parser.add_argument('--json', action='store_true', help='print one JSON report')
+args = parser.parse_args(sys.argv[2:])
+repo = pathlib.Path(sys.argv[1])
+prefix = pathlib.Path(args.prefix).resolve()
+install = pathlib.Path(os.environ.get('SLUICE_INSTALL_DIR', str(prefix / 'install'))).resolve()
+def selection():
+    try: return json.loads((install / 'selection.json').read_text())
+    except FileNotFoundError: return None
+if args.home: home = pathlib.Path(args.home).resolve()
+elif 'SLUICE_HOME' in os.environ: home = pathlib.Path(os.environ['SLUICE_HOME']).resolve()
+elif selection(): home = pathlib.Path(selection()['home_path']).resolve()
+else: sys.exit('cutover-rehearse: no home: set SLUICE_HOME or --home (the installation selects none)')
+if not (home / 'sluice.db').is_file(): sys.exit('cutover-rehearse: %s has no database' % home)
+candidate = pathlib.Path(args.candidate).resolve()
+old = pathlib.Path(args.old).resolve() if args.old else (pathlib.Path(selection()['release_path']).resolve() if selection() else None)
+for name, release in (('candidate', candidate), ('old', old)):
+    if release is None or not (release / 'bin/sluice').is_file() or not (release / 'manifest.json').is_file():
+        sys.exit('cutover-rehearse: the %s release %s is not a built release' % (name, release))
+def manifest(release): return json.loads((release / 'manifest.json').read_text())
+def release_schema(release): return int(manifest(release).get('schema', 1))
+def db_schema(path):
+    with sqlite3.connect('file:%s?mode=ro' % path, uri=True, timeout=30) as db:
+        found = db.execute('SELECT schema_version FROM home_meta WHERE singleton=1').fetchone()[0]
+    db.close()
+    return found
+schema, current = release_schema(candidate), db_schema(home / 'sluice.db')
+if schema == current: sys.exit('cutover-rehearse: the candidate is schema %d like the home: nothing to rehearse' % schema)
+if release_schema(old) != current: sys.exit('cutover-rehearse: the old release is schema %d but the home is schema %d' % (release_schema(old), current))
+if args.deadline:
+    try: moment = datetime.datetime.fromisoformat(args.deadline.replace('Z', '+00:00'))
+    except ValueError: sys.exit('cutover-rehearse: --deadline %r is not an RFC 3339 time' % args.deadline)
+else: moment = datetime.datetime.now(datetime.timezone.utc)
+when = moment.astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+reason = 'schema-%d cutover at %s: stopped at the deadline; retry it after the cutover' % (schema, when)
+
+# Scratch layout, short for Unix socket paths. The copy is a scratch home: nothing selects it,
+# nothing of it is registered with the user service manager, and every process here gets no
+# route to that manager (as compat-check's children).
+scratch = pathlib.Path(tempfile.mkdtemp(prefix='cr.', dir='/tmp'))
+copy, scratch_install, bus, checkout = scratch / 'home', scratch / 'install', scratch / 'bus', scratch / 'old'
+env = {k: v for k, v in os.environ.items() if not k.startswith('SLUICE_') or k in ('SLUICE_TEST', 'SLUICE_FIXTURE')}
+env.update(SLUICE_HOME=str(copy), SLUICE_INSTALL_DIR=str(scratch_install), SLUICE_AUTHOR='cutover',
+           XDG_RUNTIME_DIR=str(bus), DBUS_SESSION_BUS_ADDRESS='unix:path=' + str(bus / 'none'))
+result = dict(ok=False, failure=None, candidate=candidate.name, old=old.name, sha=manifest(candidate)['git_sha'], copy=None,
+              report=None, conversion=None, compat=None)
+def say(message):
+    if not args.json: print('rehearse: ' + message, flush=True)
+def start_time(pid):
+    try: return pathlib.Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()[19]
+    except (FileNotFoundError, ProcessLookupError): return None
+def strays():
+    # Anything started on the copy carries it as its home in its environment.
+    found, marker = [], b'SLUICE_HOME=' + os.fsencode(copy)
+    for proc in pathlib.Path('/proc').iterdir():
+        if not proc.name.isdecimal() or int(proc.name) == os.getpid(): continue
+        try:
+            if marker in (proc / 'environ').read_bytes().split(b'\0'): found.append((int(proc.name), start_time(int(proc.name))))
+        except OSError: pass
+    return found
+def cleanup():
+    for pid, start in strays():
+        if start_time(pid) == start:
+            try: os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+    if (checkout / '.git').exists() and not args.keep:
+        subprocess.run(['git', '-C', str(repo), 'worktree', 'remove', '--force', str(checkout)], capture_output=True)
+    if args.keep: say('kept ' + str(scratch))
+    else: shutil.rmtree(scratch, ignore_errors=True)
+def interrupted(signum, frame): raise SystemExit(130)
+signal.signal(signal.SIGTERM, interrupted)
+signal.signal(signal.SIGINT, interrupted)
+def finish(failure=None):
+    result['ok'] = failure is None
+    result['failure'] = failure
+    if args.json: print(json.dumps(result, indent=2), flush=True)
+    elif failure: print('rehearse: FAILED: ' + failure, flush=True)
+    else: print('rehearse: ok: %s converts a copy of %s once the old release has played the deadline' % (candidate.name[:12], home), flush=True)
+    sys.exit(0 if failure is None else 1)
+
+def ro():
+    return sqlite3.connect('file:%s?mode=ro' % (copy / 'sluice.db'), uri=True, timeout=30)
+def query(sql, params=()):
+    db = ro()
+    try: return db.execute(sql, params).fetchall()
+    finally: db.close()
+def blockers():
+    # What the drain counts as live (§10.3); the converter refuses any of them.
+    return {kind: query(sql)[0][0] for kind, sql in [
+        ('attempts', "SELECT count(*) FROM attempts WHERE phase<>'terminal'"),
+        ('runs', 'SELECT count(*) FROM runs WHERE finished_at IS NULL'),
+        ('leases', "SELECT count(*) FROM leases WHERE state IN ('waiting','held')"),
+        ('calls', "SELECT count(*) FROM calls WHERE status='running'")]}
+def describe(counts): return ', '.join('%d %s' % (n, kind) for kind, n in counts.items() if n) or 'nothing live'
+def outcome_of(run):
+    """How a run ended on the copy: the same reading as scripts/deploy --schema-cutover's report."""
+    result_text, finished, step, step_status, step_error, call, call_status, call_error, project = query(
+        """SELECT r.result, r.finished_at, r.step_id, s.status, s.error, c.call_id, c.status, c.error, p.name
+           FROM runs r LEFT JOIN steps s ON s.project_id = r.project_id AND s.step_id = r.step_id
+           LEFT JOIN calls c ON c.run_id = r.run_id LEFT JOIN projects p ON p.project_id = r.project_id
+           WHERE r.run_id = ?""", (run,))[0]
+    ended = json.loads(result_text) if result_text else {}
+    status = ended.get('status') or call_status or ('failed' if finished else None)
+    error = ended.get('error') or (json.loads(call_error) if call_error else None)
+    entry = dict(project=project)
+    if call: entry['call'] = call
+    else: entry['step'] = step
+    entry.update(run=run, requested='stop' if call else 'cancel', outcome=dict(status=status, **({'error': error['error']} if status != 'succeeded' and isinstance(error, dict) and 'error' in error else {})))
+    if not call and step_status:
+        entry['step_status'] = step_status
+        if step_error: entry['step_error'] = json.loads(step_error).get('error')
+    if call: advice = 'call-again'
+    elif step_status == 'succeeded' or (step_status is None and status == 'succeeded'): advice = 'none'
+    elif entry.get('step_error') == 'cancelled': advice = 'retry'
+    else: advice = 'read-then-retry'
+    entry['advice'] = advice
+    return entry
+def harness():
+    """The cutover-rehearsal harness built against the old release's crates: its source is
+    this checkout's tools/cutover-rehearsal, placed into a checkout of the old commit so its
+    path dependencies name the old crates."""
+    if args.harness: return pathlib.Path(args.harness).resolve()
+    source = repo / 'tools/cutover-rehearsal'
+    if not (source / 'Cargo.toml').is_file(): finish('the rehearsal harness %s is missing' % source)
+    sha = manifest(old)['git_sha']
+    if subprocess.run(['git', '-C', str(repo), 'cat-file', '-e', sha + '^{commit}'], capture_output=True).returncode:
+        finish('the old release\'s commit %s is not in %s' % (sha[:12], repo))
+    added = subprocess.run(['git', '-C', str(repo), 'worktree', 'add', '--quiet', '--detach', str(checkout), sha], capture_output=True, text=True)
+    if added.returncode: finish('checking out %s: %s' % (sha[:12], added.stderr.strip()))
+    shutil.copytree(source, checkout / 'tools/cutover-rehearsal', ignore=shutil.ignore_patterns('target'), dirs_exist_ok=True)
+    # The harness is its own workspace; it starts from the old release's resolution.
+    shutil.copy(checkout / 'Cargo.lock', checkout / 'tools/cutover-rehearsal/Cargo.lock')
+    target = prefix / '.build/rehearsal-target'
+    say('building the harness against %s (%s)' % (old.name[:12], target))
+    built = subprocess.run(['cargo', '--config', 'build.target-dir=' + json.dumps(str(target)), 'build', '--release',
+        '--manifest-path', str(checkout / 'tools/cutover-rehearsal/Cargo.toml')], stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr)
+    if built.returncode: finish('building the rehearsal harness against %s failed' % sha[:12])
+    return target / 'release/cutover-rehearsal'
+
+try:
+    for p in (copy, scratch_install, bus):
+        p.mkdir(mode=0o700)
+    # 1. The copy: the database by the backup API from the read-only live file, the config
+    # (never notifying, never on the live port), the fn and recipe trees, never a .env.
+    with sqlite3.connect('file:%s?mode=ro' % (home / 'sluice.db'), uri=True) as live, sqlite3.connect(str(copy / 'sluice.db')) as snapshot:
+        live.backup(snapshot)
+    live.close(); snapshot.close()
+    config = {}
+    if (home / 'config.json').is_file():
+        try: config = json.loads((home / 'config.json').read_text())
+        except json.JSONDecodeError: config = {}
+    for key in ('notify', 'unread_alert_min'): config.pop(key, None)
+    config['http'] = {'host': '127.0.0.1', 'port': 1}
+    (copy / 'config.json').write_text(json.dumps(config))
+    skip = shutil.ignore_patterns('.env', '__pycache__')
+    for tree in ['projects', 'fns', 'recipes', *[d for d in config.get('fn_dirs', []) if isinstance(d, str) and not os.path.isabs(d)]]:
+        source = (home / tree).resolve()
+        if source.is_dir() and (source == home or home in source.parents) and not (copy / tree).exists():
+            shutil.copytree(source, copy / tree, symlinks=True, ignore=skip)
+    result['copy'] = str(copy)
+    say('copied %s to %s' % (home, copy))
+    # What the deadline reaches on the copy: the live step runs and the running calls.
+    affected = [run for (run,) in query("""SELECT DISTINCT r.run_id FROM attempts a JOIN runs r USING(attempt_id)
+        WHERE a.phase <> 'terminal' AND a.step_id IS NOT NULL ORDER BY r.created_at""")]
+    affected += [run for (run,) in query("SELECT run_id FROM calls WHERE status='running' AND run_id IS NOT NULL")]
+    # 2. The old release plays the deadline on the copy.
+    binary = harness()
+    say('playing the deadline with %s on the copy (%d run(s) live)' % (old.name[:12], len(affected)))
+    played = subprocess.run([str(binary), '--home', str(copy), '--author', 'cutover', '--reason', reason, '--json'],
+        env=env, cwd=scratch, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=3600)
+    try: play = json.loads(played.stdout)
+    except json.JSONDecodeError: play = None
+    if not isinstance(play, dict):
+        finish('the harness gave no report (exit %d): %s' % (played.returncode, (played.stderr.strip() or played.stdout.strip())[-600:]))
+    refused = play.get('refused', [])
+    counts = blockers()
+    stopped = [outcome_of(run) for run in affected if query('SELECT finished_at FROM runs WHERE run_id=?', (run,))[0][0]]
+    plans = query('SELECT count(*), coalesce(sum(rev), 0) FROM plans p JOIN projects USING(project_id) WHERE deleted_at IS NULL')[0]
+    result['report'] = dict(sha=result['sha'], schema=schema, deadline=when, reason=reason, projects=plans[0], revisions=plans[1],
+                            stopped=[] if refused else stopped, refused=refused)
+    if refused:
+        finish('the old release refused %d cancel(s) on the copy: %s' % (len(refused), '; '.join(
+            '%s %s: %s' % (r.get('project'), r.get('step'), (r.get('error') or {}).get('message')) for r in refused)))
+    if played.returncode or any(counts.values()):
+        finish('the copy did not reach zero blockers: %s (harness exit %d)' % (describe(counts), played.returncode))
+    say('zero blockers: %d run(s) ended on the copy' % len(stopped))
+    # 3. Convert, only now, with the candidate's unweakened preconditions; then check it.
+    migrated = subprocess.run([str(candidate / 'bin/sluice'), 'home', 'migrate', '--json'], env=env, cwd=scratch,
+        stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    if migrated.returncode: finish('the candidate\'s home migrate failed: %s' % (migrated.stderr.strip() or migrated.stdout.strip())[-600:])
+    result['conversion'] = json.loads(migrated.stdout)
+    result['report']['projects'] = len(result['conversion']['projects'])
+    result['report']['revisions'] = sum(p['revisions'] for p in result['conversion']['projects'])
+    say('converted: %d project(s), %d revision(s)' % (result['report']['projects'], result['report']['revisions']))
+    compat = subprocess.run([str(repo / 'scripts/compat-check'), '--incompatible', '--copy', str(copy), '--release', str(candidate),
+        '--old', str(old), '--prefix', str(prefix)], env=dict(os.environ, SLUICE_INSTALL_DIR=str(scratch_install)),
+        stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    result['compat'] = compat.stdout
+    if not args.json: sys.stdout.write(compat.stdout)
+    if compat.returncode: finish('scripts/compat-check --incompatible failed on the converted copy: %s' % (compat.stdout.strip().splitlines() or [compat.stderr.strip()])[-1])
+    finish()
+finally:
+    cleanup()
+PY

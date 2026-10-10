@@ -73,9 +73,23 @@ def selected():
 def live_db(home):
     return sqlite3.connect('file:%s?mode=ro' % (home / 'sluice.db'), uri=True, timeout=30)
 
+def refuse_incompatible(commit, home):
+    # ship ships compatible changes only: a commit whose schema differs from the home's goes out
+    # through scripts/deploy --schema-cutover --deadline <time> (docs/design/plan-rows.md §10.1).
+    source = git('show', commit + ':crates/sluice-store/src/schema.rs', cwd=work, check=False)
+    match = re.search(r'pub const SCHEMA_VERSION: i64 = (\d+);', source)
+    if not match: fail('%s names no SCHEMA_VERSION in crates/sluice-store/src/schema.rs' % commit)
+    if not (home / 'sluice.db').is_file(): return
+    with live_db(home) as db:
+        current = db.execute('SELECT schema_version FROM home_meta WHERE singleton=1').fetchone()
+    db.close()
+    if current and int(match.group(1)) != current[0]:
+        fail('%s is schema %s and the home is schema %d: ship ships compatible changes only; land it on main and run '
+             'scripts/deploy --schema-cutover --deadline <time> instead' % (commit, match.group(1), current[0]))
+
 try:
     say('shipping %s from %s%s' % (args.ref, work, ' (dry run)' if dry else ''))
-    selected()  # an installation that cannot be deployed to stops this before main moves
+    refuse_incompatible(args.ref, selected())  # an installation that cannot be deployed to, or an incompatible ref, stops this before main moves
     git('fetch', '--quiet', 'origin', '+refs/heads/main:refs/remotes/origin/main', cwd=work)
     head = git('rev-parse', args.ref if dry else 'HEAD', cwd=work)
     gated_upstream = None  # the main the branch's tree was last checked against
@@ -117,6 +131,7 @@ try:
             say('no overlap with main\'s changes: build only')
             run(['cargo', 'build', '--workspace', '--all-targets', '--locked'], cwd=work)
         gated_upstream = upstream
+        if not dry: refuse_incompatible(head, selected())
         say('$ git push origin HEAD:refs/heads/main  (%s)' % (head[:12] if not dry else 'the rebased ' + args.ref))
         if dry: break
         push = subprocess.run(['git', '-C', str(work), 'push', '--porcelain', 'origin', 'HEAD:refs/heads/main'], capture_output=True, text=True)

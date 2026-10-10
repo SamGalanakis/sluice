@@ -2,13 +2,32 @@
 set -euo pipefail
 repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
 exec python3 - "$repo" "$@" <<'PY'
-import argparse, hashlib, json, os, pathlib, shutil, sqlite3, subprocess, sys, tarfile, tempfile, time
-parser = argparse.ArgumentParser()
+import argparse, datetime, hashlib, json, os, pathlib, re, shutil, signal, socket, sqlite3, subprocess, sys, tarfile, tempfile, time, urllib.request
+parser = argparse.ArgumentParser(prog='scripts/deploy', description=
+    'Build REF into a release, check it, and switch the installation to it. A release whose '
+    'schema differs from the home\'s goes out only with --schema-cutover.')
 parser.add_argument('ref', nargs='?', default='origin/main')
 parser.add_argument('--prefix', default=str(pathlib.Path.home() / '.local/share/sluice'))
 parser.add_argument('--skip-compat', metavar='REASON', help='deploy without scripts/compat-check; the reason is printed and logged')
+cutover_args = parser.add_argument_group('schema cutover (docs/design/plan-rows.md §10.1)')
+cutover_args.add_argument('--schema-cutover', action='store_true', help=
+    'rehearse on a copy, print the notice, drain, and at the deadline fence, request the cancel of '
+    'every step still running, settle, migrate the home and start the new release')
+cutover_args.add_argument('--deadline', metavar='TIME', help='RFC 3339 time, or +<n>m (also +<n>s, +<n>h)')
+cutover_args.add_argument('--cancel-grace', type=float, default=300, metavar='S', help='seconds cancelled runs get to end before their units are stopped (default 300)')
+cutover_args.add_argument('--settle-timeout', type=float, default=300, metavar='S', help='seconds to wait for nothing to be live after the stops (default 300)')
+cutover_args.add_argument('--dry-run', action='store_true', help='rehearse, print the notice and what the deadline would stop now; change nothing')
+cutover_args.add_argument('--candidate', metavar='DIR', help='an already built release (the one scripts/cutover-rehearse checked) instead of building REF')
+cutover_args.add_argument('--rehearsal', metavar='FILE', help='a passing scripts/cutover-rehearse --json report for this candidate and the selected release, instead of rehearsing again')
 args = parser.parse_args(sys.argv[2:])
 repo = pathlib.Path(sys.argv[1])
+if not args.schema_cutover:
+    for flag, given in [('--deadline', args.deadline), ('--dry-run', args.dry_run), ('--candidate', args.candidate), ('--rehearsal', args.rehearsal)]:
+        if given: parser.error(flag + ' needs --schema-cutover')
+else:
+    if not args.deadline: parser.error('--schema-cutover needs --deadline')
+    if args.skip_compat is not None: parser.error('--skip-compat does not apply to --schema-cutover: its check is the rehearsal')
+    if args.cancel_grace < 0 or args.settle_timeout < 0: parser.error('--cancel-grace and --settle-timeout are seconds >= 0')
 prefix = pathlib.Path(args.prefix).resolve()
 install = pathlib.Path(os.environ.get('SLUICE_INSTALL_DIR', str(prefix / 'install'))).resolve()
 # The home is SLUICE_HOME, else the one the installation already selects.
@@ -19,26 +38,61 @@ elif (install / 'selection.json').exists():
 else:
     sys.exit('No Sluice home: set SLUICE_HOME (the installation selects none yet)')
 fixture = os.environ.get('SLUICE_DEPLOY_PROCESS_FIXTURE') == '1'
-if os.environ.get('SLUICE_TEST') == '1' or fixture:
+testing = os.environ.get('SLUICE_TEST') == '1'
+if testing or fixture:
     live = [pathlib.Path.home() / '.local/bin', pathlib.Path.home() / '.local/share/sluice']
     # The live home is the one the account's installation selects.
     try: live.append(pathlib.Path(json.loads((pathlib.Path.home() / '.local/share/sluice/install/selection.json').read_text())['home_path']).resolve())
     except FileNotFoundError: pass
-    for p in [prefix, home, install]:
+    for p in [prefix, home, install, *([pathlib.Path(args.candidate).resolve()] if args.candidate else [])]:
         for protected in live:
             if p == protected or protected in p.parents:
                 sys.exit('Tests refuse live installation paths')
 if install == home or home in install.parents:
     sys.exit('Installation control directory must be outside the home')
-sha = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', '--verify', args.ref + '^{commit}'], text=True).strip()
-prefix.mkdir(parents=True, exist_ok=True)
-# Build a source snapshot, not the dirty worktree and not an installed Python tool.
-with tempfile.TemporaryDirectory(prefix='.source-', dir=prefix) as source:
-    archive = subprocess.Popen(['git', '-C', str(repo), 'archive', sha], stdout=subprocess.PIPE)
-    with tarfile.open(fileobj=archive.stdout, mode='r|') as tar: tar.extractall(source, filter='data')
-    if archive.wait(): sys.exit('git archive failed')
-    result = subprocess.check_output([str(pathlib.Path(source) / 'scripts/build-release'), str(prefix)], text=True, env=dict(os.environ, SLUICE_BUILD_GIT_SHA=sha))
-    release = pathlib.Path(result.strip().splitlines()[-1])
+
+def say(message): print('deploy: ' + message, file=sys.stderr, flush=True)
+def home_schema():
+    # The schema the home's database is at; a home without a database takes any release.
+    if not (home / 'sluice.db').is_file(): return None
+    with sqlite3.connect('file:%s?mode=ro' % (home / 'sluice.db'), uri=True, timeout=30) as db:
+        row = db.execute('SELECT schema_version FROM home_meta WHERE singleton=1').fetchone()
+    db.close()
+    return row[0] if row else None
+def source_schema(root):
+    # The schema a source tree's sluice reads and writes, before anything is built.
+    match = re.search(r'pub const SCHEMA_VERSION: i64 = (\d+);', (root / 'crates/sluice-store/src/schema.rs').read_text())
+    if not match: sys.exit('deploy: %s names no SCHEMA_VERSION' % (root / 'crates/sluice-store/src/schema.rs'))
+    return int(match.group(1))
+def manifest(release):
+    return json.loads((pathlib.Path(release) / 'manifest.json').read_text())
+def release_schema(release):
+    # Releases built before the manifest recorded a schema are schema 1.
+    try: return int(manifest(release).get('schema', 1))
+    except FileNotFoundError: return 1
+def incompatible(schema, at):
+    return ('%s is schema %d and the home is schema %d: an incompatible release goes out only through '
+            'scripts/deploy --schema-cutover --deadline <time>' % (at, schema, home_schema()))
+
+if args.candidate:
+    release = pathlib.Path(args.candidate).resolve()
+    if not (release / 'bin/sluice').is_file() or not (release / 'manifest.json').is_file():
+        sys.exit('deploy: %s is not a built release (bin/sluice and manifest.json)' % release)
+    sha = manifest(release)['git_sha']
+else:
+    sha = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', '--verify', args.ref + '^{commit}'], text=True).strip()
+    prefix.mkdir(parents=True, exist_ok=True)
+    # Build a source snapshot, not the dirty worktree and not an installed Python tool.
+    with tempfile.TemporaryDirectory(prefix='.source-', dir=prefix) as source:
+        archive = subprocess.Popen(['git', '-C', str(repo), 'archive', sha], stdout=subprocess.PIPE)
+        with tarfile.open(fileobj=archive.stdout, mode='r|') as tar: tar.extractall(source, filter='data')
+        if archive.wait(): sys.exit('git archive failed')
+        # Refuse an incompatible commit before spending a build on it.
+        schema, current = source_schema(pathlib.Path(source)), home_schema()
+        if not args.schema_cutover and current is not None and schema != current:
+            sys.exit('deploy: ' + incompatible(schema, sha[:12]))
+        result = subprocess.check_output([str(pathlib.Path(source) / 'scripts/build-release'), str(prefix)], text=True, env=dict(os.environ, SLUICE_BUILD_GIT_SHA=sha))
+        release = pathlib.Path(result.strip().splitlines()[-1])
 program = release / 'bin/sluice'
 env = dict(os.environ, SLUICE_HOME=str(home), SLUICE_INSTALL_DIR=str(install))
 def log_deploy(**fields):
@@ -46,19 +100,8 @@ def log_deploy(**fields):
     install.mkdir(parents=True, exist_ok=True)
     with (install / 'deploy.log').open('a') as f:
         f.write(json.dumps(dict(at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), sha=sha, release=release.name, **fields)) + '\n')
-# Before the fence: the candidate must serve every release a live run is pinned to.
-if args.skip_compat is not None:
-    if not args.skip_compat.strip(): sys.exit('--skip-compat needs a reason')
-    print('compat: skipped: ' + args.skip_compat, file=sys.stderr)
-    log_deploy(compat='skipped', reason=args.skip_compat)
-else:
-    check = subprocess.run([str(repo / 'scripts/compat-check'), '--release', str(release), '--prefix', str(prefix), '--home', str(home)],
-        stdin=subprocess.DEVNULL, stdout=sys.stderr)
-    log_deploy(compat='ok' if check.returncode == 0 else 'failed')
-    if check.returncode:
-        sys.exit('Deploy stopped before the fence: scripts/compat-check failed. Fix it, or pass --skip-compat "<reason>".')
-def control(*arguments):
-    return json.loads(subprocess.check_output([str(program), 'install', *arguments], env=env, text=True))
+def control(binary, *arguments):
+    return json.loads(subprocess.check_output([str(binary), 'install', *arguments], env=env, text=True))
 def publish(name, value):
     path = install / name
     temporary = path.with_suffix('.tmp')
@@ -70,26 +113,29 @@ def publish(name, value):
     finally: os.close(fd)
 def start_time(pid):
     try: return pathlib.Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()[19]
-    except FileNotFoundError: return None
+    except (FileNotFoundError, ProcessLookupError): return None
 def stop_process(record):
     pid = record['pid']
     if start_time(pid) != record['start']: return
     os.kill(pid, 15)
     deadline = time.monotonic() + 15
     while start_time(pid) == record['start']:
-        state = pathlib.Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()[0]
+        try: state = pathlib.Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()[0]
+        except FileNotFoundError: return
         if state == 'Z': return
         if time.monotonic() > deadline: raise RuntimeError('managed process did not stop: ' + str(pid))
         time.sleep(.05)
-def start_process(arguments, name):
+def start_process(binary, arguments, name, release_dir):
     log = (install / (name + '.log')).open('ab')
-    child = subprocess.Popen([str(program), *arguments], env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    child = subprocess.Popen([str(binary), *arguments], env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
     log.close()
-    return dict(pid=child.pid, start=start_time(child.pid), command=arguments, release=str(release))
+    return dict(pid=child.pid, start=start_time(child.pid), command=arguments, release=str(release_dir))
+def unit_active(unit):
+    return subprocess.run(['systemctl', '--user', 'is-active', '--quiet', unit]).returncode == 0
 def alive(record):
-    if fixture: return start_time(record['pid']) == record['start']
-    return subprocess.run(['systemctl', '--user', 'is-active', '--quiet', record['unit']]).returncode == 0
-def wait_for_coordinator(record):
+    if 'pid' in record: return start_time(record['pid']) == record['start']
+    return unit_active(record['unit'])
+def wait_for_coordinator(binary, record):
     # Ready means the coordinator answered a cheap read. It answers reads while
     # its startup pass still adopts the runs it found; writes wait for that pass.
     deadline = time.monotonic() + READY_SECONDS
@@ -97,18 +143,18 @@ def wait_for_coordinator(record):
         if not alive(record): raise RuntimeError('maintenance coordinator exited during startup')
         if (home / 'coordinator.sock').exists():
             try:
-                answered = subprocess.run([str(program), 'tool', 'rpc', '{"command":"projects_list"}'], env=env, stdin=subprocess.DEVNULL,
+                answered = subprocess.run([str(binary), 'tool', 'rpc', '{"command":"projects_list"}'], env=env, stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=max(1, deadline - time.monotonic())).returncode == 0
             except subprocess.TimeoutExpired:
                 answered = False
             if answered: return
         if time.monotonic() > deadline: raise RuntimeError('maintenance coordinator did not answer within %d s' % READY_SECONDS)
         time.sleep(.2)
-def unfence():
+def unfence(binary):
     # The release handshake gives the coordinator a bounded time to answer. If it
     # is still busy that deadline elapses with the installation fenced: ask again.
     for attempt in range(UNFENCE_ATTEMPTS):
-        result = subprocess.run([str(program), 'install', 'unfence'], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        result = subprocess.run([str(binary), 'install', 'unfence'], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
         if result.returncode == 0: return json.loads(result.stdout)
         if 'deadline has elapsed' not in result.stderr or attempt + 1 == UNFENCE_ATTEMPTS: break
         print('unfence: coordinator busy, retrying', file=sys.stderr)
@@ -117,72 +163,452 @@ def unfence():
     raise RuntimeError('install unfence failed')
 READY_SECONDS = int(os.environ.get('SLUICE_DEPLOY_READY_SECONDS', '600'))
 UNFENCE_ATTEMPTS = 6
-# An exclusive fence waits only for shared admission/activation decisions. It
-# does not wait for guardians. Errors after this point deliberately stay fenced.
-control('fence', 'deploy ' + sha)
-previous = json.loads((install / 'services.json').read_text()) if (install / 'services.json').exists() else {}
-if fixture:
-    for record in previous.values(): stop_process(record)
-else:
-    if previous:
-        for record in previous.values():
-            unit = record['unit']
-            subprocess.run(['systemctl', '--user', 'stop', unit], check=True)
-    # The automatic coordinator has a deterministic home identity. It must also
-    # stop so its pinned execution host cannot keep scheduling the old release.
-    # Releases before the production unit prefix named it sluice-test-coordinator-*;
-    # stop that name too. Either is absent when no CLI call auto-started one, and
-    # stopping an unloaded unit is not an error here.
-    home_digest = hashlib.sha256(os.fsencode(home)).hexdigest()[:16]
-    for unit_prefix in ['sluice-coordinator-', 'sluice-test-coordinator-']:
-        subprocess.run(['systemctl', '--user', 'stop', unit_prefix + home_digest + '.service'], check=False, stderr=subprocess.DEVNULL)
-control('select', str(release), str(home))
-commands = {'coordinator': ['coordinator', '--maintenance'], 'serve': ['serve', '--no-runner', '--port', os.environ.get('SLUICE_DEPLOY_PORT', '3065')], 'loop': ['loop']}
-services = {}
-try:
+home_digest = hashlib.sha256(os.fsencode(home)).hexdigest()[:16]
+AUTO_COORDINATORS = ['sluice-coordinator-' + home_digest + '.service', 'sluice-test-coordinator-' + home_digest + '.service']
+def stop_services():
+    # The services the last deploy recorded, and the home's automatic coordinator: it has a
+    # deterministic home identity and must stop too, so its pinned execution host cannot keep
+    # scheduling the old release. Releases before the production unit prefix named it
+    # sluice-test-coordinator-*; stop that name too. Either is absent when no CLI call
+    # auto-started one, and stopping an unloaded unit is not an error here.
+    previous = json.loads((install / 'services.json').read_text()) if (install / 'services.json').exists() else {}
+    for record in previous.values():
+        if 'pid' in record: stop_process(record)
+        else: subprocess.run(['systemctl', '--user', 'stop', record['unit']], check=True)
+    if not fixture:
+        for unit in AUTO_COORDINATORS:
+            subprocess.run(['systemctl', '--user', 'stop', unit], check=False, stderr=subprocess.DEVNULL)
+    return previous
+def start_services(binary, release_dir):
+    commands = {'coordinator': ['coordinator', '--maintenance'], 'serve': ['serve', '--no-runner', '--port', os.environ.get('SLUICE_DEPLOY_PORT', '3065')], 'loop': ['loop']}
+    services = {}
     for name, arguments in commands.items():
         if fixture:
-            services[name] = start_process(arguments, name)
+            services[name] = start_process(binary, arguments, name, release_dir)
         else:
             digest = hashlib.sha256(os.fsencode(install)).hexdigest()[:16]
-            unit = ('sluice-test-' if os.environ.get('SLUICE_TEST') == '1' else 'sluice-') + digest + '-' + name
+            unit = ('sluice-test-' if testing else 'sluice-') + digest + '-' + name
             subprocess.run(['systemd-run', '--user', '--quiet', '--collect', '--service-type=exec', '--property=Restart=no', '--unit', unit,
                 '--setenv=SLUICE_HOME=' + str(home), '--setenv=SLUICE_INSTALL_DIR=' + str(install),
                 # Test services name the run units they launch sluice-test-* too.
-                *(['--setenv=SLUICE_TEST=1'] if os.environ.get('SLUICE_TEST') == '1' else []),
+                *(['--setenv=SLUICE_TEST=1'] if testing else []),
                 # The user manager's PATH lacks the engines (codex, claude, devin) and uv.
-                '--setenv=PATH=' + os.environ['PATH'], '--setenv=HOME=' + str(pathlib.Path.home()), '--', str(program), *arguments], check=True)
-            services[name] = dict(unit=unit + '.service', release=str(release))
+                '--setenv=PATH=' + os.environ['PATH'], '--setenv=HOME=' + str(pathlib.Path.home()), '--', str(binary), *arguments], check=True)
+            services[name] = dict(unit=unit + '.service', release=str(release_dir))
         publish('services.json', services)
         if name == 'coordinator':
-            wait_for_coordinator(services[name])
+            wait_for_coordinator(binary, services[name])
     time.sleep(.2)
-    if fixture:
-        for record in services.values():
-            if start_time(record['pid']) != record['start']: raise RuntimeError('managed process exited during restart')
+    for name, record in services.items():
+        if not alive(record): raise RuntimeError('%s exited during restart' % name)
+    subprocess.run([str(binary), 'doctor', '--json'], env=env, check=True, stdout=sys.stderr)
+    return services
+def prune_releases(keep):
+    # A live guardian's /proc executable is the strongest pin. Retain all release
+    # identities recorded in nonterminal home rows too, including uncertain launch.
+    pinned = {str(keep)}
+    if (home / 'sluice.db').exists():
+        with sqlite3.connect('file:' + str(home / 'sluice.db') + '?mode=ro', uri=True) as db:
+            for (release_id,) in db.execute("SELECT release_id FROM runs r JOIN attempts a USING(attempt_id) WHERE a.phase<>'terminal' OR r.finished_at IS NULL"):
+                candidate = prefix / 'releases' / release_id
+                if candidate.is_dir(): pinned.add(str(candidate))
+        db.close()
+    for proc in pathlib.Path('/proc').iterdir():
+        if not proc.name.isdecimal(): continue
+        try:
+            exe = (proc / 'exe').resolve(strict=True)
+            if exe.is_relative_to(prefix / 'releases'): pinned.add(str(exe.parent.parent))
+        except (OSError, RuntimeError): pass
+    if not (prefix / 'releases').is_dir(): return
+    releases = sorted((p for p in (prefix / 'releases').iterdir() if p.is_dir() and not p.name.startswith('.')), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    for old in releases[3:]:
+        if str(old) not in pinned: shutil.rmtree(old)
+
+# ---- an ordinary, compatible deploy -------------------------------------------------------
+def deploy():
+    current = home_schema()
+    if current is not None and release_schema(release) != current:
+        sys.exit('deploy: ' + incompatible(release_schema(release), 'release ' + release.name[:12]))
+    # Before the fence: the candidate must serve every release a live run is pinned to.
+    if args.skip_compat is not None:
+        if not args.skip_compat.strip(): sys.exit('--skip-compat needs a reason')
+        print('compat: skipped: ' + args.skip_compat, file=sys.stderr)
+        log_deploy(compat='skipped', reason=args.skip_compat)
     else:
-        for record in services.values(): subprocess.run(['systemctl', '--user', 'is-active', '--quiet', record['unit']], check=True)
-    subprocess.run([str(program), 'doctor', '--json'], env=env, check=True, stdout=sys.stderr)
-    unfence()
-except Exception:
-    print('Deploy failed; installation remains fenced. Inspect services.json before recovery.', file=sys.stderr)
-    raise
-# A live guardian's /proc executable is the strongest pin. Retain all release
-# identities recorded in nonterminal home rows too, including uncertain launch.
-pinned = {str(release)}
-if (home / 'sluice.db').exists():
-    with sqlite3.connect('file:' + str(home / 'sluice.db') + '?mode=ro', uri=True) as db:
-        for (release_id,) in db.execute("SELECT release_id FROM runs r JOIN attempts a USING(attempt_id) WHERE a.phase<>'terminal' OR r.finished_at IS NULL"):
-            candidate = prefix / 'releases' / release_id
-            if candidate.is_dir(): pinned.add(str(candidate))
-for proc in pathlib.Path('/proc').iterdir():
-    if not proc.name.isdecimal(): continue
+        check = subprocess.run([str(repo / 'scripts/compat-check'), '--release', str(release), '--prefix', str(prefix), '--home', str(home)],
+            stdin=subprocess.DEVNULL, stdout=sys.stderr)
+        log_deploy(compat='ok' if check.returncode == 0 else 'failed')
+        if check.returncode:
+            sys.exit('Deploy stopped before the fence: scripts/compat-check failed. Fix it, or pass --skip-compat "<reason>".')
+    # An exclusive fence waits only for shared admission/activation decisions. It
+    # does not wait for guardians. Errors after this point deliberately stay fenced.
+    control(program, 'fence', 'deploy ' + sha)
+    stop_services()
+    control(program, 'select', str(release), str(home))
     try:
-        exe = (proc / 'exe').resolve(strict=True)
-        if exe.is_relative_to(prefix / 'releases'): pinned.add(str(exe.parent.parent))
-    except (OSError, RuntimeError): pass
-releases = sorted((p for p in (prefix / 'releases').iterdir() if p.is_dir() and not p.name.startswith('.')), key=lambda p: p.stat().st_mtime_ns, reverse=True)
-for old in releases[3:]:
-    if str(old) not in pinned: shutil.rmtree(old)
-print('deployed ' + str(release))
+        start_services(program, release)
+        unfence(program)
+    except Exception:
+        print('Deploy failed; installation remains fenced. Inspect services.json before recovery.', file=sys.stderr)
+        raise
+    prune_releases(release)
+    print('deployed ' + str(release))
+
+# ---- the schema cutover (docs/design/plan-rows.md §10.1) -----------------------------------
+def utc(moment): return moment.astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+def parse_deadline(text):
+    relative = re.fullmatch(r'\+(\d+(?:\.\d+)?)([smh])', text.strip())
+    if relative:
+        seconds = float(relative.group(1)) * {'s': 1, 'm': 60, 'h': 3600}[relative.group(2)]
+        return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=seconds)
+    try: moment = datetime.datetime.fromisoformat(text.strip().replace('Z', '+00:00'))
+    except ValueError: parser.error('--deadline: %r is neither an RFC 3339 time nor +<n>m' % text)
+    if moment.tzinfo is None: parser.error('--deadline: %r has no time zone' % text)
+    return moment
+def ro():
+    return sqlite3.connect('file:%s?mode=ro' % (home / 'sluice.db'), uri=True, timeout=30)
+def query(sql, params=()):
+    db = ro()
+    try: return db.execute(sql, params).fetchall()
+    finally: db.close()
+def blockers():
+    """What the drain counts as live, by kind (§10.3): nothing converts until all are zero."""
+    db = ro()
+    try:
+        return {kind: db.execute(sql).fetchone()[0] for kind, sql in [
+            ('attempts', "SELECT count(*) FROM attempts WHERE phase<>'terminal'"),
+            ('runs', 'SELECT count(*) FROM runs WHERE finished_at IS NULL'),
+            ('leases', "SELECT count(*) FROM leases WHERE state IN ('waiting','held')"),
+            ('calls', "SELECT count(*) FROM calls WHERE status='running'")]}
+    finally: db.close()
+def describe(counts): return ', '.join('%d %s' % (n, kind) for kind, n in counts.items() if n) or 'nothing live'
+def live_runs():
+    """Every live run: a step's (with its settle intent) or a call's, oldest first."""
+    return query("""SELECT r.run_id, r.project_id, p.name, r.step_id, c.call_id, coalesce(r.started_at, r.created_at),
+                           r.release_id, json_type(a.request, '$.settle') IS NOT NULL, a.attempt_id
+                    FROM runs r JOIN attempts a USING(attempt_id) LEFT JOIN projects p ON p.project_id = r.project_id
+                    LEFT JOIN calls c ON c.run_id = r.run_id
+                    WHERE r.finished_at IS NULL OR a.phase <> 'terminal' ORDER BY r.created_at, r.run_id""")
+def live_step_attempts():
+    """The live step attempts grouped by distinct (project, step), with their runs."""
+    groups = {}
+    for project_id, name, step, attempt, run in query("""SELECT a.project_id, p.name, a.step_id, a.attempt_id, r.run_id
+            FROM attempts a JOIN projects p ON p.project_id = a.project_id LEFT JOIN runs r ON r.attempt_id = a.attempt_id
+            WHERE a.phase <> 'terminal' AND a.step_id IS NOT NULL ORDER BY p.name, a.step_id, a.created_at"""):
+        group = groups.setdefault((project_id, step), dict(project_id=project_id, project=name, step=step, attempts=[], runs=[]))
+        group['attempts'].append(attempt)
+        if run: group['runs'].append(run)
+    return list(groups.values())
+def step_attempts(project_id, step):
+    """(nonterminal attempt ids, those without a cancel request) of one step, now."""
+    rows = query("SELECT attempt_id, cancel_requested FROM attempts WHERE project_id=? AND step_id=? AND phase<>'terminal'", (project_id, step))
+    return [a for a, _ in rows], [a for a, requested in rows if not requested]
+def reply_error(proc):
+    # A CLI error is the PublicError JSON on stdout or as stderr's last line.
+    for text in (proc.stdout.strip(), (proc.stderr.strip().splitlines() or [''])[-1]):
+        try: value = json.loads(text) if text else None
+        except json.JSONDecodeError: value = None
+        if isinstance(value, dict) and isinstance(value.get('error'), str): return value
+    return dict(error='storage', message='exit %d: %s' % (proc.returncode, (proc.stderr.strip() or proc.stdout.strip())[-400:] or 'no output'))
+def coordinator_listening():
+    # A connect, not a CLI call: a CLI that finds no coordinator would try to start one.
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(5)
+        probe.connect(str(home / 'coordinator.sock'))
+        return True
+    except OSError: return False
+    finally: probe.close()
+def run_units(run):
+    # The only unit names a run's guardian can have (sluice_process::systemd::TransientService::names).
+    return ['sluice-test-%s.service' % run] if testing else ['sluice-run-%s.service' % run, 'sluice-test-%s.service' % run]
+def stop_run(run):
+    """Stop one live run's transient unit; a run without a unit (a call run in its caller) by
+    its recorded guardian identity. Never by a command-line pattern."""
+    row = query('SELECT unit_name, guardian_pid, guardian_start FROM runs WHERE run_id=?', (run,))
+    unit, pid, start = row[0] if row else (None, None, None)
+    if unit:
+        if unit not in run_units(run): raise RuntimeError('run %s records unit %s, which is not its own' % (run, unit))
+        subprocess.run(['systemctl', '--user', 'stop', unit], check=False, stderr=subprocess.DEVNULL)
+    elif pid and start and start_time(pid) == start:
+        os.kill(pid, signal.SIGTERM)
+def outcome_of(run):
+    """How a run actually ended (its own completion), its step's status and error after it."""
+    row = query("""SELECT r.result, r.finished_at, r.step_id, s.status, s.error, c.call_id, c.status, c.error, p.name
+                   FROM runs r LEFT JOIN steps s ON s.project_id = r.project_id AND s.step_id = r.step_id
+                   LEFT JOIN calls c ON c.run_id = r.run_id LEFT JOIN projects p ON p.project_id = r.project_id
+                   WHERE r.run_id = ?""", (run,))[0]
+    result, finished, step, step_status, step_error, call, call_status, call_error, project = row
+    result = json.loads(result) if result else {}
+    status = result.get('status') or call_status or ('failed' if finished else None)
+    error = result.get('error') or (json.loads(call_error) if call_error else None)
+    entry = dict(project=project)
+    if call: entry['call'] = call
+    else: entry['step'] = step
+    entry.update(run=run, requested='stop' if call else 'cancel', outcome=dict(status=status, **({'error': error['error']} if status != 'succeeded' and isinstance(error, dict) and 'error' in error else {})))
+    if not call and step_status:
+        entry['step_status'] = step_status
+        if step_error: entry['step_error'] = json.loads(step_error).get('error')
+    # Advice follows the outcome, never the request.
+    if call: advice = 'call-again'
+    elif step_status == 'succeeded' or (step_status is None and status == 'succeeded'): advice = 'none'
+    elif entry.get('step_error') == 'cancelled': advice = 'retry'
+    else: advice = 'read-then-retry'
+    entry['advice'] = advice
+    return entry
+def plan_counts():
+    rows = query('SELECT count(*), coalesce(sum(rev), 0) FROM plans p JOIN projects USING(project_id) WHERE deleted_at IS NULL')
+    return rows[0]
+def home_processes():
+    """Processes that still hold the home's database or writer lock open (database readers,
+    a coordinator), found by their open files, never by a command-line pattern."""
+    targets = {str(home / name) for name in ('sluice.db', 'sluice.db-wal', 'sluice.db-shm', 'coordinator.lock')}
+    found = []
+    for proc in pathlib.Path('/proc').iterdir():
+        if not proc.name.isdecimal() or int(proc.name) == os.getpid(): continue
+        try:
+            if any(os.readlink(fd) in targets for fd in (proc / 'fd').iterdir()):
+                found.append('%s (%s)' % (proc.name, os.readlink(proc / 'exe')))
+        except OSError: pass
+    return found
+def home_units():
+    """Active user units of this home: its automatic coordinator and any run unit of a run in
+    its database (by unit name and its run id)."""
+    if fixture and not shutil.which('systemctl'): return []
+    listed = subprocess.run(['systemctl', '--user', 'list-units', '--plain', '--no-legend', '--state=active,activating,deactivating',
+        'sluice-*.service'], capture_output=True, text=True).stdout.split('\n')
+    names = [line.split()[0] for line in listed if line.strip()]
+    active = [u for u in names if u in AUTO_COORDINATORS]
+    runs = {m.group(1): u for u in names for m in [re.fullmatch(r'sluice-(?:run|test)-([0-9a-f-]{36})\.service', u)] if m}
+    if runs:
+        known = {r for (r,) in query('SELECT run_id FROM runs WHERE run_id IN (%s)' % ','.join('?' * len(runs)), list(runs))}
+        active += [u for r, u in runs.items() if r in known]
+    return active
+def compact(document):
+    # §10.5: compact serializations, byte-equal, in document order.
+    return json.dumps(document, separators=(',', ':'), ensure_ascii=False)
+def http_status(url):
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response: return response.status
+    except Exception as e: return getattr(e, 'code', str(e))
+
+def cutover():
+    deadline = parse_deadline(args.deadline)
+    current = home_schema()
+    if current is None: sys.exit('deploy: %s has no database: there is nothing to cut over; use scripts/deploy' % home)
+    schema = release_schema(release)
+    if schema == current: sys.exit('deploy: release %s is schema %d like the home: not a schema change; use scripts/deploy' % (release.name[:12], schema))
+    if schema < current: sys.exit('deploy: release %s is schema %d and the home is schema %d: a cutover only moves forward' % (release.name[:12], schema, current))
+    selection = json.loads((install / 'selection.json').read_text()) if (install / 'selection.json').exists() else None
+    if not selection or pathlib.Path(selection['home_path']).resolve() != home:
+        sys.exit('deploy: the installation does not select %s: a cutover starts from the release that serves the home' % home)
+    old = pathlib.Path(selection['release_path']).resolve()
+    old_program = old / 'bin/sluice'
+    if release_schema(old) != current:
+        sys.exit('deploy: the selected release %s is schema %d but the home is schema %d' % (old.name[:12], release_schema(old), current))
+    when = utc(deadline)
+    reason = 'schema-%d cutover at %s: stopped at the deadline; retry it after the cutover' % (schema, when)
+    stamp = deadline.astimezone(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    report_path = install / ('cutover-%s.json' % stamp)
+    def write_report(stopped, refused, projects=None, revisions=None):
+        counted = plan_counts() if projects is None else (projects, revisions)
+        report = dict(sha=sha, schema=schema, deadline=when, reason=reason, projects=counted[0], revisions=counted[1], stopped=stopped, refused=refused)
+        temporary = report_path.with_suffix('.tmp')
+        temporary.write_text(json.dumps(report, indent=2) + '\n')
+        temporary.replace(report_path)
+        return report
+    def log_line(line, **fields):
+        print(line, flush=True)
+        log_deploy(cutover=line, **fields)
+    def stop_fenced(line, code=1):
+        log_line(line)
+        sys.exit('deploy: %s; the installation stays fenced and drained (report %s)' % (line, report_path))
+
+    # 1. Rehearse on a private copy: the old release plays the deadline, the candidate converts.
+    if args.rehearsal:
+        rehearsal = json.loads(pathlib.Path(args.rehearsal).read_text())
+        if rehearsal.get('candidate') != release.name or rehearsal.get('old') != old.name:
+            sys.exit('deploy: %s rehearsed candidate %s over %s, not %s over %s' % (args.rehearsal, rehearsal.get('candidate'), rehearsal.get('old'), release.name, old.name))
+        if not rehearsal.get('ok'): sys.exit('deploy: %s is a failed rehearsal: %s' % (args.rehearsal, rehearsal.get('failure')))
+        say('rehearsal: %s (passed)' % args.rehearsal)
+    else:
+        say('rehearsal: scripts/cutover-rehearse on a copy of %s' % home)
+        played = subprocess.run([str(repo / 'scripts/cutover-rehearse'), '--candidate', str(release), '--old', str(old), '--deadline', when,
+            '--home', str(home), '--prefix', str(prefix), '--json'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
+        try: rehearsal = json.loads(played.stdout)
+        except json.JSONDecodeError: rehearsal = dict(ok=False, failure='no report: exit %d' % played.returncode)
+        if played.returncode or not rehearsal.get('ok'):
+            log_deploy(cutover='rehearsal failed', failure=rehearsal.get('failure'))
+            sys.exit('deploy: the rehearsal failed, nothing live changed: %s' % rehearsal.get('failure'))
+        say('rehearsal: passed (%d run(s) stopped on the copy)' % len(rehearsal.get('report', {}).get('stopped', [])))
+
+    # 2. The notice.
+    notice = ('sluice cutover to schema %d at %s: new work is refused from now; runs still live at %s get a cancel request ("%s") '
+              '— check how each ended in the cutover report and retry it after the cutover.' % (schema, when, when, reason))
+    print('cutover: the notice to send every session using sluice:', flush=True)
+    print(notice, flush=True)
+    if args.dry_run:
+        runs = live_runs()
+        print('cutover: dry run: %d run(s) live now; at the deadline:' % len(runs), flush=True)
+        for run, _, project, step, call, started, pinned, settle, attempt in runs:
+            what = ('call:' + call) if call else step
+            action = 'stop its unit' if call or not step else 'step_cancel, then stop its unit after %gs' % args.cancel_grace
+            print('  %s %s %s started %s release %s settle=%s: %s' % (project or '-', what, run, started, (pinned or '-')[:12], 'yes' if settle else 'no', action), flush=True)
+        print('cutover: dry run: changed nothing', flush=True)
+        return
+
+    # 3. Drain, under the old release.
+    cutover_env = dict(env, SLUICE_AUTHOR='cutover')
+    drained = subprocess.run([str(old_program), 'drain', '--no-wait'], env=cutover_env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    if drained.returncode: sys.exit('deploy: drain failed, nothing else changed: %s' % reply_error(drained).get('message'))
+    log_line('cutover %s · drained · deadline %s' % (sha[:12], when))
+    # 4. Wait for nothing live, or the deadline.
+    last = 0
+    while True:
+        counts = blockers()
+        remaining = (deadline - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+        if not any(counts.values()) or remaining <= 0: break
+        if time.monotonic() - last > 60:
+            say('waiting: %s; deadline in %ds' % (describe(counts), remaining)); last = time.monotonic()
+        time.sleep(min(2, max(remaining, .1)))
+    # 5. Fence, then make sure the old coordinator serves the cancels.
+    control(old_program, 'fence', 'schema-%d cutover' % schema)
+    say('fenced: schema-%d cutover' % schema)
+    if not coordinator_listening():
+        say('the old coordinator is not running: starting it in maintenance')
+        if fixture: record = start_process(old_program, ['coordinator', '--maintenance'], 'coordinator', old)
+        else:
+            unit = ('sluice-test-' if testing else 'sluice-') + hashlib.sha256(os.fsencode(install)).hexdigest()[:16] + '-coordinator'
+            subprocess.run(['systemd-run', '--user', '--quiet', '--collect', '--service-type=exec', '--property=Restart=no', '--unit', unit,
+                '--setenv=SLUICE_HOME=' + str(home), '--setenv=SLUICE_INSTALL_DIR=' + str(install), *(['--setenv=SLUICE_TEST=1'] if testing else []),
+                '--setenv=PATH=' + os.environ['PATH'], '--setenv=HOME=' + str(pathlib.Path.home()), '--', str(old_program), 'coordinator', '--maintenance'], check=True)
+            record = dict(unit=unit + '.service', release=str(old))
+        services = json.loads((install / 'services.json').read_text()) if (install / 'services.json').exists() else {}
+        services['coordinator'] = record
+        publish('services.json', services)
+        wait_for_coordinator(old_program, record)
+
+    # 6. One step_cancel per live (project, step), then verify the intent before stopping anything.
+    groups = live_step_attempts()
+    refused, cancelled = [], []
+    for group in groups:
+        request = dict(project='id:' + group['project_id'], steps=[group['step']], reason=reason)
+        proc = subprocess.run([str(old_program), 'tool', 'step_cancel', json.dumps(request)], env=cutover_env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        live, without = step_attempts(group['project_id'], group['step'])
+        if proc.returncode and without:
+            # Re-read first: a step whose attempts all ended meanwhile is not a refusal, nor is
+            # one whose live attempts all carry a cancel request already (a settle).
+            refused.append(dict(project=group['project'], step=group['step'], runs=group['runs'], attempts=live, error=reply_error(proc)))
+        else:
+            cancelled.append(group)
+    for group in cancelled:
+        live, without = step_attempts(group['project_id'], group['step'])
+        if without:
+            runs = [r for (r,) in query('SELECT run_id FROM runs WHERE attempt_id IN (%s)' % ','.join('?' * len(without)), without)]
+            refused.append(dict(project=group['project'], step=group['step'], runs=runs, attempts=without, error=dict(error='conflict',
+                message='the cancel was accepted, but %d live attempt(s) carry no cancel request' % len(without))))
+    if refused:
+        write_report([], refused)
+        for entry in refused:
+            say('refused: %s %s runs %s attempts %s: %s: %s' % (entry['project'], entry['step'], ','.join(entry['runs']) or '-', ','.join(entry['attempts']),
+                entry['error'].get('error'), entry['error'].get('message')))
+        stop_fenced('cutover stopped fenced: %d cancels refused' % len(refused))
+    affected = {}
+    for group in cancelled:
+        for run in group['runs']: affected[run] = 'cancel'
+    for (run,) in query("SELECT run_id FROM calls WHERE status='running' AND run_id IS NOT NULL"): affected[run] = 'stop'
+    say('cancel requested for %d step(s) (%d run(s)), intent verified; %d call(s) to stop' % (len(cancelled), sum(1 for v in affected.values() if v == 'cancel'), sum(1 for v in affected.values() if v == 'stop')))
+
+    # 7. The grace, the stops, then the bounded zero-blocker check.
+    def unfinished(runs):
+        if not runs: return []
+        return [r for (r,) in query('SELECT run_id FROM runs WHERE finished_at IS NULL AND run_id IN (%s)' % ','.join('?' * len(runs)), list(runs))]
+    grace = time.monotonic() + args.cancel_grace
+    while unfinished(affected) and time.monotonic() < grace: time.sleep(1)
+    stopped_units = unfinished(affected)
+    for run in stopped_units: stop_run(run)
+    if stopped_units: say('stopped the units of %d run(s) still live after the grace' % len(stopped_units))
+    settle = time.monotonic() + args.settle_timeout
+    while any(blockers().values()) and time.monotonic() < settle: time.sleep(1)
+    counts = blockers()
+    stopped = [outcome_of(run) for run in affected if not unfinished([run])]
+    report = write_report(stopped, [])
+    if any(counts.values()):
+        for run, _, project, step, call, started, pinned, _, attempt in live_runs():
+            say('still live: %s %s run %s attempt %s' % (project or '-', ('call:' + call) if call else (step or '-'), run, attempt))
+        stop_fenced('cutover stopped fenced: %s after the settle timeout' % describe(counts))
+
+    # 8. Stop the services and prove nothing of the home is left.
+    stop_services()
+    left_deadline = time.monotonic() + 30
+    while True:
+        left = home_units() + home_processes()
+        if not left or time.monotonic() > left_deadline: break
+        time.sleep(.5)
+    if left: stop_fenced('cutover stopped fenced: still running on the home: %s' % '; '.join(left))
+    # 9. Back the database up.
+    backups = install / 'backups'
+    backups.mkdir(parents=True, exist_ok=True)
+    backup = backups / ('pre-schema%d-%s.db' % (schema, time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())))
+    with ro() as source, sqlite3.connect(str(backup)) as copy: source.backup(copy)
+    source.close(); copy.close()
+    say('backup: %s' % backup)
+    # 10. Migrate with the candidate, under the fence, holding the writer lock.
+    migrated = subprocess.run([str(program), 'home', 'migrate', '--json'], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    if migrated.returncode:
+        sys.stderr.write(migrated.stderr)
+        stop_fenced('cutover stopped fenced: home migrate failed (%s); the home is unchanged: start the old release %s again, or restore %s with it'
+                    % (reply_error(migrated).get('message'), old.name[:12], backup))
+    conversion = json.loads(migrated.stdout)
+    projects, revisions = len(conversion['projects']), sum(p['revisions'] for p in conversion['projects'])
+    for warning in conversion.get('warnings', []): say('conversion warning: %s' % (warning if isinstance(warning, str) else json.dumps(warning)))
+    report = write_report(stopped, [], projects, revisions)
+    # 11. Select and start the candidate, then check it against the backup.
+    control(program, 'select', str(release), str(home))
+    try:
+        start_services(program, release)
+        if query('PRAGMA integrity_check')[0][0] != 'ok': raise RuntimeError('integrity_check failed on the migrated home')
+        with sqlite3.connect('file:%s?mode=ro' % backup, uri=True) as before:
+            plans = before.execute('SELECT p.project_id, p.name, d.rev, d.doc FROM plans d JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL ORDER BY p.name').fetchall()
+        before.close()
+        for project_id, name, rev, doc in plans:
+            got = subprocess.run([str(program), 'tool', 'plan_get', json.dumps(dict(project='id:' + project_id))], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+            if got.returncode: raise RuntimeError('plan_get %s: %s' % (name, reply_error(got).get('message')))
+            exported = json.loads(got.stdout)
+            if exported.get('rev') != rev or compact(exported.get('plan')) != compact(json.loads(doc)):
+                raise RuntimeError('plan_get %s differs from the backup\'s plan at rev %d' % (name, rev))
+            history = subprocess.run([str(program), 'tool', 'plan_history', json.dumps(dict(project='id:' + project_id, limit=1))], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+            entries = json.loads(history.stdout).get('entries', []) if history.returncode == 0 else []
+            if not entries or entries[0].get('kind') != 'plan.edit' or entries[0].get('rev') != 1:
+                raise RuntimeError('plan_history %s does not reach rev 1' % name)
+        port = os.environ.get('SLUICE_DEPLOY_PORT', '3065')
+        pages = ['http://127.0.0.1:%s/' % port] + (['http://127.0.0.1:%s/projects/id/%s' % (port, plans[0][0])] if plans else [])
+        answer_deadline = time.monotonic() + 60
+        while True:
+            # The home page answers 200; a project page answers without a server error (a plan
+            # whose fns the dashboard's catalog lacks is a typed refusal, not a dead dashboard).
+            bad = [(url, code) for i, url in enumerate(pages) for code in [http_status(url)]
+                   if not (code == 200 or (i > 0 and isinstance(code, int) and code < 500))]
+            if not bad or time.monotonic() > answer_deadline: break
+            time.sleep(.5)
+        if bad: raise RuntimeError('the dashboard answered %s' % ', '.join('%s %s' % pair for pair in bad))
+        say('checked: integrity, %d plan(s) equal to the backup, history to rev 1, the dashboard answers' % len(plans))
+        # 12. Unfence, then release the drain.
+        unfence(program)
+        released = subprocess.run([str(program), 'drain', '--release'], env=cutover_env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        if released.returncode: raise RuntimeError('release: %s' % reply_error(released).get('message'))
+    except Exception as error:
+        log_deploy(cutover='failed after the migration', failure=str(error))
+        sys.exit('deploy: the cutover failed after the migration: %s. The installation stays fenced; recover forward, or restore %s together with %s (§10.7)' % (error, backup, old.name[:12]))
+    # 13. The report.
+    calls = sum(1 for entry in stopped if 'call' in entry)
+    log_line('cutover %s · schema %d · %d projects · %d revisions converted · cancel requested for %d runs · %d calls stopped'
+             % (sha[:12], schema, projects, revisions, len(stopped) - calls, calls), report=str(report_path))
+    for entry in stopped:
+        outcome = entry['outcome']['status'] + (':' + entry['outcome']['error'] if 'error' in entry['outcome'] else '')
+        log_line('stopped %s %s %s requested=%s outcome=%s advice=%s' % (entry['project'] or '-', entry.get('step') or 'call:' + entry['call'],
+                 entry['run'], entry['requested'], outcome, entry['advice']))
+    prune_releases(release)
+
+cutover() if args.schema_cutover else deploy()
 PY
