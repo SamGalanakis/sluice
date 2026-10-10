@@ -817,15 +817,23 @@ fn expand_unit(
     if !collisions.is_empty() {
         return Err(collisions);
     }
-    let members: Vec<String> = steps.keys().cloned().collect();
+    // the unit's entry steps among the new ones, its members being every step of the
+    // candidate in that unit as well (as today's staging compile derives them)
     let is_step = |name: &str| work.has_step(name) || steps.contains_key(name);
-    let entries: Vec<String> = members
-        .iter()
+    let declarations: IndexMap<String, JsonMap> = work
+        .units()
+        .get(unit.as_str())
+        .into_iter()
+        .flatten()
+        .map(|id| (id.clone(), work.steps[id.as_str()].1.clone()))
+        .chain(steps.iter().map(|(id, step)| (id.clone(), map_of(step))))
+        .collect();
+    let entries: Vec<String> = steps
+        .keys()
         .filter(|id| {
-            let declaration = map_of(&steps[id.as_str()]);
-            !dependencies(&declaration, &is_step)
+            !dependencies(&declarations[id.as_str()], &is_step)
                 .iter()
-                .any(|d| members.contains(d))
+                .any(|d| declarations.contains_key(d))
         })
         .cloned()
         .collect();
@@ -863,4 +871,50 @@ fn expand_unit(
 }
 fn map_of(value: &Value) -> JsonMap {
     object(value, "").expect("a strict step object")
+}
+
+/// `base` with `changes` applied as the store applies a commit (§4 step 5): `header.put` sets
+/// the root order, deletes remove rows, puts insert or replace `(position, declaration)`.
+/// Applying an edit's `changes` to its base gives its candidate's rows.
+pub fn apply_changes(base: &PlanRows, changes: &[PlanChange]) -> PlanRows {
+    let mut work = Working::of(base);
+    for change in changes {
+        match change {
+            PlanChange::HeaderPut { root_order } => work.root_order = root_order.clone(),
+            PlanChange::InputDelete { name } => {
+                work.inputs.shift_remove(name);
+            }
+            PlanChange::OutputDelete { name } => {
+                work.outputs.shift_remove(name);
+            }
+            PlanChange::StepDelete { step } => {
+                work.steps.shift_remove(step.as_str());
+            }
+            PlanChange::InputPut {
+                name,
+                position,
+                declaration,
+            } => {
+                work.inputs
+                    .insert(name.clone(), (*position, declaration.clone()));
+            }
+            PlanChange::OutputPut {
+                name,
+                position,
+                binding,
+            } => {
+                work.outputs
+                    .insert(name.clone(), (*position, binding.clone()));
+            }
+            PlanChange::StepPut {
+                step,
+                position,
+                declaration,
+            } => {
+                work.steps
+                    .insert(step.to_string(), (*position, declaration.clone()));
+            }
+        }
+    }
+    work.rows(&base.header)
 }
