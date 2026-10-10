@@ -26,27 +26,6 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-/// A plan edit command's name and author, for the coordinator's log; None for any other
-/// command.
-pub fn edit_label(command: &CommandRequest) -> Option<(&'static str, Option<&str>)> {
-    let (kind, options) = match command {
-        CommandRequest::PlanPatch(e) => return Some(("plan_patch", e.author.as_deref())),
-        CommandRequest::StepAdd(e) => ("step_add", &e.edit),
-        CommandRequest::UnitAdd(e) => ("unit_add", &e.edit),
-        CommandRequest::StepUpdate(e) => ("step_update", &e.edit),
-        CommandRequest::StepRemove(e) => ("step_remove", &e.edit),
-        CommandRequest::EdgeAdd(e) => ("edge_add", &e.edit),
-        CommandRequest::EdgeRemove(e) => ("edge_remove", &e.edit),
-        CommandRequest::StepSetInput(e) => ("step_set_input", &e.edit),
-        CommandRequest::PlanSetInput(e) => ("plan_set_input", &e.edit),
-        CommandRequest::UnitTag(e) => ("unit_tag", &e.edit),
-        CommandRequest::StepPause(e) => ("step_pause", &e.edit),
-        CommandRequest::PlanPrune(e) => ("plan_prune", &e.edit),
-        _ => return None,
-    };
-    Some((kind, options.author.as_deref()))
-}
-
 /// `step_set_input`'s report.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, JsonSchema)]
 pub struct InputChanges {

@@ -1,6 +1,7 @@
 # Plans
 
-Each project has exactly one plan: JSON with typed `inputs`, named `outputs` and `steps`. A new
+Each project has exactly one plan, stored as rows and exported as JSON with typed `inputs`,
+named `outputs` and `steps`. These JSON documents are the export format, not edit requests. A new
 project starts with `{"inputs": {}, "outputs": {}, "steps": {}}`. Each step runs one function
 (`run`) and binds each of the function's inputs (`in`). `agent.*` and `git.*` are built in like
 `core.*` — every first-party function is compiled into sluice (see `docs("fns")`).
@@ -33,7 +34,8 @@ Say what an input or a step is for with an optional `doc`. A plan input takes th
                     "after": ["approved"], "in": {"path": {"source": "repo"}}}}}
 ```
 
-`plan_get` returns them with the plan, and the dashboard and `plan_view` show them.
+`plan_get` exports them with the plan. Full `step_get` and `plan_read` replies include them
+in `spec`, and the dashboard shows them.
 
 ## Titles: how a step is named on the dashboard
 Every step has a title the owner reads instead of its id; the id stays beside it in mono. Give
@@ -239,7 +241,7 @@ no separate `effort` input: the effort is in the object.
 - A string `model` (`"sol"`, `"fusion"`) or an `effort` input is the retired form: the run
   fails at launch with the object to use instead. An edit that adds an agent step with a
   string `model`, or changes a step's model to one (`step_add`, `unit_add` with its recipe's
-  params and `inputs`, `step_update`, `step_set_input`, `plan_patch`, or `plan_set_input` on an
+  params and `inputs`, `step_update`, `step_set_input`, `plan_edit`, or `plan_set_input` on an
   input a model reads), is refused at once with that message. In a recipe whose `model` param
   is a name, pass the object through `unit_add`'s `inputs`:
   `"inputs": {"work": {"model": {"type": "normal", "model": "sol", "effort": "high"}}}`.
@@ -423,11 +425,11 @@ for it. It does not scatter.
                                                   "values": {"source": ["work/final"]}}}}}
 ```
 
-To move a step's work out (say a long agent step you fan out yourself), patch its `run` to
-`core.external` and `step_retry` it. Its inputs stay (the old function's own inputs become
-extra inputs) and so do its declared outputs; declare any output of the old function a
-dependent reads (`{"op": "add", "path": "/steps/w/outputs/final", "value": "string"}`), and
-drop its `scatter`.
+To move a step's work out, use `step_update` to set `run` to `core.external`, declare the
+outputs its dependents read and remove `scatter`, then `step_retry` it. Its inputs stay; the
+old function's own inputs become extra inputs. For a step `w` whose dependent reads `final`:
+`step_update(project, "w", changes={"run": "core.external", "outputs": {"final": "string"},
+"scatter": null})`. `outputs` replaces that map, so include any other declarations to keep.
 
 Every edit, manual value and step status change is a record in the project's log:
 `plan_history(project)` shows every edit (back to rev 1) and the manual values the log still
@@ -460,53 +462,105 @@ your edits). Its edit is a plain `plan.edit`: `next` does not wake for it (unles
 the setting with `query`: `SELECT prune_done_after, prune_keep FROM projects WHERE project_id =
 ?1`. The owner can set both on the project settings page.
 
-Removing a step that finished (by `plan_prune`, `step_remove` or any `plan_patch`) keeps what it
+Removing a step that finished (by `plan_prune`, `step_remove` or any `plan_edit`) keeps what it
 ended with in the `outcomes` view: its status, outputs, error, run ids, unit, when it was
 recorded and when it was removed. Nothing trims it; read it with `query`, e.g.
 `SELECT step_id, status, outputs FROM outcomes WHERE project_id = ?1 AND unit = 'x'` with the
 project's id as the parameter.
 
+## Scoped reads
+Read one unit with `unit_get(project, unit, compact=false)` or one step with
+`step_get(project, step, compact=false)`. Their full steps include the declaration as
+`spec` and the normalized `references`; `compact=true` returns only `id`, `unit`, `recipe`,
+`position`, `run`, `status`, `paused` and `priority`, without decoding declarations. A missing
+step or unit is `not_found`.
+
+`plan_read(project, units?, steps?, status?, recipe?, compact=true, limit=200, cursor?)`
+returns `{project, rev, state_epoch, recipe_generation, steps, next_cursor}`. Lists match any
+member and filters combine with AND. `units`, `steps` and `status` each accept one string.
+Absent filters are unrestricted, an empty list matches nothing and a name matching nothing
+returns an empty page. Statuses are the stored words `pending`, `running`, `succeeded`,
+`failed`, `stale` and `skipped`, not the dashboard's words. A `recipe` filters units that
+match it now. Steps come in position order. Limits are 1 to 1000, larger capped at 1000;
+zero is `bad_request`.
+
+Pass `next_cursor` back with the same project and filters. A cursor always binds the plan's
+revision, binds execution state only when filtering on status, and binds recipes only when
+filtering on recipe. Unfiltered paging therefore survives status changes. An expired cursor
+is `cursor_expired`; read again without it. A malformed cursor or one from another query is
+`bad_request`. `step_get` returns `{project, rev, state_epoch, step}`. `unit_get` returns
+`{project, rev, state_epoch, recipe_generation, unit}`; the unit has `id`, `recipe`,
+`entry_steps`, `exit_steps`, `done`, `settled` and its `steps` in position order.
+
+`plan_get(project)` exports the whole plan with its revision and project identity, in authored
+section and key order. It does not compile, so a broken fn catalog does not prevent an export.
+`plan_view(project, format="mermaid", all=false, units?, steps?, status?, recipe?)` uses the
+same filters. Every edge crossing the selection ends at an outside boundary node, and a
+comment counts them. `all=true` keeps done units.
+
 ## Editing
-`plan_patch` takes the plan's current `rev` (from `plan_get` or `status`) and RFC 6902 JSON
-Patch ops against the plan document. If someone edited in between you get `conflict` with
-`current_rev`: re-read and retry.
+Read the unit or steps you need with `unit_get`, `step_get` or `plan_read`. Use the typed tools for single changes and `plan_edit` for an atomic batch. Pass `rev` when a change depends on an earlier read. `plan_get` exports the whole plan. A preview describes the edit's affected work; ask for a full dry run explicitly. An edit refused `busy` is retried as is.
+
+`plan_edit(project, ops, reason, rev?, start=true)` applies operations in order to one
+candidate. Each sees the preceding operations, then the candidate is validated once and
+commits whole or not at all. Pass the revision from a scoped read when the edit depends on
+it. If the plan moved on you get `conflict` with `current_rev`: read again before deciding
+what to change. `reason` is required for `plan_edit`, `unit_update` and `unit_remove`; other
+edit tools default to an empty reason.
 
 ```json
-[{"op": "add", "path": "/inputs/repo", "value": "string"},
- {"op": "add", "path": "/steps/head", "value": {"run": "git.head", "in": {"path": {"source": "repo"}}}},
- {"op": "replace", "path": "/steps/notes/in/engine", "value": {"default": "codex"}},
- {"op": "remove", "path": "/steps/old-step"}]
+{"project": "demo", "rev": 7, "reason": "Replace the old checkout step", "ops": [
+  {"op": "input.put", "name": "repo", "declaration": "string"},
+  {"op": "step.add", "step": "head", "spec": {"run": "git.head", "in": {"path": {"source": "repo"}}}},
+  {"op": "step.update", "step": "notes", "changes": {"in": {"engine": {"default": "codex"}, "cwd": {"source": "repo"}, "spec": {"default": "Write the notes"}}}},
+  {"op": "step.remove", "steps": ["old-step"]}
+]}
 ```
 
-The other edit tools take an optional `rev`: leave it out to edit the current plan, or pass it
-to be refused with `conflict` if the plan moved on.
+Operations are `input.put {name, declaration}`, `input.remove {name}`, `output.put {name,
+source}`, `output.remove {name}`, `step.add {step, spec}`, `step.update {step, changes}`,
+`step.remove {steps}`, `edge.add` or `edge.remove {step, after}`, `unit.add {recipe, unit,
+params?, after?, inputs?, tags?}`, `unit.update {unit, changes}`, `unit.remove {unit}` and
+`order.set {collection, ids}`. `collection` is `steps`, `inputs` or `outputs`; `ids` must name
+every current member exactly once, and `rev` is required. Pure reordering is an authored edit.
+An unknown operation or field, empty `ops`, changes, removal steps or edge entries is
+`bad_request`. Operation refusals are collected as `invalid` with `ops[i]` paths; candidate
+validation errors use plan paths.
 
-Small edits: `step_add(project, step, spec)`, `step_update(project, step, changes)` (each
-key replaces that field, null removes it) and `step_remove(project, steps=[...])`. They are the
-same edit, validated the same way. `edge_add` and `edge_remove` are the only verbs for gates:
-no rev to read, and edges someone else added are never dropped (a `plan_patch` of
-`/steps/<id>/after` replaces the whole list). Adding an edge that is there already, or
-removing one that is not, leaves the plan as it was: no edit, the current `rev`. `step`
-may also be `unit:<name>`: the entries then go on every entry step of that unit.
+Small edits use `step_add`, `step_update` or `step_remove`. `changes` accepts only `run`,
+`in`, `scatter`, `doc`, `outputs`, `paused`, `after`, `tags`, `needs` and `priority`; null
+removes a key and `in` replaces the whole map. `unit_update(project, unit, changes, reason)`
+changes listed members by exact id without regenerating the recipe; its `steps` report the
+changed members. `unit_remove(project, unit, reason)` removes every member; its `steps`
+report removed members in position order.
 
-Tools that change one step's contents take `step` (`step_add`, `step_update`, `step_set_output`,
-`step_submit`); tools that act on a selection take `steps` (ids; one id is fine too) and/or
-`tags`: `step_pause`, `step_retry`, `step_cancel`, `step_remove`, `step_set_input` and the
-`status` filter (`plan_prune` takes `units` and `tags`). A tool refuses an argument it does not
-take, naming the ones it does.
+`edge_add` and `edge_remove` append or remove entries without replacing someone else's gate
+entries. An edge already there or already absent is a no-op. `step` may be `unit:<name>` to
+act on the unit's entry steps. Selection tools use `steps` and/or `tags`; one string is fine.
+A tool refuses an argument it does not take.
 
-Every edit tool takes `dry_run: true`, which returns `{ops, would_start, would_queue,
-would_skip, would_stale, errors}` from one simulation without changing anything.
+Edit replies are `{project, rev, preview, steps?, board_warnings?}`. Every edit takes
+`dry_run=true`, returning the preview alone without changing anything. The preview is
+`{scope, changes, would_start, would_queue, would_skip, would_stale, errors}`. `scope` is
+`impact` by default and describes affected work, including resource competitors when needed.
+For a whole-plan simulation, pass `dry_run=true, preview_scope="all"`; without `dry_run`,
+`all` is `bad_request`. `changes` are resolved row puts and deletes, not request operations.
 
-An edit that changes nothing is no edit: it commits nothing and returns the current `rev`
-with empty `preview.ops` (`step_set_input` refuses one instead).
+A no-op writes no record or history and keeps the current revision with empty
+`preview.changes`. Typed lowering can produce no operations; supplied empty batches are
+still refused. `step_set_input` keeps its `bad_request` when it changes nothing. A running
+step can only be paused or tagged. A `busy` refusal with `retryable=true` after three stale
+preparations writes nothing: send the same edit again.
 
-You cannot remove or change a running step (only pause or tag it). Every edit needs a short
-`reason`; it goes into the plan's history (`plan_history`).
+`plan_history(project, since_rev?, after_seq?, limit=200)` returns `{project, entries,
+next_after_seq}`. Every authored edit is retained from revision 1 with resolved `changes`;
+retained `plan.input`, `step.output` and `step.retry` log records join them, oldest by `seq`
+first. Both filters apply together. Pass `next_after_seq` as `after_seq` to page; null ends
+the history. Limits follow `plan_read`.
 
 ## Pausing
 Steps you add start as soon as they are ready. To draft first, pass `start=false` to
-`plan_patch`, `step_add` or `unit_add`: the steps it adds come in **paused** (unless a step sets
+`plan_edit`, `step_add` or `unit_add`: the steps it adds come in **paused** (unless a step sets
 `paused` itself) and start nothing until you release them. To cap how many run at once, use
 resources and `needs` (Resources, below), not pauses.
 

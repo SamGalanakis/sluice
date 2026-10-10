@@ -343,7 +343,15 @@ const TOOLS: &[(&str, &str)] = &[
     ),
     ("plan_get", "the plan document and its revision"),
     ("plan_history", "the plan's edit history"),
-    ("plan_patch", "JSON-patch the plan at a required rev"),
+    (
+        "plan_edit",
+        "edit the plan with an atomic batch of typed operations",
+    ),
+    ("plan_read", "read selected steps, with paging"),
+    ("step_get", "read one step and its references"),
+    ("unit_get", "read one unit and its steps"),
+    ("unit_update", "change a unit's member steps atomically"),
+    ("unit_remove", "remove every member of a unit"),
     ("plan_prune", "drop settled units by tag/age"),
     ("plan_set_input", "set a plan input"),
     ("plan_view", "the plan as mermaid text (or html)"),
@@ -446,7 +454,9 @@ fn fill_author(request: &mut CommandRequest, author: &str) {
         CommandRequest::BoardSet(r) => fill(&mut r.author),
         CommandRequest::BoardDocWrite(r) => fill(&mut r.author),
         CommandRequest::BoardDocEdit(r) => fill(&mut r.author),
-        CommandRequest::PlanPatch(r) => fill(&mut r.author),
+        CommandRequest::PlanEdit(r) => fill(&mut r.author),
+        CommandRequest::UnitUpdate(r) => fill(&mut r.author),
+        CommandRequest::UnitRemove(r) => fill(&mut r.author),
         CommandRequest::StepAdd(r) => fill_edit(&mut r.edit),
         CommandRequest::UnitAdd(r) => fill_edit(&mut r.edit),
         CommandRequest::StepUpdate(r) => fill_edit(&mut r.edit),
@@ -500,18 +510,6 @@ async fn normalize_args(
             }
         }
         args.insert("selection".into(), Value::Object(selection));
-    }
-    /// expected/dry_run/reason/author become the wire's `edit` object.
-    fn edit(args: &mut serde_json::Map<String, Value>) {
-        let mut edit = serde_json::Map::new();
-        for key in ["expected", "dry_run", "reason", "author"] {
-            if let Some(value) = args.remove(key) {
-                edit.insert(key.into(), value);
-            }
-        }
-        edit.entry("dry_run").or_insert(Value::Bool(false));
-        edit.entry("reason").or_insert(Value::String(String::new()));
-        args.insert("edit".into(), Value::Object(edit));
     }
     /// A command whose `project` is a bare ProjectId (not a selector) resolves
     /// a name or `id:` here.
@@ -614,9 +612,6 @@ async fn normalize_args(
                 to_selector(project)?;
             }
         }
-        "plan_patch" => {
-            args.entry("dry_run").or_insert(Value::Bool(false));
-        }
         "board_set" if !args.contains_key("program") => {
             return Err(bad_request(
                 "board_set needs program: the board program, or null to clear the board",
@@ -627,48 +622,6 @@ async fn normalize_args(
                 "board_doc_write needs markdown: the whole document (--markdown-file reads it from a file)",
             ));
         }
-        "step_add" | "step_update" | "unit_tag" | "edge_add" | "edge_remove" | "plan_set_input"
-        | "plan_prune" => {
-            listify(args, "after");
-            edit(args);
-            if name == "unit_tag" {
-                args.entry("add").or_insert(Value::Array(vec![]));
-                args.entry("remove").or_insert(Value::Array(vec![]));
-            }
-            if name == "plan_prune"
-                && let Some(hours) = args.remove("older_than_hours")
-            {
-                let secs = hours.as_f64().unwrap_or(0.0) * 3600.0;
-                args.insert("older_than_seconds".into(), json!(secs.max(0.0) as u64));
-            }
-        }
-        "unit_add" => {
-            // `after` is a map of recipe step suffix to step ids ({"fork": ["x-landed"]}),
-            // never a list; a single id for a suffix is taken as a one-item list.
-            if let Some(Value::Object(after)) = args.get_mut("after") {
-                for ids in after.values_mut() {
-                    if let Value::String(_) = ids {
-                        *ids = Value::Array(vec![ids.take()]);
-                    }
-                }
-            }
-            listify(args, "tags");
-            edit(args);
-            args.entry("after")
-                .or_insert(Value::Object(Default::default()));
-            args.entry("inputs")
-                .or_insert(Value::Object(Default::default()));
-            if let Some(unit) = args.get("params").and_then(|p| p.get("unit")).cloned() {
-                args.entry("unit").or_insert(unit);
-            }
-        }
-        "step_remove" | "step_pause" => {
-            selection(args);
-            edit(args);
-            if name == "step_pause" {
-                args.entry("paused").or_insert(Value::Bool(true));
-            }
-        }
         "step_cancel" | "step_retry" | "status" => {
             selection(args);
             if name == "status" {
@@ -677,28 +630,6 @@ async fn normalize_args(
             if name == "step_cancel" {
                 args.entry("reason").or_insert(Value::String(String::new()));
             }
-        }
-        "step_set_input" => {
-            let step = args.remove("step");
-            let input = args.remove("input");
-            let value = args.remove("value");
-            if let Some(step) = step {
-                listify(args, "steps");
-                match args.get_mut("steps") {
-                    Some(Value::Array(steps)) => steps.push(step),
-                    _ => {
-                        args.insert("steps".into(), json!([step]));
-                    }
-                }
-            }
-            selection(args);
-            if let (Some(Value::String(input)), Some(value)) = (input, value) {
-                args.insert("inputs".into(), json!({input: value}));
-            }
-            if let Some(rev) = args.remove("rev") {
-                args.insert("expected".into(), rev);
-            }
-            edit(args);
         }
         "step_set_output" => {
             args.entry("force").or_insert(Value::Bool(false));
@@ -1199,15 +1130,20 @@ async fn tool(home: &Path, argv: Vec<String>) -> Result<(), PublicError> {
     };
     sluice_web::tool_args::coerce_integers(&fields.schema, &mut args)?;
     run_defaults(&name, &fields, &mut args);
-    normalize_args(home, &name, &mut args).await?;
-    let body = if name == "projects_list" {
-        json!({"command": name})
+    let request = if crate::plan_tools::handles(&name) {
+        crate::plan_tools::decode(&name, args, &cli_author())?
     } else {
-        json!({"command": name, "args": Value::Object(args)})
+        normalize_args(home, &name, &mut args).await?;
+        let body = if name == "projects_list" {
+            json!({"command": name})
+        } else {
+            json!({"command": name, "args": Value::Object(args)})
+        };
+        let mut request: CommandRequest = decode_json(body.to_string().as_bytes())
+            .map_err(|e| bad_request(format!("args: {e}")))?;
+        fill_author(&mut request, &cli_author());
+        request
     };
-    let mut request: CommandRequest =
-        decode_json(body.to_string().as_bytes()).map_err(|e| bad_request(format!("args: {e}")))?;
-    fill_author(&mut request, &cli_author());
     if !local_tool(&request) {
         let program = std::env::current_exe().map_err(storage)?;
         let client = ensure_coordinator(home, &program).await?;

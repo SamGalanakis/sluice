@@ -8,8 +8,11 @@ The call id is a UUID. For long functions use `wait=0` and poll `call_status(cal
 `project` to run it with that project's functions. (`git.head` and the `agent.*` functions below are built in.)
 
 ## Parallel work, then a summary (fan-out, fan-in)
-`project_create("health", "Add health checks to the API and UI")`, then `plan_patch("health",
-1, ...)` replacing `/inputs`, `/outputs` and `/steps` to reach:
+`project_create("health", "Add health checks to the API and UI")`, then use one
+`plan_edit(project="health", rev=1, reason="Build API and UI health checks", ops=[...])`.
+Declare `repo` with `input.put`, add each step with `step.add {step, spec}`, and expose
+`summary` with `output.put {name: "summary", source: "summary/result"}`.
+The following JSON is the export format returned by `plan_get`, not an edit request:
 ```json
 {"inputs": {"repo": "string"},
  "outputs": {"summary": {"source": "summary/result"}},
@@ -63,7 +66,7 @@ succeeded or was skipped.
 
 ## A step that failed
 1. `status("fixes")` shows `fix` failed with its error (`{"error": <kind>, "message": ...}`).
-2. Either fix the cause (e.g. `plan_patch` to change an input, with the current `rev`) and
+2. Either fix the cause (e.g. `step_update` to change an input binding, with the revision read by `step_get`) and
    `step_retry("fixes", steps=["fix"])` — the retry also re-arms failed and stale steps
    blocked behind it — or record the result yourself with
    `step_set_output("fixes", "fix", {...})`.

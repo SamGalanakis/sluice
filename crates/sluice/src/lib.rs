@@ -5,6 +5,7 @@ pub mod doctor;
 pub mod logging;
 pub mod me;
 pub mod modes;
+pub mod plan_tools;
 
 pub fn error_json(error: &sluice_model::error::PublicError) -> String {
     serde_json::to_string(error)

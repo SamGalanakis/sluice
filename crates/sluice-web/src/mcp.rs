@@ -90,6 +90,66 @@ impl McpServer {
     }
 }
 
+/// The HTTP tool endpoint uses the same command decoder and reply shaping as MCP.
+pub async fn call_http(
+    server: &McpServer,
+    name: &str,
+    request: axum::extract::Request,
+) -> axum::response::Response {
+    use axum::{
+        body::to_bytes,
+        http::{StatusCode, header},
+        response::IntoResponse,
+    };
+    let status_error = |status, message: &str| (status, axum::Json(bad(message))).into_response();
+    if !request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|s| {
+            s.split(';')
+                .next()
+                .is_some_and(|s| s.trim().eq_ignore_ascii_case("application/json"))
+        })
+    {
+        return status_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "expected application/json",
+        );
+    }
+    let bytes = match to_bytes(request.into_body(), crate::http::MAX_BODY).await {
+        Ok(bytes) => bytes,
+        Err(_) => return status_error(StatusCode::PAYLOAD_TOO_LARGE, "request body exceeds 1 MiB"),
+    };
+    let args: sluice_model::rpc::JsonMap = match sluice_model::rpc::decode_json(&bytes) {
+        Ok(args) => args,
+        Err(error) => return crate::http::error_response(error),
+    };
+    let value = serde_json::to_value(args)
+        .expect("arguments")
+        .as_object()
+        .expect("argument map")
+        .clone();
+    let result = server.call(name, value, Some("http")).await;
+    if result.is_error == Some(true) {
+        let error: PublicError =
+            serde_json::from_value(result.structured_content.expect("structured public error"))
+                .expect("public error");
+        crate::http::error_response(error)
+    } else {
+        let text = result
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|c| c.text.clone())
+            .unwrap_or_default();
+        match serde_json::from_str::<Value>(&text) {
+            Ok(value) => axum::Json(value).into_response(),
+            Err(_) => text.into_response(),
+        }
+    }
+}
+
 /// Public tool arguments are flat; nested `edit`, `selection`, and `read` are internal only.
 pub fn decode_tool(
     name: &str,
@@ -133,7 +193,7 @@ pub fn decode_tool(
             _ => return Err(bad("wake must be any or questions")),
         };
     }
-    for field in ["steps", "tags", "projects", "state"] {
+    for field in ["steps", "tags", "projects", "state", "units", "status"] {
         if let Some(value) = args.get_mut(field)
             && value.is_string()
         {
@@ -209,7 +269,10 @@ pub fn decode_tool(
     } else {
         json!({"command":name,"args":args})
     };
-    sluice_model::rpc::decode_json(&serde_json::to_vec(&value).expect("tool command"))
+    let request: CommandRequest =
+        sluice_model::rpc::decode_json(&serde_json::to_vec(&value).expect("tool command"))?;
+    request.check_plan_arguments()?;
+    Ok(request)
 }
 
 /// Resolve the mutable project name once before constructing an id-scoped submission.
@@ -322,7 +385,7 @@ pub fn renames(name: &str) -> &'static [(&'static str, &'static str)] {
     }
 }
 fn default_value(name: &str, key: &str) -> Option<Value> {
-    if name == "plan_patch" && key == "reason" {
+    if matches!(name, "plan_edit" | "unit_update" | "unit_remove") && key == "reason" {
         return None;
     }
     match key {
@@ -338,6 +401,9 @@ fn default_value(name: &str, key: &str) -> Option<Value> {
             Some(json!({}))
         }
         "add" | "remove" | "tags" if name == "unit_tag" || name == "unit_add" => Some(json!([])),
+        "preview_scope" => Some(json!("impact")),
+        "compact" if name == "plan_read" => Some(json!(true)),
+        "compact" if matches!(name, "step_get" | "unit_get") => Some(json!(false)),
         "limit" => Some(json!(200)),
         "timeout_seconds" => Some(json!(300)),
         "older_than_seconds" | "since_seq" if name == "plan_prune" || name == "next" => {
@@ -477,7 +543,10 @@ fn schema_fields(
         if key == "questions_only" {
             value = json!({"type":"string","enum":["any","questions"],"default":"any"});
         }
-        if matches!(key.as_str(), "steps" | "tags" | "projects" | "state") {
+        if matches!(
+            key.as_str(),
+            "steps" | "tags" | "projects" | "state" | "units" | "status"
+        ) {
             let default = value.get("default").cloned();
             value = json!({"anyOf":[value,{"type":"string"}]});
             if let Some(default) = default {
@@ -702,15 +771,35 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "plan_get",
-        "Return the project's plan. Returns {project, rev, plan}: the project {project_id, name},\nthe plan's revision and the plan (without rev).\n\nArgs:\n    project: the project.",
+        "Export the whole plan from its rows in authored order, without compiling it. Works even while the fn catalog is broken. Returns {project, rev, plan}.\n\nArgs:\n    project: the project.",
     ),
     (
-        "plan_patch",
-        "Edit a project's plan with RFC 6902 JSON Patch ops. A step it adds starts as soon\nas it is ready; pass start=false to add it paused (a draft), and unpause it with\nstep_pause. Cap how many run at once with resources and `needs`. Returns the edit result {project, rev, preview, board_warnings?}: the project {project_id, name}, the new\nrev and what the edit set going (its ops and the steps it starts, queues, skips or stales);\nboard_warnings, when the edit takes away a step the project's board names, says which, as\n\"line N: StepStatus names step `x`, which is not in the plan\" (the edit is made).\n\nArgs:\n    project: the project.\n    rev: the revision you read; if the plan moved on you get `conflict` with\n        current_rev, so re-read and retry.\n    ops: JSON Patch operations against the plan without rev, e.g.\n        [{\"op\": \"add\", \"path\": \"/steps/x\", \"value\": {...}}]. The result is validated;\n        an `invalid` error lists every problem with its path.\n    reason: why, recorded in the plan's history (required).\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n    start: false adds the new steps paused (unless a step sets `paused` itself).\n\ndry_run: preview without committing (the result is then the preview {ops, would_start,\nwould_queue, would_skip, would_stale, errors}). Every edit records author and reason.",
+        "plan_read",
+        "Read a page of selected steps in position order. Compact reads do not decode declarations. Filters combine with AND; lists match any member, an empty list matches nothing. Missing filter names give an empty page. Returns {project, rev, state_epoch, recipe_generation, steps, next_cursor}. Compact steps are {id, unit, recipe, position, run, status, paused, priority}; full steps add spec and references.\n\nArgs:\n    project: the project.\n    units: unit names, or one name.\n    steps: step ids, or one id.\n    status: stored statuses, or one status (pending, running, succeeded, failed, stale, skipped).\n    recipe: units matching this recipe now.\n    compact: true by default; false includes spec and references.\n    limit: default 200, 1 to 1000, larger capped at 1000; zero is bad_request.\n    cursor: next_cursor from the previous page, with the same project and filters. A changed bound revision, status epoch or recipe generation is cursor_expired; read again without cursor.",
+    ),
+    (
+        "step_get",
+        "Read one step. Returns {project, rev, state_epoch, step}. The step has {id, unit, recipe, position, run, status, paused, priority}; a full step adds spec and references. A missing step is not_found (no step <id>).\n\nArgs:\n    project: the project.\n    step: the exact step id.\n    compact: false by default; true omits spec and references without decoding a declaration.",
+    ),
+    (
+        "unit_get",
+        "Read one unit with its entry and exit steps, completion and settlement. Returns {project, rev, state_epoch, recipe_generation, unit}. The unit is {id, recipe, entry_steps, exit_steps, done, settled, steps}; steps are in position order. A missing unit is not_found (no unit <name>).\n\nArgs:\n    project: the project.\n    unit: the unit name.\n    compact: false by default; true omits step specs and references without decoding declarations.",
+    ),
+    (
+        "unit_update",
+        "Change listed unit members by exact id, without regenerating the recipe. Empty changes or member changes are bad_request. Unknown members are invalid. Returns {project, rev, preview, steps?, board_warnings?}. With dry_run, returns the preview alone.\n\nArgs:\n    project: the project.\n    rev: the revision read earlier; a stale one is conflict with current_rev.\n    dry_run: preview without committing.\n    preview_scope: impact by default; all requires dry_run=true.\n    reason: why, recorded in history.\n    author: explicit, else SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP client name, else mcp; cli from sluice tool.\n\nA no-op keeps the revision and writes no history. Busy with retryable=true means send the same edit again. The preview is {scope, changes, would_start, would_queue, would_skip, would_stale, errors}; impact describes affected work. Changes are resolved rows, never request operations.\n    unit: the unit name.\n    changes: {step id: changes}; only run, in, scatter, doc, outputs, paused, after, tags, needs and priority. Null removes a key; in replaces the whole map.\n    reason: required.",
+    ),
+    (
+        "unit_remove",
+        "Remove every member of a unit atomically. A running member or surviving reference refuses the edit. Finished outcomes stay archived. Steps in the reply are removed members in position order. Returns {project, rev, preview, steps?, board_warnings?}. With dry_run, returns the preview alone.\n\nArgs:\n    project: the project.\n    rev: the revision read earlier; a stale one is conflict with current_rev.\n    dry_run: preview without committing.\n    preview_scope: impact by default; all requires dry_run=true.\n    reason: why, recorded in history.\n    author: explicit, else SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP client name, else mcp; cli from sluice tool.\n\nA no-op keeps the revision and writes no history. Busy with retryable=true means send the same edit again. The preview is {scope, changes, would_start, would_queue, would_skip, would_stale, errors}; impact describes affected work. Changes are resolved rows, never request operations.\n    unit: the unit name.\n    reason: required.",
+    ),
+    (
+        "plan_edit",
+        "Apply typed operations in order to one candidate, validate once, then commit all or nothing. Unknown operations or fields are bad_request; operation refusals are invalid with ops[i] paths. Empty ops, changes, step removal lists and edge lists are bad_request. Returns {project, rev, preview, steps?, board_warnings?}. With dry_run, returns the preview alone.\n\nArgs:\n    project: the project.\n    rev: the revision read earlier; a stale one is conflict with current_rev.\n    dry_run: preview without committing.\n    preview_scope: impact by default; all requires dry_run=true.\n    reason: why, recorded in history.\n    author: explicit, else SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP client name, else mcp; cli from sluice tool.\n\nA no-op keeps the revision and writes no history. Busy with retryable=true means send the same edit again. The preview is {scope, changes, would_start, would_queue, would_skip, would_stale, errors}; impact describes affected work. Changes are resolved rows, never request operations.\n    ops: input.put {name, declaration}, input.remove {name}, output.put {name, source}, output.remove {name}, step.add {step, spec}, step.update {step, changes}, step.remove {steps}, edge.add or edge.remove {step, after}, unit.add {recipe, unit, params?, after?, inputs?, tags?}, unit.update {unit, changes}, unit.remove {unit}, order.set {collection, ids}. order.set requires rev and each current member exactly once.\n    start: true by default; false adds new steps paused unless they specify paused themselves.\n    reason: required.",
     ),
     (
         "step_add",
-        "Add one step to a plan: plan_patch for a single step, at the current rev. It\nstarts as soon as it is ready; start=false (or `paused` in the spec) adds it paused.\nReturns the edit result {project, rev, preview}: the project {project_id, name}, the new\nrev and what the edit set going (its ops and the steps it starts, queues, skips or stales).\n\nArgs:\n    project: the project.\n    step: the new step's id.\n    spec: the step, {run, in, scatter?, doc?, outputs?, paused?, after?, tags?, needs?}.\n    reason: why, recorded in the plan's history.\n    start: false adds it paused.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n\ndry_run: preview without committing (the result is then the preview {ops, would_start,\nwould_queue, would_skip, would_stale, errors}). Every edit records author and reason.",
+        "Add one step. It starts as soon as it is ready; start=false adds it paused unless its spec sets paused. Returns {project, rev, preview, steps?, board_warnings?}. With dry_run, returns the preview alone.\n\nArgs:\n    project: the project.\n    rev: the revision read earlier; a stale one is conflict with current_rev.\n    dry_run: preview without committing.\n    preview_scope: impact by default; all requires dry_run=true.\n    reason: why, recorded in history.\n    author: explicit, else SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP client name, else mcp; cli from sluice tool.\n\nA no-op keeps the revision and writes no history. Busy with retryable=true means send the same edit again. The preview is {scope, changes, would_start, would_queue, would_skip, would_stale, errors}; impact describes affected work. Changes are resolved rows, never request operations.\n    step: the new step id.\n    spec: {run, in, scatter?, doc?, outputs?, paused?, after?, tags?, needs?, priority?}.\n    start: true by default.",
     ),
     (
         "recipe_list",
@@ -718,31 +807,31 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "unit_add",
-        "Add one unit of work from a recipe: its steps with `{param}` filled in, each tagged\n`unit:<unit>` (and `tags`), with the edges and input overrides given, in one plan\nedit at the current rev: one call stages a whole lane. They start as soon as they are\nready; start=false adds them paused. Refused (`bad_request`) when an id it would add\nis already in the plan; `invalid` lists every param, expansion or staging problem\n(nothing is written). Returns the edit result {project, rev, preview, steps}: steps\nare the ids it added.\n\nArgs:\n    project: the project.\n    recipe: the recipe's name (recipe_list).\n    params: {unit: \"<name of the unit, a valid step id>\", <param>: value, ...}, each\n        checked against the recipe's param types.\n    start: false adds the new steps paused.\n    tags: more tags for every step of the unit, e.g. [\"arc:tsvm\"] (select by them in\n        status, step_pause, step_cancel, plan_prune, ...); `unit:` ones are reserved.\n    after: {suffix: [step ids]}: ids appended to that recipe step's `after` (its own\n        kept). A suffix is the recipe step's id without the leading \"<unit>-\", e.g.\n        {\"draft\": [\"a-6-publish\"]}.\n    inputs: {suffix: {input: value}}: literals bound to that step's inputs\n        ({\"default\": value}, replacing the recipe's binding), e.g.\n        {\"work\": {\"model\": {\"type\": \"normal\", \"model\": \"sol\", \"effort\": \"xhigh\"}}};\n        an input its fn does not declare and the recipe\n        does not bind is refused.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n    reason: why, recorded in the plan's history (default \"add unit <unit> (recipe\n        <recipe>)\").\n\ndry_run: preview without committing. Every edit records author and reason. tags adds unit tags; inputs binds inputs by entry step.",
+        "Add one unit of work from a recipe: its steps with `{param}` filled in, each tagged\n`unit:<unit>` (and `tags`), with the edges and input overrides given, in one plan\nedit at the current rev: one call stages a whole lane. They start as soon as they are\nready; start=false adds them paused. Refused (`bad_request`) when an id it would add\nis already in the plan; `invalid` lists every param, expansion or staging problem\n(nothing is written). Returns the edit result {project, rev, preview, steps}: steps\nare the ids it added.\n\nArgs:\n    project: the project.\n    recipe: the recipe's name (recipe_list).\n    unit: the new unit name, a valid step id.\n    params: {<param>: value, ...}, checked against the recipe's param types.\n    start: false adds the new steps paused.\n    tags: more tags for every step of the unit, e.g. [\"arc:tsvm\"] (select by them in\n        status, step_pause, step_cancel, plan_prune, ...); `unit:` ones are reserved.\n    after: {suffix: [step ids]}: ids appended to that recipe step's `after` (its own\n        kept). A suffix is the recipe step's id without the leading \"<unit>-\", e.g.\n        {\"draft\": [\"a-6-publish\"]}.\n    inputs: {suffix: {input: value}}: literals bound to that step's inputs\n        ({\"default\": value}, replacing the recipe's binding), e.g.\n        {\"work\": {\"model\": {\"type\": \"normal\", \"model\": \"sol\", \"effort\": \"xhigh\"}}};\n        an input its fn does not declare and the recipe\n        does not bind is refused.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n    reason: why, recorded in the plan's history (default \"add unit <unit> (recipe\n        <recipe>)\").\n\ndry_run: preview without committing. Every committed change records author and reason. tags adds unit tags; inputs binds inputs by entry step.\n\nArgs:\n    project: the project.\n    rev: the revision read earlier; a stale one is conflict with current_rev.\n    dry_run: preview without committing.\n    preview_scope: impact by default; all requires dry_run=true.\n    reason: why, recorded in history.\n    author: explicit, else SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP client name, else mcp; cli from sluice tool.\n\nA no-op keeps the revision and writes no history. Busy with retryable=true means send the same edit again. The preview is {scope, changes, would_start, would_queue, would_skip, would_stale, errors}; impact describes affected work. Changes are resolved rows, never request operations.",
     ),
     (
         "unit_tag",
-        "Add and/or remove tags on every step of a unit (those tagged `unit:<unit>`), in one\nplan edit at the current rev, e.g. to put units into an arc after the fact. `unit:`\ntags are reserved; an unknown unit is `not_found`. Nothing to change: no edit, the\ncurrent rev. Returns the edit result {project, rev, preview, steps}: steps are the\nunit's steps.\n\nArgs:\n    project: the project.\n    unit: the unit's name.\n    add: tags to add, e.g. [\"arc:tsvm\"].\n    remove: tags to remove.\n    reason: why, recorded in the plan's history.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n\ndry_run: preview without committing. Every edit records author and reason.",
+        "Add and/or remove tags on every step of a unit (those tagged `unit:<unit>`), in one\nplan edit at the current rev, e.g. to put units into an arc after the fact. `unit:`\ntags are reserved; an unknown unit is `not_found`. Nothing to change: no edit, the\ncurrent rev. Returns the edit result {project, rev, preview, steps}: steps are the\nunit's steps.\n\nArgs:\n    project: the project.\n    unit: the unit's name.\n    add: tags to add, e.g. [\"arc:tsvm\"].\n    remove: tags to remove.\n    reason: why, recorded in the plan's history.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n\ndry_run: preview without committing. Every committed change records author and reason.\n\nArgs:\n    project: the project.\n    rev: the revision read earlier; a stale one is conflict with current_rev.\n    dry_run: preview without committing.\n    preview_scope: impact by default; all requires dry_run=true.\n    reason: why, recorded in history.\n    author: explicit, else SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP client name, else mcp; cli from sluice tool.\n\nA no-op keeps the revision and writes no history. Busy with retryable=true means send the same edit again. The preview is {scope, changes, would_start, would_queue, would_skip, would_stale, errors}; impact describes affected work. Changes are resolved rows, never request operations.",
     ),
     (
         "edge_add",
-        "Make a step run after others: append gate entries to its `after` (deduplicated, its\nexisting entries kept) in one plan edit at the current rev, with no rev to read and no\nway to drop an entry someone else added. `step` may be `unit:<name>`: every entry step of\nthat unit. An unknown step or unit is `invalid`, and so is a cycle. Returns the edit result {project, rev, preview}: the project {project_id, name}, the new\nrev and what the edit set going (its ops and the steps it starts, queues, skips or stales).\n\nArgs:\n    project: the project.\n    step: the step that waits, or unit:<name>.\n    after: the gate entries it waits for (docs(\"plans\")): a step id, `<id>?` (a skip\n        is fine too), `unit:<name>`, or a boolean output `<id>/<output>` (`!` negates).\n    reason: why, recorded in the plan's history.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n\ndry_run: preview without committing (the result is then the preview {ops, would_start,\nwould_queue, would_skip, would_stale, errors}). Every edit records author and reason.",
+        "Make a step run after others: append gate entries to its `after` (deduplicated, its\nexisting entries kept) in one plan edit at the current rev, with no rev to read and no\nway to drop an entry someone else added. `step` may be `unit:<name>`: every entry step of\nthat unit. An unknown step or unit is `invalid`, and so is a cycle. Returns the edit result {project, rev, preview}: the project {project_id, name}, the new\nrev and what the edit set going (its resolved changes and the steps it starts, queues, skips or stales).\n\nArgs:\n    project: the project.\n    step: the step that waits, or unit:<name>.\n    after: the gate entries it waits for (docs(\"plans\")): a step id, `<id>?` (a skip\n        is fine too), `unit:<name>`, or a boolean output `<id>/<output>` (`!` negates).\n    reason: why, recorded in the plan's history.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n\ndry_run: preview without committing (the result is then the preview {scope, changes, would_start,\nwould_queue, would_skip, would_stale, errors}). Every committed change records author and reason.\n\nArgs:\n    project: the project.\n    rev: the revision read earlier; a stale one is conflict with current_rev.\n    dry_run: preview without committing.\n    preview_scope: impact by default; all requires dry_run=true.\n    reason: why, recorded in history.\n    author: explicit, else SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP client name, else mcp; cli from sluice tool.\n\nA no-op keeps the revision and writes no history. Busy with retryable=true means send the same edit again. The preview is {scope, changes, would_start, would_queue, would_skip, would_stale, errors}; impact describes affected work. Changes are resolved rows, never request operations.",
     ),
     (
         "edge_remove",
-        "Remove gate entries from a step's `after` in one plan edit at the current rev (the others\nkept). `step` may be `unit:<name>`: every entry step of that unit. An unknown step or unit\nis `invalid`. Returns the edit result {project, rev, preview}: the project {project_id, name}, the new\nrev and what the edit set going (its ops and the steps it starts, queues, skips or stales).\n\nArgs:\n    project: the project.\n    step: the step that waits, or unit:<name>.\n    after: the entries it should no longer wait for.\n    reason: why, recorded in the plan's history.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n\ndry_run: preview without committing (the result is then the preview {ops, would_start,\nwould_queue, would_skip, would_stale, errors}). Every edit records author and reason.",
+        "Remove gate entries from a step's `after` in one plan edit at the current rev (the others\nkept). `step` may be `unit:<name>`: every entry step of that unit. An unknown step or unit\nis `invalid`. Returns the edit result {project, rev, preview}: the project {project_id, name}, the new\nrev and what the edit set going (its resolved changes and the steps it starts, queues, skips or stales).\n\nArgs:\n    project: the project.\n    step: the step that waits, or unit:<name>.\n    after: the entries it should no longer wait for.\n    reason: why, recorded in the plan's history.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n\ndry_run: preview without committing (the result is then the preview {scope, changes, would_start,\nwould_queue, would_skip, would_stale, errors}). Every committed change records author and reason.\n\nArgs:\n    project: the project.\n    rev: the revision read earlier; a stale one is conflict with current_rev.\n    dry_run: preview without committing.\n    preview_scope: impact by default; all requires dry_run=true.\n    reason: why, recorded in history.\n    author: explicit, else SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP client name, else mcp; cli from sluice tool.\n\nA no-op keeps the revision and writes no history. Busy with retryable=true means send the same edit again. The preview is {scope, changes, would_start, would_queue, would_skip, would_stale, errors}; impact describes affected work. Changes are resolved rows, never request operations.",
     ),
     (
         "step_update",
-        "Change fields of one step: each key of `changes` replaces that field (`in` is\nreplaced whole), null removes it; `when` is refused (use `after`). A running step only\ntakes `paused` and `tags`. Returns the edit result {project, rev, preview}: the project {project_id, name}, the new\nrev and what the edit set going (its ops and the steps it starts, queues, skips or stales).\n\nArgs:\n    project: the project.\n    step: the step id.\n    changes: e.g. {\"doc\": \"...\", \"in\": {...}}.\n    reason: why, recorded in the plan's history.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n\ndry_run: preview without committing (the result is then the preview {ops, would_start,\nwould_queue, would_skip, would_stale, errors}). Every edit records author and reason.",
+        "Replace each supplied step field; null removes it, in replaces the whole input map. Only run, in, scatter, doc, outputs, paused, after, tags, needs and priority are accepted. Unknown keys and empty changes are bad_request. A running step takes only paused and tags. Returns {project, rev, preview, steps?, board_warnings?}. With dry_run, returns the preview alone.\n\nArgs:\n    project: the project.\n    rev: the revision read earlier; a stale one is conflict with current_rev.\n    dry_run: preview without committing.\n    preview_scope: impact by default; all requires dry_run=true.\n    reason: why, recorded in history.\n    author: explicit, else SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP client name, else mcp; cli from sluice tool.\n\nA no-op keeps the revision and writes no history. Busy with retryable=true means send the same edit again. The preview is {scope, changes, would_start, would_queue, would_skip, would_stale, errors}; impact describes affected work. Changes are resolved rows, never request operations.\n    step: the step id.\n    changes: the fields to replace or remove.",
     ),
     (
         "step_remove",
-        "Remove steps from a plan in one edit, selected by ids and/or tags. Refused\n(`invalid`) while a step left or a plan output still reads one, or while one runs.\nEach one that finished keeps its outcome (the `outcomes` table, see query).\nReturns the edit result {project, rev, preview, board_warnings?}: the project {project_id,\nname}, the new rev and what the edit set going (its ops and the steps it starts, queues,\nskips or stales); board_warnings names each step the project's board still names that the\nedit removed (the edit is made).\n\nArgs:\n    project: the project.\n    steps: step ids (one id is fine too).\n    tags: every step carrying any of these tags.\n    reason: why, recorded in the plan's history.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n\ndry_run: preview without committing (the result is then the preview {ops, would_start,\nwould_queue, would_skip, would_stale, errors}). Every edit records author and reason.",
+        "Remove steps from a plan in one edit, selected by ids and/or tags. Refused\n(`invalid`) while a step left or a plan output still reads one, or while one runs.\nEach one that finished keeps its outcome (the `outcomes` table, see query).\nReturns the edit result {project, rev, preview, board_warnings?}: the project {project_id,\nname}, the new rev and what the edit set going (its resolved changes and the steps it starts, queues,\nskips or stales); board_warnings names each step the project's board still names that the\nedit removed (the edit is made).\n\nArgs:\n    project: the project.\n    steps: step ids (one id is fine too).\n    tags: every step carrying any of these tags.\n    reason: why, recorded in the plan's history.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n\ndry_run: preview without committing (the result is then the preview {scope, changes, would_start,\nwould_queue, would_skip, would_stale, errors}). Every committed change records author and reason.\n\nArgs:\n    project: the project.\n    rev: the revision read earlier; a stale one is conflict with current_rev.\n    dry_run: preview without committing.\n    preview_scope: impact by default; all requires dry_run=true.\n    reason: why, recorded in history.\n    author: explicit, else SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP client name, else mcp; cli from sluice tool.\n\nA no-op keeps the revision and writes no history. Busy with retryable=true means send the same edit again. The preview is {scope, changes, would_start, would_queue, would_skip, would_stale, errors}; impact describes affected work. Changes are resolved rows, never request operations.",
     ),
     (
         "step_pause",
-        "Pause or unpause steps in one edit. A paused step does not start, however ready\nits inputs, until unpaused; a running one finishes (pausing never stops it: see\nstep_cancel). Select by ids and/or tags; with subtree, also everything downstream\n(steps that read from or run after them, transitively), including those that become\nready later. Pausing what is paused already, or unpausing what is not, is no edit.\nReturns the edit result {project, rev, preview, steps}: the steps selected.\n\nArgs:\n    project: the project.\n    steps: step ids (one id is fine too).\n    tags: select every step carrying any of these tags.\n    subtree: include everything downstream of the selected steps.\n    paused: true to pause, false to let them start.\n    reason: why; kept on each paused step (status shows it) and in the history.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n\ndry_run: preview without committing. Every edit records author and reason.",
+        "Pause or unpause steps in one edit. A paused step does not start, however ready\nits inputs, until unpaused; a running one finishes (pausing never stops it: see\nstep_cancel). Select by ids and/or tags; with subtree, also everything downstream\n(steps that read from or run after them, transitively), including those that become\nready later. Pausing what is paused already, or unpausing what is not, is no edit.\nReturns the edit result {project, rev, preview, steps}: the steps selected.\n\nArgs:\n    project: the project.\n    steps: step ids (one id is fine too).\n    tags: select every step carrying any of these tags.\n    subtree: include everything downstream of the selected steps.\n    paused: true to pause, false to let them start.\n    reason: why; kept on each paused step (status shows it) and in the history.\n    author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).\n\ndry_run: preview without committing. Every committed change records author and reason.\n\nArgs:\n    project: the project.\n    rev: the revision read earlier; a stale one is conflict with current_rev.\n    dry_run: preview without committing.\n    preview_scope: impact by default; all requires dry_run=true.\n    reason: why, recorded in history.\n    author: explicit, else SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP client name, else mcp; cli from sluice tool.\n\nA no-op keeps the revision and writes no history. Busy with retryable=true means send the same edit again. The preview is {scope, changes, would_start, would_queue, would_skip, would_stale, errors}; impact describes affected work. Changes are resolved rows, never request operations.",
     ),
     (
         "step_cancel",
@@ -754,15 +843,15 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "plan_history",
-        "Return the plan's history, oldest first. Returns [{seq, at, kind, ...}]: log records,\nevery edit as `plan.edit` {rev, author, reason, ops} from rev 1, and the `plan.input`,\n`step.output` and `step.retry` records.\n\nArgs:\n    project: the project.\n    since_rev: only entries after this revision.",
+        "Read persistent plan edits and retained plan.input, step.output and step.retry records, merged by seq oldest first. Edits contain resolved changes and reach revision 1 even after log trimming. Returns {project, entries, next_after_seq}.\n\nArgs:\n    project: the project.\n    since_rev: keep records with a greater rev.\n    after_seq: keep records with a greater seq; both filters apply together.\n    limit: default 200, 1 to 1000, larger capped at 1000; zero is bad_request.",
     ),
     (
         "plan_set_input",
-        "Set a declared plan input; steps reading it can then start. Changing it later makes\nthe succeeded steps that read it (and their dependents) stale. Returns {ok: true}; with\ndry_run, the preview {ops, would_start, would_queue, would_skip, would_stale, errors}.\n\nArgs:\n    project: the project.\n    name: the plan input's name.\n    value: its value, checked against the input's type.\n    rev: refuse (`conflict`) unless the plan is at this revision.\n    reason: why, recorded in the plan's history.\n    author: who is acting (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).",
+        "Set a declared plan input; steps reading it can then start. Changing it later makes\nthe succeeded steps that read it (and their dependents) stale. Returns {ok: true}; with\ndry_run, the preview {scope, changes, would_start, would_queue, would_skip, would_stale, errors}.\n\nArgs:\n    project: the project.\n    name: the plan input's name.\n    value: its value, checked against the input's type.\n    rev: refuse (`conflict`) unless the plan is at this revision.\n    reason: why, recorded in the plan's history.\n    author: who is acting (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP\n        client's name, else \"mcp\"; \"cli\" from `sluice tool`).",
     ),
     (
         "step_set_input",
-        "Bind literal inputs ({name: value}, each as {\"default\": value}) on the steps selected by steps and/or tags, in one edit at rev if supplied. Only steps whose fn has the inputs change; running steps are left alone; a succeeded step whose binding changes turns stale. Returns the edit result {project, rev, preview} with changed, running (selected but running) and unsupported ([{step, inputs}]: selected but lacking those inputs); an edit that changes no step is bad_request. dry_run returns the preview. reason and author record why and who.",
+        "Bind literal inputs ({name: value}, each as {\"default\": value}) on the steps selected by steps and/or tags, in one edit at rev if supplied. Only steps whose fn has the inputs change; running steps are left alone; a succeeded step whose binding changes turns stale. Returns the edit result {project, rev, preview} with changed, running (selected but running) and unsupported ([{step, inputs}]: selected but lacking those inputs); an edit that changes no step is bad_request. dry_run returns the preview. reason and author record why and who.\n\nArgs:\n    project: the project.\n    rev: the revision read earlier; a stale one is conflict with current_rev.\n    dry_run: preview without committing.\n    preview_scope: impact by default; all requires dry_run=true.\n    reason: why, recorded in history.\n    author: explicit, else SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP client name, else mcp; cli from sluice tool.\n\nA no-op keeps the revision and writes no history. Busy with retryable=true means send the same edit again. The preview is {scope, changes, would_start, would_queue, would_skip, would_stale, errors}; impact describes affected work. Changes are resolved rows, never request operations.",
     ),
     (
         "step_set_output",
@@ -818,7 +907,7 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "plan_view",
-        "Draw the plan with each step's status: a Mermaid flowchart (top-down, a subgraph per\nunit) or a standalone HTML page. Done units (independent pieces of work whose every step\nsucceeded or was skipped) are left out, with one line saying how many, unless all is true.\n\nArgs:\n    project: the project.\n    format: \"mermaid\" (default) or \"html\".\n    all: include the done units too.",
+        "Draw selected steps as Mermaid text or self-contained HTML. Every edge touching the selection remains; its outside endpoint is a boundary node labelled <id> · outside. A comment counts boundary nodes. Done units are left out by default and counted. Returns the graph text.\n\nArgs:\n    project: the project.\n    format: mermaid by default, or html.\n    all: true keeps done units.\n    units: unit names, or one name.\n    steps: step ids, or one id.\n    status: stored statuses, or one status.\n    recipe: units matching this recipe now.\n\nFilters combine with AND, lists match any member and empty lists match nothing.",
     ),
     (
         "status",
@@ -826,7 +915,7 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "plan_prune",
-        "Remove done units (every step succeeded or skipped), all or those named in units or tagged with tags, whose last step finished at least older_than seconds ago, in one edit. A unit a surviving step or plan output references is kept, and so is one whose name matches a keep pattern (keep: [\"ta-*\"], * any run, ? one character). Returns the edit result {project, rev, preview, steps} (steps: the removed steps) with units (the removed units) and kept: [{unit, step}], [{unit, output}] or [{unit, keep}], each kept unit with the step, plan output or pattern holding it. Nothing to remove: no edit, the current rev. dry_run previews without committing. rev is the revision you read, reason and author record the edit.",
+        "Remove done units (every step succeeded or skipped), all or those named in units or tagged with tags, whose last step finished at least older_than seconds ago, in one edit. A unit a surviving step or plan output references is kept, and so is one whose name matches a keep pattern (keep: [\"ta-*\"], * any run, ? one character). Returns the edit result {project, rev, preview, steps} (steps: the removed steps) with units (the removed units) and kept: [{unit, step}], [{unit, output}] or [{unit, keep}], each kept unit with the step, plan output or pattern holding it. Nothing to remove: no edit, the current rev. dry_run previews without committing. rev is the revision you read, reason and author record the edit.\n\nArgs:\n    project: the project.\n    rev: the revision read earlier; a stale one is conflict with current_rev.\n    dry_run: preview without committing.\n    preview_scope: impact by default; all requires dry_run=true.\n    reason: why, recorded in history.\n    author: explicit, else SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP client name, else mcp; cli from sluice tool.\n\nA no-op keeps the revision and writes no history. Busy with retryable=true means send the same edit again. The preview is {scope, changes, would_start, would_queue, would_skip, would_stale, errors}; impact describes affected work. Changes are resolved rows, never request operations.",
     ),
     (
         "ask",

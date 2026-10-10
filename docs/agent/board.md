@@ -41,7 +41,7 @@ or edited the document and whether the plan has changed since (under the documen
   itself is not recorded).
 - A step's run may set its own project's board (`sluice tool board_set` in the run, or the
   MCP tool), as the orchestrator can.
-- A plan edit (`plan_patch`, `step_remove`, the unit tools, any edit) that takes away a step
+- A plan edit (`plan_edit`, `step_remove`, the unit tools, any edit) that takes away a step
   the board names is made all the same, and its result carries `board_warnings` in the same
   form, so a rename never leaves a widget silently showing a step that is gone.
 

@@ -474,6 +474,7 @@ impl<H: ExecutionHost> Coordinator<H> {
             self.ready().await?;
             self.refresh_registry().await?;
         }
+        request.check_plan_arguments()?;
         crate::drain::check_command(self.reads(), &request).await?;
         if let Some(reply) = calls::dispatch_p3_04(
             self.calls(),
@@ -512,7 +513,20 @@ impl<H: ExecutionHost> Coordinator<H> {
                 let project=self.writer().write(RetrySafety::NonIdempotent,move|tx|projects::project_create(tx,projects::CreateProject{name,description,icon,resources:Some(serde_json::to_value(resources)?),author:author.unwrap_or_else(||"cli".into())},&projects::EmptyPlanInitializer,&ResourceSettings((*catalog).clone()))).await?;
                 artifacts::recover(self.writer(),self.home()).await.map_err(|e|e.into_public(false))?; Ok(CommandReply::Project(ProjectIdentity{project_id:project.project_id,name:project.name}))
             },
-            CommandRequest::PlanGet{project}=>self.reads().snapshot(move|sql|{let id=messages_project(sql,&project)?;let ctx=context(sql,id,&catalog)?;Ok(json!({"project":projects_identity(sql,id)?,"rev":ctx.revision,"plan":ctx.plan.document()}))}).await.map_err(|e|e.into_public(true)).and_then(data),
+            CommandRequest::PlanGet { project } => self
+                .reads()
+                .snapshot(move |sql| {
+                    let id = messages_project(sql, &project)?;
+                    let exported = plans::export_plan(sql, id)?;
+                    Ok(sluice_model::plan_rows::PlanGetResult {
+                        project: projects_identity(sql, id)?,
+                        rev: exported.rev,
+                        plan: exported.document,
+                    })
+                })
+                .await
+                .map_err(|e| e.into_public(true))
+                .map(CommandReply::Plan),
             CommandRequest::Status(query)=>{let cache=self.inner.plans.clone();self.reads().snapshot(move|sql|crate::status::status(sql,&catalog,&cache,query)).await.map_err(|e|e.into_public(true)).and_then(data)},
             CommandRequest::BoardDocRead(request) => self.reads().snapshot(move |sql| {
                 let doc = projects::board_doc_read(sql, &request.project)?;
@@ -1570,6 +1584,11 @@ impl<H: ExecutionHost> Coordinator<H> {
                     if !matches!(
                         command,
                         CommandRequest::PlanGet { .. }
+                            | CommandRequest::PlanRead(_)
+                            | CommandRequest::StepGet(_)
+                            | CommandRequest::UnitGet(_)
+                            | CommandRequest::PlanHistory(_)
+                            | CommandRequest::PlanView(_)
                             | CommandRequest::BoardGet { .. }
                             | CommandRequest::BoardDocRead(_)
                             | CommandRequest::Status(_)
@@ -2189,10 +2208,13 @@ fn served_while_adopting(command: &CommandRequest) -> bool {
         CommandRequest::ProjectsList
             | CommandRequest::Status(_)
             | CommandRequest::PlanGet { .. }
+            | CommandRequest::PlanRead(_)
+            | CommandRequest::StepGet(_)
+            | CommandRequest::UnitGet(_)
             | CommandRequest::BoardGet { .. }
             | CommandRequest::BoardDocRead(_)
-            | CommandRequest::PlanHistory { .. }
-            | CommandRequest::PlanView { .. }
+            | CommandRequest::PlanHistory(_)
+            | CommandRequest::PlanView(_)
             | CommandRequest::StepContext { .. }
             | CommandRequest::RecipeList { .. }
             | CommandRequest::FnList { .. }
@@ -2675,7 +2697,7 @@ fn callback_mutation(
 
 /// A plan edit command's name and author, for its log line; None for any other command.
 fn edit_label(command: &CommandRequest) -> Option<(&'static str, Option<String>)> {
-    sluice_model::edit::edit_label(command).map(|(kind, author)| (kind, author.map(str::to_owned)))
+    sluice_model::commands::edit_label(command).map(|(kind, author)| (kind, author.map(str::to_owned)))
 }
 
 /// What one plan edit cost, logged once it is answered: the time spent preparing it from

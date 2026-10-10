@@ -210,15 +210,14 @@ async fn tool_descriptions_name_the_keys_their_replies_have() {
     f.check("recipe_list", json!({"project":"p"})).await;
     let plan = f
         .check(
-            "plan_patch",
-            json!({"project":"p","rev":1,"reason":"the fixture plan","ops":[{"op":"replace","path":"","value":{
-                "inputs":{"x":"int"},"outputs":{},
-                "steps":{
-                    "a":{"run":"fixture.echo","paused":true,"in":{"value":{"default":1}}},
-                    "b":{"run":"fixture.echo","paused":true,"after":["a"],"in":{"value":{"default":2}}},
-                    "ext":{"run":"core.external","outputs":{"done":"boolean"}},
-                    "work":{"run":"fixture.submit","in":{"value":{"default":3}},
-                            "outputs":{"note":"string"}}}}}]}),
+            "plan_edit",
+            json!({"project":"p","rev":1,"reason":"the fixture plan","ops":[
+                {"op":"input.put","name":"x","declaration":"int"},
+                {"op":"step.add","step":"a","spec":{"run":"fixture.echo","paused":true,"in":{"value":{"default":1}}}},
+                {"op":"step.add","step":"b","spec":{"run":"fixture.echo","paused":true,"after":["a"],"in":{"value":{"default":2}}}},
+                {"op":"step.add","step":"ext","spec":{"run":"core.external","outputs":{"done":"boolean"}}},
+                {"op":"step.add","step":"work","spec":{"run":"fixture.submit","in":{"value":{"default":3}},"outputs":{"note":"string"}}}
+            ]}),
         )
         .await;
     assert_eq!(plan["rev"], 2);
@@ -381,9 +380,9 @@ async fn the_board_document_through_mcp() {
         "{slot}"
     );
     f.call(
-        "plan_patch",
-        json!({"project":"p","rev":1,"reason":"plan","ops":[{"op":"add","path":"/steps/tests-main",
-            "value":{"run":"fixture.echo","paused":true,"in":{"value":{"default":1}}}}]}),
+        "plan_edit",
+        json!({"project":"p","rev":1,"reason":"plan","ops":[{"op":"step.add","step":"tests-main",
+            "spec":{"run":"fixture.echo","paused":true,"in":{"value":{"default":1}}}}]}),
     )
     .await;
     let set = f

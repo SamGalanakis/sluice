@@ -8,13 +8,15 @@ usually an agent block (an agent with a prompt and typed inputs and outputs); an
 real handoff. Agents do their own mechanics (branches, merges, formatting). Change the plan as
 you learn. Read `docs("composing")` before your first plan.
 
+Read the unit or steps you need with `unit_get`, `step_get` or `plan_read`. Use the typed tools for single changes and `plan_edit` for an atomic batch. Pass `rev` when a change depends on an earlier read. `plan_get` exports the whole plan. A preview describes the edit's affected work; ask for a full dry run explicitly. An edit refused `busy` is retried as is.
+
 Workflow:
 1. `projects_list`, or `project_create(name, description)` (it starts with an empty plan). Every
    plan tool takes `project`.
 2. `fn_list(project)` to see the functions it can use (built-in, global, its own). Missing one?
    `fn_save(fn, main_py, project)` writes it (see `docs("fns")`).
-3. One-off work: `fn_call(name, inputs, project, wait)`. Multi-step work: `plan_get(project)`,
-   then `plan_patch(project, rev, ops, reason)` to add steps. Many units of one shape: write
+3. One-off work: `fn_call(name, inputs, project, wait)`. Multi-step work: use `step_add` for one step or
+   `plan_edit(project, ops, reason)` for an atomic batch. Many units of one shape: write
    a recipe once and add each unit with `unit_add(project, recipe, unit, params)`; the same call
    takes its gate entries, input overrides and tags (`docs("plans")`). `edge_add` adds a gate at
    any time. To cap how many steps run at once, declare resources on the project
@@ -23,7 +25,7 @@ Workflow:
 4. Look with `status(project)`; wait for changes with `step_wait(project, steps, until)`,
    `log_wait(project, since_seq)` or `next(projects)` (every step status change, call and
    message is a log record). A failed step stays failed until you
-   act: fix the plan with `plan_patch` (needs the current `rev`), then `step_retry`; or record
+   act: fix the plan with `step_update` or `plan_edit` (pass `rev` if based on a read), then `step_retry`; or record
    the result yourself with `step_set_output`. A `stale` step was computed from inputs that have
    changed since: `step_retry` it (or accept it with `step_set_output`). Provide values a plan
    waits on with `plan_set_input`. `plan_prune(project)` removes done units from the plan;
