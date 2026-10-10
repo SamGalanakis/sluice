@@ -517,7 +517,28 @@ impl InboxView {
             )
         };
         let head = match self.view {
-            MessageView::History => return TrustedHtml::default(),
+            MessageView::History => {
+                // the threads with the owner, the latest first, and how many wait on an answer
+                let mut said = format!(
+                    "{} with a message to you or from you, read or not, the latest first.",
+                    count(self.threads.len(), "thread", "threads")
+                );
+                let asks = self
+                    .threads
+                    .iter()
+                    .filter(|t| t.open_ask().is_some())
+                    .count();
+                if let Some(n) = super::questions_words(asks) {
+                    said.push_str(&format!(
+                        " <a class=\"ask\" href=\"#history-threads\">{n} for you</a>."
+                    ));
+                }
+                band_head(
+                    self.title(),
+                    &TrustedHtml::owned(back(String::new())),
+                    &TrustedHtml::owned(said),
+                )
+            }
             MessageView::Thread => {
                 let Some(thread) = self.threads.first() else {
                     return TrustedHtml::owned(format!(

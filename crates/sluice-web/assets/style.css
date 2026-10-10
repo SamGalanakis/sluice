@@ -3560,7 +3560,6 @@ main { container: frame / inline-size; }
 /* ---- history (`templates/history.html`): every thread with the owner, a module each on the
    grid, as many to a row as fit; one with an open question to the owner under the coral rule -- */
 .histpage { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
-.histpage > h1 { margin-top: 6px; font-size: 44px; line-height: 1; font-weight: 900; letter-spacing: -0.035em; }
 .histpage .history-lead { margin: 10px 0 26px; }
 .histpage .hist-grid { display: grid; gap: 28px var(--col-gap);
                        grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); }
@@ -3571,6 +3570,5 @@ main { container: frame / inline-size; }
 .histpage .hist .m-body { margin-top: 4px; font-size: 14px; line-height: 20px; color: var(--ink);
                           display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 @container frame (max-width: 639.98px) {
-  .histpage > h1 { font-size: 36px; }
   #messages-view.histpage .item > h2.t-name a { display: inline-flex; min-height: 44px; align-items: center; }
 }

@@ -777,8 +777,10 @@ The pages compose these parts; each lane that redraws one writes its section her
   tabs on a phone), each section beside it under a band section's head, each field a row (its
   name, then its form at 78ch); pause and archive are rows with a square switch; Delete sits on
   the sand under its rule. (`settings.css` is folded into `style.css`.)
-- **History** (`/history`): the threads with the owner, a module each on the grid, as many to
-  a row as fit 360px; one with an open question under the coral rule.
+- **History** (`/history`): the third of the message views, under the same band as For you
+  and Questions (its name, the way back, how many threads and how many hold a question for the
+  owner); the threads with the owner, a module each on the grid, as many to a row as fit
+  360px; one with an open question under the coral rule.
 - **A page that cannot be drawn** (`views::missing`): the band says what is missing, huge,
   and why; the paper lists the ways on, each a heavy link with its arrow.
 - **Agent docs** (`/docs`): the band names them; the index a row of topic modules; a topic

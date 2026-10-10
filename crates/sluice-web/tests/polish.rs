@@ -164,11 +164,23 @@ async fn a_projects_messages_page_is_titled_messages_and_the_tray_stays_inbox() 
     let (_, tray) = f.get("/inbox").await;
     assert!(tray.contains("<h1>Inbox</h1>"), "{tray}");
     let (_, history) = f.get(&format!("/projects/id/{}/history", f.id)).await;
+    // History wears the messages' band as For you and Questions do: its name, the way back to
+    // the plan and how many threads, in the frame's head before the page
+    let band = history
+        .split("<div id=\"messages-band\" class=\"messages-band\">")
+        .nth(1)
+        .and_then(|b| b.split("<main").next())
+        .unwrap_or_else(|| panic!("no band: {history}"));
+    assert!(band.contains("<h1 class=\"long\">History</h1>"), "{band}");
+    assert!(band.contains(" plan</a></nav>"), "{band}");
     assert!(
-        history.contains(
-            "<p class=\"meta history-lead\">Every thread with a message to you or from you"
-        ),
-        "{history}"
+        band.contains("with a message to you or from you, read or not, the latest first."),
+        "{band}"
+    );
+    assert!(!history.contains("<h1>History</h1>"), "{history}");
+    assert!(
+        history.contains("/history\" aria-current=\"page\">History</a>"),
+        "its switch names History, the third view: {history}"
     );
 }
 
