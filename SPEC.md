@@ -174,9 +174,17 @@ installation selects:
    unchanged and stops fenced.
 8. **Select and start** the candidate (as an ordinary deploy's steps 5 to 7) and check: the
    integrity check, every project's `plan_get` equal to the backup's plan at its revision
-   (compact serialization, `docs/design/plan-rows.md` §10.5), `plan_history` reaching rev 1, and the
-   dashboard answering (`/` with 200, a project page without a server error). A failure stays fenced: recover forward, or
-   restore the backup together with the old release.
+   (compact serialization, `docs/design/plan-rows.md` §10.5), the first plan edit in `plan_history`
+   at each project's baseline revision from the conversion report, or its first logged revision
+   in the backup for an unanchored project, and the dashboard answering (`/` with 200, a project
+   page without a server error). A failure stays fenced: recover forward, or
+   restore the backup together with the old release. To recover forward after repairing a
+   post-migration failure, run `scripts/deploy --schema-cutover --resume-checks`. It requires
+   the `schema-3 cutover` fence, the home and recorded candidate at schema 3, and the recorded
+   successful migration checkpoint at `<install>/schema-cutover-checkpoint.json`. It re-creates
+   the candidate services and repeats these checks against the recorded backup. It then
+   performs step 9, preserving the original deadline and run outcomes. No deadline or rehearsal
+   is needed for this retry; a different candidate is refused.
 9. **Unfence**, then **release** the drain (author `cutover`), and **report**: one line `cutover
    <sha> · schema 3 · <n> projects · <m> revisions converted · cancel requested for <k> runs ·
    <c> calls stopped`, then a line per run, `stopped <project> <step or call:<id>> <run>
@@ -1185,7 +1193,8 @@ take none of these filters. Calls made without a project go to the home log (`pr
 
 Each log keeps at most 10,000 records; past that it is trimmed to 9,000 in the same transaction.
 A `since_seq` older than a log's trim floor, or newer than any seq the home has issued, is
-`cursor_expired`. `plan_edits` is never trimmed, so `plan_history` reaches rev 1. Records carry
+`cursor_expired`. `plan_edits` is never trimmed, so `plan_history` reaches the baseline revision,
+rev 1 for a new project or the imported anchor for a converted project. Records carry
 payload version 2 from schema 3 on; a converted
 home's records are rewritten to it.
 
@@ -1406,7 +1415,7 @@ removed steps.
 | `plan_read` | `project`, `units?`, `steps?`, `status?`, `recipe?`, `compact=true`, `limit=200`, `cursor?` | `{project, rev, state_epoch, recipe_generation, steps, next_cursor}`: the matching steps in plan order, compact `{id, unit, recipe, position, run, status, paused, priority}` or full (plus `spec`, the declaration, and `references`) |
 | `step_get` | `project`, `step`, `compact=false` | `{project, rev, state_epoch, step}` |
 | `unit_get` | `project`, `unit`, `compact=false` | `{project, rev, state_epoch, recipe_generation, unit: {id, recipe, entry_steps, exit_steps, done, settled, steps}}` |
-| `plan_history` | `project`, `since_rev?`, `after_seq?`, `limit=200` | `{project, entries, next_after_seq}`: every edit (`plan.edit`, from rev 1) and the log's `plan.input`, `step.output`, `step.retry`, oldest first |
+| `plan_history` | `project`, `since_rev?`, `after_seq?`, `limit=200` | `{project, entries, next_after_seq}`: every edit (`plan.edit`, from the baseline revision) and the log's `plan.input`, `step.output`, `step.retry`, oldest first |
 | `plan_set_input` | `project`, `name`, `value`, `rev?`, `dry_run`, `reason`, `author?` | `{ok: true}`, or the preview |
 | `step_set_output` | `project`, `step`, `outputs`, `force=false`, `reason`, `author?` | `{ok: true}` |
 | `step_retry` | `project`, `steps?`, `tags?`, `message?`, `reason`, `expected_rev?`, `author?` | `{project, steps, rearmed, stopped_at}` |

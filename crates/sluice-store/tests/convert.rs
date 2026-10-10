@@ -1087,6 +1087,18 @@ async fn imported_projects_are_anchored_at_an_exact_baseline() {
             "{name}: {json}"
         );
         let p = project.to_string();
+        let (header_rev, last_edit_rev): (i64, i64) = c
+            .query_row(
+                "SELECT rev, (SELECT max(rev) FROM plan_edits WHERE project_id=?1) FROM plans WHERE project_id=?1",
+                [&p],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(header_rev, 4, "{name}: keeps the old plans.rev");
+        assert_eq!(
+            header_rev, last_edit_rev,
+            "{name}: next edit follows history"
+        );
         // The stored plan exports exactly, and the history from the baseline rebuilds it.
         let exported = plans::export_plan(&c, project).unwrap();
         assert_eq!(compact(&exported.document), compact(&stored), "{name}");

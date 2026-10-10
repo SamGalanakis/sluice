@@ -2336,7 +2336,9 @@ runs it as `scripts/deploy --schema-cutover --deadline <RFC 3339 time or +<n>m>
     home's writer lock. Its preconditions (§10.3) are checked again inside its transaction.
 11. **Select and start** the candidate (`coordinator --maintenance`, serve, loop) and verify:
     integrity, `plan_get` of every project equals the backup's `plans.doc` (§10.5),
-    `plan_history` reaches rev 1, the dashboard answers.
+    the first plan edit in `plan_history` is at each project's anchor revision from the
+    conversion report, or its first logged revision in the backup when unanchored, and the
+    dashboard answers. Retained dynamic records may precede that edit; page past them.
 12. **Unfence, release.** `install unfence`, then `release` with author `cutover`, which
     unpauses exactly the drain's recorded projects.
 13. **Report** one line, `cutover <sha> · schema 3 · <n> projects · <m> revisions converted ·
@@ -2470,6 +2472,14 @@ in steps 8 to 12 still leaves each run's outcome; the deploy.log lines are JSON 
 coordinator's, and any active `sluice-run-`/`sluice-test-` unit of a run in its database) and by
 the processes holding its database or `coordinator.lock` open, never by a command-line pattern.
 
+After a post-migration failure, repair the cause and run `scripts/deploy --schema-cutover
+--resume-checks`. The retry requires the `schema-3 cutover` fence, the home and the recorded
+candidate at schema 3, and a successful migration recorded in
+`<install>/schema-cutover-checkpoint.json`. It stops and re-creates the candidate services,
+repeats step 11 against the recorded backup and conversion anchors, then performs steps 12
+and 13 with the original report's deadline and run outcomes. It needs no new deadline or
+rehearsal and refuses a different candidate. A failed retry keeps the fence and drain.
+
 ### 10.2 The converter
 
 `sluice_store::convert::convert_home(database) -> Result<ConversionReport>` (lane B), with one
@@ -2578,6 +2588,10 @@ nothing else can supply their origin; attempts' frozen completion snapshots
   that revision's that no record of the project holds (history orders and pages by it) and the
   project's `created_at`, and no free sequence is a blocker. Revisions after `k` convert by
   steps 2 to 5 from the anchor's rows; steps 4 and 5 hold unchanged.
+- **Final revision.** The converted `plans.rev` remains `N`, the old `plans.rev` and the
+  maximum converted `plan_edits.rev`. The count of converted revisions is `N - k + 1`,
+  which the report records as `revisions`; it is never the plan header's revision. The next
+  edit therefore uses `N + 1`, without colliding with retained history.
 - **Folded edits.** Logged revisions at or below `k` are **folded** into the baseline: their
   `plan_edits` rows are not kept (rev `k`'s is the baseline). Each such revision's retained
   `plan.edit` record is kept with its author and reason: rev `k`'s carries the baseline's

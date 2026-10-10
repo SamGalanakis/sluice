@@ -24,11 +24,15 @@
 - The live home runs a deployed release, never this working tree. After pushing to main,
   `SLUICE_HOME=<the selected home> scripts/deploy <ref>` (ref defaults to `origin/main`;
   `--prefix DIR` picks the installation) builds a pinned release of that commit, selects it
-  under the installation fence and restarts the coordinator, serve and loop units; running
-  steps are adopted. `sluice install status` names the selected home. Ship with `scripts/ship`
+  under the installation fence and stops and re-creates the coordinator, serve and loop units.
+  Running steps are adopted. `sluice install status` names the selected home. Ship with `scripts/ship`
   (below) rather than by hand.
 
 ## Shipping
+
+Deploy-started services are transient units created with `systemd-run --collect`. Stop and
+re-create them with the same deploy arguments. Do not use `systemctl --user restart`: a serve
+restart can race the port, exit and be collected.
 
 - `scripts/ship [REF] [--dry-run]` takes a branch that already passed `scripts/check` to a
   verified live deploy. From any worktree, with a clean tree, it rebases REF (default `HEAD`;
@@ -79,8 +83,12 @@
   notice, the drain, at the deadline the fence and then a cancel request (with a reason naming
   the cutover) for each run still live, nothing converted until nothing is live, then the
   migration; `<install>/cutover-<time>.json` says how each run actually ended. `--dry-run`
-  rehearses and lists what the deadline would stop. The plan-rows lanes land together from one
-  integration branch (`docs/design/plan-rows.md` §12); none is shipped alone.
+  rehearses and lists what the deadline would stop. After a post-migration failure, repair the
+  cause and run `scripts/deploy --schema-cutover --resume-checks` with the same scratch or live
+  installation selection. It requires the `schema-3 cutover` fence and a home at the recorded
+  candidate's schema. It checks the recorded backup and each project's baseline, then unfences,
+  releases the drain and prints the original cutover report. The plan-rows lanes land together
+  from one integration branch (`docs/design/plan-rows.md` §12); none is shipped alone.
 
 ## UI changes
 

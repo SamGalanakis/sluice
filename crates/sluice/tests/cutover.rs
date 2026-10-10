@@ -5,8 +5,8 @@
 //! a scratch installation directory and prefix, plain child services, `sluice-test-*` units.
 //!
 //! The cutover needs two releases: the old one the home runs (schema 1) and the candidate. The
-//! old release is the schema-1 build of the merge base with `main`, built once into the target
-//! directory, and the candidate is this build.
+//! old release is the last schema-1 ancestor with the legacy compiler on the first-parent
+//! history, built once into the target directory, and the candidate is this build.
 #[path = "../../../tests/support/executable.rs"]
 mod executable;
 #[allow(dead_code)]
@@ -77,12 +77,31 @@ fn wait_for(what: &str, limit: Duration, mut predicate: impl FnMut() -> bool) {
 }
 
 /// The schema-1 binary the home runs before the cutover.
+fn old_revision() -> &'static str {
+    static REVISION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    REVISION.get_or_init(|| {
+        let repo = repo();
+        git(&repo, &["rev-list", "--first-parent", "HEAD"])
+            .lines()
+            .find(|sha| {
+                git(
+                    &repo,
+                    &["show", &format!("{sha}:crates/sluice-store/src/schema.rs")],
+                )
+                .contains("pub const SCHEMA_VERSION: i64 = 1;")
+                    && !git(&repo, &["ls-tree", sha, "crates/sluice-model/src/plan.rs"]).is_empty()
+            })
+            .expect("cutover tests need a schema-1 ancestor with the legacy compiler")
+            .to_owned()
+    })
+}
+
 fn old_binary() -> PathBuf {
     let repo = repo();
-    let sha = git(&repo, &["merge-base", "HEAD", "main"]);
-    let cache = target().join("cutover-old").join(&sha);
+    let sha = old_revision();
+    let cache = target().join("cutover-old").join(sha);
     std::fs::create_dir_all(&cache).unwrap();
-    // One build per merge base, whichever test asks first.
+    // One build per schema-1 revision, whichever test asks first.
     let lock = std::fs::File::create(cache.join("lock")).unwrap();
     lock.lock().unwrap();
     // Where cargo put it, as it reports: a cargo wrapper may override the target directory.
@@ -98,7 +117,7 @@ fn old_binary() -> PathBuf {
     let mut archive = Command::new("git")
         .arg("-C")
         .arg(&repo)
-        .args(["archive", &sha])
+        .args(["archive", sha])
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
@@ -235,8 +254,7 @@ impl Releases {
         let root = tempfile::tempdir_in(target().join("tmp")).unwrap();
         let repo = repo();
         let head = git(&repo, &["rev-parse", "HEAD"]);
-        let base = git(&repo, &["merge-base", "HEAD", "main"]);
-        let old = release(root.path(), &old_binary(), &base, 1);
+        let old = release(root.path(), &old_binary(), old_revision(), 1);
         let candidate = release(
             root.path(),
             Path::new(env!("CARGO_BIN_EXE_sluice")),
@@ -421,14 +439,18 @@ impl Scratch {
         path
     }
     fn cutover(&self, extra: &[&str]) -> Output {
-        let rehearsal = self.rehearsal();
-        self.gate
-            .command(&repo().join("scripts/deploy"), &["--prefix"])
-            .arg(&self.prefix)
-            .args(["--schema-cutover", "--candidate"])
-            .arg(&self.releases.candidate)
-            .arg("--rehearsal")
-            .arg(rehearsal)
+        let mut command = self
+            .gate
+            .command(&repo().join("scripts/deploy"), &["--prefix"]);
+        command.arg(&self.prefix).arg("--schema-cutover");
+        if !extra.contains(&"--resume-checks") {
+            command
+                .arg("--candidate")
+                .arg(&self.releases.candidate)
+                .arg("--rehearsal")
+                .arg(self.rehearsal());
+        }
+        command
             .args(extra)
             .env("SLUICE_DEPLOY_PROCESS_FIXTURE", "1")
             .env("SLUICE_DEPLOY_PORT", self.port.to_string())
@@ -963,6 +985,187 @@ fn cutover_cancels_the_running_steps_stops_the_calls_settles_and_reports_how_eac
 }
 
 // ---- compat-check --incompatible --copy -------------------------------------------------------
+
+#[test]
+fn cutover_preserves_an_imported_revision_and_checks_its_baseline() {
+    let scratch = Scratch::new();
+    scratch.tool("project_create", json!({"name": "p"}));
+    // The importer's only logged edit is revision 7, with no completion snapshot.
+    let db = rusqlite::Connection::open(scratch.gate.home.join("sluice.db")).unwrap();
+    db.execute_batch(
+        "UPDATE plans SET rev=7;
+         UPDATE plan_edits SET rev=7;
+         UPDATE records SET payload=json_set(payload,'$.rev',7) WHERE kind='plan.edit';
+         UPDATE records SET seq=seq+1000;
+         UPDATE plan_edits SET seq=seq+1000;",
+    )
+    .unwrap();
+    // Retained dynamic records precede the baseline and fill more than one history page.
+    for seq in 1..=201 {
+        db.execute(
+            "INSERT INTO records(seq,project_id,kind,at,payload,payload_version)
+             SELECT ?1, project_id, 'plan.input', at, ?2, 1 FROM plan_edits LIMIT 1",
+            rusqlite::params![seq, json!({"kind":"plan.input","rev":1,"name":"old","value":seq,"author":"fixture","reason":"old input"}).to_string()],
+        ).unwrap();
+    }
+    drop(db);
+    let output = scratch.cutover(&["--deadline", "+0s"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(scratch.value("SELECT rev FROM plans").as_deref(), Some("7"));
+    assert_eq!(
+        scratch.value("SELECT min(rev) FROM plan_edits").as_deref(),
+        Some("7")
+    );
+    assert_eq!(scratch.report().revisions, 1);
+    assert_eq!(scratch.fence(), None);
+    let next = scratch
+        .gate
+        .command(
+            &scratch.releases.candidate.join("bin/sluice"),
+            &[
+                "tool",
+                "plan_edit",
+                r#"{"project":"p","rev":7,"reason":"after cutover","ops":[{"op":"input.put","name":"n","declaration":"int"}]}"#,
+            ],
+        )
+        .output()
+        .unwrap();
+    assert!(next.status.success(), "{}", text(&next));
+    assert_eq!(scratch.value("SELECT rev FROM plans").as_deref(), Some("8"));
+    assert_eq!(
+        scratch.value("SELECT max(rev) FROM plan_edits").as_deref(),
+        Some("8")
+    );
+}
+
+#[test]
+fn cutover_resumes_failed_checks_after_repair_and_refuses_the_wrong_fence_or_schema() {
+    let mut scratch = Scratch::new();
+    scratch.tool("project_create", json!({"name": "p"}));
+    // A candidate that serves the real home but returns a wrong plan while the fault marker
+    // exists. The release manifest includes both the wrapper and its real binary.
+    let candidate = &scratch.releases.candidate;
+    std::fs::rename(
+        candidate.join("bin/sluice"),
+        candidate.join("bin/sluice-real"),
+    )
+    .unwrap();
+    std::fs::write(candidate.join("bin/sluice"),
+        "#!/bin/sh\nif [ \"$1\" = tool ] && [ \"$2\" = plan_get ] && [ -f \"$SLUICE_HOME/fail-plan-check\" ]; then\n  printf '%s\\n' '{\"rev\":0,\"plan\":{}}'\n  exit 0\nfi\nexec \"$(dirname \"$0\")/sluice-real\" \"$@\"\n"
+    ).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        candidate.join("bin/sluice"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let mut manifest: Manifest =
+        serde_json::from_slice(&std::fs::read(candidate.join("manifest.json")).unwrap()).unwrap();
+    let mut digests = BTreeMap::new();
+    files(candidate, candidate, &mut digests);
+    digests.remove("manifest.json");
+    manifest.release_id = format!(
+        "{}-{}",
+        manifest.git_sha,
+        sluice_store::artifacts::fingerprint(&serde_json::to_vec(&digests).unwrap())
+    );
+    manifest.files = digests;
+    std::fs::write(
+        candidate.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let renamed = candidate.parent().unwrap().join(&manifest.release_id);
+    std::fs::rename(candidate, &renamed).unwrap();
+    scratch.releases.candidate = renamed;
+    let marker = scratch.gate.home.join("fail-plan-check");
+    std::fs::write(&marker, "fault").unwrap();
+    let output = scratch.cutover(&["--deadline", "+0s"]);
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("plan_get p differs"),
+        "{}",
+        text(&output)
+    );
+    assert_eq!(
+        scratch
+            .value("SELECT schema_version FROM home_meta")
+            .as_deref(),
+        Some("3")
+    );
+    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
+    assert_eq!(
+        scratch.value("SELECT mode FROM maintenance").as_deref(),
+        Some("drain")
+    );
+    let original = serde_json::to_value(scratch.report()).unwrap();
+    let checkpoint = scratch.gate.install.join("schema-cutover-checkpoint.json");
+    let recorded = std::fs::read(&checkpoint).unwrap();
+    std::fs::remove_file(&checkpoint).unwrap();
+    let output = scratch.cutover(&["--resume-checks"]);
+    assert!(
+        !output.status.success()
+            && String::from_utf8_lossy(&output.stderr).contains("recorded checkpoint"),
+        "{}",
+        text(&output)
+    );
+    std::fs::write(&checkpoint, recorded).unwrap();
+    let install = Installation::at(scratch.gate.install.clone()).unwrap();
+    install.fence("ordinary deploy".into()).unwrap();
+    let output = scratch.cutover(&["--resume-checks"]);
+    assert!(
+        !output.status.success()
+            && String::from_utf8_lossy(&output.stderr).contains("fence reason schema-3 cutover"),
+        "{}",
+        text(&output)
+    );
+    install.fence("schema-3 cutover".into()).unwrap();
+    let db = rusqlite::Connection::open(scratch.gate.home.join("sluice.db")).unwrap();
+    db.execute("UPDATE home_meta SET schema_version=1", [])
+        .unwrap();
+    let output = scratch.cutover(&["--resume-checks"]);
+    assert!(
+        !output.status.success()
+            && String::from_utf8_lossy(&output.stderr).contains("home and candidate at schema 3"),
+        "{}",
+        text(&output)
+    );
+    db.execute("UPDATE home_meta SET schema_version=3", [])
+        .unwrap();
+    drop(db);
+    // An unrepaired check failure must leave the installation fenced and drained again.
+    let output = scratch.cutover(&["--resume-checks"]);
+    assert!(!output.status.success(), "{}", text(&output));
+    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
+    std::fs::remove_file(marker).unwrap();
+    // A --collect service that already exited must not prevent service re-creation.
+    let services_path = scratch.gate.install.join("services.json");
+    let mut services: Value =
+        serde_json::from_slice(&std::fs::read(&services_path).unwrap()).unwrap();
+    services["collected"] = json!({"unit": format!("sluice-test-collected-{}.service", sluice_model::ids::InvocationId::new()), "release":scratch.releases.candidate});
+    std::fs::write(&services_path, serde_json::to_vec(&services).unwrap()).unwrap();
+    let output = scratch.cutover(&["--resume-checks"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(scratch.fence(), None);
+    assert_eq!(
+        scratch.value("SELECT mode FROM maintenance").as_deref(),
+        Some("normal")
+    );
+    assert_eq!(serde_json::to_value(scratch.report()).unwrap(), original);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 revisions converted"),
+        "{}",
+        text(&output)
+    );
+    assert_eq!(
+        std::fs::read_dir(scratch.gate.install.join("backups"))
+            .unwrap()
+            .count(),
+        1
+    );
+    // A completed cutover is not a resumable fenced cutover.
+    assert!(!scratch.cutover(&["--resume-checks"]).status.success());
+}
 
 impl Scratch {
     fn compat_check(&self, args: &[&str]) -> Output {

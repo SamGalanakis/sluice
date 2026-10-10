@@ -128,7 +128,7 @@ pub struct ConversionReport {
 pub struct ProjectConversion {
     pub project_id: ProjectId,
     pub name: String,
-    /// Plan revisions replayed and converted (`1 … rev`).
+    /// Number of plan revisions converted, including the imported baseline when anchored.
     pub revisions: u64,
     pub steps: u64,
     pub inputs: u64,
@@ -1277,7 +1277,7 @@ fn restore_order(value: &mut Value, parent: &str, keys: &[String]) {
 /// steps' final positions, units and declarations for the copy.
 fn write_plan(sql: &Connection, plan: &Converted) -> Result<()> {
     let id = plan.project.to_string();
-    let rev = plan.revisions.len() as i64;
+    let rev = plan.rows.header.rev.0 as i64;
     sql.execute(
         "INSERT INTO plans(project_id,rev,root_order,state_epoch) VALUES (?1,?2,?3,0)",
         params![id, rev, compact(&plan.rows.header.root_order)],

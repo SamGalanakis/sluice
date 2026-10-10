@@ -13,6 +13,7 @@ cutover_args = parser.add_argument_group('schema cutover (docs/design/plan-rows.
 cutover_args.add_argument('--schema-cutover', action='store_true', help=
     'rehearse on a copy, print the notice, drain, and at the deadline fence, request the cancel of '
     'every step still running, settle, migrate the home and start the new release')
+cutover_args.add_argument('--resume-checks', action='store_true', help='retry the recorded post-migration checks on a fenced schema-3 home, then unfence and release the drain')
 cutover_args.add_argument('--deadline', metavar='TIME', help='RFC 3339 time, or +<n>m (also +<n>s, +<n>h)')
 cutover_args.add_argument('--cancel-grace', type=float, default=300, metavar='S', help='seconds cancelled runs get to end before their units are stopped (default 300)')
 cutover_args.add_argument('--settle-timeout', type=float, default=300, metavar='S', help='seconds to wait for nothing to be live after the stops (default 300)')
@@ -22,10 +23,12 @@ cutover_args.add_argument('--rehearsal', metavar='FILE', help='a passing scripts
 args = parser.parse_args(sys.argv[2:])
 repo = pathlib.Path(sys.argv[1])
 if not args.schema_cutover:
-    for flag, given in [('--deadline', args.deadline), ('--dry-run', args.dry_run), ('--candidate', args.candidate), ('--rehearsal', args.rehearsal)]:
+    for flag, given in [('--deadline', args.deadline), ('--dry-run', args.dry_run), ('--candidate', args.candidate), ('--rehearsal', args.rehearsal), ('--resume-checks', args.resume_checks)]:
         if given: parser.error(flag + ' needs --schema-cutover')
 else:
-    if not args.deadline: parser.error('--schema-cutover needs --deadline')
+    if args.resume_checks:
+        if args.deadline or args.dry_run or args.rehearsal: parser.error('--resume-checks cannot take --deadline, --dry-run or --rehearsal')
+    elif not args.deadline: parser.error('--schema-cutover needs --deadline')
     if args.skip_compat is not None: parser.error('--skip-compat does not apply to --schema-cutover: its check is the rehearsal')
     if args.cancel_grace < 0 or args.settle_timeout < 0: parser.error('--cancel-grace and --settle-timeout are seconds >= 0')
 prefix = pathlib.Path(args.prefix).resolve()
@@ -74,11 +77,36 @@ def incompatible(schema, at):
     return ('%s is schema %d and the home is schema %d: an incompatible release goes out only through '
             'scripts/deploy --schema-cutover --deadline <time>' % (at, schema, home_schema()))
 
+checkpoint_path = install / 'schema-cutover-checkpoint.json'
+checkpoint = None
+if args.resume_checks:
+    try:
+        fence = json.loads((install / 'fence.json').read_text())
+        checkpoint = json.loads(checkpoint_path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError) as error:
+        sys.exit('deploy: --resume-checks needs the schema-3 cutover fence and recorded checkpoint: %s' % error)
+    if checkpoint.get('completed'):
+        sys.exit('deploy: the recorded cutover already completed')
+    if fence.get('reason') != 'schema-3 cutover':
+        sys.exit('deploy: --resume-checks requires fence reason schema-3 cutover')
+    if pathlib.Path(checkpoint['home']).resolve() != home:
+        sys.exit('deploy: the recorded cutover belongs to a different home')
+    if args.candidate and pathlib.Path(args.candidate).resolve() != pathlib.Path(checkpoint['release']).resolve():
+        sys.exit('deploy: --resume-checks requires the recorded candidate')
+    args.candidate = checkpoint['release']
+
 if args.candidate:
     release = pathlib.Path(args.candidate).resolve()
     if not (release / 'bin/sluice').is_file() or not (release / 'manifest.json').is_file():
         sys.exit('deploy: %s is not a built release (bin/sluice and manifest.json)' % release)
     sha = manifest(release)['git_sha']
+    if args.resume_checks:
+        if testing or fixture:
+            if any(release == p or p in release.parents for p in live): sys.exit('Tests refuse live installation paths')
+        if home_schema() != release_schema(release) or home_schema() != 3:
+            sys.exit('deploy: --resume-checks requires the home and candidate at schema 3')
+        if checkpoint.get('conversion') is None:
+            sys.exit('deploy: --resume-checks needs a recorded successful migration')
 else:
     sha = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', '--verify', args.ref + '^{commit}'], text=True).strip()
     prefix.mkdir(parents=True, exist_ok=True)
@@ -174,7 +202,12 @@ def stop_services():
     previous = json.loads((install / 'services.json').read_text()) if (install / 'services.json').exists() else {}
     for record in previous.values():
         if 'pid' in record: stop_process(record)
-        else: subprocess.run(['systemctl', '--user', 'stop', record['unit']], check=True)
+        else:
+            stopped = subprocess.run(['systemctl', '--user', 'stop', record['unit']], capture_output=True, text=True)
+            if stopped.returncode:
+                loaded = subprocess.run(['systemctl', '--user', 'show', record['unit'], '--property=LoadState', '--value'], capture_output=True, text=True)
+                if loaded.stdout.strip() != 'not-found':
+                    raise RuntimeError('stop %s: %s' % (record['unit'], stopped.stderr.strip()))
     if not fixture:
         for unit in AUTO_COORDINATORS:
             subprocess.run(['systemctl', '--user', 'stop', unit], check=False, stderr=subprocess.DEVNULL)
@@ -413,9 +446,7 @@ def cutover():
     def write_report(stopped, refused, projects=None, revisions=None):
         counted = plan_counts() if projects is None else (projects, revisions)
         report = dict(sha=sha, schema=schema, deadline=when, reason=reason, projects=counted[0], revisions=counted[1], stopped=stopped, refused=refused)
-        temporary = report_path.with_suffix('.tmp')
-        temporary.write_text(json.dumps(report, indent=2) + '\n')
-        temporary.replace(report_path)
+        publish(report_path.name, report)
         return report
     def log_line(line, **fields):
         print(line, flush=True)
@@ -557,6 +588,8 @@ def cutover():
         copy.execute('PRAGMA journal_mode=DELETE')
     source.close(); copy.close()
     say('backup: %s' % backup)
+    checkpoint = dict(home=str(home), release=str(release), old=str(old), backup=str(backup), report=str(report_path), conversion=None)
+    publish(checkpoint_path.name, checkpoint)
     # 10. Migrate with the candidate, under the fence, holding the writer lock.
     migrated = subprocess.run([str(program), 'home', 'migrate', '--json'], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
     if migrated.returncode:
@@ -567,24 +600,53 @@ def cutover():
     projects, revisions = len(conversion['projects']), sum(p['revisions'] for p in conversion['projects'])
     for warning in conversion.get('warnings', []): say('conversion warning: %s' % (warning if isinstance(warning, str) else json.dumps(warning)))
     report = write_report(stopped, [], projects, revisions)
+    checkpoint['conversion'] = conversion
+    publish(checkpoint_path.name, checkpoint)
+    finish_cutover(checkpoint)
+
+def finish_cutover(checkpoint):
+    backup = pathlib.Path(checkpoint['backup'])
+    old = pathlib.Path(checkpoint['old'])
+    report_path = pathlib.Path(checkpoint['report'])
+    report = json.loads(report_path.read_text())
+    conversion = checkpoint['conversion']
+    projects, revisions, stopped = report['projects'], report['revisions'], report['stopped']
+    schema = release_schema(release)
+    cutover_env = dict(env, SLUICE_AUTHOR='cutover')
+    def log_line(line, **fields):
+        print(line, flush=True)
+        log_deploy(cutover=line, **fields)
     # 11. Select and start the candidate, then check it against the backup.
     control(program, 'select', str(release), str(home))
     try:
+        stop_services()
         start_services(program, release)
         if query('PRAGMA integrity_check')[0][0] != 'ok': raise RuntimeError('integrity_check failed on the migrated home')
         with sqlite3.connect('file:%s?mode=ro' % backup, uri=True) as before:
-            plans = before.execute('SELECT p.project_id, p.name, d.rev, d.doc FROM plans d JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL ORDER BY p.name').fetchall()
+            plans = before.execute('SELECT p.project_id, p.name, d.rev, d.doc, (SELECT min(rev) FROM plan_edits WHERE project_id=p.project_id) FROM plans d JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL ORDER BY p.name').fetchall()
         before.close()
-        for project_id, name, rev, doc in plans:
+        anchors = {p['project_id']: p['anchor']['rev'] for p in conversion['projects'] if p.get('anchor')}
+        for project_id, name, rev, doc, first_rev in plans:
+            first_rev = anchors.get(project_id, first_rev)
             got = subprocess.run([str(program), 'tool', 'plan_get', json.dumps(dict(project='id:' + project_id))], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
             if got.returncode: raise RuntimeError('plan_get %s: %s' % (name, reply_error(got).get('message')))
             exported = json.loads(got.stdout)
             if exported.get('rev') != rev or compact(exported.get('plan')) != compact(json.loads(doc)):
                 raise RuntimeError('plan_get %s differs from the backup\'s plan at rev %d' % (name, rev))
-            history = subprocess.run([str(program), 'tool', 'plan_history', json.dumps(dict(project='id:' + project_id, limit=1))], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
-            entries = json.loads(history.stdout).get('entries', []) if history.returncode == 0 else []
-            if not entries or entries[0].get('kind') != 'plan.edit' or entries[0].get('rev') != 1:
-                raise RuntimeError('plan_history %s does not reach rev 1' % name)
+            cursor, first_edit = None, None
+            while first_edit is None:
+                request = dict(project='id:' + project_id, limit=200)
+                if cursor is not None: request['after_seq'] = cursor
+                history = subprocess.run([str(program), 'tool', 'plan_history', json.dumps(request)], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+                if history.returncode: raise RuntimeError('plan_history %s: %s' % (name, reply_error(history).get('message')))
+                page = json.loads(history.stdout)
+                first_edit = next((e for e in page.get('entries', []) if e.get('kind') == 'plan.edit'), None)
+                next_cursor = page.get('next_after_seq')
+                if first_edit is not None or next_cursor is None: break
+                if next_cursor == cursor: raise RuntimeError('plan_history %s did not advance' % name)
+                cursor = next_cursor
+            if first_edit is None or first_edit.get('rev') != first_rev:
+                raise RuntimeError('plan_history %s does not reach baseline rev %s' % (name, first_rev))
         port = os.environ.get('SLUICE_DEPLOY_PORT', '3065')
         pages = ['http://127.0.0.1:%s/' % port] + (['http://127.0.0.1:%s/projects/id/%s' % (port, plans[0][0])] if plans else [])
         answer_deadline = time.monotonic() + 60
@@ -596,14 +658,15 @@ def cutover():
             if not bad or time.monotonic() > answer_deadline: break
             time.sleep(.5)
         if bad: raise RuntimeError('the dashboard answered %s' % ', '.join('%s %s' % pair for pair in bad))
-        say('checked: integrity, %d plan(s) equal to the backup, history to rev 1, the dashboard answers' % len(plans))
+        say('checked: integrity, %d plan(s) equal to the backup, history to each baseline, the dashboard answers' % len(plans))
         # 12. Unfence, then release the drain.
         unfence(program)
         released = subprocess.run([str(program), 'drain', '--release'], env=cutover_env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
         if released.returncode: raise RuntimeError('release: %s' % reply_error(released).get('message'))
     except Exception as error:
+        control(program, 'fence', 'schema-3 cutover')
         log_deploy(cutover='failed after the migration', failure=str(error))
-        sys.exit('deploy: the cutover failed after the migration: %s. The installation stays fenced; recover forward, or restore %s together with %s (§10.7)' % (error, backup, old.name[:12]))
+        sys.exit('deploy: the cutover failed after the migration: %s. The installation stays fenced; repair and run scripts/deploy --schema-cutover --resume-checks, or restore %s together with %s (§10.7)' % (error, backup, old.name[:12]))
     # 13. The report.
     calls = sum(1 for entry in stopped if 'call' in entry)
     log_line('cutover %s · schema %d · %d projects · %d revisions converted · cancel requested for %d runs · %d calls stopped'
@@ -613,6 +676,10 @@ def cutover():
         log_line('stopped %s %s %s requested=%s outcome=%s advice=%s' % (entry['project'] or '-', entry.get('step') or 'call:' + entry['call'],
                  entry['run'], entry['requested'], outcome, entry['advice']))
     prune_releases(release)
+    publish(checkpoint_path.name, dict(checkpoint, completed=True))
 
-cutover() if args.schema_cutover else deploy()
+
+if args.resume_checks: finish_cutover(checkpoint)
+elif args.schema_cutover: cutover()
+else: deploy()
 PY
