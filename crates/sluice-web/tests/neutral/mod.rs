@@ -17,7 +17,6 @@ use serde_json::{Value, json};
 use sluice_model::{
     error::PublicError,
     ids::{AttemptId, ProjectId, RunId},
-    plan::{FnSignature, Plan, SignatureProvider},
 };
 use sluice_store::{
     RetrySafety, Writer,
@@ -40,16 +39,6 @@ pub const DONE: [&str; 5] = ["a-1", "a-2", "a-3", "s-1", "s-2"];
 pub const STOPPED: [&str; 3] = ["a-4", "a-5", "s-4"];
 pub const RUNNING: [&str; 5] = ["a-6", "a-7", "s-3", "index", "survey"];
 pub const WAITING: [&str; 3] = ["a-8", "a-9", "s-5"];
-
-struct Open;
-impl SignatureProvider for Open {
-    fn signature(&self, name: &str) -> Option<FnSignature> {
-        (name == "custom.open").then(|| FnSignature {
-            open: true,
-            ..Default::default()
-        })
-    }
-}
 
 /// An instant `seconds` ago, as the store writes one.
 pub fn ago(seconds: u64) -> String {
@@ -116,11 +105,8 @@ async fn project(writer: &Writer, name: &'static str, description: &'static str)
 async fn plan(writer: &Writer, project: ProjectId, doc: Value, steps: Vec<Step>) {
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            let plan = Plan::parse_json(&serde_json::to_vec(&doc).unwrap(), &Open).unwrap();
             let p = project.to_string();
-            tx.sql()
-                .execute("DELETE FROM plans WHERE project_id=?1", [&p])?;
-            sluice_store::plans::initialize_plan(tx, project, &plan)?;
+            crate::seed::put(tx, project, doc)?;
             for s in &steps {
                 let mut ids = vec![];
                 for (started, took) in &s.runs {

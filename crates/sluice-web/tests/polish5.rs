@@ -7,6 +7,7 @@
 //! the run file's title, a pause reason's period, the inbox's one section name, the guide's title
 //! and the agent docs.
 mod board_fixture;
+mod seed;
 #[allow(dead_code)]
 #[path = "../../../tests/support/messages.rs"]
 mod stored_messages;

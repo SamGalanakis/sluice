@@ -35,6 +35,7 @@ use std::{
     },
 };
 use tower::ServiceExt;
+mod seed;
 
 struct Commands;
 impl CommandService for Commands {
@@ -100,14 +101,10 @@ async fn live_home(
                 .iter()
                 .map(|s| (s.to_string(), json!({"run": "custom.open"})))
                 .collect();
-            let doc = json!({ "steps": steps });
-            tx.sql().execute(
-                "UPDATE plans SET doc=?2 WHERE project_id=?1",
-                (id.to_string(), doc.to_string()),
-            )?;
-            for (position, (step, run)) in STEPS.iter().zip(&stored).enumerate() {
+            seed::put(tx, id, json!({ "steps": steps }))?;
+            for (step, run) in STEPS.iter().zip(&stored) {
                 let attempt = AttemptId::new();
-                tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status,generation,work_generation,run_ids) VALUES (?1,?2,?3,?4,'running',1,1,?5)", (id.to_string(), step, position as i64, doc["steps"][step].to_string(), json!([run]).to_string()))?;
+                tx.sql().execute("UPDATE steps SET status='running',generation=1,work_generation=1,run_ids=?3 WHERE project_id=?1 AND step_id=?2", (id.to_string(), step, json!([run]).to_string()))?;
                 tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,generation,work_generation,phase,request,inputs_hash,created_at) VALUES (?1,?2,?3,1,1,'executing',?4,'hash','2026-10-04T00:00:00Z')", (attempt.to_string(), id.to_string(), step, json!({"inputs": {}}).to_string()))?;
                 tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,generation,work_generation,created_at,started_at) VALUES (?1,?2,?3,?4,1,1,'2026-10-04T00:00:00Z','2026-10-04T00:00:00Z')", (run.to_string(), id.to_string(), attempt.to_string(), step))?;
             }
@@ -376,19 +373,12 @@ async fn a_plan_edited_between_renders_is_drawn_at_once() {
     assert!(before.contains("data-step=\"w3\"") && !before.contains("data-step=\"added\""));
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            let doc: String = tx.sql().query_row(
-                "SELECT doc FROM plans WHERE project_id=?1",
-                [id.to_string()],
-                |r| r.get(0),
-            )?;
-            let mut doc: Value = serde_json::from_str(&doc).unwrap();
-            doc["steps"]["added"] = json!({"run": "custom.open"});
-            tx.sql().execute(
-                "UPDATE plans SET doc=?2 WHERE project_id=?1",
-                (id.to_string(), doc.to_string()),
-            )?;
-            tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status) VALUES (?1,'added',9,?2,'pending')", (id.to_string(), doc["steps"]["added"].to_string()))?;
-            tx.changed(Some(id), "plan");
+            let mut steps: serde_json::Map<String, Value> = STEPS
+                .iter()
+                .map(|s| (s.to_string(), json!({"run": "custom.open"})))
+                .collect();
+            steps.insert("added".into(), json!({"run": "custom.open"}));
+            seed::put(tx, id, json!({ "steps": steps }))?;
             Ok(())
         })
         .await

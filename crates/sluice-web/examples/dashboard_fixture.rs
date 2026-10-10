@@ -9,6 +9,9 @@ mod dashboard_fixture;
 /// The neutral projects (`almanac`, `chores`) every page must render (tests/neutral).
 #[path = "../tests/neutral/mod.rs"]
 mod neutral;
+/// Plans are put through the store's plan edit, as the tests' are.
+#[path = "../tests/seed/mod.rs"]
+mod seed;
 use dashboard_fixture::{configure, home, layers, seed};
 #[tokio::main]
 async fn main() {

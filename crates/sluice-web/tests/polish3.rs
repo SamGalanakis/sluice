@@ -5,6 +5,7 @@
 //! row; a run's file is a page with its terminal codes out, the file itself a link away.
 mod board_fixture;
 mod plan_html;
+mod seed;
 use board_fixture::Fixture;
 use serde_json::json;
 use sluice_model::{
@@ -271,14 +272,24 @@ async fn sluices_housekeeping_in_a_row_is_one_quiet_line_on_the_log() {
         .await;
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            for rev in [7, 8, 9] {
+            // each retirement logs a step.delete per step it retired: 2, then 1, then 1
+            for (rev, retired) in [
+                (7, &["u-1-work", "u-1-land"][..]),
+                (8, &["u-2"]),
+                (9, &["u-3"]),
+            ] {
                 tx.append_record(
                     Some(id),
                     Event::PlanEdit {
                         rev: Revision(rev),
                         author: "sluice".into(),
                         reason: "retire done units older than 6h".into(),
-                        ops: vec![],
+                        changes: retired
+                            .iter()
+                            .map(|step| sluice_model::plan_rows::PlanChange::StepDelete {
+                                step: step.parse().unwrap(),
+                            })
+                            .collect(),
                     },
                 )?;
             }
@@ -296,7 +307,7 @@ async fn sluices_housekeeping_in_a_row_is_one_quiet_line_on_the_log() {
     assert!(!rows.contains("older than 6h</p>"), "{rows}");
     assert!(
         rows.contains(
-            "<p class=\"log-what chore\">sluice retired done units 3 times: plan revs 7 to 9, 0 changes"
+            "<p class=\"log-what chore\">sluice retired done units 3 times: plan revs 7 to 9, 4 changes"
         ),
         "{rows}"
     );

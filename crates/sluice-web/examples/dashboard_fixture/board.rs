@@ -47,9 +47,7 @@ pub async fn seed(writer: &Writer, _id: ProjectId) {
             "queued":{"run":"custom.open","doc":"Queued for the cached cpu capacity.","needs":{"cpu":1}},
             "done":{"run":"custom.open","tags":["unit:finished"]},
             "skipped":{"run":"custom.open","tags":["unit:finished"]}},"outputs":{"result":{"source":"source/text"}}});
-        let plan = sluice_model::plan::Plan::parse_json(&serde_json::to_vec(&doc).unwrap(), &BoardFixtureRegistry).unwrap();
-        tx.sql().execute("DELETE FROM plans WHERE project_id=?1",[project.to_string()])?;
-        sluice_store::plans::initialize_plan(tx,project,&plan)?;
+        crate::seed::put(tx, project, doc)?;
         for (id,status,outputs) in [("source","succeeded",json!({"ok":true,"text":"A verified patch"})),("failed","failed",json!({"summary":"Preserved output from the previous attempt."})),("no","skipped",json!({})),("done","succeeded",json!({})),("skipped","skipped",json!({}))] {
             tx.sql().execute("UPDATE steps SET status=?3,outputs=?4 WHERE project_id=?1 AND step_id=?2",(project.to_string(),id,status,outputs.to_string()))?;
         }
@@ -88,16 +86,7 @@ pub async fn seed(writer: &Writer, _id: ProjectId) {
             "held":{"run":"custom.open","outputs":{"ok":"boolean"},"tags":["unit:build"]},
             "review":{"run":"custom.open","after":["held"],"tags":["unit:review"]},
             "deliver":{"run":"custom.open","after":["review"],"tags":["unit:review"]}}});
-            let plan = sluice_model::plan::Plan::parse_json(
-                &serde_json::to_vec(&doc).unwrap(),
-                &BoardFixtureRegistry,
-            )
-            .unwrap();
-            tx.sql().execute(
-                "DELETE FROM plans WHERE project_id=?1",
-                [paused.to_string()],
-            )?;
-            sluice_store::plans::initialize_plan(tx, paused, &plan)?;
+            crate::seed::put(tx, paused, doc)?;
             tx.sql().execute(
                 "UPDATE projects SET paused=1 WHERE project_id=?1",
                 [paused.to_string()],

@@ -29,6 +29,7 @@ use sluice_web::views::{
 };
 use std::sync::Arc;
 use tower::ServiceExt;
+mod seed;
 
 struct Catalog;
 impl views::CatalogSource for Catalog {
@@ -95,8 +96,8 @@ async fn fixture(engine: &str, status: &str) -> Fixture {
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
             let doc = json!({"steps":{"work":{"run":"agent.claude","outputs":{"ready":"boolean"}}}});
-            tx.sql().execute("UPDATE plans SET doc=?2 WHERE project_id=?1", (project.to_string(), doc.to_string()))?;
-            tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status,error,run_ids) VALUES(?1,'work',0,?2,?3,?4,?5)", (project.to_string(), doc["steps"]["work"].to_string(), &status, (status == "failed").then_some(r#"{"error":"agent_failure","kind":"Engine","message":"engine stopped"}"#), json!([run]).to_string()))?;
+            seed::put(tx, project, doc)?;
+            tx.sql().execute("UPDATE steps SET status=?2,error=?3,run_ids=?4 WHERE project_id=?1 AND step_id='work'", (project.to_string(), &status, (status == "failed").then_some(r#"{"error":"agent_failure","kind":"Engine","message":"engine stopped"}"#), json!([run]).to_string()))?;
             let attempt = AttemptId::new();
             tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,phase,request,inputs_hash,created_at) VALUES(?1,?2,'work','executing','{}','fixture',?3)", (attempt.to_string(), project.to_string(), &start))?;
             let finished = (status != "running").then_some("2026-10-08T23:00:00Z");

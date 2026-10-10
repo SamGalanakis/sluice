@@ -3,6 +3,7 @@
 //! say to the orchestrator refused once the board has moved on.
 mod board_fixture;
 mod plan_html;
+mod seed;
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
@@ -463,7 +464,7 @@ async fn the_board_head_takes_the_programs_title_and_says_when_its_words_last_ch
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
             tx.sql().execute(
-                "INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,ops) VALUES (?1,99,(SELECT max(seq)+1 FROM records),'2099-01-01T00:00:00Z','orch','later','[]')",
+                "INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,changes) VALUES (?1,99,(SELECT max(seq)+1 FROM records),'2099-01-01T00:00:00Z','orch','later','[]')",
                 [id.to_string()],
             )?;
             tx.changed(Some(id), "plan");
@@ -936,7 +937,7 @@ async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws
 
 /// A paused step has one name, "paused", and is counted as paused everywhere it is counted:
 /// the summary line and its bar, the home row, and the step page, which says who paused it
-/// (from the plan edit that did) instead of "Waits on: paused".
+/// (the owner's plan edit that added it paused) instead of "Waits on: paused".
 #[tokio::test]
 async fn a_paused_step_is_named_and_counted_paused_on_every_surface() {
     let f = Fixture::new().await;
@@ -950,17 +951,6 @@ async fn a_paused_step_is_named_and_counted_paused_on_every_surface() {
             &[("done", "succeeded")],
         )
         .await;
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            let edit: sluice_model::events::Event = serde_json::from_value(json!({
-                "kind":"plan.edit","rev":2,"author":"owner","reason":"",
-                "ops":[{"op":"add","path":"/steps/hold/paused","value":true}]}))
-            .unwrap();
-            tx.append_record(Some(held), edit)?;
-            Ok(())
-        })
-        .await
-        .unwrap();
     let (status, html) = f.get(&format!("/projects/id/{held}")).await;
     assert_eq!(status, StatusCode::OK, "{html}");
     // the plan: the paused one waits, its cell says paused; the band counts it waiting

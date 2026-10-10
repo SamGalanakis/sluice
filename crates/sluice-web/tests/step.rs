@@ -10,7 +10,7 @@ use sluice_model::{
     error::PublicError,
     gates::{StateSnapshot, StepState},
     ids::ProjectId,
-    plan::{FnSignature, Plan, SignatureProvider},
+    plan::{FnSignature, SignatureProvider},
 };
 use sluice_store::{
     ReadPool, RetrySafety, Writer,
@@ -27,6 +27,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tower::ServiceExt;
+mod seed;
 struct Signatures;
 impl SignatureProvider for Signatures {
     fn signature(&self, _: &str) -> Option<FnSignature> {
@@ -38,7 +39,7 @@ impl SignatureProvider for Signatures {
 }
 #[test]
 fn detail_preserves_missing_null_default_bindings_and_escapes_error() {
-    let plan=Plan::parse_json(br#"{"steps":{"a":{"run":"core.external","outputs":{"nil":"Any"}},"b":{"run":"core.external","doc":"<script>bad</script>","in":{"missing":{"source":"a/nil"},"literal":{"default":null},"file":{"file":"/tmp/a"}},"outputs":{"ready":"boolean"}}}}"#,&Signatures).unwrap();
+    let plan=seed::compile(serde_json::from_slice(br#"{"steps":{"a":{"run":"core.external","outputs":{"nil":"Any"}},"b":{"run":"core.external","doc":"<script>bad</script>","in":{"missing":{"source":"a/nil"},"literal":{"default":null},"file":{"file":"/tmp/a"}},"outputs":{"ready":"boolean"}}}}"#).unwrap(), &Signatures);
     let mut state = StateSnapshot::default();
     state.steps.insert(
         "b".parse().unwrap(),
@@ -77,7 +78,7 @@ fn detail_preserves_missing_null_default_bindings_and_escapes_error() {
 /// line, the set ones drawn as fields with each doc under its name.
 #[test]
 fn a_failed_steps_drawer_leads_with_retry_and_names_its_unset_outputs_on_one_line() {
-    let plan = Plan::parse_json(br#"{"steps":{"w":{"run":"core.external","outputs":{"summary":{"type":"string","doc":"What changed"},"ready":"boolean","evidence":"string"}}}}"#, &Signatures).unwrap();
+    let plan = seed::compile(serde_json::from_slice(br#"{"steps":{"w":{"run":"core.external","outputs":{"summary":{"type":"string","doc":"What changed"},"ready":"boolean","evidence":"string"}}}}"#).unwrap(), &Signatures);
     let mut state = StateSnapshot::default();
     state.steps.insert(
         "w".parse().unwrap(),
@@ -183,7 +184,22 @@ async fn fixture() -> (tempfile::TempDir, Writer, views::DashboardState, Project
         .await
         .unwrap()
         .project_id;
-    writer.write(RetrySafety::NonIdempotent,move|tx|{let doc=json!({"steps":{"work":{"run":"custom.open","outputs":{"ready":"boolean"}}}});tx.sql().execute("UPDATE plans SET doc=?2 WHERE project_id=?1",(project.to_string(),doc.to_string()))?;tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status) VALUES(?1,'work',0,?2,'failed')",(project.to_string(),doc["steps"]["work"].to_string()))?;tx.changed(Some(project), "project");Ok(())}).await.unwrap();
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            seed::put(
+                tx,
+                project,
+                json!({"steps":{"work":{"run":"custom.open","outputs":{"ready":"boolean"}}}}),
+            )?;
+            tx.sql().execute(
+                "UPDATE steps SET status='failed' WHERE project_id=?1 AND step_id='work'",
+                [project.to_string()],
+            )?;
+            tx.changed(Some(project), "project");
+            Ok(())
+        })
+        .await
+        .unwrap();
     let state =
         views::DashboardState::new(ReadPool::open(home.path(), 2).unwrap(), Arc::new(Catalog));
     (home, writer, state, project)
@@ -394,9 +410,8 @@ async fn durable_detail_uses_current_generation_frozen_inputs_and_live_submissio
     let (_home, writer, state, project) = fixture().await;
     let live = RunId::new();
     writer.write(RetrySafety::NonIdempotent, move |tx| {
-        let doc = json!({"steps":{"work":{"run":"custom.open","in":{"prompt":{"default":"new plan value"}},"outputs":{"ready":"boolean"}}}});
-        tx.sql().execute("UPDATE plans SET doc=?2 WHERE project_id=?1", (project.to_string(),doc.to_string()))?;
-        tx.sql().execute("UPDATE steps SET generation=2,status='running',declaration=?2 WHERE project_id=?1 AND step_id='work'", (project.to_string(),doc["steps"]["work"].to_string()))?;
+        seed::put(tx, project, json!({"steps":{"work":{"run":"custom.open","in":{"prompt":{"default":"new plan value"}},"outputs":{"ready":"boolean"}}}}))?;
+        tx.sql().execute("UPDATE steps SET generation=2,status='running' WHERE project_id=?1 AND step_id='work'", [project.to_string()])?;
         for (generation,run,finished,prompt) in [(1,RunId::new(),Some("old end"),"old generation"),(2,live,None,"frozen attempted value")] {
             let attempt=AttemptId::new();
             tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,generation,phase,request,inputs_hash,created_at) VALUES(?1,?2,'work',?3,'terminal',?4,'fixture','now')", (attempt.to_string(),project.to_string(),generation,json!({"inputs":{"prompt":prompt}}).to_string()))?;
@@ -673,11 +688,13 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
 /// the reason, and Retry a plain button, though the store keeps the step failed.
 #[test]
 fn a_cancelled_step_reads_as_cancelled_not_failed() {
-    let plan = Plan::parse_json(
-        br#"{"steps":{"w":{"run":"core.external","outputs":{"done":"boolean"}}}}"#,
+    let plan = seed::compile(
+        serde_json::from_slice(
+            br#"{"steps":{"w":{"run":"core.external","outputs":{"done":"boolean"}}}}"#,
+        )
+        .unwrap(),
         &Signatures,
-    )
-    .unwrap();
+    );
     let mut state = StateSnapshot::default();
     state.steps.insert(
         "w".parse().unwrap(),
@@ -710,11 +727,7 @@ fn a_cancelled_step_reads_as_cancelled_not_failed() {
 /// folded, sorted and linked; a cancelled or failed step offers no Pause.
 #[test]
 fn a_long_after_is_a_sentence_over_its_linked_steps() {
-    let plan = Plan::parse_json(
-        br#"{"steps":{"f":{"run":"core.external","outputs":{"done":"boolean"}},"e":{"run":"core.external","outputs":{"done":"boolean"}},"d":{"run":"core.external","outputs":{"done":"boolean"}},"c":{"run":"core.external","outputs":{"done":"boolean"}},"b":{"run":"core.external","outputs":{"done":"boolean"}},"a":{"run":"core.external","outputs":{"done":"boolean"}},"w":{"run":"core.external","outputs":{"done":"boolean"},"after":["f","e","d","c","b","a"]}}}"#,
-        &Signatures,
-    )
-    .unwrap();
+    let plan = seed::compile(serde_json::from_slice(br#"{"steps":{"f":{"run":"core.external","outputs":{"done":"boolean"}},"e":{"run":"core.external","outputs":{"done":"boolean"}},"d":{"run":"core.external","outputs":{"done":"boolean"}},"c":{"run":"core.external","outputs":{"done":"boolean"}},"b":{"run":"core.external","outputs":{"done":"boolean"}},"a":{"run":"core.external","outputs":{"done":"boolean"}},"w":{"run":"core.external","outputs":{"done":"boolean"},"after":["f","e","d","c","b","a"]}}}"#).unwrap(), &Signatures);
     let mut state = StateSnapshot::default();
     for id in ["a", "b", "c", "d", "e"] {
         state.steps.insert(
@@ -764,11 +777,13 @@ fn a_long_after_is_a_sentence_over_its_linked_steps() {
 /// "Pane at failure", never shown as escaped JSON.
 #[test]
 fn a_failure_leads_with_its_sentence_and_folds_the_pane() {
-    let plan = Plan::parse_json(
-        br#"{"steps":{"w":{"run":"core.external","outputs":{"done":"boolean"}}}}"#,
+    let plan = seed::compile(
+        serde_json::from_slice(
+            br#"{"steps":{"w":{"run":"core.external","outputs":{"done":"boolean"}}}}"#,
+        )
+        .unwrap(),
         &Signatures,
-    )
-    .unwrap();
+    );
     let mut state = StateSnapshot::default();
     state.steps.insert(
         "w".parse().unwrap(),
@@ -828,18 +843,21 @@ async fn the_index_lists_each_stopped_step_as_a_row_with_its_failure() {
         .project_id;
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            for (position, (step, error)) in [
+            let failed = [
                 ("broke", json!({"error":"fn_failure","message":"exit code 1"})),
                 ("dropped", json!({"error":"cancelled","message":"cancel requested"})),
                 ("b2", json!({"error":"agent_failure","kind":"WallCap","message":"cap"})),
                 ("b3", json!({"error":"fn_failure","message":"exit code 2"})),
                 ("b4", json!({"error":"fn_failure","message":"exit code 3"})),
                 ("pivoted", json!({"error":"agent_failure","kind":"Cancelled","message":"cancelled during transient backoff"})),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status,error) VALUES (?1,?2,?3,'{\"run\":\"core.external\"}','failed',?4)", (id.to_string(), step, position as i64, error.to_string()))?;
+            ];
+            let steps: serde_json::Map<String, serde_json::Value> = failed
+                .iter()
+                .map(|(step, _)| (step.to_string(), json!({"run": "core.external"})))
+                .collect();
+            seed::put(tx, id, json!({ "steps": steps }))?;
+            for (step, error) in failed {
+                tx.sql().execute("UPDATE steps SET status='failed',error=?3 WHERE project_id=?1 AND step_id=?2", (id.to_string(), step, error.to_string()))?;
             }
             tx.changed(Some(id), "status");
             Ok(())
@@ -1063,11 +1081,13 @@ async fn a_running_step_says_what_it_is_doing_now() {
 /// resume sits with the actions, its tool call as code.
 #[test]
 fn a_fn_failure_reads_as_its_exception_with_the_resume_hint_by_retry() {
-    let plan = Plan::parse_json(
-        br#"{"steps":{"w":{"run":"core.external","outputs":{"done":"boolean"}}}}"#,
+    let plan = seed::compile(
+        serde_json::from_slice(
+            br#"{"steps":{"w":{"run":"core.external","outputs":{"done":"boolean"}}}}"#,
+        )
+        .unwrap(),
         &Signatures,
-    )
-    .unwrap();
+    );
     let mut state = StateSnapshot::default();
     state.steps.insert(
         "w".parse().unwrap(),

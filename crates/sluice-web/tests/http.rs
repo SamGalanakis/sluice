@@ -22,6 +22,7 @@ use sluice_web::{
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
+mod seed;
 
 struct Commands;
 impl CommandService for Commands {
@@ -784,14 +785,14 @@ async fn a_refused_step_action_sends_a_browser_back_to_its_step_and_a_client_jso
     fixture
         .writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            let doc = serde_json::json!({"steps":{"work":{"run":"custom.open"}}});
-            tx.sql().execute(
-                "UPDATE plans SET doc=?2 WHERE project_id=?1",
-                (id.to_string(), doc.to_string()),
+            seed::put(
+                tx,
+                id,
+                serde_json::json!({"steps":{"work":{"run":"custom.open"}}}),
             )?;
             tx.sql().execute(
-                "INSERT INTO steps(project_id,step_id,position,declaration,status) VALUES(?1,'work',0,?2,'succeeded')",
-                (id.to_string(), doc["steps"]["work"].to_string()),
+                "UPDATE steps SET status='succeeded' WHERE project_id=?1 AND step_id='work'",
+                [id.to_string()],
             )?;
             tx.changed(Some(id), "project");
             Ok(())

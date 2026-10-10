@@ -204,19 +204,29 @@ pub async fn load(
     let exact = registry.map(|r| r.0.signatures(project)).transpose()?;
     let catalog = state.catalog.catalog(Some(project))?;
     let view = view.clone();
+    let plans = state.plans.clone();
     let loaded = state
         .reads
         .snapshot(move |c| {
-            let doc: String = c.query_row(
-                "SELECT doc FROM plans WHERE project_id=?1",
-                [project.to_string()],
-                |r| r.get(0),
-            )?;
+            // the plan the board page compiled, kept: a plan that does not compile leaves the
+            // board its units unknown
             let plan = match &exact {
-                Some(exact) => Plan::parse_json(doc.as_bytes(), exact),
-                None => Plan::parse_json(doc.as_bytes(), &CatalogSignatures(&catalog)),
+                Some(exact) => {
+                    plans.plan(c, project, &format!("registry:{}", exact.version), exact)
+                }
+                None => plans.plan(
+                    c,
+                    project,
+                    &format!("catalog:{}", catalog.version),
+                    &CatalogSignatures(&catalog),
+                ),
             };
-            gather(c, project, plan.as_ref().ok(), &view, draft)
+            let plan = match plan {
+                Ok((_, plan)) => Some(plan),
+                Err(sluice_store::StoreError::Public(PublicError::Invalid { .. })) => None,
+                Err(e) => return Err(e),
+            };
+            gather(c, project, plan.as_deref(), &view, draft)
         })
         .await
         .map_err(|e| e.into_public(true))?;

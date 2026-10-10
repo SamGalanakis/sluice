@@ -29,6 +29,7 @@ use std::{
     time::Duration,
 };
 use tower::ServiceExt;
+mod seed;
 struct Resources;
 impl SignatureProvider for Resources {
     fn signature(&self, name: &str) -> Option<FnSignature> {
@@ -216,14 +217,11 @@ async fn fields_commit_separately_with_owner_records_safe_preview_and_resource_v
     let id = f.id;
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            tx.sql().execute(
-                "INSERT INTO steps(project_id,step_id,position,declaration) VALUES (?1,'s',0,?2)",
-                (
-                    id.to_string(),
-                    json!({"run":"core.external","needs":{"workers":1}}).to_string(),
-                ),
+            seed::put(
+                tx,
+                id,
+                json!({"steps":{"s":{"run":"core.external","needs":{"workers":1}}}}),
             )?;
-            tx.changed(Some(id), "plan");
             Ok(())
         })
         .await
@@ -294,7 +292,8 @@ async fn rename_preserves_live_callbacks_next_reader_and_id_stream() {
     let run = RunId::new();
     let attempt = AttemptId::new();
     f.writer.write(RetrySafety::NonIdempotent,move |tx| {
-  tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status,generation,work_generation,run_ids) VALUES (?1,'s',0,'{}','running',1,1,?2)",(id.to_string(),json!([run]).to_string()))?;
+  seed::put(tx,id,json!({"steps":{"s":{"run":"core.external"}}}))?;
+  tx.sql().execute("UPDATE steps SET status='running',generation=1,work_generation=1,run_ids=?2 WHERE project_id=?1 AND step_id='s'",(id.to_string(),json!([run]).to_string()))?;
   tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,generation,work_generation,phase,request,inputs_hash,created_at) VALUES (?1,?2,'s',1,1,'executing',?3,'hash','now')",(attempt.to_string(),id.to_string(),json!({"declared":{"result":"string"}}).to_string()))?;
   tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,generation,work_generation,created_at) VALUES (?1,?2,?3,'s',1,1,'now')",(run.to_string(),id.to_string(),attempt.to_string()))?;tx.changed(Some(id),"status");Ok(())
  }).await.unwrap();
@@ -414,7 +413,18 @@ async fn dashboard_deletion_archives_first_and_requires_current_revision_and_no_
         "{html}"
     );
     let id = f.id;
-    f.writer.write(RetrySafety::NonIdempotent,move |tx| {tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status) VALUES (?1,'s',0,'{}','running')",[id.to_string()])?;tx.changed(Some(id),"status");Ok(())}).await.unwrap();
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            seed::put(tx, id, json!({"steps":{"s":{"run":"core.external"}}}))?;
+            tx.sql().execute(
+                "UPDATE steps SET status='running' WHERE project_id=?1 AND step_id='s'",
+                [id.to_string()],
+            )?;
+            tx.changed(Some(id), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
     assert_eq!(f.delete(1).await.0, 400);
     assert!(!f.project().await.archived);
     let (_, blocked) = f.get_page().await;

@@ -10,6 +10,7 @@ mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
 mod plan_html;
+mod seed;
 #[allow(dead_code)]
 #[path = "../../../tests/support/messages.rs"]
 mod stored_messages;

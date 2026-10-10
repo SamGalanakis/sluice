@@ -112,8 +112,12 @@ pub async fn create(writer: &Writer) -> ProjectId {
         writer.write(RetrySafety::NonIdempotent,move |tx| {
             let c=tx.sql();
             c.execute("UPDATE projects SET archived=?1,paused=?2 WHERE project_id=?3",(archived,paused,project.project_id.to_string()))?;
-            for (n,status) in ["succeeded","succeeded",if index==0 {"running"} else {"failed"},"pending"].into_iter().enumerate(){
-                c.execute("INSERT INTO steps(project_id,step_id,position,declaration,status) VALUES(?1,?2,?3,?4,?5)",(project.project_id.to_string(),format!("work-{n}"),n as i64,format!(r#"{{"run":"core.external","doc":"{}"}}"#,if status=="running" {"Build the shared dashboard"} else {"Review and validate"}),status))?;
+            let statuses = ["succeeded","succeeded",if index==0 {"running"} else {"failed"},"pending"];
+            let steps: serde_json::Map<String, serde_json::Value> = statuses.iter().enumerate().map(|(n,status)| (format!("work-{n}"), serde_json::json!({"run":"core.external","doc":if *status=="running" {"Build the shared dashboard"} else {"Review and validate"}}))).collect();
+            crate::seed::put(tx, project.project_id, serde_json::json!({"steps": steps}))?;
+            let c=tx.sql();
+            for (n,status) in statuses.into_iter().enumerate(){
+                c.execute("UPDATE steps SET status=?3 WHERE project_id=?1 AND step_id=?2",(project.project_id.to_string(),format!("work-{n}"),status))?;
             }
             tx.changed(Some(project.project_id), "project");
             Ok(())

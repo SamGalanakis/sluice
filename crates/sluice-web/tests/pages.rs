@@ -8,6 +8,7 @@ mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
 mod neutral;
+mod seed;
 use axum::{
     Router,
     body::{Body, Bytes},

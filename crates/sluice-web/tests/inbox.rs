@@ -21,6 +21,7 @@ use sluice_web::views::{
 };
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
+mod seed;
 
 struct TypedInputs;
 impl messages::PlanInputSetter for TypedInputs {
@@ -308,10 +309,17 @@ async fn p605_typed_ui_reply_is_atomic_and_stale_buttons_conflict() {
 #[tokio::test]
 async fn p605_invalid_input_answer_stays_open_and_close_bypasses_input() {
     let (_home, writer, project, state, _) = fixture().await;
-    writer.write(RetrySafety::NonIdempotent, move |tx| {
-        tx.sql().execute("INSERT INTO inputs(project_id,name,position,declaration) VALUES(?1,'count',0,'{\"type\":\"int\"}')",[project.to_string()])?;
-        tx.changed(Some(project),"plan"); Ok(())
-    }).await.unwrap();
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            seed::put(
+                tx,
+                project,
+                serde_json::json!({"inputs":{"count":{"type":"int"}},"steps":{}}),
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
     let question = post(
         &writer,
         project,
@@ -437,11 +445,11 @@ async fn the_owner_composes_ask_or_say_to_the_thread_step_or_the_orchestrator() 
     let (_home, writer, project, state, commands) = fixture().await;
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            tx.sql().execute(
-                "INSERT INTO steps(project_id,step_id,position,declaration) VALUES (?1,'work',0,'{}')",
-                [project.to_string()],
+            seed::put(
+                tx,
+                project,
+                serde_json::json!({"steps":{"work":{"run":"custom.open"}}}),
             )?;
-            tx.changed(Some(project), "plan");
             Ok(())
         })
         .await

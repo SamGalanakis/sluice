@@ -9,6 +9,7 @@ mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
 mod neutral;
+mod seed;
 use board_fixture::Fixture;
 use chrome::Chrome;
 use serde_json::{Value, json};

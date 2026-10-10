@@ -2,6 +2,7 @@
 //! through the dashboard's markdown renderer; a step named by `tag:<tag>`; and the warning a
 //! widget draws when the step its data comes from is no longer in the plan.
 mod board_fixture;
+mod seed;
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},

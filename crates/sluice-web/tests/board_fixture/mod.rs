@@ -1,6 +1,7 @@
 //! The seeded home the board tests draw: a project `lanes` with two units, a failed step, an
 //! output and a board using every data component; a project `plain` without a board.
 #![allow(dead_code)]
+use crate::seed;
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -11,7 +12,7 @@ use sluice_model::{
     commands::{CommandReply, CommandRequest, Delivery, MessageReceipt},
     error::PublicError,
     ids::{MessageId, ProjectId, ProjectSelector, Revision},
-    plan::{FnSignature, Plan, SignatureProvider},
+    plan::{FnSignature, SignatureProvider},
 };
 use sluice_store::{
     ReadPool, RetrySafety, Writer,
@@ -134,9 +135,7 @@ impl Fixture {
                     "alpha-review":{"run":"custom.open","in":{"s":{"source":"alpha-build/summary"}},"tags":["unit:alpha"]},
                     "beta-build":{"run":"custom.open","after":["alpha-build"],"tags":["unit:beta"]},
                     "beta-review":{"run":"custom.open","doc":"Check the Parser output","after":["beta-build","alpha-review"],"tags":["unit:beta"]}}});
-                let plan = Plan::parse_json(&serde_json::to_vec(&doc).unwrap(), &Registry).unwrap();
-                tx.sql().execute("DELETE FROM plans WHERE project_id=?1", [id.to_string()])?;
-                sluice_store::plans::initialize_plan(tx, id, &plan)?;
+                seed::put(tx, id, doc)?;
                 for (step, status, outputs) in [
                     ("alpha-build", "succeeded", json!({"summary": "Built <12> crates"})),
                     ("beta-build", "failed", json!({})),
@@ -203,10 +202,7 @@ impl Fixture {
                     &NoResourceSettings,
                 )?
                 .project_id;
-                let plan = Plan::parse_json(&serde_json::to_vec(&doc).unwrap(), &Registry).unwrap();
-                tx.sql()
-                    .execute("DELETE FROM plans WHERE project_id=?1", [id.to_string()])?;
-                sluice_store::plans::initialize_plan(tx, id, &plan)?;
+                seed::put(tx, id, doc)?;
                 for (step, status) in &statuses {
                     tx.sql().execute(
                         "UPDATE steps SET status=?3 WHERE project_id=?1 AND step_id=?2",

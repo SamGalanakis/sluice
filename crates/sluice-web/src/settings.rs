@@ -22,7 +22,7 @@ use sluice_model::{
     ids::{ProjectId, ProjectSelector, Revision},
 };
 use sluice_store::{
-    RetrySafety, Writer,
+    RetrySafety, StoreError, Writer,
     projects::{self, DeletionGuard, Icon, Project, ResourceSettings, UpdateProject},
     resources,
 };
@@ -129,6 +129,7 @@ impl SettingsState {
                 message: e.to_string(),
             })??;
         let guard = self.deletion_guard.clone();
+        let plans = self.dashboard.plans.clone();
         self.dashboard
             .reads
             .snapshot(move |c| {
@@ -143,17 +144,25 @@ impl SettingsState {
                 let declarations = resources::declarations(c, id)?;
                 let held = resources::held(c, id)?;
                 let leases = resources::leases(c, id)?;
-                let doc: String = c.query_row(
-                    "SELECT doc FROM plans WHERE project_id=?1",
+                // the steps each resource queues: none while no pending step needs a resource
+                // (`steps_needs`, no declaration read); else those admission would start but
+                // their resources hold back, over the plan the dashboard keeps compiled
+                let needing: bool = c.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND status='pending' AND needs IS NOT NULL)",
                     [id.to_string()],
                     |r| r.get(0),
                 )?;
-                let raw = serde_json::from_str(&doc)?;
-                let queued =
-                    sluice_model::plan::Plan::parse(&raw, &CatalogSignatures(&shared.functions))
-                        .ok()
-                        .map(|plan| resources::status(c, id, &plan))
-                        .transpose()?;
+                let queued = if needing {
+                    let signatures = format!("settings:{}", shared.functions.version);
+                    let provider = CatalogSignatures(&shared.functions);
+                    match plans.plan(c, id, &signatures, &provider) {
+                        Ok((_, plan)) => Some(resources::status(c, id, &plan)?),
+                        Err(StoreError::Public(PublicError::Invalid { .. })) => None,
+                        Err(e) => return Err(e),
+                    }
+                } else {
+                    Some(BTreeMap::new())
+                };
                 let rows = declarations
                     .into_values()
                     .map(|r| ResourceView {
@@ -186,8 +195,7 @@ impl SettingsState {
                             .count(),
                         queued: queued
                             .as_ref()
-                            .and_then(|rows| rows.get(&r.name))
-                            .map(|r| r.queued),
+                            .map(|rows| rows.get(&r.name).map_or(0, |r| r.queued)),
                         error: r.error.map(|e| e.to_string()).unwrap_or_default(),
                     })
                     .collect();

@@ -620,7 +620,9 @@ fn head_part() -> TrustedHtml {
 fn step_band_part(prefix: &str) -> Result<TrustedHtml, askama::Error> {
     use sluice_model::commands::StepStatus;
     use sluice_model::gates::{StateSnapshot, StepState};
-    use sluice_model::plan::{FnSignature, Plan, SignatureProvider};
+    use sluice_model::ids::Revision;
+    use sluice_model::plan::{FnSignature, SignatureProvider, compile_rows};
+    use sluice_model::plan_rows::{PlanHeader, PlanRows, RootSection, StateEpoch, StepRow};
     struct Open;
     impl SignatureProvider for Open {
         fn signature(&self, _: &str) -> Option<FnSignature> {
@@ -630,11 +632,27 @@ fn step_band_part(prefix: &str) -> Result<TrustedHtml, askama::Error> {
             })
         }
     }
-    let plan = Plan::parse_json(
-        br#"{"steps":{"a-12-review":{"run":"custom.open","doc":"Terns: the spring guide's entries\n\nCheck each entry against the regional checklist and the photograph credits."}}}"#,
-        &Open,
-    )
-    .map_err(|e| askama::Error::Custom(format!("{e:?}").into()))?;
+    let declaration = serde_json::from_value(serde_json::json!({
+        "run": "custom.open",
+        "doc": "Terns: the spring guide's entries\n\nCheck each entry against the regional checklist and the photograph credits."
+    }))
+    .map_err(|e| askama::Error::Custom(e.to_string().into()))?;
+    let rows = PlanRows {
+        header: PlanHeader {
+            rev: Revision(1),
+            root_order: vec![RootSection::Steps],
+            state_epoch: StateEpoch(0),
+        },
+        inputs: vec![],
+        outputs: vec![],
+        steps: vec![StepRow {
+            step: "a-12-review".parse().expect("a step id"),
+            position: 0,
+            declaration,
+        }],
+    };
+    let plan = compile_rows(&rows, &Open)
+        .map_err(|e| askama::Error::Custom(format!("{e:?}").into()))?;
     let mut state = StateSnapshot::default();
     state.steps.insert(
         "a-12-review".parse().expect("a step id"),

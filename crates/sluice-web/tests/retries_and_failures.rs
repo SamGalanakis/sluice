@@ -5,6 +5,7 @@
 //! named by its source's title and id.
 mod board_fixture;
 mod plan_html;
+mod seed;
 use axum::http::StatusCode;
 use board_fixture::Fixture;
 use serde_json::json;

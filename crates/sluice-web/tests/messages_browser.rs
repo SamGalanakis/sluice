@@ -6,6 +6,7 @@
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
+mod seed;
 #[allow(dead_code)]
 #[path = "../../../tests/support/messages.rs"]
 mod stored_messages;

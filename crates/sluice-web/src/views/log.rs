@@ -13,6 +13,7 @@ use sluice_model::{
     error::PublicError,
     events::{Event, Record},
     ids::{ProjectId, RecordSeq},
+    plan_rows::PlanChange,
 };
 use sluice_store::{
     ReadPool,
@@ -186,7 +187,8 @@ pub struct LogRow {
     pub place: (String, String),
     pub json: String,
     /// sluice's own housekeeping (retiring done units): such records in a row are one quiet
-    /// row, "sluice retired done units 4 times" (`Some` its plan revision and changes).
+    /// row, "sluice retired done units 4 times" (`Some` its plan revision and the steps it
+    /// retired, its `step.delete` changes).
     pub chore: Option<(u64, usize)>,
     /// The first plan revision of a row of chores, for its sentence.
     pub chore_from: u64,
@@ -596,10 +598,7 @@ pub async fn load(
                 (None, Some(id)) => nav.projects.iter().find(|p| p.id == id).map(|p| (p.name.to_string(), p.href())).unwrap_or_else(|| ("a deleted project".into(), String::new())),
                 _ => (String::new(), String::new()),
             };
-            let chore = match &event {
-                Event::PlanEdit { rev, author, reason, ops } if author == "sluice" && reason.starts_with("retire done units") => Some((rev.0, ops.len())),
-                _ => None,
-            };
+            let chore = retirement(&event);
             let change = match &event {
                 Event::StepStatus { step, from: Some(from), to, error, .. } if error.is_none() || *to != sluice_model::commands::StepStatus::Failed => {
                     Some((step.to_string(), stored_word(from).to_owned(), stored_word(to).to_owned()))
@@ -796,6 +795,25 @@ fn linked(text: &str, links: &[(String, String, String, String)]) -> TrustedHtml
     html.push_str(&esc(&text[at..]));
     TrustedHtml::owned(html)
 }
+/// Sluice's own retirement of done units (`plan_prune` run by the retirer): its revision and
+/// how many steps it retired, the `step.delete` changes it logged. Other edits are `None`.
+fn retirement(event: &Event) -> Option<(u64, usize)> {
+    match event {
+        Event::PlanEdit {
+            rev,
+            author,
+            reason,
+            changes,
+        } if author == "sluice" && reason.starts_with("retire done units") => Some((
+            rev.0,
+            changes
+                .iter()
+                .filter(|c| matches!(c, PlanChange::StepDelete { .. }))
+                .count(),
+        )),
+        _ => None,
+    }
+}
 /// A record in one plain sentence: who did what to which step, unit, run or project. A
 /// failure reads as `views::failure` says it (a cancel as a cancel), never as a pane dump or
 /// JSON; the record's JSON is one click away under it.
@@ -845,11 +863,11 @@ fn summary(event: &Event) -> String {
             rev,
             author,
             reason,
-            ops,
+            changes,
         } => format!(
             "Plan rev {} by {author}, {}{}",
             rev.0,
-            super::ui::count(ops.len(), "change", "changes"),
+            super::ui::count(changes.len(), "change", "changes"),
             because(reason)
         ),
         Event::PlanInput {
@@ -1208,5 +1226,57 @@ pub fn registration() -> super::PageRegistration {
             )]
         },
         assets: &[],
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::{Event, PlanChange, retirement, summary};
+    use sluice_model::ids::Revision;
+
+    fn edit(author: &str, reason: &str, changes: Vec<PlanChange>) -> Event {
+        Event::PlanEdit {
+            rev: Revision(12),
+            author: author.into(),
+            reason: reason.into(),
+            changes,
+        }
+    }
+    fn delete(step: &str) -> PlanChange {
+        PlanChange::StepDelete {
+            step: step.parse().unwrap(),
+        }
+    }
+
+    /// A plan edit reads as its revision, author, how many row changes it logged and why; the
+    /// retirer's own folds by the steps it retired, its `step.delete` changes.
+    #[test]
+    fn a_plan_edit_reads_its_changes_and_a_retirement_counts_the_steps_it_retired() {
+        let put = PlanChange::StepPut {
+            step: "review".parse().unwrap(),
+            position: 3,
+            declaration: serde_json::from_value(serde_json::json!({"run": "agent.review"}))
+                .unwrap(),
+        };
+        let edited = edit("orchestrator", "Review the work", vec![put, delete("draft")]);
+        assert_eq!(
+            summary(&edited),
+            "Plan rev 12 by orchestrator, 2 changes: Review the work"
+        );
+        assert_eq!(retirement(&edited), None);
+        let retired = edit(
+            "sluice",
+            "retire done units older than 6h",
+            vec![delete("a-1-draft"), delete("a-1-review"), delete("a-1-publish")],
+        );
+        assert_eq!(retirement(&retired), Some((12, 3)));
+        assert_eq!(
+            summary(&retired),
+            "Plan rev 12 by sluice, 3 changes: retire done units older than 6h"
+        );
+        // only the retirer's own edit is a chore
+        assert_eq!(
+            retirement(&edit("owner", "retire done units by hand", vec![delete("x")])),
+            None
+        );
     }
 }

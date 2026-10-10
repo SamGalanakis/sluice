@@ -8,6 +8,7 @@
 //! types, the owner's thread by name.
 mod board_fixture;
 mod plan_html;
+mod seed;
 #[allow(dead_code)]
 #[path = "../../../tests/support/messages.rs"]
 mod stored_messages;
@@ -545,7 +546,7 @@ async fn the_log_keeps_bookkeeping_quiet_and_a_steps_quick_changes_on_one_row() 
         rev: Revision(rev),
         author: "sluice".into(),
         reason: "retire done units older than 6h".into(),
-        ops: vec![],
+        changes: vec![],
     };
     record(&f, id, chore(7), None).await;
     record(

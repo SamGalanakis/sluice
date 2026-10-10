@@ -15,6 +15,7 @@ use sluice_web::{
     views::{DashboardState, EmptyCatalog, dashboard_router},
 };
 use std::sync::Arc;
+mod seed;
 struct Resources;
 impl SignatureProvider for Resources {
     fn signature(&self, name: &str) -> Option<FnSignature> {
@@ -61,7 +62,8 @@ async fn chromium_settings_commands_streams_geometry_and_screenshots() {
     let run = sluice_model::ids::RunId::new();
     let attempt = sluice_model::ids::AttemptId::new();
     writer.write(RetrySafety::NonIdempotent, move |tx| {
-        tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status,generation,work_generation,run_ids) VALUES (?1,'work',0,'{}','running',1,1,?2)",(id.to_string(),serde_json::json!([run]).to_string()))?;
+        seed::put(tx,id,serde_json::json!({"steps":{"work":{"run":"core.external"}}}))?;
+        tx.sql().execute("UPDATE steps SET status='running',generation=1,work_generation=1,run_ids=?2 WHERE project_id=?1 AND step_id='work'",(id.to_string(),serde_json::json!([run]).to_string()))?;
         tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,generation,work_generation,phase,request,inputs_hash,created_at) VALUES (?1,?2,'work',1,1,'executing',?3,'hash','now')",(attempt.to_string(),id.to_string(),serde_json::json!({"declared":{"result":"string"}}).to_string()))?;
         tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,generation,work_generation,created_at) VALUES (?1,?2,?3,'work',1,1,'now')",(run.to_string(),id.to_string(),attempt.to_string()))?;
         tx.changed(Some(id),"status"); Ok(())

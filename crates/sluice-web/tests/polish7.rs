@@ -7,6 +7,7 @@ mod board_fixture;
 mod chrome;
 mod neutral;
 mod plan_html;
+mod seed;
 use axum::{
     Extension, Router,
     body::{Body, to_bytes},

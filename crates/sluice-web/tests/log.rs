@@ -63,7 +63,7 @@ async fn p605_log_keyset_pages_preserve_filters_hide_successful_message_calls_an
                         rev: Revision(n + 1),
                         author: "owner".into(),
                         reason: format!("change {n} <script>"),
-                        ops: vec![],
+                        changes: vec![],
                     },
                 )?;
             }

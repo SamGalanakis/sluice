@@ -3,6 +3,7 @@
 //! stopped ones first, and the plan's find finds a step by its title.
 mod board_fixture;
 mod plan_html;
+mod seed;
 use axum::http::StatusCode;
 use board_fixture::Fixture;
 use sluice_model::{events::Event, ids::StepId};

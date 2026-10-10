@@ -17,7 +17,7 @@ use sluice_model::{
     error::PublicError,
     shown::Band as Placed,
     gates::{Gate, GateDecision, StateSnapshot, evaluate_step},
-    ids::{ProjectId, StepId, UnitName},
+    ids::{ProjectId, Revision, StepId, UnitName},
     plan::{FnSignature, Plan, SignatureProvider},
     types::Type,
 };
@@ -1103,43 +1103,62 @@ impl SignatureProvider for CatalogSignatures<'_> {
         Some(sig)
     }
 }
-/// Each project's compiled plan, kept while its stored document and the signatures it was
-/// compiled against stay the same: compiling a large plan costs more than the rest of its page.
+/// Each project's plan compiled from its rows (`compile_rows`), kept while its revision and the
+/// signatures it was compiled against stay the same. A page reads the revision alone (one
+/// row); only a new revision or new signatures read the plan's rows and compile them again,
+/// so no page reads a document or compiles per request.
 #[derive(Clone, Default)]
 pub struct PlanCache(std::sync::Arc<std::sync::Mutex<BTreeMap<ProjectId, CompiledPlan>>>);
 struct CompiledPlan {
+    rev: Revision,
     signatures: String,
-    doc: String,
     plan: std::sync::Arc<Plan>,
 }
 impl PlanCache {
-    /// The plan `doc` compiled against `provider`, whose version is `signatures`.
-    fn compile(
+    /// The project's plan at its current revision, compiled against `provider` (whose version is
+    /// `signatures`), with that revision; read in the caller's snapshot. A plan whose rows do
+    /// not compile against the signatures is `invalid`.
+    pub fn plan(
         &self,
+        c: &Connection,
         project: ProjectId,
-        doc: String,
         signatures: &str,
         provider: &impl SignatureProvider,
-    ) -> Result<std::sync::Arc<Plan>, PublicError> {
+    ) -> sluice_store::Result<(Revision, std::sync::Arc<Plan>)> {
+        let rev = sluice_store::plans::plan_revision(c, project)?;
+        let plan = self.compiled(project, rev, signatures, || {
+            let rows = sluice_store::plans::read_plan_rows(c, project)?;
+            Ok(sluice_model::plan::compile_rows(&rows, provider).map_err(|e| {
+                PublicError::Invalid {
+                    message: "stored plan cannot be compiled".into(),
+                    errors: e.into_iter().map(|e| e.to_string()).collect(),
+                }
+            })?)
+        })?;
+        Ok((rev, plan))
+    }
+    /// The plan kept for `(rev, signatures)`, else `compile`'s, kept in its place.
+    pub fn compiled(
+        &self,
+        project: ProjectId,
+        rev: Revision,
+        signatures: &str,
+        compile: impl FnOnce() -> sluice_store::Result<Plan>,
+    ) -> sluice_store::Result<std::sync::Arc<Plan>> {
         let held = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(compiled) = held.get(&project)
+            && compiled.rev == rev
             && compiled.signatures == signatures
-            && compiled.doc == doc
         {
             return Ok(compiled.plan.clone());
         }
         drop(held);
-        let plan = std::sync::Arc::new(Plan::parse_json(doc.as_bytes(), provider).map_err(
-            |e| PublicError::Invalid {
-                message: "stored plan cannot be compiled".into(),
-                errors: e.into_iter().map(|e| e.to_string()).collect(),
-            },
-        )?);
+        let plan = std::sync::Arc::new(compile()?);
         self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(
             project,
             CompiledPlan {
+                rev,
                 signatures: signatures.to_owned(),
-                doc,
                 plan: plan.clone(),
             },
         );
@@ -1165,15 +1184,10 @@ pub fn load_board(
         .ok_or_else(|| PublicError::NotFound {
             message: "project not found".into(),
         })?;
-    let (revision, doc): (i64, String) = c.query_row(
-        "SELECT rev,doc FROM plans WHERE project_id=?1",
-        [project.to_string()],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    let plan = plans.compile(project, doc, signatures, provider)?;
+    let (Revision(revision), plan) = plans.plan(c, project, signatures, provider)?;
     let mut state = sluice_store::plans::read_state(c, project)?;
     queue(c, project, &plan, &mut state, None)?;
-    let mut board = ProjectView::new(summary.clone(), &plan, &state, revision as u64);
+    let mut board = ProjectView::new(summary.clone(), &plan, &state, revision);
     board.name(sluice_runtime::naming::for_project(
         c,
         &super::home_of(c),
@@ -1197,7 +1211,7 @@ pub fn load_board(
             unit.last_received = received;
         }
         for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
-            cards.decorate(step, revision as u64);
+            cards.decorate(step, revision);
             // its run as observed with the store's snapshot: quiet, and when it last wrote
             let run = summary.running.iter().find(|r| r.step == step.id.as_str());
             step.quiet = run.is_some_and(|r| r.quiet);
@@ -1367,12 +1381,7 @@ pub fn load_step(
         .ok_or_else(|| PublicError::NotFound {
             message: "project not found".into(),
         })?;
-    let (revision, doc): (i64, String) = c.query_row(
-        "SELECT rev,doc FROM plans WHERE project_id=?1",
-        [project.to_string()],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    let plan = plans.compile(project, doc, signatures, provider)?;
+    let (Revision(revision), plan) = plans.plan(c, project, signatures, provider)?;
     if !plan.steps().contains_key(id) {
         return Ok(None);
     }
@@ -1385,7 +1394,7 @@ pub fn load_step(
         let mut view = UnitView::new(project, "", &plan, &state, unit, &depths);
         view.name(&names);
         for step in &mut view.steps {
-            cards.decorate(step, revision as u64);
+            cards.decorate(step, revision);
         }
         view
     };
@@ -1434,7 +1443,7 @@ pub fn load_step(
         .chain(step.gates.iter().filter_map(|g| g.step.as_ref()))
     {
         let mut view = StepView::new(project, &plan, &state, other);
-        cards.decorate(&mut view, revision as u64);
+        cards.decorate(&mut view, revision);
         observe(c, project, &mut view)?;
         shown.insert(other.clone(), view.shown());
     }
@@ -1455,7 +1464,7 @@ pub fn load_step(
                 Some(known) => *known,
                 None => {
                     let mut view = StepView::new(project, &plan, &state, at);
-                    cards.decorate(&mut view, revision as u64);
+                    cards.decorate(&mut view, revision);
                     observe(c, project, &mut view)?;
                     view.shown()
                 }
@@ -1964,22 +1973,21 @@ async fn plan_mermaid(
 ) -> Result<String, PublicError> {
     let exact = registry.map(|r| r.0.signatures(project)).transpose()?;
     let catalog = state.catalog.catalog(Some(project))?;
+    let plans = state.plans.clone();
     state
         .reads
         .snapshot(move |c| {
-            let doc: String = c.query_row(
-                "SELECT doc FROM plans WHERE project_id=?1",
-                [project.to_string()],
-                |r| r.get(0),
-            )?;
-            let plan = match &exact {
-                Some(exact) => Plan::parse_json(doc.as_bytes(), exact),
-                None => Plan::parse_json(doc.as_bytes(), &CatalogSignatures(&catalog)),
-            }
-            .map_err(|e| PublicError::Invalid {
-                message: "stored plan cannot be compiled".into(),
-                errors: e.into_iter().map(|e| e.to_string()).collect(),
-            })?;
+            let (_, plan) = match &exact {
+                Some(exact) => {
+                    plans.plan(c, project, &format!("registry:{}", exact.version), exact)?
+                }
+                None => plans.plan(
+                    c,
+                    project,
+                    &format!("catalog:{}", catalog.version),
+                    &CatalogSignatures(&catalog),
+                )?,
+            };
             sluice_runtime::dispatch_ext::render_plan_view(
                 c,
                 project,

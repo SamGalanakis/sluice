@@ -8,6 +8,7 @@ mod board_fixture;
 mod chrome;
 mod neutral;
 mod plan_html;
+mod seed;
 use board_fixture::Fixture;
 use chrome::Chrome;
 

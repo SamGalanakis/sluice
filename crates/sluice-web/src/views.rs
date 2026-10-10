@@ -457,6 +457,9 @@ pub struct DashboardState {
     pub reads: ReadPool,
     pub catalog: Arc<dyn CatalogSource>,
     pub stop: Arc<std::sync::atomic::AtomicBool>,
+    /// Each project's plan compiled from its rows, kept by revision and signatures: every page
+    /// that draws a plan (the board, a step, home's modules, the board program, settings and
+    /// the Mermaid) reads it here.
     pub plans: board::PlanCache,
     /// Claude's config home, where its session transcripts are (an agent run's activity):
     /// `CLAUDE_CONFIG_DIR`, else `~/.claude`, as Claude finds it.

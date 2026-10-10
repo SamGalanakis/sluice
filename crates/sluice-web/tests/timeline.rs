@@ -5,6 +5,7 @@ mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
 mod plan_html;
+mod seed;
 use axum::http::StatusCode;
 use board_fixture::{Fixture, lane_recipe};
 use serde_json::json;

@@ -3,6 +3,7 @@
 //! step page, the board's StepStatus, Units and Count, the summary line and bar, and the index.
 mod board_fixture;
 mod plan_html;
+mod seed;
 use axum::http::StatusCode;
 use board_fixture::Fixture;
 use serde_json::json;

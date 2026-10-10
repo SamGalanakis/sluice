@@ -2270,6 +2270,39 @@ fn load_conversation(
     }));
     Ok(())
 }
+/// Who paused a step and when: the author and time of the plan edit that made its latest
+/// actual pause transition in its current incarnation (plan-rows §9.1). Its edits are walked
+/// newest first through `plan_edits`, never trimmed: a `step.delete` of it ends the walk (what
+/// came before was another step of the same id), and the newest put whose pause (absent reads
+/// as not paused; a reason and `true` differ, as two reasons do) differs from the put before it
+/// is credited, the oldest put of the incarnation against not paused, since adding it paused
+/// is a transition. So a later edit of its tags or doc, which carries the pause along, is never
+/// credited. `None` when it is not paused now or no edit of it is kept.
+pub fn who_paused(
+    c: &rusqlite::Connection,
+    project: ProjectId,
+    step: &StepId,
+) -> sluice_store::Result<Option<(String, String)>> {
+    let mut edits = c.prepare_cached(
+        "SELECT e.author,e.at,json_extract(c.value,'$.op'),CASE json_type(c.value,'$.declaration.paused') WHEN 'true' THEN 'true' WHEN 'text' THEN json_quote(json_extract(c.value,'$.declaration.paused')) ELSE 'false' END FROM plan_edits e, json_each(e.changes) c WHERE e.project_id=?1 AND json_extract(c.value,'$.step')=?2 AND json_extract(c.value,'$.op') IN ('step.put','step.delete') ORDER BY e.rev DESC",
+    )?;
+    let mut rows = edits.query((project.to_string(), step.as_str()))?;
+    // the newer put of the pair compared: its author, time and pause
+    let mut newer: Option<(String, String, String)> = None;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(2)? == "step.delete" {
+            break;
+        }
+        let paused: String = row.get(3)?;
+        match &newer {
+            None if paused == "false" => return Ok(None),
+            Some((by, at, was)) if *was != paused => return Ok(Some((by.clone(), at.clone()))),
+            _ => {}
+        }
+        newer = Some((row.get(0)?, row.get(1)?, paused));
+    }
+    Ok(newer.map(|(by, at, _)| (by, at)))
+}
 pub fn load_detail(
     c: &rusqlite::Connection,
     project: ProjectId,
@@ -2397,15 +2430,9 @@ pub fn load_detail(
         }
     }
     load_progress(c, project, step)?;
-    // who paused it: the latest plan edit that set its pause
+    // who paused it: the plan edit that made its latest pause transition
     if let Some(hold) = step.hold.as_mut().filter(|h| !h.project)
-        && let Some((by, at)) = c
-            .prepare_cached("SELECT coalesce(json_extract(payload,'$.author'),''),at FROM records WHERE project_id=?1 AND kind='plan.edit' AND instr(payload,?2)>0 ORDER BY seq DESC LIMIT 1")?
-            .query_row(
-                (project.to_string(), format!("\"/steps/{}/paused\"", step.id)),
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-            )
-            .optional()?
+        && let Some((by, at)) = who_paused(c, project, &step.id)?
     {
         hold.by = by;
         hold.at = at;
