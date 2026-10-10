@@ -339,7 +339,7 @@ async fn a_failed_step_opens_on_its_last_failed_call_and_why_it_failed_links_the
         );
         // Why it failed links to it, before the outline
         let why = &html[html.find("d-sec d-failure").unwrap()..];
-        let why = &why[..why.find("</section>").unwrap()];
+        let why = &why[..why.find("</article>").unwrap()];
         assert!(
             why.contains(&format!(
                 "<p class=\"act-why\"><a href=\"#{anchor}\">Its last failed call</a>: <span class=\"act-tool\">"
@@ -557,8 +557,8 @@ async fn a_running_steps_now_leads_with_its_live_turn() {
         .unwrap();
     f.laid.write(upto);
     let (_, html) = f.get(&f.page()).await;
-    let now = &html[html.find("<section class=\"d-sec d-now\">").unwrap()..];
-    let now = &now[..now.find("</section>").unwrap()];
+    let now = &html[html.find("<article class=\"mod d-sec d-now\"").unwrap()..];
+    let now = &now[..now.find("</article>").unwrap()];
     let turn = &now[now
         .find("<div class=\"now-turn is-running\">")
         .unwrap_or_else(|| panic!("{now}"))..];
@@ -572,18 +572,19 @@ async fn a_running_steps_now_leads_with_its_live_turn() {
         turn.contains("<p class=\"now-call\">"),
         "the call in flight: {turn}"
     );
-    assert!(
-        turn.contains(
-            "<a href=\"#activity\" data-tab-to=\"activity\">Its activity</a> · run 1 · 3 turns"
-        ),
-        "{turn}"
-    );
-    // nothing comes before it but the section's head
+    // its activity is named in the module's head, beside "Now"
     let before = &now[..now.find("<div class=\"now-turn").unwrap()];
     assert!(
-        !before.contains("<p") && !before.contains("convo"),
+        before.contains(
+            "<a href=\"#activity\" data-tab-to=\"activity\">Its activity</a> · run 1 · 3 turns"
+        ),
         "{before}"
     );
+    // nothing comes before it but the module's head
+    let body = &before[before.find("</div>").unwrap()..];
+    assert!(body == "</div>" && !before.contains("convo"), "{before}");
+    // its calls by tool, as the transcript names each tool, and its latest calls before it
+    assert!(turn.contains("<ul class=\"now-tools\""), "{turn}");
     drop(f.writer);
     drop(f.home);
 }
@@ -662,4 +663,65 @@ async fn a_message_turn_whose_file_is_gone_reads_back_from_its_message() {
             "{activity}"
         );
     }
+}
+
+/// In Chromium a running step's Now reads its live turn on the grid: its last words, its calls
+/// by tool as tiles (each tool named as the transcript names it) and its latest calls, each a
+/// link into Activity; nothing scrolls sideways at a phone's width or a wide screen's.
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_a_running_steps_now_reads_its_live_turn_on_the_grid() {
+    let f = fixture("claude", "running").await;
+    let upto = f
+        .laid
+        .lines
+        .iter()
+        .position(|l| l.contains("messages/138999.md"))
+        .unwrap();
+    f.laid.write(upto);
+    let router = f.app.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let page = format!("http://{addr}{}", f.page());
+    tokio::task::spawn_blocking(move || {
+        let screens = std::env::var_os("SLUICE_ACTIVITY_SCREENS").map(std::path::PathBuf::from);
+        let mut browser = chrome::Chrome::open(&page).unwrap();
+        let ready = "document.readyState === 'complete' && document.querySelector('#tp-overview .d-now .now-turn')";
+        browser.wait(ready).unwrap();
+        for width in [390, 1440, 2560] {
+            for theme in ["light", "dark"] {
+                browser.viewport(width, theme).unwrap();
+                browser.navigate(&page).unwrap();
+                browser.wait(ready).unwrap();
+                let g = browser
+                    .eval("(() => { const now = document.querySelector('#tp-overview .d-now'), tiles = [...now.querySelectorAll('.now-tools > li')], calls = now.querySelectorAll('.now-calls a[data-tab-to=activity]'); return {tiles: tiles.length, named: tiles.every(t => t.querySelector('.nt-tool').textContent.trim().length > 0 && /^[0-9]+$/.test(t.querySelector('.nt-n').textContent)), calls: calls.length, last: !!now.querySelector('.now-call')?.checkVisibility(), scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth}; })()")
+                    .unwrap();
+                let label = format!("{width} {theme}");
+                assert!(g["tiles"].as_u64().unwrap() >= 1, "{label}: {g}");
+                assert_eq!(g["named"], true, "{label}: {g}");
+                assert!(g["calls"].as_u64().unwrap() >= 1, "{label}: {g}");
+                assert_eq!(g["last"], true, "{label}: {g}");
+                assert_eq!(g["scroll"], 0, "{label}: sideways {g}");
+                if let Some(dir) = &screens {
+                    browser
+                        .screenshot(&dir.join(format!("step-running-{width}-{theme}.png")))
+                        .unwrap();
+                }
+            }
+        }
+        // a latest call opens Activity on it
+        browser.viewport(1440, "light").unwrap();
+        browser.navigate(&page).unwrap();
+        browser.wait(ready).unwrap();
+        browser
+            .eval("document.querySelector('#tp-overview .now-calls a').click()")
+            .unwrap();
+        browser
+            .wait("document.querySelector('#activity').checkVisibility()")
+            .unwrap();
+        assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), serde_json::json!([]));
+    })
+    .await
+    .unwrap();
+    server.abort();
 }

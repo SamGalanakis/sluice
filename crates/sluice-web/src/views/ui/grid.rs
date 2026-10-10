@@ -127,6 +127,37 @@ pub fn module_open_wide(span: u8, swell: Swell, label: &str, wide: Wide) -> Trus
 pub fn module_close() -> TrustedHtml {
     TrustedHtml::owned("</article>".into())
 }
+/// A module as `module_open` draws it, named by its own heading (`labelled`, an element's id)
+/// rather than a label, and carrying `class` after its swell's: a page's own kind of module (a
+/// step's Now, its waits) that its stream and its tests find by name.
+pub fn module_open_as(span: u8, swell: Swell, labelled: &str, class: &str) -> TrustedHtml {
+    module_open_with("", span, swell, labelled, class)
+}
+/// The same with its own `id` (a link's target, what a patch keeps in place).
+pub fn module_open_with(
+    id: &str,
+    span: u8,
+    swell: Swell,
+    labelled: &str,
+    class: &str,
+) -> TrustedHtml {
+    let span = span.clamp(1, 12);
+    TrustedHtml::owned(format!(
+        "<article{} class=\"{} {}\" style=\"--span:{span}\" data-span=\"{span}\"{}>",
+        if id.is_empty() {
+            String::new()
+        } else {
+            format!(" id=\"{}\"", esc(id))
+        },
+        swell.class(),
+        esc(class),
+        if labelled.is_empty() {
+            String::new()
+        } else {
+            format!(" aria-labelledby=\"{}\"", esc(labelled))
+        }
+    ))
+}
 /// A column of the sheet that holds modules stacked (`span` columns wide): a band's modules
 /// under its head.
 pub fn column_open(span: u8) -> TrustedHtml {
@@ -436,6 +467,29 @@ pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
         esc(label)
     ))
 }
+/// The strip as `stage_strip` draws it, with the cell at `at` marked as the page's own stage
+/// (`aria-current="step"`, ringed): a step's band shows where it stands in its unit.
+pub fn stage_strip_at(label: &str, stages: &[Stage], at: usize) -> TrustedHtml {
+    let strip = stage_strip(label, stages).0;
+    let mut out = String::with_capacity(strip.len() + 32);
+    let mut rest = strip.as_str();
+    let mut n = 0;
+    while let Some(i) = rest.find("<li class=\"sc") {
+        out.push_str(&rest[..i]);
+        rest = &rest[i..];
+        if n == at {
+            out.push_str("<li aria-current=\"step\" class=\"sc-here sc");
+            rest = &rest["<li class=\"sc".len()..];
+            out.push_str(rest);
+            return TrustedHtml::owned(out);
+        }
+        out.push_str("<li class=\"sc");
+        rest = &rest["<li class=\"sc".len()..];
+        n += 1;
+    }
+    out.push_str(rest);
+    TrustedHtml::owned(out)
+}
 /// The same strip small, for a line of words (a stopped module's meta): a square a stage,
 /// its state's fill, the strip's words for a screen reader.
 pub fn stage_marks(label: &str, stages: &[Stage]) -> TrustedHtml {
@@ -683,7 +737,21 @@ fn join(items: &[String]) -> String {
 /// its summary sentence beside it. A long name takes a size down and the full width
 /// (`long` from 7 characters, `longer` from 13, `longest` from 21), so it never runs off.
 pub fn band_head(name: &str, lead: &TrustedHtml, summary: &TrustedHtml) -> TrustedHtml {
-    let chars = name.chars().count();
+    band_head_html(
+        &TrustedHtml::owned(esc(name)),
+        name.chars().count(),
+        lead,
+        summary,
+    )
+}
+/// The band's head with its name already drawn (`name`, `chars` characters of words long): a
+/// step's name with its stage muted before its title.
+pub fn band_head_html(
+    name: &TrustedHtml,
+    chars: usize,
+    lead: &TrustedHtml,
+    summary: &TrustedHtml,
+) -> TrustedHtml {
     let size = match chars {
         0..=6 => "",
         7..=12 => " class=\"long\"",
@@ -701,8 +769,7 @@ pub fn band_head(name: &str, lead: &TrustedHtml, summary: &TrustedHtml) -> Trust
         format!("<p class=\"band-summary\">{summary}</p>")
     };
     TrustedHtml::owned(format!(
-        "<div class=\"band-head\"><h1{size}>{}</h1>{}</div>",
-        esc(name),
+        "<div class=\"band-head\"><h1{size}>{name}</h1>{}</div>",
         if lead.is_empty() && summary.is_empty() {
             String::new()
         } else {

@@ -233,8 +233,8 @@ async fn a_step_is_named_one_way_on_its_page_its_thread_and_the_log() {
     .await;
     record(&f, id, status("l1-work", "pending", "running")).await;
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
-    let heading = between(&page, "<h1 id=\"d-title\">", "</h1>")
-        .trim_start_matches("<h1 id=\"d-title\">")
+    let heading = between(&page, "<h1 id=\"d-title\" class=\"sb-t long\">", "</h1>")
+        .trim_start_matches("<h1 id=\"d-title\" class=\"sb-t long\">")
         .to_owned();
     assert_eq!(
         heading,
@@ -249,7 +249,7 @@ async fn a_step_is_named_one_way_on_its_page_its_thread_and_the_log() {
         .get(&format!("/projects/id/{id}/thread?thread=step-l1-work"))
         .await;
     assert!(
-        thread.contains(&format!("<h1 class=\"title-long\">{heading}</h1>")),
+        thread.contains(&format!("<h1 class=\"longest\">{heading}</h1>")),
         "{thread}"
     );
     assert!(
@@ -332,7 +332,7 @@ async fn an_answered_or_closed_question_keeps_its_place_and_reads_whole() {
     .0;
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
     assert!(!page.contains("d-sec d-ask"), "answered: nothing waits");
-    let now = between(&page, "<section class=\"d-sec d-now\">", "</section>");
+    let now = between(&page, "<article class=\"mod d-sec d-now\"", "</article>");
     let item = between(now, &format!("id=\"ov-message-{q}\""), "</ol></li>");
     assert!(
         item.contains("<li><strong>Now:</strong> land it.</li>"),
@@ -377,7 +377,7 @@ async fn an_answered_or_closed_question_keeps_its_place_and_reads_whole() {
     let card = between(&inbox, &format!("id=\"item-{id}-{c}\""), "</article>");
     assert!(
         inbox.contains(&format!(
-            "<article class=\"item q q-done\" id=\"item-{id}-{c}\">"
+            "<article id=\"item-{id}-{c}\" class=\"mod item q q-done\""
         )),
         "{card}"
     );

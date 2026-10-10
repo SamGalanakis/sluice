@@ -94,7 +94,7 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
     let (status, step) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
     assert_eq!(status, StatusCode::OK, "{step}");
     assert!(
-        step.contains("<h1 id=\"d-title\"><span class=\"d-stage\">work ·</span> FIG-1: Fix the cron driver</h1><p class=\"d-id\"><sluice-copy value=\"l1-work\"><code>l1-work</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy step id\""),
+        step.contains("<h1 id=\"d-title\" class=\"sb-t long\"><span class=\"d-stage\">work ·</span> FIG-1: Fix the cron driver</h1><p class=\"d-id\"><sluice-copy value=\"l1-work\"><code>l1-work</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy step id\""),
         "{step}"
     );
     assert!(
@@ -104,7 +104,7 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
     // a doc's first line is its title; the page says the rest of it once
     let (_, watch) = f.get(&format!("/projects/id/{id}/steps/watch")).await;
     assert!(
-        watch.contains("<h1 id=\"d-title\">Watches main for red</h1>"),
+        watch.contains("<h1 id=\"d-title\" class=\"sb-t long\">Watches main for red</h1>"),
         "{watch}"
     );
     assert!(
@@ -114,12 +114,12 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
     // a literal prompt's heading; and a step with neither is its id
     let (_, bare) = f.get(&format!("/projects/id/{id}/steps/bare")).await;
     assert!(
-        bare.contains("<h1 id=\"d-title\">Bare heading</h1>"),
+        bare.contains("<h1 id=\"d-title\" class=\"sb-t\">Bare heading</h1>"),
         "{bare}"
     );
     let (_, plain) = f.get(&format!("/projects/id/{id}/steps/plain")).await;
     assert!(
-        plain.contains("<h1 id=\"d-title\">plain</h1>") && !plain.contains("d-id"),
+        plain.contains("<h1 id=\"d-title\" class=\"sb-t\">plain</h1>") && !plain.contains("d-id"),
         "{plain}"
     );
     // the unit's page: its title the heading, its id and recipe under it, its view in full

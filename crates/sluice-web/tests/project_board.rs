@@ -599,7 +599,7 @@ async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
     // written no message), not a section of its own.
     let (_, detail) = f.get(&step).await;
     assert!(!detail.contains("d-progress"), "{detail}");
-    let section = between(&detail, "<section class=\"d-sec d-now\">", "</section>");
+    let section = between(&detail, "<article class=\"mod d-sec d-now\"", "</article>");
     assert!(
         section.contains(">Now</") && section.contains("Live progress, set"),
         "{section}"
@@ -636,8 +636,8 @@ async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
     let (_, detail) = f.get(&step).await;
     let section = between(
         &detail,
-        "<section class=\"d-sec d-progress\">",
-        "</section>",
+        "<article class=\"mod d-sec d-progress\"",
+        "</article>",
     );
     assert!(section.contains("by its last run"), "{section}");
 }
@@ -886,7 +886,7 @@ async fn the_done_index_lists_every_done_unit_newest_first_and_recently_finished
 }
 
 #[tokio::test]
-async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws_its_lines() {
+async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws_its_stages() {
     let f = Fixture::new().await;
     let (status, html) = f.get(&format!("/projects/id/{}", f.id)).await;
     assert_eq!(status, StatusCode::OK, "{html}");
@@ -900,23 +900,29 @@ async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws
         plan_html::stopped(&html, "beta").contains("<b>failed</b>"),
         "{html}"
     );
-    // the unit's own page: its steps summed, and the lines inside it drawn
+    // the unit's own page: its steps summed, its stages drawn
     let (status, page) = f.get(&format!("/projects/id/{}/units/alpha", f.id)).await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert!(
         page.contains(&format!("<div class=\"meta unit-sum\"><span>2 steps · 1 pending · 1 succeeded</span><span aria-hidden=\"true\">·</span><a href=\"/projects/id/{}/log?unit=alpha\">Log</a></div>", f.id)),
         "{page}"
     );
-    let edges = edges_text(&page);
+    // its stages in its band, a cell a step in plan order, each to its page; nothing of beta
+    let strip = between(&page, "<ol class=\"strip\"", "</ol>");
+    let build = strip.find(&format!("/projects/id/{}/steps/alpha-build\"", f.id));
+    let review = strip.find(&format!("/projects/id/{}/steps/alpha-review\"", f.id));
     assert!(
-        edges.contains("alpha-build") && edges.contains("alpha-review"),
-        "{edges}"
+        build.is_some() && review.is_some() && build < review,
+        "{strip}"
     );
+    assert!(!strip.contains("beta"), "only its own stages: {strip}");
+    // and its steps as modules on the grid, each named by its own heading
     assert!(
-        !edges.contains("beta"),
-        "only the lines inside the unit: {edges}"
+        page.contains("aria-labelledby=\"us-alpha-build\"")
+            && page.contains("aria-labelledby=\"us-alpha-review\""),
+        "{page}"
     );
-    assert!(page.contains("<svg class=\"edges\""), "{page}");
+    assert!(!page.contains("<svg class=\"edges\""), "{page}");
 }
 
 /// A paused step has one name, "paused", and is counted as paused everywhere it is counted:

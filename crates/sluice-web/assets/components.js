@@ -595,7 +595,7 @@ define("sluice-keys", {
       if (event.key === "/") {
         const find = finder();
         // a page with nothing to find (a step's or a unit's) finds on its plan
-        const away = find ? null : document.querySelector("main a[data-find-at]");
+        const away = find ? null : document.querySelector("a[data-find-at]");
         if (!find && !away) return;
         event.preventDefault();
         if (away) {

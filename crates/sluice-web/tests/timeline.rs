@@ -238,7 +238,7 @@ async fn a_unit_page_draws_its_runs_on_one_axis_its_long_waits_collapsed_and_its
 
     let (status, html) = f.get(&format!("/projects/id/{id}/units/l1")).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    let tl = between(&html, "<section class=\"d-sec unit-tl\"", "</section>");
+    let tl = between(&html, "<article class=\"mod d-sec unit-tl\"", "</article>");
     // a row a stage, in the unit's order, each named by its stage and leading to its step
     let rows: Vec<&str> = tl
         .split("<a class=\"tl-stage\"")
@@ -287,7 +287,7 @@ async fn a_unit_page_draws_its_runs_on_one_axis_its_long_waits_collapsed_and_its
 
     // l2's 6h wait between fork and work is a break, named on the axis and in work's words
     let (_, html) = f.get(&format!("/projects/id/{id}/units/l2")).await;
-    let tl = between(&html, "<section class=\"d-sec unit-tl\"", "</section>");
+    let tl = between(&html, "<article class=\"mod d-sec unit-tl\"", "</article>");
     assert_eq!(tl.matches("class=\"tl-break\"").count(), 1, "{tl}");
     assert!(tl.contains("title=\"waited 6h 0m\""), "{tl}");
     assert!(tl.contains("class=\"tl-tick at-mid\""), "{tl}");
@@ -301,24 +301,24 @@ async fn a_unit_page_draws_its_runs_on_one_axis_its_long_waits_collapsed_and_its
     let (_, html) = f.get(&format!("/projects/id/{id}/units/l3")).await;
     assert!(!html.contains("unit-tl"), "{html}");
 
-    // the step page folds its unit's timeline under Runs, its own row marked
+    // the step page draws its unit's timeline under Runs, its own row marked, over its runs
     let (_, html) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
-    let fold = between(&html, "<details class=\"tl-fold more-fold\"", "</details>");
+    let tl = between(&html, "<div class=\"runs-tl\">", "<ol class=\"attempts\">");
     assert!(
-        fold.contains("<span>Its unit&#39;s timeline</span>"),
-        "{fold}"
+        tl.contains("<h3 class=\"runs-tl-h\">Its unit&#39;s timeline</h3>"),
+        "{tl}"
     );
     assert!(
-        fold.contains("<li class=\"tl-row is-current\"><a class=\"tl-stage\""),
-        "{fold}"
+        tl.contains("<li class=\"tl-row is-current\"><a class=\"tl-stage\""),
+        "{tl}"
     );
     assert!(
-        between(fold, "is-current", "</a>").contains("aria-current=\"page\""),
-        "{fold}"
+        between(tl, "is-current", "</a>").contains("aria-current=\"page\""),
+        "{tl}"
     );
     assert!(
-        html.find("tl-fold").unwrap() < html.find("<ol class=\"attempts\"").unwrap(),
-        "the fold is under Runs' head, before the runs"
+        html.find("runs-tl").unwrap() < html.find("<ol class=\"attempts\"").unwrap(),
+        "the timeline is under Runs' head, before the runs"
     );
 }
 

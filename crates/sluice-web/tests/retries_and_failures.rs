@@ -203,7 +203,7 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
     assert_eq!(status, StatusCode::OK, "{page}");
     let badges = between(&page, "<p class=\"d-badges\">", "</p>");
     assert!(badges.contains(">run 6<"), "{badges}");
-    let now = between(&page, "<section class=\"d-sec d-now\">", "</section>");
+    let now = between(&page, "<article class=\"mod d-sec d-now\"", "</article>");
     let retry = between(now, "<p class=\"meta now-retry\">", "</p>");
     assert!(
         retry.starts_with("<p class=\"meta now-retry\">Run 6 started <time")
@@ -340,7 +340,11 @@ async fn a_failure_links_its_own_log_record_which_the_log_marks() {
     );
     // "Why it failed" on its page
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/l2-work")).await;
-    let why = between(&page, "<section class=\"d-sec d-failure\">", "</section>");
+    let why = between(
+        &page,
+        "<article class=\"mod swell-look d-sec d-failure\"",
+        "</article>",
+    );
     assert!(
         why.contains(&format!(
             "<p class=\"meta err-log\"><a href=\"{href}\">Its log record {seq}</a></p>"

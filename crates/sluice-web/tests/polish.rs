@@ -148,7 +148,11 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
 async fn a_projects_messages_page_is_titled_messages_and_the_tray_stays_inbox() {
     let f = Fixture::new().await;
     let (_, project) = f.get(&format!("/projects/id/{}/inbox", f.id)).await;
-    assert!(project.contains("<h1>Messages</h1>"), "{project}");
+    // its name is the band's, its way back under it
+    assert!(
+        project.contains("<h1 class=\"long\">Messages</h1>"),
+        "{project}"
+    );
     assert!(
         project.contains("<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/"),
         "{project}"
@@ -205,9 +209,10 @@ async fn a_message_box_to_a_step_not_running_says_when_it_is_read() {
         thread.contains("composer-note"),
         "the thread's page says it too"
     );
-    // the crumb names the step by its id: the h1 says its title
+    // the crumb names the step by its id: the band's h1 says its title
     assert!(
-        thread.contains(">step l2-work</a></nav><h1 class=\"title-long\">"),
+        thread.contains("<div class=\"band-head\"><h1 class=\"longest\"><span class=\"d-stage\">")
+            && thread.contains(">step l2-work</a></nav>"),
         "{thread}"
     );
     let (_, running) = f
@@ -492,18 +497,20 @@ async fn chromium_a_steps_heading_steps_down_on_a_phone_and_a_units_glyph_sits_b
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}/steps/l1-work")).unwrap();
         browser.wait("document.readyState === 'complete' && document.querySelector('h1')").unwrap();
         const SIZE: &str = "(() => { const h = document.querySelector('h1'); const s = getComputedStyle(h); return {size: s.fontSize, line: s.lineHeight}; })()";
+        // the band's name, its stage and a title of 26 characters ("long"): 68px over the band,
+        // a phone's 44px, so its state and tabs stay near the first screen
         browser.viewport(390, "light").unwrap();
-        assert_eq!(browser.eval(SIZE).unwrap(), json!({"size": "19px", "line": "25px"}));
+        assert_eq!(browser.eval(SIZE).unwrap(), json!({"size": "44px", "line": "40.48px"}));
         browser.viewport(1440, "light").unwrap();
-        assert_eq!(browser.eval(SIZE).unwrap(), json!({"size": "22px", "line": "28px"}));
+        assert_eq!(browser.eval(SIZE).unwrap(), json!({"size": "68px", "line": "62.56px"}));
         browser.navigate(&format!("http://{addr}/projects/id/{id}/units/l1")).unwrap();
         browser.wait("document.querySelector('h1.unit-h')").unwrap();
         browser.viewport(390, "light").unwrap();
         let g = browser
             .eval("(() => { const h = document.querySelector('h1.unit-h'), g = h.querySelector('.g'); return {top: g.getBoundingClientRect().top - h.getBoundingClientRect().top, size: getComputedStyle(h).fontSize}; })()")
             .unwrap();
-        assert!(g["top"].as_f64().unwrap() < 6.0, "the glyph by the first line: {g}");
-        assert_eq!(g["size"], "19px", "{g}");
+        assert!(g["top"].as_f64().unwrap() < 8.0, "the glyph by the first line: {g}");
+        assert_eq!(g["size"], "32px", "{g}");
     })
     .await
     .unwrap();

@@ -333,7 +333,6 @@ p { margin: 0; }
 .tag .g svg { width: 14px; height: 14px; }
 .tag.live { color: var(--on-run); background: var(--run); box-shadow: none; }
 .tag.live .g { color: inherit; }
-.d-progress .d-sec-h { align-items: center; }  /* the "live" badge on the head's centre line */
 .err { color: var(--ink); font-weight: 500; }
 .empty { color: var(--ink-muted); padding: 32px 0; max-width: 60ch; }
 .log-empty p { margin: 0; }
@@ -1173,56 +1172,275 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--ink) 86%, var(--pa
                  place-items: center; border: 0; border-radius: 0;
                  background: var(--paper-raised); color: var(--ink-muted); cursor: pointer; }
 .drawer .close:hover { color: var(--ink); background: var(--paper-2); }
-.d-head { margin-bottom: 8px; }
-/* the id and, beside it, the step's state as badges; they wrap under a long id */
-.d-head .hd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
-              padding-right: 40px; }  /* clear of the close */
-/* the drawer's heading: three lines at most (its whole title in its title and on the step's
-   page), so its state and tabs stay in view */
-.d-head h2 { margin: 0; font-family: var(--font-sans);
-             font-size: 20px; line-height: 25px; font-weight: 800;
-             overflow-wrap: anywhere; min-width: 0;
-             display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3;
-             overflow: hidden; }
-.d-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
-.d-badges .tag { height: 24px; padding: 0 8px; font-size: 13px; }
-.d-badges .tag .g, .d-badges .tag .g svg { width: 16px; height: 16px; }
-.d-doc { margin: 8px 0 0; color: var(--ink-muted); max-width: var(--measure); }
-.d-meta { margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
-.d-meta code { font-size: 12.5px; border: 0; background: none; padding: 0; color: var(--ink); }
-.d-sec { margin-top: 26px; }
-/* a section's head: an h2 under the step page's h1, an h3 in the drawer; one look for both */
-#step-detail :is(.d-sec, .d-sec-h) > :is(h2, h3, h4) { font: 650 16px/22px var(--font-sans); letter-spacing: 0; margin: 0; color: var(--ink); }
-/* what a running step is doing now: its latest turn first (what it said, the call in flight,
-   its activity in a line), how this run came about, its live progress, its latest exchange as
-   messages (its own latest, the latest to it since) */
-.now-turn { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--rule-faint);
-            border-radius: 0; background: var(--paper-raised); max-width: 78ch; }
-.now-turn.is-running { border-color: var(--run-ink); }
-.now-turn-h { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0;
-              font-size: 14px; line-height: 20px; font-weight: 600;
-              font-variant-numeric: tabular-nums; }
-.now-turn-h .meta { font-weight: 400; margin-left: 4px; }
-.now-said { margin: 6px 0 0; max-width: var(--measure); font-size: 14px; line-height: 20px;
-            overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical;
-            -webkit-line-clamp: 4; overflow: hidden; }
-.now-call { display: flex; align-items: center; gap: 8px; margin: 6px 0 0; min-width: 0;
-            font-size: 13.5px; line-height: 20px; }
-.now-turn .now-act { margin: 8px 0 0; }
-@media (max-width: 720px) { .now-call { flex-wrap: wrap; row-gap: 0; } }
-.d-now .convo { margin-top: 12px; }
-.now-from { font-weight: 600; color: var(--ink); }
-.now-progress { margin-top: 12px; }
-/* Now reads as one column: the turn's card, its progress and its exchange one width */
-.d-now > :is(.now-progress, .convo) { max-width: 78ch; }
+/* ---- a step's band (DESIGN.md, A step's page): on its own page the frame's title band carries
+   it (`Frame::head`), in the drawer it heads the step on the band's navy. Its way back, its name
+   huge (its stage muted before its title, its id under it in data mono), its state, run and
+   usual time, its words, its unit's stages with its own ringed, and its actions on the navy:
+   square, a cream line, the next move filled cream. ------------------------------------------ */
+.step-band { padding: 22px 0 26px; color: var(--band-ink); }
+/* a solid glyph's mark is cut in what it sits on: the band, a done cell's sky, a look's sand */
+.step-band, .unit-band, .messages-band { --glyph-cut: var(--band); }
+:is(.step-band, .unit-band) .sc-done { --glyph-cut: var(--sky); }
+:is(.step-band, .unit-band) .sc-look { --glyph-cut: var(--sand); }
+.swell-look { --glyph-cut: var(--sand-pale); }
+:is(.site-head, .step-band) .crumbs { margin: 0 0 16px; color: var(--band-muted); }
+:is(.site-head, .step-band) .d-stage { color: var(--band-muted); }
+sluice-copy > button.copy { box-shadow: none; }
+:is(.site-head, .step-band) .crumbs a { color: var(--band-muted); }
+:is(.site-head, .step-band) .crumbs a:hover { color: var(--band-ink); text-decoration: underline;
+                             text-decoration-color: var(--band-accent); }
+.sb-top { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); align-items: end;
+          column-gap: var(--col-gap); row-gap: 18px; }
+.sb-name { grid-column: span 7; min-width: 0; }
+.sb-side { grid-column: span 5; display: flex; flex-direction: column; gap: 10px; min-width: 0;
+           padding-bottom: 4px; }
+/* its name is fluid like the band's: 96px at 1440 (68, 48, 36 for a longer one), a phone's
+   floor, more on a wide screen */
+.sb-t { margin: 0 0 0 -0.04em; font-size: clamp(56px, calc(96px + (100vw - 1440px) * 0.0667), 154px); line-height: .88; font-weight: 900;
+        letter-spacing: -0.04em; color: var(--band-ink); overflow-wrap: anywhere;
+        text-wrap: balance; }
+.sb-t.long { font-size: clamp(44px, calc(68px + (100vw - 1440px) * 0.0472), 109px); line-height: .92; }
+.sb-t.longer { font-size: clamp(32px, calc(48px + (100vw - 1440px) * 0.0333), 77px); line-height: 1;
+               letter-spacing: -0.035em; }
+.sb-t.longest { font-size: clamp(26px, calc(36px + (100vw - 1440px) * 0.025), 58px); line-height: 1.08;
+                letter-spacing: -0.03em; }
+.sb-t .d-stage { color: var(--band-muted); font-weight: 700; }
+.step-band .d-id { margin-top: 14px; display: flex; align-items: center; gap: 4px; }
+.step-band .d-id code { padding: 0; background: none; color: var(--band-muted); font-size: 14px; }
+.step-band sluice-copy > .copy { color: var(--band-muted); box-shadow: none; }
+.step-band sluice-copy > .copy:hover { color: var(--band-ink); background: none; }
+.step-band :is(.g, .icon) { color: inherit; }
+.d-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0; }
+.step-band .d-badges .tag { height: 32px; padding: 0 12px; gap: 6px; font-size: 14px;
+                            color: var(--band-ink); box-shadow: inset 0 0 0 1.5px var(--band-ink); }
+.step-band .d-badges .tag .g, .step-band .d-badges .tag .g svg { width: 16px; height: 16px; }
+.step-band .tag.attn { background: var(--sand); color: var(--on-sand); box-shadow: none; }
+.step-band .tag.ask { color: var(--on-coral); }
+.step-band .tries, .step-band .d-usual { font-size: 14px; color: var(--band-muted); }
+.step-band .d-usual.over { color: var(--band-ink); font-weight: 650; }
+/* a live overrun on the band and a unit's step: the attention fill, its own text on it; an
+   ended one (history) in plain ink */
+:is(.step-band, .u-step) .over-x { display: inline-flex; align-items: center; padding: 1px 6px;
+  background: var(--sand); color: var(--on-sand); font-size: 12.5px; font-weight: 700; }
+.step-band .d-when .over-x { padding: 0; background: none; color: var(--band-ink); font-weight: 600; }
+.step-band .d-doc { font-size: clamp(15px, calc(12px + 0.2vw), 19px); line-height: 1.45; color: var(--band-muted);
+                    max-width: var(--measure); overflow-wrap: anywhere; }
+.step-band :is(.d-when, .d-retried, .d-resume) { color: var(--band-muted); font-size: 14px;
+                                                line-height: 20px; max-width: var(--measure);
+                                                overflow-wrap: anywhere; }
+.d-retried { display: flex; align-items: flex-start; gap: 6px; }
+.d-retried .icon { flex: none; margin-top: 2px; }
+.step-band .d-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.step-band .d-meta code, .step-band .d-resume code { padding: 0; background: none;
+                                                    color: var(--band-muted); }
+.step-band .d-meta .tag { color: var(--band-ink); box-shadow: inset 0 0 0 1px var(--band-rule); }
+.step-band .d-meta a.tag:hover { box-shadow: inset 0 0 0 1px var(--band-ink); }
+/* its unit's stages: the unit in the first two columns, a stage a column after it */
+.sb-lane { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); align-items: center;
+           column-gap: var(--col-gap); row-gap: 10px; margin-top: 24px; padding-top: 16px;
+           border-top: 1px solid var(--band-rule); }
+.sb-lane-h { grid-column: span 2; display: flex; flex-direction: column; gap: 2px; min-width: 0;
+             font-size: 13px; color: var(--band-muted); }
+.sb-lane-h a { font-size: 15px; font-weight: 750; color: var(--band-ink); }
+.sb-lane .strip { grid-column: 3 / span var(--lane, 10); row-gap: 10px;
+                  grid-template-columns: repeat(var(--lane-n, 10), minmax(0, 1fr)); }
+/* the strip on the navy: a stage not reached is a cream outline; the step's own stage ringed */
+.site-head .sc-empty, .step-band .sc-empty { box-shadow: inset 0 0 0 1px var(--band-rule);
+                                            color: var(--band-muted); }
+.site-head .sc-run, .step-band .sc-run { box-shadow: inset 0 0 0 1px var(--band-accent); }
+.sc-here { outline: 2px solid var(--band-ink); outline-offset: 3px; }
+/* its actions on the navy */
+.step-band .d-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px;
+                        margin-top: 24px; }
+.step-band .d-actions > form { display: contents; }
+.step-band .d-actions details:not(.confirm-flow) { order: 9; flex-basis: 100%; }
+.step-band .d-actions > a.d-thread:first-of-type { margin-left: auto; }
+.step-band .d-actions :is(button, .confirm-flow > summary) { display: inline-flex; align-items: center;
+  min-height: 44px; padding: 0 18px; background: transparent; color: var(--band-ink);
+  box-shadow: inset 0 0 0 1.5px var(--band-ink); border: 0; font-weight: 650; }
+.step-band .d-actions :is(button, .confirm-flow > summary):hover {
+  background: color-mix(in oklch, var(--band-ink) 14%, transparent); }
+.step-band .d-actions button.primary { background: var(--band-ink); color: var(--band); box-shadow: none;
+                            font-weight: 750; }
+.step-band .d-actions button.primary:hover { background: color-mix(in oklch, var(--band-ink) 86%, var(--band)); }
+.step-band .confirm-flow > form { color: var(--ink); }
+.step-band .d-actions .confirm-flow > form button { color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--navy); }
+.step-band .d-actions .confirm-flow > form button:is(.primary, .danger) { color: var(--on-navy); }
+.step-band .d-actions details:not(.confirm-flow) > summary { min-height: 44px; display: inline-flex;
+  align-items: center; color: var(--band-muted); }
+.step-band .d-actions details[open]:not(.confirm-flow) > textarea { max-width: var(--measure); }
+.step-band textarea { width: 100%; }
+.step-band a.d-thread { display: inline-flex; align-items: center; min-height: 44px;
+                        color: var(--band-muted); }
+.step-band a.d-thread:hover { color: var(--band-ink); }
+.step-band ::selection { background: var(--band-ink); color: var(--band); }
+.step-band :focus-visible { outline-color: var(--band-ink); }
+/* in the drawer: the band's navy across the drawer's top, its name a size a drawer holds, its
+   parts stacked; the close button sits on it */
+article#step-detail { display: flow-root; }  /* its band's margins stay its own */
+.step-band.in-drawer { margin: calc(-1 * var(--d-pad-t, 20px)) calc(-1 * var(--d-pad-x, 24px)) 0;
+  padding: 18px var(--d-pad-x, 24px) 20px; background: var(--band); }
+.step-band.in-drawer .sb-top, .step-band.in-drawer .sb-lane { display: block; }
+.step-band.in-drawer .sb-name { padding-right: 52px; }
+.step-band.in-drawer .sb-side { margin-top: 12px; }
+.step-band.in-drawer .sb-t { margin: 0; font-size: 28px; line-height: 1.12; letter-spacing: -0.025em;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3;
+  overflow: hidden; }
+.step-band.in-drawer .d-id { margin-top: 8px; }
+.step-band.in-drawer .sb-lane { margin-top: 16px; padding-top: 12px; }
+.step-band.in-drawer .sb-lane-h { flex-direction: row; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 8px; }
+.step-band.in-drawer .sb-lane .strip { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+.step-band.in-drawer .d-actions { margin-top: 16px; }
+/* a narrow strip keeps each stage's name whole: its state is its glyph (and its words for a
+   screen reader), not the word beside the name */
+.step-band.in-drawer .sb-lane .sc-word { display: none; }
+@media (max-width: 1023.98px) { :is(.sb-lane, .ub-lane) .sc-word { display: none; } }
+/* a tablet or a narrow window: the name over its words, a size down */
+@media (min-width: 761px) and (max-width: 1100px) {
+  .sb-name, .sb-side, h1.unit-h, .ub-side { grid-column: 1 / -1; }
+  .sb-t, h1.unit-h { font-size: 76px; }
+  .sb-t.long, h1.unit-h.long { font-size: 56px; }
+  .sb-t.longer, h1.unit-h.longer { font-size: 40px; }
+  .sb-t.longest, h1.unit-h.longest { font-size: 30px; }
+  .sb-lane-h { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; gap: 4px 10px; }
+  .sb-lane .strip { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+  .step-band { padding: 18px 0 20px; }
+  .sb-name, .sb-side { grid-column: 1 / -1; }
+  .sb-t { font-size: 56px; }
+  .sb-t.long { font-size: 44px; }
+  .sb-t.longer { font-size: 32px; }
+  .sb-t.longest { font-size: 26px; }
+  .sb-lane-h { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; gap: 4px 10px; }
+  .sb-lane .strip, .ub-lane .strip { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .step-band .d-actions :is(button, .confirm-flow > summary) { flex: 1 1 auto; justify-content: center; }
+}
+
+/* ---- a step's Overview (DESIGN.md, A step's page): modules on the grid, the question to the
+   owner swelling first, then why it failed or what it does now; beside them what it waits on,
+   what it comes after, its progress and its key output. One column on a narrow sheet (the
+   drawer, a phone); two to a row from 900px of sheet; from 2000px more modules to a row, never
+   longer lines. -------------------------------------------------------------------------------- */
+.ov { container: ov / inline-size; }
+.ov > sluice-grid { row-gap: 26px; }
+.ov .mod-col { gap: 26px; }
+/* by its sheet's mode (DESIGN.md, The module grid): the columns one over the other on a narrow
+   sheet and to 900px; 7 and 5 twelfths to 2000px; from there halves, the side's modules two to
+   a row (and with no side, the first column's two to a row); from 3000px a third and two
+   thirds, so three modules stand in a row */
+@container sheet (min-width: 640px) and (max-width: 899.98px) {
+  .ov > sluice-grid > .mod-col { --take: 12; }
+}
+@container sheet (min-width: 900px) and (max-width: 1199.98px) {
+  .ov > sluice-grid > .mod-col { --take: var(--span); }
+}
+@container sheet (min-width: 2000px) {
+  .ov > sluice-grid > .mod-col { --take: 12; }
+  .ov:not(.ov-two) > sluice-grid > .mod-col { --take: 24; }
+  .ov.ov-two > sluice-grid > .mod-col[data-span="5"],
+  .ov:not(.ov-two) > sluice-grid > .mod-col {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start;
+    column-gap: var(--col-gap); }
+}
+@container sheet (min-width: 3000px) {
+  .ov.ov-two > sluice-grid > .mod-col[data-span="7"] { --take: 8; }
+  .ov.ov-two > sluice-grid > .mod-col[data-span="5"] { --take: 16; }
+}
+/* nothing in the first column (a step done with no words or outputs of its own): its waits and
+   what it comes after take the sheet, as many to a row as fit */
+.ov > sluice-grid > .mod-col[data-span="7"]:not(:has(> *)) { display: none; }
+.ov:has(> sluice-grid > .mod-col[data-span="7"]:not(:has(> *))) .mod-col[data-span="5"] {
+  grid-column: 1 / -1; display: grid; column-gap: var(--col-gap); align-items: start;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); }
+/* a module of a step is titled on a heavy rule; its words at the reading measure */
+#step-detail .mod:not(.swell-ask, .swell-look), .unit-page .mod.d-sec { border-top: 3px solid var(--navy);
+                                                                       padding-top: 12px; }
+#step-detail .mod > :is(h2, h3, h4):first-child, #step-detail .mod-h > :is(h2, h3, h4),
+.unit-page .mod.d-sec > h2 { margin: 0 0 12px; font-size: 22px; line-height: 1.1; font-weight: 850;
+                              letter-spacing: -0.02em; color: var(--ink); }
+#step-detail .mod-h { display: flex; flex-wrap: wrap; align-items: baseline;
+                      justify-content: space-between; gap: 4px 14px; margin-bottom: 12px; }
+#step-detail .mod-h > :is(h2, h3, h4) { margin: 0; }
+#step-detail .mod-h > .meta, #step-detail .mod-h > a.meta { margin: 0; }
+#step-detail .mod > p, #step-detail .mod .convo { max-width: var(--measure); }
+#step-detail .mod > p + p { margin-top: 6px; }
+@container ov (max-width: 599px) {
+  #step-detail .mod > :is(h2, h3, h4):first-child, #step-detail .mod-h > :is(h2, h3, h4) { font-size: 18px; }
+}
+/* the question to the owner, swelled: its kind's line over the coral rule, the question whole */
+#step-detail .mod.d-ask > .mod-k { margin: 0 0 10px; font-size: 15px; line-height: 20px; font-weight: 750;
+                               letter-spacing: 0; color: var(--ink); }
+/* why it failed: on the sand, its sentence first */
+.d-failure > :is(h2, h3, h4):first-child { font-size: 22px; }
+.d-failure .err-line { font-size: 17px; line-height: 1.4; font-weight: 650; }
+.d-failure .err-next { margin-top: 6px; }
+.d-failure .err-log { margin-top: 8px; }
+.d-failure .d-dismiss { margin-top: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.d-failure .d-dismiss button { min-height: 40px; }
+/* what it does now: its live turn's last words large, its calls by tool, its last calls */
+.now-turn { margin-top: 2px; }
+.now-turn-h { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0;
+              font-size: 13px; line-height: 18px; color: var(--ink-muted); }
+.now-turn-h > span:first-of-type { color: var(--ink); font-weight: 650; }
+.now-turn-h .g { color: var(--run-ink); }
+.now-said { margin: 10px 0 0; max-width: 42em; font-size: 19px; line-height: 1.4; font-weight: 550;
+            letter-spacing: -0.01em; overflow-wrap: anywhere; display: -webkit-box;
+            -webkit-box-orient: vertical; -webkit-line-clamp: 6; overflow: hidden; }
+.now-said .act-lab { display: none; }
+.now-said code { font-size: .8em; }
+ul.now-tools { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 10px;
+               grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); }
+ul.now-tools > li { display: flex; flex-direction: column; padding: 8px 10px;
+                    box-shadow: inset 0 0 0 1px var(--rule); min-width: 0; }
+.nt-tool { font-size: 12px; color: var(--ink-muted); overflow: hidden; text-overflow: ellipsis;
+           white-space: nowrap; }
+.nt-n { font-size: 22px; line-height: 1.1; font-weight: 800; font-variant-numeric: tabular-nums; }
+.now-call, ol.now-calls > li > a { display: grid; align-items: center; column-gap: 10px;
+  grid-template-columns: 16px max-content minmax(0, 1fr) auto; min-height: 34px; padding: 0 8px;
+  font-size: 13.5px; line-height: 20px; border-bottom: 1px solid var(--rule-faint); }
+.now-call { margin: 16px 0 0; background: var(--paper-2); border-top: 1.5px solid var(--navy); }
+ol.now-calls { list-style: none; margin: 0; padding: 0; }
+ol.now-calls > li > a { color: inherit; text-decoration: none; }
+ol.now-calls > li > a:hover { background: var(--paper-2); }
+ol.now-calls > li > a:hover .act-key { color: var(--ink); }
+ol.now-calls > li.is-failed .act-key { color: var(--ink); }
+.now-call .act-end .g { color: var(--run-ink); }
+:is(.now-call, ol.now-calls > li > a) .act-end { white-space: nowrap; }
+.d-now .now-turn { max-width: 132ch; }
+/* a phone: each call's tool and time on a line, its key argument under them */
+@media (max-width: 760px) {
+  .now-call, ol.now-calls > li > a { grid-template-columns: 16px minmax(0, 1fr) auto; row-gap: 2px;
+                                    padding: 6px 8px; min-height: 44px; }
+  :is(.now-call, ol.now-calls > li > a) .act-key { grid-column: 2 / -1; grid-row: 2; order: 0;
+                                                   flex-basis: auto; padding-left: 0; }
+}
+.d-now > .now-quiet { display: flex; align-items: center; gap: 6px; margin: 0 0 10px;
+                      font-weight: 650; color: var(--sand-ink); }
+.d-now .now-retry { margin-top: 14px; padding: 10px 12px; background: var(--paper-2); }
+.now-progress { margin-top: 16px; }
+.d-now .convo { margin-top: 16px; }
 .now-act { margin: 10px 0 0; }
-/* a failed step's own last message, after its failure: what its agent last said, in its words */
 .d-said { margin-top: 12px; }
 .d-said-h { margin: 0 0 6px; }
-.d-key .d-sec-h { align-items: baseline; }
 .d-from { margin: -4px 0 8px; }
 /* outputs a run before the one going now set: said so, and set back in muted ink */
 .d-key.is-earlier dl.fields { color: var(--ink-muted); }
+/* what it waits on and comes after: steps as links, each led by its glyph */
+.wait-list > p + p, .d-waits .d-ready + .wait-list { margin-top: 6px; }
+.d-waits p { overflow-wrap: anywhere; }
+.d-ready { display: flex; align-items: flex-start; gap: 6px; }
+.d-ready .g { margin-top: 2px; flex: none; }
+.d-hold { display: flex; align-items: flex-start; gap: 6px; }
+.d-hold .g { margin-top: 2px; flex: none; }
+.d-after .gate-list { display: flex; flex-direction: column; gap: 6px; }
+.chain-link { margin: 0; }
+.chain-link a { color: var(--ink-muted); text-underline-offset: 3px; }
+.chain-link a:hover { color: var(--ink); }
+.ov > .chain-link { margin-top: 22px; }
+@media (max-width: 760px) {
+  .chain-link a { display: inline-flex; align-items: center; min-height: 44px; }
+}
 /* what a page says at its top when something asked for was not done */
 .notice { display: flex; align-items: flex-start; gap: 10px;
           margin: 0 0 18px; padding: 10px 14px; border-radius: 0;
@@ -1231,20 +1449,11 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--ink) 86%, var(--pa
 .notice p { margin: 0; max-width: var(--measure); overflow-wrap: anywhere; }
 .notice-i { flex: none; margin-top: 2px; color: var(--sand-ink); }
 .a-id { font-size: 12px; color: var(--ink-muted); border: 0; background: none; padding: 0; }
-/* quiet: how long its run has written nothing, before what it last said */
-/* a retry's run before this one: its number (a link to it under Runs), how it ended and why */
-.now-retry { margin: 6px 0 0; max-width: var(--measure); overflow-wrap: anywhere; }
-.d-failure .err-log { margin: 8px 0 0; }
-.d-failure .err-next { margin: 4px 0 0; max-width: var(--measure); }
-.now-quiet { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; font-weight: 600;
-             color: var(--sand-ink); }
-.d-resume { margin-top: 10px; max-width: var(--measure); overflow-wrap: anywhere; }
 .d-sec-h { display: flex; align-items: baseline; gap: 12px;
            margin-bottom: 10px; }
 .d-sec-h .label { margin: 0; }
 /* a section's head in the theme's second voice */
 .d-sec-h .label, .plan-facts .label { color: var(--ink); }
-.d-sec .meta { margin-bottom: 4px; }
 /* how the step stands to the others: a label, then the steps as links led by their glyphs */
 dl.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px;
            margin: 14px 0 0; font-size: 14px; line-height: 20px; }
@@ -1253,9 +1462,6 @@ dl.facts dt { font-size: 13px; color: var(--ink-muted); }
 dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 dl.facts code { font-size: 12.5px; border: 0; background: none; padding: 0; }
 dl.facts dd p { margin: 0; }
-/* a pending step's pause: its glyph, then who paused it and when */
-.d-hold { display: flex; align-items: flex-start; gap: 6px; }
-.d-hold .g { margin-top: 2px; flex: none; }
 /* named values, a field list: each name in a narrow muted column (one line, ellipsized, its
    type after it with Types on), its value beside it, so a short value is one row; a long one
    takes the full width below its name, where it comes from and its doc beside the name. The
@@ -1361,16 +1567,15 @@ ul.v.list > li:not(:last-child)::after { content: ", "; color: var(--ink-muted);
    glyphs, the current attempt (last) on the secondary fill (as the current filter is); a
    failure's headline in ink, all of it under "Show error" */
 ol.attempts { list-style: none; margin: 0; padding: 0; font-size: 14px; line-height: 20px; }
-ol.attempts > li { position: relative; display: grid; column-gap: 10px;
-                   grid-template-columns: 1.4em 16px minmax(0, 1fr); padding: 8px 0 12px; }
-ol.attempts > li:not(:last-child)::before {
-  content: ""; position: absolute; z-index: 1; left: calc(1.4em + 10px + 7.5px); top: 31px;
-  bottom: -7px; width: 1px; background: var(--rule); }
-ol.attempts > li:has(+ .a-now)::before { bottom: -11px; }  /* past the fill's top margin */
-ol.attempts > li.a-now { margin: 4px 0 0; padding: 8px 12px 12px; background: var(--paper-2);
-                         border-radius: 0; }
-.a-n { font-size: 13px; line-height: 22px; color: var(--ink-muted); text-align: right;
-       font-variant-numeric: tabular-nums; }
+/* a run a row: its number large in data mono, its glyph, its outcome and facts; the current run
+   on the sunk well under the navy rule */
+ol.attempts > li { position: relative; display: grid; column-gap: 12px;
+                   grid-template-columns: 2.4rem 16px minmax(0, 1fr); padding: 10px 0 14px;
+                   border-top: 1px solid var(--rule); }
+ol.attempts > li.a-now { padding: 10px 12px 14px 0; background: var(--paper-2);
+                         border-top: 1.5px solid var(--navy); }
+.a-n { font: 800 20px/24px var(--font-mono); color: var(--ink); text-align: right;
+       font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
 .a-g .g { margin-top: 3px; }
 .a-b { min-width: 0; }
 .a-h { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; margin: 0;
@@ -1417,7 +1622,7 @@ code.v { border: 0; background: none; padding: 0; }
    bar sticks to the top of what scrolls (the window; in the drawer, under its close band) and
    scrolls sideways inside itself on a narrow screen, so the page never does */
 .tabs { margin-top: 20px; min-width: 0; }
-.tabbar { position: sticky; top: 0; z-index: 4; margin: 0 0 18px; background: var(--paper);
+.tabbar { position: sticky; top: 0; z-index: 4; margin: 0 0 24px; background: var(--paper);
           box-shadow: inset 0 -1px 0 var(--rule-faint); }
 .drawer .tabbar { top: calc(60px - var(--d-pad-t)); background: var(--paper-raised); }
 .tablist { display: flex; gap: 2px; overflow-x: auto; overscroll-behavior-x: contain;
@@ -1426,8 +1631,8 @@ code.v { border: 0; background: none; padding: 0; }
 /* more tabs past its end: the bar fades out there (sluice-tabs marks it) */
 .tablist[data-more] { mask-image: linear-gradient(to right, black calc(100% - 64px), transparent); }
 .tablist > [role=tab] { position: relative; flex: none; display: inline-flex; align-items: center;
-  gap: 6px; height: 42px; padding: 0 var(--tab-x); border: 0; border-radius: 0 0 0 0;
-  background: none; color: var(--ink-muted); font: 500 14.5px/20px var(--font-sans);
+  gap: 6px; height: 48px; padding: 0 var(--tab-x); border: 0; border-radius: 0; box-shadow: none;
+  background: none; color: var(--ink-muted); font: 650 15px/20px var(--font-sans);
   white-space: nowrap; cursor: pointer; }
 .tablist > [role=tab]:first-child { margin-left: calc(0px - var(--tab-x)); }
 /* a phone fits a step's six tabs nearer its width: less room around each word */
@@ -1435,10 +1640,10 @@ code.v { border: 0; background: none; padding: 0; }
 @media (max-width: 720px) { .tablist { --tab-x: 9px; } }
 .tablist > [role=tab]:hover { color: var(--ink); background: none; }
 .tablist > [role=tab]:hover::after { content: ""; position: absolute; left: var(--tab-x); right: var(--tab-x);
-  bottom: 0; height: 2px; border-radius: 2px; background: var(--rule); }
-.tablist > [role=tab][aria-selected=true] { color: var(--ink); font-weight: 650; }
+  bottom: 0; height: 3px; border-radius: 0; background: var(--rule); }
+.tablist > [role=tab][aria-selected=true] { color: var(--ink); font-weight: 800; }
 .tablist > [role=tab][aria-selected=true]::after { content: ""; position: absolute; left: var(--tab-x);
-  right: var(--tab-x); bottom: 0; height: 2px; border-radius: 2px; background: var(--ink); }
+  right: var(--tab-x); bottom: 0; height: 3px; border-radius: 0; background: var(--navy); }
 .tablist > [role=tab]:focus-visible { outline-offset: -3px; border-radius: 0; }
 .tablist > [role=tab] .n { margin-left: 6px; font: 500 12.5px/18px var(--font-sans); color: var(--ink-muted);
                            font-variant-numeric: tabular-nums; }
@@ -1457,20 +1662,7 @@ code.v { border: 0; background: none; padding: 0; }
   sluice-tabs > .tp + .tp { margin-top: 36px; padding-top: 22px; border-top: 1px solid var(--rule-faint); }
 }
 /* what opens a panel: its first section sits at the bar */
-.tp > .tp-h + :is(.d-sec, dl.facts, .d-sec-h, sluice-conversation, .empty-state) { margin-top: 0; }
-/* a wide screen draws a step page's Overview in two columns, in its order: its question or why
-   it failed beside Now, its outputs beside its last message; a section alone, and any line of
-   its own (ready, its waits, its chain), spans both */
-@media (min-width: 1800px) {
-  #step-detail[data-page-title] #tp-overview { display: grid; gap: 26px 40px; align-items: start;
-                                                grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  #step-detail[data-page-title] #tp-overview > * { margin-top: 0; }
-  #step-detail[data-page-title] #tp-overview > :not(section.d-sec),
-  #step-detail[data-page-title] #tp-overview > section.d-sec:only-of-type { grid-column: 1 / -1; }
-}
-@media (min-width: 1800px) and (scripting: enabled) {
-  #step-detail[data-page-title] sluice-tabs > #tp-overview:not([data-chosen]) { display: none; }
-}
+.tp > .tp-h + :is(.d-sec, .ov, dl.facts, .d-sec-h, sluice-conversation, .empty-state) { margin-top: 0; }
 .tp > .tp-h + sluice-conversation > .convo { margin-top: 0; }
 .tp-top { justify-content: space-between; align-items: center; min-height: 24px; }
 .tp-top .meta { margin: 0; }
@@ -1489,44 +1681,46 @@ code.v { border: 0; background: none; padding: 0; }
 .tag.ask { background: var(--coral); color: var(--on-coral); box-shadow: none;
            font-weight: 650; }
 
-/* ---- a conversation: one column, as a transcript reads ---------------------------------------
-   Each run of messages from one sender is a group under who sent it and to whom; a day's start
-   and the first message not read yet are lines across the column; a question's reply sits in it,
-   under it. What a message is reads from its words and its fill: from the step the page is
-   about on the card colour, to it on the muted fill, the owner's tinted with the primary blue */
-.convo { display: grid; gap: 12px; min-width: 0; max-width: 78ch; }
+/* ---- a conversation (DESIGN.md, The inbox and threads): one column, as a transcript reads.
+   Each run of messages from one sender is a group under who sent it and to whom; its messages
+   are rows apart by hairlines, flat on the paper; the owner's own on the sunk well. A day's
+   start and the first message not read yet are lines across the column; a question's replies
+   sit under it. An open question to the owner is the one on the coral rule, its title a size
+   up; the message box closes the column under the navy rule. ---------------------------------- */
+.convo { display: grid; gap: 14px; min-width: 0; max-width: 78ch; }
 .convo-of { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; }
 .run-file-page .jump, .convo-of .jump { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-muted);
                   text-underline-offset: 3px; }
 .convo-more { margin: 0; }
-.convo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; min-width: 0; }
-.m-day, .m-new { display: flex; align-items: center; gap: 10px; font: 500 12.5px/18px var(--font-sans);
+.convo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 18px; min-width: 0; }
+.m-day, .m-new { display: flex; align-items: center; gap: 10px; font: 600 12.5px/18px var(--font-sans);
                  color: var(--ink-muted); font-variant-numeric: tabular-nums; }
-.m-day::after, .m-new::after { content: ""; flex: 1; height: 1px; background: var(--rule-faint); }
-.m-new { color: var(--ink); font-weight: 650; }
-.m-new::after { background: var(--ink); opacity: .55; }
-.mg { display: grid; gap: 6px; min-width: 0; }
-.mg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin: 0;
+.m-day::after, .m-new::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+.m-new { color: var(--ink); font-weight: 750; }
+.m-new::after { height: 1.5px; background: var(--navy); }
+.mg { display: grid; gap: 0; min-width: 0; }
+.mg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin: 0 0 2px;
            font-size: 13px; line-height: 20px; color: var(--ink-muted); }
 .mg-head .mg-to { flex: none; width: 14px; height: 14px; }
-.who { font-weight: 600; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.who { font-weight: 700; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
 .who .sref-a { text-decoration: none; }
 .who .sref-a:hover .sref-t { text-decoration: underline; text-decoration-color: var(--run-ink);
                              text-underline-offset: 3px; }
-.who .sref-t { font-weight: 600; }
+.who .sref-t { font-weight: 700; }
 .who .sref-id { font-size: 11.5px; }
-.mg-msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; min-width: 0; }
-.m { min-width: 0; padding: 9px 14px 12px; border: 1px solid var(--rule-faint); border-radius: 0;
-     background: var(--paper-raised); }
-.mg-in .m { background: var(--paper-2); }
-.mg-you .m { background: color-mix(in oklch, var(--navy) 7%, var(--paper-raised));
-             border-color: color-mix(in oklch, var(--navy) 30%, var(--rule-faint)); }
-.m-ask { border-color: var(--rule); }
+.mg-msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; min-width: 0; }
+.m { min-width: 0; padding: 10px 0 12px; border-top: 1px solid var(--rule); }
+.mg-you .m { padding-inline: 12px; background: var(--paper-2); border-top-color: var(--navy); }
+.m-ask { border-top: 1.5px solid var(--navy); }
+/* an open question to the owner: the coral rule, its title a size up (the One Coral Rule) */
+.m.m-yours { border-top: 4px solid var(--coral); padding-top: 12px; }
+.swell-ask .m.m-yours { border-top: 0; padding-top: 0; }
+.m.m-yours .m-title { font-size: 19px; line-height: 1.25; font-weight: 800; letter-spacing: -0.015em; }
 .m-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin: 0;
           font-size: 12.5px; line-height: 20px; color: var(--ink-muted); }
 .m-meta .tag { height: 20px; }
 .m-id { padding: 0; border: 0; background: none; font-size: 11.5px; color: var(--ink-muted); }
-.m-q { display: inline-flex; align-items: center; gap: 4px; font-weight: 650; color: var(--ink); }
+.m-q { display: inline-flex; align-items: center; gap: 4px; font-weight: 700; color: var(--ink); }
 .m-q svg { width: 15px; height: 15px; }
 .m-to { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 4px; }
 /* a note sent to many in a row, drawn once: "to 10 steps", its recipients folded under it */
@@ -1538,40 +1732,40 @@ details.m-many > summary::-webkit-details-marker { display: none; }
 details.m-many[open] { display: block; flex-basis: 100%; order: 9; }
 details.m-many[open] > .m-all { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 2px; }
 .m-re a { color: inherit; }
-.m-title { margin: 4px 0 0; font: 650 15px/22px var(--font-sans); }
+.m-title { margin: 4px 0 0; font: 750 15.5px/22px var(--font-sans); overflow-wrap: anywhere; }
 .m-body { margin-top: 6px; max-width: 72ch; overflow-wrap: anywhere; }
 .m-body p { margin: 0; }
 .m-body p + p, .m-body ul, .m-body ol, .m-body pre { margin-top: 8px; }
-.mg-in .m-body pre { background: var(--paper-raised); }
+.mg-you .m-body pre { background: var(--paper); }
 :is(.m, .m-reply) > .long > .clip { max-height: 240px; max-width: 72ch; }
 :is(.m, .m-reply) > .long > .fold-toggle { margin-top: 4px; }
 .m-text { margin-top: 6px; line-height: 21px; overflow-wrap: anywhere; max-width: 72ch; }
 .m-text code { font-size: 12.5px; }
 .m-whole { display: inline-block; margin-top: 6px; font-size: 13px; }
 .m-answer { margin-top: 8px; }
-.m .gone { margin-top: 6px; color: var(--sand-ink); font-weight: 500; }
-/* a question's replies, under it: the muted fill inside its card (the card colour inside a
-   message on the muted fill) */
+.m .gone { margin-top: 6px; color: var(--sand-ink); font-weight: 600; }
+/* a question's replies, under it, each on the sunk well behind a hairline */
 .m-replies { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
-.m-reply { min-width: 0; padding: 7px 12px 10px; border-radius: 0; background: var(--paper-2); }
-.mg-in .m-reply { background: var(--paper-raised); }
+.m-reply { min-width: 0; padding: 8px 12px 10px; background: var(--paper-2);
+           box-shadow: inset 0 1px 0 var(--rule); }
+.mg-you .m-reply { background: var(--paper); }
 .m-reply .m-ri { flex: none; width: 15px; height: 15px; }
-/* inside a card (an inbox note) a message is flat: no card within a card */
+/* inside a module (an inbox card) a message is flat: no rule over its one message */
 .item .m { padding: 0; border: 0; background: none; }
 .item .mg-msgs { gap: 12px; }
 .item .convo { margin-top: 8px; }
-/* the message box, at a conversation's end */
-.composer { display: grid; gap: 8px; margin-top: 4px; padding: 12px 14px; border: 1px solid var(--rule);
-            border-radius: 0; background: var(--paper-raised); min-width: 0; }
-.composer-to { font: 600 13px/18px var(--font-sans); }
+/* the message box, at a conversation's end, under the navy rule */
+.composer { display: grid; gap: 8px; margin-top: 6px; padding: 12px 0 0; border-top: 1.5px solid var(--navy);
+            min-width: 0; }
+.composer-to { font: 750 14px/20px var(--font-sans); }
 /* a step not running: when it will read this, straight under whom it goes to */
 .composer-note { margin: -6px 0 0; font-size: 13px; line-height: 18px; }
-.composer textarea { width: 100%; min-width: 0; min-height: 76px; resize: vertical; }
+.composer textarea { width: 100%; min-width: 0; min-height: 84px; resize: vertical; padding: 8px 10px; }
 .composer-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
                 gap: 8px 14px; }
-.composer label.check { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+.composer-row button { min-height: 44px; padding: 0 20px; }
+.composer label.check { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; min-height: 44px; }
 .composer .ou-status:empty { display: none; }
-/* an inbox question's line: its state, who asked whom, when, its id and where */
 /* a question on the questions list: where it was asked, then the one-message conversation */
 .item.q > .q-where { margin: 0; }
 .item.q > .q-where a { color: inherit; text-underline-offset: 3px;
@@ -1589,19 +1783,34 @@ details.m-many[open] > .m-all { display: flex; flex-wrap: wrap; gap: 2px 14px; m
 .q-answered .qa-what { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .q-answered .qa-title { font-weight: 400; }
 .q-answered .qa-to a { color: inherit; text-underline-offset: 3px; }
-article.item.q-done { padding-block: 10px; }
 .q-also { margin: 2px 0 10px; max-width: var(--measure); }
 .q-also a { color: inherit; text-underline-offset: 3px; }
 li.m.q-done > .md, li.m.q-done > .m-body { opacity: 0.7; }
 .threads { display: grid; gap: 10px; }
 .threads > .item { margin: 0; }
-/* a wide screen sets the inbox's questions and notes two to a row, each card at its measure */
-@media (min-width: 1800px) {
-  .q-group, .threads { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
-                       gap: 12px 16px; align-items: start; }
-  .q-group > :not(article.item) { grid-column: 1 / -1; }
-  .q-group > article.item { margin: 0; }
-}
+/* the inbox's sections on the grid: a question to the owner a swelled module, two to a row
+   from 900px of sheet, three past 2400px; one, the full width, on a phone */
+#messages-view > section, #messages-view > #inbox-items > section,
+#messages-view > details.read-today { margin-top: 30px; }
+#messages-view > #inbox-items > section:first-child { margin-top: 22px; }
+#messages-view .sec-h { margin-bottom: 4px; }
+/* its questions and notes by the sheet's mode: one to a row to 900px, two to 2000px, three
+   from there and four from 3000px, each at its reading measure */
+.q-sheet { margin-top: 12px; }
+.q-sheet > sluice-grid { row-gap: 26px; }
+@container sheet (min-width: 640px) and (max-width: 899.98px) { .q-sheet > sluice-grid > .mod { --take: 12; } }
+@container sheet (min-width: 2000px) { .q-sheet > sluice-grid > .mod { --take: 8; } }
+@container sheet (min-width: 3000px) { .q-sheet > sluice-grid > .mod { --take: 6; } }
+.q-sheet article.item { margin: 0; padding: 0; border-inline: 0; border-bottom: 0; background: none; }
+.q-sheet article.item.swell-ask { padding-top: 14px; border-top: 6px solid var(--coral); }
+.q-sheet article.item:not(.swell-ask) { padding-top: 12px; border-top: 1.5px solid var(--navy); }
+.q-sheet article.item.q-done { border-top-color: var(--rule); }
+.swell-ask .q-where { font-size: 13px; }
+.swell-ask .m-title { font-size: 23px; line-height: 1.18; font-weight: 800; letter-spacing: -0.022em;
+                      margin-top: 8px; }
+.swell-ask .m-body { font-size: 15.5px; line-height: 1.5; }
+.q-sheet .note-head h3 a, .q-sheet .item > h3 a { text-decoration: none; }
+.q-sheet .note-head h3, .q-sheet .item > h3 { font-size: 17px; line-height: 1.25; font-weight: 800; }
 
 details > summary { cursor: pointer; color: var(--ink-muted); }
 details[open] > summary { margin-bottom: 6px; }
@@ -1805,28 +2014,10 @@ article.item { background: var(--paper-raised); border: 1px solid var(--rule-fai
             text-decoration: none; font-weight: 500; }
 .crumbs a:hover { color: var(--ink); text-decoration: underline;
                   text-decoration-color: var(--run-ink); }
-.d-head h1 { overflow-wrap: anywhere; min-width: 0; }
-/* a step's or unit's title is a sentence, often two lines: the page title's face at the size
-   the step's id had (22/28), so a long one does not shout */
-.d-head h1, h1.unit-h, h1.title-long { font-size: 22px; line-height: 28px; }
-/* on a phone a step's, unit's or thread's title steps down again (a 160-character title is five
-   lines, not seven), so its state and tabs stay on the first screen */
-@media (max-width: 720px) {
-  .d-head :is(h1, h2), h1.unit-h, h1.title-long { font-size: 19px; line-height: 25px; }
-}
-.d-when { margin-top: 6px; }
-/* a retry not run yet: who retried it, when, and the feedback it took, in ink under the head */
-.d-retried { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; max-width: var(--measure);
-             font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
-.d-retried .icon { flex: none; margin-top: 2px; color: var(--ink-muted); }
-.d-retried + .d-when { margin-top: 2px; }
-/* a run past twice its stage's usual time: its "usually" in ink, no colour of its own (gold is
-   quiet's) */
-.d-usual.over { color: var(--ink); font-weight: 600; }
-.d-meta a.tag { text-decoration: none; color: var(--ink); }
-.d-meta a.tag:hover { border-color: var(--ink); }
-/* why it failed: one sentence first, in ink; what it said under it; the pane folded */
-.d-failure .err-line { font-size: 15px; line-height: 22px; font-weight: 500; }
+/* a page's own title on the paper (a run's file): the page title's face at 22/28 */
+h1.title-long { font-size: 22px; line-height: 28px; overflow-wrap: anywhere; }
+@media (max-width: 720px) { h1.title-long { font-size: 19px; line-height: 25px; } }
+.step-band .d-meta a.tag { text-decoration: none; }
 /* its engine's or fn's own one paragraph: prose at the reading measure, set apart by a hairline */
 .err-said { margin-top: 8px; padding-left: 12px; border-left: 1px solid var(--rule);
             font-size: 14px; line-height: 21px; color: var(--ink-muted);
@@ -1875,17 +2066,21 @@ dl.a-facts code { font-size: 12px; border: 0; background: none; padding: 0; }
    call the label links to) */
 .act-why .act-cmd { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
                     line-clamp: 2; overflow: hidden; margin-top: 2px; line-height: 18px; }
-ol.act-turns { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
-.act-turn { display: grid; grid-template-columns: 1.4em minmax(0, 1fr); column-gap: 10px; }
-.act-n { padding-top: 9px; font-size: 13px; line-height: 20px; color: var(--ink-muted);
-         text-align: right; font-variant-numeric: tabular-nums; }
-details.act-t { min-width: 0; border: 1px solid var(--rule-faint); border-radius: 0;
-                background: var(--paper-raised); }
-.act-turn.is-running > details.act-t { border-color: var(--run-ink); }
-.act-turn.has-failed > details.act-t { border-color: var(--rule); }
+/* a turn a row on the grid: its number large in data mono in the first column, its words and
+   calls across the rest, under a hairline; the live turn under the running blue, a turn with a
+   failed call under the ink */
+ol.act-turns { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 0; }
+.act-turn { display: grid; grid-template-columns: 3.2rem minmax(0, 1fr); column-gap: var(--col-gap);
+            border-top: 1px solid var(--rule); }
+.act-turn.is-running { border-top: 3px solid var(--run); }
+.act-turn.has-failed { border-top: 1.5px solid var(--ink); }
+.act-n { padding-top: 10px; font: 800 20px/24px var(--font-mono); color: var(--ink);
+         text-align: right; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+details.act-t { min-width: 0; }
 details.act-t > summary { display: grid; grid-template-columns: minmax(0, 1fr) 16px;
-                          column-gap: 10px; padding: 9px 12px 10px; cursor: pointer;
+                          column-gap: 10px; padding: 10px 0 12px; cursor: pointer;
                           list-style: none; border-radius: 0; }
+details.act-t > summary:hover { background: color-mix(in oklch, var(--paper-2) 60%, transparent); }
 details.act-t > summary::-webkit-details-marker { display: none; }
 details.act-t > summary > .act-line { grid-column: 1; }
 details.act-t > summary > .chev { grid-column: 2; grid-row: 1; margin-top: 2px;
@@ -1896,7 +2091,7 @@ details.act-t > summary:hover > .chev { color: var(--ink); }
 .act-sent, .act-said { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
                        font-size: 14px; line-height: 20px; overflow-wrap: anywhere;
                        max-width: var(--measure); }
-.act-sent { -webkit-line-clamp: 2; font-weight: 500; }
+.act-sent { -webkit-line-clamp: 2; font-weight: 600; }
 /* sluice's own turn (it carried on, or handed back a compacted context): no one's words */
 .act-sent.act-quiet { font-weight: 400; color: var(--ink-muted); }
 .act-said { -webkit-line-clamp: 3; margin-top: 3px; }
@@ -1909,7 +2104,7 @@ details.act-t > summary:hover > .chev { color: var(--ink); }
 .act-live { color: var(--ink); }
 .act-failed { color: var(--ink); font-weight: 600; }
 /* the calls: a hairline down the turn, an elbow to each row, the last one rounded */
-ol.act-calls { list-style: none; margin: 0; padding: 0 12px 10px 20px; }
+ol.act-calls { list-style: none; margin: 0; padding: 0 0 12px 8px; }
 ol.act-calls > li { position: relative; padding-left: 20px; }
 ol.act-calls > li::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0;
                             border-left: 1px solid var(--rule); }
@@ -1956,8 +2151,8 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
 .act-err { max-height: 300px; margin-top: 0; }
 .act-err pre.act-out { border: 0; background: none; }
 @media (max-width: 720px) {
-  .act-turn { grid-template-columns: minmax(0, 1fr); }
-  .act-n { display: none; }
+  .act-turn { grid-template-columns: 2rem minmax(0, 1fr); column-gap: 8px; }
+  .act-n { font-size: 15px; }
   ol.act-calls { padding: 0 10px 8px 10px; }
   ol.act-calls > li { padding-left: 16px; }
   ol.act-calls > li::after { top: 22px; width: 10px; }
@@ -1970,25 +2165,81 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
   .act-body { padding-left: 8px; }
 }
 
-/* ---- a unit's page ------------------------------------------------------------------------- */
-/* its glyph beside its title's first line, however many lines the title runs to */
-.unit-h { display: flex; align-items: flex-start; gap: 10px; overflow-wrap: anywhere; }
-.unit-h > .g { margin-top: 3px; flex: none; }
-.unit-h .g, .unit-h .g svg, .p-title .g, .p-title .g svg { width: 22px; height: 22px; }
-.unit-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: 4px 0 16px; }
-/* a short view said on the meta line: "engine opus" */
+/* ---- a unit's page (DESIGN.md, A unit's page): its band carries its name huge beside its id,
+   recipe and how its steps stand, its stage strip under a cream rule on the frame's columns; on
+   the paper its steps are modules, three to a row (one on a phone, four past 2000px of sheet),
+   the one asking the owner on the coral rule, a stop on the sand; then its timeline and its
+   last message. ------------------------------------------------------------------------------ */
+.unit-band { padding: 22px 0 26px; color: var(--band-ink); }
+.ub-top { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); align-items: end;
+          column-gap: var(--col-gap); row-gap: 16px; }
+h1.unit-h { grid-column: span 7; display: flex; align-items: flex-start; gap: 14px; margin: 0;
+            font-size: clamp(56px, calc(96px + (100vw - 1440px) * 0.0667), 154px); line-height: .88;
+            font-weight: 900; letter-spacing: -0.04em;
+            overflow-wrap: anywhere; text-wrap: balance; color: var(--band-ink); }
+h1.unit-h.long { font-size: clamp(44px, calc(72px + (100vw - 1440px) * 0.05), 115px); line-height: .92; }
+h1.unit-h.longer { font-size: clamp(32px, calc(48px + (100vw - 1440px) * 0.0333), 77px); line-height: 1;
+                   letter-spacing: -0.035em; }
+h1.unit-h.longest { font-size: clamp(26px, calc(36px + (100vw - 1440px) * 0.025), 58px); line-height: 1.08;
+                    letter-spacing: -0.03em; }
+h1.unit-h > span { min-width: 0; }
+h1.unit-h > .g { flex: none; margin-top: .12em; color: var(--band-ink); }
+h1.unit-h .g, h1.unit-h .g svg { width: 28px; height: 28px; }
+.p-title .g, .p-title .g svg { width: 22px; height: 22px; }
+.ub-side { grid-column: span 5; display: flex; flex-direction: column; gap: 8px; min-width: 0;
+           padding-bottom: 4px; }
+.unit-band .d-id { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.unit-band :is(.d-id code, .meta, .meta code) { padding: 0; background: none; color: var(--band-muted); }
+.unit-band .d-id > sluice-copy code { font-size: 14px; }
+.unit-band sluice-copy > .copy { color: var(--band-muted); box-shadow: none; }
+.unit-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; font-size: 15px;
+            line-height: 22px; }
+.unit-band .unit-sum a { color: var(--band-ink); }
+/* a short view said on the band's line: "engine opus" */
 .unit-sum .uv-line .uv, .unit-sum .uv-line .uv-stack { display: inline-flex; flex-wrap: wrap;
                                                        align-items: baseline; gap: 2px 10px; }
-.unit-page .board { padding: 0; }
-/* the unit's box sits on the column's left edge, under its title, not centred */
-.unit-page .board .boxes, .unit-page .board .layer { justify-content: flex-start; }
-.unit-sum a, .unit-last .meta a { color: var(--ink-muted); text-underline-offset: 3px; }
-.unit-sum a:hover, .unit-last .meta a:hover { color: var(--ink); }
+.unit-band .uv, .unit-band .uv * { color: inherit; }
+.unit-band .uv-k { color: var(--band-muted); }
+.ub-lane { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--band-rule);
+           display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--col-gap); }
+.ub-lane .strip { grid-column: 1 / span var(--lane, 12); row-gap: 10px;
+                  grid-template-columns: repeat(var(--lane-n, 12), minmax(0, 1fr)); }
+.unit-band ::selection { background: var(--band-ink); color: var(--band); }
+.unit-band :focus-visible { outline-color: var(--band-ink); }
+@media (max-width: 760px) {
+  .unit-band { padding: 18px 0 20px; }
+  h1.unit-h, .ub-side { grid-column: 1 / -1; }
+  h1.unit-h { font-size: 56px; }
+  h1.unit-h.long { font-size: 44px; }
+  h1.unit-h.longer { font-size: 32px; }
+  h1.unit-h.longest { font-size: 26px; }
+  h1.unit-h .g, h1.unit-h .g svg { width: 20px; height: 20px; }
+}
+/* its steps by the sheet's mode: one to a row on a narrow sheet, two from 640px, three from
+   1200px, four from 2000px and six from 3000px */
+.u-sheet > sluice-grid { row-gap: 22px; }
+@container sheet (min-width: 2000px) { .u-sheet > sluice-grid > .u-step { --take: 6; } }
+@container sheet (min-width: 3000px) { .u-sheet > sluice-grid > .u-step { --take: 4; } }
+.u-step { padding: 12px 0 14px; border-top: 1.5px solid var(--navy); }
+.u-step.swell-ask { border-top: 6px solid var(--coral); }
+.u-step.swell-look { padding: 12px 14px 14px; }
+.u-step.is-running { box-shadow: inset 0 3px 0 var(--run); border-top-color: var(--run); }
+.u-step .mod-k { gap: 4px 8px; }
+.u-step .mod-k .g { margin: 0; }
+.u-step .mod-k .took { font-size: 13px; color: var(--ink-muted); }
+.u-step .mod-t a { text-decoration: none; }
+.u-step .mod-t a:hover { text-decoration: underline; }
+.u-step .mod-t .d-stage { color: var(--ink-muted); font-weight: 650; }
+.u-step .mod-meta code { padding: 0; background: none; font-weight: 400; color: var(--ink-muted); }
+.u-why { color: var(--ink); font-weight: 550; }
+.u-waits { margin-top: 8px; font-size: 13.5px; color: var(--ink-muted); overflow-wrap: anywhere; }
+.u-step .card-ask { margin-top: 10px; }
+.unit-page .unit-view .uv-h { margin: 0; }
 .uv-h { margin: 0 0 8px; font: 500 13px/18px var(--font-sans); color: var(--ink-muted); }
 .uv-k { font: 500 12.5px/18px var(--font-sans); color: var(--ink-muted); }
-/* the h1 names the unit: its box does not again */
-.unit-page .box-label, .unit-page .fold-box > summary .fb-name { display: none; }
 .unit-last .md { max-width: var(--measure); }
+.unit-last .meta a { color: var(--ink-muted); text-underline-offset: 3px; }
+.unit-last .meta a:hover { color: var(--ink); }
 
 /* ---- a unit's timeline: a row a stage, a bar a run, one time axis --------------------------- */
 /* The bars are drawn to scale but for the long waits, each a 48px break named on the axis
@@ -2056,16 +2307,14 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
   .tl-stage .g { display: inline-flex; margin: 0; }
   .tl-stage::after { content: "·"; color: var(--ink-muted); font-weight: 400; }
 }
-/* the step's Runs: its unit's timeline folded over them */
-.tl-fold { margin: 0 0 12px; }
-.tl-fold[open] { margin-bottom: 16px; }
-/* the step's facts lead to its chain on the plan */
-.chain-link { margin: 6px 0 0; }
-.chain-link a, .focus-note a { color: var(--ink-muted); text-underline-offset: 3px; }
-.chain-link a:hover, .focus-note a:hover { color: var(--ink); }
+/* the step's Runs: its timeline over the run list */
+.runs-tl { margin: 0 0 22px; padding-top: 10px; border-top: 3px solid var(--navy); }
+#step-detail .runs-tl-h { margin: 0 0 8px; font-size: 22px; line-height: 1.1; font-weight: 850;
+             letter-spacing: -0.02em; }
+.focus-note a { color: var(--ink-muted); text-underline-offset: 3px; }
+.focus-note a:hover { color: var(--ink); }
 @media (max-width: 720px) {
-  .chain-link a, .focus-note > a:last-child { display: inline-flex; align-items: center;
-                                               min-height: 44px; }
+  .focus-note > a:last-child { display: inline-flex; align-items: center; min-height: 44px; }
 }
 /* a running card whose stage usually takes so long (`data-usually`): how far along it is, a
    faint line in running's blue along its foot, drawn by nav.js; full once past it. Never the
@@ -2086,18 +2335,23 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
 
 /* ---- messages: questions, the ones nobody waits on, notes read on sight ---------------------- */
 /* Answer and Close keep their places; the answer box opens under them */
-.q-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 10px; }
-.q-actions button { min-height: 32px; }
+.q-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 14px; }
+.q-actions button, .q-close button { min-height: 44px; padding: 0 18px; }
+@media (max-width: 760px) {
+  .swell-ask .q-actions > :is(button, form) { flex: 1 1 0; }
+  .swell-ask .q-actions .q-close button { width: 100%; }
+}
+.answer form button { min-height: 44px; padding: 0 20px; }
+.stopped-head > .sec-h { flex: 1 1 auto; }
+.stopped-head:has(> .sec-h) { align-items: flex-end; border-top: 3px solid var(--navy); }
+.stopped-head > .sec-h { border-top: 0; }
 .q-toggle[aria-expanded="true"] { background: var(--paper-raised); color: var(--ink);
                                   border-color: var(--rule); }
 .q-box { margin-top: 10px; }
 @media (scripting: enabled) { .q-box:not([data-open]) { display: none; } }
 @media (scripting: none) { .q-toggle { display: none; } }
 /* a question between agents: the owner may answer, but it is not theirs to; quieter */
-.q-group + .q-group { margin-top: 28px; }
-.q-group > h2 { margin-top: 20px; }
 .item.q.agents .md { color: var(--ink-muted); }
-.q-close button { min-height: 32px; }
 .stopped, .notes { margin-top: 24px; }
 #inbox-items > .empty, .q-group > .empty { padding: 4px 0 8px; }
 .stopped-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;

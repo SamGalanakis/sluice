@@ -161,16 +161,24 @@ async fn stream(
                     threads::load(&state.dashboard.reads, project, view(&path), query.thread)
                         .await?;
                 let nav = super::NavView::new(&page.nav, project, page.tab())?;
+                let mut regions = vec![PatchRegion::new("messages-view", page.body()?)];
+                let band = page.band();
+                if !band.as_str().is_empty() {
+                    regions.push(PatchRegion::new("messages-band", band));
+                }
                 Ok(RenderedBatch {
                     version: page.version(),
                     regions: vec![
-                        PatchRegion::new("messages-view", page.body()?),
+                        regions.remove(0),
                         PatchRegion::new(
                             "top-nav",
                             super::render_nav(&nav, &viewer, path.trim_end_matches("/stream"))
                                 .map_err(threads::render_error)?,
                         ),
-                    ],
+                    ]
+                    .into_iter()
+                    .chain(regions)
+                    .collect(),
                 })
             }
         },
