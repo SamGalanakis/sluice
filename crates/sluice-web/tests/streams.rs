@@ -162,13 +162,14 @@ async fn axum_wire_disconnects_between_each_pair_replay_targets_before_acknowled
             .unwrap();
         let mut body = response.into_body().into_data_stream();
         let mut wires = vec![];
-        for _ in 0..3 {
+        for _ in 0..4 {
             wires.push(String::from_utf8(body.next().await.unwrap().unwrap().to_vec()).unwrap());
         }
         assert!(wires[0].contains("selector #projects"));
-        assert!(wires[1].contains("selector #top-nav"));
-        assert!(wires[2].contains("datastar-patch-signals"));
-        let signals = wires[2]
+        assert!(wires[1].contains("selector #home-band"));
+        assert!(wires[2].contains("selector #top-nav"));
+        assert!(wires[3].contains("datastar-patch-signals"));
+        let signals = wires[3]
             .lines()
             .find_map(|l| l.strip_prefix("data: signals "))
             .unwrap();

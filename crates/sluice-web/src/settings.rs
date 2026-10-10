@@ -442,7 +442,7 @@ impl ProjectSettingsView {
     pub fn render(&self, viewer: &Viewer, feedback: &Feedback) -> Result<TrustedHtml, PublicError> {
         let body = self.body(feedback).map_err(render_error)?;
         let nav = NavView::new(&self.shared, Some(self.project.project_id), "settings")?;
-        views::render_layout(
+        views::render_framed(
             &format!("{} · Settings", self.project.name),
             &body,
             &nav,
@@ -450,8 +450,44 @@ impl ProjectSettingsView {
             &format!("{}/stream", self.path()),
             &self.version(),
             &self.path(),
+            &views::Frame {
+                head: self.head(),
+                ..views::Frame::default()
+            },
         )
         .map_err(render_error)
+    }
+    /// The band: the project's name huge, what its settings hold, and how it stands.
+    pub fn head(&self) -> TrustedHtml {
+        let mut state = vec![if self.project.archived {
+            "Archived: off the index's projects and the switcher's list.".to_owned()
+        } else if self.project.paused {
+            "Paused: no new step starts until it is resumed.".to_owned()
+        } else {
+            "Active: its steps start as their waits are met.".to_owned()
+        }];
+        state.push(match self.resources.len() {
+            0 => "No resources of its own.".to_owned(),
+            n => format!(
+                "{} that its steps share.",
+                views::ui::count(n, "resource", "resources")
+            ),
+        });
+        let hours = self.retire_hours();
+        if !hours.is_empty() {
+            state.push(format!("Done units retire after {hours} hours."));
+        }
+        TrustedHtml::owned(format!(
+            "<div id=\"settings-band\" class=\"band-wrap\">{}</div>",
+            views::ui::band_head(
+                self.project.name.as_str(),
+                &TrustedHtml::owned(
+                    "<p>Its settings: its name and words, its icon, its resources, its board, when done units retire, pausing, archiving and deleting it.</p>"
+                        .into()
+                ),
+                &TrustedHtml::owned(views::ui::esc(&state.join(" "))),
+            )
+        ))
     }
     fn body(&self, feedback: &Feedback) -> Result<TrustedHtml, askama::Error> {
         let icon_text = match &self.project.icon {
@@ -471,7 +507,6 @@ impl ProjectSettingsView {
             icon_text,
             icon_url,
             preview: markdown::render(description),
-            css: views::asset_url("settings.css"),
             retire_hours: self.retire_hours(),
             retire_keep: self.retire_keep(),
         })
@@ -503,10 +538,14 @@ impl ProjectSettingsView {
         });
         Ok(RenderedBatch {
             version: self.version(),
-            regions: std::iter::once(PatchRegion::new(
-                "top-nav",
-                views::render_nav(&nav, viewer, &self.path()).map_err(render_error)?,
-            ))
+            regions: [
+                PatchRegion::new(
+                    "top-nav",
+                    views::render_nav(&nav, viewer, &self.path()).map_err(render_error)?,
+                ),
+                PatchRegion::new("settings-band", self.head()),
+            ]
+            .into_iter()
             .chain(regions)
             .collect(),
         })
@@ -520,7 +559,6 @@ struct SettingsTemplate<'a> {
     icon_text: String,
     icon_url: String,
     preview: TrustedHtml,
-    css: String,
     retire_hours: String,
     retire_keep: String,
 }

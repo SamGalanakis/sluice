@@ -138,7 +138,7 @@ async fn a_page_without_script_reads_its_durations_as_the_server_read_the_clock(
     // the index says the same before any script
     let (_, home) = f.get("/").await;
     assert!(
-        home.contains("<span class=\"dur\">running for <time data-since=\"")
+        home.contains("running for <span class=\"pm-for\"><time data-since=\"")
             && home.contains(" UTC\">1h 25m</time></span>"),
         "{home}"
     );

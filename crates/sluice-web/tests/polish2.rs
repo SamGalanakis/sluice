@@ -497,7 +497,9 @@ async fn a_failure_says_what_to_try_and_the_index_says_a_runs_time_as_running() 
     run(&f, id, "r", "2026-10-01T00:00:00Z", None, None).await;
     let (_, home) = f.get("/").await;
     assert!(
-        home.contains("<span class=\"dur\">running for <time data-since=\"2026-10-01T00:00:00Z\""),
+        home.contains(
+            "running for <span class=\"pm-for\"><time data-since=\"2026-10-01T00:00:00Z\""
+        ),
         "{home}"
     );
 }

@@ -452,7 +452,7 @@ impl LogView {
             Some(project) => format!("Log · {}", project.name),
             None => "Log".into(),
         };
-        super::render_layout(
+        super::render_framed(
             &title,
             &self.body()?,
             &nav,
@@ -460,8 +460,56 @@ impl LogView {
             &stream,
             &self.version(),
             &self.base(),
+            &super::Frame {
+                head: self.head(),
+                ..super::Frame::default()
+            },
         )
         .map_err(super::threads::render_error)
+    }
+    /// The band: "Log" huge (a project's log, the project's name), what it holds and what this
+    /// page of it shows.
+    pub fn head(&self) -> TrustedHtml {
+        let project = self
+            .project
+            .and_then(|id| self.nav.projects.iter().find(|p| p.id == id));
+        let (name, lead) = match project {
+            Some(p) => (
+                p.name.clone(),
+                format!("The records {} keeps, the newest first.", p.name),
+            ),
+            None => (
+                "Log".to_owned(),
+                "The records sluice keeps for every project, the newest first.".to_owned(),
+            ),
+        };
+        let shown: usize = self.rows.iter().map(|r| r.count.max(1)).sum();
+        let what = match self.query.preset() {
+            "step" => "step records",
+            "run" => "run records",
+            "message" => "messages",
+            "errors" => "errors",
+            "all" => "records",
+            _ => "records of the kinds chosen",
+        };
+        let summary = match (self.rows.first(), self.rows.last()) {
+            (Some(newest), Some(oldest)) => format!(
+                "{} {what} on this page, seq {} to {}; the newest {}.",
+                shown,
+                oldest.oldest.min(oldest.seq),
+                newest.seq,
+                super::ui::ago(&newest.at)
+            ),
+            _ => format!("No {what} here."),
+        };
+        TrustedHtml::owned(format!(
+            "<div id=\"log-band\" class=\"band-wrap\">{}</div>",
+            super::ui::band_head(
+                &name,
+                &TrustedHtml::owned(format!("<p>{}</p>", super::ui::esc(&lead))),
+                &TrustedHtml::owned(summary),
+            )
+        ))
     }
 }
 #[derive(Template)]
@@ -1138,6 +1186,7 @@ fn stream(
                     version: page.version(),
                     regions: vec![
                         PatchRegion::new("log-view", page.body()?),
+                        PatchRegion::new("log-band", page.head()),
                         PatchRegion::new(
                             "top-nav",
                             super::render_nav(&nav, &viewer, &page.base())

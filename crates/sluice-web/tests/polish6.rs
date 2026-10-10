@@ -426,7 +426,7 @@ async fn the_questions_nobody_waits_on_say_why_in_the_owners_words() {
 async fn the_agent_docs_lead_with_the_overview() {
     let f = Fixture::new().await;
     let (_, page) = f.get("/docs").await;
-    let index = between(&page, "<ul class=\"docs-index\">", "</ul>");
+    let index = between(&page, "<ul class=\"docs-index docs-cards\">", "</ul>");
     let order: Vec<&str> = index
         .split("<li><a href=\"/docs/")
         .skip(1)

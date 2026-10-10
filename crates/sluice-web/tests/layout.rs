@@ -160,11 +160,8 @@ async fn runner_line_follows_the_scheduler_lease_and_is_versioned() {
         })
     };
     let render = |snapshot: &DashboardSnapshot| {
-        HomeView::new(snapshot)
-            .render(snapshot, &Viewer::default())
-            .unwrap()
-            .as_str()
-            .to_owned()
+        // the band says it (`HomeView::head`)
+        HomeView::new(snapshot).head().as_str().to_owned()
     };
     // No loop holds the lease: nothing new starts, and the home page says so.
     let stopped = state.snapshot(None).await.unwrap();
@@ -205,22 +202,25 @@ fn home_running_link_has_a_short_name_and_the_full_title_as_description() {
         },
     );
     let html = HomeView::new(&snapshot).body().unwrap();
-    // the name starts with the words the link shows, cut short, then the id
-    let label = html
+    // its link reads as it shows: the id, then the title cut short; the whole title its
+    // description
+    let link = html
         .as_str()
-        .split("aria-label=\"")
-        .find(|s| s.starts_with("Watch main tests"))
-        .map(|s| &s[..s.find('"').unwrap()])
+        .split("<a class=\"sref-a\"")
+        .find(|s| s.contains("watch-main-tests</code>"))
+        .map(|s| &s[..s.find("</a>").unwrap()])
         .unwrap_or_else(|| panic!("{}", html.as_str()));
-    assert!(label.ends_with(" watch-main-tests"), "{label}");
     assert!(
-        label.chars().count() <= 72 + 1 + "watch-main-tests".len(),
-        "{label}"
+        link.contains("<code class=\"sref-id\">watch-main-tests</code> <span class=\"sref-t\">Watch main tests"),
+        "{link}"
     );
     assert!(
-        html.as_str()
-            .contains(&format!("aria-description=\"{title}\"")),
-        "{}",
-        html.as_str()
+        link.contains(&format!("aria-description=\"{title}\"")),
+        "{link}"
+    );
+    let shown = link.split("<span class=\"sref-t\">").nth(1).unwrap();
+    assert!(
+        shown.split("</span>").next().unwrap().chars().count() <= 41,
+        "{shown}"
     );
 }

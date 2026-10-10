@@ -156,15 +156,15 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
         unit.contains("<title>FIG-2: Stop the parser leak · titled · sluice</title>"),
         "{unit}"
     );
-    // the index: a running step by its title (its stage before it), its id after it
+    // home: a running step by its id, which tells one row from the next, then its title
     let (_, home) = f.get("/").await;
     assert!(
-        home.contains("<span class=\"sref\"><span class=\"sref-stage\">work ·</span> <span class=\"sref-t\">FIG-1: Fix the cron driver</span> <code class=\"sref-id\">l1-work</code></span>"),
+        home.contains("<span class=\"sref\"><code class=\"sref-id\">l1-work</code> <span class=\"sref-t\">FIG-1: Fix the cron driver</span></span>"),
         "{home}"
     );
-    assert!(home.contains("<span class=\"sref-t\">Watches main for red</span> <code class=\"sref-id\">watch</code>"), "{home}");
-    // a failed step in the stopped line too
-    assert!(home.contains("<span class=\"sref-t\">FIG-2: Stop the parser leak</span> <code class=\"sref-id\">l2-work</code>"), "{home}");
+    assert!(home.contains("<code class=\"sref-id\">watch</code> <span class=\"sref-t\">Watches main for red</span>"), "{home}");
+    // a failed step in the stopped rows too
+    assert!(home.contains("<code class=\"sref-id\">l2-work</code> <span class=\"sref-t\">FIG-2: Stop the parser leak</span>"), "{home}");
     // the plan: a loose step's row is its title, its id after it
     let (_, board) = f.get(&format!("/projects/id/{id}")).await;
     let watch = match plan_html::place(&board, "watch") {

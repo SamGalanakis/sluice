@@ -92,7 +92,7 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     assert!(title(&home).contains("1 cancelled"), "{}", title(&home));
     let row = between(
         &home,
-        "<ul class=\"stopped-rows\" aria-label=\"Stopped steps\"><li class=\"sr-cancelled\"",
+        "<li class=\"pm-row pm-stopped sr-cancelled\">",
         "</li>",
     );
     assert!(

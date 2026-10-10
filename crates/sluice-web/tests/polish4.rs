@@ -157,28 +157,29 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     let (_, page) = f.get("/").await;
     assert!(page.contains("<title>3 questions · "), "{page}");
 
-    // the index: each question leads its project's card, a row of its own with the coral tag:
+    // home: each question leads its project's module, a row of its own under the coral mark:
     // a step's names the step and leads to its Overview, the orchestrator's to the inbox; the
-    // asking step's running row no longer repeats the tag
-    let others = between(&page, "<ul class=\"ask-rows\"", "</ul>");
-    assert!(
-        others.contains(&format!(
-            "<a class=\"tag ask\" href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\" title=\"Land l1 first?\" aria-label=\"Awaiting your reply: Land l1 first?\">Awaiting your reply</a>"
-        )) && others.contains("<span class=\"ar-from meta\">from <span class=\"sref\">"),
-        "{others}"
+    // asking step's running row says nothing of it again
+    let module = between(&page, "aria-label=\"titled\"", "</article>");
+    let asks = between(
+        module,
+        "<li class=\"pm-row pm-ask\">",
+        "<li class=\"pm-row pm-running",
     );
     assert!(
-        others.contains(&format!(
-            "<a class=\"ar-title\" href=\"/projects/id/{id}/inbox#item-{id}-{orchestrator}\">Accept revision 3?</a>"
+        asks.contains(&format!(
+            "asks you: <a href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\">Land l1 first?</a>"
+        )) && asks.contains("<code class=\"sref-id\">l1-work</code>"),
+        "{asks}"
+    );
+    assert!(
+        asks.contains(&format!(
+            "<span class=\"pm-who\">The orchestrator</span> <span class=\"pm-what\">asks you: <a href=\"/projects/id/{id}/inbox#item-{id}-{orchestrator}\">Accept revision 3?</a>"
         )),
-        "{others}"
+        "{asks}"
     );
-    assert!(
-        page.find("<ul class=\"ask-rows\"").unwrap() < page.find("<ul class=\"now\"").unwrap(),
-        "the questions lead the card"
-    );
-    let row = between(&page, "#step:l1-work\"", "</li>");
-    assert!(!row.contains("tag ask"), "{row}");
+    let row = between(module, "<li class=\"pm-row pm-running", "</li>");
+    assert!(!row.contains("tag ask") && !row.contains("mk-ask"), "{row}");
 
     // the plan: its summary counts them, linked to For you, where each is a module of its own
     // under the coral rule, answered where it was asked

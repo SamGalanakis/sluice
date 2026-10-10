@@ -862,13 +862,13 @@ async fn the_index_lists_each_stopped_step_as_a_row_with_its_failure() {
     assert_eq!(project.stopped[0].headline, "Its fn failed: exit code 1.");
     assert_eq!(project.shown(), sluice_web::views::ui::Shown::Failed);
     let html = views::home::HomeView::new(&snapshot).body().unwrap();
-    let rows = html
-        .as_str()
-        .split("<ul class=\"stopped-rows\"")
-        .nth(1)
-        .unwrap();
+    let rows = html.as_str().split("<ul class=\"pm-rows\"").nth(1).unwrap();
     let rows = &rows[..rows.find("</ul>").unwrap()];
-    assert_eq!(rows.matches("<li").count(), 5, "{rows}");
+    assert_eq!(
+        rows.matches("<li class=\"pm-row pm-stopped").count(),
+        4,
+        "{rows}"
+    );
     // with no record kept, the reason still links: its step's records on the log
     assert!(
         rows.contains("log?step=")
@@ -877,7 +877,7 @@ async fn the_index_lists_each_stopped_step_as_a_row_with_its_failure() {
         "{rows}"
     );
     assert!(rows.contains("Stopped at its wall-clock cap"), "{rows}");
-    assert!(rows.contains("and 2 more</a>"), "{rows}");
+    assert!(rows.contains("and 2 more stopped</a>"), "{rows}");
     assert!(
         !rows.contains("pivoted"),
         "past four rows a stop is counted: {rows}"
@@ -902,7 +902,7 @@ async fn the_index_lists_each_stopped_step_as_a_row_with_its_failure() {
     let html = views::home::HomeView::new(&snapshot).body().unwrap();
     assert!(
         html.as_str()
-            .contains("<li class=\"sr-cancelled\"><span class=\"g g-cancelled\""),
+            .contains("<li class=\"pm-row pm-stopped sr-cancelled\"><span class=\"g g-cancelled\""),
         "a cancel's row: {}",
         html.as_str()
     );
