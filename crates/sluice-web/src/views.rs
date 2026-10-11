@@ -161,6 +161,46 @@ pub const THEMES: &[Theme] = &[
         name: "Empire Builder Dark",
         source: "Great Northern Railway livery, GNRHS Reference Sheet 28",
     },
+    Theme {
+        id: "williamsburg-light",
+        name: "Williamsburg Light",
+        source: "Benjamin Moore Williamsburg Collection",
+    },
+    Theme {
+        id: "williamsburg-dark",
+        name: "Williamsburg Dark",
+        source: "Benjamin Moore Williamsburg Collection",
+    },
+    Theme {
+        id: "interstate-light",
+        name: "Interstate Light",
+        source: "MUTCD sign colours, FHWA",
+    },
+    Theme {
+        id: "interstate-dark",
+        name: "Interstate Dark",
+        source: "MUTCD sign colours, FHWA",
+    },
+    Theme {
+        id: "ranger-light",
+        name: "Ranger Light",
+        source: "WPA Ranger Naturalist posters, Library of Congress",
+    },
+    Theme {
+        id: "ranger-dark",
+        name: "Ranger Dark",
+        source: "WPA Ranger Naturalist posters, Library of Congress",
+    },
+    Theme {
+        id: "parks-light",
+        name: "Park Service Light",
+        source: "NPS UniGuide standards",
+    },
+    Theme {
+        id: "parks-dark",
+        name: "Park Service Dark",
+        source: "NPS UniGuide standards",
+    },
 ];
 fn theme(id: &str) -> Option<&'static Theme> {
     THEMES.iter().find(|t| t.id == id)
