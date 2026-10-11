@@ -636,7 +636,7 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 .sc > a.sc-a:hover { text-decoration: underline; text-decoration-thickness: 1px; }
 .sc-top { display: flex; align-items: center; gap: 5px; min-width: 0; font-weight: 650; }
 .sc-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sc .g { width: 13px; height: 13px; margin: 0; }
+.sc .g { flex: none; width: 13px; height: 13px; margin: 0; }
 .sc .g svg { width: 13px; height: 13px; }
 /* not reached: a hairline inside the cell (`--cell-empty-edge`, a solid inset shadow), or a
    dashed or dotted line drawn just inside it (`--cell-empty-outline`), never taking its room */
@@ -652,6 +652,7 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 .sc-done .g { color: var(--sky-ink); }
 .sc-run { background: var(--run); color: var(--on-run); }
 .sc-run .sc-name { font-size: 12px; }
+.sc-run .g { color: var(--on-run); }  /* its glyph in the cell's own ink, on the blue */
 .sc-run .sc-time, .sc-look .sc-time { font-size: 20px; line-height: 1.05; font-weight: 800;
                                        letter-spacing: -0.01em; white-space: nowrap; }
 .sc-look { background: var(--sand); box-shadow: var(--cell-look-edge); color: var(--on-sand); }
@@ -2386,8 +2387,9 @@ details.read-today .item { opacity: .85; }
 .pl-cells .sc-look .sc-word:has(+ .sc-time) { display: none; }
 /* a unit of no recipe: its own graph, as wide as its layers */
 .pl-free .pl-row.pl-graphed { grid-template-columns: minmax(0, 1fr) auto 34px; }
-/* a running or stopped cell's time a size its cell holds */
-.pl-cells .strip:not(.pl-layer .strip) :is(.sc-run, .sc-look) .sc-time {
+/* a running or stopped cell's time a size its cell holds, in a plan row and in a row under a
+   strip head */
+:is(.pl-cells .strip:not(.pl-layer .strip), .strip-row > .strip) :is(.sc-run, .sc-look) .sc-time {
   font-size: clamp(13px, calc(var(--cell) * 0.17), 19px); }
 /* a narrow lead (a board or the drawer beside the plan) keeps the title in sight: three lines
    for its state and its title together */

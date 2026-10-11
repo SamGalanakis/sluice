@@ -8,12 +8,13 @@
 //! over HTTP; and in Chromium, at eight widths from 320 to 3840 (four in every other theme), no
 //! page scrolls sideways, the sheet's modules take the columns its width gives them, a strip head
 //! stays over its rows, a phone's 44px targets stay 44px and no words sit in a display face under
-//! 19px in every theme, no stage cell's state word clips, wraps or leaves its cell (at 390, 1440
-//! and 2560 in every theme; the gallery's waiting rows draw "⊖ review" over "blocked"), a sweep of
-//! none is the still line, the picker's thirty themes take one column on a phone and two from 900px
-//! with no name wrapped, a page fetches only its own theme's faces (the picker none, a page without
-//! script the cookie's) and each from the dashboard, the first open takes Sluice Light or Dark from
-//! the system once and keeps it, and a pick applies at once and is kept.
+//! 19px in every theme, no stage cell's state word clips, wraps or leaves its cell and every cell
+//! that carries a glyph draws it whole before its name with its word or time under them (at 390,
+//! 1440 and 2560 in every theme; the gallery's waiting rows draw "⊖ review" over "blocked"), a
+//! sweep of none is the still line, the picker's thirty themes take one column on a phone and two
+//! from 900px with no name wrapped, a page fetches only its own theme's faces (the picker none, a
+//! page without script the cookie's) and each from the dashboard, the first open takes Sluice Light
+//! or Dark from the system once and keeps it, and a pick applies at once and is kept.
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
@@ -888,6 +889,11 @@ const UNDER_FLOOR: &str = "(() => { const norm = s => s.replace(/[\"'\\s]/g, '')
 /// Every stage cell's state word drawn on the page that clips, wraps or leaves its cell: its
 /// text and its cell's state and width. A word has its own line under the cell's glyph and name.
 const WORDS: &str = "[...document.querySelectorAll('.sc-word')].filter(w => w.getClientRects().length && getComputedStyle(w).display !== 'none').map(w => { const r = w.getBoundingClientRect(), c = w.closest('.sc').getBoundingClientRect(); return [w.textContent, w.closest('.sc').dataset.state, Math.round(c.width), w.scrollWidth > w.clientWidth + 0.5 || r.height > 1.5 * parseFloat(getComputedStyle(w).lineHeight) || r.right > c.right + 0.5 || r.bottom > c.bottom + 0.5]; }).filter(w => w[3])";
+/// Every drawn cell that carries a glyph (done, running, a look, a cell waiting in its own way)
+/// whose two lines are not whole: its glyph missing, squeezed or outside the cell, its second
+/// line (the word, else the time) not under the first or its ink (less words for a screen reader) outside the cell, or a running cell's
+/// sweep not along its foot.
+const LINES: &str = "[...document.querySelectorAll('.sc-run, .sc-done, .sc-look, .sc-empty:has(.sc-word)')].filter(c => c.getClientRects().length && c.getBoundingClientRect().width > 0).map(c => { const r = c.getBoundingClientRect(), top = c.querySelector('.sc-top'), g = top && top.querySelector(':scope > .g'); const shown = e => e && e.getClientRects().length && getComputedStyle(e).display !== 'none'; const words = c.querySelector('.sc-word'), second = shown(words) ? words : c.querySelector('.sc-time'); const bad = []; if (!g || !shown(g)) bad.push('no glyph'); else { const b = g.getBoundingClientRect(); if (b.width < 12.5 || b.left < r.left - 0.5 || b.right > r.right + 0.5) bad.push('glyph ' + Math.round(b.width) + 'px at ' + Math.round(b.left - r.left)); } if (second && shown(second)) { const s = second.getBoundingClientRect(); if (s.top < top.getBoundingClientRect().bottom - 0.5) bad.push('line 2 beside line 1'); const k = []; const walk = document.createTreeWalker(second, NodeFilter.SHOW_TEXT); while (walk.nextNode()) { const n = walk.currentNode; if (!n.textContent.trim() || n.parentElement.closest('.vh')) continue; const ink = document.createRange(); ink.selectNodeContents(n); k.push(ink.getBoundingClientRect()); } if (k.some(b => b.right > r.right + 0.5 || b.bottom > r.bottom + 0.5)) bad.push('line 2 cut'); } if (c.matches('.sc-run')) { const w = c.querySelector('.sweep'); const sb = w && w.getBoundingClientRect(); if (!sb || Math.abs(sb.bottom - r.bottom) > 1 || Math.abs(sb.width - r.width) > 1) bad.push('sweep'); } return [c.dataset.state, Math.round(r.width), bad]; }).filter(c => c[2].length)";
 /// The page's paper and its theme, as drawn.
 const PAPER: &str = "[document.documentElement.dataset.theme ?? null, getComputedStyle(document.body).backgroundColor]";
 
@@ -911,12 +917,17 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
                 browser.eval(FRAMES).unwrap();
                 let m: Value = browser.eval(MEASURE).unwrap();
                 assert!(m["scroll"].as_f64() <= m["width"].as_f64(), "{name} at {width} scrolls sideways: {m}");
-                // a cell's state word is whole on its own line, in the narrowest cell too
+                // a cell's state word is whole on its own line, in the narrowest cell too, and
+                // every cell that carries a glyph draws it before its name, its word or time under
                 assert_eq!(browser.eval(WORDS).unwrap(), json!([]), "{name} at {width}");
+                assert_eq!(browser.eval(LINES).unwrap(), json!([]), "{name} at {width}");
                 if name == "ui" {
                     // the gallery's waiting rows: "⊖ review", then "blocked" under it
                     let blocked = browser.eval("(() => { const c = document.querySelector('.gal-waits .sc-empty[data-state=blocked]'); const top = c.querySelector('.sc-top'), w = c.querySelector('.sc-word'); return [top.firstElementChild.matches('.g-blocked'), top.textContent, w.textContent, w.getBoundingClientRect().top >= top.getBoundingClientRect().bottom - 0.5, w.getClientRects().length > 0]; })()").unwrap();
                     assert_eq!(blocked, json!([true, "review", "blocked", true, true]), "{width}");
+                    // and a running cell: its turning glyph before "review", its time under them
+                    let running = browser.eval("(() => { const c = document.querySelector('.gal-strips .sc-run[data-state=running]'); const top = c.querySelector('.sc-top'); return [top.firstElementChild.matches('.g-running'), top.textContent, c.querySelector('.sc-time').getBoundingClientRect().top >= top.getBoundingClientRect().bottom - 0.5]; })()").unwrap();
+                    assert_eq!(running, json!([true, "review", true]), "{width}");
                 }
                 if name != "ui" {
                     continue;
@@ -975,6 +986,7 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
                     if width != 320 {
                         browser.eval("document.fonts.ready").unwrap();
                         assert_eq!(browser.eval(WORDS).unwrap(), json!([]), "{name} in {} at {width}: a cell's word clips", t.id);
+                        assert_eq!(browser.eval(LINES).unwrap(), json!([]), "{name} in {} at {width}: a cell's lines", t.id);
                     }
                     if matches!(width, 390 | 1440) {
                         // a display face never sets words under 19px: the head takes the text face

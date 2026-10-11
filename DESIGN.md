@@ -821,18 +821,19 @@ the word goes under the name, never beside it.
 - **Done** (the Done band): sky, its glyph (check, set by hand, skipped) and its name, how long
   it took under it.
 - **Running** (the rest of the Running band: running, finishing, stopping, outside): the blue,
-  its name small, its elapsed time big and ticking, a sweep along its foot. It is never set
+  its glyph (in `on-run`) and its name small, its elapsed time big and ticking under them, a
+  sweep along its foot. It is never set
   against a usual time: that is the Stats page's.
 - **Needs a look** (a state that wants attention: failed, cancelled, stale, quiet): sand, its
   glyph, its name and its word, its time; a quiet run keeps running's blue edge.
 - A note may span the cells not reached ("then review and publish").
 
-Every cell has the same two lines: its glyph (where it draws one) before its name, then its
-word or its time alone, big for a run and a look, small for done. So a state word never shares
-its line with the glyph, and it fits the narrowest cell, a plan row's 68px at 1440, in every
-theme; a word wider than its cell would wrap within it, never clip or go out of sight. In a
-plan row a look cell's second line is its time (the row's head says its state in words); a
-cell waiting in its own way keeps its word there.
+Every cell has the same two lines: its glyph before its name (a cell not reached that says
+nothing draws none), then its word or its time alone, big for a run and a look, small for done.
+So a state word never shares its line with the glyph, and it fits the narrowest cell, a plan
+row's 68px at 1440, in every theme; a word wider than its cell would wrap within it, never clip
+or go out of sight. In a plan row a look cell's second line is its time (the row's head says its
+state in words); a cell waiting in its own way keeps its word there.
 
 Each cell's state is said in words to a screen reader, and a cell with a page links to it.
 `ui::stage_marks` draws the same strip as 12px squares in a line of words.

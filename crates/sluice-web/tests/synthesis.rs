@@ -56,6 +56,21 @@ fn every_cell_of_a_strip_says_its_state_in_words_and_shape() {
         html.contains("<li class=\"sc sc-run\" data-state=\"running\">"),
         "{html}"
     );
+    // a running cell's first line is its glyph and its name, its time under them, the sweep
+    // at its foot
+    let run = html
+        .split("<li class=\"sc sc-run\" data-state=\"running\">")
+        .nth(1)
+        .and_then(|rest| rest.split("</li>").next())
+        .unwrap();
+    assert!(
+        run.starts_with("<span class=\"sc-top\"><span class=\"g g-running\""),
+        "{run}"
+    );
+    let name = run.find("<span class=\"sc-name\">").unwrap();
+    let time = run.find("<span class=\"sc-time\">").unwrap();
+    let sweep = run.find("<span class=\"sweep\"").unwrap();
+    assert!(name < time && time < sweep, "{run}");
     // a running cell says its state and its time, never against a usual time
     assert!(
         html.contains("<span class=\"vh\">: running</span>"),

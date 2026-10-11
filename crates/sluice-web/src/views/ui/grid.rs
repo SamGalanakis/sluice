@@ -273,7 +273,8 @@ pub enum Cell {
     Empty,
     /// Done: sky, its glyph and how long it took.
     Done,
-    /// Running: the channel's blue, its elapsed time big, a sweep along its foot.
+    /// Running: the channel's blue, its glyph and name, its elapsed time big, a sweep along
+    /// its foot.
     Run,
     /// Needs a look: sand, its glyph and its word (failed, cancelled, stale; quiet keeps
     /// running's blue edge).
@@ -363,7 +364,8 @@ pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
                 esc(state)
             ),
             Cell::Run => format!(
-                "<span class=\"sc-top\"><span class=\"sc-name\">{}</span></span>{}<span class=\"vh\">: {}</span><span class=\"sweep\" aria-hidden=\"true\"></span>",
+                "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span>{}<span class=\"vh\">: {}</span><span class=\"sweep\" aria-hidden=\"true\"></span>",
+                mark(stage.shown.unwrap_or(Shown::Running)),
                 esc(&stage.name),
                 stage.seconds.map(time).unwrap_or_default(),
                 esc(state),
