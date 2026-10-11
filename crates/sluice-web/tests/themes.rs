@@ -35,6 +35,9 @@ const FAMILIES: &[&str] = &[
     "rose-pine",
     "flexoki",
     "empire",
+    "kodachrome",
+    "fiesta",
+    "atlas",
 ];
 
 /// The 27 roles every theme maps (DESIGN.md, Themes).

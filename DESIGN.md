@@ -296,9 +296,9 @@ There is no light or dark setting: there is one list of themes, and a theme is a
 one scheme. Sluice Light and Sluice Dark are the brand; beside them the display preferences
 offer twelve more made from well-loved colour schemes, each adapted to sluice's roles: Solarized
 Light and Dark, Nord Light and Nord, Gruvbox Light and Dark, Catppuccin Latte and Mocha, Rosé
-Pine Dawn and Rosé Pine, Flexoki Light and Dark; and deep themes from classic American liveries,
-which also set their faces, rules and materials (the deep tokens, below): Empire Builder Light
-and Dark. A theme's id is `<family>-light` or
+Pine Dawn and Rosé Pine, Flexoki Light and Dark; and deep themes from classics of American
+design, which also set their faces, rules and materials (the deep tokens, below): Empire Builder
+Light and Dark, then Kodachrome, Fiesta and Road Atlas, each Light and Dark. A theme's id is `<family>-light` or
 `<family>-dark` (`views::THEMES`): `data-theme` on `<html>` and the `sluice_theme` cookie,
 server-drawn, so a page without script is drawn in it; with script the picker applies at once
 (`sluice-toggle`). The picker shows each theme's swatch in its own tokens: its band over its
@@ -320,7 +320,7 @@ of its cyan or green, its glyph the full hue; sand its yellow; and the question 
 vivid colour no other role uses. Status never rests on colour alone in any theme: every state
 keeps its glyph and its word.
 
-**Held by a test** (`tests/themes.rs`), which reads each of the sixteen themes' tokens from
+**Held by a test** (`tests/themes.rs`), which reads each theme's tokens from
 the stylesheet, in its own scheme:
 text at 4.5:1 (ink and ink-muted on paper, paper-2, paper-raised, sand-pale and sky; run-ink
 and sand-ink on paper and paper-2; band-ink, band-muted and band-accent on the band; the text on
@@ -345,6 +345,9 @@ and home at 320 to 2560px with no sideways scroll and every 44px target still 44
 | **Rosé Pine** | Rosé Pine, [rosepinetheme.com](https://rosepinetheme.com), MIT | Dawn base, Main base band | Main base, a deeper Main band |
 | **Flexoki** | Steph Ango, [stephango.com/flexoki](https://stephango.com/flexoki), MIT | paper, black band | base-950 paper, black band |
 | **Empire Builder** | Great Northern Railway livery, GNRHS Reference Sheet 28 | cream paper, Pullman Green band | Pullman Green paper, a deeper green band |
+| **Kodachrome** | Kodak trade dress | white print paper, the carton's black stripe as the band | near-black paper, a deeper black band |
+| **Fiesta** | Fiesta ware glazes (unofficial matches) | Old Ivory paper, Cobalt band | Cobalt paper, a deeper Cobalt band |
+| **Road Atlas** | Rand McNally road map, 1926 | buff paper, road-blue band | road-blue paper, a deeper road-blue band |
 
 The roles in each (light / dark; one value when both are the same):
 
@@ -401,6 +404,63 @@ Green #3B331C to #2E2815 so Omaha Orange #BB5800 carries white text (4.66:1) and
 the band (3.15:1); running Big Sky Blue darkened to #0070A1 for white text (5.48:1), its text
 #006594; the look fill the gold #E0B45A with dark text; the dark question lifted to #E07A1F with
 dark text (6.3:1), as white on it is 3.0:1; the dark sky-ink and run-ink lifted for the green paper.
+
+**Kodachrome** (`assets/themes/kodachrome.css`), Kodak's trade dress on the Kodachrome carton:
+Kodak Yellow (PMS 1235C, #FFB700) and Kodak Red (PMS 485C, #ED0000) as Kodak publishes them,
+over the carton's dark stripe #282C2F, sampled from a 1961 carton (the primitives
+`--p-kodak-yellow`, `--p-kodak-red`, `--p-box-stripe`). Paper white #FBFAF6 / #1D2023, ink
+#1B1D1F / #F3F1EA; navy and the band the stripe, the dark band #121416; the yellow is the look
+and the band's accent and mark; the question the red. Its faces: Alfa Slab One for the display
+and the heads (400, at Sluice's sizes), IBM Plex Sans Condensed for the text, as on a data
+sheet, and IBM Plex Mono for data. A 4px black rule over each section and a 3px one over a
+stopped module, 2px corners as a perforation's, sprocket holes along the band's foot (a 12px
+edge, the paper showing through 8px in every 24px), narrow columns (0.62), and the sweep
+stepped, `steps(8)` over 2s, advancing a frame at a time. Adjusted from the source: Kodak
+names no blue, so running is a designed blue #1F5FBF (white on it 6.09:1), its text #1D56AD; the
+yellow, Kodak's identity, is the look colour and not the band, the theme's main compromise;
+the red carries black text (4.6:1) and reads on the band at 3.08:1; the dark question lifted to
+#FF4D3D. Done is a designed pale blue (#DDE8F6 / #24364C, its ink #2E5F8A / #9CC0F0). The
+study's heads at 0.92 would set a recipe's 19px head at 17.5px in a display face, so the heads
+keep Sluice's sizes. Contrast minima: text 4.60 / 5.61, marks 3.08 / 5.23.
+
+**Fiesta** (`assets/themes/fiesta.css`), Homer Laughlin's Fiesta ware of 1936, Frederick
+Rhead's concentric rings: Cobalt #13294B, Old Ivory #F2EFDE, Lapis #2B64A1, Turquoise #56B1BD,
+Yellow #DAAC49 and Poppy #F24B21, a collectors' guide's matches from photographs, unofficial
+(each a primitive, `--p-cobalt` and so on). Paper Old Ivory / Cobalt #16294A, ink Cobalt / Old
+Ivory; the band Cobalt, #0D1B33 in the dark, with Turquoise its mark; running Lapis; done a
+Turquoise wash; the look the Yellow; the question Poppy. Its faces: Righteous for the display
+and the heads, Nunito for the text and DM Mono for data. Three 2px rings over each section (a
+10px room), 14px modules, 10px cells, buttons and chips at 14px (a chip is round at that, a
+button nearly so: the allowed set stops at 14px), a roomy rhythm (density 1.1, 54px cells),
+not-reached cells dashed, rounded columns (6px), a 3px focus ring 3px off, 2px links at 4px,
+2.25 glyph strokes, and a 2.4s sweep with a slight overshoot. Adjusted from the source: Poppy
+keeps its value and takes deep cobalt text #0B1A33 (4.8:1), and reads on the band at 4.0:1;
+Turquoise darkens to Juniper #2C6672 as the done mark (#7FD0DA in the dark); Lapis text
+#24578E; the dark question lifted to #F7703F. Contrast minima: text 4.80 / 5.41, marks
+4.01 / 5.00.
+
+**Road Atlas** (`assets/themes/atlas.css`), Rand McNally's Auto Road Map of Illinois of 1926,
+the year the US numbered its highways, sampled from a public-domain scan of the aged sheet: road
+blue #2C2C4B, map paper #DBC89B, boundary red #9F402E, map ink #30241E (the primitives
+`--p-road-blue`, `--p-map-paper`, `--p-map-ink`). Paper buff #F4EAD2 / road blue #272638, ink the
+map's / cream; navy, the rules and the filled button, the road blue; the band #1E1E36 /
+#1A1A2B with the map paper as its accent; running a lifted road blue #34509A; the question the
+boundary red. Its faces: Old Standard TT, bold for the display and regular for the heads, set
+in spaced capitals (0.14em) as a map's place names; Fira Sans Condensed for the text and Source
+Code Pro for data. A dash-dot boundary line over each section and a dashed rule over a stopped
+module, a dashed centre line under the band, a faint graticule on the paper (a line every 72px
+each way, the road ink at 6%), a compact rhythm (density 0.92, 48px cells), not-reached cells
+dotted as an unpaved road, and narrow columns (0.51) on a dotted grid in Stats, with a 3.4s
+ease-in-out sweep. Adjusted from the source: a two-ink map, so done (a grey-blue wash #DFE0DC
+/ #323C4C, its ink #3D5B7A / #A5BFD8) and the look (#D9B25E) are designed in its spirit; the
+paper lifted from the aged #DBC89B to #F4EAD2; the road blue lifted to #34509A for running
+(text on it 6.75:1); the band deepened to #1E1E36 so the boundary red, lifted to #B24C38, reads
+on it (3.08:1) and carries cream text (4.89:1); the dark question #E0745C. Adjusted from the
+study: its heads were bold at 0.72 of Sluice's size, which puts a display face at 13.7 to
+18.7px, so they keep Sluice's sizes, in the regular weight with the tracking eased from 0.16em
+to 0.14em; and its text face, Barlow Semi Condensed, draws I and l, 0 and O alike at 12px, so
+the text is Fira Sans Condensed, whose l has a tail and whose zero is narrower than its O.
+Contrast minima: text 4.89 / 4.95, marks 3.08 / 5.20.
 
 **One stylesheet.** A family's file is its block (`[data-theme^="<family>-"]`: its colour
 roles, the deep tokens it changes, its faces' `@font-face` rules), plus a

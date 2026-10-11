@@ -1,0 +1,111 @@
+/* Kodachrome Light and Kodachrome Dark (DESIGN.md, Themes): Kodak trade dress, on the
+   Kodachrome carton. Kodak Yellow (PMS 1235C) and Kodak Red (PMS 485C), as Kodak publishes
+   them, over the carton's dark stripe; Kodak names no blue, so running is a designed one. A
+   deep theme: Alfa Slab One heads, IBM Plex Sans Condensed text as on a data sheet, IBM Plex
+   Mono data, a 4px black rule, 2px corners as a perforation's, sprocket holes along the band's
+   foot, narrow columns and a sweep that advances a frame at a time. build.rs joins this file
+   after style.css. */
+
+/* its faces, the latin subset, each with a fallback of metric overrides (a local Arial or
+   Courier New sized to the face) so the swap to it does not move the page */
+@font-face { font-family: "Alfa Slab One"; font-style: normal; font-display: swap; font-weight: 400;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/alfa-slab-one@5.3.0/files/alfa-slab-one-latin-400-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "IBM Plex Sans Condensed"; font-style: normal; font-display: swap; font-weight: 400;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans-condensed@5.3.0/files/ibm-plex-sans-condensed-latin-400-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "IBM Plex Sans Condensed"; font-style: normal; font-display: swap; font-weight: 600;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans-condensed@5.3.0/files/ibm-plex-sans-condensed-latin-600-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "IBM Plex Sans Condensed"; font-style: normal; font-display: swap; font-weight: 700;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans-condensed@5.3.0/files/ibm-plex-sans-condensed-latin-700-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-display: swap; font-weight: 400;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.3.0/files/ibm-plex-mono-latin-400-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-display: swap; font-weight: 600;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.3.0/files/ibm-plex-mono-latin-600-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Alfa Slab One Fallback"; font-style: normal; font-weight: 100 900;
+  src: local("Arial Bold"), local("Arial-BoldMT"), local("Liberation Sans Bold"), local("LiberationSans-Bold"),
+       local("Arimo Bold");
+  size-adjust: 112.13%; ascent-override: 92.39%; descent-override: 29.7%; line-gap-override: 0%; }
+@font-face { font-family: "IBM Plex Sans Condensed Fallback"; font-style: normal; font-weight: 100 549;
+  src: local("Arial"), local("ArialMT"), local("Liberation Sans"), local("LiberationSans"), local("Arimo");
+  size-adjust: 91.41%; ascent-override: 112.14%; descent-override: 30.09%; line-gap-override: 0%; }
+@font-face { font-family: "IBM Plex Sans Condensed Fallback"; font-style: normal; font-weight: 550 900;
+  src: local("Arial Bold"), local("Arial-BoldMT"), local("Liberation Sans Bold"), local("LiberationSans-Bold"),
+       local("Arimo Bold");
+  size-adjust: 88.83%; ascent-override: 115.39%; descent-override: 30.96%; line-gap-override: 0%; }
+@font-face { font-family: "IBM Plex Mono Fallback"; font-style: normal; font-weight: 100 549;
+  src: local("Courier New"), local("CourierNewPSMT"), local("Liberation Mono"), local("LiberationMono"),
+       local("Cousine");
+  size-adjust: 99.98%; ascent-override: 102.52%; descent-override: 27.5%; line-gap-override: 0%; }
+@font-face { font-family: "IBM Plex Mono Fallback"; font-style: normal; font-weight: 550 900;
+  src: local("Courier New Bold"), local("CourierNewPS-BoldMT"), local("Liberation Mono Bold"),
+       local("LiberationMono-Bold"), local("Cousine Bold");
+  size-adjust: 99.98%; ascent-override: 102.52%; descent-override: 27.5%; line-gap-override: 0%; }
+
+[data-theme^="kodachrome-"] {
+  /* the source, as published (Kodak's logo page) and sampled (the 1961 carton's stripe) */
+  --p-kodak-yellow: #ffb700;
+  --p-kodak-red: #ed0000;
+  --p-box-stripe: #282c2f;
+  /* the 27 roles, light then dark; moved from the published values in Oklab lightness only
+     where a pair needed it (DESIGN.md, Themes) */
+  --paper: light-dark(#fbfaf6, #1d2023);
+  --paper-2: light-dark(#f1efe8, #25292d);
+  --paper-raised: light-dark(#ffffff, #2b2f33);
+  --ink: light-dark(#1b1d1f, #f3f1ea);
+  --ink-muted: light-dark(#52565b, #babdbf);
+  --navy: light-dark(var(--p-box-stripe), #f3f1ea);
+  --navy-deep: light-dark(#151719, #ffffff);
+  --on-navy: light-dark(#fbfaf6, #1d2023);
+  --band: light-dark(var(--p-box-stripe), #121416);
+  --band-ink: #fbfaf6;
+  --band-accent: var(--p-kodak-yellow);
+  --band-mark: var(--p-kodak-yellow);
+  --run: light-dark(#1f5fbf, #4d8ae6);
+  --on-run: light-dark(#ffffff, #0c0e10);
+  --run-ink: light-dark(#1d56ad, #8fb6f2);
+  --focus: light-dark(#1f5fbf, #8fb6f2);
+  --sky: light-dark(#dde8f6, #24364c);
+  --sky-ink: light-dark(#2e5f8a, #9cc0f0);
+  --sweep: #9cc0f0;
+  --sand: var(--p-kodak-yellow);
+  --on-sand: light-dark(#1b1d1f, #121416);
+  --sand-mark: light-dark(#1b1d1f, #121416);
+  --sand-pale: light-dark(#fdf0cc, #3a3220);
+  --sand-ink: light-dark(#7a5200, #ffc94a);
+  --coral: light-dark(var(--p-kodak-red), #ff4d3d);
+  --on-coral: #000000;
+  --idle: light-dark(#6c7076, #8e9297);
+  /* type: Alfa Slab One for the display and the heads, set as they come; IBM Plex Sans
+     Condensed for the text, as a data sheet; IBM Plex Mono for data */
+  --font-display: "Alfa Slab One", "Alfa Slab One Fallback", ui-serif, serif;
+  --font-text: "IBM Plex Sans Condensed", "IBM Plex Sans Condensed Fallback", ui-sans-serif, system-ui,
+               sans-serif;
+  --font-mono: "IBM Plex Mono", "IBM Plex Mono Fallback", ui-monospace, monospace;
+  --display-weight: 400;
+  --display-tracking: 0em;
+  --head-weight: 400;
+  --head-tracking: 0.01em;
+  /* heads at Sluice's sizes: the slab is a display face, and a recipe's 19px head is its floor */
+  /* 2px corners, as a perforation's */
+  --radius-module: 2px;
+  --radius-cell: 2px;
+  --radius-control: 2px;
+  --radius-chip: 2px;
+  /* a 4px black rule over each section, a 3px one over a stopped module */
+  --section-rule-height: 4px;
+  --look-rule: 3px solid var(--navy);
+  /* sprocket holes along the band's foot: the paper showing through, 8px in every 24px */
+  --band-edge-height: 12px;
+  --band-edge: repeating-linear-gradient(90deg, transparent 0 8px, var(--paper) 8px 16px, transparent 16px 24px)
+               0 4px / 100% 5px no-repeat,
+               var(--band);
+  /* narrow columns, no grid */
+  --chart-column-width: 0.62;
+  /* the sweep advances a frame at a time */
+  --sweep-animation: tide 2s steps(8, jump-none) infinite;
+}

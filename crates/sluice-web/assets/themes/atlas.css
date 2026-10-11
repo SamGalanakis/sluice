@@ -1,0 +1,130 @@
+/* Road Atlas Light and Road Atlas Dark (DESIGN.md, Themes): Rand McNally road map, 1926, the
+   year the US numbered its highways: the Auto Road Map of Illinois, its road blue and boundary
+   red on buff paper, sampled from a public-domain scan of the aged sheet. A two-ink map, so
+   done and the look are designed in its spirit. A deep theme: Old Standard TT heads in spaced
+   capitals, Fira Sans Condensed text, Source Code Pro data, a dash-dot boundary rule, a
+   dashed centre line under the band, a faint 72px graticule on the paper, a compact rhythm,
+   not-reached cells dotted as an unpaved road, narrow columns on a dotted grid and a 3.4s
+   ease-in-out sweep. build.rs joins this file after style.css. */
+
+/* its faces, the latin subset, each with a fallback of metric overrides (a local Times New
+   Roman, Arial or Courier New sized to the face) so the swap to it does not move the page */
+@font-face { font-family: "Old Standard TT"; font-style: normal; font-display: swap; font-weight: 400;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/old-standard-tt@5.3.0/files/old-standard-tt-latin-400-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Old Standard TT"; font-style: normal; font-display: swap; font-weight: 700;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/old-standard-tt@5.3.0/files/old-standard-tt-latin-700-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Fira Sans Condensed"; font-style: normal; font-display: swap; font-weight: 400;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/fira-sans-condensed@5.3.0/files/fira-sans-condensed-latin-400-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Fira Sans Condensed"; font-style: normal; font-display: swap; font-weight: 600;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/fira-sans-condensed@5.3.0/files/fira-sans-condensed-latin-600-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Fira Sans Condensed"; font-style: normal; font-display: swap; font-weight: 700;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/fira-sans-condensed@5.3.0/files/fira-sans-condensed-latin-700-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Source Code Pro Variable"; font-style: normal; font-display: swap;
+  font-weight: 200 900;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource-variable/source-code-pro@5.3.0/files/source-code-pro-latin-wght-normal.woff2) format("woff2-variations");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Old Standard TT Fallback"; font-style: normal; font-weight: 100 549;
+  src: local("Times New Roman"), local("TimesNewRomanPSMT"), local("Liberation Serif"), local("LiberationSerif"),
+       local("Tinos");
+  size-adjust: 107.57%; ascent-override: 70.84%; descent-override: 22.13%; line-gap-override: 21.94%; }
+@font-face { font-family: "Old Standard TT Fallback"; font-style: normal; font-weight: 550 900;
+  src: local("Times New Roman Bold"), local("TimesNewRomanPS-BoldMT"), local("Liberation Serif Bold"),
+       local("LiberationSerif-Bold"), local("Tinos Bold");
+  size-adjust: 103.95%; ascent-override: 73.31%; descent-override: 22.9%; line-gap-override: 22.7%; }
+@font-face { font-family: "Fira Sans Condensed Fallback"; font-style: normal; font-weight: 100 549;
+  src: local("Arial"), local("ArialMT"), local("Liberation Sans"), local("LiberationSans"), local("Arimo");
+  size-adjust: 93.56%; ascent-override: 99.94%; descent-override: 28.33%; line-gap-override: 0%; }
+@font-face { font-family: "Fira Sans Condensed Fallback"; font-style: normal; font-weight: 550 900;
+  src: local("Arial Bold"), local("Arial-BoldMT"), local("Liberation Sans Bold"), local("LiberationSans-Bold"),
+       local("Arimo Bold");
+  size-adjust: 87.34%; ascent-override: 107.05%; descent-override: 30.34%; line-gap-override: 0%; }
+@font-face { font-family: "Source Code Pro Fallback"; font-style: normal; font-weight: 100 549;
+  src: local("Courier New"), local("CourierNewPSMT"), local("Liberation Mono"), local("LiberationMono"),
+       local("Cousine");
+  size-adjust: 99.98%; ascent-override: 98.42%; descent-override: 27.3%; line-gap-override: 0%; }
+@font-face { font-family: "Source Code Pro Fallback"; font-style: normal; font-weight: 550 900;
+  src: local("Courier New Bold"), local("CourierNewPS-BoldMT"), local("Liberation Mono Bold"),
+       local("LiberationMono-Bold"), local("Cousine Bold");
+  size-adjust: 99.98%; ascent-override: 98.42%; descent-override: 27.3%; line-gap-override: 0%; }
+
+[data-theme^="atlas-"] {
+  /* the map's inks and paper, sampled from the 1926 scan (aged) */
+  --p-road-blue: #2c2c4b;
+  --p-map-paper: #dbc89b;
+  --p-map-ink: #30241e;
+  /* the 27 roles, light then dark; moved from the sampled values in Oklab lightness only
+     where a pair needed it (DESIGN.md, Themes) */
+  --paper: light-dark(#f4ead2, #272638);
+  --paper-2: light-dark(#eadcba, #2f2e43);
+  --paper-raised: light-dark(#f8f1df, #35344b);
+  --ink: light-dark(var(--p-map-ink), #f1e6cb);
+  --ink-muted: light-dark(#5e4f42, #c8bea6);
+  --navy: light-dark(var(--p-road-blue), #f1e6cb);
+  --navy-deep: light-dark(#1c1c33, #fffaf0);
+  --on-navy: light-dark(#f4ead2, #272638);
+  --band: light-dark(#1e1e36, #1a1a2b);
+  --band-ink: #f4ead2;
+  --band-accent: var(--p-map-paper);
+  --band-mark: #8f9be0;
+  --run: light-dark(#34509a, #6b80cf);
+  --on-run: light-dark(#f8f1df, #121220);
+  --run-ink: light-dark(#2f4a8f, #a9b6e6);
+  --focus: light-dark(#34509a, #a9b6e6);
+  --sky: light-dark(#dfe0dc, #323c4c);
+  --sky-ink: light-dark(#3d5b7a, #a5bfd8);
+  --sweep: #a9b6e6;
+  --sand: #d9b25e;
+  --on-sand: light-dark(var(--p-map-ink), #1a1a2b);
+  --sand-mark: light-dark(#4f3812, #3e2b0b);
+  --sand-pale: light-dark(#efdcae, #3e3727);
+  --sand-ink: light-dark(#6e4c12, #e3c27a);
+  --coral: light-dark(#b24c38, #e0745c);
+  --on-coral: light-dark(#fbf6ea, #121220);
+  --idle: light-dark(#76695a, #9d97a3);
+  /* type: Old Standard TT bold for the display, and its regular in spaced capitals for the
+     heads, as a map's place names, at Sluice's sizes (a display face, so never scaled down);
+     Fira Sans Condensed for the text (the study's Barlow Semi Condensed draws I and l, 0 and O
+     alike at 12px); Source Code Pro for data */
+  --font-display: "Old Standard TT", "Old Standard TT Fallback", ui-serif, serif;
+  --font-text: "Fira Sans Condensed", "Fira Sans Condensed Fallback", ui-sans-serif, system-ui,
+               sans-serif;
+  --font-mono: "Source Code Pro Variable", "Source Code Pro Fallback", ui-monospace, monospace;
+  --display-weight: 700;
+  --display-tracking: 0em;
+  --head-weight: 400;
+  --head-case: uppercase;
+  --head-tracking: 0.14em;
+  /* the boundary line, dash-dot, over each section; a dashed rule over a stopped module */
+  --section-rule-color: transparent;
+  --section-rule: repeating-linear-gradient(90deg, var(--navy) 0 16px, transparent 16px 22px,
+                                            var(--navy) 22px 25px, transparent 25px 31px)
+                  0 0 / 100% 3px no-repeat;
+  --look-rule: 2px dashed var(--navy);
+  /* a dashed centre line under the band, a row down from it */
+  --band-edge-height: 3px;
+  --band-edge: repeating-linear-gradient(90deg, var(--band-accent) 0 14px, transparent 14px 22px)
+               0 1px / 100% 1px no-repeat,
+               var(--band);
+  /* a faint graticule, a line every 72px each way, in the road ink at 6% */
+  --paper-texture: repeating-linear-gradient(to right, color-mix(in oklab, var(--navy) 6%, transparent) 0 1px,
+                                             transparent 1px 72px),
+                   repeating-linear-gradient(to bottom, color-mix(in oklab, var(--navy) 6%, transparent) 0 1px,
+                                             transparent 1px 72px);
+  --paper-texture-alpha: 6%;
+  /* a compact rhythm */
+  --density: 0.92;
+  --cell-height: 48px;
+  /* not reached: a dotted line just inside the cell, an unpaved road */
+  --cell-empty-edge: none;
+  --cell-empty-outline: 1.5px dotted var(--ink-muted);
+  /* narrow columns on a dotted grid */
+  --chart-column-width: 0.51;
+  --chart-grid: radial-gradient(circle at 2.5px 1px, var(--rule) 1px, transparent 1.3px) 0 100% / 5px 16px;
+  /* the sweep at an even ease */
+  --sweep-animation: tide 3.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}

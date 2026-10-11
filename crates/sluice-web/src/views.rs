@@ -161,6 +161,36 @@ pub const THEMES: &[Theme] = &[
         name: "Empire Builder Dark",
         source: "Great Northern Railway livery, GNRHS Reference Sheet 28",
     },
+    Theme {
+        id: "kodachrome-light",
+        name: "Kodachrome Light",
+        source: "Kodak trade dress",
+    },
+    Theme {
+        id: "kodachrome-dark",
+        name: "Kodachrome Dark",
+        source: "Kodak trade dress",
+    },
+    Theme {
+        id: "fiesta-light",
+        name: "Fiesta Light",
+        source: "Fiesta ware glazes (unofficial matches)",
+    },
+    Theme {
+        id: "fiesta-dark",
+        name: "Fiesta Dark",
+        source: "Fiesta ware glazes (unofficial matches)",
+    },
+    Theme {
+        id: "atlas-light",
+        name: "Road Atlas Light",
+        source: "Rand McNally road map, 1926",
+    },
+    Theme {
+        id: "atlas-dark",
+        name: "Road Atlas Dark",
+        source: "Rand McNally road map, 1926",
+    },
 ];
 fn theme(id: &str) -> Option<&'static Theme> {
     THEMES.iter().find(|t| t.id == id)
