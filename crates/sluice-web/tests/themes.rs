@@ -39,6 +39,9 @@ const FAMILIES: &[&str] = &[
     "interstate",
     "ranger",
     "parks",
+    "kodachrome",
+    "fiesta",
+    "atlas",
 ];
 
 /// The 27 roles every theme maps (DESIGN.md, Themes).

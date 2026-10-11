@@ -1,0 +1,103 @@
+/* Fiesta Light and Fiesta Dark (DESIGN.md, Themes): Fiesta ware glazes (unofficial matches).
+   Homer Laughlin's Fiesta of 1936, Frederick Rhead's concentric rings in Cobalt, Old Ivory,
+   Lapis, Turquoise, Yellow and Poppy, matched from photographs by a collectors' guide, not
+   published by the maker. A deep theme: Righteous heads, Nunito text, DM Mono data, three
+   rings over each section, rounded modules and cells, round buttons and chips, a roomy
+   rhythm, not-reached cells dashed, rounded columns, a 3px focus ring and a sweep with a
+   slight overshoot. build.rs joins this file after style.css. */
+
+/* its faces, the latin subset, each with a fallback of metric overrides (a local Arial or
+   Courier New sized to the face) so the swap to it does not move the page; DM Mono and its
+   fallback are declared once, in ranger.css */
+@font-face { font-family: "Righteous"; font-style: normal; font-display: swap; font-weight: 400;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/righteous@5.3.0/files/righteous-latin-400-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Nunito Variable"; font-style: normal; font-display: swap;
+  font-weight: 200 1000;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource-variable/nunito@5.3.0/files/nunito-latin-wght-normal.woff2) format("woff2-variations");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Righteous Fallback"; font-style: normal; font-weight: 100 900;
+  src: local("Arial"), local("ArialMT"), local("Liberation Sans"), local("LiberationSans"), local("Arimo");
+  size-adjust: 106.51%; ascent-override: 92.46%; descent-override: 24.11%; line-gap-override: 0%; }
+@font-face { font-family: "Nunito Fallback"; font-style: normal; font-weight: 100 549;
+  src: local("Arial"), local("ArialMT"), local("Liberation Sans"), local("LiberationSans"), local("Arimo");
+  size-adjust: 101.67%; ascent-override: 99.44%; descent-override: 34.72%; line-gap-override: 0%; }
+@font-face { font-family: "Nunito Fallback"; font-style: normal; font-weight: 550 900;
+  src: local("Arial Bold"), local("Arial-BoldMT"), local("Liberation Sans Bold"), local("LiberationSans-Bold"),
+       local("Arimo Bold");
+  size-adjust: 100.07%; ascent-override: 101.03%; descent-override: 35.28%; line-gap-override: 0%; }
+
+[data-theme^="fiesta-"] {
+  /* the glazes, as the collectors' guide matches them */
+  --p-cobalt: #13294b;
+  --p-old-ivory: #f2efde;
+  --p-lapis: #2b64a1;
+  --p-turquoise: #56b1bd;
+  --p-yellow: #daac49;
+  --p-poppy: #f24b21;
+  /* the 27 roles, light then dark; moved from the matched values in Oklab lightness only
+     where a pair needed it (DESIGN.md, Themes) */
+  --paper: light-dark(var(--p-old-ivory), #16294a);
+  --paper-2: light-dark(#eae3c6, #1c3256);
+  --paper-raised: light-dark(#f8f6ec, #213a60);
+  --ink: light-dark(var(--p-cobalt), var(--p-old-ivory));
+  --ink-muted: light-dark(#45526b, #c4c9d4);
+  --navy: light-dark(var(--p-cobalt), var(--p-old-ivory));
+  --navy-deep: light-dark(#0b1a33, #ffffff);
+  --on-navy: light-dark(#f8f6ec, #16294a);
+  --band: light-dark(var(--p-cobalt), #0d1b33);
+  --band-ink: var(--p-old-ivory);
+  --band-accent: #8fd0d8;
+  --band-mark: var(--p-turquoise);
+  --run: light-dark(var(--p-lapis), #5b93d1);
+  --on-run: light-dark(#ffffff, #0b1a33);
+  --run-ink: light-dark(#24578e, #9cc2ec);
+  --focus: light-dark(var(--p-lapis), #9cc2ec);
+  --sky: light-dark(#cfe8ea, #1f4d5a);
+  --sky-ink: light-dark(#2c6672, #7fd0da);
+  --sweep: #8fd0d8;
+  --sand: var(--p-yellow);
+  --on-sand: light-dark(var(--p-cobalt), #0d1b33);
+  --sand-mark: light-dark(#4a3605, #3d2c04);
+  --sand-pale: light-dark(#f3e3b6, #3b3a35);
+  --sand-ink: light-dark(#7a5a12, #e8c26a);
+  --coral: light-dark(var(--p-poppy), #f7703f);
+  --on-coral: light-dark(#0b1a33, #0d1b33);
+  --idle: light-dark(#68728a, #97a1b5);
+  /* type: Righteous for the display and the heads, as it comes; Nunito for the text; DM Mono
+     for data */
+  --font-display: "Righteous", "Righteous Fallback", ui-rounded, ui-sans-serif, sans-serif;
+  --font-text: "Nunito Variable", "Nunito Fallback", ui-rounded, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "DM Mono", "DM Mono Fallback", ui-monospace, monospace;
+  --display-weight: 400;
+  --display-tracking: 0em;
+  --head-weight: 400;
+  --head-tracking: 0.005em;
+  /* rounded everything: 14px modules, 10px cells, buttons and chips as round as the set allows */
+  --radius-module: 14px;
+  --radius-cell: 10px;
+  --radius-control: 14px;
+  --radius-chip: 14px;
+  /* three 2px rings over each section, as on the ware's rim */
+  --section-rule-height: 10px;
+  --section-rule-color: transparent;
+  --section-rule: linear-gradient(var(--navy), var(--navy)) 0 0 / 100% 2px no-repeat,
+                  linear-gradient(var(--navy), var(--navy)) 0 4px / 100% 2px no-repeat,
+                  linear-gradient(var(--navy), var(--navy)) 0 8px / 100% 2px no-repeat;
+  /* a roomy rhythm */
+  --density: 1.1;
+  --cell-height: 54px;
+  /* not reached: a dashed line just inside the cell */
+  --cell-empty-edge: none;
+  --cell-empty-outline: 1.5px dashed var(--rule);
+  /* rounded columns, no grid */
+  --chart-radius: 6px;
+  /* a 3px ring, 3px off */
+  --focus-width: 3px;
+  --focus-offset: 3px;
+  --link-thickness: 2px;
+  --link-offset: 4px;
+  /* the sweep with a slight overshoot */
+  --sweep-animation: tide 2.4s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+  --glyph-stroke: 2.25;
+}
