@@ -296,7 +296,9 @@ There is no light or dark setting: there is one list of themes, and a theme is a
 one scheme. Sluice Light and Sluice Dark are the brand; beside them the display preferences
 offer twelve more made from well-loved colour schemes, each adapted to sluice's roles: Solarized
 Light and Dark, Nord Light and Nord, Gruvbox Light and Dark, Catppuccin Latte and Mocha, Rosé
-Pine Dawn and Rosé Pine, Flexoki Light and Dark. A theme's id is `<family>-light` or
+Pine Dawn and Rosé Pine, Flexoki Light and Dark; and deep themes from classic American liveries,
+which also set their faces, rules and materials (the deep tokens, below): Empire Builder Light
+and Dark. A theme's id is `<family>-light` or
 `<family>-dark` (`views::THEMES`): `data-theme` on `<html>` and the `sluice_theme` cookie,
 server-drawn, so a page without script is drawn in it; with script the picker applies at once
 (`sluice-toggle`). The picker shows each theme's swatch in its own tokens: its band over its
@@ -318,14 +320,20 @@ of its cyan or green, its glyph the full hue; sand its yellow; and the question 
 vivid colour no other role uses. Status never rests on colour alone in any theme: every state
 keeps its glyph and its word.
 
-**Held by a test** (`tests/themes.rs`), which reads each of the fourteen themes' tokens from
+**Held by a test** (`tests/themes.rs`), which reads each of the sixteen themes' tokens from
 the stylesheet, in its own scheme:
 text at 4.5:1 (ink and ink-muted on paper, paper-2, paper-raised, sand-pale and sky; run-ink
 and sand-ink on paper and paper-2; band-ink, band-muted and band-accent on the band; the text on
-running, sand, coral and navy fills), 3:1 for the focus ring on paper and paper-2 and for status
-marks (sky-ink on paper and sky, sand-ink on sand-pale, sand-mark on sand, idle on paper,
-band-mark and the coral count on the band), the question colour at least 0.1 apart in Oklab
-from every other role's, running apart from done, and the band no lighter than the paper.
+running, sand, coral, navy and selection fills), 3:1 for the focus ring on paper, paper-2, sky
+and sand-pale and for status marks (sky-ink on paper and sky, sand-ink on sand-pale, sand-mark
+on sand, idle on paper, band-mark and the coral count on the band), the chart colours 3:1 on
+paper and paper-2, the question colour at least 0.1 apart in Oklab from every other role's and
+every chart colour, running apart from done, and the band no lighter than the paper. For the
+deep tokens it also lays the texture's ink at its alpha over the paper and holds ink and navy
+on that; holds the band edge's top row 3:1 against band-ink and band-mark, an outlined done
+cell's edge 3:1 on the paper and a look cell's on sand; checks every token a family sets is
+known and in its allowed set; and, in Chromium, draws each theme in place on `/_ui`, a plan
+and home at 320 to 2560px with no sideways scroll and every 44px target still 44px on a phone.
 
 | Theme | Source and licence | Light | Dark |
 |---|---|---|---|
@@ -336,6 +344,7 @@ from every other role's, running apart from done, and the band no lighter than t
 | **Catppuccin** | Catppuccin, [catppuccin.com](https://catppuccin.com), MIT | Latte base, Mocha base band | Mocha base, Mocha crust band |
 | **Rosé Pine** | Rosé Pine, [rosepinetheme.com](https://rosepinetheme.com), MIT | Dawn base, Main base band | Main base, a deeper Main band |
 | **Flexoki** | Steph Ango, [stephango.com/flexoki](https://stephango.com/flexoki), MIT | paper, black band | base-950 paper, black band |
+| **Empire Builder** | Great Northern Railway livery, GNRHS Reference Sheet 28 | cream paper, Pullman Green band | Pullman Green paper, a deeper green band |
 
 The roles in each (light / dark; one value when both are the same):
 
@@ -356,7 +365,8 @@ The roles in each (light / dark; one value when both are the same):
 
 \* Adjusted from the published value for contrast, or a surface the scheme lacks designed in its
 spirit. Solarized: ink-muted base01 darkened to #4f646b (4.39:1 on base2 otherwise); running
-blue darkened to #1f6fa8 for base3 text (#268bd2 gives 3.6:1), its text #1c6aa3 and #4fa6e0;
+blue darkened to #1f6fa8 for base3 text (#268bd2 gives 3.6:1), its text #1c6aa3 and #4fa6e0, and
+the light focus ring that blue too (#268bd2 is 2.97:1 on the light sky);
 sky-ink #1d7a73; sand-ink #7d5f00 and #c99a12 (yellow #b58900 is 3.0:1 as text on base3);
 magenta lifted to #e2639f with base03 on it (base3 on #d33682 is 4.2:1); the dark band
 #00212b and the dark sky #083a45 designed deeper than base03. Nord: the light running fill
@@ -375,6 +385,22 @@ blue-300 #66A0C8 (blue-400 is 4.4:1 on base-950); the light paper-2 base-50, the
 base-950 so the black band stays the deepest. The washes (sky, sand-pale) are the theme's hue
 mixed into its paper. Sluice's values are in `assets/style.css`; every other family's are in its
 own file, `assets/themes/<family>.css`.
+
+**Empire Builder** (`assets/themes/empire.css`), the Great Northern's Empire Builder of 1947:
+Omaha Orange over Pullman Green, parted by a gold stripe. Paper cream #F5F0E1 / #2A2516, ink
+#2A2414 / #F1EAD6; navy, the rules and the filled button, Pullman Green #3B331C (the one
+primitive, `--p-pullman-green`) / cream; the band a deeper green, #2E2815 / #1D190D, with the
+livery's gold #E0B45A as its accent and a 3px gold pinstripe under it; done Glacier Green (sky
+#D3EBE2 / #1F3F37, its ink #00775F / #5FD0B6), drawn as an outline on the paper, not a fill;
+running Big Sky Blue; the look the gold; the question Omaha Orange. Its faces: Libre Franklin
+(display black 900, heads 800 in capitals tracked 0.05em at 0.74 of Sluice's size) and Courier
+Prime for data. An Oxford rule (3px over 1px) over each section, a tighter rhythm (density 0.86,
+46px cells), narrow columns (0.56) on dotted leader rows in Stats, dotted 2px links, and the
+sweep at a train's steady 2.6s linear. Adjusted from the source: the band deepened from Pullman
+Green #3B331C to #2E2815 so Omaha Orange #BB5800 carries white text (4.66:1) and still reads on
+the band (3.15:1); running Big Sky Blue darkened to #0070A1 for white text (5.48:1), its text
+#006594; the look fill the gold #E0B45A with dark text; the dark question lifted to #E07A1F with
+dark text (6.3:1), as white on it is 3.0:1; the dark sky-ink and run-ink lifted for the green paper.
 
 **One stylesheet.** A family's file is its block (`[data-theme^="<family>-"]`: its colour
 roles, the deep tokens it changes, its faces' `@font-face` rules), plus a

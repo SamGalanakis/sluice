@@ -263,12 +263,12 @@ async fn the_frame_draws_the_page_head_and_the_row_under_it_and_the_gallery_ever
     // one flat list of themes, each with its swatch; no appearance to pick and no grid to show
     assert_eq!(
         plan.matches("name=\"theme\" value=\"").count(),
-        14,
+        sluice_web::views::THEMES.len(),
         "{plan}"
     );
     assert_eq!(
         plan.matches("<span class=\"swatch\" data-theme=\"").count(),
-        14,
+        sluice_web::views::THEMES.len(),
         "{plan}"
     );
     for gone in [

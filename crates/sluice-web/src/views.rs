@@ -151,6 +151,16 @@ pub const THEMES: &[Theme] = &[
         name: "Flexoki Dark",
         source: "Flexoki, Steph Ango (MIT)",
     },
+    Theme {
+        id: "empire-light",
+        name: "Empire Builder Light",
+        source: "Great Northern Railway livery, GNRHS Reference Sheet 28",
+    },
+    Theme {
+        id: "empire-dark",
+        name: "Empire Builder Dark",
+        source: "Great Northern Railway livery, GNRHS Reference Sheet 28",
+    },
 ];
 fn theme(id: &str) -> Option<&'static Theme> {
     THEMES.iter().find(|t| t.id == id)

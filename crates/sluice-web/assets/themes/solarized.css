@@ -17,7 +17,7 @@
   --run: light-dark(#1f6fa8, #268bd2);
   --on-run: light-dark(#fdf6e3, #00212b);
   --run-ink: light-dark(#1c6aa3, #4fa6e0);
-  --focus: #268bd2;
+  --focus: light-dark(#1f6fa8, #268bd2);
   --sky: light-dark(#dcebdc, #083a45);
   --sky-ink: light-dark(#1d7a73, #2aa198);
   --sweep: #93d6cf;

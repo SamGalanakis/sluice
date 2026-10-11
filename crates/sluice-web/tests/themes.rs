@@ -1,10 +1,15 @@
-//! The frame's themes and its fluid grid: every theme's tokens read from the stylesheet hold
-//! WCAG contrast (text 4.5:1, focus and status marks 3:1) and keep the question's colour apart
-//! from every other role; the theme cookie, the picker and the gallery over HTTP; and in
-//! Chromium, at eight widths from 320 to 3840, no page scrolls sideways, the sheet's modules
-//! take the columns its width gives them, a strip head stays over its rows, the first open
-//! takes Sluice Light or Dark from the system once and keeps it, and a pick applies at once
-//! and is kept.
+//! The frame's themes and its fluid grid: every theme's tokens, read from the stylesheet the
+//! pages get (style.css and every family's file under assets/themes, joined), hold WCAG contrast
+//! (text 4.5:1, focus, status marks, chart colours and edges 3:1, also on a textured paper, a
+//! look cell's border and where the band's edge meets its marks) and keep the question's colour
+//! apart from every other role and out of every non-colour token; every deep token a family
+//! declares is a known one, in its allowed range; a primitive (`--p-…`) never leaves its family's
+//! block; the theme cookie, the picker and the gallery over HTTP; and in Chromium, at eight
+//! widths from 320 to 3840 (four in every other theme), no page scrolls sideways, the sheet's
+//! modules take the columns its width gives them, a strip head stays over its rows, a phone's
+//! 44px targets stay 44px in every theme, a page fetches only its own theme's faces (the picker
+//! none, a page without script the cookie's), the first open takes Sluice Light or Dark from the
+//! system once and keeps it, and a pick applies at once and is kept.
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
@@ -14,10 +19,23 @@ use board_fixture::Fixture;
 use chrome::Chrome;
 use serde_json::{Value, json};
 use sluice_web::views::THEMES;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The stylesheet as the pages get it: style.css with every family's file joined after it.
 const STYLE: &str = sluice_web::views::STYLESHEET;
+
+/// Every theme family, in the picker's order: Sluice's in style.css, each other one's in
+/// `assets/themes/<family>.css`. A new family is appended here.
+const FAMILIES: &[&str] = &[
+    "sluice",
+    "solarized",
+    "nord",
+    "gruvbox",
+    "catppuccin",
+    "rose-pine",
+    "flexoki",
+    "empire",
+];
 
 /// The 27 roles every theme maps (DESIGN.md, Themes).
 const ROLES: [&str; 27] = [
@@ -49,8 +67,18 @@ const ROLES: [&str; 27] = [
     "on-coral",
     "idle",
 ];
+/// The tokens every theme works out from its roles: never a family's to set.
+const DERIVED: [&str; 7] = [
+    "rule",
+    "rule-faint",
+    "line",
+    "band-muted",
+    "band-rule",
+    "band-hover",
+    "scrim",
+];
 /// Text and what it sits on: 4.5:1.
-const TEXT: [(&str, &str); 20] = [
+const TEXT: [(&str, &str); 21] = [
     ("ink", "paper"),
     ("ink", "paper-2"),
     ("ink", "paper-raised"),
@@ -71,11 +99,14 @@ const TEXT: [(&str, &str); 20] = [
     ("on-sand", "sand"),
     ("on-coral", "coral"),
     ("on-navy", "navy"),
+    ("on-selection", "selection"),
 ];
-/// A focus ring or a status mark and what it sits on: 3:1.
-const MARKS: [(&str, &str); 10] = [
+/// A focus ring, a status mark or a chart's colour and what it sits on: 3:1.
+const MARKS: [(&str, &str); 18] = [
     ("focus", "paper"),
     ("focus", "paper-2"),
+    ("focus", "sky"),
+    ("focus", "sand-pale"),
     ("sky-ink", "paper"),
     ("sky-ink", "sky"),
     ("sand-ink", "sand-pale"),
@@ -84,6 +115,21 @@ const MARKS: [(&str, &str); 10] = [
     ("band-mark", "band"),
     ("coral", "band"),
     ("band-ink", "band"),
+    ("chart-ink", "paper"),
+    ("chart-ink", "paper-2"),
+    ("chart-busiest", "paper"),
+    ("chart-busiest", "paper-2"),
+    ("chart-series", "paper"),
+    ("chart-series", "paper-2"),
+];
+/// The colour tokens of the deep set, read like roles.
+const DEEP_COLOURS: [&str; 6] = [
+    "selection",
+    "on-selection",
+    "chart-ink",
+    "chart-busiest",
+    "chart-series",
+    "chart-range",
 ];
 
 /// A colour's linear sRGB and its alpha.
@@ -159,81 +205,177 @@ fn apart(x: Rgb, y: Rgb) -> f64 {
     let (a, b) = (lab(x), lab(y));
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
-/// The declarations of the block whose selector is exactly `selector`.
-fn block(selector: &str) -> BTreeMap<String, String> {
-    let at = STYLE
-        .find(&format!("\n{selector} {{"))
-        .unwrap_or_else(|| panic!("no block {selector}"));
-    let body = &STYLE[at + selector.len() + 3..];
-    let body = &body[..body.find("\n}").unwrap()];
-    body.lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            let (name, value) = line.strip_prefix("--")?.split_once(':')?;
+
+/// `text` cut at each `sep` outside any parentheses.
+fn split_top(text: &str, sep: char) -> Vec<&str> {
+    let (mut depth, mut from, mut out) = (0, 0, vec![]);
+    for (i, c) in text.char_indices() {
+        if c == sep && depth == 0 {
+            out.push(&text[from..i]);
+            from = i + c.len_utf8();
+            continue;
+        }
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    out.push(&text[from..]);
+    out
+}
+/// A block's custom properties, each value on one line, its comments gone.
+fn declarations(body: &str) -> BTreeMap<String, String> {
+    let mut plain = String::new();
+    let mut rest = body;
+    while let Some(at) = rest.find("/*") {
+        plain.push_str(&rest[..at]);
+        rest = &rest[at + rest[at..].find("*/").unwrap() + 2..];
+    }
+    plain.push_str(rest);
+    split_top(&plain, ';')
+        .into_iter()
+        .filter_map(|d| {
+            let (name, value) = d.trim().strip_prefix("--")?.split_once(':')?;
             Some((
-                name.to_owned(),
-                value.trim().trim_end_matches(';').to_owned(),
+                name.trim().to_owned(),
+                value.split_whitespace().collect::<Vec<_>>().join(" "),
             ))
         })
         .collect()
 }
-/// A theme's value of every role in its own scheme: its family's block over Sluice's, the
-/// light or the dark side of each `light-dark()` by its id's suffix.
-fn theme(id: &str) -> BTreeMap<String, Rgb> {
-    let mut tokens = block(":root, [data-theme]");
+/// Where each block whose selector is exactly `selector` starts and ends in the stylesheet.
+fn spans(selector: &str) -> Vec<(usize, usize)> {
+    let needle = format!("\n{selector} {{");
+    let mut out = vec![];
+    let mut from = 0;
+    while let Some(at) = STYLE[from..].find(&needle) {
+        let start = from + at + needle.len();
+        let end = start + STYLE[start..].find("\n}").unwrap();
+        out.push((start, end));
+        from = end;
+    }
+    out
+}
+/// The declarations of every block whose selector is exactly `selector`, in order.
+fn block(selector: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (start, end) in spans(selector) {
+        out.extend(declarations(&STYLE[start..end]));
+    }
+    out
+}
+fn family_selector(family: &str) -> String {
+    format!("[data-theme^=\"{family}-\"]")
+}
+/// What a family's own blocks declare: its block, then its rule for one scheme.
+fn own(family: &str, scheme: &str) -> BTreeMap<String, String> {
+    let mut own = block(&family_selector(family));
+    own.extend(block(&format!("[data-theme=\"{family}-{scheme}\"]")));
+    own
+}
+/// A theme's tokens as written: Sluice's, then its family's over them.
+fn written(id: &str) -> BTreeMap<String, String> {
     let (family, scheme) = id.rsplit_once('-').unwrap();
     assert!(matches!(scheme, "light" | "dark"), "{id}: a scheme");
+    let mut tokens = block(":root, [data-theme]");
     if family != "sluice" {
-        let own = block(&format!("[data-theme^=\"{family}-\"]"));
-        for role in ROLES {
-            assert!(own.contains_key(role), "{id} maps every role: {role}");
-        }
-        tokens.extend(own);
+        tokens.extend(own(family, scheme));
     }
-    ROLES
-        .iter()
-        .map(|role| {
-            let value = &tokens[*role];
-            let pair = match value.strip_prefix("light-dark(") {
-                Some(rest) => {
-                    let rest = rest.strip_suffix(')').unwrap();
-                    // the split between the two colours: the comma outside any parentheses
-                    let mut depth = 0;
-                    let cut = rest
-                        .char_indices()
-                        .find(|(_, c)| {
-                            match c {
-                                '(' => depth += 1,
-                                ')' => depth -= 1,
-                                ',' if depth == 0 => return true,
-                                _ => {}
-                            }
-                            false
-                        })
-                        .unwrap()
-                        .0;
-                    (parse(&rest[..cut]), parse(&rest[cut + 1..]))
-                }
-                None => (parse(value), parse(value)),
-            };
-            (
-                role.to_string(),
-                if scheme == "dark" { pair.1 } else { pair.0 },
-            )
-        })
-        .collect()
+    tokens
+}
+/// `value` with every `var(--name)` replaced by that token's value, its `light-dark()`s by
+/// the side of its scheme.
+fn resolve(tokens: &BTreeMap<String, String>, value: &str, dark: bool) -> String {
+    let mut v = value.to_owned();
+    for _ in 0..8 {
+        let Some(at) = v.find("var(--") else { break };
+        let inner = &v[at + 4..];
+        let end = at + 4 + split_top(inner, ')')[0].len();
+        let name = split_top(&v[at + 6..end], ',')[0].trim().to_owned();
+        let with = tokens
+            .get(&name)
+            .unwrap_or_else(|| panic!("no token --{name} for {value}"))
+            .clone();
+        v.replace_range(at..=end, &with);
+    }
+    while let Some(at) = v.find("light-dark(") {
+        let inner = &v[at + 11..];
+        let body = split_top(inner, ')')[0];
+        let sides = split_top(body, ',');
+        let pick = sides[if dark { 1 } else { 0 }].trim().to_owned();
+        v.replace_range(at..at + 11 + body.len() + 1, &pick);
+    }
+    v
+}
+/// A token's colour in a theme.
+fn colour(tokens: &BTreeMap<String, String>, name: &str, dark: bool) -> Rgb {
+    parse(&resolve(tokens, &tokens[name], dark))
+}
+/// The colours a value draws with, by the tokens it names (`var(--x)`), in a theme.
+fn colours_named(tokens: &BTreeMap<String, String>, value: &str, dark: bool) -> Vec<(String, Rgb)> {
+    let mut out = vec![];
+    let mut rest = value;
+    while let Some(at) = rest.find("var(--") {
+        let tail = &rest[at + 6..];
+        let name = &tail[..tail.find([')', ',']).unwrap()];
+        if ROLES.contains(&name) || DEEP_COLOURS.contains(&name) || name.starts_with("p-") {
+            out.push((name.to_owned(), colour(tokens, name, dark)));
+        }
+        rest = tail;
+    }
+    out
+}
+/// A length in px (or a bare number), from "3px", "0", "0.5px".
+fn px(value: &str) -> Option<f64> {
+    value.trim().trim_end_matches("px").parse().ok()
+}
+/// The colours drawn in the band edge's top row, where it meets the nav and its marks: each
+/// layer that covers y = 0, down to the first plain colour.
+fn edge_top(tokens: &BTreeMap<String, String>, dark: bool) -> Vec<(String, Rgb)> {
+    let edge = &tokens["band-edge"];
+    let mut out = vec![];
+    if edge == "none" {
+        return out;
+    }
+    for layer in split_top(edge, ',') {
+        let layer = layer.trim();
+        if !layer.contains("gradient(") {
+            out.extend(colours_named(tokens, layer, dark));
+            break;
+        }
+        let close = layer.rfind(')').unwrap();
+        let (place, size) = layer[close + 1..]
+            .split_once('/')
+            .unwrap_or((&layer[close + 1..], ""));
+        let y = place.split_whitespace().nth(1).and_then(px).unwrap_or(0.0);
+        let h = size
+            .split_whitespace()
+            .nth(1)
+            .and_then(px)
+            .unwrap_or(f64::INFINITY);
+        if y <= 0.0 && y + h > 0.0 {
+            out.extend(colours_named(tokens, &layer[..=close], dark));
+        }
+    }
+    out
 }
 
 #[test]
 fn every_theme_maps_every_role_and_holds_its_contrast() {
     // the themes the picker offers are the stylesheet's: a block for each family but Sluice's,
     // each family a light and a dark entry, and no other theme block is there
-    let families: std::collections::BTreeSet<&str> = THEMES
+    let families: Vec<&str> = THEMES
         .iter()
         .map(|t| t.id.rsplit_once('-').unwrap().0)
+        .collect::<Vec<_>>()
+        .chunks(2)
+        .map(|pair| {
+            assert_eq!(pair[0], pair[1], "each family light then dark");
+            pair[0]
+        })
         .collect();
-    assert_eq!(THEMES.len(), 14);
-    assert_eq!(families.len() * 2, THEMES.len(), "{families:?}");
+    assert_eq!(families, FAMILIES, "the picker's families, in order");
     assert_eq!(
         STYLE.matches("\n[data-theme^=\"").count(),
         families.len() - 1,
@@ -242,8 +384,16 @@ fn every_theme_maps_every_role_and_holds_its_contrast() {
     let mut failures = vec![];
     for t in THEMES {
         assert_eq!(t.dark(), t.id.ends_with("-dark"));
-        let tokens = theme(t.id);
-        let get = |role: &str| tokens[role];
+        let dark = t.dark();
+        let tokens = written(t.id);
+        let (family, scheme) = t.id.rsplit_once('-').unwrap();
+        if family != "sluice" {
+            let own = own(family, scheme);
+            for role in ROLES {
+                assert!(own.contains_key(role), "{} maps every role: {role}", t.id);
+            }
+        }
+        let get = |name: &str| colour(&tokens, name, dark);
         for (fg, bg) in TEXT {
             let ratio = contrast(get(fg), get(bg));
             if ratio < 4.5 {
@@ -262,9 +412,61 @@ fn every_theme_maps_every_role_and_holds_its_contrast() {
                 failures.push(format!("{}: {fg} on {bg} {ratio:.2} < 3", t.id));
             }
         }
-        // the question's colour is its own: apart from every other role a page colours with
+        // text on the paper with its texture at its darkest: its ink (or navy) at the
+        // texture's alpha over the paper
+        let alpha = tokens["paper-texture-alpha"]
+            .trim_end_matches('%')
+            .parse::<f64>()
+            .unwrap()
+            / 100.0;
+        for grain in ["ink", "navy"] {
+            let textured = over(Rgb(get(grain).0, alpha), get("paper"));
+            for fg in ["ink", "ink-muted", "run-ink", "sand-ink"] {
+                let ratio = contrast(get(fg), textured);
+                if ratio < 4.5 {
+                    failures.push(format!(
+                        "{}: {fg} on the textured paper ({grain}) {ratio:.2} < 4.5",
+                        t.id
+                    ));
+                }
+            }
+        }
+        // where the band's edge meets the band's ink and its marks, they read against it
+        for (name, c) in edge_top(&tokens, dark) {
+            for fg in ["band-ink", "band-mark"] {
+                let ratio = contrast(get(fg), c);
+                if ratio < 3.0 {
+                    failures.push(format!(
+                        "{}: {fg} against the band edge's {name} {ratio:.2} < 3",
+                        t.id
+                    ));
+                }
+            }
+        }
+        // a look cell's border reads on its sand, an outlined done cell's on the paper
+        for (edge, on) in [("cell-look-edge", "sand"), ("cell-done-edge", "paper")] {
+            for (name, c) in colours_named(&tokens, &tokens[edge], dark) {
+                let ratio = contrast(c, get(on));
+                if ratio < 3.0 {
+                    failures.push(format!("{}: {edge}'s {name} on {on} {ratio:.2} < 3", t.id));
+                }
+            }
+        }
+        // the question's colour is its own: apart from every other role a page colours with,
+        // and from every chart colour
         for other in [
-            "sand", "run", "sky", "ink", "paper", "sky-ink", "sand-ink", "run-ink",
+            "sand",
+            "run",
+            "sky",
+            "ink",
+            "paper",
+            "sky-ink",
+            "sand-ink",
+            "run-ink",
+            "chart-ink",
+            "chart-busiest",
+            "chart-series",
+            "chart-range",
         ] {
             let d = apart(get("coral"), get(other));
             if d < 0.1 {
@@ -281,6 +483,175 @@ fn every_theme_maps_every_role_and_holds_its_contrast() {
             "{}: the band is the deepest surface",
             t.id
         );
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Is `value` in its token's allowed set (DESIGN.md, Themes: the deep tokens)? `None` when it is,
+/// else why not.
+fn allowed(name: &str, value: &str, head_case: &str) -> Option<String> {
+    let within = |v: Option<f64>, lo: f64, hi: f64| v.is_some_and(|v| (lo..=hi).contains(&v));
+    let em = |v: &str| v.trim().trim_end_matches("em").parse::<f64>().ok();
+    let number = |v: &str| v.trim().parse::<f64>().ok();
+    let ok = match name {
+        "font-display" | "font-text" | "font-mono" => {
+            let last = value.rsplit(',').next().unwrap().trim();
+            [
+                "serif",
+                "sans-serif",
+                "monospace",
+                "cursive",
+                "fantasy",
+                "system-ui",
+                "ui-serif",
+                "ui-sans-serif",
+                "ui-monospace",
+                "ui-rounded",
+            ]
+            .contains(&last)
+        }
+        "display-weight" | "head-weight" => within(number(value), 100.0, 900.0),
+        "display-tracking" => within(em(value), -0.05, 0.1),
+        "head-tracking" => {
+            within(em(value), -0.05, 0.2)
+                // tracked capitals need room between them
+                && (head_case != "uppercase" || em(value).unwrap() >= 0.05)
+        }
+        "head-case" => ["none", "uppercase"].contains(&value),
+        "head-style" | "kind-style" => ["normal", "italic"].contains(&value),
+        "head-scale" => within(number(value), 0.7, 1.1),
+        "prose-numerals" => ["normal", "oldstyle-nums", "lining-nums"].contains(&value),
+        "radius-module" | "radius-cell" | "radius-control" | "radius-chip" | "band-radius"
+        | "chart-radius" => within(px(value), 0.0, 14.0),
+        "section-rule-height" => within(px(value), 1.0, 10.0),
+        "ask-rule" => within(px(value), 4.0, 8.0),
+        "look-rule" => {
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            within(px(parts[0]), 1.0, 3.0) && ["solid", "dashed"].contains(&parts[1])
+        }
+        "band-edge-height" => within(px(value), 0.0, 12.0),
+        "band-margin" => within(px(value), 0.0, 8.0),
+        "band-frame" | "cell-done-edge" | "cell-look-edge" | "cell-empty-edge" => {
+            value == "none"
+                || split_top(value, ',')
+                    .iter()
+                    .all(|s| s.trim().starts_with("inset "))
+        }
+        "paper-texture-alpha" => within(value.trim_end_matches('%').parse().ok(), 0.0, 6.0),
+        "section-rule" | "band-edge" | "paper-texture" | "chart-grid" | "sweep-fill" => {
+            // gradients and colours only, never an image
+            !value.contains("url(")
+        }
+        "density" => within(number(value), 0.85, 1.1),
+        "cell-height" => within(px(value), 46.0, 56.0),
+        "cell-empty-outline" => {
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            value == "none"
+                || (within(px(parts[0]), 1.0, 2.0)
+                    && ["solid", "dashed", "dotted"].contains(&parts[1]))
+        }
+        "chart-column-width" => within(number(value), 0.3, 1.0),
+        "focus-width" => ["2px", "3px"].contains(&value),
+        "focus-offset" => within(px(value), 1.0, 4.0),
+        "link-thickness" => within(px(value), 1.0, 3.0),
+        "link-offset" => within(px(value), 2.0, 6.0),
+        "link-style" => ["solid", "dotted", "dashed"].contains(&value),
+        "sweep-animation" => {
+            value == "none" || {
+                let parts: Vec<&str> = value.split_whitespace().collect();
+                let secs = parts.iter().find_map(|p| {
+                    p.strip_suffix("ms")
+                        .and_then(|n| n.parse::<f64>().ok().map(|n| n / 1000.0))
+                        .or_else(|| p.strip_suffix('s').and_then(|n| n.parse::<f64>().ok()))
+                });
+                ["tide", "lane"].contains(&parts[0]) && secs.is_some_and(|s| s >= 1.0)
+            }
+        }
+        "glyph-stroke" => within(number(value), 1.75, 2.5),
+        // a colour (the chart's, a done cell's fill, the rule's), shadows, or a lift: read by
+        // the contrast test or free
+        _ => true,
+    };
+    (!ok).then(|| format!("--{name}: {value} is outside its allowed set"))
+}
+
+#[test]
+fn every_deep_token_a_family_sets_is_known_and_in_its_range() {
+    let defaults = block(":root, [data-theme]");
+    let deep: BTreeSet<&str> = defaults
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !ROLES.contains(k) && !DERIVED.contains(k))
+        .collect();
+    let mut failures = vec![];
+    for family in FAMILIES {
+        for scheme in ["light", "dark"] {
+            let declared = if *family == "sluice" {
+                defaults.clone()
+            } else {
+                own(family, scheme)
+            };
+            let head_case = written(&format!("{family}-{scheme}"))["head-case"].clone();
+            for (name, value) in &declared {
+                if ROLES.contains(&name.as_str()) || DERIVED.contains(&name.as_str()) {
+                    if *family != "sluice" && DERIVED.contains(&name.as_str()) {
+                        failures.push(format!("{family}: --{name} is worked out, never set"));
+                    }
+                    continue;
+                }
+                if name.starts_with("p-") {
+                    continue;
+                }
+                if !deep.contains(name.as_str()) {
+                    failures.push(format!("{family}: --{name} is no token"));
+                    continue;
+                }
+                // the question's colour is the question's alone: no rule, edge, cell, chart,
+                // link or sweep takes it
+                if value.contains("var(--coral)") || value.contains("var(--on-coral)") {
+                    failures.push(format!(
+                        "{family}: --{name} draws with the question's colour"
+                    ));
+                }
+                if let Some(why) = allowed(name, value, &head_case) {
+                    failures.push(format!("{family}-{scheme}: {why}"));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn a_primitive_never_leaves_its_family_block() {
+    // every family's block, where its primitives (`--p-…`) may be declared and read
+    let blocks: Vec<(String, usize, usize)> = FAMILIES
+        .iter()
+        .skip(1)
+        .flat_map(|family| {
+            spans(&family_selector(family))
+                .into_iter()
+                .map(move |(start, end)| (family.to_string(), start, end))
+        })
+        .collect();
+    let mut failures = vec![];
+    for (at, _) in STYLE.match_indices("--p-") {
+        let line = STYLE[..at].matches('\n').count() + 1;
+        let Some((family, start, end)) = blocks.iter().find(|(_, s, e)| (*s..*e).contains(&at))
+        else {
+            failures.push(format!("a primitive outside a family's block, line {line}"));
+            continue;
+        };
+        let name: String = STYLE[at + 2..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+            .collect();
+        let declared = declarations(&STYLE[*start..*end]);
+        if !declared.contains_key(&name) {
+            failures.push(format!(
+                "{family}: --{name} is read, never declared, in its block"
+            ));
+        }
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
@@ -431,6 +802,10 @@ const MEASURE: &str = "(() => {
     r.rows = [...s.querySelectorAll('.strip-row > .strip')].map(st => [...st.children].map(e => Math.round(e.getBoundingClientRect().left)));
   }
   return r; })()";
+/// Every control a phone taps on the page, in document order: its height, the height a rule
+/// gives it (its min-height, a fixed 44px, or a stage cell's that its link fills; 0 for a
+/// control as tall as its words) and what it is.
+const TARGETS: &str = "[...document.querySelectorAll('a[href], button, summary, input:not([type=hidden]), select, textarea, [role=tab]')].filter(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden').map(e => { const h = e.getBoundingClientRect().height; const ruled = Math.max(parseFloat(getComputedStyle(e).minHeight) || 0, Math.abs(h - 44) < 0.5 ? 44 : 0, e.matches('.sc-a') ? parseFloat(getComputedStyle(e.parentElement).minHeight) || 0 : 0); return [Math.round(h * 10) / 10, ruled, e.outerHTML.slice(0, 120)]; })";
 /// The page's paper and its theme, as drawn.
 const PAPER: &str = "[document.documentElement.dataset.theme ?? null, getComputedStyle(document.body).backgroundColor]";
 
@@ -495,6 +870,30 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
             }
         }
 
+        // ---- every other theme, set in place on each page: no page scrolls sideways at a
+        // phone's, a laptop's or a wide screen's width, and every phone target Sluice draws at
+        // 44px or more stays so (a theme's rhythm and faces never shrink one)
+        for (name, url) in [("ui", &gallery), ("plan", &plan), ("home", &home)] {
+            browser.navigate(url).unwrap();
+            browser.wait("document.readyState === 'complete'").unwrap();
+            browser.viewport(390, "light").unwrap();
+            let sluice: Vec<(f64, f64, String)> = serde_json::from_value(browser.eval(TARGETS).unwrap()).unwrap();
+            for t in THEMES.iter().filter(|t| t.id != "sluice-light") {
+                for width in [320, 390, 1440, 2560] {
+                    browser.viewport(width, t.id).unwrap();
+                    let m: Value = browser.eval(MEASURE).unwrap();
+                    assert!(m["scroll"].as_f64() <= m["width"].as_f64(), "{name} in {} at {width} scrolls sideways: {m}", t.id);
+                    if width == 390 {
+                        let heights: Vec<(f64, f64, String)> = serde_json::from_value(browser.eval(TARGETS).unwrap()).unwrap();
+                        assert_eq!(heights.len(), sluice.len(), "{name} in {}: the same targets", t.id);
+                        for ((h, _, what), (base, ruled, _)) in heights.iter().zip(&sluice) {
+                            assert!(*ruled < 44.0 || *h >= 43.5, "{name} in {} at 390: {what} is {h}px (Sluice's {base}px)", t.id);
+                        }
+                    }
+                }
+            }
+        }
+
         // ---- a pick: the picker applies at once, and the cookie keeps it
         browser.viewport(1440, "light").unwrap();
         browser.navigate(&home).unwrap();
@@ -549,6 +948,90 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
                     browser.viewport(1440, t.id).unwrap();
                     browser.eval(FRAMES).unwrap();
                     browser.screenshot(&dir.join(format!("theme-{}-{name}-1440.png", t.id))).unwrap();
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    server.abort();
+}
+
+/// Which faces a page asked for: each `@font-face` family the stylesheet declares, with whether
+/// any of its faces has been asked to load (with script or without; a face that could not be
+/// fetched counts, so this holds offline).
+const FACES: &str = "(() => { const asked = {}; for (const f of document.fonts) { const k = f.family.replace(/[\"']/g, ''); asked[k] = (asked[k] ?? false) || f.status !== 'unloaded'; } return asked; })()";
+
+/// A page fetches only its own theme's faces: Sluice's two in Sluice, Empire Builder's in
+/// Empire Builder, never another family's; opening the picker (whose swatches carry no text)
+/// fetches none; and a page without script draws the cookie's theme in its own faces.
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_a_page_fetches_only_its_themes_faces() {
+    let f = Fixture::new().await;
+    neutral::seed(&f.writer, f._home.path()).await;
+    let (addr, server) = serve(&f);
+    let base = format!("http://{addr}");
+    tokio::task::spawn_blocking(move || {
+        let home = format!("{base}/");
+        let asked = |browser: &mut Chrome| -> BTreeMap<String, bool> {
+            serde_json::from_value(browser.eval(FACES).unwrap()).unwrap()
+        };
+        for (theme, own, others) in [
+            (
+                "sluice-light",
+                ["Schibsted Grotesk Variable", "JetBrains Mono Variable"],
+                ["Libre Franklin Variable", "Courier Prime"],
+            ),
+            (
+                "empire-dark",
+                ["Libre Franklin Variable", "Courier Prime"],
+                ["Schibsted Grotesk Variable", "JetBrains Mono Variable"],
+            ),
+        ] {
+            for script in [true, false] {
+                let mut browser = Chrome::open("about:blank").unwrap();
+                if !script {
+                    browser
+                        .send(
+                            "Emulation.setScriptExecutionDisabled",
+                            json!({"value": true}),
+                        )
+                        .unwrap();
+                }
+                browser
+                    .send(
+                        "Network.setCookie",
+                        json!({"url": base, "name": "sluice_theme", "value": theme}),
+                    )
+                    .unwrap();
+                browser.navigate(&home).unwrap();
+                browser.wait("document.readyState === 'complete'").unwrap();
+                browser
+                    .eval("document.fonts.ready.then(() => true)")
+                    .unwrap();
+                if script {
+                    browser
+                        .eval("document.querySelector('details.settings').open = true")
+                        .unwrap();
+                    browser.eval(FRAMES).unwrap();
+                    browser
+                        .eval("document.fonts.ready.then(() => true)")
+                        .unwrap();
+                }
+                let faces = asked(&mut browser);
+                for face in own {
+                    assert_eq!(
+                        faces.get(face),
+                        Some(&true),
+                        "{theme} (script {script}) asks for {face}: {faces:?}"
+                    );
+                }
+                for face in others {
+                    assert_eq!(
+                        faces.get(face),
+                        Some(&false),
+                        "{theme} (script {script}) never asks for {face}: {faces:?}"
+                    );
                 }
             }
         }

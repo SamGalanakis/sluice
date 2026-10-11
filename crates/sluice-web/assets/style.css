@@ -880,7 +880,7 @@ details.about .clip { max-width: var(--measure); max-height: calc(var(--lines, 2
 details.about[open] .clip { max-height: none; }
 details.about[open] > summary { margin-bottom: 0; }
 details.about > summary::after { content: "Show more"; font-size: 13px;
-                                 text-decoration: underline; text-underline-offset: 3px;
+                                 text-decoration: underline; text-underline-offset: var(--link-offset);
                                  text-decoration-color: var(--rule); }
 details.about[open] > summary::after { content: "Show less"; }
 .plan-facts { display: grid; gap: 22px; margin-top: 36px; padding-top: 20px;
@@ -1267,7 +1267,7 @@ ol.now-calls > li.is-failed .act-key { color: var(--ink); }
 .d-hold .g { margin-top: 2px; flex: none; }
 .d-after .gate-list { display: flex; flex-direction: column; gap: 6px; }
 .chain-link { margin: 0; }
-.chain-link a { color: var(--ink-muted); text-underline-offset: 3px; }
+.chain-link a { color: var(--ink-muted); text-underline-offset: var(--link-offset); }
 .chain-link a:hover { color: var(--ink); }
 .ov > .chain-link { margin-top: 22px; }
 @media (max-width: 760px) {
@@ -1522,7 +1522,7 @@ code.v { border: 0; background: none; padding: 0; }
 .convo { display: grid; gap: 14px; min-width: 0; max-width: 78ch; }
 .convo-of { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; }
 .run-file-page .jump, .convo-of .jump { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-muted);
-                  text-underline-offset: 3px; }
+                  text-underline-offset: var(--link-offset); }
 .convo-more { margin: 0; }
 .convo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: calc(18px * var(--density)); min-width: 0; }
 .m-day, .m-new { display: flex; align-items: center; gap: 10px; font: 600 12.5px/18px var(--font-text);
@@ -1537,7 +1537,7 @@ code.v { border: 0; background: none; padding: 0; }
 .who { font-weight: 700; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
 .who .sref-a { text-decoration: none; }
 .who .sref-a:hover .sref-t { text-decoration: underline; text-decoration-color: var(--run-ink);
-                             text-underline-offset: 3px; }
+                             text-underline-offset: var(--link-offset); }
 .who .sref-t { font-weight: 700; }
 .who .sref-id { font-size: 11.5px; }
 .mg-msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; min-width: 0; }
@@ -1563,7 +1563,7 @@ code.v { border: 0; background: none; padding: 0; }
 details.m-many { display: inline; }
 details.m-many > summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
                            color: var(--ink); font-weight: 600; list-style: none;
-                           text-decoration: underline dotted; text-underline-offset: 3px; }
+                           text-decoration: underline dotted; text-underline-offset: var(--link-offset); }
 details.m-many > summary::-webkit-details-marker { display: none; }
 details.m-many[open] { display: block; flex-basis: 100%; order: 9; }
 details.m-many[open] > .m-all { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 2px; }
@@ -1604,7 +1604,7 @@ details.m-many[open] > .m-all { display: flex; flex-wrap: wrap; gap: 2px 14px; m
 .composer .ou-status:empty { display: none; }
 /* a question on the questions list: where it was asked, then the one-message conversation */
 .item.q > .q-where { margin: 0; }
-.item.q > .q-where a { color: inherit; text-underline-offset: 3px;
+.item.q > .q-where a { color: inherit; text-underline-offset: var(--link-offset);
                        text-decoration-color: var(--rule); }
 .item.q .convo { margin-top: 6px; }
 /* an answer said where it was given: one line, the check, what was answered, and to whom with
@@ -1618,9 +1618,9 @@ details.m-many[open] > .m-all { display: flex; flex-wrap: wrap; gap: 2px 14px; m
 .q-answered:focus-visible { outline: var(--focus-width) solid var(--focus); outline-offset: 4px; border-radius: 0; }
 .q-answered .qa-what { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .q-answered .qa-title { font-weight: 400; }
-.q-answered .qa-to a { color: inherit; text-underline-offset: 3px; }
+.q-answered .qa-to a { color: inherit; text-underline-offset: var(--link-offset); }
 .q-also { margin: 2px 0 10px; max-width: var(--measure); }
-.q-also a { color: inherit; text-underline-offset: 3px; }
+.q-also a { color: inherit; text-underline-offset: var(--link-offset); }
 li.m.q-done > .md, li.m.q-done > .m-body { opacity: 0.7; }
 .threads { display: grid; gap: 10px; }
 .threads > .item { margin: 0; }
@@ -1797,7 +1797,7 @@ article.item { background: var(--paper-raised); border: 1px solid var(--rule-fai
 /* a history card's name: a quiet link at body weight, never a display heading */
 #messages-view .item > h2.t-name { margin: 0; font: 600 15.5px/22px var(--font-text); color: var(--ink); }
 .t-name a { color: inherit; text-decoration: none; }
-.t-name a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.t-name a:hover { text-decoration: underline; text-underline-offset: var(--link-offset); }
 /* a history card whose thread holds an open question to the owner leads with it */
 .t-ask { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 4px 0 0; }
 .t-ask-title { font-weight: 600; overflow-wrap: anywhere; }
@@ -1875,7 +1875,7 @@ dl.a-facts code { font-size: 12px; border: 0; background: none; padding: 0; }
 /* ---- a run's activity: one row per turn (what sluice sent, what the agent said last, its
    calls counted), folding open to its calls as a tree drawn in hairlines, each call folding
    open to its arguments and result. A failed call is ink and never folds away. */
-.act-sum a, .act-more a, .act-why a { color: var(--ink); text-underline-offset: 3px; }
+.act-sum a, .act-more a, .act-why a { color: var(--ink); text-underline-offset: var(--link-offset); }
 .act-more { margin: 6px 0 0; max-width: var(--measure); }
 .act-why { margin: 10px 0 0; font-size: 14px; line-height: 20px; overflow-wrap: anywhere;
            max-width: var(--measure); }
@@ -2026,7 +2026,7 @@ h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
 .uv-h { margin: 0 0 8px; font: 500 13px/18px var(--font-text); color: var(--ink-muted); }
 .uv-k { font: 500 12.5px/18px var(--font-text); color: var(--ink-muted); }
 .unit-last .md { max-width: var(--measure); }
-.unit-last .meta a { color: var(--ink-muted); text-underline-offset: 3px; }
+.unit-last .meta a { color: var(--ink-muted); text-underline-offset: var(--link-offset); }
 .unit-last .meta a:hover { color: var(--ink); }
 
 /* ---- a unit's timeline: a row a stage, a bar a run, one time axis --------------------------- */
@@ -2056,7 +2056,7 @@ h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
 .tl-stage > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl-stage .g { display: none; }
 .tl-stage:hover > span { color: var(--ink); text-decoration: underline;
-                         text-underline-offset: 3px; }
+                         text-underline-offset: var(--link-offset); }
 .tl-row.is-current .tl-stage { color: var(--ink); font-weight: 650; }
 /* the track, axis and breaks keep 8px in from the column's edges: a glyph centred on a run's
    start or end stays inside it */
@@ -2083,7 +2083,7 @@ h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
 .tl-row.is-current .tl-words { color: var(--ink); }
 /* the stages at its end with no run yet: one line under the rest */
 .tl-rest .tl-words { grid-column: 1 / -1; }
-.tl-rest a { color: inherit; text-underline-offset: 3px; text-decoration-color: var(--rule); }
+.tl-rest a { color: inherit; text-underline-offset: var(--link-offset); text-decoration-color: var(--rule); }
 .tl-rest a:hover { color: var(--ink); text-decoration-color: currentColor; }
 @container tl (max-width: 490px) {
   .tl-in { display: block; }
@@ -2101,7 +2101,7 @@ h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
              font-size: calc(22px * var(--head-scale)); line-height: 1.1; font-weight: var(--head-weight);
              font-style: var(--head-style); letter-spacing: calc(var(--head-tracking) + 0.005em);
              text-transform: var(--head-case); }
-.focus-note a { color: var(--ink-muted); text-underline-offset: 3px; }
+.focus-note a { color: var(--ink-muted); text-underline-offset: var(--link-offset); }
 .focus-note a:hover { color: var(--ink); }
 @media (max-width: 720px) {
   .focus-note > a:last-child { display: inline-flex; align-items: center; min-height: 44px; }
@@ -2109,7 +2109,7 @@ h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
 /* a button that reads as a quiet text action (Dismiss, Undo): an underline, no box */
 .text-button { min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--ink-muted);
                font: inherit; font-size: 13px; line-height: 18px; text-decoration: underline;
-               text-underline-offset: 3px; text-decoration-color: var(--rule); cursor: pointer; }
+               text-underline-offset: var(--link-offset); text-decoration-color: var(--rule); cursor: pointer; }
 .text-button:hover { color: var(--ink); text-decoration-color: currentColor; background: none; }
 .d-dismiss { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 10px 0 0; }
 .d-dismiss .meta { margin: 0; }
@@ -2297,7 +2297,7 @@ details.read-today .item { opacity: .85; }
 .pl-item .trace-pick { display: flex; flex-direction: column; gap: 0; color: inherit; }
 .pl-item .trace-pick > .mod-k { margin: 0; }
 .pl-item .trace-pick:hover { background: none; }
-.pl-item .trace-pick:hover .mod-t { text-decoration: underline; text-underline-offset: 3px;
+.pl-item .trace-pick:hover .mod-t { text-decoration: underline; text-underline-offset: var(--link-offset);
                                      text-decoration-thickness: 1px; }
 .pl-item .trace-role { margin-right: 2px; }
 .pl-asks .mod-actions form, .pl-stop .mod-actions form { display: contents; }
@@ -2376,7 +2376,7 @@ details.read-today .item { opacity: .85; }
 /* the row's head is the trace's button: plain words, never a box of its own */
 .pl-row .trace-pick { display: block; margin: 0; padding: 0; color: inherit; max-width: var(--measure);
                       background: none; box-shadow: none; }
-.pl-row .trace-pick:hover .pl-t { text-decoration: underline; text-underline-offset: 3px;
+.pl-row .trace-pick:hover .pl-t { text-decoration: underline; text-underline-offset: var(--link-offset);
                                   text-decoration-thickness: 1px; }
 .pl-head { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
            font-size: 15.5px; line-height: 21px; }
@@ -2557,7 +2557,7 @@ sluice-drawer#step-drawer .drawer .close:hover { background: var(--paper-2); }
                         color: var(--ink-muted); border-radius: 0; }
 .more-fold > summary::-webkit-details-marker { display: none; }
 .more-fold > summary:hover { color: var(--ink); }
-.more-fold > summary:hover > span { text-decoration: underline; text-underline-offset: 3px;
+.more-fold > summary:hover > span { text-decoration: underline; text-underline-offset: var(--link-offset);
                                      text-decoration-color: var(--rule); }
 .more-fold[open] > summary { margin-bottom: var(--space-sm); }
 .more-fold[open] .chev { transform: rotate(180deg); }
@@ -2573,7 +2573,7 @@ sluice-drawer#step-drawer .drawer .close:hover { background: var(--paper-2); }
     margin-top: 4px; padding: 0; border: 0; background: none; box-shadow: none; cursor: pointer;
     font: 500 13px/18px var(--font-text); color: var(--ink-muted); }
   .doc-more[open] .fold-less:hover { color: var(--ink); text-decoration: underline;
-    text-underline-offset: 3px; }
+    text-underline-offset: var(--link-offset); }
 }
 .plan-pane .board-tools { margin: var(--space-xl) 0 var(--space-md); }
 .board-tools label { display: inline-flex; align-items: center; gap: 6px;
@@ -2869,7 +2869,7 @@ details.gates > summary { margin-top: 0; font-size: 14px; color: var(--ink); }
 /* a read mark that did not go through: one quiet line at the top of the notes */
 .read-status { margin: 4px 0 10px; }
 .read-status .link-button { padding: 0; border: 0; background: none; color: var(--ink);
-                            font: inherit; text-decoration: underline; text-underline-offset: 3px;
+                            font: inherit; text-decoration: underline; text-underline-offset: var(--link-offset);
                             cursor: pointer; }
 /* the inputs that are undocumented on/off switches: one quiet line under the fields */
 .f-switches { margin: 8px 0 0; max-width: var(--measure); }
@@ -2884,7 +2884,7 @@ code.sref-id {
   font: 400 12.5px/18px var(--font-mono); color: var(--ink-muted); border: 0;
   background: none; padding: 0; white-space: nowrap; }
 a.sref-a { text-decoration: none; color: inherit; }
-a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px; }
+a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: var(--link-offset); }
 /* a status as its glyph and word (views::ui::status) */
 .st { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 /* a step's stage, muted before its title */
@@ -2900,7 +2900,7 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
 .uv-msg { overflow-wrap: anywhere; }
 .uv-from { color: var(--ink); font-weight: 500; }
 .uv-text.muted { color: var(--ink-muted); }
-.uv-link { color: var(--ink); text-underline-offset: 3px;
+.uv-link { color: var(--ink); text-underline-offset: var(--link-offset);
            text-decoration-color: var(--rule); }
 .uv-status { display: inline-flex; align-items: center; gap: 6px; }
 .unit-view { margin: 12px 0 20px; padding: 14px 16px; max-width: var(--measure);
@@ -2920,7 +2920,7 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
 .gal-about { margin: 0; max-width: var(--measure); }
 .gal-built { margin: 2px 0 12px; max-width: var(--measure); font-size: 13px; line-height: 18px; }
 :is(.gal-about, .gal-built) code, .gal-cap code { font-size: 12px; }
-.gal-lead a { color: var(--ink); text-underline-offset: 3px; }
+.gal-lead a { color: var(--ink); text-underline-offset: var(--link-offset); }
 
 /* ---- /docs, the agent docs: the band names them; the index a module a page on the grid; a page
    its markdown at the reading width in nine columns, every page listed in the three beside it */
@@ -2930,7 +2930,7 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
 .docs-index li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 10px 0;
                  border-top: 1px solid var(--rule); }
 .docs-index a { color: var(--ink); text-decoration: none; font-weight: 700; }
-.docs-index a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.docs-index a:hover { text-decoration: underline; text-underline-offset: var(--link-offset); }
 .docs-index a[aria-current] { color: var(--run-ink); }
 .docs-index code { font-size: 12px; background: none; padding: 0; }
 .docs-read { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--col-gap);
@@ -2976,7 +2976,7 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
 .gt-name { font-family: var(--font-display); font-size: 30px; line-height: .9;
            font-weight: calc(var(--display-weight) + 50); letter-spacing: calc(var(--display-tracking) - 0.01em); }
 .gt-sum { font-size: 13.5px; line-height: 1.3; font-weight: 650; }
-.gt-sum a { text-decoration-thickness: 2px; text-decoration-color: var(--coral); text-underline-offset: 3px; }
+.gt-sum a { text-decoration-thickness: 2px; text-decoration-color: var(--coral); text-underline-offset: var(--link-offset); }
 .gt-paper { display: grid; gap: 10px; padding: 12px 14px 14px; }
 .gt-text { font-size: 14px; line-height: 1.4; }
 .gal-themecard figcaption { padding: 0 14px 12px; }
@@ -3478,11 +3478,11 @@ main { container: frame / inline-size; }
 .cap-opt select { min-height: 40px; min-width: 0; }
 .cap-remove { margin-top: 4px; display: flex; align-items: center; gap: 8px; }
 :is(.cap-remove, .board-clear) .confirm-flow > summary { min-height: 32px; padding: 0; border: 0; background: none;
-  color: var(--ink-muted); text-decoration: underline; text-underline-offset: 3px; font-size: 13px; font-weight: 400; }
+  color: var(--ink-muted); text-decoration: underline; text-underline-offset: var(--link-offset); font-size: 13px; font-weight: 400; }
 :is(.cap-remove, .board-clear) .confirm-flow > summary:hover { color: var(--ink); }
 .board-clear { margin-top: 2px; }
 .settings-page .link-button { min-height: 32px; padding: 0; border: 0; background: none; box-shadow: none;
-                              color: var(--ink-muted); text-decoration: underline; text-underline-offset: 3px;
+                              color: var(--ink-muted); text-decoration: underline; text-underline-offset: var(--link-offset);
                               font-size: 13px; font-weight: 400; }
 .settings-page .link-button:hover { color: var(--ink); }
 .resource-list { padding: 0; list-style: none; }
