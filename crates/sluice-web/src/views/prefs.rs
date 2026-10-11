@@ -73,7 +73,7 @@ fn keys_list(keys: &[(char, String, String)]) -> String {
         })
         .collect();
     format!(
-        "<div class=\"keys\"><dl class=\"keys-list\"><div><dt><kbd>/</kbd></dt><dd>Find (plan, log, functions; from a step, on its plan)</dd></div><div><dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous and next step, with one open beside the plan</dd></div>{go}<div><dt><kbd>?</kbd></dt><dd>These keys</dd></div></dl><p class=\"keys-note\">None while typing in a field.</p></div>"
+        "<div class=\"keys\"><dl class=\"keys-list\"><div><dt><kbd>/</kbd></dt><dd>Find</dd></div><div><dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous and next step</dd></div>{go}<div><dt><kbd>?</kbd></dt><dd>These keys</dd></div></dl></div>"
     )
 }
 
@@ -153,10 +153,7 @@ fn draw(d: &Draw) -> String {
     let keys = format!(
         "<details class=\"sub sub-keys needs-js\" data-preserve-attr=\"open\"{}>{}<div class=\"sub-panel\">{}{}</div></details>",
         open(Level::Keys),
-        row(
-            "Keyboard shortcuts",
-            "<kbd class=\"sub-hint\" title=\"? opens these too\">?</kbd>"
-        ),
+        row("Keyboard shortcuts", "<kbd class=\"sub-hint\">?</kbd>"),
         back("Keyboard shortcuts"),
         if d.page {
             format!("{}{list}{}", keys_open(), keys_close())
@@ -164,7 +161,7 @@ fn draw(d: &Draw) -> String {
             list
         }
     );
-    let guide = "<p class=\"prefs-guide\"><a href=\"/_ui#part-1\">What each state and part means</a><a href=\"/docs\">Agent docs</a></p>";
+    let guide = "<p class=\"prefs-guide\"><a href=\"/_ui#part-1\">States and parts</a><a href=\"/docs\">Agent docs</a></p>";
     if d.page {
         format!(
             "<div class=\"menu prefs-menu\"><form class=\"prefs\" method=\"post\" action=\"/settings\" aria-label=\"Display preferences\"><input type=\"hidden\" name=\"next\" value=\"{}\">{}{theme}{}<input type=\"hidden\" name=\"types\" value=\"0\">{}{types}{}<button class=\"save\" type=\"submit\">Save</button></form>{keys}{guide}</div>",

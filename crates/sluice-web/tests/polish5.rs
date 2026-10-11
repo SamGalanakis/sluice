@@ -509,7 +509,7 @@ async fn the_small_copy_reads_as_it_should() {
     );
     assert!(guide.contains("<p class=\"meta gal-built\">Built with <code>ui::tag</code>"));
     assert!(
-        guide.contains("<p class=\"prefs-guide\"><a href=\"/_ui#part-1\">What each state and part means</a><a href=\"/docs\">Agent docs</a></p>")
+        guide.contains("<p class=\"prefs-guide\"><a href=\"/_ui#part-1\">States and parts</a><a href=\"/docs\">Agent docs</a></p>")
     );
     let (status, docs) = f.get("/docs").await;
     assert_eq!(status, 200);

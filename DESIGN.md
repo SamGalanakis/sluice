@@ -738,8 +738,8 @@ head on the paper under it.
 - **Display preferences** (`views::prefs`, the sliders at the bar's right end) are a short
   menu, a row each on the raised paper: **Theme** (the current theme's name in muted ink and its
   swatch in the page's own tokens, then a "›"), **Show value types** (its checkbox, toggled in
-  place) and **Keyboard shortcuts** (its `?` and a "›"), then under a faint rule "What each
-  state and part means" (the gallery) and "Agent docs". Theme and Keyboard shortcuts are
+  place) and **Keyboard shortcuts** (its `?` and a "›"), then under a faint rule "States and
+  parts" (the gallery) and "Agent docs". Theme and Keyboard shortcuts are
   sub-menus (`details.sub`): a row opens its panel inside the same popover, headed by a back
   control ("‹ Theme") over a faint rule, with the top level out of sight; the panel scrolls
   inside itself when it is taller than the window. Theme's panel is the picker (Themes): a pick
@@ -946,8 +946,8 @@ what the owner sees it as and how it is built, every part and component in every
 the invented project's data, light and dark side by side (stacked under 900px, and stacked at
 every width for a part that needs the grid's room), and a table of every component, its props
 and events (a Chromium test holds each to its script's manifest). A new part goes there first.
-Display preferences hold the Keys (their Keyboard shortcuts panel) and end with "What each state
-and part means" (the gallery) and "Agent docs" (`/docs`).
+Display preferences hold the Keys (their Keyboard shortcuts panel) and end with "States and
+parts" (the gallery) and "Agent docs" (`/docs`).
 
 The components:
 
