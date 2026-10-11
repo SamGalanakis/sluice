@@ -16,6 +16,8 @@ License 1.1 for every family). `fonts/SHA256SUMS` records each file's sha256
 (`sha256sum -c SHA256SUMS` in `fonts/` checks them, as `tests/fonts.rs` does); `build.rs`
 reads it to list the faces and to version each `url(/static/fonts/<file>)` in the sheet with
 the file's fingerprint. A new face is a file here, its line in the manifest and its rule.
+`scripts/build-release` installs each family's licence and the manifest in the release as
+`licenses/fonts/<family>/LICENSE` and `licenses/fonts/SHA256SUMS`.
 
 `icons/` holds the dashboard's icons: Lucide (lucide-static 1.52.0), each SVG as published,
 embedded by `src/views/icons.rs` and inlined in pages, not served. `icons/LICENSE` is Lucide's

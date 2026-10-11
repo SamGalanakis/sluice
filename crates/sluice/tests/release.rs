@@ -166,6 +166,86 @@ fn helper_fixture(gate: &support::Gate, release: &Path) {
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["outputs"]["value"], 42);
 }
+/// A release carries the licence of every face the dashboard serves, and the manifest of their
+/// bytes: `licenses/fonts/<family>/LICENSE` and `licenses/fonts/SHA256SUMS`, as the source tree
+/// has them, each in the release manifest. Cheap: `cargo` is a stub on PATH and the prefix holds
+/// a stub binary and private tmux, so only the packaging runs.
+#[test]
+fn a_release_ships_the_font_licences() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let stubs = root.path().join("stubs");
+    std::fs::create_dir_all(&stubs).unwrap();
+    let stub = |path: &Path, body: &str| executable::write(path, format!("#!/bin/sh\n{body}\n"));
+    stub(&stubs.join("cargo"), "echo 'cargo stub'");
+    let prefix = root.path().join("prefix");
+    let target = prefix.join(".build/target/release");
+    std::fs::create_dir_all(&target).unwrap();
+    stub(
+        &target.join("sluice"),
+        &format!(
+            "echo '{{\"schema\": {}}}'",
+            sluice_store::schema::SCHEMA_VERSION
+        ),
+    );
+    let tmux = prefix.join(".build/private-tmux");
+    std::fs::create_dir_all(&tmux).unwrap();
+    std::fs::write(tmux.join("tmux-manifest.json"), "{}").unwrap();
+    let path = std::env::join_paths(std::iter::once(stubs.clone()).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    let build = Command::new(repo.join("scripts/build-release"))
+        .arg(&prefix)
+        .env("PATH", path)
+        .env("SLUICE_BUILD_GIT_SHA", "0".repeat(40))
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "build: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    // the release's path is the last line (the stub's own words come before it)
+    let release = PathBuf::from(
+        String::from_utf8(build.stdout)
+            .unwrap()
+            .trim()
+            .lines()
+            .last()
+            .unwrap(),
+    );
+    // the stubbed tmux is no real one, so the manifest is read as written, not verified
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(release.join("manifest.json")).unwrap()).unwrap();
+    let files = manifest["files"].as_object().unwrap();
+    let fonts = repo.join("crates/sluice-web/assets/fonts");
+    let mut families = 0;
+    for family in std::fs::read_dir(&fonts).unwrap() {
+        let family = family.unwrap().path();
+        if !family.is_dir() {
+            continue;
+        }
+        families += 1;
+        let name = family.file_name().unwrap().to_string_lossy().into_owned();
+        let shipped = format!("licenses/fonts/{name}/LICENSE");
+        assert_eq!(
+            std::fs::read(release.join(&shipped)).unwrap(),
+            std::fs::read(family.join("LICENSE")).unwrap(),
+            "{shipped}"
+        );
+        assert!(files.contains_key(&shipped), "{shipped}");
+    }
+    assert!(families >= 22, "{families} families");
+    assert_eq!(
+        std::fs::read(release.join("licenses/fonts/SHA256SUMS")).unwrap(),
+        std::fs::read(fonts.join("SHA256SUMS")).unwrap()
+    );
+    assert!(files.contains_key("licenses/fonts/SHA256SUMS"));
+}
 #[test]
 #[ignore = "P7 real locked release build and delegated fixture guardian across deploy; scratch prefix only"]
 fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
@@ -207,6 +287,8 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
         "python/inline_python.py",
         "tmux/bin/tmux",
         "assets",
+        "licenses/fonts/SHA256SUMS",
+        "licenses/fonts/schibsted-grotesk/LICENSE",
         "manifest.json",
     ] {
         assert!(release.join(path).exists(), "{path}");

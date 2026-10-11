@@ -45,6 +45,17 @@ with tempfile.TemporaryDirectory(prefix='.stage-', dir=releases) as staging:
     assets = repo / 'crates/sluice-web/assets'
     if assets.is_dir():
         shutil.copytree(assets, stage / 'assets', dirs_exist_ok=True)
+    # The licences of the faces the dashboard serves, beside the manifest of their bytes:
+    # licenses/fonts/<family>/LICENSE and licenses/fonts/SHA256SUMS.
+    fonts = repo / 'crates/sluice-web/assets/fonts'
+    licences = sorted(fonts.glob('*/LICENSE'))
+    if not licences or not (fonts / 'SHA256SUMS').is_file():
+        sys.exit('build-release: the font licences or their SHA256SUMS are missing')
+    for licence in licences:
+        target = stage / 'licenses/fonts' / licence.parent.name / 'LICENSE'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(licence, target)
+    shutil.copy2(fonts / 'SHA256SUMS', stage / 'licenses/fonts/SHA256SUMS')
     # Builtin definitions are embedded, so no copied packs are installed.
     # The schema the binary reads and writes: a release whose schema differs from the home's
     # goes out only through scripts/deploy --schema-cutover. Asked of the binary itself, with a
