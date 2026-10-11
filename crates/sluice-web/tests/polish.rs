@@ -109,7 +109,7 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/b")).await;
     assert!(
         step.contains(
-            "<input type=\"hidden\" name=\"action\" value=\"dismiss\"><button class=\"quiet-act\" title=\"It stays on its unit, but no longer marks the unit or its project\">Dismiss</button>"
+            "<input type=\"hidden\" name=\"action\" value=\"dismiss\"><button class=\"quiet-act\">Dismiss</button>"
         ),
         "{step}"
     );
@@ -141,7 +141,8 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/b")).await;
     assert!(step.contains("cancelled"), "the step still reads cancelled");
     assert!(
-        step.contains("value=\"undismiss\"><p class=\"meta\">Dismissed:"),
+        step.contains("value=\"undismiss\"><p class=\"meta\">Dismissed. <button")
+            && !step.contains("no longer marks the unit"),
         "{step}"
     );
 
@@ -205,7 +206,7 @@ async fn a_message_box_to_a_step_not_running_says_when_it_is_read() {
         .await;
     let composer = between(&failed, "<form class=\"composer thread-reply\"", "</form>");
     assert!(
-        composer.contains("<p class=\"meta composer-note\" id=\"composer-note-l2-work\">It is not running: it reads this only if it runs again. To tell it something now, Retry with feedback.</p>"),
+        composer.contains("<p class=\"meta composer-note\" id=\"composer-note-l2-work\">Not running: it reads this only if it runs again.</p>"),
         "{composer}"
     );
     assert!(
@@ -357,7 +358,7 @@ async fn clear_board_and_remove_ask_first_and_a_cleared_board_keeps_its_program_
     )
     .await;
     assert!(
-        response.contains("Its program is still in the box: Save board to restore it."),
+        response.contains("Cleared (rev 2). Save board restores it."),
         "{response}"
     );
     let program = between(&response, "<textarea id=\"board-program\"", "</textarea>");
@@ -601,7 +602,7 @@ async fn chromium_clear_board_asks_first_and_keeps_the_program_to_restore() {
             .eval("document.querySelector('#confirmation button.danger').click()")
             .unwrap();
         browser
-            .wait("document.querySelector('#board-feedback').textContent.includes('Save board to restore it')")
+            .wait("document.querySelector('#board-feedback').textContent.includes('Save board restores it')")
             .unwrap();
         let g = browser
             .eval("({open: Boolean(document.querySelector('#confirmation[open]')), kept: document.querySelector('#board-program').value.startsWith('root = Stack('), off: document.querySelector('#board-clear').getAttribute('aria-disabled'), errors: window.browserErrors})")

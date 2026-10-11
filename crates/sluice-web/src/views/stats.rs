@@ -598,25 +598,13 @@ impl StatsView {
             format!("No run ended {}.", self.window.words())
         } else {
             format!(
-                "{} ended and {} finished {}{}.",
+                "{} ended and {} finished {}.",
                 ui::count(self.ended, "run", "runs"),
                 ui::count(finished, "unit", "units"),
                 self.window.words(),
-                self.clock_words()
             )
         };
         ui::page_head_note("Stats", &TrustedHtml::owned(esc(&note)))
-    }
-    /// ", days on your clock (UTC+02:00)" when the reader's clock is not UTC.
-    fn clock_words(&self) -> String {
-        if self.window.zone == 0 {
-            String::new()
-        } else {
-            format!(
-                ", on your clock ({})",
-                super::day::zone_name(self.window.zone)
-            )
-        }
     }
     /// The window switch in the row: a link a window, the chosen one filled.
     pub fn switch(&self) -> TrustedHtml {
@@ -687,7 +675,7 @@ impl StatsView {
             ui::section_head(
                 &format!("{p}st-dur-h"),
                 "Durations by stage",
-                "Its runs that succeeded: the bar is the median, its pale end the p90"
+                ""
             )
         );
         if self.groups.is_empty() {
@@ -720,7 +708,7 @@ impl StatsView {
                     _ => String::new(),
                 };
                 rows.push_str(&format!(
-                    "<tr><th scope=\"row\">{}</th><td class=\"num\" data-k=\"Runs\">{}</td>{}{}{}<td class=\"st-draw\">{bar}</td></tr>",
+                    "<tr><th scope=\"row\">{}</th><td class=\"num\" data-k=\"Succeeded\">{}</td>{}{}{}<td class=\"st-draw\">{bar}</td></tr>",
                     esc(&stage.name),
                     stage.took.len(),
                     cell("Median", stage.median()),
@@ -729,7 +717,7 @@ impl StatsView {
                 ));
             }
             html.push_str(&format!(
-                "<div class=\"st-group\">{}<table class=\"st-t st-dur\" aria-labelledby=\"{id}\"><thead><tr><th scope=\"col\">Stage</th><th scope=\"col\" class=\"num\">Runs</th><th scope=\"col\" class=\"num\">Median</th><th scope=\"col\" class=\"num\">p90</th><th scope=\"col\" class=\"num\">Longest</th><th scope=\"col\" class=\"st-draw\"><span class=\"vh\">Median and p90, drawn</span></th></tr></thead><tbody>{rows}</tbody></table></div>",
+                "<div class=\"st-group\">{}<table class=\"st-t st-dur\" aria-labelledby=\"{id}\"><thead><tr><th scope=\"col\">Stage</th><th scope=\"col\" class=\"num\">Succeeded</th><th scope=\"col\" class=\"num\">Median</th><th scope=\"col\" class=\"num\">p90</th><th scope=\"col\" class=\"num\">Longest</th><th scope=\"col\" class=\"st-draw\"><span aria-hidden=\"true\">median · p90</span><span class=\"vh\">Median and p90, drawn</span></th></tr></thead><tbody>{rows}</tbody></table></div>",
                 self.group_head(group, &id)
             ));
         }
@@ -745,7 +733,7 @@ impl StatsView {
             ui::section_head(
                 &format!("{p}st-out-h"),
                 "Outcomes",
-                "How each stage's runs ended; a retry is a second or later try of its step"
+                ""
             )
         );
         if self.groups.is_empty() {
@@ -888,7 +876,7 @@ impl StatsView {
             ui::section_head(
                 &format!("{p}st-slow-h"),
                 "The slowest runs",
-                &format!("The {SLOWEST} longest runs that ended {}", self.window.words())
+                &format!("The {SLOWEST} longest, ended {}", self.window.words())
             )
         );
         if self.slowest.is_empty() {

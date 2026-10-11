@@ -611,7 +611,7 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
     );
     assert!(html.contains(r#"<div class="q-box" id="qbox-"#), "{html}");
     assert!(
-        html.contains("<h2>Questions for you</h2><p class=\"sec-n\">1 question waiting on you</p>"),
+        html.contains("<h2>Questions for you</h2><p class=\"sec-n\">1 question</p>"),
         "the inbox counts the questions put to the owner"
     );
     assert!(html.contains("<h2>Nobody is waiting</h2><p class=\"sec-n\">3 questions</p>"));
@@ -620,9 +620,8 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
     assert!(html.contains("data-keep>Keep them</button>"));
     // its body does not say its title again
     assert!(!html.contains("Close these 3 questions?"));
-    assert!(html.contains(
-        "<p class=\"confirm-copy\">Closed, they leave this list and no one can answer them.</p>"
-    ));
+    // the button and the title say it: no copy explains closing
+    assert!(html.contains("<p class=\"confirm-copy\"></p>"));
     // the nav's Inbox counts what the page lists as yours: not the ones nobody waits on
     assert_eq!(page.nav.inbox, page.for_you().len());
     // a question one agent put to another is listed apart, quieter, answerable as the owner

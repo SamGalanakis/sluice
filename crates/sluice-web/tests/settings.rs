@@ -630,12 +630,13 @@ async fn retiring_is_set_in_hours_with_keep_patterns_and_turned_off_when_empty()
     let (status, html) = f.get_page().await;
     assert_eq!(status, 200);
     assert!(html.contains("Retire done units after"));
-    assert!(html.contains("Done units stay until an edit removes them"));
+    // off is the tag alone: no sentence explains it
+    assert!(html.contains(">Off</span>") && !html.contains("Done units stay"));
     let (status, html) = f.post("prune_done_after", "6", "", 1).await;
     assert_eq!(status, 200, "{html}");
     let p = f.project().await;
     assert_eq!(p.prune_done_after, Some(21600));
-    assert!(html.contains("Done units retire 6h after their last step finished"));
+    assert!(html.contains("Done units retire after 6h"));
     assert!(html.contains("id=\"prune-done-after\" name=\"value\""));
     let (status, html) = f.post("prune_keep", "ta-*, fig-? release", "", 2).await;
     assert_eq!(status, 200, "{html}");

@@ -51,14 +51,16 @@ async fn every_unit_of_the_fixture_is_drawn_once_in_its_band_in_rank() {
     assert!(at(&html, "<!--r:s-a-4-->") < at(&html, "<!--r:s-a-5-->"));
     assert!(at(&html, "<!--r:s-s-4-->") < at(&html, "<!--r:s-a-5-->"));
     // Running: a block a recipe in the order of its first unit, the quiet one first, then the
-    // longest; the unit of no recipe after them; the band's line says where the others went
+    // longest; the unit of no recipe after them; the band's line counts its rows and says
+    // nothing of where the others went or how the rows are ordered
     let running = plan_html::band(&html, "plan-running");
     assert!(at(running, "<!--r:u-s-3-->") < at(running, "<!--r:u-a-6-->"));
     assert!(at(running, "<!--r:u-a-6-->") < at(running, "<!--r:u-index-->"));
     assert!(
-        running.contains(
-            "Quiet first, then the longest. 1 unit asks you above. 1 long run is shown apart."
-        ),
+        running.contains("<p class=\"sec-n\">3 running</p>")
+            && !running.contains("Quiet first")
+            && !running.contains("shown apart")
+            && !running.contains("asks you above"),
         "{running}"
     );
     for head in [">article</a></h3>", ">scan</a></h3>", "<h3>No recipe</h3>"] {
@@ -129,8 +131,9 @@ async fn every_unit_of_the_fixture_is_drawn_once_in_its_band_in_rank() {
     );
     // the Running group of units of no recipe says what they are
     assert!(
-        html.contains("1 unit without a recipe and 1 loose step")
-            || html.contains("1 unit without a recipe: each draws its own steps"),
+        (html.contains("1 unit without a recipe and 1 loose step")
+            || html.contains("<p class=\"sec-n\">1 unit without a recipe</p>"))
+            && !html.contains("each draws its own steps"),
         "{html}"
     );
     assert!(!html.contains("of no recipe"), "{html}");
@@ -155,7 +158,10 @@ async fn three_loose_steps_are_a_cell_each() {
         );
     }
     // no recipe, no "unit without a recipe": loose steps, said so
-    assert!(html.contains("1 loose step."), "{html}");
+    assert!(
+        html.contains("<p class=\"sec-n\">1 loose step</p>"),
+        "{html}"
+    );
     assert!(!html.contains("each draws its own steps"), "{html}");
     // a loose step's links lead to its own page, not a unit page
     assert!(!html.contains("/units/water-plants"), "{html}");

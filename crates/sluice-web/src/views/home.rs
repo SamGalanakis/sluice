@@ -326,7 +326,7 @@ impl HomeProject {
             let href = format!("{}/steps/{}", p.href(), s.step);
             let dismiss = if s.cancelled {
                 format!(
-                    "<form class=\"sr-dismiss\" method=\"post\" action=\"{}/steps/{}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"next\" value=\"/\"><button class=\"text-button\" aria-label=\"Dismiss the cancel of {}\" title=\"It stays on its unit, but no longer marks the project\">Dismiss</button></form>",
+                    "<form class=\"sr-dismiss\" method=\"post\" action=\"{}/steps/{}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"next\" value=\"/\"><button class=\"text-button\" aria-label=\"Dismiss the cancel of {}\">Dismiss</button></form>",
                     p.href(),
                     esc(&s.step),
                     esc(&sref.link_name(72))
@@ -628,7 +628,7 @@ impl HomeView {
     pub fn head(&self) -> TrustedHtml {
         let alert = if self.runner_stopped {
             format!(
-                "<div class=\"page-alert runner-off\" role=\"status\">{}<p><strong>Runner stopped.</strong> No step starts until <code>sluice loop</code> runs; running steps carry on.</p></div>",
+                "<div class=\"page-alert runner-off\" role=\"status\">{}<p><strong>Runner stopped.</strong> No step starts until <code>sluice loop</code> runs.</p></div>",
                 icons::icon(icons::Icon::TriangleAlert, 20, "ro-icon")
             )
         } else {
@@ -657,15 +657,14 @@ impl HomeView {
                 "for-you",
                 "For you",
                 &match open {
-                    0 => "Nothing is waiting on you".to_owned(),
-                    1 => "The one thing waiting on you".to_owned(),
-                    n => format!("{n} questions waiting on you, oldest first"),
+                    0 => String::new(),
+                    n => ui::count(n, "question", "questions"),
                 },
             )
             .as_str(),
         );
         if self.questions.is_empty() {
-            html.push_str("<p class=\"fy-none\">No question is waiting on you. A question an agent puts to you comes here first, and to the Inbox.</p>");
+            html.push_str("<p class=\"fy-none\">Nothing waiting on you.</p>");
         }
         for q in &self.questions {
             let id = format!("item-{}-{}", q.project, q.id());
@@ -725,7 +724,7 @@ impl HomeView {
             ));
         }
         format!(
-            "{}<div class=\"mod swell-margin td{wide}\"><ul class=\"td-list\">{rows}</ul><p class=\"td-all\"><a href=\"/day\">The day as a timetable</a></p></div>",
+            "{}<div class=\"mod swell-margin td{wide}\"><ul class=\"td-list\">{rows}</ul><p class=\"td-all\"><a href=\"/day\">Timetable</a></p></div>",
             ui::section_head("today", "Today", "The last 24 hours"),
             wide = if self.questions.is_empty() { " td-wide" } else { "" },
         )
@@ -771,7 +770,7 @@ impl HomeView {
         }
         format!(
             "{}<div class=\"scroll ix-wrap\" tabindex=\"0\" role=\"region\" aria-labelledby=\"index\"><table class=\"ix\"><thead><tr><th scope=\"col\">Project</th><th scope=\"col\" class=\"num\">Units</th><th scope=\"col\" class=\"num\">Running</th><th scope=\"col\" class=\"num\">Stopped</th><th scope=\"col\" class=\"num ix-w\">Waiting</th><th scope=\"col\" class=\"num\">Done</th><th scope=\"col\" class=\"ix-at\">Changed</th></tr></thead><tbody>{rows}</tbody><tfoot><tr><th scope=\"row\">All</th><td class=\"num\">{units}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num ix-w\">{}</td><td class=\"num\">{}</td><td class=\"ix-at\"></td></tr></tfoot></table></div>",
-            ui::section_head("index", "Index", "Every project's units by where they stand"),
+            ui::section_head("index", "Index", ""),
             total[0],
             total[1],
             total[2],
@@ -781,7 +780,7 @@ impl HomeView {
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
         let mut html = String::from("<div id=\"projects\" class=\"home\">");
         if self.projects.is_empty() && self.archived.is_empty() {
-            html.push_str("<p class=\"empty\">No projects yet. An orchestrator creates one with <code>project_create</code>.</p>");
+            html.push_str("<p class=\"empty\">No projects yet.</p>");
         } else {
             // For you beside Today while something waits on the owner; else a line over it
             let (ask, today) = if self.questions.is_empty() { (12, 12) } else { (8, 4) };
@@ -800,10 +799,7 @@ impl HomeView {
                     ui::section_head(
                         "projects-h",
                         "Projects",
-                        &format!(
-                            "{}, what needs you first",
-                            ui::count(live.len(), "project", "projects")
-                        )
+                        &ui::count(live.len(), "project", "projects")
                     )
                 ));
                 for p in live {
@@ -984,7 +980,7 @@ fn function_head(snapshot: &DashboardSnapshot, nav: &NavView) -> TrustedHtml {
         day::join(&counts)
     );
     if retired > 0 {
-        summary.push_str(&format!(" {retired} retired, kept for older plans."));
+        summary.push_str(&format!(" {retired} retired."));
     }
     if broken > 0 {
         summary.push_str(&format!(

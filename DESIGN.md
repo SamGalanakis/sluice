@@ -1023,8 +1023,8 @@ The pages compose these parts; each lane that redraws one writes its section her
     `failure::Advice`), Retry with feedback first, the bare Retry quiet when the failure
     repeated, Open step, Unit page, its Details). A failure's Details end with "Set it aside"
     under a hairline: Cancel and Cancel and dismiss, each an outlined row opening its
-    confirmation ("Cancel <title>? It stays stopped and can be dismissed; Retry still works.";
-    Cancel and dismiss says Undo brings back the cancel, not the failure); with script both
+    confirmation ("Cancel <title>?"; Cancel and dismiss says Undo brings back the cancel, not
+    the failure); with script both
     post in place, Cancel and dismiss handing the focus to Undo. Failures before
     cancels, in plan order. A cancelled card ends with a quiet Dismiss (a plain form, no
     confirm): its unit then stops marking the plan and the summary, and stands in Done's index
@@ -1041,7 +1041,9 @@ The pages compose these parts; each lane that redraws one writes its section her
     aside says "It had failed: …" under its sentence). A card's stage names it on a unit of several; a step's
     id never heads or leads a card. A card or row is its unit's trace button, named "Trace
     <title>", its state and time its description.
-  - **Running**, quiet first then the longest running, and **Waiting**, in plan order, as rows:
+  - **Running**, quiet first then the longest running, and **Waiting**, in plan order, as rows
+    (Running's count line "3 running", Waiting's "4 waiting", with ", all held by <title>" when
+    one source holds them all and ", 1 blocked"; a band of one block says its block's line):
     a block a recipe (its name, linking to every unit it made, its count by state, its stages
     as the columns over its rows), then the units of no recipe and the loose steps. A row (72 to
     88px at 1440) is the unit's trace button: its glyph and word, how long it has run ("1h 51m",
@@ -1126,7 +1128,7 @@ The pages compose these parts; each lane that redraws one writes its section her
   wide screen they stand together at the right; on a phone it drops Changed and Waiting so it
   fits without a hidden scroll, and its links and Today's are 44px targets.
 - **Day** (`/day`, `/projects/id/<p>/day`, `views::day`): the day as a timetable. The head:
-  "Day", its note the date and the reader's clock. The day line under the day's sentence: a
+  "Day", its note the date. The day line under the day's sentence: a
   row a project, its name in the first 132px, its runs as 5px
   bars on 7px tracks (sky done, blue running, sand-ink needing a look), the hours along the top
   in data mono, the rule at now in the run blue; quick successes are counted, not drawn. The
@@ -1145,13 +1147,14 @@ The pages compose these parts; each lane that redraws one writes its section her
   change.
 - **Stats** (`/projects/id/<p>/stats`, `views::stats`): a project's numbers over a window, and
   the one place a stage's usual time is said. The head: "Stats", its note how many runs ended
-  and units finished in the window ("on your clock" when it is not UTC); in the row the window
+  and units finished in the window; in the row the window
   switch (24 hours, 7 days, the default, 30 days, All), the view-switch bar of links
   (`?window=`), so it works without script. On the paper four band sections, each under its
   3px navy rule: **Durations by stage**, a table a recipe in the project's recipe order (its
   name, how many units and runs) with a row a stage in the recipe's order: how many of its runs
-  succeeded and their median, p90 and longest in data mono, then the median drawn as a sky-ink
-  bar inside its p90 in pale sky with a sky-ink edge, against the recipe's longest p90; the
+  succeeded ("Succeeded") and their median, p90 and longest in data mono, then, under "median ·
+  p90", the median drawn as a sky-ink bar inside its p90 in pale sky with a sky-ink edge,
+  against the recipe's longest p90 (no section line explains it); the
   units of no recipe and the loose steps last, "Without a recipe", a row a step (the busiest
   first). A unit the plan has retired goes with the recipe whose stages hold every stage it ran
   with the fewest left over. **Outcomes**, the same tables: succeeded, failed, cancelled,
@@ -1192,6 +1195,15 @@ The pages compose these parts; each lane that redraws one writes its section her
   its note, why; the paper lists the ways on, each a heavy link with its arrow.
 - **Agent docs** (`/docs`): the head names them; the index a row of topic modules; a topic
   its markdown at the measure in eight columns, every topic listed sticky beside it.
+
+## Words
+
+The UI explains nothing it shows: no captions on how to read a view, no standing hints, no
+second sentences; state, labels and errors only. A field's constraint is said by the error when
+it is broken, never under the field. One short line where a blank would look broken ("Nothing
+waiting on you."), a banner that says the condition and what to do in the fewest words, one
+advice line under a failure only when it says more than the Retry beside it. No hedging ("most
+often", "usually") and no second clause on why.
 
 ## Accessibility
 

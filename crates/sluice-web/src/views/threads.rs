@@ -409,10 +409,7 @@ impl InboxView {
     pub fn yours_line(&self) -> String {
         match self.for_you().len() {
             0 => String::new(),
-            n => format!(
-                "{} waiting on you",
-                super::ui::count(n, "question", "questions")
-            ),
+            n => super::ui::count(n, "question", "questions"),
         }
     }
     /// The notes not read yet, across their threads (a thread card says how many it holds).
@@ -459,7 +456,7 @@ impl InboxView {
             id: String::new(),
             action: "/messages/close".into(),
             hidden,
-            copy: "Closed, they leave this list and no one can answer them.".into(),
+            copy: String::new(),
             reason: None,
             confirm: "Close them".into(),
             keep: "Keep them",
@@ -997,13 +994,13 @@ impl Composer {
         use sluice_model::commands::StepStatus;
         match status {
             None | Some(StepStatus::Running) => String::new(),
-            Some(StepStatus::Pending) => "It has not started: it reads this when it does.".into(),
-            Some(StepStatus::Failed) => {
-                "It is not running: it reads this only if it runs again. To tell it something now, Retry with feedback.".into()
-            }
-            Some(StepStatus::Succeeded | StepStatus::Stale | StepStatus::Skipped) => {
-                "It is not running: it reads this only if it runs again.".into()
-            }
+            Some(StepStatus::Pending) => "Not started: it reads this when it starts.".into(),
+            Some(
+                StepStatus::Failed
+                | StepStatus::Succeeded
+                | StepStatus::Stale
+                | StepStatus::Skipped,
+            ) => "Not running: it reads this only if it runs again.".into(),
         }
     }
 }
@@ -1021,25 +1018,6 @@ pub struct Build<'a> {
     pub href: &'a dyn Fn(&MessageItem) -> String,
 }
 impl Conversation {
-    /// Its notes sent to several, each drawn once, as its count's head says them: "the note to
-    /// 6 steps shown once", "2 notes to several shown once each"; "" when it has none.
-    pub fn folded_words(&self) -> String {
-        let folded: Vec<&Entry> = self
-            .rows
-            .iter()
-            .filter_map(|row| match row {
-                Row::Group(g) => Some(g.entries.iter()),
-                _ => None,
-            })
-            .flatten()
-            .filter(|e| !e.also.is_empty())
-            .collect();
-        match folded.as_slice() {
-            [] => String::new(),
-            [one] => format!("the note {} shown once", one.also_words()),
-            many => format!("{} notes to several shown once each", many.len()),
-        }
-    }
     pub fn build(b: Build<'_>, items: Vec<MessageItem>) -> Self {
         let ids: BTreeSet<i64> = items.iter().map(MessageItem::id).collect();
         // every question: its replies sit under it (in excerpts, as their first words too)

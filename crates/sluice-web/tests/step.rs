@@ -126,7 +126,7 @@ fn a_failed_steps_drawer_leads_with_retry_and_names_its_unset_outputs_on_one_lin
     // a succeeded step's Retry asks first, naming what it does; never primary
     assert!(
         html.contains("<details class=\"confirm-flow\"><summary>Retry</summary>")
-            && html.contains("Retrying runs it again; its outputs stay until the new run ends.")
+            && !html.contains("Retrying runs it again")
             && !html.contains("value=\"retry\" class=\"primary\""),
         "{html}"
     );
@@ -449,10 +449,7 @@ async fn durable_detail_uses_current_generation_frozen_inputs_and_live_submissio
     assert!(!ended_html.as_str().contains("took took"));
     let mut timed = step.clone();
     timed.runs[0].seconds = Some(19200.0);
-    assert_eq!(
-        timed.cancel_prompt(),
-        "It has been running for 5h 20m. Cancelling stops that run; Retry starts it over."
-    );
+    assert_eq!(timed.cancel_prompt(), "Running for 5h 20m.");
     assert_eq!(step.inputs[0].value, "frozen attempted value");
     assert_eq!(step.outputs[0].value, "true");
     assert_eq!(step.outputs[0].source, "Submitted so far");

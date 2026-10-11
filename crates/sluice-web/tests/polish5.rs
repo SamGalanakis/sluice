@@ -386,15 +386,14 @@ async fn an_answered_or_closed_question_keeps_its_place_and_reads_whole() {
             && card.contains("<span class=\"qa-what\">Closed "),
         "{card}"
     );
-    // one section name on the inbox and Questions, and the inbox says what Questions adds
+    // one section name on the inbox and Questions; the inbox does not explain what Questions
+    // adds (the messages' switch leads there)
     for path in ["/inbox", "/questions"] {
         let (_, html) = f.get(path).await;
         assert!(html.contains(">Questions for you<"), "{path}");
         assert!(!html.contains(">For you<span"), "{path}");
     }
-    assert!(
-        inbox.contains("<p class=\"meta q-also\"><a href=\"/questions\">Questions</a> also lists")
-    );
+    assert!(!inbox.contains("q-also") && !inbox.contains("also lists"));
 }
 
 #[tokio::test]
@@ -505,7 +504,7 @@ async fn the_small_copy_reads_as_it_should() {
     let (_, guide) = f.get("/_ui").await;
     assert!(guide.contains("<h1>States and parts</h1>"), "{guide}");
     assert!(
-        guide.contains("<a href=\"/docs\">agent docs</a>"),
+        guide.contains("<a href=\"/docs\">Agent docs</a>"),
         "{guide}"
     );
     assert!(guide.contains("<p class=\"meta gal-built\">Built with <code>ui::tag</code>"));

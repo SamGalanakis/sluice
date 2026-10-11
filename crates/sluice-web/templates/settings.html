@@ -3,14 +3,13 @@
 <!--settings-live--><header id="settings-live" data-revision="{{ view.project.settings_rev }}" data-name="{{ view.project.name }}" data-paused="{{ view.project.paused }}" data-archived="{{ view.project.archived }}" data-fields="{{ view.changes_json() }}" data-page-title="{{ view.project.name }} · Settings · sluice">
 <h2 class="vh">Project settings</h2><p class="settings-lead">Project settings{% if view.project.paused %} {{ crate::views::ui::tag("Paused", "", None)|safe }}{% endif %}{% if view.project.archived %} {{ crate::views::ui::tag("Archived", "muted", None)|safe }}{% endif %}</p></header><!--/settings-live-->
 <nav class="settings-index" aria-label="Settings sections"><a href="#details-heading">Details</a><a href="#resources-heading">Resources</a><a href="#board-heading">Board</a><a href="#retire-heading">Retiring</a><a href="#activity-heading">Activity</a><a href="#danger-heading">Delete</a></nav>
-<p class="setting-help">Each Apply commits one change right away. <a href="/projects/id/{{ view.project.project_id }}/log?kind=project">View authored changes</a>.</p>
+<p class="setting-help"><a href="/projects/id/{{ view.project.project_id }}/log?kind=project">View authored changes</a></p>
 <section aria-labelledby="details-heading"><h2 id="details-heading">Details</h2>
 <dl class="settings-fields">
 <div class="setting-row"><dt><label for="project-name">Name</label></dt><dd>
 <form method="post" action="{{ view.path() }}" data-setting="name" data-seen="{{ view.seen("name") }}">
 <input type="hidden" name="field" value="name"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<input id="project-name" name="value" value="{{ feedback.value("name", view.project.name.as_str()) }}" required aria-describedby="name-help name-feedback">
-<p id="name-help" class="setting-help">Lowercase letters, numbers, underscores and hyphens. Links and running work keep the same project ID.</p>
+<input id="project-name" name="value" value="{{ feedback.value("name", view.project.name.as_str()) }}" required aria-describedby="name-feedback">
 <div class="setting-actions"><button type="submit">Apply name</button><span id="name-feedback" class="settings-feedback{% if feedback.error("name") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "name" %}{{ feedback.message }}{% endif %}</span></div>
 </form></dd></div>
 <div class="setting-row"><dt><label for="project-description">Description</label></dt><dd>
@@ -23,13 +22,11 @@
 {% if !icon_url.is_empty() %}<img class="settings-icon" id="icon-preview" src="{{ icon_url }}" alt="Current project icon">{% endif %}
 <form method="post" action="{{ view.path() }}" data-setting="icon" data-seen="{{ view.seen("icon") }}">
 <input type="hidden" name="field" value="icon"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<input id="project-icon" name="value" value="{{ feedback.value("icon", icon_text.as_str()) }}" aria-describedby="icon-help icon-feedback">
-<p id="icon-help" class="setting-help">Up to 16 text characters. Leave empty to remove.</p>
+<input id="project-icon" name="value" value="{{ feedback.value("icon", icon_text.as_str()) }}" aria-describedby="icon-feedback">
 <div class="setting-actions"><button type="submit">Apply icon</button><span id="icon-feedback" class="settings-feedback{% if feedback.error("icon") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "icon" %}{{ feedback.message }}{% endif %}</span></div>
-</form><div data-upload hidden><label for="icon-file">Or upload an image, up to 256 KiB</label><input id="icon-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><button type="button" data-upload-button>Apply image</button></div></dd></div>
+</form><div data-upload hidden><label for="icon-file">Or upload an image</label><input id="icon-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><button type="button" data-upload-button>Apply image</button></div></dd></div>
 </dl></section>
 <section aria-labelledby="resources-heading"><h2 id="resources-heading">Resources</h2>
-<p class="setting-help">A capacity is a whole number, or a fn that reports it about every 10 seconds. Lowering it holds new work while active work continues.</p>
 <!--resource-status--><div id="resource-status"><ul class="resource-list">
 {% for r in view.resources %}<li><code>{{ r.name }}</code> · {% if r.dynamic %}Dynamic{% else %}Static{% endif %} capacity {{ r.capacity }} · {{ r.held }} in use · {{ r.waiting }} waiting for capacity{% if let Some(queued) = r.queued %} · {{ queued }} steps queued{% else %} · <span title="Not known until the plan's fns have loaded">steps queued —</span>{% endif %}{% if !r.error.is_empty() %}<p class="setting-error">{{ r.error }}</p>{% endif %}</li>{% endfor %}
 {% if view.resources.is_empty() %}<li class="setting-help">No resources declared.</li>{% endif %}
@@ -44,7 +41,6 @@
 <div class="setting-pair"><label for="resource-name">Name</label><input id="resource-name" name="resource" value="{% if feedback.error("resources") %}{{ feedback.resource }}{% endif %}" required></div>
 {% call capacity("resource-value", "1", "", view.capacity_fns("")) %}{% endcall %}<div class="setting-actions"><button type="submit">Add resource</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" %}{{ feedback.message }}{% endif %}</span></div></form></dd></div></dl></section>
 <section aria-labelledby="board-heading" id="board-settings"><h2 id="board-heading">Board</h2>
-<p class="setting-help">An OpenUI Lang program drawn beside the plan (its own section on a phone), with live units, step states, outputs, metrics, tables and charts. Agents set it with <code>board_set</code>; <code>docs("board")</code> lists the components.</p>
 <form method="post" action="{{ view.path() }}/board" data-setting="board" id="board-form">
 <input type="hidden" name="expected_rev" id="board-rev" value="{{ view.project.board_rev }}">
 <label for="board-program">Program{% if view.project.board_rev.0 > 0 %} · rev {{ view.project.board_rev }}{% endif %}</label>
@@ -52,34 +48,30 @@
 <div class="setting-actions"><button type="submit" name="op" value="save">Save board</button><span id="board-feedback" class="settings-feedback board-feedback{% if feedback.error("board") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "board" %}{{ feedback.message }}{% endif %}</span></div>
 </form><div class="board-clear">{{ view.clear_confirm().html()|safe }}</div>{{ crate::views::ui::more_open_hidden("preview-fold", "Show the preview", "Hide the preview", "board-preview-label")|safe }}<div id="board-preview" class="settings-preview board-preview" aria-label="Board preview" hidden></div>{{ crate::views::ui::more_close("")|safe }}
 <h3 id="doc-heading">Document</h3>
-<p class="setting-help">The board's hand-written part, drawn where the program has <code>Doc()</code>. Agents read it with <code>board_doc_read</code> and change it with <code>board_doc_write</code> or <code>board_doc_edit</code>.</p>
-<!--board-doc--><div id="board-doc"><p class="setting-help doc-status">{% if view.doc.rev.0 > 0 %}Rev {{ view.doc.rev }}{% if let Some(at) = view.doc.at %} · edited {{ crate::views::ui::ago(at)|safe }}{% endif %}{% if let Some(author) = view.doc.author %} by {{ author }}{% endif %}{% else %}Not written yet.{% endif %}{% if !view.doc_drawn() %} The program has no <code>Doc()</code>, so the board does not show it.{% endif %}</p>
+<!--board-doc--><div id="board-doc"><p class="setting-help doc-status">{% if view.doc.rev.0 > 0 %}Rev {{ view.doc.rev }}{% if let Some(at) = view.doc.at %} · edited {{ crate::views::ui::ago(at)|safe }}{% endif %}{% if let Some(author) = view.doc.author %} by {{ author }}{% endif %}{% else %}Not written yet.{% endif %}{% if !view.doc_drawn() %} Not shown: the program has no <code>Doc()</code>.{% endif %}</p>
 {% if !view.doc.markdown.trim().is_empty() %}<div class="settings-preview doc-view md" aria-labelledby="doc-heading">{{ view.doc_html()|safe }}</div>{% endif %}
 </div><!--/board-doc--></section>
 <section aria-labelledby="retire-heading" id="retire-settings"><h2 id="retire-heading">Retiring</h2>
-<p class="setting-help">Sluice removes done units from the plan once their last step finished this long ago, in one edit by <code>sluice</code>, checking every 5 minutes. A unit that a remaining step or plan output still uses stays, and each removed step's result stays in the <code>outcomes</code> view.</p>
-<!--retire-status--><div id="retire-status"><p class="setting-help retire-status">{% if view.project.prune_done_after.is_some() %}{{ crate::views::ui::tag("On", "", None)|safe }} Done units retire {{ retire_hours }}h after their last step finished{% if !view.project.prune_keep.is_empty() %}, except {{ crate::views::ui::count(view.project.prune_keep.len(), "pattern", "patterns") }}{% endif %}. {% else %}{{ crate::views::ui::tag("Off", "muted", None)|safe }} Done units stay until an edit removes them. {% endif %}{% if let Some(r) = view.retired %}Last retired {{ crate::views::ui::ago(r.at)|safe }}: {{ crate::views::ui::count(r.steps, "step", "steps") }} (rev {{ r.rev }}).{% else %}Nothing retired yet.{% endif %}</p></div><!--/retire-status-->
+<!--retire-status--><div id="retire-status"><p class="setting-help retire-status">{% if view.project.prune_done_after.is_some() %}{{ crate::views::ui::tag("On", "", None)|safe }} Done units retire after {{ retire_hours }}h{% if !view.project.prune_keep.is_empty() %}, except {{ crate::views::ui::count(view.project.prune_keep.len(), "pattern", "patterns") }}{% endif %}. {% else %}{{ crate::views::ui::tag("Off", "muted", None)|safe }} {% endif %}{% if let Some(r) = view.retired %}Last retired {{ crate::views::ui::ago(r.at)|safe }}: {{ crate::views::ui::count(r.steps, "step", "steps") }} (rev {{ r.rev }}).{% else %}Nothing retired yet.{% endif %}</p></div><!--/retire-status-->
 <dl class="settings-fields">
 <div class="setting-row"><dt><label for="prune-done-after">Retire done units after</label></dt><dd>
 <form method="post" action="{{ view.path() }}" data-setting="prune_done_after" data-seen="{{ view.seen("prune_done_after") }}">
 <input type="hidden" name="field" value="prune_done_after"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<div class="setting-unit"><input id="prune-done-after" name="value" inputmode="decimal" autocomplete="off" placeholder="Off" value="{{ feedback.value("prune_done_after", retire_hours.as_str()) }}" aria-describedby="prune-done-after-help prune-done-after-feedback"><span>hours</span></div>
-<p id="prune-done-after-help" class="setting-help">Such as 6 or 0.5. Leave empty to turn retiring off.</p>
+<div class="setting-unit"><input id="prune-done-after" name="value" inputmode="decimal" autocomplete="off" placeholder="Off" value="{{ feedback.value("prune_done_after", retire_hours.as_str()) }}" aria-describedby="prune-done-after-feedback"><span>hours</span></div>
 <div class="setting-actions"><button type="submit">Apply</button><span id="prune-done-after-feedback" class="settings-feedback{% if feedback.error("prune_done_after") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "prune_done_after" %}{{ feedback.message }}{% endif %}</span></div>
 </form></dd></div>
 <div class="setting-row"><dt><label for="prune-keep">Never retire</label></dt><dd>
 <form method="post" action="{{ view.path() }}" data-setting="prune_keep" data-seen="{{ view.seen("prune_keep") }}">
 <input type="hidden" name="field" value="prune_keep"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<input id="prune-keep" name="value" autocomplete="off" spellcheck="false" class="mono-field" value="{{ feedback.value("prune_keep", retire_keep.as_str()) }}" aria-describedby="prune-keep-help prune-keep-feedback">
-<p id="prune-keep-help" class="setting-help">Unit-name patterns, separated by commas or spaces: <code>*</code> matches any run of characters, <code>?</code> one, as in <code>ta-*</code>. A matching unit is never retired, done or not.</p>
+<input id="prune-keep" name="value" autocomplete="off" spellcheck="false" class="mono-field" value="{{ feedback.value("prune_keep", retire_keep.as_str()) }}" title="Unit-name patterns: * any characters, ? one" aria-describedby="prune-keep-feedback">
 <div class="setting-actions"><button type="submit">Apply patterns</button><span id="prune-keep-feedback" class="settings-feedback{% if feedback.error("prune_keep") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "prune_keep" %}{{ feedback.message }}{% endif %}</span></div>
 </form></dd></div>
 </dl></section>
 <section aria-labelledby="activity-heading"><h2 id="activity-heading">Activity</h2>
-<form method="post" action="{{ view.path() }}" data-setting="paused" class="settings-switch" data-seen="{{ view.seen("paused") }}"><div><p>Pause project</p><p class="setting-help">Hold future work. Running work continues.</p></div>
+<form method="post" action="{{ view.path() }}" data-setting="paused" class="settings-switch" data-seen="{{ view.seen("paused") }}"><div><p>Pause project</p></div>
 <input type="hidden" name="field" value="paused"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><input type="hidden" name="value" value="{% if view.project.paused %}false{% else %}true{% endif %}">
 <button type="submit" role="switch" aria-checked="{{ view.project.paused }}" aria-label="Pause project">{% if view.project.paused %}Resume{% else %}Pause{% endif %}</button><span class="settings-feedback" role="status"></span></form>
-<form method="post" action="{{ view.path() }}" data-setting="archived" class="settings-switch" data-seen="{{ view.seen("archived") }}"><div><p>Archive project</p><p class="setting-help">Move to the archived list. Running work continues.</p></div>
+<form method="post" action="{{ view.path() }}" data-setting="archived" class="settings-switch" data-seen="{{ view.seen("archived") }}"><div><p>Archive project</p></div>
 <input type="hidden" name="field" value="archived"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><input type="hidden" name="value" value="{% if view.project.archived %}false{% else %}true{% endif %}">
 <button type="submit" role="switch" aria-checked="{{ view.project.archived }}" aria-label="Archive project">{% if view.project.archived %}Unarchive{% else %}Archive{% endif %}</button><span class="settings-feedback" role="status"></span></form>
 </section>

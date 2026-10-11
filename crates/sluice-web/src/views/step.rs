@@ -1688,19 +1688,17 @@ impl StepView {
             .filter(|r| r.finished.is_empty())
             .and_then(|r| r.seconds)
             .map(super::ui::duration_text);
-        let ran = if let Some(duration) = duration {
-            format!(
-                "It has been running for {duration}. Cancelling stops that run; Retry starts it over."
-            )
-        } else {
-            "It is running. Cancelling stops its run; Retry starts it over.".to_owned()
-        };
+        let ran = duration
+            .map(|d| format!("Running for {d}."))
+            .unwrap_or_default();
         // a run waiting on the owner's answer: cancelling leaves its question unanswered
         match &self.asking {
             Some(ask) => format!(
-                "It is waiting on your answer to “{}”. {ran}",
+                "Waiting on your answer to “{}”. {ran}",
                 super::ui::cut(&ask.title, 80)
-            ),
+            )
+            .trim_end()
+            .to_owned(),
             None => ran,
         }
     }
@@ -1726,8 +1724,8 @@ impl StepView {
     pub fn retry_confirm(&self) -> super::ui::Confirm {
         let after = match self.downstream {
             0 => String::new(),
-            1 => " The step after it runs again only if its new result differs.".into(),
-            n => format!(" The {n} steps after it run again only if its new result differs."),
+            1 => "The step after it reruns only if its result changes.".into(),
+            n => format!("The {n} steps after it rerun only if its result changes."),
         };
         let lead = if self.result_at.is_empty() {
             "It succeeded. ".to_owned()
@@ -1748,9 +1746,7 @@ impl StepView {
                 ("action", "retry".into()),
             ],
             lead: TrustedHtml::owned(lead),
-            copy: format!(
-                "Retrying runs it again; its outputs stay until the new run ends.{after}"
-            ),
+            copy: after,
             reason: Some("Optional feedback for the next attempt"),
             reason_label: "Feedback (optional)",
             reason_value: self.kept.clone(),
@@ -1826,19 +1822,12 @@ impl StepView {
                 }
             };
         vec![
-            confirm(
-                "Cancel",
-                "cancel",
-                cancel_next,
-                "It stays stopped and can be dismissed; Retry still works. Its failure stays on its Runs.".into(),
-                "Cancel it",
-            )
-            .html(),
+            confirm("Cancel", "cancel", cancel_next, String::new(), "Cancel it").html(),
             confirm(
                 "Cancel and dismiss",
                 "cancel_dismiss",
                 dismiss_next,
-                "It is cancelled and set aside: it stays on its unit, but no longer marks the unit or its project. Undo brings back the cancel, not the failure; Retry still works.".into(),
+                "Undo brings back the cancel, not the failure.".into(),
                 "Cancel and dismiss",
             )
             .html(),
@@ -2150,11 +2139,8 @@ struct StepBand<'a> {
 impl StepTemplate<'_> {
     /// What the inputs' values are, said once under their head: their run's, or defaults.
     fn inputs_note(&self) -> &'static str {
-        let sources: Vec<&str> = self.step.inputs.iter().map(|f| f.source.as_str()).collect();
         if self.step.inputs.iter().any(|f| f.received) {
             "As its last run received them."
-        } else if sources.contains(&"Its default") {
-            "A value not otherwise set is its default."
         } else {
             ""
         }

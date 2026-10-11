@@ -849,7 +849,7 @@ impl<'a> Plan<'a> {
         // never dismissed
         if let Some(step) = step.filter(|s| s.cancelled() && !s.dismissed) {
             actions.push_str(&format!(
-                "<form class=\"pl-dismiss\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"next\" value=\"{next}#undo-{s}\"><button class=\"quiet-act\" aria-label=\"Dismiss {name}\" title=\"It stays on its unit, but no longer marks the unit or its project\">Dismiss</button></form>",
+                "<form class=\"pl-dismiss\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"next\" value=\"{next}#undo-{s}\"><button class=\"quiet-act\" aria-label=\"Dismiss {name}\">Dismiss</button></form>",
                 h = esc(&step.href()),
                 next = esc(&self.view.href()),
                 s = esc(step.id.as_str()),
@@ -911,6 +911,11 @@ impl<'a> Plan<'a> {
             "running" => self.running_line(),
             _ => self.waiting_line(),
         };
+        // one block: its own head says the count, and Waiting adds what holds every unit
+        let held = match key {
+            "running" => String::new(),
+            _ => self.held_by(),
+        };
         let mut out = format!(
             "<section id=\"{id}\" class=\"pl-sec pl-rows\" style=\"--span:{cols}\" data-span=\"{cols}\" aria-labelledby=\"{key}\">"
         );
@@ -926,10 +931,7 @@ impl<'a> Plan<'a> {
                 let boxed = rows.len() - loose;
                 let words = match (boxed, loose) {
                     (0, n) => ui::count(n, "loose step", "loose steps"),
-                    (n, 0) => format!(
-                        "{}: each draws its own steps",
-                        ui::no_recipe(n, ("unit", "units"))
-                    ),
+                    (n, 0) => ui::no_recipe(n, ("unit", "units")),
                     (n, m) => format!(
                         "{} and {}",
                         ui::no_recipe(n, ("unit", "units")),
@@ -942,7 +944,7 @@ impl<'a> Plan<'a> {
                     "No recipe"
                 };
                 if single {
-                    ui::section_head(key, name, &format!("{line} {words}.")).0
+                    ui::section_head(key, name, &format!("{words}{held}")).0
                 } else {
                     group_head(title, &words, &[])
                 }
@@ -961,9 +963,9 @@ impl<'a> Plan<'a> {
                     esc(recipe)
                 );
                 if single {
-                    ui::strip_head(key, name, &format!("{line} {recipe}: {words}."), &stages)
+                    ui::strip_head(key, name, &format!("{recipe}: {words}{held}"), &stages)
                         .0
-                        .replacen(&format!(" {}: ", esc(recipe)), &format!(" {link}: "), 1)
+                        .replacen(&format!(">{}: ", esc(recipe)), &format!(">{link}: "), 1)
                 } else {
                     group_head(recipe, &words, &stages).replacen(
                         &format!("<h3>{}</h3>", esc(recipe)),
@@ -995,33 +997,27 @@ impl<'a> Plan<'a> {
         out.push_str("</section>");
         out
     }
-    /// "Quiet first, then the longest. 1 unit asks you above. 1 long run is shown apart." (the
-    /// margin is at the sheet's right on a wide sheet but under the band on a narrow one, so
-    /// the line names no place)
+    /// Running's count line: "3 running".
     fn running_line(&self) -> String {
-        let mut line = "Quiet first, then the longest.".to_owned();
-        let above = self
-            .asks
+        format!("{} running", self.running.len())
+    }
+    /// Waiting's count line: "3 waiting, all held by Review the spring guide" or "3 waiting,
+    /// 1 blocked".
+    fn waiting_line(&self) -> String {
+        let blocked = self
+            .waiting
             .iter()
-            .filter_map(|a| a.unit.map(|u| u.id.as_str()))
-            .collect::<BTreeSet<_>>()
-            .len();
-        if above > 0 {
-            line.push_str(&format!(
-                " {} you above.",
-                ui::count(above, "unit asks", "units ask")
-            ));
-        }
-        if !self.margin.is_empty() {
-            line.push_str(&format!(
-                " {} shown apart.",
-                ui::count(self.margin.len(), "long run is", "long runs are")
-            ));
+            .filter(|u| u.shown() == Shown::Blocked)
+            .count();
+        let mut line = format!("{} waiting{}", self.waiting.len(), self.held_by());
+        if blocked > 0 {
+            line.push_str(&format!(", {blocked} blocked"));
         }
         line
     }
-    /// "3 waiting, all held by Review the spring guide." or "3 waiting; 1 held up by a failure."
-    fn waiting_line(&self) -> String {
+    /// ", all held by Review the spring guide" when every waiting unit (two or more) waits on
+    /// the same first source; "" otherwise.
+    fn held_by(&self) -> String {
         let n = self.waiting.len();
         let firsts: BTreeSet<String> = self
             .waiting
@@ -1036,26 +1032,14 @@ impl<'a> Plan<'a> {
             .iter()
             .filter(|u| u.all_waits().is_some())
             .count();
-        let mut line = format!("{n} waiting");
         if n > 1 && held == n && firsts.len() == 1 {
-            line.push_str(&format!(
+            format!(
                 ", all held by {}",
                 firsts.iter().next().map(String::as_str).unwrap_or("")
-            ));
+            )
+        } else {
+            String::new()
         }
-        line.push('.');
-        let blocked = self
-            .waiting
-            .iter()
-            .filter(|u| u.shown() == Shown::Blocked)
-            .count();
-        if blocked > 0 {
-            line.push_str(&format!(
-                " {} held up by a failure up its chain.",
-                ui::count(blocked, "unit is", "units are")
-            ));
-        }
-        line
     }
     /// One unit's row: its head (the trace's button: its state, how long it has run, its
     /// title), its one line under it, its cells beside it at their recipe's
@@ -1365,11 +1349,11 @@ impl<'a> Plan<'a> {
             times.iter().copied().reduce(f64::max),
         ) {
             (Some(a), Some(b)) if a < b => format!(
-                "They took {} to {}, newest first.",
-                ui::duration_text(a),
-                ui::duration_text(b)
+                "<p class=\"meta pl-range\">Took {} to {}.</p>",
+                esc(&ui::duration_text(a)),
+                esc(&ui::duration_text(b))
             ),
-            _ => "Newest first.".to_owned(),
+            _ => String::new(),
         };
         let latest = ui::latest_list("Finished last", &self.latest());
         let mut items = String::new();
@@ -1417,7 +1401,7 @@ impl<'a> Plan<'a> {
         let open =
             self.view.show == "done" || !self.view.q.is_empty() || !self.view.recipe.is_empty();
         format!(
-            "<section id=\"plan-done\" class=\"pl-sec pl-done\" style=\"--span:{cols}\" data-span=\"{cols}\" aria-labelledby=\"done\">{head}{latest}<details class=\"pl-index\" data-preserve-attr=\"open\"{open}><summary>{chev}<span class=\"pl-show\">Show the {n}</span><span class=\"pl-hide\">Hide the {n}</span></summary><p class=\"meta pl-range\">{range}</p><ol class=\"pl-idx\">{items}</ol></details></section>",
+            "<section id=\"plan-done\" class=\"pl-sec pl-done\" style=\"--span:{cols}\" data-span=\"{cols}\" aria-labelledby=\"done\">{head}{latest}<details class=\"pl-index\" data-preserve-attr=\"open\"{open}><summary>{chev}<span class=\"pl-show\">Show the {n}</span><span class=\"pl-hide\">Hide the {n}</span></summary>{range}<ol class=\"pl-idx\">{items}</ol></details></section>",
             head = ui::section_head("done", "Done", &line),
             open = if open { " open" } else { "" },
             chev = icon(Icon::ChevronDown, 16, "chev"),
@@ -1558,8 +1542,8 @@ fn waits_html(unit: &UnitView) -> String {
             .first()
             .cloned()
             .unwrap_or_else(|| "Held.".into()),
-        Shown::Blocked => "Held up by a failure up its chain.".into(),
-        _ if step.ready() => "Ready: it starts when the runner next looks.".into(),
+        Shown::Blocked => "Held up by a failure upstream.".into(),
+        _ if step.ready() => "Ready: it starts next.".into(),
         _ => step.waits.first().cloned().unwrap_or_default(),
     };
     if words.is_empty() {

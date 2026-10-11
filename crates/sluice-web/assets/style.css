@@ -1672,8 +1672,6 @@ details.m-many[open] > .m-all { display: flex; flex-wrap: wrap; gap: 2px 14px; m
 .q-answered .qa-what { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .q-answered .qa-title { font-weight: 400; }
 .q-answered .qa-to a { color: inherit; text-underline-offset: var(--link-offset); }
-.q-also { margin: 2px 0 10px; max-width: var(--measure); }
-.q-also a { color: inherit; text-underline-offset: var(--link-offset); }
 li.m.q-done > .md, li.m.q-done > .m-body { opacity: 0.7; }
 .threads { display: grid; gap: 10px; }
 .threads > .item { margin: 0; }
@@ -2212,6 +2210,7 @@ button.q-toggle.primary[aria-expanded="true"]:hover {
 .confirmation h2 .sref-id { display: block; margin-top: 4px; font-size: 13px; font-weight: 400;
                             color: var(--ink-muted); }
 .confirm-copy { margin-bottom: 16px; overflow-wrap: anywhere; }
+.confirm-copy:empty { display: none; }
 .confirm-reason { display: grid; gap: 6px; font-size: 14px; }
 .confirm-reason textarea { width: 100%; min-width: 0; }
 .confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }

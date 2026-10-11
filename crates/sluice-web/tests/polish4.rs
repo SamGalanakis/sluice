@@ -511,8 +511,7 @@ async fn a_pending_step_names_what_holds_its_chain_and_a_stopped_runner() {
     assert!(root.contains("<code>b</code>"), "{root}");
     // the fixture's home has no runner: a pending step says nothing starts
     assert!(
-        waits
-            .contains("The runner is stopped: nothing starts until <code>sluice loop</code> runs."),
+        waits.contains("Runner stopped. No step starts until <code>sluice loop</code> runs."),
         "{waits}"
     );
     // a step whose own wait is running needs no more: its wait says it

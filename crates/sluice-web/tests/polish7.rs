@@ -206,7 +206,7 @@ async fn a_cancel_is_dismissed_from_its_card_and_undone_from_the_line_stopped_th
     // its page says so, with its Undo
     let step = get(&app, &format!("{plan}/steps/b")).await;
     assert!(
-        step.contains("value=\"undismiss\"><p class=\"meta\">Dismissed:"),
+        step.contains("value=\"undismiss\"><p class=\"meta\">Dismissed. <button"),
         "{step}"
     );
     assert!(!step.contains("d-dismiss-b"), "{step}");

@@ -1348,7 +1348,7 @@ impl Draw<'_> {
             };
             let _ = write!(
                 lines,
-                "<p class=\"board-stale\" role=\"note\">{}<span>Names step <code>{}</code>, which is not in the plan; this shows its last data.</span></p>",
+                "<p class=\"board-stale\" role=\"note\">{}<span>Step <code>{}</code> is not in the plan; showing its last data.</span></p>",
                 icon(Icon::TriangleAlert, 14, "bs-icon"),
                 esc(&step)
             );

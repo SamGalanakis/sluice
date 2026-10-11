@@ -397,7 +397,7 @@ impl ProjectSettingsView {
                 ("program", self.project.board.clone().unwrap_or_default()),
             ],
             copy: format!(
-                "The plan takes the whole page again and agents see no board. Its program (rev {}) stays in the box here until you leave, so Save board puts it back.",
+                "Save board puts rev {} back until you leave this page.",
                 self.project.board_rev
             ),
             confirm: "Clear board".into(),
@@ -423,9 +423,7 @@ impl ProjectSettingsView {
                     self.project.settings_rev.to_string(),
                 ),
             ],
-            copy: format!(
-                "{resource} and its capacity leave this project. While a step still needs it, sluice refuses."
-            ),
+            copy: "Refused while a step still needs it.".into(),
             confirm: format!("Remove {resource}"),
             keep: "Keep it",
             danger: true,
@@ -878,10 +876,9 @@ async fn board_change(
         resource: String::new(),
         saved: result.is_ok(),
         message: match &result {
-            Ok(outcome) if clear => format!(
-                "Cleared (rev {}). Its program is still in the box: Save board to restore it.",
-                outcome.rev
-            ),
+            Ok(outcome) if clear => {
+                format!("Cleared (rev {}). Save board restores it.", outcome.rev)
+            }
             Ok(outcome) => std::iter::once(format!("Saved (rev {})", outcome.rev))
                 .chain(outcome.warnings.iter().map(|w| format!("Warning: {w}")))
                 .collect::<Vec<_>>()
@@ -913,10 +910,7 @@ async fn board_preview(
         return error_response(bad("the program must be UTF-8"));
     };
     if program.trim().is_empty() {
-        return Html(
-            "<p class=\"setting-help\">No board: the plan keeps the whole page.</p>".to_owned(),
-        )
-        .into_response();
+        return Html("<p class=\"setting-help\">No board.</p>".to_owned()).into_response();
     }
     let registry = registry.map(|r| r.0);
     let result = async {

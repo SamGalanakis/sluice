@@ -146,18 +146,6 @@ pub fn zone(headers: &HeaderMap) -> i64 {
         .filter(|m| m.abs() <= 14 * 60)
         .unwrap_or(0)
 }
-/// "UTC", "UTC+02:00", "UTC−05:30".
-pub fn zone_name(minutes: i64) -> String {
-    if minutes == 0 {
-        return "UTC".into();
-    }
-    format!(
-        "UTC{}{:02}:{:02}",
-        if minutes > 0 { "+" } else { "−" },
-        minutes.abs() / 60,
-        minutes.abs() % 60
-    )
-}
 pub fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -467,7 +455,7 @@ impl DayView {
         let quick = all.iter().filter(|r| r.quick()).count();
         if quick > 0 {
             parts.push(format!(
-                "{} succeeded in under a minute: counted, not listed.",
+                "{} succeeded in under a minute.",
                 if quick == all.len() {
                     "All of them".to_owned()
                 } else {
@@ -483,15 +471,7 @@ impl DayView {
         let (_, date) = self.window.day_name(self.now);
         ui::page_head_note(
             "Day",
-            &TrustedHtml::owned(format!(
-                "{} · the last 24 hours, hours on {}",
-                esc(&date),
-                esc(&if self.window.zone == 0 {
-                    "UTC".to_owned()
-                } else {
-                    format!("your clock ({})", zone_name(self.window.zone))
-                })
-            )),
+            &TrustedHtml::owned(format!("{} · the last 24 hours", esc(&date))),
         )
     }
     pub fn title(&self) -> String {
@@ -614,7 +594,7 @@ impl DayView {
             ui::section_head(
                 "day-line-h",
                 "The day line",
-                "Each bar a run, start to end; stacked where runs overlapped"
+                ""
             ),
             self.summary(),
             if note.is_empty() {
@@ -643,7 +623,7 @@ impl DayView {
         if idle.is_empty() {
             String::new()
         } else {
-            format!("Nothing ran in {} in these 24 hours.", join_or(&idle))
+            format!("Nothing ran in {}.", join_or(&idle))
         }
     }
     /// The timetable: a row an hour (the current one last), a column a project, each run by
@@ -705,7 +685,7 @@ impl DayView {
             ui::section_head(
                 "timetable-h",
                 "Timetable",
-                "Each run in the hour it started: its minute, its unit and step, how it ended and how long it took"
+                ""
             ),
             // four projects or more stack under each hour sooner than a phone's width
             if n >= 4 { " tt-wide" } else { "" },
@@ -771,7 +751,7 @@ impl DayView {
         if !quick.is_empty() {
             html.push_str(&format!(
                 "<p class=\"tt-quick\">{} under a minute, all succeeded</p>",
-                esc(&ui::count(quick.len(), "quick run", "quick runs"))
+                esc(&ui::count(quick.len(), "run", "runs"))
             ));
         }
         html.push_str("</div>");
@@ -1137,8 +1117,6 @@ mod tests {
         assert_eq!(w.hours().count(), 24);
         assert_eq!(w.hour(w.start), 4);
         assert_eq!(w.day_name(now), ("Saturday", "10 October 2026".into()));
-        assert_eq!(zone_name(120), "UTC+02:00");
-        assert_eq!(zone_name(-330), "UTC−05:30");
         let utc = Window::at(now, 0);
         assert_eq!(utc.hour(now), 1);
         assert_eq!(utc.day_name(now).0, "Saturday");

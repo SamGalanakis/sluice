@@ -241,31 +241,22 @@ impl Failure {
             _ => "failed",
         }
     }
-    /// What to try next, by its kind, under its sentence: "" where only its own words can say
-    /// (the work's own failure) and for a cancel.
+    /// What to try next, by its kind, under its sentence, only when it is more than the Retry
+    /// beside it: "" where Retry is the whole move (a passing engine fault, a lost process, a
+    /// transient failure), where only its own words can say (the work's own failure) and for a
+    /// cancel.
     pub fn next_step(&self) -> &'static str {
         match self.caption() {
-            "cap" => {
-                "Retry runs it again under the same cap. To give it longer, raise its agent's time limit, set in minutes where its fn runs."
-            }
-            "stalled" => {
-                "Retry runs it again. Its Activity shows what it was doing when it went quiet."
-            }
+            "cap" => "Raise its agent's time limit, then Retry.",
+            "stalled" => "Its Activity shows where it went quiet.",
             "quota" => "Retry once its engine's usage cap resets.",
             "auth" => "Sign its engine in again on this machine, then Retry.",
             "engine exited" => {
-                "Its engine started, then exited partway through. Read what it said: a refusal or a limit will happen again, so Retry with feedback; a crash usually passes, so Retry."
-            }
-            "engine fault" => {
-                "An engine that would not start or take its input is most often a passing fault: Retry."
-            }
-            "lost" => {
-                "Its process ended with no result recorded, most often when sluice restarted: Retry."
+                "If it refused or hit a limit, Retry with feedback; if it crashed, Retry."
             }
             "no submit" => "Retry with feedback telling it to submit its outputs.",
             "invalid" => "Retry with feedback naming the outputs that did not fit.",
-            "rejected" => "Fix the inputs it refused (its Inputs tab shows them), then Retry.",
-            "transient" => "Retry: it may pass now.",
+            "rejected" => "Fix its inputs, then Retry.",
             _ => "",
         }
     }
@@ -321,9 +312,9 @@ impl Advice {
     pub fn text(&self) -> String {
         match self {
             Advice::None => String::new(),
-            Advice::Repeated(n) => format!(
-                "Run {n} failed the same way, so a bare Retry would most likely fail again. Retry with feedback, or change its inputs."
-            ),
+            Advice::Repeated(n) => {
+                format!("Run {n} failed the same way. Retry with feedback, or change its inputs.")
+            }
             Advice::Kind(text) => (*text).to_owned(),
         }
     }

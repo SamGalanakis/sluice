@@ -139,16 +139,13 @@ impl CallView {
             "Result"
         }
     }
-    /// How much of a long result is kept: "12,408 characters; its start and end are kept".
+    /// How long a long result was, its middle cut: "12,408 characters, middle cut".
     pub fn cut_words(&self) -> String {
         let kept = self.result.chars().count();
         if self.result_chars <= kept {
             return String::new();
         }
-        format!(
-            "{} characters; its start and end are kept",
-            thousands(self.result_chars)
-        )
+        format!("{} characters, middle cut", thousands(self.result_chars))
     }
 }
 fn thousands(n: usize) -> String {
@@ -432,8 +429,7 @@ pub fn view(
             ),
             SentKind::Compacted => (
                 "Compacted".to_owned(),
-                "Its engine compacted its context; sluice handed it its task and progress again."
-                    .to_owned(),
+                "Its engine compacted its context; its task and progress went back in.".to_owned(),
             ),
             SentKind::Message | SentKind::Text => match unwrapped(&turn.sent.text) {
                 Some(split) => split,

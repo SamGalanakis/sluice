@@ -138,7 +138,7 @@ fn tabs(prefix: &str) -> TrustedHtml {
 }
 fn sections() -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<section class=\"d-sec\">{}<p>A section: a head (a count after it, left out at zero), then its rows.</p></section><div class=\"card gal-card\"><p class=\"m-title\">A card</p><p class=\"meta\">A region on the card colour, its hairline and the region's corner. Never a card inside a card.</p></div>",
+        "<section class=\"d-sec\">{}<p>A section's rows.</p></section><div class=\"card gal-card\"><p class=\"m-title\">A card</p><p class=\"meta\">A region of its own.</p></div>",
         ui::head(3, "Queued", Some(2), "")
     ))
 }
@@ -163,7 +163,7 @@ fn fields(prefix: &str, project: &ProjectId) -> Result<TrustedHtml, askama::Erro
         (FieldView::new("review", "string", "", None, "a-7-review/verdict"), ""),
     ];
     Ok(TrustedHtml::owned(format!(
-        "<p class=\"meta gal-cap\">Outputs: which run set one, one repeated said once</p>{}<p class=\"f-unset\"><span class=\"quiet\">2 outputs not set yet:</span> <span class=\"f-uname\">verdict</span>, <span class=\"f-uname\">pr</span></p><p class=\"meta gal-cap\">Inputs: where each value came from</p>{}",
+        "<p class=\"meta gal-cap\">Outputs</p>{}<p class=\"f-unset\"><span class=\"quiet\">2 outputs not set yet:</span> <span class=\"f-uname\">verdict</span>, <span class=\"f-uname\">pr</span></p><p class=\"meta gal-cap\">Inputs</p>{}",
         TrustedHtml::from_template(&Fields { fields: &outputs, id: &format!("{prefix}out"), project, unset: "Not set yet." })?,
         TrustedHtml::from_template(&Fields { fields: &inputs, id: &format!("{prefix}in"), project, unset: "No value yet." })?,
     )))
@@ -174,7 +174,7 @@ fn folds() -> TrustedHtml {
     );
     let short = crate::markdown::render("Revised; the style check passes.");
     TrustedHtml::owned(format!(
-        "<p class=\"meta gal-cap\">A long text, cut</p>{}<p class=\"meta gal-cap\">One that fits its first lines: no Show all (with script)</p>{}<p class=\"meta gal-cap\">A list's sentence that opens to it</p>{}<p>a-5-draft · a-6-draft · a-7-draft · a-8-draft · a-9-draft · a-10-draft</p>{}<p class=\"meta gal-cap\">More and Less, Read less at its end</p>{}<div class=\"md\"><p>The rest of the document: what each section covers, and the order they go out in.</p></div>{}",
+        "<p class=\"meta gal-cap\">A long text, cut</p>{}<p class=\"meta gal-cap\">A long text that fits</p>{}<p class=\"meta gal-cap\">A list</p>{}<p>a-5-draft · a-6-draft · a-7-draft · a-8-draft · a-9-draft · a-10-draft</p>{}<p class=\"meta gal-cap\">More and Less</p>{}<div class=\"md\"><p>The rest of the document: what each section covers, and the order they go out in.</p></div>{}",
         ui::fold("md", &long),
         ui::fold("md", &short),
         ui::more_open("gates gal-fold", "6 steps: 5 done, 1 running", "", "", false),
@@ -207,7 +207,7 @@ fn toggles(prefix: &str) -> TrustedHtml {
         "sluice-light"
     };
     TrustedHtml::owned(format!(
-        "<div class=\"d-sec-h tp-top\"><p class=\"meta\">From run 2 · value types shown or not, on every page at once</p>{}</div><div class=\"gal-levels\"><figure><figcaption class=\"meta\">Display preferences, opened</figcaption>{}</figure><figure><figcaption class=\"meta\">Theme</figcaption>{}</figure><figure><figcaption class=\"meta\">Keyboard shortcuts</figcaption>{}</figure></div>",
+        "<div class=\"d-sec-h tp-top\"><p class=\"meta\">From run 2</p>{}</div><div class=\"gal-levels\"><figure><figcaption class=\"meta\">Display preferences, opened</figcaption>{}</figure><figure><figcaption class=\"meta\">Theme</figcaption>{}</figure><figure><figcaption class=\"meta\">Keyboard shortcuts</figcaption>{}</figure></div>",
         ui::types_toggle(),
         picture(prefix, theme, Level::Top),
         picture(prefix, theme, Level::Theme),
@@ -374,9 +374,9 @@ fn conversation(prefix: &str, project: &ProjectId) -> Result<TrustedHtml, askama
 fn empties() -> TrustedHtml {
     TrustedHtml::owned(format!(
         "{}{}",
-        ui::empty("Nothing is waiting on you."),
+        ui::empty("Nothing waiting on you."),
         ui::empty_with(
-            "No run of it is kept: it ran under an earlier release, or its runs were cleared since.",
+            "No run kept.",
             &TrustedHtml::owned("<a href=\"#\">Search the log for it</a>".into())
         )
     ))
@@ -406,7 +406,7 @@ fn dialog() -> TrustedHtml {
         ..Default::default()
     };
     TrustedHtml::owned(format!(
-        "<div class=\"gal-row\">{}{}</div><p class=\"meta\">Delete project is dimmed while something blocks it.</p>",
+        "<div class=\"gal-row\">{}{}</div>",
         cancel.html(),
         delete.html()
     ))
@@ -509,7 +509,7 @@ fn details_part(prefix: &str) -> TrustedHtml {
         .replacen("<details class=\"dm\"", "<details class=\"dm\" open", 1)
         .replace("Details of Terns", &format!("Details of Terns ({prefix}open)"));
     TrustedHtml::owned(format!(
-        "<p class=\"meta gal-cap\">Closed, at an item's end</p><div class=\"gal-row gal-dm\"><span>Terns: the spring guide's entries</span>{}</div><p class=\"meta gal-cap\">Open: each id whole, with copy</p><div class=\"gal-row gal-dm gal-dm-open\"><span>Terns: the spring guide's entries</span>{open}</div>",
+        "<p class=\"meta gal-cap\">Closed</p><div class=\"gal-row gal-dm\"><span>Terns: the spring guide's entries</span>{}</div><p class=\"meta gal-cap\">Open</p><div class=\"gal-row gal-dm gal-dm-open\"><span>Terns: the spring guide's entries</span>{open}</div>",
         details.menu("Terns: the spring guide's entries")
     ))
 }
@@ -560,12 +560,12 @@ fn heads_part() -> TrustedHtml {
         ui::Stage::new("publish", None),
     ];
     TrustedHtml::owned(format!(
-        "{}<p class=\"meta gal-cap\">Over a table of strips: each stage's name over its column, each row's stages under them</p><div class=\"gal-strips\">{}{}{}</div><p class=\"meta gal-cap\">Waiting rows: a cell that waits in its own way puts its glyph before its name and its word under them</p><div class=\"gal-strips gal-waits\">{}{}{}{}{}</div>",
+        "{}<p class=\"meta gal-cap\">Over a table of strips</p><div class=\"gal-strips\">{}{}{}</div><p class=\"meta gal-cap\">Waiting rows</p><div class=\"gal-strips gal-waits\">{}{}{}{}{}</div>",
         ui::section_head("", "Stopped", "1 failed · 1 cancelled"),
-        ui::strip_head("", "Running", "Quiet first, then the longest.", &["draft", "review", "publish"]),
+        ui::strip_head("", "Running", "2 running", &["draft", "review", "publish"]),
         row("a-12", "Terns: the spring guide's entries", article(Some(Shown::Succeeded), Some(Shown::Running), None)),
         row("a-9", "Gannets: the spring guide's entries", article(Some(Shown::Succeeded), Some(Shown::Quiet), None)),
-        ui::strip_head("", "Waiting", "4 waiting.", &["draft", "review", "publish"]),
+        ui::strip_head("", "Waiting", "4 waiting, 1 blocked", &["draft", "review", "publish"]),
         row("a-6", "Waders: the autumn guide's entries", blocked),
         row("a-13", "Skuas: the spring guide's entries", waits(Shown::Held)),
         row("a-14", "Auks: the spring guide's entries", waits(Shown::Queued)),
@@ -589,7 +589,7 @@ fn strips_part() -> TrustedHtml {
         ui::Stage::new("publish", Some(Shown::Pending)),
     ];
     TrustedHtml::owned(format!(
-        "<p class=\"meta gal-cap\">Done, running, not reached</p>{}<p class=\"meta gal-cap\">A run gone quiet; a note across the stages not reached</p>{}{}<p class=\"meta gal-cap\">Not reached, each saying why; a one-step recipe</p>{}{}<p class=\"meta gal-cap\">Small, in a line of words</p><p class=\"mod-meta\">failed at review {}</p>",
+        "<p class=\"meta gal-cap\">Done, running, not reached</p>{}<p class=\"meta gal-cap\">Quiet; a note across the stages not reached</p>{}{}<p class=\"meta gal-cap\">Not reached; a one-step recipe</p>{}{}<p class=\"meta gal-cap\">Small, in a line of words</p><p class=\"mod-meta\">failed at review {}</p>",
         ui::stage_strip("Stages of a-12", &article(Some(Shown::Succeeded), Some(Shown::Running), None)),
         ui::stage_strip("Stages of a-9", &quiet),
         ui::stage_strip("Stages of a-14", &first),
@@ -820,7 +820,7 @@ fn trace_part(prefix: &str) -> TrustedHtml {
     let trace = ui::Trace::new([("a-13", "a-12"), ("a-14", "a-13"), ("a-12", "s-3"), ("a-15", "a-12")]);
     let unit = |name: &str, title: &str, stages: Vec<ui::Stage>| {
         format!(
-            "<div class=\"mod rail-slot\"{attrs}>{rail}{open}<span class=\"mod-meta\">{role}</span><span class=\"mod-t\">{title}</span>{close}{strip}{more}<p class=\"meta\">Its steps, its last message and its buttons open here.</p>{more_end}</div>",
+            "<div class=\"mod rail-slot\"{attrs}>{rail}{open}<span class=\"mod-meta\">{role}</span><span class=\"mod-t\">{title}</span>{close}{strip}{more}{more_end}</div>",
             attrs = trace.attrs(name),
             rail = ui::rail(),
             open = ui::trace_button_open(title, ""),
@@ -889,38 +889,38 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     let mut add = |name, about, built, (light, dark): (TrustedHtml, TrustedHtml)| {
         parts.push(Part { name, wide: false, about, built, light, dark })
     };
-    add("Status", "Each state a step, unit or project can be in: its glyph, its word and what it means. The same glyph and word on every page.", "`ui::status`, `ui::glyph` or `ui::mark`, from the status table.", both(&|_| Ok(statuses()))?);
-    add("Page head", "The top of every page, on the paper under the slim navy bar (the mark, the projects, the current project with its icon, the Inbox): the page's name at a reading size, and on a plan and home only, the summary sentence under it. It says only what the counts say: questions for you, what stopped, what runs (quiet ones counted), what waits and how much is done. What identifies the page sits behind its ⋯.", "`ui::page_head`, `ui::page_head_with` in `Frame::head` (`render_framed`); `ui::summary_sentence` from `ui::UnitFact`s.", both(&|_| Ok(head_part()))?);
-    add("Step head", "A step's own page heads with it: its way back, its stage muted before its title, its state and how long it has run, its words, its unit's stages with its own ringed, and its actions, the next move filled. Its id, fn and tags are in its Details. In the drawer the same head tops the step.", "`StepView::band` (`templates/step_band.html`) in `Frame::head`, the region a step's stream patches as `step-band`; `ui::stage_strip_at`.", both(&|p| step_band_part(p))?);
-    add("Details", "What identifies an item rather than explains it (its ids, run, fn, engine, tags, recipe, hashes and paths) sits behind one ⋯ at the item's end, on every row, module and head. It opens without script, Escape closes it and gives the focus back, and each id is whole with a copy button. A failure's ⋯ also holds Set it aside: its Cancel and its Cancel and dismiss, each behind a confirmation (the step head below shows them).", "`ui::Details`, its `actions` and its `menu` (`sluice-menu`).", both(&|p| Ok(details_part(p)))?);
-    add("Finished last", "What finished most recently, newest first: its clock time, its title and how long it took, at the head of a plan's Done and on each project on home.", "`ui::latest_list` from `ui::Finished`s.", both(&|_| Ok(latest_part()))?);
-    add("Summary sentence", "One sentence from the counts alone, with the question for you linked first.", "`ui::summary_sentence`.", both(&|_| Ok(summary_part()))?);
-    add("Module grid", "Twelve columns that every module spans, fluid at every width: six on a narrow sheet (every module across it), a module half or whole on a medium one, and twenty-four from 2000px, where a module keeps its share or halves so two whole-width ones stand side by side.", "`ui::grid_open`, `ui::module_open`, `ui::module_open_wide` with `ui::Wide`.", both(&|p| Ok(grid_part(p)))?);
-    add("Modules", "A module is a unit (or a question, or a step) on the grid. The one that needs you swells: a question to you under the coral rule, its title a size up; a stopped one sits on the sand.", "`ui::module_open` with `ui::Swell`, `.mod-k`, `.mod-t`, `.mod-meta`, `.mod-body`, `.mod-actions`.", both(&|_| Ok(modules_part()))?);
-    add("Section heads", "Each band of the page (For you, Stopped, Running, Waiting, Done) under a heavy rule, its name big and its count line at the right; over a table of strips, each stage's name over its column.", "`ui::section_head`, `ui::strip_head`, `ui::strip_row_open`.", both(&|_| Ok(heads_part()))?);
-    add("Stage strip", "A unit's stages in its recipe's order, one cell each: an outline not reached (saying why when something holds it), sky when done with how long it took, blue while running with its time and a sweep, sand when it needs a look with its word. A one-step recipe is one cell.", "`ui::stage_strip` from `ui::Stage`s (`ui::Cell::of` reads the status table), `ui::stage_marks`.", both(&|_| Ok(strips_part()))?);
-    add("Margin module", "A step of no recipe that has run for hours, or reports progress, in the margin: its running time, then each field it reported by its shape: a number or a short word as it is (the first at display size), words clamped to two lines, and a hash, an id or a path kept in its Details.", "`ui::margin_module` from a `ui::LongRun`; `ui::ValueSet`.", both(&|_| Ok(margin_part()))?);
-    add("Stats", "A project's numbers over a window: each recipe's stages in its order with how long their succeeded runs took (the median a solid bar inside its pale p90), and the units finished a day as columns, the busiest in navy, every count also in a table for a screen reader.", "`views::stats::StatsView` (`durations`, `outcomes`, `throughput`, `slowest_html`), from `StatsData`.", both(&|p| Ok(stats_part(p)))?);
-    add("Trace", "Select a unit to trace its chain: it opens in place, what it waits for and what waits on it light up with a rail in the margin, the line says the chain, and the rest fades. Select it again, Clear trace or Escape clears; the arrows move between units.", "`ui::trace_open`, `ui::Trace::attrs`, `ui::rail`, `ui::trace_button_open`, `ui::trace_more_open` (`sluice-trace`).", both(&|p| Ok(trace_part(p)))?);
-    add("Tags", "A small fact set apart: plain, muted once something is closed, gold when it wants a look, coral only for a question waiting on you, blue with the running glyph while live.", "`ui::tag`, `ui::tag_link`, `ui::ask_link`.", both(&|_| Ok(tags()))?);
-    add("Buttons", "The filled button is the next move; the rest are plain; a delete is the dark danger button; a dimmed one cannot be pressed now.", "Plain `button`, `.primary`, `.danger`.", both(&|_| Ok(buttons()))?);
-    add("Tabs", "A step's parts, one at a time. The arrow keys, Home and End move between them; the chosen tab stays chosen as the page updates and is in the address, so a link opens it. Without script every part stands stacked.", "`ui::tabs_open`, `panel_open`, `panel_close`, `tabs_close` (`sluice-tabs`).", both(&|p| Ok(tabs(&format!("{p}tabs-"))))?);
-    add("Sections and cards", "A heading over a section's rows, and a card around a region of its own.", "`ui::head`.", both(&|_| Ok(sections()))?);
-    add("Fields", "Inputs, outputs and progress, one row each: its name, its value read by its kind, and where it came from or which run set it under it. Show value types (display preferences) adds each type.", "`kit.html`'s `field`.", both(&|p| fields(p, &project))?);
-    add("Folds", "A long value shows its first lines, faded, with Show all under them (only when it was cut). A list says what it holds in a sentence that opens to it; More and Less are remembered per project, or open on a wide screen.", "`ui::fold`, `ui::more_open` (`sluice-fold`).", both(&|_| Ok(folds()))?);
-    add("Conversation", "Messages in one column: a run from one sender under who sent it to whom, a line at each day and at the first unread, a question's answer under it, long ones folded, the message box at the end. A question for you has Answer and Close, and says where it went once answered.", "`threads::Conversation` in `sluice-conversation`, `sluice-composer`, `sluice-answer`.", both(&|p| conversation(p, &project))?);
-    add("Empty states", "What a place says when it has nothing to show, and where to go instead.", "`ui::empty`, `ui::empty_with`.", both(&|_| Ok(empties()))?);
-    add("Confirmation", "A step asks before Cancel, a succeeded step's Retry, Close all and a delete. Focus starts on the safe choice, Escape keeps things as they are, and you return to the button you pressed. Without script the question opens in place.", "`ui::Confirm` in `sluice-confirm`.", both(&|_| Ok(dialog()))?);
-    add("Menus", "The project switcher, display preferences and an item's Details: a click elsewhere or Escape closes one, the arrows, Home and End move through it. A menu may hold a short level of rows that each open a panel of their own in the same menu (display preferences, under Settings below).", "`ui::menu_open` (`sluice-menu`).", both(&|_| Ok(menus()))?);
-    add("Copy", "An id or a SHA in data mono, with a copy button that says Copied for a moment.", "`ui::copy` (`sluice-copy`).", both(&|_| Ok(copies()))?);
-    add("Settings", "Display preferences apply at once and are kept for next time; every Show value types switch on a page follows. The sliders at the nav bar's right open a short menu: Theme (the current one's name and swatch), Show value types (toggled in place) and Keyboard shortcuts. Theme and Keyboard shortcuts each open their own panel in the same menu, under a back control: Enter or → opens a row, ← or Backspace comes back to it, Escape closes the menu. A pick in Theme applies at once and the menu stays on the themes, so you can try the next. Without script each row opens its panel in place under it, and Save keeps the form.", "`views::prefs::menu` (`ui::setting_open`, `sluice-toggle`; `details.sub` in `sluice-menu`), `ui::types_toggle`.", both(&|p| Ok(toggles(p)))?);
-    add("Search", "A list filtered as you type (the functions), or the plan's tools showing what matches; Escape clears.", "`ui::search_open` (`sluice-search`).", both(&|p| Ok(searches(p)))?);
-    add("Banners", "Updates paused or stopped, with Reconnect, in gold; a newer build of sluice, with Reload, muted. Hidden while the page is live.", "`ui::banner` (`sluice-banner`).", both(&|_| Ok(banners()))?);
-    add("Notice", "What a page says at its top when something you asked for was not done, with what to do next and your words kept in their box. Read out as it appears.", "`ui::notice`: a refused step action comes back to the step's address, the notice held ten minutes under a key the server made.", both(&|_| Ok(notices()))?);
-    add("Keys", "Listed in display preferences' Keyboard shortcuts on every page: / finds on the plan (from a step or unit page too), the log and functions; [ and ] move the drawer to the step before or after; g then a letter goes to a section; ? opens the list there. Never while typing in a field or under an open dialog.", "`sluice-keys`.", both(&|_| Ok(keys()))?);
-    add("Splitter", "The line between the plan and an open step: drag it, or use the arrows (16px, 64px with Shift), Home and End; a double-click resets it, and its width is kept per project.", "`ui::splitter` (`sluice-splitter`).", both(&|p| Ok(splitters(p)))?);
-    add("Themes", "Each of the thirty themes the display preferences offer, one list (two columns from 900px wide, a family's light beside its dark), each a complete look: a well-loved colour scheme or a classic of American design in one of its schemes, mapped onto sluice's roles, so its band is its deepest surface, its blue (or its nearest) runs, its done is calm, its yellow wants a look and one colour of its own asks you a question. A deep theme also sets its faces, its rules, its band's edge, its rhythm, how a stage is drawn, its links and its sweep (or a still line, as Williamsburg's and every theme's under reduced motion); its display face never sets words under 19px, where its text face takes over. The page and its order stay the same. A first open takes Sluice Light or Sluice Dark by the system's scheme, and keeps it.", "`data-theme` on the page (the cookie `sluice_theme`); Sluice's tokens in `style.css`, each other family's in `assets/themes/`.", (themes_part(), TrustedHtml::default()));
-    add("Components", "For whoever builds a page: every component, the attributes it reads and what it does. The server draws everything in it; the component only behaves.", "Rocket components in `components.js`, light DOM.", (components(), TrustedHtml::default()));
+    add("Status", "Each state a step, unit or project can be in: its glyph, its word and what it means.", "`ui::status`, `ui::glyph` or `ui::mark`, from the status table.", both(&|_| Ok(statuses()))?);
+    add("Page head", "The page's name and, on a plan and home, the summary sentence; what identifies the page sits behind its ⋯.", "`ui::page_head`, `ui::page_head_with` in `Frame::head` (`render_framed`); `ui::summary_sentence` from `ui::UnitFact`s.", both(&|_| Ok(head_part()))?);
+    add("Step head", "A step's way back, name, state, words, its unit's stages and its actions.", "`StepView::band` (`templates/step_band.html`) in `Frame::head`, the region a step's stream patches as `step-band`; `ui::stage_strip_at`.", both(&|p| step_band_part(p))?);
+    add("Details", "What identifies an item, behind one ⋯ at its end; a failure's ⋯ also holds Set it aside.", "`ui::Details`, its `actions` and its `menu` (`sluice-menu`).", both(&|p| Ok(details_part(p)))?);
+    add("Finished last", "What finished most recently, newest first.", "`ui::latest_list` from `ui::Finished`s.", both(&|_| Ok(latest_part()))?);
+    add("Summary sentence", "One sentence from the counts alone, the question for you first.", "`ui::summary_sentence`.", both(&|_| Ok(summary_part()))?);
+    add("Module grid", "Twelve columns every module spans, twenty-four from 2000px.", "`ui::grid_open`, `ui::module_open`, `ui::module_open_wide` with `ui::Wide`.", both(&|p| Ok(grid_part(p)))?);
+    add("Modules", "A unit, a question or a step on the grid; the one that needs you swells.", "`ui::module_open` with `ui::Swell`, `.mod-k`, `.mod-t`, `.mod-meta`, `.mod-body`, `.mod-actions`.", both(&|_| Ok(modules_part()))?);
+    add("Section heads", "Each band's name and its count line; over a table of strips, each stage's name over its column.", "`ui::section_head`, `ui::strip_head`, `ui::strip_row_open`.", both(&|_| Ok(heads_part()))?);
+    add("Stage strip", "A unit's stages in recipe order, one cell each.", "`ui::stage_strip` from `ui::Stage`s (`ui::Cell::of` reads the status table), `ui::stage_marks`.", both(&|_| Ok(strips_part()))?);
+    add("Margin module", "A long run of no recipe, with the progress it reported.", "`ui::margin_module` from a `ui::LongRun`; `ui::ValueSet`.", both(&|_| Ok(margin_part()))?);
+    add("Stats", "A project's numbers over a window.", "`views::stats::StatsView` (`durations`, `outcomes`, `throughput`, `slowest_html`), from `StatsData`.", both(&|p| Ok(stats_part(p)))?);
+    add("Trace", "Select a unit to light its chain; select it again, Clear trace or Escape clears.", "`ui::trace_open`, `ui::Trace::attrs`, `ui::rail`, `ui::trace_button_open`, `ui::trace_more_open` (`sluice-trace`).", both(&|p| Ok(trace_part(p)))?);
+    add("Tags", "A small fact set apart.", "`ui::tag`, `ui::tag_link`, `ui::ask_link`.", both(&|_| Ok(tags()))?);
+    add("Buttons", "The filled button is the next move.", "Plain `button`, `.primary`, `.danger`.", both(&|_| Ok(buttons()))?);
+    add("Tabs", "A step's parts, one at a time.", "`ui::tabs_open`, `panel_open`, `panel_close`, `tabs_close` (`sluice-tabs`).", both(&|p| Ok(tabs(&format!("{p}tabs-"))))?);
+    add("Sections and cards", "A heading over a section's rows, and a card around a region.", "`ui::head`.", both(&|_| Ok(sections()))?);
+    add("Fields", "Inputs, outputs and progress, one row each.", "`kit.html`'s `field`.", both(&|p| fields(p, &project))?);
+    add("Folds", "A long value cut to its first lines, and More and Less.", "`ui::fold`, `ui::more_open` (`sluice-fold`).", both(&|_| Ok(folds()))?);
+    add("Conversation", "Messages in one column, the message box at the end.", "`threads::Conversation` in `sluice-conversation`, `sluice-composer`, `sluice-answer`.", both(&|p| conversation(p, &project))?);
+    add("Empty states", "One line where a place has nothing to show.", "`ui::empty`, `ui::empty_with`.", both(&|_| Ok(empties()))?);
+    add("Confirmation", "Asked before Cancel, a succeeded step's Retry, Close all and a delete.", "`ui::Confirm` in `sluice-confirm`.", both(&|_| Ok(dialog()))?);
+    add("Menus", "The project switcher, display preferences and an item's Details.", "`ui::menu_open` (`sluice-menu`).", both(&|_| Ok(menus()))?);
+    add("Copy", "An id or a SHA, with a copy button.", "`ui::copy` (`sluice-copy`).", both(&|_| Ok(copies()))?);
+    add("Settings", "Display preferences: Theme, Show value types and Keyboard shortcuts, applied at once and kept.", "`views::prefs::menu` (`ui::setting_open`, `sluice-toggle`; `details.sub` in `sluice-menu`), `ui::types_toggle`.", both(&|p| Ok(toggles(p)))?);
+    add("Search", "A list filtered as you type, or the plan's find.", "`ui::search_open` (`sluice-search`).", both(&|p| Ok(searches(p)))?);
+    add("Banners", "Updates paused or stopped, or a newer build of sluice.", "`ui::banner` (`sluice-banner`).", both(&|_| Ok(banners()))?);
+    add("Notice", "An action that was not done, and your words kept.", "`ui::notice`.", both(&|_| Ok(notices()))?);
+    add("Keys", "The page's keys, listed in display preferences' Keyboard shortcuts.", "`sluice-keys`.", both(&|_| Ok(keys()))?);
+    add("Splitter", "The line between the plan and the board.", "`ui::splitter` (`sluice-splitter`).", both(&|p| Ok(splitters(p)))?);
+    add("Themes", "Each of the thirty themes the display preferences offer, in its light and dark.", "`data-theme` on the page (the cookie `sluice_theme`); Sluice's tokens in `style.css`, each other family's in `assets/themes/`.", (themes_part(), TrustedHtml::default()));
+    add("Components", "Every component, the attributes it reads and what it does.", "Rocket components in `components.js`, light DOM.", (components(), TrustedHtml::default()));
     for part in &mut parts {
         part.wide = matches!(part.name, "Themes" | "Page head" | "Step head" | "Module grid" | "Modules" | "Section heads" | "Trace");
     }
@@ -1010,13 +1010,7 @@ async fn agent_docs(
                         &super::ui::count(pages.len(), "page", "pages")
                     )
                 ),
-                super::ui::page_head_note(
-                    "Agent docs",
-                    &TrustedHtml::owned(
-                        "What the agents that drive sluice read: the pages <code>sluice docs</code> and the MCP <code>docs</code> tool give them."
-                            .into(),
-                    ),
-                ),
+                super::ui::page_head("Agent docs", &TrustedHtml::default()),
             ),
             Some(t) => {
                 let Some((_, page)) = pages.iter().find(|(name, _)| *name == t.0) else {

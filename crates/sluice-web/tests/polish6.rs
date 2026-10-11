@@ -148,9 +148,7 @@ async fn a_ready_step_says_so_and_when_it_starts_never_waits_on_the_runner_alone
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/a")).await;
     let ready = between(&page, "<p class=\"wait-runner d-ready\">", "</p>");
     assert!(
-        ready.contains(
-            "Ready, but the runner is stopped: it starts when <code>sluice loop</code> runs."
-        ),
+        ready.contains("Ready. Runner stopped: it starts when <code>sluice loop</code> runs."),
         "{ready}"
     );
     // not under a "Waits on" of the runner alone, and no empty state's "Waits for …" either
@@ -164,8 +162,7 @@ async fn a_ready_step_says_so_and_when_it_starts_never_waits_on_the_runner_alone
     assert!(!page.contains("d-ready"), "{page}");
     let waits = between(&page, "<div class=\"wait-list\">", "</article>");
     assert!(
-        waits
-            .contains("The runner is stopped: nothing starts until <code>sluice loop</code> runs."),
+        waits.contains("Runner stopped. No step starts until <code>sluice loop</code> runs."),
         "{waits}"
     );
 }
@@ -215,7 +212,7 @@ async fn a_failure_that_repeats_its_run_before_says_so_and_opens_the_feedback() 
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/same")).await;
     let next = between(&page, "<p class=\"err-next\">", "</p>");
     assert!(
-        next.contains("Run 1 failed the same way, so a bare Retry would most likely fail again. Retry with feedback, or change its inputs."),
+        next.contains("Run 1 failed the same way. Retry with feedback, or change its inputs."),
         "{next}"
     );
     // its feedback box stands open under the advice, in Why it failed, to be written in after
@@ -343,12 +340,12 @@ async fn a_lane_row_says_its_question_and_a_note_to_many_is_drawn_once() {
     );
     assert!(last.contains("<summary>to 2 steps</summary>"), "{last}");
     assert_eq!(last.matches("Heads up").count(), 1, "{last}");
-    // the sender's Messages counts each copy and says the note is drawn once
+    // the sender's Messages counts each copy and does not explain that the note is drawn once
     let (_, page) = f
         .get(&format!("/projects/id/{id}/steps/l1-work?tab=messages"))
         .await;
     assert!(
-        page.contains("3 messages · the note to 2 steps shown once"),
+        page.contains("3 messages") && !page.contains("shown once"),
         "{page}"
     );
 }

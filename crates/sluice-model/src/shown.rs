@@ -151,7 +151,7 @@ impl Shown {
                 band: Band::Stopped,
                 attention: true,
                 caption: true,
-                help: "Its last run failed; Retry runs it again",
+                help: "Its last run failed",
             },
             Shown::Cancelled => Spec {
                 key: "cancelled",
@@ -163,7 +163,7 @@ impl Shown {
                 band: Band::Stopped,
                 attention: true,
                 caption: true,
-                help: "Cancelled by its owner; Retry runs it again",
+                help: "Cancelled by its owner",
             },
             Shown::Stale => Spec {
                 key: "stale",
@@ -175,7 +175,7 @@ impl Shown {
                 band: Band::Stopped,
                 attention: true,
                 caption: false,
-                help: "A step it reads changed since it ran; Retry runs it again",
+                help: "A step it reads changed since it ran",
             },
             Shown::Quiet => Spec {
                 key: "quiet",
@@ -187,7 +187,7 @@ impl Shown {
                 band: Band::Running,
                 attention: true,
                 caption: true,
-                help: "Running, but its run has written nothing for a while: the time since it last did",
+                help: "Running, but silent for a while",
             },
             Shown::Blocked => Spec {
                 key: "blocked",
@@ -247,7 +247,7 @@ impl Shown {
                 band: Band::Running,
                 attention: false,
                 caption: true,
-                help: "Done outside sluice: set its outputs when the work lands",
+                help: "Done outside sluice",
             },
             Shown::Paused => Spec {
                 key: "paused",

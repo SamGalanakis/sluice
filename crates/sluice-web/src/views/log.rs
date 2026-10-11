@@ -410,7 +410,7 @@ impl LogView {
             "<div class=\"empty log-empty\"><p>{}{}</p>{}</div>",
             esc(&words),
             if retired {
-                " A step retired with its unit keeps its records until the log is trimmed."
+                " A retired step's records stay until the log is trimmed."
             } else {
                 ""
             },

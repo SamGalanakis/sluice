@@ -276,7 +276,7 @@ async fn failures_show_through_every_fold() {
     assert!(shown[0].contains("act-c is-failed"), "{}", shown[0]);
     assert!(shown[1].contains("id=\"act-r1-t4\""), "{}", shown[1]);
     assert!(
-        activity.contains("2 earlier turns not shown, none with a failed call. <a href=\"")
+        activity.contains("2 earlier turns not shown. <a href=\"")
             && activity
                 .contains("?activity=all&#38;tab=activity#activity\">Show earlier turns</a>"),
         "{activity}"

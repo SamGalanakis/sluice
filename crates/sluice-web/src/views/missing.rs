@@ -132,7 +132,7 @@ pub async fn page(
     });
     let gone = match &retire_words {
         Some(after) => format!(
-            "A plan edit may have removed it, or it was in a done unit: this project retires done units {after} after their last step finished."
+            "A plan edit may have removed it, or it retired with its done unit after {after}."
         ),
         None => "A plan edit may have removed it.".to_owned(),
     };
@@ -191,8 +191,7 @@ pub async fn page(
             (
                 "No such project".to_owned(),
                 "No project has this id.".to_owned(),
-                "It may have been deleted. Links keep a project's id when it is renamed."
-                    .to_owned(),
+                "It may have been deleted.".to_owned(),
             )
         }
         _ if status == StatusCode::NOT_FOUND => {

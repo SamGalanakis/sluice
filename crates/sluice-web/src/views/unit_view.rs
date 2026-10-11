@@ -297,7 +297,7 @@ pub fn head(root: &Component) -> String {
 /// The note a broken view leaves where it would draw: "This recipe's view does not check: …".
 pub fn broken(error: &str) -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<p class=\"uv-broken\" role=\"note\">{}<span>This recipe's view does not check, so its summary is left out: {}</span></p>",
+        "<p class=\"uv-broken\" role=\"note\">{}<span>This recipe's view does not check: {}</span></p>",
         super::icons::icon(super::icons::Icon::TriangleAlert, 14, ""),
         esc(error)
     ))

@@ -319,7 +319,7 @@ async fn a_succeeded_steps_retry_asks_first_and_names_the_steps_that_may_run_aga
         "{actions}"
     );
     assert!(
-        actions.contains("<p class=\"confirm-copy\">It succeeded. Retrying runs it again; its outputs stay until the new run ends. The 2 steps after it run again only if its new result differs."),
+        actions.contains("<p class=\"confirm-copy\">It succeeded. The 2 steps after it rerun only if its result changes.</p>"),
         "{actions}"
     );
     assert!(

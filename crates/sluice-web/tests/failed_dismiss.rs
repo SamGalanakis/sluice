@@ -188,9 +188,10 @@ async fn the_plan_card_and_the_step_page_give_one_retry_advice() {
     assert_eq!(
         said,
         [
-            "Run 1 failed the same way, so a bare Retry would most likely fail again. Retry with feedback, or change its inputs.",
-            "Its process ended with no result recorded, most often when sluice restarted: Retry.",
-            "Its engine started, then exited partway through. Read what it said: a refusal or a limit will happen again, so Retry with feedback; a crash usually passes, so Retry.",
+            "Run 1 failed the same way. Retry with feedback, or change its inputs.",
+            // a lost process: Retry is the whole move, so no advice repeats it
+            "",
+            "If it refused or hit a limit, Retry with feedback; if it crashed, Retry.",
             "",
         ]
     );
@@ -326,13 +327,12 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
         "{acts}"
     );
     assert!(
-        acts.contains("heading=\"Cancel Fails once?\"")
-            && acts.contains("It stays stopped and can be dismissed; Retry still works."),
+        acts.contains("heading=\"Cancel Fails once?\"") && !acts.contains("Retry still works"),
         "{acts}"
     );
     assert!(
         acts.contains("heading=\"Cancel and dismiss Fails once?\"")
-            && acts.contains("Undo brings back the cancel, not the failure; Retry still works."),
+            && acts.contains("Undo brings back the cancel, not the failure.</p>"),
         "{acts}"
     );
     // no Dismiss on a failure, and nothing to set aside on a cancel

@@ -299,7 +299,7 @@ async fn settings_show_the_document_read_only_with_its_rev_and_last_edit() {
     let (_, page) = f.get(&settings).await;
     let section = between(&page, "<div id=\"board-doc\">", "<!--/board-doc-->");
     assert!(
-        section.contains("The program has no <code>Doc()</code>"),
+        section.contains("Not shown: the program has no <code>Doc()</code>."),
         "{section}"
     );
 }
@@ -485,13 +485,14 @@ async fn a_widget_naming_a_step_not_in_the_plan_says_it_shows_that_steps_last_da
     assert_eq!(html.matches(line).count(), 2, "{html}");
     let metric = between(&html, line, "<span class=\"metric-l\">Red</span>");
     assert!(
-        metric.contains("<span>Names step <code>tests-main</code>, which is not in the plan; this shows its last data.</span></p><div class=\"board-metric\"><span class=\"metric-v\">0</span>"),
+        metric.contains("<span>Step <code>tests-main</code> is not in the plan; showing its last data.</span></p><div class=\"board-metric\"><span class=\"metric-v\">0</span>"),
         "{metric}"
     );
     let latest = &html[html.rfind(line).unwrap()..];
     assert!(
-        latest.contains("which is not in the plan; this shows its last data.</span></p><div class=\"board-message\">")
-            && latest.contains("Run 9: 2 red"),
+        latest.contains(
+            "is not in the plan; showing its last data.</span></p><div class=\"board-message\">"
+        ) && latest.contains("Run 9: 2 red"),
         "{latest}"
     );
     // StepStatus keeps its error box.

@@ -612,10 +612,7 @@ async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
         section.contains(">Now</") && section.contains("Live progress, set"),
         "{section}"
     );
-    assert!(
-        !section.contains("It has sent no message yet."),
-        "{section}"
-    );
+    assert!(!section.contains("No message yet."), "{section}");
     assert!(
         section.contains("<span class=\"v num\">2</span>"),
         "{section}"

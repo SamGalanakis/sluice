@@ -131,8 +131,8 @@ The checks behind the warnings read the program as text, so they catch what is w
   The warning names `Count(label, "failed")`, which counts as the dashboard does.
 
 On the page, a Metric, Query, Chart or LatestMessage whose step is not in the plan draws what it
-has under a line in the attention colour: "Names step `tests-main`, which is not in the plan;
-this shows its last data." StepStatus and Output draw their error box instead.
+has under a line in the attention colour: "Step `tests-main` is not in the plan; showing its
+last data." StepStatus and Output draw their error box instead.
 
 ## A recipe's unit view
 The board is one panel for the whole project. To show each unit of a recipe the same way, give

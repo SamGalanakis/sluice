@@ -296,10 +296,7 @@ async fn home_puts_what_needs_the_owner_first_and_its_question_is_answered_in_pl
         )),
         "{today}"
     );
-    assert!(
-        today.contains("<a href=\"/day\">The day as a timetable</a>"),
-        "{today}"
-    );
+    assert!(today.contains("<a href=\"/day\">Timetable</a>"), "{today}");
     // the index: every project, the one with no steps too
     let index = between(&home, "<table class=\"ix\">", "</table>");
     for name in ["almanac", "chores", "lanes", "plain"] {
@@ -353,10 +350,12 @@ async fn the_day_sets_every_run_in_the_hour_it_started_with_how_it_ended_and_a_r
         "{summary}"
     );
     assert!(
-        summary.contains("1 succeeded in under a minute: counted, not listed."),
+        summary.contains("1 succeeded in under a minute.")
+            && !summary.contains("counted, not listed"),
         "{summary}"
     );
-    assert!(page.contains("hours on UTC"), "{page}");
+    // the head says the date, not whose clock the hours are on
+    assert!(!page.contains("hours on"), "{page}");
     // the day line: a row a project, its bars, the rule at now
     let line = between(&page, "<div class=\"dl\"", "</section>");
     assert!(
@@ -423,7 +422,7 @@ async fn the_day_sets_every_run_in_the_hour_it_started_with_how_it_ended_and_a_r
         "{done}"
     );
     assert!(
-        done.contains("<p class=\"tt-quick\">1 quick run under a minute, all succeeded</p>"),
+        done.contains("<p class=\"tt-quick\">1 run under a minute, all succeeded</p>"),
         "{done}"
     );
     // the long run started days ago: in the first row, its day and time
@@ -442,7 +441,7 @@ async fn the_day_sets_every_run_in_the_hour_it_started_with_how_it_ended_and_a_r
     )));
     // on the reader's clock, two hours east: every hour moves
     let east = get_with(&router, "/day", "sluice_zone=120").await;
-    assert!(east.contains("hours on your clock (UTC+02:00)"), "{east}");
+    assert!(!east.contains("your clock"), "{east}");
     let failed = row(&east, &hour(2 * 3600, 120));
     assert!(
         failed.contains(

@@ -987,7 +987,7 @@ pub fn margin_module(run: &LongRun) -> TrustedHtml {
         since = since(&run.since),
         fields = if fields.is_empty() {
             if run.fields.is_empty() {
-                "<p class=\"mm-none\">It has reported no progress.</p>".to_owned()
+                "<p class=\"mm-none\">No progress reported.</p>".to_owned()
             } else {
                 String::new()
             }
