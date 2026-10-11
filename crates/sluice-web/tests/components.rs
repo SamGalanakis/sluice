@@ -666,6 +666,15 @@ async fn chromium_without_script_every_page_still_reads() {
         );
         browser.eval("document.querySelector('details.settings').open = true").unwrap();
         assert_eq!(browser.eval("document.querySelector('form.prefs .save').checkVisibility()").unwrap(), true);
+        // display preferences without script: Theme opens its list in place, under its row,
+        // with the value types and Save still there; the keys (script's) are not offered
+        let prefs = "(() => { const m = document.querySelector('details.settings .menu'); const seen = (s) => [...m.querySelectorAll(s)].filter(e => e.checkVisibility()).length; return [seen('.sub-themes > summary'), seen('.themes label'), seen('label.check'), seen('.save'), seen('.sub-keys, .sub-back')]; })()";
+        assert_eq!(browser.eval(prefs).unwrap(), json!([1, 0, 1, 1, 0]));
+        browser.eval("document.querySelector('details.settings .sub-themes > summary').click()").unwrap();
+        assert_eq!(
+            browser.eval(prefs).unwrap(),
+            json!([1, sluice_web::views::THEMES.len(), 1, 1, 0])
+        );
         browser.navigate(&format!("{base}/_ui")).unwrap();
         browser.wait("document.readyState === 'complete'").unwrap();
         browser.eval("document.querySelector('.gal-th sluice-confirm:not(.dm-acts > *):not([disabled]) summary').click()").unwrap();

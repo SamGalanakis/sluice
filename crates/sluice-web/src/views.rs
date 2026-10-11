@@ -14,6 +14,7 @@ pub mod failure;
 pub mod icons;
 pub mod missing;
 pub mod plan;
+pub mod prefs;
 pub mod step;
 pub mod threads;
 pub mod timeline;
@@ -757,7 +758,6 @@ struct Layout<'a> {
     viewer: &'a Viewer,
     stream: &'a str,
     signals: String,
-    themes: &'a [Theme],
     path: &'a str,
     style_url: String,
     nav_url: String,
@@ -807,7 +807,6 @@ pub fn render_framed(
         viewer,
         stream,
         signals: serde_json::json!({"ver":version,"stale":false}).to_string(),
-        themes: THEMES,
         path,
         style_url: asset_url("style.css"),
         nav_url: asset_url("nav.js"),

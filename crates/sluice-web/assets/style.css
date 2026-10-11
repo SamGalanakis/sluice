@@ -345,7 +345,7 @@ details.switcher.current > summary:has(> .proj-icon) { box-shadow: inset 0 0 0 1
 .icon { flex: none; }  /* every Lucide icon keeps its size in a flex row */
 .chev { flex: none; color: var(--ink-muted); transition: transform 120ms ease-out; }
 details.switcher[open] .chev { transform: rotate(180deg); }
-details.switcher .menu, details.settings .menu {
+details.switcher .menu, details.settings .menu, .gal-prefs {
   position: absolute; top: 100%; z-index: 30; padding: 6px; overflow-y: auto;
   background: var(--paper-raised); color: var(--ink); box-shadow: inset 0 3px 0 var(--navy), var(--lift);
   font: 500 15px/22px var(--font-text); }
@@ -366,7 +366,8 @@ details.switcher .menu a.all { color: var(--ink-muted); margin-bottom: 4px;
 details.switcher .menu a.all[aria-current] { color: var(--ink); }
 .menu-label { margin: 8px 10px 4px; font-size: 12px; font-weight: 650; color: var(--ink-muted); }
 
-/* ---- display preferences, at the band's right end: theme and value types --------------- */
+/* ---- display preferences, at the band's right end (`views::prefs`): a short menu of rows,
+   Theme and Keyboard shortcuts each a sub-menu whose panel opens in the same popover -------- */
 details.settings { position: relative; flex: none; margin-left: auto; margin-right: -10px; }
 details.settings > summary { display: grid; place-items: center; width: 44px; height: 44px;
   list-style: none; cursor: pointer; color: var(--band-muted); user-select: none; }
@@ -375,17 +376,50 @@ details.settings > summary:hover, details.settings[open] > summary { color: var(
   background: var(--band-hover); }
 details.settings > summary:focus-visible { outline-offset: -4px; }
 details.settings .menu { -webkit-user-select: none; user-select: none; }  /* toggles, not text */
-/* the panel is as wide as its longest theme name needs, never under 264px or past the window,
-   and scrolls inside itself when taller than the window; what follows the themes takes its
-   width from them (inline-size containment), never widening it */
-details.settings .menu { right: 10px; width: max-content; min-width: 264px;
-  max-width: calc(100vw - 2 * var(--gutter)); padding: 14px 14px 14px;
+/* the panel is as wide as its level needs (the top level its rows, the themes their longest
+   name), never under 264px or past the window, and scrolls inside itself when taller than the
+   window; what is not a row takes its width from the rows (inline-size containment) */
+details.settings .menu, .gal-prefs { right: 10px; width: max-content; min-width: 264px;
+  max-width: calc(100vw - 2 * var(--gutter)); padding: 8px;
   max-height: calc(100dvh - 64px); overscroll-behavior: contain; }
-.prefs label.check, .prefs .save, details.settings .keys, .prefs-guide { contain: inline-size; }
+.prefs label.check, .prefs .save, .prefs-guide { contain: inline-size; }
 .prefs fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
-/* the page's keys (sluice-keys), under the display preferences */
-.keys { padding: 8px 4px 2px; border-top: 1px solid var(--rule-faint); margin-top: 6px; }
-.keys .menu-label { margin: 0 0 4px; }
+/* a row: its name, what it holds now (or its key) at the right, and a "›" */
+.prefs-menu details.sub > summary { list-style: none; }
+.prefs-menu details.sub > summary::-webkit-details-marker { display: none; }
+.sub-row { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 6px 0 10px;
+  cursor: pointer; font-size: 14px; font-weight: 550; color: var(--ink); }
+.sub-row:hover { background: var(--paper-2); }
+.sub-row:focus-visible { outline-offset: -2px; }
+.sub-name { flex: none; white-space: nowrap; }
+.sub-now { display: flex; align-items: center; gap: 10px; min-width: 0; margin-left: auto;
+  color: var(--ink-muted); font-weight: 500; }
+.sub-theme { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub-hint { margin-left: auto; }
+.sub-row > .sub-chev { transform: rotate(-90deg); }  /* "›" */
+.sub-back > .sub-chev { transform: rotate(90deg); }  /* "‹" */
+/* without script a row opens its panel in place, under it: its "›" turns down */
+details.sub[open] > .sub-row > .sub-chev { transform: none; }
+details.sub[open] > .sub-row { background: var(--paper-2); }
+.sub-panel { padding: 4px 0 6px; }
+/* the back control heads its panel: the panel's name, a "‹" before it. It stays at the top
+   while the panel scrolls under it, right under the menu's navy edge, which it carries over
+   what scrolls by (its 3px shadow lies on the edge, stuck or not; a sticky inset counts from
+   inside the menu's 8px padding) */
+.sub-back { position: sticky; top: -5px; z-index: 1; display: flex; align-items: center; gap: 6px;
+  width: 100%; min-height: 40px; margin: -5px 0 6px; padding: 0 10px 0 4px; border-radius: 0;
+  background: var(--paper-raised); box-shadow: 0 -3px 0 var(--navy), inset 0 -1px 0 var(--rule-faint);
+  font: 600 14px/20px var(--font-text); color: var(--ink); text-align: left; }
+.sub-back:hover { background: var(--paper-2); }
+.sub-back:focus-visible { outline-offset: -2px; }
+/* with script one level at a time (`sluice-menu`): an open sub-menu is the whole panel, the top
+   level and its own row out of sight; it opens at its head */
+:is(sluice-menu:defined > details > .prefs-menu, .gal-prefs):has(details.sub[open])
+  :is(.prefs-menu > *, .prefs > *):not(details.sub[open], :has(details.sub[open])) { display: none; }
+:is(sluice-menu:defined > details > .prefs-menu, .gal-prefs) details.sub[open] > summary { display: none; }
+:is(sluice-menu:defined > details > .prefs-menu, .gal-prefs) .sub-panel { padding-top: 0; }
+/* the page's keys (sluice-keys), in the Keyboard shortcuts panel: a measure of their own */
+.keys { width: min(340px, calc(100vw - 2 * var(--gutter) - 16px)); padding: 2px 4px 2px 10px; }
 .keys-list { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 0;
              font-size: 13px; line-height: 20px; }
 .keys-list > div { display: contents; }
@@ -396,12 +430,10 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; box-shadow: inset 
       inset 0 -2px 0 var(--rule); background: var(--paper-raised); font-size: 12px; line-height: 18px;
       text-align: center; color: var(--ink); }
 .keys-note { margin: 6px 0 0; font-size: 12.5px; line-height: 18px; color: var(--ink-muted); }
-.prefs-guide { display: grid; gap: 4px; margin: 10px -4px 0; padding: 8px 4px 2px;
+.prefs-guide { display: grid; gap: 4px; margin: 6px 0 0; padding: 8px 10px 4px;
                border-top: 1px solid var(--rule-faint); font-size: 13px; line-height: 18px; }
 .prefs-guide a { color: var(--ink-muted); }
 .prefs-guide a:hover { color: var(--ink); }
-.prefs legend { padding: 0; margin-bottom: 6px; font: 600 13px/18px var(--font-text);
-                color: var(--ink-muted); }
 /* the themes: a radio list, each row its swatch and name, the chosen one ticked on the well;
    the radio itself is the row, unseen */
 .prefs .themes { display: grid; gap: 2px; }
@@ -423,7 +455,7 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; box-shadow: inset 
 .prefs .themes .swatch { margin-left: auto; }
 /* a theme's swatch, drawn in its own tokens (the chip carries its data-theme, so its own
    scheme too): its band across the top, its paper under it with a square of its running blue
-   and a square of its question colour */
+   and a square of its question colour; the Theme row's carries none, so it is the page's own */
 .swatch { position: relative; display: inline-flex; align-items: flex-end; gap: 4px; flex: none;
   width: 58px; height: 26px; padding: 0 6px 4px; overflow: hidden;
   background: linear-gradient(var(--band) 0 9px, var(--paper) 0);
@@ -431,10 +463,11 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; box-shadow: inset 
 .swatch > i { display: block; width: 10px; height: 10px; }
 .swatch > .sw-run { background: var(--run); }
 .swatch > .sw-ask { background: var(--coral); }
-.prefs label.check { display: flex; align-items: center; gap: 10px; min-height: 36px;
-  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule-faint); cursor: pointer; }
+.prefs label.check { display: flex; align-items: center; gap: 10px; min-height: 40px;
+  padding: 0 10px; cursor: pointer; font-size: 14px; font-weight: 550; }
+.prefs label.check:hover { background: var(--paper-2); }
 .prefs label.check input { width: 16px; height: 16px; margin: 0; flex: none; accent-color: var(--navy); }
-.prefs .save { margin-top: 10px; }
+.prefs .save { margin: 6px 0 2px 10px; }
 /* each setting applies as it changes once its component runs: no Save */
 form.prefs:has(sluice-toggle:defined) .save { display: none; }
 
@@ -503,7 +536,7 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
   .subnav .subnav-tools .q-field { flex: 1 1 auto; min-width: 0; max-width: none; }
   .subnav-tools .view-switch a { padding: 0 10px; }
   .subnav-tools :is(button, input, select, a) { min-height: 44px; }
-  .prefs .themes label, .prefs label.check { min-height: 44px; }
+  .prefs .themes label, .prefs label.check, .sub-row, .sub-back { min-height: 44px; }
   .page-head { padding: calc(12px * var(--density)) 0 calc(8px * var(--density)); }
   .ph-name > h1, .page-head > h1 { font-size: 28px; line-height: 32px; }
   .page-line { font-size: 15px; line-height: 21px; }
@@ -2247,7 +2280,7 @@ details.read-today .item { opacity: .85; }
   body { font-size: 15px; }
   main { padding: 16px 0 40px; }
   h1 { font-size: 24px; line-height: 30px; }
-  .prefs .themes label, .prefs label.check { min-height: 44px; }
+  .prefs .themes label, .prefs label.check, .sub-row, .sub-back { min-height: 44px; }
   details.about .clip { max-height: calc(min(var(--lines, 2) * 2, 4) * 22px); }
   .drawer { width: 100vw; border-left: 0; --d-pad-t: 16px; --d-pad-x: 16px; --a-bleed: 10px; }
   /* tap targets at least 44px tall */
@@ -3025,6 +3058,13 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: var(
 .gal-th .board-tools { display: flex; margin: 0; }
 .gal-th .board-tools .tool-more { margin-left: 0; }
 .gal-menus { gap: 12px; }
+/* display preferences at each level, as pictures: the panel where the page floats it */
+.gal-prefs { position: static; max-width: 100%; max-height: none; }
+.gal-prefs a { text-decoration: none; }  /* as the nav bar draws its menu's links */
+.gal-prefs .keys { width: min(340px, calc(100vw - 2 * var(--gutter) - 50px)); }  /* inside a column's padding */
+.gal-levels { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px; margin-top: 14px; }
+.gal-levels > figure { margin: 0; min-width: 0; max-width: 100%; }
+.gal-levels figcaption { margin: 0 0 6px; }
 .gal-menus .meta { margin: 0; }
 .gal-copies { margin: 0; }
 .gal-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }

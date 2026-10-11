@@ -14,7 +14,9 @@
 //! sweep of none is the still line, the picker's thirty themes take one column on a phone and two
 //! from 900px with no name wrapped, a page fetches only its own theme's faces (the picker none, a
 //! page without script the cookie's) and each from the dashboard, the first open takes Sluice Light
-//! or Dark from the system once and keeps it, and a pick applies at once and is kept.
+//! or Dark from the system once and keeps it, a pick applies at once and is kept, and display
+//! preferences open a level at a time (Theme, a pick, back, Keyboard shortcuts, Escape), by the
+//! keyboard and the pointer.
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
@@ -813,10 +815,19 @@ async fn the_theme_is_a_cookie_the_picker_and_the_gallery_show() {
         "{html}"
     );
     assert!(!html.contains("appearance"), "{html}");
+    // display preferences' top level names the theme on its Theme row, over the theme list
+    assert!(
+        html.contains("<summary class=\"sub-row\"><span class=\"sub-name\">Theme</span><span class=\"sub-now\"><span class=\"sub-theme\">Rosé Pine Dawn</span>"),
+        "{html}"
+    );
     // no cookie (the first open): no theme drawn, so the system's scheme picks Sluice Light or
     // Dark in the stylesheet, and none checked until the page's script keeps that choice
     let html = get("").await;
     assert!(html.contains("<html lang=\"en\">"), "{html}");
+    assert!(
+        html.contains("<span class=\"sub-theme\">Sluice</span>"),
+        "{html}"
+    );
     assert!(
         !html.contains("name=\"theme\" value=\"sluice-light\" checked"),
         "{html}"
@@ -1020,13 +1031,16 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
             }
         }
 
-        // ---- the picker at 30 themes: one list, two columns from 900px (a family's light and
-        // dark side by side), one under it; no name wraps; the panel scrolls inside itself
+        // ---- the picker at 30 themes (display preferences' Theme): one list, two columns from
+        // 900px (a family's light and dark side by side), one under it; no name wraps; the
+        // panel scrolls inside itself
         for (width, columns) in [(390, 1), (1440, 2)] {
             browser.navigate(&home).unwrap();
-            browser.wait("document.readyState === 'complete'").unwrap();
+            browser.wait("document.readyState === 'complete' && !!customElements.get('sluice-menu')").unwrap();
             browser.viewport(width, "light").unwrap();
-            browser.eval("document.querySelector('details.settings').open = true").unwrap();
+            browser.eval("document.querySelector('details.settings > summary').click()").unwrap();
+            browser.eval(FRAMES).unwrap();
+            browser.eval("document.querySelector('details.settings .sub-themes > summary').click()").unwrap();
             browser.eval(FRAMES).unwrap();
             let p: Value = browser.eval("(() => { const m = document.querySelector('details.settings .menu'); const rows = [...m.querySelectorAll('.themes label')]; const tops = new Set(rows.map(r => Math.round(r.getBoundingClientRect().top))); return {rows: rows.length, lines: tops.size, wraps: rows.filter(r => { const n = r.querySelector('span'); return n.getClientRects().length > 1 || n.scrollWidth > n.clientWidth + 0.5 || n.getBoundingClientRect().height > 30; }).map(r => r.textContent), scrolls: getComputedStyle(m).overflowY, fits: m.getBoundingClientRect().bottom <= innerHeight, right: m.getBoundingClientRect().right <= innerWidth, left: m.getBoundingClientRect().left >= 0}; })()").unwrap();
             assert_eq!(p["rows"], json!(THEMES.len()), "{width}: {p}");
@@ -1042,6 +1056,8 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
         browser.wait("document.readyState === 'complete' && !!customElements.get('sluice-toggle')").unwrap();
         let sluice = browser.eval(PAPER).unwrap();
         browser.eval("document.querySelector('details.settings').open = true").unwrap();
+        browser.eval("document.querySelector('details.settings .sub-themes').open = true").unwrap();
+        browser.eval(FRAMES).unwrap();
         browser.eval("document.querySelector('input[name=theme][value=nord-light]').click()").unwrap();
         browser.eval(FRAMES).unwrap();
         // Nord Light's Snow Storm paper, nord6
@@ -1060,14 +1076,16 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
             true
         );
         assert_eq!(browser.eval(PAPER).unwrap(), json!(["nord-dark", "rgb(46, 52, 64)"]));
-        // the theme rows are 44px targets on a phone
+        // on a phone every row is a 44px target: the top level's, then the theme rows and the
+        // back control over them
         browser.viewport(390, "nord-dark").unwrap();
         browser.eval("document.querySelector('details.settings').open = true").unwrap();
         browser.eval(FRAMES).unwrap();
-        assert_eq!(
-            browser.eval("[...document.querySelectorAll('.prefs .themes label, .prefs label.check')].every(l => l.getBoundingClientRect().height >= 44)").unwrap(),
-            true
-        );
+        let targets = "(() => { const t = [...document.querySelectorAll('details.settings :is(.sub-row, .sub-back, label.check, .themes label)')].filter(e => e.checkVisibility()); return [t.length, t.every(e => e.getBoundingClientRect().height >= 44)]; })()";
+        assert_eq!(browser.eval(targets).unwrap(), json!([3, true]));
+        browser.eval("document.querySelector('details.settings .sub-themes').open = true").unwrap();
+        browser.eval(FRAMES).unwrap();
+        assert_eq!(browser.eval(targets).unwrap(), json!([THEMES.len() + 1, true]));
         assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), json!([]));
         if let Some(dir) = std::env::var_os("SLUICE_FRAME_SCREENS") {
             let dir = std::path::PathBuf::from(dir);
@@ -1157,7 +1175,7 @@ async fn chromium_a_page_fetches_only_its_themes_faces() {
                     .unwrap();
                 if script {
                     browser
-                        .eval("document.querySelector('details.settings').open = true")
+                        .eval("document.querySelector('details.settings').open = true; document.querySelector('details.settings .sub-themes').open = true")
                         .unwrap();
                     browser.eval(FRAMES).unwrap();
                     browser
@@ -1246,7 +1264,7 @@ async fn chromium_the_first_open_follows_the_system_once_and_then_keeps_its_them
                 true
             );
             // a pick replaces it, and survives the system's scheme changing back
-            browser.eval("document.querySelector('details.settings').open = true").unwrap();
+            browser.eval("document.querySelector('details.settings').open = true; document.querySelector('details.settings .sub-themes').open = true").unwrap();
             browser.eval("document.querySelector('input[name=theme][value=gruvbox-light]').click()").unwrap();
             browser.wait("new Promise(r => setTimeout(() => r(true), 300))").unwrap();
             scheme(&mut browser, system);
@@ -1267,6 +1285,152 @@ async fn chromium_the_first_open_follows_the_system_once_and_then_keeps_its_them
             papers.push(drawn[1].clone());
         }
         assert_ne!(papers[0], papers[1], "{papers:?}");
+    })
+    .await
+    .unwrap();
+    server.abort();
+}
+
+/// A key pressed as the keyboard sends it (Enter and Space with their text, so a summary or a
+/// radio acts on them as it would).
+fn press(browser: &mut Chrome, key: &str) {
+    let (code, text) = match key {
+        "Enter" => (13, "\r"),
+        " " => (32, " "),
+        "Escape" => (27, ""),
+        "Backspace" => (8, ""),
+        "ArrowLeft" => (37, ""),
+        "ArrowUp" => (38, ""),
+        "ArrowRight" => (39, ""),
+        "ArrowDown" => (40, ""),
+        other => panic!("no code for {other}"),
+    };
+    let name = if key == " " { "Space" } else { key };
+    for kind in ["keyDown", "keyUp"] {
+        let mut event =
+            json!({"type": kind, "key": key, "code": name, "windowsVirtualKeyCode": code});
+        if kind == "keyDown" && !text.is_empty() {
+            event["text"] = json!(text);
+        }
+        browser.send("Input.dispatchKeyEvent", event).unwrap();
+    }
+    browser.eval(FRAMES).unwrap();
+}
+
+/// Display preferences, one level at a time: what shows, what has the focus, and the theme.
+const LEVEL: &str = "(() => { const m = document.querySelector('details.settings'); const seen = (s) => [...m.querySelectorAll(s)].filter(e => e.checkVisibility()); const a = document.activeElement; return {open: m.open, rows: seen('.sub-row, label.check').map(e => e.innerText.trim().replace(/\\s+/g, ' ')), back: seen('.sub-back').map(e => e.textContent), themes: seen('.themes label').length, keys: seen('a[data-go]').length, focus: a.matches('.sub-row') ? 'row ' + a.querySelector('.sub-name').textContent : a.matches('input[type=radio]') ? 'radio ' + a.value : a.matches('a[data-go]') ? 'go ' + a.dataset.go : a.matches('details.settings > summary') ? 'menu' : a.matches('.sub-back') ? 'back' : a.matches('input[type=checkbox]') ? 'types' : a.localName, theme: document.documentElement.dataset.theme, named: m.querySelector('.sub-theme').textContent, expanded: [...m.querySelectorAll('summary')].map(s => s.getAttribute('aria-expanded')), fits: m.querySelector('.menu').getBoundingClientRect().bottom <= innerHeight, scrolls: m.querySelector('.menu').scrollHeight > m.querySelector('.menu').clientHeight, header: seen('.sub-back').map(b => { const r = b.getBoundingClientRect(), p = m.querySelector('.menu').getBoundingClientRect(); return [Math.round(r.top - p.top), document.elementFromPoint(r.left + 20, r.top + r.height / 2)?.closest('.sub-back') === b]; })}; })()";
+
+/// Display preferences are a short menu of rows: Theme opens the thirty themes in the same
+/// menu, a pick applies at once and stays there, back returns to Theme's row; Keyboard
+/// shortcuts opens the keys; Escape closes it all. By the keyboard (Enter or → opens a row, ← or
+/// Backspace comes back, the focus following) and by the pointer, at a phone's width and a
+/// desktop's.
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_display_preferences_open_theme_pick_back_shortcuts_and_escape() {
+    let f = Fixture::new().await;
+    neutral::seed(&f.writer, f._home.path()).await;
+    let (addr, server) = serve(&f);
+    let base = format!("http://{addr}");
+    tokio::task::spawn_blocking(move || {
+        let home = format!("{base}/");
+        let mut browser = Chrome::open("about:blank").unwrap();
+        browser
+            .send(
+                "Network.setCookie",
+                json!({"url": base, "name": "sluice_theme", "value": "nord-light"}),
+            )
+            .unwrap();
+        let level = |browser: &mut Chrome| -> Value { browser.eval(LEVEL).unwrap() };
+        let top = json!(["Theme Nord Light", "Show value types", "Keyboard shortcuts ?"]);
+        for width in [390, 1440] {
+            browser.navigate(&home).unwrap();
+            browser
+                .wait("document.readyState === 'complete' && !!customElements.get('sluice-menu') && !!customElements.get('sluice-toggle')")
+                .unwrap();
+            browser.viewport(width, "nord-light").unwrap();
+            // ---- the keyboard: ArrowDown from the sliders opens the top level, on Theme's row
+            browser.eval("document.querySelector('details.settings > summary').focus()").unwrap();
+            press(&mut browser, "ArrowDown");
+            let l = level(&mut browser);
+            assert_eq!(l["open"], json!(true), "{width}: {l}");
+            assert_eq!(l["rows"], top, "{width}: {l}");
+            assert_eq!((l["themes"].clone(), l["keys"].clone(), l["back"].clone()), (json!(0), json!(0), json!([])), "{width}: {l}");
+            assert_eq!(l["focus"], json!("row Theme"), "{width}: {l}");
+            assert_eq!(l["expanded"], json!(["true", "false", "false"]), "{width}: {l}");
+            // Enter opens Theme in the same menu: its back control and the thirty themes alone,
+            // the focus on the chosen one
+            press(&mut browser, "Enter");
+            let l = level(&mut browser);
+            assert_eq!((l["rows"].clone(), l["back"].clone(), l["themes"].clone()), (json!([]), json!(["Theme: back to display preferences"]), json!(THEMES.len())), "{width}: {l}");
+            assert_eq!(l["focus"], json!("radio nord-light"), "{width}: {l}");
+            assert_eq!(l["expanded"], json!(["true", "true", "false"]), "{width}: {l}");
+            // taller than the window on a phone, it scrolls inside itself; never past the window
+            assert_eq!(l["fits"], json!(true), "{width}: {l}");
+            assert_eq!(l["scrolls"], json!(width == 390), "{width}: {l}");
+            // its back control heads it, right under the menu's 3px edge, in sight however far
+            // the list scrolls
+            assert_eq!(l["header"], json!([[3, true]]), "{width}: {l}");
+            browser.eval("document.querySelector('details.settings .menu').scrollTo(0, 99999)").unwrap();
+            browser.eval(FRAMES).unwrap();
+            assert_eq!(level(&mut browser)["header"], json!([[3, true]]), "{width}");
+            // ArrowDown picks the next theme at once, and the menu stays on the themes
+            press(&mut browser, "ArrowDown");
+            let l = level(&mut browser);
+            assert_eq!((l["theme"].clone(), l["focus"].clone(), l["themes"].clone()), (json!("nord-dark"), json!("radio nord-dark"), json!(THEMES.len())), "{width}: {l}");
+            assert_eq!(browser.eval(PAPER).unwrap(), json!(["nord-dark", "rgb(46, 52, 64)"]));
+            // → is not a level deeper here, and moves nothing
+            press(&mut browser, "ArrowRight");
+            assert_eq!(level(&mut browser)["theme"], json!("nord-dark"), "{width}");
+            // ← comes back to the top level, on Theme's row, which names the pick
+            press(&mut browser, "ArrowLeft");
+            let l = level(&mut browser);
+            assert_eq!(l["rows"], json!(["Theme Nord", "Show value types", "Keyboard shortcuts ?"]), "{width}: {l}");
+            assert_eq!((l["focus"].clone(), l["named"].clone(), l["themes"].clone()), (json!("row Theme"), json!("Nord"), json!(0)), "{width}: {l}");
+            // down the rows to Keyboard shortcuts; → opens it, on its first key
+            press(&mut browser, "ArrowDown");
+            assert_eq!(level(&mut browser)["focus"], json!("types"), "{width}");
+            press(&mut browser, "ArrowDown");
+            assert_eq!(level(&mut browser)["focus"], json!("row Keyboard shortcuts"), "{width}");
+            press(&mut browser, "ArrowRight");
+            let l = level(&mut browser);
+            assert_eq!((l["rows"].clone(), l["back"].clone(), l["themes"].clone(), l["focus"].clone()), (json!([]), json!(["Keyboard shortcuts: back to display preferences"]), json!(0), json!("go h")), "{width}: {l}");
+            assert!(l["keys"].as_u64().unwrap() >= 2, "{width}: {l}");
+            // Backspace comes back to its row; Enter opens it again; Escape closes the menu,
+            // the focus on the sliders, and the next open starts at the top level
+            press(&mut browser, "Backspace");
+            let l = level(&mut browser);
+            assert_eq!((l["rows"].clone(), l["focus"].clone()), (json!(["Theme Nord", "Show value types", "Keyboard shortcuts ?"]), json!("row Keyboard shortcuts")), "{width}: {l}");
+            press(&mut browser, "Enter");
+            assert_eq!(level(&mut browser)["focus"], json!("go h"), "{width}");
+            press(&mut browser, "Escape");
+            let l = level(&mut browser);
+            assert_eq!((l["open"].clone(), l["focus"].clone()), (json!(false), json!("menu")), "{width}: {l}");
+            press(&mut browser, "Enter");
+            let l = level(&mut browser);
+            assert_eq!((l["open"].clone(), l["rows"].clone()), (json!(true), json!(["Theme Nord", "Show value types", "Keyboard shortcuts ?"])), "{width}: {l}");
+            press(&mut browser, "Escape");
+
+            // ---- the pointer: the sliders, Theme's row, a theme, back
+            browser.eval("document.querySelector('details.settings > summary').click()").unwrap();
+            browser.eval(FRAMES).unwrap();
+            browser.eval("document.querySelector('.sub-themes > summary').click()").unwrap();
+            browser.eval(FRAMES).unwrap();
+            browser.eval("document.querySelector('input[name=theme][value=nord-light]').closest('label').click()").unwrap();
+            browser.eval(FRAMES).unwrap();
+            let l = level(&mut browser);
+            assert_eq!((l["theme"].clone(), l["themes"].clone()), (json!("nord-light"), json!(THEMES.len())), "{width}: {l}");
+            browser.eval("document.querySelector('.sub-themes .sub-back').click()").unwrap();
+            browser.eval(FRAMES).unwrap();
+            let l = level(&mut browser);
+            assert_eq!((l["rows"].clone(), l["focus"].clone()), (top.clone(), json!("row Theme")), "{width}: {l}");
+            // a click elsewhere closes it
+            browser.eval("document.querySelector('main').click()").unwrap();
+            browser.eval(FRAMES).unwrap();
+            assert_eq!(level(&mut browser)["open"], json!(false), "{width}");
+            assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), json!([]));
+            // the pick is kept for the next page
+            browser.wait("new Promise(r => setTimeout(() => r(true), 300))").unwrap();
+        }
     })
     .await
     .unwrap();

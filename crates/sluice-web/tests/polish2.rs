@@ -648,15 +648,20 @@ async fn chromium_the_pages_keys_find_go_and_list_but_never_while_typing() {
             browser.eval("location.pathname").unwrap(),
             json!(format!("/projects/id/{id}"))
         );
-        // ? opens the list
+        // ? opens the list: display preferences at Keyboard shortcuts, the focus on its first key
         browser.eval("document.activeElement.blur()").unwrap();
         key(&mut browser, "?");
+        browser
+            .wait("document.activeElement.matches('sluice-keys a[data-go]')")
+            .unwrap();
         assert_eq!(
-            browser.eval("document.querySelector('sluice-keys').closest('details').open").unwrap(),
-            json!(true)
+            browser
+                .eval("[document.querySelector('details.settings').open, document.querySelector('sluice-keys').closest('details.sub').open, document.querySelector('sluice-keys a[data-go]').checkVisibility(), document.querySelector('.sub-themes > summary').checkVisibility()]")
+                .unwrap(),
+            json!([true, true, true, false])
         );
         browser
-            .eval("document.querySelector('sluice-keys').closest('details').open = false; document.activeElement.blur()")
+            .eval("document.querySelector('details.settings').open = false; document.activeElement.blur()")
             .unwrap();
         assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
         // g then l goes to the project's log

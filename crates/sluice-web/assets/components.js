@@ -561,20 +561,26 @@ define("sluice-answer", {
 // A menu behind its summary (the project switcher, display preferences, an item's Details
 // behind its "⋯"): a `<details>` that opens and works without script. Its summary says
 // aria-expanded; a click elsewhere or Escape closes it, the focus back on its summary;
-// ArrowDown from the summary goes into it, and the arrows, Home and End move through its links
-// and buttons (a radio keeps its own arrows).
+// ArrowDown from the summary goes into it, and the arrows, Home and End move through its rows,
+// links and buttons (a radio keeps its own up and down).
+// A menu may hold sub-menus (`details.sub`: display preferences' Theme and Keyboard shortcuts),
+// one level shown at a time (style.css): Enter, Space or ArrowRight on a row opens its panel in
+// the same menu, the focus on its chosen radio or its first link; its back control,
+// ArrowLeft or Backspace returns to the top level, the focus on the row it came from. Only one
+// is open at a time, and closing the menu closes them, so it opens again at its top.
 define("sluice-menu", {
   props: () => ({}),
   manifest: {
     slots: [{ name: "summary", description: "Its details' summary, the opener (its accessible name says what it holds)." },
-            { name: "menu", description: "Its .menu: links, buttons or a form." }],
+            { name: "menu", description: "Its .menu: links, buttons or a form; a details.sub is a sub-menu: its summary the row, its .sub-panel (a .sub-back first) the level it opens." }],
     events: [],
   },
   setup({ host, cleanup }) {
     const on = listening(cleanup);
     const details = () => host.querySelector(":scope > details");
-    const said = () => {
-      const d = details(), summary = d?.querySelector(":scope > summary");
+    const subs = () => [...(details()?.querySelectorAll(".menu details.sub") ?? [])];
+    const expanded = (d) => {
+      const summary = d?.querySelector(":scope > summary");
       if (summary && summary.getAttribute("aria-expanded") !== String(d.open)) summary.setAttribute("aria-expanded", String(d.open));
     };
     // an open panel stays inside the window: one anchored by its right edge near the window's
@@ -589,15 +595,45 @@ define("sluice-menu", {
       const dx = r.left < edge ? edge - r.left : r.right > width - edge ? width - edge - r.right : 0;
       if (dx) panel.style.translate = `${Math.round(dx)}px 0`;
     };
-    on(host, "toggle", () => { said(); fit(); }, { capture: true });
+    const shown = (el) => el.checkVisibility?.() ?? true;
+    on(host, "toggle", (event) => {
+      const d = details(), target = event.target;
+      expanded(d);
+      fit();
+      if (target === d) {
+        if (!d.open) for (const sub of subs()) sub.open = false;
+        return;
+      }
+      if (!target.matches?.("details.sub")) return;
+      expanded(target);
+      if (!d?.open) return;
+      const focus = document.activeElement;
+      if (target.open) {
+        for (const sub of subs()) if (sub !== target) sub.open = false;
+        target.closest(".menu")?.scrollTo(0, 0);
+        const panel = target.querySelector(":scope > .sub-panel");
+        if (panel?.contains(focus)) return;
+        const items = [...(panel?.querySelectorAll("a[href], button, input:not([type=hidden])") ?? [])].filter(shown);
+        const into = items.find((el) => el.matches("input[type=radio]:checked"))
+          ?? items.find((el) => !el.matches(".sub-back")) ?? items[0];
+        into?.focus();
+      } else if (!focus || focus === document.body || target.contains(focus)) {
+        target.querySelector(":scope > summary")?.focus();
+      }
+    }, { capture: true });
     on(window, "resize", fit);
-    said();
+    expanded(details());
+    for (const sub of subs()) expanded(sub);
     fit();
-    const items = () => [...(details()?.querySelectorAll(".menu a[href], .menu button:not([hidden]), .menu input:not([type=hidden])") ?? [])]
-      .filter((el) => el.checkVisibility?.() ?? true);
+    const items = () => [...(details()?.querySelectorAll(".menu a[href], .menu button:not([hidden]), .menu input:not([type=hidden]), .menu details.sub > summary") ?? [])]
+      .filter(shown);
     on(document, "click", (event) => {
       const d = details();
       if (d?.open && !d.contains(event.target)) d.open = false;
+    });
+    on(host, "click", (event) => {
+      const sub = event.target.closest?.(".sub-back")?.closest("details.sub");
+      if (sub) sub.open = false;
     });
     on(host, "keydown", (event) => {
       const d = details();
@@ -608,6 +644,27 @@ define("sluice-menu", {
         d.open = false;
         d.querySelector(":scope > summary").focus();
         return;
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      // a sub-menu: ArrowRight on its row opens it; inside its panel ArrowLeft or Backspace goes
+      // back, and ArrowRight goes nowhere (the levels are across, the items down)
+      const sub = event.target.closest?.("details.sub");
+      if (sub && d.open && !event.target.matches("input[type=search], textarea")) {
+        const row = event.target === sub.querySelector(":scope > summary");
+        if (row && event.key === "ArrowRight") {
+          event.preventDefault();
+          sub.open = true;
+          return;
+        }
+        if (!row && sub.open && (event.key === "ArrowLeft" || event.key === "Backspace")) {
+          event.preventDefault();
+          sub.open = false;
+          return;
+        }
+        if (!row && event.key === "ArrowRight" && event.target.matches("input[type=radio]")) {
+          event.preventDefault();
+          return;
+        }
       }
       if (event.target.matches?.("input[type=radio], input[type=search], textarea")) return;
       const list = items();
@@ -684,10 +741,11 @@ define("sluice-keys", {
         return;
       }
       if (event.key === "?") {
+        // its panel and the menu around it (display preferences' Keyboard shortcuts)
         const menu = host.closest("details");
         if (!menu) return;
         event.preventDefault();
-        menu.open = true;
+        for (let d = menu; d; d = d.parentElement?.closest("details")) d.open = true;
         requestAnimationFrame(() => host.querySelector("a[data-go]")?.focus());
       }
     });
@@ -736,18 +794,20 @@ define("sluice-copy", {
 // A display setting applied at once and kept by posting it to /settings, which sets the cookie
 // every page is drawn from: `setting` "types" (a Types switch's aria-pressed, or the display
 // preferences' checkbox; every one on the page follows, and `show-types` on <html>) or "theme"
-// (its id as `data-theme` on <html>: a complete theme, its palette and its scheme).
+// (its id as `data-theme` on <html>: a complete theme, its palette and its scheme; the Theme row
+// of display preferences names it).
 const keepSetting = (name, value) =>
   fetch("/settings", { method: "POST", keepalive: true, body: new URLSearchParams({ [name]: value }) }).catch(() => {});
 define("sluice-toggle", {
   props: ({ string }) => ({ setting: string }),
   manifest: {
-    slots: [{ name: "control", description: "button.types-toggle[aria-pressed], a types checkbox, or the theme radios." }],
+    slots: [{ name: "control", description: "button.types-toggle[aria-pressed], a types checkbox, or the theme radios with the Theme row's .sub-theme." }],
     events: [{ name: "sluice-setting", description: "A setting changed (on document); detail.setting and detail.value." }],
   },
   setup({ host, props, cleanup }) {
     const on = listening(cleanup);
     const sync = () => {
+      if (props.setting === "theme") return theme();
       if (props.setting !== "types") return;
       const shown = root.classList.contains("show-types");
       for (const b of host.querySelectorAll(".types-toggle")) {
@@ -755,6 +815,22 @@ define("sluice-toggle", {
       }
       for (const box of host.querySelectorAll("input[type=checkbox][name=types]")) box.checked = shown;
     };
+    // the theme the page wears is the one ticked and the one the Theme row names (its words
+    // the chosen radio's own): a stream patch drawn before the pick leaves both as they are
+    const theme = () => {
+      const id = root.dataset.theme;
+      const radio = id ? host.querySelector(`input[name=theme][value="${CSS.escape(id)}"]`) : null;
+      if (!radio) return;
+      if (!radio.checked) radio.checked = true;
+      const name = radio.closest("label")?.querySelector(":scope > span:not(.swatch)")?.textContent;
+      const row = host.querySelector(".sub-theme");
+      if (row && name && row.textContent !== name) row.textContent = name;
+    };
+    if (props.setting === "theme") {
+      const watch = new MutationObserver(theme);
+      watch.observe(host, { childList: true, subtree: true, characterData: true });
+      cleanup(() => watch.disconnect());
+    }
     const say = (value) => document.dispatchEvent(new CustomEvent("sluice-setting", { detail: { setting: props.setting, value } }));
     const types = (shown) => {
       root.classList.toggle("show-types", shown);
@@ -770,6 +846,7 @@ define("sluice-toggle", {
       if (input.name === "theme" && input.value) {
         root.dataset.theme = input.value;
         keepSetting("theme", input.value);
+        theme();
         say(input.value);
       }
     });

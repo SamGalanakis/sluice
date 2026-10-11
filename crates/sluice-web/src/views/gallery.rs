@@ -199,10 +199,19 @@ fn copies() -> TrustedHtml {
         ui::copy("5f3c2e1a9b7d", "Copy release"),
     ))
 }
-fn toggles() -> TrustedHtml {
+fn toggles(prefix: &str) -> TrustedHtml {
+    use super::prefs::{Level, picture};
+    let theme = if prefix == "d-" {
+        "sluice-dark"
+    } else {
+        "sluice-light"
+    };
     TrustedHtml::owned(format!(
-        "<div class=\"d-sec-h tp-top\"><p class=\"meta\">From run 2 · value types shown or not, on every page at once</p>{}</div>",
-        ui::types_toggle()
+        "<div class=\"d-sec-h tp-top\"><p class=\"meta\">From run 2 · value types shown or not, on every page at once</p>{}</div><div class=\"gal-levels\"><figure><figcaption class=\"meta\">Display preferences, opened</figcaption>{}</figure><figure><figcaption class=\"meta\">Theme</figcaption>{}</figure><figure><figcaption class=\"meta\">Keyboard shortcuts</figcaption>{}</figure></div>",
+        ui::types_toggle(),
+        picture(prefix, theme, Level::Top),
+        picture(prefix, theme, Level::Theme),
+        picture(prefix, theme, Level::Keys),
     ))
 }
 fn searches(prefix: &str) -> TrustedHtml {
@@ -405,10 +414,10 @@ fn dialog() -> TrustedHtml {
 fn notices() -> TrustedHtml {
     ui::notice("Nothing was done: this step changed since the page drew it, and it is running now. Look again, then retry. What you wrote is kept in its box: Retry sends it.")
 }
-/// The keys' list as display preferences draws it (its `sluice-keys` host is the page's own:
-/// one per page).
+/// The keys' list as display preferences' Keyboard shortcuts draws it (its `sluice-keys` host is
+/// the page's own: one per page).
 fn keys() -> TrustedHtml {
-    TrustedHtml::owned("<div class=\"keys gal-keys\"><p class=\"menu-label\">Keys</p><dl class=\"keys-list\"><div><dt><kbd>/</kbd></dt><dd>Find (plan, log, functions)</dd></div><div><dt><kbd>g</kbd> <kbd>h</kbd></dt><dd><a href=\"#\">All projects</a></dd></div><div><dt><kbd>g</kbd> <kbd>p</kbd></dt><dd><a href=\"#\">Plan</a></dd></div><div><dt><kbd>g</kbd> <kbd>m</kbd></dt><dd><a href=\"#\">Messages</a></dd></div><div><dt><kbd>g</kbd> <kbd>l</kbd></dt><dd><a href=\"#\">Log</a></dd></div><div><dt><kbd>g</kbd> <kbd>i</kbd></dt><dd><a href=\"#\">Inbox</a></dd></div><div><dt><kbd>?</kbd></dt><dd>These keys</dd></div></dl><p class=\"keys-note\">None while typing in a field.</p></div>".into())
+    super::prefs::keys_picture()
 }
 
 // ---- the Synthesis kit, on an invented project (almanac: a team writing a field guide) -------
@@ -902,13 +911,13 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Conversation", "Messages in one column: a run from one sender under who sent it to whom, a line at each day and at the first unread, a question's answer under it, long ones folded, the message box at the end. A question for you has Answer and Close, and says where it went once answered.", "`threads::Conversation` in `sluice-conversation`, `sluice-composer`, `sluice-answer`.", both(&|p| conversation(p, &project))?);
     add("Empty states", "What a place says when it has nothing to show, and where to go instead.", "`ui::empty`, `ui::empty_with`.", both(&|_| Ok(empties()))?);
     add("Confirmation", "A step asks before Cancel, a succeeded step's Retry, Close all and a delete. Focus starts on the safe choice, Escape keeps things as they are, and you return to the button you pressed. Without script the question opens in place.", "`ui::Confirm` in `sluice-confirm`.", both(&|_| Ok(dialog()))?);
-    add("Menus", "The project switcher, display preferences and an item's Details: a click elsewhere or Escape closes one, the arrows, Home and End move through it.", "`ui::menu_open` (`sluice-menu`).", both(&|_| Ok(menus()))?);
+    add("Menus", "The project switcher, display preferences and an item's Details: a click elsewhere or Escape closes one, the arrows, Home and End move through it. A menu may hold a short level of rows that each open a panel of their own in the same menu (display preferences, under Settings below).", "`ui::menu_open` (`sluice-menu`).", both(&|_| Ok(menus()))?);
     add("Copy", "An id or a SHA in data mono, with a copy button that says Copied for a moment.", "`ui::copy` (`sluice-copy`).", both(&|_| Ok(copies()))?);
-    add("Settings", "Display preferences apply at once and are kept for next time; every Show value types switch on a page follows.", "`ui::types_toggle`, `ui::setting_open` (`sluice-toggle`).", both(&|_| Ok(toggles()))?);
+    add("Settings", "Display preferences apply at once and are kept for next time; every Show value types switch on a page follows. The sliders at the nav bar's right open a short menu: Theme (the current one's name and swatch), Show value types (toggled in place) and Keyboard shortcuts. Theme and Keyboard shortcuts each open their own panel in the same menu, under a back control: Enter or → opens a row, ← or Backspace comes back to it, Escape closes the menu. A pick in Theme applies at once and the menu stays on the themes, so you can try the next. Without script each row opens its panel in place under it, and Save keeps the form.", "`views::prefs::menu` (`ui::setting_open`, `sluice-toggle`; `details.sub` in `sluice-menu`), `ui::types_toggle`.", both(&|p| Ok(toggles(p)))?);
     add("Search", "A list filtered as you type (the functions), or the plan's tools showing what matches; Escape clears.", "`ui::search_open` (`sluice-search`).", both(&|p| Ok(searches(p)))?);
     add("Banners", "Updates paused or stopped, with Reconnect, in gold; a newer build of sluice, with Reload, muted. Hidden while the page is live.", "`ui::banner` (`sluice-banner`).", both(&|_| Ok(banners()))?);
     add("Notice", "What a page says at its top when something you asked for was not done, with what to do next and your words kept in their box. Read out as it appears.", "`ui::notice`: a refused step action comes back to the step's address, the notice held ten minutes under a key the server made.", both(&|_| Ok(notices()))?);
-    add("Keys", "Listed under display preferences on every page: / finds on the plan (from a step or unit page too), the log and functions; [ and ] move the drawer to the step before or after; g then a letter goes to a section; ? opens the list. Never while typing in a field or under an open dialog.", "`sluice-keys`.", both(&|_| Ok(keys()))?);
+    add("Keys", "Listed in display preferences' Keyboard shortcuts on every page: / finds on the plan (from a step or unit page too), the log and functions; [ and ] move the drawer to the step before or after; g then a letter goes to a section; ? opens the list there. Never while typing in a field or under an open dialog.", "`sluice-keys`.", both(&|_| Ok(keys()))?);
     add("Splitter", "The line between the plan and an open step: drag it, or use the arrows (16px, 64px with Shift), Home and End; a double-click resets it, and its width is kept per project.", "`ui::splitter` (`sluice-splitter`).", both(&|p| Ok(splitters(p)))?);
     add("Themes", "Each of the thirty themes the display preferences offer, one list (two columns from 900px wide, a family's light beside its dark), each a complete look: a well-loved colour scheme or a classic of American design in one of its schemes, mapped onto sluice's roles, so its band is its deepest surface, its blue (or its nearest) runs, its done is calm, its yellow wants a look and one colour of its own asks you a question. A deep theme also sets its faces, its rules, its band's edge, its rhythm, how a stage is drawn, its links and its sweep (or a still line, as Williamsburg's and every theme's under reduced motion); its display face never sets words under 19px, where its text face takes over. The page and its order stay the same. A first open takes Sluice Light or Sluice Dark by the system's scheme, and keeps it.", "`data-theme` on the page (the cookie `sluice_theme`); Sluice's tokens in `style.css`, each other family's in `assets/themes/`.", (themes_part(), TrustedHtml::default()));
     add("Components", "For whoever builds a page: every component, the attributes it reads and what it does. The server draws everything in it; the component only behaves.", "Rocket components in `components.js`, light DOM.", (components(), TrustedHtml::default()));

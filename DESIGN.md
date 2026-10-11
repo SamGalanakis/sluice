@@ -301,17 +301,17 @@ design, which also set their faces, rules and materials (the deep tokens, below)
 Williamsburg, Interstate, Ranger, Park Service, Kodachrome, Fiesta and Road Atlas, each Light and
 Dark. A theme's id is `<family>-light` or
 `<family>-dark` (`views::THEMES`): `data-theme` on `<html>` and the `sluice_theme` cookie,
-server-drawn, so a page without script is drawn in it; with script the picker applies at once
-(`sluice-toggle`). The picker shows each theme's swatch in its own tokens: its band over its
+server-drawn, so a page without script is drawn in it; with script the picker (display
+preferences' Theme panel, The frame) applies at once (`sluice-toggle`). The picker shows each theme's swatch in its own tokens: its band over its
 paper, a square of its running colour and one of its question colour.
 
 **The picker at thirty themes** is still one flat list, in `THEMES`' order: Sluice, the six
 editor families, then Empire Builder, Williamsburg, Interstate, Ranger, Park Service,
 Kodachrome, Fiesta and Road Atlas, each Light then Dark. From 900px wide it lays the list out
 in two columns, so a family's light and dark stand side by side and a row is a family; under
-that it is one column. No name wraps: the panel is as wide as its longest name needs (never
-under 264px or past the window; the keys and links under the list take its width, never widen
-it) and scrolls inside itself when it is taller than the window. Its order, its arrow keys and
+that it is one column. No name wraps: the Theme panel is as wide as its longest name needs
+(never under 264px or past the window) and scrolls inside itself when it is taller than the
+window. Its order, its arrow keys and
 its tick are the list's, and its swatches carry no text, so they never set a theme's face and
 opening the picker fetches no face.
 
@@ -732,9 +732,28 @@ head on the paper under it.
   the project switcher (its button the current project's icon and name in a box of the band's
   rule, the menu every project), Inbox with its coral count, then at the right the live line (a
   square in `band-mark` and "Live" while the page's stream is, from `html[data-stream]`) and
-  display preferences (the theme, value types). The current place carries a 3px underline in
+  display preferences (below). The current place carries a 3px underline in
   `band-mark`. On a phone the wordmark and Projects give way to the switcher (whose menu has
   them), its name shortens before anything wraps, and the live line is its square.
+- **Display preferences** (`views::prefs`, the sliders at the bar's right end) are a short
+  menu, a row each on the raised paper: **Theme** (the current theme's name in muted ink and its
+  swatch in the page's own tokens, then a "›"), **Show value types** (its checkbox, toggled in
+  place) and **Keyboard shortcuts** (its `?` and a "›"), then under a faint rule "What each
+  state and part means" (the gallery) and "Agent docs". Theme and Keyboard shortcuts are
+  sub-menus (`details.sub`): a row opens its panel inside the same popover, headed by a back
+  control ("‹ Theme") over a faint rule, with the top level out of sight; the panel scrolls
+  inside itself when it is taller than the window. Theme's panel is the picker (Themes): a pick
+  applies at once and the menu stays on the themes, so the next can be tried; Keyboard
+  shortcuts' is the keys' list (`sluice-keys`). The keyboard follows `sluice-menu`: ArrowDown
+  from the sliders goes in, the arrows, Home and End move through the rows, Enter, Space or →
+  opens a row with the focus on its chosen theme or its first key, ← or Backspace returns to
+  the row it came from (→ inside a panel moves nothing: the levels are across, the items down),
+  and Escape closes the whole menu, the focus back on the sliders; it opens again at the top.
+  Each row's summary says `aria-expanded`. The panel is as wide as its level needs (264px at
+  least, never past the window), so it widens to the left for the two columns of themes. Rows
+  and the back control are 40px, 44px on a phone. Without script each row opens its panel in
+  place under it (nested `<details>`), every theme and the value types are one form with Save,
+  and the keys (script's alone) are not offered.
 - **The page's head** (`Frame::head`, `ui::page_head` and `ui::page_head_with`): on the paper,
   its crumbs when it is one thing in a tab (a step's way back to its plan and its unit, the unit
   by its title or name cut to 40, never "Its unit"), its name at 34px with its Details' "⋯"
@@ -927,8 +946,8 @@ what the owner sees it as and how it is built, every part and component in every
 the invented project's data, light and dark side by side (stacked under 900px, and stacked at
 every width for a part that needs the grid's room), and a table of every component, its props
 and events (a Chromium test holds each to its script's manifest). A new part goes there first.
-The display preferences end with the Keys, "What each state and part means" (the gallery) and
-"Agent docs" (`/docs`).
+Display preferences hold the Keys (their Keyboard shortcuts panel) and end with "What each state
+and part means" (the gallery) and "Agent docs" (`/docs`).
 
 The components:
 
@@ -944,16 +963,19 @@ The components:
   question's Answer and Close.
 - **`sluice-menu`**: the project switcher, display preferences, the plan's More and every
   Details "⋯": a click elsewhere or Escape closes it and gives the focus back, its button says
-  `aria-expanded`; the arrows, Home and End move through it.
+  `aria-expanded`; the arrows, Home and End move through it. A sub-menu (`details.sub`: display
+  preferences' Theme and Keyboard shortcuts) opens in the same menu, one level at a time: Enter
+  or → opens its row and the focus goes in; its back control, ← or Backspace returns to the row.
 - **`sluice-copy`**: an id or a SHA in data mono with a copy button.
 - **`sluice-toggle`**: a display setting (the theme, value types) applied at once and kept by
-  `/settings`.
+  `/settings`; the Theme row names the theme the page wears, even after a stream patch drawn
+  before the pick.
 - **`sluice-search`**: the board's search, the functions' find, a form of filters.
 - **`sluice-banner`**: the stream line ("Updates paused. Reconnecting…", "Updates stopped at
   14:02." with Reconnect) and the build line ("sluice was updated · Reload"); the stream's
   phase is also `html[data-stream]`, which the nav bar's live line reads.
 - **`sluice-keys`**: `/` finds, `[` and `]` move the drawer, `g` then a letter goes to a page,
-  `?` lists them; never while typing or under a dialog.
+  `?` opens display preferences at Keyboard shortcuts; never while typing or under a dialog.
 - **`sluice-splitter`**, **`sluice-drawer`**: the board's splitter and the step drawer.
 
 The page's clock is no component: `nav.js` ticks every `<time>` (`data-since` a two-unit

@@ -1748,7 +1748,7 @@ question's place).
 
 With script, keys move around (`sluice-keys`): `/` focuses the page's search field, `g` then a
 letter opens a page the nav links (`g h` projects, `g p` plan, `g m` messages, `g l` log, `g f`
-functions, `g i` inbox), `?` lists them in the display preferences; none acts while a field has
+functions, `g i` inbox), `?` lists them in the display preferences (its Keyboard shortcuts); none acts while a field has
 the focus, a dialog is open or a modifier is held.
 
 Every page has a `…/stream` twin that patches the page live over Datastar SSE. Pages render

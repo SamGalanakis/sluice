@@ -145,7 +145,7 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-menu",
         script: "components.js",
-        does: "A disclosure menu (the project switcher, display preferences, an item's Details behind its ⋯): its summary says aria-expanded, a click elsewhere or Escape closes it, focus back on its summary; the arrows, Home and End move through its items.",
+        does: "A disclosure menu (the project switcher, display preferences, an item's Details behind its ⋯): its summary says aria-expanded, a click elsewhere or Escape closes it, focus back on its summary; the arrows, Home and End move through its items. A sub-menu (display preferences' Theme and Keyboard shortcuts) opens in the same menu, one level at a time: Enter or ArrowRight opens its row, its back control, ArrowLeft or Backspace returns to the row.",
         props: &[],
         events: &[],
         slots: &["summary", "menu"],
@@ -161,7 +161,7 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-toggle",
         script: "components.js",
-        does: "A display setting applied at once and kept by posting it to /settings: value types (every Types switch follows) or the theme.",
+        does: "A display setting applied at once and kept by posting it to /settings: value types (every Types switch follows) or the theme (the Theme row names it).",
         props: &[("setting", "string")],
         events: &["sluice-setting"],
         slots: &["control"],
