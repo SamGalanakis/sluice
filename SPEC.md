@@ -1734,8 +1734,9 @@ the focus, a dialog is open or a modifier is held.
 
 Every page has a `…/stream` twin that patches the page live over Datastar SSE. Pages render
 fully without JavaScript; every value is HTML-escaped and markdown bodies are rendered on the
-server with unsafe link schemes refused. The only external assets are two font stylesheets from
-cdn.jsdelivr.net; every script is served from `/static/` (Datastar 1.0.4, OpenUI lang-core
+server with unsafe link schemes refused. The only external assets are font files from
+cdn.jsdelivr.net, each fetched only for a face the page's theme sets text in (their
+`@font-face` rules are in the one stylesheet); every script is served from `/static/` (Datastar 1.0.4, OpenUI lang-core
 0.3.0, zod 4.6.5 and sluice's own). A page and each stream batch are drawn from one store
 snapshot, with each running run's activity (its run files' modification times) read once;
 nothing that changes meanwhile fails the page. The version a page carries (`ver`) is a

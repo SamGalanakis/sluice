@@ -1162,7 +1162,7 @@ pub fn registration() -> PageRegistration {
             Asset {
                 names: &["style.css", "dashboard.css"],
                 media_type: "text/css",
-                bytes: include_bytes!("../../assets/style.css"),
+                bytes: include_bytes!(concat!(env!("OUT_DIR"), "/style.css")),
             },
             Asset {
                 names: &["nav.js"],

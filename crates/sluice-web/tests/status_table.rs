@@ -658,7 +658,7 @@ fn the_logs_cancel_filter_and_the_pages_agree() {
 /// and card class in style.css, its icon in the sprite, and its word in DESIGN.md's ramp.
 #[test]
 fn every_state_is_styled_drawn_and_documented() {
-    const CSS: &str = include_str!("../assets/style.css");
+    const CSS: &str = sluice_web::views::STYLESHEET;
     const DESIGN: &str = include_str!("../../../DESIGN.md");
     let ramp = &DESIGN[DESIGN.find("### Status ramp").unwrap()..];
     let ramp = &ramp[..ramp.find("### Named Rules").unwrap()];

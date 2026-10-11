@@ -2,8 +2,6 @@
 <html lang="en"{% if viewer.theme.is_some() %} data-theme="{{ viewer.theme_id() }}"{% endif %}{% if viewer.types %} class="show-types"{% endif %}>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{ title }} · sluice</title><link rel="icon" href="{{ crate::views::asset_url("favicon.svg") }}" type="image/svg+xml">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/schibsted-grotesk@5.3.0/index.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/jetbrains-mono@5.3.0/index.css">
 <link rel="stylesheet" href="{{ style_url }}">
 <script type="importmap">{{ import_map|safe }}</script>
 <script type="module" data-datastar-runtime src="{{ datastar_url }}"></script>

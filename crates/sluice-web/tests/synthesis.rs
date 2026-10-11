@@ -220,8 +220,18 @@ async fn the_frame_draws_the_page_head_and_the_row_under_it_and_the_gallery_ever
     let (status, home) = f.get("/").await;
     assert_eq!(status, 200);
     assert!(home.contains("<header class=\"site-head\"><div class=\"band-in\"><nav id=\"top-nav\" class=\"top\" aria-label=\"Main\">"), "{home}");
-    assert!(home.contains("@fontsource-variable/schibsted-grotesk@5.3.0/index.css"));
-    assert!(home.contains("@fontsource-variable/jetbrains-mono@5.3.0/index.css"));
+    // one stylesheet and no other: the faces are its @font-face rules, fetched as text needs them
+    assert_eq!(
+        home.matches("<link rel=\"stylesheet\"").count(),
+        1,
+        "{home}"
+    );
+    assert!(!home.contains("fontsource"), "{home}");
+    let css = sluice_web::views::STYLESHEET;
+    assert!(css.contains("@fontsource-variable/schibsted-grotesk@5.3.0/files/schibsted-grotesk-latin-wght-normal.woff2"));
+    assert!(css.contains(
+        "@fontsource-variable/jetbrains-mono@5.3.0/files/jetbrains-mono-latin-wght-normal.woff2"
+    ));
     assert!(!home.contains("archivo") && !home.contains("public-sans"));
     // the page's head on the paper under the slim bar, its sections in the row under it; the
     // live line only on a page with a stream

@@ -1,0 +1,32 @@
+/* Solarized Light and Solarized Dark (DESIGN.md, Themes): the 27 colour roles; every other token is Sluice's.
+   build.rs joins this file after style.css. */
+[data-theme^="solarized-"] {
+  /* Solarized (Ethan Schoonover, MIT): base03 to base3 and the eight accents */
+  --paper: light-dark(#fdf6e3, #002b36);
+  --paper-2: light-dark(#eee8d5, #073642);
+  --paper-raised: light-dark(#fdf6e3, #073642);
+  --ink: light-dark(#073642, #eee8d5);
+  --ink-muted: light-dark(#4f646b, #93a1a1);
+  --navy: light-dark(#002b36, #93a1a1);
+  --navy-deep: light-dark(#00212b, #fdf6e3);
+  --on-navy: light-dark(#fdf6e3, #002b36);
+  --band: light-dark(#002b36, #00212b);
+  --band-ink: #fdf6e3;
+  --band-accent: #2aa198;
+  --band-mark: #268bd2;
+  --run: light-dark(#1f6fa8, #268bd2);
+  --on-run: light-dark(#fdf6e3, #00212b);
+  --run-ink: light-dark(#1c6aa3, #4fa6e0);
+  --focus: #268bd2;
+  --sky: light-dark(#dcebdc, #083a45);
+  --sky-ink: light-dark(#1d7a73, #2aa198);
+  --sweep: #93d6cf;
+  --sand: #b58900;
+  --on-sand: #002b36;
+  --sand-mark: #002b36;
+  --sand-pale: light-dark(#f5ebc9, #15373a);
+  --sand-ink: light-dark(#7d5f00, #c99a12);
+  --coral: #e2639f;
+  --on-coral: #002b36;
+  --idle: light-dark(#657b83, #839496);
+}

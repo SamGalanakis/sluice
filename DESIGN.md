@@ -373,14 +373,101 @@ base-600 darkened to #64635e (4.47:1 on base-50); yellow-700 to #7a5c01 as text 
 the dark sky cyan-900 #122F2C (cyan-850 gives the muted text 4.3:1); the dark running text
 blue-300 #66A0C8 (blue-400 is 4.4:1 on base-950); the light paper-2 base-50, the dark paper
 base-950 so the black band stays the deepest. The washes (sky, sand-pale) are the theme's hue
-mixed into its paper. Every value is in `assets/style.css`, one block a theme.
+mixed into its paper. Sluice's values are in `assets/style.css`; every other family's are in its
+own file, `assets/themes/<family>.css`.
+
+**One stylesheet.** A family's file is its block (`[data-theme^="<family>-"]`: its colour
+roles, the deep tokens it changes, its faces' `@font-face` rules), plus a
+`[data-theme="<family>-dark"]` rule for any non-colour value that differs by scheme
+(`light-dark()` takes colours only). `build.rs` joins `style.css` and every file under
+`assets/themes/`, by name, into the one stylesheet a page loads (`/static/style.css`,
+`views::STYLESHEET`, what `tests/themes.rs` reads). A family's file comes after Sluice's
+defaults, so what it declares wins and what it leaves out inherits. Primitives (`--p-…`, a
+source's named colours) are readable only inside their own family's block; a lint in the test
+fails on one anywhere else.
+
+### The deep tokens
+
+A theme is more than its colours: these tokens set its materials. Sluice's values are the
+defaults (`:root, [data-theme]` in `style.css`), so a family that leaves one out draws it as
+Sluice does, and the editor schemes are Sluice's shape in their own colours. Content, order, the
+grid, sizes and the 44px targets are never a theme's: every theme shows the same page. Every
+declared value must be in its allowed set (`tests/themes.rs`).
+
+| Token | Sluice | Allowed | What it sets |
+|---|---|---|---|
+| `--font-display` | Schibsted Grotesk Variable | a stack ending in a generic family | the page's name, a step's, home's project names, a question's title (19px and up), section heads |
+| `--font-text` | Schibsted Grotesk Variable | the same | body, modules, tables, controls |
+| `--font-mono` | JetBrains Mono Variable | the same | ids, durations, clock times, data |
+| `--display-weight` | 850 | 400 to 900 | the display face's weight (a question's title 50 lighter, a theme card's name 50 heavier) |
+| `--display-tracking` | -0.025em | -0.05em to 0.1em | its letter spacing (the other display sizes keep their offsets from it) |
+| `--head-weight` | 850 | 400 to 900 | a section head's weight (a recipe's block head 50 lighter) |
+| `--head-tracking` | -0.025em | -0.05em to 0.2em; at least 0.05em in capitals | a section head's letter spacing |
+| `--head-case` | none | none, uppercase | a section head's case (tracked capitals) |
+| `--head-style` | normal | normal, italic | a section head's style |
+| `--head-scale` | 1 | 0.7 to 1.1 | a section head's size against Sluice's (26px, 22px a step's module, 30px Settings, 19px a recipe block), to even out cap heights |
+| `--kind-style` | normal | normal, italic | a module's kind line (its glyph and word stay upright) |
+| `--prose-numerals` | normal | normal, oldstyle-nums, lining-nums | figures in prose; data figures stay tabular |
+| `--radius-module` | 0px | 0 to 14px | a module, a card, an item, an empty state |
+| `--radius-cell` | 0px | 0 to 14px | a stage cell |
+| `--radius-control` | 0px | 0 to 14px | buttons, the primary moves, the view switch |
+| `--radius-chip` | 0px | 0 to 14px | tags and the Inbox count |
+| `--section-rule-height` | 3px | 1 to 10px | the heavy rule's room over a band section's head and a step's, a unit's, Settings' and the docs' modules |
+| `--section-rule-color` | `navy` | a colour, or transparent | the rule drawn plain in that room (the host's top border) |
+| `--section-rule` | none | none, or gradient layers | anything more, painted in that room from the host's border edge: Oxford, Scotch, rings, dashed, misregistered |
+| `--look-rule` | 2px solid `navy` | 1 to 3px, solid or dashed | a stopped module's rule |
+| `--ask-rule` | 6px | 4 to 8px | a question's coral rule (a message's 2px less) |
+| `--band-edge-height` | 0px | 0 to 12px | a strip under the band, below the nav, where text never sits |
+| `--band-edge` | none | gradient layers | what the strip draws (a livery stripe, a sill, sprockets, hairlines) |
+| `--band-frame` | none | none, or inset shadows | a sign panel's frame inside the band |
+| `--band-radius` | 0px | 0 to 14px | the band's corners |
+| `--band-margin` | 0px | 0 to 8px | the band's inset from the window (its content keeps the page's edges) |
+| `--paper-texture` | none | none, or gradients (never an image) | the paper's grain, laid lines or graticule |
+| `--paper-texture-alpha` | 0% | 0 to 6% | its ink at its darkest, which the contrast test lays over the paper |
+| `--density` | 1 | 0.85 to 1.1 | the vertical rhythm: the page's and a module's padding, the gaps between modules, rows and sections (never a target's height) |
+| `--cell-height` | 52px | 46 to 56px | a plan row's stage cell (a strip's is 4px more; a phone's never under 44px) |
+| `--cell-done-fill` | `sky` | a colour, or transparent | a done cell's fill |
+| `--cell-done-edge` | none | none, or an inset shadow | a done cell's edge (an outlined done cell) |
+| `--cell-look-edge` | none | none, or an inset shadow | a look cell's border |
+| `--cell-empty-edge` | inset 1px `rule` | none, or an inset shadow | a cell not reached, solid |
+| `--cell-empty-outline` | none | none, or a 1 to 2px dashed or dotted outline | a cell not reached, dashed or dotted, just inside it |
+| `--chart-ink` | `sky-ink` | a colour 3:1 on paper and paper-2, 0.1 from coral | Stats: the columns, a median, a p90's edge |
+| `--chart-busiest` | `navy` | the same | Stats: the busiest column |
+| `--chart-series` | `run-ink` | the same | the board's charts: bars, lines and dots |
+| `--chart-range` | `sky` | a colour 0.1 from coral | Stats: a p90's fill |
+| `--chart-grid` | none | none, or gradients | the rows behind the throughput's columns (leaders, lanes) |
+| `--chart-column-width` | 0.8 | 0.3 to 1 | a column's share of its slot |
+| `--chart-radius` | 0px | 0 to 14px | a column's and a duration bar's corners |
+| `--focus-width` | 2px | 2 or 3px | the focus ring, always solid, 3:1 on paper, paper-2, sky and sand-pale |
+| `--focus-offset` | 2px | 1 to 4px | its offset |
+| `--selection`, `--on-selection` | `run`, `on-run` | a pair at 4.5:1 | selected text |
+| `--link-thickness` | 1px | 1 to 3px | a link's underline |
+| `--link-offset` | 3px | 2 to 6px | its offset |
+| `--link-style` | solid | solid, dotted, dashed | its style (dotted as a timetable's leaders) |
+| `--sweep-animation` | `tide 3.2s` ease-out | `tide` (a bar) or `lane` (dashes), at least 1s, any easing or `steps()`; or none | the sweep along a running cell's foot, the one motion a theme sets |
+| `--sweep-fill` | `sweep` | a colour or a gradient | what sweeps |
+| `--glyph-stroke` | 2 | 1.75 to 2.5 | every Lucide glyph's stroke (the glyphs stay Lucide's) |
+| `--lift` | Sluice's two shadows | shadows, soft, or none | a menu's, the drawer's and a dialog's lift |
+
+Reduced motion stops every sweep in every theme (a still line); the trace's fades and the
+drawer's slide are never a theme's. Coral is never a chart's, a rule's but the question's, or a
+band edge's.
 
 ## Type
 
-One family: **Schibsted Grotesk** (variable, 400 to 900) for display and text, with
-**JetBrains Mono** for ids, durations, clock times and data only. Both load from
-cdn.jsdelivr.net (`@fontsource-variable/schibsted-grotesk@5.3.0`,
-`@fontsource-variable/jetbrains-mono@5.3.0`), the only third-party requests a page makes.
+Sluice's: one family, **Schibsted Grotesk** (variable, 400 to 900) for display and text, with
+**JetBrains Mono** for ids, durations, clock times and data only. Another theme sets its own
+faces (Themes, the deep tokens); its sizes stay these.
+
+**Loading.** Every theme's faces are `@font-face` rules in the one stylesheet, pointing at pinned
+fontsource files on cdn.jsdelivr.net (Sluice's `@fontsource-variable/schibsted-grotesk@5.3.0` and
+`@fontsource-variable/jetbrains-mono@5.3.0`, each subset fontsource ships; a family's own faces the
+latin subset), the only third-party requests a page makes. A browser fetches a face only when it
+sets text in it, so a page downloads its own theme's faces and no other, a switch needs no new
+link, and a page without script gets the cookie's theme's faces. A family's face has a fallback
+face (a local Arial or Courier New with `size-adjust` and ascent and descent overrides measured
+from the face) next in its stack, so the swap to it does not move the page. The picker's swatches
+carry no text, so opening it fetches nothing; `/_ui`'s theme cards set each theme's faces.
 
 - The page's name (`ui::page_head`): 34px/38px, 850, -0.025em (28px on a phone), balanced
   and wrapping anywhere rather than running off; a step's name the same 34px/38px (23px on a phone, 24px in the drawer, three lines at most
@@ -605,8 +692,8 @@ stream patch and drawn again after one. Without script the units link to their p
 
 ## Motion
 
-One moment, the work moving: the sweep along a running cell's foot (3.2s, ease-out, the
-bright sky crossing the blue). The trace's fades (0.35s ease-out) and the rail drawing down
+One moment, the work moving: the sweep along a running cell's foot (Sluice's: 3.2s, ease-out,
+the bright sky crossing the blue; a theme sets its duration, easing and shape, or none). The trace's fades (0.35s ease-out) and the rail drawing down
 (0.45s) answer a selection. Everything else is still. Under reduced motion the sweep is a
 static line and nothing draws or fades.
 
@@ -899,7 +986,8 @@ region that updates says so politely; reduced motion honoured.
 ### Don't:
 - Don't spend coral on anything but an open question waiting on the owner (and the logo).
 - Don't fill anything blue that is not running.
-- Don't round a corner, draw a card inside a card or add a stripe.
+- Don't round a corner, draw a card inside a card or add a stripe, but as a theme's deep tokens
+  allow (Themes).
 - Don't name a project's own words in view code; take them from what the project supplies.
 - Don't restyle or redraw the mark; it is the owner's SVG.
 - Don't add a legend; each state says itself.

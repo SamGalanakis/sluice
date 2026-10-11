@@ -58,6 +58,10 @@ impl fmt::Display for TrustedHtml {
     }
 }
 
+/// The one stylesheet every page loads, as served (`/static/style.css`): `assets/style.css`
+/// followed by each theme family's file in `assets/themes/`, joined by `build.rs`.
+pub const STYLESHEET: &str = include_str!(concat!(env!("OUT_DIR"), "/style.css"));
+
 /// A theme (DESIGN.md, Themes): one complete look, a palette mapped onto every role in one
 /// scheme, light or dark. Its id is `data-theme` on the page and the `sluice_theme` cookie:
 /// `<family>-light` or `<family>-dark`, the family naming its palette in the stylesheet, the
@@ -76,7 +80,7 @@ impl Theme {
 /// Every theme the display preferences offer, one flat list, each light then dark. With none
 /// chosen (the first open) a page is Sluice Light or Sluice Dark by the system's scheme, and
 /// its script keeps that choice from then on.
-pub const THEMES: [Theme; 14] = [
+pub const THEMES: &[Theme] = &[
     Theme {
         id: "sluice-light",
         name: "Sluice Light",
@@ -714,7 +718,7 @@ pub fn render_framed(
         viewer,
         stream,
         signals: serde_json::json!({"ver":version,"stale":false}).to_string(),
-        themes: &THEMES,
+        themes: THEMES,
         path,
         style_url: asset_url("style.css"),
         nav_url: asset_url("nav.js"),

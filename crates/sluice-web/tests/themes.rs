@@ -16,7 +16,8 @@ use serde_json::{Value, json};
 use sluice_web::views::THEMES;
 use std::collections::BTreeMap;
 
-const STYLE: &str = include_str!("../assets/style.css");
+/// The stylesheet as the pages get it: style.css with every family's file joined after it.
+const STYLE: &str = sluice_web::views::STYLESHEET;
 
 /// The 27 roles every theme maps (DESIGN.md, Themes).
 const ROLES: [&str; 27] = [
