@@ -298,7 +298,8 @@ offer twelve more made from well-loved colour schemes, each adapted to sluice's 
 Light and Dark, Nord Light and Nord, Gruvbox Light and Dark, Catppuccin Latte and Mocha, Rosé
 Pine Dawn and Rosé Pine, Flexoki Light and Dark; and deep themes from classic American liveries,
 which also set their faces, rules and materials (the deep tokens, below): Empire Builder Light
-and Dark. A theme's id is `<family>-light` or
+and Dark, Williamsburg Light and Dark, Interstate Light and Dark, Ranger Light and Dark, Park
+Service Light and Dark. A theme's id is `<family>-light` or
 `<family>-dark` (`views::THEMES`): `data-theme` on `<html>` and the `sluice_theme` cookie,
 server-drawn, so a page without script is drawn in it; with script the picker applies at once
 (`sluice-toggle`). The picker shows each theme's swatch in its own tokens: its band over its
@@ -320,7 +321,7 @@ of its cyan or green, its glyph the full hue; sand its yellow; and the question 
 vivid colour no other role uses. Status never rests on colour alone in any theme: every state
 keeps its glyph and its word.
 
-**Held by a test** (`tests/themes.rs`), which reads each of the sixteen themes' tokens from
+**Held by a test** (`tests/themes.rs`), which reads every theme's tokens from
 the stylesheet, in its own scheme:
 text at 4.5:1 (ink and ink-muted on paper, paper-2, paper-raised, sand-pale and sky; run-ink
 and sand-ink on paper and paper-2; band-ink, band-muted and band-accent on the band; the text on
@@ -345,6 +346,10 @@ and home at 320 to 2560px with no sideways scroll and every 44px target still 44
 | **Rosé Pine** | Rosé Pine, [rosepinetheme.com](https://rosepinetheme.com), MIT | Dawn base, Main base band | Main base, a deeper Main band |
 | **Flexoki** | Steph Ango, [stephango.com/flexoki](https://stephango.com/flexoki), MIT | paper, black band | base-950 paper, black band |
 | **Empire Builder** | Great Northern Railway livery, GNRHS Reference Sheet 28 | cream paper, Pullman Green band | Pullman Green paper, a deeper green band |
+| **Williamsburg** | Benjamin Moore Williamsburg Collection | Capitol White paper, Washington Blue band | Washington Blue paper, a deeper blue band |
+| **Interstate** | MUTCD sign colours, FHWA | white paper, guide-sign green band | dark green paper, a deeper green band |
+| **Ranger** | WPA Ranger Naturalist posters, Library of Congress | geyser cream paper, night-sky band | night-sky paper, a deeper night band |
+| **Park Service** | NPS UniGuide standards | warm white paper, UniGuide green band | dark green paper, a deeper green band |
 
 The roles in each (light / dark; one value when both are the same):
 
@@ -401,6 +406,69 @@ Green #3B331C to #2E2815 so Omaha Orange #BB5800 carries white text (4.66:1) and
 the band (3.15:1); running Big Sky Blue darkened to #0070A1 for white text (5.48:1), its text
 #006594; the look fill the gold #E0B45A with dark text; the dark question lifted to #E07A1F with
 dark text (6.3:1), as white on it is 3.0:1; the dark sky-ink and run-ink lifted for the green paper.
+
+**Williamsburg** (`assets/themes/williamsburg.css`), the Benjamin Moore paints matched to the
+pigments of the 1928-34 restoration of Colonial Williamsburg. Paper CW-10 Capitol White #F5F2E5
+/ #263440, ink #2A2C2E / #F5F2E5; navy and the band CW-630 Washington Blue #304656 (the one
+primitive, `--p-washington-blue`), a deeper #1B2630 band in the dark, with a double hairline of
+CW-405 Damask Gold under it; running CW-625 Prussian Blue #325A7D; done CW-585 Ewing Blue (sky
+#D0E2E0), its mark CW-550 Geddy Verdigris; the look Damask Gold #DDB558, its text CW-265
+Charlton Brown #693D2D; the question CW-300 Tucker Orange #DF745D / #E88A74 with dark text. Its
+faces: Libre Caslon Display at its one weight (400) for the display and the heads, a size up
+(1.08), Libre Caslon Text, its kind lines in italic, and Cutive Mono for data. A Scotch rule
+(1px over 3px) over each section and a 1px rule over a stopped module, a 5px question rule, laid
+lines in the paper (the ink at 4% every 5px), an airier rhythm (density 1.06, 54px cells), cells
+not reached dotted, Stats' columns at 0.7 on ruled rows, a 3px focus offset and 4px link offset,
+1.75px glyphs, and no motion: the sweep is held still, a line at 70% along a running cell's foot
+(`lane` paused at its start). Adjusted from the source: the done mark Geddy Verdigris #2E8B7E
+darkened to #2B7E72, so the mark keeps a margin on the Ewing Blue wash (3.61:1, against 3.06:1);
+the dark paper #263440 and band #1B2630 designed deeper than Washington Blue so the band stays
+the deepest surface. Libre Caslon Text has no old-style figures, so its prose figures stay
+lining.
+
+**Interstate** (`assets/themes/interstate.css`), the MUTCD's sign colours (FHWA; PMS by
+pmscolorguide.com). The band the guide sign's Green 342 #006648 (`--p-guide-green`) / #08291D,
+drawn as a sign panel: inset 6px from the window, its corners 10px, a white border inside the
+green; paper #F6F6F2 / #1C2A24, ink #111614 / #F2F3EF, navy a deeper green #00402D / the ink;
+running Blue 294 #002F6D / #3F7FD6; done a pale guide-green wash, its mark the green; the look
+the warning sign's Yellow 122 #FFD241 with black text, its text Brown 469 #6B3F23; and the
+question the incident-management fluorescent pink. Overpass, the open Highway Gothic, heavy
+(800) and mixed case for the display, heads and text (its middle dot, which Overpass draws with
+no advance, comes from the fallback face), and Overpass Mono for data. Rounded corners (modules
+8px, cells and buttons 6px, chips 4px), a 3px rule over a stopped module, look cells in the
+warning sign's 2px black border, cells not reached on a 1.5px line, Stats' columns on dashed
+lane lines (square: the study's 4px would round every corner of the stretched SVG's columns), a
+3px focus ring, 2px links, 2.5px glyphs and lane dashes running along a running cell's foot
+(1.1s). Adjusted from the source: Pink 198 #E64461 lifted to #FF859A with black text (9.07:1) so
+it reads on the green band (3.03:1), in character for a fluorescent; the dark pink #F0708A; the
+dark band #08291D designed deeper than Green 342.
+
+**Ranger** (`assets/themes/ranger.css`), the WPA Federal Art Project's screen-printed Ranger
+Naturalist posters, 1938-41, sampled from the Library of Congress's scans (LCCN 2007676132-4):
+aged paper and ink. Night band #1C2232 (`--p-night`, also ink and navy) / #151A26 over geyser
+cream; running the poster sky; done pale aqua #AEC1B6 (sky #D4DFD6 / #34474A); the look Lassen
+gold #DEC070, its text umber #6B563A; the question Lassen's rose. Its faces: Jost (a Futura)
+bold, heads in capitals tracked 0.07em at 0.8, and DM Mono for data. The screen print's
+misregistration: a navy rule with an aqua pass 3px off it (7px room) over each section and an
+offset aqua line under the band; a 3px rule over a stopped module and a 7px question rule; cells
+not reached on a 1.5px line; no shadows; a 3px focus ring; 2px links at 4px; 2.25px glyphs and a
+slow 4.8s ease-in-out sweep. Adjusted from the source: paper #F3EDDD from the sampled cream
+#D7CCB2; running #3F6A82 (5.0:1 under cream) from the sky #48748D, its text #345A70; the rose
+#9D6B6A lifted to #C9736D with night text (4.65:1, and 4.65:1 on the band) / #D98A7F.
+
+**Park Service** (`assets/themes/parks.css`), the NPS UniGuide standards' PMS colours (UniGuide
+ch. 2.4). Band PMS 5605 #22372C (`--p-uniguide-green`, also the light ink) / #141C18; navy, the
+rules and the filled button, PMS 1615 brown #8D4820 (`--p-uniguide-brown`) / a lifted #E2A272;
+paper #F1EEE7 / #1F2A24; idle PMS 405 #696158; running PMS 301 #004A88 / #4F8FCF; done PMS 5753
+olive (sky-ink #5F6639 on #DDE2CC); the look PMS 131 #D08A00; the question PMS 485 red. Its
+faces: Besley, a Clarendon, for the display (800) and heads (700), Signika for text and Red Hat
+Mono for data. The UniGuide's heavy overbar, an 8px rule in the band's green, over each section;
+an 8px question rule and a 3px rule over a stopped module; a 3px brown sill under the band; an
+open rhythm (density 1.08, 54px cells); buttons 3px round, chips 2px; and a 3.6s sweep. Adjusted
+from the source: the red #E1251D lifted to #F33C30 with dark text (4.55:1; it reads on the band
+at 3.33:1) / #F0574C; the look's text #7A5100 from PMS 131; the heads at 1.06 of Sluice's size
+(the study's 0.95 put Besley under 19px on a phone's step modules and a recipe's block head);
+the sill starts a pixel under the nav, so its top row is the band's.
 
 **One stylesheet.** A family's file is its block (`[data-theme^="<family>-"]`: its colour
 roles, the deep tokens it changes, its faces' `@font-face` rules), plus a

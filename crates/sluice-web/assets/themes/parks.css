@@ -1,0 +1,105 @@
+/* Park Service Light and Park Service Dark (DESIGN.md, Themes): the NPS UniGuide standards,
+   their PMS colours. The UniGuide's dark green band, its brown for the rules and the filled
+   button, the Park Service blue running, its olive done, its gold wanting a look and its red,
+   the one alarm colour, asking. A deep theme: Besley, a Clarendon, for the display; Signika, a
+   signage face, for text; Red Hat Mono for data; the UniGuide's heavy green overbar over each
+   section; a brown sill under the band; and an open rhythm. build.rs joins this file after
+   style.css. */
+
+/* its faces, the latin subset, each with a fallback of metric overrides (a local Times New
+   Roman, Arial or Courier New sized to the face) so the swap to it does not move the page */
+@font-face { font-family: "Besley Variable"; font-style: normal; font-display: swap;
+  font-weight: 400 900;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource-variable/besley@5.3.0/files/besley-latin-wght-normal.woff2) format("woff2-variations");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Signika Variable"; font-style: normal; font-display: swap;
+  font-weight: 300 700;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource-variable/signika@5.3.0/files/signika-latin-wght-normal.woff2) format("woff2-variations");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Red Hat Mono Variable"; font-style: normal; font-display: swap;
+  font-weight: 300 700;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource-variable/red-hat-mono@5.3.0/files/red-hat-mono-latin-wght-normal.woff2) format("woff2-variations");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Besley Fallback"; font-style: normal; font-weight: 100 549;
+  src: local("Times New Roman"), local("TimesNewRomanPSMT"), local("Liberation Serif"), local("LiberationSerif"),
+       local("Tinos");
+  size-adjust: 124.69%; ascent-override: 100.25%; descent-override: 34.09%; line-gap-override: 0%; }
+@font-face { font-family: "Besley Fallback"; font-style: normal; font-weight: 550 900;
+  src: local("Times New Roman Bold"), local("TimesNewRomanPS-BoldMT"), local("Liberation Serif Bold"),
+       local("LiberationSerif-Bold"), local("Tinos Bold");
+  size-adjust: 132.19%; ascent-override: 94.56%; descent-override: 32.15%; line-gap-override: 0%; }
+@font-face { font-family: "Signika Fallback"; font-style: normal; font-weight: 100 549;
+  src: local("Arial"), local("ArialMT"), local("Liberation Sans"), local("LiberationSans"), local("Arimo");
+  size-adjust: 96.05%; ascent-override: 97.86%; descent-override: 30.4%; line-gap-override: 0%; }
+@font-face { font-family: "Signika Fallback"; font-style: normal; font-weight: 550 900;
+  src: local("Arial Bold"), local("Arial-BoldMT"), local("Liberation Sans Bold"), local("LiberationSans-Bold"),
+       local("Arimo Bold");
+  size-adjust: 90.65%; ascent-override: 103.7%; descent-override: 32.21%; line-gap-override: 0%; }
+@font-face { font-family: "Red Hat Mono Fallback"; font-style: normal; font-weight: 100 549;
+  src: local("Courier New"), local("CourierNewPSMT"), local("Liberation Mono"), local("LiberationMono"),
+       local("Cousine");
+  size-adjust: 99.98%; ascent-override: 101.82%; descent-override: 30.5%; line-gap-override: 0%; }
+@font-face { font-family: "Red Hat Mono Fallback"; font-style: normal; font-weight: 550 900;
+  src: local("Courier New Bold"), local("CourierNewPS-BoldMT"), local("Liberation Mono Bold"),
+       local("LiberationMono-Bold"), local("Cousine Bold");
+  size-adjust: 99.98%; ascent-override: 101.82%; descent-override: 30.5%; line-gap-override: 0%; }
+
+[data-theme^="parks-"] {
+  /* the source, as published (UniGuide ch. 2.4, PMS 5605 and 1615): the band's green and the
+     rules' brown */
+  --p-uniguide-green: #22372c;
+  --p-uniguide-brown: #8d4820;
+  /* the 27 roles, light then dark; moved from the published values in Oklab lightness only
+     where a pair needed it (DESIGN.md, Themes) */
+  --paper: light-dark(#f1eee7, #1f2a24);
+  --paper-2: light-dark(#e6e1d6, #26332c);
+  --paper-raised: light-dark(#f7f5f0, #2b3a32);
+  --ink: light-dark(var(--p-uniguide-green), #ece8de);
+  --ink-muted: light-dark(#56544b, #bdb8aa);
+  --navy: light-dark(var(--p-uniguide-brown), #e2a272);
+  --navy-deep: light-dark(#6e3615, #f0c39f);
+  --on-navy: light-dark(#f7f5f0, #1f2a24);
+  --band: light-dark(var(--p-uniguide-green), #141c18);
+  --band-ink: #f1eee7;
+  --band-accent: #d9c9a3;
+  --band-mark: light-dark(#c98a4a, #e2a272);
+  --run: light-dark(#004a88, #4f8fcf);
+  --on-run: light-dark(#f7f5f0, #0f1713);
+  --run-ink: light-dark(#004a88, #8fbbe6);
+  --focus: light-dark(#004a88, #8fbbe6);
+  --sky: light-dark(#dde2cc, #343d2c);
+  --sky-ink: light-dark(#5f6639, #b9c08a);
+  --sweep: #9fc3e0;
+  --sand: light-dark(#d08a00, #d99b1e);
+  --on-sand: light-dark(#1b2a22, #141c18);
+  --sand-mark: #3a2a10;
+  --sand-pale: light-dark(#f2e2bd, #3b3220);
+  --sand-ink: light-dark(#7a5100, #e8b54a);
+  --coral: light-dark(#f33c30, #f0574c);
+  --on-coral: #141c18;
+  --idle: light-dark(#696158, #9c9586);
+  /* type: Besley, a Clarendon, for the display and the heads; Signika for text; Red Hat Mono
+     for data */
+  --font-display: "Besley Variable", "Besley Fallback", serif;
+  --font-text: "Signika Variable", "Signika Fallback", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Red Hat Mono Variable", "Red Hat Mono Fallback", ui-monospace, monospace;
+  --display-weight: 800;
+  --display-tracking: -0.01em;
+  --head-weight: 700;
+  --head-tracking: -0.005em;
+  --head-scale: 1.06;
+  --radius-control: 3px;
+  --radius-chip: 2px;
+  /* the UniGuide's heavy overbar, in the band's green */
+  --section-rule-height: 8px;
+  --section-rule-color: var(--band);
+  --look-rule: 3px solid var(--navy);
+  --ask-rule: 8px;
+  /* a brown sill under the band, a pixel down from the nav */
+  --band-edge-height: 4px;
+  --band-edge: linear-gradient(var(--navy), var(--navy)) 0 1px / 100% 3px no-repeat, var(--band);
+  /* a guide's open rhythm */
+  --density: 1.08;
+  --cell-height: 54px;
+  --sweep-animation: tide 3.6s var(--ease-out) infinite;
+}
