@@ -4,12 +4,15 @@
 //! look cell's border and where the band's edge meets its marks) and keep the question's colour
 //! apart from every other role and out of every non-colour token; every deep token a family
 //! declares is a known one, in its allowed range; a primitive (`--p-…`) never leaves its family's
-//! block; the theme cookie, the picker and the gallery over HTTP; and in Chromium, at eight
-//! widths from 320 to 3840 (four in every other theme), no page scrolls sideways, the sheet's
-//! modules take the columns its width gives them, a strip head stays over its rows, a phone's
-//! 44px targets stay 44px in every theme, a page fetches only its own theme's faces (the picker
-//! none, a page without script the cookie's), the first open takes Sluice Light or Dark from the
-//! system once and keeps it, and a pick applies at once and is kept.
+//! block; a head is set in the display face only at 19px and up; the theme cookie, the picker
+//! and the gallery over HTTP; and in Chromium, at eight widths from 320 to 3840 (four in every
+//! other theme), no page scrolls sideways, the sheet's modules take the columns its width gives
+//! them, a strip head stays over its rows, a phone's 44px targets stay 44px and no words sit in
+//! a display face under 19px in every theme, a sweep of none is the still line, the picker's
+//! thirty themes take one column on a phone and two from 900px with no name wrapped, a page
+//! fetches only its own theme's faces (the picker none, a page without script the cookie's), the
+//! first open takes Sluice Light or Dark from the system once and keeps it, and a pick applies
+//! at once and is kept.
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
@@ -609,6 +612,12 @@ fn every_deep_token_a_family_sets_is_known_and_in_its_range() {
                 if name.starts_with("p-") {
                     continue;
                 }
+                if name.starts_with("head-face-") {
+                    if *family != "sluice" {
+                        failures.push(format!("{family}: --{name} is worked out, never set"));
+                    }
+                    continue;
+                }
                 if !deep.contains(name.as_str()) {
                     failures.push(format!("{family}: --{name} is no token"));
                     continue;
@@ -658,6 +667,65 @@ fn a_primitive_never_leaves_its_family_block() {
             failures.push(format!(
                 "{family}: --{name} is read, never declared, in its block"
             ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// The display face's floor: a head drawn at N px times its theme's head scale reads its face
+/// from `--head-face-N`, which build.rs makes the display face at 19px and up and the text face
+/// under that, in every theme.
+#[test]
+fn a_display_face_never_sets_a_head_under_19px() {
+    let mut sizes: Vec<u32> = STYLE
+        .match_indices("var(--head-face-")
+        .map(|(at, needle)| {
+            STYLE[at + needle.len()..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse()
+                .unwrap()
+        })
+        .collect();
+    sizes.sort_unstable();
+    sizes.dedup();
+    assert!(
+        sizes.contains(&18) && sizes.contains(&26),
+        "the scaled heads: {sizes:?}"
+    );
+    // a scaled head never names the display face itself
+    for (at, _) in STYLE.match_indices("* var(--head-scale))") {
+        let start = STYLE[..at].rfind('{').unwrap();
+        let end = at + STYLE[at..].find('}').unwrap();
+        assert!(
+            !STYLE[start..end].contains("var(--font-display)"),
+            "a scaled head set in the display face: {}",
+            &STYLE[start..end]
+        );
+    }
+    let mut failures = vec![];
+    for t in THEMES {
+        let (family, scheme) = t.id.rsplit_once('-').unwrap();
+        let scale: f64 = written(t.id)["head-scale"].parse().unwrap();
+        let mut faces = block(":root, [data-theme]");
+        faces.extend(block(&format!("[data-theme]{}", family_selector(family))));
+        faces.extend(block(&format!(
+            "[data-theme][data-theme=\"{family}-{scheme}\"]"
+        )));
+        for size in &sizes {
+            let want = if f64::from(*size) * scale >= 19.0 - 1e-9 {
+                "var(--font-display)"
+            } else {
+                "var(--font-text)"
+            };
+            let got = faces.get(&format!("head-face-{size}")).map(String::as_str);
+            if got != Some(want) {
+                failures.push(format!(
+                    "{}: a {size}px head at {scale} is {got:?}, not {want}",
+                    t.id
+                ));
+            }
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
@@ -813,6 +881,9 @@ const MEASURE: &str = "(() => {
 /// gives it (its min-height, a fixed 44px, or a stage cell's that its link fills; 0 for a
 /// control as tall as its words) and what it is.
 const TARGETS: &str = "[...document.querySelectorAll('a[href], button, summary, input:not([type=hidden]), select, textarea, [role=tab]')].filter(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden').map(e => { const h = e.getBoundingClientRect().height; const ruled = Math.max(parseFloat(getComputedStyle(e).minHeight) || 0, Math.abs(h - 44) < 0.5 ? 44 : 0, e.matches('.sc-a') ? parseFloat(getComputedStyle(e.parentElement).minHeight) || 0 : 0); return [Math.round(h * 10) / 10, ruled, e.outerHTML.slice(0, 120)]; })";
+/// Every element whose own words are set in its theme's display face (where that is not also
+/// its text face) under 19px: its size, its face and what it is.
+const UNDER_FLOOR: &str = "(() => { const norm = s => s.replace(/[\"'\\s]/g, ''); return [...document.querySelectorAll('body *')].filter(e => [...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim()) && e.getClientRects().length).map(e => { const cs = getComputedStyle(e); const display = norm(cs.getPropertyValue('--font-display')), text = norm(cs.getPropertyValue('--font-text')); return [parseFloat(cs.fontSize), norm(cs.fontFamily) === display && display !== text, e.outerHTML.slice(0, 100)]; }).filter(([size, display]) => display && size < 18.95); })()";
 /// The page's paper and its theme, as drawn.
 const PAPER: &str = "[document.documentElement.dataset.theme ?? null, getComputedStyle(document.body).backgroundColor]";
 
@@ -890,6 +961,11 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
                     browser.viewport(width, t.id).unwrap();
                     let m: Value = browser.eval(MEASURE).unwrap();
                     assert!(m["scroll"].as_f64() <= m["width"].as_f64(), "{name} in {} at {width} scrolls sideways: {m}", t.id);
+                    if matches!(width, 390 | 1440) {
+                        // a display face never sets words under 19px: the head takes the text face
+                        browser.eval("document.fonts.ready").unwrap();
+                        assert_eq!(browser.eval(UNDER_FLOOR).unwrap(), json!([]), "{name} in {} at {width}", t.id);
+                    }
                     if width == 390 {
                         let heights: Vec<(f64, f64, String)> = serde_json::from_value(browser.eval(TARGETS).unwrap()).unwrap();
                         assert_eq!(heights.len(), sluice.len(), "{name} in {}: the same targets", t.id);
@@ -899,6 +975,38 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
                     }
                 }
             }
+        }
+
+        // ---- a sweep of none is the still line, as reduced motion draws it: on the gallery's
+        // theme cards, Williamsburg's sweeps rest still and every other one moves
+        browser.navigate(&gallery).unwrap();
+        browser.wait("document.readyState === 'complete'").unwrap();
+        browser.viewport(1440, "light").unwrap();
+        browser.eval(FRAMES).unwrap();
+        let sweeps: Vec<(String, String, String, String)> = serde_json::from_value(browser.eval("[...document.querySelectorAll('.sweep')].map(s => { const a = getComputedStyle(s, '::after'); return [s.closest('[data-theme]').dataset.theme, a.animationName, a.transform, a.opacity]; })").unwrap()).unwrap();
+        assert!(sweeps.iter().any(|s| s.0.starts_with("williamsburg-")), "{sweeps:?}");
+        for (theme, name, transform, opacity) in &sweeps {
+            if theme.starts_with("williamsburg-") {
+                assert_eq!((name.as_str(), transform.as_str(), opacity.as_str()), ("none", "none", "0.6"), "{theme}");
+            } else {
+                assert_ne!(name, "none", "{theme}");
+            }
+        }
+
+        // ---- the picker at 30 themes: one list, two columns from 900px (a family's light and
+        // dark side by side), one under it; no name wraps; the panel scrolls inside itself
+        for (width, columns) in [(390, 1), (1440, 2)] {
+            browser.navigate(&home).unwrap();
+            browser.wait("document.readyState === 'complete'").unwrap();
+            browser.viewport(width, "light").unwrap();
+            browser.eval("document.querySelector('details.settings').open = true").unwrap();
+            browser.eval(FRAMES).unwrap();
+            let p: Value = browser.eval("(() => { const m = document.querySelector('details.settings .menu'); const rows = [...m.querySelectorAll('.themes label')]; const tops = new Set(rows.map(r => Math.round(r.getBoundingClientRect().top))); return {rows: rows.length, lines: tops.size, wraps: rows.filter(r => { const n = r.querySelector('span'); return n.getClientRects().length > 1 || n.scrollWidth > n.clientWidth + 0.5 || n.getBoundingClientRect().height > 30; }).map(r => r.textContent), scrolls: getComputedStyle(m).overflowY, fits: m.getBoundingClientRect().bottom <= innerHeight, right: m.getBoundingClientRect().right <= innerWidth, left: m.getBoundingClientRect().left >= 0}; })()").unwrap();
+            assert_eq!(p["rows"], json!(THEMES.len()), "{width}: {p}");
+            assert_eq!(p["lines"], json!(THEMES.len() / columns), "{width}: {p}");
+            assert_eq!(p["wraps"], json!([]), "{width}: {p}");
+            assert_eq!(p["scrolls"], json!("auto"), "{width}: {p}");
+            assert!(p["fits"] == json!(true) && p["right"] == json!(true) && p["left"] == json!(true), "{width}: {p}");
         }
 
         // ---- a pick: the picker applies at once, and the cookie keeps it

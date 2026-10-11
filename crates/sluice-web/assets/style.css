@@ -136,6 +136,10 @@
   --head-case: none;
   --head-style: normal;
   --head-scale: 1;
+  /* a head drawn at N px times the head scale is set in `--head-face-N`: the display face when
+     that comes to 19px or more, else the text face, so a display face never sets text under
+     19px. build.rs works each one out from Sluice's scale and from each family's, after the
+     family files; nothing else declares them (DESIGN.md, Themes: the display face's floor). */
   --kind-style: normal;
   --prose-numerals: normal;
   /* shape */
@@ -370,8 +374,13 @@ details.settings > summary:hover, details.settings[open] > summary { color: var(
   background: var(--band-hover); }
 details.settings > summary:focus-visible { outline-offset: -4px; }
 details.settings .menu { -webkit-user-select: none; user-select: none; }  /* toggles, not text */
-details.settings .menu { right: 10px; width: 264px; max-width: calc(100vw - 2 * var(--gutter));
-  padding: 14px 14px 14px; max-height: calc(100dvh - 64px); }
+/* the panel is as wide as its longest theme name needs, never under 264px or past the window,
+   and scrolls inside itself when taller than the window; what follows the themes takes its
+   width from them (inline-size containment), never widening it */
+details.settings .menu { right: 10px; width: max-content; min-width: 264px;
+  max-width: calc(100vw - 2 * var(--gutter)); padding: 14px 14px 14px;
+  max-height: calc(100dvh - 64px); overscroll-behavior: contain; }
+.prefs label.check, .prefs .save, details.settings .keys, .prefs-guide { contain: inline-size; }
 .prefs fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 /* the page's keys (sluice-keys), under the display preferences */
 .keys { padding: 8px 4px 2px; border-top: 1px solid var(--rule-faint); margin-top: 6px; }
@@ -395,9 +404,14 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; box-shadow: inset 
 /* the themes: a radio list, each row its swatch and name, the chosen one ticked on the well;
    the radio itself is the row, unseen */
 .prefs .themes { display: grid; gap: 2px; }
+/* one flat list; from 900px two columns, so a family's light and dark sit side by side in the
+   list's own order (a row is a family), the keys and the tab order unchanged */
+@media (min-width: 900px) {
+  .prefs .themes { grid-template-columns: repeat(2, minmax(max-content, 1fr)); column-gap: 6px; }
+}
 .prefs .themes label { position: relative; display: flex; align-items: center; gap: 10px;
   min-height: 36px; padding: 0 8px 0 5px; cursor: pointer; font-size: 14px; font-weight: 550;
-  color: var(--ink-muted); }
+  color: var(--ink-muted); white-space: nowrap; }  /* a theme's name never wraps */
 .prefs .themes label:hover { color: var(--ink); background: var(--paper-2); }
 .prefs .themes input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
 .prefs .themes label:has(:checked) { color: var(--ink); background: var(--paper-2);
@@ -575,7 +589,7 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
        .unit-page .mod.d-sec, .runs-tl, .docs-more, .settings-index, .settings-page section > h2) {
   background: var(--section-rule); background-origin: border-box; }
 /* a section's head: the theme's head face, weight, case, tracking and scale */
-.sec-h h2 { margin: 0; font-family: var(--font-display); font-size: calc(26px * var(--head-scale));
+.sec-h h2 { margin: 0; font-family: var(--head-face-26); font-size: calc(26px * var(--head-scale));
             line-height: 1; font-weight: var(--head-weight); font-style: var(--head-style);
             letter-spacing: var(--head-tracking); text-transform: var(--head-case); }
 .sec-n { font-size: 13px; color: var(--ink-muted); }
@@ -628,7 +642,11 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 .sc-empty { box-shadow: var(--cell-empty-edge); outline: var(--cell-empty-outline); outline-offset: -1.5px;
             color: var(--ink-muted); }
 .sc-empty .sc-name { font-size: 12px; }
-.sc-word { display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; }
+/* a cell's state word never clips: it is one line, and a word wider than the room beside its
+   glyph wraps to a second line that is not shown, leaving the glyph (the cell's words are
+   there for a reader either way) */
+.sc-word { display: flex; flex-wrap: wrap; align-items: center; gap: 15px 4px; height: 15px;
+           overflow: hidden; font-size: 12px; line-height: 15px; font-weight: 600; white-space: nowrap; }
 .sc-done { background: var(--cell-done-fill); box-shadow: var(--cell-done-edge); color: var(--ink); }
 .sc-done .sc-time { color: var(--ink-muted); }
 .sc-done .g { color: var(--sky-ink); }
@@ -641,7 +659,9 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 .sc-look .sc-word { font-weight: 700; }
 /* a cell's state word goes under its name, never beside it (where it would cut the name) */
 .sc-top:has(> .sc-word) { flex-wrap: wrap; row-gap: 1px; }
-.sc-top .sc-word { flex: 0 0 100%; font-size: 12px; }
+.sc-top .sc-word { flex: 0 0 100%; font-size: 12px; column-gap: 0; }
+/* a strut first, so a word too wide for the cell wraps out of sight */
+.sc-top .sc-word::before { content: ""; height: 15px; }
 .sc-quiet { box-shadow: inset 0 0 0 2px var(--run); }
 .sc-gap { grid-column: span var(--gap); flex-direction: row; align-items: center; gap: 8px;
           padding: 0; font-size: 12.5px; color: var(--ink-muted); }
@@ -649,13 +669,16 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 .sc-gap > span { flex: none; max-width: 80%; text-align: center; }
 .sweep { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; overflow: hidden; }
 /* the sweep: the theme's fill and animation (`tide` a bar crossing the cell, `lane` dashes
-   running along it, any easing, `steps()` too) or none, a still line then */
+   running along it, any easing, `steps()` too) or none. At rest the bar is a still line across
+   the cell's foot, at .6: what `--sweep-animation: none` and reduced motion draw in every theme.
+   Both keyframes set the whole bar, so a running sweep never shows the rest. */
 .sweep::after { content: ""; position: absolute; inset: 0; background: var(--sweep-fill);
-                transform: translateX(-100%); animation: var(--sweep-animation); }
-@keyframes tide { 0% { transform: translateX(-100%); } 70% { transform: translateX(0); }
-                  100% { transform: translateX(100%); } }
-@keyframes lane { from { transform: none; background-position: 0 0; }
-                  to { transform: none; background-position: 44px 0; } }
+                transform: none; opacity: .6; animation: var(--sweep-animation); }
+@keyframes tide { 0% { transform: translateX(-100%); opacity: 1; }
+                  70% { transform: translateX(0); opacity: 1; }
+                  100% { transform: translateX(100%); opacity: 1; } }
+@keyframes lane { from { transform: none; opacity: 1; background-position: 0 0; }
+                  to { transform: none; opacity: 1; background-position: 44px 0; } }
 .marks { display: inline-flex; gap: 3px; vertical-align: middle; }
 .mk { display: block; width: 12px; height: 12px; }
 .mk-done { background: var(--sky); box-shadow: inset 0 0 0 1.5px var(--sky-ink); }
@@ -816,7 +839,7 @@ sluice-trace[tracing] [data-trace="selected"] { box-shadow: 0 0 0 2px var(--navy
   .sc > a.sc-a { margin: 0 -6px; padding: 0 6px; }
   .sc-run .sc-time, .sc-look .sc-time { font-size: 14px; }
   .sc-name { font-size: 11px; }
-  .sec-h h2 { font-size: calc(24px * var(--head-scale)); }
+  .sec-h h2 { font-family: var(--head-face-24); font-size: calc(24px * var(--head-scale)); }
 }
 /* the rail sits in the gutter, so it narrows with it under 1200px */
 @media (max-width: 1199.98px) {
@@ -825,7 +848,7 @@ sluice-trace[tracing] [data-trace="selected"] { box-shadow: 0 0 0 2px var(--navy
     transform-origin: left top; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sweep::after { animation: none !important; transform: none; opacity: .6; }
+  .sweep::after { animation: none !important; }  /* the still line, at rest */
   .rail[data-rail]::before { animation: none; }
   [data-unit] { transition: none; }
 }
@@ -1179,7 +1202,7 @@ article#step-detail { display: flow-root; }  /* its head's margins stay its own 
 #step-detail .mod:not(.swell-ask, .swell-look), .unit-page .mod.d-sec {
   border-top: var(--section-rule-height) solid var(--section-rule-color); padding-top: calc(12px * var(--density)); }
 #step-detail .mod > :is(h2, h3, h4):first-child, #step-detail .mod-h > :is(h2, h3, h4),
-.unit-page .mod.d-sec > h2 { margin: 0 0 12px; font-family: var(--font-display);
+.unit-page .mod.d-sec > h2 { margin: 0 0 12px; font-family: var(--head-face-22);
                               font-size: calc(22px * var(--head-scale)); line-height: 1.1;
                               font-weight: var(--head-weight); font-style: var(--head-style);
                               letter-spacing: calc(var(--head-tracking) + 0.005em);
@@ -1192,13 +1215,14 @@ article#step-detail { display: flow-root; }  /* its head's margins stay its own 
 #step-detail .mod > p + p { margin-top: 6px; }
 @container ov (max-width: 599px) {
   #step-detail .mod > :is(h2, h3, h4):first-child, #step-detail .mod-h > :is(h2, h3, h4) {
-    font-size: calc(18px * var(--head-scale)); }
+    font-family: var(--head-face-18); font-size: calc(18px * var(--head-scale)); }
 }
 /* the question to the owner, swelled: its kind's line over the coral rule, the question whole */
 #step-detail .mod.d-ask > .mod-k { margin: 0 0 10px; font-size: 15px; line-height: 20px; font-weight: 750;
                                letter-spacing: 0; color: var(--ink); }
 /* why it failed: on the sand, its sentence first */
-.d-failure > :is(h2, h3, h4):first-child { font-size: calc(22px * var(--head-scale)); }
+.d-failure > :is(h2, h3, h4):first-child { font-family: var(--head-face-22);
+                                           font-size: calc(22px * var(--head-scale)); }
 .d-failure .err-line { font-size: 17px; line-height: 1.4; font-weight: 650; }
 /* the advice is the next move: ink at body size; when the failure repeated, the feedback box
    stands open under it */
@@ -2097,7 +2121,7 @@ h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
 }
 /* the step's Runs: its timeline over the run list */
 .runs-tl { margin: 0 0 22px; padding-top: 10px; border-top: var(--section-rule-height) solid var(--section-rule-color); }
-#step-detail .runs-tl-h { margin: 0 0 8px; font-family: var(--font-display);
+#step-detail .runs-tl-h { margin: 0 0 8px; font-family: var(--head-face-22);
              font-size: calc(22px * var(--head-scale)); line-height: 1.1; font-weight: var(--head-weight);
              font-style: var(--head-style); letter-spacing: calc(var(--head-tracking) + 0.005em);
              text-transform: var(--head-case); }
@@ -2350,7 +2374,7 @@ details.read-today .item { opacity: .85; }
 .pl-group > .uv-broken { margin: 4px 0 8px; }
 .sec-group { min-height: calc(40px * var(--density)); border-top: 1.5px solid var(--navy); background: none;
              padding: calc(14px * var(--density)) 0 calc(6px * var(--density)); }
-.sec-group h3 { margin: 0; font-family: var(--font-display); font-size: calc(19px * var(--head-scale));
+.sec-group h3 { margin: 0; font-family: var(--head-face-19); font-size: calc(19px * var(--head-scale));
                 line-height: 1.1; font-weight: calc(var(--head-weight) - 50); font-style: var(--head-style);
                 letter-spacing: calc(var(--head-tracking) + 0.01em); text-transform: var(--head-case); }
 .pl-row { padding: calc(10px * var(--density)) 0; border-top: 1px solid var(--rule-faint); min-height: calc(76px * var(--density)); }
@@ -3417,7 +3441,7 @@ main { container: frame / inline-size; }
 .settings-page section { margin: 0 0 calc(44px * var(--density)); }
 .settings-page section > h2 { margin: 0 0 6px; padding: 12px 0 10px;
                               border-top: var(--section-rule-height) solid var(--section-rule-color);
-                              font-family: var(--font-display); font-size: calc(30px * var(--head-scale));
+                              font-family: var(--head-face-30); font-size: calc(30px * var(--head-scale));
                               line-height: 1; font-weight: var(--head-weight); font-style: var(--head-style);
                               letter-spacing: calc(var(--head-tracking) - 0.005em);
                               text-transform: var(--head-case); }

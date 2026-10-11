@@ -305,6 +305,16 @@ server-drawn, so a page without script is drawn in it; with script the picker ap
 (`sluice-toggle`). The picker shows each theme's swatch in its own tokens: its band over its
 paper, a square of its running colour and one of its question colour.
 
+**The picker at thirty themes** is still one flat list, in `THEMES`' order: Sluice, the six
+editor families, then Empire Builder, Williamsburg, Interstate, Ranger, Park Service,
+Kodachrome, Fiesta and Road Atlas, each Light then Dark. From 900px wide it lays the list out
+in two columns, so a family's light and dark stand side by side and a row is a family; under
+that it is one column. No name wraps: the panel is as wide as its longest name needs (never
+under 264px or past the window; the keys and links under the list take its width, never widen
+it) and scrolls inside itself when it is taller than the window. Its order, its arrow keys and
+its tick are the list's, and its swatches carry no text, so they never set a theme's face and
+opening the picker fetches no face.
+
 **The first open.** With no cookie the page names no theme and the stylesheet draws Sluice
 Light or Sluice Dark by the system's scheme. With script, that first page keeps what it drew as
 the choice (`nav.js` posts it to `/settings` once); from then on only a pick in the picker
@@ -333,8 +343,11 @@ every chart colour, running apart from done, and the band no lighter than the pa
 deep tokens it also lays the texture's ink at its alpha over the paper and holds ink and navy
 on that; holds the band edge's top row 3:1 against band-ink and band-mark, an outlined done
 cell's edge 3:1 on the paper and a look cell's on sand; checks every token a family sets is
-known and in its allowed set; and, in Chromium, draws each theme in place on `/_ui`, a plan
-and home at 320 to 2560px with no sideways scroll and every 44px target still 44px on a phone.
+known and in its allowed set; works out each theme's head faces against the display face's
+floor; and, in Chromium, draws each theme in place on `/_ui`, a plan and home at 320 to 2560px
+with no sideways scroll, every 44px target still 44px on a phone and no words in a display face
+under 19px, holds Williamsburg's sweeps still and every other theme's moving, and lays the
+picker out in one column at 390px and two at 1440px with no name wrapped.
 
 | Theme | Source and licence | Light | Dark |
 |---|---|---|---|
@@ -403,7 +416,7 @@ livery's gold #E0B45A as its accent and a 3px gold pinstripe under it; done Glac
 running Big Sky Blue; the look the gold; the question Omaha Orange. Its faces: Libre Franklin
 (display black 900, heads 800 in capitals tracked 0.05em at 0.74 of Sluice's size) and Courier
 Prime for data. An Oxford rule (3px over 1px) over each section, a tighter rhythm (density 0.86,
-46px cells), narrow columns (0.56) on dotted leader rows in Stats, dotted 2px links, and the
+46px cells), narrow columns (0.448: the study's 56% of Sluice's 0.8) on dotted leader rows in Stats, dotted 2px links, and the
 sweep at a train's steady 2.6s linear. Adjusted from the source: the band deepened from Pullman
 Green #3B331C to #2E2815 so Omaha Orange #BB5800 carries white text (4.66:1) and still reads on
 the band (3.15:1); running Big Sky Blue darkened to #0070A1 for white text (5.48:1), its text
@@ -418,12 +431,14 @@ CW-405 Damask Gold under it; running CW-625 Prussian Blue #325A7D; done CW-585 E
 #D0E2E0), its mark CW-550 Geddy Verdigris; the look Damask Gold #DDB558, its text CW-265
 Charlton Brown #693D2D; the question CW-300 Tucker Orange #DF745D / #E88A74 with dark text. Its
 faces: Libre Caslon Display at its one weight (400) for the display and the heads, a size up
-(1.08), Libre Caslon Text, its kind lines in italic, and Cutive Mono for data. A Scotch rule
+(1.08), Libre Caslon Text, its kind lines in italic, and Anonymous Pro for data, a
+typewriter-cut mono whose zero is slashed, so 0 and O differ by shape at 12px (the study's
+Cutive Mono told them apart by width alone). A Scotch rule
 (1px over 3px) over each section and a 1px rule over a stopped module, a 5px question rule, laid
 lines in the paper (the ink at 4% every 5px), an airier rhythm (density 1.06, 54px cells), cells
-not reached dotted, Stats' columns at 0.7 on ruled rows, a 3px focus offset and 4px link offset,
-1.75px glyphs, and no motion: the sweep is held still, a line at 70% along a running cell's foot
-(`lane` paused at its start). Adjusted from the source: the done mark Geddy Verdigris #2E8B7E
+not reached dotted, Stats' columns at 0.56 (the study's 70% of 0.8) on ruled rows, a 3px focus
+offset and 4px link offset, 1.75px glyphs, and no motion: `--sweep-animation: none`, the still
+line along a running cell's foot. Adjusted from the source: the done mark Geddy Verdigris #2E8B7E
 darkened to #2B7E72, so the mark keeps a margin on the Ewing Blue wash (3.61:1, against 3.06:1);
 the dark paper #263440 and band #1B2630 designed deeper than Washington Blue so the band stays
 the deepest surface. Libre Caslon Text has no old-style figures, so its prose figures stay
@@ -482,7 +497,8 @@ and the band's accent and mark; the question the red. Its faces: Alfa Slab One f
 and the heads (400, at Sluice's sizes), IBM Plex Sans Condensed for the text, as on a data
 sheet, and IBM Plex Mono for data. A 4px black rule over each section and a 3px one over a
 stopped module, 2px corners as a perforation's, sprocket holes along the band's foot (a 12px
-edge, the paper showing through 8px in every 24px), narrow columns (0.62), and the sweep
+edge, the paper showing through 8px in every 24px), narrow columns (0.624: the study's 78% of
+0.8), and the sweep
 stepped, `steps(8)` over 2s, advancing a frame at a time. Adjusted from the source: Kodak
 names no blue, so running is a designed blue #1F5FBF (white on it 6.09:1), its text #1D56AD; the
 yellow, Kodak's identity, is the look colour and not the band, the theme's main compromise;
@@ -497,7 +513,8 @@ Yellow #DAAC49 and Poppy #F24B21, a collectors' guide's matches from photographs
 (each a primitive, `--p-cobalt` and so on). Paper Old Ivory / Cobalt #16294A, ink Cobalt / Old
 Ivory; the band Cobalt, #0D1B33 in the dark, with Turquoise its mark; running Lapis; done a
 Turquoise wash; the look the Yellow; the question Poppy. Its faces: Righteous for the display
-and the heads, Nunito for the text and DM Mono for data. Three 2px rings over each section (a
+and the heads, Nunito for the text and DM Mono for data (declared once, in `ranger.css`, which
+Ranger shares). Three 2px rings over each section (a
 10px room), 14px modules, 10px cells, buttons and chips at 14px (a chip is round at that, a
 button nearly so: the allowed set stops at 14px), a roomy rhythm (density 1.1, 54px cells),
 not-reached cells dashed, rounded columns (6px), a 3px focus ring 3px off, 2px links at 4px,
@@ -518,7 +535,8 @@ in spaced capitals (0.14em) as a map's place names; Fira Sans Condensed for the 
 Code Pro for data. A dash-dot boundary line over each section and a dashed rule over a stopped
 module, a dashed centre line under the band, a faint graticule on the paper (a line every 72px
 each way, the road ink at 6%), a compact rhythm (density 0.92, 48px cells), not-reached cells
-dotted as an unpaved road, and narrow columns (0.51) on a dotted grid in Stats, with a 3.4s
+dotted as an unpaved road, and narrow columns (0.512: the study's 64% of 0.8) on a dotted grid
+in Stats, with a 3.4s
 ease-in-out sweep. Adjusted from the source: a two-ink map, so done (a grey-blue wash #DFE0DC
 / #323C4C, its ink #3D5B7A / #A5BFD8) and the look (#D9B25E) are designed in its spirit; the
 paper lifted from the aged #DBC89B to #F4EAD2; the road blue lifted to #34509A for running
@@ -530,6 +548,16 @@ to 0.14em; and its text face, Barlow Semi Condensed, draws I and l, 0 and O alik
 the text is Fira Sans Condensed, whose l has a tail and whose zero is narrower than its O.
 Contrast minima: text 4.89 / 4.95, marks 3.08 / 5.20.
 
+**Il1 and 0O at 12px.** Every mono face draws a slashed or dotted zero. The text faces tell 1
+from I and l (1 is flagged everywhere), but Overpass (Interstate), Jost (Ranger) and Libre
+Franklin (Empire Builder) draw I and l as plain bars a little apart in height; that is accepted
+as it is (the owner's ruling), since a word in context reads and every id and figure is in the
+mono face.
+
+**The chart columns.** A family's `--chart-column-width` is the study's column share times
+Sluice's own 0.8, so a "narrow" column is narrower than Sluice's: Empire Builder 0.448,
+Williamsburg 0.56, Kodachrome 0.624, Road Atlas 0.512; the rest keep 0.8.
+
 **One stylesheet.** A family's file is its block (`[data-theme^="<family>-"]`: its colour
 roles, the deep tokens it changes, its faces' `@font-face` rules), plus a
 `[data-theme="<family>-dark"]` rule for any non-colour value that differs by scheme
@@ -538,7 +566,7 @@ roles, the deep tokens it changes, its faces' `@font-face` rules), plus a
 `views::STYLESHEET`, what `tests/themes.rs` reads). A family's file comes after Sluice's
 defaults, so what it declares wins and what it leaves out inherits. Primitives (`--p-…`, a
 source's named colours) are readable only inside their own family's block; a lint in the test
-fails on one anywhere else.
+fails on one anywhere else. Last, `build.rs` appends the display face's floor (below).
 
 ### The deep tokens
 
@@ -550,7 +578,7 @@ declared value must be in its allowed set (`tests/themes.rs`).
 
 | Token | Sluice | Allowed | What it sets |
 |---|---|---|---|
-| `--font-display` | Schibsted Grotesk Variable | a stack ending in a generic family | the page's name, a step's, home's project names, a question's title (19px and up), section heads |
+| `--font-display` | Schibsted Grotesk Variable | a stack ending in a generic family | the page's name, a step's, home's project names, a question's title (19px and up), section heads at 19px and up (the floor, below) |
 | `--font-text` | Schibsted Grotesk Variable | the same | body, modules, tables, controls |
 | `--font-mono` | JetBrains Mono Variable | the same | ids, durations, clock times, data |
 | `--display-weight` | 850 | 400 to 900 | the display face's weight (a question's title 50 lighter, a theme card's name 50 heavier) |
@@ -559,7 +587,8 @@ declared value must be in its allowed set (`tests/themes.rs`).
 | `--head-tracking` | -0.025em | -0.05em to 0.2em; at least 0.05em in capitals | a section head's letter spacing |
 | `--head-case` | none | none, uppercase | a section head's case (tracked capitals) |
 | `--head-style` | normal | normal, italic | a section head's style |
-| `--head-scale` | 1 | 0.7 to 1.1 | a section head's size against Sluice's (26px, 22px a step's module, 30px Settings, 19px a recipe block), to even out cap heights |
+| `--head-scale` | 1 | 0.7 to 1.1 | a section head's size against Sluice's (26px, 24px on a phone, 22px a step's module, 18px in a narrow drawer, 30px Settings, 19px a recipe block), to even out cap heights |
+| `--head-face-N` | worked out | never a family's | the face a head drawn at N px times the head scale is set in (the floor, below) |
 | `--kind-style` | normal | normal, italic | a module's kind line (its glyph and word stay upright) |
 | `--prose-numerals` | normal | normal, oldstyle-nums, lining-nums | figures in prose; data figures stay tabular |
 | `--radius-module` | 0px | 0 to 14px | a module, a card, an item, an empty state |
@@ -598,13 +627,22 @@ declared value must be in its allowed set (`tests/themes.rs`).
 | `--link-thickness` | 1px | 1 to 3px | a link's underline |
 | `--link-offset` | 3px | 2 to 6px | its offset |
 | `--link-style` | solid | solid, dotted, dashed | its style (dotted as a timetable's leaders) |
-| `--sweep-animation` | `tide 3.2s` ease-out | `tide` (a bar) or `lane` (dashes), at least 1s, any easing or `steps()`; or none | the sweep along a running cell's foot, the one motion a theme sets |
+| `--sweep-animation` | `tide 3.2s` ease-out | `tide` (a bar) or `lane` (dashes), at least 1s, any easing or `steps()`; or none, the still line | the sweep along a running cell's foot, the one motion a theme sets |
 | `--sweep-fill` | `sweep` | a colour or a gradient | what sweeps |
 | `--glyph-stroke` | 2 | 1.75 to 2.5 | every Lucide glyph's stroke (the glyphs stay Lucide's) |
 | `--lift` | Sluice's two shadows | shadows, soft, or none | a menu's, the drawer's and a dialog's lift |
 
-Reduced motion stops every sweep in every theme (a still line); the trace's fades and the
-drawer's slide are never a theme's. Coral is never a chart's, a rule's but the question's, or a
+**The still line.** At rest a sweep's bar lies across the whole foot of a running cell at .6;
+both keyframes (`tide`, `lane`) set the whole bar, so a moving sweep never shows the rest.
+`--sweep-animation: none` (Williamsburg) and reduced motion, in every theme, draw that still
+line; the trace's fades and the drawer's slide are never a theme's.
+
+**The display face's floor.** A display face never sets text under 19px. Every head sized by
+`--head-scale` reads its face from `--head-face-N` (N its size in px at scale 1), and `build.rs`
+works each out, for Sluice's scale and every family block that sets its own, after the family
+files: the display face when N times the scale is 19px or more, the text face under that (in
+Kodachrome, Fiesta and Road Atlas the narrow drawer's 18px module heads; in Empire Builder its
+heads at 0.74 but the 26px and 30px ones). The other display sizes are fixed at 19px and up. Coral is never a chart's, a rule's but the question's, or a
 band edge's.
 
 ## Type
@@ -785,6 +823,11 @@ the word goes under the name, never beside it.
 - **Needs a look** (a state that wants attention: failed, cancelled, stale, quiet): sand, its
   glyph, its name and its word, its time; a quiet run keeps running's blue edge.
 - A note may span the cells not reached ("then review and publish").
+
+A cell's state word never clips, in any theme: it is one line, and a word wider than the room
+beside its glyph wraps to a second line that is not drawn, so the cell shows its glyph alone
+("blocked" needs about 77px; a plan row's cell at 1440 is 68px, so there it is the glyph, as a
+row's look cells already are, and at 2560 the word).
 
 Each cell's state is said in words to a screen reader, and a cell with a page links to it.
 `ui::stage_marks` draws the same strip as 12px squares in a line of words.

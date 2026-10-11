@@ -104,8 +104,8 @@
   --band-edge: repeating-linear-gradient(90deg, transparent 0 8px, var(--paper) 8px 16px, transparent 16px 24px)
                0 4px / 100% 5px no-repeat,
                var(--band);
-  /* narrow columns, no grid */
-  --chart-column-width: 0.62;
+  /* narrow columns, no grid: the study's 78% of Sluice's own 0.8 */
+  --chart-column-width: 0.624;
   /* the sweep advances a frame at a time */
   --sweep-animation: tide 2s steps(8, jump-none) infinite;
 }

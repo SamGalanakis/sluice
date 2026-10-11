@@ -2,7 +2,7 @@
    Collection, the paints matched to the pigments recovered in the 1928-34 restoration of
    Colonial Williamsburg. Washington Blue band over Capitol White, Prussian Blue runs, Ewing
    Blue is done, Damask Gold wants a look and Tucker Orange asks. A deep theme: Libre Caslon
-   Display heads and Libre Caslon Text, italic kind lines, Cutive Mono data, a Scotch rule, a
+   Display heads and Libre Caslon Text, italic kind lines, Anonymous Pro data, a Scotch rule, a
    double gold hairline under the band, laid lines in the paper, an airier rhythm, cells not
    reached dotted, a ruled chart, fine glyphs and a still line where others sweep. build.rs
    joins this file after style.css. */
@@ -21,8 +21,11 @@
 @font-face { font-family: "Libre Caslon Text"; font-style: italic; font-display: swap; font-weight: 400;
   src: url(https://cdn.jsdelivr.net/npm/@fontsource/libre-caslon-text@5.3.0/files/libre-caslon-text-latin-400-italic.woff2) format("woff2");
   unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
-@font-face { font-family: "Cutive Mono"; font-style: normal; font-display: swap; font-weight: 400;
-  src: url(https://cdn.jsdelivr.net/npm/@fontsource/cutive-mono@5.3.0/files/cutive-mono-latin-400-normal.woff2) format("woff2");
+@font-face { font-family: "Anonymous Pro"; font-style: normal; font-display: swap; font-weight: 400;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/anonymous-pro@5.3.0/files/anonymous-pro-latin-400-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Anonymous Pro"; font-style: normal; font-display: swap; font-weight: 700;
+  src: url(https://cdn.jsdelivr.net/npm/@fontsource/anonymous-pro@5.3.0/files/anonymous-pro-latin-700-normal.woff2) format("woff2");
   unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family: "Libre Caslon Display Fallback"; font-style: normal; font-weight: 100 900;
   src: local("Times New Roman"), local("TimesNewRomanPSMT"), local("Liberation Serif"), local("LiberationSerif"),
@@ -40,14 +43,14 @@
   src: local("Times New Roman Italic"), local("TimesNewRomanPS-ItalicMT"), local("Liberation Serif Italic"),
        local("LiberationSerif-Italic"), local("Tinos Italic");
   size-adjust: 117.5%; ascent-override: 82.55%; descent-override: 22.13%; line-gap-override: 0%; }
-@font-face { font-family: "Cutive Mono Fallback"; font-style: normal; font-weight: 100 549;
+@font-face { font-family: "Anonymous Pro Fallback"; font-style: normal; font-weight: 100 549;
   src: local("Courier New"), local("CourierNewPSMT"), local("Liberation Mono"), local("LiberationMono"),
        local("Cousine");
-  size-adjust: 100.9%; ascent-override: 82.13%; descent-override: 27.0%; line-gap-override: 0%; }
-@font-face { font-family: "Cutive Mono Fallback"; font-style: normal; font-weight: 550 900;
+  size-adjust: 90.97%; ascent-override: 89.91%; descent-override: 20.02%; line-gap-override: 0%; }
+@font-face { font-family: "Anonymous Pro Fallback"; font-style: normal; font-weight: 550 900;
   src: local("Courier New Bold"), local("CourierNewPS-BoldMT"), local("Liberation Mono Bold"),
        local("LiberationMono-Bold"), local("Cousine Bold");
-  size-adjust: 100.9%; ascent-override: 82.13%; descent-override: 27.0%; line-gap-override: 0%; }
+  size-adjust: 90.97%; ascent-override: 89.91%; descent-override: 20.02%; line-gap-override: 0%; }
 
 [data-theme^="williamsburg-"] {
   /* the source, as published (Benjamin Moore): CW-630 Washington Blue, the band's and the
@@ -83,10 +86,11 @@
   --on-coral: light-dark(#1f2122, #1b2630);
   --idle: light-dark(#6f6e66, #9aa0a0);
   /* type: Libre Caslon Display at its one weight for the display and the heads, a size up;
-     Libre Caslon Text, its kind lines in italic; Cutive Mono, a typewriter's, for data */
+     Libre Caslon Text, its kind lines in italic; Anonymous Pro, a typewriter-cut mono
+     whose zero is slashed apart from its O, for data */
   --font-display: "Libre Caslon Display", "Libre Caslon Display Fallback", serif;
   --font-text: "Libre Caslon Text", "Libre Caslon Text Fallback", serif;
-  --font-mono: "Cutive Mono", "Cutive Mono Fallback", ui-monospace, monospace;
+  --font-mono: "Anonymous Pro", "Anonymous Pro Fallback", ui-monospace, monospace;
   --display-weight: 400;
   --display-tracking: 0em;
   --head-weight: 400;
@@ -115,15 +119,13 @@
   /* a cell not reached is dotted */
   --cell-empty-edge: none;
   --cell-empty-outline: 1px dotted var(--ink-muted);
-  /* columns at 0.7 of their slot on ruled rows, a ledger's */
-  --chart-column-width: 0.7;
+  /* columns on ruled rows, a ledger's: the study's 70% of Sluice's own 0.8 */
+  --chart-column-width: 0.56;
   --chart-grid: repeating-linear-gradient(to top, transparent 0 21px, var(--rule) 21px 22px);
   --focus-offset: 3px;
   --link-offset: 4px;
-  /* no motion: the sweep held still, a line at 70% along a running cell's foot (`lane` paused
-     at its start, where it draws the fill in place) */
-  --sweep-animation: lane 1s linear infinite paused;
-  --sweep-fill: color-mix(in oklch, var(--sweep) 70%, transparent);
+  /* no motion: the sweep is the still line along a running cell's foot */
+  --sweep-animation: none;
   /* a pen's fine line */
   --glyph-stroke: 1.75;
 }

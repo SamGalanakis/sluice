@@ -122,8 +122,8 @@
   /* not reached: a dotted line just inside the cell, an unpaved road */
   --cell-empty-edge: none;
   --cell-empty-outline: 1.5px dotted var(--ink-muted);
-  /* narrow columns on a dotted grid */
-  --chart-column-width: 0.51;
+  /* narrow columns on a dotted grid: the study's 64% of Sluice's own 0.8 */
+  --chart-column-width: 0.512;
   --chart-grid: radial-gradient(circle at 2.5px 1px, var(--rule) 1px, transparent 1.3px) 0 100% / 5px 16px;
   /* the sweep at an even ease */
   --sweep-animation: tide 3.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
