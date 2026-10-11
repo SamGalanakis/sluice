@@ -643,11 +643,10 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 .sc-empty { box-shadow: var(--cell-empty-edge); outline: var(--cell-empty-outline); outline-offset: -1.5px;
             color: var(--ink-muted); }
 .sc-empty .sc-name { font-size: 12px; }
-/* a cell's state word never clips: it is one line, and a word wider than the room beside its
-   glyph wraps to a second line that is not shown, leaving the glyph (the cell's words are
-   there for a reader either way) */
-.sc-word { display: flex; flex-wrap: wrap; align-items: center; gap: 15px 4px; height: 15px;
-           overflow: hidden; font-size: 12px; line-height: 15px; font-weight: 600; white-space: nowrap; }
+/* a cell's glyph stands before its name on the first line; its state word has the line under
+   them to itself, so it never shares its room with the glyph. A word wider than the whole cell
+   (none at 68px in any theme) wraps within it: it never clips and never goes out of sight */
+.sc-word { min-width: 0; font-size: 12px; line-height: 15px; font-weight: 600; overflow-wrap: anywhere; }
 .sc-done { background: var(--cell-done-fill); box-shadow: var(--cell-done-edge); color: var(--ink); }
 .sc-done .sc-time { color: var(--ink-muted); }
 .sc-done .g { color: var(--sky-ink); }
@@ -658,11 +657,6 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 .sc-look { background: var(--sand); box-shadow: var(--cell-look-edge); color: var(--on-sand); }
 .sc-look .g { color: var(--sand-mark); }
 .sc-look .sc-word { font-weight: 700; }
-/* a cell's state word goes under its name, never beside it (where it would cut the name) */
-.sc-top:has(> .sc-word) { flex-wrap: wrap; row-gap: 1px; }
-.sc-top .sc-word { flex: 0 0 100%; font-size: 12px; column-gap: 0; }
-/* a strut first, so a word too wide for the cell wraps out of sight */
-.sc-top .sc-word::before { content: ""; height: 15px; }
 .sc-quiet { box-shadow: inset 0 0 0 2px var(--run); }
 .sc-gap { grid-column: span var(--gap); flex-direction: row; align-items: center; gap: 8px;
           padding: 0; font-size: 12.5px; color: var(--ink-muted); }
@@ -2332,7 +2326,7 @@ details.read-today .item { opacity: .85; }
 /* the question's unit's stages wrap rather than cut a name: as many cells a row as fit 96px,
    three a row in a half-width card, each name whole, its state its glyph */
 .pl-ask .mod > .strip { margin-top: 16px; gap: 8px; grid-template-columns: var(--strip-narrow); }
-.pl-ask .mod > .strip .sc-top .sc-word { display: none; }
+.pl-ask .mod > .strip .sc-look .sc-word { display: none; }
 .pl-ask .mod-actions button.quiet-act, .pl-stop .mod-actions button.quiet-act {
   background: none; box-shadow: none; }
 /* Retry with feedback opens its box in place; Retry beside it sends none */
@@ -2387,8 +2381,9 @@ details.read-today .item { opacity: .85; }
                                          min-height: var(--cell-height); }
 .pl-cells .sc { min-height: var(--cell-height); padding: 0 7px; }
 .pl-cells .sc > a.sc-a { margin: 0 -7px; padding: 0 7px; }
-/* in a row the cell's state is its glyph (and its words for a reader): the row's head says it */
-.pl-cells .sc-top .sc-word { display: none; }
+/* in a row a look cell's second line is its time: its glyph says its state, and the row's head
+   says it in words. A cell waiting in its own way (held, queued, paused, blocked) keeps its word */
+.pl-cells .sc-look .sc-word:has(+ .sc-time) { display: none; }
 /* a unit of no recipe: its own graph, as wide as its layers */
 .pl-free .pl-row.pl-graphed { grid-template-columns: minmax(0, 1fr) auto 34px; }
 /* a running or stopped cell's time a size its cell holds */

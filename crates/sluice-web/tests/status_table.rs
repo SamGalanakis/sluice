@@ -529,11 +529,16 @@ async fn a_project_pause_and_outside_work_read_as_themselves() {
         .unwrap();
     board(&f, id, "root = Units()".into()).await;
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
-    // the plan: a waiting unit's first stage says it is paused, in its cell
+    // the plan: a waiting unit's first stage says it is paused, in its cell: its glyph before
+    // the stage's name, its word under them
     let cell = plan_html::cell(&html, "l3-fork");
     assert!(
         cell.contains("data-state=\"paused\"")
-            && cell.contains(&format!("{}paused</span>", mark(Shown::Paused))),
+            && cell.contains(&format!(
+                "<span class=\"sc-top\">{}<span class=\"sc-name\">fork</span></span>",
+                mark(Shown::Paused)
+            ))
+            && cell.contains("<span class=\"sc-word\" aria-hidden=\"true\">paused</span>"),
         "{cell}"
     );
     let pane = between(&html, "<aside id=\"board-pane\"", "</aside>");

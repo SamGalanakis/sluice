@@ -1,18 +1,19 @@
-//! The frame's themes and its fluid grid: every theme's tokens, read from the stylesheet the
-//! pages get (style.css and every family's file under assets/themes, joined), hold WCAG contrast
-//! (text 4.5:1, focus, status marks, chart colours and edges 3:1, also on a textured paper, a
-//! look cell's border and where the band's edge meets its marks) and keep the question's colour
-//! apart from every other role and out of every non-colour token; every deep token a family
-//! declares is a known one, in its allowed range; a primitive (`--p-…`) never leaves its family's
-//! block; a head is set in the display face only at 19px and up; the theme cookie, the picker
-//! and the gallery over HTTP; and in Chromium, at eight widths from 320 to 3840 (four in every
-//! other theme), no page scrolls sideways, the sheet's modules take the columns its width gives
-//! them, a strip head stays over its rows, a phone's 44px targets stay 44px and no words sit in
-//! a display face under 19px in every theme, a sweep of none is the still line, the picker's
-//! thirty themes take one column on a phone and two from 900px with no name wrapped, a page
-//! fetches only its own theme's faces (the picker none, a page without script the cookie's) and
-//! each from the dashboard, the first open takes Sluice Light or Dark from the system once and keeps it, and a pick applies
-//! at once and is kept.
+//! The frame's themes and its fluid grid: every theme's tokens, read from the stylesheet the pages
+//! get (style.css and every family's file under assets/themes, joined), hold WCAG contrast (text
+//! 4.5:1, focus, status marks, chart colours and edges 3:1, also on a textured paper, a look cell's
+//! border and where the band's edge meets its marks) and keep the question's colour apart from
+//! every other role and out of every non-colour token; every deep token a family declares is a
+//! known one, in its allowed range; a primitive (`--p-…`) never leaves its family's block; a head
+//! is set in the display face only at 19px and up; the theme cookie, the picker and the gallery
+//! over HTTP; and in Chromium, at eight widths from 320 to 3840 (four in every other theme), no
+//! page scrolls sideways, the sheet's modules take the columns its width gives them, a strip head
+//! stays over its rows, a phone's 44px targets stay 44px and no words sit in a display face under
+//! 19px in every theme, no stage cell's state word clips, wraps or leaves its cell (at 390, 1440
+//! and 2560 in every theme; the gallery's waiting rows draw "⊖ review" over "blocked"), a sweep of
+//! none is the still line, the picker's thirty themes take one column on a phone and two from 900px
+//! with no name wrapped, a page fetches only its own theme's faces (the picker none, a page without
+//! script the cookie's) and each from the dashboard, the first open takes Sluice Light or Dark from
+//! the system once and keeps it, and a pick applies at once and is kept.
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
@@ -884,6 +885,9 @@ const TARGETS: &str = "[...document.querySelectorAll('a[href], button, summary, 
 /// Every element whose own words are set in its theme's display face (where that is not also
 /// its text face) under 19px: its size, its face and what it is.
 const UNDER_FLOOR: &str = "(() => { const norm = s => s.replace(/[\"'\\s]/g, ''); return [...document.querySelectorAll('body *')].filter(e => [...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim()) && e.getClientRects().length).map(e => { const cs = getComputedStyle(e); const display = norm(cs.getPropertyValue('--font-display')), text = norm(cs.getPropertyValue('--font-text')); return [parseFloat(cs.fontSize), norm(cs.fontFamily) === display && display !== text, e.outerHTML.slice(0, 100)]; }).filter(([size, display]) => display && size < 18.95); })()";
+/// Every stage cell's state word drawn on the page that clips, wraps or leaves its cell: its
+/// text and its cell's state and width. A word has its own line under the cell's glyph and name.
+const WORDS: &str = "[...document.querySelectorAll('.sc-word')].filter(w => w.getClientRects().length && getComputedStyle(w).display !== 'none').map(w => { const r = w.getBoundingClientRect(), c = w.closest('.sc').getBoundingClientRect(); return [w.textContent, w.closest('.sc').dataset.state, Math.round(c.width), w.scrollWidth > w.clientWidth + 0.5 || r.height > 1.5 * parseFloat(getComputedStyle(w).lineHeight) || r.right > c.right + 0.5 || r.bottom > c.bottom + 0.5]; }).filter(w => w[3])";
 /// The page's paper and its theme, as drawn.
 const PAPER: &str = "[document.documentElement.dataset.theme ?? null, getComputedStyle(document.body).backgroundColor]";
 
@@ -907,6 +911,13 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
                 browser.eval(FRAMES).unwrap();
                 let m: Value = browser.eval(MEASURE).unwrap();
                 assert!(m["scroll"].as_f64() <= m["width"].as_f64(), "{name} at {width} scrolls sideways: {m}");
+                // a cell's state word is whole on its own line, in the narrowest cell too
+                assert_eq!(browser.eval(WORDS).unwrap(), json!([]), "{name} at {width}");
+                if name == "ui" {
+                    // the gallery's waiting rows: "⊖ review", then "blocked" under it
+                    let blocked = browser.eval("(() => { const c = document.querySelector('.gal-waits .sc-empty[data-state=blocked]'); const top = c.querySelector('.sc-top'), w = c.querySelector('.sc-word'); return [top.firstElementChild.matches('.g-blocked'), top.textContent, w.textContent, w.getBoundingClientRect().top >= top.getBoundingClientRect().bottom - 0.5, w.getClientRects().length > 0]; })()").unwrap();
+                    assert_eq!(blocked, json!([true, "review", "blocked", true, true]), "{width}");
+                }
                 if name != "ui" {
                     continue;
                 }
@@ -961,6 +972,10 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
                     browser.viewport(width, t.id).unwrap();
                     let m: Value = browser.eval(MEASURE).unwrap();
                     assert!(m["scroll"].as_f64() <= m["width"].as_f64(), "{name} in {} at {width} scrolls sideways: {m}", t.id);
+                    if width != 320 {
+                        browser.eval("document.fonts.ready").unwrap();
+                        assert_eq!(browser.eval(WORDS).unwrap(), json!([]), "{name} in {} at {width}: a cell's word clips", t.id);
+                    }
                     if matches!(width, 390 | 1440) {
                         // a display face never sets words under 19px: the head takes the text face
                         browser.eval("document.fonts.ready").unwrap();

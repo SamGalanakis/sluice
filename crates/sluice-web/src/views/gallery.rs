@@ -535,12 +535,32 @@ fn heads_part() -> TrustedHtml {
             ui::strip_row_close()
         )
     };
+    // a waiting row's cells: its glyph before the stage's name, its word under them, alone
+    let waits = |first: Shown| {
+        vec![
+            ui::Stage::new("draft", Some(first)).href("#"),
+            ui::Stage::new("review", None),
+            ui::Stage::new("publish", None),
+        ]
+    };
+    let blocked = vec![
+        ui::Stage::new("draft", Some(Shown::Succeeded))
+            .href("#")
+            .took(2_460.0),
+        ui::Stage::new("review", Some(Shown::Blocked)).href("#"),
+        ui::Stage::new("publish", None),
+    ];
     TrustedHtml::owned(format!(
-        "{}<p class=\"meta gal-cap\">Over a table of strips: each stage's name over its column, each row's stages under them</p><div class=\"gal-strips\">{}{}{}</div>",
+        "{}<p class=\"meta gal-cap\">Over a table of strips: each stage's name over its column, each row's stages under them</p><div class=\"gal-strips\">{}{}{}</div><p class=\"meta gal-cap\">Waiting rows: a cell that waits in its own way puts its glyph before its name and its word under them</p><div class=\"gal-strips gal-waits\">{}{}{}{}{}</div>",
         ui::section_head("", "Stopped", "1 failed · 1 cancelled"),
         ui::strip_head("", "Running", "Quiet first, then the longest.", &["draft", "review", "publish"]),
         row("a-12", "Terns: the spring guide's entries", article(Some(Shown::Succeeded), Some(Shown::Running), None)),
         row("a-9", "Gannets: the spring guide's entries", article(Some(Shown::Succeeded), Some(Shown::Quiet), None)),
+        ui::strip_head("", "Waiting", "4 waiting.", &["draft", "review", "publish"]),
+        row("a-6", "Waders: the autumn guide's entries", blocked),
+        row("a-13", "Skuas: the spring guide's entries", waits(Shown::Held)),
+        row("a-14", "Auks: the spring guide's entries", waits(Shown::Queued)),
+        row("a-15", "Puffins: the spring guide's entries", waits(Shown::Paused)),
     ))
 }
 fn strips_part() -> TrustedHtml {

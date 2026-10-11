@@ -338,20 +338,23 @@ pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
                 _ => format!("<span class=\"sc-time\">{}</span>", duration(s)),
             }
         };
+        // a cell's first line is its glyph (where it draws one) and its name; under it its word
+        // or its time, alone
         let inner = match cell {
-            Cell::Empty => format!(
-                "<span class=\"sc-name\">{}</span>{}<span class=\"vh\">: {}</span>",
-                esc(&stage.name),
-                match stage.shown {
-                    Some(s) if s.spec().caption || s == Shown::Paused => format!(
-                        "<span class=\"sc-word\" aria-hidden=\"true\">{}{}</span>",
-                        mark(s),
-                        esc(word(s))
-                    ),
-                    _ => String::new(),
-                },
-                esc(state)
-            ),
+            Cell::Empty => match stage.shown {
+                Some(s) if s.spec().caption || s == Shown::Paused => format!(
+                    "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span><span class=\"sc-word\" aria-hidden=\"true\">{}</span><span class=\"vh\">: {}</span>",
+                    mark(s),
+                    esc(&stage.name),
+                    esc(word(s)),
+                    esc(state)
+                ),
+                _ => format!(
+                    "<span class=\"sc-name\">{}</span><span class=\"vh\">: {}</span>",
+                    esc(&stage.name),
+                    esc(state)
+                ),
+            },
             Cell::Done => format!(
                 "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span>{}<span class=\"vh\">: {}</span>",
                 mark(stage.shown.unwrap_or(Shown::Succeeded)),
@@ -368,7 +371,7 @@ pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
             Cell::Look => {
                 let shown = stage.shown.expect("a look has a state");
                 format!(
-                    "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span><span class=\"sc-word\" aria-hidden=\"true\">{}</span></span>{}<span class=\"vh\">: {}</span>",
+                    "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span><span class=\"sc-word\" aria-hidden=\"true\">{}</span>{}<span class=\"vh\">: {}</span>",
                     mark(shown),
                     esc(&stage.name),
                     esc(word(shown)),

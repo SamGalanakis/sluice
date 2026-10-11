@@ -72,8 +72,10 @@ fn every_cell_of_a_strip_says_its_state_in_words_and_shape() {
         html.contains("<li class=\"sc sc-look\" data-state=\"failed\">"),
         "{html}"
     );
-    // a waiting state that says itself writes its word in its outline
-    assert!(html.contains("<li class=\"sc sc-empty\" data-state=\"paused\"><span class=\"sc-name\">hold</span><span class=\"sc-word\" aria-hidden=\"true\">"), "{html}");
+    // a waiting state that says itself writes its glyph before its name and its word under
+    // them, alone, in its outline
+    assert!(html.contains("<li class=\"sc sc-empty\" data-state=\"paused\"><span class=\"sc-top\"><span class=\"g g-paused\""), "{html}");
+    assert!(html.contains("<span class=\"sc-name\">hold</span></span><span class=\"sc-word\" aria-hidden=\"true\">paused</span>"), "{html}");
     assert!(
         html.contains("<li class=\"sc sc-gap\" style=\"--gap:2\"><span>then the rest</span></li>"),
         "{html}"
