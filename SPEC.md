@@ -449,7 +449,11 @@ A project sees builtin, global and its own fns. Names never collide: a global fn
 a builtin name, and a project fn may not reuse a builtin or global one. A fn dir is an
 immediate subdirectory holding `fn.json` whose `name` matches the directory. The registry is
 rescanned when fn files change (a watcher on the fn scopes) and republished only when it
-changed; each publication is an immutable generation that runs are pinned to.
+changed; each publication is an immutable generation that runs are pinned to. Cached scans
+use a fingerprint taken before reading the fn files, so a change during a scan causes the
+next registry access to rescan. If a publication's pinned manifest differs from the scan,
+the attempt returns `conflict` and clears the cached scans so the next attempt reads fresh
+files.
 
 A project whose own scope has a problem (a collision, a bad `fn.json`) is **blocked**: plan
 edits, manual values and new runs of that project fail with `invalid` ("project registry

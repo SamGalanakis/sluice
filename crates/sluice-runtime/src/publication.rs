@@ -174,6 +174,7 @@ impl Publication {
                         })?,
                     )?;
                     if pinned != f.raw {
+                        self.registry.invalidate();
                         return Err(PublicError::Conflict {
                             message: "fn changed during publication".into(),
                             current_rev: None,
