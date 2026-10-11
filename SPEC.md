@@ -74,7 +74,7 @@ re-execs itself once with `SLUICE_PYTHON_DIR=<release>/python`,
 assets are compiled into the binary.
 
 `sluice install <command>` prints the installation status as JSON
-`{generation, selection, fence}`:
+`{generation, selection, fence}` (`verify` prints the release it checked):
 
 | command | effect |
 |---|---|
@@ -82,6 +82,7 @@ assets are compiled into the binary.
 | `install fence <reason>` | writes `fence.json` under the exclusive lock; while fenced, every coordinator activation and admission write is refused (`maintenance: <reason> (generation n)`), except a coordinator started with `--maintenance` |
 | `install select <release_dir> <home>` | verifies the release's manifest (when it has one) and records the selection |
 | `install unfence` | verifies the selected release and removes the fence |
+| `install verify <release_dir>` | the check `select` runs (`release::verify`: every file's sha256, the release id, the guardian protocol, the private tmux), with no fence, no installation and no change; prints `{release, release_id, git_sha, schema}` |
 
 A home that is not the installation's selected home refuses admission (`maintenance: stale
 selected home`). Without a release and without `SLUICE_INSTALL_DIR` (a source build), the
@@ -91,9 +92,13 @@ installation is the sibling directory `<home>.sluice-install`.
 with its target dir under `<prefix>/.build/target`, stages `bin/sluice`, `python/`, the private
 tmux (built once by `scripts/build-private-tmux` and cached under `<prefix>/.build`) and
 `assets/`, asks the staged binary its schema (`sluice home schema`, which prints `{"schema": n}`
-and needs no home), writes `manifest.json`, moves the stage to `releases/<release_id>` (an existing
-release id must have identical metadata), compiles the launcher into `<prefix>/bin/sluice` and
-prints the release path. It refuses a prefix on `PATH`, `/`, or `~/.local/bin`.
+and needs no home), writes `manifest.json`, has the staged binary accept it (`install verify`),
+moves the stage to `releases/<release_id>` (an existing release id must have identical
+metadata), compiles the launcher into `<prefix>/bin/sluice` and prints the release path. The
+release id is `<git sha>-<sha256>` of `files` as `release::verify` re-serialises the manifest's
+map: compact JSON, keys in the byte order of their UTF-8 (so `a-b/x` before `a/x`, unlike path
+order), `"`, `\` and control characters escaped, nothing else; a file name that is not UTF-8 is
+refused. It refuses a prefix on `PATH`, `/`, or `~/.local/bin`.
 
 **`scripts/deploy [REF] [--prefix DIR] [--skip-compat REASON]`** (REF defaults to `origin/main`)
 installs one commit:
@@ -102,23 +107,26 @@ installs one commit:
    differs from the home's `schema_version` is refused there, before anything is built (it goes
    out only with `--schema-cutover`, below), and so is a built release whose manifest `schema`
    differs; then run `build-release` in the tree;
-2. `scripts/compat-check` the new release: on a scratch copy of the home's database, with its
+2. `install verify <release>` with the release's own binary: a release it refuses stops the
+   deploy here, before the fence, with nothing live changed (a binary from before `install
+   verify` runs its `install select` on a scratch installation instead);
+3. `scripts/compat-check` the new release: on a scratch copy of the home's database, with its
    coordinator cut off from systemd, every release an unfinished run is pinned to (plus the
    selected one and the candidate) runs `log_read`, `status`, `say`, a stale `step_submit` and
    `step_context`; a storage or schema error, a crash, a timeout or a submit not refused as
    stale stops the deploy unless `--skip-compat` gives a reason. Each deploy's outcome and any
    skip reason are appended to `<install>/deploy.log`;
-3. `install fence "deploy <sha>"`;
-4. stop the services recorded in `services.json` and the home's auto-started coordinator unit;
-5. `install select <release> <home>`;
-6. start three transient user units, `sluice-<sha16(install dir)>-coordinator`
+4. `install fence "deploy <sha>"`;
+5. stop the services recorded in `services.json` and the home's auto-started coordinator unit;
+6. `install select <release> <home>`;
+7. start three transient user units, `sluice-<sha16(install dir)>-coordinator`
    (`coordinator --maintenance`), `-serve` (`serve --no-runner --port 3065`, or
    `SLUICE_DEPLOY_PORT`) and `-loop` (`loop`), each with `SLUICE_HOME`, `SLUICE_INSTALL_DIR`,
    `PATH` and `HOME` set, recording them in `services.json`; after the coordinator it waits
    until the coordinator is ready to serve its socket;
-7. check that every unit is active and run `sluice doctor --json`;
-8. `install unfence`;
-9. prune releases: keep the newest three plus every release a live process runs from or an
+8. check that every unit is active and run `sluice doctor --json`;
+9. `install unfence`;
+10. prune releases: keep the newest three plus every release a live process runs from or an
    unfinished run in the home records.
 
 **`scripts/ship [REF] [--dry-run]`** takes a gated branch to a verified live deploy: it refuses a
@@ -127,9 +135,18 @@ anything moves and again on the rebased commit before the push: ship ships compa
 only), rebases onto `origin/main` (re-running `scripts/check` only when main changed a non-`*.md`
 file the branch changed, else building), pushes with a bounded retry, deploys `origin/main` to the
 selected home, checks that every run live before the deploy is still running or finished with a
-result, that the three units are active and that the dashboard answers, and prints one line.
+result, that the three units are active and that the dashboard answers, and prints one line. A
+deploy that fails or rolls back fails ship, which says that main is ahead of live: the push has
+already happened.
 
-Any failure after the fence leaves the installation fenced and says so. Running steps survive a
+A failure stopping the old services (step 5) leaves the installation fenced and says so. A
+failure after the stop, in steps 6 to 9, rolls back when the previous selection serves the same
+home: deploy stops whatever it started, selects the previous release again unless the selection
+still names it, re-creates the three services from it under the same unit names and arguments,
+waits for its coordinator, unfences with its binary, checks that the dashboard answers 200 and
+exits 3 with `deploy rolled back to <old sha>: <error>` (and a `rolled back` line in
+`deploy.log`). Without a previous selection, or when the rollback fails itself, the installation
+stays fenced and deploy prints the commands that finish the recovery by hand. Running steps survive a
 deploy: each run's guardian stays pinned to its own release, and the new coordinator adopts it
 (§7.9).
 
@@ -141,7 +158,9 @@ RFC 3339 or `+<n>m`; grace and timeout default to 300 s; `--candidate` takes an 
 release instead of building REF, and `--skip-compat` is refused) runs from the release the
 installation selects:
 
-1. **Rehearse** on a private copy of the home (`scripts/cutover-rehearse`, below), or take
+1. **Verify** the candidate with its own binary (`install verify`, as step 2 above); a refusal
+   stops the cutover before anything is drained or fenced. **Rehearse** on a private copy of
+   the home (`scripts/cutover-rehearse`, below), or take
    `--rehearsal FILE`, a passed rehearsal report of this candidate over the selected release.
 2. Print the **notice** the orchestrator sends every session: `sluice cutover to schema 3 at
    <deadline>: new work is refused from now; runs still live at <deadline> get a cancel request
@@ -1944,7 +1963,7 @@ write that timed out, and connections dropped for want of a permit.
 | `serve [--no-runner] [--port P] [--host H]` | dashboard, MCP and HTTP tools; takes the scheduler lease unless `--no-runner`; loopback only. Host and port default to config.json's `http`, else 127.0.0.1:3065 |
 | `loop` | takes the scheduler lease and holds it until SIGINT/SIGTERM |
 | `coordinator [--maintenance]` | runs the home's coordinator in the foreground |
-| `install fence <reason> \| unfence \| select <release_dir> <home> \| status` | §2.2 |
+| `install fence <reason> \| unfence \| select <release_dir> <home> \| verify <release_dir> \| status` | §2.2 |
 | `home schema` | `{"schema": n}`: the database schema this binary reads and writes (needs no home; `build-release` records it) |
 | `home migrate [--dry-run] [--json]` | converts `SLUICE_HOME`'s schema-1 or schema-2 database to this binary's schema (§3), holding `coordinator.lock` (refused while a coordinator holds it); `--dry-run` converts a backup-API copy in a scratch directory and leaves the home untouched; `--json` prints the conversion report |
 | `tool [name [json\|-] [--field value]…]` | without a name, lists the tools; with one, runs it (its arguments as below) and prints its result as MCP returns it (`{"ok": true}` for an acknowledgement); `tool <name> --help` lists its fields |

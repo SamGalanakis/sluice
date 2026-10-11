@@ -66,9 +66,20 @@ Never `systemctl restart` a deploy-started transient unit; re-create it with `sy
   it, the candidate serves it, and the old release (`--old`, default the selected one) must
   refuse it unchanged. `--copy DIR` checks a prepared copy (the rehearsal's) and never removes
   it.
+- `scripts/deploy` verifies the candidate before the fence and before stopping anything: the
+  release's own binary runs `sluice install verify <release>`, the check `install select` runs
+  (build-release has the staged binary run it too). A release that won't verify stops the
+  deploy with live untouched.
 - `scripts/deploy` runs compat-check after the build and before the fence. A failure stops the
   deploy unless `--skip-compat "<reason>"` is given; the reason is printed and every deploy's
   compat outcome is appended to `<install>/deploy.log`.
+- A deploy that fails after it stopped the services (select, start or unfence) rolls back: it
+  stops what it started, re-selects the previous release if needed, re-creates the previous
+  services under the same unit names and arguments, unfences with the old binary, checks the
+  dashboard and exits 3 with `deploy rolled back to <old sha>: <error>`. `scripts/ship` then
+  fails saying main is ahead of live (the push already happened). Only a rollback that fails
+  itself, or a deploy with no previous selection, stays fenced; it prints the manual recovery
+  commands.
 - Incompatible storage changes require a new schema version and a drained, fenced migration
   with no live consumers of the old schema: a run's pinned `sluice` reads the database itself
   and refuses any other version. Schema 2 remains reserved for the historical interim board

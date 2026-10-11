@@ -1864,8 +1864,17 @@ pub enum HomeCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum InstallCommand {
-    Fence { reason: String },
+    Fence {
+        reason: String,
+    },
     Unfence,
-    Select { release_dir: PathBuf, home: PathBuf },
+    Select {
+        release_dir: PathBuf,
+        home: PathBuf,
+    },
+    /// Check a release as `select` would, without the fence and without selecting it.
+    Verify {
+        release_dir: PathBuf,
+    },
     Status,
 }

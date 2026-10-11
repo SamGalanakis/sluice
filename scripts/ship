@@ -165,11 +165,20 @@ try:
     if not dry:
         child = subprocess.Popen([str(c) for c in deploy], cwd=work, env=dict(os.environ, SLUICE_HOME=str(home)),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        rolled_back = None
         for line in child.stdout:
             sys.stderr.write(line)
             match = re.match(r'compat: (\d+) releases ok', line)
             if match: compat = 'compat %s releases ok' % match.group(1)
-        if child.wait(): fail('deploy failed (see above)')
+            match = re.match(r'deploy rolled back to (\S+): (.*)', line)
+            if match: rolled_back = match.groups()
+        code = child.wait()
+        # The push is done: a deploy that did not finish leaves main ahead of what runs live.
+        if code == 3 or rolled_back:
+            old, error = rolled_back or ('the previous release', 'see above')
+            fail('deploy of %s rolled back to %s: %s. main is ahead of live: origin/main is %s, live still runs %s. '
+                 'Fix the cause and run scripts/deploy origin/main.' % (head[:12], old, error, head[:12], old))
+        if code: fail('deploy of %s failed (see above). main is ahead of live: origin/main is %s and was pushed, but did not deploy.' % (head[:12], head[:12]))
 
     # Adoption: every run live before the deploy is still live under its unit, or finished
     # with a recorded result; the deploy's units are active; the dashboard answers.

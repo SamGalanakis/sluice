@@ -68,14 +68,38 @@ with tempfile.TemporaryDirectory(prefix='.stage-', dir=releases) as staging:
     finally:
         shutil.rmtree(probe, ignore_errors=True)
     if not isinstance(schema, int) or schema < 1: sys.exit('build-release: bin/sluice reports no schema')
-    files = {str(p.relative_to(stage)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(stage.rglob('*')) if p.is_file()}
-    digest = hashlib.sha256(json.dumps(files, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+    # The release id is <git sha>-<sha256 of `files` as serde_json writes the manifest's
+    # BTreeMap<String, String>> (release::verify recomputes it so): compact, keys in the byte
+    # order of their UTF-8, `"`, `\` and control characters escaped (\u00xx in lower-case
+    # hex), nothing else ('/' and non-ASCII as they are). Python's json.dumps with these
+    # arguments escapes exactly so; the order is given here, by bytes, never by Path order, which
+    # puts `a/x` before `a-b/x`. A name that is not UTF-8 has no String: refused.
+    files = {}
+    for p in stage.rglob('*'):
+        if not p.is_file(): continue
+        name = str(p.relative_to(stage))
+        try: name.encode('utf-8')
+        except UnicodeEncodeError: sys.exit('build-release: %r is not a UTF-8 file name' % name)
+        files[name] = hashlib.sha256(p.read_bytes()).hexdigest()
+    files = dict(sorted(files.items(), key=lambda item: item[0].encode('utf-8')))
+    digest = hashlib.sha256(json.dumps(files, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
     release_id = sha + '-' + digest
     manifest = dict(release_id=release_id, git_sha=sha, guardian_protocol_major=1, guardian_protocol_minor=0, files=files,
                     private_tmux=json.loads((stage / 'tmux/tmux-manifest.json').read_text()),
                     build_toolchain={tool: subprocess.check_output([tool, '--version'], text=True).strip() for tool in ['rustc', 'cargo', 'cc']},
                     schema=schema)
     (stage / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    # The staged binary must accept its own release, with the check `install select` runs: a
+    # release it would refuse is never published.
+    probe = pathlib.Path(tempfile.mkdtemp(prefix='verify-', dir=prefix / '.build/tmp'))
+    try:
+        verified = subprocess.run([str(stage / 'bin/sluice'), 'install', 'verify', str(stage)], capture_output=True, text=True,
+            env=dict({k: v for k, v in os.environ.items() if not k.startswith('SLUICE_') or k == 'SLUICE_TEST'},
+                     SLUICE_HOME=str(probe / 'home'), SLUICE_INSTALL_DIR=str(probe / 'install')))
+    finally:
+        shutil.rmtree(probe, ignore_errors=True)
+    if verified.returncode:
+        sys.exit('build-release: bin/sluice refuses the release it was built into: %s' % (verified.stdout.strip() or verified.stderr.strip()))
     fsync_tree(stage)
     destination = releases / release_id
     if destination.exists():

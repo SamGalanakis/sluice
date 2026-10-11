@@ -2,7 +2,7 @@
 set -euo pipefail
 repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
 exec python3 - "$repo" "$@" <<'PY'
-import argparse, datetime, hashlib, json, os, pathlib, re, shutil, signal, socket, sqlite3, subprocess, sys, tarfile, tempfile, time, urllib.request
+import argparse, datetime, hashlib, json, os, pathlib, re, shlex, shutil, signal, socket, sqlite3, subprocess, sys, tarfile, tempfile, time, urllib.request
 parser = argparse.ArgumentParser(prog='scripts/deploy', description=
     'Build REF into a release, check it, and switch the installation to it. A release whose '
     'schema differs from the home\'s goes out only with --schema-cutover.')
@@ -221,17 +221,20 @@ def stop_service(record):
                 raise RuntimeError('stop %s: %s' % (record['unit'], stopped.stderr.strip()))
 def service_commands():
     return {'coordinator': ['coordinator', '--maintenance'], 'serve': ['serve', '--no-runner', '--port', os.environ.get('SLUICE_DEPLOY_PORT', '3065')], 'loop': ['loop']}
-def start_service(binary, release_dir, name, arguments):
-    if fixture: return start_process(binary, arguments, name, release_dir)
-    digest = hashlib.sha256(os.fsencode(install)).hexdigest()[:16]
-    unit = ('sluice-test-' if testing else 'sluice-') + digest + '-' + name
-    subprocess.run(['systemd-run', '--user', '--quiet', '--collect', '--service-type=exec', '--property=Restart=no', '--unit', unit,
+def service_unit(name):
+    return ('sluice-test-' if testing else 'sluice-') + hashlib.sha256(os.fsencode(install)).hexdigest()[:16] + '-' + name
+def unit_command(binary, name, arguments):
+    # The transient unit deploy creates for one service; a manual recovery prints this too.
+    return ['systemd-run', '--user', '--quiet', '--collect', '--service-type=exec', '--property=Restart=no', '--unit', service_unit(name),
         '--setenv=SLUICE_HOME=' + str(home), '--setenv=SLUICE_INSTALL_DIR=' + str(install),
         # Test services name the run units they launch sluice-test-* too.
         *(['--setenv=SLUICE_TEST=1'] if testing else []),
         # The user manager's PATH lacks the engines (codex, claude, devin) and uv.
-        '--setenv=PATH=' + os.environ['PATH'], '--setenv=HOME=' + str(pathlib.Path.home()), '--', str(binary), *arguments], check=True)
-    return dict(unit=unit + '.service', release=str(release_dir))
+        '--setenv=PATH=' + os.environ['PATH'], '--setenv=HOME=' + str(pathlib.Path.home()), '--', str(binary), *arguments]
+def start_service(binary, release_dir, name, arguments):
+    if fixture: return start_process(binary, arguments, name, release_dir)
+    subprocess.run(unit_command(binary, name, arguments), check=True)
+    return dict(unit=service_unit(name) + '.service', release=str(release_dir))
 def start_services(binary, release_dir, include_loop=True):
     services = {}
     for name, arguments in service_commands().items():
@@ -292,10 +295,78 @@ def prune_releases(keep):
         if str(old) not in pinned: shutil.rmtree(old)
 
 # ---- an ordinary, compatible deploy -------------------------------------------------------
+def verify_candidate():
+    """The candidate binary checks its own release as `install select` will, before the fence:
+    a release it would refuse stops the deploy with nothing live touched."""
+    checked = subprocess.run([str(program), 'install', 'verify', str(release)], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    if checked.returncode == 2 and 'unrecognized subcommand' in checked.stderr:
+        # A candidate built before `install verify` runs the same check in its `install select`:
+        # ask that, on a scratch installation that selects nothing live.
+        say('the candidate predates install verify: checking it with install select on a scratch installation')
+        with tempfile.TemporaryDirectory(prefix='sluice-verify-') as scratch:
+            scratch_env = dict(env, SLUICE_INSTALL_DIR=str(pathlib.Path(scratch) / 'install'))
+            for arguments in (['fence', 'verify ' + sha], ['select', str(release), str(home)]):
+                checked = subprocess.run([str(program), 'install', *arguments], env=scratch_env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+                if checked.returncode: break
+    if checked.returncode:
+        message = reply_error(checked).get('message')
+        log_deploy(verify='failed', error=message)
+        sys.exit('deploy: release %s does not verify: %s. Stopped before the fence: nothing live changed.' % (release.name, message))
+    say('verified: %s' % release.name)
+def release_sha(release_dir):
+    try: return manifest(release_dir)['git_sha'][:12]
+    except (FileNotFoundError, KeyError, json.JSONDecodeError): return pathlib.Path(release_dir).name
+def recovery(old):
+    """The commands that bring the previous release back by hand, as deploy would run them."""
+    sluice = shlex.quote(str(old / 'bin/sluice'))
+    services = json.loads((install / 'services.json').read_text()) if (install / 'services.json').exists() else {}
+    lines = ['export SLUICE_HOME=%s SLUICE_INSTALL_DIR=%s' % (shlex.quote(str(home)), shlex.quote(str(install)))]
+    for name, record in services.items():
+        lines.append('systemctl --user stop %s' % shlex.quote(record['unit']) if 'unit' in record else 'kill %d  # %s, if /proc/%d is still it' % (record['pid'], name, record['pid']))
+    lines.append('%s install select %s %s' % (sluice, shlex.quote(str(old)), shlex.quote(str(home))))
+    for name, arguments in service_commands().items():
+        if fixture: lines.append('setsid %s %s >> %s 2>&1 < /dev/null &' % (sluice, shlex.join(arguments), shlex.quote(str(install / (name + '.log')))))
+        else: lines.append(shlex.join(unit_command(old / 'bin/sluice', name, arguments)))
+    lines.append('%s doctor --json' % sluice)
+    lines.append('%s install unfence' % sluice)
+    return lines
+def dashboard_answers(seconds=60):
+    url = 'http://127.0.0.1:%s/' % os.environ.get('SLUICE_DEPLOY_PORT', '3065')
+    deadline = time.monotonic() + seconds
+    while (code := http_status(url)) != 200:
+        if time.monotonic() > deadline: raise RuntimeError('the dashboard answered %s on %s' % (code, url))
+        time.sleep(.5)
+def roll_back(previous, error):
+    """After a failure between the stop and the unfence: bring the previous selection's release
+    back under the same units, unfence with it and exit 3. A rollback that fails stays fenced
+    and prints the commands that finish it by hand."""
+    old = pathlib.Path(previous['release_path'])
+    old_program = old / 'bin/sluice'
+    say('deploy failed after the stop: %s; rolling back to %s' % (error, release_sha(old)))
+    try:
+        # Whatever this deploy started (and the previous records, stopped already) goes first.
+        started = json.loads((install / 'services.json').read_text()) if (install / 'services.json').exists() else {}
+        for record in started.values(): stop_service(record)
+        selected = json.loads((install / 'selection.json').read_text())
+        if pathlib.Path(selected['release_path']).resolve() != old.resolve():
+            control(old_program, 'select', str(old), str(home))
+        start_services(old_program, old)
+        unfence(old_program)
+        dashboard_answers()
+    except Exception as rollback_error:
+        log_deploy(outcome='rollback failed', error=str(error), rollback_error=str(rollback_error))
+        print('deploy: the rollback to %s failed: %s. The installation stays fenced (deploy %s). Repair the cause, then finish it by hand:' % (release_sha(old), str(rollback_error).rstrip('.'), sha[:12]), file=sys.stderr)
+        for line in recovery(old): print('  ' + line, file=sys.stderr)
+        sys.exit('deploy failed: %s' % error)
+    log_deploy(outcome='rolled back', to=old.name, error=str(error))
+    print('deploy rolled back to %s: %s' % (release_sha(old), error), file=sys.stderr, flush=True)
+    sys.exit(3)
 def deploy():
     current = home_schema()
     if current is not None and release_schema(release) != current:
         sys.exit('deploy: ' + incompatible(release_schema(release), 'release ' + release.name[:12]))
+    # Before the fence: the candidate must verify as `install select` will verify it.
+    verify_candidate()
     # Before the fence: the candidate must serve every release a live run is pinned to.
     if args.skip_compat is not None:
         if not args.skip_compat.strip(): sys.exit('--skip-compat needs a reason')
@@ -307,17 +378,25 @@ def deploy():
         log_deploy(compat='ok' if check.returncode == 0 else 'failed')
         if check.returncode:
             sys.exit('Deploy stopped before the fence: scripts/compat-check failed. Fix it, or pass --skip-compat "<reason>".')
-    # An exclusive fence waits only for shared admission/activation decisions. It
-    # does not wait for guardians. Errors after this point deliberately stay fenced.
+    # The release to come back to: the previous selection, when it serves this home.
+    previous = json.loads((install / 'selection.json').read_text()) if (install / 'selection.json').exists() else None
+    if previous and (pathlib.Path(previous['home_path']).resolve() != home or not (pathlib.Path(previous['release_path']) / 'bin/sluice').is_file()):
+        previous = None
+    # An exclusive fence waits only for shared admission/activation decisions. It does not
+    # wait for guardians. A failure stopping the old services stays fenced; a failure after
+    # the stop rolls back to the previous release when there is one, else stays fenced.
     control(program, 'fence', 'deploy ' + sha)
     stop_services()
-    control(program, 'select', str(release), str(home))
     try:
+        selected = subprocess.run([str(program), 'install', 'select', str(release), str(home)], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        if selected.returncode: raise RuntimeError('install select: %s' % reply_error(selected).get('message'))
         start_services(program, release)
         unfence(program)
-    except Exception:
-        print('Deploy failed; installation remains fenced. Inspect services.json before recovery.', file=sys.stderr)
-        raise
+    except Exception as error:
+        if previous is None:
+            print('Deploy failed; installation remains fenced and there is no previous selection to roll back to. Inspect services.json before recovery.', file=sys.stderr)
+            raise
+        roll_back(previous, error)
     prune_releases(release)
     print('deployed ' + str(release))
 
@@ -473,6 +552,8 @@ def cutover():
     old_program = old / 'bin/sluice'
     if release_schema(old) != current:
         sys.exit('deploy: the selected release %s is schema %d but the home is schema %d' % (old.name[:12], release_schema(old), current))
+    # Before the rehearsal, the drain and the fence: the candidate must verify as `install select` will.
+    verify_candidate()
     when = utc(deadline)
     reason = 'schema-%d cutover at %s: stopped at the deadline; retry it after the cutover' % (schema, when)
     stamp = deadline.astimezone(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
@@ -541,13 +622,7 @@ def cutover():
     say('fenced: schema-%d cutover' % schema)
     if not coordinator_listening():
         say('the old coordinator is not running: starting it in maintenance')
-        if fixture: record = start_process(old_program, ['coordinator', '--maintenance'], 'coordinator', old)
-        else:
-            unit = ('sluice-test-' if testing else 'sluice-') + hashlib.sha256(os.fsencode(install)).hexdigest()[:16] + '-coordinator'
-            subprocess.run(['systemd-run', '--user', '--quiet', '--collect', '--service-type=exec', '--property=Restart=no', '--unit', unit,
-                '--setenv=SLUICE_HOME=' + str(home), '--setenv=SLUICE_INSTALL_DIR=' + str(install), *(['--setenv=SLUICE_TEST=1'] if testing else []),
-                '--setenv=PATH=' + os.environ['PATH'], '--setenv=HOME=' + str(pathlib.Path.home()), '--', str(old_program), 'coordinator', '--maintenance'], check=True)
-            record = dict(unit=unit + '.service', release=str(old))
+        record = start_service(old_program, old, 'coordinator', service_commands()['coordinator'])
         services = json.loads((install / 'services.json').read_text()) if (install / 'services.json').exists() else {}
         services['coordinator'] = record
         publish('services.json', services)

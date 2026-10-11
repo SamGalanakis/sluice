@@ -644,6 +644,65 @@ fn ship_refuses_a_ref_whose_schema_differs_from_the_home_before_anything_moves()
     );
 }
 
+/// The push is done when the deploy runs, so a deploy that rolls back leaves main ahead of
+/// live: ship fails and says so, naming both.
+#[test]
+fn ship_reports_a_rolled_back_deploy_as_a_failure_with_main_ahead_of_live() {
+    let gate = support::Gate::new();
+    let prefix = selected_home(&gate);
+    let source = scratch_repo(gate.root.path(), SCHEMA);
+    let origin = gate.root.path().join("origin.git");
+    git(
+        gate.root.path(),
+        &["init", "-q", "--bare", origin.to_str().unwrap()],
+    );
+    git(
+        &source,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&source, &["push", "-q", "origin", "main"]);
+    // The change shipped: a deploy that rolls back to the release live before it.
+    executable::write(
+        source.join("scripts/deploy"),
+        "#!/bin/sh\necho 'deploy rolled back to 0123456789ab: install select: refused' >&2\nexit 3\n",
+    );
+    git(
+        &source,
+        &["commit", "-qam", "A change whose deploy rolls back."],
+    );
+    let head = git(&source, &["rev-parse", "HEAD"]);
+    let stubs = gate.root.path().join("stubs");
+    std::fs::create_dir_all(&stubs).unwrap();
+    executable::write(stubs.join("cargo"), "#!/bin/sh\nexit 0\n");
+    let output = gate
+        .command(&source.join("scripts/ship"), &["--prefix"])
+        .arg(&prefix)
+        .current_dir(&source)
+        // No live launcher on PATH: the scratch prefix's is the one ship asks.
+        .env("PATH", format!("{}:/usr/bin:/bin", stubs.display()))
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{}", text(&output));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "ship: deploy of {} rolled back to 0123456789ab: install select: refused. main is ahead of live",
+            &head[..12]
+        )),
+        "{}",
+        text(&output)
+    );
+    assert!(!stderr.contains("shipped "), "{}", text(&output));
+    // It was pushed all the same.
+    assert_eq!(
+        git(
+            gate.root.path(),
+            &["--git-dir", origin.to_str().unwrap(), "rev-parse", "main"]
+        ),
+        head
+    );
+}
+
 #[test]
 fn deploy_refuses_an_incompatible_commit_before_building_it() {
     let gate = support::Gate::new();
