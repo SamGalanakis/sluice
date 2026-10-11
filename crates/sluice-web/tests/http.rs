@@ -669,7 +669,7 @@ async fn a_dead_link_is_a_page_for_a_browser_and_json_for_a_client() {
     }
     fixture.writer.shutdown().await.unwrap();
 }
-/// Pages, styles and scripts go out compressed when the client takes it; every script module is
+/// Pages, styles and scripts go out compressed when the client takes it, a face as it is; every script module is
 /// reached by its fingerprinted URL (an import map for those a module imports by name) and kept
 /// for good, and any other asset URL revalidates to a bodiless 304.
 #[tokio::test]
@@ -724,6 +724,24 @@ async fn assets_are_compressed_versioned_and_revalidated() {
             "{path}"
         );
     }
+    // a face (woff2) is compressed already: it goes out as it is
+    let face = sluice_web::views::FONTS[0].names[0];
+    let response = get_with(
+        &fixture,
+        &format!("/static/{face}"),
+        &[("accept-encoding", "br")],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK, "{face}");
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "font/woff2",
+        "{face}"
+    );
+    assert!(
+        response.headers().get(header::CONTENT_ENCODING).is_none(),
+        "{face}"
+    );
     let plain = get_with(&fixture, "/static/logo.svg", &[]).await;
     assert_eq!(
         plain.headers()[header::CACHE_CONTROL],

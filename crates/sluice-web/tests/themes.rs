@@ -10,8 +10,8 @@
 //! them, a strip head stays over its rows, a phone's 44px targets stay 44px and no words sit in
 //! a display face under 19px in every theme, a sweep of none is the still line, the picker's
 //! thirty themes take one column on a phone and two from 900px with no name wrapped, a page
-//! fetches only its own theme's faces (the picker none, a page without script the cookie's), the
-//! first open takes Sluice Light or Dark from the system once and keeps it, and a pick applies
+//! fetches only its own theme's faces (the picker none, a page without script the cookie's) and
+//! each from the dashboard, the first open takes Sluice Light or Dark from the system once and keeps it, and a pick applies
 //! at once and is kept.
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
@@ -1076,10 +1076,14 @@ async fn chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
 /// any of its faces has been asked to load (with script or without; a face that could not be
 /// fetched counts, so this holds offline).
 const FACES: &str = "(() => { const asked = {}; for (const f of document.fonts) { const k = f.family.replace(/[\"']/g, ''); asked[k] = (asked[k] ?? false) || f.status !== 'unloaded'; } return asked; })()";
+/// Each face family the page has loaded, and every URL the page fetched that is not the
+/// dashboard's own.
+const LOADED: &str = "(() => { const loaded = {}; for (const f of document.fonts) { const k = f.family.replace(/[\"']/g, ''); loaded[k] = (loaded[k] ?? false) || f.status === 'loaded'; } return [loaded, performance.getEntriesByType('resource').map(e => e.name).filter(u => new URL(u).origin !== location.origin)]; })()";
 
 /// A page fetches only its own theme's faces: Sluice's two in Sluice, Empire Builder's in
 /// Empire Builder, never another family's; opening the picker (whose swatches carry no text)
-/// fetches none; and a page without script draws the cookie's theme in its own faces.
+/// fetches none; a page without script draws the cookie's theme in its own faces; and every face
+/// loads from the dashboard itself, the page asking no other host for anything.
 #[tokio::test(flavor = "multi_thread")]
 async fn chromium_a_page_fetches_only_its_themes_faces() {
     let f = Fixture::new().await;
@@ -1134,6 +1138,19 @@ async fn chromium_a_page_fetches_only_its_themes_faces() {
                         .unwrap();
                 }
                 let faces = asked(&mut browser);
+                let (loaded, elsewhere): (BTreeMap<String, bool>, Vec<String>) =
+                    serde_json::from_value(browser.eval(LOADED).unwrap()).unwrap();
+                assert!(
+                    elsewhere.is_empty(),
+                    "{theme} (script {script}) asks another host: {elsewhere:?}"
+                );
+                for face in own {
+                    assert_eq!(
+                        loaded.get(face),
+                        Some(&true),
+                        "{theme} (script {script}) loads {face} from the dashboard: {loaded:?}"
+                    );
+                }
                 for face in own {
                     assert_eq!(
                         faces.get(face),

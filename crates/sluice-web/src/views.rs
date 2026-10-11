@@ -62,6 +62,15 @@ impl fmt::Display for TrustedHtml {
 /// followed by each theme family's file in `assets/themes/`, joined by `build.rs`.
 pub const STYLESHEET: &str = include_str!(concat!(env!("OUT_DIR"), "/style.css"));
 
+/// The faces the stylesheet's `@font-face` rules use, vendored under `assets/fonts/` and served
+/// at `/static/fonts/<file>` (`build.rs` lists them from `assets/fonts/SHA256SUMS`).
+pub const FONTS: &[Asset] = include!(concat!(env!("OUT_DIR"), "/fonts.rs"));
+
+/// Every asset the dashboard serves: each page's, then the faces.
+pub fn served_assets() -> impl Iterator<Item = &'static Asset> {
+    PAGES.iter().flat_map(|page| (page)().assets).chain(FONTS)
+}
+
 /// A theme (DESIGN.md, Themes): one complete look, a palette mapped onto every role in one
 /// scheme, light or dark. Its id is `data-theme` on the page and the `sluice_theme` cookie:
 /// `<family>-light` or `<family>-dark`, the family naming its palette in the stylesheet, the
@@ -814,7 +823,7 @@ fn import_map() -> &'static str {
     static MAP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     MAP.get_or_init(|| {
         let mut imports = serde_json::Map::new();
-        for asset in PAGES.iter().flat_map(|page| (page)().assets) {
+        for asset in served_assets() {
             if asset.media_type == "text/javascript" {
                 for name in asset.names {
                     imports.insert(format!("/static/{name}"), asset_url(name).into());
@@ -857,7 +866,7 @@ pub fn render_nav(
 /// like (`streams::release`).
 pub fn assets_fingerprint() -> String {
     let mut all = String::new();
-    for registered in PAGES.iter().flat_map(|page| (page)().assets) {
+    for registered in served_assets() {
         for name in registered.names {
             all.push_str(name);
             all.push_str(
@@ -893,7 +902,7 @@ fn asset(name: &str) -> Option<&'static EmbeddedAsset> {
     ASSETS
         .get_or_init(|| {
             let mut assets = std::collections::BTreeMap::new();
-            for asset in PAGES.iter().flat_map(|page| (page)().assets) {
+            for asset in served_assets() {
                 let mut fingerprint = sluice_store::artifacts::fingerprint(asset.bytes);
                 fingerprint.truncate(16);
                 for name in asset.names {
@@ -921,7 +930,18 @@ async fn static_asset(
     Query(query): Query<AssetQuery>,
     headers: HeaderMap,
 ) -> Response {
-    match asset(&name) {
+    serve_asset(&name, &query, &headers)
+}
+/// A face (`/static/fonts/<file>`), served as any other asset.
+async fn static_font(
+    Path(name): Path<String>,
+    Query(query): Query<AssetQuery>,
+    headers: HeaderMap,
+) -> Response {
+    serve_asset(&format!("fonts/{name}"), &query, &headers)
+}
+fn serve_asset(name: &str, query: &AssetQuery, headers: &HeaderMap) -> Response {
+    match asset(name) {
         Some(asset) => {
             let etag = format!("\"{}\"", asset.fingerprint);
             let cache = if query.v.as_ref() == Some(&asset.fingerprint) {

@@ -2,7 +2,20 @@ Dashboard assets, compiled into the binary (each page module under `src/views/` 
 own) and served at `/static/<name>?v=<fingerprint>`: `style.css` (joined by `build.rs` with every
 theme family's file in `themes/`, one stylesheet), sluice's
 scripts (`components.js`, `sluice.js`, `nav.js`, `openui.js`, `board.js`), the logo and favicon, and the pinned
-third-party scripts (Datastar 1.0.4, OpenUI lang-core 0.3.0, zod 4.6.5).
+third-party scripts (Datastar 1.0.4, OpenUI lang-core 0.3.0, zod 4.6.5). OpenUI and zod are
+the ES-module bundles jsDelivr's `/npm/<package>@<version>/+esm` endpoint built; each keeps its
+header naming the bundler and the original file, less the CDN's own note.
+
+`fonts/` holds every face the stylesheet's `@font-face` rules use (Sluice's and each deep
+family's), served at `/static/fonts/<file>?v=<fingerprint>` with `Content-Type: font/woff2`
+and cached for good; a page downloads only the faces its theme sets text in. Each family's
+directory holds its woff2 files, exactly as fontsource 5.3.0 publishes them
+(`https://cdn.jsdelivr.net/npm/@fontsource/<family>@5.3.0/files/<file>`, or
+`@fontsource-variable/` for a `-wght-` file), and the package's `LICENSE` (the SIL Open Font
+License 1.1 for every family). `fonts/SHA256SUMS` records each file's sha256
+(`sha256sum -c SHA256SUMS` in `fonts/` checks them, as `tests/fonts.rs` does); `build.rs`
+reads it to list the faces and to version each `url(/static/fonts/<file>)` in the sheet with
+the file's fingerprint. A new face is a file here, its line in the manifest and its rule.
 
 `icons/` holds the dashboard's icons: Lucide (lucide-static 1.52.0), each SVG as published,
 embedded by `src/views/icons.rs` and inlined in pages, not served. `icons/LICENSE` is Lucide's

@@ -10,22 +10,22 @@
 /* its faces, the latin subset, each with a fallback of metric overrides (a local Times New
    Roman or Courier New sized to the face) so the swap to it does not move the page */
 @font-face { font-family: "Libre Caslon Display"; font-style: normal; font-display: swap; font-weight: 400;
-  src: url(https://cdn.jsdelivr.net/npm/@fontsource/libre-caslon-display@5.3.0/files/libre-caslon-display-latin-400-normal.woff2) format("woff2");
+  src: url(/static/fonts/libre-caslon-display-latin-400-normal.woff2) format("woff2");
   unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family: "Libre Caslon Text"; font-style: normal; font-display: swap; font-weight: 400;
-  src: url(https://cdn.jsdelivr.net/npm/@fontsource/libre-caslon-text@5.3.0/files/libre-caslon-text-latin-400-normal.woff2) format("woff2");
+  src: url(/static/fonts/libre-caslon-text-latin-400-normal.woff2) format("woff2");
   unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family: "Libre Caslon Text"; font-style: normal; font-display: swap; font-weight: 700;
-  src: url(https://cdn.jsdelivr.net/npm/@fontsource/libre-caslon-text@5.3.0/files/libre-caslon-text-latin-700-normal.woff2) format("woff2");
+  src: url(/static/fonts/libre-caslon-text-latin-700-normal.woff2) format("woff2");
   unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family: "Libre Caslon Text"; font-style: italic; font-display: swap; font-weight: 400;
-  src: url(https://cdn.jsdelivr.net/npm/@fontsource/libre-caslon-text@5.3.0/files/libre-caslon-text-latin-400-italic.woff2) format("woff2");
+  src: url(/static/fonts/libre-caslon-text-latin-400-italic.woff2) format("woff2");
   unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family: "Anonymous Pro"; font-style: normal; font-display: swap; font-weight: 400;
-  src: url(https://cdn.jsdelivr.net/npm/@fontsource/anonymous-pro@5.3.0/files/anonymous-pro-latin-400-normal.woff2) format("woff2");
+  src: url(/static/fonts/anonymous-pro-latin-400-normal.woff2) format("woff2");
   unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family: "Anonymous Pro"; font-style: normal; font-display: swap; font-weight: 700;
-  src: url(https://cdn.jsdelivr.net/npm/@fontsource/anonymous-pro@5.3.0/files/anonymous-pro-latin-700-normal.woff2) format("woff2");
+  src: url(/static/fonts/anonymous-pro-latin-700-normal.woff2) format("woff2");
   unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family: "Libre Caslon Display Fallback"; font-style: normal; font-weight: 100 900;
   src: local("Times New Roman"), local("TimesNewRomanPSMT"), local("Liberation Serif"), local("LiberationSerif"),

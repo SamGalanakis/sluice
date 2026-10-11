@@ -14,7 +14,7 @@ Audience and job: one owner supervising many agents, between other work, on a se
 a phone; within seconds, does anything need me and is the work moving; then drill into any unit
 or step. Proof and content: the project's own plan, recipes, runs, progress fields, messages.
 Constraints: server-rendered askama, Datastar patches, Rocket components that only behave; no
-client-rendered content; works without JS; fonts from cdn.jsdelivr.net only; the Americana
+client-rendered content; works without JS; fonts served by sluice itself; the Americana
 palette is binding (PRODUCT.md); fully generic (no project's vocabulary in view code).
 
 Chosen direction: Synthesis (owner, 2026-10-09). Memorable moment: the project's name set huge

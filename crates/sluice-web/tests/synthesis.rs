@@ -228,10 +228,9 @@ async fn the_frame_draws_the_page_head_and_the_row_under_it_and_the_gallery_ever
     );
     assert!(!home.contains("fontsource"), "{home}");
     let css = sluice_web::views::STYLESHEET;
-    assert!(css.contains("@fontsource-variable/schibsted-grotesk@5.3.0/files/schibsted-grotesk-latin-wght-normal.woff2"));
-    assert!(css.contains(
-        "@fontsource-variable/jetbrains-mono@5.3.0/files/jetbrains-mono-latin-wght-normal.woff2"
-    ));
+    // Sluice's own copies of the pinned fontsource files, served by the dashboard
+    assert!(css.contains("url(/static/fonts/schibsted-grotesk-latin-wght-normal.woff2?v="));
+    assert!(css.contains("url(/static/fonts/jetbrains-mono-latin-wght-normal.woff2?v="));
     assert!(!home.contains("archivo") && !home.contains("public-sans"));
     // the page's head on the paper under the slim bar, its sections in the row under it; the
     // live line only on a page with a stream

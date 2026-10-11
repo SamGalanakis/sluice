@@ -651,10 +651,12 @@ Sluice's: one family, **Schibsted Grotesk** (variable, 400 to 900) for display a
 **JetBrains Mono** for ids, durations, clock times and data only. Another theme sets its own
 faces (Themes, the deep tokens); its sizes stay these.
 
-**Loading.** Every theme's faces are `@font-face` rules in the one stylesheet, pointing at pinned
-fontsource files on cdn.jsdelivr.net (Sluice's `@fontsource-variable/schibsted-grotesk@5.3.0` and
-`@fontsource-variable/jetbrains-mono@5.3.0`, each subset fontsource ships; a family's own faces the
-latin subset), the only third-party requests a page makes. A browser fetches a face only when it
+**Loading.** Every theme's faces are `@font-face` rules in the one stylesheet, pointing at Sluice's
+own copies of pinned fontsource 5.3.0 files (Sluice's `@fontsource-variable/schibsted-grotesk` and
+`@fontsource-variable/jetbrains-mono`, each subset fontsource ships; a family's own faces the latin
+subset), vendored under `crates/sluice-web/assets/fonts/` with each family's licence and every
+file's sha256, and served at `/static/fonts/<file>?v=<fingerprint>` to be kept for good. A page
+asks no host but the dashboard for anything. A browser fetches a face only when it
 sets text in it, so a page downloads its own theme's faces and no other, a switch needs no new
 link, and a page without script gets the cookie's theme's faces. A family's face has a fallback
 face (a local Arial or Courier New with `size-adjust` and ascent and descent overrides measured

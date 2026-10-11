@@ -51,8 +51,8 @@ progress line and its typed outputs, with the one human decision point (the Inbo
   feedback) and cancelling a step, and the project settings (name, description, icon,
   resources, pause, archive, delete); each goes through the same commands as the MCP tools.
 - Server-rendered HTML; every page works without JavaScript; Datastar SSE streams patch only the
-  parts that changed. Every script is served by sluice itself (vendored); only the fonts come
-  from cdn.jsdelivr.net.
+  parts that changed. Every script and font is served by sluice itself (vendored); a page asks
+  no other host for anything.
 - Every value is untrusted and HTML-escaped.
 - Statuses come from one status table (`sluice_model::shown`): stored pending, running,
   succeeded, failed, stale, skipped, plus derived cancelled, stopping, finishing, quiet, paused,

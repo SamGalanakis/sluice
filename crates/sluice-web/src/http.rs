@@ -68,14 +68,16 @@ pub fn router(
         // encoder flushes whenever the stream waits, so each batch arrives whole and at once,
         // and brotli's window spans batches: a region sent again compresses to almost nothing.
         // quality 6: brotli's default (4) comes out larger than gzip's on the styles and
-        // scripts; at 6 it is smaller, and still fast enough for a large board page
+        // scripts; at 6 it is smaller, and still fast enough for a large board page. A face
+        // (woff2) is compressed already and goes out as it is
         .layer(
             tower_http::compression::CompressionLayer::new()
                 .quality(tower_http::CompressionLevel::Precise(6))
                 .compress_when(
                     SizeAbove::new(32)
                         .and(NotForContentType::GRPC)
-                        .and(NotForContentType::IMAGES),
+                        .and(NotForContentType::IMAGES)
+                        .and(NotForContentType::const_new("font/")),
                 ),
         )
 }
