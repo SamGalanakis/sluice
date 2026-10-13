@@ -53,18 +53,18 @@ Never `systemctl restart` a deploy-started transient unit; re-create it with `sy
 
 - `scripts/ship [REF] [--dry-run]` takes a branch that already passed `scripts/check` to a
   verified live deploy. From any worktree, with a clean tree, it rebases REF (default `HEAD`;
-  another ref is worked on in a temporary worktree) onto `origin/main`, builds, pushes to main
+  another ref is worked on in a temporary worktree) onto `origin/main`, runs the land check (below), pushes to main
   (fetching and rebasing again, up to `--retries`, when the push is not a fast-forward), runs
   `scripts/deploy origin/main` with the home `sluice install status` selects, and checks
   adoption: every run live before the deploy is still live under its unit or finished with a
   recorded result, the coordinator, serve and loop units are active, and the dashboard answers
   200 on `/` and a project page. It ends with one line: `shipped <sha> <subject> · deploy ok ·
   compat N releases ok · adopted M runs`. `--dry-run` prints each step and changes nothing.
-- Re-test rule: after a rebase, re-run `scripts/check` only when main's new commits changed a
-  file other than prose (`*.md`) that the branch also changed; otherwise a build (`cargo build
-  --workspace --all-targets --locked`, into cargo's configured target dir) is enough. A re-gate in
-  ship's temporary checkout borrows this checkout's `.venv` and `target/private-tmux`. A rebase conflict stops the ship: resolve
-  it, gate again and ship again.
+- Gate once. A branch passes `scripts/check` once, on its finished change, and never again
+  because main moved. Ship's land check runs on the rebased tree before every push: Clippy over
+  the whole workspace (every target, so every test compiles) and the fast suite. A rebase
+  conflict stops the ship: resolve it, run the tests covering the code you resolved, and ship
+  again. A ship's temporary checkout borrows this checkout's `.venv` and `target/private-tmux`.
 - `scripts/compat-check [--release DIR]` proves a candidate release (default: the newest under
   the prefix, i.e. the one `scripts/build-release` just built) can serve every release a live
   run is pinned to. It copies the home's `sluice.db` (SQLite backup API, the live file opened

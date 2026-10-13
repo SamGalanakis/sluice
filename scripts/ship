@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Ship a gated branch: rebase onto origin/main, build (or re-test), push to main, deploy that
+# Ship a branch: rebase onto origin/main, lint and run the fast suite, push to main, deploy that
 # commit to the selected home, and check that the deploy adopted every live run.
 set -euo pipefail
 script_repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
 exec python3 - "$script_repo" "$@" <<'PY'
 import argparse, json, os, pathlib, re, shutil, sqlite3, subprocess, sys, tempfile, time, urllib.request
 parser = argparse.ArgumentParser(prog='scripts/ship', description=
-    'Rebase REF onto origin/main, build it (re-test when the rebase brought in changes to files '
-    'the branch touched), push it to main, deploy origin/main to the selected home and check '
+    'Rebase REF onto origin/main, lint the workspace and run the fast suite, push it to main, deploy origin/main to the selected home and check '
     'that every live run was adopted.')
 parser.add_argument('ref', nargs='?', default='HEAD', help='what to ship (default HEAD of the current worktree)')
 parser.add_argument('--dry-run', action='store_true', help='print each step; rebase, build, push and deploy nothing')
@@ -92,7 +91,6 @@ try:
     refuse_incompatible(args.ref, selected())  # an installation that cannot be deployed to, or an incompatible ref, stops this before main moves
     git('fetch', '--quiet', 'origin', '+refs/heads/main:refs/remotes/origin/main', cwd=work)
     head = git('rev-parse', args.ref if dry else 'HEAD', cwd=work)
-    gated_upstream = None  # the main the branch's tree was last checked against
     for attempt in range(1, args.retries + 1):
         upstream = git('rev-parse', 'origin/main', cwd=work)
         base = git('merge-base', head, upstream, cwd=work)
@@ -100,37 +98,28 @@ try:
             say('%s is already on origin/main; nothing to push' % head[:12])
             head = upstream
             break
-        # Tests again only when main brought changes to files the branch touched. The branch was
-        # gated against its base; after a failed push, against the main it last rebased onto.
-        since = gated_upstream or base
-        ours = set(git('diff', '--name-only', base, head, cwd=work).split())
-        theirs = set(git('diff', '--name-only', since, upstream, cwd=work).split()) if since != upstream else set()
-        # Prose (*.md) cannot change what the tests see, so overlapping docs alone do not re-gate.
-        overlap = sorted(f for f in ours & theirs if not f.endswith('.md'))
         if base != upstream:
-            say('rebase %d commit(s) onto origin/main %s (main changed %d file(s) since %s)' % (
-                int(git('rev-list', '--count', base + '..' + head, cwd=work)), upstream[:12], len(theirs), since[:12]))
+            say('rebase %d commit(s) onto origin/main %s' % (
+                int(git('rev-list', '--count', base + '..' + head, cwd=work)), upstream[:12]))
             if not dry:
                 rebase = subprocess.run(['git', '-C', str(work), 'rebase', '--quiet', upstream], capture_output=True, text=True)
                 if rebase.returncode:
                     subprocess.run(['git', '-C', str(work), 'rebase', '--abort'], capture_output=True)
                     fail('rebase onto %s conflicts; resolve it by hand, re-gate and ship again:\n%s' % (upstream[:12], rebase.stdout + rebase.stderr))
                 head = git('rev-parse', 'HEAD', cwd=work)
-        if overlap:
-            say('main changed %d file(s) this branch also touched (%s): re-running the gate' % (len(overlap), ', '.join(overlap[:5]) + (' ...' if len(overlap) > 5 else '')))
-            if temporary is not None and not dry:
-                # A temporary checkout lacks the per-checkout setup the engine gates use; share
-                # this repository's (AGENTS.md: uv sync and build-private-tmux once per checkout).
-                for setup in ('.venv', 'target/private-tmux'):
-                    source, link = script_repo / setup, work / setup
-                    if source.exists() and not link.exists():
-                        link.parent.mkdir(parents=True, exist_ok=True)
-                        link.symlink_to(source)
-            run([work / 'scripts/check'], cwd=work)
-        else:
-            say('no overlap with main\'s changes: build only')
-            run(['cargo', 'build', '--workspace', '--all-targets', '--locked'], cwd=work)
-        gated_upstream = upstream
+        # The land check, on the rebased tree before every push: the whole workspace compiles and
+        # lints clean (every crate, example and test target) and the fast suite passes. It never
+        # runs the slow tier; that is `scripts/check --slow`, for release, deploy and schema work.
+        if temporary is not None and not dry:
+            # A temporary checkout lacks the per-checkout setup the engine tests use; share this
+            # repository's (AGENTS.md: uv sync and build-private-tmux once per checkout).
+            for setup in ('.venv', 'target/private-tmux'):
+                source, link = script_repo / setup, work / setup
+                if source.exists() and not link.exists():
+                    link.parent.mkdir(parents=True, exist_ok=True)
+                    link.symlink_to(source)
+        run(['cargo', 'clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings'], cwd=work)
+        run(['cargo', 'nextest', 'run', '--workspace', '--all-targets', '--locked'], cwd=work)
         if not dry: refuse_incompatible(head, selected())
         say('$ git push origin HEAD:refs/heads/main  (%s)' % (head[:12] if not dry else 'the rebased ' + args.ref))
         if dry: break
