@@ -3602,8 +3602,15 @@
         "format": "int64"
       },
       "owner": {
-        "description": "Read as the owner (the dashboard's identity) instead of the orchestrator.",
+        "description": "Read as the owner (the dashboard's identity) instead of the caller.",
         "type": "boolean"
+      },
+      "me": {
+        "description": "The reading session, `@name`: the inbox and history are its own. Without one (and\nwithout `owner`) they are what was addressed to `orchestrator` before sessions named\nthemselves.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "additionalProperties": false,
@@ -3987,6 +3994,43 @@
       },
       "questions_only": {
         "type": "boolean"
+      },
+      "me": {
+        "description": "The waiting session, `@name`: its scope defaults to `mine`, and each wait marks it as\nreading.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "scope": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Scope"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "units": {
+        "description": "Only these units' records (names or `*`/`?` patterns), with messages to or from you.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        }
+      },
+      "tags": {
+        "description": "Only the records of units carrying one of these tags, with messages to or from you.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        }
       }
     },
     "additionalProperties": false,
@@ -4123,6 +4167,14 @@
           "stale",
           "skipped"
         ]
+      },
+      "Scope": {
+        "description": "Whose records a wait reads (`next`, `log_wait`): a named session's own (`mine`, its\ndefault) or everyone's (`all`, an unnamed caller's only scope).",
+        "type": "string",
+        "enum": [
+          "mine",
+          "all"
+        ]
       }
     }
   },
@@ -4138,7 +4190,11 @@
         }
       },
       "since_seq": {
-        "type": "integer",
+        "description": "Records after this seq. Left out, a named session resumes after the last batch it was\ngiven (its own cursor) and an unnamed one starts at the top of the logs.",
+        "type": [
+          "integer",
+          "null"
+        ],
         "format": "int64"
       },
       "me": {
@@ -4147,6 +4203,37 @@
           "string",
           "null"
         ]
+      },
+      "scope": {
+        "description": "`mine` (a named session's default): its own units' records (the fallback's are the\nunowned units'), messages to or from it and the projects' own records; `all` (an\nunnamed caller's only scope): everyone's.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Scope"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "units": {
+        "description": "Only these units' records (names or `*`/`?` patterns), with messages to or from you.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        }
+      },
+      "tags": {
+        "description": "Only the records of units carrying one of these tags, with messages to or from you.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        }
       },
       "timeout_seconds": {
         "type": "integer",
@@ -4173,7 +4260,6 @@
     "additionalProperties": false,
     "required": [
       "projects",
-      "since_seq",
       "timeout_seconds",
       "all",
       "settle_seconds",
@@ -4227,6 +4313,14 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "Scope": {
+        "description": "Whose records a wait reads (`next`, `log_wait`): a named session's own (`mine`, its\ndefault) or everyone's (`all`, an unnamed caller's only scope).",
+        "type": "string",
+        "enum": [
+          "mine",
+          "all"
+        ]
       },
       "Settles": {
         "type": "string",
@@ -10537,6 +10631,40 @@
             "properties": {
               "command": {
                 "type": "string",
+                "const": "unit_claim"
+              },
+              "args": {
+                "$ref": "#/$defs/UnitClaim"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "unit_release"
+              },
+              "args": {
+                "$ref": "#/$defs/UnitRelease"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
                 "const": "plan_prune"
               },
               "args": {
@@ -12915,6 +13043,140 @@
           "edit"
         ]
       },
+      "UnitClaim": {
+        "description": "`unit_claim` (SPEC §8.1): the calling session takes the selected units, in one write. Select\nby `unit`, `units` (names or `*`/`?` patterns) and `tags` (a unit carrying any of them);\ntogether they select every unit any of them names.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "units": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "owned_by": {
+            "description": "Only the selected units this owner holds now (`@session`, `owner` or `unowned`); alone,\nevery unit it holds. It is also the owner expected, unless `expected_owner` says.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_owner": {
+            "description": "The owner each selected unit must have now (`@session`, `owner`, or `unowned`): a\ncompare-and-set; any other owner is a `conflict` and nothing changes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "force": {
+            "description": "Take a unit the person (`owner`) holds, or one whose owner is reading.",
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "me": {
+            "description": "The claiming session, `@name`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project"
+        ]
+      },
+      "UnitRelease": {
+        "description": "`unit_release` (SPEC §8.1): the calling session hands the selected units it owns to `to`\n(`@session` or `owner`), or leaves them unowned, so the project's fallback answers them.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "units": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "owned_by": {
+            "description": "Only the selected units this owner holds now (`@session`, `owner` or `unowned`); alone,\nevery unit it holds.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "force": {
+            "description": "Release units another session (or the person) owns.",
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "me": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project"
+        ]
+      },
       "PlanPrune": {
         "type": "object",
         "properties": {
@@ -13552,8 +13814,15 @@
             "format": "int64"
           },
           "owner": {
-            "description": "Read as the owner (the dashboard's identity) instead of the orchestrator.",
+            "description": "Read as the owner (the dashboard's identity) instead of the caller.",
             "type": "boolean"
+          },
+          "me": {
+            "description": "The reading session, `@name`: the inbox and history are its own. Without one (and\nwithout `owner`) they are what was addressed to `orchestrator` before sessions named\nthemselves.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false,
@@ -13743,6 +14012,43 @@
           },
           "questions_only": {
             "type": "boolean"
+          },
+          "me": {
+            "description": "The waiting session, `@name`: its scope defaults to `mine`, and each wait marks it as\nreading.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Scope"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "units": {
+            "description": "Only these units' records (names or `*`/`?` patterns), with messages to or from you.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "description": "Only the records of units carrying one of these tags, with messages to or from you.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false,
@@ -13750,6 +14056,14 @@
           "read",
           "timeout_seconds",
           "questions_only"
+        ]
+      },
+      "Scope": {
+        "description": "Whose records a wait reads (`next`, `log_wait`): a named session's own (`mine`, its\ndefault) or everyone's (`all`, an unnamed caller's only scope).",
+        "type": "string",
+        "enum": [
+          "mine",
+          "all"
         ]
       },
       "StepWait": {
@@ -13820,7 +14134,11 @@
             }
           },
           "since_seq": {
-            "type": "integer",
+            "description": "Records after this seq. Left out, a named session resumes after the last batch it was\ngiven (its own cursor) and an unnamed one starts at the top of the logs.",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64"
           },
           "me": {
@@ -13829,6 +14147,37 @@
               "string",
               "null"
             ]
+          },
+          "scope": {
+            "description": "`mine` (a named session's default): its own units' records (the fallback's are the\nunowned units'), messages to or from it and the projects' own records; `all` (an\nunnamed caller's only scope): everyone's.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Scope"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "units": {
+            "description": "Only these units' records (names or `*`/`?` patterns), with messages to or from you.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "description": "Only the records of units carrying one of these tags, with messages to or from you.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           },
           "timeout_seconds": {
             "type": "integer",
@@ -13855,7 +14204,6 @@
         "additionalProperties": false,
         "required": [
           "projects",
-          "since_seq",
           "timeout_seconds",
           "all",
           "settle_seconds",
@@ -28018,6 +28366,40 @@
         "properties": {
           "command": {
             "type": "string",
+            "const": "unit_claim"
+          },
+          "args": {
+            "$ref": "#/$defs/UnitClaim"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "unit_release"
+          },
+          "args": {
+            "$ref": "#/$defs/UnitRelease"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
             "const": "plan_prune"
           },
           "args": {
@@ -30396,6 +30778,140 @@
           "edit"
         ]
       },
+      "UnitClaim": {
+        "description": "`unit_claim` (SPEC §8.1): the calling session takes the selected units, in one write. Select\nby `unit`, `units` (names or `*`/`?` patterns) and `tags` (a unit carrying any of them);\ntogether they select every unit any of them names.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "units": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "owned_by": {
+            "description": "Only the selected units this owner holds now (`@session`, `owner` or `unowned`); alone,\nevery unit it holds. It is also the owner expected, unless `expected_owner` says.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_owner": {
+            "description": "The owner each selected unit must have now (`@session`, `owner`, or `unowned`): a\ncompare-and-set; any other owner is a `conflict` and nothing changes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "force": {
+            "description": "Take a unit the person (`owner`) holds, or one whose owner is reading.",
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "me": {
+            "description": "The claiming session, `@name`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project"
+        ]
+      },
+      "UnitRelease": {
+        "description": "`unit_release` (SPEC §8.1): the calling session hands the selected units it owns to `to`\n(`@session` or `owner`), or leaves them unowned, so the project's fallback answers them.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "units": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "owned_by": {
+            "description": "Only the selected units this owner holds now (`@session`, `owner` or `unowned`); alone,\nevery unit it holds.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "force": {
+            "description": "Release units another session (or the person) owns.",
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "me": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project"
+        ]
+      },
       "PlanPrune": {
         "type": "object",
         "properties": {
@@ -31033,8 +31549,15 @@
             "format": "int64"
           },
           "owner": {
-            "description": "Read as the owner (the dashboard's identity) instead of the orchestrator.",
+            "description": "Read as the owner (the dashboard's identity) instead of the caller.",
             "type": "boolean"
+          },
+          "me": {
+            "description": "The reading session, `@name`: the inbox and history are its own. Without one (and\nwithout `owner`) they are what was addressed to `orchestrator` before sessions named\nthemselves.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false,
@@ -31224,6 +31747,43 @@
           },
           "questions_only": {
             "type": "boolean"
+          },
+          "me": {
+            "description": "The waiting session, `@name`: its scope defaults to `mine`, and each wait marks it as\nreading.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Scope"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "units": {
+            "description": "Only these units' records (names or `*`/`?` patterns), with messages to or from you.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "description": "Only the records of units carrying one of these tags, with messages to or from you.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false,
@@ -31231,6 +31791,14 @@
           "read",
           "timeout_seconds",
           "questions_only"
+        ]
+      },
+      "Scope": {
+        "description": "Whose records a wait reads (`next`, `log_wait`): a named session's own (`mine`, its\ndefault) or everyone's (`all`, an unnamed caller's only scope).",
+        "type": "string",
+        "enum": [
+          "mine",
+          "all"
         ]
       },
       "StepWait": {
@@ -31301,7 +31869,11 @@
             }
           },
           "since_seq": {
-            "type": "integer",
+            "description": "Records after this seq. Left out, a named session resumes after the last batch it was\ngiven (its own cursor) and an unnamed one starts at the top of the logs.",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64"
           },
           "me": {
@@ -31310,6 +31882,37 @@
               "string",
               "null"
             ]
+          },
+          "scope": {
+            "description": "`mine` (a named session's default): its own units' records (the fallback's are the\nunowned units'), messages to or from it and the projects' own records; `all` (an\nunnamed caller's only scope): everyone's.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Scope"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "units": {
+            "description": "Only these units' records (names or `*`/`?` patterns), with messages to or from you.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "description": "Only the records of units carrying one of these tags, with messages to or from you.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           },
           "timeout_seconds": {
             "type": "integer",
@@ -31336,7 +31939,6 @@
         "additionalProperties": false,
         "required": [
           "projects",
-          "since_seq",
           "timeout_seconds",
           "all",
           "settle_seconds",

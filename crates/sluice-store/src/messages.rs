@@ -1155,8 +1155,10 @@ pub fn conversation(sql: &Connection, project: ProjectId, step: &str) -> Result<
 }
 
 /// The caller's inbox: its open questions lead, followed by its unread notes grouped
-/// by thread, unread by `identity`'s read watermarks. History is every message in
-/// any conversation `identity` took part in.
+/// by thread, unread by `identity`'s read watermarks. A session's inbox also holds the open
+/// questions sent to the retired `orchestrator` before sessions named themselves (they are
+/// any session's to answer). History is every message in any conversation `identity` took
+/// part in.
 pub fn messages(
     sql: &Connection,
     project: ProjectId,
@@ -1172,8 +1174,13 @@ pub fn messages(
         return Err(invalid("message cursor must be nonnegative"));
     }
     let open = "needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL";
+    let legacy = if identity::is_session(identity) {
+        format!(" OR (\"to\"='{LEGACY_ORCHESTRATOR}' AND {open})")
+    } else {
+        String::new()
+    };
     let condition=match view {
-        MessageView::Inbox => format!("\"to\"=?4 AND (({open}) OR (needs_reply=0 AND id>coalesce((SELECT cursor FROM readers r WHERE r.project_id=messages.project_id AND r.identity=?4 AND r.stream='owner' AND r.thread=messages.thread),0)))"),
+        MessageView::Inbox => format!("(\"to\"=?4 AND (({open}) OR (needs_reply=0 AND id>coalesce((SELECT cursor FROM readers r WHERE r.project_id=messages.project_id AND r.identity=?4 AND r.stream='owner' AND r.thread=messages.thread),0)))){legacy}"),
         MessageView::Questions=>open.into(),
         MessageView::History=>"thread IN (SELECT thread FROM messages WHERE project_id=?1 AND (\"to\"=?4 OR \"from\"=?4))".into(),
         MessageView::Thread=>"1".into(),

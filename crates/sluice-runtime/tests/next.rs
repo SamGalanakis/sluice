@@ -202,9 +202,10 @@ async fn owner_answer_to_worker_wakes_and_notes_and_own_questions_do_not() {
     .await;
     post(&w, p, "decision", "worker", Some("owner"), false, None).await;
     post(&w, p, "my own question", "@lead", None, true, None).await;
-    // The session @lead waits: its own question does not wake it.
+    // The session @lead waits on everyone's (scope all): its own question does not wake it.
     let options = |p| NextOptions {
         me: Some("@lead".into()),
+        scope: Some(sluice_model::commands::Scope::All),
         ..options(p)
     };
     let silent = next(&w, &r, options(p)).await.unwrap();
@@ -243,7 +244,7 @@ async fn notes_are_messages_first_and_whole_and_cursor_stops_at_first_wake() {
     let batch = next(&w, &r, options(p)).await.unwrap();
     assert_eq!(batch.last_seq, first.seq);
     assert_eq!(batch.notes.len(), 1);
-    let text = render(&batch, Settles::None, 1, false).unwrap();
+    let text = render(&batch, Settles::None, 1, false, &Cancels::default()).unwrap();
     assert!(text.starts_with("SAY"));
     assert!(text.contains("all\n  whole\n  lines"));
     assert!(!text.contains("question"));
@@ -302,7 +303,7 @@ async fn failures_stale_and_skipped_wake_success_alone_does_not() {
         assert_eq!(batch.timed_out, to == StepStatus::Succeeded);
         if to == StepStatus::Failed {
             assert!(
-                line(&batch.records[0], Settles::Full, 600)
+                line(&batch.records[0], Settles::Full, 600, &Cancels::default())
                     .unwrap()
                     .ends_with("last boom")
             );
@@ -549,16 +550,19 @@ fn compact_rendering_modes_keep_json_whole_and_unicode_cut_safe() {
         last_seq: RecordSeq(3),
         timed_out: false,
     };
-    let short = render(&result, Settles::Short, 600, false).unwrap();
+    let short = render(&result, Settles::Short, 600, false, &Cancels::default()).unwrap();
     assert!(short.contains("work.summary: résumé"));
     assert!(short.contains("(+ work.evidence, work.items:"));
-    let none = render(&result, Settles::None, 600, false).unwrap();
-    assert_eq!(none, "UNIT u settled: work succeeded\nseq 3\n");
-    let full = render(&result, Settles::Full, 3, false).unwrap();
+    let none = render(&result, Settles::None, 600, false, &Cancels::default()).unwrap();
+    assert_eq!(
+        none,
+        "UNIT u settled · succeeded: work succeeded\n\nseq 3\n"
+    );
+    let full = render(&result, Settles::Full, 3, false, &Cancels::default()).unwrap();
     assert!(full.contains("rés…"));
-    let json = render(&result, Settles::None, 1, true).unwrap();
+    let json = render(&result, Settles::None, 1, true, &Cancels::default()).unwrap();
     assert!(json.contains(&"x".repeat(100)));
-    assert!(render(&result, Settles::Full, 0, false).is_err());
+    assert!(render(&result, Settles::Full, 0, false, &Cancels::default()).is_err());
 }
 #[test]
 fn cursor_files_roundtrip_and_invalid_files_fail() {

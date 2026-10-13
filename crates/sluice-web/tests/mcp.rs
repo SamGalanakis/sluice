@@ -79,6 +79,8 @@ fn every_v2_tool_has_a_shared_strict_schema() {
         "recipe_list",
         "unit_add",
         "unit_tag",
+        "unit_claim",
+        "unit_release",
         "edge_add",
         "edge_remove",
         "step_update",
@@ -519,7 +521,7 @@ fn client_config() -> ClientConfig {
 }
 async fn exercise(client: &rmcp::service::RunningService<rmcp::RoleClient, ClientConfig>) {
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 56);
+    assert_eq!(tools.len(), 58);
     let result = client
         .call_tool(CallToolRequestParams::new("projects_list"))
         .await
@@ -721,7 +723,7 @@ fn decimal_strings_are_taken_for_integer_arguments() {
     };
     assert_eq!(
         (next.since_seq, next.timeout_seconds),
-        (RecordSeq(7), mcp::WAIT_CAP)
+        (Some(RecordSeq(7)), mcp::WAIT_CAP)
     );
     let Ok(CommandRequest::StepAdd(add)) = decode(
         "step_add",

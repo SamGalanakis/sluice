@@ -135,9 +135,15 @@ async fn kinds_threads_and_from_now_filter_stream_without_notification_race() {
     let got = waiter.await.unwrap().unwrap();
     assert_eq!(got.records.len(), 1);
     assert!(
-        render(&got, sluice_model::commands::Settles::Full, 600, true)
-            .unwrap()
-            .contains("after")
+        render(
+            &got,
+            sluice_model::commands::Settles::Full,
+            600,
+            true,
+            &Cancels::default()
+        )
+        .unwrap()
+        .contains("after")
     );
     w.shutdown().await.unwrap();
 }

@@ -1031,6 +1031,16 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
             json!({"unit":"pre","add":["tag"],"remove":[],"edit":edit}),
         ),
         (
+            "UnitClaim",
+            "unit_claim",
+            json!({"unit":"pre","me":"@orch","reason":"test"}),
+        ),
+        (
+            "UnitRelease",
+            "unit_release",
+            json!({"unit":"pre","me":"@orch","reason":"test"}),
+        ),
+        (
             "PlanPrune",
             "plan_prune",
             json!({"older_than_seconds":0,"edit":edit}),
@@ -1212,6 +1222,8 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
                 | "StepRemove"
                 | "StepPause"
                 | "UnitTag"
+                | "UnitClaim"
+                | "UnitRelease"
                 | "PlanPrune"
                 | "PlanSetInput"
                 | "StepSetInput"
@@ -1325,7 +1337,7 @@ async fn message_records_in_log_read_and_next_over_socket() {
         panic!("records")
     };
     assert_eq!(page.records[0].seq.0, id.0);
-    let CommandReply::Next(next)=f.client.command(request("next",json!({"projects":[f.selector()],"since_seq":id.0-1,"me":"@lead","timeout_seconds":0,"all":true,"settle_seconds":0,"settle_max_seconds":0,"settles":"none"}))).await.unwrap() else {panic!("next")};
+    let CommandReply::Next(next)=f.client.command(request("next",json!({"projects":[f.selector()],"since_seq":id.0-1,"me":"@lead","scope":"all","timeout_seconds":0,"all":true,"settle_seconds":0,"settle_max_seconds":0,"settles":"none"}))).await.unwrap() else {panic!("next")};
     assert_eq!(next.records[0].seq.0, id.0);
     f.close().await;
 }

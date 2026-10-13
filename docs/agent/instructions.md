@@ -13,7 +13,11 @@ or `-`; for example `@lash-f4`) on your first call. It binds this MCP session: e
 speaks, edits and waits as you, so the plan's history and the messages say which session did
 what (from a shell, set `SLUICE_ME=@lash-f4`). Without a name you may read, but `ask`, `say` and
 `reply` are refused. `owner` is the person, and `orchestrator` is no longer anyone's name. A
-unit you add is yours: its workers' questions come to you (`docs("threads")`, Who you are).
+unit you add is yours: its workers' questions come to you, and `next` and `log_wait` show you
+your own units and messages (`scope="all"` for everyone's). Take over a unit with
+`unit_claim(project, unit)` (a stopped session's units: `unit_claim(project,
+owned_by="@old-name")`), hand one on
+with `unit_release(project, unit, to="@peer")` (`docs("threads")`, Who you are).
 
 Read the unit or steps you need with `unit_get`, `step_get` or `plan_read`. Use the typed tools for single changes and `plan_edit` for an atomic batch. Pass `rev` when a change depends on an earlier read. `plan_get` exports the whole plan. A preview describes the edit's affected work; ask for a full dry run explicitly. An edit refused `busy` is retried as is.
 
@@ -46,8 +50,9 @@ watcher. `step_wait(project, steps or tags, until="succeeded"|"settled"|{"any_of
 blocks until steps get there; `log_wait` with `kinds`, `statuses` and `recipients` blocks until
 a matching record (`log_wait(project, since_seq, kinds=["step.status", "message"],
 statuses=["failed", "stale"], recipients=["@lash-f4"])` wakes only on failures, stale steps
-and messages to you, `@lash-f4`); `next` blocks across projects, waking on questions to you.
-See `docs("threads")`.
+and messages to you, `@lash-f4`); `next` blocks across projects, waking on your units' settles
+and failures and the questions to you, and without `since_seq` resumes where your last batch
+ended. See `docs("threads")`.
 
 Refs: a plan input is `name`; a step output is `step/output` (add `.field` or `.0` to reach
 inside). Every edit is type-checked; errors name the exact path to fix.

@@ -336,3 +336,130 @@ fn a_new_unit_belongs_to_its_editor_and_the_export_never_shows_it() {
     let exported = serde_json::to_value(&plan.plan).unwrap();
     assert_eq!(exported["steps"]["lane-a-work"], spec("lane-a"));
 }
+
+/// `sluice next` as a named session, from the shell: its own units only, resuming where its
+/// last batch ended (no cursor file), its output ending with the cursor after a blank line.
+fn next_text(home: &Path, me: &str) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_sluice"))
+        .env("SLUICE_HOME", home)
+        .env_remove("SLUICE_RUN_ID")
+        .env("SLUICE_ME", me)
+        .args(["next", "-p", "p", "--timeout", "0", "--settle", "0"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// Units change hands through the tools (SPEC §8.1, "Claim and release"): an unnamed claim is
+/// refused; a session takes an unowned unit, a reading owner's unit only by compare-and-set,
+/// and hands it on; each handoff leaves a note in the inbox of the session it concerns, whose
+/// own inbox it is; and each session's `next` shows its own units' records, resuming from its
+/// own position.
+#[test]
+fn units_change_hands_through_the_tools() {
+    let home = ScratchHome::new().unwrap();
+    let home = home.path();
+    project(home);
+    for me in ["@lead", "@peer"] {
+        ok(tool(
+            home,
+            Some(me),
+            &["say", r#"{"project":"p","to":"q","body":"hello"}"#],
+        ));
+    }
+    let (kind, message) = refused(tool(
+        home,
+        None,
+        &["unit_claim", r#"{"project":"p","unit":"q"}"#],
+    ));
+    assert_eq!(kind, "invalid");
+    assert!(message.contains("name this session"), "{message}");
+    let took = ok(tool(
+        home,
+        Some("@lead"),
+        &[
+            "unit_claim",
+            r#"{"project":"p","unit":"q","reason":"mine now"}"#,
+        ],
+    ));
+    assert_eq!(
+        took["units"],
+        json!([{"unit":"q","from":null,"to":"@lead"}])
+    );
+    assert_eq!(took["notices"].as_array().unwrap().len(), 1);
+    // @lead waits (and so is reading): @peer's plain claim is a conflict naming it.
+    assert!(next_text(home, "@lead").starts_with("timeout seq "));
+    let (kind, message) = refused(tool(
+        home,
+        Some("@peer"),
+        &["unit_claim", r#"{"project":"p","unit":"q"}"#],
+    ));
+    assert_eq!(kind, "conflict");
+    assert!(
+        message.contains("unit q is owned by @lead, which is reading"),
+        "{message}"
+    );
+    ok(tool(
+        home,
+        Some("@peer"),
+        &[
+            "unit_claim",
+            r#"{"project":"p","units":"q*","expected_owner":"@lead","reason":"taking over"}"#,
+        ],
+    ));
+    // The note is in @lead's own inbox, and not in @peer's.
+    let inbox = |me: &str| {
+        ok(tool(
+            home,
+            Some(me),
+            &["messages", r#"{"project":"p","view":"inbox"}"#],
+        ))["messages"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    let lead = inbox("@lead");
+    let note = lead
+        .iter()
+        .find(|m| m["from"] == "sluice")
+        .unwrap_or_else(|| panic!("{lead:?}"));
+    assert!(
+        note["body"]
+            .as_str()
+            .unwrap()
+            .starts_with("@peer claimed unit q from @lead (taking over)."),
+        "{note}"
+    );
+    assert_eq!(note["data"]["unit_owner"]["units"][0]["to"], "@peer");
+    assert!(inbox("@peer").iter().all(|m| m["from"] != "sluice"));
+    // @peer hands it back; the step's failure is now @lead's to see, not @peer's.
+    ok(tool(
+        home,
+        Some("@peer"),
+        &["unit_release", r#"{"project":"p","unit":"q","to":"@lead"}"#],
+    ));
+    assert!(next_text(home, "@peer").starts_with("timeout seq "));
+    ok(tool(
+        home,
+        Some("@lead"),
+        &[
+            "step_cancel",
+            r#"{"project":"p","steps":"q","reason":"done elsewhere"}"#,
+        ],
+    ));
+    let lead = next_text(home, "@lead");
+    assert!(lead.contains("\n\nseq "), "{lead}");
+    assert!(
+        lead.lines()
+            .any(|l| l.starts_with("STEP q pending -> failed")),
+        "{lead}"
+    );
+    // @peer's own position: it resumes after its last batch and sees nothing of q's.
+    let peer = next_text(home, "@peer");
+    assert!(!peer.contains("STEP q"), "{peer}");
+}

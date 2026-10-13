@@ -317,6 +317,13 @@ async fn tool_descriptions_name_the_keys_their_replies_have() {
         json!({"project":"p","view":"thread","thread":"step-work"}),
     )
     .await;
+    f.check("unit_claim", json!({"project":"p","unit":"a","me":"@orch"}))
+        .await;
+    f.check(
+        "unit_release",
+        json!({"project":"p","unit":"a","me":"@orch"}),
+    )
+    .await;
     // Submitting ends the run's agent, so it comes after the messages to it.
     f.check(
         "step_submit",

@@ -13,17 +13,23 @@
 //! - **Routing.** A run's message with no recipient (or the retired `orchestrator`) goes to its
 //!   unit's owner, else the fallback, else `owner`.
 //!
-//! Claiming and releasing a unit (a compare-and-set on `steps.owner` in one write
-//! transaction) and per-identity reading scopes build on `unit_owner` and `set_unit_owner`
-//! here without touching routing.
-use crate::{Result, StoreError, WriteTransaction};
+//! - **Claim and release.** `claim` and `release` move units between owners in one write
+//!   transaction: a compare-and-set on `steps.owner`, the units' open questions re-addressed
+//!   to whoever answers them now, and a note from `sluice` that records the handoff in the
+//!   log (a `say` whose `data.unit_owner` holds `{by, reason, units: [{unit, from, to}],
+//!   questions}`; no new record kind, so releases pinned before it read the log unchanged).
+//!   Routing reads the owner when a message is posted, so later questions follow the unit.
+use crate::{Result, StoreError, WriteTransaction, messages};
 use rusqlite::{Connection, OptionalExtension, params};
 use sluice_model::{
-    identity::{LIVE_READER_MINUTES, OWNER, SessionName, is_session, refusal},
-    ids::{ProjectId, StepId},
+    error::PublicError,
+    events::{Event, NotificationOutcome},
+    identity::{LEGACY_ORCHESTRATOR, LIVE_READER_MINUTES, OWNER, SessionName, is_session, refusal},
+    ids::{AttemptId, MessageId, ProjectId, ProjectSelector, RecordSeq, StepId},
     plan_rows::PlanEditCommit,
+    rpc::JsonValue,
 };
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// The `readers` stream sessions are registered and read under.
 pub const READER_STREAM: &str = "orchestrator";
@@ -39,6 +45,48 @@ pub fn register(tx: &mut WriteTransaction<'_>, project: ProjectId, me: &SessionN
         tx.changed(Some(project), "readers");
     }
     Ok(())
+}
+
+/// Mark `me` as reading `project` (`log_wait`): its heartbeat, its `next` position untouched.
+pub fn beat(tx: &mut WriteTransaction<'_>, project: ProjectId, me: &SessionName) -> Result<()> {
+    tx.sql().execute(
+        "INSERT INTO readers(project_id,identity,stream,thread,cursor,heartbeat_at) VALUES (?1,?2,?3,'',0,?4)
+         ON CONFLICT(project_id,identity,stream,thread) DO UPDATE SET heartbeat_at=excluded.heartbeat_at",
+        params![project.to_string(), me.as_str(), READER_STREAM, now()?],
+    )?;
+    tx.changed(Some(project), "readers");
+    Ok(())
+}
+
+/// Where `me`'s `next` left off in `project`: the end of the last batch it was given; `None`
+/// before its first.
+pub fn resume(sql: &Connection, project: ProjectId, me: &str) -> Result<Option<RecordSeq>> {
+    Ok(sql
+        .query_row(
+            "SELECT cursor FROM readers WHERE project_id=?1 AND identity=?2 AND stream=?3 AND thread='' AND cursor>0",
+            params![project.to_string(), me, READER_STREAM],
+            |r| r.get(0),
+        )
+        .optional()?
+        .map(RecordSeq))
+}
+
+/// `name`'s last heartbeat in `project` (RFC 3339), if it ever waited there.
+pub fn heartbeat(sql: &Connection, project: ProjectId, name: &str) -> Result<Option<String>> {
+    Ok(sql
+        .query_row(
+            "SELECT heartbeat_at FROM readers WHERE project_id=?1 AND identity=?2 AND stream=?3 AND thread=''",
+            params![project.to_string(), name, READER_STREAM],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten())
+}
+
+fn now() -> Result<String> {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|e| StoreError::InvalidDatabase(e.to_string()))
 }
 
 /// Whether `name` has a readers row in `project`.
@@ -416,4 +464,416 @@ pub fn set_fallback(
         params![project.to_string(), value],
     )?;
     Ok(())
+}
+
+/// The units a claim or release selects, in name order: `unit` and each of `units` by name or
+/// pattern (`*` any run of characters, `?` one), and every unit with a step carrying one of
+/// `tags`; with `owned_by` (`@session`, `owner` or `unowned`), those of them its owner holds
+/// now, or with nothing else every unit it holds. Selecting nothing is `invalid`; a name,
+/// pattern or tag that matches no unit, or an owner holding none of them, is `not_found`.
+pub fn select_units(
+    sql: &Connection,
+    project: ProjectId,
+    unit: Option<&str>,
+    units: &[String],
+    tags: &[String],
+    owned_by: Option<&str>,
+) -> Result<Vec<String>> {
+    let mut patterns: Vec<&str> = unit
+        .into_iter()
+        .chain(units.iter().map(String::as_str))
+        .map(str::trim)
+        .collect();
+    if patterns.is_empty() && tags.is_empty() {
+        if owned_by.is_none() {
+            return Err(refusal(
+                "units",
+                "select the units: unit, units (names or patterns), tags or owned_by",
+            )
+            .into());
+        }
+        patterns.push("*");
+    }
+    let all: Vec<String> = sql
+        .prepare_cached("SELECT DISTINCT unit FROM steps WHERE project_id=?1 ORDER BY unit")?
+        .query_map([project.to_string()], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut selected = BTreeSet::new();
+    let mut missing = vec![];
+    for pattern in patterns {
+        let owned = [pattern.to_owned()];
+        let found: Vec<&String> = all
+            .iter()
+            .filter(|unit| sluice_model::units::keep_match(&owned, unit).is_some())
+            .collect();
+        if found.is_empty() {
+            missing.push(format!("no unit {pattern}"));
+        }
+        selected.extend(found.into_iter().cloned());
+    }
+    for tag in tags {
+        let found: Vec<String> = sql
+            .prepare_cached(
+                "SELECT DISTINCT s.unit FROM steps s, json_each(s.declaration,'$.tags') t WHERE s.project_id=?1 AND t.value=?2",
+            )?
+            .query_map(params![project.to_string(), tag], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        if found.is_empty() {
+            missing.push(format!("no unit is tagged {tag}"));
+        }
+        selected.extend(found);
+    }
+    if !missing.is_empty() {
+        return Err(PublicError::NotFound {
+            message: missing.join("; "),
+        }
+        .into());
+    }
+    let Some(owned_by) = owned_by else {
+        return Ok(selected.into_iter().collect());
+    };
+    let holder = expected(owned_by).map_err(|_| {
+        refusal(
+            "owned_by",
+            &format!("{owned_by:?} is not an owner: an @session, owner or unowned"),
+        )
+    })?;
+    let mut held = vec![];
+    for unit in selected {
+        if unit_owner(sql, project, &unit)?.flatten() == holder {
+            held.push(unit);
+        }
+    }
+    if held.is_empty() {
+        return Err(PublicError::NotFound {
+            message: format!("no unit selected is owned by {}", who(holder.as_deref())),
+        }
+        .into());
+    }
+    Ok(held)
+}
+
+/// One unit's change of owner (`None`: unowned).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct OwnerChange {
+    pub unit: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+/// What a claim or release did: the units that changed owner, those already as asked, the
+/// open questions it re-addressed (as they now read) and the notes that record it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Handoff {
+    pub units: Vec<OwnerChange>,
+    pub unchanged: Vec<String>,
+    pub questions: Vec<sluice_model::commands::Message>,
+    pub notices: Vec<MessageId>,
+}
+
+/// The owner a claim expects: a session, the person, or none.
+fn expected(value: &str) -> Result<Option<String>> {
+    let value = value.trim();
+    if value == "unowned" {
+        return Ok(None);
+    }
+    if value == OWNER || is_session(value) {
+        return Ok(Some(value.to_owned()));
+    }
+    Err(refusal(
+        "expected_owner",
+        &format!("{value:?} is not an owner: an @session, owner or unowned"),
+    )
+    .into())
+}
+
+fn who(owner: Option<&str>) -> &str {
+    owner.unwrap_or("nobody (unowned)")
+}
+
+fn conflicts(lines: Vec<String>) -> StoreError {
+    PublicError::Conflict {
+        message: format!("nothing changed: {}", lines.join("; ")),
+        current_rev: None,
+    }
+    .into()
+}
+
+/// `unit_claim`: `me` takes `units` (from `select_units`), all or none. A unit already `me`'s
+/// is left as it is. With `expected` (an `@session`, `owner` or `unowned`) each unit's owner
+/// must be that now; without it a unit is taken when it is unowned or its owner session is not
+/// reading (no `next` or `log_wait` heartbeat in `LIVE_READER_MINUTES`). A unit the person
+/// holds (`owner`), or a reading session's without `expected`, needs `force`. Anything else is
+/// one `conflict` naming every unit's owner (and a reading owner's last heartbeat), and
+/// nothing changes.
+pub fn claim(
+    tx: &mut WriteTransaction<'_>,
+    project: ProjectId,
+    me: &SessionName,
+    units: &[String],
+    expected_owner: Option<&str>,
+    force: bool,
+    reason: &str,
+) -> Result<Handoff> {
+    register(tx, project, me)?;
+    let expected = expected_owner.map(expected).transpose()?;
+    let mut refused = vec![];
+    let mut taking = vec![];
+    let mut unchanged = vec![];
+    for unit in units {
+        let current = unit_owner(tx.sql(), project, unit)?.flatten();
+        if current.as_deref() == Some(me.as_str()) {
+            unchanged.push(unit.clone());
+            continue;
+        }
+        if let Some(expected) = &expected
+            && expected != &current
+        {
+            refused.push(format!(
+                "unit {unit} is owned by {}, not {}",
+                who(current.as_deref()),
+                who(expected.as_deref())
+            ));
+            continue;
+        }
+        match current.as_deref() {
+            Some(OWNER) if !force => refused.push(format!(
+                "unit {unit} is owned by the person (owner): pass force to take it"
+            )),
+            Some(session)
+                if expected.is_none() && !force && reading(tx.sql(), project, session)? =>
+            {
+                let at = heartbeat(tx.sql(), project, session)?.unwrap_or_default();
+                refused.push(format!(
+                    "unit {unit} is owned by {session}, which is reading (last heartbeat {at}): pass expected_owner=\"{session}\" to take it over"
+                ));
+            }
+            _ => taking.push(OwnerChange {
+                unit: unit.clone(),
+                from: current,
+                to: Some(me.to_string()),
+            }),
+        }
+    }
+    if !refused.is_empty() {
+        return Err(conflicts(refused));
+    }
+    hand_over(tx, project, me, taking, unchanged, reason, Handing::Claim)
+}
+
+/// `unit_release`: `me` hands `units` it owns to `to` (`@session` registered in the project,
+/// or `owner`), or leaves them unowned, so the project's fallback (else the person) answers
+/// them. A unit another owns (or nobody) needs `force`; a unit already `to`'s is left as it
+/// is. All or none, as `claim`.
+pub fn release(
+    tx: &mut WriteTransaction<'_>,
+    project: ProjectId,
+    me: &SessionName,
+    units: &[String],
+    to: Option<&str>,
+    force: bool,
+    reason: &str,
+) -> Result<Handoff> {
+    register(tx, project, me)?;
+    let to = to
+        .map(str::trim)
+        .filter(|to| !to.is_empty() && *to != "unowned")
+        .map(|to| check_owner(tx.sql(), project, "to", to, Some(me)))
+        .transpose()?;
+    let mut refused = vec![];
+    let mut giving = vec![];
+    let mut unchanged = vec![];
+    for unit in units {
+        let current = unit_owner(tx.sql(), project, unit)?.flatten();
+        if current == to {
+            unchanged.push(unit.clone());
+        } else if current.as_deref() != Some(me.as_str()) && !force {
+            refused.push(format!(
+                "unit {unit} is owned by {}, not you: pass force to release it",
+                who(current.as_deref())
+            ));
+        } else {
+            giving.push(OwnerChange {
+                unit: unit.clone(),
+                from: current,
+                to: to.clone(),
+            });
+        }
+    }
+    if !refused.is_empty() {
+        return Err(conflicts(refused));
+    }
+    hand_over(tx, project, me, giving, unchanged, reason, Handing::Release)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Handing {
+    Claim,
+    Release,
+}
+
+/// Write each change: the unit's owner, its open questions re-addressed from whoever answered
+/// it to whoever answers it now (its owner, else the fallback, else the person), and one note
+/// from `sluice` per party told: on a claim whoever answered the units before, on a release
+/// whoever answers them now (`me` itself when that is `me`).
+fn hand_over(
+    tx: &mut WriteTransaction<'_>,
+    project: ProjectId,
+    me: &SessionName,
+    changes: Vec<OwnerChange>,
+    unchanged: Vec<String>,
+    reason: &str,
+    handing: Handing,
+) -> Result<Handoff> {
+    let fallback = fallback(tx.sql(), project)?;
+    let answerer = |owner: &Option<String>| -> String {
+        owner
+            .clone()
+            .or_else(|| fallback.clone())
+            .unwrap_or_else(|| OWNER.into())
+    };
+    let mut moved = vec![];
+    let mut told: BTreeMap<String, (Vec<&OwnerChange>, Vec<MessageId>)> = BTreeMap::new();
+    for change in &changes {
+        set_unit_owner(tx, project, &change.unit, change.to.as_deref())?;
+        let (before, after) = (answerer(&change.from), answerer(&change.to));
+        let ids = readdress(tx, project, &change.unit, &before, &after)?;
+        let party = match handing {
+            Handing::Claim => before,
+            Handing::Release => after,
+        };
+        let entry = told.entry(party).or_default();
+        entry.0.push(change);
+        entry.1.extend(ids.iter().copied());
+        moved.extend(ids);
+    }
+    let reason = reason.trim();
+    let mut notices = vec![];
+    for (party, (units, questions)) in told {
+        let names = units
+            .iter()
+            .map(|c| c.unit.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let plural = if units.len() == 1 { "unit" } else { "units" };
+        let mut body = match handing {
+            Handing::Claim => {
+                let from: BTreeSet<&str> = units.iter().map(|c| who(c.from.as_deref())).collect();
+                format!(
+                    "{me} claimed {plural} {names} from {}",
+                    from.into_iter().collect::<Vec<_>>().join(", ")
+                )
+            }
+            Handing::Release => match &units[0].to {
+                Some(to) => format!("{me} handed {plural} {names} to {to}"),
+                None => format!(
+                    "{me} released {plural} {names}: unowned now, so {} answers",
+                    fallback.as_deref().map_or_else(
+                        || "the person (owner)".to_owned(),
+                        |f| format!("the fallback {f}")
+                    )
+                ),
+            },
+        };
+        if !reason.is_empty() {
+            body.push_str(&format!(" ({reason})"));
+        }
+        body.push('.');
+        if !questions.is_empty() {
+            let ids = questions
+                .iter()
+                .map(|id| format!("#{}", id.0))
+                .collect::<Vec<_>>()
+                .join(", ");
+            body.push_str(&format!(
+                " Open questions re-addressed to {}: {ids}.",
+                answerer(&units[0].to)
+            ));
+        }
+        let data = serde_json::json!({"unit_owner": {
+            "by": me.as_str(),
+            "reason": reason,
+            "units": units,
+            "questions": questions.iter().map(|id| id.0).collect::<Vec<_>>(),
+        }});
+        let posted = messages::post(
+            tx,
+            messages::Post {
+                project: ProjectSelector::Id(project),
+                speaker: messages::Speaker::Sluice,
+                body,
+                verb: messages::Verb::Say {
+                    to: party,
+                    data: Some(JsonValue::try_from(data)?),
+                },
+            },
+            &messages::NoPlanInputs,
+        )?;
+        notices.push(posted.message.id);
+    }
+    let questions = moved
+        .into_iter()
+        .map(|id| messages::message(tx.sql(), project, id))
+        .collect::<Result<_>>()?;
+    Ok(Handoff {
+        units: changes,
+        unchanged,
+        questions,
+        notices,
+    })
+}
+
+/// Re-address `unit`'s open questions (asked by its steps) that went to `before` (or to the
+/// retired `orchestrator`) to `after`; a question to the person reserves its notification, as
+/// posting one does. The log keeps each question's record as it was posted.
+fn readdress(
+    tx: &mut WriteTransaction<'_>,
+    project: ProjectId,
+    unit: &str,
+    before: &str,
+    after: &str,
+) -> Result<Vec<MessageId>> {
+    let id = project.to_string();
+    let ids: Vec<i64> = tx
+        .sql()
+        .prepare_cached(
+            "SELECT m.id FROM messages m WHERE m.project_id=?1 AND m.needs_reply=1 AND m.resolved_by IS NULL
+               AND m.closed_at IS NULL AND m.\"to\" IN (?2,?3) AND m.\"to\"!=?4
+               AND m.\"from\" IN (SELECT s.step_id FROM steps s WHERE s.project_id=?1 AND s.unit=?5)
+             ORDER BY m.id",
+        )?
+        .query_map(params![id, before, LEGACY_ORCHESTRATOR, after, unit], |r| {
+            r.get(0)
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    let at = now()?;
+    for question in &ids {
+        tx.sql().execute(
+            "UPDATE messages SET \"to\"=?3 WHERE project_id=?1 AND id=?2",
+            params![id, question, after],
+        )?;
+        if after == OWNER {
+            let reserved = tx.sql().execute(
+                "INSERT INTO notification_attempts(project_id,message_id,attempt_id,outcome,reserved_at) VALUES (?1,?2,?3,'reserved',?4)
+                 ON CONFLICT(project_id,message_id) DO NOTHING",
+                params![id, question, AttemptId::new().to_string(), at],
+            )?;
+            if reserved > 0 {
+                tx.append_record(
+                    Some(project),
+                    Event::ProjectNotify {
+                        message: MessageId(*question),
+                        outcome: NotificationOutcome::Reserved,
+                        error: None,
+                    },
+                )?;
+            }
+        }
+    }
+    if !ids.is_empty() {
+        for view in ["messages", "questions", "status"] {
+            tx.changed(Some(project), view);
+        }
+    }
+    Ok(ids.into_iter().map(MessageId).collect())
 }

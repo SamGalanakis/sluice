@@ -1187,9 +1187,12 @@ title takes up its own latest earlier question: an open one nobody waits on gets
 asker; an answered one whose answer nobody claimed returns that answer at once. A claimed
 answer (`claimed_by`) is never reused.
 
-`messages(project, view, thread?, since?, owner=false)` → `{project, messages, last_id}`, read
-as the caller: the owner for the dashboard and with `owner`, else `orchestrator`, the inbox of
-what was addressed to the orchestrator before sessions named themselves:
+`messages(project, view, thread?, since?, owner=false, me?)` → `{project, messages, last_id}`,
+read as the caller: the owner for the dashboard and with `owner`; else the session `me` names
+(its own inbox and history; its inbox also holds the open questions sent to `orchestrator`
+before sessions named themselves, which are any session's to answer); else, unnamed,
+`orchestrator`, the inbox of what was addressed to the orchestrator before sessions named
+themselves:
 
 | view | shows |
 |---|---|
@@ -1228,10 +1231,12 @@ session name is `invalid` and says how to write one; `owner` (only the dashboard
 owner), `orchestrator` and `sluice` are never names. A run that names `me` is refused: it
 speaks as its step. A write's `author` defaults to the session's name (§12.3).
 
-**Registration.** A session's first message, plan edit with `me`, or `next` naming it in a
-project adds its `readers` row there (stream `orchestrator`, thread `''`); that row is the
-registry. Its `heartbeat_at`, which `next` writes every 30 s while it waits, says whether the
-session is reading: it is when the heartbeat is under 10 minutes old.
+**Registration.** A session's first message, plan edit with `me`, claim, or `next` or
+`log_wait` naming it in a project adds its `readers` row there (stream `orchestrator`, thread
+`''`); that row is the registry. Its `heartbeat_at`, which `next` and `log_wait` write every
+30 s while they wait, says whether the session is reading: it is when the heartbeat is under
+10 minutes old. Its `cursor` is where the session's last `next` batch ended in that project,
+which `log_wait` never moves.
 
 **Owner.** A unit's owner is who answers its runs: an `@session`, `owner` (the person) or
 nobody. It is `steps.owner` (an added column), equal across the unit's rows. When an edit adds
@@ -1264,6 +1269,59 @@ units.
 A message from a session or the dashboard to a session that is not reading is stored and is in
 that session's inbox all the same; its receipt carries `note: "queued; @peer has no live
 reader"`. A run's receipt never carries `note`, so a run pinned to an older release decodes it.
+
+**What a session sees.** `next` and `log_wait` take `scope`: `mine`, a named session's default,
+or `all`, everyone's and an unnamed caller's only scope (`mine` without a name is `invalid`). In
+scope `mine` a record is read when it is:
+
+- a unit's: a `unit.settled`, or any record naming a step (`step.*`, `run.*` of a step), whose
+  unit is the session's: its owner is the session, or it is unowned and the project's
+  fallback is the session or there is none (a removed step's unit reads as unowned);
+- a message to or from the session, to `orchestrator` or to nobody (stored before sessions
+  named themselves), or to or from a step of such a unit;
+- a call's record when the session made the call;
+- the project's own (pause, archive, settings, plan edits and every other record).
+
+Ownership is read when the record is read, so a claim moves a unit's past records too. `units`
+(unit names or patterns, `*` any run of characters, `?` one) and `tags` (a unit any of whose
+steps carries one) narrow either scope to those units, keeping messages to or from the session.
+In scope `all` a named session's `next` wakes on a question to any session, as an unnamed one's
+does; in `mine`, only on one to it.
+
+**Claim and release.** `unit_claim(project, unit? | units? | tags?, owned_by?, expected_owner?,
+force=false, reason?, me)` makes the session the owner of every unit selected (`unit` and
+`units` by name or pattern, `tags` by any step carrying one; together, every unit any of them
+names; `owned_by` (`@session`, `owner` or `unowned`) keeps those its owner holds now, alone every
+unit it holds, and is the owner expected unless `expected_owner` is given; selecting nothing is
+`invalid`, a name, pattern or tag matching no unit, or an owner holding none of them,
+`not_found`), in one write transaction, all or none:
+
+- a unit already the session's is left as it is (`unchanged`);
+- with `expected_owner` (`@session`, `owner` or `unowned`) each unit's owner must be that now,
+  a compare-and-set; another is `conflict` ("unit u is owned by @x, not @y");
+- without it a unit is taken when it is unowned or its owner session is not reading; one whose
+  owner is reading is `conflict`, naming the owner and its last heartbeat and how to take it
+  over (`expected_owner="@x"`), unless `force`;
+- a unit the person holds (`owner`) needs `force`, with or without `expected_owner`.
+
+Every refusal is listed in one `conflict` ("nothing changed: …"). `unit_release(project, unit? |
+units? | tags?, owned_by?, to?, force=false, reason?, me)` hands units the session owns to `to` (`owner` or
+an `@session` registered in the project), or, without it, leaves them unowned, so the fallback
+(else the person) answers them; a unit another owns, or nobody, needs `force`; a unit already
+`to`'s is unchanged. Neither is plan work: no revision, and both are taken during a drain.
+
+For each unit that changes owner, in the same transaction: its open questions (asked by its
+steps) addressed to whoever answered it before (its owner, else the fallback, else `owner`) or
+to `orchestrator` are re-addressed to whoever answers it now (a question re-addressed to `owner`
+reserves its notification), and the log keeps each question's record as it was posted; and
+`sluice` says so, in one `say` per party told, on a claim whoever answered the units before, on
+a release whoever answers them now (the caller itself when that is the caller): "@b claimed unit
+u from @a (reason). Open questions re-addressed to @b: #12.", its `data` `{"unit_owner": {by,
+reason, units: [{unit, from, to}], questions: [ids]}}`. The handoff is a message, not a new
+record kind, so releases pinned before it read the log unchanged. Routing reads the owner when a
+message is posted, so the units' later questions go to the new owner. The reply is `{project,
+units: [{unit, from, to}], unchanged, questions: [{id, from, to, title, body}], notices}`: the
+units moved, those left, the questions re-addressed (their first line) and the notes' ids.
 
 ## 9. The log
 
@@ -1310,7 +1368,7 @@ returned when its kind passes `kinds` (and, when `threads` is given without `kin
 `recipients` both apply to a message. An empty list is no filter. So `kinds: ["step.status",
 "message"], statuses: ["failed", "stale"], recipients: ["@lead"]` returns failures,
 stale steps and messages to the session `@lead`, and nothing else. `next` and `sluice watch`
-take none of these filters. Calls made without a project go to the home log (`project` null).
+take none of these filters; `next` and `log_wait` take a scope (§8.1). Calls made without a project go to the home log (`project` null).
 
 Each log keeps at most 10,000 records; past that it is trimmed to 9,000 in the same transaction.
 A `since_seq` older than a log's trim floor, or newer than any seq the home has issued, is
@@ -1326,10 +1384,12 @@ a record is committed to the log it watches, so a caller that would sleep and re
 of these instead.
 
 `log_wait(project?, since_seq?, kinds?, threads?, statuses?, recipients?, limit=200,
-timeout=300, wake="any")` returns `{records, last_seq}` as soon as a matching record (§9) exists
-after `since_seq`, or with no records after `timeout` seconds (capped at 3600). Records that do
-not match never wake it. `wake: "questions"` holds notes until a record that is not a note
-arrives or the timeout passes.
+timeout=300, wake="any", me?, scope?, units?, tags?)` returns `{records, last_seq}` as soon as a
+matching record (§9) in its scope (§8.1, "What a session sees") exists after `since_seq`, or
+with no records after `timeout` seconds (capped at 3600). Records that do not match never wake
+it. `wake: "questions"` holds notes until a record that is not a note arrives or the timeout
+passes. A named session's wait writes its heartbeat (at the start and every 30 s), never its
+`next` position.
 
 `step_wait(project, steps? | tags?, until, timeout=300)` waits until every selected step meets
 `until`: `"succeeded"` (each succeeded), `"settled"` (each settled, §7.1) or `{"any_of":
@@ -1345,9 +1405,14 @@ shapes (an unknown status, an empty `any_of`, another field) are `invalid`, `err
 each (`steps: no step x`, `tags: no step is tagged t`, `until.any_of[1]: …`); a selected step
 removed from the plan during the wait ends it with the same error.
 
-`next(projects=[], since_seq=0, me?, timeout=300, all=false, settle=20,
+`next(projects=[], since_seq?, me?, scope?, units?, tags?, timeout=300, all=false, settle=20,
 settle_max=120, settles="short")` waits across projects (all live projects when empty) for what
-an orchestrator acts on and returns `{records, notes, last_seq, timed_out}`. It wakes on:
+an orchestrator acts on, in its scope (§8.1, "What a session sees": a named session's own units
+and messages by default), and returns `{records, notes, last_seq, timed_out}`. Without
+`since_seq` a named session resumes after its last batch: the earliest of its `readers`
+positions in the selected projects (a position the log no longer reaches, or none yet, starts at
+the top of the logs); an unnamed caller starts at the top. Each session keeps its own position,
+so sessions never share or move one cursor. It wakes on:
 
 - a `unit.settled` record, written each time a unit comes to rest: it is settled (§6.7), and
   its steps, their generations or work generations, or their statuses differ from its last
@@ -1356,11 +1421,12 @@ an orchestrator acts on and returns `{records, notes, last_seq, timed_out}`. It 
   more can move;
 - a `step.status` to `failed`, `stale` or `skipped`;
 - a question to `me` (or, stored before sessions named themselves, to `orchestrator`, or
-  before the verbs, to nobody), not from `me`; without `me`, a question to any session (or to
-  `orchestrator` or nobody);
+  before the verbs, to nobody), not from `me`; without `me` or in scope `all`, a question to any
+  session (or to `orchestrator` or nobody);
 - a reply to a question, not from `me`;
 - `project.pause` or `project.archive` not authored by `me`;
-- with `all`, any record.
+- for a named session, a `project.update` of the project's `fallback` not authored by it;
+- with `all`, any record in scope.
 
 A step's progress (§6.4) writes no record, so it wakes none of these waits, `all` included.
 Notes are held and returned in `notes`. After the first waking record it keeps collecting until
@@ -1612,9 +1678,9 @@ on.
 | `ask` | `project`, `to?` (a session must give it), `body`, `title?`, `ui?`, `input?`, `data?`, `run?`, `me?` | `{id, to, thread, delivery, run?, note?}` (§8, §8.1) |
 | `say` | `project`, `to?`, `body`, `data?`, `run?`, `me?` | `{id, to, thread, delivery, run?, note?}` (§8, §8.1) |
 | `reply` | `project`, `to_message?` or `to?`, `body=""`, `answer?`, `run?`, `me?` | `{id, to, thread, delivery, run?, note?}` (§8) |
-| `messages` | `project`, `view="inbox"`, `thread?`, `since?`, `owner=false` | `{project, messages, last_id}` |
+| `messages` | `project`, `view="inbox"`, `thread?`, `since?`, `owner=false`, `me?` | `{project, messages, last_id}`; the inbox and history are `me`'s (§8) |
 | `log_read` | `project?`, `since_seq?`, `kinds?`, `threads?`, `statuses?`, `recipients?`, `limit=200` | `{records, last_seq}`; without `since_seq` the latest records; filters §9 |
-| `log_wait` | as `log_read`, plus `timeout=300`, `wake="any"` | `{records, last_seq}` |
+| `log_wait` | as `log_read`, plus `timeout=300`, `wake="any"`, `me?`, `scope?`, `units?`, `tags?` | `{records, last_seq}` (§10) |
 | `step_wait` | `project`, `steps?` or `tags?`, `until`, `timeout=300` | `{met, steps, seq}` (§10) |
 | `next` | §10 | `{records, notes, last_seq, timed_out}` |
 | `query` | `sql`, `params=[]`, `limit=200` | `{columns, rows, truncated}` |
@@ -1622,6 +1688,13 @@ on.
 `query` runs one read-only statement on a fresh connection: at most 100,000 bytes of SQL, `limit`
 1 to 1000 rows, a 2 s deadline, a 1 MiB response; writes, `ATTACH`, extensions and unsafe
 functions are refused. JSON columns come back as JSON text.
+
+**Owners**
+
+| tool | arguments | result |
+|---|---|---|
+| `unit_claim` | `project`, `unit?`, `units?`, `tags?`, `owned_by?`, `expected_owner?`, `force=false`, `reason?`, `me` | `{project, units, unchanged, questions, notices}` (§8.1) |
+| `unit_release` | `project`, `unit?`, `units?`, `tags?`, `owned_by?`, `to?`, `force=false`, `reason?`, `me` | as `unit_claim` |
 
 **Maintenance**
 
@@ -2074,7 +2147,7 @@ write that timed out, and connections dropped for want of a permit.
 | `home migrate [--dry-run] [--json]` | converts `SLUICE_HOME`'s schema-1 or schema-2 database to this binary's schema (§3), holding `coordinator.lock` (refused while a coordinator holds it); `--dry-run` converts a backup-API copy in a scratch directory and leaves the home untouched; `--json` prints the conversion report |
 | `tool [name [json\|-] [--field value]…]` | without a name, lists the tools; with one, runs it (its arguments as below) and prints its result as MCP returns it (`{"ok": true}` for an acknowledgement); `tool <name> --help` lists its fields |
 | `tool rpc '<request>'` | sends a raw wire request |
-| `next [-p P]… [--since-seq N \| --cursor FILE] [--me @NAME] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; without a since it starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |
+| `next [-p P]… [--since-seq N \| --cursor FILE] [--me @NAME] [--scope mine\|all] [--units U,…] [--tags T,…] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; without a since a named session resumes after its last batch and an unnamed one starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |
 | `watch [-p P] [--kinds K,…] [--threads T,…] [--since-seq N] [--wake any\|questions]` | follows the log, one JSON record per line, until killed |
 | `drain [-p P]… [--no-wait] [--release]` | drains (waits until drained unless `--no-wait`) or releases |
 | `me [--project P] [--step S] [--json]` | `step_context` for the current step (from `SLUICE_PROJECT_ID`/`SLUICE_PROJECT` and `SLUICE_STEP`) |
@@ -2086,10 +2159,21 @@ write that timed out, and connections dropped for want of a permit.
 | `agent hook --engine codex\|claude\|devin --event E [--run R]` | engine hook entry (internal) |
 | `guardian`, `payload-exec` | internal |
 
-`sluice next` prints one line per event: `ASK|SAY|REPLY #<message-id> <thread> <from> -> <to>: <body>`, `STEP <id>
-<from> -> <to>: <error tail>`, `UNIT <u> settled: <outputs>` (long outputs named with a hint to
-read them with `sluice query` or `--settles full`), `PROJECT <id> paused by <author>`, and last
-`seq N` or `timeout seq N`; `--json` prints the reply.
+`sluice next` prints one entry per event: `ASK|SAY|REPLY #<message-id> <thread> <from> -> <to>:
+<title or body>` (a question's title leads, its body on the lines after, each indented two
+spaces), `STEP <id> <from> -> <to>: <error tail>`, `UNIT <u> settled · <outcome>: <step>
+<status>[ (held)] · …` then its outputs (long ones named with a hint to read them with `sluice
+query` or `--settles full`), `PROJECT <id> paused by <author>`, then a blank line and last `seq
+N` or `timeout seq N`; `--json` prints the reply. A message's body is whole up to 4,000
+characters; a longer one shows its first paragraph and every later paragraph that is a marked
+question (it starts with "Question" or "Q:", or ends with "?"), each whole, never cut
+mid-sentence, then `[N more characters of #<id> not shown: messages(view="thread",
+thread="<thread>") reads it whole]`. A settled unit's `<outcome>` says how it ended: `succeeded`
+when none of its steps failed, was cancelled or turned stale (`skipped` or `held` when none
+even succeeded); else the one way it went wrong, counted past one (`failed`, `2 failed`,
+`cancelled`, `stale`), or each count when mixed (`1 failed, 1 cancelled`). A failed step whose
+failure was a cancel (its last `step.status` before the settlement) shows as `cancelled`, so
+`UNIT x settled · failed: work failed · rm pending (held)` never reads as a success.
 Reply with the `#N` on the ASK line; the last line's `seq N` is the cursor to pass to
 `--since-seq`, not an id to reply to.
 The message id is a decimal integer after `#`, always the second token, for every verb

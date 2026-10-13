@@ -52,7 +52,111 @@ pub struct RecordFilter {
     pub statuses: Vec<StepStatus>,
     /// message records whose `to` is one of these.
     pub recipients: Vec<String>,
+    /// Whose records (`next`, `log_wait`): none reads everyone's.
+    pub scope: Option<ScopeFilter>,
     pub limit: u32,
+}
+
+/// A wait's scope (SPEC §8.1, "What a session sees"), as SQL over each record:
+///
+/// - a unit's records (`unit.settled`, and every record naming a step: `step.*`, `run.*` of a
+///   step) when the unit is the reader's (`mine`: its owner is the reader, or it is unowned and
+///   the project's fallback is the reader or there is none) and is selected (`units` patterns,
+///   `tags`); a removed step's unit is unknown, so its records read as an unowned unit's;
+/// - a message when it is to or from the reader, to the retired `orchestrator` or to nobody
+///   (stored before identities), or to or from a step of a unit as above;
+/// - a call's records when the reader made the call;
+/// - every other record (the project's own: pause, archive, settings, plan edits) always.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScopeFilter {
+    /// The reading session, `@name`.
+    pub me: Option<String>,
+    /// Only the reader's own units (needs `me`).
+    pub mine: bool,
+    /// Unit-name patterns (`*` any run, `?` one character); empty selects every unit.
+    pub units: Vec<String>,
+    /// A unit carrying one of these tags; empty selects every unit.
+    pub tags: Vec<String>,
+}
+impl ScopeFilter {
+    /// Whether it narrows anything: an `all` scope with no selection reads everything.
+    pub fn narrows(&self) -> bool {
+        self.mine || !self.units.is_empty() || !self.tags.is_empty()
+    }
+    /// The SQL condition on `records` and its arguments, in order.
+    fn condition(&self, args: &mut Vec<Value>) -> String {
+        let me = || Value::Text(self.me.clone().unwrap_or_default());
+        // Whether unit `u` (an SQL expression) is in scope; each call pushes its own arguments.
+        let unit_ok = |u: &str, args: &mut Vec<Value>| {
+            let mut parts = vec![];
+            if self.mine {
+                parts.push(format!(
+                    "coalesce((SELECT s.owner FROM steps s WHERE s.project_id=records.project_id AND s.unit=({u}) ORDER BY s.owner IS NULL LIMIT 1),\
+                     (SELECT p.fallback FROM projects p WHERE p.project_id=records.project_id),?)=?"
+                ));
+                args.push(me());
+                args.push(me());
+            }
+            if !self.units.is_empty() {
+                parts.push(format!(
+                    "({})",
+                    vec![format!("({u}) GLOB ?"); self.units.len()].join(" OR ")
+                ));
+                args.extend(self.units.iter().map(|p| Value::Text(glob(p))));
+            }
+            if !self.tags.is_empty() {
+                parts.push(format!(
+                    "EXISTS(SELECT 1 FROM steps s, json_each(s.declaration,'$.tags') t WHERE s.project_id=records.project_id AND s.unit=({u}) AND t.value IN ({}))",
+                    vec!["?"; self.tags.len()].join(",")
+                ));
+                args.extend(self.tags.iter().cloned().map(Value::Text));
+            }
+            if parts.is_empty() {
+                "1".to_owned()
+            } else {
+                format!("({})", parts.join(" AND "))
+            }
+        };
+        let step_unit = |step: &str| {
+            format!(
+                "(SELECT s.unit FROM steps s WHERE s.project_id=records.project_id AND s.step_id={step})"
+            )
+        };
+        let from = "json_extract(records.payload,'$.from')";
+        let to = "json_extract(records.payload,'$.to')";
+        let mut message = vec![];
+        if self.me.is_some() {
+            message.push(format!("{from}=? OR {to}=?"));
+            args.push(me());
+            args.push(me());
+        }
+        message.push(format!("{to} IS NULL OR {to}='orchestrator'"));
+        let (from_unit, to_unit) = (step_unit(from), step_unit(to));
+        message.push(format!(
+            "({from_unit} IS NOT NULL AND {})",
+            unit_ok(&from_unit, args)
+        ));
+        message.push(format!(
+            "({to_unit} IS NOT NULL AND {})",
+            unit_ok(&to_unit, args)
+        ));
+        let settled = unit_ok("json_extract(records.payload,'$.unit')", args);
+        let stepped = unit_ok(&step_unit("records.step_id"), args);
+        let call = if self.me.is_some() {
+            args.push(me());
+            "(SELECT c.author FROM calls c WHERE c.call_id=records.call_id OR c.run_id=records.call_id LIMIT 1)=?"
+        } else {
+            "0"
+        };
+        format!(
+            " AND (CASE WHEN records.kind='message' THEN ({}) WHEN records.kind='unit.settled' THEN {settled} WHEN records.step_id IS NOT NULL THEN {stepped} WHEN records.call_id IS NOT NULL THEN {call} ELSE 1 END)",
+            message.join(" OR ")
+        )
+    }
+}
+/// A unit pattern as SQLite's GLOB reads it: `*` and `?` as given, any `[` taken literally.
+fn glob(pattern: &str) -> String {
+    pattern.replace('[', "[[]")
 }
 impl Default for RecordFilter {
     fn default() -> Self {
@@ -62,6 +166,7 @@ impl Default for RecordFilter {
             threads: vec![],
             statuses: vec![],
             recipients: vec![],
+            scope: None,
             limit: 200,
         }
     }
@@ -74,6 +179,7 @@ impl From<&LogRead> for RecordFilter {
             threads: read.threads.clone().unwrap_or_default(),
             statuses: read.statuses.clone().unwrap_or_default(),
             recipients: read.recipients.clone().unwrap_or_default(),
+            scope: None,
             limit: read.limit,
         }
     }
@@ -205,6 +311,9 @@ pub fn read_records(
             args.push(Value::Text(kind.into()));
             args.extend(values.into_iter().map(Value::Text));
         }
+    }
+    if let Some(scope) = filter.scope.as_ref().filter(|scope| scope.narrows()) {
+        query.push_str(&scope.condition(&mut args));
     }
     if let Some(seq) = filter.since {
         query.push_str(" AND seq>? ORDER BY seq LIMIT ?");

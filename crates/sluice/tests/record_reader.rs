@@ -198,8 +198,11 @@ fn native_next_and_http_read_message_records_across_project_rename() {
 
     let request = CommandRequest::Next(Next {
         projects: vec![ProjectSelector::Id(id)],
-        since_seq: cursor,
+        since_seq: Some(cursor),
         me: Some("@orch".into()),
+        scope: None,
+        units: None,
+        tags: None,
         timeout_seconds: 1,
         all: false,
         settle_seconds: 0,

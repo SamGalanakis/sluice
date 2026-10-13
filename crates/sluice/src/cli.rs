@@ -68,9 +68,19 @@ pub enum Mode {
         since_seq: Option<i64>,
         #[arg(long, value_name = "FILE")]
         cursor: Option<PathBuf>,
-        /// This session's name, @name (default: $SLUICE_ME): questions to it wake the wait.
+        /// This session's name, @name (default: $SLUICE_ME): questions to it wake the wait,
+        /// and without --since-seq or --cursor it resumes after its last batch.
         #[arg(long, value_name = "@NAME")]
         me: Option<String>,
+        /// mine (the default with a name: your units and messages) or all.
+        #[arg(long, value_parser = ["mine", "all"])]
+        scope: Option<String>,
+        /// Only these units' records (names or patterns).
+        #[arg(long, value_delimiter = ',', value_name = "U1,U2")]
+        units: Vec<String>,
+        /// Only the records of units carrying one of these tags.
+        #[arg(long, value_delimiter = ',', value_name = "T1,T2")]
+        tags: Vec<String>,
         #[arg(long, default_value_t = 300, value_name = "S")]
         timeout: u64,
         #[arg(long, default_value_t = 20, value_name = "S")]
@@ -222,6 +232,9 @@ pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
                 since_seq,
                 cursor,
                 me,
+                scope,
+                units,
+                tags,
                 timeout,
                 settle,
                 settle_max,
@@ -237,6 +250,9 @@ pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
                         since_seq,
                         cursor,
                         me,
+                        scope,
+                        units,
+                        tags,
                         timeout,
                         settle,
                         settle_max,
@@ -390,6 +406,14 @@ const TOOLS: &[(&str, &str)] = &[
     ("submission", "a run's submitted fields so far"),
     ("unit_add", "add a recipe unit's steps"),
     ("unit_tag", "tag or untag a unit"),
+    (
+        "unit_claim",
+        "take units for your session (by name, pattern or tag)",
+    ),
+    (
+        "unit_release",
+        "hand your units to a session or the owner, or unown them",
+    ),
     ("edge_add", "add `after` ordering to a step"),
     ("edge_remove", "remove `after` ordering"),
     ("ask", "ask a step, a session or the owner a question"),
@@ -696,6 +720,8 @@ async fn normalize_args(
             args.entry("limit").or_insert(json!(200));
         }
         "log_wait" => {
+            listify(args, "units");
+            listify(args, "tags");
             args.entry("limit").or_insert(json!(200));
             let mut read = serde_json::Map::new();
             for key in [
@@ -742,6 +768,8 @@ async fn normalize_args(
         }
         "next" => {
             listify(args, "projects");
+            listify(args, "units");
+            listify(args, "tags");
             args.entry("all").or_insert(Value::Bool(false));
             args.entry("settles").or_insert(json!("short"));
             for (from, to, default) in [
@@ -764,6 +792,10 @@ async fn normalize_args(
             }
         }
         "drain" => listify(args, "projects"),
+        "unit_claim" | "unit_release" => {
+            listify(args, "units");
+            listify(args, "tags");
+        }
         "query" => {
             args.entry("params").or_insert(Value::Array(vec![]));
             args.entry("limit").or_insert(json!(200));
@@ -1391,6 +1423,9 @@ struct NextFlags {
     since_seq: Option<i64>,
     cursor: Option<PathBuf>,
     me: Option<String>,
+    scope: Option<String>,
+    units: Vec<String>,
+    tags: Vec<String>,
     timeout: u64,
     settle: u64,
     settle_max: u64,
@@ -1415,8 +1450,10 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
     if since.is_some_and(|seq| seq.0 < 0) {
         return Err(bad_request("--since-seq: expected a nonnegative sequence"));
     }
-    // "From now" is the top of the selected projects' logs; the command carries
-    // an explicit seq, so the CLI reads the same bounds the tool would start at.
+    // "From now" is the top of the selected projects' logs: without a since, an unnamed
+    // reader carries that explicit seq; a named one leaves it out and resumes after its last
+    // batch (its own position, kept by the coordinator).
+    let me = cli_me(flags.me.as_deref())?.map(|me| me.to_string());
     let reads = reads(home)?;
     let selected = {
         let wanted = projects.clone();
@@ -1458,18 +1495,26 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
             "no projects (none not archived); pass -p to name them",
         ));
     }
-    let since_seq = since.unwrap_or(top);
+    let since_seq = since.or((me.is_none()).then_some(top));
     let settles = match flags.settles.as_str() {
         "short" => Settles::Short,
         "full" => Settles::Full,
         "none" => Settles::None,
         _ => unreachable!("clap restricted"),
     };
-    let me = cli_me(flags.me.as_deref())?.map(|me| me.to_string());
+    let scope = match flags.scope.as_deref() {
+        Some("mine") => Some(sluice_model::commands::Scope::Mine),
+        Some("all") => Some(sluice_model::commands::Scope::All),
+        _ => None,
+    };
+    let list = |values: Vec<String>| (!values.is_empty()).then_some(values);
     let request = CommandRequest::Next(Next {
         projects,
         since_seq,
         me,
+        scope,
+        units: list(flags.units),
+        tags: list(flags.tags),
         timeout_seconds: flags.timeout.min(3600),
         all: flags.all,
         settle_seconds: flags.settle,
@@ -1485,7 +1530,14 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
     if let Some(path) = &flags.cursor {
         watch::save_cursor(path, result.last_seq)?;
     }
-    let out = watch::render(&result, settles, flags.cut, flags.json)?;
+    let cancels = {
+        let result = result.clone();
+        reads
+            .snapshot(move |sql| watch::Cancels::read(sql, &result))
+            .await
+            .map_err(|e| e.into_public(true))?
+    };
+    let out = watch::render(&result, settles, flags.cut, flags.json, &cancels)?;
     print!("{out}");
     std::io::stdout().flush().map_err(storage)?;
     Ok(())

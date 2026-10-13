@@ -374,8 +374,45 @@ async fn log_wait<H: ExecutionHost>(
         .map_err(public)?;
     let mut filter = records::RecordFilter::from(&request.read);
     filter.since = filter.since.or(Some(RecordSeq(0)));
+    // A named session reads its own scope by default, and each wait marks it as reading.
+    let me = request
+        .me
+        .as_deref()
+        .map(str::trim)
+        .filter(|me| !me.is_empty())
+        .map(sluice_model::identity::SessionName::parse)
+        .transpose()?;
+    let options = crate::watch::NextOptions {
+        me: me.as_ref().map(ToString::to_string),
+        scope: request.scope,
+        units: request.units.clone().unwrap_or_default(),
+        tags: request.tags.clone().unwrap_or_default(),
+        ..crate::watch::NextOptions::default()
+    };
+    filter.scope = Some(options.scope_filter()?);
+    let beat = || async {
+        let (Some(me), Some(project)) = (me.clone(), project) else {
+            return Ok(());
+        };
+        match broker
+            .writer()
+            .write(RetrySafety::Idempotent, move |tx| {
+                sluice_store::identities::beat(tx, project, &me)
+            })
+            .await
+        {
+            Err(PublicError::Busy { .. }) => Ok(()),
+            other => other,
+        }
+    };
+    beat().await?;
+    let mut beaten = tokio::time::Instant::now();
     let mut held = vec![];
     loop {
+        if beaten.elapsed() >= Duration::from_secs(30) {
+            beat().await?;
+            beaten = tokio::time::Instant::now();
+        }
         let remaining = (request.read.limit as usize).saturating_sub(held.len());
         if remaining == 0 {
             // The bounded page is full of notes. Wait for a waking record without
@@ -427,7 +464,7 @@ async fn log_wait<H: ExecutionHost>(
             }
         }
         tokio::select! {
-            _ = tokio::time::sleep_until(deadline) => {},
+            _ = tokio::time::sleep_until(deadline.min(beaten + Duration::from_secs(30))) => {},
             changed = changes.wait() => { changed.map_err(public)?; },
         }
     }

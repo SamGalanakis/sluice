@@ -322,6 +322,73 @@ pub struct UnitTag {
     pub edit: EditOptions,
 }
 
+/// `unit_claim` (SPEC §8.1): the calling session takes the selected units, in one write. Select
+/// by `unit`, `units` (names or `*`/`?` patterns) and `tags` (a unit carrying any of them);
+/// together they select every unit any of them names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UnitClaim {
+    pub project: ProjectSelector,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    /// Only the selected units this owner holds now (`@session`, `owner` or `unowned`); alone,
+    /// every unit it holds. It is also the owner expected, unless `expected_owner` says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owned_by: Option<String>,
+    /// The owner each selected unit must have now (`@session`, `owner`, or `unowned`): a
+    /// compare-and-set; any other owner is a `conflict` and nothing changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_owner: Option<String>,
+    /// Take a unit the person (`owner`) holds, or one whose owner is reading.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub force: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The claiming session, `@name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<String>,
+}
+
+/// `unit_release` (SPEC §8.1): the calling session hands the selected units it owns to `to`
+/// (`@session` or `owner`), or leaves them unowned, so the project's fallback answers them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UnitRelease {
+    pub project: ProjectSelector,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    /// Only the selected units this owner holds now (`@session`, `owner` or `unowned`); alone,
+    /// every unit it holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owned_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// Release units another session (or the person) owns.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub force: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<String>,
+}
+
+/// Whose records a wait reads (`next`, `log_wait`): a named session's own (`mine`, its
+/// default) or everyone's (`all`, an unnamed caller's only scope).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Scope {
+    Mine,
+    All,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PlanPrune {
@@ -524,9 +591,14 @@ pub struct Messages {
     pub view: MessageView,
     pub thread: Option<String>,
     pub since: Option<MessageId>,
-    /// Read as the owner (the dashboard's identity) instead of the orchestrator.
+    /// Read as the owner (the dashboard's identity) instead of the caller.
     #[serde(default, skip_serializing_if = "is_false")]
     pub owner: bool,
+    /// The reading session, `@name`: the inbox and history are its own. Without one (and
+    /// without `owner`) they are what was addressed to `orchestrator` before sessions named
+    /// themselves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<String>,
 }
 
 /// The owner sets a cancelled step aside (`dismissed`), or back: a dismissed cancel stays on
@@ -586,6 +658,18 @@ pub struct LogWait {
     pub read: LogRead,
     pub timeout_seconds: u64,
     pub questions_only: bool,
+    /// The waiting session, `@name`: its scope defaults to `mine`, and each wait marks it as
+    /// reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Scope>,
+    /// Only these units' records (names or `*`/`?` patterns), with messages to or from you.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<Vec<String>>,
+    /// Only the records of units carrying one of these tags, with messages to or from you.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 /// `step_wait`: wait until every selected step's status meets `until`, or `timeout_seconds`
@@ -691,11 +775,25 @@ pub struct StepWaitResult {
 #[serde(deny_unknown_fields)]
 pub struct Next {
     pub projects: Vec<ProjectSelector>,
-    pub since_seq: RecordSeq,
+    /// Records after this seq. Left out, a named session resumes after the last batch it was
+    /// given (its own cursor) and an unnamed one starts at the top of the logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_seq: Option<RecordSeq>,
     /// The waiting session, `@name`: questions to it wake the wait, and its own messages and
     /// pauses never do. Without one, a question to any session wakes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub me: Option<String>,
+    /// `mine` (a named session's default): its own units' records (the fallback's are the
+    /// unowned units'), messages to or from it and the projects' own records; `all` (an
+    /// unnamed caller's only scope): everyone's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Scope>,
+    /// Only these units' records (names or `*`/`?` patterns), with messages to or from you.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<Vec<String>>,
+    /// Only the records of units carrying one of these tags, with messages to or from you.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
     pub timeout_seconds: u64,
     pub all: bool,
     pub settle_seconds: u64,
@@ -1083,6 +1181,8 @@ pub enum CommandRequest {
     StepRemove(StepRemove),
     StepPause(StepPause),
     UnitTag(UnitTag),
+    UnitClaim(UnitClaim),
+    UnitRelease(UnitRelease),
     PlanPrune(PlanPrune),
     PlanSetInput(PlanSetInput),
     StepSetInput(StepSetInput),

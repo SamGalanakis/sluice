@@ -701,10 +701,19 @@ impl<H: ExecutionHost> Coordinator<H> {
                 .reads()
                 .snapshot(move |sql| {
                     let id = messages_project(sql, &request.project)?;
-                    let identity = if request.owner {
-                        sluice_store::messages::OWNER_STREAM
-                    } else {
-                        sluice_store::messages::ORCHESTRATOR_STREAM
+                    // The owner's (the dashboard's), a session's own, else the inbox of what
+                    // was addressed to `orchestrator` before sessions named themselves.
+                    let me = request
+                        .me
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|me| !me.is_empty())
+                        .map(sluice_model::identity::SessionName::parse)
+                        .transpose()?;
+                    let identity = match (&me, request.owner) {
+                        (_, true) => sluice_store::messages::OWNER_STREAM,
+                        (Some(me), false) => me.as_str(),
+                        (None, false) => sluice_store::messages::ORCHESTRATOR_STREAM,
                     };
                     let messages = sluice_store::messages::messages(
                         sql,
@@ -779,8 +788,77 @@ impl<H: ExecutionHost> Coordinator<H> {
                 })
                 .await
                 .map_err(|e| e.into_public(true)),
+            CommandRequest::UnitClaim(request) => self.handoff(Handoff::Claim(request)).await,
+            CommandRequest::UnitRelease(request) => self.handoff(Handoff::Release(request)).await,
             _ => Err(PublicError::not_implemented("command dispatch extension")),
         }
+    }
+    /// `unit_claim` and `unit_release` (SPEC §8.1): the units selected, moved between owners
+    /// in one write with their open questions and the note that records it. Not plan work: no
+    /// revision, and taken during a drain.
+    async fn handoff(&self, handoff: Handoff) -> Result<CommandReply, PublicError> {
+        use sluice_store::identities;
+        let (project, unit, units, tags, owned_by, me) = match &handoff {
+            Handoff::Claim(c) => (&c.project, &c.unit, &c.units, &c.tags, &c.owned_by, &c.me),
+            Handoff::Release(r) => (&r.project, &r.unit, &r.units, &r.tags, &r.owned_by, &r.me),
+        };
+        let me = sluice_model::identity::SessionName::parse(me.as_deref().unwrap_or(""))?;
+        let (project, unit, units, tags, owned_by) = (
+            project.clone(),
+            unit.clone(),
+            units.clone().unwrap_or_default(),
+            tags.clone().unwrap_or_default(),
+            owned_by.clone(),
+        );
+        self.writer()
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                let id = messages_project(tx.sql(), &project)?;
+                let selected = identities::select_units(
+                    tx.sql(),
+                    id,
+                    unit.as_deref(),
+                    &units,
+                    &tags,
+                    owned_by.as_deref(),
+                )?;
+                let done = match &handoff {
+                    Handoff::Claim(c) => identities::claim(
+                        tx,
+                        id,
+                        &me,
+                        &selected,
+                        c.expected_owner.as_deref().or(owned_by.as_deref()),
+                        c.force,
+                        c.reason.as_deref().unwrap_or(""),
+                    )?,
+                    Handoff::Release(r) => identities::release(
+                        tx,
+                        id,
+                        &me,
+                        &selected,
+                        r.to.as_deref(),
+                        r.force,
+                        r.reason.as_deref().unwrap_or(""),
+                    )?,
+                };
+                let questions: Vec<Value> = done
+                    .questions
+                    .iter()
+                    .map(|q| {
+                        json!({"id": q.id, "from": q.from, "to": q.to, "title": q.title,
+                               "body": q.body.lines().next().unwrap_or("").chars().take(200).collect::<String>()})
+                    })
+                    .collect();
+                let reply = json!({
+                    "project": projects_identity(tx.sql(), id)?,
+                    "units": done.units,
+                    "unchanged": done.unchanged,
+                    "questions": questions,
+                    "notices": done.notices,
+                });
+                Ok(CommandReply::Data(reply.try_into()?))
+            })
+            .await
     }
     /// `step_settle` (SPEC §7.5): settle a step that is finishing (its one current run has a
     /// valid submission) on that submission. Only a bare agent fn's step: the outputs are the
@@ -3161,4 +3239,10 @@ pub(crate) fn board_drops(
             was: Some(before),
         },
     ))
+}
+
+/// A claim or a release (`Coordinator::handoff`).
+enum Handoff {
+    Claim(sluice_model::commands::UnitClaim),
+    Release(sluice_model::commands::UnitRelease),
 }

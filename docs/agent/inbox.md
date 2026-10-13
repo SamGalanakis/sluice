@@ -18,9 +18,9 @@ a note is never read for having been shown.
   unowned one in a project with no fallback) asks the person directly.
 - Wait for the answer with `log_wait(project, since_seq, wake="questions")`, or let `next`
   return it: a `message` record is written for the question and for the reply. Or read the
-  `messages(project, view="inbox")` views: `"inbox"` (the open questions, then the unread notes and
-  replies, addressed to `orchestrator` before sessions named themselves; `owner: true` for the
-  owner's), `"questions"` (every open question in the project,
+  `messages(project, view="inbox")` views: `"inbox"` (your open questions, with those addressed
+  to `orchestrator` before sessions named themselves, then your unread notes and replies;
+  without a name, what was addressed to `orchestrator`; `owner: true` for the owner's), `"questions"` (every open question in the project,
   whoever it is addressed to), `"history"` (threads you took part in), `"thread"` (one thread
   in full). Each question shows its `state`: `open`, `answered` (with `answered_by`) or
   `closed`.

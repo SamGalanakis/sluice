@@ -274,6 +274,11 @@ with no fallback asks the person. The owner never appears in the plan's export
 (`plan_get`) or history: it is not part of the plan. Read it with `query`: `SELECT unit,
 owner FROM steps WHERE project_id = ? GROUP BY unit`.
 
+To take units over, or hand them on, without editing the plan, use `unit_claim` and
+`unit_release` (`docs("threads")`, Owners): `unit_claim(project, units=["pe-*"])` makes you the
+owner of every unit the patterns (or `tags`) select, all or none, and their open questions
+come with them.
+
 ## Recipes: the same unit again and again
 When every unit of work has the same shape (a worktree, an agent working in it, the worktree
 removed), write it once as a recipe and add each unit with one call. A recipe is a file

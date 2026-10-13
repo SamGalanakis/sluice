@@ -1,8 +1,9 @@
 //! One durable wake filter shared by next and watch. No plan reconstruction at read time.
 use crate::calls::{parse_id, public};
+use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::{MessageVerb, Next, NextResult, Settles, StepStatus},
+    commands::{MessageVerb, Next, NextResult, Scope, Settles, StepStatus},
     error::PublicError,
     events::{Event, Record, UnitStep},
     ids::{ProjectId, ProjectSelector, RecordSeq, Revision, WorkGeneration},
@@ -11,8 +12,8 @@ use sluice_model::{
     units::settled_steps,
 };
 use sluice_store::{
-    ChangeKey, ReadPool, RetrySafety, WriteTransaction, Writer, messages, plans,
-    records::{self, RecordFilter},
+    ChangeKey, ReadPool, RetrySafety, WriteTransaction, Writer, identities, messages, plans,
+    records::{self, RecordFilter, ScopeFilter},
 };
 use std::{path::Path, time::Duration};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -241,6 +242,11 @@ pub struct NextOptions {
     /// The waiting session, `@name`, or none (an unnamed reader, kept as
     /// `messages::ANONYMOUS_READER`).
     pub me: Option<String>,
+    /// Whose records: `None` is `mine` for a named session, `all` for an unnamed one.
+    pub scope: Option<Scope>,
+    /// Only these units' records (patterns) / those of units carrying one of these tags.
+    pub units: Vec<String>,
+    pub tags: Vec<String>,
     pub timeout: Option<Duration>,
     pub all: bool,
     pub settle: Duration,
@@ -256,6 +262,9 @@ impl Default for NextOptions {
             projects: vec![],
             since_seq: None,
             me: None,
+            scope: None,
+            units: vec![],
+            tags: vec![],
             timeout: None,
             all: false,
             settle: Duration::from_secs(20),
@@ -265,6 +274,30 @@ impl Default for NextOptions {
             threads: vec![],
             clock: Clock::default(),
         }
+    }
+}
+impl NextOptions {
+    /// The scope it reads: as given, else `mine` for a named session and `all` for an unnamed
+    /// one. `mine` without a name is refused.
+    pub fn scope(&self) -> Result<Scope, PublicError> {
+        match (self.scope, &self.me) {
+            (Some(Scope::Mine), None) => Err(sluice_model::identity::refusal(
+                "scope",
+                "scope mine is a named session's: pass me=@name (or SLUICE_ME), or scope all",
+            )),
+            (Some(scope), _) => Ok(scope),
+            (None, Some(_)) => Ok(Scope::Mine),
+            (None, None) => Ok(Scope::All),
+        }
+    }
+    /// The record filter for its scope (`next`'s, and `log_wait`'s).
+    pub fn scope_filter(&self) -> Result<ScopeFilter, PublicError> {
+        Ok(ScopeFilter {
+            me: self.me.clone(),
+            mine: self.scope()? == Scope::Mine,
+            units: self.units.clone(),
+            tags: self.tags.clone(),
+        })
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +313,8 @@ async fn batch(
     cursor: RecordSeq,
 ) -> Result<(Vec<(Record, Classification)>, RecordSeq), PublicError> {
     let options = options.clone();
+    let scope = options.scope_filter()?;
+    let mine = scope.mine;
     reads
         .snapshot(move |sql| {
             let mut gathered = vec![];
@@ -294,6 +329,7 @@ async fn batch(
                         limit: 200,
                         kinds: options.kinds.clone(),
                         threads: options.threads.clone(),
+                        scope: Some(scope.clone()),
                         ..RecordFilter::default()
                     },
                 )?
@@ -321,15 +357,18 @@ async fn batch(
                             ..
                         } => Classification::Wake,
                         Event::Message(msg) => {
-                            let wake = messages::message_wakes(
-                                sql,
-                                record.project.ok_or_else(|| PublicError::Invalid {
-                                    message: "message record without project".into(),
-                                    errors: vec![],
-                                })?,
-                                msg,
-                                options.me.as_deref(),
-                            )?;
+                            // Own messages never wake; in scope all a question to any session
+                            // does, in scope mine only one to the reader.
+                            let wake = options.me.as_deref() != Some(msg.from.as_str())
+                                && messages::message_wakes(
+                                    sql,
+                                    record.project.ok_or_else(|| PublicError::Invalid {
+                                        message: "message record without project".into(),
+                                        errors: vec![],
+                                    })?,
+                                    msg,
+                                    options.me.as_deref().filter(|_| mine),
+                                )?;
                             if wake {
                                 Classification::Wake
                             } else if !msg.is_question()
@@ -343,6 +382,13 @@ async fn batch(
                         Event::ProjectPause { author, .. }
                         | Event::ProjectArchive { author, .. }
                             if options.me.as_deref() != Some(author.as_str()) =>
+                        {
+                            Classification::Wake
+                        }
+                        // A named session hears who answers the unowned units now.
+                        Event::ProjectUpdate { fields, author, .. }
+                            if options.me.as_deref().is_some_and(|me| me != author)
+                                && fields.iter().any(|f| f == "fallback") =>
                         {
                             Classification::Wake
                         }
@@ -395,8 +441,11 @@ pub async fn next_command(
         reads,
         NextOptions {
             projects: selected,
-            since_seq: Some(request.since_seq),
+            since_seq: request.since_seq,
             me,
+            scope: request.scope,
+            units: request.units.unwrap_or_default(),
+            tags: request.tags.unwrap_or_default(),
             timeout: Some(Duration::from_secs(request.timeout_seconds)),
             all: request.all,
             settle: Duration::from_secs(request.settle_seconds),
@@ -424,18 +473,42 @@ pub async fn next(
             message: "reader must be nonblank and cursor/alert threshold nonnegative".into(),
         });
     }
+    options.scope()?;
     options.projects = projects(reads, options.projects).await?;
+    // Without a since: a named session resumes where its last batch ended (the earliest of
+    // its positions in the selected projects); an unnamed one, or a session's first wait,
+    // starts at the top of the logs.
     let mut cursor = if let Some(seq) = options.since_seq {
         seq
     } else {
         let selected = options.projects.clone();
+        let me = options.me.clone();
         reads
             .snapshot(move |sql| {
                 let mut top = RecordSeq(0);
+                let mut resumed: Option<RecordSeq> = None;
                 for p in selected {
                     top = RecordSeq(top.0.max(records::bounds(sql, Some(p))?.1.0));
+                    // A position the log no longer reaches back to is dropped, not refused.
+                    if let Some(me) = &me
+                        && let Some(at) = identities::resume(sql, p, me)?
+                        && matches!(
+                            records::read_records(
+                                sql,
+                                Some(p),
+                                &RecordFilter {
+                                    since: Some(at),
+                                    limit: 1,
+                                    ..RecordFilter::default()
+                                },
+                            )?,
+                            records::RecordRead::Page(_)
+                        )
+                    {
+                        resumed = Some(resumed.map_or(at, |r| RecordSeq(r.0.min(at.0))));
+                    }
                 }
-                Ok(top)
+                Ok(resumed.unwrap_or(top))
             })
             .await
             .map_err(public)?
@@ -654,26 +727,172 @@ fn one(value: &Value, cut: usize) -> String {
         .unwrap_or_else(|| value.to_string());
     cut_text(&s.split_whitespace().collect::<Vec<_>>().join(" "), cut)
 }
-pub fn line(record: &Record, settles: Settles, cut: usize) -> Result<String, PublicError> {
+/// A message body over this many characters is shown as its first paragraph and the
+/// paragraphs that ask (`body_shown`).
+pub const BODY_WHOLE: usize = 4000;
+
+/// A message's body as `next` prints it: whole, unless it is over `BODY_WHOLE` characters;
+/// then its first paragraph and every later paragraph that is a marked question (it starts
+/// with "Question" or "Q:", or ends with "?"), each whole, and how much is left out and where
+/// to read it. Paragraphs are split at blank lines, so nothing is cut mid-sentence.
+pub fn body_shown(body: &str, id: i64, thread: &str) -> String {
+    let body = body.trim();
+    let total = body.chars().count();
+    if total <= BODY_WHOLE {
+        return body.to_owned();
+    }
+    let mut paragraphs = vec![];
+    let mut current: Vec<&str> = vec![];
+    for line in body.lines() {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(current.join("\n"));
+                current.clear();
+            }
+        } else {
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        paragraphs.push(current.join("\n"));
+    }
+    let asks = |paragraph: &str| {
+        let lead = paragraph
+            .trim_start_matches(|c: char| c.is_whitespace() || "#*->_`".contains(c))
+            .to_lowercase();
+        lead.starts_with("question")
+            || lead.starts_with("q:")
+            || paragraph.trim_end().ends_with('?')
+    };
+    let mut kept: Vec<&str> = vec![];
+    for (i, paragraph) in paragraphs.iter().enumerate() {
+        if i == 0 || asks(paragraph) {
+            kept.push(paragraph);
+        }
+    }
+    let shown = kept.join("\n\n");
+    let left = total.saturating_sub(shown.chars().count());
+    format!(
+        "{shown}\n\n[{left} more characters of #{id} not shown: messages(view=\"thread\", thread=\"{thread}\") reads it whole]"
+    )
+}
+
+/// The steps whose failure a settlement shows was a cancel, by the settlement's seq: what the
+/// `UNIT ... settled` line needs beyond the record, read from the step's last `step.status`
+/// record before the settlement (else its stored error while it is still failed).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Cancels(std::collections::BTreeSet<(i64, String)>);
+impl Cancels {
+    pub fn read(sql: &rusqlite::Connection, result: &NextResult) -> sluice_store::Result<Self> {
+        let mut found = std::collections::BTreeSet::new();
+        for record in result.records.iter().chain(&result.notes) {
+            let (Event::UnitSettled { steps, .. }, Some(project)) = (&record.event, record.project)
+            else {
+                continue;
+            };
+            for step in steps.iter().filter(|s| s.status == StepStatus::Failed) {
+                let last: Option<String> = sql
+                    .query_row(
+                        "SELECT payload FROM records WHERE project_id=?1 AND kind='step.status' AND step_id=?2 AND seq<?3 ORDER BY seq DESC LIMIT 1",
+                        rusqlite::params![project.to_string(), step.id.as_str(), record.seq.0],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let cancel = match last.map(|p| serde_json::from_str::<Event>(&p)).transpose()? {
+                    Some(Event::StepStatus {
+                        to: StepStatus::Failed,
+                        error,
+                        ..
+                    }) => error.as_ref().is_some_and(sluice_model::shown::is_cancel),
+                    _ => sql
+                        .query_row(
+                            "SELECT error FROM steps WHERE project_id=?1 AND step_id=?2 AND status='failed'",
+                            rusqlite::params![project.to_string(), step.id.as_str()],
+                            |r| r.get::<_, Option<String>>(0),
+                        )
+                        .optional()?
+                        .flatten()
+                        .is_some_and(|e| sluice_model::shown::stored_is_cancel(&e)),
+                };
+                if cancel {
+                    found.insert((record.seq.0, step.id.to_string()));
+                }
+            }
+        }
+        Ok(Self(found))
+    }
+    pub fn contains(&self, seq: RecordSeq, step: &str) -> bool {
+        self.0.contains(&(seq.0, step.to_owned()))
+    }
+}
+
+/// How a settled unit ended, from its steps' statuses (a cancelled step is a failed one whose
+/// failure was a cancel): `succeeded` when none failed, was cancelled or turned stale (or
+/// `skipped`/`held` when none even succeeded); the one way it went wrong (`failed`, `2
+/// failed`, `cancelled`, `stale`); or each count when they are mixed (`1 failed, 1
+/// cancelled`).
+pub fn outcome(steps: &[UnitStep], cancelled: impl Fn(&UnitStep) -> bool) -> String {
+    let count = |want: &dyn Fn(&UnitStep) -> bool| steps.iter().filter(|s| want(s)).count();
+    let bad = [
+        (
+            "failed",
+            count(&|s| s.status == StepStatus::Failed && !cancelled(s)),
+        ),
+        (
+            "cancelled",
+            count(&|s| s.status == StepStatus::Failed && cancelled(s)),
+        ),
+        ("stale", count(&|s| s.status == StepStatus::Stale)),
+    ];
+    let present: Vec<(&str, usize)> = bad.into_iter().filter(|(_, n)| *n > 0).collect();
+    match present.as_slice() {
+        [] if count(&|s| s.status == StepStatus::Succeeded) > 0 => "succeeded".into(),
+        [] if count(&|s| s.status == StepStatus::Skipped) > 0 => "skipped".into(),
+        [] => "held".into(),
+        [(word, 1)] => (*word).to_owned(),
+        [(word, n)] => format!("{n} {word}"),
+        mixed => mixed
+            .iter()
+            .map(|(word, n)| format!("{n} {word}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
+}
+
+pub fn line(
+    record: &Record,
+    settles: Settles,
+    cut: usize,
+    cancels: &Cancels,
+) -> Result<String, PublicError> {
     if cut == 0 {
         return Err(PublicError::BadRequest {
             message: "cut must be positive".into(),
         });
     }
     Ok(match &record.event {
-        Event::Message(m) => format!(
-            "{} #{} {} {} -> {}: {}",
-            match m.verb {
-                MessageVerb::Ask => "ASK",
-                MessageVerb::Say => "SAY",
-                MessageVerb::Reply => "REPLY",
-            },
-            m.id.0,
-            m.thread,
-            m.from,
-            m.to.as_deref().unwrap_or("-"),
-            m.body.trim().replace('\n', "\n  ")
-        ),
+        Event::Message(m) => {
+            // The `#id` to reply to sits on the verb's line; a question's title leads it.
+            let body = body_shown(&m.body, m.id.0, &m.thread);
+            let text = match m.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+                Some(title) if body.is_empty() => title.to_owned(),
+                Some(title) => format!("{title}\n{body}"),
+                None => body,
+            };
+            format!(
+                "{} #{} {} {} -> {}: {}",
+                match m.verb {
+                    MessageVerb::Ask => "ASK",
+                    MessageVerb::Say => "SAY",
+                    MessageVerb::Reply => "REPLY",
+                },
+                m.id.0,
+                m.thread,
+                m.from,
+                m.to.as_deref().unwrap_or("-"),
+                text.replace('\n', "\n  ")
+            )
+        }
         Event::StepStatus {
             step,
             from,
@@ -707,16 +926,28 @@ pub fn line(record: &Record, settles: Settles, cut: usize) -> Result<String, Pub
             let marks = steps
                 .iter()
                 .map(|s| {
+                    let status = if s.status == StepStatus::Failed
+                        && cancels.contains(record.seq, s.id.as_str())
+                    {
+                        "cancelled"
+                    } else {
+                        s.status.as_str()
+                    };
                     format!(
-                        "{} {}{}",
+                        "{} {status}{}",
                         name(&s.id),
-                        s.status.as_str(),
                         if s.held { " (held)" } else { "" }
                     )
                 })
                 .collect::<Vec<_>>()
                 .join(" · ");
-            let mut lines = vec![format!("UNIT {unit} settled: {marks}")];
+            let marks = if marks.is_empty() {
+                "no steps".to_owned()
+            } else {
+                marks
+            };
+            let ended = outcome(steps, |s| cancels.contains(record.seq, s.id.as_str()));
+            let mut lines = vec![format!("UNIT {unit} settled · {ended}: {marks}")];
             let mut omitted = vec![];
             if settles != Settles::None {
                 for step in steps {
@@ -801,11 +1032,14 @@ pub fn line(record: &Record, settles: Settles, cut: usize) -> Result<String, Pub
         }
     })
 }
+/// `sluice next`'s text: one entry per record, messages first, then a blank line and the
+/// batch's cursor, `seq N` (`timeout seq N`), kept apart from the `#id`s the entries carry.
 pub fn render(
     result: &NextResult,
     settles: Settles,
     cut: usize,
     json_lines: bool,
+    cancels: &Cancels,
 ) -> Result<String, PublicError> {
     let mut lines = vec![];
     for record in messages_first(result) {
@@ -814,18 +1048,21 @@ pub fn render(
                 message: e.to_string(),
             })?
         } else {
-            line(record, settles.clone(), cut)?
+            line(record, settles.clone(), cut, cancels)?
         });
     }
-    lines.push(if json_lines {
-        json!({"seq":result.last_seq,"timed_out":result.timed_out}).to_string()
+    if json_lines {
+        lines.push(json!({"seq":result.last_seq,"timed_out":result.timed_out}).to_string());
     } else {
-        format!(
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push(format!(
             "{}seq {}",
             if result.timed_out { "timeout " } else { "" },
             result.last_seq.0
-        )
-    });
+        ));
+    }
     Ok(lines.join("\n") + "\n")
 }
 

@@ -89,6 +89,52 @@ person), or nobody. A unit you add is yours: `step_add`, `unit_add` and `plan_ed
 `fallback` answers unowned units: `project_update(project, fallback="@lash-f4")`; with no
 fallback, a worker of an unowned unit asks the person.
 
+**Starting.** Name yourself, set the fallback of a project you drive if it has none
+(`project_update(project, fallback="@lash-f4")`), and hold one wait:
+`next(projects=["lash"], timeout=3600)` (from a shell, `SLUICE_ME=@lash-f4 sluice next -p lash
+--timeout 3600`, in a loop). It shows you your scope, `mine`: your units' settles, failures and
+records, the unowned units' when you are the fallback (or when the project has none), questions
+and notes to you or your units' steps, replies to your questions, and the project's own events
+(a pause, an archive, a new fallback). Other sessions' units never wake you, so you need no
+filter of your own. `scope="all"` reads everyone's (an unnamed caller's only scope);
+`units=["pe-*"]` or `tags=["arc:x"]` narrow either scope to those units, keeping messages to
+you. `log_wait` takes the same `me`, `scope`, `units` and `tags`.
+
+**Your position.** Each session's `next` keeps its own position: called without `since_seq`
+it resumes after the last batch it was given, so two sessions never share or race one cursor
+and a watcher needs no cursor file or lock. Passing `since_seq` (or `--cursor FILE` from a
+shell) reads from there instead. An unnamed `next` starts at the top of the logs.
+
+**Handing off and taking over.** Ownership moves only by these two calls, each one write, all
+or none, and neither is plan work (no `rev`; allowed during a drain):
+
+- `unit_claim(project, unit | units | tags | owned_by, expected_owner?, force?, reason?)` makes
+  you the owner of every unit selected (`owned_by="@x"` keeps the units `@x` holds now; alone,
+  all of them). A unit is taken when it is unowned or its owner has not waited (`next` or
+  `log_wait`) in the last 10 minutes. A live owner's unit is a `conflict` naming it and its last
+  heartbeat: agree with it first, then take it with `expected_owner="@it"`, a compare-and-set
+  that refuses if the owner changed meanwhile. A unit the person holds needs `force`.
+- `unit_release(project, unit | units | tags | owned_by, to?, reason?)` hands units you own to
+  `to` (an `@session` registered in the project, or `owner`), or, without `to`, leaves them
+  unowned, so the fallback answers them.
+
+Either way the units' open questions to whoever answered them before (and those sent to
+`orchestrator` before sessions named themselves) are re-addressed to whoever answers them now,
+listed in the reply's `questions`, and `sluice` leaves a note saying who moved what to the
+party that lost (on a claim) or gained (on a release) the units, its `data.unit_owner`
+`{by, reason, units: [{unit, from, to}], questions}`. Later questions route to the new owner.
+
+To take over a session that stopped (its units, its questions), select by who holds them, which
+is also the compare-and-set (a unit it no longer holds is left alone):
+
+```
+unit_claim(project="lash", owned_by="@lash-f4", reason="lash-f4 stopped")
+→ {"units": [{"unit": "pe-a", "from": "@lash-f4", "to": "@lash-f5"}, ...],
+   "questions": [{"id": 312458, "from": "pe-a-work", "to": "@lash-f5", ...}], ...}
+```
+
+A successor that reuses the stopped session's name needs no claim: it is that session.
+
 ## Messages and threads
 Three verbs; the thread and the sender are derived, never given, and the recipient is checked
 and stored as resolved:
@@ -166,24 +212,27 @@ needed a reply, else a note).
   is `{"seq", "at", "project", "kind": "message", "id", "verb", "from", "to", "thread",
   "body", ..., "posted_at"}`; `messages(project, "thread", thread="step-work")` reads a
   thread's rows directly (`{project, messages, last_id}`). `messages(project)` defaults to
-  `view="inbox"` and reads your inbox: your open questions, then the notes and replies to you not yet read (pass
+  `view="inbox"` and reads your inbox: your open questions (with those sent to `orchestrator`
+  before sessions named themselves), then the notes and replies to you not yet read (pass
   `owner: true` to read the owner's).
 - Wake only on questions: `log_wait(..., wake="questions")` (and `message.wait`'s `wake`
   input) does not return for a note or a reply; they come back with the next question or
   record that does wake it, or when `timeout` passes, so nothing is lost and nothing wakes
   you early.
-- `next(projects, since_seq)` waits on your behalf across projects (all live projects when
-  `projects` is empty): it wakes on a question to you, on a reply that answers a question,
-  not written by you, on a step that failed, turned stale or was skipped, on a unit that
-  settled, and on a project paused or archived by someone else. A unit settles when every one
+- `next(projects, since_seq?)` waits on your behalf across projects (all live projects when
+  `projects` is empty), in your scope (above): it wakes on a question to you, on a reply that
+  answers a question, not written by you, on a step that failed, turned stale or was skipped,
+  on a unit that settled, on a project paused or archived by someone else, and on a new
+  fallback. A unit settles when every one
   of its steps is settled as `step_wait`'s `"settled"` means: one whose next step waits on
   work still running, in it or in another unit, has not. It settles again each time it comes
   to rest differently (retried, its pause or a value acted on, then finished). Notes ride
   along in `notes`.
   It returns `{records, notes, last_seq, timed_out}`. With your name (`me`, or your session's
-  binding, or `SLUICE_ME` for `sluice next`) it wakes on questions to you; without one, on a
-  question to any session. `since_seq` defaults to 0, so pass the `last_seq` you hold. Each
-  wait also marks you as reading, which senders' receipts reflect.
+  binding, or `SLUICE_ME` for `sluice next`) it wakes on questions to you; without one, or with
+  `scope="all"`, on a question to any session. Without `since_seq` it resumes after your last
+  batch (unnamed: from now). Each wait (and each `log_wait`) also marks you as reading, which
+  senders' receipts and `unit_claim` reflect.
 
 In a plan, the fns `message.ask`, `message.say` and `message.reply` take the tools'
 arguments and return `{id, receipt}` (`message.ask` also `reply`, below), speaking as the
@@ -242,10 +291,16 @@ hash and make the corrected result stale.
 ## Watching from a shell
 `sluice watch -p myproj [--kinds k1,k2] [--threads a,b] [--since-seq N] [--wake any|questions]`
 follows the log from now (or after `--since-seq`) and prints each matching record as one JSON
-line; it never exits. `sluice next` is the same wait as the `next` tool, printed one line per
-event and ending with `seq N`. Message lines have the form
-`ASK|SAY|REPLY #<message-id> <thread> <from> -> <to>: <body>`: the second token always
-names the message, so an ASK can be answered directly with `--to-message <message-id>`.
+line; it never exits. `sluice next` is the same wait as the `next` tool, printed one entry per
+event and ending, after a blank line, with `seq N`. Message entries have the form
+`ASK|SAY|REPLY #<message-id> <thread> <from> -> <to>: <title or body>`, the rest of the body on
+the lines after, indented: the second token always names the message, so an ASK can be
+answered directly with `--to-message <message-id>`. A body is printed whole up to 4,000
+characters; a longer one shows its first paragraph and each paragraph that asks ("Question:",
+"Q:", or ending in "?"), whole, and how to read the rest. A settled unit reads `UNIT <u> settled
+· <outcome>: <step> <status> · …`, the outcome first (`succeeded`, `failed`, `cancelled`,
+`stale`, or counts when mixed: `1 failed, 1 cancelled`), so `UNIT x settled · failed: work
+failed · rm pending (held)` never reads as a success.
 Reply with the `#N` on the ASK line; the batch's final `seq N` is the cursor for `--since-seq`.
 `log_wait` and JSON `next` carry `id` too. The last-message summary in `status(view="units")`
 begins with `#<message-id>`; the rendered line includes it when it shows that message.
