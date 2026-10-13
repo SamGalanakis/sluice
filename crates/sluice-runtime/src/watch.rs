@@ -5,10 +5,10 @@ use sluice_model::{
     commands::{MessageVerb, Next, NextResult, Settles, StepStatus},
     error::PublicError,
     events::{Event, Record, UnitStep},
-    gates::{GateDecision, evaluate_step},
     ids::{ProjectId, ProjectSelector, RecordSeq, Revision, WorkGeneration},
     plan::Plan,
     rpc::JsonMap,
+    units::settled_steps,
 };
 use sluice_store::{
     ChangeKey, ReadPool, RetrySafety, WriteTransaction, Writer, messages, plans,
@@ -20,10 +20,18 @@ use tokio_util::sync::CancellationToken;
 
 /// Called by reconciliation after status, pause and plan edits, in their transaction, with
 /// the plan compiled at `rev` (the stored revision, or the call is refused as stale).
-/// A generation certificate survives feed trimming; outputs and membership freeze here.
-/// Only the units whose steps' generations moved since their last settlement are looked at:
-/// every step's generation is read at once, and a unit whose stamp its last settlement
-/// already recorded is skipped before its state is evaluated.
+/// A unit settles (§6.7) each time it comes to rest unlike its last settlement: with another
+/// stamp (each member's id, generation and work generation) or other member statuses. The
+/// certificate (`settlements` in the maintenance settings: `signature` the stamp, `statuses`,
+/// `work`) survives feed trimming; outputs and membership freeze here. Every step's stamp is
+/// read at once, a unit whose stamp and statuses its last settlement already recorded is
+/// skipped before its state is evaluated, and the plan's settled steps (§7.1) are worked out
+/// once, at the first unit that needs them.
+///
+/// A certificate written before statuses were recorded (no `statuses`) whose stamp still
+/// matches is upgraded without a record: it takes the current statuses if the unit is at rest,
+/// or none (`[]`, so its next rest settles) if not. `signature` keeps its meaning, so a release
+/// from before statuses reads the certificates as it wrote them.
 pub fn record_settlements(
     tx: &mut WriteTransaction<'_>,
     project: ProjectId,
@@ -56,7 +64,9 @@ pub fn record_settlements(
             Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?)))
         })?
         .collect::<Result<_, _>>()?;
+    let mut held = None;
     let mut emitted = vec![];
+    let mut upgraded = false;
     for unit in plan.units().values() {
         let mut stamp = vec![];
         let mut work = 1;
@@ -73,8 +83,24 @@ pub fn record_settlements(
         }
         let key = format!("{project}/{}", unit.name);
         let stamp = Value::Array(stamp);
+        let statuses: Value = unit
+            .steps
+            .iter()
+            .map(|id| json!(state.status(id)))
+            .collect();
         let previous = &settings["settlements"][&key];
-        if previous["signature"] == stamp || !unit.settled(plan, &state) {
+        let same = previous["signature"] == stamp;
+        if same && previous["statuses"] == statuses {
+            continue;
+        }
+        let held = held.get_or_insert_with(|| settled_steps(plan, &state));
+        let settled = unit.settled_in(held);
+        if same && previous.get("statuses").is_none() {
+            settings["settlements"][&key]["statuses"] = if settled { statuses } else { json!([]) };
+            upgraded = true;
+            continue;
+        }
+        if !settled {
             continue;
         }
         if let Some(previous_work) = previous["work"].as_i64() {
@@ -92,9 +118,7 @@ pub fn record_settlements(
             .map(|id| {
                 let step = &plan.steps()[id];
                 let status = state.status(id);
-                let held = status == StepStatus::Pending
-                    && (step.is_external()
-                        || evaluate_step(plan, &state, step) != GateDecision::Ready);
+                let held = status == StepStatus::Pending && held.contains(id);
                 let names: Vec<_> = if step.declared_outputs.is_empty() {
                     step.signature.outputs.keys().collect()
                 } else {
@@ -132,14 +156,18 @@ pub fn record_settlements(
         if !settings["settlements"].is_object() {
             settings["settlements"] = json!({});
         }
-        settings["settlements"][key] = json!({"signature":stamp,"work":work});
+        settings["settlements"][key] = json!({"signature":stamp,"statuses":statuses,"work":work});
     }
-    if !emitted.is_empty() {
+    if !emitted.is_empty() || upgraded {
         tx.sql().execute(
             "UPDATE maintenance SET settings=?1 WHERE singleton=1",
             [settings.to_string()],
         )?;
+    }
+    if !emitted.is_empty() {
         tx.changed(Some(project), "status");
+    } else if upgraded {
+        tx.changed(None, "maintenance");
     }
     Ok(emitted)
 }

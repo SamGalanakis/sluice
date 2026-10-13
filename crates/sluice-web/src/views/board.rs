@@ -247,11 +247,12 @@ pub struct UnitView {
     /// A done unit a search matched in: drawn open, its matching cards in view.
     pub open: bool,
 }
-/// Each step's depth in the plan (the longest chain of what it waits on), and the steps held up
-/// by a stopped step (`sluice_model::status::blocked`).
+/// Each step's depth in the plan (the longest chain of what it waits on), the steps held up
+/// by a stopped step (`sluice_model::status::blocked`) and the settled steps (§7.1).
 struct Depths {
     depth: BTreeMap<StepId, usize>,
     blocked: indexmap::IndexSet<StepId>,
+    settled: indexmap::IndexSet<StepId>,
 }
 impl Depths {
     fn new(plan: &Plan, state: &StateSnapshot) -> Self {
@@ -269,6 +270,7 @@ impl Depths {
         Self {
             depth,
             blocked: sluice_model::status::blocked(plan, state),
+            settled: sluice_model::units::settled_steps(plan, state),
         }
     }
 }
@@ -305,7 +307,7 @@ impl UnitView {
             pos: 0,
             tagged: unit.tagged,
             done: unit.done(state),
-            settled: unit.settled(plan, state),
+            settled: unit.settled_in(&depths.settled),
             steps,
             rows: rows.into_values().collect(),
             last_message: String::new(),

@@ -100,17 +100,14 @@ impl Unit {
             )
         })
     }
-    /// Resources are ignored: queued pending work is still startable. A ready
-    /// core.external step is externally blocked and can settle.
+    /// Settled (§6.7): every one of its steps is settled (§7.1). Only its steps and what they
+    /// depend on, transitively, are evaluated.
     pub fn settled(&self, plan: &Plan, state: &StateSnapshot) -> bool {
-        self.steps.iter().all(|id| match state.status(id) {
-            StepStatus::Running => false,
-            StepStatus::Pending => {
-                let step = &plan.steps()[id];
-                step.is_external() || evaluate_step(plan, state, step) != GateDecision::Ready
-            }
-            _ => true,
-        })
+        self.settled_in(&settled_among(plan, state, &self.steps))
+    }
+    /// Settled, given the plan's settled steps (`settled_steps`) already worked out.
+    pub fn settled_in(&self, settled: &IndexSet<StepId>) -> bool {
+        self.steps.iter().all(|id| settled.contains(id))
     }
 }
 
@@ -121,8 +118,29 @@ impl Unit {
 /// dependency it waits on is itself settled). Running steps, pending steps about to start or
 /// queued on resources, and pending steps waiting on running or startable work are not.
 pub fn settled_steps(plan: &Plan, state: &StateSnapshot) -> IndexSet<StepId> {
+    settle_walk(plan, state, None)
+}
+/// The settled steps among `ids` and everything they depend on, transitively: whether a step
+/// is settled depends on nothing else, so the rest of the plan is never evaluated.
+pub fn settled_among(plan: &Plan, state: &StateSnapshot, ids: &[StepId]) -> IndexSet<StepId> {
+    let mut closure: IndexSet<StepId> = ids.iter().cloned().collect();
+    let mut next = 0;
+    while let Some(id) = closure.get_index(next).cloned() {
+        closure.extend(plan.dependencies(&id).iter().cloned());
+        next += 1;
+    }
+    settle_walk(plan, state, Some(&closure))
+}
+fn settle_walk(
+    plan: &Plan,
+    state: &StateSnapshot,
+    only: Option<&IndexSet<StepId>>,
+) -> IndexSet<StepId> {
     let mut settled = IndexSet::new();
     for id in plan.topological_order() {
+        if only.is_some_and(|only| !only.contains(id)) {
+            continue;
+        }
         let held = match state.status(id) {
             StepStatus::Running => false,
             StepStatus::Pending => {

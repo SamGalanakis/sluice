@@ -116,7 +116,7 @@ async fn settled(w: &Writer, p: ProjectId, name: &str) -> Record {
     .unwrap()
 }
 #[tokio::test]
-async fn singleton_settles_once_per_generation_without_open_exception() {
+async fn singleton_settles_once_per_rest_without_open_exception() {
     let (_h, w, r, p) = setup().await;
     let signatures = IndexMap::from([(
         "test.fn".into(),
@@ -780,5 +780,231 @@ async fn upkeep_asks_about_unread_settlements_only_with_unread_alert_min_and_tri
         .await
         .unwrap();
     assert_eq!(count().await.unwrap(), 18, "trimmed to 90% of log_max");
+    w.shutdown().await.unwrap();
+}
+
+/// Sets each step's status (a `+` before its name also moves its work generation, as a retry
+/// does) and records settlements in the same transaction: the units that settled, in order.
+async fn rest_after(
+    w: &Writer,
+    p: ProjectId,
+    plan: &Plan,
+    statuses: &[(&str, &str)],
+) -> Vec<String> {
+    let plan = plan.clone();
+    let statuses: Vec<(String, String)> = statuses
+        .iter()
+        .map(|(step, status)| (step.to_string(), status.to_string()))
+        .collect();
+    let emitted = w
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            for (step, status) in &statuses {
+                let (step, retry) = match step.strip_prefix('+') {
+                    Some(step) => (step, 1),
+                    None => (step.as_str(), 0),
+                };
+                tx.sql().execute(
+                    "UPDATE steps SET status=?3,work_generation=work_generation+?4 WHERE project_id=?1 AND step_id=?2",
+                    (p.to_string(), step, status, retry),
+                )?;
+            }
+            tx.changed(Some(p), "status");
+            record_settlements(tx, p, Revision(2), &plan)
+        })
+        .await
+        .unwrap();
+    emitted
+        .iter()
+        .map(|r| match &r.event {
+            Event::UnitSettled { unit, .. } => unit.to_string(),
+            other => panic!("not a settlement: {other:?}"),
+        })
+        .collect()
+}
+/// A committed plan: `a` outside unit `y`, whose work waits on `a`, and unit `z`, whose close
+/// is paused.
+async fn gated(w: &Writer, p: ProjectId) -> Plan {
+    let signatures = IndexMap::from([("test.fn".into(), FnSignature::default())]);
+    let (doc, plan) = compile(
+        br#"{"steps":{"a":{"run":"test.fn"},
+        "y-fork":{"run":"test.fn","tags":["unit:y"]},
+        "y-work":{"run":"test.fn","tags":["unit:y","exit"],"after":["a","y-fork"]},
+        "y-rm":{"run":"test.fn","tags":["unit:y"],"after":["y-work"]},
+        "z-work":{"run":"test.fn","tags":["unit:z"]},
+        "z-close":{"run":"test.fn","tags":["unit:z","exit"],"after":["z-work"],"paused":true},
+        "z-rm":{"run":"test.fn","tags":["unit:z"],"after":["z-close"]}}}"#,
+        &signatures,
+    );
+    w.write(RetrySafety::NonIdempotent, move |tx| {
+        plan_rows::commit_document(tx, p, &doc, None, None)
+    })
+    .await
+    .unwrap();
+    plan
+}
+#[tokio::test]
+async fn a_unit_whose_work_waits_on_a_running_step_does_not_settle() {
+    let (_h, w, _r, p) = setup().await;
+    let plan = gated(&w, p).await;
+    let rest =
+        |statuses: &'static [(&'static str, &'static str)]| rest_after(&w, p, &plan, statuses);
+    // The fork is done and the work waits on `a`, still running: nothing needs anyone.
+    assert_eq!(
+        rest(&[("a", "running"), ("y-fork", "succeeded")]).await,
+        Vec::<String>::new()
+    );
+    // Nor once `a` is done and the work is about to start, or running.
+    assert_eq!(rest(&[("a", "succeeded")]).await, ["a"]);
+    assert_eq!(rest(&[("y-work", "running")]).await, Vec::<String>::new());
+    w.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn next_wakes_when_a_unit_gated_on_running_work_really_finishes() {
+    let (_h, w, r, p) = setup().await;
+    let plan = gated(&w, p).await;
+    let rest =
+        |statuses: &'static [(&'static str, &'static str)]| rest_after(&w, p, &plan, statuses);
+    rest(&[("a", "running"), ("y-fork", "succeeded")]).await;
+    rest(&[("a", "succeeded")]).await;
+    rest(&[("y-work", "running")]).await;
+    let since = r
+        .snapshot(move |c| Ok(records::bounds(c, Some(p))?.1))
+        .await
+        .unwrap();
+    rest(&[("y-work", "succeeded"), ("y-rm", "running")]).await;
+    rest(&[("y-rm", "succeeded")]).await;
+    // `next` wakes on the real finish, every step of it succeeded.
+    let batch = next(
+        &w,
+        &r,
+        NextOptions {
+            since_seq: Some(since),
+            ..options(p)
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!batch.timed_out, "no wake: {:?}", batch.records);
+    match &batch.records[..] {
+        [
+            Record {
+                event: Event::UnitSettled { unit, steps, .. },
+                ..
+            },
+        ] => {
+            assert_eq!(unit.as_str(), "y");
+            assert!(
+                steps
+                    .iter()
+                    .all(|s| s.status == StepStatus::Succeeded && !s.held),
+                "{steps:?}"
+            );
+        }
+        other => panic!("one settlement of y: {other:?}"),
+    }
+    w.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn a_unit_settles_again_each_time_it_comes_back_to_rest() {
+    let (_h, w, _r, p) = setup().await;
+    let plan = gated(&w, p).await;
+    let rest =
+        |statuses: &'static [(&'static str, &'static str)]| rest_after(&w, p, &plan, statuses);
+    // `a` fails: `y` is held behind it.
+    assert_eq!(
+        rest(&[("y-fork", "succeeded"), ("a", "failed")]).await,
+        ["a", "y"]
+    );
+    // `a` is retried; `y`'s steps are untouched, and it is not at rest while `a` can run.
+    assert_eq!(rest(&[("+a", "pending")]).await, Vec::<String>::new());
+    assert_eq!(rest(&[("a", "running")]).await, Vec::<String>::new());
+    assert_eq!(
+        rest(&[("a", "succeeded"), ("y-work", "running")]).await,
+        ["a"]
+    );
+    assert_eq!(rest(&[("y-work", "failed")]).await, ["y"]);
+    // `y`'s own work is retried and then finishes, cleanup and all.
+    assert_eq!(rest(&[("+y-work", "running")]).await, Vec::<String>::new());
+    assert_eq!(
+        rest(&[("y-work", "succeeded"), ("y-rm", "succeeded")]).await,
+        ["y"]
+    );
+    // `z` rests on its paused close; its output set by hand, it runs to the end and settles
+    // again.
+    assert_eq!(rest(&[("z-work", "succeeded")]).await, ["z"]);
+    assert_eq!(
+        rest(&[("z-close", "succeeded")]).await,
+        Vec::<String>::new()
+    );
+    assert_eq!(rest(&[("z-rm", "succeeded")]).await, ["z"]);
+    // Nothing moved: nothing settles.
+    assert_eq!(rest(&[]).await, Vec::<String>::new());
+    w.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn settlements_recorded_before_statuses_upgrade_without_a_record() {
+    let (_h, w, _r, p) = setup().await;
+    let plan = gated(&w, p).await;
+    // Before the upgrade: `y` settled early, held on `a` while it ran, and `z` settled on its
+    // paused close. Their certificates carry no statuses.
+    let copy = plan.clone();
+    w.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute(
+            "UPDATE steps SET status=CASE step_id WHEN 'a' THEN 'running' WHEN 'y-fork' THEN 'succeeded' WHEN 'z-work' THEN 'succeeded' ELSE 'pending' END WHERE project_id=?1",
+            [p.to_string()],
+        )?;
+        tx.changed(Some(p), "status");
+        let mut settlements = json!({});
+        for unit in ["y", "z"] {
+            let mut signature = vec![];
+            for id in &copy.units()[&unit.parse::<UnitName>().unwrap()].steps {
+                let (generation, work): (i64, i64) = tx.sql().query_row(
+                    "SELECT generation,work_generation FROM steps WHERE project_id=?1 AND step_id=?2",
+                    (p.to_string(), id.as_str()),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                signature.push(json!([id, generation, work]));
+            }
+            settlements[format!("{p}/{unit}")] = json!({"signature": signature, "work": 1});
+        }
+        tx.sql().execute(
+            "UPDATE maintenance SET settings=json_set(settings,'$.settlements',json(?1)) WHERE singleton=1",
+            [settlements.to_string()],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let settlements = || {
+        w.write(RetrySafety::NonIdempotent, move |tx| {
+            let raw: String = tx.sql().query_row(
+                "SELECT settings FROM maintenance WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok(serde_json::from_str::<serde_json::Value>(&raw)?["settlements"].clone())
+        })
+    };
+    // The first reconcile after the upgrade writes no record: `z` is at rest as it was, and
+    // `y` waits on `a`, still running, so its next rest settles.
+    let rest =
+        |statuses: &'static [(&'static str, &'static str)]| rest_after(&w, p, &plan, statuses);
+    assert_eq!(rest(&[]).await, Vec::<String>::new());
+    let stored = settlements().await.unwrap();
+    assert_eq!(rest(&[]).await, Vec::<String>::new());
+    // `y` really finishes, and says so; `z` stays quiet.
+    assert_eq!(rest(&[("a", "succeeded")]).await, ["a"]);
+    assert_eq!(
+        rest(&[("y-work", "succeeded"), ("y-rm", "succeeded")]).await,
+        ["y"]
+    );
+    // Both certificates were upgraded in place at the first reconcile, their stamps unchanged:
+    // `z` with its statuses, `y` with none.
+    let z = &stored[format!("{p}/z")];
+    assert_eq!(z["statuses"], json!(["succeeded", "pending", "pending"]));
+    assert_eq!(z["signature"].as_array().unwrap().len(), 3);
+    assert_eq!(z["signature"][0].as_array().unwrap().len(), 3);
+    assert_eq!(stored[format!("{p}/y")]["statuses"], json!([]));
+    assert_eq!(stored[format!("{p}/y")]["work"], 1);
     w.shutdown().await.unwrap();
 }

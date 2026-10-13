@@ -169,7 +169,8 @@ struct UnitSummary {
 }
 /// A unit's entry and exit steps, `done` and `settled` (SPEC §6.7), from the cached compiled
 /// plan and the stored state of its members and of what they read or wait on: no declaration
-/// is decoded while the cache is warm, and no step outside the unit's neighbourhood is read.
+/// is decoded while the cache is warm, and no step outside the unit and what it depends on is
+/// read.
 fn unit_summary(
     sql: &Connection,
     project: ProjectId,
@@ -188,9 +189,12 @@ fn unit_summary(
         .units()
         .get(unit)
         .ok_or_else(|| PublicError::from(PlanRowsError::NoUnit { unit: unit.clone() }))?;
+    // Whether a member is settled (§7.1) turns on everything it depends on, transitively.
     let mut steps: indexmap::IndexSet<StepId> = found.steps.iter().cloned().collect();
-    for id in &found.steps {
-        steps.extend(plan.dependencies(id).iter().cloned());
+    let mut next = 0;
+    while let Some(id) = steps.get_index(next).cloned() {
+        steps.extend(plan.dependencies(&id).iter().cloned());
+        next += 1;
     }
     let scoped = plans::read_scoped_state(
         sql,

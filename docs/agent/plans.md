@@ -490,7 +490,8 @@ filtering on recipe. Unfiltered paging therefore survives status changes. An exp
 is `cursor_expired`; read again without it. A malformed cursor or one from another query is
 `bad_request`. `step_get` returns `{project, rev, state_epoch, step}`. `unit_get` returns
 `{project, rev, state_epoch, recipe_generation, unit}`; the unit has `id`, `recipe`,
-`entry_steps`, `exit_steps`, `done`, `settled` and its `steps` in position order.
+`entry_steps`, `exit_steps`, `done`, `settled` (every step settled, as `step_wait`'s
+`"settled"` means) and its `steps` in position order.
 
 `plan_get(project)` exports the whole plan with its revision and project identity, in authored
 section and key order. It does not compile, so a broken fn catalog does not prevent an export.

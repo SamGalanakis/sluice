@@ -732,8 +732,9 @@ step); an untagged step is a unit of one named by its id. Edges may cross units.
 **done** when every step succeeded or was skipped. Its **exit steps** are its steps tagged
 `exit`, else its sinks over the edges inside the unit; a unit may not depend on its own exits.
 Its **entry steps** (derived, never stored) are its steps with no dependency inside the unit.
-`unit:` and `exit` are reserved tags. A unit is **settled** when none of its steps is running
-and every pending one is external or not ready.
+`unit:` and `exit` are reserved tags. A unit is **settled** when every one of its steps is
+settled (§7.1): a unit whose next step waits on a step that is running, or that can still
+start, in it or in another unit, is not.
 
 ### 6.8 Recipes
 
@@ -879,8 +880,8 @@ step it depends on (handoff sources and gate steps, a unit gate's exit steps) th
 succeeded or been skipped is itself settled; what it waits for is then a failed, stale or held
 step, or a plan input with no value. A running step is not settled, nor is a pending step that
 is ready (queued on resources included), about to be skipped or failed by the scheduler, or
-waiting on a step that is running or can still start. A unit's settling (§6.7, `unit.settled`)
-is looser: it counts every pending step that is not ready, whatever it waits on.
+waiting on a step that is running or can still start. A unit is settled when all its steps are
+(§6.7).
 
 ### 7.2 Admission and launch
 
@@ -1211,7 +1212,7 @@ seqs have gaps. Kinds:
 | `run.orphan` | `run` |
 | `run.completion_action.register` | `run, target, message, author` |
 | `run.completion_action` | `run, outcome, author` |
-| `unit.settled` | `unit, work, steps: [{id, status, held, outputs, omitted}]` |
+| `unit.settled` | `unit, work, steps: [{id, status, held, outputs, omitted}]` (`held`: a pending step held, §7.1) |
 
 `step_progress` (§6.4) writes no record: progress is state on the step, not history.
 
@@ -1264,7 +1265,11 @@ removed from the plan during the wait ends it with the same error.
 settle_max=120, settles="short")` waits across projects (all live projects when empty) for what
 an orchestrator acts on and returns `{records, notes, last_seq, timed_out}`. It wakes on:
 
-- a `unit.settled` record (written when a unit settles, once per unit and work generation);
+- a `unit.settled` record, written each time a unit comes to rest: it is settled (§6.7), and
+  its steps, their generations or work generations, or their statuses differ from its last
+  settlement's. A unit that settles, is retried or acted on and comes to rest again settles
+  again; one waiting on running work settles only once that work has finished and nothing
+  more can move;
 - a `step.status` to `failed`, `stale` or `skipped`;
 - a question to `me` (or, stored before the verbs, to nobody), not from `me`;
 - a reply to a question, not from `me`;

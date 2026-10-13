@@ -46,7 +46,8 @@ meets `until`, and returns `{met, steps: {id: status}, seq}`:
   or it is pending and held: paused, a `core.external` step waiting for its outputs, or
   waiting only on such steps or on a plan input with no value); or `{"any_of": ["failed",
   "stale"]}`, each step in one of those statuses.
-- Give `steps` (ids) or `tags` (`unit:<name>` selects a unit), not both.
+- Give `steps` (ids) or `tags` (`unit:<name>` selects a unit), not both. A unit whose steps
+  are all settled is the settled unit `next` reports and `unit_get` marks `settled`.
 - It answers at once when the condition already holds; otherwise when a status change makes
   it hold, or with `met: false` after `timeout` seconds (at most 3600; 0 checks once).
 - `seq` is the project log's last seq at that answer: `log_read(project, since_seq=seq)`
@@ -141,7 +142,11 @@ needed a reply, else a note).
 - `next(projects, since_seq)` waits on your behalf across projects (all live projects when
   `projects` is empty): it wakes on a question to you, on a reply that answers a question,
   not written by you, on a step that failed, turned stale or was skipped, on a unit that
-  settled, and on a project paused or archived by someone else. Notes ride along in `notes`.
+  settled, and on a project paused or archived by someone else. A unit settles when every one
+  of its steps is settled as `step_wait`'s `"settled"` means: one whose next step waits on
+  work still running, in it or in another unit, has not. It settles again each time it comes
+  to rest differently (retried, its pause or a value acted on, then finished). Notes ride
+  along in `notes`.
   It returns `{records, notes, last_seq, timed_out}`. Pass `me` your name (default
   `orchestrator`); `since_seq` defaults to 0, so pass the `last_seq` you hold.
 
