@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
+# The gate. `--slow` adds the slow tier (tests named `slow_*`).
 set -euo pipefail
 cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.."
 # Override the shim's shared target default without setting CARGO_* variables.
 cargo() { command cargo --config "build.target-dir=\"$PWD/target\"" "$@"; }
+profile=default
+if [ "${1:-}" = "--slow" ]; then profile=slow; fi
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --all-targets --locked
+cargo nextest run --workspace --all-targets --locked --profile "$profile"
 cargo test --workspace --doc --locked

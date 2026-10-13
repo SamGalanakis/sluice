@@ -1,0 +1,13 @@
+# The default run is the gate: every test in it finishes in seconds. A test whose name starts
+# with `slow_` (durability across releases, real browsers beyond the smoke, scale) runs only in
+# the slow profile: `scripts/check --slow`.
+[profile.default]
+default-filter = "not test(/(^|::)slow_/)"
+slow-timeout = { period = "3s" }
+fail-fast = false
+status-level = "fail"
+final-status-level = "slow"
+
+[profile.slow]
+default-filter = "all()"
+slow-timeout = { period = "60s" }

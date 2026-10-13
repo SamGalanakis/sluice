@@ -1,10 +1,10 @@
 # sluice: notes for agents
 
 - Rust workspace under `crates/`. `scripts/check` is the gate: `cargo fmt --check`, Clippy with
-  `-D warnings`, `cargo test --workspace --all-targets --locked` and doctests, all built into
-  this checkout's `target/`.
-- Day to day, `cargo test --workspace --locked` (or `-p <crate> --test <file>`) builds into
-  cargo's configured target dir; leave it to cargo's configuration and never set `CARGO_*`
+  `-D warnings`, `cargo nextest run --workspace --all-targets --locked` and doctests, all built
+  into this checkout's `target/`. `scripts/check --slow` adds the slow tier (see Tests).
+- Day to day, `cargo nextest run --workspace --locked` (or `-p <crate> -E 'test(name)'`) builds
+  into cargo's configured target dir; leave it to cargo's configuration and never set `CARGO_*`
   variables. To pin one invocation to this checkout's `target/`, pass
   `--config 'build.target-dir="<worktree>/target"'`, as `scripts/check` does.
 - Tests start the binaries they test through `env!("CARGO_BIN_EXE_sluice")` (and the other
@@ -27,6 +27,23 @@
   under the installation fence and stops and re-creates the coordinator, serve and loop units.
   Running steps are adopted. `sluice install status` names the selected home. Ship with `scripts/ship`
   (below) rather than by hand.
+
+## Tests
+
+The suite is small, fast and end to end. The default run takes about a minute.
+- A test drives a real entry point: the `sluice` binary, MCP or HTTP, the coordinator, or a
+  crate's public API. It asserts what a user or a peer session would see: output, stored state,
+  a page, a message. Never private state, call order or log text.
+- One scenario test with several checks beats many tests that each repeat the same setup.
+- Unit tests are for kernels only: plan compile, the incremental-vs-reference differential,
+  codecs. Prefer a property or a differential to a list of examples there.
+- Every default test finishes in 3 s on this host (nextest marks anything slower). No sleeps:
+  wait on state or events, fake the clock.
+- The slow tier is tests named `slow_*`: durability across releases (cutover, schema
+  migration, release builds), browser checks beyond each page's smoke, scale. It runs with
+  `scripts/check --slow` for changes to release, deploy, install, schema or storage-format code.
+- Before adding a test, name the real bug it catches that no existing test catches. If you can't,
+  don't add it.
 
 ## Shipping
 
