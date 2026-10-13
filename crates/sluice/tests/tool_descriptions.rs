@@ -270,6 +270,13 @@ async fn tool_descriptions_name_the_keys_their_replies_have() {
     .await;
     f.check("step_retry", json!({"project":"p","steps":"a"}))
         .await;
+    let bypass = f
+        .check(
+            "step_bypass",
+            json!({"project":"p","step":"b","outputs":{"value":2},"reason":"not needed"}),
+        )
+        .await;
+    assert_eq!(bypass["bypass"]["outputs"], json!({"value":2}));
     f.check(
         "plan_set_input",
         json!({"project":"p","name":"x","value":1}),

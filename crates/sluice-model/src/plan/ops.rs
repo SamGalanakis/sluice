@@ -420,6 +420,7 @@ pub(crate) fn apply_ops(
                 inputs,
                 tags,
                 owner: _,
+                bypass: _,
             } => match expand_unit(
                 &work,
                 recipes,

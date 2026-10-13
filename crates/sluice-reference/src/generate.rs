@@ -958,6 +958,7 @@ fn build_op(target: &Target, catalog: &IndexMap<String, FnSignature>, data: &[u8
                     vec![]
                 },
                 owner: None,
+                bypass: IndexMap::new(),
             }
         }
         9 => {
@@ -1033,6 +1034,7 @@ fn build_op(target: &Target, catalog: &IndexMap<String, FnSignature>, data: &[u8
                 inputs,
                 tags,
                 owner: None,
+                bypass: IndexMap::new(),
             }
         }
         10 => {

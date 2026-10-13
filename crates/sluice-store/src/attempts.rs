@@ -263,6 +263,11 @@ pub fn reserve(
     if step.is_external() {
         return Err(plans::invalid("external steps never execute"));
     }
+    if crate::bypass::waiting(tx, context.project, &request.step)? {
+        return Err(plans::conflict(
+            "step is bypassed: it settles without a run",
+        ));
+    }
     let state = plans::read_state(tx.sql(), context.project)?;
     let scatter = step.scatter.is_some();
     if !matches!(state.status(&request.step), StepStatus::Pending)

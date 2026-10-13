@@ -338,12 +338,18 @@ pub(crate) fn status_record(
     Ok(())
 }
 
-/// Apply the pure model's gate and data-hash transitions. Never reserves work.
+/// Apply the pure model's gate and data-hash transitions, then any bypass preset whose step is
+/// now ready (`bypass::apply_ready`), again until nothing more settles. Never reserves work.
 pub fn reconcile(tx: &mut WriteTransaction<'_>, context: &PlanContext) -> Result<()> {
     check_context(tx, context)?;
-    let before = read_state(tx.sql(), context.project)?;
-    let changes = status_changes(&context.plan, &before);
-    write_status_changes(tx, context.project, &changes)
+    loop {
+        let before = read_state(tx.sql(), context.project)?;
+        let changes = status_changes(&context.plan, &before);
+        write_status_changes(tx, context.project, &changes)?;
+        if !crate::bypass::apply_ready(tx, context)? {
+            return Ok(());
+        }
+    }
 }
 /// A step whose status, skip reasons or error the model's reconcile changes.
 #[derive(Debug, PartialEq)]

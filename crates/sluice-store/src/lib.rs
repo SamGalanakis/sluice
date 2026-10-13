@@ -3,6 +3,7 @@
 pub mod artifacts;
 pub mod attempts;
 pub mod backup;
+pub mod bypass;
 pub mod convert;
 pub mod identities;
 pub mod messages;

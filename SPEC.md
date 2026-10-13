@@ -418,6 +418,11 @@ as it is, so `SELECT json_extract(progress, '$.red'), progress_at FROM steps WHE
 A step's row carries its unit's owner in `owner`, and a project's row the `fallback` that answers
 its unowned units (both added columns, null until set; §8.1). Neither is part of a declaration.
 
+A step's row carries its bypass preset (§7.7) in `bypass` (an added column, null when none):
+`{outputs, author, reason, at}`, and once the runner applies it `applied: {at, result}`. It is
+runtime state, never part of the step's declaration: the plan's export, its history and the
+plan a pinned release compiles never see it, and a release from before the column ignores it.
+
 A run's row keeps who stopped or retried it, and why, in `stopped` (an added column, null until
 one does): `{"cancel": {author, reason, at}, "retry": {author, reason, at}}`. `step_cancel`
 writes `cancel` on the runs it stops (on a failed step, on its latest run of each item), `step_retry` writes `retry` on the step's latest run of
@@ -778,7 +783,11 @@ expands the recipe, tags every new step `unit:<unit>` (then the recipe's tags, t
 (`"*"` means the unit's entry steps) and binds `inputs` per suffix to `{"default": value}`. A
 suffix is a recipe step's id without the leading `<unit>-`. An unknown suffix, an input the
 step's fn does not declare and the recipe does not bind, or a step id the plan already has is
-refused before anything is written.
+refused before anything is written. `bypass` (`{suffix: outputs}`, a new step's id also taken
+for its suffix; `plan_edit`'s `unit.add` takes it too) sets a bypass preset (§7.7) on each
+named new step in the same transaction as the add, with the edit's author and reason, each
+outputs checked against its step as `step_bypass` checks them; a key naming no step of the unit
+or outputs that do not fit refuse the whole edit (`invalid`, `bypass.<suffix>…`).
 
 ### 6.9 Validation
 
@@ -897,7 +906,8 @@ marks staleness, and admits ready steps in priority order (higher first, ties in
 Admission reserves an attempt and its runs in one transaction (status `running`, fresh run ids,
 the messages assigned to each run, `prev_run`), then launches each run's unit. A reservation
 whose launch fails before the payload starts fails that run with `process_lost`; it is never
-started twice. Built-in fns that need no process run inside the coordinator.
+started twice. Built-in fns that need no process run inside the coordinator. A step with a
+bypass preset waiting (§7.7) is never admitted: it settles instead.
 
 ### 7.3 Staleness
 
@@ -1023,6 +1033,30 @@ the same totals as `needs`. A run that ends releases its leases. Grants and rele
   while a gate is unsatisfied or something it reads is not ready. A pause, the step's or its
   project's, does not block it: pausing holds back a launch, so a paused step can be given its
   result without ever starting. A `step.output` record.
+- `step_bypass(project, step, outputs?, off?, reason)`: drops a pending step from the run while
+  keeping its place, so the steps after it still go on. It stores a **bypass preset** on the
+  step (`steps.bypass`, §3: the outputs, author, reason and when) and writes a `step.bypass`
+  record (`outputs` null when cleared). When the step's gates and inputs are ready, the
+  reconciliation that sees it so (the transaction that made it ready, or the runner's next
+  pass) does not launch it: it settles it as `step_set_output` without `force` would, status
+  `succeeded`, `manual: true`, the preset's outputs, with that `step.output` record (the
+  preset's author and reason) and its `step.status` record, and its dependents then run in
+  order. A step already ready settles in the call itself. A pause, the step's or its
+  project's, does not hold it back (no run starts). `outputs` (default `{}`) are checked when
+  the preset is set, against the step's declared outputs as `step_set_output` checks them:
+  each required one present, the types fitting (`invalid` names each field), nothing else. If
+  the step's declaration changes so that they no longer fit, the step fails instead
+  (`invalid`, "bypass: its outputs no longer match the step's outputs"), never launching.
+  Only a pending step takes it: any other is refused (`invalid`) naming the verbs that apply
+  (`step_cancel`, `step_settle` and `step_set_output` for a running step; `step_set_output` and
+  `step_retry` otherwise); `reason` is required. `off: true` clears a preset still waiting
+  (`invalid` when there is none). Setting it again replaces it. A preset is applied once and
+  then kept only as the record of what settled the step: a later `step_retry` of the step runs
+  it for real, while a preset not yet applied stays through a retry upstream that makes its
+  step wait again. The reply is `{project, step, status, bypass, applied}` (`bypass` the preset
+  still waiting, null once applied or cleared). `status` shows a waiting preset as the step's
+  `bypass` (`{outputs, author, reason, at}`). No new step status: a bypassed step is
+  `succeeded`, manual; the dashboard words its manual result "bypassed" (§13).
 
 ### 7.8 Message delivery and `prev_run`
 
@@ -1339,6 +1373,7 @@ seqs have gaps. Kinds:
 | `step.cancel` | `step, author, reason` |
 | `step.submit` | `step, run, outputs, author` |
 | `step.settle` | `step, run, author, reason` |
+| `step.bypass` | `rev, author, reason, step, outputs` (`outputs` null when the preset is cleared) |
 | `step.status` | `step, from, to, error, run_ids, needs` |
 | `step.lease` | `step, run, lease, resource, amount, state, reason` |
 | `step.queued` | `step, needs, resources, reason` |
@@ -1571,7 +1606,7 @@ outside its authority. The document tools refuse (`invalid`) while the board's p
 | `step_update` | `project`, `step`, `changes` (each key replaces that field, null removes it) |
 | `step_remove` | `project`, `steps?`, `tags?` |
 | `step_pause` | `project`, `steps?`, `tags?`, `subtree=false`, `paused=true` (sets `"paused"` to the `reason`, or `true` without one, a step already paused keeping its own; `false` removes it) |
-| `unit_add` | `project`, `recipe`, `unit`, `params={}`, `after={}`, `inputs={}`, `tags=[]`, `start=true`, `owner?` (§8.1), `me?` |
+| `unit_add` | `project`, `recipe`, `unit`, `params={}`, `after={}`, `inputs={}`, `tags=[]`, `bypass={}`, `start=true`, `owner?` (§8.1), `me?` |
 | `unit_tag` | `project`, `unit`, `add=[]`, `remove=[]` |
 | `unit_update` | `project`, `unit`, `changes` (`{step id: changes}`, each a member; as `step_update`'s) |
 | `unit_remove` | `project`, `unit` (every member; running members or surviving references refuse it) |
@@ -1615,6 +1650,7 @@ removed steps.
 | `plan_history` | `project`, `since_rev?`, `after_seq?`, `limit=200` | `{project, entries, next_after_seq}`: every edit (`plan.edit`, from the baseline revision) and the log's `plan.input`, `step.output`, `step.retry`, oldest first |
 | `plan_set_input` | `project`, `name`, `value`, `rev?`, `dry_run`, `reason`, `author?` | `{ok: true}`, or the preview |
 | `step_set_output` | `project`, `step`, `outputs`, `force=false`, `reason`, `author?` | `{ok: true}` |
+| `step_bypass` | `project`, `step`, `outputs={}`, `off=false`, `reason`, `author?` | `{project, step, status, bypass, applied}` (§7.7) |
 | `step_retry` | `project`, `steps?`, `tags?`, `message?`, `reason`, `expected_rev?`, `author?` | `{project, steps, rearmed, stopped_at}` |
 | `step_cancel` | `project`, `steps?`, `tags?`, `reason`, `expected_rev?`, `author?` | `{ok: true}`; running, pending `core.external` or failed steps (§7.5) |
 | `step_submit` | `project`, `step`, `run`, `outputs`, `author?` | `{ok: true}` |
@@ -1805,7 +1841,9 @@ plan input with no value is held; a ready step short of a resource is queued; a 
 whose cancel was asked for (`step_cancel` sets its attempt's `cancel_requested`; a settle is
 not one) is stopping, and Cancel is not offered on it again; one whose run has submitted is
 finishing; one whose run has written nothing past its cadence is quiet; a succeeded step set
-by hand is set by hand. A status the store holds that is none of the six is an error the page
+by hand is set by hand, worded "bypassed" on its page, its drawer and its unit's stages when
+its bypass preset (§7.7) settled it; a pending step with a preset waiting carries a "bypass ·
+<author>" tag in its stage's cell and its band. A status the store holds that is none of the six is an error the page
 says, never read as pending. The index has no plan: it counts a blocked, held, queued or
 outside step as pending.
 

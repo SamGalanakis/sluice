@@ -28,8 +28,17 @@ pub(crate) const TABLES: i64 = 27;
 /// - `steps.owner`: who answers the step's unit (`@session` or `owner`; NULL unowned), equal
 ///   across a unit's rows (`identities`); never part of a declaration.
 /// - `projects.fallback`: who answers the project's unowned units (`@session` or `owner`).
-const ADDED_COLUMNS: &[(&str, &str, &str)] =
-    &[("steps", "owner", "TEXT"), ("projects", "fallback", "TEXT")];
+/// - `steps.bypass`: a pending step's bypass preset `{outputs, author, reason, at}`, and once
+///   the runner applies it `applied {at, result}` (`step_bypass`); never part of a declaration.
+const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
+    ("steps", "owner", "TEXT"),
+    ("projects", "fallback", "TEXT"),
+    (
+        "steps",
+        "bypass",
+        "TEXT CHECK (bypass IS NULL OR json_type(bypass) = 'object')",
+    ),
+];
 /// Views added to schema 3 after homes existed, as `(name, definition)`: the writer creates the
 /// missing ones with the columns. Empty in schema 3.
 const ADDED_VIEWS: &[(&str, &str)] = &[];

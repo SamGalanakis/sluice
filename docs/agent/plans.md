@@ -317,6 +317,7 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
            inputs={"work": {"model": {"type": "normal", "model": "swe-2", "effort": "max"}}},
            tags=["arc:auth"])
   ```
+- `bypass={"<suffix>": {outputs}}` keeps a step of the new unit from running (Dropping a step).
 
   `after` entries are added to the step's own, and each input is bound to
   `{"default": value}`. An unknown suffix, or an input the step's fn does not declare and the
@@ -429,13 +430,48 @@ on news `cadence:1d` so its silence is not flagged.
   starts with the message first.
 
 ## Dropping a step
+To keep a pending step from running while the steps after it still go on, bypass it: it
+settles as succeeded with outputs you give, as `step_set_output` would, instead of launching.
 
-Pause it with `step_pause`; when its inputs and gates are ready, use `step_set_output`
-with the declared outputs, without force. Its dependents then proceed in order.
-Or use one `plan_edit` to remove it and re-gate its dependents on its prerequisites;
-replace any bindings that read its outputs in that same edit.
-Avoid `force=true` on a pending step: its dependents could run before its prerequisites,
-and its result turns stale when those arrive.
+- `step_bypass(project, step, outputs, reason)` stores the outputs on a pending step. When its
+  gates and inputs are ready the runner settles it with them (succeeded, manual) in place of a
+  run, and what waits on it proceeds in order. A step already ready settles in the call. A
+  pause does not hold it back. The reply is `{project, step, status, bypass, applied}`.
+- `outputs` are checked at once against the step's outputs: every required one, the types
+  (`invalid` names each field); an optional one may be left out.
+- Only a pending step takes it; a running, succeeded or failed one is refused with the verbs
+  that apply to it. `step_bypass(project, step, off=true, reason)` clears it while the step is
+  still pending, and it then runs as usual.
+- It applies once. A later `step_retry` of the step runs it for real; a retry upstream that
+  makes the step wait again keeps a bypass not applied yet.
+- `status` shows a waiting bypass as the step's `bypass` (`{outputs, author, reason, at}`); the
+  log has a `step.bypass` record for each set and clear, then the usual `step.output` and
+  `step.status` records when it applies. The dashboard tags the step "bypass" with who set it,
+  then words its result "bypassed".
+- `unit_add(..., bypass={"<suffix>": {outputs}})` (or `plan_edit`'s `unit.add` with `bypass`)
+  sets it on new steps in the same edit as the add; the key is the recipe step's suffix or the
+  step's id. A key no step of the unit has, or outputs that do not fit, refuse the whole add.
+
+Example: a lane `fork → work → land → close → rm`, where `close` closes a ticket and `rm`
+waits on `close` (`after: ["{unit}-close"]`). For a lane whose ticket must stay open:
+
+```
+unit_add(project, "lane", "fix-login", {...},
+         bypass={"close": {"ok": true, "closed": false}},
+         reason="the ticket stays open")
+```
+
+`fix-login-close` never runs; once `land` is done it settles with those outputs and `rm` runs
+after it. On a lane already added, `step_bypass(project, "fix-login-close", outputs={"ok":
+true, "closed": false}, reason="the ticket stays open")` does the same while `close` is still
+pending. Removing `close` instead would break `rm`'s `after`, and a false gate entry on `close`
+would skip `rm` too (a skipped step skips what waits on it).
+
+Other ways, without a bypass: one `plan_edit` that removes the step and re-gates its
+dependents on its prerequisites, replacing any bindings that read its outputs in that same
+edit; or `step_pause` it and, once its inputs and gates are ready, `step_set_output` it
+without force. Avoid `force=true` on a pending step: its dependents could run before its
+prerequisites, and its result turns stale when those arrive.
 
 ## Work done outside sluice
 A step whose work happens elsewhere (a person, another orchestrator's workers, a CI run) runs

@@ -64,6 +64,17 @@ pub enum Event {
         author: String,
         reason: String,
     },
+    /// A bypass preset set on a pending step, or cleared (`outputs` null). When the runner
+    /// applies it, the step's `step.output` and `step.status` records follow as for
+    /// `step_set_output`.
+    #[serde(rename = "step.bypass")]
+    StepBypass {
+        rev: Revision,
+        author: String,
+        reason: String,
+        step: StepId,
+        outputs: Option<JsonMap>,
+    },
     #[serde(rename = "step.status")]
     StepStatus {
         step: StepId,

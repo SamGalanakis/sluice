@@ -270,6 +270,11 @@ pub struct UnitAdd {
     /// The editing session, `@name`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub me: Option<String>,
+    /// Recipe step suffix (or the step's id) to the outputs it settles with instead of
+    /// running: a bypass preset on the new step, set with the add (`step_bypass`).
+    #[serde(default, skip_serializing_if = "indexmap::IndexMap::is_empty")]
+    #[schemars(with = "std::collections::BTreeMap<String, JsonMap>")]
+    pub bypass: indexmap::IndexMap<String, JsonMap>,
     pub edit: EditOptions,
 }
 
@@ -476,6 +481,26 @@ pub struct StepProgress {
     pub step: StepId,
     pub run: RunId,
     pub outputs: JsonMap,
+}
+
+/// Bypass a pending step: store a preset (its outputs, who set it and why) so that when its
+/// gates and inputs are ready the runner settles it as succeeded with those outputs, as
+/// `step_set_output` would (manual), instead of launching it. `off` clears the preset while
+/// the step is still pending. Runtime state, never part of the plan's declaration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StepBypass {
+    pub project: ProjectSelector,
+    pub step: StepId,
+    /// The outputs it settles with, checked against the step's declared outputs now; absent
+    /// is `{}` (only a step with no required output).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outputs: Option<JsonMap>,
+    /// Clear the step's preset instead of setting one.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub off: bool,
+    pub reason: String,
+    pub author: Option<String>,
 }
 
 /// Settle a running step whose run has submitted (it is finishing) on that submission: its
@@ -1192,6 +1217,7 @@ pub enum CommandRequest {
     StepSubmit(StepSubmit),
     StepProgress(StepProgress),
     StepSettle(StepSettle),
+    StepBypass(StepBypass),
     Ask(Ask),
     Say(Say),
     Reply(Reply),

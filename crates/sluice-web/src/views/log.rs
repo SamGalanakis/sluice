@@ -150,6 +150,7 @@ pub const KIND_OPTIONS: &[&str] = &[
     "step.cancel",
     "step.submit",
     "step.settle",
+    "step.bypass",
     "step.status",
     "step.lease",
     "step.queued",
@@ -914,6 +915,20 @@ fn summary(event: &Event) -> String {
             reason,
             ..
         } => format!("{step} settled by {author}{}", because(reason)),
+        Event::StepBypass {
+            step,
+            author,
+            reason,
+            outputs: Some(_),
+            ..
+        } => format!("{step} bypassed by {author}{}", because(reason)),
+        Event::StepBypass {
+            step,
+            author,
+            reason,
+            outputs: None,
+            ..
+        } => format!("{step}'s bypass cleared by {author}{}", because(reason)),
         Event::StepLease {
             step,
             resource,

@@ -644,6 +644,7 @@ pub fn apply(
                 inputs,
                 tags,
                 owner: _,
+                bypass: _,
             } => match expand_unit(
                 &work,
                 recipes,

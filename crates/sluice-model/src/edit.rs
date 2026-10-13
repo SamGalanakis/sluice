@@ -251,6 +251,7 @@ pub fn unit_add(
     after: &IndexMap<String, Vec<String>>,
     inputs: &IndexMap<String, JsonMap>,
     tags: &[String],
+    bypass: &IndexMap<String, JsonMap>,
 ) -> Result<Lowered, PublicError> {
     let entry = recipes
         .get(recipe)
@@ -305,6 +306,7 @@ pub fn unit_add(
             inputs: inputs.clone(),
             tags: tags.to_vec(),
             owner: None,
+            bypass: bypass.clone(),
         }],
         ReplySteps::Added,
     ))

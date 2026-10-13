@@ -231,6 +231,17 @@ pub(crate) struct Staged {
     evidence: Option<PruneEligibility>,
     /// Who the units the edit adds belong to.
     owners: OwnerIntent,
+    /// `unit.add`'s bypass presets, checked against the candidate's steps.
+    bypass: Bypass,
+}
+/// The bypass presets an edit's `unit.add` operations set (`bypass`), each resolved to its new
+/// step and checked against its declared outputs while the edit is prepared; the writer
+/// stores them with the edit.
+#[derive(Default)]
+struct Bypass {
+    presets: Vec<(StepId, sluice_model::rpc::JsonMap)>,
+    author: String,
+    reason: String,
 }
 /// What a commit hands back for the plan cache: the candidate and the revision it is.
 pub(crate) struct Committed {
@@ -260,6 +271,20 @@ impl Staged {
             CommitOutcome::Stale => Ok(None),
             CommitOutcome::Committed(rev) => {
                 identities::write_owners(tx, self.project, &owners)?;
+                if !self.bypass.presets.is_empty() {
+                    let context = plans::PlanContext {
+                        project: self.project,
+                        revision: rev,
+                        plan: (*self.edit.compiled.plan).clone(),
+                    };
+                    sluice_store::bypass::set_presets(
+                        tx,
+                        &context,
+                        self.bypass.presets,
+                        &self.bypass.author,
+                        &self.bypass.reason,
+                    )?;
+                }
                 Ok(Some(Committed {
                     reply: edit_reply(
                         EditResult {
@@ -521,6 +546,7 @@ fn lower(
                 &request.after,
                 &request.inputs,
                 &request.tags,
+                &request.bypass,
             )?,
             options(&request.edit, request.start),
         ),
@@ -706,6 +732,8 @@ pub(crate) fn prepare(
         &mut read,
         &mut state,
     )?;
+    let asked = bypass_asked(&lowered.ops);
+    let (author, reason) = (options.author.clone(), options.reason.clone());
     let mut prepared = prepare_lowered(
         &EditBase {
             state: &state,
@@ -726,6 +754,15 @@ pub(crate) fn prepare(
         })
         .collect();
     crate::models::check_edit(&base, &prepared.compiled.plan, written, &state.state.inputs)?;
+    let bypass = Bypass {
+        presets: resolve_bypass(&prepared.compiled.plan, asked)?,
+        author,
+        reason: if reason.trim().is_empty() {
+            "set when its unit was added".into()
+        } else {
+            reason
+        },
+    };
     if prepared.dry_run {
         return Ok((
             project,
@@ -752,8 +789,69 @@ pub(crate) fn prepare(
             prune,
             evidence,
             owners,
+            bypass,
         })),
     ))
+}
+
+/// Each `unit.add`'s bypass entries: (unit, suffix or step id, outputs).
+fn bypass_asked(
+    ops: &[sluice_model::plan_rows::PlanOp],
+) -> Vec<(UnitName, String, sluice_model::rpc::JsonMap)> {
+    ops.iter()
+        .filter_map(|op| match op {
+            sluice_model::plan_rows::PlanOp::UnitAdd { unit, bypass, .. } => Some(
+                bypass
+                    .iter()
+                    .map(|(key, outputs)| (unit.clone(), key.clone(), outputs.clone())),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// Each bypass entry's step in the candidate: the unit's step with that id, else with the id
+/// `<unit>-<suffix>`; its outputs checked against the step's declared outputs.
+fn resolve_bypass(
+    candidate: &Plan,
+    asked: Vec<(UnitName, String, sluice_model::rpc::JsonMap)>,
+) -> Result<Vec<(StepId, sluice_model::rpc::JsonMap)>, PublicError> {
+    let mut presets = vec![];
+    for (unit, key, outputs) in asked {
+        let members = candidate
+            .units()
+            .get(&unit)
+            .map(|u| u.steps.as_slice())
+            .unwrap_or_default();
+        let step = [key.clone(), format!("{unit}-{key}")]
+            .iter()
+            .find_map(|id| members.iter().find(|m| m.as_str() == id))
+            .ok_or_else(|| PublicError::Invalid {
+                message: format!("bypass.{key}: unit {unit} has no step {key}"),
+                errors: vec![format!("bypass.{key}: unit {unit} has no step {key}")],
+            })?;
+        sluice_store::bypass::check_outputs(&candidate.steps()[step], &outputs).map_err(
+            |e| match e.into_public(false) {
+                PublicError::Invalid { errors, .. } => PublicError::Invalid {
+                    message: format!("bypass.{key}: outputs do not match step {step}'s outputs"),
+                    errors: errors
+                        .into_iter()
+                        .map(|e| format!("bypass.{key}.{}", e.trim_start_matches("outputs.")))
+                        .collect(),
+                },
+                other => other,
+            },
+        )?;
+        if presets.iter().any(|(id, _)| id == step) {
+            return Err(PublicError::Invalid {
+                message: format!("bypass.{key}: step {step} is named twice"),
+                errors: vec![format!("bypass.{key}: step {step} is named twice")],
+            });
+        }
+        presets.push((step.clone(), outputs));
+    }
+    Ok(presets)
 }
 
 #[cfg(test)]

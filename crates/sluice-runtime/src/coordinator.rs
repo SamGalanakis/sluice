@@ -3057,6 +3057,7 @@ fn project_mutation(command: &CommandRequest) -> bool {
             | CommandRequest::StepRetry(_)
             | CommandRequest::StepCancel(_)
             | CommandRequest::StepSetOutput(_)
+            | CommandRequest::StepBypass(_)
             | CommandRequest::PlanSetInput(_)
     ) || edits::edit_selector(command).is_some()
 }
@@ -3163,6 +3164,11 @@ fn mutate_project(
             let ctx = cached_context(tx.sql(), id, catalog, plans)?;
             plans::step_set_output(tx, &ctx, request)?;
             Ok(CommandReply::Ack)
+        }
+        CommandRequest::StepBypass(request) => {
+            let id = messages_project(tx.sql(), &request.project)?;
+            let ctx = cached_context(tx.sql(), id, catalog, plans)?;
+            json_reply(sluice_store::bypass::step_bypass(tx, &ctx, request)?)
         }
         CommandRequest::PlanSetInput(request) => {
             crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;

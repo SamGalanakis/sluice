@@ -91,6 +91,7 @@ fn every_v2_tool_has_a_shared_strict_schema() {
         "plan_history",
         "plan_set_input",
         "step_set_input",
+        "step_bypass",
         "step_set_output",
         "step_retry",
         "step_submit",
@@ -521,7 +522,7 @@ fn client_config() -> ClientConfig {
 }
 async fn exercise(client: &rmcp::service::RunningService<rmcp::RoleClient, ClientConfig>) {
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 58);
+    assert_eq!(tools.len(), 59);
     let result = client
         .call_tool(CallToolRequestParams::new("projects_list"))
         .await

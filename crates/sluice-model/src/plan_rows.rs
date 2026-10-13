@@ -671,6 +671,11 @@ pub enum PlanOp {
         /// the project's fallback. Runtime metadata: never part of the plan's declaration.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         owner: Option<String>,
+        /// Recipe step suffix (or step id) to the outputs that step settles with instead of
+        /// running (`step_bypass`). Runtime state: never part of the plan's declaration.
+        #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+        #[schemars(with = "std::collections::BTreeMap<String, JsonMap>")]
+        bypass: IndexMap<String, JsonMap>,
     },
     /// Change the unit's member steps, each by its exact id.
     #[serde(rename = "unit.update")]

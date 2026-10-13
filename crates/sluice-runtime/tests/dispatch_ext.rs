@@ -1081,6 +1081,11 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
             "step_settle",
             json!({"step":"work","reason":"test"}),
         ),
+        (
+            "StepBypass",
+            "step_bypass",
+            json!({"step":"work","outputs":{"value":1,"ready":true},"reason":"test"}),
+        ),
         ("Messages", "messages", json!({"view":"questions"})),
         (
             "MarkRead",
@@ -1232,6 +1237,7 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
                 | "StepCancel"
                 | "StepProgress"
                 | "StepSettle"
+                | "StepBypass"
                 | "Ask"
                 | "Say"
                 | "Reply"

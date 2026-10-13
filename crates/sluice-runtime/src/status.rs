@@ -165,6 +165,7 @@ pub(crate) fn status(
     };
     let left_out: std::collections::HashSet<&StepId> =
         done.iter().flat_map(|u| u.steps.iter()).collect();
+    let presets = sluice_store::bypass::presets(sql, id)?;
     let mut steps = serde_json::Map::new();
     for (step, row) in rows {
         let step = step_id(step)?;
@@ -217,6 +218,9 @@ pub(crate) fn status(
                 }
                 if !waiting.is_empty() {
                     row.insert("waiting".into(), json!(waiting));
+                }
+                if let Some(preset) = presets.get(&step).filter(|p| p.pending()) {
+                    row.insert("bypass".into(), preset.summary());
                 }
             }
         }

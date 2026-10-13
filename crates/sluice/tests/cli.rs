@@ -2106,6 +2106,62 @@ fn step_settle_takes_flags_help_and_suggestions() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("not_found"));
 }
 
+/// `sluice tool step_bypass` takes flags, requires a reason, fills the author from
+/// SLUICE_AUTHOR, and settles a ready pending step at once.
+#[test]
+fn step_bypass_takes_flags_and_settles_a_ready_step() {
+    let home = ScratchHome::new().unwrap();
+    let home = home.path();
+    let help =
+        String::from_utf8(tool_with(home, &["step_bypass", "--help"], &[], None).stdout).unwrap();
+    assert!(help.contains("  --reason <string>  (required)"), "{help}");
+    project_with_steps(home);
+    let message = refused(&tool_with(
+        home,
+        &[
+            "step_bypass",
+            "--project",
+            "p",
+            "--step",
+            "q",
+            "--outputs",
+            "{\"ok\":true}",
+        ],
+        &[],
+        None,
+    ));
+    assert!(message.contains("missing field `reason`"), "{message}");
+    let reply = ok(tool_with(
+        home,
+        &[
+            "step_bypass",
+            "--project",
+            "p",
+            "--step",
+            "q",
+            "--outputs",
+            "{\"ok\":true}",
+            "--reason",
+            "done elsewhere",
+        ],
+        &[],
+        None,
+    ));
+    assert_eq!(
+        (reply["status"].as_str(), reply["applied"].as_bool()),
+        (Some("succeeded"), Some(true))
+    );
+    let log = ok(tool(
+        home,
+        "log_read",
+        r#"{"project":"p","kinds":["step.bypass"]}"#,
+    ));
+    assert_eq!(log["records"][0]["author"], "@orch");
+    assert_eq!(log["records"][0]["reason"], "done elsewhere");
+    let status = ok(tool(home, "status", r#"{"project":"p","steps":"q"}"#));
+    assert_eq!(status["steps"]["q"]["manual"], 1);
+}
+
 /// `unit_add` takes `after` as the documented map of recipe step suffix to step ids, from the
 /// JSON argument and from `--after`, and a single id for a suffix as a one-item list.
 #[test]
