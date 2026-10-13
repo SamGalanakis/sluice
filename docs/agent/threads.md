@@ -231,6 +231,14 @@ one, ask `to="owner"` (`docs("inbox")`).
   message="what to fix")` says the message to the step and runs it again; an agent fn that
   can resume its session sees the message first.
 
+## Correcting a running step
+
+`say(project, to="work", body="what to change")` reaches a listening agent live.
+For a `{"file": path}` input, edit the file too: each start re-reads it.
+To change a typed input, `step_cancel`, wait until the step fails, then `step_set_input`
+and `step_retry(message="what to fix")`. Changing `in` mid-run would change the inputs
+hash and make the corrected result stale.
+
 ## Watching from a shell
 `sluice watch -p myproj [--kinds k1,k2] [--threads a,b] [--since-seq N] [--wake any|questions]`
 follows the log from now (or after `--since-seq`) and prints each matching record as one JSON

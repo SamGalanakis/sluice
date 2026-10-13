@@ -423,6 +423,15 @@ on news `cadence:1d` so its silence is not flagged.
   `message="..."` to post that message to each retried step — the send-back: its next run
   starts with the message first.
 
+## Dropping a step
+
+Pause it with `step_pause`; when its inputs and gates are ready, use `step_set_output`
+with the declared outputs, without force. Its dependents then proceed in order.
+Or use one `plan_edit` to remove it and re-gate its dependents on its prerequisites;
+replace any bindings that read its outputs in that same edit.
+Avoid `force=true` on a pending step: its dependents could run before its prerequisites,
+and its result turns stale when those arrive.
+
 ## Work done outside sluice
 A step whose work happens elsewhere (a person, another orchestrator's workers, a CI run) runs
 the built-in `core.external`. The runner never starts it: once ready it waits (its wait reason

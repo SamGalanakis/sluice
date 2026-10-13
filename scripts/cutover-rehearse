@@ -152,8 +152,10 @@ def harness():
     shutil.copy(checkout / 'Cargo.lock', checkout / 'tools/cutover-rehearsal/Cargo.lock')
     target = prefix / '.build/rehearsal-target'
     say('building the harness against %s (%s)' % (old.name[:12], target))
-    built = subprocess.run(['cargo', '--config', 'build.target-dir=' + json.dumps(str(target)), 'build', '--target-dir', str(target), '--release',
-        '--manifest-path', str(checkout / 'tools/cutover-rehearsal/Cargo.toml')], stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr)
+    build_env = os.environ.copy()
+    for key in ('CARGO_TARGET_DIR', 'CARGO_BUILD_TARGET_DIR'): build_env.pop(key, None)
+    built = subprocess.run(['cargo', 'build', '--target-dir', str(target), '-j', '8', '--release',
+        '--manifest-path', str(checkout / 'tools/cutover-rehearsal/Cargo.toml')], env=build_env, stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr)
     if built.returncode: finish('building the rehearsal harness against %s failed' % sha[:12])
     return target / 'release/cutover-rehearsal'
 

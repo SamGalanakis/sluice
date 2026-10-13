@@ -20,7 +20,9 @@ for child in ['releases', 'bin', '.build']:
 os.environ['TMPDIR'] = str(prefix / '.build/tmp')
 sha = os.environ.get('SLUICE_BUILD_GIT_SHA') or subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
 # One shared Cargo feature graph; all build outputs are inside the explicit prefix.
-subprocess.run(['cargo', '--config', 'build.target-dir=' + json.dumps(str(prefix / '.build/target')), 'build', '--target-dir', str(prefix / '.build/target'), '--workspace', '--bins', '--release', '--locked'], cwd=repo, check=True)
+build_env = os.environ.copy()
+for key in ('CARGO_TARGET_DIR', 'CARGO_BUILD_TARGET_DIR'): build_env.pop(key, None)
+subprocess.run(['cargo', 'build', '--target-dir', str(prefix / '.build/target'), '-j', '8', '--workspace', '--bins', '--release', '--locked'], cwd=repo, env=build_env, check=True)
 def fsync_tree(root):
     for path in root.rglob('*'):
         if path.is_file() and not path.is_symlink():

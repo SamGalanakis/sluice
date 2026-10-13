@@ -104,9 +104,10 @@ fn old_binary() -> PathBuf {
     // One build per schema-1 revision, whichever test asks first.
     let lock = std::fs::File::create(cache.join("lock")).unwrap();
     lock.lock().unwrap();
-    // Where cargo put it, as it reports: a cargo wrapper may override the target directory.
+    // Ignore cached paths from before legacy builds had their own target directory.
     let path = cache.join("binary");
     if let Ok(binary) = std::fs::read_to_string(&path).map(PathBuf::from)
+        && binary.starts_with(cache.join("target"))
         && binary.is_file()
     {
         return binary;
@@ -134,13 +135,12 @@ fn old_binary() -> PathBuf {
     );
     let built = Command::new("cargo")
         .current_dir(&source)
-        .arg("--config")
-        .arg(format!(
-            "build.target-dir={}",
-            serde_json::to_string(&cache.join("target")).unwrap()
-        ))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("CARGO_BUILD_TARGET_DIR")
         .args([
             "build",
+            "-j",
+            "8",
             "-p",
             "sluice",
             "--bin",
@@ -148,6 +148,8 @@ fn old_binary() -> PathBuf {
             "--locked",
             "--message-format=json-render-diagnostics",
         ])
+        .arg("--target-dir")
+        .arg(cache.join("target"))
         .output()
         .unwrap();
     assert!(built.status.success(), "building {sha}: {}", text(&built));
@@ -157,6 +159,11 @@ fn old_binary() -> PathBuf {
         .filter(|message| message["target"]["name"] == "sluice")
         .find_map(|message| message["executable"].as_str().map(PathBuf::from))
         .unwrap_or_else(|| panic!("building {sha} names no sluice executable"));
+    assert!(
+        binary.starts_with(cache.join("target")),
+        "{}",
+        binary.display()
+    );
     std::fs::write(&path, binary.to_string_lossy().as_bytes()).unwrap();
     binary
 }

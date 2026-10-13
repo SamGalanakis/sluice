@@ -180,7 +180,15 @@ fn a_release_ships_the_font_licences() {
     let stubs = root.path().join("stubs");
     std::fs::create_dir_all(&stubs).unwrap();
     let stub = |path: &Path, body: &str| executable::write(path, format!("#!/bin/sh\n{body}\n"));
-    stub(&stubs.join("cargo"), "echo 'cargo stub'");
+    stub(
+        &stubs.join("cargo"),
+        "if [ \"$1\" = build ]; then\n\
+         [ \"${CARGO_TARGET_DIR+x}\" != x ] || exit 1\n\
+         [ \"${CARGO_BUILD_TARGET_DIR+x}\" != x ] || exit 1\n\
+         [ \"$2\" = --target-dir ] && [ \"$3\" = \"${TMPDIR%/tmp}/target\" ] || exit 1\n\
+         fi\n\
+         echo 'cargo stub'",
+    );
     let prefix = root.path().join("prefix");
     let target = prefix.join(".build/target/release");
     std::fs::create_dir_all(&target).unwrap();
