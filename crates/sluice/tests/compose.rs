@@ -1916,6 +1916,77 @@ fn messages_default_to_inbox_through_cli_socket_and_mcp() {
 }
 
 #[test]
+fn reply_to_log_seq_has_the_same_refusal_through_cli_socket_and_mcp() {
+    let g = Gate::new();
+    g.plan(json!({"lane":{"run":"core.external"}}));
+    let question = owner_question(&g, "orchestrator", "Which parser?");
+    let CommandReply::Records(page) = g.rpc(json!({"command":"log_read","args":{
+        "project":g.selector(),"kinds":["plan.edit"],"limit":100
+    }})) else {
+        panic!("records")
+    };
+    let seq = page.records.last().unwrap().seq.0;
+    let expected = format!(
+        "{seq} is a log seq (a plan.edit record), not a message. A message's id is the # number on its line. Open questions to you:\n#{question} owner: Which parser?"
+    );
+    for transport in [
+        MessageTransport::Cli,
+        MessageTransport::Socket,
+        MessageTransport::Mcp,
+    ] {
+        let error = message_tool(
+            &g,
+            transport,
+            "reply",
+            json!({"to_message":seq,"body":"Use Rust"}),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, sluice_model::error::PublicError::Invalid { ref message, .. }
+            if message == &expected),
+            "{transport:?}: {error:?}"
+        );
+        let missing = message_tool(
+            &g,
+            transport,
+            "reply",
+            json!({"to_message":i64::MAX,"body":"Use Rust"}),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(missing, sluice_model::error::PublicError::NotFound { message }
+            if message == format!("no message {}", i64::MAX)),
+            "{transport:?}"
+        );
+    }
+    for transport in [
+        MessageTransport::Cli,
+        MessageTransport::Socket,
+        MessageTransport::Mcp,
+    ] {
+        let posted = message_tool(
+            &g,
+            transport,
+            "reply",
+            json!({"to_message":question,"body":"Use Rust"}),
+        )
+        .unwrap();
+        assert_eq!(posted["to"], "owner", "{transport:?}");
+    }
+    let error = message_tool(
+        &g,
+        MessageTransport::Cli,
+        "reply",
+        json!({"to_message":seq,"body":"Again"}),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().ends_with("Open questions to you: none."),
+        "{error}"
+    );
+}
+
+#[test]
 fn reply_by_sender_selects_one_open_question_through_cli_socket_and_mcp() {
     for transport in [
         MessageTransport::Cli,

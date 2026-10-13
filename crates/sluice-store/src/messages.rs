@@ -89,15 +89,79 @@ pub fn resolve_project(sql: &Connection, selector: &ProjectSelector) -> Result<P
 const MESSAGE_JSON: &str = "json_object('id',id,'verb',CASE WHEN reply_to IS NOT NULL THEN 'reply' WHEN needs_reply=1 THEN 'ask' ELSE 'say' END,'from',\"from\",'to',\"to\",'thread',thread,'body',CASE WHEN body='' AND needs_reply=1 AND input IS NOT NULL THEN coalesce((SELECT json_extract(i.declaration,'$.doc') FROM inputs i WHERE i.project_id=messages.project_id AND i.name=messages.input),'') ELSE body END,'title',title,'ui',ui,'input',input,'data',json(data),'run',run_id,'at',at,'to_message',reply_to,'answer',json(answer),'state',CASE WHEN needs_reply=1 THEN CASE WHEN closed_at IS NOT NULL THEN 'closed' WHEN resolved_by IS NOT NULL THEN 'answered' ELSE 'open' END END,'answered_by',CASE WHEN needs_reply=1 AND closed_at IS NULL THEN resolved_by END)";
 
 pub fn message(sql: &Connection, project: ProjectId, id: MessageId) -> Result<Message> {
-    let json: String = sql
+    find_message(sql, project, id)?.ok_or_else(|| missing(format!("no message {}", id.0)))
+}
+
+fn find_message(sql: &Connection, project: ProjectId, id: MessageId) -> Result<Option<Message>> {
+    let json: Option<String> = sql
         .query_row(
             &format!("SELECT {MESSAGE_JSON} FROM messages WHERE project_id=?1 AND id=?2"),
             params![project.to_string(), id.0],
             |r| r.get(0),
         )
-        .optional()?
-        .ok_or_else(|| missing(format!("no message {}", id.0)))?;
-    Ok(serde_json::from_str(&json)?)
+        .optional()?;
+    json.map(|json| serde_json::from_str(&json))
+        .transpose()
+        .map_err(Into::into)
+}
+
+fn reply_message(
+    sql: &Connection,
+    project: ProjectId,
+    id: MessageId,
+    caller: &str,
+) -> Result<Message> {
+    if let Some(message) = find_message(sql, project, id)? {
+        return Ok(message);
+    }
+    let other_project: Option<String> = sql
+        .query_row(
+            "SELECT p.name FROM messages m JOIN projects p ON p.project_id=m.project_id WHERE m.id=?1",
+            [id.0],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(name) = other_project {
+        return Err(invalid(format!("message {} is in project {name}", id.0)));
+    }
+    let kind: Option<String> = sql
+        .query_row(
+            "SELECT kind FROM records WHERE project_id=?1 AND seq=?2",
+            params![project.to_string(), id.0],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(kind) = kind else {
+        return Err(missing(format!("no message {}", id.0)));
+    };
+    let mut query = sql.prepare(&format!(
+        "SELECT {MESSAGE_JSON} FROM messages WHERE project_id=?1 AND \"to\"=?2
+         AND needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL ORDER BY id LIMIT 5"
+    ))?;
+    let mut choices = Vec::new();
+    for row in query.query_map(params![project.to_string(), caller], |row| {
+        row.get::<_, String>(0)
+    })? {
+        let question: Message = serde_json::from_str(&row?)?;
+        let body: String = question
+            .body
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(200)
+            .collect();
+        choices.push(format!("#{} {}: {body}", question.id.0, question.from));
+    }
+    let questions = if choices.is_empty() {
+        " none.".into()
+    } else {
+        format!("\n{}", choices.join("\n"))
+    };
+    Err(invalid(format!(
+        "{} is a log seq (a {kind} record), not a message. A message's id is the # number on its line. Open questions to you:{questions}",
+        id.0
+    )))
 }
 
 /// The run that has claimed this answering reply, if any.
@@ -593,7 +657,7 @@ pub fn post(
             (to.clone(), Verb::Say { to, data }, None)
         }
         Verb::Reply { to_message, answer } => {
-            let parent = message(tx.sql(), project, to_message)?;
+            let parent = reply_message(tx.sql(), project, to_message, &from)?;
             if let Some(answer) = &answer {
                 if answer.action.trim().is_empty() {
                     return Err(invalid("answer.action must not be blank"));

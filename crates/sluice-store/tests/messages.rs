@@ -4,7 +4,7 @@ use home::ScratchHome;
 use rusqlite::params;
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::{Message, MessageAnswer, MessageVerb, QuestionState},
+    commands::{Message, MessageAnswer, MessageVerb, QuestionState, StepStatus},
     error::PublicError,
     events::Event,
     ids::{AttemptId, MessageId, ProjectId, ProjectSelector, Revision, RunId},
@@ -154,6 +154,119 @@ fn answer(project: ProjectId, id: MessageId, value: Value) -> Post {
         params: Some(serde_json::from_value(json!({"value":7})).unwrap()),
         values: Some(serde_json::from_value(json!({"value":value})).unwrap()),
     })
+}
+
+#[tokio::test]
+async fn reply_to_log_seq_lists_only_callers_oldest_five_open_questions() {
+    let f = Fixture::new().await;
+    let run = f.run("work", 0, 1, None).await;
+    let answered = f.post(asking(f.project, "Already answered")).await.unwrap();
+    f.post(reply(f.project, answered.id, "Done")).await.unwrap();
+    let closed = f.post(asking(f.project, "Already closed")).await.unwrap();
+    f.post(reply(f.project, closed.id, "").answer(MessageAnswer {
+        action: "close".into(),
+        params: None,
+        values: None,
+    }))
+    .await
+    .unwrap();
+    f.post(asking(f.project, "For another caller").to("work"))
+        .await
+        .unwrap();
+    f.post(draft(f.project, "Just a note")).await.unwrap();
+    let mut questions = Vec::new();
+    for n in 0..6 {
+        questions.push(
+            f.post(
+                asking(f.project, &format!("Question {n}\nMore context"))
+                    .speaker(Speaker::Run(run)),
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let p = f.project;
+    let record = f
+        .writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.append_record(
+                Some(p),
+                Event::Call {
+                    call: RunId::new(),
+                    name: "test.call".into(),
+                    status: StepStatus::Succeeded,
+                    inputs: None,
+                    outputs: None,
+                    error: None,
+                    direct: true,
+                    author: None,
+                },
+            )
+        })
+        .await
+        .unwrap();
+    let before = f.count("messages").await;
+    let error = f
+        .post(reply(p, MessageId(record.seq.0), "Answer"))
+        .await
+        .unwrap_err();
+    let choices = questions
+        .iter()
+        .take(5)
+        .map(|q| format!("#{} work: {}", q.id.0, q.body.lines().next().unwrap()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let expected = format!(
+        "{} is a log seq (a call record), not a message. A message's id is the # number on its line. Open questions to you:\n{choices}",
+        record.seq.0
+    );
+    assert!(
+        matches!(error, PublicError::Invalid { ref message, ref errors }
+        if message == &expected && errors == std::slice::from_ref(&expected)),
+        "{error:?}"
+    );
+    assert_eq!(f.count("messages").await, before);
+    for q in &questions {
+        assert_eq!(f.question(q.id).await.state, QuestionState::Open);
+    }
+    let posted = f.post(reply(p, questions[0].id, "Answer")).await.unwrap();
+    assert_eq!(posted.to_message, Some(questions[0].id));
+    assert_eq!(
+        f.question(questions[0].id).await.state,
+        QuestionState::Answered
+    );
+}
+
+#[tokio::test]
+async fn reply_to_missing_id_keeps_plain_missing_message() {
+    let f = Fixture::new().await;
+    let error = f
+        .post(reply(f.project, MessageId(i64::MAX), "Answer"))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, PublicError::NotFound { message }
+        if message == format!("no message {}", i64::MAX)));
+}
+
+#[tokio::test]
+async fn reply_to_another_projects_message_names_the_project() {
+    let f = Fixture::new().await;
+    let other = ProjectId::new();
+    f.writer.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute("INSERT INTO projects(project_id,name,created_at) VALUES (?1,'other-project','now')", [other.to_string()])?;
+        tx.changed(Some(other), "project");
+        Ok(())
+    }).await.unwrap();
+    let question = f
+        .post(asking(other, "Other project's question"))
+        .await
+        .unwrap();
+    let error = f
+        .post(reply(f.project, question.id, "Answer"))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, PublicError::Invalid { message, .. }
+        if message == format!("message {} is in project other-project", question.id.0)));
 }
 trait Draft {
     fn to(self, to: &str) -> Self;

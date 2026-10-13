@@ -1072,6 +1072,12 @@ derived, never given:
   and posting happen in one transaction. With no match it returns `conflict` saying so; with
   several it returns `conflict` listing their ids and first body lines, at most 200 characters
   each, so the caller can choose `to_message`. No refusal posts or answers anything.
+  With `to_message`, a non-message log seq in the project returns `invalid`, naming the
+  record kind and listing up to five open questions addressed to the caller, oldest first,
+  with their message ids, senders and first body lines, at most 200 characters each. With
+  none, it says "Open questions to you: none." A message in another project returns
+  `invalid`, "message N is in project <name>". An id that names neither returns `not_found`,
+  "no message N". A log seq is never resolved to a different message.
 
 Each takes `run?` too: the run that speaks (agent and fn callers; `sluice tool` fills it in a
 run, §14). The dashboard speaks as the owner (`owner: true`, which MCP and `sluice
@@ -1983,6 +1989,8 @@ write that timed out, and connections dropped for want of a permit.
 <from> -> <to>: <error tail>`, `UNIT <u> settled: <outputs>` (long outputs named with a hint to
 read them with `sluice query` or `--settles full`), `PROJECT <id> paused by <author>`, and last
 `seq N` or `timeout seq N`; `--json` prints the reply.
+Reply with the `#N` on the ASK line; the last line's `seq N` is the cursor to pass to
+`--since-seq`, not an id to reply to.
 The message id is a decimal integer after `#`, always the second token, for every verb
 and `--settles` mode. `log_wait` and JSON `next` records retain their `id` field.
 `status(view="units")` prefixes the last-message summary with `#<id>`; the rendered line

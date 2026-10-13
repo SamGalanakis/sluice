@@ -198,6 +198,7 @@ line; it never exits. `sluice next` is the same wait as the `next` tool, printed
 event and ending with `seq N`. Message lines have the form
 `ASK|SAY|REPLY #<message-id> <thread> <from> -> <to>: <body>`: the second token always
 names the message, so an ASK can be answered directly with `--to-message <message-id>`.
+Reply with the `#N` on the ASK line; the batch's final `seq N` is the cursor for `--since-seq`.
 `log_wait` and JSON `next` carry `id` too. The last-message summary in `status(view="units")`
 begins with `#<message-id>`; the rendered line includes it when it shows that message.
 In Claude Code, run it under the Monitor tool so every record arrives as an event:
