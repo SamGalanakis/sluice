@@ -3,11 +3,12 @@
 //! owner, For you (a question to the owner, swollen), Stopped (failed, cancelled, stale), Running
 //! (quiet first, then the longest), Waiting (each held up by whom) and Done (a dense index,
 //! folded), with a long run's progress in the margin. Every unit is one row or module; select a
-//! unit to trace its chain (`sluice-trace`).
+//! unit to trace its chain (`sluice-trace`); a row's disclosure opens its step view in place
+//! (`unit_steps`).
 //!
 //! Generic by rule: a unit's cells are its recipe's own stages in recipe order (a block a recipe,
-//! its columns that recipe's steps), a unit of no recipe draws its own small graph, a loose step
-//! is one cell, and every word comes from the status table, the recipe or what the project's
+//! its columns that recipe's steps), a unit of no recipe its steps in plan order (its gates are
+//! its step view's), a loose step one cell, and every word comes from the status table, the recipe or what the project's
 //! steps reported.
 use super::board::{ProjectView, Question, UnitView};
 use super::icons::{Icon, icon};
@@ -1073,20 +1074,10 @@ impl<'a> Plan<'a> {
                 waits
             }
         };
-        let (cells, graph) = match (unit.stages.is_empty(), unit.steps.len()) {
-            (false, _) => (unit.stages.len(), false),
-            (true, 1) => (1, false),
-            (true, _) => (layers(unit).len(), true),
-        };
-        let cells_html = if graph {
-            self.graph_html(unit)
-        } else {
-            ui::stage_strip(&format!("Stages of {}", unit.heading()), &strip(unit)).0
-        };
+        let cells = ui::stage_strip(&format!("Stages of {}", unit.heading()), &strip(unit)).0;
         format!(
-            "<div id=\"u-{id}\" class=\"pl-row rail-slot{g}\" style=\"--cells:{cells}\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-head\"><span class=\"pl-k\" id=\"k-u-{id}\"><span class=\"pl-w\">{role}{mark}<b>{word}</b></span> {state}</span> <span class=\"pl-t\">{title}</span></span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open the unit</a></div><div class=\"pl-cells\">{cells_html}</div><div class=\"pl-end\">{menu}</div>{more}{more_body}{more_end}</div>",
+            "<div id=\"u-{id}\" class=\"pl-row rail-slot\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-head\"><span class=\"pl-k\" id=\"k-u-{id}\"><span class=\"pl-w\">{role}{mark}<b>{word}</b></span> {state}</span> <span class=\"pl-t\">{title}</span></span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open the unit</a></div><div class=\"pl-cells\">{cells}</div><div class=\"pl-end\">{menu}</div>{steps}{more}{more_body}{more_end}</div>",
             id = esc(unit.id.as_str()),
-            g = if graph { " pl-graphed" } else { "" },
             attrs = self.attrs(unit),
             rail = ui::rail(),
             pick = ui::trace_button_open(title(unit), &format!("k-u-{}", unit.id)),
@@ -1097,10 +1088,21 @@ impl<'a> Plan<'a> {
             pick_end = ui::trace_button_close(),
             href = esc(&unit_href(self.view, unit)),
             menu = self.unit_details(unit, step).menu(title(unit)),
+            steps = self.steps_html(unit),
             more = ui::trace_more_open(),
             more_body = self.more_html(unit),
             more_end = ui::trace_more_close(),
         )
+    }
+    /// A unit's step view (`unit_steps`) behind its disclosure, its steps opening in the
+    /// drawer; which are open is the trace's to keep (`expanded`).
+    fn steps_html(&self, unit: &UnitView) -> String {
+        ui::expand(
+            unit.id.as_str(),
+            &format!("Steps of {}", title(unit)),
+            &super::unit_steps::of_unit(unit, &self.view.relations, true, "").html(),
+        )
+        .0
     }
     /// A unit's one line: its recipe's view (the project's own summary of it, its params kept
     /// in the row's Details), else its last message, its sender named in words and its text on
@@ -1131,33 +1133,9 @@ impl<'a> Plan<'a> {
             ))
         )
     }
-    /// What opens in place while a unit is traced: its steps, its last message, its buttons.
+    /// What opens in place while a unit is traced: its last message and its buttons (its
+    /// steps are its disclosure's).
     fn more_html(&self, unit: &UnitView) -> String {
-        let mut steps = String::new();
-        for step in &unit.steps {
-            let shown = step.shown();
-            let time = match step.timing.as_ref() {
-                Some(t) if step.running() => format!(" since {}", ui::clock(&t.started)),
-                Some(_) => step
-                    .shown_timing()
-                    .map(|t| format!(" {}", esc(&ui::duration_text(t.seconds))))
-                    .unwrap_or_default(),
-                None => String::new(),
-            };
-            let waits = unit
-                .waits_of(step)
-                .first()
-                .map(|w| format!(", waits for {}", esc(&w.name.text(48))))
-                .unwrap_or_default();
-            steps.push_str(&format!(
-                "<li><a href=\"{h}\" data-step=\"{s}\">{name}</a><span class=\"pl-st\">{g}{w}{time}{waits}</span></li>",
-                h = esc(&step.href()),
-                s = esc(step.id.as_str()),
-                name = esc(&short(unit, step)),
-                g = ui::mark(shown),
-                w = esc(shown.word()),
-            ));
-        }
         let said = if unit.last_message.trim().is_empty() {
             "<p class=\"meta\">No message yet.</p>".to_owned()
         } else {
@@ -1185,90 +1163,9 @@ impl<'a> Plan<'a> {
             esc(&unit_href(self.view, unit))
         ));
         format!(
-            "<div class=\"pl-more\"><div class=\"pl-steps\"><h3 class=\"pl-mh\">Steps</h3><ol>{steps}</ol></div><div class=\"pl-said\"><h3 class=\"pl-mh\">Last message</h3>{said}</div><div class=\"mod-actions\">{actions}</div></div>"
+            "<div class=\"pl-more\"><div class=\"pl-said\"><h3 class=\"pl-mh\">Last message</h3>{said}</div><div class=\"mod-actions\">{actions}</div></div>"
         )
     }
-    /// A unit of no recipe as its own small graph: its steps in columns by how far down its
-    /// own chain each is, each a cell, with a small connector for each wait between them (a
-    /// fan-in or fan-out reads as itself).
-    fn graph_html(&self, unit: &UnitView) -> String {
-        let layers = layers(unit);
-        let rows = layers.iter().map(Vec::len).max().unwrap_or(1).max(1);
-        // each cell's place: its column and its row, centred in the tallest column
-        let mut at = std::collections::BTreeMap::<&str, (usize, f64)>::new();
-        for (c, layer) in layers.iter().enumerate() {
-            let off = (rows - layer.len()) as f64 / 2.0;
-            for (r, step) in layer.iter().enumerate() {
-                at.insert(step.id.as_str(), (c, r as f64 + off));
-            }
-        }
-        let edges = self.inner_edges(unit);
-        let mut columns = vec![];
-        let mut out = String::new();
-        for (c, layer) in layers.iter().enumerate() {
-            if c > 0 {
-                // the connectors into this column, one path a wait
-                let mut paths = String::new();
-                for (from, to) in &edges {
-                    let (Some(&(fc, fr)), Some(&(tc, tr))) =
-                        (at.get(from.as_str()), at.get(to.as_str()))
-                    else {
-                        continue;
-                    };
-                    if tc != c {
-                        continue;
-                    }
-                    let (y1, y2) = ((fr + 0.5) * 100.0, (tr + 0.5) * 100.0);
-                    paths.push_str(&format!(
-                        "<path d=\"M0 {y1} C14 {y1} 14 {y2} 28 {y2}\"{} vector-effect=\"non-scaling-stroke\"/>",
-                        if fc + 1 == tc {
-                            ""
-                        } else {
-                            " stroke-dasharray=\"3 3\""
-                        }
-                    ));
-                }
-                out.push_str(&format!(
-                    "<svg class=\"pl-wire\" viewBox=\"0 0 28 {}\" preserveAspectRatio=\"none\" aria-hidden=\"true\">{paths}</svg>",
-                    rows * 100
-                ));
-                columns.push("28px".to_owned());
-            }
-            let stages: Vec<Stage> = layer.iter().map(|s| stage_of(s, &short(unit, s))).collect();
-            let off = (rows - layer.len()) as f64 / 2.0;
-            out.push_str(&format!(
-                "<div class=\"pl-layer\" style=\"--off:{off}\">{}</div>",
-                ui::stage_strip(
-                    &format!("Stages of {}, step {} of its chain", unit.id, c + 1),
-                    &stages
-                )
-            ));
-            columns.push("minmax(0, 1fr)".to_owned());
-        }
-        format!(
-            "<div class=\"pl-graph\" style=\"--rows:{rows};grid-template-columns:{}\">{out}</div>",
-            columns.join(" ")
-        )
-    }
-    /// The waits between a unit's own steps, by step id.
-    fn inner_edges(&self, unit: &UnitView) -> Vec<(String, String)> {
-        let ids: BTreeSet<&str> = unit.steps.iter().map(|s| s.id.as_str()).collect();
-        let mut out = vec![];
-        for r in &self.view.relations {
-            if let (super::board::Endpoint::Step(from), super::board::Endpoint::Step(to)) =
-                (&r.from, &r.to)
-                && ids.contains(from.as_str())
-                && ids.contains(to.as_str())
-            {
-                let edge = (from.to_string(), to.to_string());
-                if !out.contains(&edge) {
-                    out.push(edge);
-                }
-            }
-        }
-        out
-    }
-
     /// The margin: each long run's progress as it reported it.
     /// The margin: the long runs, down the sheet's right beside `rows` of it (`wide` from
     /// 2000px, where Running and Waiting share one).
@@ -1369,7 +1266,7 @@ impl<'a> Plan<'a> {
                 .collect();
             let dismissed = unit.steps.iter().any(|s| s.cancelled() && s.dismissed);
             items.push_str(&format!(
-                "<li data-said=\"{states}\"><a href=\"{h}\"><span class=\"pl-at\">{at}</span>{g}<span class=\"pl-dt\">{t}</span><span class=\"pl-dk\">{k}</span></a></li>",
+                "<li data-said=\"{states}\"><a href=\"{h}\"><span class=\"pl-at\">{at}</span>{g}<span class=\"pl-dt\">{t}</span><span class=\"pl-dk\">{k}</span></a>{x}</li>",
                 h = esc(&unit_href(self.view, unit)),
                 states = esc(&states_said(unit)),
                 at = if unit.finished().is_empty() {
@@ -1395,6 +1292,7 @@ impl<'a> Plan<'a> {
                 } else {
                     esc(unit.shown().word())
                 },
+                x = self.steps_html(unit),
             ));
         }
         // open when asked for: Show done, a find, or a recipe's every unit
@@ -1458,25 +1356,6 @@ fn group_head(name: &str, line: &str, stages: &[&str]) -> String {
         )
         .replacen("<h2>", "<h3>", 1)
         .replacen("</h2>", "</h3>", 1)
-}
-/// A unit's steps in columns by their own chain: a step after the column of the latest step of
-/// its unit it waits for, in plan order within a column.
-fn layers(unit: &UnitView) -> Vec<Vec<&StepView>> {
-    // the unit's rows are the plan's depths: number them from its own first
-    let mut out: Vec<Vec<&StepView>> = unit
-        .rows
-        .iter()
-        .map(|row| {
-            row.iter()
-                .filter_map(|s| unit.steps.iter().find(|o| o.id == s.id))
-                .collect()
-        })
-        .filter(|row: &Vec<&StepView>| !row.is_empty())
-        .collect();
-    if out.is_empty() {
-        out.push(unit.steps.iter().collect());
-    }
-    out
 }
 /// A unit's waits, said: "review waits for publish · Terns (running)"; or what else holds its
 /// first step.

@@ -331,15 +331,11 @@ async fn a_lane_row_says_its_question_and_a_note_to_many_is_drawn_once() {
             && own.contains("</span> <a class=\"lg-thread\" href=\""),
         "{own}"
     );
-    // the unit page draws the note as its thread does: once, to 2 steps
+    // the unit page says the note once, in its step view's foot, by its sender's stage
     let (_, unit) = f.get(&format!("/projects/id/{id}/units/l3")).await;
-    let last = between(
-        &unit,
-        "<article class=\"mod d-sec unit-last\"",
-        "</article>",
-    );
-    assert!(last.contains("<summary>to 2 steps</summary>"), "{last}");
-    assert_eq!(last.matches("Heads up").count(), 1, "{last}");
+    let last = between(&unit, "<p class=\"sv-foot\">", "</p>");
+    assert!(last.contains("<b>work</b>"), "{last}");
+    assert_eq!(unit.matches("Heads up").count(), 1, "{unit}");
     // the sender's Messages counts each copy and does not explain that the note is drawn once
     let (_, page) = f
         .get(&format!("/projects/id/{id}/steps/l1-work?tab=messages"))

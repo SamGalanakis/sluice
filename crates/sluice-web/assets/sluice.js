@@ -175,8 +175,8 @@ rocket("sluice-drawer", {
           || evt.ctrlKey || evt.metaKey || evt.altKey || document.querySelector("dialog[open]")) return;
       const t = evt.target;
       if (t instanceof Element && t.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return;
-      // the plan's stage cells, in page order
-      const ids = [...new Set($$("#project-board a.sc-a[data-step]")
+      // the plan's stage cells and its open step views' rows, in page order
+      const ids = [...new Set($$("#project-board :is(a.sc-a, a.sv-a)[data-step]")
         .filter(shown).map((a) => a.dataset.step || a.dataset.opens))];
       const at = ids.indexOf(sid);
       const next = ids[evt.key === "]" ? at + 1 : (at < 0 ? ids.length : at) - 1];
@@ -185,10 +185,11 @@ rocket("sluice-drawer", {
       opener = document.getElementById(`n-${next}`) || opener;
       location.hash = `step:${encodeURIComponent(next)}`;
     };
-    // a click on the page around the board (not on a card, a control, the switcher or in the
-    // drawer, and not the end of selecting text) closes the drawer as Escape does
+    // a click on the page around the board (not on a card, a step view's row, a control, the
+    // switcher or in the drawer, and not the end of selecting text) closes the drawer as Escape
+    // does
     const INTERACTIVE = "a, button, summary, input, select, textarea, label, details.switcher, "
-      + ".scrim, [data-step]";
+      + ".scrim, [data-step], li.sv-row";
     const away = (evt) => {
       const t = evt.target;
       if (document.querySelector("dialog[open]") || !currentStep() || evt.button !== 0 || !(t instanceof Element)) return;

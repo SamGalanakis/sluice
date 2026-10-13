@@ -91,10 +91,12 @@ async fn every_unit_of_the_fixture_is_drawn_once_in_its_band_in_rank() {
     // a running row says how long it has run, never against a usual time
     assert!(article.contains("<span class=\"pl-time\">"), "{article}");
     assert!(!article.contains("usual"), "{article}");
-    // the unit of no recipe: its two gathers fan in to its merge, a connector an edge
+    // the unit of no recipe: its steps its cells, and in its step view its two gathers fan in
+    // to its merge, an arrow each into it
     let index = plan_html::row(&html, "index");
-    assert!(index.contains("<div class=\"pl-graph\""), "{index}");
-    assert_eq!(index.matches("<path ").count(), 2, "{index}");
+    assert_eq!(index.matches("<li class=\"sc").count(), 3, "{index}");
+    let merge = plan_html::between(index, "data-sv=\"index-merge\"", "</li>");
+    assert_eq!(merge.matches("class=\"sv-arrow\"").count(), 2, "{merge}");
     // the margin: the long run's progress, its first field large
     let margin = plan_html::band(&html, "plan-margin");
     assert!(
@@ -150,7 +152,6 @@ async fn three_loose_steps_are_a_cell_each() {
     for unit in &units[..2] {
         let row = plan_html::row(&html, unit);
         assert_eq!(row.matches("<li class=\"sc").count(), 1, "{row}");
-        assert!(!row.contains("pl-graph"), "{row}");
         // its cell is the step's own, opening it in the drawer
         assert!(
             row.contains(&format!(" id=\"n-{unit}\" data-step=\"{unit}\"")),

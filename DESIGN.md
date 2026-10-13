@@ -231,8 +231,9 @@ table, `sluice_model::shown`), run, wait, message (owner, orchestrator, steps), 
 outputs and the project's board document. Nothing in view code assumes a project's vocabulary.
 
 - **Stage columns** come from a unit's recipe's own steps, in recipe order. A project with
-  several recipes gets a block per recipe, each with its own columns. A unit of no recipe draws
-  its own small graph; a one-step unit is one cell.
+  several recipes gets a block per recipe, each with its own columns. A unit of no recipe has
+  its steps as its cells, in plan order, six to a line (its gates are its step view's); a
+  one-step unit is one cell.
 - **"Finished last"** is the units (or steps of no unit) whose run ended most recently, by
   title, with when and how long they took.
 - **A long run** (a step of no recipe running six hours or more, or reporting `step_progress`) shows
@@ -715,7 +716,8 @@ for input (pointer, hover, motion, colour scheme).
   (`ui::strip_head(…, stages)`) names each stage over its column, and each row under it (a
   plan's unit, or `ui::strip_row_open(n)`: its lead, then its `ui::stage_strip`) shares one
   track list: the lead takes what the cells leave, the cells `--cell` wide each
-  (`clamp(68px, 6cqi, 104px)`) close beside it, then the row's "⋯". So each cell stands under
+  (`clamp(68px, 6cqi, 104px)`) close beside it, then the row's end (72px: a plan row's
+  disclosure and its "⋯"). So each cell stands under
   its name at every width. Where the sheet is under 640px the lead stands over the cells, the
   head's names give way and each row's cells share its width.
 - The trace rail sits in the gutter and narrows with it (28px from 1200px, the gutter less a
@@ -912,11 +914,63 @@ Selecting it again, Clear trace or Escape clears and gives the focus back to its
 arrows move between the units' buttons. The choice is the host's `selected`, kept through a
 stream patch and drawn again after one. Without script the units link to their pages.
 
+## The step view
+
+`views::unit_steps` (`View`, from a unit by `unit_steps::of_unit`) in a `sluice-steps`: a unit
+drawn step by step, after the reference the owner chose (a pipeline's run view), in Synthesis.
+It is the unit page's body, what a plan row's disclosure opens in place, and a step's Runs tab's
+first part (its own row ringed).
+
+- **Rows are steps**, in graph order: the recipe's (else the plan's), each after every step of
+  its unit it comes after. Each row: the rail, the name (its stage, linking the step; a
+  condition it runs on muted before it, "if ok", "if not ok"; a wait on another unit under it,
+  "waits for Terns"), **State** (`ui::status`: glyph and word, then `ui::tries`' "run 3"),
+  **Progress** (a scatter's "12/40" or a short `step_progress` field, a 3px bar under an "a/b";
+  "—" for none), the **timeline** and **Span** (how long its current run took, in `ink-muted`
+  data mono; a running one's ticking in `run-ink`).
+- **The rail** (an inline SVG a row, out of flow so its lines run the row's whole height): the
+  gates between the unit's steps (`after` entries and values passed) in `line`, 1.5px; a node a
+  step, 5px: filled `sky-ink` done, ringed `idle` not reached, an arc in `run-ink` turning while
+  it runs as the glyphs turn (held still under reduced motion), `sand` edged in `sand-mark` for a
+  look. A chain runs down lane 0, beside the names; a branch takes the lowest free lane to the
+  left (never one freed on its own row), and an arrow marks where a branch or a join reaches a
+  step. At most five lanes.
+- **The time axis.** One axis for every row, from the unit's first start to now while it is not
+  done (rounded up to a step of a tenth of the time drawn, 5 minutes at least, so the server
+  redraws it once a step, never with the clock), else to its last end. Linear, because a reader
+  compares lengths; but no run is drawn under 3px, so a two-second step beside a two-hour one is
+  still a mark in its row, and a stretch where nothing ran that is a tenth or more of the time
+  drawn to scale collapses to a break, 4% of the width on `paper-2` between dashed `rule` edges,
+  labelled with its length ("+1d 2h"). A log axis was refused: it would make every hour-long
+  run look alike and lie about the gaps. The labels (data mono, 11.5px) sit at a nice spacing
+  of the scaled time, 17% apart at least, each with a hairline down the rows; "now" is a
+  `run-ink` line with its word, which `nav.js` moves with the reader's clock every five seconds
+  and after every patch (`data-now`: the last stretch's start, place and rate), as it does a
+  running bar's end. A bar: 8px, `--chart-radius`; done `sky-ink`, running `run`, a look
+  `sand-ink`, no result `idle`; earlier runs at 35%.
+- **The foot**: "Last message", how long ago, its sender in words, its first line linking its
+  thread.
+- **Selecting.** A row is the step's link: a click anywhere on it opens the step (in the drawer
+  on the plan and in the drawer, its page elsewhere); the arrows, Home and End move between rows;
+  the row in focus, clicked or open in the drawer is selected: `paper-2` under a 2px navy ring
+  (the host's `selected`, kept through a patch). Hover is `paper-2` alone.
+- **In the plan.** A row's disclosure (`ui::expand`: a `<details>`, its summary a chevron 34px,
+  44px on a phone, before the row's "⋯", named "Steps of <title>") opens the view under the row
+  across the content; a Done index line has one at its end and opens across the index's
+  columns. Enter or Space toggles it. The title still traces; the disclosure only opens. The
+  units open are the trace host's `expanded`, so a patch, or the unit moving between bands,
+  leaves them open.
+- **Narrow** (under 560px of its own width: a phone, a narrow drawer): one column, the rail
+  and name, then state, progress and span, then the runs as a 4px bar; the head and the axis's
+  labels give way. Nothing scrolls sideways.
+- Words: the column names, the states' words, durations. Nothing explains how to read it.
+
 ## Motion
 
 One moment, the work moving: the sweep along a running cell's foot (Sluice's: 3.2s, ease-out,
 the bright sky crossing the blue; a theme sets its duration, easing and shape, or none). The trace's fades (0.35s ease-out) and the rail drawing down
-(0.45s) answer a selection. Everything else is still. Under reduced motion the sweep is a
+(0.45s) answer a selection, and a disclosure's chevron turns (0.2s). A step view's now line
+moves with the clock in steps of five seconds, never animated. Everything else is still. Under reduced motion the sweep is a
 static line and nothing draws or fades.
 
 ## Components
@@ -951,7 +1005,10 @@ parts" (the gallery) and "Agent docs" (`/docs`).
 
 The components:
 
-- **`sluice-trace`**: select to trace (above).
+- **`sluice-trace`**: select to trace (above); it keeps the plan rows whose step view the owner
+  opened open (`expanded`).
+- **`sluice-steps`**: the step view (above): a row's click opens its step, the arrows move
+  between rows, the selected row in `selected`.
 - **`sluice-tabs`**: an ARIA tablist over its panels (arrows wrap, Home and End); the choice in
   `$$tab`, its `current`, and with `url` in `?tab=`; without script every panel stands stacked.
 - **`sluice-fold`**: Show all and Show less over a long text, said only when it is cut, and
@@ -1050,8 +1107,9 @@ The pages compose these parts; each lane that redraws one writes its section her
     and how long silent when quiet), then its title, two lines at most; under it one line, what holds a waiting unit
     (each source by title, linked, and what it is doing) or the recipe's `view` (else its last
     message, its sender in words); its cells close beside it, sized to them, on the recipe's
-    columns (a unit of no recipe its own small graph, a loose step one cell); its Details at
-    the end. Selecting a row opens its steps, last message and actions in place.
+    columns (a loose step one cell; a unit of no recipe its steps, six to a line); its
+    disclosure and its Details at the end. The disclosure opens its step view under it (The
+    step view); selecting the row opens its last message and actions in place.
   - **The margin**: a long run alone (no recipe, reporting progress, or running six hours or
     more, `plan::LONG_RUN`) as the sky module in the sheet's last two columns, down beside the
     bands; its title opens the step in the drawer.
@@ -1059,7 +1117,7 @@ The pages compose these parts; each lane that redraws one writes its section her
     title with their clock time and how long they took (`ui::latest_list`); then the index
     folded behind "Show the n done units" (open for Show: Done, a find or a recipe's every
     unit), a dense list newest first in columns: finish time, glyph, title, how long it took
-    (in `ink-muted`, like every finished duration: the blue is for what runs).
+    (in `ink-muted`, like every finished duration: the blue is for what runs), its disclosure.
   The sheet's modes: on a medium sheet (under 1200px, a board or the drawer beside it) a row's
   cells narrow to 68px each, the modules sit two to a band's row and the long
   runs go side by side under Running; under 640px everything stacks; from 2000px the bands of
@@ -1090,16 +1148,14 @@ The pages compose these parts; each lane that redraws one writes its section her
   row, and at a third and two thirds from 3000px: more modules a row, never longer lines.
   Activity is its turns as rows numbered in data mono, the running one on the run rule;
   Messages the conversation; Inputs and Outputs field tables with where each came from; Runs
-  its unit's timeline over its runs. In the drawer the same head tops the step a size down,
+  its unit's step view, its own row ringed, over its runs. In the drawer the same head tops the step a size down,
   three lines at most.
 - **A unit's page** (`/projects/id/<p>/units/<u>`): under the row, its head: its way back,
-  its glyph and title with its Details (its id, recipe and params), how its steps stand, its
-  stage strip. On the sheet its steps are modules (two a row from 640px of sheet, three from
-  1200, four from 2000, six from 3000), each headed by its stage name with its Details, its own
-  title only when it differs from the unit's (which the head already says), the one asking the
-  owner on the
-  coral rule, a stop on the sand, a running one
-  on the run rule; then its timeline and its last message.
+  its glyph and title with its Details (its id, recipe and params), how its steps stand, a short
+  recipe view on that line. On the sheet its recipe's view whole when it says more than a line,
+  then Steps: its step view across the sheet (The step view), and under it a module for each
+  step that needs the owner, in the view's order: the one asking on the coral rule, answered in
+  place, a stop on the sand with why it stopped, each headed by its stage with its Details.
 - **The inbox, Questions and a thread**: the head names the page (a thread its step's title,
   its way back over it and its Details); the messages' switch is in the row. Questions to the
   owner

@@ -166,9 +166,18 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
         row.contains("<b>quiet</b>") && row.contains(", silent "),
         "{row}"
     );
+    let line = &row[..row.find("<details class=\"x\"").unwrap_or(row.len())];
     assert!(
-        !row.contains("class=\"tries\"") && !row.contains(">run 6<"),
+        !line.contains("class=\"tries\"") && !line.contains(">run 6<"),
         "{row}"
+    );
+    // its step view says the run beside its state, its earlier runs faint on the axis
+    let view = &row[row.find("<sluice-steps").expect("its step view")..];
+    assert!(view.contains(">run 6<"), "{view}");
+    assert_eq!(
+        view.matches("sv-b is-old").count() + view.matches(" is-old\"").count(),
+        5,
+        "{view}"
     );
     assert!(
         row.contains("<dt>Run</dt><dd><span>6, after 4 failed and 1 cancelled</span></dd>"),

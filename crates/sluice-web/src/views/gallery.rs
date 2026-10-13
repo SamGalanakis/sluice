@@ -856,6 +856,179 @@ fn trace_part(prefix: &str) -> TrustedHtml {
         ui::trace_close(),
     ))
 }
+/// The step view's cases (`unit_steps`), each a unit of the invented project: a chain, a
+/// fan-out and its join, a condition, a failure on its third run, a long run beside quick ones,
+/// a unit idle for a day between steps.
+fn steps_part() -> TrustedHtml {
+    use super::unit_steps::{Edge, Latest, Progress, RunSpan, Span, Step, View};
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs() as f64);
+    // a run from `from` to `to` seconds before now (none: still going), ending as `outcome`
+    let run = |from: f64, to: Option<f64>, outcome: Shown| RunSpan {
+        started: before(from as u64),
+        finished: to.map(|t| before(t as u64)),
+        outcome: Some(outcome),
+        items: 0,
+        from: now - from,
+        to: to.map(|t| now - t),
+    };
+    struct Case {
+        name: &'static str,
+        steps: Vec<(&'static str, Shown, Vec<RunSpan>, Progress)>,
+        edges: Vec<(&'static str, &'static str, &'static str)>,
+        latest: Option<(&'static str, &'static str, u64)>,
+        live: bool,
+        tries: Option<(usize, Vec<Shown>)>,
+    }
+    use Shown::*;
+    let h = 3600.0;
+    let cases = vec![
+        Case {
+            name: "A chain",
+            steps: vec![
+                ("draft", Succeeded, vec![run(1.8 * h, Some(1.1 * h), Succeeded)], Progress::None),
+                ("review", Running, vec![run(1.1 * h, None, Running)], Progress::Text("2 of 3".into())),
+                ("publish", Pending, vec![], Progress::None),
+            ],
+            edges: vec![("draft", "review", ""), ("review", "publish", "")],
+            latest: Some(("review", "The tern maps moved under maps/coast/; the entries point there now.", 240)),
+            live: true,
+            tries: None,
+        },
+        Case {
+            name: "A fan-out and its join",
+            steps: vec![
+                ("gather", Succeeded, vec![run(3_000.0, Some(2_700.0), Succeeded)], Progress::None),
+                ("birds", Succeeded, vec![run(2_700.0, Some(1_500.0), Succeeded)], Progress::None),
+                ("places", Running, vec![run(2_700.0, None, Running)], Progress::Part { done: 31.0, total: 48.0, text: "31/48".into() }),
+                ("dates", Succeeded, vec![run(2_700.0, Some(2_100.0), Succeeded)], Progress::None),
+                ("merge", Pending, vec![], Progress::None),
+            ],
+            edges: vec![
+                ("gather", "birds", ""), ("gather", "places", ""), ("gather", "dates", ""),
+                ("birds", "merge", ""), ("places", "merge", ""), ("dates", "merge", ""),
+            ],
+            latest: None,
+            live: true,
+            tries: None,
+        },
+        Case {
+            name: "A condition",
+            steps: vec![
+                ("count", Succeeded, vec![run(1_300.0, Some(1_180.0), Succeeded)], Progress::None),
+                ("check", Succeeded, vec![run(1_180.0, Some(1_170.0), Succeeded)], Progress::None),
+                ("publish", Succeeded, vec![run(1_170.0, Some(600.0), Succeeded)], Progress::None),
+                ("set aside", Skipped, vec![], Progress::None),
+                ("index", Succeeded, vec![run(600.0, Some(420.0), Succeeded)], Progress::None),
+            ],
+            edges: vec![
+                ("count", "check", ""), ("check", "publish", "ok"), ("check", "set aside", "not ok"),
+                ("publish", "index", ""), ("set aside", "index", ""),
+            ],
+            latest: None,
+            live: false,
+            tries: None,
+        },
+        Case {
+            name: "A failure, run 3",
+            steps: vec![
+                ("draft", Succeeded, vec![run(2.0 * h, Some(1.4 * h), Succeeded)], Progress::None),
+                ("review", Failed, vec![
+                    run(1.4 * h, Some(1.2 * h), Failed),
+                    run(1.1 * h, Some(0.8 * h), Failed),
+                    run(0.6 * h, Some(0.3 * h), Failed),
+                ], Progress::None),
+                ("publish", Blocked, vec![], Progress::None),
+            ],
+            edges: vec![("draft", "review", ""), ("review", "publish", "")],
+            latest: Some(("review", "Two entries still lack a photograph credit.", 1_100)),
+            live: true,
+            tries: Some((3, vec![Failed, Failed])),
+        },
+        Case {
+            name: "A long run beside quick ones",
+            steps: vec![
+                ("fetch", Succeeded, vec![run(7_210.0, Some(7_208.0), Succeeded)], Progress::None),
+                ("parse", Succeeded, vec![run(7_208.0, Some(7_206.0), Succeeded)], Progress::None),
+                ("scan", Running, vec![run(7_206.0, None, Running)], Progress::Text("1240".into())),
+                ("index", Pending, vec![], Progress::None),
+            ],
+            edges: vec![("fetch", "parse", ""), ("parse", "scan", ""), ("scan", "index", "")],
+            latest: None,
+            live: true,
+            tries: None,
+        },
+        Case {
+            name: "Idle a day between steps",
+            steps: vec![
+                ("draft", Succeeded, vec![run(28.0 * h, Some(27.3 * h), Succeeded)], Progress::None),
+                ("review", Succeeded, vec![run(1.5 * h, Some(1.1 * h), Succeeded)], Progress::None),
+                ("publish", Succeeded, vec![run(1.1 * h, Some(1.05 * h), Succeeded)], Progress::None),
+            ],
+            edges: vec![("draft", "review", ""), ("review", "publish", "")],
+            latest: None,
+            live: false,
+            tries: None,
+        },
+    ];
+    let mut out = String::from("<div class=\"gal-steps\">");
+    for case in &cases {
+        let steps = case
+            .steps
+            .iter()
+            .map(|(name, shown, spans, progress)| Step {
+                id: format!("a-12-{}", name.replace(' ', "-")),
+                name: (*name).to_owned(),
+                title: String::new(),
+                href: "#".into(),
+                shown: *shown,
+                runs: match (&case.tries, shown) {
+                    (Some((n, earlier)), Failed) => ui::tries(*n, earlier),
+                    _ => TrustedHtml::default(),
+                },
+                progress: progress.clone(),
+                spans,
+                span: match spans.last() {
+                    Some(r) if r.to.is_none() => Span::Since(r.started.clone()),
+                    Some(r) => Span::Took(r.to.unwrap_or(r.from) - r.from),
+                    None => Span::None,
+                },
+                note: String::new(),
+            })
+            .collect();
+        let view = View {
+            label: format!("Steps of {}", case.name),
+            steps,
+            edges: case
+                .edges
+                .iter()
+                .map(|(a, b, when)| Edge {
+                    from: format!("a-12-{}", a.replace(' ', "-")),
+                    to: format!("a-12-{}", b.replace(' ', "-")),
+                    when: (*when).to_owned(),
+                })
+                .collect(),
+            latest: case.latest.map(|(from, text, ago)| Latest {
+                at: before(ago),
+                from: from.into(),
+                text: text.into(),
+                href: "#".into(),
+            }),
+            selected: String::new(),
+            opens: false,
+            live: case.live,
+            now,
+        };
+        out.push_str(&format!(
+            "<figure class=\"gal-case\"><figcaption class=\"gal-theme\">{}</figcaption>{}</figure>",
+            ui::esc(case.name),
+            view.html()
+        ));
+    }
+    out.push_str("</div>");
+    TrustedHtml::owned(out)
+}
 /// Every theme: each a small page in its own tokens, its band with its name and a summary, then
 /// on its paper a unit's stages, the tags, prose with a link, the buttons.
 fn themes_part() -> TrustedHtml {
@@ -901,6 +1074,7 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Stage strip", "A unit's stages in recipe order, one cell each.", "`ui::stage_strip` from `ui::Stage`s (`ui::Cell::of` reads the status table), `ui::stage_marks`.", both(&|_| Ok(strips_part()))?);
     add("Margin module", "A long run of no recipe, with the progress it reported.", "`ui::margin_module` from a `ui::LongRun`; `ui::ValueSet`.", both(&|_| Ok(margin_part()))?);
     add("Stats", "A project's numbers over a window.", "`views::stats::StatsView` (`durations`, `outcomes`, `throughput`, `slowest_html`), from `StatsData`.", both(&|p| Ok(stats_part(p)))?);
+    add("Step view", "A unit step by step: its gates, each step's state, progress, runs on one time axis and how long it took, and its last message.", "`unit_steps::View` (`unit_steps::of_unit` from a unit) in `sluice-steps`; `ui::expand` opens it under a plan row.", both(&|_| Ok(steps_part()))?);
     add("Trace", "Select a unit to light its chain; select it again, Clear trace or Escape clears.", "`ui::trace_open`, `ui::Trace::attrs`, `ui::rail`, `ui::trace_button_open`, `ui::trace_more_open` (`sluice-trace`).", both(&|p| Ok(trace_part(p)))?);
     add("Tags", "A small fact set apart.", "`ui::tag`, `ui::tag_link`, `ui::ask_link`.", both(&|_| Ok(tags()))?);
     add("Buttons", "The filled button is the next move.", "Plain `button`, `.primary`, `.danger`.", both(&|_| Ok(buttons()))?);
@@ -922,7 +1096,7 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Themes", "Each of the thirty themes the display preferences offer, in its light and dark.", "`data-theme` on the page (the cookie `sluice_theme`); Sluice's tokens in `style.css`, each other family's in `assets/themes/`.", (themes_part(), TrustedHtml::default()));
     add("Components", "Every component, the attributes it reads and what it does.", "Rocket components in `components.js`, light DOM.", (components(), TrustedHtml::default()));
     for part in &mut parts {
-        part.wide = matches!(part.name, "Themes" | "Page head" | "Step head" | "Module grid" | "Modules" | "Section heads" | "Trace");
+        part.wide = matches!(part.name, "Themes" | "Page head" | "Step head" | "Module grid" | "Modules" | "Section heads" | "Trace" | "Step view");
     }
     Ok(parts)
 }

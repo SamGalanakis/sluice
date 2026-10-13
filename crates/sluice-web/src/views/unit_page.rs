@@ -1,8 +1,8 @@
-//! A unit's own page (DESIGN.md, A unit's page): its band carries its name huge, its id and
-//! recipe, how its steps stand and its stage strip (its recipe's stages in recipe order; a unit
-//! of no recipe its own steps in plan order; a one-step unit one cell). On the paper its steps
-//! are modules on the grid, the one that needs the owner swelling, then its timeline and its
-//! last message. Generic by rule: every stage is named as its recipe names it.
+//! A unit's own page (DESIGN.md, A unit's page): its head carries its name, what identifies it
+//! behind its ⋯ and how its steps stand. On the paper its recipe's view when it says more than a
+//! line, then its step view (`unit_steps`), the whole unit step by step, and under it a module
+//! for each step that needs the owner: a question on the coral rule, a stop on the sand with why
+//! it stopped. Generic by rule: every stage is named as its recipe names it.
 use super::board::{self, Registry, UnitView, render_error};
 use super::step::StepView;
 use super::ui::{self, Shown, Stage, Swell};
@@ -18,23 +18,8 @@ use sluice_model::{
     error::PublicError,
     ids::{ProjectId, UnitName},
 };
-use std::{collections::BTreeSet, time::Duration};
+use std::time::Duration;
 
-/// A unit's steps in its strip's order: its recipe's stages first, in recipe order, then any
-/// step no stage names; a unit of no recipe its steps in plan order.
-pub fn ordered(unit: &UnitView) -> Vec<&StepView> {
-    let mut out: Vec<&StepView> = unit
-        .stages
-        .iter()
-        .filter_map(|stage| unit.stage_step(stage))
-        .collect();
-    for step in &unit.steps {
-        if !out.iter().any(|s| s.id == step.id) {
-            out.push(step);
-        }
-    }
-    out
-}
 /// A step's cell in its unit's strip: its stage's name (else its id less its unit's), its
 /// state, and how long its run took or has run.
 fn stage_of(unit: &UnitView, step: &StepView) -> Stage {
@@ -62,7 +47,7 @@ fn stage_of(unit: &UnitView, step: &StepView) -> Stage {
 }
 /// The unit's stage strip's cells, in its strip's order.
 pub fn stages(unit: &UnitView) -> Vec<Stage> {
-    ordered(unit)
+    super::unit_steps::ordered(unit)
         .into_iter()
         .map(|s| stage_of(unit, s))
         .collect()
@@ -78,7 +63,6 @@ struct Drawn {
 struct UnitPage<'a> {
     unit: &'a UnitView,
     project: &'a super::ProjectView,
-    last: Option<&'a super::threads::Conversation>,
     tab: String,
     view: Option<TrustedHtml>,
     /// The view is short enough for the band's line, not a module of its own.
@@ -86,16 +70,14 @@ struct UnitPage<'a> {
     view_error: Option<&'a str>,
     /// The view's outputs that identify (a merged hash), which its Details hold.
     held: Vec<(String, String)>,
+    /// Its step view (`unit_steps`).
+    steps: TrustedHtml,
+    /// The open questions to the owner, each its words whole.
+    questions: &'a [board::Question],
     /// Drawing the band (else the detail).
     band: bool,
 }
 impl UnitPage<'_> {
-    fn ordered(&self) -> Vec<&StepView> {
-        ordered(self.unit)
-    }
-    fn strip(&self) -> TrustedHtml {
-        ui::stage_strip("Stages of the unit", &stages(self.unit))
-    }
     /// What identifies it, behind its head's "⋯": its id, its recipe, its params and the
     /// view's outputs that identify (`unit_view::held`).
     fn details(&self) -> TrustedHtml {
@@ -113,82 +95,47 @@ impl UnitPage<'_> {
         }
         details.menu(self.unit.whole_heading())
     }
-    /// A step's name inside its unit, the unit's title being in the band: its stage, else its
-    /// id past the unit's ("draft" for a-12-draft), else its id.
-    fn stage_name(&self, step: &StepView) -> String {
-        if !step.stage.is_empty() {
-            return step.stage.clone();
-        }
-        step.id
-            .as_str()
-            .strip_prefix(&format!("{}-", self.unit.id))
-            .unwrap_or(step.id.as_str())
-            .to_owned()
+    /// The steps that need the owner, in the view's order: one that asks a question, one
+    /// stopped (failed, cancelled, stale).
+    fn needs(&self) -> Vec<&StepView> {
+        super::unit_steps::ordered(self.unit)
+            .into_iter()
+            .filter(|s| s.asking.is_some() || Self::stopped(s))
+            .collect()
     }
-    /// A step's own title, when it says something the unit's does not: "" when it has none
-    /// or it is the unit's title again.
-    fn own_title(&self, step: &StepView) -> String {
-        let unit = [self.unit.title.as_str(), self.unit.whole.as_str()];
-        if !step.titled()
-            || unit.contains(&step.title.as_str())
-            || unit.contains(&step.whole_heading())
-        {
-            String::new()
-        } else {
-            step.whole_heading().to_owned()
-        }
+    fn stopped(step: &StepView) -> bool {
+        step.shown().spec().attention && step.shown() != Shown::Quiet
     }
-    /// A step's module: the question to the owner swells, a stop needs a look, the rest plain.
+    /// A step's question to the owner whole, its title over its words, Answer under them;
+    /// nothing when it asks none.
+    fn question(&self, step: &StepView) -> TrustedHtml {
+        let Some(ask) = step.asking.as_ref() else {
+            return TrustedHtml::default();
+        };
+        let body = self
+            .questions
+            .iter()
+            .find(|q| q.message == ask.message)
+            .map(|q| crate::markdown::render(&q.body).0)
+            .unwrap_or_default();
+        TrustedHtml::owned(format!(
+            "<p class=\"mod-body u-ask\">{}</p><div class=\"mod-body md\">{body}</div><div class=\"mod-actions\"><a class=\"primary\" href=\"{}\">Answer{}</a></div>",
+            ui::esc(&ask.title),
+            ui::esc(&ask.href(&step.project)),
+            super::icons::icon(super::icons::Icon::ArrowRight, 16, "")
+        ))
+    }
+    /// A step's module: the question to the owner swells on the coral rule, a stop on the sand.
     fn module(&self, step: &StepView) -> TrustedHtml {
         let swell = if step.asking.is_some() {
             Swell::Ask
-        } else if step.shown().spec().attention && step.shown() != Shown::Quiet {
+        } else {
             Swell::Look
-        } else {
-            Swell::Plain
         };
-        let class = if step.running() {
-            "u-step is-running"
-        } else {
-            "u-step"
-        };
-        ui::module_open_as(4, swell, &format!("us-{}", step.id), class)
-    }
-    /// What a step waits for in other units, in words, each linked.
-    fn waits(&self, step: &StepView) -> TrustedHtml {
-        let waits = self.unit.waits_of(step);
-        if waits.is_empty() {
-            return TrustedHtml::default();
-        }
-        let named: Vec<String> = waits
-            .iter()
-            .map(|w| {
-                format!(
-                    "<a href=\"{}\">{}{}</a>{}",
-                    ui::esc(&w.href),
-                    if w.unit { "unit " } else { "" },
-                    w.name.html(60).as_str(),
-                    if w.note.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" ({})", ui::esc(&w.note))
-                    }
-                )
-            })
-            .collect();
-        let words = match named.as_slice() {
-            [one] => one.clone(),
-            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-            [] => String::new(),
-        };
-        TrustedHtml::owned(format!("<p class=\"u-waits\">Waits for {words}</p>"))
+        ui::module_open_as(6, swell, &format!("us-{}", step.id), "u-step")
     }
 }
-fn draw(
-    view: &board::ProjectView,
-    unit: &UnitView,
-    last: Option<&super::threads::Conversation>,
-) -> Result<Drawn, askama::Error> {
+fn draw(view: &board::ProjectView, unit: &UnitView) -> Result<Drawn, askama::Error> {
     let recipe = view.names.recipe_of(unit.id.as_str()).map(|r| r.as_ref());
     let drawn_view = recipe
         .and_then(|r| r.view())
@@ -198,15 +145,17 @@ fn draw(
         .and_then(|r| r.view())
         .map(|root| super::unit_view::held(root, unit))
         .unwrap_or_default();
+    let steps = super::unit_steps::of_unit(unit, &view.relations, false, "").html();
     let page = |band| UnitPage {
         unit,
         project: &view.project,
-        last,
         tab: sluice_model::naming::cut(unit.heading(), 48),
         view_short: drawn_view.as_ref().is_some_and(super::unit_view::short),
         view: drawn_view.clone(),
         view_error: recipe.and_then(|r| r.view_error()),
         held: held.clone(),
+        steps: steps.clone(),
+        questions: &view.questions,
         band,
     };
     Ok(Drawn {
@@ -229,10 +178,9 @@ fn batch(
     view: &board::ProjectView,
     unit: &UnitName,
     viewer: &Viewer,
-    last: Option<&super::threads::Conversation>,
 ) -> Result<RenderedBatch, PublicError> {
     let unit = unit_of(view, unit)?;
-    let drawn = draw(view, &unit, last).map_err(render_error)?;
+    let drawn = draw(view, &unit).map_err(render_error)?;
     let nav = NavView::new(shared, Some(view.project.id), "plan")?;
     Ok(RenderedBatch::new(vec![
         PatchRegion::new("unit-band", drawn.band),
@@ -244,75 +192,6 @@ fn batch(
         ),
     ]))
 }
-/// A unit's last message as its page draws it: one message of the shared conversation, read
-/// from the store by its id (none when the unit has no message).
-async fn last_message(
-    state: &super::DashboardState,
-    view: &board::ProjectView,
-    unit: &UnitName,
-) -> Result<Option<super::threads::Conversation>, PublicError> {
-    let Some(id) = view
-        .units
-        .iter()
-        .find(|u| &u.id == unit)
-        .map(|u| u.last_id)
-        .filter(|id| *id > 0)
-    else {
-        return Ok(None);
-    };
-    let (project, name) = (view.project.id, view.project.name.clone());
-    state
-        .reads
-        .snapshot(move |c| {
-            let message =
-                sluice_store::messages::message(c, project, sluice_model::ids::MessageId(id))?;
-            let steps = super::threads::step_names(c, project)?;
-            // a note sent to several within a minute is drawn as its thread draws it, once,
-            // "to 6 steps": every copy of it is read
-            let mut ids = vec![];
-            if !message.is_question() {
-                let mut q = c.prepare_cached("SELECT id FROM messages WHERE project_id=?1 AND thread=?2 AND \"from\"=?3 AND body=?4 AND coalesce(title,'')=?5 AND needs_reply=0 AND abs(julianday(at)-julianday(?6))*86400<=60 AND id!=?7 ORDER BY id")?;
-                let rows = q.query_map(
-                    rusqlite::params![
-                        project.to_string(),
-                        message.thread,
-                        message.from,
-                        message.body,
-                        message.title.clone().unwrap_or_default(),
-                        message.at,
-                        id
-                    ],
-                    |r| r.get::<_, i64>(0),
-                )?;
-                ids = rows.collect::<Result<Vec<_>, _>>()?;
-            }
-            ids.push(id);
-            ids.sort_unstable();
-            let mut items = vec![];
-            for each in ids {
-                let message = if each == id {
-                    message.clone()
-                } else {
-                    sluice_store::messages::message(c, project, sluice_model::ids::MessageId(each))?
-                };
-                items.push(super::threads::item(c, project, &name, &steps, message)?);
-            }
-            Ok(Some(super::threads::Conversation::build(
-                super::threads::Build {
-                    project,
-                    subject: None,
-                    steps: &steps,
-                    unread: &BTreeSet::new(),
-                    most: None,
-                    excerpt: false,
-                    href: &|m| super::threads::thread_url(project, &m.message.thread),
-                },
-                items,
-            )))
-        })
-        .await
-        .map_err(|e| e.into_public(true))
-}
 pub async fn unit_page(
     State(state): State<super::DashboardState>,
     registry: Option<Extension<Registry>>,
@@ -323,8 +202,7 @@ pub async fn unit_page(
         let (shared, view) =
             board::snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await?;
         let viewer = Viewer::from_headers(&headers);
-        let last = last_message(&state, &view, &unit).await?;
-        let drawn = batch(&shared, &view, &unit, &viewer, last.as_ref())?;
+        let drawn = batch(&shared, &view, &unit, &viewer)?;
         let nav = NavView::new(&shared, Some(project), "plan")?;
         let frame = super::Frame {
             head: drawn.regions[0].html.clone(),
@@ -404,8 +282,7 @@ pub async fn unit_stream(
                     ),
                 ]));
             }
-            let last = last_message(&state, &view, &id).await?;
-            batch(&shared, &view, &id, &viewer, last.as_ref())
+            batch(&shared, &view, &id, &viewer)
         }
     };
     Sse::new(streams::page_events(

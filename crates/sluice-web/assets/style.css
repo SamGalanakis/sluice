@@ -628,11 +628,12 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
 .sec-n { font-size: 13px; color: var(--ink-muted); }
 /* a strip head (`ui::strip_head`) and the rows under it (the plan's units, `ui::strip_row_open`)
    share one track list: the lead takes what the cells leave, the stages `--cell` wide each so
-   every stage sits under its name, then the row's end. Where the sheet is under 640px the lead
-   stands over the stages, the head's names give way and each row's cells share its width. */
+   every stage sits under its name, then the row's end (a plan row's disclosure and its ⋯). Where
+   the sheet is under 640px the lead stands over the stages, the head's names give way and each
+   row's cells share its width. */
 .sec-strip, .strip-row, .pl-row { --cell: clamp(68px, 6cqi, 104px);
   display: grid; align-items: center; column-gap: var(--col-gap);
-  grid-template-columns: minmax(0, 1fr) calc(var(--n, 1) * var(--cell) + (var(--n, 1) - 1) * 8px) 34px; }
+  grid-template-columns: minmax(0, 1fr) calc(var(--n, 1) * var(--cell) + (var(--n, 1) - 1) * 8px) 72px; }
 .sec-strip { align-items: end; }
 .sh-lead, .strip-row > :first-child { grid-column: 1; min-width: 0; }
 .sh-lead .sec-n { margin-top: 6px; }
@@ -1141,8 +1142,7 @@ sluice-copy > button.copy { box-shadow: none; }
 .step-band .d-resume code { padding: 0; background: none; }
 /* its unit's stages, each cell sized to its stage, its own ringed */
 .sb-lane { margin-top: 14px; }
-.sb-lane .strip, .ub-lane .strip { grid-template-columns: repeat(var(--n), minmax(0, 132px));
-                                   row-gap: 8px; }
+.sb-lane .strip { grid-template-columns: repeat(var(--n), minmax(0, 132px)); row-gap: 8px; }
 .sc-here { outline: 2px solid var(--navy); outline-offset: 3px; }
 /* its actions: square, a navy line, the next move filled navy */
 .step-band .d-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px;
@@ -1180,11 +1180,11 @@ article#step-detail { display: flow-root; }  /* its head's margins stay its own 
 /* a narrow strip keeps each stage's name whole: its state is its glyph (and its words for a
    screen reader), not the word beside the name */
 .step-band.in-drawer .sb-lane .sc-word { display: none; }
-@media (max-width: 1023.98px) { :is(.sb-lane, .ub-lane) .sc-word { display: none; } }
+@media (max-width: 1023.98px) { .sb-lane .sc-word { display: none; } }
 @media (max-width: 760px) {
   .step-band { padding: 12px 0 10px; }
   .sb-t { font-size: 23px; line-height: 28px; }
-  .sb-lane .strip, .ub-lane .strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .sb-lane .strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .step-band .d-actions :is(button, .confirm-flow > summary, .pl-fb > summary, a.d-fb) { flex: 1 1 auto;
     justify-content: center; }
   .step-band .d-actions button.quiet-act { flex: none; }
@@ -2048,20 +2048,16 @@ h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
 /* a short view said on the head's line: "engine opus" */
 .unit-sum .uv-line .uv, .unit-sum .uv-line .uv-stack { display: inline-flex; flex-wrap: wrap;
                                                        align-items: baseline; gap: 2px 10px; }
-.ub-lane { margin-top: 14px; }
 @media (max-width: 760px) {
   h1.unit-h .g, h1.unit-h .g svg { width: 18px; height: 18px; }
   h1.unit-h > .g { margin-top: 6px; }
 }
-/* its steps by the sheet's mode: one to a row on a narrow sheet, two from 640px, three from
-   1200px, four from 2000px and six from 3000px */
+/* its step view across the sheet, then a module for each step that needs the owner */
 .u-sheet > .sheet { row-gap: calc(22px * var(--density)); }
-@container sheet (min-width: 2000px) { .u-sheet > .sheet > .u-step { --take: 6; } }
-@container sheet (min-width: 3000px) { .u-sheet > .sheet > .u-step { --take: 4; } }
+.u-sheet .sec-h + .u-view { margin-top: calc(-10px * var(--density)); }
 .u-step { padding: calc(12px * var(--density)) 0 calc(14px * var(--density)); border-top: 1.5px solid var(--navy); }
 .u-step.swell-ask { border-top: var(--ask-rule) solid var(--coral); }
 .u-step.swell-look { padding: 12px 14px 14px; }
-.u-step.is-running { box-shadow: inset 0 3px 0 var(--run); border-top-color: var(--run); }
 .u-step .mod-k { gap: 4px 8px; }
 .u-step .mod-k .g { margin: 0; }
 .u-step .mod-k .took { font-size: 13px; color: var(--ink-muted); }
@@ -2070,82 +2066,116 @@ h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
 .u-step .mod-t .d-stage { color: var(--ink-muted); font-weight: 650; }
 .u-step .mod-meta code { padding: 0; background: none; font-weight: 400; color: var(--ink-muted); }
 .u-why { color: var(--ink); font-weight: 550; }
-.u-waits { margin-top: 8px; font-size: 13.5px; color: var(--ink-muted); overflow-wrap: anywhere; }
-.u-step .card-ask { margin-top: 10px; }
+.u-ask { font-size: 17px; line-height: 23px; font-weight: 750; }
 .unit-page .unit-view .uv-h { margin: 0; }
 .uv-h { margin: 0 0 8px; font: 500 13px/18px var(--font-text); color: var(--ink-muted); }
 .uv-k { font: 500 12.5px/18px var(--font-text); color: var(--ink-muted); }
-.unit-last .md { max-width: var(--measure); }
-.unit-last .meta a { color: var(--ink-muted); text-underline-offset: var(--link-offset); }
-.unit-last .meta a:hover { color: var(--ink); }
 
-/* ---- a unit's timeline: a row a stage, a bar a run, one time axis --------------------------- */
-/* The bars are drawn to scale but for the long waits, each a 48px break named on the axis
-   ("waited 6h 12m"); a run still going runs on through an open, dashed tail to "now" at the
-   axis's end. Each bar ends in its status glyph; its words under it. No legend. Narrower than
-   a usable track (the drawer on a laptop, a phone), each stage is one line of words. */
-.tl { container: tl / inline-size; margin-top: 2px; }
-.tl-in { display: grid; grid-template-columns: 76px minmax(0, 1fr); column-gap: 12px;
-         grid-template-rows: auto auto; }
-.tl-axis { grid-column: 2; grid-row: 1; position: relative; height: 22px;
-           font-size: 12px; line-height: 18px; color: var(--ink-muted);
-           font-variant-numeric: tabular-nums; }
-.tl-tick { position: absolute; top: 0; white-space: nowrap; }
-.tl-tick.at-mid { transform: translateX(-50%); }
-.tl-tick.at-end { transform: translateX(-100%); }
-.tl-breaks { grid-column: 2; grid-row: 1 / span 2; position: relative; pointer-events: none; }
-.tl-break { position: absolute; top: 20px; bottom: 0; width: 48px; background: var(--paper-2);
-            border-inline: 1px dashed var(--rule); }
-.tl-rows { grid-column: 1 / -1; grid-row: 2; display: grid; grid-template-columns: subgrid;
-           margin: 0; padding: 0; list-style: none; }
-.tl-row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid;
-          padding: 6px 0 8px; border-top: 1px solid var(--rule-faint); }
-.tl-stage { grid-column: 1; grid-row: 1 / span 2; display: flex; align-items: center; gap: 6px;
-            min-width: 0; height: 24px; font-size: 13px; color: var(--ink-muted);
-            text-decoration: none; }
-.tl-stage > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tl-stage .g { display: none; }
-.tl-stage:hover > span { color: var(--ink); text-decoration: underline;
-                         text-underline-offset: var(--link-offset); }
-.tl-row.is-current .tl-stage { color: var(--ink); font-weight: 650; }
-/* the track, axis and breaks keep 8px in from the column's edges: a glyph centred on a run's
-   start or end stays inside it */
-.tl-track { grid-column: 2; position: relative; z-index: 1; height: 24px; margin-inline: 8px; }
-.tl-axis, .tl-breaks { margin-inline: 8px; }
-.tl-bar { position: absolute; top: 7px; height: 10px; min-width: 2px; border-radius: 3px;
-          background: var(--idle); }
-.tl-succeeded { background: color-mix(in srgb, var(--sky-ink) 62%, transparent); }
-.tl-failed { background: var(--ink); }
-.tl-cancelled { background: color-mix(in srgb, var(--ink-muted) 45%, transparent); }
-.tl-running { background: var(--run-ink); }
-/* the run goes on to now at the axis's end: its end open, the bar fading out in dashes under
-   its turning glyph */
-.tl-bar.tl-on { border-radius: 3px 0 0 3px;
-  -webkit-mask: linear-gradient(to right, #000 calc(100% - 48px), transparent 0),
-                repeating-linear-gradient(to right, #000 0 4px, transparent 4px 7px);
-  mask: linear-gradient(to right, #000 calc(100% - 48px), transparent 0),
-        repeating-linear-gradient(to right, #000 0 4px, transparent 4px 7px); }
-.tl-g { position: absolute; top: 4px; display: flex; transform: translateX(-50%);
-        border-radius: 50%; background: var(--paper); }
-.tl-g.at-now { transform: translateX(-100%); }
-.tl-words { grid-column: 2; margin: 0; font-size: 13px; line-height: 18px;
-            color: var(--ink-muted); font-variant-numeric: tabular-nums; }
-.tl-row.is-current .tl-words { color: var(--ink); }
-/* the stages at its end with no run yet: one line under the rest */
-.tl-rest .tl-words { grid-column: 1 / -1; }
-.tl-rest a { color: inherit; text-underline-offset: var(--link-offset); text-decoration-color: var(--rule); }
-.tl-rest a:hover { color: var(--ink); text-decoration-color: currentColor; }
-@container tl (max-width: 490px) {
-  .tl-in { display: block; }
-  .tl-axis, .tl-breaks, .tl-track { display: none; }
-  .tl-rows { display: block; }
-  .tl-row { display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; min-height: 44px;
-            padding: 10px 0; }
-  .tl-stage { height: auto; color: var(--ink); font-weight: 600; }
-  .tl-stage .g { display: inline-flex; margin: 0; }
-  .tl-stage::after { content: "·"; color: var(--ink-muted); font-weight: 400; }
+/* ---- the step view (`unit_steps`, DESIGN.md, The step view): a unit step by step ----------- */
+/* A row a step in graph order on one grid (subgrid), so every row's columns line up: the rail
+   with its gates, the step's name, its state, its progress, its runs on the shared axis and how
+   long it took. Behind the timelines a line at each label, each break and the line at now
+   (`--now`, which the page's clock moves). Under 560px of its own width a row is its rail and
+   name, then its state and time, then its runs as a thin bar; the axis gives way. */
+sluice-steps.sv { display: block; container: sv / inline-size; min-width: 0; }
+.sv-g { display: grid; column-gap: 14px; align-items: stretch;
+  grid-template-columns: [rail] var(--rail) [name] minmax(0, 1.1fr) [st] max-content
+                         [pr] minmax(3.2em, max-content) [tl] minmax(120px, 1.4fr) [sp] minmax(3.4em, max-content);
+  font-size: 13.5px; line-height: 19px; }
+.sv-g.sv-untimed { grid-template-columns: [rail] var(--rail) [name] minmax(0, 1fr) [st] max-content
+                                          [pr] minmax(3.2em, max-content) [sp] minmax(3.4em, max-content); }
+.sv-hd, .sv-rows, .sv-foot { grid-column: 1 / -1; min-width: 0; }
+.sv-hd, .sv-rows, .sv-row { display: grid; grid-template-columns: subgrid; }
+.sv-hd { grid-row: 1; align-items: end; padding-bottom: 6px; box-shadow: inset 0 -1px 0 var(--rule);
+         font-size: 12px; line-height: 16px; font-weight: 650; color: var(--ink-muted); }
+.sv-h-name { grid-column: name; }
+.sv-h-st { grid-column: st; }
+.sv-h-pr { grid-column: pr; text-align: right; }
+.sv-h-sp { grid-column: sp; text-align: right; padding-right: 8px; }
+.sv-axis { grid-column: tl; position: relative; height: 16px; }
+.sv-tick { position: absolute; bottom: 0; transform: translateX(-50%); white-space: nowrap;
+           font: 500 11.5px/16px var(--font-mono); font-variant-numeric: tabular-nums; }
+.sv-tick.at-start { transform: none; }
+.sv-tick.at-end { transform: translateX(-100%); }
+.sv-nowlabel { left: var(--now); transform: translateX(-100%); padding-right: 4px;
+               font-family: var(--font-text); font-weight: 750; color: var(--run-ink); }
+.sv-ov { grid-column: tl; grid-row: 2; position: relative; pointer-events: none; }
+.sv-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--rule-faint); }
+.sv-break { position: absolute; top: 0; bottom: 0; background: var(--paper-2);
+            border-inline: 1px dashed var(--rule); pointer-events: auto; }
+.sv-now { position: absolute; top: -6px; bottom: 0; left: var(--now); width: 0;
+          border-left: 1.5px solid var(--run-ink); }
+.sv-rows { grid-row: 2; margin: 0; padding: 0; list-style: none; }
+.sv-row { grid-column: 1 / -1; min-height: 40px; cursor: pointer;
+  background: linear-gradient(var(--rule-faint), var(--rule-faint)) right top / calc(100% - var(--rail) - 7px) 1px no-repeat; }
+.sv-row:first-child { background-image: none; }
+.sv-row:hover { background-color: var(--paper-2); }
+.sv-row.is-sel { background-color: var(--paper-2); box-shadow: inset 0 0 0 2px var(--navy); }
+.sv-row > :not(.sv-rail) { display: flex; align-items: center; min-width: 0; padding: 4px 0; }
+/* the rail: the lines in `line`, a node a step over them, an arrow where a gate joins or branches */
+.sv-rail { grid-column: rail; position: relative; align-self: stretch; }
+.sv-rail > svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.sv-rail line, .sv-rail .sv-arrow { fill: none; stroke: var(--line); stroke-width: 1.5; stroke-linecap: round;
+                                   stroke-linejoin: round; }
+.sv-node { stroke-width: 1.75; }
+.sv-n-done { fill: var(--sky-ink); stroke: var(--sky-ink); }
+.sv-n-empty { fill: var(--paper); stroke: var(--idle); }
+.sv-n-run { fill: var(--paper); stroke: var(--run-ink); stroke-width: 2.25; stroke-dasharray: 22 9.4; }
+.sv-n-run.spin { transform-box: fill-box; transform-origin: center; }
+.sv-n-look { fill: var(--sand); stroke: var(--sand-mark); }
+.sv-name { flex-wrap: wrap; column-gap: 6px; }
+.sv-when { font-size: 12px; font-weight: 600; color: var(--ink-muted); }
+.sv-a { font-weight: 650; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+.sv-a:hover { text-decoration: underline; text-underline-offset: var(--link-offset);
+              text-decoration-thickness: var(--link-thickness); }
+.sv-note { flex-basis: 100%; font-size: 12px; line-height: 16px; color: var(--ink-muted); }
+.sv-st { gap: 6px; white-space: nowrap; }
+.sv-st .g { margin: 0; }
+.sv-pr { flex-direction: column; align-items: flex-end !important; justify-content: center; gap: 3px; }
+.sv-pr .num, .sv-sp { font: 500 12.5px/18px var(--font-mono); font-variant-numeric: tabular-nums; }
+.sv-part { display: block; width: 100%; min-width: 3.2em; height: 3px; background: var(--rule-faint); }
+.sv-part > i { display: block; height: 100%; background: var(--sky-ink); }
+.sv-c-run .sv-part > i { background: var(--run); }
+.sv-tr { position: relative; align-self: stretch; }
+.sv-b { position: absolute; top: 50%; height: 8px; margin-top: -4px;
+        left: min(var(--l), calc(100% - 3px)); width: max(var(--w), 3px); max-width: calc(100% - var(--l));
+        border-radius: var(--chart-radius); background: var(--idle); }
+.sv-b-done { background: var(--sky-ink); }
+.sv-b-run { background: var(--run); }
+.sv-b-look { background: var(--sand-ink); }
+.sv-b.is-old { opacity: 0.35; }
+.sv-sp { justify-content: flex-end; color: var(--ink-muted); white-space: nowrap; }
+.sv-row > .sv-sp { padding-right: 8px; }
+.sv-c-run .sv-sp { color: var(--run-ink); font-weight: 700; }
+.sv-none { color: var(--ink-muted); }
+.sv-foot { grid-row: 3; display: flex; align-items: baseline; gap: 4px 8px; margin: 0; padding-top: 8px;
+           box-shadow: inset 0 1px 0 var(--rule); font-size: 13px; line-height: 19px; color: var(--ink-muted); }
+.sv-fk { font-weight: 650; white-space: nowrap; }
+.sv-foot time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sv-foot b { color: var(--ink); font-weight: 650; white-space: nowrap; }
+.sv-foot a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink);
+             text-underline-offset: var(--link-offset); text-decoration-color: var(--rule); }
+.sv-foot a:hover { text-decoration-color: currentColor; }
+@container sv (max-width: 559.98px) {
+  .sv-g, .sv-rows { display: block; }
+  .sv-hd, .sv-ov { display: none; }
+  .sv-row { display: grid; grid-template-columns: var(--rail) max-content max-content minmax(0, 1fr);
+            column-gap: 10px; min-height: 44px; }
+  .sv-row > :not(.sv-rail) { padding: 0; }
+  .sv-row > .sv-sp { padding-right: 8px; }
+  .sv-rail { grid-column: 1; grid-row: 1 / span 3; }
+  .sv-name { grid-column: 2 / -1; grid-row: 1; padding-top: 8px !important; }
+  .sv-st { grid-column: 2; grid-row: 2; }
+  .sv-pr { grid-column: 3; grid-row: 2; flex-direction: row !important; align-items: center !important; }
+  .sv-pr:has(> .sv-none) { visibility: hidden; }
+  .sv-pr .sv-part { width: 40px; }
+  .sv-sp { grid-column: 4; grid-row: 2; }
+  .sv-tr { grid-column: 2 / -1; grid-row: 3; height: 4px; margin: 6px 0 10px; padding: 0 !important; }
+  .sv-untimed .sv-st, .sv-untimed .sv-pr, .sv-untimed .sv-sp { padding-bottom: 8px !important; }
+  .sv-b { height: 4px; margin-top: -2px; }
+  .sv-foot { flex-wrap: wrap; }
 }
-/* the step's Runs: its timeline over the run list */
+/* the step's Runs: its unit's step view over the run list */
 .runs-tl { margin: 0 0 22px; padding-top: 10px; border-top: var(--section-rule-height) solid var(--section-rule-color); }
 #step-detail .runs-tl-h { margin: 0 0 8px; font-family: var(--head-face-22);
              font-size: calc(22px * var(--head-scale)); line-height: 1.1; font-weight: var(--head-weight);
@@ -2406,26 +2436,42 @@ details.read-today .item { opacity: .85; }
                 letter-spacing: calc(var(--head-tracking) + 0.01em); text-transform: var(--head-case); }
 .pl-row { padding: calc(10px * var(--density)) 0; border-top: 1px solid var(--rule-faint); min-height: calc(76px * var(--density)); }
 .pl-group > .rail-slot + .pl-row, .pl-rows > .pl-group:first-child .pl-row:first-of-type { border-top-color: var(--rule); }
-.pl-lead { grid-column: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.pl-cells { grid-column: 2; min-width: 0; }
-.pl-end { grid-column: 3; align-self: center; display: flex; justify-content: flex-end; }
-.pl-cells .strip:not(.pl-layer .strip) { grid-template-columns: repeat(var(--n), var(--cell)); column-gap: 8px;
+.pl-lead { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pl-cells { grid-column: 2; grid-row: 1; min-width: 0; }
+.pl-end { grid-column: 3; grid-row: 1; align-self: center; display: flex; justify-content: flex-end; }
+/* a unit of no recipe: its steps in a strip as wide as they are, six to a line */
+.pl-free .pl-row { grid-template-columns: minmax(0, 1fr) auto 72px; }
+.pl-free .pl-cells .strip { grid-template-columns: repeat(min(var(--n), 6), var(--cell)); row-gap: 8px; }
+/* its disclosure, before its ⋯: its step view opens under the row, across the content */
+.pl-row > details.x > summary { grid-column: 3; grid-row: 1; justify-self: start; }
+.pl-cells .strip { grid-template-columns: repeat(var(--n), var(--cell)); column-gap: 8px;
                                          min-height: var(--cell-height); }
 .pl-cells .sc { min-height: var(--cell-height); padding: 0 7px; }
 .pl-cells .sc > a.sc-a { margin: 0 -7px; padding: 0 7px; }
 /* in a row a look cell's second line is its time: its glyph says its state, and the row's head
    says it in words. A cell waiting in its own way (held, queued, paused, blocked) keeps its word */
 .pl-cells .sc-look .sc-word:has(+ .sc-time) { display: none; }
-/* a unit of no recipe: its own graph, as wide as its layers */
-.pl-free .pl-row.pl-graphed { grid-template-columns: minmax(0, 1fr) auto 34px; }
 /* a running or stopped cell's time a size its cell holds, in a plan row and in a row under a
    strip head */
-:is(.pl-cells .strip:not(.pl-layer .strip), .strip-row > .strip) :is(.sc-run, .sc-look) .sc-time {
+:is(.pl-cells .strip, .strip-row > .strip) :is(.sc-run, .sc-look) .sc-time {
   font-size: clamp(13px, calc(var(--cell) * 0.17), 19px); }
 /* a narrow lead (a board or the drawer beside the plan) keeps the title in sight: three lines
    for its state and its title together */
 @container sheet (max-width: 1199.98px) { .pl-head { -webkit-line-clamp: 3; } }
 .pl-row > .trace-more { grid-column: 1 / -1; margin-top: 12px; }
+/* a disclosure of a unit's steps (`ui::expand`): its summary a chevron where its row puts it,
+   the step view under the row, across it */
+details.x { display: contents; }
+details.x > summary.x-s { display: grid; place-items: center; width: 34px; height: 34px; list-style: none;
+  cursor: pointer; color: var(--ink-muted); -webkit-user-select: none; user-select: none; }
+details.x > summary.x-s::-webkit-details-marker { display: none; }
+details.x > summary.x-s:hover, details.x[open] > summary.x-s { color: var(--ink); background: var(--paper-2);
+  box-shadow: inset 0 0 0 1px var(--rule); }
+details.x > summary.x-s .chev { transition: transform 0.2s ease-out; }
+details.x[open] > summary.x-s .chev { transform: rotate(180deg); }
+details.x::details-content { grid-column: 1 / -1; min-width: 0; }
+details.x[open]::details-content { margin: 12px 0 4px; }
+@media (max-width: 720px) { details.x > summary.x-s { width: 44px; height: 44px; } }
 /* the row's head is the trace's button: plain words, never a box of its own */
 .pl-row .trace-pick { display: block; margin: 0; padding: 0; color: inherit; max-width: var(--measure);
                       background: none; box-shadow: none; }
@@ -2472,31 +2518,14 @@ details.read-today .item { opacity: .85; }
 /* the selected unit: ringed, its parts open under it */
 sluice-trace[tracing] .pl-row[data-trace="selected"] { box-shadow: 0 0 0 2px var(--navy);
   border-top-color: transparent; padding-left: 10px; padding-right: 10px; }
-/* a unit's steps opened in place: the stage, its state and time, what it waits for */
-.pl-more { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 5fr) minmax(0, 2fr);
+/* what a traced unit opens to in place: its last message, its buttons */
+.pl-more { display: grid; grid-template-columns: minmax(0, 10fr) minmax(0, 2fr);
            gap: 12px var(--col-gap); align-items: start; }
 .pl-mh { margin: 0 0 6px; font-size: 13px; font-weight: 750; }
-.pl-steps ol { list-style: none; margin: 0; padding: 0; }
-.pl-steps li { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 2px 10px;
-               align-items: baseline; padding: 4px 0; border-top: 1px solid var(--rule-faint);
-               font-size: 13px; line-height: 18px; }
-.pl-steps li > a { font-weight: 650; }
-.pl-st { display: inline-flex; align-items: center; gap: 4px; justify-self: end; text-align: right;
-         color: var(--ink-muted); }
-.pl-st .g { margin: 0; width: 13px; height: 13px; }
 .pl-said-t { font-size: 14px; line-height: 20px; max-width: var(--measure); }
 .pl-more .mod-actions { flex-direction: column; align-items: stretch; padding-top: 0; }
 /* the open step's cell on the plan: a ring apart from it */
 .sc-a.open { outline: 2px solid var(--focus); outline-offset: 2px; }
-
-/* a unit of no recipe: its own small graph, its steps in columns by their own chain, a small
-   connector for each wait between them */
-.pl-graph { --cell: calc(var(--cell-height) + 4px); display: grid; align-items: start; column-gap: 0; min-width: 0; }
-.pl-layer { margin-top: calc(var(--off) * (var(--cell) + 8px)); min-width: 0; }
-.pl-graph .strip { grid-template-columns: minmax(0, 1fr); row-gap: 0; min-height: 0; }
-.pl-graph .sc { height: var(--cell); min-height: 0; margin: 4px 0; }
-.pl-wire { display: block; width: 28px; height: calc(var(--rows) * (var(--cell) + 8px)); overflow: visible; }
-.pl-wire path { fill: none; stroke: var(--line); stroke-width: 1.5; }
 
 /* the margin: a long run's progress, at the sheet's right beside the bands */
 .pl-margin { grid-column: span calc(var(--take, 2) * var(--per, 1)) / -1; grid-row: 1 / span var(--rows);
@@ -2517,7 +2546,13 @@ sluice-trace[tracing] .pl-row[data-trace="selected"] { box-shadow: 0 0 0 2px var
 .pl-done > .latest { max-width: 720px; margin: 2px 0 14px; }
 .pl-idx { list-style: none; margin: 0; padding: 12px 14px; background: var(--paper-2);
           columns: 3 22rem; column-gap: calc(var(--col-gap) * 2); }
-.pl-idx li { break-inside: avoid; border-bottom: 1px solid var(--rule-faint); }
+.pl-idx li { break-inside: avoid; border-bottom: 1px solid var(--rule-faint);
+              display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 6px; }
+.pl-idx li > a { grid-column: 1; grid-row: 1; }
+.pl-idx li > details.x > summary { grid-column: 2; grid-row: 1; width: 28px; height: 28px; }
+/* a done unit's steps open across the index's columns */
+.pl-idx li:has(> details.x[open]) { column-span: all; padding-bottom: 8px; }
+@media (max-width: 720px) { .pl-idx li > details.x > summary { width: 44px; height: 44px; } }
 .pl-idx a { display: grid; grid-template-columns: 3.4em 14px minmax(0, 1fr) auto;
             align-items: baseline; gap: 0 8px; padding: 5px 0; font-size: 13px; line-height: 18px;
             text-decoration: none; }
@@ -2550,16 +2585,17 @@ sluice-drawer#step-drawer .drawer .close:hover { background: var(--paper-2); }
 }
 @container sheet (max-width: 639.98px) {
   /* a phone's row: its head, its "⋯" beside it, its cells across the row under them */
-  .pl-row, .pl-free .pl-row.pl-graphed { grid-template-columns: minmax(0, 1fr) 44px; row-gap: 8px;
+  .pl-row, .pl-free .pl-row { grid-template-columns: minmax(0, 1fr) 88px; row-gap: 8px;
                                          align-items: start; }
   .pl-lead { grid-column: 1; }
   .pl-end { grid-column: 2; grid-row: 1; align-self: start; }
+  .pl-row > details.x > summary { grid-column: 2; align-self: start; }
   .pl-cells { grid-column: 1 / -1; grid-row: 2; }
-  .pl-cells .strip:not(.pl-layer .strip) { grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
+  .pl-cells .strip { grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
+  .pl-free .pl-cells .strip { grid-template-columns: var(--strip-narrow); }
   .pl-cells .sc-time { font-size: 13px !important; }
   .pl-sec > .pl-item { grid-column: 1 / -1; }
   .pl-head { -webkit-line-clamp: 3; }
-  .pl-graph { --cell: max(44px, calc(var(--cell-height) - 4px)); }
   .pl-more { grid-template-columns: minmax(0, 1fr); }
   .pl-more .mod-actions { flex-direction: row; }
   .pl-idx { columns: 1; padding: 8px 10px; }
@@ -3041,6 +3077,8 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: var(
 .gal-th { min-width: 0; padding: 14px 16px 18px; border: 1px solid var(--rule);
           border-radius: 0; background: var(--paper); background-image: var(--paper-texture); color: var(--ink); }
 .gal-theme { margin: 0 0 10px; font: 500 12px/16px var(--font-text); color: var(--ink-muted); }
+.gal-steps { display: grid; gap: 26px; }
+.gal-case { margin: 0; min-width: 0; }
 .gal-th .tabbar { position: static; background: var(--paper); }
 .gal-states { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .gal-states li { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 2px 10px;

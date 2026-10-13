@@ -1,4 +1,4 @@
-//! A unit's runs in time (SPEC §13): the unit page's timeline and the step page's fold of it, a
+//! A unit's runs in time (SPEC §13): the unit page's step view and the step page's Runs draw of it, a
 //! running step's time with no usual time beside it, a step's chain on the board (`?root=`),
 //! and a recipe's every unit (`?recipe=`), each read over HTTP as a browser gets it.
 mod board_fixture;
@@ -192,8 +192,7 @@ async fn recipes(f: &Fixture) -> ProjectId {
 }
 
 #[tokio::test]
-async fn a_unit_page_draws_its_runs_on_one_axis_its_long_waits_collapsed_and_its_running_run_open()
-{
+async fn a_unit_page_draws_its_steps_on_one_axis_its_long_waits_broken_and_its_running_run_open() {
     let f = Fixture::new().await;
     let id = f.titled().await;
     // l1: forked, its work failed once and runs again; l2: forked, then its work failed 6h later
@@ -239,27 +238,30 @@ async fn a_unit_page_draws_its_runs_on_one_axis_its_long_waits_collapsed_and_its
 
     let (status, html) = f.get(&format!("/projects/id/{id}/units/l1")).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    let tl = between(&html, "<article class=\"mod d-sec unit-tl\"", "</article>");
-    // a row a stage, in the unit's order, each named by its stage and leading to its step
-    let rows: Vec<&str> = tl
-        .split("<a class=\"tl-stage\"")
+    let view = between(&html, "<sluice-steps", "</sluice-steps>");
+    // a row a step, in the unit's order, each named by its stage and leading to its step
+    let rows: Vec<&str> = view
+        .split("data-sv=\"")
         .skip(1)
-        .map(|r| between(r, "<span>", "</span>").trim_start_matches("<span>"))
+        .map(|r| &r[..r.find('"').unwrap()])
         .collect();
-    assert_eq!(rows, ["fork", "work", "land"], "{tl}");
+    assert_eq!(rows, ["l1-fork", "l1-work", "l1-land"], "{view}");
     assert!(
-        tl.contains(&format!("href=\"/projects/id/{id}/steps/l1-work\"")),
-        "{tl}"
+        view.contains(&format!(
+            "href=\"/projects/id/{id}/steps/l1-work\">work</a>"
+        )),
+        "{view}"
     );
-    // the retry is a second bar after the failed one; the running one runs to now, open
-    let work = between(tl, "steps/l1-work", "</li>");
-    assert_eq!(work.matches("class=\"tl-bar ").count(), 2, "{work}");
-    assert!(work.contains("class=\"tl-bar tl-failed\""), "{work}");
-    assert!(work.contains("class=\"tl-bar tl-running tl-on\""), "{work}");
+    // the retry is a second bar after the failed one, which is faint; the running one runs to
+    // now, open, and the clock moves its end
+    let work = between(view, "data-sv=\"l1-work\"", "</li>");
+    assert_eq!(work.matches("<i class=\"sv-b ").count(), 2, "{work}");
     assert!(
-        work.contains("class=\"tl-g at-now\" style=\"left:100.000%\""),
+        work.contains("<i class=\"sv-b sv-b-look is-old\""),
         "{work}"
     );
+    assert!(work.contains("<i class=\"sv-b sv-b-run\""), "{work}");
+    assert!(work.contains(" data-open=\""), "{work}");
     assert!(
         work.contains(&format!(
             "aria-label=\"Run 1 failed after 38 minutes. Run 2 running since {}\"",
@@ -267,59 +269,60 @@ async fn a_unit_page_draws_its_runs_on_one_axis_its_long_waits_collapsed_and_its
         )),
         "{work}"
     );
-    // its words say the runs, the time they took, the running one's ticking time
+    // its span is the running run's ticking time
     assert!(
-        work.contains(&format!(
-            "<p class=\"tl-words\">2 runs · 38m · running <time data-since=\"{}\"",
-            recent(41).0
-        )),
+        between(work, "<span class=\"sv-sp\">", "</span></li>")
+            .contains(&format!("<time data-since=\"{}\"", recent(41).0)),
         "{work}"
     );
     assert!(
-        between(tl, "steps/l1-land", "</li>").contains("No run yet."),
-        "{tl}"
+        between(view, "data-sv=\"l1-land\"", "</li>").contains("aria-label=\"No run yet\""),
+        "{view}"
     );
-    // the axis: where it starts and "now", no break (nothing waited long)
+    // the axis: from 0s to now (a line the page's clock moves), no break (nothing waited long)
     assert!(
-        tl.contains(">start</span>") && tl.contains(">now</span>"),
-        "{tl}"
+        view.contains(">0s</span>") && view.contains(">now</span>"),
+        "{view}"
     );
-    assert!(!tl.contains("class=\"tl-break\""), "{tl}");
+    assert!(view.contains(" data-now=\""), "{view}");
+    assert!(!view.contains("class=\"sv-break\""), "{view}");
 
-    // l2's 6h wait between fork and work is a break, named on the axis and in work's words
+    // l2's 6h wait between fork and work is a break, and so is the time since, to now; the bars
+    // keep their scale past them: fork 10m of the 40m drawn, of the 92% two breaks leave
     let (_, html) = f.get(&format!("/projects/id/{id}/units/l2")).await;
-    let tl = between(&html, "<article class=\"mod d-sec unit-tl\"", "</article>");
-    assert_eq!(tl.matches("class=\"tl-break\"").count(), 1, "{tl}");
-    assert!(tl.contains("title=\"waited 6h 0m\""), "{tl}");
-    assert!(tl.contains("class=\"tl-tick at-mid\""), "{tl}");
-    assert!(tl.contains("1 run · 30m · waited 6h 0m"), "{tl}");
-    // the bars keep their scale past the break: fork 10m of the 40m drawn
-    assert!(
-        tl.contains("style=\"left:calc((100% - 48px) * 0.00000 + 0.0px);width:calc((100% - 48px) * 0.25000 + 0.0px)\""),
-        "{tl}"
-    );
-    // a unit with no run has no timeline
+    let view = between(&html, "<sluice-steps", "</sluice-steps>");
+    assert_eq!(view.matches("class=\"sv-break\"").count(), 2, "{view}");
+    assert!(view.contains(">+6h</span>"), "{view}");
+    assert!(view.contains("title=\"Nothing ran for 6h 0m\""), "{view}");
+    assert!(view.contains("style=\"--l:0.000%;--w:23.000%\""), "{view}");
+    // a unit with no run has no axis
     let (_, html) = f.get(&format!("/projects/id/{id}/units/l3")).await;
-    assert!(!html.contains("unit-tl"), "{html}");
+    let view = between(&html, "<sluice-steps", "</sluice-steps>");
+    assert!(
+        view.contains("sv-untimed") && !view.contains("sv-axis"),
+        "{view}"
+    );
 
-    // the step page draws its unit's timeline under Runs, its own row marked, over its runs
+    // the step page draws its unit's step view under Runs, its own row ringed, over its runs
     let (_, html) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
     let tl = between(&html, "<div class=\"runs-tl\">", "<ol class=\"attempts\">");
     assert!(
-        tl.contains("<h3 class=\"runs-tl-h\">Its unit&#39;s timeline</h3>"),
+        tl.contains("<h3 class=\"runs-tl-h\">Its unit&#39;s steps</h3>"),
         "{tl}"
     );
     assert!(
-        tl.contains("<li class=\"tl-row is-current\"><a class=\"tl-stage\""),
+        tl.contains("<sluice-steps class=\"sv\" selected=\"l1-work\""),
         "{tl}"
     );
+    let own = between(tl, "data-sv=\"l1-work\"", "</li>");
+    assert!(own.contains("aria-current=\"step\""), "{own}");
     assert!(
-        between(tl, "is-current", "</a>").contains("aria-current=\"page\""),
+        between(tl, "<li class=\"sv-row sv-c-run is-sel\"", "</li>").contains("l1-work"),
         "{tl}"
     );
     assert!(
         html.find("runs-tl").unwrap() < html.find("<ol class=\"attempts\"").unwrap(),
-        "the timeline is under Runs' head, before the runs"
+        "the step view is under Runs' head, before the runs"
     );
 }
 
@@ -451,7 +454,7 @@ async fn a_recipes_head_leads_to_every_unit_it_made_done_ones_too() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn chromium_draws_the_timeline_to_its_width() {
+async fn chromium_draws_the_step_view_to_its_width() {
     let f = Fixture::new().await;
     let id = f.titled().await;
     runs(
@@ -484,36 +487,45 @@ async fn chromium_draws_the_timeline_to_its_width() {
     tokio::task::spawn_blocking(move || {
         let base = format!("http://{addr}");
         let mut browser = chrome::Chrome::open(&format!("{base}/projects/id/{id}/units/l2")).unwrap();
-        let ready = "document.querySelector('.tl') && document.readyState === 'complete'";
+        let ready = "customElements.get('sluice-steps') && document.querySelector('.sv-g') && document.readyState === 'complete'";
         browser.wait(ready).unwrap();
         const GEOMETRY: &str = r#"(() => {
-          const r = s => { const e = document.querySelector(s); return e && e.checkVisibility() ? e.getBoundingClientRect() : null; };
-          const track = r('.tl-row:nth-child(2) .tl-track'), brk = r('.tl-break');
-          const bars = [...document.querySelectorAll('.tl-bar, .tl-g')].map(e => e.getBoundingClientRect());
-          const ticks = [...document.querySelectorAll('.tl-tick')].filter(e => e.checkVisibility()).map(e => e.getBoundingClientRect());
+          const r = e => e && e.checkVisibility() ? e.getBoundingClientRect() : null;
+          const tracks = [...document.querySelectorAll('.sv-tr')].map(r);
+          const track = tracks[1];
+          const brk = r(document.querySelector('.sv-break'));
+          const bars = [...document.querySelectorAll('.sv-b')].map(e => e.getBoundingClientRect());
+          const ticks = [...document.querySelectorAll('.sv-tick')].filter(e => e.checkVisibility()).map(e => e.getBoundingClientRect());
+          const rows = [...document.querySelectorAll('.sv-row')];
+          // every row's rail runs its whole height, so its lines meet the next row's
+          const rails = rows.every(row => { const a = row.getBoundingClientRect(), b = row.querySelector('.sv-rail > svg').getBoundingClientRect(); return Math.abs(a.top - b.top) < 1 && Math.abs(a.bottom - b.bottom) < 1; });
+          // nothing in a row spills out of it
+          const clipped = rows.flatMap(row => [...row.querySelectorAll('.sv-name, .sv-st, .sv-pr, .sv-sp')].filter(e => e.scrollWidth > e.clientWidth + 1).map(e => e.className));
           return {scroll: document.documentElement.scrollWidth, width: document.documentElement.clientWidth,
-                  track: track && [track.left, track.right], brk: brk && brk.width,
-                  inside: !track || bars.every(b => b.left >= track.left - 8.5 && b.right <= track.right + 8.5),
-                  apart: ticks.every((t, i) => i === 0 || t.left >= ticks[i - 1].right + 8),
-                  ticks: ticks.length, phone: r('.tl-words') && getComputedStyle(document.querySelector('.tl-row')).display,
+                  track: track && [track.left, track.right, track.height], brk: brk && track && brk.width / (track.right - track.left),
+                  inside: !track || bars.every(b => b.left >= track.left - 0.5 && b.right <= track.right + 0.5),
+                  apart: ticks.every((t, i) => i === 0 || t.left >= ticks[i - 1].right + 4),
+                  ticks: ticks.length, head: r(document.querySelector('.sv-hd')) !== null, rails, clipped,
                   errors: window.browserErrors};
         })()"#;
-        for theme in ["light", "dark"] {
+        for theme in ["light", "dark", "interstate-light"] {
             for width in [390, 1440, 2560] {
                 browser.viewport(width, theme).unwrap();
                 let g = browser.eval(GEOMETRY).unwrap();
                 let label = format!("{width} {theme}");
                 assert!(g["scroll"].as_f64().unwrap() <= g["width"].as_f64().unwrap(), "{label}: sideways scroll {g}");
                 assert_eq!(g["errors"], serde_json::json!([]), "{label}: {g}");
+                assert_eq!(g["rails"], true, "{label}: {g}");
+                assert_eq!(g["clipped"], serde_json::json!([]), "{label}: {g}");
+                assert_eq!(g["inside"], true, "{label}: {g}");
                 if width == 390 {
-                    // a phone reads each stage as one line of words, no track
-                    assert_eq!(g["track"], serde_json::Value::Null, "{label}: {g}");
-                    assert_eq!(g["phone"], "flex", "{label}: {g}");
+                    // a phone: no head, the runs a thin bar under the name
+                    assert_eq!(g["head"], false, "{label}: {g}");
+                    assert!(g["track"][2].as_f64().unwrap() <= 4.5, "{label}: {g}");
                 } else {
-                    // the break is 48px whatever the width; every bar and glyph in its track;
-                    // the axis's labels never meet
-                    assert_eq!(g["brk"], 48.0, "{label}: {g}");
-                    assert_eq!(g["inside"], true, "{label}: {g}");
+                    // a break is 4% of the axis whatever the width; the labels never meet
+                    let share = g["brk"].as_f64().unwrap();
+                    assert!((share - 0.04).abs() < 0.002, "{label}: {g}");
                     assert_eq!(g["apart"], true, "{label}: {g}");
                     assert!(g["ticks"].as_u64().unwrap() >= 2, "{label}: {g}");
                 }

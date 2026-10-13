@@ -253,6 +253,54 @@ pub fn duration(seconds: f64) -> TrustedHtml {
     ))
 }
 
+// ---- retries ---------------------------------------------------------------------------------
+
+/// Earlier runs in words: "after 2 failed", "after 1 failed and 1 cancelled"; "" when none says
+/// how it ended.
+pub fn tries_words(earlier: &[Shown]) -> String {
+    let tally: Tally = earlier.iter().copied().collect();
+    let parts: Vec<String> = tally
+        .iter()
+        .map(|(s, n)| format!("{n} {}", s.word()))
+        .collect();
+    match parts.as_slice() {
+        [] => String::new(),
+        [one] => format!("after {one}"),
+        [rest @ .., last] => format!("after {} and {last}", rest.join(", ")),
+    }
+}
+/// "run 3" after a mark for each of the last three earlier runs' ends ("+2" before them for
+/// more): a step's run that is not its first, on its card, row or drawer.
+pub fn tries(run: usize, earlier: &[Shown]) -> TrustedHtml {
+    const MARKS: usize = 3;
+    let words = tries_words(earlier);
+    let mut marks = String::new();
+    if earlier.len() > MARKS {
+        marks.push_str(&format!(
+            "<span class=\"tries-more\">+{}</span>",
+            earlier.len() - MARKS
+        ));
+    }
+    for shown in &earlier[earlier.len().saturating_sub(MARKS)..] {
+        marks.push_str(mark(*shown).as_str());
+    }
+    let title = if words.is_empty() {
+        format!("Run {run}")
+    } else {
+        format!("Run {run}, {words}")
+    };
+    TrustedHtml::owned(format!(
+        "<span class=\"tries\" title=\"{title}\"><span class=\"tries-m\" aria-hidden=\"true\">{marks}</span><span aria-hidden=\"true\">run {run}</span><span class=\"vh\">{said}</span></span>",
+        title = esc(&title),
+        // one phrase for a screen reader: "run 3, after 2 failed"
+        said = esc(&if words.is_empty() {
+            format!("run {run}")
+        } else {
+            format!("run {run}, {words}")
+        }),
+    ))
+}
+
 // ---- counts ----------------------------------------------------------------------------------
 
 /// "1 step", "3 steps", "0 steps".

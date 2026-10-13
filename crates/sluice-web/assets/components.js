@@ -1161,11 +1161,13 @@ define("sluice-splitter", {
 // gets `data-rail`: top, bottom and a node) and puts the sentence in the line; selecting it
 // again, Clear trace or Escape clears. The arrows move between the units' buttons. The choice
 // is the host's `selected`, kept through a patch, and drawn again after one.
+// A unit's steps (`ui::expand`, a `details[data-x]`) stay as the owner left them: the units open
+// are the host's `expanded`, so a patch, or the unit moving to another band, leaves them open.
 define("sluice-trace", {
-  props: ({ string }) => ({ selected: string }),
+  props: ({ string }) => ({ selected: string, expanded: string }),
   manifest: {
     slots: [{ name: "line", description: "The server's .trace-line: .trace-words (the sentence, polite) and button.trace-clear." },
-            { name: "units", description: "Elements with data-unit, data-up, data-down and data-chain, each a .rail-slot with its .rail and a [data-trace-pick] button; section heads may be .rail-slot too." }],
+            { name: "units", description: "Elements with data-unit, data-up, data-down and data-chain, each a .rail-slot with its .rail and a [data-trace-pick] button; section heads may be .rail-slot too. A unit's details[data-x] is its steps' disclosure." }],
     events: [{ name: "sluice-trace", description: "A unit was traced or the trace cleared; detail.unit is its name or \"\"." }],
   },
   setup({ host, cleanup }) {
@@ -1214,6 +1216,23 @@ define("sluice-trace", {
       const clear = host.querySelector(".trace-clear");
       if (clear && clear.hidden === !!unit) clear.hidden = !unit;
     };
+    const expanded = () => new Set((host.getAttribute("expanded") ?? "").split(" ").filter(Boolean));
+    const expand = () => {
+      const open = expanded();
+      for (const fold of host.querySelectorAll("details[data-x]")) {
+        if (fold.open !== open.has(fold.dataset.x)) fold.open = open.has(fold.dataset.x);
+      }
+    };
+    // toggle does not bubble: caught on its way down
+    on(host, "toggle", (event) => {
+      const fold = event.target;
+      if (!(fold instanceof HTMLDetailsElement) || !fold.matches("details[data-x]")) return;
+      const open = expanded();
+      if (fold.open) open.add(fold.dataset.x); else open.delete(fold.dataset.x);
+      const value = [...open].join(" ");
+      if (value === (host.getAttribute("expanded") ?? "")) return;
+      if (value) host.setAttribute("expanded", value); else host.removeAttribute("expanded");
+    }, { capture: true });
     const choose = (id) => {
       if (id) host.setAttribute("selected", id); else host.removeAttribute("selected");
       draw();
@@ -1254,10 +1273,75 @@ define("sluice-trace", {
     const observer = new MutationObserver(() => {
       if (queued) return;
       queued = true;
-      queueMicrotask(() => { queued = false; draw(); });
+      queueMicrotask(() => { queued = false; draw(); expand(); });
     });
     observer.observe(host, { childList: true, subtree: true });
     cleanup(() => observer.disconnect());
     draw();
+    expand();
+  },
+});
+
+// ---- sluice-steps ------------------------------------------------------------------------------
+// A unit's step view (`unit_steps`): each `li.sv-row` a step (`data-sv` its id), its `a.sv-a` its
+// link (with `data-step` the drawer opens it). A click anywhere on a row follows its link, the
+// arrows, Home and End move between the rows' links, and the row in focus, clicked, or open in
+// the drawer (`#step:<id>`) is the one selected: the host's `selected`, kept through a patch.
+define("sluice-steps", {
+  props: ({ string }) => ({ selected: string }),
+  manifest: {
+    slots: [{ name: "rows", description: "ol.sv-rows: an li.sv-row a step (data-sv its id), its a.sv-a the step's link." }],
+    events: [],
+  },
+  setup({ host, cleanup }) {
+    const on = listening(cleanup);
+    const rows = () => [...host.querySelectorAll("li.sv-row")];
+    const mark = () => {
+      const id = host.getAttribute("selected") ?? "";
+      for (const row of rows()) {
+        const chosen = row.dataset.sv === id;
+        if (row.classList.contains("is-sel") !== chosen) row.classList.toggle("is-sel", chosen);
+      }
+    };
+    const choose = (id) => {
+      if ((host.getAttribute("selected") ?? "") === id) return;
+      if (id) host.setAttribute("selected", id); else host.removeAttribute("selected");
+      mark();
+    };
+    on(host, "click", (event) => {
+      const row = event.target.closest?.("li.sv-row");
+      if (!row || !host.contains(row)) return;
+      choose(row.dataset.sv);
+      if (!plainClick(event) || event.target.closest("a, button, summary, input, textarea")) return;
+      if (getSelection && !getSelection().isCollapsed) return;
+      row.querySelector("a.sv-a")?.click();
+    });
+    on(host, "focusin", (event) => {
+      const row = event.target.closest?.("li.sv-row");
+      if (row && host.contains(row)) choose(row.dataset.sv);
+    });
+    on(host, "keydown", (event) => {
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const link = event.target.closest?.("a.sv-a");
+      if (!link || !host.contains(link)) return;
+      const links = rows().map((row) => row.querySelector("a.sv-a")).filter(Boolean);
+      const at = links.indexOf(link);
+      const next = { ArrowDown: links[at + 1], ArrowUp: links[at - 1], Home: links[0], End: links.at(-1) }[event.key];
+      if (!next) return;
+      event.preventDefault();
+      next.focus();
+    });
+    // the step open in the drawer is the one selected
+    const follow = () => {
+      let id = "";
+      try { id = location.hash.startsWith("#step:") ? decodeURIComponent(location.hash.slice(6)) : ""; } catch { /* a bad hash */ }
+      if (id && rows().some((row) => row.dataset.sv === id)) choose(id);
+    };
+    on(window, "hashchange", follow);
+    const observer = new MutationObserver(mark);
+    observer.observe(host, { childList: true, subtree: true });
+    cleanup(() => observer.disconnect());
+    follow();
+    mark();
   },
 });

@@ -683,13 +683,13 @@ async fn the_plan_orders_its_bands_and_says_each_wait_between_units_in_words() {
     let base = format!("/projects/id/{id}");
     let (status, html) = f.get(&base).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    // one-step units are one cell; a unit of several steps of no recipe its own graph
+    // one-step units are one cell; a unit of several steps of no recipe a cell a step, its
+    // gates its step view's rail
     let k3 = plan_html::row(&html, "k3");
     assert_eq!(k3.matches("<li class=\"sc").count(), 1, "{k3}");
-    assert!(!k3.contains("pl-graph"), "{k3}");
     let lane = plan_html::row(&html, "lane");
-    assert!(lane.contains("<div class=\"pl-graph\""), "{lane}");
-    assert!(lane.contains("<svg class=\"pl-wire\""), "{lane}");
+    assert!(lane.matches("<li class=\"sc").count() > 1, "{lane}");
+    assert!(lane.contains("<span class=\"sv-rail\""), "{lane}");
     // no lines between units, no key, no arrow counts
     assert!(
         !html.contains("board-edges") && !html.contains("<svg class=\"edges\""),
@@ -893,7 +893,7 @@ async fn the_done_index_lists_every_done_unit_newest_first_and_its_head_the_late
 }
 
 #[tokio::test]
-async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws_its_stages() {
+async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws_its_steps() {
     let f = Fixture::new().await;
     let (status, html) = f.get(&format!("/projects/id/{}", f.id)).await;
     assert_eq!(status, StatusCode::OK, "{html}");
@@ -914,21 +914,22 @@ async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws
         page.contains(&format!("<div class=\"meta unit-sum\"><span>2 steps · 1 pending · 1 succeeded</span><span aria-hidden=\"true\">·</span><a href=\"/projects/id/{}/log?unit=alpha\">Log</a></div>", f.id)),
         "{page}"
     );
-    // its stages in its band, a cell a step in plan order, each to its page; nothing of beta
-    let strip = between(&page, "<ol class=\"strip\"", "</ol>");
-    let build = strip.find(&format!("/projects/id/{}/steps/alpha-build\"", f.id));
-    let review = strip.find(&format!("/projects/id/{}/steps/alpha-review\"", f.id));
+    // its steps as its step view's rows, in order, each to its page; nothing of beta
+    let view = between(&page, "<sluice-steps", "</sluice-steps>");
+    let build = view.find(&format!("/projects/id/{}/steps/alpha-build\"", f.id));
+    let review = view.find(&format!("/projects/id/{}/steps/alpha-review\"", f.id));
     assert!(
         build.is_some() && review.is_some() && build < review,
-        "{strip}"
+        "{view}"
     );
-    assert!(!strip.contains("beta"), "only its own stages: {strip}");
-    // and its steps as modules on the grid, each named by its own heading
+    assert!(!view.contains("beta"), "only its own steps: {view}");
+    // review takes build's summary: one gate on the rail between them, no module for either
+    // (neither needs the owner)
     assert!(
-        page.contains("aria-labelledby=\"us-alpha-build\"")
-            && page.contains("aria-labelledby=\"us-alpha-review\""),
-        "{page}"
+        between(view, "data-sv=\"alpha-review\"", "</li>").contains("y2=\"50%\""),
+        "{view}"
     );
+    assert!(!page.contains("aria-labelledby=\"us-alpha-"), "{page}");
     assert!(!page.contains("<svg class=\"edges\""), "{page}");
 }
 

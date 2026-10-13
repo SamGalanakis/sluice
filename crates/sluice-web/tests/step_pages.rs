@@ -96,7 +96,8 @@ async fn a_steps_band_carries_its_name_state_stages_and_actions_and_a_units_band
     let scan_band = &scan_band[..scan_band.find("</header>").unwrap()];
     assert!(!scan_band.contains("class=\"sb-lane\""), "{scan_band}");
 
-    // a unit's band: its stage strip from its recipe, in the recipe's order
+    // a unit's page: its head, then its step view, a row a step in its recipe's order (a unit
+    // of no recipe in the plan's), each named by its stage and linking its step
     for (unit, recipe, stages) in [
         ("a-6", Some("article"), &["draft", "review", "publish"][..]),
         ("s-3", Some("scan"), &["scan"][..]),
@@ -119,28 +120,39 @@ async fn a_steps_band_carries_its_name_state_stages_and_actions_and_a_units_band
             ),
             None => assert!(!band.contains("<dt>Recipe</dt>"), "{band}"),
         }
-        let (names, here) = strip(band, "the unit");
-        assert_eq!(names, stages, "{unit}");
-        assert_eq!(here, None, "{unit}: a unit's own strip rings no stage");
-        // its steps as modules on the grid, each headed by its stage, its id in its Details;
-        // the unit's title is in the band and never again in a module
+        assert!(
+            !band.contains("class=\"strip\""),
+            "{unit}: the view draws its steps"
+        );
         let detail = &html[main..];
+        let view = &detail[detail.find("<sluice-steps").unwrap()..];
+        let view = &view[..view.find("</sluice-steps>").unwrap()];
+        let names: Vec<&str> = view
+            .split("<a class=\"sv-a\" href=\"")
+            .skip(1)
+            .map(|r| {
+                let name = &r[r.find('>').unwrap() + 1..];
+                &name[..name.find('<').unwrap()]
+            })
+            .collect();
+        assert_eq!(names, stages, "{unit}");
         for stage in stages {
             let id = format!("{unit}-{stage}");
-            assert!(html.contains(&format!("id=\"us-{id}\"")), "{unit}: {id}");
             assert!(
-                detail.contains(&format!(
-                    "<h3 class=\"mod-t\" id=\"us-{id}\"><a href=\"/projects/id/{p}/steps/{id}\">{stage}</a></h3><sluice-menu><details class=\"dm\""
-                )),
-                "{unit}: {id} {detail}"
+                view.contains(&format!("data-sv=\"{id}\""))
+                    && view.contains(&format!("href=\"/projects/id/{p}/steps/{id}\"")),
+                "{unit}: {id} {view}"
             );
         }
+        assert!(
+            !view.contains("is-sel"),
+            "{unit}: a unit's own view rings no step"
+        );
         if unit == "a-6" {
             let title = "Terns: the spring guide&#39;s entries";
             assert!(band.contains(title), "{band}");
-            let steps = &detail[detail.find("id=\"unit-steps\"").unwrap()..];
-            let steps = &steps[..steps.find("unit-tl").unwrap_or(steps.len())];
-            assert!(!steps.contains(title), "{steps}");
+            // no row repeats the unit's title
+            assert!(!view.contains(&format!("title=\"{title}\"")), "{view}");
         }
     }
 }

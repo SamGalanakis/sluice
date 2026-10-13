@@ -103,6 +103,7 @@ function tick() {
   }
   if (wider) window.dispatchEvent(new Event("sluice-resized"));
   dayLine(now);
+  stepViews(now);
   // a running step on the index gone quiet: "quiet" when it has written nothing since it
   // started, else "quiet 42m"
   let quiet = 0;
@@ -141,6 +142,23 @@ function dayLine(now) {
     for (const bar of line.querySelectorAll(".dl-bar[data-open]")) {
       const width = `${Math.max(0.15, at(now) - at(Number(bar.dataset.open) * 1000)).toFixed(3)}%`;
       if (bar.style.width !== width) bar.style.width = width;
+    }
+  }
+}
+// A step view's "now" line, and each running run's bar to it (`unit_steps`): the server draws the
+// axis to now rounded up, so it redraws once a step and never with the clock; `data-now` is the
+// axis's last stretch, its start (seconds), its place and how far a second moves along it
+// (percent), from which this keeps the line and the open bars at the reader's now.
+function stepViews(now) {
+  for (const view of document.querySelectorAll(".sv-g[data-now]")) {
+    const [from, place, rate] = view.dataset.now.split(" ").map(Number);
+    if (![from, place, rate].every(Number.isFinite)) continue;
+    const at = Math.min(100, Math.max(0, place + (now / 1000 - from) * rate));
+    const here = `${at.toFixed(3)}%`;
+    if (view.style.getPropertyValue("--now") !== here) view.style.setProperty("--now", here);
+    for (const bar of view.querySelectorAll(".sv-b[data-open]")) {
+      const width = `${Math.max(0, at - Number(bar.dataset.open)).toFixed(3)}%`;
+      if (bar.style.getPropertyValue("--w") !== width) bar.style.setProperty("--w", width);
     }
   }
 }

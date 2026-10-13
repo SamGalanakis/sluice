@@ -371,9 +371,21 @@ async fn the_frame_draws_the_page_head_and_the_row_under_it_and_the_gallery_ever
             ][..],
         ),
         (
+            "Step view",
+            &[
+                "<sluice-steps class=\"sv\" data-preserve-attr=\"selected\">",
+                "<span class=\"sv-rail\" aria-hidden=\"true\">",
+                "<span class=\"sv-when\">if ok</span>",
+                "<span class=\"sv-when\">if not ok</span>",
+                "class=\"sv-break\"",
+                "<span class=\"sv-tick sv-nowlabel\">now</span>",
+                ">run 3<",
+            ][..],
+        ),
+        (
             "Trace",
             &[
-                "<sluice-trace id=\"l-trace\" class=\"trace\" data-preserve-attr=\"selected\">",
+                "<sluice-trace id=\"l-trace\" class=\"trace\" data-preserve-attr=\"selected expanded\">",
                 "data-unit=\"a-12\" data-up=\"s-3\" data-down=\"a-13 a-15 a-14\"",
                 "class=\"rail\"",
             ][..],

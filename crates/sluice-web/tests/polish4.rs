@@ -4,7 +4,7 @@
 //! step's Overview draws it whole with Answer; an answer is confirmed where it was given, with or
 //! without script. A rerun says what started it on Runs; a pending step names what holds its
 //! chain and a stopped runner; the log keeps sluice's bookkeeping quiet; and the small fixes:
-//! a lane string's overrun, a live run file's end, the timeline's unreached stages, readable
+//! a lane string's overrun, a live run file's end, the step view's unreached stages, readable
 //! types, the owner's thread by name.
 mod board_fixture;
 mod plan_html;
@@ -673,7 +673,7 @@ async fn the_small_fixes_read_as_they_should() {
 }
 
 #[tokio::test]
-async fn a_units_unreached_stages_are_one_line_of_its_timeline() {
+async fn a_units_unreached_stages_are_rows_of_its_step_view_with_no_run() {
     let f = Fixture::new().await;
     let id = f.titled().await;
     run(
@@ -694,14 +694,28 @@ async fn a_units_unreached_stages_are_one_line_of_its_timeline() {
         Some(json!({"status":"succeeded"})),
     )
     .await;
-    // l3: its fork ran, its work and land have not: one line, each a link
+    // l3: its fork ran, its work and land have not: each a row in its order, linked, no run
     let (_, page) = f.get(&format!("/projects/id/{id}/units/l3")).await;
-    let rest = between(&page, "<li class=\"tl-row tl-rest\">", "</li>");
+    let view = between(&page, "<sluice-steps", "</sluice-steps>");
+    let rows: Vec<&str> = view
+        .split("data-sv=\"")
+        .skip(1)
+        .map(|r| &r[..r.find('"').unwrap()])
+        .collect();
+    assert_eq!(rows, ["l3-fork", "l3-work", "l3-land"], "{view}");
+    for step in ["work", "land"] {
+        let row = between(view, &format!("data-sv=\"l3-{step}\""), "</li>");
+        assert!(
+            row.contains(&format!(
+                "<a class=\"sv-a\" href=\"/projects/id/{id}/steps/l3-{step}\""
+            )),
+            "{row}"
+        );
+        assert!(row.contains("aria-label=\"No run yet\""), "{row}");
+    }
+    let fork = between(view, "data-sv=\"l3-fork\"", "</li>");
     assert!(
-        rest.contains(&format!(
-            "<a href=\"/projects/id/{id}/steps/l3-work\">work</a>, <a href=\"/projects/id/{id}/steps/l3-land\">land</a>: no run yet."
-        )),
-        "{rest}"
+        fork.contains("aria-label=\"Run 1 succeeded after 1 minute\""),
+        "{fork}"
     );
-    assert!(!page.contains("No run yet."), "{page}");
 }

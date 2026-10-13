@@ -86,10 +86,11 @@ async fn a_recipe_with_a_view_draws_its_live_units_as_rows_under_its_stages_atte
         "{waiting}"
     );
     assert_eq!(plan_html::place(&html, "r1"), "waiting");
-    // a unit of no recipe draws its own steps: kit's two, a connector between them
+    // a unit of no recipe draws its own steps: kit's two, a cell each, the gate between them
+    // its step view's
     let kit = plan_html::row(&html, "kit");
-    assert!(kit.contains("<div class=\"pl-graph\""), "{kit}");
-    assert_eq!(kit.matches("<path ").count(), 1, "{kit}");
+    assert_eq!(kit.matches("<li class=\"sc").count(), 2, "{kit}");
+    assert_eq!(kit.matches("<li class=\"sv-row").count(), 2, "{kit}");
 }
 
 #[tokio::test]

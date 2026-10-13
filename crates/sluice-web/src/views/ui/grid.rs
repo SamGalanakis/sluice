@@ -1094,6 +1094,7 @@ pub fn trace_open(id: &str) -> TrustedHtml {
             .attr("id", id)
             .attr("class", "trace")
             .keep("selected")
+            .keep("expanded")
             .open(),
         icon(Icon::Workflow, 18, ""),
         esc(TRACE_IDLE),
@@ -1102,6 +1103,18 @@ pub fn trace_open(id: &str) -> TrustedHtml {
 }
 pub fn trace_close() -> TrustedHtml {
     Host::new("sluice-trace").close()
+}
+/// A unit's steps behind a disclosure (DESIGN.md, The step view): a `<details>` whose summary
+/// is a chevron named `label` ("Steps of Terns") and whose content is `body`. Inside
+/// `sluice-trace` the units open are kept (`data-x`) in the host's `expanded`, so they hold
+/// through a patch and a move between bands; without script it is the plain disclosure.
+pub fn expand(unit: &str, label: &str, body: &TrustedHtml) -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<details class=\"x\" data-x=\"{u}\" data-preserve-attr=\"open\"><summary class=\"x-s\" aria-label=\"{l}\" title=\"{l}\">{chev}</summary>{body}</details>",
+        u = esc(unit),
+        l = esc(label),
+        chev = icon(Icon::ChevronDown, 16, "chev"),
+    ))
 }
 /// A unit's place on the trace's rail, in the margin at its left (inside its `.rail-slot`).
 pub fn rail() -> TrustedHtml {

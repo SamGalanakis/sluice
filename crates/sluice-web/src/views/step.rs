@@ -498,8 +498,10 @@ pub struct StepView {
     pub failure_record: Option<i64>,
     /// Its current run's times, for its card's timer.
     pub timing: Option<RunTiming>,
-    /// Its unit's timeline, on its page and in the drawer (`board::load_step`).
-    pub timeline: Option<super::timeline::Timeline>,
+    /// Its unit's step view (`unit_steps`), its own row ringed, on its page and in the
+    /// drawer (`board::load_step`).
+    #[serde(skip)]
+    pub unit_steps: TrustedHtml,
     /// It comes after a step or a step comes after it: its page links its chain on the plan
     /// (`board::load_step`).
     pub chained: bool,
@@ -648,7 +650,7 @@ pub struct RunTiming {
     /// Every run of its current generation, oldest first (a scatter's round one): its unit's
     /// timeline. What changes in them changes `runs`, `started` or `finished` too.
     #[serde(skip)]
-    pub spans: Vec<super::timeline::RunSpan>,
+    pub spans: Vec<super::unit_steps::RunSpan>,
     /// Its last two runs' failures, the one before first (none for a run that did not fail):
     /// what its retry advice reads (`failure::Advice`).
     #[serde(skip)]
@@ -1016,7 +1018,7 @@ impl StepView {
             messages_total: 0,
             failure_record: None,
             timing: None,
-            timeline: None,
+            unit_steps: TrustedHtml::default(),
             chained: false,
             activity: None,
             transcript_unread: false,
@@ -1497,53 +1499,16 @@ impl StepView {
     /// Its earlier runs in words: "after 2 failed", "after 1 failed and 1 cancelled"; "" when
     /// none says how it ended.
     pub fn retries_words(&self) -> String {
-        let Some((_, earlier)) = self.retries() else {
-            return String::new();
-        };
-        let tally: super::ui::Tally = earlier.iter().copied().collect();
-        let parts: Vec<String> = tally
-            .iter()
-            .map(|(s, n)| format!("{n} {}", s.word()))
-            .collect();
-        match parts.as_slice() {
-            [] => String::new(),
-            [one] => format!("after {one}"),
-            [rest @ .., last] => format!("after {} and {last}", rest.join(", ")),
-        }
+        self.retries()
+            .map(|(_, earlier)| super::ui::tries_words(earlier))
+            .unwrap_or_default()
     }
-    /// "run 3" on its card, matrix pill or drawer, after a mark for each of its last three
-    /// earlier runs' ends ("+2" before them for more); nothing on its first run.
+    /// "run 3" on its card, matrix pill or drawer (`ui::tries`); nothing on its first run.
     pub fn retries_html(&self) -> TrustedHtml {
-        const MARKS: usize = 3;
-        let Some((run, earlier)) = self.retries() else {
-            return TrustedHtml::owned(String::new());
-        };
-        let words = self.retries_words();
-        let mut marks = String::new();
-        if earlier.len() > MARKS {
-            marks.push_str(&format!(
-                "<span class=\"tries-more\">+{}</span>",
-                earlier.len() - MARKS
-            ));
+        match self.retries() {
+            Some((run, earlier)) => super::ui::tries(run, earlier),
+            None => TrustedHtml::default(),
         }
-        for shown in &earlier[earlier.len().saturating_sub(MARKS)..] {
-            marks.push_str(super::ui::mark(*shown).as_str());
-        }
-        let title = if words.is_empty() {
-            format!("Run {run}")
-        } else {
-            format!("Run {run}, {words}")
-        };
-        TrustedHtml::owned(format!(
-            "<span class=\"tries\" title=\"{title}\"><span class=\"tries-m\" aria-hidden=\"true\">{marks}</span><span aria-hidden=\"true\">run {run}</span><span class=\"vh\">{said}</span></span>",
-            title = super::ui::esc(&title),
-            // one phrase for a screen reader: "run 3, after 2 failed"
-            said = super::ui::esc(&if words.is_empty() {
-                format!("run {run}")
-            } else {
-                format!("run {run}, {words}")
-            }),
-        ))
     }
     /// A running step's run before this one, for Now: its number and the run.
     pub fn previous_run(&self) -> Option<(usize, &RunView)> {
@@ -2150,11 +2115,12 @@ impl StepTemplate<'_> {
     fn level(&self) -> u8 {
         if self.page { 2 } else { 3 }
     }
-    /// The Runs tab's timeline: the step's own runs, or its unit's.
+    /// The Runs tab's step view: its unit's steps, or its own runs in time.
     fn timeline_words(&self) -> &'static str {
-        match &self.step.timeline {
-            Some(t) if t.rows.len() > 1 => "Its unit's timeline",
-            _ => "Timeline",
+        if self.step.lane.is_empty() {
+            "Timeline"
+        } else {
+            "Its unit's steps"
         }
     }
     /// The first heading level inside a value: one under its section's head.

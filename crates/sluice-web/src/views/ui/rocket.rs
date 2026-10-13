@@ -206,10 +206,18 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-trace",
         script: "components.js",
-        does: "Select to trace: a unit's button selects it, opens it in place, lights its chain up and down from the ids its markup carries, draws the rail in the margin, says the chain in its line and fades the rest; again, Clear trace or Escape clears; the arrows move between units.",
-        props: &[("selected", "string")],
+        does: "Select to trace: a unit's button selects it, opens it in place, lights its chain up and down from the ids its markup carries, draws the rail in the margin, says the chain in its line and fades the rest; again, Clear trace or Escape clears; the arrows move between units. It keeps the units whose steps the owner opened (expanded) open through a patch and a move between bands.",
+        props: &[("selected", "string"), ("expanded", "string")],
         events: &["sluice-trace"],
         slots: &["line", "units"],
+    },
+    Component {
+        tag: "sluice-steps",
+        script: "components.js",
+        does: "A unit's step view: a click on a row opens its step (in the drawer on the plan), the arrows, Home and End move between its rows, and the row in focus, clicked or open in the drawer is the one selected.",
+        props: &[("selected", "string")],
+        events: &[],
+        slots: &["rows"],
     },
     Component {
         tag: "sluice-drawer",

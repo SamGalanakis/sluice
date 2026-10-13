@@ -420,30 +420,6 @@ impl UnitView {
             .find(|s| s.stage == stage)
             .or_else(|| self.steps.iter().find(|s| s.id.as_str() == id))
     }
-    /// Its timeline: a row a step (named by its stage, else its id less the unit's prefix), a
-    /// bar a run; `current` marks the step whose page shows it. None before anything ran.
-    pub fn timeline(&self, current: Option<&StepId>) -> Option<super::timeline::Timeline> {
-        let prefix = format!("{}-", self.id);
-        let lanes: Vec<super::timeline::Lane<'_>> = self
-            .steps
-            .iter()
-            .map(|s| super::timeline::Lane {
-                label: if !s.stage.is_empty() {
-                    s.stage.clone()
-                } else {
-                    s.id.as_str().strip_prefix(&prefix).unwrap_or(s.id.as_str()).to_owned()
-                },
-                title: s.name().link_name(160),
-                href: s.href(),
-                current: current == Some(&s.id),
-                spans: s.timing.as_ref().map_or(&[][..], |t| t.spans.as_slice()),
-            })
-            .collect();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0.0, |d| d.as_secs_f64());
-        super::timeline::Timeline::new(&lanes, now)
-    }
     /// Every wait of its steps on other units, once each, and the first step that waits.
     pub fn all_waits(&self) -> Option<(&StepView, Vec<Wait>)> {
         let mut out: Vec<Wait> = vec![];
@@ -1410,7 +1386,9 @@ pub fn load_step(
         .find(|s| &s.id == id)
         .cloned()
         .expect("the unit holds the step");
-    step.timeline = unit.timeline(Some(id));
+    // its unit drawn step by step, its own row ringed: its Runs tab's
+    step.unit_steps =
+        super::unit_steps::of_unit(&unit, &relations(&plan), true, id.as_str()).html();
     // its unit's stages in its band: a unit of one step is the step alone
     if unit.steps.len() > 1 {
         step.lane = super::unit_page::stages(&unit);
@@ -1632,8 +1610,8 @@ struct Run {
 }
 /// A step's runs as its timeline draws them, oldest first: a run a span, a scatter's round of
 /// item runs one span from its first start to its last end (running while any item is).
-fn spans(all: &[Run]) -> Vec<super::timeline::RunSpan> {
-    use super::timeline::{RunSpan, from_julian};
+fn spans(all: &[Run]) -> Vec<super::unit_steps::RunSpan> {
+    use super::unit_steps::{RunSpan, from_julian};
     let mut out: Vec<(Option<i64>, RunSpan)> = vec![];
     for run in all {
         let Some(from) = run.from.map(from_julian) else {

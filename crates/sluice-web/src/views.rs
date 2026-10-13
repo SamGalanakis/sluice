@@ -17,9 +17,9 @@ pub mod plan;
 pub mod prefs;
 pub mod step;
 pub mod threads;
-pub mod timeline;
 pub mod ui;
 pub mod unit_page;
+pub mod unit_steps;
 pub mod unit_view;
 
 use askama::Template;
