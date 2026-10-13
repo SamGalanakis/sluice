@@ -11,9 +11,10 @@
 //! The preparation probe is the barrier §11's contention test holds an edit at: the runtime
 //! calls [`preparation_point`] once per preparation, after it has read its snapshot and
 //! before it hands the result to the writer, on the thread that prepared it (never the
-//! writer's). With no hook installed it costs one atomic load.
+//! writer's). The commit probe is where a committed edit has not yet reached the plan cache
+//! ([`commit_point`]). With no hook installed each costs one atomic load.
 
-use crate::ids::ProjectId;
+use crate::ids::{ProjectId, Revision};
 use std::sync::{
     Arc, Mutex, MutexGuard, RwLock,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -207,21 +208,73 @@ pub struct PreparationPoint {
     /// 1 for an edit's first preparation, 2 and 3 for its re-preparations.
     pub attempt: usize,
 }
-type Hook = Arc<dyn Fn(&PreparationPoint) + Send + Sync>;
-static HOOKED: AtomicBool = AtomicBool::new(false);
-static HOOK: RwLock<Option<Hook>> = RwLock::new(None);
+/// Where a plan edit stands when it reaches the commit probe: committed at `rev`, and not yet
+/// installed in the runtime's plan cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitPoint {
+    pub project: ProjectId,
+    pub rev: Revision,
+}
+
+type Hook<P> = Arc<dyn Fn(&P) + Send + Sync>;
+/// One probe: a hook a test installs to stop the runtime at a point, costing one atomic load
+/// while none is installed.
+struct Probe<P: 'static> {
+    hooked: AtomicBool,
+    hook: RwLock<Option<Hook<P>>>,
+    installed: Mutex<()>,
+}
+impl<P: 'static> Probe<P> {
+    const fn new() -> Self {
+        Self {
+            hooked: AtomicBool::new(false),
+            hook: RwLock::new(None),
+            installed: Mutex::new(()),
+        }
+    }
+    fn reach(&self, point: &P) {
+        if !self.hooked.load(Ordering::Acquire) {
+            return;
+        }
+        let hook = self.hook.read().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(hook) = hook {
+            hook(point);
+        }
+    }
+    fn install(&'static self, hook: impl Fn(&P) + Send + Sync + 'static) -> ProbeHook<P> {
+        let exclusive = self.installed.lock().unwrap_or_else(|e| e.into_inner());
+        *self.hook.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(hook));
+        self.hooked.store(true, Ordering::Release);
+        ProbeHook {
+            probe: self,
+            _exclusive: exclusive,
+        }
+    }
+}
+/// Removes a probe's hook when dropped.
+pub struct ProbeHook<P: 'static> {
+    probe: &'static Probe<P>,
+    _exclusive: MutexGuard<'static, ()>,
+}
+impl<P: 'static> Drop for ProbeHook<P> {
+    fn drop(&mut self) {
+        self.probe.hooked.store(false, Ordering::Release);
+        *self.probe.hook.write().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+/// The preparation hook's guard.
+pub type PreparationHook = ProbeHook<PreparationPoint>;
+/// The commit hook's guard.
+pub type CommitHook = ProbeHook<CommitPoint>;
+
+static PREPARATIONS: Probe<PreparationPoint> = Probe::new();
+static COMMITS: Probe<CommitPoint> = Probe::new();
 
 /// The runtime calls this once per preparation, after reading its snapshot and before the
 /// writer sees the result. A hook may block (a test's barrier); it runs on the preparing
 /// thread, never the writer's.
 pub fn preparation_point(point: &PreparationPoint) {
-    if !HOOKED.load(Ordering::Acquire) {
-        return;
-    }
-    let hook = HOOK.read().unwrap_or_else(|e| e.into_inner()).clone();
-    if let Some(hook) = hook {
-        hook(point);
-    }
+    PREPARATIONS.reach(point);
 }
 
 /// Install the preparation hook until the returned guard drops. One at a time per process:
@@ -229,23 +282,20 @@ pub fn preparation_point(point: &PreparationPoint) {
 pub fn hook_preparations(
     hook: impl Fn(&PreparationPoint) + Send + Sync + 'static,
 ) -> PreparationHook {
-    static INSTALLED: Mutex<()> = Mutex::new(());
-    let exclusive = INSTALLED.lock().unwrap_or_else(|e| e.into_inner());
-    *HOOK.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(hook));
-    HOOKED.store(true, Ordering::Release);
-    PreparationHook {
-        _exclusive: exclusive,
-    }
+    PREPARATIONS.install(hook)
 }
-/// Removes the preparation hook when dropped.
-pub struct PreparationHook {
-    _exclusive: MutexGuard<'static, ()>,
+
+/// The runtime calls this once per committed plan edit, after its transaction has committed
+/// and before the plan cache holds the edit's plan: the window a reader of the new revision
+/// can fall into. A hook may block; it runs on the writer's thread, so while it blocks
+/// nothing else is written.
+pub fn commit_point(point: &CommitPoint) {
+    COMMITS.reach(point);
 }
-impl Drop for PreparationHook {
-    fn drop(&mut self) {
-        HOOKED.store(false, Ordering::Release);
-        *HOOK.write().unwrap_or_else(|e| e.into_inner()) = None;
-    }
+
+/// Install the commit hook until the returned guard drops. One at a time per process.
+pub fn hook_commits(hook: impl Fn(&CommitPoint) + Send + Sync + 'static) -> CommitHook {
+    COMMITS.install(hook)
 }
 
 #[cfg(test)]
@@ -285,5 +335,17 @@ mod tests {
         }
         preparation_point(&point);
         assert_eq!(*seen.lock().unwrap(), vec![1]);
+        let committed = CommitPoint {
+            project: point.project,
+            rev: Revision(4),
+        };
+        {
+            let seen = seen.clone();
+            let _hook = hook_commits(move |c| seen.lock().unwrap().push(c.rev.0 as usize));
+            commit_point(&committed);
+            preparation_point(&point);
+        }
+        commit_point(&committed);
+        assert_eq!(*seen.lock().unwrap(), vec![1, 4]);
     }
 }

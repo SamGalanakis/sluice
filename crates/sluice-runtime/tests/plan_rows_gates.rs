@@ -10,11 +10,15 @@
 //! - a high-fanout edit scales with its readers, not with the plan;
 //! - three stale preparations end in `busy` with nothing written, none on the writer's
 //!   thread, while an independent write commits within its budget;
-//! - cold compile and cold recipe matching are measured and reported.
+//! - cold compile and cold recipe matching are measured and reported;
+//! - a reader of an edit's revision between its commit and the cache's install compiles
+//!   nothing.
 //!
 //! Each measures the whole pipeline (the store's rows and counters, the model's preparation,
-//! the runtime's cache and the tools); a measurement holds the counters to itself
-//! (`cost::Measurement`), so the gates run beside each other in `scripts/check`.
+//! the runtime's cache and the tools). The counters are process-wide and count every
+//! coordinator in the process, measured or not, so the gates take turns (`serial`): a
+//! measurement (`cost::Measurement`) excludes other measurements, but not another gate's
+//! unmeasured setup, whose first edit compiles its new, empty plan whole.
 #[allow(dead_code)]
 #[path = "../../../tests/support/home.rs"]
 mod home;
@@ -24,9 +28,9 @@ mod plan_rows;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::{CommandReply, CommandRequest},
-    cost::{self, Costs, Measurement, PreparationPoint},
+    cost::{self, CommitPoint, Costs, Measurement, PreparationPoint},
     error::PublicError,
-    ids::ProjectId,
+    ids::{ProjectId, Revision},
     rpc::{FnInvocation, JsonMap, decode_json},
 };
 use sluice_process::{
@@ -46,6 +50,13 @@ use std::{
 
 /// The independent small write's budget while an edit prepares (§11).
 const INDEPENDENT_WRITE_BUDGET: Duration = Duration::from_millis(100);
+
+/// One gate at a time in this process: every coordinator's work counts in the one set of
+/// counters, so a gate's measurement would otherwise count another gate's setup.
+async fn serial() -> tokio::sync::MutexGuard<'static, ()> {
+    static GATES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    GATES.lock().await
+}
 
 #[derive(Clone, Default)]
 struct Fake(Arc<Mutex<Vec<Launch>>>);
@@ -231,6 +242,7 @@ fn filler(n: usize, prefix: &str) -> Vec<Value> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_same_local_edit_costs_the_same_at_198_1980_and_19800_steps() {
+    let _serial = serial().await;
     let mut seen: Vec<(usize, &str, Costs)> = Vec::new();
     for size in [198, 1980, 19800] {
         let plan = Plan::new(json!({})).await;
@@ -293,6 +305,7 @@ async fn the_same_local_edit_costs_the_same_at_198_1980_and_19800_steps() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_ordinary_edit_on_a_warm_cache_exports_or_compiles_the_whole_plan() {
+    let _serial = serial().await;
     let plan = Plan::new(json!({"cpu": 2})).await;
     let recipes = plan
         .home
@@ -384,6 +397,7 @@ async fn no_ordinary_edit_on_a_warm_cache_exports_or_compiles_the_whole_plan() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn removal_and_prune_renumber_nothing_and_leave_exactly_the_derived_indexes() {
+    let _serial = serial().await;
     let plan = Plan::new(json!({})).await;
     plan.edit(json!([
         {"op": "step.add", "step": "s1", "spec": step(json!(1))},
@@ -486,6 +500,7 @@ async fn removal_and_prune_renumber_nothing_and_leave_exactly_the_derived_indexe
 
 #[tokio::test(flavor = "multi_thread")]
 async fn compact_reads_and_the_competitor_read_decode_no_declaration() {
+    let _serial = serial().await;
     let mut decoded_by_competitors = Vec::new();
     for competitors in [2, 60] {
         let plan = Plan::new(json!({"gpu": 1})).await;
@@ -534,6 +549,7 @@ async fn compact_reads_and_the_competitor_read_decode_no_declaration() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_high_fanout_edit_scales_with_its_readers_not_with_the_plan() {
+    let _serial = serial().await;
     let mut seen = Vec::new();
     for (readers, unrelated) in [(50, 0), (50, 2000), (100, 0)] {
         let plan = Plan::new(json!({})).await;
@@ -583,6 +599,7 @@ async fn a_high_fanout_edit_scales_with_its_readers_not_with_the_plan() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn three_stale_preparations_end_busy_with_nothing_written_and_none_on_the_writer() {
+    let _serial = serial().await;
     let plan = Plan::new(json!({})).await;
     let mut ops = vec![
         json!({"op": "input.put", "name": "src", "declaration": "string"}),
@@ -675,6 +692,7 @@ async fn three_stale_preparations_end_busy_with_nothing_written_and_none_on_the_
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cold_compile_and_cold_recipe_matching_are_measured_and_reported() {
+    let _serial = serial().await;
     let plan = Plan::new(json!({})).await;
     let recipes = plan
         .home
@@ -729,5 +747,80 @@ async fn cold_compile_and_cold_recipe_matching_are_measured_and_reported() {
     eprintln!(
         "on 2,080 steps: cold edit {cold_edit:?} ({compiles} whole compile), warm edit {warm_edit:?}; \
          cold recipe matching {cold_recipes:?}, warm {warm_recipes:?} (reported, no budget)"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reader_of_an_edits_revision_before_the_cache_holds_it_compiles_nothing() {
+    let _serial = serial().await;
+    let plan = Plan::new(json!({})).await;
+    let mut ops = filler(198, "x");
+    ops.push(json!({"op": "step.add", "step": "a", "spec": step(json!(1))}));
+    plan.edit(Value::Array(ops)).await;
+    plan.edit(json!([{"op": "step.update", "step": "a", "changes": {"doc": "warm"}}]))
+        .await;
+    let rev = plan.rev().await;
+
+    // The probe: the edit has committed and the cache does not hold its plan yet. A reader
+    // of the new revision runs there, as the scheduler or a status read can after any commit.
+    let (reached, at_commit) = std::sync::mpsc::channel::<Revision>();
+    let (release, go) = std::sync::mpsc::channel::<()>();
+    let go = Mutex::new(go);
+    let project = plan.project;
+    let hook = cost::hook_commits(move |point: &CommitPoint| {
+        if point.project == project {
+            reached.send(point.rev).unwrap();
+            go.lock().unwrap().recv().unwrap();
+        }
+    });
+    let measurement = Measurement::start();
+    let edit = {
+        let broker = plan.broker.clone();
+        tokio::spawn(async move {
+            broker
+                .command(request(
+                    "plan_edit",
+                    json!({"project": {"kind": "id", "value": project}, "reason": "probed",
+                        "ops": [{"op": "step.update", "step": "a", "changes": {"doc": "probed"}}]}),
+                ))
+                .await
+        })
+    };
+    let committed =
+        tokio::task::spawn_blocking(move || at_commit.recv_timeout(Duration::from_secs(120)))
+            .await
+            .unwrap()
+            .expect("the edit reaches the commit probe");
+    assert_eq!(committed, Revision(rev + 1));
+    let read = plan
+        .call(
+            "status",
+            json!({"selection": {"steps": null, "tags": null}}),
+        )
+        .await;
+    release.send(()).unwrap();
+    edit.await.unwrap().unwrap();
+    drop(hook);
+    let read = read.unwrap();
+    assert_eq!(
+        read["rev"],
+        json!(rev + 1),
+        "the reader sees the edit: {read}"
+    );
+    let costs = measurement.costs();
+    assert_eq!(
+        (costs.full_exports, costs.full_compiles),
+        (0, 0),
+        "a reader of the edit's revision takes the edit's plan: {costs:?}"
+    );
+    // And the cache holds it after: the next edit is warm too.
+    measurement.reset();
+    plan.edit(json!([{"op": "step.update", "step": "a", "changes": {"doc": "after"}}]))
+        .await;
+    let costs = measurement.costs();
+    assert_eq!(
+        (costs.full_exports, costs.full_compiles),
+        (0, 0),
+        "{costs:?}"
     );
 }

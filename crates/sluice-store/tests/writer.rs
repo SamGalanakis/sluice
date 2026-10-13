@@ -202,3 +202,73 @@ async fn caller_cancellation_after_admission_does_not_cancel_commit() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn a_commit_hook_runs_once_committed_before_subscribers_hear_and_a_rollback_drops_it() {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    let (home, writer, _reads, project) = setup().await;
+    let db = home.path().join("sluice.db");
+    let notified = writer.subscribe();
+    let commits = notified.borrow().commits;
+    // Committed: the hook sees the row from another connection, before the notification.
+    let seen = Arc::new(Mutex::new(None));
+    let hook_seen = seen.clone();
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE projects SET description='hooked' WHERE project_id=?1",
+                [project.to_string()],
+            )?;
+            tx.changed(Some(project), "status");
+            tx.on_commit(move || {
+                let other = Connection::open(&db).unwrap();
+                let description: String = other
+                    .query_row(
+                        "SELECT description FROM projects WHERE project_id=?1",
+                        [project.to_string()],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                *hook_seen.lock().unwrap() = Some((description, notified.borrow().commits));
+            });
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        seen.lock().unwrap().take(),
+        Some(("hooked".to_owned(), commits)),
+        "the hook ran after the commit and before subscribers were told"
+    );
+    assert_eq!(writer.subscribe().borrow().commits, commits.wrapping_add(1));
+    // Rolled back: the hook is dropped unrun, before the write returns.
+    struct Dropped(Arc<AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let (ran, dropped) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let (hook_ran, guard) = (ran.clone(), Dropped(dropped.clone()));
+    let refused = writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.on_commit(move || {
+                let _guard = guard;
+                hook_ran.store(true, Ordering::SeqCst);
+            });
+            Err::<(), _>(StoreError::Closed)
+        })
+        .await;
+    assert!(refused.is_err());
+    assert!(!ran.load(Ordering::SeqCst), "a rolled-back hook never runs");
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "and is dropped with its transaction"
+    );
+}

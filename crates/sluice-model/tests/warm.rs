@@ -1,8 +1,8 @@
 //! Warm edits: a chain of edits, each prepared on the candidate the one before certified,
 //! compiles no plan whole (`full_compiles` stays 0); a step added with a fn the base never used
 //! compiles into the candidate; and preparing from a state that lacks a step the edit consults
-//! panics in a debug build. Its own test binary, so no other test moves the process-wide
-//! counter while it counts.
+//! panics in a debug build. Its own test binary, and its tests take turns (`serial`): the
+//! others compile plans whole, which would move the process-wide counter while it counts.
 
 mod support;
 
@@ -23,6 +23,11 @@ fn op(value: serde_json::Value) -> PlanOp {
 fn id(name: &str) -> StepId {
     name.parse().unwrap()
 }
+/// One test at a time: `full_compiles` counts every compile in the process.
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    static TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    TESTS.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 fn base_document() -> serde_json::Value {
     json!({
@@ -38,6 +43,7 @@ fn base_document() -> serde_json::Value {
 
 #[test]
 fn warm_edits_compile_no_plan_whole() {
+    let _serial = serial();
     let signatures = model_signatures(&generate::catalog());
     let mut plan = Arc::new(support::compile(base_document(), &signatures).unwrap());
     let state = StateSnapshot::default();
@@ -75,6 +81,7 @@ fn warm_edits_compile_no_plan_whole() {
 /// signature from the provider, not from what the base already compiled.
 #[test]
 fn a_step_with_a_fn_the_base_never_used_compiles() {
+    let _serial = serial();
     let signatures = model_signatures(&generate::catalog());
     let plan = support::compile(base_document(), &signatures).unwrap();
     assert!(plan.steps().values().all(|step| step.run != "t.late"));
@@ -108,6 +115,7 @@ fn a_step_with_a_fn_the_base_never_used_compiles() {
 #[cfg(debug_assertions)]
 #[should_panic(expected = "outside its read set")]
 fn preparation_outside_its_read_set_panics_in_debug() {
+    let _serial = serial();
     let signatures = model_signatures(&generate::catalog());
     let plan = Arc::new(support::compile(base_document(), &signatures).unwrap());
     let state = ScopedState::default();

@@ -83,10 +83,18 @@ pub struct WriteTransaction<'connection> {
     transaction: Transaction<'connection>,
     changed: BTreeSet<ChangeKey>,
     rows: &'connection RowLog,
+    committed: Vec<Box<dyn FnOnce() + Send>>,
 }
 impl WriteTransaction<'_> {
     pub fn sql(&self) -> &Connection {
         &self.transaction
+    }
+    /// Run `hook` on the writer's thread as soon as this transaction commits: before the next
+    /// transaction begins and before subscribers are told. A transaction that rolls back drops
+    /// its hooks unrun, also before the next begins. A hook must be quick and must not touch
+    /// the database.
+    pub fn on_commit(&mut self, hook: impl FnOnce() + Send + 'static) {
+        self.committed.push(Box::new(hook));
     }
     /// (table, rowid) of every row in `ROW_TABLES` that a transaction committed after
     /// `mark` changed, in commit order; None when the log no longer reaches back that far.
@@ -499,6 +507,7 @@ fn transact<T>(
         transaction,
         changed: BTreeSet::new(),
         rows,
+        committed: Vec::new(),
     };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&mut tx)));
     tx.sql()
@@ -518,12 +527,23 @@ fn transact<T>(
             (key.scope(), key.project.map(|id| id.to_string()), &key.view),
         )?;
     }
-    tx.transaction.commit()?;
+    let WriteTransaction {
+        transaction,
+        changed,
+        committed,
+        ..
+    } = tx;
+    transaction.commit()?;
     rows.publish();
-    if !tx.changed.is_empty() {
+    for hook in committed {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(hook)).is_err() {
+            tracing::error!("a commit hook panicked after its transaction committed");
+        }
+    }
+    if !changed.is_empty() {
         changes.send_modify(|notification| {
             notification.commits = notification.commits.wrapping_add(1);
-            notification.changed = tx.changed;
+            notification.changed = changed;
         });
     }
     Ok(value)

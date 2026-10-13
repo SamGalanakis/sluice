@@ -1456,23 +1456,19 @@ impl<H: ExecutionHost> Coordinator<H> {
                     if !staged.generations_hold(&this.inner.catalog, this.home()) {
                         return Ok(None);
                     }
-                    let clock = timer.clone();
+                    let (clock, plans) = (timer.clone(), this.inner.plans.clone());
                     let attempt = this
                         .callback_attempt(id, key, encoded, false, move |tx| {
                             let started = std::time::Instant::now();
-                            let committed = staged
-                                .commit(tx)?
-                                .map(|c| (c.reply, Some((project, c.rev, c.compiled))));
+                            let committed = staged.commit(tx)?.map(|c| {
+                                plans.install_on_commit(tx, project, c.rev, c.compiled);
+                                (c.reply, ())
+                            });
                             *clock.lock().unwrap_or_else(|e| e.into_inner()) += started.elapsed();
                             Ok(committed)
                         })
                         .await?;
-                    Ok(attempt.map(|(reply, install)| {
-                        if let Some((project, rev, compiled)) = install {
-                            this.inner.plans.install_certified(project, rev, compiled);
-                        }
-                        reply
-                    }))
+                    Ok(attempt.map(|(reply, ())| reply))
                 }
             })
             .await;
@@ -1606,21 +1602,20 @@ impl<H: ExecutionHost> Coordinator<H> {
                     if !staged.generations_hold(&this.inner.catalog, this.home()) {
                         return Ok(None);
                     }
-                    let project = staged.project;
+                    let (project, plans) = (staged.project, this.inner.plans.clone());
                     let (committed, took) = this
                         .writer()
                         .write(RetrySafety::NonIdempotent, move |tx| {
                             let started = std::time::Instant::now();
-                            Ok((staged.commit(tx)?, started.elapsed()))
+                            let committed = staged.commit(tx)?.map(|c| {
+                                plans.install_on_commit(tx, project, c.rev, c.compiled);
+                                c.reply
+                            });
+                            Ok((committed, started.elapsed()))
                         })
                         .await?;
                     *timer.lock().unwrap_or_else(|e| e.into_inner()) += took;
-                    Ok(committed.map(|c| {
-                        this.inner
-                            .plans
-                            .install_certified(project, c.rev, c.compiled);
-                        c.reply
-                    }))
+                    Ok(committed)
                 }
             })
             .await;

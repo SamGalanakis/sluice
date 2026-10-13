@@ -382,8 +382,9 @@ preview here and never reaches the writer; its candidate is dropped.
    when step 4 or 7 wrote anything).
 
 Steps 4 to 9 commit together or not at all. The triggers move `state_epoch` as a side effect.
-After `Committed`, the coordinator installs `compiled` in its plan cache (§8.1); after `Stale`,
-a conflict or any error it drops it.
+After `Committed`, the commit's own transaction hands `compiled` to the plan cache, which
+installs it the moment the transaction commits (§8.1); after `Stale`, a conflict, any error or a
+rollback it is dropped.
 
 **Re-preparation** (round 2; replaces decision 11's writer fallback). A stale commit is
 prepared again from a new snapshot, outside the writer, at most `EDIT_TRIES` (3) preparations
@@ -2181,11 +2182,18 @@ payload. **Decision:** preparation produces the compiled candidate itself.
   `catalog_generation`, and validated by §6.1. It describes the plan at `base_rev + 1` when
   `commit.rows.changes` is not empty, else it is the base itself.
 - The runtime's plan cache is `(project) → (rev, catalog_generation, Arc<Plan>)`, built cold by
-  `compile_rows`. After `CommitOutcome::Committed(rev)` the coordinator installs `compiled.plan`
-  as `(rev, compiled.catalog_generation)` **only if** the cache still holds `(base_rev, the same
-  catalog_generation)` for the project; otherwise (another edit was installed first, or the
-  catalog was republished) it drops the candidate and the next reader compiles cold. After
-  `Stale`, a `conflict`, any error, or a dry run, the candidate is dropped.
+  `compile_rows`. After `CommitOutcome::Committed(rev)`, still inside the writer transaction,
+  the coordinator stages `compiled.plan` as `(rev, compiled.catalog_generation)` and registers
+  a commit hook (`WriteTransaction::on_commit`, run on the writer's thread as soon as the
+  transaction commits, before the next begins). The hook installs the candidate **only if** the
+  cache still holds `(base_rev, the same catalog_generation)` for the project; otherwise
+  (another edit was installed first, or the catalog was republished) it drops the candidate and
+  the next reader compiles cold. Between the commit and the hook, a reader whose snapshot
+  already shows `rev` takes the staged candidate: the only transaction that can commit `rev`
+  while it is staged is the one that staged it, so no reader of a new revision compiles the
+  plan whole because the cache has not caught up. A rollback drops the hook and unstages the
+  candidate before the next transaction. After `Stale`, a `conflict`, any error, or a dry run,
+  the candidate is dropped.
 - A catalog publication that changes a signature some step uses invalidates the entry (§6.2).
 
 The runtime (lane D) owns the plan cache, `recipe_generation(home, project) ->
@@ -2867,7 +2875,10 @@ Release gates (lane H):
   unrelated steps decodes and writes the same counts (`declarations_decoded`,
   `declarations_written`, `rows_written` equal across the three sizes).
 - No ordinary edit on a warm cache calls `export_plan`, `read_plan_rows` or `compile_rows`
-  (`full_exports = full_compiles = 0`).
+  (`full_exports = full_compiles = 0`), and neither does a reader of the edit's revision that
+  runs after its commit and before the cache's install (held there by the commit probe,
+  `cost::commit_point`). The counters are process-wide, so the gates in one test binary take
+  turns: a measurement must not count another gate's setup.
 - Removal and prune renumber nothing (`positions_renumbered = 0`).
 - After every removal (`step.remove`, `unit.remove`, a removing `step_update` chain) and every
   prune, rebuilding the indexes from the declarations (`step_index`, `output_references`, edge
