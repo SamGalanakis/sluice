@@ -369,7 +369,7 @@ pub struct ProjectView {
     pub asks: Vec<AskView>,
 }
 /// An open question to the owner that someone waits on: its message, the step that asked it
-/// ("" for the orchestrator or anyone else), and its title (its body's first line without one).
+/// ("" for a session or anyone else), and its title (its body's first line without one).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AskView {
     pub message: i64,
@@ -380,14 +380,20 @@ pub struct AskView {
     pub title: String,
 }
 impl AskView {
-    /// Who asked when no step did, as a sentence starts: the session by its name, "Sluice",
-    /// or "The orchestrator" for a question from before sessions named themselves.
-    pub fn sender(&self) -> String {
-        match self.from.as_str() {
-            "orchestrator" | "" => "The orchestrator".into(),
-            "sluice" => "Sluice".into(),
-            from => from.into(),
+    /// Who asked when no step did: its sender, read as the old shared address when it has
+    /// none (a question from before senders were kept).
+    pub fn sender_id(&self) -> &str {
+        if self.from.is_empty() {
+            sluice_model::identity::LEGACY_ORCHESTRATOR
+        } else {
+            &self.from
         }
+    }
+    /// Who asked when no step did, as a sentence starts with it (`ui::Party`): the session by
+    /// its name, "Sluice", or "orchestrator", muted, for a question from before sessions named
+    /// themselves.
+    pub fn sender_html(&self) -> String {
+        ui::party_html(self.sender_id(), true)
     }
     /// Where it is answered: its step's page, whose Overview draws it whole with Answer; a
     /// question no step asked, its card in the project's inbox.

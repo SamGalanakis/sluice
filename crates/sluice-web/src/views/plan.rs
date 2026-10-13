@@ -562,12 +562,10 @@ impl<'a> Plan<'a> {
         let project = self.project();
         let ask = a.ask;
         // who asked, in words: its stage (its unit's title is under the question), else the
-        // session (or, before sessions named themselves, the orchestrator)
+        // session, sluice, or before sessions named themselves "orchestrator", muted
         let from = match (a.unit, a.step) {
-            (Some(unit), Some(step)) => short(unit, step),
-            _ if ask.step.is_empty() && ask.from.starts_with('@') => ask.from.clone(),
-            _ if ask.step.is_empty() && ask.from == "sluice" => "Sluice".to_owned(),
-            _ if ask.step.is_empty() => "the orchestrator".to_owned(),
+            (Some(unit), Some(step)) => esc(&short(unit, step)),
+            _ if ask.step.is_empty() => ui::party_html(ask.sender_id(), false),
             _ => "a step".to_owned(),
         };
         let when = a
@@ -649,7 +647,6 @@ impl<'a> Plan<'a> {
                 ui::trace_role().0
             },
             q = icon(Icon::MessageSquare, 16, "ask-i"),
-            from = esc(&from),
             title = esc(&ask.title),
         );
         let head = if attrs.is_empty() {
@@ -1078,7 +1075,7 @@ impl<'a> Plan<'a> {
         };
         let cells = ui::stage_strip(&format!("Stages of {}", unit.heading()), &strip(unit)).0;
         format!(
-            "<div id=\"u-{id}\" class=\"pl-row rail-slot\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-head\"><span class=\"pl-k\" id=\"k-u-{id}\"><span class=\"pl-w\">{role}{mark}<b>{word}</b></span> {state}</span> <span class=\"pl-t\">{title}</span></span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open the unit</a></div><div class=\"pl-cells\">{cells}</div><div class=\"pl-end\">{menu}</div>{steps}{more}{more_body}{more_end}</div>",
+            "<div id=\"u-{id}\" class=\"pl-row rail-slot\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-head\"><span class=\"pl-k\" id=\"k-u-{id}\"><span class=\"pl-w\">{role}{mark}<b>{word}</b></span> {state}{owner}</span> <span class=\"pl-t\">{title}</span></span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open the unit</a></div><div class=\"pl-cells\">{cells}</div><div class=\"pl-end\">{menu}</div>{steps}{more}{more_body}{more_end}</div>",
             id = esc(unit.id.as_str()),
             attrs = self.attrs(unit),
             rail = ui::rail(),
@@ -1086,6 +1083,7 @@ impl<'a> Plan<'a> {
             role = ui::trace_role(),
             mark = ui::mark(shown),
             word = esc(shown.word()),
+            owner = owner_html(unit),
             title = esc(title(unit)),
             pick_end = ui::trace_button_close(),
             href = esc(&unit_href(self.view, unit)),
@@ -1127,7 +1125,7 @@ impl<'a> Plan<'a> {
         }
         format!(
             "<p class=\"pl-sub\"><b>{}</b> {}: {}</p>",
-            esc(&unit.sender()),
+            unit.sender_html(),
             ui::ago(&unit.changed),
             esc(&crate::markdown::cut(
                 &crate::markdown::plain(&unit.last_message),
@@ -1144,7 +1142,7 @@ impl<'a> Plan<'a> {
             format!(
                 "<p class=\"meta\"><b>{}{}</b> · {}</p><div class=\"md pl-said-t\">{}</div>",
                 if unit.last_received { "Note from " } else { "" },
-                esc(&unit.sender()),
+                unit.sender_html(),
                 ui::ago(&unit.changed),
                 crate::markdown::excerpt(&unit.last_message, 420).0
             )
@@ -1332,6 +1330,15 @@ fn view_switch(href: &str, chosen: Option<&str>) -> String {
     format!("<nav class=\"view-switch\" aria-label=\"View\">{links}</nav>")
 }
 /// "a", "a and b", "a, b and c".
+/// A unit's owner, small and muted at the end of its row's state line: `@lead`, or "you";
+/// nothing when it is unowned.
+fn owner_html(unit: &UnitView) -> String {
+    let owner = unit.owner_words();
+    if owner.is_empty() {
+        return owner;
+    }
+    format!(" <span class=\"own\">{}</span>", esc(&owner))
+}
 fn join(items: &[&str]) -> String {
     match items {
         [] => String::new(),

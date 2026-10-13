@@ -1587,6 +1587,11 @@ code.v { border: 0; background: none; padding: 0; }
            font-size: 13px; line-height: 20px; color: var(--ink-muted); }
 .mg-head .mg-to { flex: none; width: 14px; height: 14px; }
 .who { font-weight: 700; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+/* the shared address messages were stored under before sessions named themselves: kept as
+   stored, muted, wherever a sender or recipient is named */
+.who-old, .who.who-old { color: var(--ink-muted); font-weight: 500; }
+/* who answers a unit (`steps.owner`): its @name, small and muted */
+.own { color: var(--ink-muted); font-weight: 500; white-space: nowrap; }
 .who .sref-a { text-decoration: none; }
 .who .sref-a:hover .sref-t { text-decoration: underline; text-decoration-color: var(--run-ink);
                              text-underline-offset: var(--link-offset); }
@@ -2088,7 +2093,8 @@ sluice-steps.sv { display: block; container: sv / inline-size; min-width: 0; }
 .sv-hd, .sv-rows, .sv-row { display: grid; grid-template-columns: subgrid; }
 .sv-hd { grid-row: 1; align-items: end; padding-bottom: 6px; box-shadow: inset 0 -1px 0 var(--rule);
          font-size: 12px; line-height: 16px; font-weight: 650; color: var(--ink-muted); }
-.sv-h-name { grid-column: name; }
+.sv-h-name { grid-column: name; display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.sv-hd .own { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
 .sv-h-st { grid-column: st; }
 .sv-h-pr { grid-column: pr; text-align: right; }
 .sv-h-sp { grid-column: sp; text-align: right; padding-right: 8px; }
@@ -2174,6 +2180,9 @@ sluice-steps.sv { display: block; container: sv / inline-size; min-width: 0; }
   .sv-untimed .sv-st, .sv-untimed .sv-pr, .sv-untimed .sv-sp { padding-bottom: 8px !important; }
   .sv-b { height: 4px; margin-top: -2px; }
   .sv-foot { flex-wrap: wrap; }
+  /* the head gives way but for its unit's owner */
+  .sv-hd.has-own { display: block; }
+  .sv-hd.has-own > :not(.sv-h-name), .sv-hd .sv-h-w { display: none; }
 }
 /* the step's Runs: its unit's step view over the run list */
 .runs-tl { margin: 0 0 22px; padding-top: 10px; border-top: var(--section-rule-height) solid var(--section-rule-color); }
@@ -2486,6 +2495,7 @@ details.x[open]::details-content { margin: 12px 0 4px; }
 .pl-k .g svg { width: 14px; height: 14px; }
 .pl-time { margin-left: 6px; font-weight: 650; }
 .pl-note { color: var(--ink-muted); }
+.pl-k .own { margin-left: 8px; font-size: 12.5px; }
 .pl-k .trace-role { margin-right: 4px; }
 .pl-t { font-weight: 750; letter-spacing: -0.005em; }
 .pl-sub { max-width: var(--measure); font-size: 13px; line-height: 18px; color: var(--ink-muted);
@@ -3584,6 +3594,13 @@ main { container: frame / inline-size; }
                               font-size: 13px; font-weight: 400; }
 .settings-page .link-button:hover { color: var(--ink); }
 .resource-list { padding: 0; list-style: none; }
+/* the project's sessions, each its @name and when it was last seen, on one line while they fit */
+.sessions { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 0; padding: 0; list-style: none;
+            font-size: 14px; line-height: 20px; color: var(--ink-muted); }
+.sessions .own { color: var(--ink); font-weight: 650; }
+#sessions dd { padding-top: 8px; }
+#project-fallback { min-height: 40px; min-width: 14rem; max-width: 100%; }
+.setting-row:has(+ .setting-row[hidden]:last-child) { border-bottom: 1px solid var(--rule); }
 .resource-list li { max-width: var(--measure); padding: 8px 0; border-bottom: 1px solid var(--rule-faint);
                     overflow-wrap: anywhere; }
 .resource-list code { overflow-wrap: anywhere; }
@@ -3623,7 +3640,7 @@ main { container: frame / inline-size; }
                     border-top: 0; border-bottom: 1px solid var(--rule); background: var(--paper); }
   .settings-index a { min-height: 44px; border: 0; white-space: nowrap; }
   .setting-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
-  .setting-row dt { padding: 0; }
+  .setting-row dt, #sessions dd { padding: 0; }
   .settings-page button, .settings-page input:not([type=hidden]), .settings-page .link-button,
   :is(.cap-remove, .board-clear) .confirm-flow > summary { min-height: 44px; }
   .settings-switch { flex-wrap: wrap; }

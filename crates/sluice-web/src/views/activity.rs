@@ -263,17 +263,14 @@ struct ActivityTemplate<'a> {
     a: &'a ActivityView,
 }
 
-/// Who sent a message, as a turn is headed: "Orchestrator", "you", a step by its id.
+/// Who sent a message, as a turn is headed: "you", a session's `@name`, "orchestrator" (sent
+/// before sessions named themselves), a step by its id.
 fn sender(from: &str) -> String {
-    match from {
-        "owner" => "you".to_owned(),
-        "orchestrator" => "Orchestrator".to_owned(),
-        other => other.to_owned(),
-    }
+    super::ui::party_words(from)
 }
 /// A message as its agent was handed it, split from sluice's delivery line around it: how its
 /// turn is headed, by who sent it, and its words. "Message from orchestrator on your sluice
-/// thread `step-a` (…): Look again" is "From Orchestrator", "Look again"; a question "Question
+/// thread `step-a` (…): Look again" is "From orchestrator", "Look again"; a question "Question
 /// 12 from b", its id kept to answer it; a reply "Reply from b". None when it has no such line.
 pub fn unwrapped(text: &str) -> Option<(String, String)> {
     const ON: &str = " on your sluice thread `";

@@ -341,8 +341,8 @@ fn conversation(prefix: &str, project: &ProjectId) -> Result<TrustedHtml, askama
         item(ask, "answered"),
         item(reply, "note"),
         item(message(153341, "a-8-draft", "a-7-draft", "2026-10-08T19:48:08Z", "The coastal maps are under `maps/coast/` now.", MessageVerb::Say), "note"),
-        item(message(156475, "orchestrator", "a-7-draft", "2026-10-08T21:29:57Z", &long, MessageVerb::Say), "note"),
-        item(message(157531, "a-7-draft", "orchestrator", "2026-10-09T08:10:02Z", "Revised; the style check passes. Submitting after the checklist question.", MessageVerb::Say), "note"),
+        item(message(156475, "@editor", "a-7-draft", "2026-10-08T21:29:57Z", &long, MessageVerb::Say), "note"),
+        item(message(157531, "a-7-draft", "@editor", "2026-10-09T08:10:02Z", "Revised; the style check passes. Submitting after the checklist question.", MessageVerb::Say), "note"),
         item(yours, "open"),
         item(message(157611, "owner", "a-7-draft", "2026-10-09T08:20:13Z", "Wait for a-11; it goes out within the hour.", MessageVerb::Say), "note"),
     ];
@@ -880,6 +880,7 @@ fn steps_part() -> TrustedHtml {
         latest: Option<(&'static str, &'static str, u64)>,
         live: bool,
         tries: Option<(usize, Vec<Shown>)>,
+        owner: &'static str,
     }
     use Shown::*;
     let h = 3600.0;
@@ -895,6 +896,7 @@ fn steps_part() -> TrustedHtml {
             latest: Some(("review", "The tern maps moved under maps/coast/; the entries point there now.", 240)),
             live: true,
             tries: None,
+            owner: "@editor",
         },
         Case {
             name: "A fan-out and its join",
@@ -912,6 +914,7 @@ fn steps_part() -> TrustedHtml {
             latest: None,
             live: true,
             tries: None,
+            owner: "",
         },
         Case {
             name: "A condition",
@@ -929,6 +932,7 @@ fn steps_part() -> TrustedHtml {
             latest: None,
             live: false,
             tries: None,
+            owner: "",
         },
         Case {
             name: "A failure, run 3",
@@ -945,6 +949,7 @@ fn steps_part() -> TrustedHtml {
             latest: Some(("review", "Two entries still lack a photograph credit.", 1_100)),
             live: true,
             tries: Some((3, vec![Failed, Failed])),
+            owner: "@editor",
         },
         Case {
             name: "A long run beside quick ones",
@@ -958,6 +963,7 @@ fn steps_part() -> TrustedHtml {
             latest: None,
             live: true,
             tries: None,
+            owner: "you",
         },
         Case {
             name: "Idle a day between steps",
@@ -970,6 +976,7 @@ fn steps_part() -> TrustedHtml {
             latest: None,
             live: false,
             tries: None,
+            owner: "",
         },
     ];
     let mut out = String::from("<div class=\"gal-steps\">");
@@ -999,6 +1006,7 @@ fn steps_part() -> TrustedHtml {
             .collect();
         let view = View {
             label: format!("Steps of {}", case.name),
+            owner: case.owner.to_owned(),
             steps,
             edges: case
                 .edges
@@ -1011,7 +1019,7 @@ fn steps_part() -> TrustedHtml {
                 .collect(),
             latest: case.latest.map(|(from, text, ago)| Latest {
                 at: before(ago),
-                from: from.into(),
+                from: ui::esc(from),
                 text: text.into(),
                 href: "#".into(),
             }),

@@ -315,7 +315,7 @@ async fn one_conversation_on_the_steps_thread_tab_its_thread_page_and_the_inbox(
             "{place}: {html}"
         );
         // a group per run of messages from one sender, named by who sent it to whom
-        assert!(html.contains("<li class=\"mg mg-in\"><p class=\"mg-head\"><span class=\"who\">Orchestrator</span>"), "{place}: {html}");
+        assert!(html.contains("<li class=\"mg mg-in\"><p class=\"mg-head\"><span class=\"who who-old\">orchestrator</span>"), "{place}: {html}");
         assert!(
             html.contains("<span class=\"who who-this\">This step</span>"),
             "{place}: {html}"

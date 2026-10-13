@@ -25,6 +25,13 @@
 <input id="project-icon" name="value" value="{{ feedback.value("icon", icon_text.as_str()) }}" aria-describedby="icon-feedback">
 <div class="setting-actions"><button type="submit">Apply icon</button><span id="icon-feedback" class="settings-feedback{% if feedback.error("icon") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "icon" %}{{ feedback.message }}{% endif %}</span></div>
 </form><div data-upload hidden><label for="icon-file">Or upload an image</label><input id="icon-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><button type="button" data-upload-button>Apply image</button></div></dd></div>
+<div class="setting-row"><dt><label for="project-fallback">Fallback</label></dt><dd>
+<form method="post" action="{{ view.path() }}" data-setting="fallback" data-seen="{{ view.seen("fallback") }}">
+<input type="hidden" name="field" value="fallback"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
+{% let chosen = feedback.value("fallback", view.fallback.as_str()) %}<select id="project-fallback" name="value" aria-describedby="fallback-feedback">{% for (value, words) in view.fallback_choices() %}<option value="{{ value }}"{% if value.as_str() == chosen %} selected{% endif %}>{{ words }}</option>{% endfor %}</select>
+<div class="setting-actions"><button type="submit">Apply fallback</button><span id="fallback-feedback" class="settings-feedback{% if feedback.error("fallback") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "fallback" %}{{ feedback.message }}{% endif %}</span></div>
+</form></dd></div>
+<!--sessions--><div id="sessions" class="setting-row"{% if view.sessions.is_empty() %} hidden{% endif %}><dt>Sessions</dt><dd><ul class="sessions">{% for s in view.sessions %}<li><span class="own">{{ s.name }}</span>{% if !s.seen.is_empty() %} · seen {{ crate::views::ui::ago(s.seen)|safe }}{% endif %}</li>{% endfor %}</ul></dd></div><!--/sessions-->
 </dl></section>
 <section aria-labelledby="resources-heading"><h2 id="resources-heading">Resources</h2>
 <!--resource-status--><div id="resource-status"><ul class="resource-list">

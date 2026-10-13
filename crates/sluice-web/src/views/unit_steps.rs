@@ -145,7 +145,7 @@ pub struct Edge {
 pub struct Latest {
     /// When it was sent (RFC 3339).
     pub at: String,
-    /// Its sender in words ("work", "orchestrator", "you").
+    /// Its sender in words as HTML ("work", "@lead", "you"; "orchestrator" muted).
     pub from: String,
     pub text: String,
     /// Its thread.
@@ -156,6 +156,9 @@ pub struct Latest {
 pub struct View<'a> {
     /// What it is named for a screen reader: "Steps of Terns".
     pub label: String,
+    /// Its unit's owner in words (`@lead`, "you"), small and muted in its head; "" when
+    /// unowned.
+    pub owner: String,
     pub steps: Vec<Step<'a>>,
     pub edges: Vec<Edge>,
     pub latest: Option<Latest>,
@@ -645,11 +648,23 @@ impl View<'_> {
                 labels.push_str("<span class=\"sv-tick sv-nowlabel\">now</span>");
             }
         }
+        // and its unit's owner after the first, small and muted (the columns' names are for the
+        // eye; a screen reader hears the owner alone)
         let _ = write!(
             out,
-            "<div class=\"sv-hd\" aria-hidden=\"true\"><span class=\"sv-h-name\">Step</span><span class=\"sv-h-st\">State</span><span class=\"sv-h-pr\">Progress</span>{}<span class=\"sv-h-sp\">Span</span></div>",
+            "<div class=\"sv-hd{}\"><span class=\"sv-h-name\"><span class=\"sv-h-w\" aria-hidden=\"true\">Step</span>{}</span><span class=\"sv-h-st\" aria-hidden=\"true\">State</span><span class=\"sv-h-pr\" aria-hidden=\"true\">Progress</span>{}<span class=\"sv-h-sp\" aria-hidden=\"true\">Span</span></div>",
+            if self.owner.is_empty() {
+                ""
+            } else {
+                " has-own"
+            },
+            if self.owner.is_empty() {
+                String::new()
+            } else {
+                format!("<span class=\"own\">{}</span>", esc(&self.owner))
+            },
             if axis.is_some() {
-                format!("<span class=\"sv-axis\">{labels}</span>")
+                format!("<span class=\"sv-axis\" aria-hidden=\"true\">{labels}</span>")
             } else {
                 String::new()
             }
@@ -760,7 +775,7 @@ impl View<'_> {
                 out,
                 "<p class=\"sv-foot\"><span class=\"sv-fk\">Last message</span>{}<b>{}</b><a href=\"{}\">{}</a></p>",
                 ui::ago(&latest.at),
-                esc(&latest.from),
+                latest.from,
                 esc(&latest.href),
                 esc(&latest.text)
             );
@@ -962,7 +977,7 @@ pub fn of_unit<'a>(
         .then(|| {
             project.map(|p| Latest {
                 at: unit.changed.clone(),
-                from: unit.sender(),
+                from: unit.sender_html(),
                 text: crate::markdown::cut(&crate::markdown::plain(&unit.last_message), 200),
                 href: unit.last_thread_href(&p),
             })
@@ -970,6 +985,7 @@ pub fn of_unit<'a>(
         .flatten();
     View {
         label: format!("Steps of {}", unit.heading()),
+        owner: unit.owner_words(),
         steps: views,
         edges,
         latest,

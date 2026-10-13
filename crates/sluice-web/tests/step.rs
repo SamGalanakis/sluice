@@ -1007,7 +1007,7 @@ async fn a_running_step_says_what_it_is_doing_now() {
     );
     // its latest exchange as messages: its own latest (to the orchestrator), its first words
     let this = "<span class=\"who who-this\">This step</span>";
-    let orchestrator = "<span class=\"who\">Orchestrator</span>";
+    let orchestrator = "<span class=\"who who-old\">orchestrator</span>";
     assert!(
         now.contains(&format!("<p class=\"mg-head\">{this}")),
         "{now}"

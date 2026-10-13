@@ -678,3 +678,113 @@ async fn retiring_is_set_in_hours_with_keep_patterns_and_turned_off_when_empty()
         ]
     );
 }
+
+/// The fallback is a field like any other: a select of the project's registered sessions and
+/// "none", applied in place and recorded as the owner's; Sessions lists each registered session
+/// with when it was last seen (its heartbeat or its last message), and an unregistered name or
+/// the old shared address is never offered.
+#[tokio::test]
+async fn the_fallback_is_chosen_from_the_projects_sessions_which_are_listed_with_when_each_was_seen()
+ {
+    let f = Fixture::new().await;
+    let (_, page) = f.get_page().await;
+    assert!(
+        page.contains("<div id=\"sessions\" class=\"setting-row\" hidden>"),
+        "{page}"
+    );
+    let id = f.id;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            for (who, beat) in [
+                ("@lash-f4", Some("2026-10-13T10:00:00Z")),
+                ("@figments", None),
+                ("orchestrator", Some("2026-10-13T10:00:00Z")),
+            ] {
+                tx.sql().execute(
+                    "INSERT INTO readers(project_id,identity,stream,thread,cursor,heartbeat_at) VALUES (?1,?2,'orchestrator','',0,?3)",
+                    (id.to_string(), who, beat),
+                )?;
+            }
+            tx.sql().execute(
+                "INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,at) VALUES (900000,?1,'@figments','@figments','owner','Maps redrawn.','2026-10-13T11:00:00Z')",
+                [id.to_string()],
+            )?;
+            tx.changed(Some(id), "readers");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (_, page) = f.get_page().await;
+    let select = page
+        .split("<select id=\"project-fallback\"")
+        .nth(1)
+        .and_then(|s| s.split("</select>").next())
+        .unwrap();
+    assert_eq!(
+        select.matches("<option").count(),
+        3,
+        "none and the two sessions: {select}"
+    );
+    assert!(
+        select.contains("<option value=\"\" selected>none</option>"),
+        "{select}"
+    );
+    assert!(
+        select.contains("<option value=\"@figments\">@figments</option>"),
+        "{select}"
+    );
+    assert!(!select.contains("orchestrator"), "{select}");
+    let sessions = page
+        .split("<!--sessions-->")
+        .nth(1)
+        .and_then(|s| s.split("<!--/sessions-->").next())
+        .unwrap();
+    assert!(!sessions.contains("hidden"), "{sessions}");
+    assert!(
+        sessions.contains("<span class=\"own\">@figments</span> · seen <time")
+            && sessions.contains("datetime=\"2026-10-13T11:00:00Z\""),
+        "{sessions}"
+    );
+    assert!(
+        sessions.contains("<span class=\"own\">@lash-f4</span> · seen <time")
+            && sessions.contains("datetime=\"2026-10-13T10:00:00Z\""),
+        "{sessions}"
+    );
+    assert!(!sessions.contains("orchestrator"), "{sessions}");
+
+    let rev = f.project().await.settings_rev.0;
+    let (status, _) = f.post("fallback", "@lash-f4", "", rev).await;
+    assert_eq!(status, 200);
+    let fallback = |f: &Fixture| {
+        let id = f.id;
+        let reads = f.state.dashboard.reads.clone();
+        async move {
+            reads
+                .snapshot(move |c| sluice_store::identities::fallback(c, id))
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(fallback(&f).await.as_deref(), Some("@lash-f4"));
+    let (_, page) = f.get_page().await;
+    assert!(
+        page.contains("<option value=\"@lash-f4\" selected>@lash-f4</option>"),
+        "{page}"
+    );
+    let record = f.records().await.pop().unwrap();
+    assert_eq!(record["fields"], json!(["fallback"]), "{record}");
+    assert_eq!(record["author"], "owner", "{record}");
+    // a name no session registered is refused, and nothing changes
+    let rev = f.project().await.settings_rev.0;
+    let (status, body) = f.post("fallback", "@laed", "", rev).await;
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        body.contains("@laed is not a session of project first"),
+        "{body}"
+    );
+    assert_eq!(fallback(&f).await.as_deref(), Some("@lash-f4"));
+    // none clears it
+    let (status, _) = f.post("fallback", "", "", rev).await;
+    assert_eq!(status, 200);
+    assert_eq!(fallback(&f).await, None);
+}

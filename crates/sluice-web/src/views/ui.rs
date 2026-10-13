@@ -468,6 +468,67 @@ fn tone_class(tone: &str) -> String {
     }
 }
 
+// ---- who: the identities that are not a step (SPEC §8.1) -------------------------------------
+
+/// Someone a page names who is not a step: the person ("you"), a session by its `@name`,
+/// sluice, or "orchestrator", the shared address messages were stored under before sessions
+/// named themselves, drawn muted (`who-old`) and never rewritten. A step is named by its
+/// `StepRef`; a page names a step itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Party {
+    You,
+    Session(String),
+    Sluice,
+    Legacy,
+}
+impl Party {
+    /// `id` as an identity, none when it is a step's id (or anything else).
+    pub fn of(id: &str) -> Option<Self> {
+        use sluice_model::identity::{LEGACY_ORCHESTRATOR, OWNER, SLUICE, is_session};
+        match id {
+            OWNER => Some(Party::You),
+            SLUICE => Some(Party::Sluice),
+            LEGACY_ORCHESTRATOR => Some(Party::Legacy),
+            id if is_session(id) => Some(Party::Session(id.to_owned())),
+            _ => None,
+        }
+    }
+    /// Its name in words, as a sentence says it mid-line: "you", "@lead", "sluice",
+    /// "orchestrator".
+    pub fn words(&self) -> String {
+        match self {
+            Party::You => "you".into(),
+            Party::Session(name) => name.clone(),
+            Party::Sluice => "sluice".into(),
+            Party::Legacy => "orchestrator".into(),
+        }
+    }
+    /// Its name as a sentence starts with it: "You", "Sluice"; a name keeps its case.
+    pub fn lead(&self) -> String {
+        match self {
+            Party::You => "You".into(),
+            Party::Sluice => "Sluice".into(),
+            other => other.words(),
+        }
+    }
+    /// Its words as HTML: the old shared address muted.
+    pub fn html(&self, lead: bool) -> String {
+        let words = if lead { self.lead() } else { self.words() };
+        match self {
+            Party::Legacy => format!("<span class=\"who-old\">{}</span>", esc(&words)),
+            _ => esc(&words),
+        }
+    }
+}
+/// `id` named in words when it is an identity, else itself: "you", "@lead", "orchestrator".
+pub fn party_words(id: &str) -> String {
+    Party::of(id).map_or_else(|| id.to_owned(), |p| p.words())
+}
+/// `id` as HTML when it is an identity (the old shared address muted), else itself escaped.
+pub fn party_html(id: &str, lead: bool) -> String {
+    Party::of(id).map_or_else(|| esc(id), |p| p.html(lead))
+}
+
 // ---- a step ----------------------------------------------------------------------------------
 
 /// How many characters of a step's title its name in words keeps (`StepRef::label`).
@@ -779,6 +840,24 @@ pub struct Confirm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_identity_is_named_as_itself_and_the_old_shared_address_as_stored_and_muted() {
+        assert_eq!(Party::of("owner"), Some(Party::You));
+        assert_eq!(party_words("owner"), "you");
+        assert_eq!(Party::You.lead(), "You");
+        assert_eq!(party_words("@lead"), "@lead");
+        assert_eq!(party_html("@lead", true), "@lead");
+        assert_eq!(party_html("sluice", true), "Sluice");
+        assert_eq!(
+            party_html("orchestrator", true),
+            "<span class=\"who-old\">orchestrator</span>"
+        );
+        // a step, or anything else, is not an identity: its page names it
+        assert_eq!(Party::of("a-7-draft"), None);
+        assert_eq!(Party::of("@Bad"), None);
+        assert_eq!(party_html("<b>", false), "&lt;b&gt;");
+    }
 
     #[test]
     fn a_duration_from_julian_days_does_not_lose_a_minute() {

@@ -202,6 +202,8 @@ impl SettingsState {
                 let doc = projects::board_doc(c, id)?;
                 let retired = projects::last_retirement(c, id)?;
                 let changes = field_changes(c, id)?;
+                let fallback = sluice_store::identities::fallback(c, id)?.unwrap_or_default();
+                let sessions = sessions(c, id)?;
                 Ok(ProjectSettingsView {
                     shared,
                     project,
@@ -210,6 +212,8 @@ impl SettingsState {
                     retired,
                     blocker,
                     changes,
+                    fallback,
+                    sessions,
                 })
             })
             .await
@@ -220,10 +224,11 @@ impl SettingsState {
 /// who did. A form keeps the settings revision it was drawn or last applied with while nobody
 /// else changes its field; when someone does, it says so and keeps that revision, so its Apply
 /// is refused as a conflict instead of writing over theirs.
-pub const FIELDS: [&str; 8] = [
+pub const FIELDS: [&str; 9] = [
     "name",
     "description",
     "icon",
+    "fallback",
     "resources",
     "prune_done_after",
     "prune_keep",
@@ -263,6 +268,37 @@ fn field_changes(
         }
     }
     Ok(changes)
+}
+/// The sessions registered in the project (SPEC §8.1: a session's readers row), by name, each
+/// with when it was last seen: its reader's last heartbeat or its last message, whichever is
+/// later ("" when it has neither).
+fn sessions(c: &rusqlite::Connection, id: ProjectId) -> sluice_store::Result<Vec<SessionView>> {
+    let mut q = c.prepare_cached(
+        "SELECT r.identity, max(coalesce(r.heartbeat_at,''), coalesce(m.at,'')) FROM readers r
+         LEFT JOIN (SELECT \"from\" AS who, max(at) AS at FROM messages WHERE project_id=?1 AND \"from\" LIKE '@%' GROUP BY \"from\") m ON m.who=r.identity
+         WHERE r.project_id=?1 AND r.stream=?2 AND r.thread='' ORDER BY r.identity",
+    )?;
+    let rows = q
+        .query_map(
+            rusqlite::params![id.to_string(), sluice_store::identities::READER_STREAM],
+            |r| {
+                Ok(SessionView {
+                    name: r.get(0)?,
+                    seen: r.get(1)?,
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .filter(|s| sluice_model::identity::is_session(&s.name))
+        .collect())
+}
+/// A session registered in the project and when it was last seen (RFC 3339, "" for never).
+#[derive(Clone, Debug, Serialize)]
+pub struct SessionView {
+    pub name: String,
+    pub seen: String,
 }
 struct CatalogSignatures<'a>(&'a views::FunctionCatalog);
 impl sluice_model::plan::SignatureProvider for CatalogSignatures<'_> {
@@ -317,6 +353,10 @@ pub struct ProjectSettingsView {
     pub blocker: Option<String>,
     /// Each setting's last change (`field_changes`): the record's seq and its author.
     pub changes: BTreeMap<&'static str, (i64, String)>,
+    /// Who answers its unowned units: a session's `@name`, `owner`, or "" for nobody.
+    pub fallback: String,
+    /// Its registered sessions, by name.
+    pub sessions: Vec<SessionView>,
 }
 impl ProjectSettingsView {
     /// The fns that can give a resource its capacity (they return `{capacity}`), with
@@ -442,8 +482,25 @@ impl ProjectSettingsView {
         sluice_store::artifacts::fingerprint(&serde_json::to_vec(&serde_json::json!({
             "shared":self.shared,"revision":self.project.settings_rev,"resources":self.resources,"blocker":self.blocker,
             "retired":self.retired.as_ref().map(|r| r.rev),
-            "doc":self.doc.rev
+            "doc":self.doc.rev,"sessions":self.sessions
         })).expect("owned views serialize"))
+    }
+    /// The fallback field's choices, as (value, words): nobody, each registered session, and
+    /// the current fallback kept when it is none of them (the owner, "you").
+    pub fn fallback_choices(&self) -> Vec<(String, String)> {
+        let mut out = vec![(String::new(), "none".to_owned())];
+        out.extend(
+            self.sessions
+                .iter()
+                .map(|s| (s.name.clone(), s.name.clone())),
+        );
+        if !self.fallback.is_empty() && !out.iter().any(|(v, _)| *v == self.fallback) {
+            out.push((
+                self.fallback.clone(),
+                views::ui::party_words(&self.fallback),
+            ));
+        }
+        out
     }
     pub fn render(&self, viewer: &Viewer, feedback: &Feedback) -> Result<TrustedHtml, PublicError> {
         let body = self.body(feedback).map_err(render_error)?;
@@ -499,6 +556,7 @@ impl ProjectSettingsView {
             "settings-live",
             "resource-status",
             "board-doc",
+            "sessions",
             "retire-status",
             "delete-guard",
         ]
@@ -699,6 +757,10 @@ fn update(request: &FieldChange) -> Result<UpdateProject, PublicError> {
             })?)
         }
         "description" => command.description = Some(request.value.clone()),
+        "fallback" => {
+            let value = request.value.trim();
+            command.fallback = Some((!value.is_empty()).then(|| value.to_owned()));
+        }
         "icon" => {
             command.icon = Some(Icon::text(&request.value).map_err(|e| e.into_public(false))?)
         }

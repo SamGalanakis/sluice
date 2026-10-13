@@ -327,8 +327,9 @@ async fn a_lane_row_says_its_question_and_a_note_to_many_is_drawn_once() {
         .find(|r| r.contains("Parser leak"))
         .unwrap();
     assert!(
-        own.contains("</a> to the orchestrator: <span class=\"lg-said\">")
-            && own.contains("</span> <a class=\"lg-thread\" href=\""),
+        own.contains(
+            "</a> to <span class=\"who-old\">orchestrator</span>: <span class=\"lg-said\">"
+        ) && own.contains("</span> <a class=\"lg-thread\" href=\""),
         "{own}"
     );
     // the unit page says the note once, in its step view's foot, by its sender's stage

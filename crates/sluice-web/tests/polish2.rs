@@ -113,7 +113,9 @@ async fn a_note_sent_to_many_is_one_entry_and_a_mixed_group_says_each_recipient(
     let head = between(list, "<p class=\"mg-head\">", "</p>");
     assert!(!head.contains("mg-to"), "{head}");
     assert!(
-        list.contains("<span class=\"m-to\">to <span class=\"who\">Orchestrator</span></span>"),
+        list.contains(
+            "<span class=\"m-to\">to <span class=\"who who-old\">orchestrator</span></span>"
+        ),
         "{list}"
     );
     // the conversation counts every message

@@ -277,16 +277,18 @@ impl LogNote {
     }
 }
 /// A sender or recipient as a log row names it: a step of the plan by its title and id,
-/// linked; the owner as you; anyone else by name. And whether it is a step.
+/// linked; the owner as you, a session by its `@name`, the old shared address muted
+/// (`ui::Party`); anyone else by name. And whether it is a step.
 fn who_html(
     id: &str,
     project: ProjectId,
     names: Option<&sluice_runtime::naming::ProjectNaming>,
     lead: bool,
 ) -> (String, bool) {
+    if let Some(party) = super::ui::Party::of(id) {
+        return (party.html(lead), false);
+    }
     match id {
-        "owner" => ((if lead { "You" } else { "you" }).into(), false),
-        "orchestrator" => ((if lead { "The orchestrator" } else { "the orchestrator" }).into(), false),
         "" => ("anyone".into(), false),
         id => match names.and_then(|n| n.naming.step(id)) {
             Some(name) => {
@@ -736,11 +738,11 @@ fn links(
         links.push((thread.to_owned(), super::threads::thread_url(project, thread), String::new(), String::new()));
     }
     // a question to the owner says who asked it first ("a-7-draft asked you: …"): a step
-    // asking is linked as any step is
+    // asking is linked as any step is, a session or the old shared address never
     let asker = field("from").filter(|from| {
         field("verb") == Some("ask")
             && field("to") == Some("owner")
-            && !["owner", "orchestrator"].contains(from)
+            && super::ui::Party::of(from).is_none()
     });
     if let Some(step) = field("step").or(asker) {
         let named = super::ui::StepRef::new(step, names.and_then(|n| n.naming.step(step)));

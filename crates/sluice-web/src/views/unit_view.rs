@@ -199,7 +199,7 @@ impl Draw<'_> {
                     } else {
                         ""
                     },
-                    esc(&self.unit.sender()),
+                    self.unit.sender_html(),
                     ui::ago(&self.unit.changed)
                 );
             }

@@ -540,7 +540,7 @@ pub struct StepView {
     pub lane_recipe: String,
 }
 /// What started a run after its step's first: a retry's author and reason (a completion
-/// action's, an orchestrator's, the owner's) and the feedback it sent with it; or an input it
+/// action's, a session's, the owner's) and the feedback it sent with it; or an input it
 /// reads changing, which made it stale.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct Restart {
@@ -573,7 +573,7 @@ impl Restart {
             "" => return String::new(),
             "owner" => "You retried it".to_owned(),
             _ if itself => "Sluice retried it on its own".to_owned(),
-            "orchestrator" => "The orchestrator retried it".to_owned(),
+            "orchestrator" => "<span class=\"who-old\">orchestrator</span> retried it".to_owned(),
             by if action => format!("<code>{}</code> sent it back", esc(by)),
             by => format!("{} retried it", esc(by)),
         };
@@ -597,7 +597,7 @@ impl Restart {
         let mut out = match by {
             "owner" => "You retried it".to_owned(),
             "" => "It was retried".to_owned(),
-            "orchestrator" => "The orchestrator retried it".to_owned(),
+            "orchestrator" => "<span class=\"who-old\">orchestrator</span> retried it".to_owned(),
             by if by == step || by == "sluice" => "Sluice retried it".to_owned(),
             by if self.reason.starts_with("conditional ") => {
                 format!("<code>{}</code> sent it back", esc(by))
@@ -2522,7 +2522,7 @@ fn load_cancels(
                 let who = match by.strip_prefix("step:").unwrap_or(by) {
                     "" => String::new(),
                     "owner" => ", by you".into(),
-                    "orchestrator" => ", by the orchestrator".into(),
+                    "orchestrator" => ", by orchestrator".into(),
                     by => format!(", by {by}"),
                 };
                 let words = kept["reason"].as_str().unwrap_or("");
@@ -2567,7 +2567,7 @@ fn load_cancels(
             let who = match by {
                 "" => String::new(),
                 "owner" => "you".into(),
-                "orchestrator" => "the orchestrator".into(),
+                "orchestrator" => "orchestrator".into(),
                 by if by == id => "sluice".into(),
                 by => by.to_owned(),
             };

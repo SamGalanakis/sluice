@@ -145,7 +145,10 @@ fn draw(view: &board::ProjectView, unit: &UnitView) -> Result<Drawn, askama::Err
         .and_then(|r| r.view())
         .map(|root| super::unit_view::held(root, unit))
         .unwrap_or_default();
-    let steps = super::unit_steps::of_unit(unit, &view.relations, false, "").html();
+    // its owner is its head's to say, once
+    let mut steps = super::unit_steps::of_unit(unit, &view.relations, false, "");
+    steps.owner.clear();
+    let steps = steps.html();
     let page = |band| UnitPage {
         unit,
         project: &view.project,

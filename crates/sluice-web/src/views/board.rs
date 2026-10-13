@@ -229,6 +229,9 @@ pub struct UnitView {
     pub settled: bool,
     pub steps: Vec<StepView>,
     pub rows: Vec<Vec<StepView>>,
+    /// Who answers its runs' questions (`steps.owner`, SPEC §8.1): a session's `@name` or
+    /// `owner`; "" when it is unowned.
+    pub owner: String,
     pub last_message: String,
     /// Who sent its last message, its thread and its id (its page draws it as a message).
     pub last_from: String,
@@ -310,6 +313,7 @@ impl UnitView {
             settled: unit.settled_in(&depths.settled),
             steps,
             rows: rows.into_values().collect(),
+            owner: String::new(),
             last_message: String::new(),
             last_from: String::new(),
             last_from_stage: String::new(),
@@ -445,15 +449,15 @@ impl UnitView {
             .to_owned()
     }
     /// Who sent its last message, in words: a step by its stage (its own or another unit's),
-    /// a session by its name (`@lead`), "orchestrator" (stored before sessions named
-    /// themselves), "you" (the owner), or "another unit" for a step of no stage elsewhere;
-    /// never a step's id.
+    /// an identity as `ui::Party` names it ("you", `@lead`, "sluice", "orchestrator" for one
+    /// stored before sessions named themselves), or "another unit" for a step of no stage
+    /// elsewhere; never a step's id.
     pub fn sender(&self) -> String {
+        if let Some(party) = super::ui::Party::of(&self.last_from) {
+            return party.words();
+        }
         match self.last_from.as_str() {
             "" => String::new(),
-            "orchestrator" => "orchestrator".into(),
-            "owner" => "you".into(),
-            from if sluice_model::identity::is_session(from) => from.into(),
             from => self
                 .steps
                 .iter()
@@ -462,6 +466,18 @@ impl UnitView {
                 .or_else(|| Some(self.last_from_stage.clone()).filter(|s| !s.is_empty()))
                 .unwrap_or_else(|| "another unit".into()),
         }
+    }
+    /// `sender` as HTML: the old shared address muted.
+    pub fn sender_html(&self) -> String {
+        match super::ui::Party::of(&self.last_from) {
+            Some(party) => party.html(false),
+            None => super::ui::esc(&self.sender()),
+        }
+    }
+    /// Its owner in words, who its runs' questions go to: a session's `@name`, "you" for the
+    /// owner; "" when it is unowned.
+    pub fn owner_words(&self) -> String {
+        super::ui::Party::of(&self.owner).map_or_else(String::new, |p| p.words())
     }
     /// Its first step that put a question to the owner its run waits on: its row says so.
     pub fn asking_step(&self) -> Option<&StepView> {
@@ -1175,7 +1191,14 @@ pub fn load_board(
     )?);
     let mut last = last_messages(c, project, &board)?;
     let cards = Cards::read(c, project)?;
+    let owners = owners(c, project)?;
     for unit in &mut board.units {
+        unit.owner = unit
+            .steps
+            .iter()
+            .find_map(|s| owners.get(s.id.as_str()))
+            .cloned()
+            .unwrap_or_default();
         if let Some((message, at, from, thread, id, received)) = last.remove(unit.id.as_str()) {
             unit.last_message = message;
             unit.changed = at;
@@ -1239,6 +1262,16 @@ pub fn load_board(
     // every fact read: how each step reads, its waits' words, the counts and the lines
     board.known(&plan, &state);
     Ok((board, plan))
+}
+/// Each owned step's owner (`steps.owner`, equal across a unit's steps), by step id.
+fn owners(c: &Connection, project: ProjectId) -> sluice_store::Result<BTreeMap<String, String>> {
+    let mut q = c.prepare_cached(
+        "SELECT step_id,owner FROM steps WHERE project_id=?1 AND owner IS NOT NULL",
+    )?;
+    let rows = q
+        .query_map([project.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
 }
 /// Note on each pending step the plan would start but its resources hold back why it is queued
 /// (`only`: that step alone).
@@ -1381,7 +1414,15 @@ pub fn load_step(
     let Some(home) = plan.units().values().find(|u| u.steps.contains(id)) else {
         return Ok(None);
     };
-    let unit = unit_of(home);
+    let mut unit = unit_of(home);
+    unit.owner = c
+        .prepare_cached("SELECT owner FROM steps WHERE project_id=?1 AND step_id=?2")?
+        .query_row(rusqlite::params![project.to_string(), id.as_str()], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .optional()?
+        .flatten()
+        .unwrap_or_default();
     let mut step = unit
         .steps
         .iter()

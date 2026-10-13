@@ -805,6 +805,13 @@ whole. A message line on a row names its sender in words (the
 sending step's stage, a session's `@name`, "orchestrator" for a message stored before sessions
 named themselves, or "you") and keeps to one line.
 
+**Who.** Every sender and recipient is named as the identity it is (`ui::Party`, a step by its
+`StepRef`): a session its `@name`, the owner "you" ("You" leading a sentence or as a
+conversation's chip), sluice "sluice". "orchestrator", the address messages were stored under
+before sessions named themselves, is shown as stored, in `ink-muted` at weight 500 (`who-old`),
+never "the orchestrator" and never rewritten. A unit's owner (`own`) is its `@name` (or "you")
+small in `ink-muted`; an unowned unit says nothing.
+
 ## Modules
 
 A module is a unit, a question or a step on the grid: an `article` spanning whole columns,
@@ -949,6 +956,9 @@ first part (its own row ringed).
   and after every patch (`data-now`: the last stretch's start, place and rate), as it does a
   running bar's end. A bar: 8px, `--chart-radius`; done `sky-ink`, running `run`, a look
   `sand-ink`, no result `idle`; earlier runs at 35%.
+- **The head**: the columns' names in `ink-muted` 12px, and after "Step" its unit's owner
+  (`own`), which a screen reader hears alone; under 560px the head keeps only the owner. The
+  unit page says the owner in its own head, so its view leaves it out.
 - **The foot**: "Last message", how long ago, its sender in words, its first line linking its
   thread.
 - **Selecting.** A row is the step's link: a click anywhere on it opens the step (in the drawer
@@ -1105,7 +1115,7 @@ The pages compose these parts; each lane that redraws one writes its section her
     a block a recipe (its name, linking to every unit it made, its count by state, its stages
     as the columns over its rows), then the units of no recipe and the loose steps. A row (72 to
     88px at 1440) is the unit's trace button: its glyph and word, how long it has run ("1h 51m",
-    and how long silent when quiet), then its title, two lines at most; under it one line, what holds a waiting unit
+    and how long silent when quiet), its owner small and muted (`@lash-f4`), then its title, two lines at most; under it one line, what holds a waiting unit
     (each source by title, linked, and what it is doing) or the recipe's `view` (else its last
     message, its sender in words); its cells close beside it, sized to them, on the recipe's
     columns (a loose step one cell; a unit of no recipe its steps, six to a line); its
@@ -1153,7 +1163,7 @@ The pages compose these parts; each lane that redraws one writes its section her
   three lines at most.
 - **A unit's page** (`/projects/id/<p>/units/<u>`): under the row, its head: its way back,
   its glyph and title with its Details (its id, recipe and params), how its steps stand, a short
-  recipe view on that line. On the sheet its recipe's view whole when it says more than a line,
+  recipe view on that line, its owner. On the sheet its recipe's view whole when it says more than a line,
   then Steps: its step view across the sheet (The step view), and under it a module for each
   step that needs the owner, in the view's order: the one asking on the coral rule, answered in
   place, a stop on the sand with why it stopped, each headed by its stage with its Details.
@@ -1243,7 +1253,9 @@ The pages compose these parts; each lane that redraws one writes its section her
   sections' index stands sticky in a quarter of the width, at most 300px (a scrolling row of
   tabs on a phone), each section beside it under a band section's head, each field a row (its
   name, then its form at 78ch); pause and archive are rows with a square switch; Delete sits on
-  the sand under its rule. (`settings.css` is folded into `style.css`.)
+  the sand under its rule. Details end with Fallback (a select of the project's sessions and
+  "none", applied in place as every field is) and, while any session is registered, Sessions:
+  one line, each its `@name` in ink and "seen 2m ago" muted. (`settings.css` is folded into `style.css`.)
 - **History** (`/history`): the third of the message views, its head its name as For you
   and Questions; the threads with the owner, counted in their section's head, a module each on
   the grid, as many to a row as fit

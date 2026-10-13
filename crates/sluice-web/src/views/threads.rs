@@ -238,17 +238,18 @@ impl ThreadView {
             .unwrap_or_default()
     }
     /// The thread by what it is about: a step's by the step's name ("work · Ship the cron
-    /// fix", `StepRef::label`), the orchestrator's, or a conversation's first message ("Can
-    /// the lane land today?").
+    /// fix", `StepRef::label`), a session's with the owner ("You and @lead"), the threads
+    /// from before sessions named themselves by the old shared address ("You and
+    /// orchestrator"), or a conversation's first message ("Can the lane land today?").
     pub fn name(&self) -> String {
         if let Some(step) = &self.step_name {
             return step.label();
         }
         if self.thread == sluice_store::messages::ORCHESTRATOR_STREAM {
-            return "Orchestrator".into();
+            return "orchestrator".into();
         }
         if self.thread == "owner" {
-            return "You and the orchestrator".into();
+            return "You and orchestrator".into();
         }
         // a session's own thread, which it and the owner talk on
         if self.thread.starts_with('@') {
@@ -278,8 +279,13 @@ impl ThreadView {
     /// Its page's heading: a step's thread by its step's heading (its stage muted, its title
     /// whole), as the step's own page has it; any other by its name.
     pub fn heading_html(&self) -> TrustedHtml {
+        let old = "<span class=\"who-old\">orchestrator</span>";
         match &self.step_name {
             Some(step) => step.heading_html(),
+            None if self.thread == sluice_store::messages::ORCHESTRATOR_STREAM => {
+                TrustedHtml::owned(old.into())
+            }
+            None if self.thread == "owner" => TrustedHtml::owned(format!("You and {old}")),
             None => TrustedHtml::owned(super::ui::esc(&self.name())),
         }
     }
@@ -739,8 +745,9 @@ pub fn unread_ids(
 // ---- a conversation: the one way every page draws messages ----------------------------------
 
 /// Who a message is from or to, as a conversation names them: the step the page is about
-/// ("This step"), another step (by its title, its id after it), the orchestrator, the owner
-/// ("You"), or any other name as itself.
+/// ("This step"), another step (by its title, its id after it), the owner ("You"), a session
+/// by its `@name`, or any other name as itself; "orchestrator", the shared address messages
+/// were stored under before sessions named themselves, muted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Who {
     This,
@@ -769,7 +776,7 @@ impl Who {
         TrustedHtml::owned(match self {
             Who::This => "<span class=\"who who-this\">This step</span>".into(),
             Who::Owner => "<span class=\"who who-you\">You</span>".into(),
-            Who::Orchestrator => "<span class=\"who\">Orchestrator</span>".into(),
+            Who::Orchestrator => "<span class=\"who who-old\">orchestrator</span>".into(),
             Who::Anyone => "<span class=\"who\">Anyone</span>".into(),
             Who::Other(name) => format!("<span class=\"who\">{}</span>", esc(name)),
             Who::Step(step) => format!(
@@ -782,13 +789,13 @@ impl Who {
             ),
         })
     }
-    /// Its name in plain words, as a sentence says it: a step's name (`StepRef::label`), "the
-    /// orchestrator", "you".
+    /// Its name in plain words, as a sentence says it: a step's name (`StepRef::label`), a
+    /// session's `@name`, "orchestrator", "you".
     pub fn name(&self) -> String {
         match self {
             Who::This => "this step".into(),
             Who::Step(step) => step.label(),
-            Who::Orchestrator => "the orchestrator".into(),
+            Who::Orchestrator => "orchestrator".into(),
             Who::Owner => "you".into(),
             Who::Anyone => "anyone".into(),
             Who::Other(name) => name.clone(),

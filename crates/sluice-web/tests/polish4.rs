@@ -176,7 +176,7 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     );
     assert!(
         asks.contains(&format!(
-            "<span class=\"pm-who\">The orchestrator</span> <span class=\"pm-what\">asks you: <a href=\"/projects/id/{id}/inbox#item-{id}-{orchestrator}\">Accept revision 3?</a>"
+            "<span class=\"pm-who\"><span class=\"who-old\">orchestrator</span></span> <span class=\"pm-what\">asks you: <a href=\"/projects/id/{id}/inbox#item-{id}-{orchestrator}\">Accept revision 3?</a>"
         )),
         "{asks}"
     );
@@ -667,7 +667,7 @@ async fn the_small_fixes_read_as_they_should() {
     )
     .await;
     let (_, history) = f.get("/history").await;
-    let card = between(&history, "You and the orchestrator", "</article>");
+    let card = between(&history, "You and orchestrator", "</article>");
     assert!(card.contains("<p class=\"t-ask\"><span class=\"t-ask-title\">Accept revision 3?</span><a class=\"tag ask\""), "{card}");
     assert!(card.contains(&format!("#message-{q}\"")), "{card}");
 }

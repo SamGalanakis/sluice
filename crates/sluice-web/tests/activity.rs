@@ -605,7 +605,7 @@ fn a_handed_over_message_reads_without_its_delivery_line() {
         unwrapped(
             "Message from orchestrator on your sluice thread `step-a`: You're on the critical path."
         ),
-        split("From Orchestrator", "You're on the critical path.")
+        split("From orchestrator", "You're on the critical path.")
     );
     assert_eq!(
         unwrapped(
@@ -657,7 +657,7 @@ async fn a_message_turn_whose_file_is_gone_reads_back_from_its_message() {
     let (_, html) = f.get(&format!("{}?activity=all", f.page())).await;
     let activity = section(&html);
     assert!(
-        activity.contains("<span class=\"act-lab\">From Orchestrator</span> <span class=\"act-x\">Your default is right.")
+        activity.contains("<span class=\"act-lab\">From orchestrator</span> <span class=\"act-x\">Your default is right.")
             && activity
                 .contains("<a class=\"act-ref\" href=\"#message-138999\"><code>#138999</code></a>"),
         "{activity}"
