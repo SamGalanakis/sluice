@@ -958,7 +958,8 @@ first part (its own row ringed).
   `sand-ink`, no result `idle`; earlier runs at 35%.
 - **The head**: the columns' names in `ink-muted` 12px, and after "Step" its unit's owner
   (`own`), which a screen reader hears alone; under 560px the head keeps only the owner. The
-  unit page says the owner in its own head, so its view leaves it out.
+  plan row and unit page already say the owner, so their step views leave it out. The
+  Runs tab keeps it in the step view's head.
 - **The foot**: "Last message", how long ago, its sender in words, its first line linking its
   thread.
 - **Selecting.** A row is the step's link: a click anywhere on it opens the step (in the drawer
@@ -1087,9 +1088,9 @@ The pages compose these parts; each lane that redraws one writes its section her
     each name whole, its state its glyph), the question's body, Answer primary, Open
     step, Message, Close question, its Details). Beside it, **Stopped**: each failed, cancelled
     or stale unit a module on the sand (its glyph and word, its failure's kind in a word, its
-    stage marks, the failure's sentence and what to try next (one advice with the step page,
-    `failure::Advice`), Retry with feedback first, the bare Retry quiet when the failure
-    repeated, Open step, Unit page, its Details). A failure's Details end with "Set it aside"
+    owner small and muted in the kind line when owned, its stage marks, the failure's sentence
+    and what to try next (one advice with the step page, `failure::Advice`), Retry with feedback
+    first, the bare Retry quiet when the failure repeated, Open step, Unit page, its Details). A failure's Details end with "Set it aside"
     under a hairline: Cancel and Cancel and dismiss, each an outlined row opening its
     confirmation ("Cancel <title>?"; Cancel and dismiss says Undo brings back the cancel, not
     the failure); with script both

@@ -157,7 +157,7 @@ pub struct View<'a> {
     /// What it is named for a screen reader: "Steps of Terns".
     pub label: String,
     /// Its unit's owner in words (`@lead`, "you"), small and muted in its head; "" when
-    /// unowned.
+    /// unowned or already named by its plan row or unit page.
     pub owner: String,
     pub steps: Vec<Step<'a>>,
     pub edges: Vec<Edge>,

@@ -2032,9 +2032,9 @@ whole there.
 bands that holds it: **For you** (a step of it asked the owner a question someone waits on:
 the question whole, a module under the coral rule with Answer, Open, Message and Close
 question; a session's questions too, by its name), **Stopped** (it reads as failed, cancelled or
-stale: a module with its glyph and word, its failure's kind, its stage marks, the failure's
-sentence and what to try next (the step page's advice, `failure::Advice`; on a failure that
-repeated the bare Retry is quiet), Retry with feedback and Retry, its Details (on a failure, under
+stale: a module with its glyph and word, its failure's kind, its owner small and muted in the
+kind line when owned, its stage marks, the failure's sentence and what to try next (the step
+page's advice, `failure::Advice`; on a failure that repeated the bare Retry is quiet), Retry with feedback and Retry, its Details (on a failure, under
 "Set it aside", Cancel, confirmed with "Cancel <title>?", and Cancel and dismiss, a
 confirmation that says Undo brings back the cancel, not the failure), and on a cancel a Dismiss, a form posting `dismiss` with no confirm
 (a cancel that set a failure aside says "It had failed: …" under its sentence); failures first, then cancels, then stale, the
@@ -2093,8 +2093,8 @@ progress (a scatter's items done of all, else the first short field of its live 
 with a bar for "a/b"; "—" for none), its runs as bars on one time axis every row shares (the
 current run whole, the earlier ones faint) and how long its current run took or has run. A head
 names the columns and the axis's labels, and after the first its unit's owner, small and muted
-(the unit page says it in its head instead); its foot is the unit's last message, when and from whom,
-linking its thread. The axis runs from the unit's first start to now while the unit is not
+on the Runs tab (the plan row and unit page already say it, so their step views leave it out);
+its foot is the unit's last message, when and from whom, linking its thread. The axis runs from the unit's first start to now while the unit is not
 done, else to its last end; "now" is the read's time rounded up to a step of a tenth of the time
 drawn or more (5 minutes at least), so the drawing changes once a step and never with the clock
 alone, and the page moves the now line and a running bar's end between. It is linear, but a run

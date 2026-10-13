@@ -857,7 +857,7 @@ impl<'a> Plan<'a> {
             ));
         }
         format!(
-            "<div id=\"s-{id}\" class=\"pl-item pl-stop\" tabindex=\"-1\" style=\"--span:{span}\"{attrs} data-said=\"{states}\">{open}{pick}<span class=\"mod-k\" id=\"k-s-{id}\">{role}{g}<b>{word}</b>{kind}<span class=\"quiet\">{said}</span>{marks}</span><span class=\"mod-t\">{title}</span>{pick_end}{menu}<div class=\"mod-body\">{body}</div><div class=\"mod-actions\">{actions}</div>{close}</div>",
+            "<div id=\"s-{id}\" class=\"pl-item pl-stop\" tabindex=\"-1\" style=\"--span:{span}\"{attrs} data-said=\"{states}\">{open}{pick}<span class=\"mod-k\" id=\"k-s-{id}\">{role}{g}<b>{word}</b>{kind}{owner}<span class=\"quiet\">{said}</span>{marks}</span><span class=\"mod-t\">{title}</span>{pick_end}{menu}<div class=\"mod-body\">{body}</div><div class=\"mod-actions\">{actions}</div>{close}</div>",
             id = esc(unit.id.as_str()),
             attrs = self.attrs(unit),
             states = esc(&states_said(unit)),
@@ -870,6 +870,7 @@ impl<'a> Plan<'a> {
             role = ui::trace_role(),
             g = ui::mark(shown),
             word = esc(shown.word()),
+            owner = owner_html(unit),
             // a failure's kind in a word ("quota", "lost", "cap") when it says more
             kind = step
                 .map(|s| s.caption())
@@ -1097,10 +1098,12 @@ impl<'a> Plan<'a> {
     /// A unit's step view (`unit_steps`) behind its disclosure, its steps opening in the
     /// drawer; which are open is the trace's to keep (`expanded`).
     fn steps_html(&self, unit: &UnitView) -> String {
+        let mut steps = super::unit_steps::of_unit(unit, &self.view.relations, true, "");
+        steps.owner.clear();
         ui::expand(
             unit.id.as_str(),
             &format!("Steps of {}", title(unit)),
-            &super::unit_steps::of_unit(unit, &self.view.relations, true, "").html(),
+            &steps.html(),
         )
         .0
     }
@@ -1330,8 +1333,8 @@ fn view_switch(href: &str, chosen: Option<&str>) -> String {
     format!("<nav class=\"view-switch\" aria-label=\"View\">{links}</nav>")
 }
 /// "a", "a and b", "a, b and c".
-/// A unit's owner, small and muted at the end of its row's state line: `@lead`, or "you";
-/// nothing when it is unowned.
+/// A unit's owner, small and muted on its row's state line or Stopped card: `@lead`, or
+/// "you"; nothing when it is unowned.
 fn owner_html(unit: &UnitView) -> String {
     let owner = unit.owner_words();
     if owner.is_empty() {
