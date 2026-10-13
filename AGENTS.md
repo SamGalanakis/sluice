@@ -80,6 +80,9 @@ Never `systemctl restart` a deploy-started transient unit; re-create it with `sy
   fails saying main is ahead of live (the push already happened). Only a rollback that fails
   itself, or a deploy with no previous selection, stays fenced; it prints the manual recovery
   commands.
+- Before rolling back to a release older than `step_bypass`, clear the waiting bypass presets
+  (`step_bypass(..., off=true)`; `status` shows them as a step's `bypass`): an older
+  coordinator ignores `steps.bypass` and launches those steps.
 - Incompatible storage changes require a new schema version and a drained, fenced migration
   with no live consumers of the old schema: a run's pinned `sluice` reads the database itself
   and refuses any other version. Schema 2 remains reserved for the historical interim board
