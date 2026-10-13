@@ -643,6 +643,7 @@ pub fn apply(
                 after,
                 inputs,
                 tags,
+                owner: _,
             } => match expand_unit(
                 &work,
                 recipes,

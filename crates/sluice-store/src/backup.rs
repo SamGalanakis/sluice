@@ -259,6 +259,15 @@ pub fn restore_into_fresh_home(src: &Path, dst: &Path) -> Result<BackupInfo> {
     let info = backup_connection(&source, &dst.join(DATABASE_FILE))?;
     if converts {
         convert::convert_home(&dst.join(DATABASE_FILE))?;
+    } else {
+        // A backup from before a column schema 3 added gains it on its private copy.
+        let mut copy = Connection::open_with_flags(
+            dst.join(DATABASE_FILE),
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        copy.busy_timeout(Duration::from_millis(50))?;
+        schema::verify_schema(&copy)?;
+        schema::conform(&mut copy)?;
     }
     // This verifies HomeId, format, schema, application_id and all 27 tables.
     schema::open_reader(dst, Duration::from_millis(50))?;

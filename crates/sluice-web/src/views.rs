@@ -374,9 +374,21 @@ pub struct ProjectView {
 pub struct AskView {
     pub message: i64,
     pub step: String,
+    /// Who asked: its step, a session (`@lead`), `sluice`, or `orchestrator` before
+    /// sessions named themselves.
+    pub from: String,
     pub title: String,
 }
 impl AskView {
+    /// Who asked when no step did, as a sentence starts: the session by its name, "Sluice",
+    /// or "The orchestrator" for a question from before sessions named themselves.
+    pub fn sender(&self) -> String {
+        match self.from.as_str() {
+            "orchestrator" | "" => "The orchestrator".into(),
+            "sluice" => "Sluice".into(),
+            from => from.into(),
+        }
+    }
     /// Where it is answered: its step's page, whose Overview draws it whole with Answer; a
     /// question no step asked, its card in the project's inbox.
     pub fn href(&self, project: &ProjectId) -> String {
@@ -1229,10 +1241,11 @@ pub(crate) fn load_asks(
             message: r.get(0)?,
             // a step asks on its own thread
             step: if thread.strip_prefix("step-") == Some(from.as_str()) {
-                from
+                from.clone()
             } else {
                 String::new()
             },
+            from,
             title: if title.trim().is_empty() {
                 threads::headline(&body, 90)
             } else {

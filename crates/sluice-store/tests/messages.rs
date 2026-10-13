@@ -112,11 +112,11 @@ impl Fixture {
             .unwrap()
     }
 }
-/// The orchestrator tells the owner something.
+/// A session, @orch, tells the owner something.
 fn draft(project: ProjectId, body: &str) -> Post {
     Post {
         project: ProjectSelector::Id(project),
-        speaker: Speaker::Orchestrator,
+        speaker: Speaker::Session(sluice_model::identity::SessionName::parse("@orch").unwrap()),
         body: body.into(),
         verb: Verb::Say {
             to: "owner".into(),
@@ -124,7 +124,7 @@ fn draft(project: ProjectId, body: &str) -> Post {
         },
     }
 }
-/// The orchestrator asks the owner.
+/// A session, @orch, asks the owner.
 fn asking(project: ProjectId, body: &str) -> Post {
     Post {
         verb: Verb::Ask {

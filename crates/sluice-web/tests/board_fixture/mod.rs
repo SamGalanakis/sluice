@@ -58,10 +58,11 @@ impl MessageCommands for Commands {
         Box::pin(async {
             Ok(CommandReply::Receipt(MessageReceipt {
                 id: MessageId(9),
-                to: "orchestrator".into(),
-                thread: "owner".into(),
+                to: "@lash-f4".into(),
+                thread: "@lash-f4".into(),
                 delivery: Delivery::Delivered,
                 run: None,
+                note: None,
             }))
         })
     }

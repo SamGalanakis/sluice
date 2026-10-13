@@ -1,6 +1,6 @@
 //! The project's board (docs("board")): drawn beside the plan from the project's own data,
 //! each data component filled on the server, a bad part an inline error box, and a Button a
-//! say to the orchestrator refused once the board has moved on.
+//! say to the project's fallback session refused once the board has moved on.
 mod board_fixture;
 mod plan_html;
 mod seed;
@@ -92,7 +92,7 @@ async fn every_data_component_is_filled_from_the_project_and_a_bad_query_is_an_e
 }
 
 #[tokio::test]
-async fn a_button_says_to_the_orchestrator_and_a_stale_board_refuses_it() {
+async fn a_button_says_to_the_fallback_session_and_a_stale_board_refuses_it() {
     let f = Fixture::new().await;
     let action = format!("/projects/id/{}/board/action", f.id);
     let (status, reply) = f
@@ -107,15 +107,13 @@ async fn a_button_says_to_the_orchestrator_and_a_stale_board_refuses_it() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{reply}");
-    assert_eq!(reply["message"], "Sent to the orchestrator.");
+    // The coordinator resolves who it reaches; the receipt names it.
+    assert_eq!(reply["message"], "Sent to @lash-f4.");
     let sent = f.commands.0.lock().unwrap().clone();
     let [CommandRequest::Say(say)] = sent.as_slice() else {
         panic!("{sent:?}")
     };
-    assert_eq!(
-        (say.to.as_str(), say.owner, say.run),
-        ("orchestrator", true, None)
-    );
+    assert_eq!((say.to.as_str(), say.owner, say.run), ("", true, None));
     assert_eq!(say.project, ProjectSelector::Id(f.id));
     assert_eq!(say.body, "Board: Retry the lane");
     assert_eq!(

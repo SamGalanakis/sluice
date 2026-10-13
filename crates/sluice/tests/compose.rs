@@ -128,7 +128,12 @@ impl Gate {
             Err(e) => panic!("command failed: {e:?}"),
         }
     }
-    fn try_rpc(&self, command: Value) -> Result<CommandReply, sluice_model::error::PublicError> {
+    fn try_rpc(
+        &self,
+        mut command: Value,
+    ) -> Result<CommandReply, sluice_model::error::PublicError> {
+        let verb = command["command"].clone();
+        speak_as_session(&verb, &mut command["args"]);
         let request = json!({"protocol":1,"request_id":"compose-test","run_capability":null,"command":command});
         let mut stream = UnixStream::connect(self.home.join("coordinator.sock")).unwrap();
         stream
@@ -212,7 +217,7 @@ impl Gate {
             .map(|l| serde_json::from_str(l).unwrap())
             .collect()
     }
-    /// The orchestrator tells `step` something: its receipt.
+    /// Session `@orch` tells `step` something: its receipt.
     fn say(&self, step: &str, body: &str) -> MessageReceipt {
         let CommandReply::Receipt(receipt) = self
             .rpc(json!({"command":"say","args":{"project":self.selector(),"body":body,"to":step}}))
@@ -631,7 +636,7 @@ fn native_factory(engine: &str) {
         // Port p5-05's addressed-input/feedback sequence and force the missing Stop.
         let config = g.temp.path().join("native-fixture.json");
         std::fs::write(config, json!({"prompts":g.temp.path().join("devin-prompts.jsonl"),"turns":[{"reply":"task done"},{"exit_before_stop":true}]}).to_string()).unwrap();
-        g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":"Resume after addressed input","reason":"fixture feedback","author":"fixture"}}));
+        g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":"Resume after addressed input","reason":"fixture feedback","author":"@fixture"}}));
         g.wait(|g| {
             g.status()["steps"]["work"]["run_ids"][0]
                 .as_str()
@@ -999,7 +1004,7 @@ fn fake_agent_submits_delivers_once_and_feedback_resumes_previous_session() {
         .count();
     assert_eq!(delivered, 1, "events: {:?}", g.events());
     g.script(json!({"outputs":{"summary":"resumed output"}}));
-    g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":"Continue the existing session","reason":"feedback","author":"test"}}));
+    g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":"Continue the existing session","reason":"feedback","author":"@test"}}));
     g.wait(|g| g.status()["steps"]["work"]["run_ids"][0] != first);
     let second = g.terminal("work");
     assert_eq!(second["status"], "succeeded", "{second}");
@@ -1790,7 +1795,7 @@ run(main)
             g.rpc(json!({"command":"log_wait","args":{"read":{"project":g.selector(),"since_seq":since,"kinds":null,"threads":null,"limit":50},"timeout_seconds":3,"questions_only":false}}))
         });
         let next = scope.spawn(|| {
-            g.rpc(json!({"command":"next","args":{"projects":[g.selector()],"since_seq":since,"me":"orchestrator","timeout_seconds":3,"all":false,"settle_seconds":1,"settle_max_seconds":1,"settles":"short"}}))
+            g.rpc(json!({"command":"next","args":{"projects":[g.selector()],"since_seq":since,"me":"@orch","timeout_seconds":3,"all":false,"settle_seconds":1,"settle_max_seconds":1,"settles":"short"}}))
         });
         std::thread::sleep(Duration::from_millis(300));
         std::fs::write(dir.join("again"), b"").unwrap();
@@ -1818,6 +1823,23 @@ run(main)
     assert_eq!(query(&g)["rows"][0][0], 1);
 }
 
+/// The orchestrator in these tests is session `@orch` (SPEC §8.1): a message the owner or a
+/// run does not send, it sends.
+const SESSION: &str = "@orch";
+fn speak_as_session(command: &Value, args: &mut Value) {
+    if ["say", "ask", "reply"].contains(&command.as_str().unwrap_or(""))
+        && args["owner"] != true
+        && args["run"].is_null()
+        && args.get("me").is_none()
+    {
+        args["me"] = json!(SESSION);
+    }
+}
+/// `@orch` registers in the gate's project (a `next` that returns at once), so the owner can
+/// write to it.
+fn register(g: &Gate) {
+    g.rpc(json!({"command":"next","args":{"projects":[g.selector()],"since_seq":0,"me":SESSION,"timeout_seconds":0,"all":false,"settle_seconds":0,"settle_max_seconds":0,"settles":"short"}}));
+}
 #[derive(Clone, Copy, Debug)]
 enum MessageTransport {
     Cli,
@@ -1843,6 +1865,9 @@ fn message_tool(
                 .env_remove("SLUICE_PROJECT")
                 .env_remove("SLUICE_STEP")
                 .args(["tool", name, "--project", &format!("id:{}", g.project)]);
+            if args.get("run").is_none() {
+                command.env("SLUICE_ME", SESSION);
+            }
             for (field, value) in args.as_object().unwrap() {
                 command.arg(format!("--{}", field.replace('_', "-")));
                 command.arg(
@@ -1861,6 +1886,9 @@ fn message_tool(
         }
         MessageTransport::Mcp => {
             args["project"] = json!(format!("id:{}", g.project));
+            if args.get("run").is_none() {
+                args["me"] = json!(SESSION);
+            }
             let server = sluice_web::mcp::McpServer::new(std::sync::Arc::new(
                 sluice_runtime::client::CoordinatorClient::new(&g.home),
             ));
@@ -1881,6 +1909,9 @@ fn message_tool(
     }
 }
 fn owner_question(g: &Gate, to: &str, body: &str) -> Value {
+    if to == SESSION {
+        register(g);
+    }
     let CommandReply::Receipt(receipt) = g.rpc(json!({"command":"ask","args":{
         "project":g.selector(),"to":to,"body":body,"owner":true
     }})) else {
@@ -1891,26 +1922,35 @@ fn owner_question(g: &Gate, to: &str, body: &str) -> Value {
 
 #[test]
 fn messages_default_to_inbox_through_cli_socket_and_mcp() {
+    // A session's own inbox is phase A2's (the inbox by `me`); the owner's shows the default.
     for transport in [
         MessageTransport::Cli,
         MessageTransport::Socket,
         MessageTransport::Mcp,
     ] {
         let g = Gate::new();
-        let question = owner_question(&g, "orchestrator", "Which parser?");
-        g.rpc(json!({"command":"say","args":{"project":g.selector(),"to":"orchestrator","body":"A note","owner":true}}));
-        g.rpc(json!({"command":"ask","args":{"project":g.selector(),"to":"owner","body":"Not in your inbox"}}));
-        let inbox = message_tool(&g, transport, "messages", json!({})).unwrap();
+        let CommandReply::Receipt(question) = g.rpc(json!({"command":"ask","args":{"project":g.selector(),"to":"owner","body":"Which parser?"}})) else { panic!("receipt") };
+        g.rpc(
+            json!({"command":"say","args":{"project":g.selector(),"to":"owner","body":"A note"}}),
+        );
+        owner_question(&g, SESSION, "Not in your inbox");
+        let inbox = message_tool(&g, transport, "messages", json!({"owner":true})).unwrap();
         assert_eq!(
             inbox["messages"].as_array().unwrap().len(),
             2,
             "{transport:?}: {inbox}"
         );
-        assert_eq!(inbox["messages"][0]["id"], question);
+        assert_eq!(inbox["messages"][0]["id"], json!(question.id));
         assert_eq!(inbox["messages"][1]["body"], "A note");
         assert_eq!(
             inbox,
-            message_tool(&g, transport, "messages", json!({"view":"inbox"})).unwrap()
+            message_tool(
+                &g,
+                transport,
+                "messages",
+                json!({"view":"inbox","owner":true})
+            )
+            .unwrap()
         );
     }
 }
@@ -1919,7 +1959,7 @@ fn messages_default_to_inbox_through_cli_socket_and_mcp() {
 fn reply_to_log_seq_has_the_same_refusal_through_cli_socket_and_mcp() {
     let g = Gate::new();
     g.plan(json!({"lane":{"run":"core.external"}}));
-    let question = owner_question(&g, "orchestrator", "Which parser?");
+    let question = owner_question(&g, SESSION, "Which parser?");
     let CommandReply::Records(page) = g.rpc(json!({"command":"log_read","args":{
         "project":g.selector(),"kinds":["plan.edit"],"limit":100
     }})) else {
@@ -1994,7 +2034,7 @@ fn reply_by_sender_selects_one_open_question_through_cli_socket_and_mcp() {
         MessageTransport::Mcp,
     ] {
         let g = Gate::new();
-        let question = owner_question(&g, "orchestrator", "Which parser?\nMore context");
+        let question = owner_question(&g, SESSION, "Which parser?\nMore context");
         // A question addressed to somebody else must never count as a candidate.
         g.plan(json!({"lane":{"run":"core.external"}}));
         owner_question(&g, "lane", "For the lane alone");
@@ -2010,7 +2050,7 @@ fn reply_by_sender_selects_one_open_question_through_cli_socket_and_mcp() {
             &g,
             transport,
             "messages",
-            json!({"view":"thread","thread":"owner"}),
+            json!({"view":"thread","thread":"@orch"}),
         )
         .unwrap();
         assert_eq!(history["messages"][0]["id"], question);
@@ -2022,11 +2062,11 @@ fn reply_by_sender_selects_one_open_question_through_cli_socket_and_mcp() {
         assert!(
             missing.contains("no open question")
                 && missing.contains("owner")
-                && missing.contains("orchestrator"),
+                && missing.contains(SESSION),
             "{transport:?}: {missing}"
         );
-        let a = owner_question(&g, "orchestrator", "First choice\nDetails not in the error");
-        let b = owner_question(&g, "orchestrator", "Second choice\nOther details");
+        let a = owner_question(&g, SESSION, "First choice\nDetails not in the error");
+        let b = owner_question(&g, SESSION, "Second choice\nOther details");
         let before = message_tool(&g, transport, "messages", json!({"view":"questions"})).unwrap();
         let ambiguous = message_tool(
             &g,
@@ -2069,12 +2109,19 @@ fn reply_by_sender_selects_one_open_question_through_cli_socket_and_mcp() {
         .unwrap();
         // A running step can also speak by sender, and selection is scoped to that caller.
         let g = Gate::new();
+        register(&g);
         g.plan(json!({"lane":{"run":"message.ask","in":{
-            "to":{"default":"orchestrator"},"body":{"default":"Lane question"},"title":{"default":"Lane decision"},"wait":{"default":true}
+            "to":{"default":"@orch"},"body":{"default":"Lane question"},"title":{"default":"Lane decision"},"wait":{"default":true}
         }}}));
         let _lease = g.lease();
         g.wait(|g| {
-            message_tool(g, MessageTransport::Socket, "messages", json!({})).unwrap()["messages"]
+            message_tool(
+                g,
+                MessageTransport::Socket,
+                "messages",
+                json!({"view":"questions"}),
+            )
+            .unwrap()["messages"]
                 .as_array()
                 .is_some_and(|m| m.len() == 1)
         });
@@ -2090,10 +2137,10 @@ fn reply_by_sender_selects_one_open_question_through_cli_socket_and_mcp() {
             &g,
             transport,
             "reply",
-            json!({"to":"orchestrator","body":"Lane response","run":run}),
+            json!({"to":"@orch","body":"Lane response","run":run}),
         )
         .unwrap();
-        assert_eq!(own_reply["to"], "orchestrator");
+        assert_eq!(own_reply["to"], "@orch");
         let thread = message_tool(
             &g,
             transport,
@@ -2123,8 +2170,8 @@ fn reply_by_sender_selects_one_open_question_through_cli_socket_and_mcp() {
 #[test]
 fn next_message_lines_include_ids_and_log_wait_keeps_them() {
     let g = Gate::new();
-    let ask = owner_question(&g, "orchestrator", "Question body");
-    let CommandReply::Receipt(say) = g.rpc(json!({"command":"say","args":{"project":g.selector(),"to":"orchestrator","body":"Note body","owner":true}})) else { panic!("receipt") };
+    let ask = owner_question(&g, SESSION, "Question body");
+    let CommandReply::Receipt(say) = g.rpc(json!({"command":"say","args":{"project":g.selector(),"to":"@orch","body":"Note body","owner":true}})) else { panic!("receipt") };
     let asked = message_tool(
         &g,
         MessageTransport::Socket,
@@ -2133,7 +2180,7 @@ fn next_message_lines_include_ids_and_log_wait_keeps_them() {
     )
     .unwrap();
     let CommandReply::Receipt(reply) = g.rpc(json!({"command":"reply","args":{"project":g.selector(),"to_message":asked["id"],"body":"Reply body","owner":true}})) else { panic!("receipt") };
-    let CommandReply::Next(next) = g.rpc(json!({"command":"next","args":{"projects":[g.selector()],"since_seq":0,"me":"orchestrator","timeout_seconds":1,"all":false,"settle_seconds":1,"settle_max_seconds":2,"settles":"short"}})) else { panic!("next") };
+    let CommandReply::Next(next) = g.rpc(json!({"command":"next","args":{"projects":[g.selector()],"since_seq":0,"me":"@orch","timeout_seconds":1,"all":false,"settle_seconds":1,"settle_max_seconds":2,"settles":"short"}})) else { panic!("next") };
     let next = serde_json::to_value(next).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_sluice"))
         .envs(&g.env)
@@ -2167,7 +2214,7 @@ fn next_message_lines_include_ids_and_log_wait_keeps_them() {
     ] {
         assert!(
             text.lines()
-                .any(|line| line == format!("{verb} #{id} owner owner -> orchestrator: {body}")),
+                .any(|line| line == format!("{verb} #{id} @orch owner -> @orch: {body}")),
             "{text}"
         );
         assert!(

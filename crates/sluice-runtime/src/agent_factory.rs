@@ -696,16 +696,16 @@ async fn acknowledge_delivery(
     })
     .await
 }
-/// Says `body` to the orchestrator for this run. Every try carries the same request id, so a
+/// Says `body` for this run to its unit's owner. Every try carries the same request id, so a
 /// try the coordinator committed but could not answer in time is never posted twice.
-async fn say_to_orchestrator(
+async fn say_to_owner(
     link: &impl CoordinatorLink,
     launch: &Launch,
     body: &str,
     cancel: &CancellationToken,
     patience: Patience,
 ) -> io::Result<()> {
-    // The run says it to the orchestrator; its step and thread are derived.
+    // The run names nobody: it says it to its unit's owner; its step and thread are derived.
     let command = C::Callback {
         identity: launch.identity.clone(),
         request: Box::new(RpcRequest {
@@ -714,10 +714,11 @@ async fn say_to_orchestrator(
             run_capability: Some(launch.capability.clone()),
             command: CommandRequest::Say(Say {
                 project: ProjectSelector::Id(launch.invocation.project),
-                to: "orchestrator".into(),
+                to: String::new(),
                 body: body.into(),
                 data: None,
                 run: Some(launch.identity.run),
+                me: None,
                 owner: false,
             }),
         }),
@@ -803,7 +804,7 @@ impl SupervisorHost for RunHost {
         ))
     }
     async fn note(&mut self, body: &str) -> io::Result<()> {
-        say_to_orchestrator(&self.link, &self.launch, body, &self.cancel, self.patience).await
+        say_to_owner(&self.link, &self.launch, body, &self.cancel, self.patience).await
     }
     async fn checkpoint(&mut self, checkpoint: &Checkpoint) -> io::Result<()> {
         checkpoint.save(&self.directory)?;
@@ -1147,7 +1148,7 @@ mod tests {
             requests: Mutex::default(),
         };
         let started = tokio::time::Instant::now();
-        say_to_orchestrator(
+        say_to_owner(
             &coordinator,
             &launch(),
             "quiet for 45 minutes",

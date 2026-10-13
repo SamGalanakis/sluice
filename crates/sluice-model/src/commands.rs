@@ -98,6 +98,15 @@ pub struct ProjectUpdate {
         skip_serializing_if = "Option::is_none"
     )]
     pub prune_keep: Option<Option<Vec<String>>>,
+    /// Who answers the project's unowned units (`@session` or `owner`); null clears it (they
+    /// go to `owner`), absent leaves it as it is.
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(extend("type" = ["string", "null"]))]
+    pub fallback: Option<Option<String>>,
     pub expected_settings_rev: Option<Revision>,
     pub reason: Option<String>,
     pub author: Option<String>,
@@ -228,6 +237,13 @@ pub struct StepAdd {
     pub spec: JsonMap,
     #[serde(default = "default_start")]
     pub start: bool,
+    /// Who answers the step's unit, for a new unit (`@session` or `owner`): else the editing
+    /// session, else the project's fallback. A step added to an existing unit takes its owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// The editing session, `@name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<String>,
     pub edit: EditOptions,
 }
 
@@ -247,6 +263,13 @@ pub struct UnitAdd {
     #[serde(default)]
     #[schemars(with = "std::collections::BTreeMap<String, JsonMap>")]
     pub inputs: indexmap::IndexMap<String, JsonMap>,
+    /// Who answers the new unit (`@session` or `owner`): else the editing session, else the
+    /// project's fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// The editing session, `@name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<String>,
     pub edit: EditOptions,
 }
 
@@ -409,13 +432,14 @@ pub struct MessageAnswer {
     pub values: Option<JsonMap>,
 }
 
-/// A question that needs a reply. `to` is a step of the project's current plan,
-/// `orchestrator` or `owner`; the thread and sender are derived, never given.
+/// A question that needs a reply. `to` is a step of the project's current plan, an
+/// `@session` or `owner`; the thread and sender are derived, never given (SPEC §8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Ask {
     pub project: ProjectSelector,
-    /// Required; a missing or unknown recipient is refused as `invalid`, never stored.
+    /// A session must name its recipient; a run that leaves it out (or gives the retired
+    /// `orchestrator`) asks its unit's owner. An unknown recipient is `invalid`, never stored.
     #[serde(default)]
     pub to: String,
     pub body: String,
@@ -423,8 +447,11 @@ pub struct Ask {
     pub ui: Option<String>,
     pub input: Option<String>,
     pub data: Option<JsonValue>,
-    /// The asking run: its step is the sender. Without it the caller is the orchestrator.
+    /// The asking run: its step is the sender.
     pub run: Option<RunId>,
+    /// The asking session, `@name`; a session with no name may not speak.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<String>,
     /// The dashboard speaks as the owner.
     #[serde(default, skip_serializing_if = "is_false")]
     pub owner: bool,
@@ -435,12 +462,14 @@ pub struct Ask {
 #[serde(deny_unknown_fields)]
 pub struct Say {
     pub project: ProjectSelector,
-    /// Required; a missing or unknown recipient is refused as `invalid`, never stored.
+    /// As `Ask::to`.
     #[serde(default)]
     pub to: String,
     pub body: String,
     pub data: Option<JsonValue>,
     pub run: Option<RunId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub owner: bool,
 }
@@ -460,6 +489,8 @@ pub struct Reply {
     pub body: String,
     pub answer: Option<MessageAnswer>,
     pub run: Option<RunId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub owner: bool,
 }
@@ -661,7 +692,10 @@ pub struct StepWaitResult {
 pub struct Next {
     pub projects: Vec<ProjectSelector>,
     pub since_seq: RecordSeq,
-    pub me: String,
+    /// The waiting session, `@name`: questions to it wake the wait, and its own messages and
+    /// pauses never do. Without one, a question to any session wakes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<String>,
     pub timeout_seconds: u64,
     pub all: bool,
     pub settle_seconds: u64,
@@ -848,7 +882,7 @@ impl Message {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Delivery {
-    /// A live listening run of the step was handed it (or an orchestrator/owner inbox).
+    /// A live listening run of the step was handed it (or a session's or the owner's inbox).
     Delivered,
     /// The step will run, and its next run is assigned it.
     Queued,
@@ -866,6 +900,11 @@ pub struct MessageReceipt {
     pub delivery: Delivery,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<RunId>,
+    /// Only on a session's message to a session nobody is reading ("queued; @x has no live
+    /// reader"): a run's receipt never carries it, so a run pinned to an older release decodes
+    /// its receipt as it always has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

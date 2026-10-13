@@ -649,12 +649,11 @@ impl sluice_store::plans::RetryMessages for Hooks {
         body: &str,
         author: &str,
     ) -> sluice_store::Result<()> {
-        let _ = author;
         sluice_store::messages::post(
             tx,
             sluice_store::messages::Post {
                 project: ProjectSelector::Id(project),
-                speaker: sluice_store::messages::Speaker::Orchestrator,
+                speaker: sluice_store::messages::Speaker::of_author(tx.sql(), project, author)?,
                 body: body.into(),
                 verb: sluice_store::messages::Verb::Say {
                     to: step.to_string(),

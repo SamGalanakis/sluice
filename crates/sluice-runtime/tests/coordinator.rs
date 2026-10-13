@@ -90,7 +90,7 @@ fn executor() -> ProcessIdentity {
 #[tokio::test]
 async fn claim_replay_is_same_identity_only_and_start_consumes_backlog_once() {
     let (_home, b, f, p) = setup().await;
-    b.command(request(json!({"command":"say","args":{"project":json!({"kind":"id","value":p}),"body":"feedback","to":"work","data":null,"run":null}}))).await.unwrap();
+    b.command(request(json!({"command":"say","args":{"project":json!({"kind":"id","value":p}),"body":"feedback","to":"work","data":null,"run":null,"me":"@orch"}}))).await.unwrap();
     b.acquire_scheduler("s".into()).await.unwrap();
     reconcile_project(&b, p, "s").await.unwrap();
     let l = f.0.lock().unwrap()[0].clone();
@@ -217,7 +217,8 @@ async fn claim_replay_is_same_identity_only_and_start_consumes_backlog_once() {
         .is_err()
     );
 }
-/// One ask, say or reply through the coordinator's command dispatch: its receipt.
+/// One ask, say or reply through the coordinator's command dispatch: its receipt. A caller
+/// that is neither the owner nor a run speaks as the session `@orch` unless it names `me`.
 async fn speak(
     b: &Coordinator<Fake>,
     p: ProjectId,
@@ -226,6 +227,9 @@ async fn speak(
 ) -> Result<MessageReceipt, PublicError> {
     let mut args = args;
     args["project"] = json!({"kind":"id","value":p});
+    if args.get("owner").is_none() && args.get("run").is_none() && args.get("me").is_none() {
+        args["me"] = json!("@orch");
+    }
     match b
         .command(request(json!({"command":verb,"args":args})))
         .await?
@@ -261,8 +265,8 @@ async fn message_count(b: &Coordinator<Fake>, p: ProjectId) -> (i64, i64) {
 #[tokio::test]
 async fn ask_say_and_reply_reach_every_recipient_on_derived_threads() {
     let (_home, b, _f, p) = setup().await;
-    // The orchestrator (no run identity) and the owner (the dashboard) speak to every
-    // recipient kind: a step of the plan, the orchestrator and the owner.
+    // A session (`@orch`) and the owner (the dashboard) speak to every recipient kind: a step
+    // of the plan, a session and the owner.
     let say_step = speak(&b, p, "say", json!({"to":"work","body":"steer"}))
         .await
         .unwrap();
@@ -283,21 +287,22 @@ async fn ask_say_and_reply_reach_every_recipient_on_derived_threads() {
     )
     .await
     .unwrap();
+    // A session and the owner talk on the session's own thread.
     assert_eq!(
         (ask_owner.thread.as_str(), ask_owner.delivery),
-        ("owner", Delivery::Delivered)
+        ("@orch", Delivery::Delivered)
     );
     let say_orch = speak(
         &b,
         p,
         "say",
-        json!({"to":"orchestrator","body":"fyi","owner":true}),
+        json!({"to":"@orch","body":"fyi","owner":true}),
     )
     .await
     .unwrap();
     assert_eq!(
         (say_orch.thread.as_str(), say_orch.delivery),
-        ("owner", Delivery::Delivered)
+        ("@orch", Delivery::Delivered)
     );
     let ask_step = speak(
         &b,
@@ -312,7 +317,7 @@ async fn ask_say_and_reply_reach_every_recipient_on_derived_threads() {
         &b,
         p,
         "ask",
-        json!({"to":"orchestrator","body":"go?","owner":true}),
+        json!({"to":"@orch","body":"go?","owner":true}),
     )
     .await
     .unwrap();
@@ -339,7 +344,7 @@ async fn ask_say_and_reply_reach_every_recipient_on_derived_threads() {
     .unwrap();
     assert_eq!(
         (closed.to.as_str(), closed.thread.as_str()),
-        ("orchestrator", "owner")
+        ("@orch", "@orch")
     );
     // A ui answer to a question no longer open conflicts; a plain reply is a message.
     assert!(matches!(
@@ -371,7 +376,7 @@ async fn ask_say_and_reply_reach_every_recipient_on_derived_threads() {
     assert_eq!(
         shape,
         vec![
-            (MessageVerb::Say, "orchestrator", Some("work"), None, None),
+            (MessageVerb::Say, "@orch", Some("work"), None, None),
             (
                 MessageVerb::Ask,
                 "owner",
@@ -379,17 +384,11 @@ async fn ask_say_and_reply_reach_every_recipient_on_derived_threads() {
                 Some(QuestionState::Answered),
                 Some(reply.id)
             ),
-            (
-                MessageVerb::Reply,
-                "orchestrator",
-                Some("owner"),
-                None,
-                None
-            ),
+            (MessageVerb::Reply, "@orch", Some("owner"), None, None),
         ]
     );
     assert_eq!(thread[2].to_message, Some(ask_step.id));
-    let owner = read_messages(&b, p, json!({"view":"thread","thread":"owner"})).await;
+    let owner = read_messages(&b, p, json!({"view":"thread","thread":"@orch"})).await;
     assert_eq!(owner[0].state, Some(QuestionState::Closed));
     assert_eq!(owner[0].answered_by, None);
     // Open questions, and each reader's own inbox.
@@ -409,12 +408,11 @@ async fn ask_say_and_reply_reach_every_recipient_on_derived_threads() {
                 .collect::<Vec<_>>()
         }
     };
-    // The orchestrator's: its open question first, then its unread notes and replies.
-    assert_eq!(
-        inbox(false).await,
-        vec![ask_orch.id, say_orch.id, closed.id, after.id]
-    );
+    // The owner's; a session's own inbox is not read by its name yet (`messages` reads the
+    // inbox of what was addressed to `orchestrator`, which a session's messages never are).
+    assert!(inbox(false).await.is_empty());
     assert_eq!(inbox(true).await, vec![reply.id]);
+    let _ = (ask_orch, say_orch, after);
 }
 #[tokio::test]
 async fn a_missing_unknown_or_removed_recipient_is_invalid_and_stores_nothing() {
@@ -426,7 +424,11 @@ async fn a_missing_unknown_or_removed_recipient_is_invalid_and_stores_nothing() 
         ("ask", json!({"to":"nobody","body":"x"})),
         ("ask", json!({"to":"Work","body":"x"})),
         ("say", json!({"to":"cli","body":"x"})),
-        ("say", json!({"to":"orchestrator","body":"to myself"})),
+        ("say", json!({"to":"orchestrator","body":"x"})),
+        ("say", json!({"to":"@orch","body":"to myself"})),
+        ("say", json!({"to":"@nobody","body":"x"})),
+        ("say", json!({"to":"work","body":"x","me":"orchestrator"})),
+        ("say", json!({"to":"work","body":"x","me":"owner"})),
         ("say", json!({"to":"work","body":" "})),
     ] {
         assert!(
@@ -505,6 +507,8 @@ async fn receipts_follow_the_step_from_pending_through_its_run_to_done() {
         .unwrap();
     assert_eq!((running.delivery, running.run), (Delivery::NoLiveRun, None));
     // The step's own run speaks on its thread, as its step.
+    // Naming the retired orchestrator, as a run of an older release does, it asks its unit's
+    // owner: unowned, with no fallback, the person.
     let own = speak(
         &b,
         p,
@@ -514,8 +518,8 @@ async fn receipts_follow_the_step_from_pending_through_its_run_to_done() {
     .await
     .unwrap();
     assert_eq!(
-        (own.thread.as_str(), own.delivery),
-        ("step-work", Delivery::Delivered)
+        (own.to.as_str(), own.thread.as_str(), own.delivery),
+        ("owner", "step-work", Delivery::Delivered)
     );
     let mine = read_messages(&b, p, json!({"view":"questions"})).await;
     assert_eq!(
@@ -725,7 +729,8 @@ async fn the_retired_message_post_is_bridged_for_a_run_and_refused_without_one()
     reconcile_project(&b, p, "s").await.unwrap();
     let l = f.0.lock().unwrap()[0].clone();
     let run = l.identity.run;
-    // An old agent's root post with no `to` asks the orchestrator; a note says it.
+    // An old agent's root post with no `to` asks its unit's owner (unowned: the person); a
+    // note says it.
     let CommandReply::Posted { id: asked } = b
         .command(retired(json!({"body":"which?","thread":"step-work","from":"work","run":run,"to":null,"needs_reply":true})))
         .await
@@ -784,9 +789,9 @@ async fn the_retired_message_post_is_bridged_for_a_run_and_refused_without_one()
     assert_eq!(
         shape,
         vec![
-            (MessageVerb::Ask, "work", Some("orchestrator"), Some(run)),
-            (MessageVerb::Say, "work", Some("orchestrator"), Some(run)),
-            (MessageVerb::Reply, "orchestrator", Some("work"), None),
+            (MessageVerb::Ask, "work", Some("owner"), Some(run)),
+            (MessageVerb::Say, "work", Some("owner"), Some(run)),
+            (MessageVerb::Reply, "@orch", Some("work"), None),
             (MessageVerb::Say, "work", Some("owner"), Some(run)),
         ]
     );
@@ -869,7 +874,7 @@ async fn a_watcher_sees_exactly_the_pinned_fields_of_each_verb_record() {
         (Some("message"), Some("ask"))
     );
     // The messages rows carry the same shape, plus a question's state.
-    let rows = read_messages(&b, p, json!({"view":"history"})).await;
+    let rows = read_messages(&b, p, json!({"view":"history","owner":true})).await;
     let row = serde_json::to_value(&rows[0]).unwrap();
     let mut keys: Vec<_> = row.as_object().unwrap().keys().cloned().collect();
     keys.sort();
@@ -967,7 +972,7 @@ async fn current_reserved_run_accepts_submissions_before_claim_and_after_feedbac
         );
         assert_eq!(b.submissions(run).await.unwrap().version, Some(1));
         if round == 0 {
-            b.command(request(json!({"command":"step_retry","args":{"project":{"kind":"id","value":p},"selection":{"steps":["work"],"tags":null},"message":"Continue with feedback","reason":"fixture","author":"fixture"}}))).await.unwrap();
+            b.command(request(json!({"command":"step_retry","args":{"project":{"kind":"id","value":p},"selection":{"steps":["work"],"tags":null},"message":"Continue with feedback","reason":"fixture","author":"@fixture"}}))).await.unwrap();
         }
     }
 }
@@ -1272,7 +1277,7 @@ async fn cancel_after_payload_grant_before_started_must_settle() {
 #[tokio::test]
 async fn cancelled_start_records_history_without_dispatch_and_adoption_settles() {
     let (home, b, f, p) = setup().await;
-    b.command(request(json!({"command":"say","args":{"project":{"kind":"id","value":p},"body":"feedback","to":"work","data":null,"run":null}}))).await.unwrap();
+    b.command(request(json!({"command":"say","args":{"project":{"kind":"id","value":p},"body":"feedback","to":"work","data":null,"run":null,"me":"@orch"}}))).await.unwrap();
     b.acquire_scheduler("s".into()).await.unwrap();
     reconcile_project(&b, p, "s").await.unwrap();
     let l = f.0.lock().unwrap()[0].clone();

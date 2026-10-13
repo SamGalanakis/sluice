@@ -208,7 +208,7 @@ struct ReplyBody {
     body: String,
     answer: Option<MessageAnswer>,
     action: Option<String>,
-    /// A new message's recipient: a step, or the orchestrator.
+    /// A new message's recipient: a step or an `@session`.
     to: Option<String>,
     /// A new message is a question (ask) rather than a note (say).
     #[serde(default)]
@@ -290,6 +290,7 @@ async fn mutate(
                 body: fields.body,
                 answer: fields.answer,
                 run: None,
+                me: None,
                 owner: true,
             }),
             (None, _) if fields.answer.is_some() => {
@@ -299,7 +300,7 @@ async fn mutate(
             }
             (None, None) => {
                 return Err(PublicError::Invalid {
-                    message: "to is required: a step of the plan or orchestrator".into(),
+                    message: "to is required: a step of the plan or an @session".into(),
                     errors: vec![],
                 });
             }
@@ -312,6 +313,7 @@ async fn mutate(
                 input: None,
                 data: None,
                 run: None,
+                me: None,
                 owner: true,
             }),
             (None, Some(to)) => CommandRequest::Say(Say {
@@ -320,6 +322,7 @@ async fn mutate(
                 body: fields.body,
                 data: None,
                 run: None,
+                me: None,
                 owner: true,
             }),
         };
@@ -411,6 +414,7 @@ async fn close_many(State(state): State<MessageState>, body: Bytes) -> Response 
                     values: None,
                 }),
                 run: None,
+                me: None,
                 owner: true,
             }))
             .await;

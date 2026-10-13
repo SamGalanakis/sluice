@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use sluice_model::{
     commands::{CommandReply, CommandRequest, Next, Query, RuntimeApi, Settles},
     error::PublicError,
+    identity::SessionName,
     ids::{ProjectId, ProjectSelector, RecordSeq},
     rpc::{JsonValue, decode_json},
 };
@@ -67,8 +68,9 @@ pub enum Mode {
         since_seq: Option<i64>,
         #[arg(long, value_name = "FILE")]
         cursor: Option<PathBuf>,
-        #[arg(long, default_value = "orchestrator", value_name = "NAME")]
-        me: String,
+        /// This session's name, @name (default: $SLUICE_ME): questions to it wake the wait.
+        #[arg(long, value_name = "@NAME")]
+        me: Option<String>,
         #[arg(long, default_value_t = 300, value_name = "S")]
         timeout: u64,
         #[arg(long, default_value_t = 20, value_name = "S")]
@@ -390,14 +392,8 @@ const TOOLS: &[(&str, &str)] = &[
     ("unit_tag", "tag or untag a unit"),
     ("edge_add", "add `after` ordering to a step"),
     ("edge_remove", "remove `after` ordering"),
-    (
-        "ask",
-        "ask a step, the orchestrator or the owner a question",
-    ),
-    (
-        "say",
-        "tell a step, the orchestrator or the owner something",
-    ),
+    ("ask", "ask a step, a session or the owner a question"),
+    ("say", "tell a step, a session or the owner something"),
     ("reply", "reply to a message (answers an open question)"),
     ("messages", "read a view of a project's messages"),
     ("mark_read", "record how far a thread's reader has read"),
@@ -436,7 +432,21 @@ fn local_tool(request: &CommandRequest) -> bool {
     )
 }
 
-fn cli_author() -> String {
+/// The caller's session name (SPEC §8.1): `--me`/`me` given, else `SLUICE_ME`. In a run
+/// (`SLUICE_RUN_ID` set) the run speaks as its step, so `SLUICE_ME` is not taken.
+fn cli_me(given: Option<&str>) -> Result<Option<SessionName>, PublicError> {
+    let in_run = std::env::var("SLUICE_RUN_ID").is_ok_and(|run| !run.trim().is_empty());
+    let env = (!in_run)
+        .then(|| std::env::var(sluice_model::identity::SLUICE_ME).ok())
+        .flatten();
+    sluice_model::identity::resolve_me(given, env.as_deref(), None)
+}
+/// The author rule (SPEC §12.3): the caller's session name, else SLUICE_AUTHOR, else
+/// `step:<id>` in a run, else "cli" (an explicit `author` wins over all of them).
+fn cli_author(me: Option<&SessionName>) -> String {
+    if let Some(me) = me {
+        return me.to_string();
+    }
     if let Ok(author) = std::env::var("SLUICE_AUTHOR")
         && !author.trim().is_empty()
     {
@@ -447,8 +457,8 @@ fn cli_author() -> String {
         _ => "cli".into(),
     }
 }
-/// The author rule (§4): explicit arg, else SLUICE_AUTHOR, else `step:<id>` in a
-/// run, else "cli". Only fills fields the command already carries.
+/// The author rule (§4): explicit arg, else the session's name, else SLUICE_AUTHOR, else
+/// `step:<id>` in a run, else "cli". Only fills fields the command already carries.
 fn fill_author(request: &mut CommandRequest, author: &str) {
     use sluice_model::commands::EditOptions;
     let fill = |slot: &mut Option<String>| {
@@ -732,7 +742,6 @@ async fn normalize_args(
         }
         "next" => {
             listify(args, "projects");
-            args.entry("me").or_insert(json!("orchestrator"));
             args.entry("all").or_insert(Value::Bool(false));
             args.entry("settles").or_insert(json!("short"));
             for (from, to, default) in [
@@ -1158,9 +1167,21 @@ async fn tool(home: &Path, argv: Vec<String>) -> Result<(), PublicError> {
     };
     sluice_web::tool_args::coerce_integers(&fields.schema, &mut args)?;
     run_defaults(&name, &fields, &mut args);
+    // The caller's name: kept for a command that takes it, and the author's default.
+    let me = match args.remove("me") {
+        None | Some(Value::Null) => cli_me(None)?,
+        Some(Value::String(me)) => cli_me(Some(&me))?,
+        Some(_) => return Err(bad_request("me must be a string, @name")),
+    };
+    if let Some(me) = &me
+        && sluice_web::mcp::wire_fields(&name).contains_key("me")
+    {
+        args.insert("me".into(), json!(me.as_str()));
+    }
+    let author = cli_author(me.as_ref());
     let request = if crate::plan_tools::handles(&name) {
         unit_add_shorthands(&name, &mut args);
-        crate::plan_tools::decode(&name, args, &cli_author())?
+        crate::plan_tools::decode(&name, args, &author)?
     } else {
         normalize_args(home, &name, &mut args).await?;
         let body = if name == "projects_list" {
@@ -1170,7 +1191,7 @@ async fn tool(home: &Path, argv: Vec<String>) -> Result<(), PublicError> {
         };
         let mut request: CommandRequest = decode_json(body.to_string().as_bytes())
             .map_err(|e| bad_request(format!("args: {e}")))?;
-        fill_author(&mut request, &cli_author());
+        fill_author(&mut request, &author);
         request
     };
     if !local_tool(&request) {
@@ -1369,7 +1390,7 @@ struct NextFlags {
     projects: Vec<String>,
     since_seq: Option<i64>,
     cursor: Option<PathBuf>,
-    me: String,
+    me: Option<String>,
     timeout: u64,
     settle: u64,
     settle_max: u64,
@@ -1444,10 +1465,11 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
         "none" => Settles::None,
         _ => unreachable!("clap restricted"),
     };
+    let me = cli_me(flags.me.as_deref())?.map(|me| me.to_string());
     let request = CommandRequest::Next(Next {
         projects,
         since_seq,
-        me: flags.me,
+        me,
         timeout_seconds: flags.timeout.min(3600),
         all: flags.all,
         settle_seconds: flags.settle,
@@ -1560,7 +1582,7 @@ async fn drain(
     release: bool,
 ) -> Result<(), PublicError> {
     ensure_home(home)?;
-    let author = cli_author();
+    let author = cli_author(cli_me(None)?.as_ref());
     let program = std::env::current_exe().map_err(storage)?;
     let client = ensure_coordinator(home, &program).await?;
     if release {

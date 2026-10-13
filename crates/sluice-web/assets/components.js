@@ -457,7 +457,7 @@ define("sluice-conversation", {
 });
 
 // ---- sluice-composer ---------------------------------------------------------------------------
-// The message box: a note or a question to its step or the orchestrator, posted as JSON without
+// The message box: a note or a question to its step or session, posted as JSON without
 // leaving the page (Ctrl or Cmd with Enter sends). The conversation's stream brings the message
 // in; the box keeps what is typed until then (`data-ignore-morph`). Without script it posts as a
 // form.

@@ -420,7 +420,8 @@ fn request_schemas_name_their_public_fields() {
             "preview_scope",
             "start",
             "reason",
-            "author"
+            "author",
+            "me"
         ]
     );
     assert_eq!(

@@ -52,6 +52,8 @@ pub fn project_selector(project: &str) -> String {
     }
 }
 /// The flag form of the message verbs, which needs no JSON quoting (SPEC §14).
+const TO: &str =
+    "To reach someone else, add `\"to\"`: a step id, an `@session` or `owner` (the person).";
 const FLAGS: &str = "Each verb also takes flags instead of the JSON, e.g. `sluice tool reply --to-message 12 --body-file -` with the body on stdin; in this run, project and run default to its own.";
 pub fn build(task: &str, values: &BTreeMap<String, Value>, ctx: &PromptContext) -> String {
     let mut text = String::new();
@@ -120,22 +122,18 @@ pub fn build(task: &str, values: &BTreeMap<String, Value>, ctx: &PromptContext) 
         let tool = |verb: &str, args: Value| {
             format!("`sluice tool {verb} {}`", shell_quote(&args.to_string()))
         };
-        let ask = tool(
-            "ask",
-            json!({"project":project,"run":ctx.run,"to":"orchestrator","body":"..."}),
-        );
-        let say = tool(
-            "say",
-            json!({"project":project,"run":ctx.run,"to":"orchestrator","body":"..."}),
-        );
+        // Naming nobody, a run's question or note reaches its unit's owner (SPEC §8.1); `to`
+        // takes a step id, an `@session` or `owner` to reach someone else.
+        let ask = tool("ask", json!({"project":project,"run":ctx.run,"body":"..."}));
+        let say = tool("say", json!({"project":project,"run":ctx.run,"body":"..."}));
         let reply = tool(
             "reply",
             json!({"project":project,"run":ctx.run,"to_message":"<id>","body":"..."}),
         );
         if ctx.listen {
-            text.push_str(&format!("\n\nMessages addressed to this step arrive in this session as they come, on its sluice thread `{thread}` of project `{project}`; you need not poll for them. Follow instructions addressed to you. If you hit a question you cannot settle within your task, ask the orchestrator with {ask} and continue with anything not blocked by it. To tell it something that needs no answer, use {say}. Answer a question you are asked with {reply}, giving its message id. Post questions and changes of scope, not progress. {FLAGS}"));
+            text.push_str(&format!("\n\nMessages addressed to this step arrive in this session as they come, on its sluice thread `{thread}` of project `{project}`; you need not poll for them. Follow instructions addressed to you. If you hit a question you cannot settle within your task, ask with {ask} (your unit's owner answers) and continue with anything not blocked by it. To tell your unit's owner something that needs no answer, use {say}. {TO} Answer a question you are asked with {reply}, giving its message id. Post questions and changes of scope, not progress. {FLAGS}"));
         } else {
-            text.push_str(&format!("\n\nTo ask the orchestrator a question, use {ask}; to tell it something that needs no answer, use {say}. Both land on this step's sluice thread `{thread}` of project `{project}`. {FLAGS}"));
+            text.push_str(&format!("\n\nTo ask a question, use {ask} (your unit's owner answers); to tell your unit's owner something that needs no answer, use {say}. Both land on this step's sluice thread `{thread}` of project `{project}`. {TO} {FLAGS}"));
         }
     }
     text

@@ -293,7 +293,7 @@ async fn rename_preserves_live_callbacks_next_reader_and_id_stream() {
     let attempt = AttemptId::new();
     f.writer.write(RetrySafety::NonIdempotent,move |tx| {
   seed::put(tx,id,json!({"steps":{"s":{"run":"core.external"}}}))?;
-  tx.sql().execute("UPDATE steps SET status='running',generation=1,work_generation=1,run_ids=?2 WHERE project_id=?1 AND step_id='s'",(id.to_string(),json!([run]).to_string()))?;
+  tx.sql().execute("UPDATE steps SET status='running',generation=1,work_generation=1,run_ids=?2,owner='@lead' WHERE project_id=?1 AND step_id='s'",(id.to_string(),json!([run]).to_string()))?;
   tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,generation,work_generation,phase,request,inputs_hash,created_at) VALUES (?1,?2,'s',1,1,'executing',?3,'hash','now')",(attempt.to_string(),id.to_string(),json!({"declared":{"result":"string"}}).to_string()))?;
   tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,generation,work_generation,created_at) VALUES (?1,?2,?3,'s',1,1,'now')",(run.to_string(),id.to_string(),attempt.to_string()))?;tx.changed(Some(id),"status");Ok(())
  }).await.unwrap();
@@ -321,6 +321,7 @@ async fn rename_preserves_live_callbacks_next_reader_and_id_stream() {
                 projects: vec![id],
                 settle: Duration::ZERO,
                 timeout: Some(Duration::from_secs(3)),
+                me: Some("@lead".into()),
                 ..Default::default()
             },
         )
@@ -336,7 +337,7 @@ async fn rename_preserves_live_callbacks_next_reader_and_id_stream() {
                     Ok(sluice_store::messages::reader(
                         c,
                         id,
-                        "orchestrator",
+                        "@lead",
                         sluice_store::messages::ORCHESTRATOR_STREAM,
                         "",
                     )?
@@ -391,7 +392,7 @@ async fn rename_preserves_live_callbacks_next_reader_and_id_stream() {
                 sluice_store::messages::reader(
                     c,
                     id,
-                    "orchestrator",
+                    "@lead",
                     sluice_store::messages::ORCHESTRATOR_STREAM,
                     "",
                 )?,

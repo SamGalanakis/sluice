@@ -17,9 +17,11 @@ use std::{
 };
 use support::home::ScratchHome;
 
+/// `sluice <args>` as session `@orch` (SPEC §8.1), outside any run.
 fn run(home: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_sluice"))
         .env("SLUICE_HOME", home)
+        .env("SLUICE_ME", "@orch")
         .env_remove("SLUICE_STEP")
         .env_remove("SLUICE_AUTHOR")
         .env_remove("SLUICE_RUN_ID")
@@ -447,7 +449,10 @@ fn a_project_through_the_tools() {
         read["numbered"],
         "     1\t## Phase\n     2\tGreen soon.\n     3\t## Asks\n     4\t- one\n     5\t- two\n"
     );
-    assert_eq!((&read["rev"], &read["author"]), (&json!(1), &json!("cli")));
+    assert_eq!(
+        (&read["rev"], &read["author"]),
+        (&json!(1), &json!("@orch"))
+    );
     // Several edits at once by rev-1 numbers: replace, delete, insert and append.
     let edited = run(
         home.path(),
@@ -758,7 +763,7 @@ fn project_with_steps(home: &Path) {
     );
 }
 
-/// The orchestrator asks (or tells) step `step`, on its thread `step-<step>`.
+/// Session `@orch` asks (or tells) step `step`, on its thread `step-<step>`.
 fn post(home: &Path, step: &str, body: &str, question: bool) {
     let out = tool(
         home,
@@ -1063,7 +1068,7 @@ fn a_bare_id_an_id_selector_and_the_name_reach_the_same_project() {
     let posted = tool(
         home.path(),
         "messages",
-        &json!({"project": "demo", "view": "thread", "thread": "owner"}).to_string(),
+        &json!({"project": "demo", "view": "thread", "thread": "@orch"}).to_string(),
     );
     assert_eq!(stdout(&posted)["messages"].as_array().unwrap().len(), 3);
     let unknown = sluice_model::ids::ProjectId::new();
@@ -1373,7 +1378,7 @@ fn tool_results_match_the_mcp_shapes() {
     assert!(settled["seq"].as_i64().unwrap() > 0, "{settled}");
 }
 
-/// `sluice tool ask/say/reply`: the orchestrator speaks (no run identity), the thread and
+/// `sluice tool ask/say/reply`: session `@orch` speaks (no run identity), the thread and
 /// sender are derived, each call prints its receipt, a bad recipient is `invalid` with
 /// nothing stored, and the retired `message_post` is refused without a run.
 #[test]
@@ -1414,10 +1419,11 @@ fn ask_say_and_reply_through_sluice_tool() {
     ));
     assert_eq!(
         (asked["thread"].as_str(), asked["delivery"].as_str()),
-        (Some("owner"), Some("delivered"))
+        (Some("@orch"), Some("delivered"))
     );
-    // The owner's question (the dashboard's, sent raw) is answered by the orchestrator.
-    let owner_ask = json!({"command":"ask","args":{"project":{"kind":"name","value":"p"},"to":"orchestrator","body":"which db?","owner":true}});
+    // The owner's question to @orch (the dashboard's, sent raw) is answered by @orch, on its
+    // own thread.
+    let owner_ask = json!({"command":"ask","args":{"project":{"kind":"name","value":"p"},"to":"@orch","body":"which db?","owner":true}});
     let raw = ok(run(home, &["tool", "rpc", &owner_ask.to_string()]));
     let question = raw["data"]["id"].clone();
     let replied = ok(tool(
@@ -1427,12 +1433,12 @@ fn ask_say_and_reply_through_sluice_tool() {
     ));
     assert_eq!(
         (replied["to"].as_str(), replied["thread"].as_str()),
-        (Some("owner"), Some("owner"))
+        (Some("owner"), Some("@orch"))
     );
     let thread = ok(tool(
         home,
         "messages",
-        r#"{"project":"p","view":"thread","thread":"owner"}"#,
+        r#"{"project":"p","view":"thread","thread":"@orch"}"#,
     ));
     let rows: Vec<(String, String, String, Value)> = thread["messages"]
         .as_array()
@@ -1450,28 +1456,18 @@ fn ask_say_and_reply_through_sluice_tool() {
     assert_eq!(
         rows,
         vec![
-            (
-                "ask".into(),
-                "orchestrator".into(),
-                "owner".into(),
-                json!("open")
-            ),
+            ("ask".into(), "@orch".into(), "owner".into(), json!("open")),
             (
                 "ask".into(),
                 "owner".into(),
-                "orchestrator".into(),
+                "@orch".into(),
                 json!("answered")
             ),
-            (
-                "reply".into(),
-                "orchestrator".into(),
-                "owner".into(),
-                Value::Null
-            ),
+            ("reply".into(), "@orch".into(), "owner".into(), Value::Null),
         ]
     );
     assert_eq!(thread["messages"][1]["answered_by"], replied["id"]);
-    // The orchestrator's inbox is what is addressed to it; the owner's is the owner's.
+    // A session's inbox waits for A2's per-session inbox; the owner's is the owner's.
     let inbox = ok(tool(home, "messages", r#"{"project":"p","view":"inbox"}"#));
     assert_eq!(inbox["messages"].as_array().unwrap().len(), 0);
     let owners = ok(tool(
@@ -1535,6 +1531,7 @@ fn tool_with(home: &Path, args: &[&str], env: &[(&str, &str)], stdin: Option<&st
     let mut command = Command::new(env!("CARGO_BIN_EXE_sluice"));
     command
         .env("SLUICE_HOME", home)
+        .env("SLUICE_ME", "@orch")
         .env_remove("SLUICE_STEP")
         .env_remove("SLUICE_AUTHOR")
         .env_remove("SLUICE_RUN_ID")
@@ -1587,7 +1584,7 @@ fn tool_takes_decimal_strings_for_integer_arguments() {
     let home = ScratchHome::new().unwrap();
     let home = home.path();
     project_with_steps(home);
-    let owner_ask = json!({"command":"ask","args":{"project":{"kind":"name","value":"p"},"to":"orchestrator","body":"which db?","owner":true}});
+    let owner_ask = json!({"command":"ask","args":{"project":{"kind":"name","value":"p"},"to":"@orch","body":"which db?","owner":true}});
     let question = ok(run(home, &["tool", "rpc", &owner_ask.to_string()]))["data"]["id"]
         .as_i64()
         .unwrap();
@@ -1596,11 +1593,11 @@ fn tool_takes_decimal_strings_for_integer_arguments() {
         "reply",
         &json!({"project":"p","to_message":question.to_string(),"body":"postgres"}).to_string(),
     ));
-    assert_eq!(replied["thread"], "owner");
+    assert_eq!(replied["thread"], "@orch");
     let thread = ok(tool(
         home,
         "messages",
-        r#"{"project":"p","view":"thread","thread":"owner","since":"0"}"#,
+        r#"{"project":"p","view":"thread","thread":"@orch","since":"0"}"#,
     ));
     assert_eq!(thread["messages"][0]["state"], "answered", "{thread}");
     let page = ok(tool(
@@ -1689,7 +1686,7 @@ fn tool_takes_flags_files_and_stdin() {
         &[],
         None,
     ));
-    let owner_ask = json!({"command":"ask","args":{"project":{"kind":"name","value":"p"},"to":"orchestrator","body":"which db?","owner":true}});
+    let owner_ask = json!({"command":"ask","args":{"project":{"kind":"name","value":"p"},"to":"@orch","body":"which db?","owner":true}});
     let question =
         ok(run(home, &["tool", "rpc", &owner_ask.to_string()]))["data"]["id"].to_string();
     let replied = ok(tool_with(
@@ -1712,7 +1709,7 @@ fn tool_takes_flags_files_and_stdin() {
         home,
         &["messages", "-", "--owner"],
         &[],
-        Some(r#"{"project":"p","view":"thread","thread":"owner"}"#),
+        Some(r#"{"project":"p","view":"thread","thread":"@orch"}"#),
     ));
     let bodies: Vec<&str> = inbox["messages"]
         .as_array()
@@ -1815,14 +1812,38 @@ fn tool_defaults_project_run_and_step_inside_a_run() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // An explicit null run keeps the orchestrator's voice.
-    let said = ok(tool_with(
+    // An explicit null run is not the run: inside a run's environment SLUICE_ME is not read,
+    // so it is anonymous and refused, and speaks as the session it names.
+    let out = tool_with(
         home,
         &["say", r#"{"run":null}"#, "--to", "owner", "--body", "hi"],
         &env,
         None,
+    );
+    assert!(
+        stderr(&out)["message"]
+            .as_str()
+            .unwrap()
+            .contains("name this session"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let said = ok(tool_with(
+        home,
+        &[
+            "say",
+            r#"{"run":null}"#,
+            "--to",
+            "owner",
+            "--body",
+            "hi",
+            "--me",
+            "@orch",
+        ],
+        &env,
+        None,
     ));
-    assert_eq!(said["thread"], "owner");
+    assert_eq!(said["thread"], "@orch");
     // step_submit gets project, step and run: the coordinator sees this run's submission.
     let out = tool_with(home, &["step_submit", "--outputs", "{}"], &env, None);
     assert_eq!(

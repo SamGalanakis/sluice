@@ -26,11 +26,11 @@ log — a question and its answer outlive the records that announced them.
   `run` and `unit` match every kind under them. `threads`: only messages on these threads
   (alone, it means messages only).
 - `statuses`: only `step.status` records whose `to` is one of these statuses. `recipients`:
-  only messages whose `to` is one of these (step ids, `orchestrator`, `owner`). Each narrows
+  only messages whose `to` is one of these (step ids, `@session` names, `owner`). Each narrows
   its own kind and lets every other kind through, so pair them with `kinds`. One standing wait
-  that wakes only on failures, stale steps and messages to you:
+  that wakes only on failures, stale steps and messages to you, session `@lead`:
   `log_wait(project, since_seq, kinds=["step.status", "message"], statuses=["failed",
-  "stale"], recipients=["orchestrator"])`.
+  "stale"], recipients=["@lead"])`.
 
 A record is `{"seq", "at", "project", "kind", ...}`. A `step.status` record adds `"step",
 "from", "to", "error", "run_ids", "needs"` (`error` is a structured error object or null),
@@ -67,9 +67,31 @@ unit), call `step_wait`; to wait for events (failures, messages to you), call `l
 `next`. Each answers the moment its condition holds and costs nothing while it waits; on a
 timeout, call it again with what it returned.
 
+## Who you are
+Every session names itself before it speaks: `@<name>`, a lowercase letter, then lowercase
+letters, digits or `-` (at most 40), for example `@lash-f4`. Pass `me="@lash-f4"` on your first
+call; over MCP that binds your session and every later call defaults to it (a different `me`
+on the same session is refused). From a shell, set `SLUICE_ME=@lash-f4` (or pass `--me`). The
+name is your identity, not your connection: a successor that reuses it carries on with your
+units and your messages.
+
+- Without a name you may read anything, but `ask`, `say` and `reply` are refused: "name this
+  session: pass me=@name or set SLUICE_ME".
+- `owner` is the person at the dashboard; only the dashboard speaks as it. `orchestrator` is
+  no longer a name or an address: messages from before sessions named themselves keep it.
+- A worker run speaks as its step; the coordinator's own alerts come from `sluice`.
+- Your writes are authored by your name, so the plan's history says which session did what.
+
+**Owners.** Every unit has an owner, who answers its workers: an `@session`, `owner` (the
+person), or nobody. A unit you add is yours: `step_add`, `unit_add` and `plan_edit` with your
+`me` make you its owner (`owner="@peer"` or `owner="owner"` names another; see
+`docs("plans")`). A step added to an existing unit keeps that unit's owner. The project's
+`fallback` answers unowned units: `project_update(project, fallback="@lash-f4")`; with no
+fallback, a worker of an unowned unit asks the person.
+
 ## Messages and threads
-Three verbs, each with a required recipient; the thread and the sender are derived, never
-given:
+Three verbs; the thread and the sender are derived, never given, and the recipient is checked
+and stored as resolved:
 
 - `ask(project, to, body, title?, ui?, input?, data?)`: a question that needs a reply.
 - `say(project, to, body, data?)`: a note; no reply is expected.
@@ -81,33 +103,44 @@ given:
   Give exactly one of `to_message` or `to`. With `to="work"`, answer `work`'s single open
   question addressed to you. No match is a `conflict` saying so; several matches are a
   `conflict` listing their ids and first body lines, cut to 200 characters. Choose an id to
-  disambiguate. In a run, "you" is that run's step; otherwise it is the orchestrator.
+  disambiguate. In a run, "you" is that run's step; otherwise it is your session (questions
+  sent to `orchestrator` before sessions named themselves count as yours too).
 
 From a shell, `sluice tool` takes the same arguments as one JSON object or as flags, a
 message's body from a file or stdin so it needs no quoting (`sluice tool reply --help` lists
 the fields). Inside a step's run, `project` and `run` default to the run's own:
 
 ```sh
+export SLUICE_ME=@lash-f4
 sluice tool ask --project myproj --to work --body 'Which schema version?'
 sluice tool reply --project myproj --to-message 24771 --body-file - <<'END'
 Use v3; it's on the "parser" branch.
 END
-sluice tool say --to orchestrator --body-file note.md      # in a step's run
+sluice tool say --body-file note.md      # in a step's run: to its unit's owner
 ```
 
-`to` is a step of the project's current plan, `orchestrator` or `owner`. Anything else (left
-out, an unknown or removed step, any other name, yourself) is `invalid` and nothing is
-stored. A message to or from a step lives on that step's thread, `step-<step>`; when a
-step's run speaks, the thread is its own step's. The orchestrator and the owner talk on the
-thread `owner`. You speak as the orchestrator; with `run` (a run id, `SLUICE_RUN_ID` inside
-a step) you speak as that run's step; the dashboard speaks as the owner.
+`to` is a step of the project's current plan, a session (`@name`) registered in the project,
+or `owner`. A session registers in a project with its first message, edit or `next` there, so
+a misspelt `@name` is refused rather than lost. You must name your recipient; anything else
+(left out, `orchestrator`, an unknown or removed step, an unknown session, yourself) is
+`invalid` and nothing is stored. A run may leave `to` out: its question or note goes to its
+unit's owner, else the project's fallback, else the person; a run of an older release that
+still says `to: "orchestrator"` reaches the same owner.
 
-Each of the three returns its receipt, `{id, to, thread, delivery, run?}`:
+A message to or from a step lives on that step's thread, `step-<step>`; when a step's run
+speaks, the thread is its own step's. A session and the owner talk on the session's thread,
+named as the session (`@lash-f4`); a message to another session lives on that session's
+thread. You speak as your session; with `run` (a run id, `SLUICE_RUN_ID` inside a step) you
+speak as that run's step; the dashboard speaks as the owner.
+
+Each of the three returns its receipt, `{id, to, thread, delivery, run?, note?}` (`to` as
+resolved):
 
 - `delivered`: a live run of the step that listens (its fn takes `listen`, as every agent
   fn does and a fn that runs one should, and the step does not bind `listen: false`) was
-  handed it on its live feed (`run` names it); to `orchestrator` or `owner` it is in their
-  inbox.
+  handed it on its live feed (`run` names it); to a session or `owner` it is in their
+  inbox. A session that has not waited (`next`) in the last 10 minutes still gets it, and the
+  receipt says so: `note: "queued; @peer has no live reader"`.
 - `queued`: the step will run (it is pending, or its run has not started yet) and its next
   run is assigned it.
 - `no_live_run`: the step has no live or upcoming run (it is paused, or its live run does
@@ -147,12 +180,14 @@ needed a reply, else a note).
   work still running, in it or in another unit, has not. It settles again each time it comes
   to rest differently (retried, its pause or a value acted on, then finished). Notes ride
   along in `notes`.
-  It returns `{records, notes, last_seq, timed_out}`. Pass `me` your name (default
-  `orchestrator`); `since_seq` defaults to 0, so pass the `last_seq` you hold.
+  It returns `{records, notes, last_seq, timed_out}`. With your name (`me`, or your session's
+  binding, or `SLUICE_ME` for `sluice next`) it wakes on questions to you; without one, on a
+  question to any session. `since_seq` defaults to 0, so pass the `last_seq` you hold. Each
+  wait also marks you as reading, which senders' receipts reflect.
 
 In a plan, the fns `message.ask`, `message.say` and `message.reply` take the tools'
 arguments and return `{id, receipt}` (`message.ask` also `reply`, below), speaking as the
-step. The `message.reply` fn selects by `to_message`; sender selection is for the `reply` tool.
+step; left without `to`, they reach the unit's owner. The `message.reply` fn selects by `to_message`; sender selection is for the `reply` tool.
 `message.wait` blocks a step until a message lands on a thread (`to` keeps only messages
 addressed to it; `timeout` defaults to 300 s, then `messages` is empty):
 
@@ -161,7 +196,7 @@ addressed to it; `timeout` defaults to 300 s, then `messages` is empty):
  "outputs": {"answer": {"source": "answer/messages"}},
  "steps": {
    "ask":    {"run": "message.ask",
-              "in": {"to": {"default": "orchestrator"}, "body": {"source": "question"}}},
+              "in": {"body": {"source": "question"}}},
    "answer": {"run": "message.wait",
               "in": {"thread": {"default": "step-ask"}, "since": {"source": "ask/id"},
                      "to": {"default": "ask"}, "timeout": {"default": 3600}}}}}
@@ -174,11 +209,11 @@ addressed to it; `timeout` defaults to 300 s, then `messages` is empty):
 
 The agent fns (`agent.devin`, `agent.codex`, `agent.claude`, `agent.review`, and so
 `agent.run`) give every agent running as a plan step its own thread, `step-<id>`, and tell it
-in the spec how to `ask` the orchestrator a question it cannot settle, `say` something that
-needs no answer and `reply` to a question it is asked, each with its run, and to send no
-progress reports. Messages to the step reach it live unless the step binds `listen: false`.
-A person is never asked through a step's thread: when the orchestrator needs one, it asks
-`to="owner"` (`docs("inbox")`).
+in the spec how to `ask` a question it cannot settle, `say` something that needs no answer
+(both to its unit's owner: you, for a unit you added) and `reply` to a question it is asked,
+each with its run, and to send no progress reports. Messages to the step reach it live unless
+the step binds `listen: false`. A person is never asked through a step's thread: when you need
+one, ask `to="owner"` (`docs("inbox")`).
 
 - To steer a running step, tell it: `say(project="myproj", to="work", body="skip the
   Windows build")`; the receipt says whether its live run got it (`delivered`). Messages to a

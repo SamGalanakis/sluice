@@ -12,12 +12,15 @@ a note is never read for having been shown.
 - `ask(project, to="owner", body, title=..., ui=..., input=..., data=...)` → its receipt
   `{id, to, thread, delivery}` (`docs("threads")`). `title` is the question in one line,
   `body` any context as markdown, `ui` an OpenUI Lang program with buttons or a form (below;
-  without it the person gets a text box). You ask as the orchestrator, on the thread `owner`;
-  a step's run asking (with its `run`) asks as its step, on its own thread.
+  without it the person gets a text box). You ask as your session (`me="@lash-f4"`,
+  `docs("threads")`), on your session's thread (`@lash-f4`); a step's run asking (with its
+  `run`) asks as its step, on its own thread. A worker of a unit the person owns (or of an
+  unowned one in a project with no fallback) asks the person directly.
 - Wait for the answer with `log_wait(project, since_seq, wake="questions")`, or let `next`
   return it: a `message` record is written for the question and for the reply. Or read the
-  `messages(project, view="inbox")` views: `"inbox"` (your open questions, then your unread notes and
-  replies; `owner: true` for the owner's), `"questions"` (every open question in the project,
+  `messages(project, view="inbox")` views: `"inbox"` (the open questions, then the unread notes and
+  replies, addressed to `orchestrator` before sessions named themselves; `owner: true` for the
+  owner's), `"questions"` (every open question in the project,
   whoever it is addressed to), `"history"` (threads you took part in), `"thread"` (one thread
   in full). Each question shows its `state`: `open`, `answered` (with `answered_by`) or
   `closed`.

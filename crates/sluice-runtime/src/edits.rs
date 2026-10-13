@@ -29,6 +29,7 @@ use sluice_model::{
 };
 use sluice_store::{
     ReadPool, WriteTransaction,
+    identities::{self, Editor, OwnerIntent},
     plans::{self, CommitOutcome, PruneEligibility},
 };
 use std::{
@@ -161,6 +162,61 @@ pub(crate) struct Preparation {
     pub cache: Arc<PlanCache>,
     /// A run's callback may edit only its own project.
     pub run_project: Option<ProjectId>,
+    /// A run's callback: the run's step, whose unit's owner a unit it adds takes.
+    pub run_step: Option<StepId>,
+}
+
+/// Who an edit's new units belong to, as the command asks (`identities::edit_owners` decides
+/// at commit): the editing session (`me`) or run, and the owners it names.
+fn owner_intent(
+    command: &CommandRequest,
+    run_step: Option<&StepId>,
+) -> Result<OwnerIntent, PublicError> {
+    use sluice_model::{identity::SessionName, plan_rows::PlanOp};
+    let (me, units, steps) = match command {
+        CommandRequest::StepAdd(r) => (
+            r.me.as_deref(),
+            vec![],
+            r.owner
+                .iter()
+                .map(|o| (r.step.clone(), o.clone()))
+                .collect(),
+        ),
+        CommandRequest::UnitAdd(r) => (
+            r.me.as_deref(),
+            r.owner
+                .iter()
+                .map(|o| (r.unit.to_string(), o.clone()))
+                .collect(),
+            vec![],
+        ),
+        CommandRequest::PlanEdit(r) => (
+            r.me.as_deref(),
+            r.ops
+                .iter()
+                .filter_map(|op| match op {
+                    PlanOp::UnitAdd {
+                        unit,
+                        owner: Some(owner),
+                        ..
+                    } => Some((unit.to_string(), owner.clone())),
+                    _ => None,
+                })
+                .collect(),
+            vec![],
+        ),
+        _ => (None, vec![], vec![]),
+    };
+    let editor = match (run_step, me.map(str::trim).filter(|m| !m.is_empty())) {
+        (Some(step), _) => Editor::Run(step.clone()),
+        (None, Some(me)) => Editor::Session(SessionName::parse(me)?),
+        (None, None) => Editor::Anonymous,
+    };
+    Ok(OwnerIntent {
+        editor,
+        units,
+        steps,
+    })
 }
 
 /// An edit prepared from a read snapshot, for the writer.
@@ -173,6 +229,8 @@ pub(crate) struct Staged {
     prune: Option<PruneSet>,
     /// The store's age evidence for an age-filtered `plan_prune`, rechecked by the commit.
     evidence: Option<PruneEligibility>,
+    /// Who the units the edit adds belong to.
+    owners: OwnerIntent,
 }
 /// What a commit hands back for the plan cache: the candidate and the revision it is.
 pub(crate) struct Committed {
@@ -195,24 +253,29 @@ impl Staged {
         tx: &mut WriteTransaction<'_>,
     ) -> sluice_store::Result<Option<Committed>> {
         crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
+        // Worked out before the rows move: a unit's owner is read from the rows it keeps.
+        let owners = identities::edit_owners(tx, self.project, &self.edit.commit, &self.owners)?;
         match plans::commit_plan_edit(tx, self.project, &self.edit.commit, self.evidence.as_ref())?
         {
             CommitOutcome::Stale => Ok(None),
-            CommitOutcome::Committed(rev) => Ok(Some(Committed {
-                reply: edit_reply(
-                    EditResult {
-                        project: self.identity,
-                        rev,
-                        preview: self.edit.preview,
-                        steps: self.edit.steps,
-                        board_warnings: self.edit.board_warnings,
-                    },
-                    self.inputs,
-                    self.prune,
-                ),
-                rev,
-                compiled: self.edit.compiled,
-            })),
+            CommitOutcome::Committed(rev) => {
+                identities::write_owners(tx, self.project, &owners)?;
+                Ok(Some(Committed {
+                    reply: edit_reply(
+                        EditResult {
+                            project: self.identity,
+                            rev,
+                            preview: self.edit.preview,
+                            steps: self.edit.steps,
+                            board_warnings: self.edit.board_warnings,
+                        },
+                        self.inputs,
+                        self.prune,
+                    ),
+                    rev,
+                    compiled: self.edit.compiled,
+                }))
+            }
         }
     }
 }
@@ -523,6 +586,7 @@ pub(crate) fn prepare(
         .into());
     }
     let identity = crate::coordinator::projects_identity(sql, project)?;
+    let owners = owner_intent(&input.command, input.run_step.as_ref())?;
     // Read before any signature (`Catalog::generation`), on every preparation: a catalog
     // republished since the last one is this one's.
     let generation = input.catalog.generation();
@@ -687,6 +751,7 @@ pub(crate) fn prepare(
             inputs,
             prune,
             evidence,
+            owners,
         })),
     ))
 }

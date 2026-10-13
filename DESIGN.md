@@ -227,7 +227,7 @@ kept.
 ## The generic rule
 
 The dashboard knows only sluice's own concepts: project, recipe, unit, step, status (the status
-table, `sluice_model::shown`), run, wait, message (owner, orchestrator, steps), progress fields,
+table, `sluice_model::shown`), run, wait, message (owner, sessions, steps), progress fields,
 outputs and the project's board document. Nothing in view code assumes a project's vocabulary.
 
 - **Stage columns** come from a unit's recipe's own steps, in recipe order. A project with
@@ -802,7 +802,8 @@ two lines, whole in the Details. Every preview goes through it: a step's progres
 its Progress module, the margin), Overview's outputs and a recipe's view on a unit's row and
 head (a "land sha" is in the unit's Details); only the Inputs and Outputs tabs draw every value
 whole. A message line on a row names its sender in words (the
-sending step's stage, "orchestrator" or "you") and keeps to one line.
+sending step's stage, a session's `@name`, "orchestrator" for a message stored before sessions
+named themselves, or "you") and keeps to one line.
 
 ## Modules
 

@@ -22,9 +22,14 @@ pub(crate) const SCHEMA: &str = include_str!("../migrations/0003.sql");
 /// The tables a schema-3 home has (`sqlite_%` excluded).
 pub(crate) const TABLES: i64 = 27;
 /// Columns added to schema 3 after homes existed, as `(table, column, definition)`. The writer
-/// adds the missing ones when it opens a home, before anything else touches it. Empty: every
-/// schema-1 addition is folded into `0003.sql`.
-const ADDED_COLUMNS: &[(&str, &str, &str)] = &[];
+/// adds the missing ones when it opens a home, before anything else touches it. Every
+/// schema-1 addition is folded into `0003.sql`. Each is nullable runtime metadata that a
+/// release pinned before it never reads, so a home carrying it serves them unchanged:
+/// - `steps.owner`: who answers the step's unit (`@session` or `owner`; NULL unowned), equal
+///   across a unit's rows (`identities`); never part of a declaration.
+/// - `projects.fallback`: who answers the project's unowned units (`@session` or `owner`).
+const ADDED_COLUMNS: &[(&str, &str, &str)] =
+    &[("steps", "owner", "TEXT"), ("projects", "fallback", "TEXT")];
 /// Views added to schema 3 after homes existed, as `(name, definition)`: the writer creates the
 /// missing ones with the columns. Empty in schema 3.
 const ADDED_VIEWS: &[(&str, &str)] = &[];
@@ -200,16 +205,15 @@ pub(crate) fn open_writer(home: &Path, timeout: Duration) -> Result<Connection> 
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
         transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         transaction.commit()?;
-    } else {
-        conform(&mut connection)?;
     }
+    conform(&mut connection)?;
     crate::messages::upgrade_dismissals(&mut connection)?;
     Ok(connection)
 }
 
 /// Add a verified home's missing `ADDED_COLUMNS` and `ADDED_VIEWS`, in one immediate
 /// transaction; a home already in shape is left alone.
-fn conform(connection: &mut Connection) -> Result<()> {
+pub(crate) fn conform(connection: &mut Connection) -> Result<()> {
     if missing_columns(connection)?.is_empty() && missing_views(connection)?.is_empty() {
         return Ok(());
     }

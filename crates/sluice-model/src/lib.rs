@@ -9,6 +9,7 @@ pub mod error;
 pub mod events;
 pub mod gates;
 pub mod hash;
+pub mod identity;
 pub mod ids;
 pub mod naming;
 pub mod openui;

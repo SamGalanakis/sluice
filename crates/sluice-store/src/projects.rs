@@ -514,6 +514,8 @@ pub struct UpdateProject {
     pub prune_done_after: Option<Option<u64>>,
     /// The keep patterns; `Some(vec![])` clears them, `None` leaves them.
     pub prune_keep: Option<Vec<String>>,
+    /// Who answers the unowned units (`identities`); `Some(None)` clears it, `None` leaves it.
+    pub fallback: Option<Option<String>>,
     pub expected_settings_rev: Option<Revision>,
     pub reason: Option<String>,
     pub author: String,
@@ -648,6 +650,15 @@ pub fn project_update(
                 rusqlite::params![id.to_string(), stored],
             )?;
             fields.push("prune_keep".into());
+        }
+    }
+    if let Some(fallback) = request.fallback {
+        let fallback = fallback.filter(|f| !f.trim().is_empty());
+        if fallback.as_deref().map(str::trim)
+            != crate::identities::fallback(tx.sql(), id)?.as_deref()
+        {
+            crate::identities::set_fallback(tx, id, fallback.as_deref())?;
+            fields.push("fallback".into());
         }
     }
     for (column, value) in [("paused", paused), ("archived", archived)] {

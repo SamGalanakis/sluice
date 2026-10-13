@@ -192,17 +192,13 @@ impl RetryMessages for Hooks {
         body: &str,
         author: &str,
     ) -> sluice_store::Result<()> {
-        // Retry feedback is said to the step: by the owner from the dashboard, else by
-        // the orchestrator.
+        // Retry feedback is said to the step by whoever retries: the owner from the dashboard,
+        // a session by its name (its author), a run or a completion action as its step.
         messages::post(
             tx,
             messages::Post {
                 project: ProjectSelector::Id(project),
-                speaker: if author == messages::OWNER_STREAM {
-                    messages::Speaker::Owner
-                } else {
-                    messages::Speaker::Orchestrator
-                },
+                speaker: messages::Speaker::of_author(tx.sql(), project, author)?,
                 body: body.into(),
                 verb: messages::Verb::Say {
                     to: step.to_string(),

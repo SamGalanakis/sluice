@@ -238,7 +238,9 @@ impl Default for ManualClock {
 pub struct NextOptions {
     pub projects: Vec<ProjectId>,
     pub since_seq: Option<RecordSeq>,
-    pub me: String,
+    /// The waiting session, `@name`, or none (an unnamed reader, kept as
+    /// `messages::ANONYMOUS_READER`).
+    pub me: Option<String>,
     pub timeout: Option<Duration>,
     pub all: bool,
     pub settle: Duration,
@@ -253,7 +255,7 @@ impl Default for NextOptions {
         Self {
             projects: vec![],
             since_seq: None,
-            me: "orchestrator".into(),
+            me: None,
             timeout: None,
             all: false,
             settle: Duration::from_secs(20),
@@ -326,11 +328,13 @@ async fn batch(
                                     errors: vec![],
                                 })?,
                                 msg,
-                                &options.me,
+                                options.me.as_deref(),
                             )?;
                             if wake {
                                 Classification::Wake
-                            } else if !msg.is_question() && msg.from != options.me {
+                            } else if !msg.is_question()
+                                && options.me.as_deref() != Some(msg.from.as_str())
+                            {
                                 Classification::Note
                             } else {
                                 Classification::Ignore
@@ -338,7 +342,7 @@ async fn batch(
                         }
                         Event::ProjectPause { author, .. }
                         | Event::ProjectArchive { author, .. }
-                            if author != &options.me =>
+                            if options.me.as_deref() != Some(author.as_str()) =>
                         {
                             Classification::Wake
                         }
@@ -369,6 +373,14 @@ pub async fn next_command(
     request: Next,
 ) -> Result<NextResult, PublicError> {
     let selectors = request.projects;
+    let me = request
+        .me
+        .as_deref()
+        .map(str::trim)
+        .filter(|me| !me.is_empty())
+        .map(sluice_model::identity::SessionName::parse)
+        .transpose()?
+        .map(|me| me.to_string());
     let selected = reads
         .snapshot(move |sql| {
             selectors
@@ -384,7 +396,7 @@ pub async fn next_command(
         NextOptions {
             projects: selected,
             since_seq: Some(request.since_seq),
-            me: request.me,
+            me,
             timeout: Some(Duration::from_secs(request.timeout_seconds)),
             all: request.all,
             settle: Duration::from_secs(request.settle_seconds),
@@ -404,7 +416,7 @@ pub async fn next(
     reads: &ReadPool,
     mut options: NextOptions,
 ) -> Result<NextResult, PublicError> {
-    if options.me.trim().is_empty()
+    if options.me.as_deref().is_some_and(|me| me.trim().is_empty())
         || options.since_seq.is_some_and(|s| s.0 < 0)
         || options.unread_alert_min.is_some_and(|n| n < 0)
     {
@@ -509,7 +521,10 @@ async fn beat(
     cursor: RecordSeq,
 ) -> Result<(), PublicError> {
     let projects = options.projects.clone();
-    let me = options.me.clone();
+    let me = options
+        .me
+        .clone()
+        .unwrap_or_else(|| messages::ANONYMOUS_READER.into());
     let threshold = options.unread_alert_min;
     let result=writer.write(RetrySafety::Idempotent,move|tx|{
         for project in projects{

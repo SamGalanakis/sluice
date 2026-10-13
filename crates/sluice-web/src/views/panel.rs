@@ -7,7 +7,7 @@
 //! tool's path and limits, with `?` bound to the project's id. A step is named by its id or as
 //! `tag:<tag>`, the one step carrying that tag. A component that cannot be drawn becomes an
 //! inline error box, and one whose data names a step the plan no longer has says so above it;
-//! the page never fails for either. A Button sends the orchestrator a `say` from the owner.
+//! the page never fails for either. A Button sends the project's fallback session a `say` from the owner.
 use super::board::{self, CatalogSignatures, Registry};
 use super::icons::{Icon, icon};
 use super::step::StepView;
@@ -22,7 +22,7 @@ use axum::{
 use serde::Serialize;
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::{CommandRequest, Say, UnitState},
+    commands::{CommandReply, CommandRequest, Say, UnitState},
     error::PublicError,
     ids::{ProjectId, ProjectSelector, Revision},
     openui::{self, Board, Component, Problem, Value as Ui},
@@ -1770,7 +1770,8 @@ fn error_response(error: PublicError) -> Response {
 }
 
 /// `POST /projects/id/<p>/board/action`: a board Button, as a form post (`board_rev`,
-/// `button`, `field-<n>`). It sends `say(to: orchestrator)` from the owner with data
+/// `button`, `field-<n>`). It sends a `say` from the owner, `to` left for the coordinator to
+/// resolve (the project's fallback session), with data
 /// `{board_rev, action, params, values}`; the board never edits the plan itself.
 async fn post_action(
     State(state): State<super::inbox::MessageState>,
@@ -1806,11 +1807,12 @@ async fn post_action(
             .await
             .map_err(|e| e.into_public(true))?;
         let action = action(program.as_deref(), current as u64, rev, button, &posted)?;
+        // Naming nobody, the owner's note goes to the project's fallback session.
         state
             .commands
             .command(CommandRequest::Say(Say {
                 project: ProjectSelector::Id(project),
-                to: "orchestrator".into(),
+                to: String::new(),
                 body: format!("Board: {}", action.label),
                 data: Some(sluice_model::rpc::JsonValue::try_from(action.data).map_err(
                     |e| PublicError::BadRequest {
@@ -1818,14 +1820,19 @@ async fn post_action(
                     },
                 )?),
                 run: None,
+                me: None,
                 owner: true,
             }))
             .await
     }
     .await;
     match result {
-        Ok(_) if wants_json(&headers) => {
-            axum::Json(json!({"ok": true, "message": "Sent to the orchestrator."})).into_response()
+        Ok(reply) if wants_json(&headers) => {
+            let to = match reply {
+                CommandReply::Receipt(receipt) => receipt.to,
+                _ => "the project's fallback".into(),
+            };
+            axum::Json(json!({"ok": true, "message": format!("Sent to {to}.")})).into_response()
         }
         Ok(_) => Redirect::to(&format!("/projects/id/{project}")).into_response(),
         Err(error) => error_response(error),

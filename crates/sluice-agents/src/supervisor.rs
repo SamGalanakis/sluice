@@ -745,7 +745,7 @@ impl Machine {
             let since = *self.dialog_since.get_or_insert(now);
             if now.saturating_sub(since) >= self.limits.dialog {
                 self.dialog_since = None;
-                return self.nudge("Nobody can answer here. Decide, or ask the orchestrator with `sluice tool ask` (to: \"orchestrator\") and continue the task.".into());
+                return self.nudge("Nobody can answer here. Decide, or ask with `sluice tool ask` (your unit's owner answers) and continue the task.".into());
             }
             return Ok(Action::None);
         }
@@ -1361,7 +1361,7 @@ fn enqueue_message(
     let body = message.body.as_value();
     let text = if let Some(object) = body.as_object() {
         let field = |key: &str| object.get(key).and_then(Value::as_str);
-        let from = field("from").unwrap_or("orchestrator");
+        let from = field("from").unwrap_or("someone");
         let thread = field("thread").unwrap_or("step");
         // A question says how to answer it: a reply to its id.
         let heading = match field("verb") {

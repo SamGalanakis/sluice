@@ -79,7 +79,8 @@ impl Fixture {
                 )?;
                 tx.sql().execute(
                     "INSERT INTO steps(project_id,step_id,position,declaration,unit,run,paused,priority)
-                     VALUES (?1,'work',0,'{\"run\":\"test.fn\"}','work','test.fn','false',0)",
+                     VALUES (?1,'work',0,'{\"run\":\"test.fn\"}','work','test.fn','false',0),
+                            (?1,'other',1,'{\"run\":\"test.fn\"}','other','test.fn','false',0)",
                     (project.to_string(),),
                 )?;
                 tx.changed(Some(project), "plan");
@@ -270,6 +271,8 @@ async fn ask_say_and_reply_commit_the_message_and_return_its_receipt() {
     let f = Fixture::new().await;
     let run = f.run("work", -1, 1, None).await;
     let ctx = f.ctx(Some(run), CancellationToken::new());
+    // Naming the retired orchestrator, the step's run tells its unit's owner: unowned, with
+    // no fallback, the person.
     let said = fns::dispatch(
         "message.say",
         &map(json!({"to": "orchestrator", "body": "progress note"})),
@@ -282,7 +285,7 @@ async fn ask_say_and_reply_commit_the_message_and_return_its_receipt() {
     assert!(!said.0.contains_key("reply"));
     assert_eq!(
         out(&said, "receipt"),
-        json!({"id": posted.id.0, "to": "orchestrator", "thread": "step-work", "delivery": "delivered"})
+        json!({"id": posted.id.0, "to": "owner", "thread": "step-work", "delivery": "delivered"})
     );
     assert_eq!(
         (posted.verb, posted.from.as_str()),
@@ -297,8 +300,9 @@ async fn ask_say_and_reply_commit_the_message_and_return_its_receipt() {
     .unwrap();
     assert_eq!(out(&asked, "reply"), Value::Null);
     let id = out(&asked, "id").as_i64().unwrap();
-    // The orchestrator (a fn called with no run) replies, to the asking step.
-    let ctx = f.ctx(None, CancellationToken::new());
+    // Another step's run replies, to the asking step.
+    let other = f.run("other", -1, 1, None).await;
+    let ctx = f.ctx(Some(other), CancellationToken::new());
     let replied = fns::dispatch(
         "message.reply",
         &map(json!({"to_message": id, "body": "that one"})),
@@ -314,7 +318,7 @@ async fn ask_say_and_reply_commit_the_message_and_return_its_receipt() {
     );
     for (name, inputs) in [
         ("message.say", json!({"to": "nobody", "body": "x"})),
-        ("message.ask", json!({"body": "x"})),
+        ("message.ask", json!({"to": "@nobody", "body": "x"})),
         ("message.reply", json!({"body": "x"})),
     ] {
         assert!(
@@ -358,14 +362,15 @@ async fn retired_message_post_still_runs_through_the_bridge_and_only_for_a_run()
         .unwrap();
     let thread = f.thread("step-work").await;
     assert_eq!(out(&note, "id"), json!(thread[0].id.0));
-    // A note to nobody goes to the orchestrator; a root post is a question.
+    // A note to nobody goes to the unit's owner (unowned: the person); a root post is a
+    // question.
     assert_eq!(
         (
             thread[0].verb,
             thread[0].to.as_deref(),
             thread[0].from.as_str()
         ),
-        (MessageVerb::Say, Some("orchestrator"), "work")
+        (MessageVerb::Say, Some("owner"), "work")
     );
     assert_eq!(thread[1].verb, MessageVerb::Ask);
 }

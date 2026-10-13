@@ -114,7 +114,7 @@ impl Fixture {
         self.broker.complete(journal(launch, result)).await.unwrap();
     }
     async fn retry(&self) {
-        command(&self.broker,json!({"command":"step_retry","args":{"project":json!({"kind":"id","value":self.project}),"selection":{"steps":["each"],"tags":null},"message":"try again","reason":"test","author":"test"}})).await;
+        command(&self.broker,json!({"command":"step_retry","args":{"project":json!({"kind":"id","value":self.project}),"selection":{"steps":["each"],"tags":null},"message":"try again","reason":"test","author":"@test"}})).await;
     }
     async fn patch(&self, rev: u64, ops: Value) {
         command(&self.broker,json!({"command":"plan_edit","args":{"project":json!({"kind":"id","value":self.project}),"rev":rev,"ops":ops,"start":true,"dry_run":false,"reason":"test","author":"test"}})).await;

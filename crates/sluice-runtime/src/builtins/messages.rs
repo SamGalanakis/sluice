@@ -76,12 +76,13 @@ pub fn descriptors() -> [BuiltinDescriptor; 5] {
     [
         BuiltinDescriptor {
             name: "message.ask",
-            doc: "Ask a question that needs a reply. to is a step of the plan, \
-orchestrator or owner; the thread and sender are derived. input names a plan input the \
+            doc: "Ask a question that needs a reply. to is a step of the plan, an \
+@session or owner; left out, it goes to the owner of the step's unit (else the project's \
+fallback, else owner). The thread and sender are derived. input names a plan input the \
 answer sets. wait: true blocks until the first answering reply, which it returns, and \
 fails when the question is closed. Returns the message id and its receipt.",
             inputs: ports(&[
-                ("to", "string"),
+                ("to", "string?"),
                 ("body", "string"),
                 ("title", "string?"),
                 ("ui", "string?"),
@@ -97,9 +98,9 @@ fails when the question is closed. Returns the message id and its receipt.",
         },
         BuiltinDescriptor {
             name: "message.say",
-            doc: "Tell a step of the plan, the orchestrator or the owner something; no \
-reply is expected. Returns the message id and its receipt.",
-            inputs: ports(&[("to", "string"), ("body", "string"), ("data", "Any?")]),
+            doc: "Tell a step of the plan, an @session or the owner something (left out, \
+the owner of the step's unit); no reply is expected. Returns the message id and its receipt.",
+            inputs: ports(&[("to", "string?"), ("body", "string"), ("data", "Any?")]),
             outputs: ports(&[("id", "int"), ("receipt", "Any")]),
             open: false,
             submits: vec![],
@@ -145,7 +146,8 @@ question, or at the timeout.",
             name: "message.post",
             doc: "Retired: use message.ask, message.say or message.reply. Plans written \
 before them still run: a reply when reply_to is given, else a question unless needs_reply \
-is false, to the orchestrator unless to names a recipient; thread and from are ignored.",
+is false, to the owner of the step's unit unless to names a recipient; thread and from are \
+ignored.",
             inputs: ports(&[
                 ("body", "string"),
                 ("thread", "string?"),
@@ -184,23 +186,25 @@ pub async fn dispatch(
     }
 }
 
-/// The fn's run speaks; a fn called with no run speaks as the orchestrator.
-fn speaker(ctx: &MessageCtx) -> Speaker {
-    ctx.run.map_or(Speaker::Orchestrator, Speaker::Run)
+/// The fn's run speaks: a message fn always runs as a run.
+fn speaker(ctx: &MessageCtx) -> Result<Speaker, FnFailure> {
+    ctx.run
+        .map(Speaker::Run)
+        .ok_or_else(|| terminal("a message fn speaks as its run"))
 }
 
 async fn ask(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> {
     let post = Post {
         project: ProjectSelector::Id(ctx.project),
-        speaker: speaker(ctx),
         body: required_string(inputs, "body")?,
         verb: Verb::Ask {
-            to: required_string(inputs, "to")?,
+            to: opt_string(inputs, "to")?.unwrap_or_default(),
             title: opt_string(inputs, "title")?,
             ui: opt_string(inputs, "ui")?,
             input: opt_string(inputs, "input")?,
             data: opt_json(inputs, "data"),
         },
+        speaker: speaker(ctx)?,
     };
     asking(post, flag(inputs, "wait")?, ctx, true).await
 }
@@ -208,12 +212,12 @@ async fn ask(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> {
 async fn say(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> {
     let post = Post {
         project: ProjectSelector::Id(ctx.project),
-        speaker: speaker(ctx),
         body: required_string(inputs, "body")?,
         verb: Verb::Say {
-            to: required_string(inputs, "to")?,
+            to: opt_string(inputs, "to")?.unwrap_or_default(),
             data: opt_json(inputs, "data"),
         },
+        speaker: speaker(ctx)?,
     };
     let posted = write_post(post, ctx).await?;
     receipt_output(&posted, None)
@@ -222,7 +226,6 @@ async fn say(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> {
 async fn reply(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> {
     let post = Post {
         project: ProjectSelector::Id(ctx.project),
-        speaker: speaker(ctx),
         body: opt_string(inputs, "body")?.unwrap_or_default(),
         verb: Verb::Reply {
             to_message: MessageId(
@@ -231,6 +234,7 @@ async fn reply(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure>
             ),
             answer: opt_answer(inputs)?,
         },
+        speaker: speaker(ctx)?,
     };
     let posted = write_post(post, ctx).await?;
     receipt_output(&posted, None)
@@ -345,6 +349,7 @@ async fn asking(
                     thread: question.thread.clone(),
                     delivery: Delivery::Delivered,
                     run: None,
+                    note: None,
                 },
                 message: question,
             };

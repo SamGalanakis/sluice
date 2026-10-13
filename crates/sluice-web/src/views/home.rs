@@ -308,7 +308,7 @@ impl HomeProject {
         let mut html = String::new();
         for ask in &p.asks {
             let who = if ask.step.is_empty() {
-                "<span class=\"pm-who\">The orchestrator</span>".to_owned()
+                format!("<span class=\"pm-who\">{}</span>", esc(&ask.sender()))
             } else {
                 format!(
                     "<span class=\"pm-who\">{}</span>",

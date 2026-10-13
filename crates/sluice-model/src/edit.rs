@@ -304,6 +304,7 @@ pub fn unit_add(
             after: after.clone(),
             inputs: inputs.clone(),
             tags: tags.to_vec(),
+            owner: None,
         }],
         ReplySteps::Added,
     ))

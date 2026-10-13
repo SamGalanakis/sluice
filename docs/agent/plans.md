@@ -259,6 +259,21 @@ own exits.
 `unit_add` tags every step it adds `unit:<unit>`; recipes tag their delivery step `exit` so
 cleanup stays out of the dependency.
 
+### Owners
+Every unit has an **owner**: who answers its workers' questions and notes, an `@session` or
+`owner` (the person), or nobody. A unit you add is yours: `step_add`, `unit_add` and
+`plan_edit` made with your session's name (`me`, `docs("threads")`) set it to you. To give it
+to someone else, pass `owner`: `unit_add(project, "lane", "fix-login", {...},
+owner="@lash-f5")` (or `owner="owner"` to have the person answer it; `plan_edit`'s `unit.add`
+and `step_add` take `owner` too). A session must be registered in the project (it has spoken,
+edited or waited there) to own a unit. A step added to an existing unit takes that unit's
+owner whoever adds it, and naming another is `invalid`. Edits that change a step never change
+its owner. A unit added with no session named belongs to the project's `fallback`
+(`project_update(project, fallback="@lash-f4")`), else to nobody; a worker of an unowned unit
+with no fallback asks the person. The owner never appears in the plan's export
+(`plan_get`) or history: it is not part of the plan. Read it with `query`: `SELECT unit,
+owner FROM steps WHERE project_id = ? GROUP BY unit`.
+
 ## Recipes: the same unit again and again
 When every unit of work has the same shape (a worktree, an agent working in it, the worktree
 removed), write it once as a recipe and add each unit with one call. A recipe is a file

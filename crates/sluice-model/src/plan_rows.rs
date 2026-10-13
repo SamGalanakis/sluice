@@ -619,6 +619,8 @@ impl StepChanges {
 
 /// One operation of `plan_edit`. Operations apply in order to one candidate (each sees what
 /// those before it did); the candidate is validated once, whole, and commits all or nothing.
+// A wire value decoded once per edit and held in a short list: `unit.add`'s size costs nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", deny_unknown_fields)]
 pub enum PlanOp {
@@ -665,6 +667,10 @@ pub enum PlanOp {
         inputs: IndexMap<String, JsonMap>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tags: Vec<String>,
+        /// Who answers the new unit (`@session` or `owner`): else the editing session, else
+        /// the project's fallback. Runtime metadata: never part of the plan's declaration.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<String>,
     },
     /// Change the unit's member steps, each by its exact id.
     #[serde(rename = "unit.update")]
@@ -774,6 +780,9 @@ pub struct PlanEditRequest {
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+    /// The editing session, `@name`: a new unit with no `owner` of its own is its.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<String>,
 }
 
 /// `unit_update`: change a unit's member steps by their exact ids.

@@ -441,7 +441,7 @@ async fn p605_pages_escape_programs_and_validate_projects_thread_and_reply_paylo
 }
 
 #[tokio::test]
-async fn the_owner_composes_ask_or_say_to_the_thread_step_or_the_orchestrator() {
+async fn the_owner_composes_ask_or_say_to_the_thread_step_or_session() {
     let (_home, writer, project, state, commands) = fixture().await;
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
@@ -450,12 +450,18 @@ async fn the_owner_composes_ask_or_say_to_the_thread_step_or_the_orchestrator() 
                 project,
                 serde_json::json!({"steps":{"work":{"run":"custom.open"}}}),
             )?;
+            // session @lead, registered in the project
+            tx.sql().execute(
+                "INSERT INTO readers(project_id,identity,stream,thread,cursor) VALUES (?1,'@lead','orchestrator','',0)",
+                [project.to_string()],
+            )?;
             Ok(())
         })
         .await
         .unwrap();
     post(&writer, project, serde_json::json!({"thread":"step-work"})).await;
     post(&writer, project, serde_json::json!({"thread":"step-gone"})).await;
+    post(&writer, project, serde_json::json!({"thread":"@lead"})).await;
     let page = |thread: &str| {
         let reads = state.dashboard.reads.clone();
         let thread = thread.to_owned();
@@ -477,13 +483,20 @@ async fn the_owner_composes_ask_or_say_to_the_thread_step_or_the_orchestrator() 
     assert!(html.as_str().contains("Message to work"));
     assert!(html.as_str().contains(r#"name="ask" value="true""#));
     assert!(!html.as_str().contains("needs_reply"));
-    // A step no longer in the plan: the owner writes to the orchestrator instead.
-    assert_eq!(page("step-gone").await.threads[0].recipient, "orchestrator");
+    // A step no longer in the plan: nobody to write to, so no composer.
+    let gone = page("step-gone").await;
+    assert_eq!(gone.threads[0].recipient, "");
+    let html = gone
+        .render(&Viewer::default(), "/thread", "/thread/stream")
+        .unwrap();
+    assert!(!html.as_str().contains(r#"name="to""#));
+    // A session's thread: the owner writes to that session.
+    assert_eq!(page("@lead").await.threads[0].recipient, "@lead");
     let router = inbox::router(state.clone());
     let url = format!("/projects/id/{project}/messages");
     for body in [
         serde_json::json!({"body":"which db?","to":"work","ask":true}),
-        serde_json::json!({"body":"fyi","to":"orchestrator"}),
+        serde_json::json!({"body":"fyi","to":"@lead"}),
     ] {
         let response = send(&router, &url, body).await;
         assert_eq!(response.status(), 200);
@@ -495,7 +508,7 @@ async fn the_owner_composes_ask_or_say_to_the_thread_step_or_the_orchestrator() 
     }
     let requests = commands.requests.lock().unwrap().clone();
     assert!(matches!(&requests[0], CommandRequest::Ask(a) if a.owner && a.to == "work"));
-    assert!(matches!(&requests[1], CommandRequest::Say(s) if s.owner && s.to == "orchestrator"));
+    assert!(matches!(&requests[1], CommandRequest::Say(s) if s.owner && s.to == "@lead"));
     let thread = page("step-work").await;
     let last = &thread.threads[0].messages.last().unwrap().message;
     assert_eq!(

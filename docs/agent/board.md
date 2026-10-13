@@ -14,7 +14,7 @@ hand-written part, plain prose for the owner, drawn where the program puts `Doc(
 `Heading` that opens the root `Stack` is the board's own title: the dashboard draws it as the
 column's head (else the head says "Board"). The dashboard says when you last set the program
 or edited the document and whether the plan has changed since (under the document, "Edited
-12m ago by orchestrator", once it is written; else under the head), so the board needs no
+12m ago by @lash-f4", once it is written; else under the head), so the board needs no
 "updated at" line of its own.
 
 ## Setting it
@@ -40,7 +40,7 @@ or edited the document and whether the plan has changed since (under the documen
 - Each change is a `project.board` log record: `{rev, cleared, reason, author}` (the program
   itself is not recorded).
 - A step's run may set its own project's board (`sluice tool board_set` in the run, or the
-  MCP tool), as the orchestrator can.
+  MCP tool), as a session can.
 - A plan edit (`plan_edit`, `step_remove`, the unit tools, any edit) that takes away a step
   the board names is made all the same, and its result carries `board_warnings` in the same
   form, so a rename never leaves a widget silently showing a step that is gone.
@@ -92,7 +92,7 @@ Read, then edit the lines that changed:
 
 ```
 board_doc_read(project="release")
-→ {"rev": 4, "updated_at": "2026-10-07T09:12:03Z", "author": "orchestrator",
+→ {"rev": 4, "updated_at": "2026-10-07T09:12:03Z", "author": "@lash-f4",
    "markdown": "## Where it stands\nMaking main green: 11 red targets left.\n\n## Needs you\n- Approve the paid S35 rows\n- Decide [#53](https://github.com/example/release/issues/53)\n",
    "numbered": "     1\t## Where it stands\n     2\tMaking main green: 11 red targets left.\n     3\t\n     4\t## Needs you\n     5\t- Approve the paid S35 rows\n     6\t- Decide [#53](https://github.com/example/release/issues/53)\n"}
 
@@ -118,12 +118,12 @@ steps tagged `main-tests` (and `unit` holds a step's unit). Rows of other tables
 
 The checks behind the warnings read the program as text, so they catch what is written down:
 - StepStatus's and Output's step, and a `tag:` selector anywhere: always.
-- LatestMessage's `from`, unless `owner` or `orchestrator`: when it is not a plan step but
+- LatestMessage's `from`, unless `owner`, `orchestrator` or an `@session`: when it is not a plan step but
   was one (a step result, a message from one of its runs or a status record names it).
 - A Metric's, Query's or Chart's SQL: each string compared with a column that holds step ids
   by `=`, `==` or `IN (...)`, on either side, bare or qualified (`s.step_id`): `step_id`
   always; a message's `from`, `to` or `thread` when the value was once a step (and never a
-  status word, `owner` or `orchestrator`).
+  status word, `owner`, `orchestrator` or an `@session`).
 - Not caught: `NOT IN`, `<>`, `LIKE` and `GLOB`, a value built by an expression or held in
   JSON, an author such as `step:x`, and a step id in a Markdown or Text.
 - A Metric's, Query's or Chart's SQL that compares `status` with `'failed'` and never reads
@@ -186,14 +186,14 @@ Fields and buttons:
 Data, filled from the project when the page draws:
 
 - `Units(state?: ("running" | "failed" | "settled" | "blocked" | "queued" | "pending")[])` — the units view's rows (`status(project, view="units")`): each unit (a link to its page) with how it reads, its steps' marks and what holds it. `state` only chooses the rows, in the units view's words: `failed` a unit with a failed or stale step (a cancel too, and one that also has a running step), `blocked` a held unit (paused, outside work, a plan input with no value, or behind a failure). Each row is drawn as the plan draws it, from the dashboard's one status table: a stale unit reads "stale", a cancel "cancelled" (■), a paused one "paused" (‖), outside work "outside" (↗), one behind a failure "blocked" (⊖), a quiet run "quiet" (◔). Without `state`, done units are left out and counted; name `settled` to see them.
-- `Doc(fallback?: string)` — the board's document (above) as markdown, with "Edited 12m ago by orchestrator" under it; until it is written, `fallback` (markdown, muted) or "Not written yet.". At most one per program.
+- `Doc(fallback?: string)` — the board's document (above) as markdown, with "Edited 12m ago by @lash-f4" under it; until it is written, `fallback` (markdown, muted) or "Not written yet.". At most one per program.
 - `StepStatus(step: string)` — the step's card: its state's glyph and word (as its card on the plan reads: "quiet", "stopping", "paused", "blocked", "queued", "outside", …), and why it waits ("Paused by the owner: …", "after up (cancelled)") or what failed. A link to the step.
 - `Output(step: string, field: string)` — the step's freshest value of `field`, cut short; "Not set yet." until it has one. While the step's progress (`step_progress`, `docs("fns")`) is newer than its outputs, that is the value, marked "live" while the step runs ("progress" after its run ended) with when it was set; once the step finishes with outputs, the output.
 - `Count(label: string, of: "failed" | "cancelled" | "stale" | "quiet" | "blocked" | "stopping" | "finishing" | "running" | "external" | "paused" | "held" | "queued" | "pending" | "manual" | "succeeded" | "skipped" | "steps")` — one number under its label, counted as the dashboard's own summary line counts it, each step once under the one state it reads as: a step the owner cancelled is `cancelled`, never `failed`; `quiet` is a running step that has written nothing past its threshold (two hours, or its `cadence:` tag), `stopping` one whose cancel was asked for, `finishing` one whose run has submitted, and `running` counts none of those; `external` is ready work outside sluice; `paused` is a step held by its own pause or its project's, `blocked` one behind a failure, `held` one reading a plan input with no value, `queued` one short of a resource, and `pending` never includes any of them; `manual` is a step set by hand, never `succeeded`; `steps` is every step. Prefer it to a Metric for these: a Metric's SQL sees a cancel as `status = 'failed'`.
 - `Metric(label: string, query: string)` — one number (the first column of the first row) under its label.
 - `Query(query: string, caption?: string)` — the result as a table (the first 50 rows).
 - `Chart(kind: "bar" | "line", query: string, caption?: string)` — a small chart of a two-column result: a label, then a number (the first 60 rows). `bar` draws a bar per row; `line` joins them in order.
-- `LatestMessage(from: string, chars?: number)` — the newest message in the project whose sender is `from` (a step id, or a name such as `orchestrator` or `owner`, as `messages` reports `from`), with its time: its body as markdown, cut to `chars` characters (default 280, at most 4000) with an ellipsis and a link to the whole message in its thread. With none, "No message from <from> yet.".
+- `LatestMessage(from: string, chars?: number)` — the newest message in the project whose sender is `from` (a step id, a session such as `@lash-f4`, or `owner`, as `messages` reports `from`), with its time: its body as markdown, cut to `chars` characters (default 280, at most 4000) with an ellipsis and a link to the whole message in its thread. With none, "No message from <from> yet.".
 
 Markdown:
 
@@ -213,7 +213,9 @@ reason; the rest of the board and the page still draw. Check a new board once on
 in the settings' preview.
 
 ## Buttons
-A Button sends you, the orchestrator, a `say` from the owner on the `owner` thread: its body is
+A Button sends a `say` from the owner to the project's fallback session
+(`project_update(project, fallback="@lash-f4")`; without one the press is refused), on that
+session's thread: its body is
 `Board: <label>` and its `data` is `{board_rev, action, params, values}` — `action` and
 `params` as the Button names them (`action` defaults to `"submit"`), `values` the fields of its
 Form (or every field outside a Form), by name: text as strings, a `number` Input as a number, a

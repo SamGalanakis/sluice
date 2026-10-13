@@ -415,6 +415,7 @@ impl settings::SettingsCommands for SocketSettings {
                     archived: request.archived,
                     prune_done_after: request.prune_done_after,
                     prune_keep: request.prune_keep.map(Some),
+                    fallback: request.fallback,
                     expected_settings_rev: request.expected_settings_rev,
                     reason: request.reason,
                     author: Some(request.author),

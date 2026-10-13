@@ -29,7 +29,9 @@ the agent-facing topics the `docs` tool serves.
 - **Run:** one execution of a step (one per scattered item) or of a call, in its own transient
   systemd unit under a guardian (§2.5, §7).
 - **Message:** a row on a project thread: a question (`ask`), a note (`say`) or a `reply`, to
-  a step, the orchestrator or the owner. Open questions to `owner` are the inbox (§8).
+  a step, a session (`@name`) or the owner. Open questions to `owner` are the inbox (§8).
+- **Identity:** who speaks and is addressed: a session names itself `@<name>`, the person at
+  the dashboard is `owner`, a run is its step (§8.1). A unit's **owner** answers its runs.
 - **Log:** each project's ordered records of what happened (edits, manual values, status
   changes, calls, messages, …), each with a home-wide `seq` (§9). History, not truth: `status`
   and `plan_get` are the current state.
@@ -412,6 +414,9 @@ A step's row also carries its progress (§6.4): `progress` (the JSON object of l
 run publishes some and cleared when the step's next run starts. `steps` is readable by `query`
 as it is, so `SELECT json_extract(progress, '$.red'), progress_at FROM steps WHERE project_id =
 ? AND step_id = 'tests-main'` reads a rolling step's latest count.
+
+A step's row carries its unit's owner in `owner`, and a project's row the `fallback` that answers
+its unowned units (both added columns, null until set; §8.1). Neither is part of a declaration.
 
 A run's row keeps who stopped or retried it, and why, in `stopped` (an added column, null until
 one does): `{"cancel": {author, reason, at}, "retry": {author, reason, at}}`. `step_cancel`
@@ -961,7 +966,7 @@ cancel already is left as it is, nothing written. Any other selected step (succe
 skipped, pending and not `core.external`) refuses the whole call. Reply `{"ok": true}`.
 
 `step_settle(project, step, reason?)` settles a finishing step (§6.4) on its submission, for
-the owner or the orchestrator (a run's callbacks may not). It is refused (`invalid`, saying
+the owner or a session (a run's callbacks may not). It is refused (`invalid`, saying
 why) unless the step is running, not scattered, and its one current run has stored a valid
 submission, and unless the step runs an agent fn itself (`agent.run`, `agent.codex`,
 `agent.devin`, `agent.claude`, `agent.review`, `decide.llm`). Its outputs are the ones the done
@@ -1062,8 +1067,8 @@ the project.
 
 ## 8. Messages
 
-Three verbs post a message, each with a required recipient; the thread and the sender are
-derived, never given:
+Three verbs post a message; the thread and the sender are derived, never given, and the
+recipient is resolved when it is posted (§8.1):
 
 - `ask(project, to, body, title?, ui?, input?, data?)`: a question that needs a reply.
 - `say(project, to, body, data?)`: a note; no reply is expected.
@@ -1081,15 +1086,17 @@ derived, never given:
   "no message N". A log seq is never resolved to a different message.
 
 Each takes `run?` too: the run that speaks (agent and fn callers; `sluice tool` fills it in a
-run, §14). The dashboard speaks as the owner (`owner: true`, which MCP and `sluice
-tool` do not take).
+run, §14), and `me?`: the session that speaks (§8.1). The dashboard speaks as the owner
+(`owner: true`, which MCP and `sluice tool` do not take).
 
-- `from` is derived: a run's step for a step's run (`orchestrator` for a call's run), `owner`
-  for the dashboard, `orchestrator` for MCP and command-line callers with no run identity,
-  `sluice` for the coordinator's own alerts.
-- `to`, for `ask` and `say`, is a step id in the project's current plan, `orchestrator` or
-  `owner`. Anything else (missing, empty, an unknown or removed step, another name, the sender
-  itself) is `invalid` and nothing is stored. A reply's `to` is the original's `from`.
+- `from` is derived: a run's step for a step's run (`call:<run>` for a call's run), the
+  session's `@name`, `owner` for the dashboard, `sluice` for the coordinator's own alerts. A
+  session with no name may not speak (§8.1).
+- `to`, for `ask` and `say`, is a step id in the project's current plan, an `@session`
+  registered in the project or `owner`; a run may leave it out (or give `orchestrator`) to
+  reach its unit's owner (§8.1). Anything else (an unknown or removed step, an unregistered
+  session, another name, the sender itself; from a session, nothing or `orchestrator`) is
+  `invalid` and nothing is stored. A reply's `to` is the original's `from`.
 - A step whose status is `succeeded`, `failed`, `stale` or `skipped`, or running with every
   run it has already submitted (its agents' sessions are over; the runs are only finishing),
   takes no messages: an `ask` or `say` to it, and a reply whose `to` it is (to a question it
@@ -1098,8 +1105,10 @@ tool` do not take).
   taken: the question is answered (setting its `input`) or closed, and the step's retry takes
   it up. A retry's message reaches the step after the retry has reopened it.
 - The thread: a reply keeps the original's; a message from a step's run lives on its own
-  step's thread `step-<step>`; one to a step on `step-<step>`; between the orchestrator and the
-  owner on the fixed thread `owner`.
+  step's thread `step-<step>`; one to a step on `step-<step>`; one between a session and the
+  owner on the session's thread, named as the session (`@lead`), and one between two sessions
+  on the recipient's; the coordinator's alerts to the owner on `owner`, where the orchestrator
+  and the owner talked before sessions named themselves.
 - A reply to an open question answers it (an **answering reply**) atomically: with or without
   `answer` `{action, params?, values?}`; `answer.action == "close"` closes it without setting
   anything. A reply to a question already answered or closed is just a message, but one with
@@ -1114,9 +1123,11 @@ tool` do not take).
 - An open question to `owner` reserves a notification attempt and writes a `project.notify`
   record (`outcome: reserved`). Notes, replies and questions to anyone else never notify.
 
-Each verb returns its receipt `{id, to, thread, delivery, run?}`. `delivery` is `delivered`
+Each verb returns its receipt `{id, to, thread, delivery, run?, note?}`: `to` is the resolved
+recipient. `delivery` is `delivered`
 when a live run of the step that listens has started and is handed the message on its live
-feed (`run` names it), and for `orchestrator` and `owner` (their inbox). A run listens when
+feed (`run` names it), and for a session and `owner` (their inbox); `note` says when a session
+recipient has no live reader (§8.1). A run listens when
 its fn takes a `listen` input (every agent fn, and a pack fn that runs one and passes
 `listen` on) and its inputs do not set it to `false`; its reservation freezes this, so the
 receipt reads stored rows, never which guardian protocol (a held watch or a poll) the run's
@@ -1141,7 +1152,8 @@ deleted with their project.
 The retired `message_post` is accepted only from a caller presenting a run identity (a run's
 callback, or `run`), as runs started on older releases still post: translated to `reply` when
 it names `reply_to`, else to `ask` unless `needs_reply` is false, else `say`, addressed to
-`orchestrator` when it names nobody; its `thread`, `from` and `author` are ignored. It answers
+the run's unit's owner when it names nobody (§8.1); its `thread`, `from` and `author` are
+ignored. It answers
 `{id}` and logs a deprecation line. It is not an MCP tool, not listed by `sluice tool` and not
 documented for agents.
 
@@ -1174,7 +1186,8 @@ asker; an answered one whose answer nobody claimed returns that answer at once. 
 answer (`claimed_by`) is never reused.
 
 `messages(project, view, thread?, since?, owner=false)` → `{project, messages, last_id}`, read
-as the caller: the owner for the dashboard and with `owner`, else the orchestrator:
+as the caller: the owner for the dashboard and with `owner`, else `orchestrator`, the inbox of
+what was addressed to the orchestrator before sessions named themselves:
 
 | view | shows |
 |---|---|
@@ -1186,6 +1199,69 @@ as the caller: the owner for the dashboard and with `owner`, else the orchestrat
 Read positions are kept per project, reader and thread and advance through `mark_read`; each
 message it passes to that reader also gets its `read_at` (an added column; older releases
 ignore it). The dashboard marks read, as `owner`, only when the owner asks (§13).
+
+### 8.1 Identities, owners and routing
+
+Every message's `from` and `to` is an identity:
+
+| identity | who | named by |
+|---|---|---|
+| `@<name>`, `^@[a-z][a-z0-9-]{0,39}$` | a session: an orchestrator's MCP connection or shell | itself (`me`) |
+| `owner` | the person, at the dashboard | the dashboard alone |
+| a step id | a run of that step (a call's run is `call:<run>`) | its run |
+| `sluice` | the coordinator's own alerts | nobody; it takes no messages |
+
+`orchestrator` is no longer an identity. Messages stored before sessions named themselves keep
+it, and it reads as "the orchestrator".
+
+**The caller's name** resolves in order: the call's `me` (every tool takes it); `SLUICE_ME` for
+`sluice tool`, `sluice next` and `sluice drain`, except in a run (`SLUICE_RUN_ID` set), which
+speaks as its step; the MCP session's binding. The first `me` an MCP session gives binds that
+session, its later calls default to it, and a different `me` on it is `invalid` ("this MCP
+session is @lead; a session keeps one name"). The name is the identity, not the connection: a
+successor that reuses `@name` inherits its units and what is addressed to it. With no name a
+session reads freely, but `ask`, `say`, `reply` and a `step_retry` with a `message` are
+refused: `invalid`, "name this session: pass me=@name or set SLUICE_ME". A `me` that is not a
+session name is `invalid` and says how to write one; `owner` (only the dashboard speaks as the
+owner), `orchestrator` and `sluice` are never names. A run that names `me` is refused: it
+speaks as its step. A write's `author` defaults to the session's name (§12.3).
+
+**Registration.** A session's first message, plan edit with `me`, or `next` naming it in a
+project adds its `readers` row there (stream `orchestrator`, thread `''`); that row is the
+registry. Its `heartbeat_at`, which `next` writes every 30 s while it waits, says whether the
+session is reading: it is when the heartbeat is under 10 minutes old.
+
+**Owner.** A unit's owner is who answers its runs: an `@session`, `owner` (the person) or
+nobody. It is `steps.owner` (an added column), equal across the unit's rows. When an edit adds
+a step to a unit that keeps rows the edit leaves there, the step takes that unit's owner. A new
+unit takes the owner the call names (`owner` on `step_add`, `unit_add` and `plan_edit`'s
+`unit.add`: `owner` or an `@session` registered in the project), else the editing session
+(`me`; a run's edit, its own unit's owner), else the project's `fallback`, else nobody. A step
+its tags move into another unit takes that unit's owner. Row updates never change it, and naming
+an owner other than an existing unit's is `invalid` ("unit u already exists, owned by @lead").
+The owner is runtime metadata, never part of a declaration: `plan_get`, the plan's history and
+the log never show it, and releases pinned before it never read it. Units added before owners
+are unowned. The project's `fallback` (an added column, set by `project_update(fallback)`; null
+clears it) is `owner` or an `@session` registered in the project, and answers its unowned
+units.
+
+**Routing.** `to` is resolved when the message is posted, and stored resolved:
+
+- A step id of the current plan, an `@session` registered in the project, or `owner`, as
+  given. Any other `@name` is `invalid` ("@laed is not a session of project p: …"), which
+  catches a typo.
+- A run that leaves `to` out, or gives `orchestrator` (runs pinned to older releases still do
+  until they drain), reaches its unit's owner, else the fallback, else `owner`. A call's run
+  reaches its caller when the caller is a session.
+- A session names its recipient: `to` left out, or `orchestrator`, is `invalid`.
+- The dashboard leaving `to` out (a board Button) reaches the fallback session; without one it
+  is refused.
+- A reply goes to the message's `from`; `reply(to=…)` chooses among the open questions to the
+  caller (for a session, also those addressed to `orchestrator` before it named itself).
+
+A message from a session or the dashboard to a session that is not reading is stored and is in
+that session's inbox all the same; its receipt carries `note: "queued; @peer has no live
+reader"`. A run's receipt never carries `note`, so a run pinned to an older release decodes it.
 
 ## 9. The log
 
@@ -1225,13 +1301,13 @@ seqs have gaps. Kinds:
 `kinds` filters take exact kinds or the groups `plan`, `step`, `project`, `run`, `unit`.
 `threads` keeps only messages on those threads (alone it means messages only). `statuses`
 (step statuses) keeps only the `step.status` records whose `to` is one of them; `recipients`
-(step ids, `orchestrator`, `owner`) keeps only the `message` records whose `to` is one of them.
+(step ids, `@session` names, `owner`) keeps only the `message` records whose `to` is one of them.
 Each filter speaks of its own records and lets records of other kinds through: a record is
 returned when its kind passes `kinds` (and, when `threads` is given without `kinds`, is
 `message`) and it passes every other filter that applies to its kind. `threads` and
 `recipients` both apply to a message. An empty list is no filter. So `kinds: ["step.status",
-"message"], statuses: ["failed", "stale"], recipients: ["orchestrator"]` returns failures,
-stale steps and messages to the orchestrator, and nothing else. `next` and `sluice watch`
+"message"], statuses: ["failed", "stale"], recipients: ["@lead"]` returns failures,
+stale steps and messages to the session `@lead`, and nothing else. `next` and `sluice watch`
 take none of these filters. Calls made without a project go to the home log (`project` null).
 
 Each log keeps at most 10,000 records; past that it is trimmed to 9,000 in the same transaction.
@@ -1267,7 +1343,7 @@ shapes (an unknown status, an empty `any_of`, another field) are `invalid`, `err
 each (`steps: no step x`, `tags: no step is tagged t`, `until.any_of[1]: …`); a selected step
 removed from the plan during the wait ends it with the same error.
 
-`next(projects=[], since_seq=0, me="orchestrator", timeout=300, all=false, settle=20,
+`next(projects=[], since_seq=0, me?, timeout=300, all=false, settle=20,
 settle_max=120, settles="short")` waits across projects (all live projects when empty) for what
 an orchestrator acts on and returns `{records, notes, last_seq, timed_out}`. It wakes on:
 
@@ -1277,7 +1353,9 @@ an orchestrator acts on and returns `{records, notes, last_seq, timed_out}`. It 
   again; one waiting on running work settles only once that work has finished and nothing
   more can move;
 - a `step.status` to `failed`, `stale` or `skipped`;
-- a question to `me` (or, stored before the verbs, to nobody), not from `me`;
+- a question to `me` (or, stored before sessions named themselves, to `orchestrator`, or
+  before the verbs, to nobody), not from `me`; without `me`, a question to any session (or to
+  `orchestrator` or nobody);
 - a reply to a question, not from `me`;
 - `project.pause` or `project.archive` not authored by `me`;
 - with `all`, any record.
@@ -1288,7 +1366,7 @@ Notes are held and returned in `notes`. After the first waking record it keeps c
 first in `records`. `settles` sets how much of a settled unit's step outputs are carried:
 `short` (booleans, numbers, strings up to 80 characters and a `summary`'s first line; the rest
 named in `omitted`), `full` or `none`. Every call records the reader's position and heartbeat in
-`readers`.
+`readers` (for `me`, its registration, §8.1; without it, under `orchestrator`).
 
 `sluice next` is the same wait (§14), and `sluice watch` follows the log as JSON lines.
 
@@ -1366,7 +1444,8 @@ Errors are `{"error": kind, "message", …}`:
 
 ### 12.3 Authors
 
-Every write records an author: the tool's `author` argument when given; else `SLUICE_AUTHOR`;
+Every write records an author: the tool's `author` argument when given; else the session's
+name (`me`, `SLUICE_ME` or the MCP session's binding, §8.1); else `SLUICE_AUTHOR`;
 else `step:<SLUICE_STEP>` when set; else the MCP client's name; else `mcp` (MCP) or `cli`
 (`sluice tool`). The dashboard writes as `owner`, capacity calls as `capacity`.
 
@@ -1374,7 +1453,8 @@ else `step:<SLUICE_STEP>` when set; else the MCP client's name; else `mcp` (MCP)
 
 Edit tools share `rev?`, `dry_run=false`, `preview_scope="impact"`, `reason=""` and `author?`
 (`plan_edit`, `unit_update` and `unit_remove` require `reason`) and return the edit result
-(§6.10) or, with `dry_run`, the preview.
+(§6.10) or, with `dry_run`, the preview. Every tool takes `me?`, the caller's session name
+(§8.1).
 `plan_edit` batches operations. Selection tools take `steps?`
 and/or `tags?` (a `unit:` tag selects the unit); naming neither is `bad_request`, an unknown
 step `not_found`.
@@ -1386,7 +1466,7 @@ step `not_found`.
 | `docs` | `topic?` | the topic's markdown, or the index |
 | `projects_list` | | `[{project_id, name, description, rev, settings_rev, counts, paused, archived, board_rev, resources?, icon?}]` (live projects, by name); `counts` maps step status to the plan's steps in it, `resources` each declared resource to `{capacity}` or `{capacity_fn}`, `icon` is `{kind: "image", type}` or `{kind: "text", text}` |
 | `project_create` | `name`, `description=""`, `icon?`, `resources={}`, `author?` | `{project_id, name}` |
-| `project_update` | `project`, `new_name?`, `description?`, `icon?` (`""` removes), `resources?` (each key set, null removes), `paused?`, `archived?`, `prune_done_after?` (seconds, null turns it off, §6.11), `prune_keep?` (patterns, `[]` or null clears), `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
+| `project_update` | `project`, `new_name?`, `description?`, `icon?` (`""` removes), `resources?` (each key set, null removes), `paused?`, `archived?`, `prune_done_after?` (seconds, null turns it off, §6.11), `prune_keep?` (patterns, `[]` or null clears), `fallback?` (`owner` or a registered `@session` that answers unowned units, null clears, §8.1), `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
 | `board_set` | `project`, `program` (null clears), `expected_rev?`, `reason?`, `author?` | `{rev, warnings}`; a stale `expected_rev` is `conflict`, a program that does not check `invalid` with each problem as `line N: …` (a `Slot` is told it was replaced by `Doc`); the same program again changes nothing; writes `project.board`. `warnings` lists each step the program names that the plan cannot give it (`docs("board")`), as `line N: <Component> names step `x`, which is not in the plan` or `… selects `tag:x`, which no plan step carries`, and each Metric, Query or Chart whose SQL compares `status` with `'failed'` and never reads `error` (it counts the owner's cancels as failures: `Count` counts as the dashboard does); it never refuses |
 | `board_get` | `project` | `{project, rev, program}` (`rev` 0 and `program` null before any board) |
 | `board_doc_read` | `project` | `{rev, updated_at, author, markdown, numbered}`: the board's document (`rev` 0 and `markdown` "" before the first write), `numbered` its lines with right-aligned numbers and a tab, as `cat -n` |
@@ -1416,12 +1496,12 @@ outside its authority. The document tools refuse (`invalid`) while the board's p
 
 | tool | specific arguments |
 |---|---|
-| `plan_edit` | `project`, `ops` (operations, below), `start=true`; `rev` required with `order.set` |
-| `step_add` | `project`, `step`, `spec`, `start=true` |
+| `plan_edit` | `project`, `ops` (operations, below), `start=true`, `me?`; `rev` required with `order.set` |
+| `step_add` | `project`, `step`, `spec`, `start=true`, `owner?` (its unit's, when new; §8.1), `me?` |
 | `step_update` | `project`, `step`, `changes` (each key replaces that field, null removes it) |
 | `step_remove` | `project`, `steps?`, `tags?` |
 | `step_pause` | `project`, `steps?`, `tags?`, `subtree=false`, `paused=true` (sets `"paused"` to the `reason`, or `true` without one, a step already paused keeping its own; `false` removes it) |
-| `unit_add` | `project`, `recipe`, `unit`, `params={}`, `after={}`, `inputs={}`, `tags=[]`, `start=true` |
+| `unit_add` | `project`, `recipe`, `unit`, `params={}`, `after={}`, `inputs={}`, `tags=[]`, `start=true`, `owner?` (§8.1), `me?` |
 | `unit_tag` | `project`, `unit`, `add=[]`, `remove=[]` |
 | `unit_update` | `project`, `unit`, `changes` (`{step id: changes}`, each a member; as `step_update`'s) |
 | `unit_remove` | `project`, `unit` (every member; running members or surviving references refuse it) |
@@ -1527,9 +1607,9 @@ on.
 
 | tool | arguments | result |
 |---|---|---|
-| `ask` | `project`, `to`, `body`, `title?`, `ui?`, `input?`, `data?`, `run?` | `{id, to, thread, delivery, run?}` (§8) |
-| `say` | `project`, `to`, `body`, `data?`, `run?` | `{id, to, thread, delivery, run?}` (§8) |
-| `reply` | `project`, `to_message?` or `to?`, `body=""`, `answer?`, `run?` | `{id, to, thread, delivery, run?}` (§8) |
+| `ask` | `project`, `to?` (a session must give it), `body`, `title?`, `ui?`, `input?`, `data?`, `run?`, `me?` | `{id, to, thread, delivery, run?, note?}` (§8, §8.1) |
+| `say` | `project`, `to?`, `body`, `data?`, `run?`, `me?` | `{id, to, thread, delivery, run?, note?}` (§8, §8.1) |
+| `reply` | `project`, `to_message?` or `to?`, `body=""`, `answer?`, `run?`, `me?` | `{id, to, thread, delivery, run?, note?}` (§8) |
 | `messages` | `project`, `view="inbox"`, `thread?`, `since?`, `owner=false` | `{project, messages, last_id}` |
 | `log_read` | `project?`, `since_seq?`, `kinds?`, `threads?`, `statuses?`, `recipients?`, `limit=200` | `{records, last_seq}`; without `since_seq` the latest records; filters §9 |
 | `log_wait` | as `log_read`, plus `timeout=300`, `wake="any"` | `{records, last_seq}` |
@@ -1601,7 +1681,7 @@ recorded) or its going stale: "You retried it: <reason>, with feedback.", "`fig-
 | `/projects/id/<p>/runs/<run>/files/<name>` | one of a run's files as a page (a way back to its step's Runs, the run, its text with terminal escape sequences taken out; a long one "Jump to end" to `#file-end` under its last line, where a live run's file opens from its step's links), or with `?raw=1` as plain text, read-only: `pane-at-failure.txt` (its newest invocation's), `stderr.log`, `stderr-tail.log`, `summary.txt`, and an engine's record there, masked (`account::redact`): `codex.log`, `codex-wire.jsonl`, `devin-hooks.jsonl`, `devin.log`, `devin.json` (the run's own, else its newest invocation's); only a run of that project, only from its own directory, never through a link; a large file's last 2 MiB; a run name that is no run id is a 404 page |
 | `POST /projects/id/<p>/steps/<s>/actions` | `action=pause\|unpause\|retry\|cancel\|cancel_dismiss\|dismiss\|undismiss` (`cancel` on a failure sets it aside, §7.5; `cancel_dismiss`, only on a failure, is that cancel and then its dismissal, one confirmation for both: a dismissal refused after the cancel says so and leaves it cancelled), `revision` (none for dismiss and undismiss, which edit no plan), `seen` (the step as the page drew it: `<state>:<paused>:<runs>`), `message` (retry feedback, a cancel's reason), `next` (a path on the site to go back to, the step's page by default). A stale `revision` with `seen` still matching applies at the current revision; otherwise nothing is done and a browser (`Accept: text/html`) is sent back to the step (303 to `steps/<s>?notice=<key>`, so a reload never posts again), whose page draws a notice saying why and the typed `message` kept in its box; the notice and the text are held in the serving process under a key it made (a v7 UUID), for ten minutes, the latest 256, and an unknown key draws the step as it is; any other client gets the JSON error at the refusal's status (409 for a step that changed or an action that no longer applies, 413, 503 while the coordinator does not answer) |
 | `/inbox`, `/questions`, `/history` | the message views across projects (the nav's Inbox, whose count is the questions put to the owner that someone still waits on: "Questions for you" on both views, the inbox saying that Questions also lists those between agents and those nobody waits on); Questions lists those, then "Between agents" (one agent's question to another, answerable as the owner), then the ones nobody waits on; History lists every thread with a message to or from the owner, the latest first. All three head the page with its name and carry the switch For you · Questions · History in the frame's row |
-| `/projects/id/<p>/{inbox,questions,history,thread}` | the same for one project (its nav section Messages, its inbox titled "Messages"); the views' switch reads For you · Questions · History; each question a one-message conversation as a step's Messages tab draws it; `thread?thread=<name>`, under a way back to its plan and its step (or History, an empty thread too), its Details its thread and step ids, a step's thread headed and titled by its step's name as the step's own page has it ("work · Fix the cron driver"; `StepRef`, the one name a step has in words: its page, its thread, every message box's "Message to …", the log), with its message count (and, on a step's thread whose step's conversation holds more, "2 in this thread · 11 with this step", a link to its Messages tab), "Jump to latest" and, while notes in it are unread, a button to mark them read, then its conversation (below) and a message box to its step (while the plan has it; to a step not running, a line saying when it reads it) or the orchestrator; a page arriving without an anchor scrolls to the newest message |
+| `/projects/id/<p>/{inbox,questions,history,thread}` | the same for one project (its nav section Messages, its inbox titled "Messages"); the views' switch reads For you · Questions · History; each question a one-message conversation as a step's Messages tab draws it; `thread?thread=<name>`, under a way back to its plan and its step (or History, an empty thread too), its Details its thread and step ids, a step's thread headed and titled by its step's name as the step's own page has it ("work · Fix the cron driver"; `StepRef`, the one name a step has in words: its page, its thread, every message box's "Message to …", the log), with its message count (and, on a step's thread whose step's conversation holds more, "2 in this thread · 11 with this step", a link to its Messages tab), "Jump to latest" and, while notes in it are unread, a button to mark them read, then its conversation (below) and a message box to its step (while the plan has it; to a step not running, a line saying when it reads it) or, on a session's thread (`@lead`, headed "You and @lead"), to the session; the `owner` thread from before sessions named themselves has none; a page arriving without an anchor scrolls to the newest message |
 | `POST /projects/id/<p>/messages` | post an answer or reply as `owner` |
 | `POST /projects/id/<p>/messages/read` | mark messages read (`thread`, `through`); the pages send it only when the owner asks: a note's Mark read, Mark all read, or the thread page's button. Never on render, on sight or on opening a thread. The inbox lists the notes read in the last 24 hours under "Read today", from each message's `read_at` |
 | `POST /messages/close` | close several questions as `owner` (each `m=<project>/<message>`), then to `next` |
@@ -1732,7 +1812,7 @@ The section links the run's own record when its directory holds one (Codex's `co
 **Conversations.** Every page that draws messages (a step's Messages tab and Overview, a thread's
 page, the inbox's notes) draws them one way, in one column: a run of messages from one sender is
 a group under who sent it and to whom (a step by its title and id, the page's own step "This
-step", the orchestrator, the owner "You"); a line at each day's start (UTC) and at the first note
+step", a session by its name (`@lead`), the orchestrator of older messages, the owner "You"); a line at each day's start (UTC) and at the first note
 to the owner not read yet ("New", by the owner's read mark on its thread; nothing is marked read
 by being drawn); a question with its state ("Awaiting your reply" when it waits on the owner,
 "Awaiting reply", "Answered", "Closed") and the replies to it directly under it; each message's
@@ -1845,7 +1925,8 @@ renderer (escaped, unsafe link schemes refused); `Text` stays plain. A query run
 board; a stream reruns them when the project's log, plan, board or step progress changes (a
 document edit is both of the first) and at least every 30 s. A component that cannot be drawn (a bad
 query, an unknown step, a non-numeric chart) is an inline error box naming it, its line and the
-reason; the page still renders. A Button sends `say(to: "orchestrator")` as `owner` with body
+reason; the page still renders. A Button sends a `say` as `owner` to the project's fallback
+session (§8.1; refused without one) with body
 `Board: <label>` and data `{board_rev, action, params, values}` (a primary button checks its
 form's rules first, `invalid` otherwise); if the board's rev changed since the page was drawn
 it is refused (`conflict`, shown under the board) and nothing is sent. The board never edits
@@ -1873,7 +1954,7 @@ whole there.
 **The plan.** The project page draws each unit that is not done once, in the first of these
 bands that holds it: **For you** (a step of it asked the owner a question someone waits on:
 the question whole, a module under the coral rule with Answer, Open, Message and Close
-question; the orchestrator's questions too), **Stopped** (it reads as failed, cancelled or
+question; a session's questions too, by its name), **Stopped** (it reads as failed, cancelled or
 stale: a module with its glyph and word, its failure's kind, its stage marks, the failure's
 sentence and what to try next (the step page's advice, `failure::Advice`; on a failure that
 repeated the bare Retry is quiet), Retry with feedback and Retry, its Details (on a failure, under
@@ -1991,7 +2072,7 @@ write that timed out, and connections dropped for want of a permit.
 | `home migrate [--dry-run] [--json]` | converts `SLUICE_HOME`'s schema-1 or schema-2 database to this binary's schema (§3), holding `coordinator.lock` (refused while a coordinator holds it); `--dry-run` converts a backup-API copy in a scratch directory and leaves the home untouched; `--json` prints the conversion report |
 | `tool [name [json\|-] [--field value]…]` | without a name, lists the tools; with one, runs it (its arguments as below) and prints its result as MCP returns it (`{"ok": true}` for an acknowledgement); `tool <name> --help` lists its fields |
 | `tool rpc '<request>'` | sends a raw wire request |
-| `next [-p P]… [--since-seq N \| --cursor FILE] [--me NAME] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; without a since it starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |
+| `next [-p P]… [--since-seq N \| --cursor FILE] [--me @NAME] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; without a since it starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |
 | `watch [-p P] [--kinds K,…] [--threads T,…] [--since-seq N] [--wake any\|questions]` | follows the log, one JSON record per line, until killed |
 | `drain [-p P]… [--no-wait] [--release]` | drains (waits until drained unless `--no-wait`) or releases |
 | `me [--project P] [--step S] [--json]` | `step_context` for the current step (from `SLUICE_PROJECT_ID`/`SLUICE_PROJECT` and `SLUICE_STEP`) |
@@ -2035,7 +2116,7 @@ A tool's arguments are one JSON object, flags, or both:
   strings). For any other field it is parsed as JSON when it parses (`--to-message 24771`,
   `--outputs '{"ok": true}'`, `--steps '["a","b"]'`, `--until '{"any_of": ["failed"]}'`);
   else, for a list of strings that takes no single string, it is a one-item list of the text
-  (`--kinds message`, `--statuses failed`, `--recipients orchestrator`); else it is the text
+  (`--kinds message`, `--statuses failed`, `--recipients owner`); else it is the text
   (`--steps a`, `--until settled`, `--value hello`). A field that takes neither a string nor
   a number nor a boolean (an object such as `outputs`) refuses text that is not JSON. A boolean field's flag with no value is
   `true` (`--owner`, `--dry-run`). A value that starts with `--` needs the `=` form; a
@@ -2047,7 +2128,7 @@ A tool's arguments are one JSON object, flags, or both:
   `id:$SLUICE_PROJECT_ID` (when set), and one that leaves out `run` gets `$SLUICE_RUN_ID`, on
   every tool that takes them; `step_submit`, `step_progress` and `step_context` also get
   `step` from `SLUICE_STEP`. No other step is defaulted: a step that names a target is always given. A
-  field the call gives is kept, even as null (`"run": null` speaks as the orchestrator,
+  field the call gives is kept, even as null (`"run": null` speaks as the session `me`,
   `"project": null` leaves an optional project out), and `project_update` or `project_delete`
   given `name` names its project that way. Only `sluice tool` defaults; MCP, HTTP and
   `ctx.tool` do not, except that `ctx.tool("step_progress", …)` defaults `step` and `run` to
@@ -2060,7 +2141,8 @@ A tool's arguments are one JSON object, flags, or both:
 sluice tool reply --project demo --to-message 24771 --body-file - <<'END'
 It's on the "parser" branch.
 END
-sluice tool say --to orchestrator --body 'blocked on the schema'   # in a run
+sluice tool say --body 'blocked on the schema'     # in a run: to its unit's owner
+SLUICE_ME=@lead sluice tool ask --project demo --to work --body 'Which schema?'
 sluice tool step_submit --outputs-file outputs.json                # in a run
 sluice tool status '{"project": "demo"}' --brief
 ```
@@ -2073,8 +2155,9 @@ writes the task (for a step's run, first the note on the step's previous attempt
 Previous attempt` (§7.4) and then `## Task`; the prompt or spec, the step's inputs under `## Inputs`, the outputs to submit
 with the exact `step_submit` command under `## Outputs you must submit` and "Submit only when
 you are finished: submitting ends your session." with the `--outputs-file` form that needs no
-shell quoting, and, unless `listen: false`, how to `ask` the orchestrator, `say` to it and
-`reply`, with the run's id, and their flag form, §14), watches the session through the
+shell quoting, and, unless `listen: false`, how to `ask` and `say` (naming nobody: its unit's
+owner answers, §8.1; `to` a step, an `@session` or `owner` reaches someone else) and `reply`,
+with the run's id, and their flag form, §14), watches the session through the
 engine's hooks, nudges a stalled session, and ends it when the agent is done. The result carries
 `session` (pass it back to resume) and `git` facts `{head_before, head_after, commits, dirty}`
 of `cwd`. A failed session is an `agent_failure` error with its `kind` and `session`. Agent fns
@@ -2124,7 +2207,7 @@ account refreshed later than the owner's file (`last_refresh`) is written to the
 first, and an older one never is.
 
 A stalled coordinator or guardian never fails an agent run. The supervisor's reads, its
-acknowledgements of live messages and its notes to the orchestrator retry a peer that answers
+acknowledgements of live messages and its notes to its unit's owner retry a peer that answers
 `busy` (retryable) or does not answer within its 5 s, with waits growing from 50 ms to 1 s,
 until it answers, the run is cancelled, or (acknowledgements and notes) ten minutes have passed;
 it keeps answering the engine's hooks meanwhile. Each retry of a note is the same request, so

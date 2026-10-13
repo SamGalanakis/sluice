@@ -445,13 +445,15 @@ impl UnitView {
             .to_owned()
     }
     /// Who sent its last message, in words: a step by its stage (its own or another unit's),
-    /// "orchestrator", "you" (the owner), or "another unit" for a step of no stage elsewhere;
+    /// a session by its name (`@lead`), "orchestrator" (stored before sessions named
+    /// themselves), "you" (the owner), or "another unit" for a step of no stage elsewhere;
     /// never a step's id.
     pub fn sender(&self) -> String {
         match self.last_from.as_str() {
             "" => String::new(),
             "orchestrator" => "orchestrator".into(),
             "owner" => "you".into(),
+            from if sluice_model::identity::is_session(from) => from.into(),
             from => self
                 .steps
                 .iter()

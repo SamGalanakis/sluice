@@ -8,6 +8,13 @@ usually an agent block (an agent with a prompt and typed inputs and outputs); an
 real handoff. Agents do their own mechanics (branches, merges, formatting). Change the plan as
 you learn. Read `docs("composing")` before your first plan.
 
+Name yourself first: pass `me="@<name>"` (a lowercase letter, then lowercase letters, digits
+or `-`; for example `@lash-f4`) on your first call. It binds this MCP session: every later call
+speaks, edits and waits as you, so the plan's history and the messages say which session did
+what (from a shell, set `SLUICE_ME=@lash-f4`). Without a name you may read, but `ask`, `say` and
+`reply` are refused. `owner` is the person, and `orchestrator` is no longer anyone's name. A
+unit you add is yours: its workers' questions come to you (`docs("threads")`, Who you are).
+
 Read the unit or steps you need with `unit_get`, `step_get` or `plan_read`. Use the typed tools for single changes and `plan_edit` for an atomic batch. Pass `rev` when a change depends on an earlier read. `plan_get` exports the whole plan. A preview describes the edit's affected work; ask for a full dry run explicitly. An edit refused `busy` is retried as is.
 
 Workflow:
@@ -38,8 +45,9 @@ Wait, don't poll: never sleep and re-check `status` or the log, and never run yo
 watcher. `step_wait(project, steps or tags, until="succeeded"|"settled"|{"any_of": [...]})`
 blocks until steps get there; `log_wait` with `kinds`, `statuses` and `recipients` blocks until
 a matching record (`log_wait(project, since_seq, kinds=["step.status", "message"],
-statuses=["failed", "stale"], recipients=["orchestrator"])` wakes only on failures, stale steps
-and messages to you); `next` blocks across projects. See `docs("threads")`.
+statuses=["failed", "stale"], recipients=["@lash-f4"])` wakes only on failures, stale steps
+and messages to you, `@lash-f4`); `next` blocks across projects, waking on questions to you.
+See `docs("threads")`.
 
 Refs: a plan input is `name`; a step output is `step/output` (add `.field` or `.0` to reach
 inside). Every edit is type-checked; errors name the exact path to fix.
@@ -52,11 +60,12 @@ When you need a person (a decision, an approval, a missing value), ask them
 (`ask(project, to="owner", title=..., body=...)`, or a `message.ask` step with `wait: true` in
 a plan) and wait with `log_wait(project, since_seq, wake="questions")`; see `docs("inbox")`.
 Open questions to the owner are the inbox: the only place the person looks for what needs
-them — failed steps and workers' questions are yours to handle, not theirs. Answer a worker's
-question with `reply(project, to_message=<its id>, body=...)`; a note (`say`) needs no answer.
+them — failed steps and your workers' questions are yours to handle, not theirs. Answer a
+worker's question with `reply(project, to_message=<its id>, body=...)`; a note (`say`) needs no
+answer. Address another session as `to="@lash-f5"`.
 
 To give the owner a live view of a project (a lane overview, a few numbers, a chart, a button
-that asks you for something), set its board: `board_set(project, program)`, drawn beside the
+that asks the project's fallback session for something), set its board: `board_set(project, program)`, drawn beside the
 plan on the dashboard, with a `Doc()` where its document goes. The document is the board's
 hand-written part, plain prose for the owner: write it with `board_doc_write`, and whenever
 anything it says changes, read it (`board_doc_read`) and edit the lines that changed

@@ -395,7 +395,9 @@ use support::*;
 fn post(project: ProjectId, body: &str) -> messages::Post {
     messages::Post {
         project: ProjectSelector::Id(project),
-        speaker: messages::Speaker::Orchestrator,
+        speaker: messages::Speaker::Session(
+            sluice_model::identity::SessionName::parse("@orch").unwrap(),
+        ),
         body: body.into(),
         verb: messages::Verb::Say {
             to: "owner".into(),

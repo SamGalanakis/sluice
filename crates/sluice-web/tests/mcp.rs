@@ -361,6 +361,121 @@ async fn errors_keep_the_common_envelope_and_authorship() {
     assert_eq!(request.author.as_deref(), Some("editor"));
     assert_eq!(request.reason, "stale");
 }
+/// An MCP session names itself once: the first `me` it gives binds it, every later call of
+/// that session speaks (and authors) as it, a different `me` is refused, and another session
+/// binds its own. A tool that does not act on `me` still takes it, to bind and author.
+#[tokio::test]
+async fn an_mcp_session_binds_the_first_name_it_gives() {
+    let stop = CancellationToken::new();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let commands = Arc::new(Commands::default());
+    let app = axum::Router::new().nest_service(
+        "/mcp",
+        mcp::http_service(McpServer::new(commands.clone()), stop.clone()),
+    );
+    let shutdown = stop.clone();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown.cancelled_owned())
+            .await
+            .unwrap()
+    });
+    let connect = || async {
+        client_config()
+            .serve(StreamableHttpClientTransport::from_uri(format!(
+                "http://{address}/mcp"
+            )))
+            .await
+            .unwrap()
+    };
+    let call = |name: &'static str, args: Value| {
+        CallToolRequestParams::new(name).with_arguments(args.as_object().unwrap().clone())
+    };
+    let (lead, peer) = (connect().await, connect().await);
+    // Unnamed, a read goes through; nothing is bound.
+    let read = lead
+        .call_tool(call("status", json!({"project":"p"})))
+        .await
+        .unwrap();
+    assert_ne!(read.is_error, Some(true), "{read:?}");
+    // The first me binds: a read that names it.
+    let named = lead
+        .call_tool(call("status", json!({"project":"p","me":"@lead"})))
+        .await
+        .unwrap();
+    assert_ne!(named.is_error, Some(true), "{named:?}");
+    for (name, args) in [
+        ("say", json!({"project":"p","to":"q","body":"start"})),
+        ("step_retry", json!({"project":"p","steps":["q"]})),
+        (
+            "say",
+            json!({"project":"p","to":"q","body":"again","me":"@lead"}),
+        ),
+    ] {
+        let result = lead.call_tool(call(name, args)).await.unwrap();
+        assert_ne!(result.is_error, Some(true), "{name}: {result:?}");
+    }
+    let other = lead
+        .call_tool(call(
+            "say",
+            json!({"project":"p","to":"q","body":"x","me":"@peer"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(other.is_error, Some(true));
+    let error = other.structured_content.unwrap();
+    assert_eq!(error["error"], "invalid");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("this MCP session is @lead"),
+        "{error}"
+    );
+    for me in ["owner", "orchestrator"] {
+        let refused = peer
+            .call_tool(call(
+                "say",
+                json!({"project":"p","to":"q","body":"x","me":me}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(refused.is_error, Some(true), "{me}");
+    }
+    let theirs = peer
+        .call_tool(call(
+            "say",
+            json!({"project":"p","to":"q","body":"mine","me":"@peer"}),
+        ))
+        .await
+        .unwrap();
+    assert_ne!(theirs.is_error, Some(true), "{theirs:?}");
+    let speakers: Vec<(String, Option<String>)> = commands
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|request| match request {
+            CommandRequest::Say(say) => Some((say.body.clone(), say.me.clone())),
+            CommandRequest::StepRetry(retry) => Some(("retry".into(), retry.author.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        speakers,
+        vec![
+            ("start".into(), Some("@lead".into())),
+            ("retry".into(), Some("@lead".into())),
+            ("again".into(), Some("@lead".into())),
+            ("mine".into(), Some("@peer".into())),
+        ]
+    );
+    lead.cancel().await.unwrap();
+    peer.cancel().await.unwrap();
+    stop.cancel();
+    task.await.unwrap();
+}
 #[test]
 fn docs_are_embedded_and_topic_names_cannot_read_files() {
     assert_eq!(mcp::docs(None).unwrap()["types"], "Types");
@@ -515,11 +630,12 @@ async fn rmcp_client_initializes_lists_and_reads_over_process_stdio() {
     eprintln!("stdio fixture PID {pid} reaped; 47 tools");
 }
 
-/// ask, say and reply speak as the orchestrator over MCP (or the run they name): no
-/// `owner` argument; ask and say require `to`, and a call without one decodes so the
-/// coordinator refuses it as `invalid`. Reading may be done as the owner.
+/// ask, say and reply speak as the session's `me` over MCP (or the run they name): no
+/// `owner` argument; a call to ask or say without `to` decodes, so the coordinator refuses a
+/// session's as `invalid` and routes a run's to its unit's owner. Reading may be done as the
+/// owner.
 #[test]
-fn message_verbs_take_a_required_recipient_and_no_owner_over_mcp() {
+fn message_verbs_take_no_owner_and_leave_the_recipient_to_the_coordinator() {
     let schema = |name: &str| {
         mcp::tools()
             .iter()
@@ -548,8 +664,10 @@ fn message_verbs_take_a_required_recipient_and_no_owner_over_mcp() {
     }
     for name in ["ask", "say"] {
         let s = schema(name);
+        // A run may leave `to` out (its unit's owner gets it); a session that does is refused
+        // by the coordinator.
         assert!(
-            s["required"].as_array().unwrap().contains(&json!("to")),
+            !s["required"].as_array().unwrap().contains(&json!("to")),
             "{name}"
         );
         assert!(s["properties"]["to"].get("default").is_none(), "{name}");

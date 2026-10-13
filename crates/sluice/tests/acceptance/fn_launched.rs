@@ -196,9 +196,9 @@ fn fn_launched(engine: &str, real: bool) {
     let body = format!(
         "Addressed live G3 steer: write steer.txt containing steered, then submit word={STEER_WORD} for this current run with step_submit and finish your turn."
     );
-    let CommandReply::Receipt(receipt) =
-        gate.rpc(json!({"command":"say","args":{"project":selector,"body":body,"to":"work"}}))
-    else {
+    let CommandReply::Receipt(receipt) = gate.rpc(
+        json!({"command":"say","args":{"project":selector,"me":"@orch","body":body,"to":"work"}}),
+    ) else {
         panic!("say reply")
     };
     println!("g3_fn_launched_{engine} steer receipt={receipt:?}");
@@ -271,7 +271,7 @@ fn fn_launched(engine: &str, real: bool) {
     );
     // A settled step takes no more messages, and its run no second submission.
     let refused = gate.try_rpc(
-        json!({"command":"say","args":{"project":selector,"body":"too late","to":"work"}}),
+        json!({"command":"say","args":{"project":selector,"me":"@orch","body":"too late","to":"work"}}),
     );
     assert!(
         matches!(&refused, Err(PublicError::Conflict { message, .. }) if message.contains("settled")),
@@ -378,7 +378,7 @@ fn submit(project: &impl serde::Serialize, run: &str, word: Value) -> Value {
 /// Retry `work` with `message`; returns its new run and that run's agent invocation once
 /// the message has reached the agent.
 fn send_back(gate: &mut Gate, selector: &Value, prior: &str, message: &str) -> (String, PathBuf) {
-    gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":message,"reason":"fixture send-back","author":"fixture"}}));
+    gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":message,"reason":"fixture send-back","author":"@fixture"}}));
     let mut run = String::new();
     gate.wait(
         Duration::from_secs(60),

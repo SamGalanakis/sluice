@@ -77,7 +77,7 @@ than before. Everything computed from the old result turns `stale` (`status` sho
 readers wait). `step_retry` each stale step in order, or accept one as it is with
 `step_set_output`.
 
-## A human or orchestrator step
+## A human or session step
 Declare a plan input (e.g. `"approved": "boolean"`) and have later steps read it. They wait until
 someone calls `plan_set_input(project, "approved", true)` — or answers a question asked with
 `ask(project, to="owner", input="approved", title=...)`, which sets it.

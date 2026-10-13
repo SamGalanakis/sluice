@@ -201,7 +201,12 @@ async fn owner_answer_to_worker_wakes_and_notes_and_own_questions_do_not() {
     )
     .await;
     post(&w, p, "decision", "worker", Some("owner"), false, None).await;
-    post(&w, p, "my own question", "orchestrator", None, true, None).await;
+    post(&w, p, "my own question", "@lead", None, true, None).await;
+    // The session @lead waits: its own question does not wake it.
+    let options = |p| NextOptions {
+        me: Some("@lead".into()),
+        ..options(p)
+    };
     let silent = next(&w, &r, options(p)).await.unwrap();
     assert!(silent.timed_out);
     assert_eq!(silent.records.len(), 0);

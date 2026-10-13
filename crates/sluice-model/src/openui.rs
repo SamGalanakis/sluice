@@ -1168,10 +1168,7 @@ fn check_component(c: &Component, vocabulary: &Vocabulary, problems: &mut Vec<Pr
         if let Some(Value::String(from)) = c.args.first()
             && from.trim().is_empty()
         {
-            fail(
-                "LatestMessage: from names a sender (a step id or a name such as orchestrator)"
-                    .into(),
-            );
+            fail("LatestMessage: from names a sender (a step id, an @session or owner)".into());
         }
         if let Some(Value::Number(n)) = c.args.get(1)
             && !(n.fract() == 0.0 && *n >= 1.0 && *n <= MAX_MESSAGE_CHARS as f64)

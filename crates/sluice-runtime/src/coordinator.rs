@@ -1369,8 +1369,9 @@ impl<H: ExecutionHost> Coordinator<H> {
         let mut log = EditLog::start();
         let held = Arc::new(std::sync::Mutex::new(Duration::ZERO));
         let (this, timer) = (self.clone(), held.clone());
+        let run_step = id.step.clone();
         let reply = self
-            .run_edit(command, Some(project), &mut log, move |staged| {
+            .run_edit(command, Some(project), run_step, &mut log, move |staged| {
                 let (this, timer) = (this.clone(), timer.clone());
                 let (id, key, encoded) = (id.clone(), key.clone(), encoded.clone());
                 async move {
@@ -1521,7 +1522,7 @@ impl<H: ExecutionHost> Coordinator<H> {
         let held = Arc::new(std::sync::Mutex::new(Duration::ZERO));
         let (this, timer) = (self.clone(), held.clone());
         let reply = self
-            .run_edit(command, None, &mut log, move |staged| {
+            .run_edit(command, None, None, &mut log, move |staged| {
                 let (this, timer) = (this.clone(), timer.clone());
                 async move {
                     if !staged.generations_hold(&this.inner.catalog, this.home()) {
@@ -1556,6 +1557,7 @@ impl<H: ExecutionHost> Coordinator<H> {
         &self,
         command: CommandRequest,
         run_project: Option<ProjectId>,
+        run_step: Option<StepId>,
         log: &mut EditLog,
         commit: C,
     ) -> Result<CommandReply, PublicError>
@@ -1570,6 +1572,7 @@ impl<H: ExecutionHost> Coordinator<H> {
             home: self.home().to_owned(),
             cache: self.inner.plans.clone(),
             run_project,
+            run_step,
         };
         let prepare = Arc::new(
             move |sql: &Connection| -> sluice_store::Result<(ProjectId, Prepared<edits::Staged>)> {
@@ -3005,6 +3008,7 @@ fn mutate_project(
                     archived: update.archived,
                     prune_done_after: update.prune_done_after,
                     prune_keep: update.prune_keep.map(Option::unwrap_or_default),
+                    fallback: update.fallback,
                     expected_settings_rev: update.expected_settings_rev,
                     reason: update.reason,
                     author: update.author.unwrap_or_else(|| "cli".into()),
@@ -3057,6 +3061,16 @@ fn mutate_project(
         }
         CommandRequest::StepRetry(request) => {
             crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
+            // A retry with a message speaks to the step: its author must name the speaker.
+            if request
+                .message
+                .as_deref()
+                .is_some_and(|m| !m.trim().is_empty())
+            {
+                sluice_store::messages::check_speaking_author(
+                    request.author.as_deref().unwrap_or_default(),
+                )?;
+            }
             let id = messages_project(tx.sql(), &request.project)?;
             let ctx = cached_context(tx.sql(), id, catalog, plans)?;
             check_expected_revision(&request, ctx.revision)?;

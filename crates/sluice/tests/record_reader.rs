@@ -166,6 +166,11 @@ fn native_next_and_http_read_message_records_across_project_rename() {
     ))
     .unwrap();
     let id: ProjectId = serde_json::from_value(created["project_id"].clone()).unwrap();
+    // Session @orch registers in the project by waiting once.
+    server.http(
+        "next",
+        json!({"projects":[format!("id:{id}")], "timeout":0, "settle":0, "settle_max":0, "me":"@orch"}),
+    );
     let page: RecordPage =
         decode_json(&server.http("log_read", json!({"project":format!("id:{id}")}))).unwrap();
     let cursor = page.last_seq;
@@ -177,8 +182,8 @@ fn native_next_and_http_read_message_records_across_project_rename() {
         ("say", "note after rename"),
         ("ask", "question after rename"),
     ] {
-        // The owner speaks to the orchestrator, whose next wakes on it.
-        let request = json!({"command":verb,"args":{"project":{"kind":"name","value":"renamed-record-at"},"to":"orchestrator","body":body,"owner":true}});
+        // The owner speaks to session @orch, whose next wakes on it.
+        let request = json!({"command":verb,"args":{"project":{"kind":"name","value":"renamed-record-at"},"to":"@orch","body":body,"owner":true}});
         let output = server
             .command()
             .args(["tool", "rpc", &request.to_string()])
@@ -194,7 +199,7 @@ fn native_next_and_http_read_message_records_across_project_rename() {
     let request = CommandRequest::Next(Next {
         projects: vec![ProjectSelector::Id(id)],
         since_seq: cursor,
-        me: "orchestrator".into(),
+        me: Some("@orch".into()),
         timeout_seconds: 1,
         all: false,
         settle_seconds: 0,
@@ -215,7 +220,7 @@ fn native_next_and_http_read_message_records_across_project_rename() {
         panic!("expected next reply")
     };
     assert_messages(&native, id);
-    let http: NextResult = decode_json(&server.http("next", json!({"projects":[format!("id:{id}")], "since_seq":cursor, "timeout":1, "settle":0, "settle_max":0}))).unwrap();
+    let http: NextResult = decode_json(&server.http("next", json!({"projects":[format!("id:{id}")], "since_seq":cursor, "timeout":1, "settle":0, "settle_max":0, "me":"@orch"}))).unwrap();
     assert_eq!(http, native);
     let log: RecordPage = decode_json(&server.http(
         "log_read",

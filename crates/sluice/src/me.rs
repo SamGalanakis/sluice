@@ -361,7 +361,6 @@ fn build(
     let ask = json!({
         "project": format!("id:{project}"),
         "run": reported.as_ref().map(|r| r.to_string()).unwrap_or_else(|| "<run>".into()),
-        "to": "orchestrator",
         "body": "...",
     });
     let mut context = json!({

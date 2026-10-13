@@ -200,7 +200,7 @@ async fn status_folds_done_units_cuts_briefly_and_shows_unit_rows() {
     let question = f
         .ok(
             "ask",
-            json!({"project":"p","to":"flow-work","body":"Which crate\n  owns   the parser?"}),
+            json!({"project":"p","to":"flow-work","body":"Which crate\n  owns   the parser?","me":"@orch"}),
         )
         .await;
     // later: ready, but the lane is held.

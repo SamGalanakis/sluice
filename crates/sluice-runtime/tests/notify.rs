@@ -70,6 +70,10 @@ async fn post(w: &Writer, p: ProjectId, value: Value) -> Message {
     let verb = value["verb"].as_str().unwrap().to_owned();
     value.as_object_mut().unwrap().remove("verb");
     value["project"] = json!({"kind":"id","value":p});
+    // Neither the owner nor a run: the session @orch.
+    if value.get("owner").is_none() && value.get("run").is_none() {
+        value["me"] = json!("@orch");
+    }
     w.write(RetrySafety::NonIdempotent, move |tx| {
         let post = match verb.as_str() {
             "ask" => messages::Post::try_from(serde_json::from_value::<Ask>(value).unwrap()),
@@ -129,7 +133,7 @@ async fn open_owner_question_runs_the_command_once_with_the_message_on_stdin() {
     post(
         &w,
         p,
-        json!({"verb":"ask","body":"which?","to":"orchestrator","owner":true}),
+        json!({"verb":"ask","body":"which?","to":"@orch","owner":true}),
     )
     .await;
     round(&mut n).await;

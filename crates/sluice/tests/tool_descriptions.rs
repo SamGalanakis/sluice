@@ -294,15 +294,19 @@ async fn tool_descriptions_name_the_keys_their_replies_have() {
     };
     // The message verbs return their receipt; the run speaks as its step.
     // A step whose run has submitted takes no messages, so these go first.
+    // Session @orch names itself (and registers) with its first message.
+    f.check(
+        "say",
+        json!({"project":"p","to":"work","body":"fyi","me":"@orch"}),
+    )
+    .await;
     let asked = f
         .check(
             "ask",
-            json!({"project":"p","to":"orchestrator","body":"which?","run":run}),
+            json!({"project":"p","to":"@orch","body":"which?","run":run}),
         )
         .await;
     assert_eq!(asked["thread"], "step-work");
-    f.check("say", json!({"project":"p","to":"work","body":"fyi"}))
-        .await;
     f.check(
         "reply",
         json!({"project":"p","to_message":asked["id"],"body":"this one"}),

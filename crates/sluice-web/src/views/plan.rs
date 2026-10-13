@@ -562,9 +562,11 @@ impl<'a> Plan<'a> {
         let project = self.project();
         let ask = a.ask;
         // who asked, in words: its stage (its unit's title is under the question), else the
-        // orchestrator
+        // session (or, before sessions named themselves, the orchestrator)
         let from = match (a.unit, a.step) {
             (Some(unit), Some(step)) => short(unit, step),
+            _ if ask.step.is_empty() && ask.from.starts_with('@') => ask.from.clone(),
+            _ if ask.step.is_empty() && ask.from == "sluice" => "Sluice".to_owned(),
             _ if ask.step.is_empty() => "the orchestrator".to_owned(),
             _ => "a step".to_owned(),
         };

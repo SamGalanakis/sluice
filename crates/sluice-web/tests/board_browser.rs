@@ -347,7 +347,7 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
             .eval("document.querySelector('#board-pane input[name=\"field-0\"]').value='gamma'; document.querySelector('#board-pane input[name=\"field-0\"]').closest('form').querySelector('[name=\"field-1\"]').value='go now'; document.querySelector('#board-pane button[name=button][value=\"0\"]').click()")
             .unwrap();
         browser
-            .wait("document.querySelector('#board-pane .board-status').textContent === 'Sent to the orchestrator.'")
+            .wait("document.querySelector('#board-pane .board-status').textContent === 'Sent to @lash-f4.'")
             .unwrap();
         // The settings page's Board section, with its live preview.
         browser

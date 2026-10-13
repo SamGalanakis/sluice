@@ -32,6 +32,19 @@ fn read_marks(f: &Fixture) -> Vec<sluice_model::commands::MarkRead> {
 #[tokio::test(flavor = "multi_thread")]
 async fn chromium_a_note_is_read_only_when_the_owner_asks_and_times_survive_a_patch() {
     let f = Fixture::new().await;
+    // A named thread is written to the project's fallback session.
+    let id = f.id;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE projects SET fallback='@lash-f4' WHERE project_id=?1",
+                [id.to_string()],
+            )?;
+            tx.changed(Some(id), "project");
+            Ok(())
+        })
+        .await
+        .unwrap();
     for (thread, body) in [
         ("notes", "The lane landed on main."),
         ("later", "A second note, on its own thread."),

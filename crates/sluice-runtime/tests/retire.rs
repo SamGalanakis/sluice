@@ -446,7 +446,7 @@ async fn retiring_wakes_no_orchestrator_next() {
     let next = |all: bool| {
         request(
             "next",
-            json!({"projects":[{"kind":"id","value":f.project}],"since_seq":since,"me":"orchestrator",
+            json!({"projects":[{"kind":"id","value":f.project}],"since_seq":since,"me":"@lead",
                    "timeout_seconds":1,"all":all,"settle_seconds":0,"settle_max_seconds":0,"settles":"none"}),
         )
     };

@@ -97,9 +97,18 @@ impl Fixture {
     fn selector(&self) -> Value {
         json!({"kind":"id","value":self.project})
     }
+    /// A tool call in the project; a message neither the owner's nor a run's is the session
+    /// `@orch`'s.
     async fn call(&self, name: &str, mut args: Value) -> Result<CommandReply, PublicError> {
         if name != "query" {
             args["project"] = self.selector();
+        }
+        if matches!(name, "ask" | "say" | "reply")
+            && args.get("owner").is_none()
+            && args.get("run").is_none()
+            && args.get("me").is_none()
+        {
+            args["me"] = json!("@orch");
         }
         self.client.command(request(name, args)).await
     }
@@ -452,12 +461,8 @@ async fn context_docs_query_and_views_use_the_coordinator_snapshot() {
     assert_eq!(ctx["messages"].as_array().unwrap().len(), 1);
     assert_eq!(ctx["submit"]["outputs"][0]["name"], "ready");
     assert!(ctx["ask"].as_str().unwrap().starts_with("sluice tool ask "));
-    assert!(
-        ctx["ask"]
-            .as_str()
-            .unwrap()
-            .contains("\"to\":\"orchestrator\"")
-    );
+    // The step's run asks with no recipient: its unit's owner answers.
+    assert!(!ctx["ask"].as_str().unwrap().contains("\"to\""));
     assert!(
         ctx["submit"]["command"]
             .as_str()
@@ -524,24 +529,25 @@ async fn context_docs_query_and_views_use_the_coordinator_snapshot() {
     f.close().await;
 }
 
-/// The owner tells or asks the orchestrator, on the `owner` thread.
+/// The session `@orch` tells or asks the owner, on the session's thread `@orch`.
 async fn post(f: &Fixture, body: &str, question: bool) -> MessageId {
     let CommandReply::Receipt(receipt) = f
         .call(
             if question { "ask" } else { "say" },
-            json!({"to":"orchestrator","body":body,"owner":true}),
+            json!({"to":"owner","body":body,"me":"@orch"}),
         )
         .await
         .unwrap()
     else {
         panic!("post")
     };
+    assert_eq!(receipt.thread, "@orch");
     receipt.id
 }
 fn wait_request(f: &Fixture, since: i64, limit: u32, timeout: u64) -> CommandRequest {
     request(
         "log_wait",
-        json!({"read":{"project":f.selector(),"since_seq":since,"kinds":["message"],"threads":["owner"],"limit":limit},"timeout_seconds":timeout,"questions_only":true}),
+        json!({"read":{"project":f.selector(),"since_seq":since,"kinds":["message"],"threads":["@orch"],"limit":limit},"timeout_seconds":timeout,"questions_only":true}),
     )
 }
 async fn send_wait(
@@ -763,11 +769,14 @@ async fn bounded_notes_cases(socket: bool) {
     f.client
         .command(request(
             "mark_read",
-            json!({"project":f.project,"identity":"orchestrator","thread":"owner","through":c}),
+            json!({"project":f.project,"identity":"owner","thread":"@orch","through":c}),
         ))
         .await
         .unwrap();
-    let page = f.call("messages", json!({"view":"inbox"})).await.unwrap();
+    let page = f
+        .call("messages", json!({"view":"inbox","owner":true}))
+        .await
+        .unwrap();
     let CommandReply::Messages(page) = page else {
         panic!("messages")
     };
@@ -1316,7 +1325,7 @@ async fn message_records_in_log_read_and_next_over_socket() {
         panic!("records")
     };
     assert_eq!(page.records[0].seq.0, id.0);
-    let CommandReply::Next(next)=f.client.command(request("next",json!({"projects":[f.selector()],"since_seq":id.0-1,"me":"owner","timeout_seconds":0,"all":true,"settle_seconds":0,"settle_max_seconds":0,"settles":"none"}))).await.unwrap() else {panic!("next")};
+    let CommandReply::Next(next)=f.client.command(request("next",json!({"projects":[f.selector()],"since_seq":id.0-1,"me":"@lead","timeout_seconds":0,"all":true,"settle_seconds":0,"settle_max_seconds":0,"settles":"none"}))).await.unwrap() else {panic!("next")};
     assert_eq!(next.records[0].seq.0, id.0);
     f.close().await;
 }
@@ -1650,7 +1659,7 @@ async fn log_read_filters_step_status_by_status_and_messages_by_recipient() {
     f.call("say", json!({"to":"pre","body":"for pre"}))
         .await
         .unwrap();
-    let note = post(&f, "for the orchestrator", false).await;
+    let note = post(&f, "for the owner", false).await;
     f.input("value", json!(1), false).await;
     f.call(
         "step_set_output",
@@ -1693,7 +1702,7 @@ async fn log_read_filters_step_status_by_status_and_messages_by_recipient() {
     assert_eq!(kinds(&only), BTreeSet::from(["step.status".to_owned()]));
     assert_eq!(step_status(&only), vec![json!("succeeded")]);
     // recipients narrows messages the same way.
-    let only = read(json!({"recipients":["orchestrator"]})).await;
+    let only = read(json!({"recipients":["owner"]})).await;
     let messages: Vec<_> = only
         .records
         .iter()
@@ -1702,25 +1711,28 @@ async fn log_read_filters_step_status_by_status_and_messages_by_recipient() {
         .collect();
     assert_eq!(messages, vec![note.0]);
     assert!(kinds(&only).contains("step.status"));
-    let only = read(json!({"kinds":["message"],"recipients":["orchestrator"]})).await;
+    let only = read(json!({"kinds":["message"],"recipients":["owner"]})).await;
     assert_eq!(
         only.records.iter().map(|r| r.seq.0).collect::<Vec<_>>(),
         vec![note.0]
     );
-    // Both, with kinds: the succeeded status and the message to the orchestrator, in order.
-    let only = read(json!({"kinds":["step.status","message"],"statuses":["succeeded"],"recipients":["orchestrator"]})).await;
+    // Both, with kinds: the succeeded status and the message to the owner, in order.
+    let only = read(
+        json!({"kinds":["step.status","message"],"statuses":["succeeded"],"recipients":["owner"]}),
+    )
+    .await;
     assert_eq!(only.records.len(), 2);
     assert_eq!(only.records[0].seq.0, note.0);
     assert_eq!(field(&only.records[1], "to"), "succeeded");
     // threads and recipients both apply to a message.
     assert!(
-        read(json!({"threads":["owner"],"recipients":["pre"]}))
+        read(json!({"threads":["@orch"],"recipients":["pre"]}))
             .await
             .records
             .is_empty()
     );
     assert_eq!(
-        read(json!({"threads":["owner"],"recipients":["orchestrator"]}))
+        read(json!({"threads":["@orch"],"recipients":["owner"]}))
             .await
             .records
             .iter()
@@ -1734,7 +1746,7 @@ async fn log_read_filters_step_status_by_status_and_messages_by_recipient() {
 #[tokio::test]
 async fn standing_log_wait_sleeps_through_unrelated_records_and_wakes_on_the_first_match() {
     let f = Fixture::new().await;
-    let standing = |since: RecordSeq| json!({"read":{"since_seq":since,"kinds":["step.status","message"],"statuses":["failed","stale"],"recipients":["orchestrator"],"limit":200},"timeout_seconds":30,"questions_only":false});
+    let standing = |since: RecordSeq| json!({"read":{"since_seq":since,"kinds":["step.status","message"],"statuses":["failed","stale"],"recipients":["@orch"],"limit":200},"timeout_seconds":30,"questions_only":false});
     let wait = spawn_call(&f, "log_wait", standing(latest(&f).await.last_seq));
     parked(&wait).await;
     // A message to a step, a note to the owner, plan inputs, an edit and a running step.
@@ -1764,14 +1776,24 @@ async fn standing_log_wait_sleeps_through_unrelated_records_and_wakes_on_the_fir
     assert_eq!(field(&woke.records[0], "kind"), "step.status");
     assert_eq!(field(&woke.records[0], "step"), "pre");
     assert_eq!(field(&woke.records[0], "to"), "failed");
-    // From there, the next standing wait wakes on the message to the orchestrator.
+    // From there, the next standing wait wakes on the message to the session.
     let wait = spawn_call(&f, "log_wait", standing(woke.last_seq));
     parked(&wait).await;
     f.call("say", json!({"to":"work","body":"for work"}))
         .await
         .unwrap();
     parked(&wait).await;
-    let note = post(&f, "for the orchestrator", false).await;
+    let CommandReply::Receipt(note) = f
+        .call(
+            "say",
+            json!({"to":"@orch","body":"for the session","owner":true}),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("say")
+    };
+    let note = note.id;
     let woke = page(answered(wait).await);
     assert_eq!(
         woke.records.iter().map(|r| r.seq.0).collect::<Vec<_>>(),

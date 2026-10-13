@@ -639,6 +639,13 @@
           "type": "string"
         }
       },
+      "fallback": {
+        "description": "Who answers the project's unowned units (`@session` or `owner`); null clears it (they\ngo to `owner`), absent leaves it as it is.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "expected_settings_rev": {
         "type": [
           "integer",
@@ -953,6 +960,20 @@
         "type": "boolean",
         "default": true
       },
+      "owner": {
+        "description": "Who answers the step's unit, for a new unit (`@session` or `owner`): else the editing\nsession, else the project's fallback. A step added to an existing unit takes its owner.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "me": {
+        "description": "The editing session, `@name`.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "edit": {
         "$ref": "#/$defs/EditOptions"
       }
@@ -1143,6 +1164,20 @@
           "$ref": "#/$defs/JsonMap"
         },
         "default": {}
+      },
+      "owner": {
+        "description": "Who answers the new unit (`@session` or `owner`): else the editing session, else the\nproject's fallback.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "me": {
+        "description": "The editing session, `@name`.",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "edit": {
         "$ref": "#/$defs/EditOptions"
@@ -4107,7 +4142,11 @@
         "format": "int64"
       },
       "me": {
-        "type": "string"
+        "description": "The waiting session, `@name`: questions to it wake the wait, and its own messages and\npauses never do. Without one, a question to any session wakes it.",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "timeout_seconds": {
         "type": "integer",
@@ -4135,7 +4174,6 @@
     "required": [
       "projects",
       "since_seq",
-      "me",
       "timeout_seconds",
       "all",
       "settle_seconds",
@@ -11562,6 +11600,13 @@
               "type": "string"
             }
           },
+          "fallback": {
+            "description": "Who answers the project's unowned units (`@session` or `owner`); null clears it (they\ngo to `owner`), absent leaves it as it is.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "expected_settings_rev": {
             "type": [
               "integer",
@@ -11929,6 +11974,13 @@
               "string",
               "null"
             ]
+          },
+          "me": {
+            "description": "The editing session, `@name`: a new unit with no `owner` of its own is its.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false,
@@ -12165,6 +12217,13 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "owner": {
+                "description": "Who answers the new unit (`@session` or `owner`): else the editing session, else\nthe project's fallback. Runtime metadata: never part of the plan's declaration.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "op": {
                 "type": "string",
@@ -12598,6 +12657,20 @@
             "type": "boolean",
             "default": true
           },
+          "owner": {
+            "description": "Who answers the step's unit, for a new unit (`@session` or `owner`): else the editing\nsession, else the project's fallback. A step added to an existing unit takes its owner.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "me": {
+            "description": "The editing session, `@name`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "edit": {
             "$ref": "#/$defs/EditOptions"
           }
@@ -12683,6 +12756,20 @@
               "$ref": "#/$defs/JsonMap"
             },
             "default": {}
+          },
+          "owner": {
+            "description": "Who answers the new unit (`@session` or `owner`): else the editing session, else the\nproject's fallback.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "me": {
+            "description": "The editing session, `@name`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "edit": {
             "$ref": "#/$defs/EditOptions"
@@ -13124,14 +13211,14 @@
         ]
       },
       "Ask": {
-        "description": "A question that needs a reply. `to` is a step of the project's current plan,\n`orchestrator` or `owner`; the thread and sender are derived, never given.",
+        "description": "A question that needs a reply. `to` is a step of the project's current plan, an\n`@session` or `owner`; the thread and sender are derived, never given (SPEC §8).",
         "type": "object",
         "properties": {
           "project": {
             "$ref": "#/$defs/ProjectSelector"
           },
           "to": {
-            "description": "Required; a missing or unknown recipient is refused as `invalid`, never stored.",
+            "description": "A session must name its recipient; a run that leaves it out (or gives the retired\n`orchestrator`) asks its unit's owner. An unknown recipient is `invalid`, never stored.",
             "type": "string",
             "default": ""
           },
@@ -13167,7 +13254,7 @@
             ]
           },
           "run": {
-            "description": "The asking run: its step is the sender. Without it the caller is the orchestrator.",
+            "description": "The asking run: its step is the sender.",
             "anyOf": [
               {
                 "$ref": "#/$defs/RunId"
@@ -13175,6 +13262,13 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "me": {
+            "description": "The asking session, `@name`; a session with no name may not speak.",
+            "type": [
+              "string",
+              "null"
             ]
           },
           "owner": {
@@ -13196,7 +13290,7 @@
             "$ref": "#/$defs/ProjectSelector"
           },
           "to": {
-            "description": "Required; a missing or unknown recipient is refused as `invalid`, never stored.",
+            "description": "As `Ask::to`.",
             "type": "string",
             "default": ""
           },
@@ -13221,6 +13315,12 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "me": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "owner": {
@@ -13277,6 +13377,12 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "me": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "owner": {
@@ -13718,7 +13824,11 @@
             "format": "int64"
           },
           "me": {
-            "type": "string"
+            "description": "The waiting session, `@name`: questions to it wake the wait, and its own messages and\npauses never do. Without one, a question to any session wakes it.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "timeout_seconds": {
             "type": "integer",
@@ -13746,7 +13856,6 @@
         "required": [
           "projects",
           "since_seq",
-          "me",
           "timeout_seconds",
           "all",
           "settle_seconds",
@@ -15945,6 +16054,13 @@
                 "type": "null"
               }
             ]
+          },
+          "note": {
+            "description": "Only on a session's message to a session nobody is reading (\"queued; @x has no live\nreader\"): a run's receipt never carries it, so a run pinned to an older release decodes\nits receipt as it always has.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false,
@@ -15959,7 +16075,7 @@
         "description": "How a message reached its recipient when it was posted.",
         "oneOf": [
           {
-            "description": "A live listening run of the step was handed it (or an orchestrator/owner inbox).",
+            "description": "A live listening run of the step was handed it (or a session's or the owner's inbox).",
             "type": "string",
             "const": "delivered"
           },
@@ -22027,6 +22143,13 @@
           "string",
           "null"
         ]
+      },
+      "me": {
+        "description": "The editing session, `@name`: a new unit with no `owner` of its own is its.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "additionalProperties": false,
@@ -22310,6 +22433,13 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "owner": {
+                "description": "Who answers the new unit (`@session` or `owner`): else the editing session, else\nthe project's fallback. Runtime metadata: never part of the plan's declaration.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "op": {
                 "type": "string",
@@ -23527,6 +23657,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "owner": {
+            "description": "Who answers the new unit (`@session` or `owner`): else the editing session, else\nthe project's fallback. Runtime metadata: never part of the plan's declaration.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "op": {
             "type": "string",
@@ -28944,6 +29081,13 @@
               "type": "string"
             }
           },
+          "fallback": {
+            "description": "Who answers the project's unowned units (`@session` or `owner`); null clears it (they\ngo to `owner`), absent leaves it as it is.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "expected_settings_rev": {
             "type": [
               "integer",
@@ -29311,6 +29455,13 @@
               "string",
               "null"
             ]
+          },
+          "me": {
+            "description": "The editing session, `@name`: a new unit with no `owner` of its own is its.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false,
@@ -29547,6 +29698,13 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "owner": {
+                "description": "Who answers the new unit (`@session` or `owner`): else the editing session, else\nthe project's fallback. Runtime metadata: never part of the plan's declaration.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "op": {
                 "type": "string",
@@ -29980,6 +30138,20 @@
             "type": "boolean",
             "default": true
           },
+          "owner": {
+            "description": "Who answers the step's unit, for a new unit (`@session` or `owner`): else the editing\nsession, else the project's fallback. A step added to an existing unit takes its owner.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "me": {
+            "description": "The editing session, `@name`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "edit": {
             "$ref": "#/$defs/EditOptions"
           }
@@ -30065,6 +30237,20 @@
               "$ref": "#/$defs/JsonMap"
             },
             "default": {}
+          },
+          "owner": {
+            "description": "Who answers the new unit (`@session` or `owner`): else the editing session, else the\nproject's fallback.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "me": {
+            "description": "The editing session, `@name`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "edit": {
             "$ref": "#/$defs/EditOptions"
@@ -30506,14 +30692,14 @@
         ]
       },
       "Ask": {
-        "description": "A question that needs a reply. `to` is a step of the project's current plan,\n`orchestrator` or `owner`; the thread and sender are derived, never given.",
+        "description": "A question that needs a reply. `to` is a step of the project's current plan, an\n`@session` or `owner`; the thread and sender are derived, never given (SPEC §8).",
         "type": "object",
         "properties": {
           "project": {
             "$ref": "#/$defs/ProjectSelector"
           },
           "to": {
-            "description": "Required; a missing or unknown recipient is refused as `invalid`, never stored.",
+            "description": "A session must name its recipient; a run that leaves it out (or gives the retired\n`orchestrator`) asks its unit's owner. An unknown recipient is `invalid`, never stored.",
             "type": "string",
             "default": ""
           },
@@ -30549,7 +30735,7 @@
             ]
           },
           "run": {
-            "description": "The asking run: its step is the sender. Without it the caller is the orchestrator.",
+            "description": "The asking run: its step is the sender.",
             "anyOf": [
               {
                 "$ref": "#/$defs/RunId"
@@ -30557,6 +30743,13 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "me": {
+            "description": "The asking session, `@name`; a session with no name may not speak.",
+            "type": [
+              "string",
+              "null"
             ]
           },
           "owner": {
@@ -30578,7 +30771,7 @@
             "$ref": "#/$defs/ProjectSelector"
           },
           "to": {
-            "description": "Required; a missing or unknown recipient is refused as `invalid`, never stored.",
+            "description": "As `Ask::to`.",
             "type": "string",
             "default": ""
           },
@@ -30603,6 +30796,12 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "me": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "owner": {
@@ -30659,6 +30858,12 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "me": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "owner": {
@@ -31100,7 +31305,11 @@
             "format": "int64"
           },
           "me": {
-            "type": "string"
+            "description": "The waiting session, `@name`: questions to it wake the wait, and its own messages and\npauses never do. Without one, a question to any session wakes it.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "timeout_seconds": {
             "type": "integer",
@@ -31128,7 +31337,6 @@
         "required": [
           "projects",
           "since_seq",
-          "me",
           "timeout_seconds",
           "all",
           "settle_seconds",
@@ -33275,6 +33483,13 @@
                 "type": "null"
               }
             ]
+          },
+          "note": {
+            "description": "Only on a session's message to a session nobody is reading (\"queued; @x has no live\nreader\"): a run's receipt never carries it, so a run pinned to an older release decodes\nits receipt as it always has.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false,
@@ -33289,7 +33504,7 @@
         "description": "How a message reached its recipient when it was posted.",
         "oneOf": [
           {
-            "description": "A live listening run of the step was handed it (or an orchestrator/owner inbox).",
+            "description": "A live listening run of the step was handed it (or a session's or the owner's inbox).",
             "type": "string",
             "const": "delivered"
           },
@@ -36810,6 +37025,13 @@
                 "type": "null"
               }
             ]
+          },
+          "note": {
+            "description": "Only on a session's message to a session nobody is reading (\"queued; @x has no live\nreader\"): a run's receipt never carries it, so a run pinned to an older release decodes\nits receipt as it always has.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false,
@@ -36824,7 +37046,7 @@
         "description": "How a message reached its recipient when it was posted.",
         "oneOf": [
           {
-            "description": "A live listening run of the step was handed it (or an orchestrator/owner inbox).",
+            "description": "A live listening run of the step was handed it (or a session's or the owner's inbox).",
             "type": "string",
             "const": "delivered"
           },
@@ -40940,7 +41162,7 @@
     "description": "How a message reached its recipient when it was posted.",
     "oneOf": [
       {
-        "description": "A live listening run of the step was handed it (or an orchestrator/owner inbox).",
+        "description": "A live listening run of the step was handed it (or a session's or the owner's inbox).",
         "type": "string",
         "const": "delivered"
       },
@@ -40976,7 +41198,7 @@
         "$ref": "#/$defs/ProjectSelector"
       },
       "to": {
-        "description": "Required; a missing or unknown recipient is refused as `invalid`, never stored.",
+        "description": "As `Ask::to`.",
         "type": "string",
         "default": ""
       },
@@ -41001,6 +41223,12 @@
           {
             "type": "null"
           }
+        ]
+      },
+      "me": {
+        "type": [
+          "string",
+          "null"
         ]
       },
       "owner": {
@@ -41130,6 +41358,13 @@
             "type": "null"
           }
         ]
+      },
+      "note": {
+        "description": "Only on a session's message to a session nobody is reading (\"queued; @x has no live\nreader\"): a run's receipt never carries it, so a run pinned to an older release decodes\nits receipt as it always has.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "additionalProperties": false,
@@ -41144,7 +41379,7 @@
         "description": "How a message reached its recipient when it was posted.",
         "oneOf": [
           {
-            "description": "A live listening run of the step was handed it (or an orchestrator/owner inbox).",
+            "description": "A live listening run of the step was handed it (or a session's or the owner's inbox).",
             "type": "string",
             "const": "delivered"
           },
@@ -41223,6 +41458,12 @@
           {
             "type": "null"
           }
+        ]
+      },
+      "me": {
+        "type": [
+          "string",
+          "null"
         ]
       },
       "owner": {
@@ -41365,14 +41606,14 @@
   "Ask": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Ask",
-    "description": "A question that needs a reply. `to` is a step of the project's current plan,\n`orchestrator` or `owner`; the thread and sender are derived, never given.",
+    "description": "A question that needs a reply. `to` is a step of the project's current plan, an\n`@session` or `owner`; the thread and sender are derived, never given (SPEC §8).",
     "type": "object",
     "properties": {
       "project": {
         "$ref": "#/$defs/ProjectSelector"
       },
       "to": {
-        "description": "Required; a missing or unknown recipient is refused as `invalid`, never stored.",
+        "description": "A session must name its recipient; a run that leaves it out (or gives the retired\n`orchestrator`) asks its unit's owner. An unknown recipient is `invalid`, never stored.",
         "type": "string",
         "default": ""
       },
@@ -41408,7 +41649,7 @@
         ]
       },
       "run": {
-        "description": "The asking run: its step is the sender. Without it the caller is the orchestrator.",
+        "description": "The asking run: its step is the sender.",
         "anyOf": [
           {
             "$ref": "#/$defs/RunId"
@@ -41416,6 +41657,13 @@
           {
             "type": "null"
           }
+        ]
+      },
+      "me": {
+        "description": "The asking session, `@name`; a session with no name may not speak.",
+        "type": [
+          "string",
+          "null"
         ]
       },
       "owner": {

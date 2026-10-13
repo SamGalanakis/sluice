@@ -542,7 +542,7 @@ fn g3(engine: &str) {
             .sum::<u32>(),
         1
     );
-    gate.rpc(json!({"command":"say","args":{"project":selector,"body":"Addressed live fixture input: write live.txt containing received, without another commit. Submit word=blue for this current run and finish.","to":"work"}}));
+    gate.rpc(json!({"command":"say","args":{"project":selector,"me":"@orch","body":"Addressed live fixture input: write live.txt containing received, without another commit. Submit word=blue for this current run and finish.","to":"work"}}));
     let first = step_finished(&mut gate, &selector);
     assert_eq!(first["outputs"]["word"], "blue");
     assert_eq!(
@@ -551,7 +551,7 @@ fn g3(engine: &str) {
     );
     let session = first["outputs"]["session"].as_str().unwrap().to_string();
     println!("g3_{engine}_fresh_submit_live_feedback_cleanup fresh session={session} run={run}");
-    gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Feedback resume: continue this same session, do not create or commit original.txt again. Submit word=green to the new current RunId using its current step_submit instructions; finish.","reason":"scratch feedback","author":"fixture"}}));
+    gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Feedback resume: continue this same session, do not create or commit original.txt again. Submit word=green to the new current RunId using its current step_submit instructions; finish.","reason":"scratch feedback","author":"@fixture"}}));
     let next = step_finished(&mut gate, &selector);
     assert_eq!(next["outputs"]["word"], "green");
     assert_eq!(next["outputs"]["session"], session);
@@ -563,7 +563,7 @@ fn g3(engine: &str) {
     fs::remove_file(marker.with_extension("injected")).unwrap();
     private_write(&marker, b"cancel the next backoff\n");
     let feedback_run = next["run_ids"][0].as_str().unwrap().to_string();
-    gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Cancellation fixture: resume the same session, make no files or commits, and finish this turn with G3_CANCEL_WAITING WITHOUT submitting any word. The harness cancels the injected transient backoff.","reason":"scratch backoff cancellation","author":"fixture"}}));
+    gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Cancellation fixture: resume the same session, make no files or commits, and finish this turn with G3_CANCEL_WAITING WITHOUT submitting any word. The harness cancels the injected transient backoff.","reason":"scratch backoff cancellation","author":"@fixture"}}));
     let mut cancel_run = String::new();
     gate.wait(Duration::from_secs(30), |g| {
         let status = g.status(&selector);
@@ -772,7 +772,7 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
                     1
                 );
                 if addressed {
-                    gate.rpc(json!({"command":"say","args":{"project":selector,"body":"Addressed fixture input","to":"work"}}));
+                    gate.rpc(json!({"command":"say","args":{"project":selector,"me":"@orch","body":"Addressed fixture input","to":"work"}}));
                     gate.wait(Duration::from_secs(30), |_| {
                         sluice_agents::supervisor::Checkpoint::read(&directory)
                             .unwrap()
@@ -795,7 +795,7 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
             if word == "blue" {
                 first_session = done["outputs"]["session"].clone();
                 prior = run;
-                gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Resume the same fixture session","reason":"fixture feedback","author":"fixture"}}));
+                gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Resume the same fixture session","reason":"fixture feedback","author":"@fixture"}}));
             } else {
                 assert_eq!(done["outputs"]["session"], first_session);
                 prior = run;
@@ -803,7 +803,7 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
         }
         fs::remove_file(marker.with_extension("injected")).unwrap();
         private_write(&marker, b"cancel fake backoff\n");
-        gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Cancellation fixture","reason":"fixture cancel backoff","author":"fixture"}}));
+        gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Cancellation fixture","reason":"fixture cancel backoff","author":"@fixture"}}));
         let mut cancel_directory = PathBuf::new();
         gate.wait(Duration::from_secs(30), |g| {
             let status = g.status(&selector);

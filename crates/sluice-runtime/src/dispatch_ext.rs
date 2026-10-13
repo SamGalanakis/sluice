@@ -698,7 +698,7 @@ fn step_context(
     let mut outputs: Vec<_> = step.declared_outputs.iter().map(|(name, decl)| json!({"name":name,"type":decl.ty,"required":!matches!(decl.ty, Type::Optional(_)),"doc":decl.doc})).collect();
     outputs.sort_by_key(|o| o["required"] != true);
     let args = json!({"project":ctx.project,"step":id,"run":run.map_or_else(|| "<run>".into(), |r|r.to_string()),"outputs":outputs.iter().map(|o| (o["name"].as_str().unwrap().to_owned(), json!(format!("<{}>",o["type"].as_str().map(str::to_owned).unwrap_or_else(||o["type"].to_string()))))).collect::<serde_json::Map<_,_>>()});
-    let ask = json!({"project":ctx.project,"run":run.map_or_else(|| "<run>".into(), |r|r.to_string()),"to":"orchestrator","body":"..."});
+    let ask = json!({"project":ctx.project,"run":run.map_or_else(|| "<run>".into(), |r|r.to_string()),"body":"..."});
     let mut out = json!({"project":project.name,"project_id":ctx.project,"step":id,"fn":step.run,"doc":step.doc,"status":state.status(id),"started":timing.0,"finished":timing.1,"elapsed":timing.2,"run":run,"inputs":short(inputs,200),"upstream":upstream,"messages":open,"submit":{"outputs":outputs,"command":format!("sluice tool step_submit {}",shell_json(&args)),"note":sluice_agents::prompt::SUBMIT_ENDS_SESSION},"thread":thread,"ask":format!("sluice tool ask {}",shell_json(&ask))});
     if !step.needs.is_empty() {
         out["needs"] = json!(step.needs);

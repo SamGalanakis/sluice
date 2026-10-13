@@ -957,6 +957,7 @@ fn build_op(target: &Target, catalog: &IndexMap<String, FnSignature>, data: &[u8
                 } else {
                     vec![]
                 },
+                owner: None,
             }
         }
         9 => {
@@ -1031,6 +1032,7 @@ fn build_op(target: &Target, catalog: &IndexMap<String, FnSignature>, data: &[u8
                 after,
                 inputs,
                 tags,
+                owner: None,
             }
         }
         10 => {
@@ -1326,6 +1328,7 @@ pub fn build_command(document: &JsonMap, data: &[u8]) -> Value {
                 after,
                 inputs,
                 tags,
+                ..
             } = op
             else {
                 unreachable!()

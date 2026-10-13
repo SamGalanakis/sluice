@@ -419,6 +419,7 @@ pub(crate) fn apply_ops(
                 after,
                 inputs,
                 tags,
+                owner: _,
             } => match expand_unit(
                 &work,
                 recipes,

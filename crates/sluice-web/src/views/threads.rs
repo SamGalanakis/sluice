@@ -210,7 +210,8 @@ pub struct ThreadView {
     pub project_name: String,
     pub thread: String,
     /// Who the owner's message on this thread goes to: its step while the step is in
-    /// the plan, else the orchestrator.
+    /// the plan, the session on its own thread, else the project's fallback session; "" for
+    /// nobody (no composer).
     pub recipient: String,
     pub messages: Vec<MessageItem>,
     pub through: i64,
@@ -248,6 +249,10 @@ impl ThreadView {
         }
         if self.thread == "owner" {
             return "You and the orchestrator".into();
+        }
+        // a session's own thread, which it and the owner talk on
+        if self.thread.starts_with('@') {
+            return format!("You and {}", self.thread);
         }
         self.messages
             .first()
@@ -967,7 +972,7 @@ pub struct Conversation {
     pub whole_href: String,
     /// It says how many it holds and offers "Jump to latest".
     pub head: bool,
-    /// The box to write to its step or the orchestrator, at its end.
+    /// The box to write to its step or session, at its end.
     pub composer: Option<Composer>,
     /// On a step's thread page, when its step's Messages hold more than the thread: how many,
     /// and the tab ("2 in this thread · 11 with this step").
@@ -1209,10 +1214,16 @@ fn group(
                 project: p.id,
                 project_name: p.name.clone(),
                 thread: item.message.thread.clone(),
-                recipient: step
-                    .filter(|_| in_plan)
-                    .unwrap_or(messages::ORCHESTRATOR_STREAM)
-                    .into(),
+                // a step's thread is written to its step, a session's to the session, any
+                // other (the `owner` thread from before sessions named themselves, a named
+                // one) to the project's fallback session; with none, nobody
+                recipient: match step {
+                    Some(step) if in_plan => step.into(),
+                    _ if item.message.thread.starts_with('@') => item.message.thread.clone(),
+                    _ => sluice_store::identities::fallback(sql, p.id)?
+                        .filter(|f| sluice_model::identity::is_session(f))
+                        .unwrap_or_default(),
+                },
                 messages: vec![],
                 through: 0,
                 unread: 0,
@@ -1293,14 +1304,14 @@ fn converse(
                 Some((count, href)) => conversation.with_wider(count, href),
                 None => conversation,
             };
-            conversation
-                .with_head(thread.href())
-                .with_composer(Some(Composer {
+            conversation.with_head(thread.href()).with_composer(
+                (!thread.recipient.is_empty()).then(|| Composer {
                     project: thread.project,
                     to: thread.recipient.clone(),
                     label,
                     note: Composer::note(thread.step().and(thread.step_status.as_ref())),
-                }))
+                }),
+            )
         } else {
             conversation
         };

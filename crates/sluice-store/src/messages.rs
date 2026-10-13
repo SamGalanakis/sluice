@@ -1,6 +1,6 @@
 //! Durable messages, answer ownership, delivery reservations, and independent readers.
 
-use crate::{Result, StoreError, WriteTransaction};
+use crate::{Result, StoreError, WriteTransaction, identities};
 use rusqlite::{Connection, OptionalExtension, params};
 pub use sluice_model::commands::QuestionState;
 use sluice_model::{
@@ -10,12 +10,18 @@ use sluice_model::{
     },
     error::PublicError,
     events::{Event, NotificationOutcome},
+    identity::{self, LEGACY_ORCHESTRATOR, NAME_THIS_SESSION, Recipient, SessionName, refusal},
     ids::{AttemptId, MessageId, ProjectId, ProjectSelector, RecordSeq, RunId},
     rpc::JsonValue,
 };
 
 pub const OWNER_STREAM: &str = "owner";
+/// The readers stream sessions read under (`identities::READER_STREAM`), and the retired
+/// shared address (`identity::LEGACY_ORCHESTRATOR`) that messages stored before identities
+/// still name.
 pub const ORCHESTRATOR_STREAM: &str = "orchestrator";
+/// The readers identity an unnamed `next` keeps its position and heartbeat under.
+pub const ANONYMOUS_READER: &str = "orchestrator";
 
 /// The plans owner implements this by calling its synchronous input setter.
 /// It must validate the value and write the plan/input projections, authored record,
@@ -135,13 +141,14 @@ fn reply_message(
         return Err(missing(format!("no message {}", id.0)));
     };
     let mut query = sql.prepare(&format!(
-        "SELECT {MESSAGE_JSON} FROM messages WHERE project_id=?1 AND \"to\"=?2
+        "SELECT {MESSAGE_JSON} FROM messages WHERE project_id=?1 AND \"to\" IN (?2,?3)
          AND needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL ORDER BY id LIMIT 5"
     ))?;
     let mut choices = Vec::new();
-    for row in query.query_map(params![project.to_string(), caller], |row| {
-        row.get::<_, String>(0)
-    })? {
+    for row in query.query_map(
+        params![project.to_string(), caller, legacy_too(caller)],
+        |row| row.get::<_, String>(0),
+    )? {
         let question: Message = serde_json::from_str(&row?)?;
         let body: String = question
             .body
@@ -278,27 +285,87 @@ fn changed(tx: &mut WriteTransaction<'_>, project: ProjectId) {
     }
 }
 
-/// Who posts. Never a free name: the transport derives it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Who posts (SPEC §8.1). The transport derives it: the dashboard is the owner, a run is its
+/// step, and an MCP or command-line session is the `@name` it gave (`me`); a session with no
+/// name may not speak.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Speaker {
     /// The dashboard.
     Owner,
-    /// MCP and command-line callers with no run identity.
-    Orchestrator,
+    /// An MCP or command-line caller that named itself.
+    Session(SessionName),
     /// An agent or fn run; a step's run speaks as its step.
     Run(RunId),
+    /// A step speaking through a write with no run at hand (a run's `step_retry` message).
+    Step(String),
     /// Sluice itself (unread alerts to the owner).
     Sluice,
 }
 impl Speaker {
-    /// `owner` comes from the dashboard; a run identity makes the run the speaker.
-    pub fn of(owner: bool, run: Option<RunId>) -> Result<Self> {
-        match (owner, run) {
-            (true, Some(_)) => Err(invalid("a run cannot speak as the owner")),
-            (true, None) => Ok(Self::Owner),
-            (false, Some(run)) => Ok(Self::Run(run)),
-            (false, None) => Ok(Self::Orchestrator),
+    /// `owner` comes from the dashboard; a run identity makes the run the speaker; else the
+    /// session must name itself with `me`.
+    pub fn of(owner: bool, run: Option<RunId>, me: Option<&str>) -> Result<Self> {
+        let me = me.map(str::trim).filter(|me| !me.is_empty());
+        match (owner, run, me) {
+            (true, Some(_), _) => Err(invalid("a run cannot speak as the owner")),
+            (true, None, Some(_)) => Err(refusal(
+                "me",
+                "the dashboard speaks as the owner and names no session",
+            )
+            .into()),
+            (true, None, None) => Ok(Self::Owner),
+            (false, Some(_), Some(_)) => {
+                Err(refusal("me", "a run speaks as its step: leave out me (or run)").into())
+            }
+            (false, Some(run), None) => Ok(Self::Run(run)),
+            (false, None, Some(me)) => Ok(Self::Session(SessionName::parse(me)?)),
+            (false, None, None) => Err(refusal("me", NAME_THIS_SESSION).into()),
         }
+    }
+    /// The speaker a write's author names (retry feedback): the owner, a session, a run's
+    /// `step:<id>`, or a step of the plan (a completion action is authored by the step that
+    /// registered it); any other author is the system's. An unnamed session's retry with a
+    /// message is refused before it gets here (`check_speaking_author`).
+    pub fn of_author(sql: &Connection, project: ProjectId, author: &str) -> Result<Self> {
+        let author = author.trim();
+        if author == OWNER_STREAM {
+            return Ok(Self::Owner);
+        }
+        if let Some(step) = author.strip_prefix("step:") {
+            return Ok(Self::Step(step.to_owned()));
+        }
+        if identity::is_session(author) {
+            return Ok(Self::Session(SessionName::parse(author)?));
+        }
+        let step: bool = sql.query_row(
+            "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
+            params![project.to_string(), author],
+            |r| r.get(0),
+        )?;
+        Ok(if step {
+            Self::Step(author.to_owned())
+        } else {
+            Self::Sluice
+        })
+    }
+}
+/// A write that speaks (a `step_retry` with a message) from a caller: its author must name
+/// the owner, a session or a run's step; any other is an unnamed session, refused.
+pub fn check_speaking_author(author: &str) -> Result<()> {
+    let author = author.trim();
+    if author == OWNER_STREAM || author.starts_with("step:") || identity::is_session(author) {
+        return Ok(());
+    }
+    Err(refusal("me", NAME_THIS_SESSION).into())
+}
+impl Speaker {}
+/// The retired `orchestrator` beside a session's own name: questions sent to it before
+/// identities are still the session's to answer. Any other caller matches only itself.
+fn legacy_too(caller: &str) -> &str {
+    if identity::is_session(caller) {
+        LEGACY_ORCHESTRATOR
+    } else {
+        caller
     }
 }
 
@@ -334,7 +401,7 @@ impl TryFrom<Ask> for Post {
     fn try_from(a: Ask) -> Result<Self> {
         Ok(Self {
             project: a.project,
-            speaker: Speaker::of(a.owner, a.run)?,
+            speaker: Speaker::of(a.owner, a.run, a.me.as_deref())?,
             body: a.body,
             verb: Verb::Ask {
                 to: a.to,
@@ -351,7 +418,7 @@ impl TryFrom<Say> for Post {
     fn try_from(s: Say) -> Result<Self> {
         Ok(Self {
             project: s.project,
-            speaker: Speaker::of(s.owner, s.run)?,
+            speaker: Speaker::of(s.owner, s.run, s.me.as_deref())?,
             body: s.body,
             verb: Verb::Say {
                 to: s.to,
@@ -363,28 +430,22 @@ impl TryFrom<Say> for Post {
 /// Resolve a reply's sender selection in the same transaction that posts it.
 /// Only open questions addressed to the transport-derived caller are candidates.
 pub fn reply_post(sql: &Connection, reply: Reply) -> Result<Post> {
-    let speaker = Speaker::of(reply.owner, reply.run)?;
+    let speaker = Speaker::of(reply.owner, reply.run, reply.me.as_deref())?;
     let to_message = match (reply.to_message, reply.to) {
         (Some(id), None) => id,
         (None, Some(sender)) if !sender.trim().is_empty() => {
             let project = resolve_project(sql, &reply.project)?;
-            let caller = match speaker {
-                Speaker::Owner => OWNER_STREAM.to_owned(),
-                Speaker::Orchestrator => ORCHESTRATOR_STREAM.to_owned(),
-                Speaker::Sluice => "sluice".into(),
-                Speaker::Run(run) => run_info(sql, project, run)?
-                    .step
-                    .unwrap_or_else(|| ORCHESTRATOR_STREAM.into()),
-            };
+            let caller = speaker_name(sql, project, &speaker)?;
             let mut query = sql.prepare(
                 "SELECT id,substr(CASE WHEN body='' AND input IS NOT NULL THEN coalesce((SELECT json_extract(i.declaration,'$.doc') FROM inputs i WHERE i.project_id=messages.project_id AND i.name=messages.input),'') ELSE body END,1,200)
-                 FROM messages WHERE project_id=?1 AND \"from\"=?2 AND \"to\"=?3
+                 FROM messages WHERE project_id=?1 AND \"from\"=?2 AND \"to\" IN (?3,?4)
                  AND needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL ORDER BY id",
             )?;
             let candidates = query
-                .query_map(params![project.to_string(), sender, caller], |row| {
-                    Ok((MessageId(row.get(0)?), row.get::<_, String>(1)?))
-                })?
+                .query_map(
+                    params![project.to_string(), sender, caller, legacy_too(&caller)],
+                    |row| Ok((MessageId(row.get(0)?), row.get::<_, String>(1)?)),
+                )?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             match candidates.as_slice() {
                 [(id, _)] => *id,
@@ -433,7 +494,8 @@ pub fn bridge(post: MessagePost) -> Result<Post> {
             "message_post is retired: use ask, say or reply (sluice docs threads)",
         ));
     };
-    let to = post.to.unwrap_or_else(|| ORCHESTRATOR_STREAM.into());
+    // Naming nobody, it asks the run's unit's owner, as `orchestrator` from a run does.
+    let to = post.to.unwrap_or_default();
     let verb = match post.reply_to {
         Some(to_message) => Verb::Reply {
             to_message,
@@ -471,7 +533,7 @@ const LISTENING_FNS: &[&str] = &[
 ];
 
 /// How a message to `to` reaches it now, read from the same durable rows the delivery
-/// path reads: the orchestrator and owner read inboxes; a step's live, started run that
+/// path reads: a session and the owner read inboxes; a step's live, started run that
 /// listens is offered it by its guardian, whether that guardian holds a watch or polls;
 /// a step that will run (pending, or a run not yet started) gets it with its next run;
 /// anything else (a paused step, a run that does not listen) keeps it for a run started
@@ -484,7 +546,7 @@ pub fn delivery(
     project: ProjectId,
     to: &str,
 ) -> Result<(Delivery, Option<RunId>)> {
-    if to == OWNER_STREAM || to == ORCHESTRATOR_STREAM {
+    if to == OWNER_STREAM || to == ORCHESTRATOR_STREAM || identity::is_session(to) {
         return Ok((Delivery::Delivered, None));
     }
     let step: Option<(String, String, String)> = sql
@@ -540,25 +602,63 @@ fn legacy_listens(declaration: &str) -> Result<bool> {
     Ok(agent && !off)
 }
 
-/// A recipient of ask and say: a step of the current plan, the orchestrator or the owner.
-fn recipient(sql: &Connection, project: ProjectId, to: &str) -> Result<()> {
-    if to == OWNER_STREAM || to == ORCHESTRATOR_STREAM {
-        return Ok(());
+/// The recipient of an ask or say, resolved (SPEC §8.1): a step of the current plan, a
+/// session registered in the project, or the owner. A run that names nobody, or the retired
+/// `orchestrator`, reaches its unit's owner (`identities::route_run`); the dashboard naming
+/// nobody reaches the project's fallback (a board Button); a session must name someone.
+fn recipient(
+    sql: &Connection,
+    project: ProjectId,
+    speaker: &Speaker,
+    posting_run: Option<&RunInfo>,
+    to: &str,
+) -> Result<String> {
+    const WHO: &str = "a step of the plan, an @session (for example @lash-f4) or owner";
+    let routed = || -> Result<String> {
+        let run = posting_run.ok_or_else(|| invalid("a run speaks with its run"))?;
+        identities::route_run(sql, project, run.step.as_deref(), run.caller.as_deref())
+    };
+    match (Recipient::of(to)?, speaker) {
+        (Recipient::Omitted | Recipient::LegacyOrchestrator, Speaker::Run(_)) => routed(),
+        (Recipient::Omitted, Speaker::Owner) => identities::route_owner(sql, project),
+        (Recipient::Omitted, _) => Err(refusal("to", &format!("to is required: {WHO}")).into()),
+        (Recipient::LegacyOrchestrator, _) => Err(refusal(
+            "to",
+            &format!("orchestrator is no longer an address: name the recipient, {WHO}"),
+        )
+        .into()),
+        (Recipient::Owner, _) => Ok(OWNER_STREAM.into()),
+        (Recipient::Session(name), _) => {
+            identities::check_registered(sql, project, "to", name.as_str())?;
+            Ok(name.to_string())
+        }
+        (Recipient::Step(step), _) => {
+            let found: bool = sql.query_row(
+                "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
+                params![project.to_string(), step],
+                |r| r.get(0),
+            )?;
+            if !found {
+                return Err(invalid(format!(
+                    "to {step:?} is not a step of the current plan, an @session or owner"
+                )));
+            }
+            Ok(step)
+        }
     }
-    let step: bool = sql.query_row(
-        "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
-        params![project.to_string(), to],
-        |r| r.get(0),
-    )?;
-    if !step {
-        let message = if to.trim().is_empty() {
-            "to is required: a step of the plan, orchestrator or owner".to_owned()
-        } else {
-            format!("to {to:?} is not a step of the current plan, orchestrator or owner")
-        };
-        return Err(invalid(message));
-    }
-    Ok(())
+}
+
+/// The name a speaker posts as.
+fn speaker_name(sql: &Connection, project: ProjectId, speaker: &Speaker) -> Result<String> {
+    Ok(match speaker {
+        Speaker::Owner => OWNER_STREAM.into(),
+        Speaker::Sluice => identity::SLUICE.into(),
+        Speaker::Session(name) => name.to_string(),
+        Speaker::Step(step) => step.clone(),
+        Speaker::Run(run) => run_info(sql, project, *run)?
+            .step
+            .unwrap_or_else(|| format!("call:{run}")),
+    })
 }
 
 /// Why a step takes no more messages, if it does not: it is settled (it has its result),
@@ -600,21 +700,16 @@ pub fn post(
         Speaker::Run(run) => Some(run_info(tx.sql(), project, run)?),
         _ => None,
     };
-    let from = match (post.speaker, posting_run.as_ref()) {
-        (Speaker::Owner, _) => OWNER_STREAM.to_owned(),
-        (Speaker::Sluice, _) => "sluice".to_owned(),
-        (
-            Speaker::Run(_),
-            Some(RunInfo {
-                step: Some(step), ..
-            }),
-        ) => step.clone(),
-        _ => ORCHESTRATOR_STREAM.to_owned(),
-    };
+    let from = speaker_name(tx.sql(), project, &post.speaker)?;
     let run = match post.speaker {
         Speaker::Run(run) => Some(run),
         _ => None,
     };
+    // A session's message registers it in the project: a session may be addressed there
+    // once it has spoken, edited or waited.
+    if let Speaker::Session(me) = &post.speaker {
+        identities::register(tx, project, me)?;
+    }
     let (to, verb, parent) = match post.verb {
         Verb::Ask {
             to,
@@ -623,7 +718,7 @@ pub fn post(
             input,
             data,
         } => {
-            recipient(tx.sql(), project, &to)?;
+            let to = recipient(tx.sql(), project, &post.speaker, posting_run.as_ref(), &to)?;
             if title.as_ref().is_some_and(|s| s.trim().is_empty()) {
                 return Err(invalid("title must not be blank"));
             }
@@ -650,7 +745,7 @@ pub fn post(
             (to, ask, None)
         }
         Verb::Say { to, data } => {
-            recipient(tx.sql(), project, &to)?;
+            let to = recipient(tx.sql(), project, &post.speaker, posting_run.as_ref(), &to)?;
             if post.body.trim().is_empty() {
                 return Err(invalid("body must not be blank"));
             }
@@ -739,10 +834,15 @@ pub fn post(
             },
         )?;
     }
+    // A reply keeps its parent's thread; a step's run speaks on its step's; a message to a
+    // step lives on that step's; one between a session and the owner or another session on
+    // the session's own (the recipient's when it is one); the system's alerts on `owner`.
     let thread = match (&parent, posting_run.as_ref().and_then(|r| r.step.as_ref())) {
         (Some(parent), _) => parent.thread.clone(),
         (None, Some(step)) => format!("step-{step}"),
+        (None, None) if identity::is_session(&to) => to.clone(),
         (None, None) if to != OWNER_STREAM && to != ORCHESTRATOR_STREAM => format!("step-{to}"),
+        (None, None) if identity::is_session(&from) => from.clone(),
         (None, None) => OWNER_STREAM.to_owned(),
     };
     let mut msg = Message {
@@ -832,6 +932,13 @@ pub fn post(
     }
     changed(tx, project);
     let (delivery, delivered_to) = delivery(tx.sql(), project, &to)?;
+    // Only a session or the dashboard hears that nobody is reading: a run's receipt keeps the
+    // shape a run pinned to an older release decodes.
+    let note = if run.is_none() {
+        identities::delivery_note(tx.sql(), project, &to)?
+    } else {
+        None
+    };
     let message = message(tx.sql(), project, msg.id)?;
     Ok(Posted {
         receipt: MessageReceipt {
@@ -840,6 +947,7 @@ pub fn post(
             thread: message.thread.clone(),
             delivery,
             run: delivered_to,
+            note,
         },
         message,
     })
@@ -852,10 +960,12 @@ struct RunInfo {
     item: i64,
     work: i64,
     live: bool,
+    /// A call's run: who called it (the call's author).
+    caller: Option<String>,
 }
 fn run_info(sql: &Connection, project: ProjectId, run: RunId) -> Result<RunInfo> {
-    sql.query_row("SELECT r.step_id,r.generation,r.item_index,r.work_generation,r.finished_at IS NULL AND a.phase!='terminal' AND a.cancel_requested=0 FROM runs r JOIN attempts a ON a.attempt_id=r.attempt_id WHERE r.project_id=?1 AND r.run_id=?2",
-        params![project.to_string(),run.to_string()],|r| Ok(RunInfo { step:r.get(0)?,generation:r.get(1)?,item:r.get(2)?,work:r.get(3)?,live:r.get(4)? })).optional()?.ok_or_else(|| missing("no run in this project"))
+    sql.query_row("SELECT r.step_id,r.generation,r.item_index,r.work_generation,r.finished_at IS NULL AND a.phase!='terminal' AND a.cancel_requested=0,(SELECT c.author FROM calls c WHERE c.run_id=r.run_id) FROM runs r JOIN attempts a ON a.attempt_id=r.attempt_id WHERE r.project_id=?1 AND r.run_id=?2",
+        params![project.to_string(),run.to_string()],|r| Ok(RunInfo { step:r.get(0)?,generation:r.get(1)?,item:r.get(2)?,work:r.get(3)?,live:r.get(4)?,caller:r.get(5)? })).optional()?.ok_or_else(|| missing("no run in this project"))
 }
 fn attach(
     tx: &mut WriteTransaction<'_>,
@@ -906,6 +1016,7 @@ pub fn ask_waiting(
         return Err(invalid("only a question waits"));
     };
     let info = run_info(tx.sql(), project, run)?;
+    let to = &recipient(tx.sql(), project, &post.speaker, Some(&info), to)?;
     if !info.live {
         return Err(conflict("asking run has stopped"));
     }
@@ -935,6 +1046,7 @@ pub fn ask_waiting(
                             thread: message.thread.clone(),
                             delivery,
                             run: delivered_to,
+                            note: None,
                         },
                         message,
                     }));
@@ -1415,17 +1527,24 @@ pub fn orchestrator_read(
     reader(tx.sql(), project, identity, ORCHESTRATOR_STREAM, "")
 }
 
-/// Store-side message wake predicate for next; trailing notes remain held by the caller.
+/// Store-side message wake predicate for next; trailing notes remain held by the caller. A
+/// question wakes a named reader when it is to it (or, stored before identities, to the
+/// retired `orchestrator` or to nobody), and an unnamed one when it is to any session.
 pub fn message_wakes(
     sql: &Connection,
     project: ProjectId,
     msg: &Message,
-    me: &str,
+    me: Option<&str>,
 ) -> Result<bool> {
-    if msg.from == me {
+    if me.is_some_and(|me| msg.from == me) {
         return Ok(false);
     }
-    if msg.verb == MessageVerb::Ask && msg.to.as_deref().is_none_or(|to| to == me) {
+    if msg.verb == MessageVerb::Ask
+        && msg.to.as_deref().is_none_or(|to| match me {
+            Some(me) => to == me || to == LEGACY_ORCHESTRATOR,
+            None => identity::is_session(to) || to == LEGACY_ORCHESTRATOR,
+        })
+    {
         return Ok(true);
     }
     if msg.verb == MessageVerb::Reply
@@ -1642,7 +1761,7 @@ pub fn unread_alert(
     for (seq, kind, payload) in rows {
         let event: Event = serde_json::from_str(&payload)?;
         let wakes = if let Event::Message(msg) = event {
-            message_wakes(tx.sql(), project, &msg, identity)?
+            message_wakes(tx.sql(), project, &msg, Some(identity))?
         } else {
             kind == "unit.settled"
         };

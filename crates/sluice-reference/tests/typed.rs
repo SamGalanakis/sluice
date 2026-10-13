@@ -41,6 +41,7 @@ fn typed(op: &PlanOp, start: bool) -> Option<Value> {
             after,
             inputs,
             tags,
+            ..
         } if start => (
             "unit_add",
             json!({"recipe": recipe, "unit": unit, "params": params, "start": true,

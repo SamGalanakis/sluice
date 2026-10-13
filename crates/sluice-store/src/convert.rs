@@ -426,6 +426,9 @@ pub fn convert_home(database: &Path) -> Result<ConversionReport> {
     clean(&tx)?;
     tx.commit()?;
     clean(&connection)?;
+    // Schema 3's added columns, as a writer opening the home would add them.
+    connection.pragma_update(None, "foreign_keys", true)?;
+    crate::schema::conform(&mut connection)?;
     Ok(report)
 }
 
