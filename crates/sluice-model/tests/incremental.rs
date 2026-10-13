@@ -396,6 +396,42 @@ fn indexes_hold(
     Ok(())
 }
 
+#[test]
+fn input_value_errors_have_a_canonical_order() {
+    let fixture = Fixture::new();
+    let model = Model::new();
+    let document = serde_json::json!({
+        "inputs": {
+            "repo": "int",
+            "note": {"type": "record", "fields": {"z": "int", "a": "boolean"}}
+        },
+        "steps": {}
+    });
+    let reference = Reference::parse(&support::map(document.clone()), &fixture.signatures).unwrap();
+    let plan = support::compile(document, &model.signatures).unwrap();
+    let expected = [
+        "inputs.note.a: missing required field",
+        "inputs.note.z: expected int, got \"bad\"",
+        "inputs.repo: expected int, got \"bad\"",
+        "inputs.unknown: unknown plan input",
+    ];
+    for values in [
+        serde_json::json!({"repo": "bad", "unknown": 1, "note": {"z": "bad"}}),
+        serde_json::json!({"note": {"z": "bad"}, "unknown": 1, "repo": "bad"}),
+    ] {
+        let values = support::map(values);
+        for errors in [
+            plan.validate_input_values(&values).unwrap_err(),
+            reference.validate_input_values(&values).unwrap_err(),
+        ] {
+            assert_eq!(
+                errors.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(768))]
 

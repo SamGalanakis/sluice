@@ -306,23 +306,9 @@ impl Plan {
         Self::parse_owned(json_map(value)?, signatures)
     }
     pub fn validate_input_values(&self, inputs: &JsonMap) -> Result<(), Vec<PathError>> {
-        let mut errors = Vec::new();
-        for (name, value) in &inputs.0 {
-            let path = format!("inputs.{name}");
-            match self.inputs.get(name) {
-                Some(decl) => {
-                    if let Err(found) = check_value_at(&decl.ty, value.as_value(), &path) {
-                        errors.extend(found);
-                    }
-                }
-                None => errors.push(diagnostic(&path, "unknown plan input")),
-            }
-        }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+        crate::types::check_input_values(&inputs.0, |name| {
+            self.inputs.get(name).map(|decl| &decl.ty)
+        })
     }
 }
 

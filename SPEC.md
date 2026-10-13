@@ -789,6 +789,8 @@ fitting its input (list sources element-wise, the scatter input item-wise); lite
 their types; gate entries well formed; `needs` naming declared resources within any fixed
 capacity; no cycles. Errors are a list with paths
 (`steps.notes.in.cwd: repo is int, which does not fit string: int is not string`).
+Runtime input-value errors are ordered by field path, then message, including when an edit
+revalidates only the inputs it changes.
 
 ### 6.10 Edits
 

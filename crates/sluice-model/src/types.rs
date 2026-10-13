@@ -360,6 +360,32 @@ pub fn check_value(t: &Type, value: &serde_json::Value) -> Result<(), Vec<PathEr
     check_value_at(t, value, "")
 }
 
+/// Validate supplied plan inputs, ordering diagnostics by field path, then message.
+/// The caller supplies the declarations and may restrict the values to changed inputs.
+pub fn check_input_values<'a, 't>(
+    inputs: impl IntoIterator<Item = (&'a String, &'a crate::rpc::JsonValue)>,
+    type_of: impl Fn(&str) -> Option<&'t Type>,
+) -> Result<(), Vec<PathError>> {
+    let mut errors = Vec::new();
+    for (name, value) in inputs {
+        let path = format!("inputs.{name}");
+        match type_of(name) {
+            Some(ty) => {
+                if let Err(found) = check_value_at(ty, value.as_value(), &path) {
+                    errors.extend(found);
+                }
+            }
+            None => errors.push(error(&path, "unknown plan input")),
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        errors.sort_by(|a, b| (&a.path, &a.message).cmp(&(&b.path, &b.message)));
+        Err(errors)
+    }
+}
+
 /// Validate a runtime value with a diagnostic prefix such as `steps.a.in.n`.
 pub fn check_value_at(
     t: &Type,

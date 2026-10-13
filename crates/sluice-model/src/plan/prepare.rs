@@ -287,18 +287,15 @@ fn work_out(
     for name in &touched.inputs {
         reads.input(name);
     }
-    for (name, value) in &base.state.state.inputs.0 {
-        if touched.inputs.contains(name)
-            && before.inputs().contains_key(name)
-            && let Some(declaration) = after.inputs().get(name)
-            && let Err(found) = crate::types::check_value_at(
-                &declaration.ty,
-                value.as_value(),
-                &format!("inputs.{name}"),
-            )
-        {
-            errors.extend(found);
-        }
+    let changed_inputs = base.state.state.inputs.0.iter().filter(|(name, _)| {
+        touched.inputs.contains(*name)
+            && before.inputs().contains_key(*name)
+            && after.inputs().contains_key(*name)
+    });
+    if let Err(found) = crate::types::check_input_values(changed_inputs, |name| {
+        after.inputs().get(name).map(|decl| &decl.ty)
+    }) {
+        errors.extend(found);
     }
     if !errors.is_empty() {
         return Err(strings(errors));
