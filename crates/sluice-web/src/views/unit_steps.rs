@@ -124,6 +124,10 @@ pub struct Step<'a> {
     pub title: String,
     pub href: String,
     pub shown: Shown,
+    /// Its state's word: `shown`'s, else what its step says instead ("bypassed").
+    pub word: &'static str,
+    /// A pending step's bypass waiting, who set it.
+    pub bypass_by: Option<String>,
     /// Its run's number and its earlier runs' ends ("run 3"), when it has had more than one.
     pub runs: TrustedHtml,
     pub progress: Progress,
@@ -738,8 +742,12 @@ impl View<'_> {
             out.push_str("</span>");
             let _ = write!(
                 out,
-                "<span class=\"sv-st\">{}{}</span>",
-                ui::status(step.shown),
+                "<span class=\"sv-st\">{}{}{}</span>",
+                ui::status_as(step.shown, step.word),
+                step.bypass_by
+                    .as_ref()
+                    .map(|by| format!("<span class=\"tag sv-tag\">bypass · {}</span>", esc(by)))
+                    .unwrap_or_default(),
                 step.runs
             );
             out.push_str("<span class=\"sv-pr\">");
@@ -962,6 +970,8 @@ pub fn of_unit<'a>(
             },
             href: s.href(),
             shown: s.shown(),
+            word: s.word(),
+            bypass_by: s.bypass_by.clone(),
             runs: s.retries_html(),
             progress: Progress::of(s),
             spans: s.timing.as_ref().map_or(&[][..], |t| t.spans.as_slice()),
@@ -1085,6 +1095,8 @@ mod tests {
             title: String::new(),
             href: String::new(),
             shown: Shown::Pending,
+            word: Shown::Pending.word(),
+            bypass_by: None,
             runs: TrustedHtml::default(),
             progress: Progress::None,
             spans: empty,

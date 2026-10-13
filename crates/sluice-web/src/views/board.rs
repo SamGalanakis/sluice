@@ -1314,6 +1314,7 @@ struct Cards {
     finishing: BTreeMap<StepId, sluice_model::attempt::Finishing>,
     stopping: BTreeSet<StepId>,
     timings: BTreeMap<String, RunTiming>,
+    bypass: BTreeMap<StepId, sluice_store::bypass::Mark>,
 }
 impl Cards {
     fn read(c: &Connection, project: ProjectId) -> sluice_store::Result<Self> {
@@ -1330,9 +1331,15 @@ impl Cards {
             finishing: sluice_store::attempts::finishing(c, project)?,
             stopping: sluice_store::attempts::stopping(c, project)?,
             timings: run_timings(c, project)?,
+            bypass: sluice_store::bypass::marks(c, project)?,
         })
     }
     fn decorate(&self, step: &mut StepView, revision: u64) {
+        match self.bypass.get(&step.id) {
+            Some(sluice_store::bypass::Mark::Bypassed) => step.bypassed = true,
+            Some(sluice_store::bypass::Mark::Waiting(by)) => step.bypass_by = Some(by.clone()),
+            None => {}
+        }
         step.finishing = self.finishing.get(&step.id).cloned();
         step.stopping = self.stopping.contains(&step.id);
         step.timing = self.timings.get(step.id.as_str()).cloned();

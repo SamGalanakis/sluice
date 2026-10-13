@@ -990,6 +990,8 @@ fn steps_part() -> TrustedHtml {
                 title: String::new(),
                 href: "#".into(),
                 shown: *shown,
+                word: shown.word(),
+                bypass_by: None,
                 runs: match (&case.tries, shown) {
                     (Some((n, earlier)), Failed) => ui::tries(*n, earlier),
                     _ => TrustedHtml::default(),

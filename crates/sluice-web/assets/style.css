@@ -680,6 +680,7 @@ nav.links > a[aria-current] { color: var(--ink); box-shadow: inset 0 -2px 0 var(
    them to itself, so it never shares its room with the glyph. A word wider than the whole cell
    (none at 68px in any theme) wraps within it: it never clips and never goes out of sight */
 .sc-word { min-width: 0; font-size: 12px; line-height: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.sc-tag { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-done { background: var(--cell-done-fill); box-shadow: var(--cell-done-edge); color: var(--ink); }
 .sc-done .sc-time { color: var(--ink-muted); }
 .sc-done .g { color: var(--sky-ink); }

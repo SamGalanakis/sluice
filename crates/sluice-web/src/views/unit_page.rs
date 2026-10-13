@@ -43,7 +43,7 @@ fn stage_of(unit: &UnitView, step: &StepView) -> Stage {
             stage.took(t.seconds)
         };
     }
-    stage
+    step.bypass_marks(stage)
 }
 /// The unit's stage strip's cells, in its strip's order.
 pub fn stages(unit: &UnitView) -> Vec<Stage> {

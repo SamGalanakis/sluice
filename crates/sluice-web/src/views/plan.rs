@@ -99,6 +99,7 @@ fn stage_of(step: &StepView, name: &str) -> Stage {
     let mut stage = Stage::new(name, Some(shown))
         .href(step.href())
         .step(step.id.as_str());
+    stage = step.bypass_marks(stage);
     match (Cell::of(Some(shown)), step.timing.as_ref()) {
         (_, Some(t)) if step.running() && t.finished.is_none() => {
             stage = stage.running_since(t.started.clone(), t.seconds);

@@ -884,8 +884,10 @@ draws:
 - **Paused**: `circle-pause` in muted ink; not reached, saying "paused".
 - **Held**: `circle-dot-dashed` in `idle`; not reached, saying "held".
 - **Queued**: `circle-ellipsis` in `idle`; not reached, saying "queued".
-- **Pending**: `circle-dashed` in `idle`; not reached.
-- **Set by hand** (`manual`): `circle-dot` in `sky-ink`; a done cell.
+- **Pending**: `circle-dashed` in `idle`; not reached. With a bypass waiting (`step_bypass`) it
+  says "bypass · <who set it>" under its name, cut to one line.
+- **Set by hand** (`manual`): `circle-dot` in `sky-ink`; a done cell. One its bypass settled
+  says "bypassed" wherever set by hand is said of it.
 - **Succeeded**: `circle-check`, solid, in `sky-ink`; a done cell.
 - **Skipped**: `circle-slash` in `idle`; a done cell.
 
@@ -932,7 +934,9 @@ first part (its own row ringed).
 - **Rows are steps**, in graph order: the recipe's (else the plan's), each after every step of
   its unit it comes after. Each row: the rail, the name (its stage, linking the step; a
   condition it runs on muted before it, "if ok", "if not ok"; a wait on another unit under it,
-  "waits for Terns"), **State** (`ui::status`: glyph and word, then `ui::tries`' "run 3"),
+  "waits for Terns"), **State** (`ui::status`: glyph and word, "bypassed" for a result its
+  bypass preset settled, then a "bypass · <who set it>" tag while one waits, then `ui::tries`'
+  "run 3"),
   **Progress** (a scatter's "12/40" or a short `step_progress` field, a 3px bar under an "a/b";
   "—" for none), the **timeline** and **Span** (how long its current run took, in `ink-muted`
   data mono; a running one's ticking in `run-ink`).

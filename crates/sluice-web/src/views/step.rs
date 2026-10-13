@@ -471,6 +471,11 @@ pub struct StepView {
     pub total: Option<usize>,
     pub done: usize,
     pub manual: bool,
+    /// Its result was settled by its bypass preset (`step_bypass`): its manual word is
+    /// "bypassed".
+    pub bypassed: bool,
+    /// Pending with a bypass preset waiting: who set it.
+    pub bypass_by: Option<String>,
     pub revision: u64,
     /// Running, and its run has submitted: only finishing (SPEC §6.4).
     pub finishing: Option<sluice_model::attempt::Finishing>,
@@ -1008,6 +1013,8 @@ impl StepView {
             total: None,
             done: 0,
             manual: false,
+            bypassed: false,
+            bypass_by: None,
             revision: 0,
             finishing: None,
             progress: None,
@@ -1094,6 +1101,25 @@ impl StepView {
     /// How it reads (`sluice_model::shown`): its stored status named from the facts beside it.
     /// Derived each time, so a fact set late (its run's quiet, observed after the store) is
     /// never missed by a copy taken early.
+    /// Its state's word, a result its bypass preset settled reading "bypassed" where set by
+    /// hand would.
+    pub fn word(&self) -> &'static str {
+        match self.shown() {
+            Shown::Manual if self.bypassed => "bypassed",
+            shown => shown.word(),
+        }
+    }
+    /// Its cell in a stage strip with what its bypass preset says: the word of a result the
+    /// preset settled, and the tag of one still waiting, with who set it.
+    pub fn bypass_marks(&self, mut stage: super::ui::Stage) -> super::ui::Stage {
+        if self.bypassed {
+            stage = stage.word(self.word());
+        }
+        if let Some(by) = &self.bypass_by {
+            stage = stage.tag(format!("bypass · {by}"), format!("bypass by {by}"));
+        }
+        stage
+    }
     pub fn shown(&self) -> Shown {
         sluice_model::shown::classify(&Facts {
             cancelled: self.failure.as_ref().is_some_and(|f| f.cancelled),
@@ -1547,7 +1573,12 @@ impl StepView {
             .filter(|f| f.available && f.source.is_empty())
             .filter_map(|f| {
                 if self.manual {
-                    return Some((f.name.clone(), "Set by hand".to_owned()));
+                    let by = if self.bypassed {
+                        "Bypassed"
+                    } else {
+                        "Set by hand"
+                    };
+                    return Some((f.name.clone(), by.to_owned()));
                 }
                 let n = self
                     .runs
@@ -2333,6 +2364,11 @@ pub fn load_detail(
 ) -> sluice_store::Result<()> {
     let (manual,total,done,revision): (bool,Option<i64>,i64,i64) = c.prepare_cached("SELECT manual,total,done,(SELECT rev FROM plans WHERE project_id=?1) FROM steps WHERE project_id=?1 AND step_id=?2")?.query_row((project.to_string(),step.id.as_str()), |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
     step.manual = manual;
+    match sluice_store::bypass::marks(c, project)?.remove(&step.id) {
+        Some(sluice_store::bypass::Mark::Bypassed) => step.bypassed = true,
+        Some(sluice_store::bypass::Mark::Waiting(by)) => step.bypass_by = Some(by),
+        None => {}
+    }
     step.total = total.map(|n| n as usize);
     step.done = done as usize;
     step.revision = revision as u64;

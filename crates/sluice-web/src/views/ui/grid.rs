@@ -230,6 +230,10 @@ pub struct Stage {
     /// Its step's id: its link opens the step in a plan's drawer (`data-step`) and carries the
     /// id `n-<step>` the drawer marks open and gives the focus back to.
     pub step: String,
+    /// Its state's word when its step says it otherwise ("bypassed" for set by hand).
+    pub word: Option<&'static str>,
+    /// A small tag a cell not reached carries, and what it says ("bypass", "bypass by o").
+    pub tag: Option<(String, String)>,
 }
 impl Stage {
     pub fn new(name: impl Into<String>, shown: Option<Shown>) -> Self {
@@ -262,6 +266,14 @@ impl Stage {
     /// Its step's id (`step`): the cell's link opens it in the drawer.
     pub fn step(mut self, id: impl Into<String>) -> Self {
         self.step = id.into();
+        self
+    }
+    pub fn word(mut self, word: &'static str) -> Self {
+        self.word = Some(word);
+        self
+    }
+    pub fn tag(mut self, tag: impl Into<String>, said: impl Into<String>) -> Self {
+        self.tag = Some((tag.into(), said.into()));
         self
     }
 }
@@ -329,7 +341,9 @@ pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
             continue;
         }
         let cell = Cell::of(stage.shown);
-        let state = stage.shown.map_or("not reached", word);
+        let state = stage
+            .word
+            .unwrap_or_else(|| stage.shown.map_or("not reached", word));
         let time = |s: f64| -> String {
             match cell {
                 // a run still going ticks, a quiet one too: its text is the clock's
@@ -350,11 +364,20 @@ pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
                     esc(word(s)),
                     esc(state)
                 ),
-                _ => format!(
-                    "<span class=\"sc-name\">{}</span><span class=\"vh\">: {}</span>",
-                    esc(&stage.name),
-                    esc(state)
-                ),
+                _ => match &stage.tag {
+                    Some((tag, said)) => format!(
+                        "<span class=\"sc-name\">{}</span><span class=\"sc-word sc-tag\" aria-hidden=\"true\" title=\"{said}\">{}</span><span class=\"vh\">: {}, {said}</span>",
+                        esc(&stage.name),
+                        esc(tag),
+                        esc(state),
+                        said = esc(said)
+                    ),
+                    None => format!(
+                        "<span class=\"sc-name\">{}</span><span class=\"vh\">: {}</span>",
+                        esc(&stage.name),
+                        esc(state)
+                    ),
+                },
             },
             Cell::Done => format!(
                 "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span>{}<span class=\"vh\">: {}</span>",

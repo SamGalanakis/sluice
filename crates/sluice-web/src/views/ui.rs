@@ -68,11 +68,17 @@ pub fn word(shown: Shown) -> &'static str {
 /// A state as its glyph and its word (the word hidden from a screen reader, which hears the
 /// glyph's name).
 pub fn status(shown: Shown) -> TrustedHtml {
+    status_as(shown, shown.word())
+}
+/// `status` with its own word for the state ("bypassed" for set by hand).
+pub fn status_as(shown: Shown, word: &str) -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<span class=\"st st-{}\">{}<span class=\"st-w\" aria-hidden=\"true\">{}</span></span>",
+        "<span class=\"st st-{}\"><span class=\"g g-{}\" role=\"img\" aria-label=\"{}\">{}</span><span class=\"st-w\" aria-hidden=\"true\">{}</span></span>",
         shown.key(),
-        glyph(shown),
-        esc(shown.word())
+        shown.key(),
+        esc(word),
+        shape(shown),
+        esc(word)
     ))
 }
 /// Each state counted and its word, in priority order, the states with none left out
