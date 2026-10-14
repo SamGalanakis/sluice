@@ -569,7 +569,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             "",
             "Three units stopped at their wall-clock cap.",
             "<details class=\"nd-more\"><summary>Show the three</summary><ul><li><a href=\"#\">Waders: the autumn guide's entries</a> <span>· “Two of five maps redrawn”</span></li><li><a href=\"#\">Gannets: the spring guide's entries</a></li><li><a href=\"#\">Scan the range maps for broken links</a></li></ul></details>",
-            "<button type=\"button\" class=\"act main\">Retry all</button>",
+            "<button type=\"button\" class=\"act\">Retry all</button>",
             x,
         ),
         need_item(
@@ -596,13 +596,13 @@ fn plan_part(prefix: &str) -> TrustedHtml {
         finished_card(&before(9_840), 312.0, "#", "Scan the photograph archive for credits", "", ""),
     ]
     .concat();
-    let row = |id: &str, title: &str, said: &str, meta: String, segs: &[(&str, f64, f64)], ticks: &[f64]| {
+    let row = |id: &str, badge: &str, title: &str, said: &str, meta: String, segs: &[(&str, f64, f64)], ticks: &[f64]| {
         roster_row(&RowParts {
             id: &format!("{prefix}{id}"),
             waiting: false,
             said_states: "",
-            badge: "fn",
-            runs_on: "custom.open",
+            badge,
+            runs_on: badge,
             title,
             owner: "",
             said,
@@ -614,6 +614,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
     let rows = [
         row(
             "a-9",
+            "codex",
             "Gannets: the spring guide's entries",
             "Two of the five range maps redrawn; checking the third.",
             format!(
@@ -627,6 +628,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
         ),
         row(
             "a-12",
+            "claude",
             "Terns: the spring guide's entries",
             "Entries 41 to 58 drafted; the maps moved under maps/coast/.",
             format!(
@@ -641,9 +643,10 @@ fn plan_part(prefix: &str) -> TrustedHtml {
     ]
     .concat();
     TrustedHtml::owned(format!(
-        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\"><div class=\"pb-label\"><h2>Needs you</h2><span class=\"pb-count\">3</span></div><ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Dismissed Owls: a section the editors set aside (cancelled)</span><button type=\"button\" class=\"link\">Undo</button></li></ul></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>Finished since you looked</h2><span class=\"pb-note\">since {}</span><span class=\"pb-grow\"></span><button type=\"button\" class=\"link\">Mark as seen</button></div><ul class=\"fin\">{finished}</ul></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>At work</h2><span class=\"pb-note\">2 units, the longest silent first</span></div><div class=\"ro\">{}<h3 class=\"ro-group\"><b>article</b> · 2 running</h3>{rows}</div><p class=\"ro-more\"><b>2 waiting</b> on earlier work · <a href=\"#\"><b>5 done</b></a>, the last {}</p></section></div></div>",
+        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\"><div class=\"pb-label\"><h2>Needs you</h2><span class=\"pb-count\">3</span></div><ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"link\">Undo</button></li></ul></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>Finished since you looked</h2><span class=\"pb-note\">since {}</span><span class=\"pb-grow\"></span><button type=\"button\" class=\"link\">Mark as seen</button></div><ul class=\"fin\">{finished}</ul></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>At work</h2><span class=\"pb-note\">2 units</span></div><div class=\"ro\">{}<details class=\"ro-g\" open><summary class=\"ro-group\"><h3><b>article</b> · 2 running</h3></summary>{}{rows}</details></div><p class=\"ro-more\"><b>2 waiting</b> on earlier work · <a href=\"#\"><b>5 done</b></a>, the last {}</p></section></div></div>",
         ui::clock(&before(14_400)),
-        axis(),
+        axis(""),
+        axis(" ro-axis-g"),
         ui::ago(&before(1_500)),
     ))
 }
@@ -1023,6 +1026,7 @@ fn steps_part() -> TrustedHtml {
                     _ => vec![],
                 },
                 current: spans.last().is_some_and(|r| r.to.is_none()),
+                quiet_since: None,
             })
             .collect();
         let view = View {
@@ -1048,6 +1052,7 @@ fn steps_part() -> TrustedHtml {
             opens: false,
             live: case.live,
             now,
+            recent: false,
         };
         out.push_str(&format!(
             "<figure class=\"gal-case\"><figcaption class=\"gal-theme\">{}</figcaption>{}</figure>",

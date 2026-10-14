@@ -15,8 +15,13 @@
 //! break of a fixed share of the width, named for how long it lasted. The axis is in percent,
 //! so the page's clock moves the "now" line and a running bar's end between patches from the
 //! last stretch's start, place and rate (`data-now`) without the server drawing again.
+//!
+//! **On the plan** a row opens to its steps on the row's own time instead (`View::recent`): the
+//! last twelve hours to now on a log scale (`recent_at`), the scale At work's tracks use, so a
+//! run reads the same in both places; a run that began earlier starts at the left edge, which
+//! says how long ago it began.
 use super::TrustedHtml;
-use super::board::{Endpoint, Relation, RelationKind, UnitView};
+use super::board::{Endpoint, Relation, RelationKind, SAID_WINDOW, UnitView};
 use super::step::StepView;
 use super::ui::{self, Cell, Shown, esc};
 use serde::Serialize;
@@ -143,6 +148,8 @@ pub struct Step<'a> {
     pub ticks: Vec<f64>,
     /// It is the step that says how its live unit stands now: its row is tinted.
     pub current: bool,
+    /// Since when its run has been quiet (seconds since the epoch), while it is.
+    pub quiet_since: Option<f64>,
 }
 /// A gate between two of the unit's steps: `to` comes after `from`, on a condition named
 /// `when` ("ok", "not ok") or none.
@@ -182,6 +189,25 @@ pub struct View<'a> {
     pub live: bool,
     /// Seconds since the epoch, as the page read the clock.
     pub now: f64,
+    /// Drawn on the last twelve hours' log scale (the plan's), not its own linear axis.
+    pub recent: bool,
+}
+
+/// The log scale's knee, seconds: the last few minutes get as much room as hours.
+const KNEE: f64 = 360.0;
+/// The labels over the last twelve hours: how long ago, and their words.
+pub const RECENT: [(f64, &str); 5] = [
+    (SAID_WINDOW, "12h"),
+    (4.0 * 3600.0, "4h"),
+    (3600.0, "1h"),
+    (900.0, "15m"),
+    (0.0, "now"),
+];
+/// A moment `ago` seconds before now on the last twelve hours' log scale, percent from its
+/// left; anything older at its left edge.
+pub fn recent_at(ago: f64) -> f64 {
+    let ago = ago.clamp(0.0, SAID_WINDOW);
+    100.0 * (1.0 - (1.0 + ago / KNEE).ln() / (1.0 + SAID_WINDOW / KNEE).ln())
 }
 
 /// A collapsed wait's share of the axis, percent.
@@ -262,8 +288,22 @@ struct Axis {
     breaks: usize,
     /// It runs to now.
     live: bool,
+    /// The last twelve hours to now on the log scale (`recent_at`).
+    recent: bool,
 }
 impl Axis {
+    /// The last twelve hours to `now`, on the log scale.
+    fn recent(now: f64) -> Self {
+        Self {
+            t0: now - SAID_WINDOW,
+            t1: now,
+            pieces: vec![],
+            scaled: SAID_WINDOW,
+            breaks: 0,
+            live: true,
+            recent: true,
+        }
+    }
     /// Over `spans` (every run of the unit), to now (rounded up) when `live`, else to the last
     /// end; none before anything ran.
     fn new(spans: &[&RunSpan], live: bool, now: f64) -> Option<Self> {
@@ -358,6 +398,7 @@ impl Axis {
             pieces,
             scaled,
             live,
+            recent: false,
         })
     }
     /// The share of the width drawn to scale, percent.
@@ -366,6 +407,9 @@ impl Axis {
     }
     /// A moment's place, percent of the width.
     fn at(&self, t: f64) -> f64 {
+        if self.recent {
+            return recent_at(self.t1 - t);
+        }
         let mut at = 0.0;
         for p in &self.pieces {
             if t <= p.a {
@@ -397,6 +441,14 @@ impl Axis {
     /// over the time drawn to scale, each label clear of the others; none in the last stretch
     /// while live, where "now" stands.
     fn labels(&self) -> Vec<(f64, String)> {
+        if self.recent {
+            // "now" is the now line's own label
+            return RECENT
+                .iter()
+                .filter(|(ago, _)| *ago > 0.0)
+                .map(|(ago, words)| (recent_at(*ago), (*words).to_owned()))
+                .collect();
+        }
         let mut out: Vec<(f64, String)> = vec![];
         let clear =
             |out: &[(f64, String)], at: f64| out.iter().all(|(p, _)| (p - at).abs() >= LABEL_GAP);
@@ -620,7 +672,19 @@ impl View<'_> {
         }
         let (rails, width) = rail(order.len(), &reduce(&pairs, &kept));
         let all: Vec<&RunSpan> = self.steps.iter().flat_map(|s| s.spans).collect();
-        let axis = Axis::new(&all, self.live, self.now);
+        let axis = if self.recent {
+            Some(Axis::recent(self.now))
+        } else {
+            Axis::new(&all, self.live, self.now)
+        };
+        // what the steps run on, a column only where it tells them apart
+        let on = self
+            .steps
+            .iter()
+            .map(|s| s.runs_on.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            > 1;
         let rail_w = 2.0 * RAIL_PAD + (width - 1) as f64 * LANE;
 
         let mut out = String::new();
@@ -631,10 +695,14 @@ impl View<'_> {
         out.push_str(host.open().as_str());
         let _ = write!(
             out,
-            "<div class=\"sv-g{}\" style=\"--rail:{rail_w:.0}px;--now:100%\"{} role=\"group\" aria-label=\"{}\">",
+            "<div class=\"sv-g{}{}\" style=\"--rail:{rail_w:.0}px;--now:100%\"{} role=\"group\" aria-label=\"{}\">",
             if axis.is_some() { "" } else { " sv-untimed" },
+            if on { "" } else { " sv-one-on" },
+            // the page's clock moves a linear axis's now; the log scale's stays at its end
             match &axis {
-                Some(axis) if axis.live => format!(" data-now=\"{}\"", axis.now_data()),
+                Some(axis) if axis.live && !axis.recent => {
+                    format!(" data-now=\"{}\"", axis.now_data())
+                }
                 _ => String::new(),
             },
             esc(&self.label)
@@ -664,7 +732,7 @@ impl View<'_> {
         // eye; a screen reader hears the owner alone)
         let _ = write!(
             out,
-            "<div class=\"sv-hd{}\"><span class=\"sv-h-name\"><span class=\"sv-h-w\" aria-hidden=\"true\">Step</span>{}</span><span class=\"sv-h-on\" aria-hidden=\"true\">Runs on</span><span class=\"sv-h-st\" aria-hidden=\"true\">State</span><span class=\"sv-h-pr\" aria-hidden=\"true\">Progress</span>{}<span class=\"sv-h-sp\" aria-hidden=\"true\">Took</span></div>",
+            "<div class=\"sv-hd{}\"><span class=\"sv-h-name\"><span class=\"sv-h-w\" aria-hidden=\"true\">Step</span>{}</span>{}<span class=\"sv-h-st\" aria-hidden=\"true\">State</span><span class=\"sv-h-pr\" aria-hidden=\"true\">Progress</span>{}<span class=\"sv-h-sp\" aria-hidden=\"true\">Took</span></div>",
             if self.owner.is_empty() {
                 ""
             } else {
@@ -674,6 +742,11 @@ impl View<'_> {
                 String::new()
             } else {
                 format!("<span class=\"own\">{}</span>", esc(&self.owner))
+            },
+            if on {
+                "<span class=\"sv-h-on\" aria-hidden=\"true\">Runs on</span>"
+            } else {
+                ""
             },
             if axis.is_some() {
                 format!("<span class=\"sv-axis\" aria-hidden=\"true\">{labels}</span>")
@@ -749,11 +822,13 @@ impl View<'_> {
                 let _ = write!(out, "<span class=\"sv-note\">{}</span>", esc(&step.note));
             }
             out.push_str("</span>");
-            let _ = write!(
-                out,
-                "<span class=\"sv-on\"><span class=\"vh\">runs on </span>{}</span>",
-                esc(&step.runs_on)
-            );
+            if on {
+                let _ = write!(
+                    out,
+                    "<span class=\"sv-on\"><span class=\"vh\">runs on </span>{}</span>",
+                    esc(&step.runs_on)
+                );
+            }
             let _ = write!(
                 out,
                 "<span class=\"sv-st\">{}{}{}</span>",
@@ -886,34 +961,72 @@ fn track(axis: &Axis, step: &Step<'_>) -> String {
     let mut said = vec![];
     let last = step.spans.len().saturating_sub(1);
     for (n, span) in step.spans.iter().enumerate() {
-        let outcome = span.outcome.unwrap_or(Shown::Pending);
-        let left = axis.at(span.from);
-        let end = span.to.unwrap_or(axis.t1).max(span.from);
-        let width = (axis.at(end) - left).max(0.0);
         let open = span.to.is_none();
-        let _ = write!(
-            bars,
-            "<i class=\"sv-b sv-b-{}{}\" style=\"--l:{left:.3}%;--w:{width:.3}%\"{}></i>",
-            Cell::of(Some(outcome)).key(),
-            if n < last { " is-old" } else { "" },
-            if open {
-                format!(" data-open=\"{left:.3}\"")
-            } else {
-                String::new()
-            }
-        );
-        let what = match span.outcome {
-            Some(shown) => shown.word(),
-            None => "no result recorded",
+        // a run still going reads as its step does now (a quiet one on the sand), an ended
+        // one as it ended
+        let outcome = if open {
+            step.shown
+        } else {
+            span.outcome.unwrap_or(Shown::Pending)
+        };
+        let end = span.to.unwrap_or(axis.t1).max(span.from);
+        let earlier = axis.recent && span.from < axis.t0;
+        let what = match (open, span.outcome) {
+            (true, _) => step.shown.word(),
+            (false, Some(shown)) => shown.word(),
+            (false, None) => "no result recorded",
         };
         said.push(match span.seconds() {
             Some(s) => format!("Run {} {what} after {}", n + 1, ui::duration_words(s)),
-            None => format!("Run {} running since {}", n + 1, ui::at_text(&span.started)),
+            None => format!("Run {} {what} since {}", n + 1, ui::at_text(&span.started)),
         });
+        if axis.recent && end < axis.t0 {
+            // over before the last twelve hours: said, not drawn
+            continue;
+        }
+        // a run gone quiet: running until it fell silent, then on the sand
+        let (cut, rest) = match step.quiet_since {
+            Some(q) if open && q > span.from => (q, Shown::Quiet),
+            _ => (end, outcome),
+        };
+        let mut piece = |from: f64, to: f64, shown: Shown, open: bool| {
+            let l = axis.at(from);
+            let _ = write!(
+                bars,
+                "<i class=\"sv-b sv-b-{}{}{}\" style=\"--l:{l:.3}%;--w:{:.3}%\"{}></i>",
+                Cell::of(Some(shown)).key(),
+                if n < last { " is-old" } else { "" },
+                if earlier && from == span.from {
+                    " is-clip"
+                } else {
+                    ""
+                },
+                (axis.at(to) - l).max(0.0),
+                if open && !axis.recent {
+                    format!(" data-open=\"{l:.3}\"")
+                } else {
+                    String::new()
+                }
+            );
+        };
+        if cut < end {
+            piece(span.from, cut, Shown::Running, false);
+            piece(cut, end, rest, open);
+        } else {
+            piece(span.from, end, outcome, open);
+        }
+        if earlier {
+            // where it began, said at the left edge
+            let _ = write!(
+                bars,
+                "<span class=\"sv-clip\">from {} ago</span>",
+                esc(&tick_text(axis.t1 - span.from))
+            );
+        }
     }
     // a tick for each message it sent, over its bars
     for t in &step.ticks {
-        if *t >= axis.t0 && *t <= axis.t1 {
+        if *t >= axis.t0 && *t <= axis.t1 + 60.0 {
             let _ = write!(
                 bars,
                 "<i class=\"sv-m\" style=\"--l:{:.3}%\"></i>",
@@ -1022,6 +1135,10 @@ pub fn of_unit<'a>(
                 .map(|(_, at)| *at)
                 .collect(),
             current: current.as_ref() == Some(&s.id),
+            quiet_since: (s.shown() == Shown::Quiet)
+                .then(|| super::timestamp(&s.active_at))
+                .flatten()
+                .map(|t| t as f64),
         })
         .collect();
     let latest = (!unit.last_message.trim().is_empty())
@@ -1046,5 +1163,6 @@ pub fn of_unit<'a>(
         now: crate::clock::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0.0, |d| d.as_secs_f64()),
+        recent: false,
     }
 }

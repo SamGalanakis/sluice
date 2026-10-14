@@ -361,13 +361,13 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
             format!("{plan_href}#undo-n-stop-first").as_str()
         )
     );
-    // the plan: no longer an item, a Dismissed line with its Undo instead
+    // the plan: no longer an item, a Set aside line with its Undo instead
     let (_, plan) = f.get(&plan_href).await;
     let well = plan_html::band(&plan, "plan-needs");
     assert!(
         plan_html::place(&plan, "first") == "done"
             && well.contains("id=\"undo-n-stop-first\"")
-            && well.contains("<span>Dismissed Fails once (cancelled)</span>"),
+            && well.contains("<span>Set aside: the cancel of Fails once</span>"),
         "{well}"
     );
     // its dependent is held as before, waiting on earlier work: counted, not a row
@@ -444,7 +444,7 @@ async fn serve(router: Router) -> (std::net::SocketAddr, tokio::task::JoinHandle
 }
 
 /// The × on a stop in Needs you, in Chromium: posted in place (no navigation, no scroll jump),
-/// the item gives way to its Dismissed line and Undo takes the focus; Undo brings it back.
+/// the item gives way to its Set aside line and Undo takes the focus; Undo brings it back.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_dismiss_a_stop_in_place_with_the_focus_on_undo() {
     let f = Fixture::new().await;

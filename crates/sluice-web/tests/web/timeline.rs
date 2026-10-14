@@ -398,7 +398,7 @@ async fn a_recipes_head_leads_to_every_unit_it_made_done_ones_too() {
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
     assert!(
         html.contains(&format!(
-            "<h3 class=\"ro-group\"><b><a href=\"/projects/id/{id}?recipe=lane&amp;show=all\">lane</a></b>"
+            "<summary class=\"ro-group\"><h3><b><a href=\"/projects/id/{id}?recipe=lane&amp;show=all\">lane</a></b>"
         )),
         "{html}"
     );

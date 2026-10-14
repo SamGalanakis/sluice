@@ -197,6 +197,8 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
             json!({"run": "custom.open", "tags": tags, "after": [format!("{unit}-review")]}),
         );
     }
+    // the latest to finish says what it produced
+    steps["a-3-publish"]["outputs"] = json!({"summary": "string"});
     for (unit, source) in sources {
         let mut scan = json!({"run": "custom.open", "tags": [format!("unit:{unit}")], "in": {"source": {"default": source}}});
         if unit == "s-5" {
@@ -348,6 +350,21 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
         },
     )
     .await;
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE steps SET outputs=?2 WHERE project_id=?1 AND step_id='a-3-publish'",
+                (
+                    almanac.to_string(),
+                    json!({"summary": "Fourteen entries, each with its photograph credited."})
+                        .to_string(),
+                ),
+            )?;
+            tx.changed(Some(almanac), "steps");
+            Ok(())
+        })
+        .await
+        .unwrap();
     // a-6 has said something three times lately: a tick each on its track
     for (body, at) in [
         ("Entries 1 to 20 drafted.", 60 * M),

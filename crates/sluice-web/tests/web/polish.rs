@@ -133,7 +133,7 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     assert!(
         plan_html::needs(&page).is_empty()
             && well.contains(
-                "<ul class=\"nd-gone\" role=\"status\"><li><span>Dismissed u (cancelled)</span>"
+                "<ul class=\"nd-gone\" role=\"status\"><li><span>Set aside: the cancel of u</span>"
             )
             && well.contains("value=\"cancel:b\""),
         "{well}"

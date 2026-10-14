@@ -227,15 +227,17 @@ async fn plan_units_and_loose_steps() {
             plan_html::cell(drill, "a-6-draft").starts_with("<li class=\"sv-row sv-c-run is-cur\""),
             "{drill}"
         );
+        // every step runs on the one fn: no column says so
         assert!(
-            plan_html::cell(drill, "a-6-review")
-                .contains("<span class=\"vh\">runs on </span>custom.open"),
+            drill.contains("<div class=\"sv-g sv-one-on\"") && !drill.contains("runs on "),
             "{drill}"
         );
+        // its foot: Open step the one move, the rest quiet links
         assert!(
             drill.contains("<p class=\"ro-ev\">Latest · ")
-                && drill.contains(">Open step</a>")
-                && drill.contains(">Message</a>"),
+                && drill.contains("<span class=\"ro-links\"><a href=")
+                && drill.contains(">Message</a>")
+                && drill.contains(" data-step=\"a-6-draft\">Open step</a>"),
             "{drill}"
         );
         // a unit of no recipe: in its step view its two gathers fan in to its merge
@@ -385,7 +387,7 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
     assert_eq!(plan_html::place(&html, "a-4"), "", "{html}");
     let well = plan_html::band(&html, "plan-needs");
     assert!(
-        well.contains("<span>Dismissed two units stopped at their wall-clock cap</span>")
+        well.contains("<span>Set aside: two units stopped at their wall-clock cap</span>")
             && well.contains("id=\"undo-n-cause-wallcap\""),
         "{well}"
     );
@@ -408,12 +410,12 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
         .unwrap();
     let (_, _, _, html) = browse(&router, &plan, None, "").await;
     assert_eq!(plan_html::place(&html, "a-4"), "stopped", "{html}");
-    assert!(!plan_html::band(&html, "plan-needs").contains("Dismissed two units"));
+    assert!(!plan_html::band(&html, "plan-needs").contains("Set aside: two units"));
     assert!(
         html.contains("<title>(1) ✕3 · almanac · sluice</title>"),
         "{html}"
     );
-    // Dismiss all sets every item aside; Undo brings one back
+    // Set all aside sets every item aside; Undo brings one back
     let keys = value(&html, "name=\"items\" value=\"").to_owned();
     assert!(
         keys.starts_with("ask:") && keys.contains("quiet:s-3-scan@"),
@@ -435,6 +437,18 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
         "{html}"
     );
     assert!(html.contains("<p class=\"nd-none\">Nothing.</p>"), "{html}");
+    // setting aside is about attention alone: the head still says what is true (the silence
+    // and the failures), and the cancel it settled leaves its unit done, never a row held
+    // behind it
+    let said = plan_html::summary(&html);
+    assert!(
+        said.contains("2 failed") && said.contains("1 quiet") && said.contains("6 of 16 done"),
+        "{said}"
+    );
+    assert!(
+        !plan_html::band(&html, "plan-roster").contains("data-unit=\"a-5\""),
+        "{html}"
+    );
     let (status, _, _, _) = browse(
         &router,
         &format!("{plan}/needs"),
@@ -504,5 +518,35 @@ async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
         ) && cards.matches("<li class=\"fin-i\"").count() == 5
             && cards.contains(&format!("/units/{a2}\"")),
         "{cards}"
+    );
+}
+
+/// A big roster folds a group with nothing remarkable in it to its line, its rows still drawn
+/// for a click (or no script) to open; a small one leaves every group open.
+#[tokio::test]
+async fn a_big_roster_folds_its_unremarkable_groups() {
+    let f = Fixture::new().await;
+    let mut steps = serde_json::Map::new();
+    let mut statuses: Vec<(&'static str, &'static str)> = vec![];
+    for n in 0..14 {
+        let id: &'static str = Box::leak(format!("w{n:02}").into_boxed_str());
+        steps.insert(id.into(), serde_json::json!({"run": "custom.open"}));
+        statuses.push((id, "running"));
+    }
+    let big = f
+        .project("big", serde_json::json!({ "steps": steps }), &statuses)
+        .await;
+    let (_, html) = f.get(&format!("/projects/id/{big}")).await;
+    let roster = plan_html::band(&html, "plan-roster");
+    assert!(
+        roster.contains("<details class=\"ro-g\"><summary class=\"ro-group\"><h3><b>No recipe</b> · 14 running</h3>")
+            && roster.matches("<details id=\"u-w").count() == 14,
+        "{roster}"
+    );
+    let (_, html) = f.get(&format!("/projects/id/{}", f.id)).await;
+    let roster = plan_html::band(&html, "plan-roster");
+    assert!(
+        !roster.contains("<details class=\"ro-g\"><summary"),
+        "{roster}"
     );
 }

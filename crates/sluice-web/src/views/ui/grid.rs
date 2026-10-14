@@ -752,13 +752,17 @@ impl Details {
     }
 }
 
-/// A time of day: "17:49" as UTC on the server, the reader's own clock once the page's script
-/// reads it (`data-clock`); the day and minute in UTC in its title.
+/// A time of day: "17:49 UTC" on the server, so it says its zone without script; the reader's
+/// own clock once the page's script reads it (`data-clock`); the day and minute in UTC in its
+/// title.
 pub fn clock(at: &str) -> TrustedHtml {
-    let shown = at.get(11..16).unwrap_or(at);
+    let shown = match at.get(11..16) {
+        Some(hm) => format!("{hm} UTC"),
+        None => at.to_owned(),
+    };
     TrustedHtml::owned(format!(
         "<time data-clock datetime=\"{a}\" title=\"{t}\">{}</time>",
-        esc(shown),
+        esc(&shown),
         a = esc(at),
         t = esc(&super::at_text(at))
     ))

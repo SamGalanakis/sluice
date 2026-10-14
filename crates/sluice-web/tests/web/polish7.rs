@@ -129,7 +129,7 @@ async fn slow_in_chromium_a_cancel_set_aside_and_undone_in_place() {
         assert_eq!(browser.eval("[window.dismissMarker, performance.getEntriesByType('navigation').length === window.dismissNavigations, Math.abs(scrollY - window.dismissScroll) <= 3]").unwrap(), json!(["same document", true, true]));
         // the line says what was set aside and offers Undo, on one line
         let line = browser
-            .eval("(() => { const b = document.querySelector('#undo-n-stop-b'), li = b.closest('li'); return [li.textContent.includes('Dismissed'), b.textContent, Math.round(li.getBoundingClientRect().height) <= 48]; })()")
+            .eval("(() => { const b = document.querySelector('#undo-n-stop-b'), li = b.closest('li'); return [li.textContent.includes('Set aside: '), b.textContent, Math.round(li.getBoundingClientRect().height) <= 48]; })()")
             .unwrap();
         assert_eq!(line, json!([true, "Undo", true]));
         browser

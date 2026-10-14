@@ -758,7 +758,8 @@ head on the paper under it.
 - **The row** (`.subnav`): its sections as tabs (Plan, Day, Stats, Messages, Log, Functions, Settings;
   the current one under a 2px ink bar), a count line (`Frame::meta`), and at the right its tools
   (`Frame::tools`: a find field and the view switch on a plan, the messages' switch on For you,
-  Questions and History). A hairline closes it. On a phone the tabs wrap and the tools take a
+  Questions and History). A hairline closes it. On a phone the tabs stay one line (all seven fit
+  at 390px; a narrower screen scrolls them sideways within themselves) and the tools take a
   line of their own.
 - **One thing inside a tab** (a step, a unit, a thread: `Frame::inner`): the row comes first
   and the head under it, so the row stays where the plan has it.
@@ -902,7 +903,7 @@ It is the unit page's body, what a plan row opens in place, and a step's Runs ta
   its unit it comes after. Each row: the rail, the name (its stage, linking the step; a
   condition it runs on muted before it, "if ok", "if not ok"; a wait on another unit under it,
   "waits for Terns"), **On** (what it runs on: an engine's name, a fn; muted, its own column
-  from 560px), **State** (`ui::status`: glyph and word, "bypassed" for a result its
+  from 560px, and only when the unit's steps run on more than one thing), **State** (`ui::status`: glyph and word, "bypassed" for a result its
   bypass preset settled, then a "bypass · <who set it>" tag while one waits, then `ui::tries`'
   "run 3"),
   **Progress** (a scatter's "12/40" or a short `step_progress` field, a 3px bar under an "a/b";
@@ -938,9 +939,12 @@ It is the unit page's body, what a plan row opens in place, and a step's Runs ta
   on the plan and in the drawer, its page elsewhere); the arrows, Home and End move between rows;
   the row in focus, clicked or open in the drawer is selected: `paper-2` under a 2px navy ring
   (the host's `selected`, kept through a patch). Hover is `paper-2` alone.
-- **In the plan.** A row of At work is a `<details>`: open, its step view stands under it on
-  `paper-2`, the current step's row tinted (`run` at 7%, `sand` at 18% for a look), then its
-  latest message, Message and Open step, and Unit page. It opens without script, and stays open
+- **In the plan.** On the row's own time (`View::recent`): the last twelve hours to now on
+  At work's log scale, so a run reads the same in the row and under it (a run that began
+  earlier starts at the left edge, saying how long ago). A row of At work is a `<details>`:
+  open, its step view stands under it on `paper-2`, the current step's row tinted (`run` at 7%;
+  `sand-pale` edged in sand for a look), then its latest message, Message and Unit page as quiet
+  links and Open step. It opens without script, and stays open
   through a patch (`data-preserve-attr="open"`), the unit moving between groups included.
 - **Narrow** (under 560px of its own width: a phone, a narrow drawer): one column, the rail
   and name, then state, progress and span, then the runs as a 4px bar; the head and the axis's
@@ -1017,7 +1021,8 @@ The components:
 - **`sluice-splitter`**, **`sluice-drawer`**: the board's splitter and the step drawer.
 
 The page's clock is no component: `nav.js` ticks every `<time>` (`data-since` a two-unit
-duration, `data-ago` "12m ago", `data-clock` a time of day on the reader's own clock), the
+duration, `data-ago` "12m ago", `data-clock` a time of day on the reader's own clock, which the
+server writes in UTC and names, "17:49 UTC", so it reads without script), the
 server writing each as it read the clock, and its text is left out of the stream's version,
 so a quiet board sends nothing.
 
@@ -1050,35 +1055,58 @@ The pages compose these parts; each lane that redraws one writes its section her
   Details, then one sentence from the status table's counts, the silences and the open
   questions, each state in its own word ("1 question for you, 2 failed, 1 quiet. 10 at work;
   73 of 92 done."; "3 at work, all heard from recently." when nothing needs the owner), the
-  question linked under the coral underline. The project's sections are soft pills under it
-  (the current one on `paper-2` at weight 600); the row's tools (Find, the switch, More) beside
-  them. Then the sheet, three sections each headed by a 13px label of weight 600:
-  - **Needs you**: the one raised well (`paper-2`, 14px), an item a line: its mark (a coral dot a
-    question, a sand square a stop, a sand ring a silence, said in words to a screen reader),
-    its sentence (the unit's title in weight 600 linking the step, what happened, its owner
-    small and muted; under it the failure's headline, what it last said and the advice, muted),
-    its one action (a pill: Answer, Retry, Retry with feedback, Retry all, Message it) and its
-    × (a 28px circle, 44px on a phone). Questions first, then stops (a shared cause said once,
-    its units folded in a `<details>`, Retry all), then silences, the longest first. A count
-    and "Dismiss all" stand in the head. An item set aside leaves a line under the well for ten
-    minutes, "Dismissed <what>" and Undo, and comes back by itself when it changes; with script
-    the × and Undo post in place, the focus going to Undo and back to the item. With nothing to
-    say, the well says "Nothing.".
-  - **Finished since you looked**: cards (10px, a hairline inset, three to a row from 760px,
-    one under it): when it finished and how long it took, the title in weight 600 linking the
+  question linked under the coral underline; what the owner set aside still counts there
+  (setting aside is about attention, never status). The project's sections are soft pills
+  under it (the current one on `paper-2` at weight 600), one line that scrolls within itself
+  on a phone; the row's tools (Find, the switch, More) beside them. Then the sheet, in a
+  measure of at most 1400px from the nav's left edge, so a row's parts and an item's action
+  stay with their words on a wide screen; three sections, each headed by an 18px/600 label
+  (body text is 15px):
+  - **Needs you**: the one raised well (`paper-2`, 14px), an item a line: its mark (a 12px
+    coral dot a question, outranking an 8px sand square a stop and an 8px sand ring a silence,
+    said in words to a screen reader), its sentence (the unit's title in weight 600 linking the
+    step, what happened, its owner small and muted; under it the failure's headline, what it
+    last said and the advice, muted), its one action (a pill: Answer, Retry, Retry with
+    feedback, Retry all, Message it) and its × (a 32px circle, 44px on a phone). Only the first
+    item's action is filled navy; the rest are outlined. Questions first, then stops (a shared
+    cause said once, its units folded in a `<details>`, Retry all), then silences, the longest
+    first. A cancel stays here: a cancelled step leaves its unit unfinished and holds the steps
+    after it, and the status table counts it as needing a look everywhere, so the owner still
+    decides (Retry, or set it aside, which settles its unit as done). A count and "Set all
+    aside" stand in the head. An item set aside leaves a line under the well for ten minutes,
+    "Set aside: the silence of <title>" and Undo, and comes back by itself when it changes; with
+    script the × and Undo post in place, the focus going to Undo and back to the item. With
+    nothing to say, the well says "Nothing.".
+  - **Finished since you looked**: cards (10px, a hairline inset, filling their row, one
+    under 760px): when it finished and how long it took, the title in weight 600 linking the
     unit, what it produced, a label muted before the value. "since 14:02" and "Mark as seen"
     (a plain form) in the head; with no look kept, "Finished lately", the latest four.
-  - **At work**: the roster, under an axis row (12h, 4h, 1h, 15m, now, in data mono 11px
-    over the tracks' column). A group a recipe, its name in weight 600 and its counts muted;
-    the units of no recipe after, the long runs last. A row (8px, `paper-2` on hover and open)
-    is a grid: the badge (a 30px circle, what it runs on), its title in weight 600 with its
-    owner muted and under it its recipe's view or its last message on one line, muted; its
+  - **At work**: the roster, under an axis row (12h, 4h, 1h, 15m, now, 12px over the tracks'
+    column). A group a recipe (a `<details>`, its triangle, its name in weight 600 and its counts
+    muted); the units of no recipe after, the long runs last. **Folding**: a roster of more than
+    12 rows folds each group of more than 3 rows that has nothing remarkable in it (no silence,
+    none of its recipe's units in Needs you) to its line, "article · 42 running · each heard
+    from in the last 25m"; a group with quiet or stopped work stays open. A row (8px,
+    `paper-2` on hover and open) is a grid: the badge (a 30px circle, an engine's name; drawn
+    only when rows run on more than one thing, never "fn"), its title in ink at weight 600 with
+    its owner muted and under it its recipe's view or its last message on one line, muted; its
     stage pill (the state's glyph, the stage and its time, on `paper-2`, 999px) and "heard 12m
-    ago" muted, or the quiet pill on the sand; its track (its last twelve hours on a log scale:
-    a done run `sky-ink` at 24%, a run the blue, quiet the sand, a wait dotted, a message a 1px
-    tick); the live dot. Waiting rows follow the running ones, muted. A line ends it: "4
-    waiting on earlier work · 25 done, the last 2h ago". Under 760px of the pane the row
-    stacks: badge and title, then the meta, then the track full width; the axis gives way.
+    ago" muted, or the quiet pill solid sand with its ink (`on-sand`) in both schemes; its
+    track (its last twelve hours on a log scale); the live dot. Waiting rows follow the running
+    ones. A line ends it: "4 waiting on earlier work · 25 done, the last 2h ago". Under 760px
+    of the pane the row stacks: badge and title, then the meta, then the track full width; the
+    long axis gives way to "12h … now" over each group's first track.
+    **The track's tones**, each at least 3:1 on the paper in both schemes: a run going
+    `--track-run` (the blue light, `run-ink` dark, where the blue would be 2.7:1); a done run
+    `sky-ink` at 45% on the paper edged in `sky-ink`; a silence the sand edged in `sand-mark`
+    (light) or filled sand (dark); a wait dotted; a message a 1px tick.
+    **The drilldown**: open, a row's step view (The step view) on the row's own scale, the
+    last twelve hours on the same log scale and as wide as the row's track, in the track's
+    tones: a run still going reads as its step does now (a quiet one on the sand from when it
+    fell silent), one that began earlier starts at the left edge, saying "from 3d ago". Its
+    "Runs on" column only when its steps differ. Its foot: the latest message (or "Not heard
+    from since 19:14"), then Message and Unit page as quiet links and Open step, its one
+    outlined move.
   - **Done**, asked for (Show: Done, a find, a recipe's units): the index, a dense list newest
     first in columns: finish time, glyph, title, how long it took (in `ink-muted`, like every
     finished duration: the blue is for what runs).
@@ -1094,7 +1122,7 @@ The pages compose these parts; each lane that redraws one writes its section her
   hairlines (`rule`, `rule-faint`) for the rest; two weights, 600 and 400 (the name 650). The
   palette's roles hold: coral only for a question, sand for a look, the blue only for what
   runs, sky for done. It reads in every theme, light and dark, from the same tokens; the radii
-  are the briefing's own, whatever a theme's `--radius-*`.
+  are the briefing's own, whatever a theme's `--radius-*`. No line explains how to read it.
 - **A step's page** (`/projects/id/<p>/steps/<s>`): under the row, its head (the gallery's
   Step head, `StepView::band`): its way back to its plan and its unit, its stage muted before
   its title at 28px with its Details (its id, unit, recipe, fn, run and tags), its state and how

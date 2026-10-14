@@ -1242,14 +1242,16 @@ pub fn load_board(
                 .unwrap_or_default();
             step.asking = summary.ask_of(step.id.as_str()).cloned();
         }
-        // a unit whose every step is done but a cancel the owner dismissed is done too: on
-        // the shelf, the cancel still on its card
+        // a unit settled by a cancel the owner dismissed is done: every step done, or held
+        // behind the cancel where nothing will run it (blocked, or pending and not ready); on
+        // the shelf, the cancel still said there
         if !unit.done
             && unit.steps.iter().any(|s| s.dismissed && s.cancelled())
-            && unit
-                .steps
-                .iter()
-                .all(|s| s.standing().spec().band == sluice_model::shown::Band::Done)
+            && unit.steps.iter().all(|s| {
+                s.standing().spec().band == sluice_model::shown::Band::Done
+                    || s.shown() == Shown::Blocked
+                    || (s.pending() && !s.ready())
+            })
         {
             unit.done = true;
         }

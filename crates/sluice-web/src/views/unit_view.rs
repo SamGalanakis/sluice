@@ -16,8 +16,10 @@ const ROW_CHARS: usize = 140;
 pub fn draw(root: &Component, unit: &UnitView, row: bool) -> TrustedHtml {
     let mut out = String::new();
     Draw { unit, row }.component(root, &mut out);
+    // in a row, phrasing alone (a row is a `<summary>`)
+    let tag = if row { "span" } else { "div" };
     TrustedHtml::owned(format!(
-        "<div class=\"uv{}\">{out}</div>",
+        "<{tag} class=\"uv{}\">{out}</{tag}>",
         if row { " uv-in-row" } else { " uv-page" }
     ))
 }
@@ -110,15 +112,16 @@ impl Draw<'_> {
         match c.name.as_str() {
             "Stack" => {
                 let row = c.str_arg(1) == Some("row");
+                let tag = if self.row { "span" } else { "div" };
                 let _ = write!(
                     out,
-                    "<div class=\"uv-stack {}\">",
+                    "<{tag} class=\"uv-stack {}\">",
                     if row { "uv-r" } else { "uv-c" }
                 );
                 for child in c.components_arg(0) {
                     self.component(child, out);
                 }
-                out.push_str("</div>");
+                let _ = write!(out, "</{tag}>");
             }
             "Text" => {
                 let muted = c.str_arg(1) == Some("muted");

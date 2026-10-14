@@ -170,12 +170,12 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
         !line.contains("class=\"tries\"") && !line.contains(">run 6<"),
         "{row}"
     );
-    // its step view says the run beside its state, its earlier runs faint on the axis
+    // its step view says the run beside its state, and its runs in words, the earlier ones
+    // too (on the plan's twelve hours, those before them are said, not drawn)
     let view = &row[row.find("<sluice-steps").expect("its step view")..];
     assert!(view.contains(">run 6<"), "{view}");
-    assert_eq!(
-        view.matches("sv-b is-old").count() + view.matches(" is-old\"").count(),
-        5,
+    assert!(
+        (1..=6).all(|n| view.contains(&format!("Run {n} "))),
         "{view}"
     );
     // a unit of no recipe: its second run, the first faint before it

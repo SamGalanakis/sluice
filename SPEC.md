@@ -2105,9 +2105,13 @@ one sentence from the status table's counts, the silences and the open questions
 state in its own word: the questions first, linked to where they are answered ("1 question for
 you"), then each stop and silence by its word ("2 failed, 1 cancelled, 1 quiet"), then "10 at
 work; 73 of 92 done."; with nothing for the owner, "3 at work, all heard from recently."; it
-names no unit. The project's sections (Plan, Day, Stats, Messages, Log, Functions, Settings)
-are pills under it. Then three
-sections, each a patch region:
+names no unit. It says what is true whatever the owner set aside: setting an item aside is
+about attention alone, so only Needs you's list, the tab title's ✕ count and the favicon leave
+it out (a cancel the owner dismissed is the exception the step's Dismiss always was: it settles
+its unit, which is then done). The project's sections (Plan, Day, Stats, Messages, Log,
+Functions, Settings) are pills under it, on one line that scrolls sideways within itself on a
+phone. Then three sections, each a patch region, in a measure of at most 1400px from the
+nav's left edge:
 
 - **Needs you**: every item that needs the owner, in one well, a sentence each with one action
   and a ×: the open questions to the owner someone waits on ("<title> asks: <its title>",
@@ -2120,47 +2124,61 @@ sections, each a patch region:
   readiness, a lost process, a passing failure outlasting its retries, exiting without
   submitting) said once ("3 runs stopped at their wall-clock cap"), the units in a fold, with
   Retry all; then the silences, the longest first ("<title> has not been heard from since 14:02,
-  3h ago.", Message it). Each is marked: a coral dot a question, a sand square a stop, a sand
-  ring a silence, said in words to a screen reader. The × sets the item aside (`POST …/needs`):
-  a cancel as its step's Dismiss, anything else by `needs_dismiss`, kept until it changes (a
-  stop's step is retried or recreated, a silent run writes, a question is answered or closed),
-  when it comes back by itself. For ten minutes after, "Dismissed <what> · Undo" stands under
-  the well, Undo putting it back. "Dismiss all" in the section's head sets every item aside.
-  With nothing to say the well says "Nothing.".
+  3h ago.", Message it). Only the first item's action is filled; the rest are outlined. Each is
+  marked: a coral dot a question (the larger mark), a sand square a stop, a sand ring a
+  silence, said in words to a screen reader. A cancel stays in Needs you: a cancelled step
+  leaves its unit unfinished and holds every step after it, and the status table counts it as
+  needing a look on every page (home, `show=attention`, the tab title), so the owner still has
+  one decision to make, Retry or set it aside (its step's Dismiss, which settles the unit). The
+  × sets the item aside (`POST …/needs`): a cancel as its step's Dismiss, anything else by
+  `needs_dismiss`, kept until it changes (a stop's step is retried or recreated, a silent run
+  writes, a question is answered or closed), when it comes back by itself. For ten minutes
+  after, "Set aside: <what> · Undo" stands under the well ("Set aside: the silence of <title>"),
+  Undo putting it back. "Set all aside" in the section's head sets every item aside. With
+  nothing to say the well says "Nothing.".
 - **Finished since you looked**: a card a unit finished since this browser last marked the
   project seen (its `sluice_seen_<p>` cookie), at most eight and how many more, newest first,
   "since 14:02"; with no mark kept, "Finished lately", the latest four. A card: when it finished
   and how long it took, its title linking its page, what it produced (its latest step's first
-  output that reads at a glance, else one that identifies, such as a commit). "Mark as seen" (`POST …/seen`) moves the mark to the
-  latest drawn; it works without script.
+  output that reads at a glance, else one that identifies, such as a commit). "Mark as seen"
+  (`POST …/seen`) moves the mark to the latest drawn; it works without script. The cards fill
+  their row.
 - **At work**: a row a unit at work or waiting once begun, grouped by recipe (its name linking
   `?recipe=<name>&show=all`, its rows counted running and waiting), then the units of no recipe,
   then the long runs (a unit of one step and no recipe reporting progress, or running six hours
   or more). In a group the running rows come first, the longest since it was heard from first,
-  then the waiting ones in plan order. A row: what its steps run on as a badge (an engine's
-  name, `fn` for a fn), its title with its owner small and muted, under it its recipe's view or
-  its last message and who sent it; its stage (its step's name in a unit of several or of a
-  recipe; a loose step's state alone), its state and how long it has run or waited; "heard 12m
-  ago", or "quiet 2h 3m" on the sand; a breathing dot while it was heard from in the last five
-  minutes; and its last twelve hours as a track on a log scale (its runs, a quiet stretch on the
-  sand, a wait dotted, a tick a message), under one axis (12h, 4h, 1h, 15m, now). A unit that has
-  not begun and waits on earlier work is counted, not drawn ("4 waiting on earlier work · 25
-  done, the last 2h ago"), unless a find, `root=` or `recipe=` asks for it. A row is a
-  `<details>`: it opens without script to its step view (below), its current step's row
-  tinted, then its latest message, Message and Open step, and Unit page; it stays open through a
-  patch. A failed, cancelled or stale unit is a stop in Needs you, not a row.
+  then the waiting ones in plan order. A group is a `<details>`, open; in a roster of more than
+  12 rows a group of more than 3 with nothing remarkable in it (no silence, none of its
+  recipe's units in Needs you) folds to its line ("article · 42 running · each heard from in
+  the last 25m"), opening without script. A row: what its steps run on as a badge, only where
+  that tells rows apart and never for a fn (an engine's name), its title with its owner small
+  and muted, under it its recipe's view or its last message and who sent it; its stage (its
+  step's name in a unit of several or of a recipe; a loose step's state alone), its state and
+  how long it has run or waited; "heard 12m ago", or "quiet 2h 3m" on the sand; a breathing dot
+  while it was heard from in the last five minutes; and its last twelve hours as a track on a
+  log scale (its runs, a quiet stretch on the sand, a wait dotted, a tick a message), under one
+  axis (12h, 4h, 1h, 15m, now; on a phone, "12h" and "now" over each group's first track). A
+  unit that has not begun and waits on earlier work is counted, not drawn ("4 waiting on earlier
+  work · 25 done, the last 2h ago"), unless a find, `root=` or `recipe=` asks for it. A row is
+  a `<details>`: it opens without script to its step view (below) on the row's own scale, the
+  same twelve hours on the same log scale, its current step's row tinted (a run that began
+  earlier starts at the left edge, saying "from 3d ago"; one over before it is said, not
+  drawn), then its latest message (or "Not heard from since 19:14"), Open step, and Message and
+  Unit page as quiet links; it stays open through a patch. A failed, cancelled or stale unit is
+  a stop in Needs you, not a row.
 
 A view whose program does not check says so once over its group ("This recipe's view does not
 check, so its summary is left out: …"). The find, `show`, `tag`, `recipe` and `root` keep or
 hide whole units. Each item of Needs you and each row is a patch region of its own, so a change
 patches the item or row it moved and nothing else. A step whose state the live plan moves on is
 said once to a screen reader ("alpha-review failed"), from the `data-said` each item, row, card
-and Done line carries, also when its unit moves between sections.
+and Done line carries, also when its unit moves between sections. A time of day is drawn on the
+server in UTC and says so ("19:14 UTC"); the page's script sets it on the reader's own clock.
 
 **The step view.** A unit drawn step by step: a row a step in graph order (its recipe's order,
 else the plan's, each step after every step of its unit it comes after), named by its stage
 (else its id less the unit's prefix) and linking to it; then what it runs on (an engine's name,
-a fn). A rail at its left draws the gates
+a fn), a column only when its steps run on more than one thing. A rail at its left draws the gates
 between the unit's steps (an `after` entry or a value passed): a node a step, filled when done,
 ringed when not reached, an arc turning while it runs, sand when it needs a look; a chain runs
 down one lane, a branch and a join take lanes beside it with an arrow into each step they reach,

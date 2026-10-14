@@ -36,16 +36,10 @@ use std::fmt::Write;
 pub const LONG_RUN: f64 = 6.0 * 3600.0;
 /// A unit heard from within this long (seconds) wears the live dot.
 const LIVE: f64 = 300.0;
-/// The log scale's knee, seconds: the track gives the last few minutes as much room as hours.
-const KNEE: f64 = 360.0;
-/// The labels over the tracks: how long ago, and their words.
-const AXIS: [(f64, &str); 5] = [
-    (SAID_WINDOW, "12h"),
-    (4.0 * 3600.0, "4h"),
-    (3600.0, "1h"),
-    (900.0, "15m"),
-    (0.0, "now"),
-];
+/// A roster of more than this many rows folds its unremarkable groups to their lines...
+const FOLD_ROSTER: usize = 12;
+/// ...each of more than this many rows.
+const FOLD_GROUP: usize = 3;
 /// How long (minutes) an item the owner set aside keeps its Dismissed line, with its Undo.
 const UNDO_MINUTES: f64 = 10.0;
 /// At most this many finished units are drawn in Finished since you looked.
@@ -422,7 +416,7 @@ impl<'a> Plan<'a> {
                 sentence: format!("<b>{who}</b> asks: {}", esc(&ask.title)),
                 more: String::new(),
                 act: format!(
-                    "<a class=\"act main\" href=\"{}\"{}>Answer</a>",
+                    "<a class=\"act\" href=\"{}\"{}>Answer</a>",
                     esc(&ask.href(&project)),
                     if ask.step.is_empty() {
                         String::new()
@@ -515,7 +509,7 @@ impl<'a> Plan<'a> {
                     "<a class=\"act\" href=\"{}\">Message it</a>",
                     esc(&step.thread_href())
                 ),
-                short: format!("{} going quiet", ui::cut(title(unit), 60)),
+                short: format!("the silence of {}", ui::cut(title(unit), 60)),
                 aside: self.aside(&key),
                 keys: vec![key],
             });
@@ -599,12 +593,12 @@ impl<'a> Plan<'a> {
         let act = if step.feedback_in_why() && shown == Shown::Failed {
             // a failure that repeated: its feedback first, on its page
             format!(
-                "<a class=\"act main\" href=\"{}#why-feedback\" data-step=\"{}\">Retry with feedback</a>",
+                "<a class=\"act\" href=\"{}#why-feedback\" data-step=\"{}\">Retry with feedback</a>",
                 esc(&step.href()),
                 esc(step.id.as_str())
             )
         } else if step.retryable() && !step.retry_asks() {
-            self.retry_form(&[step], "Retry", step.cancelled())
+            self.retry_form(&[step], "Retry")
         } else {
             format!(
                 "<a class=\"act\" href=\"{}\" data-step=\"{}\">Open step</a>",
@@ -626,7 +620,15 @@ impl<'a> Plan<'a> {
             sentence,
             more: String::new(),
             act,
-            short: format!("{} ({})", ui::cut(title(unit), 60), shown.word()),
+            short: format!(
+                "the {} of {}",
+                match shown {
+                    Shown::Cancelled => "cancel",
+                    Shown::Stale => "stale input",
+                    _ => "failure",
+                },
+                ui::cut(title(unit), 60)
+            ),
             aside: if step.cancelled() {
                 step.dismissed.then(|| step.dismissed_at.clone())
             } else {
@@ -670,7 +672,7 @@ impl<'a> Plan<'a> {
             .filter(|s| s.retryable() && !s.retry_asks())
             .collect();
         let act = if steps.len() == n {
-            self.retry_form(&steps, "Retry all", false)
+            self.retry_form(&steps, "Retry all")
         } else {
             String::new()
         };
@@ -710,19 +712,18 @@ impl<'a> Plan<'a> {
         }
     }
     /// Retry for `steps`: one step's own action form, or the plan's for several.
-    fn retry_form(&self, steps: &[&StepView], word: &str, quiet: bool) -> String {
+    fn retry_form(&self, steps: &[&StepView], word: &str) -> String {
         let next = format!("{}#needs", self.view.href());
-        let class = if quiet { "act" } else { "act main" };
         match steps {
             [step] => format!(
-                "<form class=\"nd-form\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"{class}\">{word}</button></form>",
+                "<form class=\"nd-form\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"act\">{word}</button></form>",
                 h = esc(&step.href()),
                 rev = step.revision,
                 seen = esc(&step.seen()),
                 next = esc(&next),
             ),
             steps => format!(
-                "<form class=\"nd-form\" method=\"post\" action=\"{h}/needs\"><input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"items\" value=\"{items}\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"{class}\">{word}</button></form>",
+                "<form class=\"nd-form\" method=\"post\" action=\"{h}/needs\"><input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"items\" value=\"{items}\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"act\">{word}</button></form>",
                 h = esc(&self.view.href()),
                 items = esc(&steps
                     .iter()
@@ -788,8 +789,8 @@ impl<'a> Plan<'a> {
                 "dismiss",
                 &keys,
                 "link",
-                "Dismiss all: each comes back when it changes",
-                "Dismiss all",
+                "Set all aside: each comes back when it changes",
+                "Set all aside",
                 "",
                 "needs",
             ));
@@ -799,7 +800,13 @@ impl<'a> Plan<'a> {
             out.push_str("<p class=\"nd-none\">Nothing.</p>");
         } else {
             out.push_str("<ul class=\"nd\">");
-            for need in &live {
+            for (n, need) in live.iter().enumerate() {
+                // one filled action in the well: the first item's
+                let act = if n == 0 {
+                    need.act.replacen("class=\"act\"", "class=\"act main\"", 1)
+                } else {
+                    need.act.clone()
+                };
                 // a region each, so a change to one patches it alone
                 let attrs = match self.view.units.iter().find(|u| u.id.as_str() == need.unit) {
                     Some(unit) => format!(
@@ -815,12 +822,12 @@ impl<'a> Plan<'a> {
                     &attrs,
                     &need.sentence,
                     &need.more,
-                    &need.act,
+                    &act,
                     &self.needs_form(
                         "dismiss",
                         &need.keys,
                         "x",
-                        &format!("Dismiss {}: it comes back when it changes", need.short),
+                        &format!("Set aside {}: it comes back when it changes", need.short),
                         "×",
                         "",
                         &format!("undo-{}", need.id),
@@ -835,13 +842,13 @@ impl<'a> Plan<'a> {
             for need in &aside {
                 let _ = write!(
                     out,
-                    "<li><span>Dismissed {}</span>{}</li>",
+                    "<li><span>Set aside: {}</span>{}</li>",
                     esc(&need.short),
                     self.needs_form(
                         "undo",
                         &need.keys,
                         "link",
-                        &format!("Undo dismissing {}", need.short),
+                        &format!("Undo setting aside {}", need.short),
                         "Undo",
                         &format!("undo-{}", need.id),
                         &need.id,
@@ -860,11 +867,23 @@ impl<'a> Plan<'a> {
     /// its own word: "1 question for you, 2 failed, 1 quiet. 10 at work; 73 of 92 done." or,
     /// healthy, "10 at work, all heard from recently. 73 of 92 done."
     fn sentence(&self) -> String {
-        let live: Vec<&Need> = self.needs.iter().filter(|n| n.aside.is_none()).collect();
+        // what is true, whatever the owner set aside: setting aside is about attention alone
+        // (a cancel the owner dismissed is settled, its unit done)
+        let standing: Vec<&Need> = self
+            .needs
+            .iter()
+            .filter(|n| {
+                !self
+                    .view
+                    .units
+                    .iter()
+                    .any(|u| u.done && u.id.as_str() == n.unit)
+            })
+            .collect();
         let asks = self.view.project.asks.len();
         // each stop and silence by its state's word, in the status table's order
         let mut states: BTreeMap<Shown, usize> = BTreeMap::new();
-        for need in &live {
+        for need in &standing {
             for key in &need.keys {
                 let step = key.split_once(':').map_or("", |(_, rest)| {
                     rest.split_once('@').map_or(rest, |(step, _)| step)
@@ -1079,15 +1098,24 @@ impl<'a> Plan<'a> {
             if rows == 0 {
                 "Nothing now".to_owned()
             } else {
-                format!(
-                    "{}, the longest silent first",
-                    ui::count(rows, "unit", "units")
-                )
+                ui::count(rows, "unit", "units")
             }
         );
         if rows > 0 {
-            out.push_str("<div class=\"ro\">");
-            out.push_str(&axis());
+            // a badge says what a row's steps run on only where that tells rows apart
+            let badges: std::collections::BTreeSet<String> = self
+                .groups
+                .iter()
+                .flat_map(|g| &g.rows)
+                .map(|r| current(r.unit).map(|s| s.badge()).unwrap_or_default())
+                .collect();
+            let badged = badges.len() > 1;
+            let _ = write!(
+                out,
+                "<div class=\"ro{}\">",
+                if badged { "" } else { " no-badge" }
+            );
+            out.push_str(&axis(""));
             for group in &self.groups {
                 let running = group.rows.iter().filter(|r| !r.waiting).count();
                 let waiting = group.rows.len() - running;
@@ -1098,6 +1126,35 @@ impl<'a> Plan<'a> {
                 if waiting > 0 {
                     counts.push(format!("{waiting} waiting"));
                 }
+                // a big roster folds a group with nothing remarkable in it to its line: no
+                // silence, none of its recipe's units in Needs you
+                let remarkable =
+                    group
+                        .rows
+                        .iter()
+                        .any(|r| r.unit.steps.iter().any(|s| s.shown() == Shown::Quiet))
+                        || (!group.recipe.is_empty()
+                            && self.needs.iter().any(|n| {
+                                n.aside.is_none()
+                                    && self.view.units.iter().any(|u| {
+                                        u.id.as_str() == n.unit && u.recipe == group.recipe
+                                    })
+                            }));
+                let folded = rows > FOLD_ROSTER && group.rows.len() > FOLD_GROUP && !remarkable;
+                // folded, how long since the most silent of them was heard from
+                let heard = group
+                    .rows
+                    .iter()
+                    .filter_map(|r| r.heard)
+                    .reduce(f64::min)
+                    .filter(|_| folded)
+                    .map(|t| {
+                        format!(
+                            " · each heard from in the last {}",
+                            esc(&ui::duration_text((self.now - t).max(60.0)))
+                        )
+                    })
+                    .unwrap_or_default();
                 let name = if group.recipe.is_empty() {
                     esc(&group.name)
                 } else {
@@ -1111,8 +1168,10 @@ impl<'a> Plan<'a> {
                 };
                 let _ = write!(
                     out,
-                    "<h3 class=\"ro-group\"><b>{name}</b> · {}</h3>",
-                    counts.join(", ")
+                    "<details class=\"ro-g\"{}><summary class=\"ro-group\"><h3><b>{name}</b> · {}{heard}</h3></summary>{}",
+                    if folded { "" } else { " open" },
+                    counts.join(", "),
+                    axis(" ro-axis-g"),
                 );
                 // a recipe whose view does not check: said once
                 if let Some(error) = group
@@ -1124,8 +1183,12 @@ impl<'a> Plan<'a> {
                     out.push_str(super::unit_view::broken(error).as_str());
                 }
                 for row in &group.rows {
-                    out.push_str(&region(&format!("u-{}", row.unit.id), &self.row_html(row)));
+                    out.push_str(&region(
+                        &format!("u-{}", row.unit.id),
+                        &self.row_html(row, badged),
+                    ));
                 }
+                out.push_str("</details>");
             }
             out.push_str("</div>");
         }
@@ -1155,14 +1218,16 @@ impl<'a> Plan<'a> {
     }
     /// One unit's row: its badge, its title and what it said last, its stage and when it was
     /// heard from, its activity; open, its steps.
-    fn row_html(&self, row: &Row<'_>) -> String {
+    fn row_html(&self, row: &Row<'_>, badged: bool) -> String {
         let unit = row.unit;
         let shown = unit.shown();
         let step = current(unit);
-        let (badge, runs_on) = step.map_or_else(
-            || ("fn".to_owned(), String::new()),
-            |s| (s.badge(), s.runs_on()),
-        );
+        // an engine's name where badges tell rows apart; never "fn"
+        let (badge, runs_on) = step
+            .filter(|_| badged)
+            .map(|s| (s.badge(), s.runs_on()))
+            .filter(|(b, _)| b != "fn")
+            .unwrap_or_default();
         // where it is: its stage and how long in it, or what holds it
         let mut meta = String::new();
         if let Some(step) = step {
@@ -1258,12 +1323,11 @@ impl<'a> Plan<'a> {
             .and_then(|r| r.view())
         {
             let drawn = super::unit_view::draw(view, unit, true);
-            return if super::unit_view::empty(&drawn) {
-                String::new()
-            } else {
-                drawn.0
-            };
+            if !super::unit_view::empty(&drawn) {
+                return drawn.0;
+            }
         }
+        // nothing said leaves the line empty: its meta says when it was last heard from
         said_html(unit)
     }
     /// A unit's activity over the last twelve hours on a log scale: its earlier runs faint, the
@@ -1314,13 +1378,23 @@ impl<'a> Plan<'a> {
         let mut steps = super::unit_steps::of_unit(unit, &self.view.relations, true, "");
         steps.owner.clear();
         steps.latest = None;
+        steps.recent = true;
         steps.html().0
     }
     /// The drilldown's foot: the latest that was said, then Message and Open step.
     fn foot_html(&self, unit: &UnitView) -> String {
         let mut out = String::from("<div class=\"ro-foot\"><p class=\"ro-ev\">");
         if unit.last_message.trim().is_empty() {
-            out.push_str("No message yet.");
+            match heard(unit).or_else(|| last_end(unit)) {
+                Some(at) => {
+                    let _ = write!(
+                        out,
+                        "Not heard from since {}",
+                        ui::clock(&super::rfc3339(at as u64))
+                    );
+                }
+                None => out.push_str("Not begun"),
+            }
         } else {
             let _ = write!(
                 out,
@@ -1334,20 +1408,24 @@ impl<'a> Plan<'a> {
             );
         }
         out.push_str("</p>");
+        out.push_str("<span class=\"ro-links\">");
+        if let Some(step) = current(unit) {
+            let _ = write!(out, "<a href=\"{}\">Message</a>", esc(&step.thread_href()),);
+        }
+        let _ = write!(
+            out,
+            "<a href=\"{}\">Unit page</a></span>",
+            esc(&unit_href(self.view, unit))
+        );
         if let Some(step) = current(unit) {
             let _ = write!(
                 out,
-                "<a class=\"act\" href=\"{}\">Message</a><a class=\"act\" href=\"{}\" data-step=\"{}\">Open step</a>",
-                esc(&step.thread_href()),
+                "<a class=\"act\" href=\"{}\" data-step=\"{}\">Open step</a>",
                 esc(&step.href()),
                 esc(step.id.as_str()),
             );
         }
-        let _ = write!(
-            out,
-            "<a class=\"act\" href=\"{}\">Unit page</a></div>",
-            esc(&unit_href(self.view, unit))
-        );
+        out.push_str("</div>");
         out
     }
 
@@ -1414,10 +1492,14 @@ impl<'a> Plan<'a> {
     }
 }
 
-/// A moment `ago` seconds before now on the track's log scale, percent from its left.
-fn x_of(ago: f64) -> f64 {
-    let ago = ago.clamp(0.0, SAID_WINDOW);
-    100.0 * (1.0 - (1.0 + ago / KNEE).ln() / (1.0 + SAID_WINDOW / KNEE).ln())
+/// When a unit's last run ended (seconds since the epoch), none while one goes.
+fn last_end(unit: &UnitView) -> Option<f64> {
+    unit.steps
+        .iter()
+        .filter_map(|s| s.timing.as_ref())
+        .flat_map(|t| t.spans.iter())
+        .filter_map(|s| s.to)
+        .reduce(f64::max)
 }
 
 // ---- the plan's parts, drawn here and on `/_ui` -------------------------------------------------
@@ -1470,12 +1552,17 @@ pub fn finished_card(
         },
     )
 }
-/// The labels over At work's tracks: 12h, 4h, 1h, 15m and now, where the log scale puts them.
-pub fn axis() -> String {
+/// The labels over At work's tracks: 12h, 4h, 1h, 15m and now, where the log scale puts them;
+/// `class` " ro-axis-g" for a group's own, which a narrow plan shows over its tracks.
+pub fn axis(class: &str) -> String {
     let mut out =
-        String::from("<div class=\"ro-axis\" aria-hidden=\"true\"><span class=\"ro-ticks\">");
-    for (ago, words) in AXIS {
-        let _ = write!(out, "<span style=\"left:{:.2}%\">{words}</span>", x_of(ago));
+        format!("<div class=\"ro-axis{class}\" aria-hidden=\"true\"><span class=\"ro-ticks\">");
+    for (ago, words) in super::unit_steps::RECENT {
+        let _ = write!(
+            out,
+            "<span style=\"left:{:.2}%\">{words}</span>",
+            super::unit_steps::recent_at(ago)
+        );
     }
     out.push_str("</span></div>");
     out
@@ -1490,7 +1577,10 @@ pub fn track(segs: &[(&str, f64, f64)], ticks: &[f64], now: f64) -> String {
         if *b < from {
             continue;
         }
-        let (l, r) = (x_of(now - a.max(from)), x_of(now - b));
+        let (l, r) = (
+            super::unit_steps::recent_at(now - a.max(from)),
+            super::unit_steps::recent_at(now - b),
+        );
         let _ = write!(
             bars,
             "<i class=\"{class}\" style=\"left:{l:.2}%;width:{:.2}%\"></i>",
@@ -1503,7 +1593,7 @@ pub fn track(segs: &[(&str, f64, f64)], ticks: &[f64], now: f64) -> String {
         let _ = write!(
             bars,
             "<i class=\"tk-m\" style=\"left:{:.2}%\"></i>",
-            x_of(now - t)
+            super::unit_steps::recent_at(now - t)
         );
     }
     format!(
@@ -1521,6 +1611,7 @@ pub struct RowParts<'a> {
     pub waiting: bool,
     /// Its steps' states, as `data-said` carries them ("" for none).
     pub said_states: &'a str,
+    /// What its steps run on, short ("" for no badge: rows that all run on one thing, or a fn).
     pub badge: &'a str,
     pub runs_on: &'a str,
     pub title: &'a str,
@@ -1539,7 +1630,7 @@ pub struct RowParts<'a> {
 /// opens in place without script.
 pub fn roster_row(row: &RowParts<'_>) -> String {
     format!(
-        "<details id=\"u-{id}\" class=\"ro-u{wait}\" data-unit=\"{id}\"{states} data-preserve-attr=\"open\"><summary class=\"ro-r\"><span class=\"ro-badge\" title=\"{on}\">{badge}</span><span class=\"ro-who\"><span class=\"ro-t\">{title}{own}</span><span class=\"ro-s\">{said}</span></span><span class=\"ro-meta\">{meta}</span>{track}<span class=\"ro-chev\" aria-hidden=\"true\">{chev}</span></summary><div class=\"ro-drill\">{drill}</div></details>",
+        "<details id=\"u-{id}\" class=\"ro-u{wait}\" data-unit=\"{id}\"{states} data-preserve-attr=\"open\"><summary class=\"ro-r\">{badge}<span class=\"ro-who\"><span class=\"ro-t\">{title}{own}</span><span class=\"ro-s\">{said}</span></span><span class=\"ro-meta\">{meta}</span>{track}<span class=\"ro-chev\" aria-hidden=\"true\">{chev}</span></summary><div class=\"ro-drill\">{drill}</div></details>",
         id = esc(row.id),
         wait = if row.waiting { " is-wait" } else { "" },
         states = if row.said_states.is_empty() {
@@ -1547,12 +1638,16 @@ pub fn roster_row(row: &RowParts<'_>) -> String {
         } else {
             format!(" data-said=\"{}\"", esc(row.said_states))
         },
-        on = esc(&if row.runs_on.is_empty() {
+        // what its steps run on, where that tells rows apart ("" for no badge)
+        badge = if row.badge.is_empty() {
             String::new()
         } else {
-            format!("Runs on {}", row.runs_on)
-        }),
-        badge = esc(&ui::cut(row.badge, 5)),
+            format!(
+                "<span class=\"ro-badge\" title=\"Runs on {}\">{}</span>",
+                esc(row.runs_on),
+                esc(&ui::cut(row.badge, 5))
+            )
+        },
         title = esc(row.title),
         own = if row.owner.is_empty() {
             String::new()
