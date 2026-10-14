@@ -2199,6 +2199,14 @@ payload. **Decision:** preparation produces the compiled candidate itself.
 The runtime (lane D) owns the plan cache, `recipe_generation(home, project) ->
 RecipeGeneration`, and naming keyed by `(rev, recipe_generation)`.
 
+The scheduler reads a compiled context before its later admission snapshots and writer
+transactions. An edit between them can move `plans.rev`; `check_context` then refuses with
+`current_rev`, or `resources::admit_order` refuses `compiled plan is stale`. The scheduler
+restarts reconciliation with a fresh context immediately, with three attempts in all per
+call. It retains the admission count and all committed reservations and completions across
+restarts. The third stale attempt defers as before. Other refusals are not retried, and each
+attempt repeats the existing admission and fencing checks.
+
 ## 9. Readers to migrate
 
 Every reader of `plans.doc`, of `plan_edits.ops`, of a whole compiled document, of the document

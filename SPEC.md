@@ -909,6 +909,13 @@ whose launch fails before the payload starts fails that run with `process_lost`;
 started twice. Built-in fns that need no process run inside the coordinator. A step with a
 bypass preset waiting (§7.7) is never admitted: it settles instead.
 
+If an edit moves the plan revision between the scheduler's plan read and an admission
+check, reconciliation restarts immediately with a fresh plan, with three attempts in all per
+call. Reservations and completions already committed remain in place and count toward that
+call's admissions. If the third attempt is stale too, the scheduler defers the project as
+usual. Other refusals still defer immediately; every attempt keeps the same scheduler lease,
+installation fence, drain and resource checks.
+
 ### 7.3 Staleness
 
 When a step starts or is set by hand it records `inputs_hash`, a hash of the canonical JSON of

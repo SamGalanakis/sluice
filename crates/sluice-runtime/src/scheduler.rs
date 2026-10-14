@@ -30,6 +30,11 @@ use tokio_util::sync::CancellationToken;
 
 pub const CAPACITY_INTERVAL: Duration = Duration::from_secs(10);
 pub const FULL_INTERVAL: Duration = Duration::from_secs(30);
+const RECONCILE_TRIES: usize = 3;
+
+#[cfg(test)]
+#[path = "scheduler_tests.rs"]
+mod tests;
 
 /// Recheck the connection-owned lease in the same transaction as every reservation.
 fn lease(tx: &sluice_store::WriteTransaction<'_>, owner: &str) -> sluice_store::Result<()> {
@@ -53,7 +58,55 @@ pub async fn reconcile_project<H: ExecutionHost>(
     project: ProjectId,
     owner: &str,
 ) -> Result<usize, PublicError> {
+    reconcile_project_with(
+        broker,
+        project,
+        owner,
+        #[cfg(test)]
+        async |_| {},
+    )
+    .await
+}
+
+async fn reconcile_project_with<H: ExecutionHost>(
+    broker: &Coordinator<H>,
+    project: ProjectId,
+    owner: &str,
+    #[cfg(test)] mut after_reconcile: impl AsyncFnMut(plans::PlanContext),
+) -> Result<usize, PublicError> {
     let mut admitted = 0;
+    let mut attempt = 1;
+    loop {
+        let result = reconcile_pass(
+            broker,
+            project,
+            owner,
+            &mut admitted,
+            #[cfg(test)]
+            &mut after_reconcile,
+        )
+        .await;
+        match result {
+            Err(PublicError::Conflict {
+                ref message,
+                current_rev,
+            }) if attempt < RECONCILE_TRIES
+                && (current_rev.is_some() || message == "compiled plan is stale") =>
+            {
+                attempt += 1
+            }
+            result => return result.map(|()| admitted),
+        }
+    }
+}
+
+async fn reconcile_pass<H: ExecutionHost>(
+    broker: &Coordinator<H>,
+    project: ProjectId,
+    owner: &str,
+    admitted: &mut usize,
+    #[cfg(test)] after_reconcile: &mut impl AsyncFnMut(plans::PlanContext),
+) -> Result<(), PublicError> {
     loop {
         let context = broker.context(project).await?;
         let copy = context.clone();
@@ -68,6 +121,8 @@ pub async fn reconcile_project<H: ExecutionHost>(
                 Ok(())
             })
             .await?;
+        #[cfg(test)]
+        after_reconcile(context.clone()).await;
         let copy = context.clone();
         let (state, order) = broker
             .reads()
@@ -249,7 +304,7 @@ pub async fn reconcile_project<H: ExecutionHost>(
                 )
                 .await?;
                 progressed = true;
-                admitted += 1;
+                *admitted += 1;
                 break;
             }
             let execution = broker
@@ -351,13 +406,13 @@ pub async fn reconcile_project<H: ExecutionHost>(
                             .await?;
                     }
                 }
-                admitted += 1;
+                *admitted += 1;
                 progressed = true;
             }
         }
         if !progressed {
             record_queues(broker, context, owner).await?;
-            return Ok(admitted);
+            return Ok(());
         }
     }
 }
