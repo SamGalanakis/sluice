@@ -50,6 +50,8 @@ The suite is small, fast and end to end. The default run takes about a minute.
 - The slow tier is tests named `slow_*`: durability across releases (cutover, schema
   migration, release builds), browser checks beyond each page's smoke, scale. It runs with
   `scripts/check --slow` for changes to release, deploy, install, schema or storage-format code.
+  Ship also runs this tier in its land check when the branch changes deployment, installation,
+  release, home migration or store durability sources, and `--dry-run` prints the paths and command.
   It also holds cost gates and scenarios blocked by fixed product retry, quiet-time or stream
   observation windows until controllable timing is available.
 - Before adding a test, name the real bug it catches that no existing test catches. If you can't,
@@ -72,7 +74,12 @@ Never `systemctl restart` a deploy-started transient unit; re-create it with `sy
   compat N releases ok · adopted M runs`. `--dry-run` prints each step and changes nothing.
 - Gate once. A branch passes `scripts/check` once, on its finished change, and never again
   because main moved. Ship's land check runs on the rebased tree before every push: Clippy over
-  the whole workspace (every target, so every test compiles) and the fast suite. A rebase
+  the whole workspace (every target, so every test compiles) and the fast suite. If the branch's
+  base..head diff changes `scripts/{deploy,build-release,compat-check,cutover-rehearse,ship}`,
+  `crates/sluice/src/{install,release}.rs`, `crates/sluice/src/modes/{install,home}.rs`,
+  `crates/sluice-store/src/{schema,writer,convert}.rs` or `crates/sluice-store/migrations/`, it also runs
+  `cargo nextest run --workspace --all-targets --locked --profile slow` and names the changed paths.
+  This applies before every push attempt; `--dry-run` prints the reason and slow command too. A rebase
   conflict stops the ship: resolve it, run the tests covering the code you resolved, and ship
   again. A ship's temporary checkout borrows this checkout's `.venv` and `target/private-tmux`.
 - `scripts/compat-check [--release DIR]` proves a candidate release (default: the newest under

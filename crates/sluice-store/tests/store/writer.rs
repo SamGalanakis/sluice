@@ -124,6 +124,46 @@ async fn caller_cancellation_after_admission_does_not_cancel_commit() {
 async fn writer_recovers_from_panics_and_refuses_untracked_or_early_commits() {
     let (_home, writer, reads, project) = setup().await;
     {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let ran = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (called, guard) = (ran.clone(), Dropped(dropped.clone()));
+        let error = writer
+            .write(
+                RetrySafety::NonIdempotent,
+                move |tx| -> sluice_store::Result<()> {
+                    assert_eq!(
+                        tx.sql()
+                            .query_row("PRAGMA synchronous", [], |row| row.get::<_, i64>(0))?,
+                        2
+                    );
+                    tx.on_commit(move || {
+                        let _guard = guard;
+                        called.store(true, Ordering::SeqCst);
+                    });
+                    Err(StoreError::Public(PublicError::Invalid {
+                        message: "failed write".into(),
+                        errors: Default::default(),
+                    }))
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, PublicError::Invalid { .. }));
+        assert!(!ran.load(Ordering::SeqCst));
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    {
         let error = writer
             .write(
                 RetrySafety::NonIdempotent,

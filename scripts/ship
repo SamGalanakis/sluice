@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Ship a branch: rebase onto origin/main, lint and run the fast suite, push to main, deploy that
+# Ship a branch: rebase onto origin/main, lint and run the required suites, push to main, deploy that
 # commit to the selected home, and check that the deploy adopted every live run.
 set -euo pipefail
 script_repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
 exec python3 - "$script_repo" "$@" <<'PY'
 import argparse, json, os, pathlib, re, shutil, sqlite3, subprocess, sys, tempfile, time, urllib.request
 parser = argparse.ArgumentParser(prog='scripts/ship', description=
-    'Rebase REF onto origin/main, lint the workspace and run the fast suite, push it to main, deploy origin/main to the selected home and check '
+    'Rebase REF onto origin/main, lint the workspace and run the fast suite plus durability checks when needed, push it to main, deploy origin/main to the selected home and check '
     'that every live run was adopted.')
 parser.add_argument('ref', nargs='?', default='HEAD', help='what to ship (default HEAD of the current worktree)')
 parser.add_argument('--dry-run', action='store_true', help='print each step; rebase, build, push and deploy nothing')
@@ -60,6 +60,20 @@ def cleanup():
     if not dry: git('worktree', 'remove', '--force', str(work), cwd=worktree, check=False)
     shutil.rmtree(temporary, ignore_errors=True)
 
+DURABILITY_PATHS = (
+    'scripts/deploy', 'scripts/build-release', 'scripts/compat-check',
+    'scripts/cutover-rehearse', 'scripts/ship',
+    'crates/sluice/src/install.rs', 'crates/sluice/src/release.rs',
+    'crates/sluice/src/modes/install.rs', 'crates/sluice/src/modes/home.rs',
+    'crates/sluice-store/src/schema.rs', 'crates/sluice-store/src/writer.rs',
+    'crates/sluice-store/src/convert.rs',
+)
+def durability_changes(base, head):
+    # Include both names of renames, so moving a durability source cannot skip the gate.
+    changed = git('diff', '--name-only', '--no-renames', base + '..' + head, cwd=work).splitlines()
+    return [path for path in changed if path in DURABILITY_PATHS
+            or path.startswith('crates/sluice-store/migrations/')]
+
 def selected():
     launcher = shutil.which('sluice') or str(pathlib.Path(args.prefix) / 'bin/sluice')
     result = subprocess.run([launcher, 'install', 'status'], capture_output=True, text=True)
@@ -89,7 +103,8 @@ def refuse_incompatible(commit, home):
 try:
     say('shipping %s from %s%s' % (args.ref, work, ' (dry run)' if dry else ''))
     refuse_incompatible(args.ref, selected())  # an installation that cannot be deployed to, or an incompatible ref, stops this before main moves
-    git('fetch', '--quiet', 'origin', '+refs/heads/main:refs/remotes/origin/main', cwd=work)
+    if dry: say('$ git fetch origin main (would refresh origin/main)')
+    else: git('fetch', '--quiet', 'origin', '+refs/heads/main:refs/remotes/origin/main', cwd=work)
     head = git('rev-parse', args.ref if dry else 'HEAD', cwd=work)
     for attempt in range(1, args.retries + 1):
         upstream = git('rev-parse', 'origin/main', cwd=work)
@@ -108,8 +123,8 @@ try:
                     fail('rebase onto %s conflicts; resolve it by hand, re-gate and ship again:\n%s' % (upstream[:12], rebase.stdout + rebase.stderr))
                 head = git('rev-parse', 'HEAD', cwd=work)
         # The land check, on the rebased tree before every push: the whole workspace compiles and
-        # lints clean (every crate, example and test target) and the fast suite passes. It never
-        # runs the slow tier; that is `scripts/check --slow`, for release, deploy and schema work.
+        # lints clean (every crate, example and test target) and the fast suite passes. Changes
+        # to deployment, installation or durable storage also run the slow tier.
         if temporary is not None and not dry:
             # A temporary checkout lacks the per-checkout setup the engine tests use; share this
             # repository's (AGENTS.md: uv sync and build-private-tmux once per checkout).
@@ -120,6 +135,10 @@ try:
                     link.symlink_to(source)
         run(['cargo', 'clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings'], cwd=work)
         run(['cargo', 'nextest', 'run', '--workspace', '--all-targets', '--locked'], cwd=work)
+        durability = durability_changes(base if dry else upstream, head)
+        if durability:
+            say('slow tier required by durability changes: ' + ', '.join(durability))
+            run(['cargo', 'nextest', 'run', '--workspace', '--all-targets', '--locked', '--profile', 'slow'], cwd=work)
         if not dry: refuse_incompatible(head, selected())
         say('$ git push origin HEAD:refs/heads/main  (%s)' % (head[:12] if not dry else 'the rebased ' + args.ref))
         if dry: break

@@ -31,7 +31,10 @@ use sluice_runtime::{
 };
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;
@@ -54,6 +57,8 @@ struct State {
     launches: Mutex<Vec<Launch>>,
     presence: Mutex<HashMap<RunId, Presence>>,
     composition: bool,
+    in_flight: AtomicUsize,
+    max_in_flight: AtomicUsize,
     gate: Option<tokio::sync::Semaphore>,
     entered: tokio::sync::watch::Sender<usize>,
     finished: tokio::sync::watch::Sender<usize>,
@@ -73,6 +78,18 @@ impl Fake {
 
     fn release(&self, n: usize) {
         self.0.gate.as_ref().expect("gated host").add_permits(n);
+    }
+    fn reset_counts(&self) {
+        self.0.entered.send_replace(0);
+        self.0.finished.send_replace(0);
+        self.0.max_in_flight.store(0, Ordering::SeqCst);
+    }
+    async fn until_finished(&self, n: usize) {
+        let mut finished = self.0.finished.subscribe();
+        within(finished.wait_for(|e| *e >= n))
+            .await
+            .unwrap()
+            .unwrap();
     }
     fn launches(&self) -> usize {
         self.0.launches.lock().unwrap().len()
@@ -95,10 +112,13 @@ impl FnHost for Fake {
 }
 impl AdoptionHost for Fake {
     async fn reconcile(&self, attempt: &AdoptionAttempt) -> std::io::Result<GuardianPresence> {
+        let in_flight = self.0.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.0.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
         self.0.entered.send_modify(|n| *n += 1);
         if let Some(gate) = &self.0.gate {
             gate.acquire().await.unwrap().forget();
         }
+        self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
         self.0.finished.send_modify(|n| *n += 1);
         let presence = self
             .0
@@ -805,4 +825,53 @@ async fn held_watches_leave_the_connection_pool_two_per_run() {
     until(|| broker.released_watches() == 0 && broker.connections_in_use() == 0).await;
     stop.cancel();
     within(server).await.unwrap().unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn runs_adopt_concurrently_within_the_bound_and_one_adopter_per_run() {
+    let host = Fake::gated();
+    let (_home, broker, runs) = home_with_runs(host.clone(), &["a", "b", "c", "d"], false).await;
+
+    // All four are in the host at once, and none has finished: not serial.
+    let pass = tokio::spawn({
+        let broker = broker.clone();
+        async move { broker.adopt().await }
+    });
+    host.until_entered(4).await;
+    assert_eq!(*host.0.finished.borrow(), 0);
+    assert_eq!(host.0.in_flight.load(Ordering::SeqCst), 4);
+    // A second pass meanwhile skips every run already being adopted, so it
+    // returns while the gate is still shut.
+    let duplicate = tokio::spawn({
+        let broker = broker.clone();
+        async move { broker.adopt().await }
+    });
+    tokio::select! {
+        result = duplicate => result.unwrap().unwrap(),
+        _ = host.until_entered(5) => panic!("a second adopter entered the host for the same run"),
+    }
+    assert_eq!(host.entered(), 4);
+    host.release(4);
+    within(pass).await.unwrap().unwrap().unwrap();
+    for (_, launch) in &runs {
+        assert_eq!(attempt(&broker, launch.identity.run).await.0, "reserved");
+    }
+
+    // With a bound of two, the third run starts only once one has finished.
+    host.reset_counts();
+    let pass = tokio::spawn({
+        let broker = broker.clone();
+        async move { broker.adopt_bounded(2).await }
+    });
+    host.until_entered(2).await;
+    assert_eq!(host.0.in_flight.load(Ordering::SeqCst), 2);
+    for finished in 1..=4 {
+        host.release(1);
+        host.until_finished(finished).await;
+        host.until_entered((finished + 2).min(4)).await;
+        assert!(host.0.in_flight.load(Ordering::SeqCst) <= 2);
+    }
+    within(pass).await.unwrap().unwrap().unwrap();
+    assert_eq!(host.entered(), 4);
+    assert_eq!(host.0.max_in_flight.load(Ordering::SeqCst), 2);
 }

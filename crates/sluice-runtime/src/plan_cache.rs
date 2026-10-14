@@ -356,3 +356,40 @@ pub fn compile_cold(
         .into()
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project() -> ProjectId {
+        "0199c3a4-5b6e-7f80-9a1b-2c3d4e5f6a7b".parse().unwrap()
+    }
+
+    #[test]
+    fn a_staged_candidate_is_the_plan_at_its_revision_until_installed_or_dropped() {
+        let cache = Arc::new(PlanCache::<&'static str>::default());
+        let (p, g) = (project(), CatalogGeneration(1));
+        cache.put(p, Revision(5), g, Arc::new("base 5"));
+        // Committed as 6 and not installed yet: a reader of 6 takes the candidate, a reader of
+        // 5 still has its base, and another catalog's reader has neither.
+        let staging = cache.stage(p, Revision(6), Revision(5), g, Arc::new("edit 6"));
+        assert_eq!(cache.get(p, Revision(6), g).as_deref(), Some(&"edit 6"));
+        assert_eq!(cache.get(p, Revision(5), g).as_deref(), Some(&"base 5"));
+        assert!(cache.get(p, Revision(6), CatalogGeneration(2)).is_none());
+        // Installed over its base in the step that unstages it.
+        assert!(staging.install());
+        assert_eq!(cache.get(p, Revision(6), g).as_deref(), Some(&"edit 6"));
+        assert!(cache.get(p, Revision(5), g).is_none());
+        // A transaction that rolls back drops its guard: the candidate is gone.
+        let staging = cache.stage(p, Revision(7), Revision(6), g, Arc::new("rolled back"));
+        assert!(cache.get(p, Revision(7), g).is_some());
+        drop(staging);
+        assert!(cache.get(p, Revision(7), g).is_none());
+        assert_eq!(cache.get(p, Revision(6), g).as_deref(), Some(&"edit 6"));
+        // The install rule still holds: a base never cached is not installed over.
+        let other: ProjectId = "0199c3a4-5b6e-7f80-9a1b-2c3d4e5f6a7c".parse().unwrap();
+        let staging = cache.stage(other, Revision(2), Revision(1), g, Arc::new("x"));
+        assert!(!staging.install());
+        assert!(cache.get(other, Revision(2), g).is_none());
+    }
+}

@@ -348,6 +348,34 @@ async fn a_refused_step_action_sends_a_browser_back_to_its_step_and_a_client_jso
 async fn http_refusals_assets_and_shutdown() {
     let fixture = Fixture::new().await;
     {
+        let page = text_body(get_with(&fixture, "/", &[]).await).await;
+        let start = page.find("/static/style.css?v=").unwrap();
+        let linked = &page[start..start + page[start..].find('"').unwrap()];
+        for (path, cache) in [
+            (linked, "public, max-age=31536000, immutable"),
+            ("/static/style.css", "public, max-age=0, must-revalidate"),
+            (
+                "/static/style.css?v=0000",
+                "public, max-age=0, must-revalidate",
+            ),
+        ] {
+            let response = fixture
+                .app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header(header::HOST, "127.0.0.1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(response.headers()[header::CACHE_CONTROL], cache, "{path}");
+        }
+    }
+    {
         let response = fixture
             .request(
                 "GET",
@@ -712,5 +740,171 @@ async fn http_refusals_assets_and_shutdown() {
         .unwrap()
         .unwrap();
     }
+
+    {
+        use axum::response::IntoResponse;
+
+        for (status, kind, message) in [
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "busy",
+                "Service Unavailable",
+            ),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "storage",
+                "Internal Server Error",
+            ),
+            (StatusCode::BAD_GATEWAY, "storage", "Bad Gateway"),
+            (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "bad_request",
+                "Payload Too Large",
+            ),
+            (StatusCode::NOT_FOUND, "not_found", "Not Found"),
+        ] {
+            let response = http::error_json(status.into_response()).await;
+            assert_eq!(response.status(), status);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+            let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+            let error: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(error["error"], kind, "{status}");
+            assert_eq!(error["message"], message, "{status}");
+        }
+        let response =
+            http::error_json((StatusCode::INTERNAL_SERVER_ERROR, "disk full").into_response())
+                .await;
+        let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({"error": "storage", "message": "disk full"})
+        );
+    }
+    {
+        struct Unavailable;
+        impl sluice_web::views::CatalogSource for Unavailable {
+            fn catalog(
+                &self,
+                _: Option<ProjectId>,
+            ) -> Result<sluice_web::views::FunctionCatalog, PublicError> {
+                Err(PublicError::Storage {
+                    message: "the fn catalog is unavailable".into(),
+                })
+            }
+        }
+        let id = fixture.id;
+        fixture
+            .writer
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                seed::put(tx, id, json!({"steps": {"work": {"run": "core.echo"}}}))?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let pages = PageState::new(DashboardState::new(
+            ReadPool::open(fixture._home.path(), 2).unwrap(),
+            Arc::new(Unavailable),
+        ));
+        let app = http::router(pages, Arc::new(Commands), CancellationToken::new());
+        for path in [
+            "/".to_owned(),
+            format!("/projects/id/{id}"),
+            format!("/projects/id/{id}/steps/work"),
+            "/fns".to_owned(),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(&path)
+                        .header(header::HOST, "localhost")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = text_body(response).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}");
+            let error: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                error,
+                json!({"error": "storage", "message": "the fn catalog is unavailable"}),
+                "{path}"
+            );
+        }
+    }
     fixture.writer.shutdown().await.unwrap();
+}
+
+async fn broker_fixture(
+    home: &std::path::Path,
+    count: usize,
+    handler: impl Fn(CommandRequest) -> CommandReply + Send + 'static,
+) -> tokio::task::JoinHandle<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::UnixListener::bind(home.join("coordinator.sock")).unwrap();
+    tokio::spawn(async move {
+        for _ in 0..count {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let length = stream.read_u32().await.unwrap() as usize;
+            assert!(length <= sluice_model::rpc::MAX_FRAME_BYTES);
+            let mut bytes = vec![0; length];
+            stream.read_exact(&mut bytes).await.unwrap();
+            let request: sluice_model::rpc::RpcRequest =
+                sluice_model::rpc::decode_json(&bytes).unwrap();
+            let reply = sluice_model::rpc::RpcReply {
+                protocol: request.protocol,
+                request_id: request.request_id,
+                result: sluice_model::rpc::RpcResult::Ok(Box::new(handler(request.command))),
+            };
+            stream
+                .write_all(&sluice_model::rpc::encode_frame(&reply).unwrap())
+                .await
+                .unwrap();
+        }
+    })
+}
+
+#[tokio::test]
+async fn owner_actions_send_the_displayed_revision_and_author_through_the_socket() {
+    use sluice_web::views::step::{Action, CommandService, OwnerCommand};
+    let home = tempfile::tempdir().unwrap();
+    let id = ProjectId::new();
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = requests.clone();
+    let broker = broker_fixture(home.path(), 2, move |request| {
+        captured.lock().unwrap().push(request);
+        CommandReply::Ack
+    })
+    .await;
+    let commands =
+        http::SocketOwnerCommands(sluice_runtime::client::CoordinatorClient::new(home.path()));
+    for action in [Action::Retry, Action::Cancel] {
+        commands
+            .execute(OwnerCommand {
+                project: id,
+                step: Some("work".parse().unwrap()),
+                action,
+                revision: 7,
+                message: "continue".into(),
+                author: "owner",
+            })
+            .await
+            .unwrap();
+    }
+    broker.await.unwrap();
+    let requests = requests.lock().unwrap();
+    let CommandRequest::StepRetry(retry) = &requests[0] else {
+        panic!()
+    };
+    assert_eq!(retry.expected_rev, Some(sluice_model::ids::Revision(7)));
+    assert_eq!(retry.message.as_deref(), Some("continue"));
+    assert_eq!(retry.author.as_deref(), Some("owner"));
+    let CommandRequest::StepCancel(cancel) = &requests[1] else {
+        panic!()
+    };
+    assert_eq!(cancel.expected_rev, Some(sluice_model::ids::Revision(7)));
+    assert_eq!(cancel.reason, "continue");
+    assert_eq!(cancel.author.as_deref(), Some("owner"));
 }

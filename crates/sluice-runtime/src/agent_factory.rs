@@ -945,3 +945,148 @@ fn callback_header(this: &std::path::Path) -> String {
     };
     format!("{tool} SLUICE_PROJECT_ID and SLUICE_RUN_ID identify this invocation.")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sluice_model::error::PublicError;
+    use sluice_process::journal::AttemptKey;
+    use std::{sync::Mutex, time::Duration};
+    use tokio::net::UnixListener;
+
+    fn launch() -> Launch {
+        let (project, run, attempt) = (ProjectId::new(), RunId::new(), AttemptId::new());
+        Launch {
+            identity: AttemptKey {
+                home: HomeId::new(),
+                project: Some(project),
+                step: Some("work".parse().unwrap()),
+                generation: StepGeneration(1),
+                work: WorkGeneration(1),
+                run,
+                attempt,
+            },
+            invocation: FnInvocation {
+                project,
+                step: Some("work".parse().unwrap()),
+                run,
+                attempt,
+                invocation: InvocationId::new(),
+                name: "agent.run".into(),
+                inputs: JsonMap::default(),
+            },
+            assigned: socket::AssignedRange {
+                after: MessageId(0),
+                through: MessageId(0),
+            },
+            prev_run: None,
+            capability: RunCapability::new("fixture-secret"),
+            timeout_seconds: None,
+            context: None,
+        }
+    }
+
+    fn guardian(
+        control: &Path,
+        answer: impl Fn(usize) -> Option<Result<socket::ControlReply, PublicError>> + Send + 'static,
+    ) -> (Arc<Mutex<usize>>, tokio::task::JoinHandle<()>) {
+        let listener = UnixListener::bind(control).unwrap();
+        let seen = Arc::new(Mutex::new(0));
+        let count = seen.clone();
+        let task = tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let Ok(request) =
+                    socket::read_frame::<socket::Request<socket::ControlCommand>>(&mut stream)
+                        .await
+                else {
+                    continue;
+                };
+                let n = {
+                    let mut seen = count.lock().unwrap();
+                    *seen += 1;
+                    *seen
+                };
+                match answer(n) {
+                    None => held.push(stream),
+                    Some(result) => {
+                        let reply = socket::Reply {
+                            protocol: PROTOCOL_VERSION,
+                            request_id: request.request_id,
+                            result,
+                        };
+                        // A client that gave up first hangs up; that is its business.
+                        let _ = socket::write_frame(&mut stream, &reply).await;
+                    }
+                }
+            }
+        });
+        (seen, task)
+    }
+
+    fn ack(launch: &Launch) -> DeliveryAck {
+        DeliveryAck {
+            invocation: launch.invocation.invocation,
+            message: MessageId(7),
+        }
+    }
+
+    const QUICK: Patience = Patience {
+        call: Duration::from_millis(100),
+        total: Duration::from_secs(2),
+        offer_lag: Duration::from_millis(300),
+    };
+
+    #[tokio::test]
+    async fn a_refusal_is_retried_only_while_the_message_may_not_be_offered_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        let refused = || {
+            Err(PublicError::BadRequest {
+                message: "wrong invocation acknowledgement".into(),
+            })
+        };
+        let launch = launch();
+        let control = dir.path().join("lagging");
+        std::fs::create_dir(&control).unwrap();
+        let control = control.join("control.sock");
+        // The guardian's watch hands it the message a little after this supervisor read it.
+        let (seen, guardian_task) = guardian(&control, move |n| {
+            Some(if n < 4 {
+                refused()
+            } else {
+                Ok(socket::ControlReply::Ack)
+            })
+        });
+        acknowledge_delivery(
+            &control,
+            &launch.capability,
+            ack(&launch),
+            &CancellationToken::new(),
+            QUICK,
+        )
+        .await
+        .unwrap();
+        assert_eq!(*seen.lock().unwrap(), 4);
+        guardian_task.abort();
+        assert!(guardian_task.await.unwrap_err().is_cancelled());
+        // A refusal that outlasts any offer lag is definite.
+        let control = dir.path().join("refusing");
+        std::fs::create_dir(&control).unwrap();
+        let control = control.join("control.sock");
+        let (_, guardian_task) = guardian(&control, move |_| Some(refused()));
+        let error = acknowledge_delivery(
+            &control,
+            &launch.capability,
+            ack(&launch),
+            &CancellationToken::new(),
+            QUICK,
+        )
+        .await
+        .unwrap_err();
+        assert!(!error.get_ref().unwrap().is::<HostUnavailable>(), "{error}");
+        assert!(error.to_string().contains("wrong invocation"), "{error}");
+        guardian_task.abort();
+        assert!(guardian_task.await.unwrap_err().is_cancelled());
+    }
+}

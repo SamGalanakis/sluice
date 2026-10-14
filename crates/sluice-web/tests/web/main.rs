@@ -15,7 +15,6 @@ mod log;
 mod mcp;
 mod messages_browser;
 mod neutral;
-mod page_load;
 mod pages;
 mod plan;
 mod plan_html;

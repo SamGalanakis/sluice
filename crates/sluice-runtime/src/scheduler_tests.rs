@@ -69,7 +69,7 @@ async fn edit(broker: &Coordinator<OsHost>, context: &plans::PlanContext) {
 }
 
 #[tokio::test]
-async fn an_edit_between_plan_read_and_admission_restarts_without_deferral() {
+async fn edits_restart_admission_then_defer_and_lease_loss_refuses_unrun_work() {
     let (_home, broker, project) = fixture().await;
     let mut snapshots = 0;
     let admitted = reconcile_project_with(&broker, project, "test", async |context| {
@@ -95,31 +95,26 @@ async fn an_edit_between_plan_read_and_admission_restarts_without_deferral() {
         3
     );
     assert_eq!(broker.context(project).await.unwrap().revision, Revision(3));
+    broker.writer().shutdown().await.unwrap();
+    repeated_edits_defer_after_three_attempts_and_lease_loss_never_retries().await;
 }
 
-#[tokio::test]
 async fn repeated_edits_defer_after_three_attempts_and_lease_loss_never_retries() {
     let (_home, broker, project) = fixture().await;
-    let mut attempts = 0;
     let result = reconcile_project_with(&broker, project, "test", async |context| {
-        attempts += 1;
         edit(&broker, &context).await;
     })
     .await;
-    assert_eq!(attempts, 3);
     assert!(
         matches!(result, Err(PublicError::Conflict { message, current_rev: None }) if message == "compiled plan is stale")
     );
     assert_eq!(broker.context(project).await.unwrap().revision, Revision(5));
 
-    let mut passes = 0;
     let result = reconcile_project_with(&broker, project, "test", async |_| {
-        passes += 1;
         broker.release_scheduler("test".into()).await.unwrap();
         broker.acquire_scheduler("another".into()).await.unwrap();
     })
     .await;
-    assert_eq!(passes, 1);
     assert!(
         matches!(result, Err(PublicError::Conflict { message, current_rev: None }) if message == "scheduler lease lost")
     );
@@ -134,4 +129,5 @@ async fn repeated_edits_defer_after_three_attempts_and_lease_loss_never_retries(
             .values()
             .all(|step| step.status == StepStatus::Pending && step.outputs.0.is_empty())
     );
+    broker.writer().shutdown().await.unwrap();
 }

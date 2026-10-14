@@ -282,6 +282,20 @@ async fn commit_applies_a_hand_built_edit_and_refuses_what_moved() {
         .unwrap();
     assert_eq!(h.commit(board).await.unwrap(), CommitOutcome::Stale);
     assert_eq!(h.count("records"), records);
+    for change in [
+        "UPDATE projects SET paused=1 WHERE project_id=?1",
+        "INSERT INTO resources(scope,project_id,name,declaration,capacity) VALUES (?1,?1,'cpu','{}',1)",
+        "UPDATE resources SET capacity=2 WHERE project_id=?1 AND name='cpu'",
+    ] {
+        let prepared = h.prepare(edit.clone()).await;
+        h.sql_write(change).await.unwrap();
+        assert_eq!(
+            h.commit(prepared).await.unwrap(),
+            CommitOutcome::Stale,
+            "{change}"
+        );
+        assert_eq!(h.count("records"), records);
+    }
     // An explicit revision that is not current: conflict with the current one.
     let mut explicit = h.prepare(edit.clone()).await;
     explicit.rev = Some(Revision(1));

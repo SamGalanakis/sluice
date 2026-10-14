@@ -11,6 +11,7 @@ mod record_reader;
 mod release;
 mod schema_migrate;
 mod scratch;
+mod ship;
 mod status_units;
 mod tool_contracts;
 mod tool_descriptions;
