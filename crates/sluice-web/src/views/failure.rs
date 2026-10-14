@@ -247,7 +247,9 @@ impl Failure {
     /// cancel.
     pub fn next_step(&self) -> &'static str {
         match self.caption() {
-            "cap" => "Raise its agent's time limit, then Retry.",
+            "cap" => {
+                "Raise its agent's time limit (SLUICE_AGENT_MAX_MIN in the project's .env), then Retry."
+            }
             "stalled" => "Its Activity shows where it went quiet.",
             "quota" => "Retry once its engine's usage cap resets.",
             "auth" => "Sign its engine in again on this machine, then Retry.",
@@ -257,6 +259,25 @@ impl Failure {
             "no submit" => "Retry with feedback telling it to submit its outputs.",
             "invalid" => "Retry with feedback naming the outputs that did not fit.",
             "rejected" => "Fix its inputs, then Retry.",
+            _ => "",
+        }
+    }
+    /// What to try next, said of several failures of its kind at once (the plan's group of
+    /// them, with its Retry all): `next_step` in the plural.
+    pub fn next_step_all(&self) -> &'static str {
+        match self.caption() {
+            "cap" => {
+                "Raise the agents' time limit (SLUICE_AGENT_MAX_MIN in the project's .env), then Retry all."
+            }
+            "stalled" => "Each one's Activity shows where it went quiet.",
+            "quota" => "Retry all once their engines' usage caps reset.",
+            "auth" => "Sign their engines in again on this machine, then Retry all.",
+            "engine exited" => {
+                "If they refused or hit a limit, retry each with feedback; if they crashed, Retry all."
+            }
+            "no submit" => "Retry each with feedback telling it to submit its outputs.",
+            "invalid" => "Retry each with feedback naming the outputs that did not fit.",
+            "rejected" => "Fix their inputs, then Retry all.",
             _ => "",
         }
     }

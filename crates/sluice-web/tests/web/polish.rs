@@ -124,18 +124,15 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     let done = plan_html::band(&index, "plan-done");
     let line = between(done, "/units/u\">", "</li>");
     assert!(
-        line.contains("g-cancelled") && line.contains(">b cancelled and dismissed</span>"),
+        line.contains("g-cancelled") && line.contains(">b cancelled, settled as done</span>"),
         "{line}"
     );
     assert!(!plan_html::summary(&page).contains("cancelled"), "{page}");
-    // Needs you holds no item now, only the line that offers its Undo, for ten minutes
+    // settled, not set aside: Needs you holds no item and no Set aside line (its step's page
+    // undoes it)
     let well = plan_html::band(&page, "plan-needs");
     assert!(
-        plan_html::needs(&page).is_empty()
-            && well.contains(
-                "<ul class=\"nd-gone\" role=\"status\"><li><span>Set aside: the cancel of u</span>"
-            )
-            && well.contains("value=\"cancel:b\""),
+        plan_html::needs(&page).is_empty() && !well.contains("nd-gone"),
         "{well}"
     );
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/b")).await;

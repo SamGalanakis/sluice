@@ -1400,7 +1400,7 @@ pub fn load_snapshot(
                 ui::Shown::Quiet => run.and_then(|r| r.activity).is_some_and(|at| {
                     set_aside.get(&format!("quiet:{step}")) == Some(&(at as i64))
                 }),
-                ui::Shown::Cancelled => view.dismissed.contains(&step),
+                ui::Shown::Cancelled if view.dismissed.contains(&step) => true,
                 _ => set_aside.contains_key(&format!("stop:{step}")),
             };
             if shown.spec().attention && !aside {

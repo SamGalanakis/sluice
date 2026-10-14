@@ -567,7 +567,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             Mark::Stop,
             &format!("{prefix}n-cause"),
             "",
-            "Three units stopped at their wall-clock cap.",
+            "Three units failed: they hit their wall-clock cap.",
             "<details class=\"nd-more\"><summary>Show the three</summary><ul><li><a href=\"#\">Waders: the autumn guide's entries</a> <span>· “Two of five maps redrawn”</span></li><li><a href=\"#\">Gannets: the spring guide's entries</a></li><li><a href=\"#\">Scan the range maps for broken links</a></li></ul></details>",
             "<button type=\"button\" class=\"act\">Retry all</button>",
             x,

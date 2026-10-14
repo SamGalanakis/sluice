@@ -335,18 +335,26 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
             && acts.contains("Undo brings back the cancel, not the failure.</p>"),
         "{acts}"
     );
-    // on the plan, the failure's item is its own; the cancel's sets it aside as Dismiss does
+    // on the plan, each item's × sets it aside for attention alone; a cancel's Settle as done
+    // is its step's Dismiss
     let card = plan_html::stopped(&plan, "first");
     assert!(card.contains("value=\"stop:first\""), "{card}");
     let cancelled = plan_html::stopped(&plan, "cxl");
-    assert!(cancelled.contains("value=\"cancel:cxl\""), "{cancelled}");
+    assert!(
+        cancelled.contains("value=\"stop:cxl\"")
+            && cancelled.contains(
+                "/steps/cxl/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\">"
+            )
+            && cancelled.contains(">Settle as done</button>"),
+        "{cancelled}"
+    );
 
     // Cancel and dismiss, posted without script, sent back to the plan
     let mut fields: Vec<(String, String)> = form_fields(acts, "cancel_dismiss")
         .into_iter()
         .filter(|(n, _)| n != "next")
         .collect();
-    fields.push(("next".into(), format!("{plan_href}#undo-n-stop-first")));
+    fields.push(("next".into(), format!("{plan_href}#needs")));
     fields.push(("message".into(), "superseded".into()));
     let pairs: Vec<(&str, &str)> = fields
         .iter()
@@ -356,18 +364,13 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
         post(&router, &format!("{plan_href}/steps/first/actions"), &pairs).await;
     assert_eq!(
         (status, location.as_str()),
-        (
-            StatusCode::SEE_OTHER,
-            format!("{plan_href}#undo-n-stop-first").as_str()
-        )
+        (StatusCode::SEE_OTHER, format!("{plan_href}#needs").as_str())
     );
-    // the plan: no longer an item, a Set aside line with its Undo instead
+    // the plan: settled, its unit done, no longer an item (its step's page undoes it)
     let (_, plan) = f.get(&plan_href).await;
     let well = plan_html::band(&plan, "plan-needs");
     assert!(
-        plan_html::place(&plan, "first") == "done"
-            && well.contains("id=\"undo-n-stop-first\"")
-            && well.contains("<span>Set aside: the cancel of Fails once</span>"),
+        plan_html::place(&plan, "first") == "done" && !well.contains("n-stop-first"),
         "{well}"
     );
     // its dependent is held as before, waiting on earlier work: counted, not a row
@@ -399,7 +402,8 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
     assert!(
         card.contains("</b> cancelled after 4m. superseded.")
             && card.contains("It had failed: process_lost: gone")
-            && card.contains("value=\"cancel:first\""),
+            && card.contains("value=\"stop:first\"")
+            && card.contains(">Settle as done</button>"),
         "{card}"
     );
     // Cancel alone, without script, on another failure from its head: it stays stopped, now

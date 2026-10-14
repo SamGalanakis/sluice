@@ -1,5 +1,5 @@
-//! Scratch dashboard with page-owned fixture data and no runner, and the neutral projects
-//! (`almanac`, `chores`) every page must render.
+//! Scratch dashboard with page-owned fixture data and no runner, the neutral projects
+//! (`almanac`, `chores`) every page must render, and `atlas`, a plan of 250 units.
 use sluice_model::ids::ProjectId;
 use sluice_store::{ReadPool, Writer};
 use sluice_web::views::{DashboardState, PageState, page_router};
@@ -22,6 +22,7 @@ async fn main() {
     let n = neutral::seed(&writer, home.path()).await;
     println!("ALMANAC {}", n.almanac);
     println!("CHORES {}", n.chores);
+    println!("ATLAS {}", neutral::seed_big(&writer, home.path()).await);
     let state = DashboardState::new(
         ReadPool::open(home.path(), 2).unwrap(),
         Arc::new(home::FixtureCatalog),

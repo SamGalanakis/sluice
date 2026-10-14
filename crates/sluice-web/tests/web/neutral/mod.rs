@@ -423,3 +423,166 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
         question,
     }
 }
+
+/// `atlas`, a plan at scale for the scratch dashboard's screenshots: 250 units over three
+/// recipes. `entry` (one step, 120 units) is healthy, so its group folds; `article` (80) has
+/// two failures at their wall-clock cap and `scan` (50) a quiet run, so theirs stay open.
+pub async fn seed_big(writer: &Writer, home: &Path) -> ProjectId {
+    const M: u64 = 60;
+    const H: u64 = 3600;
+    const BIRDS: [&str; 12] = [
+        "Dunlin",
+        "Sanderling",
+        "Knot",
+        "Turnstone",
+        "Curlew",
+        "Godwit",
+        "Redshank",
+        "Greenshank",
+        "Oystercatcher",
+        "Avocet",
+        "Plover",
+        "Whimbrel",
+    ];
+    let atlas = project(
+        writer,
+        "atlas",
+        "The coastal atlas: an entry for every species, a section for every coast, and the scans that check them.",
+    )
+    .await;
+    let mut steps = serde_json::Map::new();
+    let mut states: Vec<Step> = vec![];
+    // entry: 95 done over the last eleven hours, 25 running, each heard from lately
+    for n in 1..=120u64 {
+        let unit = format!("e-{n:03}");
+        let topic = format!("{} entry {n}", BIRDS[n as usize % BIRDS.len()]);
+        steps.insert(
+            format!("{unit}-check"),
+            json!({"run": "custom.open", "tags": [format!("unit:{unit}")], "in": {"species": {"default": topic}}}),
+        );
+        states.push(if n <= 95 {
+            step(
+                &format!("{unit}-check"),
+                "succeeded",
+                &[((n * 7 + 20) * M, Some(6 * M))],
+            )
+        } else {
+            step(
+                &format!("{unit}-check"),
+                "running",
+                &[((n % 30 + 4) * M, None)],
+            )
+        });
+    }
+    // article: 55 done, 22 drafting, 2 failed at review, 1 reviewing
+    for n in 1..=80u64 {
+        let unit = format!("b-{n:02}");
+        let tags = json!([format!("unit:{unit}")]);
+        let topic = format!("{}: the coast section {n}", BIRDS[n as usize % BIRDS.len()]);
+        steps.insert(
+            format!("{unit}-draft"),
+            json!({"run": "custom.open", "tags": tags, "in": {"topic": {"default": topic}}}),
+        );
+        steps.insert(
+            format!("{unit}-review"),
+            json!({"run": "custom.open", "tags": tags, "after": [format!("{unit}-draft")]}),
+        );
+        steps.insert(
+            format!("{unit}-publish"),
+            json!({"run": "custom.open", "tags": tags, "after": [format!("{unit}-review")]}),
+        );
+        let at = (n * 11 + 30) * M;
+        match n {
+            1..=55 => states.extend([
+                step(
+                    &format!("{unit}-draft"),
+                    "succeeded",
+                    &[(at + 50 * M, Some(30 * M))],
+                ),
+                step(
+                    &format!("{unit}-review"),
+                    "succeeded",
+                    &[(at + 15 * M, Some(10 * M))],
+                ),
+                step(
+                    &format!("{unit}-publish"),
+                    "succeeded",
+                    &[(at, Some(2 * M))],
+                ),
+            ]),
+            56..=77 => states.push(step(
+                &format!("{unit}-draft"),
+                "running",
+                &[((n % 25 + 3) * M, None)],
+            )),
+            78 | 79 => states.extend([
+                step(
+                    &format!("{unit}-draft"),
+                    "succeeded",
+                    &[(3 * H, Some(40 * M))],
+                ),
+                Step {
+                    error: Some(PublicError::AgentFailure {
+                        kind: "WallCap".into(),
+                        message: "The run reached its wall-clock cap.".into(),
+                        session: None,
+                    }),
+                    ..step(
+                        &format!("{unit}-review"),
+                        "failed",
+                        &[(2 * H, Some(70 * M))],
+                    )
+                },
+            ]),
+            _ => states.extend([
+                step(&format!("{unit}-draft"), "succeeded", &[(H, Some(35 * M))]),
+                step(&format!("{unit}-review"), "running", &[(20 * M, None)]),
+            ]),
+        }
+    }
+    // scan: 42 done, 7 running, 1 quiet for three hours
+    for n in 1..=50u64 {
+        let unit = format!("c-{n:02}");
+        let source = format!(
+            "the {} coast photographs, roll {n}",
+            BIRDS[n as usize % BIRDS.len()].to_lowercase()
+        );
+        steps.insert(
+            format!("{unit}-scan"),
+            json!({"run": "custom.open", "tags": [format!("unit:{unit}")], "in": {"source": {"default": source}}}),
+        );
+        states.push(match n {
+            1..=42 => step(
+                &format!("{unit}-scan"),
+                "succeeded",
+                &[((n * 13 + 25) * M, Some(9 * M))],
+            ),
+            43..=49 => step(
+                &format!("{unit}-scan"),
+                "running",
+                &[((n % 20 + 2) * M, None)],
+            ),
+            _ => step(&format!("{unit}-scan"), "running", &[(3 * H, None)]),
+        });
+    }
+    plan(writer, atlas, json!({"steps": steps}), states).await;
+    let recipes = home
+        .join("projects")
+        .join(atlas.to_string())
+        .join("recipes");
+    std::fs::create_dir_all(&recipes).unwrap();
+    let entry = json!({"name": "entry", "params": {"species": "string"}, "title": "{species}",
+        "steps": {"{unit}-check": {"run": "custom.open", "in": {"species": {"default": "{species}"}}}}});
+    for (name, doc) in [
+        ("entry", entry),
+        ("article", article_recipe()),
+        ("scan", scan_recipe()),
+    ] {
+        std::fs::write(
+            recipes.join(format!("{name}.json")),
+            serde_json::to_vec(&doc).unwrap(),
+        )
+        .unwrap();
+    }
+    atlas
+}

@@ -11,7 +11,7 @@ use chrome::Chrome;
 use neutral::stored_messages;
 use serde_json::json;
 use sluice_model::{
-    commands::StepDismiss,
+    commands::{NeedsDismiss, StepDismiss},
     error::PublicError,
     ids::{AttemptId, ProjectId, RunId},
 };
@@ -28,7 +28,8 @@ fn between<'a>(html: &'a str, from: &str, to: &str) -> &'a str {
     &html[start..end]
 }
 
-/// Dismiss and Undismiss as the coordinator takes them: the owner's mark in the store.
+/// The owner's marks as the coordinator takes them: Needs you's set-asides and a step's
+/// Dismiss, each in the store.
 struct Marks(Writer);
 impl CommandService for Marks {
     fn execute(
@@ -36,26 +37,28 @@ impl CommandService for Marks {
         command: OwnerCommand,
     ) -> Pin<Box<dyn Future<Output = Result<(), PublicError>> + Send + '_>> {
         Box::pin(async move {
-            let dismissed = match command.action {
-                Action::Dismiss => true,
-                Action::Undismiss => false,
-                _ => {
-                    return Err(PublicError::BadRequest {
-                        message: "only marks here".into(),
-                    });
-                }
-            };
-            let (project, step) = (command.project, command.step.expect("a step"));
             self.0
-                .write(RetrySafety::Idempotent, move |tx| {
-                    sluice_store::messages::dismiss(
+                .write(RetrySafety::Idempotent, move |tx| match command.action {
+                    Action::SetAside | Action::Restore => sluice_store::messages::needs_dismiss(
+                        tx,
+                        NeedsDismiss {
+                            project: command.project,
+                            items: command.items,
+                            dismissed: command.action == Action::SetAside,
+                        },
+                    ),
+                    Action::Dismiss | Action::Undismiss => sluice_store::messages::dismiss(
                         tx,
                         StepDismiss {
-                            project,
-                            step,
-                            dismissed,
+                            project: command.project,
+                            step: command.step.expect("a step"),
+                            dismissed: command.action == Action::Dismiss,
                         },
-                    )
+                    ),
+                    _ => Err(PublicError::BadRequest {
+                        message: "only marks here".into(),
+                    }
+                    .into()),
                 })
                 .await
         })
@@ -105,8 +108,8 @@ async fn aside(f: &Fixture) -> ProjectId {
 }
 
 /// In Chromium: the × on a cancel in Needs you sets it aside in place (the same document, the
-/// scroll kept) and Undo, which takes the focus, brings it back; a × that never reaches sluice
-/// says so under the item and leaves it there.
+/// scroll kept), for attention alone: its unit stays unsettled; Undo, which takes the focus,
+/// brings it back; a × that never reaches sluice says so under the item and leaves it there.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_in_chromium_a_cancel_set_aside_and_undone_in_place() {
     let f = Fixture::new().await;

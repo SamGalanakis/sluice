@@ -2107,49 +2107,54 @@ you"), then each stop and silence by its word ("2 failed, 1 cancelled, 1 quiet")
 work; 73 of 92 done."; with nothing for the owner, "3 at work, all heard from recently."; it
 names no unit. It says what is true whatever the owner set aside: setting an item aside is
 about attention alone, so only Needs you's list, the tab title's ✕ count and the favicon leave
-it out (a cancel the owner dismissed is the exception the step's Dismiss always was: it settles
-its unit, which is then done). The project's sections (Plan, Day, Stats, Messages, Log,
-Functions, Settings) are pills under it, on one line that scrolls sideways within itself on a
-phone. Then three sections, each a patch region, in a measure of at most 1400px from the
-nav's left edge:
+it out (a cancel settled as done is no longer one: its unit is done). The project's sections
+(Plan, Day, Stats, Messages, Log, Functions, Settings) are pills under it, on one line that
+scrolls sideways within itself on a phone. The head and three sections under it, each a patch
+region, keep a measure of at most 1400px from the nav's left edge (beside the board the head
+spans both):
 
 - **Needs you**: every item that needs the owner, in one well, a sentence each with one action
   and a ×: the open questions to the owner someone waits on ("<title> asks: <its title>",
   Answer, which opens the step on the question), then the stops (each unit whose current step
   failed, was cancelled or is stale: "<title> failed at <stage> after 1h 4m <owner>.", the
-  failure's headline, what it last said and what to try next, `failure::Advice`; Retry, or
-  "Retry with feedback" leading to the step's feedback box when the failure repeated; a cancel
-  says its reason and, when it set a failure aside, "It had failed: …"), failures that share a
-  cause of their own (a wall-clock cap, a stall, an engine's usage cap, sign-in, exit or
-  readiness, a lost process, a passing failure outlasting its retries, exiting without
-  submitting) said once ("3 runs stopped at their wall-clock cap"), the units in a fold, with
-  Retry all; then the silences, the longest first ("<title> has not been heard from since 14:02,
+  failure's headline, what it last said and what to try next, `failure::Advice`, where a limit
+  is set when one stopped it ("Raise its agent's time limit (SLUICE_AGENT_MAX_MIN in the
+  project's .env), then Retry."); Retry, or "Retry with feedback" leading to the step's
+  feedback box when the failure repeated; a cancel says its reason and, when it set a failure
+  aside, "It had failed: …", with Retry and "Settle as done"), failures that share a cause of
+  their own (a wall-clock cap, a stall, an engine's usage cap, sign-in, exit or readiness, a
+  lost process, a passing failure outlasting its retries, exiting without submitting) said once
+  in the head's word ("Two units failed: they hit their wall-clock cap.", the advice in the
+  plural), the units in a fold, with Retry all; then the silences, the longest first ("<title> has not been heard from since 14:02,
   3h ago.", Message it). Only the first item's action is filled; the rest are outlined. Each is
   marked: a coral dot a question (the larger mark), a sand square a stop, a sand ring a
   silence, said in words to a screen reader. A cancel stays in Needs you: a cancelled step
   leaves its unit unfinished and holds every step after it, and the status table counts it as
   needing a look on every page (home, `show=attention`, the tab title), so the owner still has
-  one decision to make, Retry or set it aside (its step's Dismiss, which settles the unit). The
-  × sets the item aside (`POST …/needs`): a cancel as its step's Dismiss, anything else by
-  `needs_dismiss`, kept until it changes (a stop's step is retried or recreated, a silent run
-  writes, a question is answered or closed), when it comes back by itself. For ten minutes
-  after, "Set aside: <what> · Undo" stands under the well ("Set aside: the silence of <title>"),
-  Undo putting it back. "Set all aside" in the section's head sets every item aside. With
-  nothing to say the well says "Nothing.".
+  one decision to make: Retry, or "Settle as done" (outlined, its step's Dismiss), which settles
+  the cancel so its unit is done; its step's page undoes it. Settling is never the ×. Every ×
+  sets its item aside for attention alone (`POST …/needs`, `needs_dismiss`, nothing settled),
+  kept until it changes (a stop's step is retried, recancelled or recreated: its generations
+  move on; a silent run writes; a question is answered or closed), when it comes back by
+  itself. For ten minutes after, "Set aside: <what> · Undo" stands under the well ("Set aside:
+  the silence of <title>"), Undo putting it back. "Set all aside" in the section's head sets
+  every item aside the same way, a cancel included, and settles nothing. With nothing to say
+  the well says "Nothing.".
 - **Finished since you looked**: a card a unit finished since this browser last marked the
   project seen (its `sluice_seen_<p>` cookie), at most eight and how many more, newest first,
   "since 14:02"; with no mark kept, "Finished lately", the latest four. A card: when it finished
   and how long it took, its title linking its page, what it produced (its latest step's first
   output that reads at a glance, else one that identifies, such as a commit). "Mark as seen"
   (`POST …/seen`) moves the mark to the latest drawn; it works without script. The cards fill
-  their row.
+  their row, each as tall as what it says.
 - **At work**: a row a unit at work or waiting once begun, grouped by recipe (its name linking
   `?recipe=<name>&show=all`, its rows counted running and waiting), then the units of no recipe,
   then the long runs (a unit of one step and no recipe reporting progress, or running six hours
   or more). In a group the running rows come first, the longest since it was heard from first,
-  then the waiting ones in plan order. A group is a `<details>`, open; in a roster of more than
-  12 rows a group of more than 3 with nothing remarkable in it (no silence, none of its
-  recipe's units in Needs you) folds to its line ("article · 42 running · each heard from in
+  then the waiting ones in plan order. A group is a `<details>`, open, its line its name in
+  ink over its counts; in a roster of more than 12 rows a group of more than 3 with nothing
+  remarkable in it (no silence, none of its recipe's units in Needs you, alone or in a group
+  of failures) folds to its line ("article · 42 running · each heard from in
   the last 25m"), opening without script. A row: what its steps run on as a badge, only where
   that tells rows apart and never for a fn (an engine's name), its title with its owner small
   and muted, under it its recipe's view or its last message and who sent it; its stage (its
@@ -2157,14 +2162,18 @@ nav's left edge:
   how long it has run or waited; "heard 12m ago", or "quiet 2h 3m" on the sand; a breathing dot
   while it was heard from in the last five minutes; and its last twelve hours as a track on a
   log scale (its runs, a quiet stretch on the sand, a wait dotted, a tick a message), under one
-  axis (12h, 4h, 1h, 15m, now; on a phone, "12h" and "now" over each group's first track). A
+  axis (12h, 4h, 1h, 15m, now; on a phone, "12h" and "now" over each group's first track),
+  which says its scale to a screen reader ("The last 12 hours on a log scale, now at the right;
+  a tick is a message."). A
   unit that has not begun and waits on earlier work is counted, not drawn ("4 waiting on earlier
   work · 25 done, the last 2h ago"), unless a find, `root=` or `recipe=` asks for it. A row is
   a `<details>`: it opens without script to its step view (below) on the row's own scale, the
-  same twelve hours on the same log scale, its current step's row tinted (a run that began
-  earlier starts at the left edge, saying "from 3d ago"; one over before it is said, not
-  drawn), then its latest message (or "Not heard from since 19:14"), Open step, and Message and
-  Unit page as quiet links; it stays open through a patch. A failed, cancelled or stale unit is
+  same twelve hours on the same log scale across exactly the row's track (its timeline as wide
+  as the track and ending where it does, how long each took before it), its current step's
+  row tinted (a run that began earlier starts at the left edge, saying "from 3d ago"; one over
+  before it is said, not drawn), then its latest message, or with none when it was last heard
+  from ("Last heard 22:51 (6m ago)"; for a quiet unit "Not heard from since 19:14 (3h ago)"),
+  Open step, and Message and Unit page as quiet links; it stays open through a patch. A failed, cancelled or stale unit is
   a stop in Needs you, not a row.
 
 A view whose program does not check says so once over its group ("This recipe's view does not
@@ -2185,7 +2194,7 @@ down one lane, a branch and a join take lanes beside it with an arrow into each 
 and a condition is named at the row of the step it gates ("if ok", "if not ok": the gate's value, negated or not). Then its state (its
 glyph and word from the status table, "run 3" with its earlier runs' marks past its first), its
 progress (a scatter's items done of all, else the first short field of its live `step_progress`,
-with a bar for "a/b"; "—" for none), its runs as bars on one time axis every row shares (the
+with a bar for "a/b"; "—" for none; a column only when one of its steps reports any), its runs as bars on one time axis every row shares (the
 current run whole, the earlier ones faint) and how long its current run took or has run. A head
 names the columns and the axis's labels, and after the first its unit's owner, small and muted
 on the Runs tab (the plan row and unit page already say it, so their step views leave it out);
@@ -2198,7 +2207,9 @@ still drawn to scale (again until none is, the longest four at most, a minute at
 break of 4% of the width, marked and labelled with its length ("+1d 2h"). Labels sit at a nice
 spacing of the time drawn to scale ("0s", "15m", "1h 30m"), at least 17% apart. Under 560 px of
 its width a row is its rail and name, then its state, progress and time, then its runs as a thin
-bar, and the head (but its owner) and the axis give way. The plan's rows open it in place (the current step's row tinted), the unit page is it, and
+bar, and the head (but its owner) and the axis give way. The plan's rows open it in place (the current step's row tinted) on
+the row's own scale instead, the one log axis it draws: the last twelve hours to now across
+exactly the row's track, how long each took before it, earlier runs' marks left out. The unit page is it, and
 a step's Runs tab draws its unit's with its own row ringed; a row in it opens its step (in the
 drawer, where there is one), and the arrows move between its rows.
 

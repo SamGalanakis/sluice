@@ -907,12 +907,13 @@ It is the unit page's body, what a plan row opens in place, and a step's Runs ta
   bypass preset settled, then a "bypass · <who set it>" tag while one waits, then `ui::tries`'
   "run 3"),
   **Progress** (a scatter's "12/40" or a short `step_progress` field, a 3px bar under an "a/b";
-  "—" for none), the **timeline** and **Span** (how long its current run took, in `ink-muted`
+  "—" for none; a column only when one of its steps reports any), the **timeline** and **Span** (how long its current run took, in `ink-muted`
   data mono; a running one's ticking in `run-ink`).
 - **The rail** (an inline SVG a row, out of flow so its lines run the row's whole height): the
   gates between the unit's steps (`after` entries and values passed) in `line`, 1.5px; a node a
   step, 5px: filled `sky-ink` done, ringed `idle` not reached, an arc in `run-ink` turning while
-  it runs as the glyphs turn (held still under reduced motion), `sand` edged in `sand-mark` for a
+  it runs as the glyphs turn (the running glyph's arc turns over a faint ring of its own, so
+  held still it reads as a ring, never as a letter C) (held still under reduced motion), `sand` edged in `sand-mark` for a
   look. A chain runs down lane 0, beside the names; a branch takes the lowest free lane to the
   left (never one freed on its own row), and an arrow marks where a branch or a join reaches a
   step. At most five lanes.
@@ -922,8 +923,11 @@ It is the unit page's body, what a plan row opens in place, and a step's Runs ta
   compares lengths; but no run is drawn under 3px, so a two-second step beside a two-hour one is
   still a mark in its row, and a stretch where nothing ran that is a tenth or more of the time
   drawn to scale collapses to a break, 4% of the width on `paper-2` between dashed `rule` edges,
-  labelled with its length ("+1d 2h"). A log axis was refused: it would make every hour-long
-  run look alike and lie about the gaps. The labels (data mono, 11.5px) sit at a nice spacing
+  labelled with its length ("+1d 2h"). A log axis was refused here: it would make every
+  hour-long run look alike and lie about the gaps. The one exception is the step view in the
+  plan's drilldown (In the plan, below), which takes its row's log scale so the run under the
+  row reads exactly as the row's track does; a unit's whole history stays linear everywhere
+  else. The labels (data mono, 11.5px) sit at a nice spacing
   of the scaled time, 17% apart at least, each with a hairline down the rows; "now" is a
   `run-ink` line with its word, which `nav.js` moves with the reader's clock every five seconds
   and after every patch (`data-now`: the last stretch's start, place and rate), as it does a
@@ -942,9 +946,14 @@ It is the unit page's body, what a plan row opens in place, and a step's Runs ta
 - **In the plan.** On the row's own time (`View::recent`): the last twelve hours to now on
   At work's log scale, so a run reads the same in the row and under it (a run that began
   earlier starts at the left edge, saying how long ago). A row of At work is a `<details>`:
-  open, its step view stands under it on `paper-2`, the current step's row tinted (`run` at 7%;
-  `sand-pale` edged in sand for a look), then its latest message, Message and Unit page as quiet
-  links and Open step. It opens without script, and stays open
+  open, its step view stands under it on `paper-2`, its timeline exactly the row's track (as
+  wide, ending at the same x: Took moves before it and the view ends where the row's chevron
+  column begins; on a phone each run's bar starts where the row's track does), the current
+  step's row tinted (`run` at 7%; `sand-pale` for a look, a full tint and no side stripe), the
+  earlier runs' marks before "run 2" left out, then its latest message (with none, "Last heard
+  22:51 (6m ago)", or for a quiet unit "Not heard from since 19:14 (3h ago)"), Message and Unit
+  page as quiet links and Open step. A run clipped at the left edge says "from 3d ago" in data
+  mono at 11.5px. It opens without script, and stays open
   through a patch (`data-preserve-attr="open"`), the unit moving between groups included.
 - **Narrow** (under 560px of its own width: a phone, a narrow drawer): one column, the rail
   and name, then state, progress and span, then the runs as a 4px bar; the head and the axis's
@@ -1058,9 +1067,10 @@ The pages compose these parts; each lane that redraws one writes its section her
   question linked under the coral underline; what the owner set aside still counts there
   (setting aside is about attention, never status). The project's sections are soft pills
   under it (the current one on `paper-2` at weight 600), one line that scrolls within itself
-  on a phone; the row's tools (Find, the switch, More) beside them. Then the sheet, in a
-  measure of at most 1400px from the nav's left edge, so a row's parts and an item's action
-  stay with their words on a wide screen; three sections, each headed by an 18px/600 label
+  on a phone; the row's tools (Find, the switch, More) beside them. The head (its More, the
+  row and its rule included) and the sheet under it keep a measure of at most 1400px from the
+  nav's left edge, so a row's parts and an item's action stay with their words on a wide
+  screen (beside the board the head spans both); three sections, each headed by an 18px/600 label
   (body text is 15px):
   - **Needs you**: the one raised well (`paper-2`, 14px), an item a line: its mark (a 12px
     coral dot a question, outranking an 8px sand square a stop and an 8px sand ring a silence,
@@ -1068,31 +1078,42 @@ The pages compose these parts; each lane that redraws one writes its section her
     step, what happened, its owner small and muted; under it the failure's headline, what it
     last said and the advice, muted), its one action (a pill: Answer, Retry, Retry with
     feedback, Retry all, Message it) and its × (a 32px circle, 44px on a phone). Only the first
-    item's action is filled navy; the rest are outlined. Questions first, then stops (a shared
+    item's action is filled navy; the rest are outlined. A cancel has two: Retry and "Settle
+    as done" (outlined; its step's Dismiss, which settles its unit as done), and its × only sets
+    it aside, like every ×. Questions first, then stops (a shared
     cause said once, its units folded in a `<details>`, Retry all), then silences, the longest
-    first. A cancel stays here: a cancelled step leaves its unit unfinished and holds the steps
-    after it, and the status table counts it as needing a look everywhere, so the owner still
-    decides (Retry, or set it aside, which settles its unit as done). A count and "Set all
+    first. A shared cause is said in the head's word, its advice in the plural ("Two units
+    failed: they hit their wall-clock cap. Raise the agents' time limit (SLUICE_AGENT_MAX_MIN
+    in the project's .env), then Retry all."). A cancel stays here: a cancelled step leaves its
+    unit unfinished and holds the steps after it, and the status table counts it as needing a
+    look everywhere, so the owner still decides: Retry, or Settle as done. Setting aside (the ×,
+    Set all aside) is about attention only and never settles. A count and "Set all
     aside" stand in the head. An item set aside leaves a line under the well for ten minutes,
     "Set aside: the silence of <title>" and Undo, and comes back by itself when it changes; with
     script the × and Undo post in place, the focus going to Undo and back to the item. With
-    nothing to say, the well says "Nothing.".
+    nothing to say, the well says "Nothing.". Each Set aside line reads as one sentence with
+    its Undo after it, wrapping as text does at any width.
   - **Finished since you looked**: cards (10px, a hairline inset, filling their row, one
-    under 760px): when it finished and how long it took, the title in weight 600 linking the
-    unit, what it produced, a label muted before the value. "since 14:02" and "Mark as seen"
+    under 760px, each as tall as its own content): when it finished and how long it took, the
+    title in weight 600 linking the unit, what it produced: its output's name muted, the value
+    in ink. "since 14:02" and "Mark as seen"
     (a plain form) in the head; with no look kept, "Finished lately", the latest four.
   - **At work**: the roster, under an axis row (12h, 4h, 1h, 15m, now, 12px over the tracks'
-    column). A group a recipe (a `<details>`, its triangle, its name in weight 600 and its counts
-    muted); the units of no recipe after, the long runs last. **Folding**: a roster of more than
-    12 rows folds each group of more than 3 rows that has nothing remarkable in it (no silence,
-    none of its recipe's units in Needs you) to its line, "article · 42 running · each heard
+    column; it says its scale to a screen reader and on hover: "The last 12 hours on a log
+    scale, now at the right; a tick is a message."). A group a recipe (a `<details>`, its
+    triangle, its name at 15px/600 in ink, so a big plan scans by its groups, and its counts
+    13px muted); the units of no recipe after, the long runs last. **Folding**: a roster of
+    more than 12 rows folds each group of more than 3 rows that has nothing remarkable in it (no
+    silence, none of its recipe's units in Needs you, alone or in a group of failures) to its
+    line, "article · 42 running · each heard
     from in the last 25m"; a group with quiet or stopped work stays open. A row (8px,
     `paper-2` on hover and open) is a grid: the badge (a 30px circle, an engine's name; drawn
     only when rows run on more than one thing, never "fn"), its title in ink at weight 600 with
     its owner muted and under it its recipe's view or its last message on one line, muted; its
     stage pill (the state's glyph, the stage and its time, on `paper-2`, 999px) and "heard 12m
     ago" muted, or the quiet pill solid sand with its ink (`on-sand`) in both schemes; its
-    track (its last twelve hours on a log scale); the live dot. Waiting rows follow the running
+    track (its last twelve hours on a log scale, `clamp(180px, 34cqi, 560px)` wide, so a wide
+    screen gives its room to the time rather than to a gap after the title); the live dot. Waiting rows follow the running
     ones. A line ends it: "4 waiting on earlier work · 25 done, the last 2h ago". Under 760px
     of the pane the row stacks: badge and title, then the meta, then the track full width; the
     long axis gives way to "12h … now" over each group's first track.
@@ -1101,12 +1122,13 @@ The pages compose these parts; each lane that redraws one writes its section her
     `sky-ink` at 45% on the paper edged in `sky-ink`; a silence the sand edged in `sand-mark`
     (light) or filled sand (dark); a wait dotted; a message a 1px tick.
     **The drilldown**: open, a row's step view (The step view) on the row's own scale, the
-    last twelve hours on the same log scale and as wide as the row's track, in the track's
-    tones: a run still going reads as its step does now (a quiet one on the sand from when it
-    fell silent), one that began earlier starts at the left edge, saying "from 3d ago". Its
-    "Runs on" column only when its steps differ. Its foot: the latest message (or "Not heard
-    from since 19:14"), then Message and Unit page as quiet links and Open step, its one
-    outlined move.
+    last twelve hours on the same log scale across exactly the row's track (the same x-range,
+    measured, at every width), in the track's tones: a run still going reads as its step does
+    now (a quiet one on the sand from when it fell silent), one that began earlier starts at the
+    left edge, saying "from 3d ago". Its "Runs on" column only when its steps differ, its
+    Progress only when one reports any. Its foot: the latest message, or with none "Last heard
+    22:51 (6m ago)" ("Not heard from since 19:14 (3h ago)" for a quiet unit), then Message and
+    Unit page as quiet links and Open step, its one outlined move.
   - **Done**, asked for (Show: Done, a find, a recipe's units): the index, a dense list newest
     first in columns: finish time, glyph, title, how long it took (in `ink-muted`, like every
     finished duration: the blue is for what runs).

@@ -685,6 +685,11 @@ impl View<'_> {
             .collect::<std::collections::BTreeSet<_>>()
             .len()
             > 1;
+        // their progress, a column only where one reports it
+        let pr = self
+            .steps
+            .iter()
+            .any(|s| !matches!(s.progress, Progress::None));
         let rail_w = 2.0 * RAIL_PAD + (width - 1) as f64 * LANE;
 
         let mut out = String::new();
@@ -695,9 +700,10 @@ impl View<'_> {
         out.push_str(host.open().as_str());
         let _ = write!(
             out,
-            "<div class=\"sv-g{}{}\" style=\"--rail:{rail_w:.0}px;--now:100%\"{} role=\"group\" aria-label=\"{}\">",
+            "<div class=\"sv-g{}{}{}\" style=\"--rail:{rail_w:.0}px;--now:100%\"{} role=\"group\" aria-label=\"{}\">",
             if axis.is_some() { "" } else { " sv-untimed" },
             if on { "" } else { " sv-one-on" },
+            if pr { "" } else { " sv-no-pr" },
             // the page's clock moves a linear axis's now; the log scale's stays at its end
             match &axis {
                 Some(axis) if axis.live && !axis.recent => {
@@ -732,7 +738,7 @@ impl View<'_> {
         // eye; a screen reader hears the owner alone)
         let _ = write!(
             out,
-            "<div class=\"sv-hd{}\"><span class=\"sv-h-name\"><span class=\"sv-h-w\" aria-hidden=\"true\">Step</span>{}</span>{}<span class=\"sv-h-st\" aria-hidden=\"true\">State</span><span class=\"sv-h-pr\" aria-hidden=\"true\">Progress</span>{}<span class=\"sv-h-sp\" aria-hidden=\"true\">Took</span></div>",
+            "<div class=\"sv-hd{}\"><span class=\"sv-h-name\"><span class=\"sv-h-w\" aria-hidden=\"true\">Step</span>{}</span>{}<span class=\"sv-h-st\" aria-hidden=\"true\">State</span>{}{}<span class=\"sv-h-sp\" aria-hidden=\"true\">Took</span></div>",
             if self.owner.is_empty() {
                 ""
             } else {
@@ -745,6 +751,11 @@ impl View<'_> {
             },
             if on {
                 "<span class=\"sv-h-on\" aria-hidden=\"true\">Runs on</span>"
+            } else {
+                ""
+            },
+            if pr {
+                "<span class=\"sv-h-pr\" aria-hidden=\"true\">Progress</span>"
             } else {
                 ""
             },
@@ -839,22 +850,27 @@ impl View<'_> {
                     .unwrap_or_default(),
                 step.runs
             );
-            out.push_str("<span class=\"sv-pr\">");
             match &step.progress {
-                Progress::None => out.push_str(NONE),
+                _ if !pr => {}
+                Progress::None => {
+                    let _ = write!(out, "<span class=\"sv-pr\">{NONE}</span>");
+                }
                 Progress::Text(text) => {
-                    let _ = write!(out, "<span class=\"num\">{}</span>", esc(text));
+                    let _ = write!(
+                        out,
+                        "<span class=\"sv-pr\"><span class=\"num\">{}</span></span>",
+                        esc(text)
+                    );
                 }
                 Progress::Part { done, total, text } => {
                     let _ = write!(
                         out,
-                        "<span class=\"num\">{}</span><span class=\"sv-part\" aria-hidden=\"true\"><i style=\"width:{:.1}%\"></i></span>",
+                        "<span class=\"sv-pr\"><span class=\"num\">{}</span><span class=\"sv-part\" aria-hidden=\"true\"><i style=\"width:{:.1}%\"></i></span></span>",
                         esc(text),
                         done / total * 100.0
                     );
                 }
             }
-            out.push_str("</span>");
             if let Some(axis) = &axis {
                 out.push_str(&track(axis, step));
             }

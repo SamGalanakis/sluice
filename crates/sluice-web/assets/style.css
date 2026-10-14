@@ -1983,16 +1983,18 @@ h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
    (`--now`, which the page's clock moves). Under 560px of its own width a row is its rail and
    name, then its state and time, then its runs as a thin bar; the axis gives way. */
 sluice-steps.sv { display: block; container: sv / inline-size; min-width: 0; }
+/* each optional column a variable, empty where the view leaves it out: Runs on (`sv-one-on`),
+   Progress (`sv-no-pr`), the timeline (`sv-untimed`); Took last (`--sv-tail`), or before the
+   timeline (`--sv-took`, the plan's drilldown) */
 .sv-g { display: grid; column-gap: 14px; align-items: stretch;
-  grid-template-columns: [rail] var(--rail) [name] minmax(0, 1.1fr) [on] fit-content(12em) [st] max-content
-                         [pr] minmax(3.2em, max-content) [tl] var(--tl, minmax(120px, 1.4fr)) [sp] minmax(3.4em, max-content);
+  --sv-name: minmax(0, 1.1fr); --sv-on: [on] fit-content(12em); --sv-pr: [pr] minmax(3.2em, max-content);
+  --sv-tl: [tl] var(--tl, minmax(120px, 1.4fr)); --sv-took: ; --sv-tail: [sp] minmax(3.4em, max-content);
+  grid-template-columns: [rail] var(--rail) [name] var(--sv-name) var(--sv-on) [st] max-content var(--sv-pr)
+                         var(--sv-took) var(--sv-tl) var(--sv-tail);
   font-size: 13.5px; line-height: 19px; }
-.sv-g.sv-untimed { grid-template-columns: [rail] var(--rail) [name] minmax(0, 1fr) [on] fit-content(12em) [st] max-content
-                                          [pr] minmax(3.2em, max-content) [sp] minmax(3.4em, max-content); }
-.sv-g.sv-one-on { grid-template-columns: [rail] var(--rail) [name] minmax(0, 1.1fr) [st] max-content
-                         [pr] minmax(3.2em, max-content) [tl] var(--tl, minmax(120px, 1.4fr)) [sp] minmax(3.4em, max-content); }
-.sv-g.sv-one-on.sv-untimed { grid-template-columns: [rail] var(--rail) [name] minmax(0, 1fr) [st] max-content
-                                          [pr] minmax(3.2em, max-content) [sp] minmax(3.4em, max-content); }
+.sv-g.sv-untimed { --sv-name: minmax(0, 1fr); --sv-tl: ; }
+.sv-g.sv-one-on { --sv-on: ; }
+.sv-g.sv-no-pr { --sv-pr: ; }
 .sv-hd, .sv-rows, .sv-foot { grid-column: 1 / -1; min-width: 0; }
 .sv-hd, .sv-rows, .sv-row { display: grid; grid-template-columns: subgrid; }
 .sv-hd { grid-row: 1; align-items: end; padding-bottom: 6px; box-shadow: inset 0 -1px 0 var(--rule);
@@ -2022,7 +2024,7 @@ sluice-steps.sv { display: block; container: sv / inline-size; min-width: 0; }
 .sv-row:first-child { background-image: none; }
 .sv-row:hover { background-color: var(--paper-2); }
 .sv-row.is-cur { background-color: color-mix(in oklch, var(--run) 7%, transparent); }
-.sv-row.is-cur.sv-c-look { background-color: var(--sand-pale); box-shadow: inset 3px 0 0 var(--sand); }
+.sv-row.is-cur.sv-c-look { background-color: var(--sand-pale); }
 .sv-row.is-sel { background-color: var(--paper-2); box-shadow: inset 0 0 0 2px var(--navy); }
 .sv-row > :not(.sv-rail) { display: flex; align-items: center; min-width: 0; padding: 4px 0; }
 /* the rail: the lines in `line`, a node a step over them, an arrow where a gate joins or branches */
@@ -2062,7 +2064,7 @@ sluice-steps.sv { display: block; container: sv / inline-size; min-width: 0; }
         background: var(--ink-muted); opacity: .75; pointer-events: none; }
 .sv-b.is-old { opacity: 0.35; }
 .sv-b.is-clip { border-start-start-radius: 0; border-end-start-radius: 0; }
-.sv-clip { position: absolute; left: 0; top: 1px; font: 500 10.5px/12px var(--font-mono);
+.sv-clip { position: absolute; left: 0; top: 0; font: 500 11.5px/12px var(--font-mono);
            color: var(--ink-muted); white-space: nowrap; pointer-events: none; }
 .sv-sp { justify-content: flex-end; color: var(--ink-muted); white-space: nowrap; }
 .sv-row > .sv-sp { padding-right: 8px; }
@@ -2303,6 +2305,10 @@ details.read-today .item { opacity: .85; }
 }
 /* composed: a measure from the nav's left edge, so a row's parts stay together on a wide screen */
 .plan-sheet { display: grid; gap: 36px; min-width: 0; max-width: 1400px; padding-top: 14px; }
+/* the plan alone: its head (name, sentence, the row of tabs and tools, its rule) keeps the
+   sheet's measure; beside the board it spans both */
+body:has(.project-page:is(:not(.has-panel), [data-view="plan"])) .page-top:has(#plan-band) {
+  max-width: calc(1400px + 2 * var(--gutter)); }
 .pb-sec { display: grid; gap: 8px; min-width: 0; align-content: start; }
 .pb-label { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0;
             font-size: 13px; line-height: 20px; color: var(--ink-muted); }
@@ -2358,10 +2364,11 @@ details.read-today .item { opacity: .85; }
            color: var(--ink-muted); }
 .nd-gone { list-style: none; margin: 2px 0 0; padding: 0 4px; display: grid; gap: 2px; font-size: 13px;
            color: var(--ink-muted); }
-.nd-gone li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
+.nd-gone li > span { margin-right: 8px; }
+.nd-gone li > .nd-form { display: inline; }
 
 /* Finished since you looked: a small card each */
-.fin { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px;
+.fin { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; align-items: start;
        grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
 .fin-i { display: grid; gap: 4px; align-content: start; min-width: 0; padding: 14px 16px; border-radius: 10px;
          box-shadow: inset 0 0 0 1px var(--rule); }
@@ -2370,13 +2377,14 @@ details.read-today .item { opacity: .85; }
 .fin-t { font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .fin-t a { color: inherit; text-decoration: none; }
 .fin-t a:hover { text-decoration: underline; text-underline-offset: var(--link-offset); }
-.fin-o { font-size: 14px; color: var(--ink-muted); overflow-wrap: anywhere; display: -webkit-box;
+.fin-o { font-size: 14px; color: var(--ink); overflow-wrap: anywhere; display: -webkit-box;
          -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
-.fin-n { color: var(--ink); }
+.fin-n { color: var(--ink-muted); }
 .fin-o code { padding: 1px 5px; border-radius: 5px; background: var(--paper-2); font-size: 12.5px; }
 
 /* At work: the axis's labels, a group's line, a row a unit (badge | who | where | track | chevron) */
-.ro { --track: clamp(180px, 24cqi, 360px); display: grid; min-width: 0;
+@property --track { syntax: "<length>"; inherits: true; initial-value: 240px; }
+.ro { --track: clamp(180px, 34cqi, 560px); --track-end: 34px; --track-in: 0px; display: grid; min-width: 0;
       --ro-cols: 30px minmax(0, 1fr) minmax(120px, 180px) var(--track) 16px;
       --ro-areas: "badge who meta track chev"; }
 .ro.no-badge { --ro-cols: minmax(0, 1fr) minmax(120px, 180px) var(--track) 16px;
@@ -2396,9 +2404,9 @@ details.read-today .item { opacity: .85; }
 .ro-group::before { content: ""; flex: none; align-self: center; width: 0; height: 0; border-block: 4px solid transparent;
                     border-inline-start: 6px solid currentColor; transition: transform .15s ease-out; }
 .ro-g[open] > .ro-group::before { transform: rotate(90deg); }
-.ro-group h3 { margin: 0; font: 400 13px/20px var(--font-text); letter-spacing: 0; text-transform: none;
+.ro-group h3 { margin: 0; font: 400 13px/22px var(--font-text); letter-spacing: 0; text-transform: none;
                color: var(--ink-muted); }
-.ro-group b { font-weight: 600; color: var(--ink); }
+.ro-group b { font-size: 15px; font-weight: 600; color: var(--ink); }
 .ro-group a { color: inherit; }
 .ro > .uv-broken { margin: 4px 0; }
 .ro-u { min-width: 0; }
@@ -2462,7 +2470,23 @@ details.read-today .item { opacity: .85; }
 .ro-drill > sluice-steps { padding: 6px 10px; border-radius: 8px; background: var(--paper);
                            box-shadow: inset 0 0 0 1px var(--rule-faint); }
 /* its runs on the row's own scale, as wide as the row's track and in its tones */
-.ro-drill .sv-g { --tl: var(--track); }
+/* its runs on the row's own scale and x-range: the timeline is as wide as the row's track and
+   ends where it does, before the chevron's column and its gap (`--track-end`), Took moving
+   before it; on a phone each run's bar starts where the row's track does (`--track-in`) */
+.ro-drill > sluice-steps { padding-right: var(--track-end); }
+.ro-drill .sv-g { --tl: var(--track); --sv-tail: ; --sv-took: [sp] minmax(3.4em, max-content); }
+@container sv (min-width: 560px) {
+  .ro-drill :is(.sv-hd, .sv-row) > * { grid-row: 1; }  /* placed by column, kept on one line */
+  .ro-drill .sv-row > .sv-sp { grid-column: sp; }
+  .ro-drill .sv-row > .sv-tr { grid-column: tl; }
+}
+@container sv (max-width: 559.98px) {
+  .ro-drill .sv-row > .sv-tr { grid-column: 1 / -1; margin-left: calc(var(--track-in) - 10px) !important; }
+  /* a clipped run's words under its bar, inside the card */
+  .ro-drill .sv-row > .sv-tr:has(.sv-clip) { margin-bottom: 24px !important; }
+  .ro-drill .sv-clip { top: 8px; left: calc(10px + var(--rail) + 10px - var(--track-in)); }
+}
+.ro-drill .tries-m { display: none; }
 .ro-drill .sv-b-done { background: var(--track-past); box-shadow: inset 0 0 0 1px var(--sky-ink); }
 .ro-drill .sv-b-look { background: var(--sand); box-shadow: inset 0 0 0 1.5px var(--track-quiet-edge); }
 .ro-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding-top: 10px; font-size: 13px; }
@@ -2482,8 +2506,9 @@ details.read-today .item { opacity: .85; }
   .nd { padding: 2px 14px; }
   .nd-i { grid-template-columns: 14px minmax(0, 1fr); }
   .nd-acts { grid-column: 2; justify-self: start; }
-  .ro { --ro-cols: 30px minmax(0, 1fr) 16px; --ro-areas: "badge who chev" ". meta ." ". track ."; }
-  .ro.no-badge { --ro-cols: minmax(0, 1fr) 16px; --ro-areas: "who chev" "meta ." "track ."; }
+  .ro { --ro-cols: 30px minmax(0, 1fr) 16px; --ro-areas: "badge who chev" ". meta ." ". track .";
+        --track-end: 28px; --track-in: 42px; }
+  .ro.no-badge { --ro-cols: minmax(0, 1fr) 16px; --ro-areas: "who chev" "meta ." "track ."; --track-in: 0px; }
   .ro-axis, .ro-r { column-gap: 12px; }
   /* the scale over each group's first track, its ends alone */
   .ro > .ro-axis { display: none; }
@@ -2499,6 +2524,8 @@ details.read-today .item { opacity: .85; }
   .plan-sheet .act { min-height: 44px; }
   .plan-sheet button.x { width: 44px; height: 44px; }
   .plan-sheet button.link { min-height: 44px; }
+  /* an Undo in its line keeps its 44px target without opening the line up */
+  .nd-gone button.link { min-height: 0; padding-block: 12px; margin-block: -12px; }
   .ro-links a { display: inline-flex; align-items: center; min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -275,7 +275,7 @@ async fn a_stopped_card_names_its_failures_kind_and_says_why_under_it() {
     assert!(
         kit.contains("Stopped at its wall-clock cap after 10h 0m.")
             && kit.contains(
-                "<span class=\"nd-next\">Raise its agent&#39;s time limit, then Retry.</span>"
+                "<span class=\"nd-next\">Raise its agent&#39;s time limit (SLUICE_AGENT_MAX_MIN in the project&#39;s .env), then Retry.</span>"
             ),
         "{kit}"
     );

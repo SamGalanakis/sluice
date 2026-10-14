@@ -99,6 +99,13 @@ pub fn sprite() -> TrustedHtml {
         );
         for icon in Icon::ALL {
             let body = &BODIES[*icon as usize];
+            // the turning arc over its faint ring, so it reads as a ring standing still too
+            // (without motion, or in a still), never as a letter C
+            let body = &if *icon == Icon::LoaderCircle {
+                format!("<circle cx=\"12\" cy=\"12\" r=\"9\" style=\"opacity:.3\"/>{body}")
+            } else {
+                body.clone()
+            };
             out.push_str(&format!(
                 "<symbol id=\"i-{}\" viewBox=\"0 0 24 24\">{body}</symbol>",
                 icon.name()

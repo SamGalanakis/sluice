@@ -140,7 +140,7 @@ async fn plan_units_and_loose_steps() {
         );
         let cause = needs[1];
         assert!(
-            cause.contains("Two units stopped at their wall-clock cap. <span class=\"nd-next\">Raise its agent&#39;s time limit, then Retry.</span>")
+            cause.contains("Two units failed: they hit their wall-clock cap. <span class=\"nd-next\">Raise the agents&#39; time limit (SLUICE_AGENT_MAX_MIN in the project&#39;s .env), then Retry all.</span>")
                 && cause.contains("<summary>Show the two</summary>")
                 && cause.contains(">Retry all</button>")
                 && cause.contains("value=\"stop:a-4-review stop:s-4-scan\""),
@@ -205,7 +205,7 @@ async fn plan_units_and_loose_steps() {
         assert!(
             a6.contains("<span class=\"vh\">running, </span>draft · ")
                 && a6.contains("heard ")
-                && a6.contains("aria-label=\"Its last twelve hours: 3 messages\""),
+                && a6.contains("aria-label=\"Its last twelve hours, on a log scale: 3 messages\""),
             "{a6}"
         );
         assert_eq!(a6.matches("<i class=\"tk-m\"").count(), 3, "{a6}");
@@ -229,7 +229,9 @@ async fn plan_units_and_loose_steps() {
         );
         // every step runs on the one fn: no column says so
         assert!(
-            drill.contains("<div class=\"sv-g sv-one-on\"") && !drill.contains("runs on "),
+            drill.contains("<div class=\"sv-g sv-one-on sv-no-pr\"")
+                && !drill.contains("runs on ")
+                && !drill.contains(">Progress<"),
             "{drill}"
         );
         // its foot: Open step the one move, the rest quiet links
@@ -387,8 +389,9 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
     assert_eq!(plan_html::place(&html, "a-4"), "", "{html}");
     let well = plan_html::band(&html, "plan-needs");
     assert!(
-        well.contains("<span>Set aside: two units stopped at their wall-clock cap</span>")
-            && well.contains("id=\"undo-n-cause-wallcap\""),
+        well.contains(
+            "<span>Set aside: the failures of two units (they hit their wall-clock cap)</span>"
+        ) && well.contains("id=\"undo-n-cause-wallcap\""),
         "{well}"
     );
     assert!(
@@ -437,12 +440,12 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
         "{html}"
     );
     assert!(html.contains("<p class=\"nd-none\">Nothing.</p>"), "{html}");
-    // setting aside is about attention alone: the head still says what is true (the silence
-    // and the failures), and the cancel it settled leaves its unit done, never a row held
-    // behind it
+    // setting aside is about attention alone: the head still says what is true (the failures,
+    // the cancel, which Set all aside never settles, and the silence), and the cancelled unit
+    // is still a stop, never a row
     let said = plan_html::summary(&html);
     assert!(
-        said.contains("2 failed") && said.contains("1 quiet") && said.contains("6 of 16 done"),
+        said.contains("2 failed, 1 cancelled, 1 quiet") && said.contains("5 of 16 done"),
         "{said}"
     );
     assert!(
@@ -521,28 +524,36 @@ async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
     );
 }
 
-/// A big roster folds a group with nothing remarkable in it to its line, its rows still drawn
-/// for a click (or no script) to open; a small one leaves every group open.
+/// The bugs this catches: a big roster drawing every healthy group open, and folding a group
+/// whose units failed together (a group of stops names no one unit) or fell silent.
 #[tokio::test]
 async fn a_big_roster_folds_its_unremarkable_groups() {
     let f = Fixture::new().await;
-    let mut steps = serde_json::Map::new();
-    let mut statuses: Vec<(&'static str, &'static str)> = vec![];
-    for n in 0..14 {
-        let id: &'static str = Box::leak(format!("w{n:02}").into_boxed_str());
-        steps.insert(id.into(), serde_json::json!({"run": "custom.open"}));
-        statuses.push((id, "running"));
-    }
-    let big = f
-        .project("big", serde_json::json!({ "steps": steps }), &statuses)
-        .await;
-    let (_, html) = f.get(&format!("/projects/id/{big}")).await;
+    let atlas = neutral::seed_big(&f.writer, f._home.path()).await;
+    let (_, html) = f.get(&format!("/projects/id/{atlas}")).await;
     let roster = plan_html::band(&html, "plan-roster");
+    // entry, healthy, folds to its line, its rows still drawn for a click (or no script)
+    let entry = &roster[at(
+        roster,
+        "<details class=\"ro-g\"><summary class=\"ro-group\"><h3><b><a ",
+    )..];
     assert!(
-        roster.contains("<details class=\"ro-g\"><summary class=\"ro-group\"><h3><b>No recipe</b> · 14 running</h3>")
-            && roster.matches("<details id=\"u-w").count() == 14,
+        entry.contains(">entry</a></b> · 25 running · each heard from in the last ")
+            && roster.matches("<details id=\"u-e-").count() == 25,
         "{roster}"
     );
+    // article (two failures at their cap, said together) and scan (a silence) stay open
+    assert_eq!(
+        roster.matches("<details class=\"ro-g\" open>").count(),
+        2,
+        "{roster}"
+    );
+    assert_eq!(
+        roster.matches("<details class=\"ro-g\">").count(),
+        1,
+        "{roster}"
+    );
+    // a small plan leaves every group open
     let (_, html) = f.get(&format!("/projects/id/{}", f.id)).await;
     let roster = plan_html::band(&html, "plan-roster");
     assert!(

@@ -123,21 +123,21 @@ fn leading(n: usize) -> String {
         n => n.to_string(),
     }
 }
-/// What a group of stops that share a failure's kind did, after "Three units": the kinds that
-/// say the same of every unit they stop. Any other kind is said a unit at a time.
+/// Why a group of failures that share a kind failed, after "Three units failed: ": the kinds
+/// that say the same of every unit they stop. Any other kind is said a unit at a time.
 fn shared_cause(kind: &str) -> Option<&'static str> {
     Some(match kind {
-        "WallCap" => "stopped at their wall-clock cap",
-        "StallCap" => "stopped: their agents wrote nothing for too long",
-        "QuotaExhausted" => "stopped: their engines hit a usage cap",
-        "AuthFailed" => "stopped: their engines could not sign in",
-        "EngineExited" => "stopped: their engines exited",
-        "ReadyTimeout" => "stopped: their engines never became ready",
+        "WallCap" => "they hit their wall-clock cap",
+        "StallCap" => "their agents wrote nothing for too long",
+        "QuotaExhausted" => "their engines hit a usage cap",
+        "AuthFailed" => "their engines could not sign in",
+        "EngineExited" => "their engines exited",
+        "ReadyTimeout" => "their engines never became ready",
         "ExitedWithoutSubmit" | "exited_without_submit" => {
-            "stopped without submitting their outputs"
+            "they exited without submitting their outputs"
         }
-        "process_lost" => "stopped: their processes were lost",
-        "Transient" | "transient" => "stopped: a passing failure outlasted their retries",
+        "process_lost" => "their processes were lost",
+        "Transient" | "transient" => "a passing failure outlasted their retries",
         _ => return None,
     })
 }
@@ -173,8 +173,9 @@ struct Need {
     unit: String,
     /// Its element's id.
     id: String,
-    /// What its dismissal names, as the form posts them: `stop:<step>`, `quiet:<step>@<stamp>`,
-    /// `ask:<message>`, `cancel:<step>` (a cancel, set aside as its step's own Dismiss does).
+    /// What its × sets aside, as the form posts them: `stop:<step>` (a failure, a cancel or a
+    /// stale input, kept against the step's generations), `quiet:<step>@<stamp>`,
+    /// `ask:<message>`.
     keys: Vec<String>,
     /// Its sentence, HTML.
     sentence: String,
@@ -182,7 +183,7 @@ struct Need {
     more: String,
     /// Its one action, HTML.
     act: String,
-    /// What its Dismissed line calls it, in words.
+    /// What its Set aside line calls it, in words.
     short: String,
     /// The owner has set it aside, and it has not changed since: when (its Undo is offered for
     /// a while).
@@ -434,19 +435,10 @@ impl<'a> Plan<'a> {
             .view
             .units
             .iter()
-            .filter_map(|u| {
-                if u.done {
-                    // a cancel set aside lately: its unit is done, its Undo still offered
-                    u.steps
-                        .iter()
-                        .find(|s| s.cancelled() && s.dismissed && !s.dismissed_at.is_empty())
-                        .map(|s| (u, s))
-                } else if matches!(u.shown(), Shown::Failed | Shown::Cancelled | Shown::Stale) {
-                    current(u).map(|s| (u, s))
-                } else {
-                    None
-                }
+            .filter(|u| {
+                !u.done && matches!(u.shown(), Shown::Failed | Shown::Cancelled | Shown::Stale)
             })
+            .filter_map(|u| current(u).map(|s| (u, s)))
             .collect();
         stops.sort_by_key(|(u, _)| (u.shown(), u.pos));
         let kind = |step: &StepView| {
@@ -598,7 +590,13 @@ impl<'a> Plan<'a> {
                 esc(step.id.as_str())
             )
         } else if step.retryable() && !step.retry_asks() {
-            self.retry_form(&[step], "Retry")
+            let retry = self.retry_form(&[step], "Retry");
+            if step.cancelled() {
+                // the cancel's other decision: settle it, so its unit counts as done
+                format!("{retry}{}", self.settle_form(unit, step))
+            } else {
+                retry
+            }
         } else {
             format!(
                 "<a class=\"act\" href=\"{}\" data-step=\"{}\">Open step</a>",
@@ -606,13 +604,8 @@ impl<'a> Plan<'a> {
                 esc(step.id.as_str())
             )
         };
-        // a cancel is set aside as its step's own Dismiss sets it; any other stop is kept
-        // against its step's generations
-        let key = if step.cancelled() {
-            format!("cancel:{}", step.id)
-        } else {
-            format!("stop:{}", step.id)
-        };
+        // set aside against its step's generations: a retry or a new cancel brings it back
+        let key = format!("stop:{}", step.id);
         Need {
             mark: Mark::Stop,
             unit: unit.id.to_string(),
@@ -629,15 +622,11 @@ impl<'a> Plan<'a> {
                 },
                 ui::cut(title(unit), 60)
             ),
-            aside: if step.cancelled() {
-                step.dismissed.then(|| step.dismissed_at.clone())
-            } else {
-                self.aside(&key)
-            },
+            aside: self.aside(&key),
             keys: vec![key],
         }
     }
-    /// Stops that share a failure's kind, said once: "Three units stopped at their wall-clock
+    /// Failures that share a kind, said once: "Three units failed: they hit their wall-clock
     /// cap.", the units under it, Retry all.
     fn group_need(&self, kind: &str, members: &[(&UnitView, &StepView)]) -> Need {
         let mut list = String::new();
@@ -681,14 +670,14 @@ impl<'a> Plan<'a> {
             unit: String::new(),
             id: format!("n-cause-{}", kind.to_lowercase().replace('_', "-")),
             sentence: format!(
-                "{} units {}.{}",
+                "{} units failed: {}.{}",
                 leading(n),
-                shared_cause(kind).unwrap_or("stopped"),
-                // what to try next, as each one's page says it
+                shared_cause(kind).unwrap_or("they share a cause"),
+                // what to try next, said of them all
                 members
                     .first()
                     .and_then(|(_, s)| s.failure.as_ref())
-                    .map(|f| f.next_step())
+                    .map(|f| f.next_step_all())
                     .filter(|next| !next.is_empty())
                     .map(|next| format!(" <span class=\"nd-next\">{}</span>", esc(next)))
                     .unwrap_or_default()
@@ -699,9 +688,9 @@ impl<'a> Plan<'a> {
             ),
             act,
             short: format!(
-                "{} units {}",
+                "the failures of {} units ({})",
                 leading(n).to_lowercase(),
-                shared_cause(kind).unwrap_or("stopped")
+                shared_cause(kind).unwrap_or("one cause")
             ),
             aside: keys
                 .iter()
@@ -734,6 +723,21 @@ impl<'a> Plan<'a> {
                 next = esc(&next),
             ),
         }
+    }
+    /// Settle as done: a cancel's step's own Dismiss, so its unit counts as done (its step's page
+    /// can undo it).
+    fn settle_form(&self, unit: &UnitView, step: &StepView) -> String {
+        format!(
+            "<form class=\"nd-form\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"act\" title=\"{label}\" aria-label=\"{label}\">Settle as done</button></form>",
+            h = esc(&step.href()),
+            rev = step.revision,
+            seen = esc(&step.seen()),
+            next = esc(&format!("{}#needs", self.view.href())),
+            label = esc(&format!(
+                "Settle the cancel of {} as done: its unit counts as done",
+                ui::cut(title(unit), 60)
+            )),
+        )
     }
     /// A form posting `action` for `keys` to the plan's Needs you, coming back to `#back` (with
     /// script the focus goes there).
@@ -868,7 +872,7 @@ impl<'a> Plan<'a> {
     /// healthy, "10 at work, all heard from recently. 73 of 92 done."
     fn sentence(&self) -> String {
         // what is true, whatever the owner set aside: setting aside is about attention alone
-        // (a cancel the owner dismissed is settled, its unit done)
+        // (a cancel settled as done, its step's Dismiss, leaves its unit done)
         let standing: Vec<&Need> = self
             .needs
             .iter()
@@ -1128,18 +1132,23 @@ impl<'a> Plan<'a> {
                 }
                 // a big roster folds a group with nothing remarkable in it to its line: no
                 // silence, none of its recipe's units in Needs you
-                let remarkable =
-                    group
-                        .rows
-                        .iter()
-                        .any(|r| r.unit.steps.iter().any(|s| s.shown() == Shown::Quiet))
-                        || (!group.recipe.is_empty()
-                            && self.needs.iter().any(|n| {
-                                n.aside.is_none()
-                                    && self.view.units.iter().any(|u| {
-                                        u.id.as_str() == n.unit && u.recipe == group.recipe
-                                    })
-                            }));
+                let remarkable = group
+                    .rows
+                    .iter()
+                    .any(|r| r.unit.steps.iter().any(|s| s.shown() == Shown::Quiet))
+                    || (!group.recipe.is_empty()
+                        && self.needs.iter().filter(|n| n.aside.is_none()).any(|n| {
+                            // an item about one unit, or a group of stops (its steps')
+                            self.view.units.iter().any(|u| {
+                                u.recipe == group.recipe
+                                    && (u.id.as_str() == n.unit
+                                        || n.keys.iter().any(|k| {
+                                            k.strip_prefix("stop:").is_some_and(|step| {
+                                                u.steps.iter().any(|s| s.id.as_str() == step)
+                                            })
+                                        }))
+                            })
+                        }));
                 let folded = rows > FOLD_ROSTER && group.rows.len() > FOLD_GROUP && !remarkable;
                 // folded, how long since the most silent of them was heard from
                 let heard = group
@@ -1385,12 +1394,20 @@ impl<'a> Plan<'a> {
     fn foot_html(&self, unit: &UnitView) -> String {
         let mut out = String::from("<div class=\"ro-foot\"><p class=\"ro-ev\">");
         if unit.last_message.trim().is_empty() {
+            let quiet = unit.steps.iter().any(|s| s.shown() == Shown::Quiet);
             match heard(unit).or_else(|| last_end(unit)) {
                 Some(at) => {
+                    let at = super::rfc3339(at as u64);
                     let _ = write!(
                         out,
-                        "Not heard from since {}",
-                        ui::clock(&super::rfc3339(at as u64))
+                        "{} {} ({})",
+                        if quiet {
+                            "Not heard from since"
+                        } else {
+                            "Last heard"
+                        },
+                        ui::clock(&at),
+                        ui::ago(&at)
                     );
                 }
                 None => out.push_str("Not begun"),
@@ -1476,7 +1493,7 @@ impl<'a> Plan<'a> {
                     format!(
                         "{} cancelled{}",
                         esc(&join(&cancels)),
-                        if dismissed { " and dismissed" } else { "" }
+                        if dismissed { ", settled as done" } else { "" }
                     )
                 } else if took > 0.0 {
                     format!("took {}", esc(&ui::duration_text(took)))
@@ -1552,11 +1569,14 @@ pub fn finished_card(
         },
     )
 }
+/// What the axis says of its scale, to a screen reader and on hover.
+const SCALE: &str = "The last 12 hours on a log scale, now at the right; a tick is a message.";
 /// The labels over At work's tracks: 12h, 4h, 1h, 15m and now, where the log scale puts them;
 /// `class` " ro-axis-g" for a group's own, which a narrow plan shows over its tracks.
 pub fn axis(class: &str) -> String {
-    let mut out =
-        format!("<div class=\"ro-axis{class}\" aria-hidden=\"true\"><span class=\"ro-ticks\">");
+    let mut out = format!(
+        "<div class=\"ro-axis{class}\" title=\"{SCALE}\"><span class=\"vh\">{SCALE}</span><span class=\"ro-ticks\" aria-hidden=\"true\">"
+    );
     for (ago, words) in super::unit_steps::RECENT {
         let _ = write!(
             out,
@@ -1599,7 +1619,7 @@ pub fn track(segs: &[(&str, f64, f64)], ticks: &[f64], now: f64) -> String {
     format!(
         "<span class=\"ro-track\" role=\"img\" aria-label=\"{}\">{bars}</span>",
         esc(&format!(
-            "Its last twelve hours: {}",
+            "Its last twelve hours, on a log scale: {}",
             ui::count(said, "message", "messages")
         ))
     )
@@ -1954,18 +1974,17 @@ pub fn render(
 pub struct NeedsForm {
     /// `dismiss`, `undo` or `retry`.
     pub action: String,
-    /// The items, space apart: `stop:<step>`, `quiet:<step>@<stamp>`, `ask:<message>`,
-    /// `cancel:<step>`; for `retry`, `stop:<step>@<seen>`.
+    /// The items, space apart: `stop:<step>`, `quiet:<step>@<stamp>`, `ask:<message>`; for
+    /// `retry`, `stop:<step>@<seen>`.
     pub items: String,
     #[serde(default)]
     pub revision: u64,
     #[serde(default)]
     pub next: String,
 }
-/// `POST /projects/id/<p>/needs`: set items of Needs you aside or back, or retry a group's
-/// steps. A cancel is set aside as its step's own Dismiss does (`StepDismiss`); any other item
-/// as the plan's (`NeedsDismiss`). Retry all retries each step as its own Retry would, the first
-/// refusal answered as that step's.
+/// `POST /projects/id/<p>/needs`: set items of Needs you aside or back (`NeedsDismiss`: about
+/// attention alone, nothing settled), or retry a group's steps. Retry all retries each step as
+/// its own Retry would, the first refusal answered as that step's.
 pub async fn needs(
     State(state): State<DashboardState>,
     registry: Option<Extension<super::board::Registry>>,
@@ -2045,33 +2064,6 @@ pub async fn needs(
     };
     let mut marks = vec![];
     for item in items {
-        if let Some(step) = item.strip_prefix("cancel:") {
-            let Ok(id) = step.parse::<StepId>() else {
-                return crate::http::error_response(PublicError::BadRequest {
-                    message: format!("{step} is not a step"),
-                });
-            };
-            let sent = commands
-                .0
-                .execute(OwnerCommand {
-                    project,
-                    step: Some(id),
-                    action: if dismissed {
-                        Action::Dismiss
-                    } else {
-                        Action::Undismiss
-                    },
-                    revision: 0,
-                    message: String::new(),
-                    author: "owner",
-                    items: vec![],
-                })
-                .await;
-            if let Err(e) = sent {
-                return crate::http::error_response(e);
-            }
-            continue;
-        }
         let (key, stamp) = match item.split_once('@') {
             Some((key, stamp)) => match stamp.parse::<i64>() {
                 Ok(stamp) => (key, stamp),
