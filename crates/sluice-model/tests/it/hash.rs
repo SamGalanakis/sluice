@@ -13,110 +13,6 @@ fn data(value: Value) -> EffectiveInput {
     EffectiveInput::Value(JsonValue::try_from(value).unwrap())
 }
 
-#[test]
-fn canonical_form_has_exact_tags_numbers_order_and_escaping() {
-    let value: Value = decode_json(br#"{"z":[null,true,1,1.0],"a":{"z":"x\n","a":-2}}"#).unwrap();
-    assert_eq!(
-        String::from_utf8(canonical_json(&value).unwrap()).unwrap(),
-        r#"["object",{"a":["object",{"a":["int","-2"],"z":["string","x\n"]}],"z":["array",[["null"],["boolean",true],["int","1"],["float","3ff0000000000000"]]]}]"#
-    );
-    assert_eq!(
-        canonical_json(&json!("é/\"\\\t")).unwrap(),
-        r#"["string","é/\"\\\t"]"#.as_bytes()
-    );
-}
-
-#[test]
-fn versioned_hash_matches_independent_sha256_fixture() {
-    // Computed independently using Python hashlib over the documented bytes.
-    assert_eq!(
-        hash(json!({})).to_string(),
-        "b7efcdc153ac1f8525258ba2e6a75b268f9cf0ef81f4be6fff04231140cf26d5"
-    );
-    assert_eq!(
-        hash(json!({"x":1})).to_string(),
-        "fe00266ab90c4312dfe074a3a90df3a884570ed6b5e8e85e0393a7afd29be85b"
-    );
-}
-
-#[test]
-fn numeric_representation_is_explicit_and_collision_free() {
-    assert_ne!(hash(json!({"x":1})), hash(json!({"x":1.0})));
-    assert_ne!(hash(json!({"x":0.0})), hash(json!({"x":-0.0})));
-    assert_eq!(
-        InputsHash::parse_json(br#"{"x":1.0}"#).unwrap(),
-        InputsHash::parse_json(br#"{"x":1e0}"#).unwrap()
-    );
-    assert_ne!(hash(json!({"x":1})), hash(json!({"x":["int","1"]})));
-    assert_ne!(
-        hash(json!({"x":1.0})),
-        hash(json!({"x":"3ff0000000000000"}))
-    );
-    assert_ne!(hash(json!({"x":true})), hash(json!({"x":1})));
-    assert_ne!(hash(json!({"x":i64::MAX})), hash(json!({"x":i64::MAX-1})));
-    assert_ne!(hash(json!({"x":i64::MIN})), hash(json!({"x":i64::MIN+1})));
-}
-
-#[test]
-fn strict_hash_ingress_refuses_invalid_json_and_nesting() {
-    for input in [
-        r#"{"x":1,"x":2}"#,
-        r#"{"x":[{"a":1,"a":2}]}"#,
-        r#"{"x":9223372036854775808}"#,
-        r#"{"x":18446744073709551616}"#,
-        r#"{"x":-9223372036854775809}"#,
-        r#"{"x":1e999}"#,
-        r#"{"x":NaN}"#,
-        r#"{"x":Infinity}"#,
-        r#"{} {}"#,
-        "null",
-        "[]",
-        "1",
-    ] {
-        assert!(InputsHash::parse_json(input.as_bytes()).is_err(), "{input}");
-    }
-    assert!(canonical_json(&json!({"x":[u64::MAX]})).is_err());
-    let mut nested = Value::Null;
-    for _ in 0..128 {
-        nested = json!([nested]);
-    }
-    assert!(canonical_json(&nested).is_err());
-}
-
-#[test]
-fn digest_serialization_roundtrips_and_refuses_malformed_digests() {
-    let digest = hash(json!({"n":1}));
-    assert_eq!(digest.as_bytes().len(), 32);
-    assert_eq!(digest.to_string().parse::<InputsHash>().unwrap(), digest);
-    assert_eq!(
-        decode_json::<InputsHash>(&serde_json::to_vec(&digest).unwrap()).unwrap(),
-        digest
-    );
-    let provenance = ExecutionProvenance::fingerprint(b"abc");
-    assert_eq!(
-        provenance.to_string(),
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    );
-    assert_eq!(
-        decode_json::<ExecutionProvenance>(&serde_json::to_vec(&provenance).unwrap()).unwrap(),
-        provenance
-    );
-    assert_eq!(provenance.as_bytes().len(), 32);
-    for malformed in [
-        "".to_owned(),
-        "a".repeat(63),
-        "0".repeat(65),
-        "A".repeat(64),
-        "é".repeat(32),
-        "g".repeat(64),
-    ] {
-        assert!(malformed.parse::<InputsHash>().is_err());
-        assert!(
-            decode_json::<ExecutionProvenance>(&serde_json::to_vec(&malformed).unwrap()).is_err()
-        );
-    }
-}
-
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config::with_cases(1024))]
     #[test]
@@ -212,5 +108,97 @@ proptest! {
         let map: JsonMap = decode_json(&serde_json::to_vec(&values).unwrap()).unwrap();
         prop_assert_eq!(InputsHash::of(&map).unwrap().to_string(), specified(&values));
         prop_assert_eq!(InputsHash::from_bindings(&bindings).unwrap().to_string(), specified(&as_objects));
+    }
+}
+
+#[test]
+fn canonical_hash_codec_boundaries() {
+    {
+        let value: Value =
+            decode_json(br#"{"z":[null,true,1,1.0],"a":{"z":"x\n","a":-2}}"#).unwrap();
+        assert_eq!(
+            String::from_utf8(canonical_json(&value).unwrap()).unwrap(),
+            r#"["object",{"a":["object",{"a":["int","-2"],"z":["string","x\n"]}],"z":["array",[["null"],["boolean",true],["int","1"],["float","3ff0000000000000"]]]}]"#
+        );
+        assert_eq!(
+            canonical_json(&json!("é/\"\\\t")).unwrap(),
+            r#"["string","é/\"\\\t"]"#.as_bytes()
+        );
+    }
+
+    {
+        assert_ne!(hash(json!({"x":1})), hash(json!({"x":1.0})));
+        assert_ne!(hash(json!({"x":0.0})), hash(json!({"x":-0.0})));
+        assert_eq!(
+            InputsHash::parse_json(br#"{"x":1.0}"#).unwrap(),
+            InputsHash::parse_json(br#"{"x":1e0}"#).unwrap()
+        );
+        assert_ne!(hash(json!({"x":1})), hash(json!({"x":["int","1"]})));
+        assert_ne!(
+            hash(json!({"x":1.0})),
+            hash(json!({"x":"3ff0000000000000"}))
+        );
+        assert_ne!(hash(json!({"x":true})), hash(json!({"x":1})));
+        assert_ne!(hash(json!({"x":i64::MAX})), hash(json!({"x":i64::MAX-1})));
+        assert_ne!(hash(json!({"x":i64::MIN})), hash(json!({"x":i64::MIN+1})));
+    }
+
+    {
+        for input in [
+            r#"{"x":1,"x":2}"#,
+            r#"{"x":[{"a":1,"a":2}]}"#,
+            r#"{"x":9223372036854775808}"#,
+            r#"{"x":18446744073709551616}"#,
+            r#"{"x":-9223372036854775809}"#,
+            r#"{"x":1e999}"#,
+            r#"{"x":NaN}"#,
+            r#"{"x":Infinity}"#,
+            r#"{} {}"#,
+            "null",
+            "[]",
+            "1",
+        ] {
+            assert!(InputsHash::parse_json(input.as_bytes()).is_err(), "{input}");
+        }
+        assert!(canonical_json(&json!({"x":[u64::MAX]})).is_err());
+        let mut nested = Value::Null;
+        for _ in 0..128 {
+            nested = json!([nested]);
+        }
+        assert!(canonical_json(&nested).is_err());
+    }
+
+    {
+        let digest = hash(json!({"n":1}));
+        assert_eq!(digest.as_bytes().len(), 32);
+        assert_eq!(digest.to_string().parse::<InputsHash>().unwrap(), digest);
+        assert_eq!(
+            decode_json::<InputsHash>(&serde_json::to_vec(&digest).unwrap()).unwrap(),
+            digest
+        );
+        let provenance = ExecutionProvenance::fingerprint(b"abc");
+        assert_eq!(
+            provenance.to_string(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            decode_json::<ExecutionProvenance>(&serde_json::to_vec(&provenance).unwrap()).unwrap(),
+            provenance
+        );
+        assert_eq!(provenance.as_bytes().len(), 32);
+        for malformed in [
+            "".to_owned(),
+            "a".repeat(63),
+            "0".repeat(65),
+            "A".repeat(64),
+            "é".repeat(32),
+            "g".repeat(64),
+        ] {
+            assert!(malformed.parse::<InputsHash>().is_err());
+            assert!(
+                decode_json::<ExecutionProvenance>(&serde_json::to_vec(&malformed).unwrap())
+                    .is_err()
+            );
+        }
     }
 }

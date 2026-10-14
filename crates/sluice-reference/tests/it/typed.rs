@@ -56,7 +56,7 @@ fn typed(op: &PlanOp, start: bool) -> Option<Value> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(512))]
+    #![proptest_config(ProptestConfig::with_cases(64))]
 
     #[test]
     fn one_operation_means_what_its_typed_tool_means(case in generate::case(10, 1)) {

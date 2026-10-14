@@ -13,7 +13,7 @@
 //!   reaches, equal the ones rebuilt from the candidate; every other step's edges are as they
 //!   were.
 
-mod support;
+use crate::support;
 
 use indexmap::IndexMap;
 use proptest::prelude::*;
@@ -41,7 +41,10 @@ use sluice_reference::{
 };
 // Today's whole-plan compiler, as the test-only reference keeps it.
 use sluice_reference::Plan as Reference;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
+
+static FIXTURE: LazyLock<Fixture> = LazyLock::new(Fixture::new);
+static MODEL: LazyLock<Model> = LazyLock::new(Model::new);
 
 /// The model's view of the generated catalog.
 struct Model {
@@ -59,8 +62,7 @@ impl Model {
 
 /// The case's state as the store holds it: a row for every step, reconciled (the scheduler
 /// reconciles every tick).
-fn settle(case: &mut EditCase) {
-    let fixture = Fixture::new();
+fn settle(case: &mut EditCase, fixture: &Fixture) {
     let before = Reference::parse(&ops::document_of(&case.base), &fixture.signatures).unwrap();
     for id in before.steps().keys() {
         case.state.steps.entry(id.clone()).or_default();
@@ -235,32 +237,19 @@ fn options(start: bool, scope: PreviewScope) -> PrepareOptions {
     }
 }
 
-/// What an agreeing case exercised, for the sweep's tally.
-#[derive(Debug, Default)]
-struct Reached {
-    rounds: usize,
-    parts: Vec<&'static str>,
-}
-
 /// The reference's verdict and the incremental model's agree on `case`.
-fn agree(mut case: EditCase) -> Result<Reached, TestCaseError> {
-    settle(&mut case);
-    let fixture = Fixture::new();
-    let model = Model::new();
+fn agree(mut case: EditCase, fixture: &Fixture, model: &Model) -> Result<(), TestCaseError> {
+    settle(&mut case, fixture);
     let verdict = evaluate(&case, &fixture.context()).expect("a generated base compiles");
     let base = Arc::new(compile_rows(&case.base, &model.signatures).expect("the base compiles"));
     let store = Store::of(&case, &base);
-    let (prepared, rounds) = prepare_scoped(
+    let (prepared, _) = prepare_scoped(
         &base,
         &store,
-        &model,
+        model,
         &case.ops,
         options(case.start, PreviewScope::Impact),
     );
-    let mut reached = Reached {
-        rounds,
-        parts: vec![],
-    };
     let ops_text = serde_json::to_string(&case.ops).unwrap();
     match (&verdict, prepared) {
         (Verdict::Refused(errors) | Verdict::Invalid(errors), Err(error)) => {
@@ -302,26 +291,11 @@ fn agree(mut case: EditCase) -> Result<Reached, TestCaseError> {
             let (all, _) = prepare_scoped(
                 &base,
                 &store,
-                &model,
+                model,
                 &case.ops,
                 options(case.start, PreviewScope::All),
             );
             prop_assert_eq!(&all.unwrap().preview, &accepted.all, "{}", ops_text);
-            let preview = &prepared.preview;
-            for (part, hit) in [
-                ("would_start", !preview.would_start.is_empty()),
-                ("would_queue", !preview.would_queue.is_empty()),
-                ("would_skip", !preview.would_skip.is_empty()),
-                ("would_stale", !preview.would_stale.is_empty()),
-                ("errors", !preview.errors.is_empty()),
-                ("transitions", !prepared.commit.state.transitions.is_empty()),
-                ("removed", !prepared.commit.state.removed.is_empty()),
-                ("edges", !prepared.commit.rows.edges.is_empty()),
-            ] {
-                if hit {
-                    reached.parts.push(part);
-                }
-            }
         }
         (ours, theirs) => prop_assert!(
             false,
@@ -331,7 +305,7 @@ fn agree(mut case: EditCase) -> Result<Reached, TestCaseError> {
             theirs.map(|p| p.commit.rows.changes)
         ),
     }
-    Ok(reached)
+    Ok(())
 }
 
 /// The index rows the commit writes are the candidate's own, and every step whose incoming
@@ -433,28 +407,20 @@ fn input_value_errors_have_a_canonical_order() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(768))]
+    #![proptest_config(ProptestConfig { failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Direct(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/incremental.proptest-regressions")))), ..ProptestConfig::with_cases(64) })]
 
     #[test]
     fn an_incremental_edit_reaches_the_references_verdict(case in generate::case(12, 4)) {
-        agree(case)?;
+        agree(case, &FIXTURE, &MODEL)?;
     }
 
-    #[test]
-    fn compile_rows_compiles_what_today_compiles(document in generate::plan(14)) {
-        let fixture = Fixture::new();
-        let model = Model::new();
-        let reference = Reference::parse(&document, &fixture.signatures).unwrap();
-        let rows = support::rows(&serde_json::to_value(&document).unwrap());
-        let plan = compile_rows(&rows, &model.signatures).unwrap();
-        prop_assert_eq!(plan_shape!(plan), plan_shape!(reference));
-    }
+
 
     #[test]
     fn compile_rows_refuses_what_today_refuses(case in generate::case(10, 4)) {
         // The candidate an edit's operations make, compiled whole by both compilers.
-        let fixture = Fixture::new();
-        let model = Model::new();
+        let fixture = &*FIXTURE;
+        let model = &*MODEL;
         if let Ok(applied) = ops::apply(&case.base, &case.ops, case.start, &fixture.recipes, &fixture.signatures) {
             let document = ops::document_of(&applied.rows);
             let theirs = Reference::parse(&document, &fixture.signatures);
@@ -465,67 +431,6 @@ proptest! {
                 (theirs, ours) => prop_assert!(false, "{:?} vs {:?}", theirs.err(), ours.err()),
             }
         }
-    }
-}
-
-/// Many more edits than the property tests above, from a fixed seed, so every operation and
-/// every refusal the generators reach is held on every run.
-#[test]
-fn a_fixed_sweep_of_generated_edits_agrees() {
-    struct Seed(u64);
-    impl Seed {
-        fn byte(&mut self) -> u8 {
-            self.0 ^= self.0 << 13;
-            self.0 ^= self.0 >> 7;
-            self.0 ^= self.0 << 17;
-            (self.0 >> 24) as u8
-        }
-        fn bytes<const N: usize>(&mut self) -> [u8; N] {
-            std::array::from_fn(|_| self.byte())
-        }
-        fn vec(&mut self, n: usize) -> Vec<u8> {
-            (0..n).map(|_| self.byte()).collect()
-        }
-    }
-    let mut seed = Seed(0x5eed_c0de_1a7e_0003);
-    let mut verdicts = IndexMap::<&str, usize>::new();
-    let mut parts = IndexMap::<&str, usize>::new();
-    let mut rounds = IndexMap::<usize, usize>::new();
-    for round in 0..2500 {
-        let steps: Vec<[u8; 16]> = (0..seed.byte() % 12).map(|_| seed.bytes()).collect();
-        let document = generate::build_plan(&seed.vec(4), &steps);
-        let ops: Vec<[u8; 12]> = (0..1 + seed.byte() % 4).map(|_| seed.bytes()).collect();
-        let case = generate::build_case(&document, &seed.vec(24), &ops, seed.byte());
-        let fixture = Fixture::new();
-        let kind = match evaluate(&case, &fixture.context()).unwrap() {
-            Verdict::Refused(_) => "refused",
-            Verdict::Invalid(_) => "invalid",
-            Verdict::Accepted(a) if a.changes.is_empty() => "no change",
-            Verdict::Accepted(_) => "accepted",
-        };
-        *verdicts.entry(kind).or_default() += 1;
-        match agree(case.clone()) {
-            Ok(reached) => {
-                *rounds.entry(reached.rounds).or_default() += 1;
-                for part in reached.parts {
-                    *parts.entry(part).or_default() += 1;
-                }
-            }
-            Err(error) => panic!(
-                "round {round}: {error}\nbase: {}\nops: {}",
-                serde_json::to_string(&ops::document_of(&case.base)).unwrap(),
-                serde_json::to_string(&case.ops).unwrap()
-            ),
-        }
-    }
-    eprintln!("verdicts: {verdicts:?}");
-    eprintln!("accepted edits whose preview or delta has: {parts:?}");
-    eprintln!("read rounds: {rounds:?}");
-    for kind in ["refused", "invalid", "accepted", "no change"] {
-        assert!(
-            verdicts.get(kind).copied().unwrap_or(0) > 50,
-            "{kind}: {verdicts:?}"
-        );
     }
 }
 

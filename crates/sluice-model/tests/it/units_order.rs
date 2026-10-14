@@ -1,7 +1,7 @@
 //! The units view orders running units by how long they have run, exactly: two units started
 //! within a second of each other keep one order as the clock ticks, rather than swapping each
 //! time their whole-second ages round level.
-mod support;
+use crate::support;
 
 use indexmap::IndexMap;
 use serde_json::json;

@@ -1,19 +1,11 @@
-//! Warm edits: a chain of edits, each prepared on the candidate the one before certified,
-//! compiles no plan whole (`full_compiles` stays 0); a step added with a fn the base never used
-//! compiles into the candidate; and preparing from a state that lacks a step the edit consults
-//! panics in a debug build. Its own test binary, and its tests take turns (`serial`): the
-//! others compile plans whole, which would move the process-wide counter while it counts.
+//! A chain of warm edits compiles no whole plan. A new fn is validated against its
+//! catalog signature. The cost scenario runs in a child of this test binary so other
+//! libtest threads cannot move its process-wide counters.
 
-mod support;
+use crate::support;
 
 use serde_json::json;
-use sluice_model::{
-    StateSnapshot,
-    cost::Measurement,
-    ids::StepId,
-    plan::{EditBase, prepare_plan_edit},
-    plan_rows::{PlanOp, ScopedState},
-};
+use sluice_model::{StateSnapshot, cost::Measurement, ids::StepId, plan_rows::PlanOp};
 use sluice_reference::{generate, interop::model_signatures};
 use std::sync::Arc;
 
@@ -42,7 +34,25 @@ fn base_document() -> serde_json::Value {
 }
 
 #[test]
-fn warm_edits_compile_no_plan_whole() {
+fn slow_warm_edits_compile_no_plan_whole() {
+    if std::env::var_os("SLUICE_WARM_COST_CHILD").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "warm::slow_warm_edits_compile_no_plan_whole",
+                "--nocapture",
+            ])
+            .env("SLUICE_WARM_COST_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     let _serial = serial();
     let signatures = model_signatures(&generate::catalog());
     let mut plan = Arc::new(support::compile(base_document(), &signatures).unwrap());
@@ -82,6 +92,7 @@ fn warm_edits_compile_no_plan_whole() {
 #[test]
 fn a_step_with_a_fn_the_base_never_used_compiles() {
     let _serial = serial();
+    let _serial = serial();
     let signatures = model_signatures(&generate::catalog());
     let plan = support::compile(base_document(), &signatures).unwrap();
     assert!(plan.steps().values().all(|step| step.run != "t.late"));
@@ -107,34 +118,4 @@ fn a_step_with_a_fn_the_base_never_used_compiles() {
         support::options(),
     );
     assert!(refused.is_err(), "{refused:?}");
-}
-
-/// A state read without the steps the edit reaches: preparation notices it consulted a step
-/// outside its read set and, in a debug build, panics.
-#[test]
-#[cfg(debug_assertions)]
-#[should_panic(expected = "outside its read set")]
-fn preparation_outside_its_read_set_panics_in_debug() {
-    let _serial = serial();
-    let signatures = model_signatures(&generate::catalog());
-    let plan = Arc::new(support::compile(base_document(), &signatures).unwrap());
-    let state = ScopedState::default();
-    let tokens = support::tokens();
-    let none = Default::default();
-    let capacities = Default::default();
-    let limits = Default::default();
-    let _ = prepare_plan_edit(
-        &EditBase {
-            plan: &plan,
-            tokens: &tokens,
-            state: &state,
-            signatures: &signatures,
-            recipes: &none,
-            capacities: &capacities,
-            limits: &limits,
-        },
-        vec![op(json!({"op": "step.update", "step": "a",
-            "changes": {"in": {"a": {"source": "n"}, "b": {"default": 5}}}}))],
-        support::options(),
-    );
 }

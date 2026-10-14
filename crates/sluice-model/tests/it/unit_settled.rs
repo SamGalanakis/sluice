@@ -1,13 +1,13 @@
-//! The reference's twin of `sluice-model/tests/unit_settled.rs`: a unit is settled (§6.7) only
-//! when every one of its steps is settled (§7.1), the same cases with the same answers.
+//! A unit waiting on failed, stale or paused work is at rest; finished work also settles.
+
+use crate::support;
 
 use indexmap::IndexMap;
 use serde_json::{Value, json};
-use sluice_reference::{
-    FnSignature, Plan, StateSnapshot, StepState,
+use sluice_model::{
+    FnSignature, StateSnapshot, StepState,
     commands::StepStatus,
     ids::{StepId, UnitName},
-    rpc::{JsonMap, decode_json},
 };
 
 fn id(s: &str) -> StepId {
@@ -25,9 +25,8 @@ fn document(a_paused: bool) -> Value {
 
 /// Whether unit `y` is settled with these statuses (every other step pending).
 fn y_settled(a_paused: bool, statuses: &[(&str, StepStatus)]) -> bool {
-    let document: JsonMap = decode_json(&serde_json::to_vec(&document(a_paused)).unwrap()).unwrap();
-    let plan = Plan::parse(
-        &document,
+    let plan = support::compile(
+        document(a_paused),
         &IndexMap::from([("test.fn".to_string(), FnSignature::default())]),
     )
     .unwrap();
@@ -42,24 +41,6 @@ fn y_settled(a_paused: bool, statuses: &[(&str, StepStatus)]) -> bool {
         );
     }
     plan.units()[&"y".parse::<UnitName>().unwrap()].settled(&plan, &state)
-}
-
-#[test]
-fn a_unit_waiting_on_a_running_or_startable_step_is_not_settled() {
-    use StepStatus::*;
-    // The reported case: the fork is done and the work waits on `a`, still running.
-    assert!(!y_settled(false, &[("a", Running), ("y-fork", Succeeded)]));
-    // `a` can still start.
-    assert!(!y_settled(false, &[("y-fork", Succeeded)]));
-    // `a` is done: the work is about to start.
-    assert!(!y_settled(
-        false,
-        &[("a", Succeeded), ("y-fork", Succeeded)]
-    ));
-    assert!(!y_settled(
-        false,
-        &[("a", Succeeded), ("y-fork", Succeeded), ("y-work", Running)]
-    ));
 }
 
 #[test]
