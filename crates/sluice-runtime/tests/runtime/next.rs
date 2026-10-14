@@ -389,8 +389,9 @@ async fn multiple_project_pagination_never_skips_a_record() {
 }
 /// Steps a manual clock until the spawned `next` returns, committing a wake
 /// before each step when `wake` is set, and returns the result with the number
-/// of wakes committed. Each step yields, but store reads may still be pending
-/// when the clock advances. The step cap turns a stuck call into a failure.
+/// of wakes committed. A step is taken only once `next` has returned or is
+/// parked on the clock, so store reads and writes always finish on virtual
+/// time. The step cap turns a call that never returns into a failure.
 async fn drive(
     task: &mut tokio::task::JoinHandle<Result<NextResult, PublicError>>,
     clock: &ManualClock,
@@ -399,18 +400,18 @@ async fn drive(
 ) -> (NextResult, usize) {
     let mut woken = 0;
     for _ in 0..10_000 {
-        if task.is_finished() {
-            break;
-        }
-        if let Some((w, p)) = wake {
+        if !task.is_finished()
+            && let Some((w, p)) = wake
+        {
             settled(w, p, "u").await;
             woken += 1;
         }
-        clock.advance(step);
-        tokio::task::yield_now().await;
+        tokio::select! {
+            result = &mut *task => return (result.unwrap().unwrap(), woken),
+            () = clock.parked() => clock.advance(step),
+        }
     }
-    assert!(task.is_finished(), "next did not return");
-    (task.await.unwrap().unwrap(), woken)
+    panic!("next did not return");
 }
 #[tokio::test]
 async fn settle_batches_wakes_and_absolute_max_cuts_continuous_wakes() {
@@ -432,8 +433,9 @@ async fn settle_batches_wakes_and_absolute_max_cuts_continuous_wakes() {
     // Settle batches: wakes at t=0,0,20,35,35 with a 40ms settle. A wake is
     // stamped when next reads it, never before its commit, so the earliest
     // possible deadline is 40ms and all five commit before the clock reaches it.
-    // A read begun before the fifth commit must be rechecked if drive advances
-    // the clock past the deadline while that read is pending.
+    // The clock then jumps to 75ms, the deadline of a batch that read the fourth
+    // wake at 35ms, while a read begun before the fifth commit may be pending:
+    // that read must not end the batch without the fifth.
     let mut task = spawn(options_for(RecordSeq(0), Duration::from_millis(40), day));
     settled(&w, p, "u").await;
     settled(&w, p, "u").await;
@@ -442,6 +444,7 @@ async fn settle_batches_wakes_and_absolute_max_cuts_continuous_wakes() {
     clock.advance(Duration::from_millis(15));
     settled(&w, p, "u").await;
     let fifth = settled(&w, p, "u").await;
+    clock.advance(Duration::from_millis(40));
     let (batch, _) = drive(&mut task, &clock, Duration::from_millis(10), None).await;
     assert!(!batch.timed_out);
     assert_eq!(batch.records.len(), 5);

@@ -190,7 +190,7 @@ impl Clock {
     fn now(&self) -> Duration {
         match self {
             Clock::Real(start) => start.elapsed(),
-            Clock::Manual(clock) => *clock.now.borrow(),
+            Clock::Manual(clock) => clock.state.borrow().now,
         }
     }
     async fn sleep_until(&self, at: Duration) {
@@ -206,24 +206,66 @@ impl Default for Clock {
     }
 }
 /// Manually advanced clock for tests. `advance` wakes every pending sleep whose
-/// deadline the new time has reached.
+/// deadline the new time has reached. `parked` tells a test when a sleeper is
+/// waiting on the clock, so it advances time only once the sleeper is there.
 #[derive(Debug, Clone)]
 pub struct ManualClock {
-    now: tokio::sync::watch::Sender<Duration>,
+    state: tokio::sync::watch::Sender<ManualState>,
+}
+#[derive(Debug, Default)]
+struct ManualState {
+    now: Duration,
+    sleeps: u64,
+    /// Sleeps that have seen the current time and wait for a later one. An
+    /// advance empties it: each sleeper must observe the new time to rejoin.
+    parked: std::collections::BTreeSet<u64>,
 }
 impl ManualClock {
     pub fn new() -> Self {
         Self {
-            now: tokio::sync::watch::channel(Duration::ZERO).0,
+            state: tokio::sync::watch::channel(ManualState::default()).0,
         }
     }
     pub fn advance(&self, by: Duration) {
-        self.now.send_modify(|now| *now += by);
+        self.state.send_modify(|state| {
+            state.now += by;
+            state.parked.clear();
+        });
+    }
+    /// Returns once some sleep has observed the current time and is waiting
+    /// for a later one, i.e. only advancing the clock can make it progress.
+    pub async fn parked(&self) {
+        let mut receiver = self.state.subscribe();
+        receiver
+            .wait_for(|state| !state.parked.is_empty())
+            .await
+            .ok();
     }
     async fn sleep_until(&self, at: Duration) {
-        let mut receiver = self.now.subscribe();
-        while *receiver.borrow_and_update() < at {
-            if receiver.changed().await.is_err() {
+        struct Unpark<'a>(&'a tokio::sync::watch::Sender<ManualState>, u64);
+        impl Drop for Unpark<'_> {
+            fn drop(&mut self) {
+                self.0
+                    .send_if_modified(|state| state.parked.remove(&self.1));
+            }
+        }
+        let mut receiver = self.state.subscribe();
+        let mut id = 0;
+        self.state.send_if_modified(|state| {
+            state.sleeps += 1;
+            id = state.sleeps;
+            false
+        });
+        let _unpark = Unpark(&self.state, id);
+        loop {
+            // Check and park under one lock, so an advance is either seen here
+            // or clears the entry and wakes the receiver below.
+            let mut reached = false;
+            self.state.send_if_modified(|state| {
+                reached = state.now >= at;
+                !reached && state.parked.insert(id)
+            });
+            if reached || receiver.changed().await.is_err() {
                 return;
             }
         }
