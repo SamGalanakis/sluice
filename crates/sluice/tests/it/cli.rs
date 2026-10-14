@@ -200,8 +200,13 @@ fn watch_prints_matching_records_from_now_or_since_a_seq() {
     }
     assert!(marker.starts_with("after-"));
     post(home.path(), "r", "other thread", true);
-    assert!(
-        rx.recv_timeout(std::time::Duration::from_secs(2)).is_err(),
+    // The matching record follows the rejected one in the durable sequence. Reaching it
+    // proves the watcher processed that range without printing the other thread.
+    marker = "after-filter".into();
+    post(home.path(), "q", &marker, true);
+    let filtered = rx.recv_timeout(std::time::Duration::from_secs(15)).unwrap();
+    assert_eq!(
+        filtered["body"], marker,
         "a post on another thread must not print"
     );
     child.kill().unwrap();
@@ -248,27 +253,16 @@ fn watch_holds_notes_until_a_question_under_wake_questions() {
             "p",
             "--threads",
             "step-q",
+            "--since-seq",
+            "0",
             "--wake",
             "questions",
         ],
     );
-    // Bring the watcher live with a question that must print; anything posted
-    // before it resolves its start bounds never reaches it.
-    let mut live = false;
-    for i in 0..40 {
-        let marker = format!("ready-{i}");
-        post(home.path(), "q", &marker, true);
-        match rx.recv_timeout(std::time::Duration::from_millis(500)) {
-            Ok(line) if line["body"] == marker => {
-                live = true;
-                break;
-            }
-            Ok(_) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(e) => panic!("watch died: {e}"),
-        }
-    }
-    assert!(live, "watch never came up");
+    // An explicit cursor keeps this readiness question even if the watcher starts later.
+    post(home.path(), "q", "ready", true);
+    let ready = rx.recv_timeout(std::time::Duration::from_secs(15)).unwrap();
+    assert_eq!(ready["body"], "ready");
     post(home.path(), "q", "fyi", false);
     assert!(
         rx.recv_timeout(std::time::Duration::from_secs(2)).is_err(),
