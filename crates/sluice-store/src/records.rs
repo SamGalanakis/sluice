@@ -19,7 +19,6 @@ const KINDS: &[&str] = &[
     "step.cancel",
     "step.submit",
     "step.settle",
-    "step.bypass",
     "step.status",
     "step.lease",
     "step.queued",

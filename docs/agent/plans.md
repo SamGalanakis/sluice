@@ -445,7 +445,8 @@ settles as succeeded with outputs you give, as `step_set_output` would, instead 
 - It applies once. A later `step_retry` of the step runs it for real; a retry upstream that
   makes the step wait again keeps a bypass not applied yet.
 - `status` shows a waiting bypass as the step's `bypass` (`{outputs, author, reason, at}`); the
-  log has a `step.bypass` record for each set and clear, then the usual `step.output` and
+  log notes each set and clear as a say from `sluice` (to you when you named yourself, else
+  to `owner`) whose `data.step_bypass` says what and why, then the usual `step.output` and
   `step.status` records when it applies. The dashboard tags the step "bypass" with who set it,
   then words its result "bypassed".
 - `unit_add(..., bypass={"<suffix>": {outputs}})` (or `plan_edit`'s `unit.add` with `bypass`)

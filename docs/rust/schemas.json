@@ -7050,47 +7050,6 @@
             ]
           },
           {
-            "description": "A bypass preset set on a pending step, or cleared (`outputs` null). When the runner\napplies it, the step's `step.output` and `step.status` records follow as for\n`step_set_output`.",
-            "type": "object",
-            "properties": {
-              "rev": {
-                "type": "integer",
-                "format": "uint64",
-                "minimum": 0
-              },
-              "author": {
-                "type": "string"
-              },
-              "reason": {
-                "type": "string"
-              },
-              "step": {
-                "$ref": "#/$defs/StepId"
-              },
-              "outputs": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/JsonMap"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "kind": {
-                "type": "string",
-                "const": "step.bypass"
-              }
-            },
-            "required": [
-              "kind",
-              "rev",
-              "author",
-              "reason",
-              "step"
-            ]
-          },
-          {
             "type": "object",
             "properties": {
               "step": {
@@ -8831,47 +8790,6 @@
               "run",
               "author",
               "reason"
-            ]
-          },
-          {
-            "description": "A bypass preset set on a pending step, or cleared (`outputs` null). When the runner\napplies it, the step's `step.output` and `step.status` records follow as for\n`step_set_output`.",
-            "type": "object",
-            "properties": {
-              "rev": {
-                "type": "integer",
-                "format": "uint64",
-                "minimum": 0
-              },
-              "author": {
-                "type": "string"
-              },
-              "reason": {
-                "type": "string"
-              },
-              "step": {
-                "$ref": "#/$defs/StepId"
-              },
-              "outputs": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/JsonMap"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "kind": {
-                "type": "string",
-                "const": "step.bypass"
-              }
-            },
-            "required": [
-              "kind",
-              "rev",
-              "author",
-              "reason",
-              "step"
             ]
           },
           {
@@ -17227,47 +17145,6 @@
             ]
           },
           {
-            "description": "A bypass preset set on a pending step, or cleared (`outputs` null). When the runner\napplies it, the step's `step.output` and `step.status` records follow as for\n`step_set_output`.",
-            "type": "object",
-            "properties": {
-              "rev": {
-                "type": "integer",
-                "format": "uint64",
-                "minimum": 0
-              },
-              "author": {
-                "type": "string"
-              },
-              "reason": {
-                "type": "string"
-              },
-              "step": {
-                "$ref": "#/$defs/StepId"
-              },
-              "outputs": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/JsonMap"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "kind": {
-                "type": "string",
-                "const": "step.bypass"
-              }
-            },
-            "required": [
-              "kind",
-              "rev",
-              "author",
-              "reason",
-              "step"
-            ]
-          },
-          {
             "type": "object",
             "properties": {
               "step": {
@@ -18815,47 +18692,6 @@
           "run",
           "author",
           "reason"
-        ]
-      },
-      {
-        "description": "A bypass preset set on a pending step, or cleared (`outputs` null). When the runner\napplies it, the step's `step.output` and `step.status` records follow as for\n`step_set_output`.",
-        "type": "object",
-        "properties": {
-          "rev": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "author": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "step": {
-            "$ref": "#/$defs/StepId"
-          },
-          "outputs": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/JsonMap"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "kind": {
-            "type": "string",
-            "const": "step.bypass"
-          }
-        },
-        "required": [
-          "kind",
-          "rev",
-          "author",
-          "reason",
-          "step"
         ]
       },
       {
@@ -20714,47 +20550,6 @@
               "run",
               "author",
               "reason"
-            ]
-          },
-          {
-            "description": "A bypass preset set on a pending step, or cleared (`outputs` null). When the runner\napplies it, the step's `step.output` and `step.status` records follow as for\n`step_set_output`.",
-            "type": "object",
-            "properties": {
-              "rev": {
-                "type": "integer",
-                "format": "uint64",
-                "minimum": 0
-              },
-              "author": {
-                "type": "string"
-              },
-              "reason": {
-                "type": "string"
-              },
-              "step": {
-                "$ref": "#/$defs/StepId"
-              },
-              "outputs": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/JsonMap"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "kind": {
-                "type": "string",
-                "const": "step.bypass"
-              }
-            },
-            "required": [
-              "kind",
-              "rev",
-              "author",
-              "reason",
-              "step"
             ]
           },
           {
@@ -35120,47 +34915,6 @@
             ]
           },
           {
-            "description": "A bypass preset set on a pending step, or cleared (`outputs` null). When the runner\napplies it, the step's `step.output` and `step.status` records follow as for\n`step_set_output`.",
-            "type": "object",
-            "properties": {
-              "rev": {
-                "type": "integer",
-                "format": "uint64",
-                "minimum": 0
-              },
-              "author": {
-                "type": "string"
-              },
-              "reason": {
-                "type": "string"
-              },
-              "step": {
-                "$ref": "#/$defs/StepId"
-              },
-              "outputs": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/JsonMap"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "kind": {
-                "type": "string",
-                "const": "step.bypass"
-              }
-            },
-            "required": [
-              "kind",
-              "rev",
-              "author",
-              "reason",
-              "step"
-            ]
-          },
-          {
             "type": "object",
             "properties": {
               "step": {
@@ -38703,47 +38457,6 @@
             ]
           },
           {
-            "description": "A bypass preset set on a pending step, or cleared (`outputs` null). When the runner\napplies it, the step's `step.output` and `step.status` records follow as for\n`step_set_output`.",
-            "type": "object",
-            "properties": {
-              "rev": {
-                "type": "integer",
-                "format": "uint64",
-                "minimum": 0
-              },
-              "author": {
-                "type": "string"
-              },
-              "reason": {
-                "type": "string"
-              },
-              "step": {
-                "$ref": "#/$defs/StepId"
-              },
-              "outputs": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/JsonMap"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "kind": {
-                "type": "string",
-                "const": "step.bypass"
-              }
-            },
-            "required": [
-              "kind",
-              "rev",
-              "author",
-              "reason",
-              "step"
-            ]
-          },
-          {
             "type": "object",
             "properties": {
               "step": {
@@ -40489,48 +40202,6 @@
           "run",
           "author",
           "reason"
-        ]
-      },
-      {
-        "description": "A bypass preset set on a pending step, or cleared (`outputs` null). When the runner\napplies it, the step's `step.output` and `step.status` records follow as for\n`step_set_output`.",
-        "type": "object",
-        "properties": {
-          "rev": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "author": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "step": {
-            "$ref": "#/$defs/StepId"
-          },
-          "outputs": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/JsonMap"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "kind": {
-            "type": "string",
-            "const": "step.bypass"
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "kind",
-          "rev",
-          "author",
-          "reason",
-          "step"
         ]
       },
       {

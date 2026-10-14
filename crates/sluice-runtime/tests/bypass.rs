@@ -113,7 +113,9 @@ impl Fixture {
     async fn bypass(&self, step: &str, args: Value) -> Result<Value, PublicError> {
         let mut args = args;
         args["step"] = json!(step);
-        args["author"] = json!("orchestrator");
+        if args.get("author").is_none() {
+            args["author"] = json!("orchestrator");
+        }
         match self.call("step_bypass", args).await? {
             CommandReply::Data(v) => Ok(v.into_value()),
             other => panic!("step_bypass reply {other:?}"),
@@ -197,6 +199,22 @@ impl Fixture {
         page.records
             .iter()
             .map(|r| serde_json::to_value(r).unwrap())
+            .collect()
+    }
+    /// The bypass notes: each `say` from `sluice` carrying `data.step_bypass`, as that object
+    /// with the record's `seq` and the note's `to`.
+    async fn notes(&self) -> Vec<Value> {
+        self.records(&["message"])
+            .await
+            .into_iter()
+            .filter(|r| r["from"] == "sluice" && r["data"]["step_bypass"].is_object())
+            .map(|r| {
+                let mut note = r["data"]["step_bypass"].clone();
+                note["seq"] = r["seq"].clone();
+                note["to"] = r["to"].clone();
+                note["verb"] = r["verb"].clone();
+                note
+            })
             .collect()
     }
     async fn reply(&self, name: &str, args: Value) -> Value {
@@ -313,22 +331,29 @@ async fn a_bypassed_pending_close_never_launches_and_rm_runs_after_landed() {
         "red fix: the ticket stays open"
     );
     run_lane(&f, "").await;
-    // The log: who bypassed it and why, then the output and status records of the settle.
-    let records = f.records(&["step.bypass", "step.output"]).await;
-    assert_eq!(records.len(), 2, "{records:?}");
+    // The log: who bypassed it and why (a say from sluice, to owner as the author is no
+    // session), then the output and status records of the settle.
+    let notes = f.notes().await;
+    assert_eq!(notes.len(), 1, "{notes:?}");
     assert_eq!(
         pick(
-            &records[0],
-            &["kind", "step", "author", "reason", "outputs"]
+            &notes[0],
+            &["step", "action", "by", "reason", "outputs", "to", "verb"]
         ),
-        json!({"kind":"step.bypass","step":"close","author":"orchestrator",
-            "reason":"red fix: the ticket stays open","outputs":{"value":"left open"}})
+        json!({"step":"close","action":"set","by":"orchestrator",
+            "reason":"red fix: the ticket stays open","outputs":{"value":"left open"},
+            "to":"owner","verb":"say"})
     );
+    let outputs = f.records(&["step.output"]).await;
+    let [output] = &outputs[..] else {
+        panic!("{outputs:?}")
+    };
     assert_eq!(
-        pick(&records[1], &["kind", "step", "author", "outputs", "force"]),
+        pick(output, &["kind", "step", "author", "outputs", "force"]),
         json!({"kind":"step.output","step":"close","author":"orchestrator",
             "outputs":{"value":"left open"},"force":false})
     );
+    assert!(notes[0]["seq"].as_i64() < output["seq"].as_i64());
     let settled = f.records(&["step.status"]).await;
     assert!(settled.iter().any(|r| r["step"] == "close"
         && r["from"] == "pending"
@@ -357,18 +382,24 @@ async fn unit_add_with_bypass_drops_the_step_atomically_with_the_add() {
     else {
         panic!("edit reply")
     };
-    let records = f.records(&["plan.edit", "step.bypass"]).await;
-    let [.., edit, bypass] = &records[..] else {
+    let records = f.records(&["plan.edit"]).await;
+    let [.., edit] = &records[..] else {
         panic!("{records:?}")
     };
     assert_eq!(
         pick(edit, &["kind", "rev"]),
         json!({"kind":"plan.edit","rev":added.rev})
     );
+    let notes = f.notes().await;
+    let [note] = &notes[..] else {
+        panic!("{notes:?}")
+    };
     assert_eq!(
-        pick(bypass, &["kind", "step", "author", "reason"]),
-        json!({"kind":"step.bypass","step":"x-close","author":"orchestrator","reason":"red fix lane"})
+        pick(note, &["step", "action", "by", "reason", "rev"]),
+        json!({"step":"x-close","action":"set","by":"orchestrator","reason":"red fix lane",
+            "rev":added.rev})
     );
+    assert!(note["seq"].as_i64() > edit["seq"].as_i64());
     assert_eq!(
         f.status().await["x-close"]["bypass"]["outputs"],
         json!({"value":"left open"})
@@ -478,16 +509,16 @@ async fn clearing_the_preset_lets_the_step_run() {
     f.succeed("close", json!("closed")).await;
     assert_eq!(f.launched(), ["land", "landed", "close", "rm"]);
     let cleared: Vec<_> = f
-        .records(&["step.bypass"])
+        .notes()
         .await
         .iter()
-        .map(|r| pick(r, &["outputs", "reason"]))
+        .map(|r| pick(r, &["action", "outputs", "reason"]))
         .collect();
     assert_eq!(
         cleared,
         [
-            json!({"outputs":{"value":"left open"},"reason":"maybe"}),
-            json!({"outputs":null,"reason":"close it after all"})
+            json!({"action":"set","outputs":{"value":"left open"},"reason":"maybe"}),
+            json!({"action":"clear","outputs":null,"reason":"close it after all"})
         ]
     );
 }
@@ -522,10 +553,7 @@ async fn outputs_are_checked_and_only_a_pending_step_is_bypassed() {
             .unwrap_err(),
     );
     assert_eq!(message, "reason: required");
-    assert!(
-        f.records(&["step.bypass"]).await.is_empty(),
-        "a refusal records nothing"
-    );
+    assert!(f.notes().await.is_empty(), "a refusal records nothing");
     f.tick().await;
     let (message, _) = invalid(
         f.bypass("land", json!({"outputs":{"value":1},"reason":"too late"}))
@@ -608,4 +636,109 @@ async fn a_preset_leaves_the_plan_and_every_typed_reply_unchanged() {
         .replace("a-", "b-")
         .replace("unit:a", "unit:b");
     assert_eq!(renamed, serde_json::to_string(&steps["b-close"]).unwrap());
+}
+
+/// The record kinds a release pinned at d0cd18f (the last main before `step_bypass`) decodes:
+/// `KINDS` in that release's `crates/sluice-store/src/records.rs`. Its `Event` decoder
+/// (`deny_unknown_fields`, one variant per kind) is the one this branch decodes with:
+/// `crates/sluice-model/src/events.rs` is unchanged since d0cd18f.
+const PINNED_KINDS: &[&str] = &[
+    "plan.edit",
+    "plan.input",
+    "step.output",
+    "step.retry",
+    "step.cancel",
+    "step.submit",
+    "step.settle",
+    "step.status",
+    "step.lease",
+    "step.queued",
+    "call",
+    "message",
+    "project.pause",
+    "project.archive",
+    "project.update",
+    "project.board",
+    "project.rename",
+    "project.delete",
+    "project.capacity",
+    "project.notify",
+    "run.adopt",
+    "run.orphan",
+    "run.completion_action",
+    "run.completion_action.register",
+    "unit.settled",
+];
+
+/// A session's bypass note goes to that session (registering it) as a say, which wakes
+/// nobody; and a log written by every bypass path holds only kinds a release pinned before
+/// `step_bypass` has, each record decoding with the strict decoder, so an unfiltered
+/// `log_read` (compat-check's) still reads it there.
+#[tokio::test]
+async fn bypass_notes_are_says_from_sluice_that_pinned_releases_decode() {
+    let f = Fixture::new(lane("")).await;
+    f.recipe("lane", lane_recipe());
+    let set = json!({"outputs":{"value":"left open"},"reason":"red fix","author":"@lead"});
+    f.bypass("close", set.clone()).await.unwrap();
+    f.bypass(
+        "close",
+        json!({"off":true,"reason":"close it after all","author":"@lead"}),
+    )
+    .await
+    .unwrap();
+    f.bypass("close", set).await.unwrap();
+    run_lane(&f, "").await;
+    f.call(
+        "unit_add",
+        json!({"recipe":"lane","unit":"x","params":{},"after":{},
+        "bypass":{"close":{"value":"left open"}},
+        "edit":{"expected":null,"reason":"red fix lane","author":"@lead"}}),
+    )
+    .await
+    .unwrap();
+    let notes = f.notes().await;
+    let seen: Vec<_> = notes
+        .iter()
+        .map(|n| pick(n, &["step", "action", "by", "to", "verb"]))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            json!({"step":"close","action":"set","by":"@lead","to":"@lead","verb":"say"}),
+            json!({"step":"close","action":"clear","by":"@lead","to":"@lead","verb":"say"}),
+            json!({"step":"close","action":"set","by":"@lead","to":"@lead","verb":"say"}),
+            json!({"step":"x-close","action":"set","by":"@lead","to":"@lead","verb":"say"}),
+        ]
+    );
+    // Registered by its bypass, @lead can be addressed in the project.
+    f.call(
+        "say",
+        json!({"to":"@lead","body":"seen","data":null,"run":null,"me":"@peer"}),
+    )
+    .await
+    .unwrap();
+
+    let CommandReply::Records(page) = f
+        .call(
+            "log_read",
+            json!({"since_seq":null,"kinds":null,"threads":null,"limit":1000}),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("records")
+    };
+    assert!(page.records.len() > 10);
+    for record in &page.records {
+        let mut wire = serde_json::to_value(record).unwrap();
+        let kind = wire["kind"].as_str().unwrap().to_owned();
+        assert!(PINNED_KINDS.contains(&kind.as_str()), "{kind} is new");
+        let fields = wire.as_object_mut().unwrap();
+        for key in ["seq", "at", "project"] {
+            fields.remove(key);
+        }
+        let event: sluice_model::events::Event =
+            serde_json::from_value(wire.clone()).unwrap_or_else(|e| panic!("{kind}: {e}"));
+        assert_eq!(serde_json::to_value(&event).unwrap(), wire);
+    }
 }

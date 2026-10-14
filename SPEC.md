@@ -1035,8 +1035,13 @@ the same totals as `needs`. A run that ends releases its leases. Grants and rele
   result without ever starting. A `step.output` record.
 - `step_bypass(project, step, outputs?, off?, reason)`: drops a pending step from the run while
   keeping its place, so the steps after it still go on. It stores a **bypass preset** on the
-  step (`steps.bypass`, §3: the outputs, author, reason and when) and writes a `step.bypass`
-  record (`outputs` null when cleared). When the step's gates and inputs are ready, the
+  step (`steps.bypass`, §3: the outputs, author, reason and when) and notes each set and clear
+  in the log as a `message` record: a say from `sluice` whose `data.step_bypass` is `{step,
+  action: "set"|"clear", by, reason, rev, outputs?}` ("@a bypassed step s (reason). Once ready
+  it settles succeeded with {…} instead of running.", as a unit handoff's note, §8), to the
+  author when it is an @session (which registers it in the project) and else to `owner`. A say wakes nobody, and the note is
+  never addressed to the step, whose next run would read it. It is no new record kind, so a
+  release pinned before `step_bypass` reads the whole log unchanged. When the step's gates and inputs are ready, the
   reconciliation that sees it so (the transaction that made it ready, or the runner's next
   pass) does not launch it: it settles it as `step_set_output` without `force` would, status
   `succeeded`, `manual: true`, the preset's outputs, with that `step.output` record (the
@@ -1373,7 +1378,6 @@ seqs have gaps. Kinds:
 | `step.cancel` | `step, author, reason` |
 | `step.submit` | `step, run, outputs, author` |
 | `step.settle` | `step, run, author, reason` |
-| `step.bypass` | `rev, author, reason, step, outputs` (`outputs` null when the preset is cleared) |
 | `step.status` | `step, from, to, error, run_ids, needs` |
 | `step.lease` | `step, run, lease, resource, amount, state, reason` |
 | `step.queued` | `step, needs, resources, reason` |

@@ -6,7 +6,7 @@
 //! plan export nor a pinned release's compiled plan sees it.
 
 use crate::{
-    Result, WriteTransaction,
+    Result, WriteTransaction, identities, messages,
     plans::{
         PlanContext, check_context, check_selector, effective_map, identity, invalid, now,
         read_state, reconcile, snapshot_result, status_record, validate_outputs,
@@ -20,9 +20,10 @@ use sluice_model::{
     error::PublicError,
     events::Event,
     gates::{self, GateDecision},
-    ids::{ProjectId, ResultId, StepId},
+    identity::SessionName,
+    ids::{ProjectId, ProjectSelector, ResultId, StepId},
     plan::{Plan, Step, inputs_hash},
-    rpc::JsonMap,
+    rpc::{JsonMap, JsonValue},
 };
 use std::collections::BTreeMap;
 
@@ -270,6 +271,11 @@ fn set(
     record(tx, context, id, Some(outputs), author, reason)
 }
 
+/// Note a set or clear in the log as a `say` from `sluice` whose `data.step_bypass` holds
+/// `{step, action: "set"|"clear", by, reason, rev, outputs?}`, as a unit handoff's note is: an existing record kind, so
+/// a release pinned before `step_bypass` reads the log unchanged. It goes to the author when
+/// that is an @session (registering it, as an edit would), else to `owner`; a say wakes
+/// nobody, and it is never addressed to the step, whose next run would read it.
 fn record(
     tx: &mut WriteTransaction<'_>,
     context: &PlanContext,
@@ -278,15 +284,47 @@ fn record(
     author: String,
     reason: String,
 ) -> Result<()> {
-    tx.append_record(
-        Some(context.project),
-        Event::StepBypass {
-            rev: context.revision,
-            author,
-            reason,
-            step: id.clone(),
-            outputs,
+    let to = match SessionName::parse_as("author", &author) {
+        Ok(me) => {
+            identities::register(tx, context.project, &me)?;
+            me.to_string()
+        }
+        Err(_) => messages::OWNER_STREAM.to_owned(),
+    };
+    let because = if reason.is_empty() {
+        String::new()
+    } else {
+        format!(" ({reason})")
+    };
+    let body = match &outputs {
+        Some(outputs) => format!(
+            "{author} bypassed step {id}{because}. Once ready it settles succeeded with {} instead of running.",
+            serde_json::to_string(outputs)?
+        ),
+        None => format!("{author} cleared step {id}'s bypass{because}. It runs as usual."),
+    };
+    let mut note = json!({
+        "step": id.as_str(),
+        "action": if outputs.is_some() { "set" } else { "clear" },
+        "by": author,
+        "reason": reason,
+        "rev": context.revision,
+    });
+    if let Some(outputs) = outputs {
+        note["outputs"] = serde_json::to_value(outputs)?;
+    }
+    messages::post(
+        tx,
+        messages::Post {
+            project: ProjectSelector::Id(context.project),
+            speaker: messages::Speaker::Sluice,
+            body,
+            verb: messages::Verb::Say {
+                to,
+                data: Some(JsonValue::try_from(json!({ "step_bypass": note }))?),
+            },
         },
+        &messages::NoPlanInputs,
     )?;
     tx.changed(Some(context.project), "status");
     Ok(())

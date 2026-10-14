@@ -75,24 +75,6 @@
       "reason": "fixture"
     },
     {
-      "kind": "step.bypass",
-      "rev": 3,
-      "author": "fixture",
-      "reason": "fixture",
-      "step": "work-1",
-      "outputs": {
-        "ok": true
-      }
-    },
-    {
-      "kind": "step.bypass",
-      "rev": 3,
-      "author": "fixture",
-      "reason": "fixture",
-      "step": "work-1",
-      "outputs": null
-    },
-    {
       "kind": "step.status",
       "step": "work-1",
       "from": null,

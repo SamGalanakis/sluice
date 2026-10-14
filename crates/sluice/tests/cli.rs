@@ -2154,10 +2154,17 @@ fn step_bypass_takes_flags_and_settles_a_ready_step() {
     let log = ok(tool(
         home,
         "log_read",
-        r#"{"project":"p","kinds":["step.bypass"]}"#,
+        r#"{"project":"p","kinds":["message"]}"#,
     ));
-    assert_eq!(log["records"][0]["author"], "@orch");
-    assert_eq!(log["records"][0]["reason"], "done elsewhere");
+    let note = log["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["from"] == "sluice")
+        .expect("the bypass note");
+    assert_eq!(note["to"], "@orch");
+    assert_eq!(note["data"]["step_bypass"]["by"], "@orch");
+    assert_eq!(note["data"]["step_bypass"]["reason"], "done elsewhere");
     let status = ok(tool(home, "status", r#"{"project":"p","steps":"q"}"#));
     assert_eq!(status["steps"]["q"]["manual"], 1);
 }
