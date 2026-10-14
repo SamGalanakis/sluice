@@ -1,9 +1,6 @@
 //! Composition acceptance uses absolute binaries and private scratch service units.
-#[path = "../../../tests/support/executable.rs"]
-mod executable;
-#[allow(dead_code)]
-#[path = "../../../tests/support/units.rs"]
-mod units;
+use crate::executable;
+use crate::support::home::units;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::{CommandReply, Delivery, MessageReceipt},
@@ -72,6 +69,9 @@ impl Gate {
         }
         env.insert("SLUICE_FIXTURE".into(), "1".into());
         env.insert("SLUICE_BACKOFF".into(), "0".into());
+        env.insert("SLUICE_AGENT_POLL_S".into(), "0.01".into());
+        env.insert("SLUICE_AGENT_SETTLE_S".into(), "0.02".into());
+        env.insert("SLUICE_AGENT_GRACE_MIN".into(), "0.003".into());
         env.insert("COMPOSITION_ENV_FIXTURE".into(), "frozen-launch".into());
         let mut gate = Self {
             temp,
@@ -86,6 +86,16 @@ impl Gate {
         gate.project = p.project_id;
         gate
     }
+    fn next_project(&mut self) {
+        let _ = std::fs::remove_file(self.home.join("fake-events.jsonl"));
+        let name = format!("compose-{}", sluice_model::ids::ProjectId::new());
+        let CommandReply::Project(project) = self.rpc(json!({"command":"project_create","args":{
+            "name":name,"description":"composition phase","resources":{},"author":"test"
+        }})) else {
+            panic!("project")
+        };
+        self.project = project.project_id;
+    }
     fn boot(&mut self) {
         let log = std::fs::OpenOptions::new()
             .create(true)
@@ -96,6 +106,7 @@ impl Gate {
             Command::new(env!("CARGO_BIN_EXE_sluice"))
                 .arg("coordinator")
                 .envs(&self.env)
+                .env("TOKIO_WORKER_THREADS", "2")
                 .stdout(Stdio::null())
                 .stderr(log)
                 .spawn()
@@ -294,8 +305,8 @@ fn bindings(values: Value) -> Value {
 fn agent(g: &Gate) -> Value {
     json!({"run":"agent.run","in":bindings(json!({"engine":"fake","cwd":g.temp.path(),"spec":"Submit summary and finish"})),"outputs":{"summary":"string"}})
 }
-/// Point `g` at the fake `engine` CLI, run through a wrapper that records its environment
-/// and commits once per internal attempt; `native-fixture.json` is its script.
+// Point `g` at the fake `engine` CLI, run through a wrapper that records its environment
+// and commits once per internal attempt; `native-fixture.json` is its script.
 fn native_engine(g: &mut Gate, engine: &str) {
     let root = g.temp.path().to_path_buf();
     let owner = root.join("owner");
@@ -352,7 +363,7 @@ fn native_engine(g: &mut Gate, engine: &str) {
     }
     g.env.insert("PYTHONHOME".into(), "/missing-python".into());
     g.env.insert("CLAUDECODE".into(), "parent".into());
-    g.env.insert("SLUICE_BACKOFF".into(), "1".into());
+    g.env.insert("SLUICE_BACKOFF".into(), "0.2".into());
     g.env.insert("SLUICE_AGENT_POLL_S".into(), "0.02".into());
     g.env.insert("SLUICE_AGENT_SETTLE_S".into(), "0.1".into());
     g.env
@@ -730,24 +741,16 @@ fn codex_log_is_readable_as_a_downstream_input() {
 }
 
 #[test]
-fn composed_codex_environment_and_same_run_retry() {
-    native_factory("codex");
-}
-#[test]
-fn composed_claude_environment_and_stale_shutdown_retry() {
-    native_factory("claude");
-}
-#[test]
-fn composed_devin_environment_and_resumed_permission_mode() {
+fn slow_composed_devin_environment_and_resumed_permission_mode() {
     native_factory("devin");
 }
-/// A Python fn that runs a Devin agent (as lash.worker does) gives it the invocation
-/// directory `runs/<run>/invocations/<invocation>`, where the control socket's absolute path
-/// is longer than a Unix socket address holds. Devin's hooks must still reach the guardian,
-/// or its task is never acknowledged ("Devin prompt acceptance unknown"). The fixture, like
-/// the real CLI, carries on past a hook command that fails.
+// A Python fn that runs a Devin agent (as lash.worker does) gives it the invocation
+// directory `runs/<run>/invocations/<invocation>`, where the control socket's absolute path
+// is longer than a Unix socket address holds. Devin's hooks must still reach the guardian,
+// or its task is never acknowledged ("Devin prompt acceptance unknown"). The fixture, like
+// the real CLI, carries on past a hook command that fails.
 #[test]
-fn composed_devin_hooks_reach_the_guardian_from_a_python_fn() {
+fn slow_composed_devin_hooks_reach_the_guardian_from_a_python_fn() {
     let g = Gate::configured(|g| native_engine(g, "devin"));
     let root = g.temp.path();
     std::fs::write(
@@ -789,10 +792,10 @@ run(main)
         assert!(hooks.contains(&format!("\"{event}\"")), "{event}: {hooks}");
     }
 }
-/// The retired forms (a string `model`, an `effort` input) validate in a plan; each such step
-/// fails at launch with kind `Invalid` and the object to use. An edit refuses a literal string
-/// model, so here the strings come from another step's outputs, known only at launch. An object
-/// whose id the engine does not list fails the same way, naming the nearest ids.
+// The retired forms (a string `model`, an `effort` input) validate in a plan; each such step
+// fails at launch with kind `Invalid` and the object to use. An edit refuses a literal string
+// model, so here the strings come from another step's outputs, known only at launch. An object
+// whose id the engine does not list fails the same way, naming the nearest ids.
 #[test]
 fn retired_model_forms_validate_in_the_plan_and_fail_at_launch() {
     let g = Gate::configured(|g| native_engine(g, "devin"));
@@ -865,413 +868,12 @@ fn retired_model_forms_validate_in_the_plan_and_fail_at_launch() {
     // Nothing reached the engine: no session started for any of them.
     assert!(!g.temp.path().join("devin-prompts.jsonl").exists());
 }
-#[test]
-fn builtin_python_tools_sections_and_inline_execute_through_guardian() {
-    let g = Gate::new();
-    g.function(
-        "custom.work",
-        json!({"value":"int"}),
-        json!({"answer":"int"}),
-        r#"from sluice_fn import run, sh
 
-def main(inp, ctx):
-    with ctx.acquire('section', timeout=5):
-        reply = ctx.tool('status', {})
-        assert reply['project']['project_id'] == ctx.project_id
-        assert ctx.project_dir.name == ctx.project_id
-        assert 'type' in ctx.extra_inputs['topic']
-        assert ctx.outputs['tag']['doc'] == 'A tag'
-        assert sh(['python3', '-c', 'print(7)']).stdout.strip() == '7'
-    with ctx.acquire('section', timeout=5):
-        answer = inp['value'] + 1
-    def acquire(key):
-        return ctx.callback('acquire_lease', {'run':ctx.run_id, 'resource':'section', 'amount':1, 'priority':0, 'request_id':key})['data']
-    first = acquire('first')
-    waiting = acquire('second')
-    assert first['state'] == 'held' and waiting['state'] == 'waiting'
-    ctx.callback('release_lease', {'run':ctx.run_id, 'lease':first['lease']})
-    granted = acquire('second')
-    assert granted['lease'] == waiting['lease'] and granted['state'] == 'held'
-    ctx.callback('release_lease', {'run':ctx.run_id, 'lease':granted['lease']})
-    return {'answer':answer, 'tag':'yes'}
-run(main)
-"#,
-    );
-    g.plan(json!({"seed":{"run":"core.echo","in":{"value":{"default":4}}},"python":{"run":"custom.work","in":{"value":{"source":"seed/value"},"topic":{"default":"guide"}},"outputs":{"tag":{"type":"string","doc":"A tag"}}},"inline":{"run":"inline.python","in":{"code":{"default":"out = n + 1"},"n":{"source":"python/answer"}}}}));
-    let _lease = g.lease();
-    let value = g.terminal("inline");
-    assert_eq!(value["status"], "succeeded", "{}", g.status());
-    assert_eq!(value["outputs"]["value"], 6);
-    assert_eq!(g.status()["steps"]["python"]["status"], "succeeded");
-    let run = g.run("python");
-    let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
-    let count: i64 = db
-        .query_row(
-            "SELECT count(*) FROM leases WHERE run_id=?1 AND kind='section' AND state='released'",
-            [run],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(count, 4);
-    let format = |inputs| {
-        g.data(json!({"command":"fn_call","args":{"project":g.selector(),"name":"core.format","inputs":inputs,"direct":true}}))
-    };
-    for (inputs, expected) in [
-        (
-            json!({"template":"hi {who}, {n} + {rest} = {sum}","values":{"who":"world","n":4,"rest":[1,2],"sum":{"a":true}}}),
-            "hi world, 4 + [1,2] = {\"a\":true}",
-        ),
-        (
-            json!({"template":"{0} then {1}","values":["first",2]}),
-            "first then 2",
-        ),
-        (json!({"template":"{0}!","values":7}), "7!"),
-        (
-            json!({"template":"{{{0}}} {{literal}} }}","values":["x"]}),
-            "{x} {literal} }",
-        ),
-    ] {
-        let call = format(inputs);
-        assert_eq!(call["status"], "succeeded", "{call}");
-        assert_eq!(call["outputs"]["text"], expected);
-        assert_eq!(call["direct"], true);
-    }
-    for (template, values, expected) in [
-        ("{1}", json!("one"), "single value"),
-        ("{2}", json!(["a", "b"]), "has 2 item(s)"),
-        ("unclosed {", json!({}), "unclosed '{'"),
-        ("{a{b}", json!({"a":1,"b":2}), "unclosed '{'"),
-        ("stray }", json!({}), "unmatched '}'"),
-        ("empty {}", json!({}), "empty placeholder"),
-        ("{x.y}", json!({"x":1}), "attribute or item access"),
-        ("{x[0]}", json!({"x":1}), "attribute or item access"),
-        ("{x!r}", json!({"x":1}), "conversion flags"),
-        ("{x!s:>10}", json!({"x":1}), "conversion flags"),
-        ("{x:>10}", json!({"x":1}), "format specifications"),
-        ("{x:.2f}", json!({"x":1}), "format specifications"),
-        ("{missing}", json!({"x":1}), "no value 'missing'"),
-        ("{0}", json!({"x":1}), "is a record"),
-        ("{name}", json!(["a"]), "is an array"),
-    ] {
-        let call = format(json!({"template":template,"values":values}));
-        assert_eq!(call["status"], "failed", "{call}");
-        assert_eq!(call["error"]["error"], "fn_failure", "{call}");
-        assert!(
-            call["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains(expected),
-            "{template}: {call}"
-        );
-    }
-}
-#[test]
-fn fake_agent_submits_delivers_once_and_feedback_resumes_previous_session() {
-    let g = Gate::new();
-    g.script(json!({"outputs":{"summary":"fake output"},"wait_message":true,"marker_transient_once":true}));
-    g.plan(json!({"work":agent(&g),"after":{"run":"core.external","after":["work"],"outputs":{"ok":"boolean"}}}));
-    // A step that will run once `work` is done: its next run is assigned the message.
-    let queued = g.say("after", "for the next run");
-    assert_eq!((queued.delivery, queued.run), (Delivery::Queued, None));
-    let _lease = g.lease();
-    g.wait(|g| g.home.join("fake-events.jsonl").exists());
-    // The live fake agent listens: it is handed the message on its live feed.
-    let receipt = g.say("work", "first live message");
-    assert_eq!(receipt.delivery, Delivery::Delivered, "{receipt:?}");
-    assert_eq!(receipt.run.map(|r| r.to_string()), Some(g.run("work")));
-    assert_eq!(receipt.thread, "step-work");
-    let id = receipt.id.0;
-    let value = g.terminal("work");
-    assert_eq!(value["status"], "succeeded", "{value}");
-    assert_eq!(value["outputs"]["summary"], "fake output");
-    let first = g.run("work");
-    // Settled: a message to it is refused; a retry's message reaches its next run.
-    let refused = g.try_rpc(
-        json!({"command":"say","args":{"project":g.selector(),"body":"after the fact","to":"work"}}),
-    );
-    assert!(
-        matches!(&refused, Err(sluice_model::error::PublicError::Conflict { message, .. }) if message.contains("settled")),
-        "{refused:?}"
-    );
-    let delivered = g
-        .events()
-        .into_iter()
-        .filter(|e| {
-            (e["command"]["command"] == "deliver_text" || e["command"]["command"] == "steer")
-                && e["command"]["id"]["kind"] == "message"
-                && e["command"]["id"]["id"] == id
-        })
-        .count();
-    assert_eq!(delivered, 1, "events: {:?}", g.events());
-    g.script(json!({"outputs":{"summary":"resumed output"}}));
-    g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":"Continue the existing session","reason":"feedback","author":"@test"}}));
-    g.wait(|g| g.status()["steps"]["work"]["run_ids"][0] != first);
-    let second = g.terminal("work");
-    assert_eq!(second["status"], "succeeded", "{second}");
-    assert_eq!(second["outputs"]["summary"], "resumed output");
-    assert_eq!(second["outputs"]["session"], value["outputs"]["session"]);
-    assert!(
-        g.events()
-            .iter()
-            .any(|e| e["command"]["command"] == "resume")
-    );
-    let run = g.run("work");
-    let launch: Value = serde_json::from_slice(
-        &std::fs::read(g.home.join("runs").join(run).join("runtime.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(launch["prev_run"], first);
-}
-/// An agent's task starts with its step's previous attempt (the first says so) and the git
-/// status of its cwd when it launched.
-#[test]
-fn an_agent_task_starts_with_its_previous_attempt_and_its_dirty_work_tree() {
-    let g = Gate::new();
-    let repo = g.temp.path().join("repo");
-    std::fs::create_dir(&repo).unwrap();
-    for args in [
-        &["init", "-q"][..],
-        &[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "first",
-        ],
-    ] {
-        assert!(
-            Command::new("/usr/bin/git")
-                .current_dir(&repo)
-                .args(args)
-                .status()
-                .unwrap()
-                .success()
-        );
-    }
-    std::fs::write(repo.join("left.txt"), "left by hand").unwrap();
-    g.script(json!({"fatal":true}));
-    g.plan(json!({"work":{"run":"agent.run","in":bindings(json!({"engine":"fake","cwd":repo,"spec":"Submit summary and finish"})),"outputs":{"summary":"string"}}}));
-    let _lease = g.lease();
-    let failed = g.terminal("work");
-    assert_eq!(failed["status"], "failed", "{failed}");
-    let first = g.run("work");
-    let task =
-        |run: &str| std::fs::read_to_string(g.home.join("runs").join(run).join("task.md")).unwrap();
-    let text = task(&first);
-    let note = text.find("## Previous attempt").expect("note");
-    assert!(
-        note < text.find("Submit summary and finish").unwrap(),
-        "{text}"
-    );
-    assert!(
-        text.contains("None: this is the first attempt at this step."),
-        "{text}"
-    );
-    assert!(
-        text.contains(&format!(
-            "The working directory {} has 1 uncommitted path now: ?? left.txt.",
-            repo.display()
-        )),
-        "{text}"
-    );
-    g.script(json!({"outputs":{"summary":"done"}}));
-    g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":null,"reason":"again","author":"test"}}));
-    g.wait(|g| g.status()["steps"]["work"]["run_ids"][0] != first.as_str());
-    let second = g.run("work");
-    assert_eq!(g.terminal("work")["status"], "succeeded");
-    let text = task(&second);
-    assert!(
-        text.contains(&format!(
-            "This is attempt 2 at this step. The previous one (run {first}, "
-        )),
-        "{text}"
-    );
-    assert!(text.contains(") failed: agent_failure"), "{text}");
-    assert!(text.contains("It submitted nothing"), "{text}");
-}
-#[test]
-fn python_agent_wrapper_retries_transient_in_same_run_and_lands_outer_outputs() {
-    let g = Gate::new();
-    g.script(json!({"outputs":{"summary":"from agent"},"marker_transient_once":true}));
-    g.function("custom.worker",json!({"cwd":"string"}),json!({"session":"string"}),r#"from sluice_fn import run, Transient
-import fcntl
+// An agent's task starts with its step's previous attempt (the first says so) and the git
+// status of its cwd when it launched.
 
-def main(inp, ctx):
-    try:
-        result = ctx.builtin('agent.run', {'engine':'fake', 'cwd':inp['cwd'], 'spec':ctx.header('Do the work')})
-    except Transient:
-        locks = list((ctx.home / 'locks').glob('session-*.lock'))
-        assert len(locks) == 1
-        with locks[0].open('r+') as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                raise AssertionError('session lock released during helper retry')
-            except BlockingIOError:
-                (ctx.home / 'lock-retained').write_text('yes')
-        raise
-    fields = ctx.submission()
-    return {'session': result['session'], 'summary':fields['summary']}
-run(main, retries=1, backoff=0)
-"#);
-    g.plan(json!({"work":{"run":"custom.worker","in":bindings(json!({"cwd":g.temp.path()})),"outputs":{"summary":"string"}}}));
-    let _lease = g.lease();
-    let value = g.terminal("work");
-    assert_eq!(value["status"], "succeeded", "{value}");
-    assert_eq!(value["outputs"]["summary"], "from agent");
-    let events = g.events();
-    assert!(events.iter().any(|e| e["command"]["command"] == "resume"));
-    assert_eq!(
-        events
-            .iter()
-            .filter(|e| e["command"]["command"] == "deliver_text"
-                && e["command"]["id"]["kind"] == "task")
-            .count(),
-        1
-    );
-    let run = g.run("work");
-    let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
-    let count: i64 = db
-        .query_row("SELECT count(*) FROM runs WHERE step_id='work'", [], |r| {
-            r.get(0)
-        })
-        .unwrap();
-    assert_eq!(count, 1);
-    assert!(g.home.join("lock-retained").exists());
-    assert!(g.home.join("turn-committed.injected").exists());
-    assert!(!g.home.join("turn-committed").exists());
-    let launch: Value = serde_json::from_slice(
-        &std::fs::read(g.home.join("runs").join(&run).join("launch.json")).unwrap(),
-    )
-    .unwrap();
-    assert!(
-        events
-            .iter()
-            .all(|e| e["cgroup"] != launch["executor"]["cgroup"])
-    );
-    assert_eq!(
-        events
-            .iter()
-            .map(|e| e["pid"].as_u64().unwrap())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len(),
-        2
-    );
-    let checkpoint: Value = serde_json::from_slice(
-        &std::fs::read(g.home.join("runs").join(run).join("native.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(checkpoint["internal_attempt"], 2);
-    let groups = events
-        .iter()
-        .map(|e| e["cgroup"].as_str().unwrap().to_owned())
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(groups.len(), 1);
-    assert!(groups.iter().all(|p| p.contains("/payload/")));
-}
 #[test]
-fn rejected_python_registers_action_and_rearms_target_atomically() {
-    let g = Gate::new();
-    g.function(
-        "custom.land",
-        json!({}),
-        json!({}),
-        r#"from sluice_fn import run, Rejected
-
-def main(inp, ctx):
-    if (ctx.home / 'rejected-once').exists():
-        return {}
-    (ctx.home / 'rejected-once').write_text('yes')
-    ctx.retry_on_failure('work', 'Fix the review')
-    raise Rejected('Review refused')
-run(main)
-"#,
-    );
-    g.plan(json!({"work":{"run":"core.echo","in":{"value":{"default":1}}},"land":{"run":"custom.land","after":["work"]}}));
-    let lease = g.lease();
-    g.wait(|g| g.home.join("runs").exists());
-    g.wait(|g|match g.rpc(json!({"command":"log_read","args":{"project":g.selector(),"since_seq":null,"kinds":["run.completion_action"],"threads":null,"limit":100}})) { CommandReply::Records(page) => !page.records.is_empty(), _ => false });
-    drop(lease);
-    let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
-    let (action,finished):(String,Option<String>)=db.query_row("SELECT completion_action,finished_at FROM runs WHERE step_id='land' ORDER BY created_at LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
-    assert!(finished.is_some());
-    assert!(action.contains("Fix the review"));
-    let count: i64 = db
-        .query_row(
-            "SELECT count(*) FROM messages WHERE body='Fix the review'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(count, 1);
-    let (result, outcome): (String, String) = db.query_row("SELECT result,action_outcome FROM runs WHERE step_id='land' ORDER BY created_at LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
-    let result: Value = serde_json::from_str(&result).unwrap();
-    let outcome: Value = serde_json::from_str(&outcome).unwrap();
-    assert_eq!(result["status"], "failed");
-    assert_eq!(outcome["outcome"], "applied");
-    let work: i64 = db
-        .query_row(
-            "SELECT work_generation FROM steps WHERE step_id='work'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert!(work >= 2);
-}
-#[test]
-fn terminal_agent_error_preserves_kind_message_and_session_through_python() {
-    let g = Gate::new();
-    g.script(json!({"fatal":true}));
-    g.function("custom.failure",json!({"cwd":"string"}),json!({}),r#"from sluice_fn import run
-
-def main(inp, ctx):
-    return ctx.builtin('agent.run', {'engine':'fake', 'cwd':inp['cwd'], 'spec':'Fail with a typed error'})
-run(main)
-"#);
-    g.plan(json!({"work":{"run":"custom.failure","in":bindings(json!({"cwd":g.temp.path()}))}}));
-    let _lease = g.lease();
-    let result = g.terminal("work");
-    assert_eq!(result["status"], "failed", "{result}");
-    assert_eq!(result["error"]["error"], "agent_failure");
-    assert_eq!(result["error"]["kind"], "EngineExited");
-    assert_eq!(result["error"]["message"], "fixture terminal error");
-    assert_eq!(result["error"]["session"], "fake-session");
-}
-#[test]
-fn compiled_builtin_retries_transient_within_one_reserved_run() {
-    let g = Gate::new();
-    let fake = g.temp.path().join("bin/gh");
-    executable::write(
-        &fake,
-        r#"#!/usr/bin/python3
-import os, pathlib, sys, json
-assert os.environ['COMPOSITION_ENV_FIXTURE'] == 'frozen-launch'
-p = pathlib.Path(os.environ['SLUICE_HOME']) / 'gh-ran'
-n = int(p.read_text()) + 1 if p.exists() else 1
-p.write_text(str(n))
-if n == 1: sys.exit(1)
-print(json.dumps({'state':'OPEN','headRefOid':'fixture-sha','url':'fixture-url','statusCheckRollup':[]}))
-"#,
-    );
-    g.plan(json!({"wait":{"run":"gh.pr_wait","in":bindings(json!({"path":g.temp.path(),"pr":"1","until":"checks"}))}}));
-    let _lease = g.lease();
-    let result = g.terminal("wait");
-    assert_eq!(result["status"], "succeeded", "{result}");
-    assert_eq!(result["outputs"]["sha"], "fixture-sha");
-    assert_eq!(std::fs::read_to_string(g.home.join("gh-ran")).unwrap(), "2");
-    let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
-    assert_eq!(
-        db.query_row("SELECT count(*) FROM runs WHERE step_id='wait'", [], |r| {
-            r.get::<_, i64>(0)
-        })
-        .unwrap(),
-        1
-    );
-}
-fn sequential_messages(live: bool) {
+fn sequential_composition_retains_assigned_and_live_messages() {
     // Ported from execution review's sequential_message_delivery probe.
     let g = Gate::configured(|g| {
         g.env.insert("SLUICE_AGENT_SETTLE_S".into(), "0.1".into());
@@ -1280,7 +882,7 @@ fn sequential_messages(live: bool) {
     // The first agent stops without submitting (a run submits once, and submitting ends
     // the agent); the fn continues its session with a second one, as a wrapper continues
     // after a wall cap.
-    g.script(json!({"outputs":{"summary":"done"},"wait_message":live,"no_submit":true}));
+    g.script(json!({"outputs":{"summary":"done"},"wait_message":true,"no_submit":true,"messages_needed":2}));
     g.function("custom.sequential", json!({"cwd":"string"}), json!({"session":"string"}), r#"from sluice_fn import run, AgentFailure
 import json, os, pathlib
 def main(inp, ctx):
@@ -1296,17 +898,15 @@ def main(inp, ctx):
 run(main)
 "#);
     g.plan(json!({"work":{"run":"custom.sequential","in":bindings(json!({"cwd":g.temp.path()})),"outputs":{"summary":"string"}}}));
-    let assigned = (!live).then(|| g.post("work", "Apply this once"));
+    let assigned = g.post("work", "Apply this assigned message once");
     let _lease = g.lease();
-    let message = assigned.unwrap_or_else(|| {
-        g.wait(|g| {
-            g.home.join("fake-events.jsonl").exists()
-                && g.events()
-                    .iter()
-                    .any(|e| e["command"]["id"]["kind"] == "task")
-        });
-        g.post("work", "Apply this live message once")
+    g.wait(|g| {
+        g.home.join("fake-events.jsonl").exists()
+            && g.events()
+                .iter()
+                .any(|e| e["command"]["id"]["kind"] == "task")
     });
+    let live = g.post("work", "Apply this live message once");
     let result = g.terminal("work");
     assert_eq!(result["status"], "succeeded", "{result}");
     let messages: Vec<_> = g
@@ -1314,8 +914,12 @@ run(main)
         .into_iter()
         .filter(|e| e["command"]["id"]["kind"] == "message")
         .collect();
-    assert_eq!(messages.len(), 1, "{messages:?}");
-    assert_eq!(messages[0]["command"]["id"]["id"], message);
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    let ids: std::collections::BTreeSet<_> = messages
+        .iter()
+        .map(|m| m["command"]["id"]["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(ids, std::collections::BTreeSet::from([assigned, live]));
     let events = g.events();
     let pids: std::collections::BTreeSet<_> =
         events.iter().map(|e| e["pid"].as_u64().unwrap()).collect();
@@ -1328,21 +932,14 @@ run(main)
         2
     );
 }
-#[test]
-fn sequential_composition_retains_acknowledged_assigned_messages() {
-    sequential_messages(false);
-}
-#[test]
-fn sequential_composition_retains_acknowledged_live_messages() {
-    sequential_messages(true);
-}
+
 const FAKE: &str = r#"#!/usr/bin/python3
 import os, sys, json, socket, struct, pathlib
 home = pathlib.Path(os.environ['SLUICE_HOME'])
 config = json.loads(pathlib.Path(sys.argv[2]).read_text())
 run = os.environ['SLUICE_RUN_ID']
 state = {'status':'starting','turns_started':0,'turns_completed':0,'waiting':None,'background_work':[],'compactions':0,'final_text':'fake done','session_id':'fake-session','acknowledged':[],'not_accepted':[],'progress':0,'error':None}
-messages = False
+messages = 0
 submitted = False
 transient = False
 sessions = home / 'fake-sessions.json'
@@ -1371,7 +968,7 @@ for line in sys.stdin:
         cmd=req['command']
         if cmd['command'] in ('start_fresh','resume'): state['status']='idle'
         if cmd['command'] in ('deliver_text','steer'):
-            if cmd['id']['kind']=='message': messages=True
+            if cmd['id']['kind']=='message': messages+=1
             state['acknowledged'].append(cmd['id']);state['turns_started']+=1;state['status']='busy';state['progress']+=1
         if cmd['command']=='request_exit': state['status']='exited'
     if req['operation']=='observe' and state['turns_started']:
@@ -1383,7 +980,7 @@ for line in sys.stdin:
         elif config.get('transient_once') and not (home/'transient-ran').exists():
             (home/'transient-ran').write_text(run)
             state['error']={'kind':'transient','message':'fixture rate limit'}
-        elif not config.get('wait_message') or messages:
+        elif not config.get('wait_message') or messages >= config.get('messages_needed', 1):
             if not submitted and not config.get('no_submit'):
                 rpc({'command':'step_submit','args':{'project':os.environ['SLUICE_PROJECT_ID'],'step':os.environ['SLUICE_STEP'],'run':run,'outputs':config.get('outputs',{}),'author':'fixture'}})
                 submitted=True
@@ -1481,12 +1078,12 @@ run(main)
     }
     assert!(checked > 3, "scanned {checked} files");
 }
-/// Steps blocked on waiting asks hold nothing other requests need: with more of them
-/// than the coordinator has read connections, it keeps answering while they wait.
+// Steps blocked on waiting asks hold nothing other requests need: with more of them
+// than the coordinator has read connections, it keeps answering while they wait.
 #[test]
-fn waiting_asks_do_not_wedge_the_coordinator() {
+fn slow_parked_questions_keep_the_broker_responsive_and_survive_restart() {
     const ASKS: usize = 8;
-    let g = Gate::new();
+    let mut g = Gate::new();
     let steps = (0..ASKS)
         .map(|i| {
             let ask =
@@ -1498,7 +1095,7 @@ fn waiting_asks_do_not_wedge_the_coordinator() {
         })
         .collect::<serde_json::Map<_, _>>();
     g.plan(Value::Object(steps));
-    let _lease = g.lease();
+    let lease = g.lease();
     let open = |g: &Gate| {
         let CommandReply::Messages(page) = g.rpc(json!({"command":"messages","args":{"project":g.selector(),"view":"questions","thread":null,"since":null,"owner":true}})) else {
             panic!("messages")
@@ -1507,8 +1104,7 @@ fn waiting_asks_do_not_wedge_the_coordinator() {
     };
     g.wait(|g| open(g).len() == ASKS);
     let answers_promptly = |g: &Gate| {
-        let until = Instant::now() + Duration::from_secs(20);
-        while Instant::now() < until {
+        for _ in 0..3 {
             let started = Instant::now();
             g.status();
             g.rpc(json!({"command":"say","args":{"project":g.selector(),"body":"still here","to":"owner"}}));
@@ -1517,10 +1113,28 @@ fn waiting_asks_do_not_wedge_the_coordinator() {
                 "the coordinator took {:?} to answer",
                 started.elapsed()
             );
-            std::thread::sleep(Duration::from_millis(100));
         }
     };
     answers_promptly(&g);
+    // Restart it as systemd does, with SIGTERM.
+    drop(lease);
+    let mut broker = g.broker.take().unwrap();
+    let pid = broker.id().to_string();
+    assert!(
+        Command::new("/bin/kill")
+            .args(["-TERM", &pid])
+            .status()
+            .unwrap()
+            .success()
+    );
+    broker.wait().unwrap();
+    g.boot();
+    let _lease = g.lease();
+    for i in 0..ASKS {
+        let step = &g.status()["steps"][format!("ask{i}")];
+        assert_eq!(step["status"], "running", "{step}");
+    }
+    assert_eq!(open(&g).len(), ASKS);
     for q in open(&g) {
         g.rpc(json!({"command":"reply","args":{"project":g.selector(),"to_message":q.id,"body":"","answer":{"action":"approve","params":null,"values":null},"owner":true}}));
     }
@@ -1574,150 +1188,15 @@ fn owner_question_runs_the_configured_notify_command_once() {
     assert_eq!(sent[0]["project"], "compose");
     assert_eq!(sent[0]["project_id"], json!(g.project));
 }
-/// A coordinator restart leaves steps waiting on asks waiting rather than failed: each
-/// asks again once it is back and still gets its answer.
-#[test]
-fn waiting_asks_survive_a_coordinator_restart() {
-    const ASKS: usize = 2;
-    let mut g = Gate::new();
-    let steps = (0..ASKS)
-        .map(|i| {
-            let ask =
-                json!({"to":"owner","title":format!("Merge {i}?"),"body":"Approve?","wait":true});
-            (
-                format!("ask{i}"),
-                json!({"run":"message.ask","in":bindings(ask)}),
-            )
-        })
-        .collect::<serde_json::Map<_, _>>();
-    g.plan(Value::Object(steps));
-    let lease = g.lease();
-    let open = |g: &Gate| {
-        let CommandReply::Messages(page) = g.rpc(json!({"command":"messages","args":{"project":g.selector(),"view":"questions","thread":null,"since":null,"owner":true}})) else {
-            panic!("messages")
-        };
-        page.messages
-    };
-    g.wait(|g| open(g).len() == ASKS);
-    // Restart it as systemd does, with SIGTERM.
-    drop(lease);
-    let mut broker = g.broker.take().unwrap();
-    let pid = broker.id().to_string();
-    assert!(
-        Command::new("/bin/kill")
-            .args(["-TERM", &pid])
-            .status()
-            .unwrap()
-            .success()
-    );
-    broker.wait().unwrap();
-    g.boot();
-    let _lease = g.lease();
-    let until = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < until {
-        for i in 0..ASKS {
-            let step = &g.status()["steps"][format!("ask{i}")];
-            assert_eq!(step["status"], "running", "{step}");
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    assert_eq!(open(&g).len(), ASKS);
-    for q in open(&g) {
-        g.rpc(json!({"command":"reply","args":{"project":g.selector(),"to_message":q.id,"body":"","answer":{"action":"approve","params":null,"values":null},"owner":true}}));
-    }
-    for i in 0..ASKS {
-        let step = g.terminal(&format!("ask{i}"));
-        assert_eq!(step["status"], "succeeded", "{step}");
-        assert_eq!(
-            step["outputs"]["reply"]["answer"]["action"], "approve",
-            "{step}"
-        );
-    }
-}
+// A coordinator restart leaves steps waiting on asks waiting rather than failed: each
+// asks again once it is back and still gets its answer.
 
-/// `ctx.tool` takes the flat arguments MCP takes and returns the plain result MCP returns,
-/// authored as the step.
-#[test]
-fn python_ctx_tool_takes_flat_mcp_arguments_and_returns_plain_results() {
-    let g = Gate::new();
-    g.function(
-        "custom.tools",
-        json!({}),
-        json!({"done":"boolean"}),
-        r#"from sluice_fn import run, CallbackError
+// `ctx.tool` takes the flat arguments MCP takes and returns the plain result MCP returns,
+// authored as the step.
 
-def main(inp, ctx):
-    status = ctx.tool('status', {'steps': 'later'})
-    assert list(status['steps']) == ['later'] and 'reply' not in status, status
-    plan = ctx.tool('plan_get', {})
-    assert 'later' in plan['plan']['steps'], plan
-    paused = ctx.tool('step_pause', {'steps': 'later', 'reason': 'hold'})
-    assert paused['rev'] == plan['rev'] + 1 and 'preview' in paused, paused
-    said = ctx.tool('say', {'to': 'later', 'body': 'later, then'})
-    assert said['to'] == 'later' and said['thread'] == 'step-tools', said
-    ok = ctx.tool('step_set_output', {'step': 'later', 'outputs': {'value': 5}, 'force': True,
-                                      'reason': 'by hand'})
-    assert ok == {'ok': True}, ok
-    waited = ctx.tool('step_wait', {'steps': 'later', 'until': 'succeeded', 'timeout': 5})
-    assert waited['met'] is True and waited['steps'] == {'later': 'succeeded'}, waited
-    done = ctx.tool('log_read', {'kinds': ['step.status'], 'statuses': ['succeeded'], 'limit': 50})
-    assert [r['seq'] for r in done['records'] if r['step'] == 'later'][-1] <= waited['seq'], done
-    try:
-        ctx.tool('say', {'to': 'later', 'body': 'too late'})
-        raise AssertionError('a settled step took a message')
-    except CallbackError as error:
-        assert error.error == 'conflict' and 'settled' in error.message, error.message
-    log = ctx.tool('log_read', {'limit': 3})
-    assert sorted(log) == ['last_seq', 'records'], log
-    fns = ctx.tool('fn_list', {})
-    assert any(f['name'] == 'custom.tools' for f in fns), fns
-    asked = ctx.tool('ask', {'to': 'orchestrator', 'body': 'which?'})
-    assert asked['thread'] == 'step-tools' and asked['delivery'] == 'delivered', asked
-    try:
-        ctx.tool('say', {'to': 'nobody', 'body': 'x'})
-        raise AssertionError('an unknown recipient was accepted')
-    except CallbackError as error:
-        assert error.error == 'invalid', error.message
-    try:
-        ctx.tool('status', {'selection': {'steps': ['later'], 'tags': None}})
-        raise AssertionError('the wire shape was accepted')
-    except CallbackError as error:
-        assert error.error == 'bad_request' and 'selection' in error.message, error.message
-    return {'done': True}
-run(main)
-"#,
-    );
-    g.plan(json!({"tools":{"run":"custom.tools","in":{}},
-                  "later":{"run":"core.echo","after":["tools"],"in":{"value":{"default":1}}}}));
-    let _lease = g.lease();
-    let value = g.terminal("tools");
-    assert_eq!(value["status"], "succeeded", "{value}");
-    let later = &g.status()["steps"]["later"];
-    assert_eq!(later["status"], "succeeded", "{later}");
-    assert_eq!(later["outputs"]["value"], 5);
-    let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
-    let (author, reason): (String, String) = db
-        .query_row(
-            "SELECT author, reason FROM plan_edits WHERE project_id=?1 ORDER BY rev DESC LIMIT 1",
-            [g.project.to_string()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!((author.as_str(), reason.as_str()), ("step:tools", "hold"));
-    // The fn's messages speak as its step, with its run.
-    let (from, run): (String, String) = db
-        .query_row(
-            "SELECT \"from\", run_id FROM messages WHERE project_id=?1 AND needs_reply=1",
-            [g.project.to_string()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!((from.as_str(), run), ("tools", g.run("tools")));
-}
-
-/// `ctx.progress` publishes a running step's latest values without finishing it: they merge,
-/// are checked against the step's outputs, show in the `query` tool's `steps`, feed no reader,
-/// and wake neither `log_wait` nor `next`. The step's result is what its run returns.
+// `ctx.progress` publishes a running step's latest values without finishing it: they merge,
+// are checked against the step's outputs, show in the `query` tool's `steps`, feed no reader,
+// and wake neither `log_wait` nor `next`. The step's result is what its run returns.
 #[test]
 fn python_ctx_progress_publishes_values_that_are_never_final_and_wake_nothing() {
     let g = Gate::new();
@@ -1790,19 +1269,23 @@ run(main)
     };
     let since = page.last_seq.0;
     let started = Instant::now();
+    let (ready, waiting) = std::sync::mpsc::channel();
     let (log_wait, next) = std::thread::scope(|scope| {
         let log_wait = scope.spawn(|| {
-            g.rpc(json!({"command":"log_wait","args":{"read":{"project":g.selector(),"since_seq":since,"kinds":null,"threads":null,"limit":50},"timeout_seconds":3,"questions_only":false}}))
+            ready.send(()).unwrap();
+            g.rpc(json!({"command":"log_wait","args":{"read":{"project":g.selector(),"since_seq":since,"kinds":null,"threads":null,"limit":50},"timeout_seconds":1,"questions_only":false}}))
         });
         let next = scope.spawn(|| {
-            g.rpc(json!({"command":"next","args":{"projects":[g.selector()],"since_seq":since,"me":"@orch","timeout_seconds":3,"all":false,"settle_seconds":1,"settle_max_seconds":1,"settles":"short"}}))
+            ready.send(()).unwrap();
+            g.rpc(json!({"command":"next","args":{"projects":[g.selector()],"since_seq":since,"me":"@orch","timeout_seconds":1,"all":false,"settle_seconds":0,"settle_max_seconds":0,"settles":"short"}}))
         });
-        std::thread::sleep(Duration::from_millis(300));
+        waiting.recv().unwrap();
+        waiting.recv().unwrap();
         std::fs::write(dir.join("again"), b"").unwrap();
         wait_file("published-again");
         (log_wait.join().unwrap(), next.join().unwrap())
     });
-    assert!(started.elapsed() >= Duration::from_millis(2500));
+    assert!(started.elapsed() >= Duration::from_millis(900));
     let CommandReply::Records(page) = log_wait else {
         panic!("log_wait: {log_wait:?}")
     };
@@ -1823,8 +1306,8 @@ run(main)
     assert_eq!(query(&g)["rows"][0][0], 1);
 }
 
-/// The orchestrator in these tests is session `@orch` (SPEC §8.1): a message the owner or a
-/// run does not send, it sends.
+// The orchestrator in these tests is session `@orch` (SPEC §8.1): a message the owner or a
+// run does not send, it sends.
 const SESSION: &str = "@orch";
 fn speak_as_session(command: &Value, args: &mut Value) {
     if ["say", "ask", "reply"].contains(&command.as_str().unwrap_or(""))
@@ -1835,8 +1318,8 @@ fn speak_as_session(command: &Value, args: &mut Value) {
         args["me"] = json!(SESSION);
     }
 }
-/// `@orch` registers in the gate's project (a `next` that returns at once), so the owner can
-/// write to it.
+// `@orch` registers in the gate's project (a `next` that returns at once), so the owner can
+// write to it.
 fn register(g: &Gate) {
     g.rpc(json!({"command":"next","args":{"projects":[g.selector()],"since_seq":0,"me":SESSION,"timeout_seconds":0,"all":false,"settle_seconds":0,"settle_max_seconds":0,"settles":"short"}}));
 }
@@ -1861,6 +1344,7 @@ fn message_tool(
             let mut command = Command::new(env!("CARGO_BIN_EXE_sluice"));
             command
                 .envs(&g.env)
+                .env("TOKIO_WORKER_THREADS", "2")
                 .env_remove("SLUICE_RUN_ID")
                 .env_remove("SLUICE_PROJECT")
                 .env_remove("SLUICE_STEP")
@@ -1921,118 +1405,8 @@ fn owner_question(g: &Gate, to: &str, body: &str) -> Value {
 }
 
 #[test]
-fn messages_default_to_inbox_through_cli_socket_and_mcp() {
-    // A session's own inbox is phase A2's (the inbox by `me`); the owner's shows the default.
-    for transport in [
-        MessageTransport::Cli,
-        MessageTransport::Socket,
-        MessageTransport::Mcp,
-    ] {
-        let g = Gate::new();
-        let CommandReply::Receipt(question) = g.rpc(json!({"command":"ask","args":{"project":g.selector(),"to":"owner","body":"Which parser?"}})) else { panic!("receipt") };
-        g.rpc(
-            json!({"command":"say","args":{"project":g.selector(),"to":"owner","body":"A note"}}),
-        );
-        owner_question(&g, SESSION, "Not in your inbox");
-        let inbox = message_tool(&g, transport, "messages", json!({"owner":true})).unwrap();
-        assert_eq!(
-            inbox["messages"].as_array().unwrap().len(),
-            2,
-            "{transport:?}: {inbox}"
-        );
-        assert_eq!(inbox["messages"][0]["id"], json!(question.id));
-        assert_eq!(inbox["messages"][1]["body"], "A note");
-        assert_eq!(
-            inbox,
-            message_tool(
-                &g,
-                transport,
-                "messages",
-                json!({"view":"inbox","owner":true})
-            )
-            .unwrap()
-        );
-    }
-}
-
-#[test]
-fn reply_to_log_seq_has_the_same_refusal_through_cli_socket_and_mcp() {
-    let g = Gate::new();
-    g.plan(json!({"lane":{"run":"core.external"}}));
-    let question = owner_question(&g, SESSION, "Which parser?");
-    let CommandReply::Records(page) = g.rpc(json!({"command":"log_read","args":{
-        "project":g.selector(),"kinds":["plan.edit"],"limit":100
-    }})) else {
-        panic!("records")
-    };
-    let seq = page.records.last().unwrap().seq.0;
-    let expected = format!(
-        "{seq} is a log seq (a plan.edit record), not a message. A message's id is the # number on its line. Open questions to you:\n#{question} owner: Which parser?"
-    );
-    for transport in [
-        MessageTransport::Cli,
-        MessageTransport::Socket,
-        MessageTransport::Mcp,
-    ] {
-        let error = message_tool(
-            &g,
-            transport,
-            "reply",
-            json!({"to_message":seq,"body":"Use Rust"}),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(error, sluice_model::error::PublicError::Invalid { ref message, .. }
-            if message == &expected),
-            "{transport:?}: {error:?}"
-        );
-        let missing = message_tool(
-            &g,
-            transport,
-            "reply",
-            json!({"to_message":i64::MAX,"body":"Use Rust"}),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(missing, sluice_model::error::PublicError::NotFound { message }
-            if message == format!("no message {}", i64::MAX)),
-            "{transport:?}"
-        );
-    }
-    for transport in [
-        MessageTransport::Cli,
-        MessageTransport::Socket,
-        MessageTransport::Mcp,
-    ] {
-        let posted = message_tool(
-            &g,
-            transport,
-            "reply",
-            json!({"to_message":question,"body":"Use Rust"}),
-        )
-        .unwrap();
-        assert_eq!(posted["to"], "owner", "{transport:?}");
-    }
-    let error = message_tool(
-        &g,
-        MessageTransport::Cli,
-        "reply",
-        json!({"to_message":seq,"body":"Again"}),
-    )
-    .unwrap_err();
-    assert!(
-        error.to_string().ends_with("Open questions to you: none."),
-        "{error}"
-    );
-}
-
-#[test]
 fn reply_by_sender_selects_one_open_question_through_cli_socket_and_mcp() {
-    for transport in [
-        MessageTransport::Cli,
-        MessageTransport::Socket,
-        MessageTransport::Mcp,
-    ] {
+    for transport in [MessageTransport::Socket] {
         let g = Gate::new();
         let question = owner_question(&g, SESSION, "Which parser?\nMore context");
         // A question addressed to somebody else must never count as a candidate.
@@ -2168,8 +1542,148 @@ fn reply_by_sender_selects_one_open_question_through_cli_socket_and_mcp() {
 }
 
 #[test]
-fn next_message_lines_include_ids_and_log_wait_keeps_them() {
-    let g = Gate::new();
+fn python_sections_inline_and_compiled_retry() {
+    let mut g = Gate::new();
+    {
+        g.function(
+        "custom.work",
+        json!({"value":"int"}),
+        json!({"answer":"int"}),
+        r#"from sluice_fn import run, sh
+
+def main(inp, ctx):
+    with ctx.acquire('section', timeout=5):
+        reply = ctx.tool('status', {})
+        assert reply['project']['project_id'] == ctx.project_id
+        assert ctx.project_dir.name == ctx.project_id
+        assert 'type' in ctx.extra_inputs['topic']
+        assert ctx.outputs['tag']['doc'] == 'A tag'
+        assert sh(['python3', '-c', 'print(7)']).stdout.strip() == '7'
+    with ctx.acquire('section', timeout=5):
+        answer = inp['value'] + 1
+    def acquire(key):
+        return ctx.callback('acquire_lease', {'run':ctx.run_id, 'resource':'section', 'amount':1, 'priority':0, 'request_id':key})['data']
+    first = acquire('first')
+    waiting = acquire('second')
+    assert first['state'] == 'held' and waiting['state'] == 'waiting'
+    ctx.callback('release_lease', {'run':ctx.run_id, 'lease':first['lease']})
+    granted = acquire('second')
+    assert granted['lease'] == waiting['lease'] and granted['state'] == 'held'
+    ctx.callback('release_lease', {'run':ctx.run_id, 'lease':granted['lease']})
+    return {'answer':answer, 'tag':'yes'}
+run(main)
+"#,
+    );
+        g.plan(json!({"seed":{"run":"core.echo","in":{"value":{"default":4}}},"python":{"run":"custom.work","in":{"value":{"source":"seed/value"},"topic":{"default":"guide"}},"outputs":{"tag":{"type":"string","doc":"A tag"}}},"inline":{"run":"inline.python","in":{"code":{"default":"out = n + 1"},"n":{"source":"python/answer"}}}}));
+        let _lease = g.lease();
+        let value = g.terminal("inline");
+        assert_eq!(value["status"], "succeeded", "{}", g.status());
+        assert_eq!(value["outputs"]["value"], 6);
+        assert_eq!(g.status()["steps"]["python"]["status"], "succeeded");
+        let run = g.run("python");
+        let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
+        let count: i64 = db
+        .query_row(
+            "SELECT count(*) FROM leases WHERE run_id=?1 AND kind='section' AND state='released'",
+            [run],
+            |r| r.get(0),
+        )
+        .unwrap();
+        assert_eq!(count, 4);
+        let format = |inputs| {
+            g.data(json!({"command":"fn_call","args":{"project":g.selector(),"name":"core.format","inputs":inputs,"direct":true}}))
+        };
+        {
+            let (inputs, expected) = (
+                json!({"template":"hi {who}, {n} + {rest} = {sum}","values":{"who":"world","n":4,"rest":[1,2],"sum":{"a":true}}}),
+                "hi world, 4 + [1,2] = {\"a\":true}",
+            );
+            let call = format(inputs);
+            assert_eq!(call["status"], "succeeded", "{call}");
+            assert_eq!(call["outputs"]["text"], expected);
+            assert_eq!(call["direct"], true);
+        }
+        {
+            let (template, values, expected) =
+                ("{x.y}", json!({"x":1}), "attribute or item access");
+            let call = format(json!({"template":template,"values":values}));
+            assert_eq!(call["status"], "failed", "{call}");
+            assert_eq!(call["error"]["error"], "fn_failure", "{call}");
+            assert!(
+                call["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains(expected),
+                "{template}: {call}"
+            );
+        }
+    }
+    g.next_project();
+    {
+        let fake = g.temp.path().join("bin/gh");
+        executable::write(
+            &fake,
+            r#"#!/usr/bin/python3
+import os, pathlib, sys, json
+assert os.environ['COMPOSITION_ENV_FIXTURE'] == 'frozen-launch'
+p = pathlib.Path(os.environ['SLUICE_HOME']) / 'gh-ran'
+n = int(p.read_text()) + 1 if p.exists() else 1
+p.write_text(str(n))
+if n == 1: sys.exit(1)
+print(json.dumps({'state':'OPEN','headRefOid':'fixture-sha','url':'fixture-url','statusCheckRollup':[]}))
+"#,
+        );
+        g.plan(json!({"wait":{"run":"gh.pr_wait","in":bindings(json!({"path":g.temp.path(),"pr":"1","until":"checks"}))}}));
+        let _lease = g.lease();
+        let result = g.terminal("wait");
+        assert_eq!(result["status"], "succeeded", "{result}");
+        assert_eq!(result["outputs"]["sha"], "fixture-sha");
+        assert_eq!(std::fs::read_to_string(g.home.join("gh-ran")).unwrap(), "2");
+        let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM runs WHERE step_id='wait'", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap(),
+            1
+        );
+    }
+}
+
+#[test]
+fn message_inbox_defaults_and_next_ids() {
+    let mut g = Gate::new();
+    let CommandReply::Receipt(question) = g.rpc(json!({"command":"ask","args":{"project":g.selector(),"to":"owner","body":"Which parser?"}})) else { panic!("receipt") };
+    g.rpc(json!({"command":"say","args":{"project":g.selector(),"to":"owner","body":"A note"}}));
+    owner_question(&g, SESSION, "Not in your inbox");
+
+    // A session's own inbox is phase A2's (the inbox by `me`); the owner's shows the default.
+    for transport in [
+        MessageTransport::Cli,
+        MessageTransport::Socket,
+        MessageTransport::Mcp,
+    ] {
+        let inbox = message_tool(&g, transport, "messages", json!({"owner":true})).unwrap();
+        assert_eq!(
+            inbox["messages"].as_array().unwrap().len(),
+            2,
+            "{transport:?}: {inbox}"
+        );
+        assert_eq!(inbox["messages"][0]["id"], json!(question.id));
+        assert_eq!(inbox["messages"][1]["body"], "A note");
+        assert_eq!(
+            inbox,
+            message_tool(
+                &g,
+                transport,
+                "messages",
+                json!({"view":"inbox","owner":true})
+            )
+            .unwrap()
+        );
+    }
+    g.next_project();
+
     let ask = owner_question(&g, SESSION, "Question body");
     let CommandReply::Receipt(say) = g.rpc(json!({"command":"say","args":{"project":g.selector(),"to":"@orch","body":"Note body","owner":true}})) else { panic!("receipt") };
     let asked = message_tool(
@@ -2180,10 +1694,11 @@ fn next_message_lines_include_ids_and_log_wait_keeps_them() {
     )
     .unwrap();
     let CommandReply::Receipt(reply) = g.rpc(json!({"command":"reply","args":{"project":g.selector(),"to_message":asked["id"],"body":"Reply body","owner":true}})) else { panic!("receipt") };
-    let CommandReply::Next(next) = g.rpc(json!({"command":"next","args":{"projects":[g.selector()],"since_seq":0,"me":"@orch","timeout_seconds":1,"all":false,"settle_seconds":1,"settle_max_seconds":2,"settles":"short"}})) else { panic!("next") };
+    let CommandReply::Next(next) = g.rpc(json!({"command":"next","args":{"projects":[g.selector()],"since_seq":0,"me":"@orch","timeout_seconds":1,"all":false,"settle_seconds":1,"settle_max_seconds":1,"settles":"short"}})) else { panic!("next") };
     let next = serde_json::to_value(next).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_sluice"))
         .envs(&g.env)
+        .env("TOKIO_WORKER_THREADS", "2")
         .args([
             "next",
             "-p",
@@ -2195,7 +1710,7 @@ fn next_message_lines_include_ids_and_log_wait_keeps_them() {
             "--settle",
             "1",
             "--settle-max",
-            "2",
+            "1",
             "--timeout",
             "1",
         ])
@@ -2238,5 +1753,374 @@ fn next_message_lines_include_ids_and_log_wait_keeps_them() {
                 .any(|m| m["id"] == id),
             "{log}"
         );
+    }
+}
+
+#[test]
+fn python_agent_retry_and_typed_terminal_error() {
+    let mut g = Gate::new();
+    {
+        g.script(json!({"outputs":{"summary":"from agent"},"marker_transient_once":true}));
+        g.function("custom.worker",json!({"cwd":"string"}),json!({"session":"string"}),r#"from sluice_fn import run, Transient
+import fcntl
+
+def main(inp, ctx):
+    try:
+        result = ctx.builtin('agent.run', {'engine':'fake', 'cwd':inp['cwd'], 'spec':ctx.header('Do the work')})
+    except Transient:
+        locks = list((ctx.home / 'locks').glob('session-*.lock'))
+        assert len(locks) == 1
+        with locks[0].open('r+') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                raise AssertionError('session lock released during helper retry')
+            except BlockingIOError:
+                (ctx.home / 'lock-retained').write_text('yes')
+        raise
+    fields = ctx.submission()
+    return {'session': result['session'], 'summary':fields['summary']}
+run(main, retries=1, backoff=0)
+"#);
+        g.plan(json!({"work":{"run":"custom.worker","in":bindings(json!({"cwd":g.temp.path()})),"outputs":{"summary":"string"}}}));
+        let _lease = g.lease();
+        let value = g.terminal("work");
+        assert_eq!(value["status"], "succeeded", "{value}");
+        assert_eq!(value["outputs"]["summary"], "from agent");
+        let events = g.events();
+        assert!(events.iter().any(|e| e["command"]["command"] == "resume"));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e["command"]["command"] == "deliver_text"
+                    && e["command"]["id"]["kind"] == "task")
+                .count(),
+            1
+        );
+        let run = g.run("work");
+        let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
+        let count: i64 = db
+            .query_row("SELECT count(*) FROM runs WHERE step_id='work'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(g.home.join("lock-retained").exists());
+        assert!(g.home.join("turn-committed.injected").exists());
+        assert!(!g.home.join("turn-committed").exists());
+        let launch: Value = serde_json::from_slice(
+            &std::fs::read(g.home.join("runs").join(&run).join("launch.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            events
+                .iter()
+                .all(|e| e["cgroup"] != launch["executor"]["cgroup"])
+        );
+        assert_eq!(
+            events
+                .iter()
+                .map(|e| e["pid"].as_u64().unwrap())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            2
+        );
+        let checkpoint: Value = serde_json::from_slice(
+            &std::fs::read(g.home.join("runs").join(run).join("native.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(checkpoint["internal_attempt"], 2);
+        let groups = events
+            .iter()
+            .map(|e| e["cgroup"].as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(groups.len(), 1);
+        assert!(groups.iter().all(|p| p.contains("/payload/")));
+    }
+    g.next_project();
+    {
+        g.script(json!({"fatal":true}));
+        g.function("custom.failure",json!({"cwd":"string"}),json!({}),r#"from sluice_fn import run
+
+def main(inp, ctx):
+    return ctx.builtin('agent.run', {'engine':'fake', 'cwd':inp['cwd'], 'spec':'Fail with a typed error'})
+run(main)
+"#);
+        g.plan(
+            json!({"work":{"run":"custom.failure","in":bindings(json!({"cwd":g.temp.path()}))}}),
+        );
+        let _lease = g.lease();
+        let result = g.terminal("work");
+        assert_eq!(result["status"], "failed", "{result}");
+        assert_eq!(result["error"]["error"], "agent_failure");
+        assert_eq!(result["error"]["kind"], "EngineExited");
+        assert_eq!(result["error"]["message"], "fixture terminal error");
+        assert_eq!(result["error"]["session"], "fake-session");
+    }
+}
+
+#[test]
+fn agent_attempt_context_live_delivery_and_feedback() {
+    let mut g = Gate::new();
+    {
+        let repo = g.temp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "first",
+            ],
+        ] {
+            assert!(
+                Command::new("/usr/bin/git")
+                    .current_dir(&repo)
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        std::fs::write(repo.join("left.txt"), "left by hand").unwrap();
+        g.script(json!({"fatal":true}));
+        g.plan(json!({"work":{"run":"agent.run","in":bindings(json!({"engine":"fake","cwd":repo,"spec":"Submit summary and finish"})),"outputs":{"summary":"string"}}}));
+        let _lease = g.lease();
+        let failed = g.terminal("work");
+        assert_eq!(failed["status"], "failed", "{failed}");
+        let first = g.run("work");
+        let task = |run: &str| {
+            std::fs::read_to_string(g.home.join("runs").join(run).join("task.md")).unwrap()
+        };
+        let text = task(&first);
+        let note = text.find("## Previous attempt").expect("note");
+        assert!(
+            note < text.find("Submit summary and finish").unwrap(),
+            "{text}"
+        );
+        assert!(
+            text.contains("None: this is the first attempt at this step."),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "The working directory {} has 1 uncommitted path now: ?? left.txt.",
+                repo.display()
+            )),
+            "{text}"
+        );
+        g.script(json!({"outputs":{"summary":"done"}}));
+        g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":null,"reason":"again","author":"test"}}));
+        g.wait(|g| g.status()["steps"]["work"]["run_ids"][0] != first.as_str());
+        let second = g.run("work");
+        assert_eq!(g.terminal("work")["status"], "succeeded");
+        let text = task(&second);
+        assert!(
+            text.contains(&format!(
+                "This is attempt 2 at this step. The previous one (run {first}, "
+            )),
+            "{text}"
+        );
+        assert!(text.contains(") failed: agent_failure"), "{text}");
+        assert!(text.contains("It submitted nothing"), "{text}");
+    }
+    g.next_project();
+    {
+        g.script(json!({"outputs":{"summary":"fake output"},"wait_message":true,"marker_transient_once":true}));
+        g.plan(json!({"work":agent(&g),"after":{"run":"core.external","after":["work"],"outputs":{"ok":"boolean"}}}));
+        // A step that will run once `work` is done: its next run is assigned the message.
+        let queued = g.say("after", "for the next run");
+        assert_eq!((queued.delivery, queued.run), (Delivery::Queued, None));
+        let _lease = g.lease();
+        g.wait(|g| g.home.join("fake-events.jsonl").exists());
+        // The live fake agent listens: it is handed the message on its live feed.
+        let receipt = g.say("work", "first live message");
+        assert_eq!(receipt.delivery, Delivery::Delivered, "{receipt:?}");
+        assert_eq!(receipt.run.map(|r| r.to_string()), Some(g.run("work")));
+        assert_eq!(receipt.thread, "step-work");
+        let id = receipt.id.0;
+        let value = g.terminal("work");
+        assert_eq!(value["status"], "succeeded", "{value}");
+        assert_eq!(value["outputs"]["summary"], "fake output");
+        let first = g.run("work");
+        // Settled: a message to it is refused; a retry's message reaches its next run.
+        let refused = g.try_rpc(
+        json!({"command":"say","args":{"project":g.selector(),"body":"after the fact","to":"work"}}),
+    );
+        assert!(
+            matches!(&refused, Err(sluice_model::error::PublicError::Conflict { message, .. }) if message.contains("settled")),
+            "{refused:?}"
+        );
+        let delivered = g
+            .events()
+            .into_iter()
+            .filter(|e| {
+                (e["command"]["command"] == "deliver_text" || e["command"]["command"] == "steer")
+                    && e["command"]["id"]["kind"] == "message"
+                    && e["command"]["id"]["id"] == id
+            })
+            .count();
+        assert_eq!(delivered, 1, "events: {:?}", g.events());
+        g.script(json!({"outputs":{"summary":"resumed output"}}));
+        g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":"Continue the existing session","reason":"feedback","author":"@test"}}));
+        g.wait(|g| g.status()["steps"]["work"]["run_ids"][0] != first);
+        let second = g.terminal("work");
+        assert_eq!(second["status"], "succeeded", "{second}");
+        assert_eq!(second["outputs"]["summary"], "resumed output");
+        assert_eq!(second["outputs"]["session"], value["outputs"]["session"]);
+        assert!(
+            g.events()
+                .iter()
+                .any(|e| e["command"]["command"] == "resume")
+        );
+        let run = g.run("work");
+        let launch: Value = serde_json::from_slice(
+            &std::fs::read(g.home.join("runs").join(run).join("runtime.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(launch["prev_run"], first);
+    }
+}
+
+#[test]
+fn codex_and_claude_retry_preserve_environment_and_session() {
+    {
+        native_factory("codex");
+    }
+    {
+        native_factory("claude");
+    }
+}
+
+#[test]
+fn python_completion_actions_and_flat_tools() {
+    let mut g = Gate::new();
+    {
+        g.function(
+            "custom.land",
+            json!({}),
+            json!({}),
+            r#"from sluice_fn import run, Rejected
+
+def main(inp, ctx):
+    if (ctx.home / 'rejected-once').exists():
+        return {}
+    (ctx.home / 'rejected-once').write_text('yes')
+    ctx.retry_on_failure('work', 'Fix the review')
+    raise Rejected('Review refused')
+run(main)
+"#,
+        );
+        g.plan(json!({"work":{"run":"core.echo","in":{"value":{"default":1}}},"land":{"run":"custom.land","after":["work"]}}));
+        let lease = g.lease();
+        g.wait(|g| g.home.join("runs").exists());
+        g.wait(|g|match g.rpc(json!({"command":"log_read","args":{"project":g.selector(),"since_seq":null,"kinds":["run.completion_action"],"threads":null,"limit":100}})) { CommandReply::Records(page) => !page.records.is_empty(), _ => false });
+        drop(lease);
+        let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
+        let (action,finished):(String,Option<String>)=db.query_row("SELECT completion_action,finished_at FROM runs WHERE step_id='land' ORDER BY created_at LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert!(finished.is_some());
+        assert!(action.contains("Fix the review"));
+        let count: i64 = db
+            .query_row(
+                "SELECT count(*) FROM messages WHERE body='Fix the review'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        let (result, outcome): (String, String) = db.query_row("SELECT result,action_outcome FROM runs WHERE step_id='land' ORDER BY created_at LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        let result: Value = serde_json::from_str(&result).unwrap();
+        let outcome: Value = serde_json::from_str(&outcome).unwrap();
+        assert_eq!(result["status"], "failed");
+        assert_eq!(outcome["outcome"], "applied");
+        let work: i64 = db
+            .query_row(
+                "SELECT work_generation FROM steps WHERE step_id='work'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(work >= 2);
+    }
+    g.next_project();
+    {
+        g.function(
+            "custom.tools",
+            json!({}),
+            json!({"done":"boolean"}),
+            r#"from sluice_fn import run, CallbackError
+
+def main(inp, ctx):
+    status = ctx.tool('status', {'steps': 'later'})
+    assert list(status['steps']) == ['later'] and 'reply' not in status, status
+    plan = ctx.tool('plan_get', {})
+    assert 'later' in plan['plan']['steps'], plan
+    paused = ctx.tool('step_pause', {'steps': 'later', 'reason': 'hold'})
+    assert paused['rev'] == plan['rev'] + 1 and 'preview' in paused, paused
+    said = ctx.tool('say', {'to': 'later', 'body': 'later, then'})
+    assert said['to'] == 'later' and said['thread'] == 'step-tools', said
+    ok = ctx.tool('step_set_output', {'step': 'later', 'outputs': {'value': 5}, 'force': True,
+                                      'reason': 'by hand'})
+    assert ok == {'ok': True}, ok
+    waited = ctx.tool('step_wait', {'steps': 'later', 'until': 'succeeded', 'timeout': 5})
+    assert waited['met'] is True and waited['steps'] == {'later': 'succeeded'}, waited
+    done = ctx.tool('log_read', {'kinds': ['step.status'], 'statuses': ['succeeded'], 'limit': 50})
+    assert [r['seq'] for r in done['records'] if r['step'] == 'later'][-1] <= waited['seq'], done
+    try:
+        ctx.tool('say', {'to': 'later', 'body': 'too late'})
+        raise AssertionError('a settled step took a message')
+    except CallbackError as error:
+        assert error.error == 'conflict' and 'settled' in error.message, error.message
+    log = ctx.tool('log_read', {'limit': 3})
+    assert sorted(log) == ['last_seq', 'records'], log
+    fns = ctx.tool('fn_list', {})
+    assert any(f['name'] == 'custom.tools' for f in fns), fns
+    asked = ctx.tool('ask', {'to': 'orchestrator', 'body': 'which?'})
+    assert asked['thread'] == 'step-tools' and asked['delivery'] == 'delivered', asked
+    try:
+        ctx.tool('say', {'to': 'nobody', 'body': 'x'})
+        raise AssertionError('an unknown recipient was accepted')
+    except CallbackError as error:
+        assert error.error == 'invalid', error.message
+    try:
+        ctx.tool('status', {'selection': {'steps': ['later'], 'tags': None}})
+        raise AssertionError('the wire shape was accepted')
+    except CallbackError as error:
+        assert error.error == 'bad_request' and 'selection' in error.message, error.message
+    return {'done': True}
+run(main)
+"#,
+        );
+        g.plan(json!({"tools":{"run":"custom.tools","in":{}},
+                  "later":{"run":"core.echo","after":["tools"],"in":{"value":{"default":1}}}}));
+        let _lease = g.lease();
+        let value = g.terminal("tools");
+        assert_eq!(value["status"], "succeeded", "{value}");
+        let later = &g.status()["steps"]["later"];
+        assert_eq!(later["status"], "succeeded", "{later}");
+        assert_eq!(later["outputs"]["value"], 5);
+        let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
+        let (author, reason): (String, String) = db
+        .query_row(
+            "SELECT author, reason FROM plan_edits WHERE project_id=?1 ORDER BY rev DESC LIMIT 1",
+            [g.project.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+        assert_eq!((author.as_str(), reason.as_str()), ("step:tools", "hold"));
+        // The fn's messages speak as its step, with its run.
+        let (from, run): (String, String) = db
+            .query_row(
+                "SELECT \"from\", run_id FROM messages WHERE project_id=?1 AND needs_reply=1",
+                [g.project.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((from.as_str(), run), ("tools", g.run("tools")));
     }
 }

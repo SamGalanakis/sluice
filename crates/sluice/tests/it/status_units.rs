@@ -1,9 +1,7 @@
 //! `status` (SPEC §8) through the coordinator socket on a scratch home: done-unit folding,
 //! selection, `brief`, and the units view's rows, state filter and refusals, over the MCP
 //! flat arguments and `sluice tool status`.
-#[allow(dead_code)]
-#[path = "../../../tests/support/mod.rs"]
-mod support;
+use crate::support;
 
 use serde_json::{Value, json};
 use sluice_model::{
@@ -24,8 +22,8 @@ use std::time::Duration;
 use support::home::ScratchHome;
 use tokio_util::sync::CancellationToken;
 
-/// The model a unit's agent step binds: the retired string for most, a model object for two,
-/// so the units view shows both.
+// The model a unit's agent step binds: the retired string for most, a model object for two,
+// so the units view shows both.
 fn model(unit: &str) -> Value {
     match unit {
         "later" => json!({"type":"normal","model":"gpt-6-luna","effort":"max"}),
@@ -35,7 +33,7 @@ fn model(unit: &str) -> Value {
         _ => json!("sol"),
     }
 }
-/// Accepts every launch and never completes it: a launched step stays running.
+// Accepts every launch and never completes it: a launched step stays running.
 #[derive(Clone)]
 struct Fake;
 impl FnHost for Fake {
@@ -182,6 +180,7 @@ fn names(view: &Value) -> Vec<String> {
 fn cli(home: &std::path::Path, args: &str) -> std::process::Output {
     std::process::Command::new(env!("CARGO_BIN_EXE_sluice"))
         .env("SLUICE_HOME", home)
+        .env("TOKIO_WORKER_THREADS", "2")
         .env_remove("SLUICE_STEP")
         .env_remove("SLUICE_AUTHOR")
         .env_remove("SLUICE_RUN_ID")

@@ -1,7 +1,5 @@
-#[path = "../../../tests/support/executable.rs"]
-mod executable;
-#[path = "fixtures/install_support.rs"]
-mod support;
+use crate::executable;
+use crate::install_support as support;
 use serde_json::{Value, json};
 use sluice::{
     install::Installation,
@@ -13,6 +11,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
+const SCHEMA: i64 = sluice_store::schema::SCHEMA_VERSION;
+
 fn synthetic_release(root: &Path) -> PathBuf {
     let release = root.join("release");
     for dir in ["bin", "python/sluice_fn", "tmux/bin", "assets"] {
@@ -75,10 +75,63 @@ fn synthetic_release(root: &Path) -> PathBuf {
     release
 }
 #[test]
-fn p7_release_manifest_verifies_bytes_and_doctor_reports_tampered_helper() {
+fn slow_release_schema_integrity_protocol_and_doctor_tamper() {
     let gate = support::Gate::new();
     let release = synthetic_release(gate.root.path());
+    {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let account = PathBuf::from(std::env::var_os("HOME").unwrap());
+        for script in ["build-release", "deploy"] {
+            let mut command = gate.command(&repo.join("scripts").join(script), &[]);
+            if script == "build-release" {
+                command.arg(account.join(".local/bin"));
+            } else {
+                command
+                    .args(["HEAD", "--prefix"])
+                    .arg(account.join(".local/share/sluice"));
+            }
+            let output = command.output().unwrap();
+            assert!(!output.status.success());
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("Refusing")
+                    || String::from_utf8_lossy(&output.stderr).contains("refuse")
+            );
+        }
+    }
     verify(&release).unwrap();
+    let schema = gate
+        .command(Path::new(env!("CARGO_BIN_EXE_sluice")), &["home", "schema"])
+        .env("SLUICE_HOME", gate.root.path().join("never-created"))
+        .env("TOKIO_WORKER_THREADS", "2")
+        .output()
+        .unwrap();
+    assert!(schema.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&schema.stdout).unwrap(),
+        json!({"schema":SCHEMA})
+    );
+    assert!(!gate.root.path().join("never-created").exists());
+    let path = release.join("manifest.json");
+    let manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let mut legacy = manifest.clone();
+    legacy.as_object_mut().unwrap().remove("schema");
+    std::fs::write(&path, legacy.to_string()).unwrap();
+    assert_eq!(verify(&release).unwrap().schema, 1);
+    std::fs::write(&path, manifest.to_string()).unwrap();
+    {
+        let path = release.join("manifest.json");
+        let mut manifest: Manifest =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        manifest.files.insert("../escape".into(), "0".repeat(64));
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(verify(&release).is_err());
+        manifest.files.remove("../escape");
+        manifest.guardian_protocol_major += 1;
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(verify(&release).is_err());
+        manifest.guardian_protocol_major -= 1;
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    }
     let install = Installation::at(gate.install.clone()).unwrap();
     install.fence("test".into()).unwrap();
     install.select(&release, &gate.home).unwrap();
@@ -99,42 +152,7 @@ fn p7_release_manifest_verifies_bytes_and_doctor_reports_tampered_helper() {
             .contains("python/sluice_fn")
     );
 }
-#[test]
-fn p7_release_manifest_paths_and_protocol_are_checked_before_use() {
-    let gate = support::Gate::new();
-    let release = synthetic_release(gate.root.path());
-    let path = release.join("manifest.json");
-    let mut manifest: Manifest = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    manifest.files.insert("../escape".into(), "0".repeat(64));
-    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    assert!(verify(&release).is_err());
-    manifest.files.remove("../escape");
-    manifest.guardian_protocol_major += 1;
-    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    assert!(verify(&release).is_err());
-}
-#[test]
-fn p7_release_release_scripts_refuse_protected_test_paths_before_building() {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let gate = support::Gate::new();
-    let account = PathBuf::from(std::env::var_os("HOME").unwrap());
-    for script in ["build-release", "deploy"] {
-        let mut command = gate.command(&repo.join("scripts").join(script), &[]);
-        if script == "build-release" {
-            command.arg(account.join(".local/bin"));
-        } else {
-            command
-                .args(["HEAD", "--prefix"])
-                .arg(account.join(".local/share/sluice"));
-        }
-        let output = command.output().unwrap();
-        assert!(!output.status.success());
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("Refusing")
-                || String::from_utf8_lossy(&output.stderr).contains("refuse")
-        );
-    }
-}
+
 fn helper_fixture(gate: &support::Gate, release: &Path) {
     let python = release.join("python");
     let fixture = gate.root.path().join("helper-fixture.py");
@@ -166,94 +184,11 @@ fn helper_fixture(gate: &support::Gate, release: &Path) {
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["outputs"]["value"], 42);
 }
-/// A release carries the licence of every face the dashboard serves, and the manifest of their
-/// bytes: `licenses/fonts/<family>/LICENSE` and `licenses/fonts/SHA256SUMS`, as the source tree
-/// has them, each in the release manifest. Cheap: `cargo` is a stub on PATH and the prefix holds
-/// a stub binary and private tmux, so only the packaging runs.
-#[test]
-fn a_release_ships_the_font_licences() {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .unwrap();
-    let root = tempfile::tempdir().unwrap();
-    let stubs = root.path().join("stubs");
-    std::fs::create_dir_all(&stubs).unwrap();
-    let stub = |path: &Path, body: &str| executable::write(path, format!("#!/bin/sh\n{body}\n"));
-    stub(
-        &stubs.join("cargo"),
-        "if [ \"$1\" = build ]; then\n\
-         [ \"${CARGO_TARGET_DIR+x}\" != x ] || exit 1\n\
-         [ \"${CARGO_BUILD_TARGET_DIR+x}\" != x ] || exit 1\n\
-         [ \"$2\" = --target-dir ] && [ \"$3\" = \"${TMPDIR%/tmp}/target\" ] || exit 1\n\
-         fi\n\
-         echo 'cargo stub'",
-    );
-    let prefix = root.path().join("prefix");
-    let target = prefix.join(".build/target/release");
-    std::fs::create_dir_all(&target).unwrap();
-    stub(
-        &target.join("sluice"),
-        &format!(
-            "echo '{{\"schema\": {}}}'",
-            sluice_store::schema::SCHEMA_VERSION
-        ),
-    );
-    let tmux = prefix.join(".build/private-tmux");
-    std::fs::create_dir_all(&tmux).unwrap();
-    std::fs::write(tmux.join("tmux-manifest.json"), "{}").unwrap();
-    let path = std::env::join_paths(std::iter::once(stubs.clone()).chain(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    )))
-    .unwrap();
-    let build = Command::new(repo.join("scripts/build-release"))
-        .arg(&prefix)
-        .env("PATH", path)
-        .env("SLUICE_BUILD_GIT_SHA", "0".repeat(40))
-        .output()
-        .unwrap();
-    assert!(
-        build.status.success(),
-        "build: {}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-    // the release's path is the last line (the stub's own words come before it)
-    let release = PathBuf::from(
-        String::from_utf8(build.stdout)
-            .unwrap()
-            .trim()
-            .lines()
-            .last()
-            .unwrap(),
-    );
-    // the stubbed tmux is no real one, so the manifest is read as written, not verified
-    let manifest: Value =
-        serde_json::from_slice(&std::fs::read(release.join("manifest.json")).unwrap()).unwrap();
-    let files = manifest["files"].as_object().unwrap();
-    let fonts = repo.join("crates/sluice-web/assets/fonts");
-    let mut families = 0;
-    for family in std::fs::read_dir(&fonts).unwrap() {
-        let family = family.unwrap().path();
-        if !family.is_dir() {
-            continue;
-        }
-        families += 1;
-        let name = family.file_name().unwrap().to_string_lossy().into_owned();
-        let shipped = format!("licenses/fonts/{name}/LICENSE");
-        assert_eq!(
-            std::fs::read(release.join(&shipped)).unwrap(),
-            std::fs::read(family.join("LICENSE")).unwrap(),
-            "{shipped}"
-        );
-        assert!(files.contains_key(&shipped), "{shipped}");
-    }
-    assert!(families >= 22, "{families} families");
-    assert_eq!(
-        std::fs::read(release.join("licenses/fonts/SHA256SUMS")).unwrap(),
-        std::fs::read(fonts.join("SHA256SUMS")).unwrap()
-    );
-    assert!(files.contains_key("licenses/fonts/SHA256SUMS"));
-}
+// A release carries the licence of every face the dashboard serves, and the manifest of their
+// bytes: `licenses/fonts/<family>/LICENSE` and `licenses/fonts/SHA256SUMS`, as the source tree
+// has them, each in the release manifest. Cheap: `cargo` is a stub on PATH and the prefix holds
+// a stub binary and private tmux, so only the packaging runs.
+
 #[test]
 #[ignore = "P7 real locked release build and delegated fixture guardian across deploy; scratch prefix only"]
 fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
@@ -708,8 +643,8 @@ fn doctor_probes_engines_on_path_without_their_homes() {
 // wrapper that execs this build's sluice) and this checkout's private tmux, so build-release
 // runs only its packaging and the release it makes verifies for real.
 
-/// The commit whose build-release ordered a release's files by `Path` (by component), so a
-/// tree holding `a/x` and `a-b/x` got a content id that `release::verify` never recomputes.
+// The commit whose build-release ordered a release's files by `Path` (by component), so a
+// tree holding `a/x` and `a-b/x` got a content id that `release::verify` never recomputes.
 const PATH_ORDER_BUILD_RELEASE: &str = "2f3823ef561bf06142cb2f6e2076a764afd3bfd1";
 
 fn repo() -> PathBuf {
@@ -759,7 +694,7 @@ fn copy_tree(from: &Path, to: &Path) {
         }
     }
 }
-/// The stub `cargo` directory and a prefix whose build cache holds this checkout's private tmux.
+// The stub `cargo` directory and a prefix whose build cache holds this checkout's private tmux.
 fn packaging(root: &Path) -> (PathBuf, PathBuf) {
     let stubs = root.join("stubs");
     std::fs::create_dir_all(&stubs).unwrap();
@@ -781,8 +716,8 @@ fn stub_path(stubs: &Path) -> std::ffi::OsString {
     )
     .unwrap()
 }
-/// The binary the next build-release packages: a wrapper that marks its processes with
-/// `FIXTURE_RELEASE=<label>`, runs `before` and execs this build's sluice.
+// The binary the next build-release packages: a wrapper that marks its processes with
+// `FIXTURE_RELEASE=<label>`, runs `before` and execs this build's sluice.
 fn wrapper(prefix: &Path, label: &str, before: &str) {
     let target = prefix.join(".build/target/release");
     std::fs::create_dir_all(&target).unwrap();
@@ -794,9 +729,9 @@ fn wrapper(prefix: &Path, label: &str, before: &str) {
         ),
     );
 }
-/// A source tree build-release and deploy can run from: the given build-release, this
-/// checkout's deploy and fn helper, this build's schema, and one font family per name (each
-/// with its licence, beside a SHA256SUMS).
+// A source tree build-release and deploy can run from: the given build-release, this
+// checkout's deploy and fn helper, this build's schema, and one font family per name (each
+// with its licence, beside a SHA256SUMS).
 fn source_tree(root: &Path, families: &[&str], build_release: &str) -> PathBuf {
     let source = root.join("source");
     std::fs::create_dir_all(source.join("scripts")).unwrap();
@@ -839,7 +774,7 @@ fn path_order_build_release() -> String {
         ],
     )
 }
-/// Runs `source`'s build-release into `prefix` and returns the release it printed.
+// Runs `source`'s build-release into `prefix` and returns the release it printed.
 fn build(source: &Path, prefix: &Path, stubs: &Path, sha: &str) -> PathBuf {
     let output = Command::new(source.join("scripts/build-release"))
         .arg(prefix)
@@ -858,14 +793,14 @@ fn build(source: &Path, prefix: &Path, stubs: &Path, sha: &str) -> PathBuf {
     )
 }
 
-/// The release id is the sha256 of `files` as `release::verify` serialises its
-/// `BTreeMap<String, String>`: keys in byte order. A tree with a directory beside a longer
-/// sibling of the same prefix (`a/x` and `a-b/x`, as the fonts `overpass/` and
-/// `overpass-mono/` are) sorts differently by `Path` components, which build-release used, and
-/// every such release failed `install select` with "release content id mismatch". The odd
-/// names hold build-release's JSON to serde_json's escaping as well.
+// The release id is the sha256 of `files` as `release::verify` serialises its
+// `BTreeMap<String, String>`: keys in byte order. A tree with a directory beside a longer
+// sibling of the same prefix (`a/x` and `a-b/x`, as the fonts `overpass/` and
+// `overpass-mono/` are) sorts differently by `Path` components, which build-release used, and
+// every such release failed `install select` with "release content id mismatch". The odd
+// names hold build-release's JSON to serde_json's escaping as well.
 #[test]
-fn a_release_whose_tree_has_prefix_sibling_directories_verifies() {
+fn slow_release_packaging_hashes_names_and_ships_licences() {
     let root = tempfile::tempdir().unwrap();
     let source = source_tree(root.path(), &["a", "a-b"], &current_build_release());
     let assets = source.join("crates/sluice-web/assets");
@@ -910,11 +845,30 @@ fn a_release_whose_tree_has_prefix_sibling_directories_verifies() {
     let mut sorted = keys.clone();
     sorted.sort();
     assert_eq!(keys, sorted);
+    for family in ["a", "a-b"] {
+        let name = format!("licenses/fonts/{family}/LICENSE");
+        assert_eq!(
+            std::fs::read(release.join(&name)).unwrap(),
+            std::fs::read(
+                source
+                    .join("crates/sluice-web/assets/fonts")
+                    .join(family)
+                    .join("LICENSE")
+            )
+            .unwrap()
+        );
+        assert!(manifest.files.contains_key(&name));
+    }
+    assert_eq!(
+        std::fs::read(release.join("licenses/fonts/SHA256SUMS")).unwrap(),
+        std::fs::read(source.join("crates/sluice-web/assets/fonts/SHA256SUMS")).unwrap()
+    );
+    assert!(manifest.files.contains_key("licenses/fonts/SHA256SUMS"));
 }
 
-/// A scratch installation selecting a release built from a scratch source, its coordinator and
-/// loop running as the test's children and registered in services.json as a deploy records
-/// them, and the deploy that follows in fixture mode (plain child services).
+// A scratch installation selecting a release built from a scratch source, its coordinator and
+// loop running as the test's children and registered in services.json as a deploy records
+// them, and the deploy that follows in fixture mode (plain child services).
 struct Deployment {
     gate: support::Gate,
     stubs: PathBuf,
@@ -981,11 +935,8 @@ impl Deployment {
     }
     /// A committed source tree whose release the deploy builds around the candidate wrapper.
     fn candidate(&self, families: &[&str], build_release: &str, before: &str) -> PathBuf {
-        let source = source_tree(
-            &self.gate.root.path().join("candidate"),
-            families,
-            build_release,
-        );
+        let candidate_root = tempfile::tempdir_in(self.gate.root.path()).unwrap().keep();
+        let source = source_tree(&candidate_root, families, build_release);
         git(&source, &["init", "-q", "-b", "main"]);
         git(&source, &["add", "."]);
         git(&source, &["commit", "-q", "-m", "candidate"]);
@@ -1071,43 +1022,14 @@ fn start_time(pid: u32) -> Option<String> {
     (fields[0] != "Z").then(|| fields[19].to_owned())
 }
 
-/// A release its own binary refuses (here: one built by the build-release that ordered files
-/// by `Path`, around fonts `a/` and `a-b/`, as 2f3823e's deploy was) stops the deploy before
-/// the fence: the old services keep running, nothing is fenced and nothing is selected.
-#[test]
-fn deploy_refuses_a_release_that_does_not_verify_before_the_fence() {
-    let mut deployment = Deployment::new();
-    let source = deployment.candidate(&["a", "a-b"], &path_order_build_release(), "");
-    let services = std::fs::read(deployment.gate.install.join("services.json")).unwrap();
-    let output = deployment.deploy(&source);
-    assert!(!output.status.success(), "{}", text(&output));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("does not verify: release content id mismatch")
-            && stderr.contains("Stopped before the fence: nothing live changed"),
-        "{}",
-        text(&output)
-    );
-    assert!(deployment.old_services_running());
-    let status = deployment.status();
-    assert!(status.fence.is_none(), "{status:?}");
-    assert_eq!(status.selection.unwrap().release_path, deployment.old);
-    assert_eq!(
-        std::fs::read(deployment.gate.install.join("services.json")).unwrap(),
-        services
-    );
-    assert!(
-        deployment.deploy_log().contains(r#""verify": "failed""#),
-        "{}",
-        deployment.deploy_log()
-    );
-}
+// A release its own binary refuses (here: one built by the build-release that ordered files
+// by `Path`, around fonts `a/` and `a-b/`, as 2f3823e's deploy was) stops the deploy before
+// the fence: the old services keep running, nothing is fenced and nothing is selected.
 
-/// A failure between the stop and the unfence brings the previous release back: whatever the
-/// deploy started is stopped, the previous release runs the same three services, the fence is
-/// gone, the dashboard answers, and deploy exits 3 saying so.
-fn deploy_rolls_back(inject: &str, error: &str) {
-    let mut deployment = Deployment::new();
+// A failure between the stop and the unfence brings the previous release back: whatever the
+// deploy started is stopped, the previous release runs the same three services, the fence is
+// gone, the dashboard answers, and deploy exits 3 saying so.
+fn deploy_rolls_back(deployment: &mut Deployment, inject: &str, error: &str) {
     let source = deployment.candidate(&["a", "a-b"], &current_build_release(), inject);
     let output = deployment.deploy(&source);
     assert_eq!(output.status.code(), Some(3), "{}", text(&output));
@@ -1141,70 +1063,14 @@ fn deploy_rolls_back(inject: &str, error: &str) {
         deployment.deploy_log()
     );
 }
-#[test]
-fn deploy_rolls_back_to_the_previous_release_when_select_fails() {
-    deploy_rolls_back(
-        r#"if [ "$1 $2" = "install select" ]; then echo '{"error":"storage","message":"injected select failure"}'; exit 1; fi"#,
-        "install select: injected select failure",
-    );
-}
-#[test]
-fn deploy_rolls_back_to_the_previous_release_when_a_new_service_exits() {
-    // The candidate's coordinator and serve start; its loop exits at once.
-    deploy_rolls_back(
-        r#"if [ "$1" = loop ]; then exit 1; fi"#,
-        "loop exited during restart",
-    );
-}
 
-/// A rollback that fails itself (the previous release no longer verifies, so its doctor
-/// refuses it) keeps the installation fenced and prints the commands that finish it by hand.
-#[test]
-fn deploy_stays_fenced_and_prints_the_recovery_when_the_rollback_fails() {
-    let deployment = Deployment::new();
-    let source = deployment.candidate(
-        &["a", "a-b"],
-        &current_build_release(),
-        r#"if [ "$1 $2" = "install select" ]; then echo '{"error":"storage","message":"injected select failure"}'; exit 1; fi"#,
-    );
-    std::fs::write(deployment.old.join("python/inline_python.py"), "tampered").unwrap();
-    let output = deployment.deploy(&source);
-    assert!(!output.status.success(), "{}", text(&output));
-    assert_ne!(output.status.code(), Some(3), "{}", text(&output));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let sluice = deployment.old.join("bin/sluice");
-    for expected in [
-        format!("the rollback to {} failed", "0".repeat(12)),
-        "The installation stays fenced".into(),
-        format!(
-            "{} install select {} {}",
-            sluice.display(),
-            deployment.old.display(),
-            deployment.gate.home.display()
-        ),
-        format!("{} install unfence", sluice.display()),
-        "deploy failed: install select: injected select failure".into(),
-    ] {
-        assert!(stderr.contains(&expected), "{expected}\n{}", text(&output));
-    }
-    let status = deployment.status();
-    assert!(
-        status.fence.as_ref().unwrap().reason.starts_with("deploy "),
-        "{status:?}"
-    );
-    assert!(
-        deployment
-            .deploy_log()
-            .contains(r#""outcome": "rollback failed""#),
-        "{}",
-        deployment.deploy_log()
-    );
-}
+// A rollback that fails itself (the previous release no longer verifies, so its doctor
+// refuses it) keeps the installation fenced and prints the commands that finish it by hand.
 
-/// A candidate built before `install verify` (its CLI refuses the subcommand) is checked by its
-/// own `install select` on a scratch installation instead, and deploys as before.
+// A candidate built before `install verify` (its CLI refuses the subcommand) is checked by its
+// own `install select` on a scratch installation instead, and deploys as before.
 #[test]
-fn deploy_checks_a_candidate_without_install_verify_by_a_scratch_select() {
+fn slow_deploy_checks_a_candidate_without_install_verify_by_a_scratch_select() {
     let deployment = Deployment::new();
     let source = deployment.candidate(
         &["a", "b"],
@@ -1223,4 +1089,89 @@ fn deploy_checks_a_candidate_without_install_verify_by_a_scratch_select() {
     let selected = status.selection.unwrap().release_path;
     assert_ne!(selected, deployment.old);
     deployment.assert_services(&selected, "candidate");
+}
+
+#[test]
+fn slow_deploy_verification_rollback_and_failed_recovery() {
+    let mut deployment = Deployment::new();
+    {
+        let source = deployment.candidate(&["a", "a-b"], &path_order_build_release(), "");
+        let services = std::fs::read(deployment.gate.install.join("services.json")).unwrap();
+        let output = deployment.deploy(&source);
+        assert!(!output.status.success(), "{}", text(&output));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("does not verify: release content id mismatch")
+                && stderr.contains("Stopped before the fence: nothing live changed"),
+            "{}",
+            text(&output)
+        );
+        assert!(deployment.old_services_running());
+        let status = deployment.status();
+        assert!(status.fence.is_none(), "{status:?}");
+        assert_eq!(status.selection.unwrap().release_path, deployment.old);
+        assert_eq!(
+            std::fs::read(deployment.gate.install.join("services.json")).unwrap(),
+            services
+        );
+        assert!(
+            deployment.deploy_log().contains(r#""verify": "failed""#),
+            "{}",
+            deployment.deploy_log()
+        );
+    }
+    {
+        deploy_rolls_back(
+            &mut deployment,
+            r#"if [ "$1 $2" = "install select" ]; then echo '{"error":"storage","message":"injected select failure"}'; exit 1; fi"#,
+            "install select: injected select failure",
+        );
+    }
+    {
+        // The candidate's coordinator and serve start; its loop exits at once.
+        deploy_rolls_back(
+            &mut deployment,
+            r#"if [ "$1" = loop ]; then exit 1; fi"#,
+            "loop exited during restart",
+        );
+    }
+    {
+        let source = deployment.candidate(
+        &["a", "a-b"],
+        &current_build_release(),
+        r#"if [ "$1 $2" = "install select" ]; then echo '{"error":"storage","message":"injected select failure"}'; exit 1; fi"#,
+    );
+        std::fs::write(deployment.old.join("python/inline_python.py"), "tampered").unwrap();
+        let output = deployment.deploy(&source);
+        assert!(!output.status.success(), "{}", text(&output));
+        assert_ne!(output.status.code(), Some(3), "{}", text(&output));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let sluice = deployment.old.join("bin/sluice");
+        for expected in [
+            format!("the rollback to {} failed", "0".repeat(12)),
+            "The installation stays fenced".into(),
+            format!(
+                "{} install select {} {}",
+                sluice.display(),
+                deployment.old.display(),
+                deployment.gate.home.display()
+            ),
+            format!("{} install unfence", sluice.display()),
+            "deploy failed: install select: injected select failure".into(),
+        ] {
+            assert!(stderr.contains(&expected), "{expected}\n{}", text(&output));
+        }
+        let status = deployment.status();
+        assert!(
+            status.fence.as_ref().unwrap().reason.starts_with("deploy "),
+            "{status:?}"
+        );
+        assert!(
+            deployment
+                .deploy_log()
+                .contains(r#""outcome": "rollback failed""#),
+            "{}",
+            deployment.deploy_log()
+        );
+    }
 }

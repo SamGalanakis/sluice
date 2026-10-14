@@ -1,6 +1,4 @@
-#[allow(dead_code)]
-#[path = "../../../../tests/support/units.rs"]
-mod units;
+use crate::support::home::units;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::CommandReply,
@@ -36,6 +34,7 @@ impl Gate {
     pub fn command(&self, binary: &Path, args: &[&str]) -> Command {
         let mut command = Command::new(binary);
         command
+            .env("TOKIO_WORKER_THREADS", "2")
             .args(args)
             .env("SLUICE_HOME", &self.home)
             .env("SLUICE_INSTALL_DIR", &self.install)

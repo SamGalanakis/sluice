@@ -7,11 +7,8 @@
 //! The cutover needs two releases: the old one the home runs (schema 1) and the candidate. The
 //! old release is the last schema-1 ancestor with the legacy compiler on the first-parent
 //! history, built once into the target directory, and the candidate is this build.
-#[path = "../../../tests/support/executable.rs"]
-mod executable;
-#[allow(dead_code)]
-#[path = "fixtures/install_support.rs"]
-mod support;
+use crate::executable;
+use crate::install_support as support;
 use serde_json::{Value, json};
 use sluice::{install::Installation, release::Manifest};
 use sluice_model::plan_rows::{CutoverReport, RetryAdvice, StopRequest};
@@ -23,7 +20,7 @@ use std::{
 };
 
 const SCHEMA: i64 = sluice_store::schema::SCHEMA_VERSION;
-/// The schema the cutover moves to.
+// The schema the cutover moves to.
 const TARGET: u32 = 3;
 
 fn repo() -> PathBuf {
@@ -76,7 +73,7 @@ fn wait_for(what: &str, limit: Duration, mut predicate: impl FnMut() -> bool) {
     }
 }
 
-/// The schema-1 binary the home runs before the cutover.
+// The schema-1 binary the home runs before the cutover.
 fn old_revision() -> &'static str {
     static REVISION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     REVISION.get_or_init(|| {
@@ -140,7 +137,7 @@ fn old_binary() -> PathBuf {
         .args([
             "build",
             "-j",
-            "8",
+            "4",
             "-p",
             "sluice",
             "--bin",
@@ -165,6 +162,36 @@ fn old_binary() -> PathBuf {
         binary.display()
     );
     std::fs::write(&path, binary.to_string_lossy().as_bytes()).unwrap();
+    binary
+}
+
+fn old_harness() -> PathBuf {
+    let _ = old_binary();
+    let cache = target().join("cutover-old").join(old_revision());
+    let lock = std::fs::File::create(cache.join("harness.lock")).unwrap();
+    lock.lock().unwrap();
+    let binary = cache.join("target/debug/cutover-rehearsal");
+    if binary.is_file() {
+        return binary;
+    }
+    let source = cache.join("src");
+    let harness = source.join("tools/cutover-rehearsal");
+    copy_tree(&repo().join("tools/cutover-rehearsal"), &harness);
+    std::fs::copy(source.join("Cargo.lock"), harness.join("Cargo.lock")).unwrap();
+    let built = Command::new("cargo")
+        .current_dir(&source)
+        .args(["build", "-j", "4", "--manifest-path"])
+        .arg(harness.join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(cache.join("target"))
+        .output()
+        .unwrap();
+    assert!(
+        built.status.success(),
+        "historical rehearsal harness: {}",
+        text(&built)
+    );
+    assert!(binary.is_file());
     binary
 }
 
@@ -200,15 +227,15 @@ fn files(root: &Path, dir: &Path, out: &mut BTreeMap<String, String>) {
         }
     }
 }
-/// A file's SHA-256 in hex, as `sluice_store::artifacts::fingerprint` gives it (by coreutils:
-/// an unoptimized test build hashes a debug binary slowly).
+// A file's SHA-256 in hex, as `sluice_store::artifacts::fingerprint` gives it (by coreutils:
+// an unoptimized test build hashes a debug binary slowly).
 fn sha256(path: &Path) -> String {
     let output = Command::new("sha256sum").arg(path).output().unwrap();
     assert!(output.status.success());
     String::from_utf8(output.stdout).unwrap()[..64].to_owned()
 }
-/// A release as `scripts/build-release` lays it out (the binary, the fn helper, the private
-/// tmux and a manifest that verifies), around an already built binary.
+// A release as `scripts/build-release` lays it out (the binary, the fn helper, the private
+// tmux and a manifest that verifies), around an already built binary.
 fn release(root: &Path, binary: &Path, git_sha: &str, schema: u32) -> PathBuf {
     let stage = tempfile::tempdir_in(root).unwrap().keep();
     std::fs::create_dir_all(stage.join("bin")).unwrap();
@@ -276,8 +303,8 @@ impl Releases {
     }
 }
 
-/// A scratch installation whose selected old release serves a scratch home, its coordinator
-/// and loop plain children registered in services.json as a fixture deploy records them.
+// A scratch installation whose selected old release serves a scratch home, its coordinator
+// and loop plain children registered in services.json as a fixture deploy records them.
 struct Scratch {
     gate: support::Gate,
     releases: Releases,
@@ -461,7 +488,7 @@ impl Scratch {
             .args(extra)
             .env("SLUICE_DEPLOY_PROCESS_FIXTURE", "1")
             .env("SLUICE_DEPLOY_PORT", self.port.to_string())
-            .env("SLUICE_DEPLOY_READY_SECONDS", "120")
+            .env("SLUICE_DEPLOY_READY_SECONDS", "3")
             .output()
             .unwrap()
     }
@@ -539,37 +566,9 @@ fn start_time(pid: u32) -> String {
 
 // ---- the release manifest's schema --------------------------------------------------------
 
-#[test]
-fn home_schema_is_the_store_schema_and_an_older_manifest_reads_as_schema_1() {
-    let home = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_sluice"))
-        .args(["home", "schema"])
-        .env("SLUICE_HOME", home.path().join("never-created"))
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", text(&output));
-    let reply: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(reply, json!({"schema": SCHEMA}));
-    assert!(!home.path().join("never-created").exists());
-    // A manifest written before the field existed is schema 1; a new one round-trips it.
-    let root = tempfile::tempdir_in(target().join("tmp")).unwrap();
-    let built = release(
-        root.path(),
-        Path::new(env!("CARGO_BIN_EXE_sluice")),
-        "f00d",
-        TARGET,
-    );
-    let mut manifest: Value =
-        serde_json::from_slice(&std::fs::read(built.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest["schema"], TARGET);
-    manifest.as_object_mut().unwrap().remove("schema");
-    std::fs::write(built.join("manifest.json"), manifest.to_string()).unwrap();
-    assert_eq!(sluice::release::verify(&built).unwrap().schema, 1);
-}
-
 // ---- ship and deploy refuse an incompatible change -----------------------------------------
 
-/// A scratch repository holding `scripts` and a `schema.rs` at `schema`, committed.
+// A scratch repository holding `scripts` and a `schema.rs` at `schema`, committed.
 fn scratch_repo(root: &Path, schema: i64) -> PathBuf {
     let dir = root.join("repo");
     std::fs::create_dir_all(dir.join("scripts")).unwrap();
@@ -591,7 +590,7 @@ fn scratch_repo(root: &Path, schema: i64) -> PathBuf {
     git(&dir, &["commit", "-q", "-m", "fixture"]);
     dir
 }
-/// A scratch installation selecting a home this build created (at SCHEMA).
+// A scratch installation selecting a home this build created (at SCHEMA).
 fn selected_home(gate: &support::Gate) -> PathBuf {
     assert!(gate.cli(&["query", "SELECT 1"]).status.success());
     let prefix = gate.root.path().join("prefix");
@@ -607,54 +606,10 @@ fn selected_home(gate: &support::Gate) -> PathBuf {
     prefix
 }
 
+// The push is done when the deploy runs, so a deploy that rolls back leaves main ahead of
+// live: ship fails and says so, naming both.
 #[test]
-fn ship_refuses_a_ref_whose_schema_differs_from_the_home_before_anything_moves() {
-    let gate = support::Gate::new();
-    let prefix = selected_home(&gate);
-    let source = scratch_repo(gate.root.path(), SCHEMA + 2);
-    let origin = gate.root.path().join("origin.git");
-    git(
-        gate.root.path(),
-        &["init", "-q", "--bare", origin.to_str().unwrap()],
-    );
-    git(
-        &source,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    for dry in [true, false] {
-        let mut command = gate.command(&source.join("scripts/ship"), &["--prefix"]);
-        command.arg(&prefix).current_dir(&source);
-        if dry {
-            command.arg("--dry-run");
-        }
-        // No live launcher on PATH: the scratch prefix's is the one ship asks.
-        command.env("PATH", "/usr/bin:/bin");
-        let output = command.output().unwrap();
-        assert!(!output.status.success(), "{}", text(&output));
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains(&format!(
-                "is schema {} and the home is schema {SCHEMA}",
-                SCHEMA + 2
-            )) && stderr.contains("--schema-cutover"),
-            "{}",
-            text(&output)
-        );
-    }
-    // Nothing was pushed.
-    assert_eq!(
-        git(
-            gate.root.path(),
-            &["--git-dir", origin.to_str().unwrap(), "for-each-ref"]
-        ),
-        ""
-    );
-}
-
-/// The push is done when the deploy runs, so a deploy that rolls back leaves main ahead of
-/// live: ship fails and says so, naming both.
-#[test]
-fn ship_reports_a_rolled_back_deploy_as_a_failure_with_main_ahead_of_live() {
+fn slow_ship_reports_a_rolled_back_deploy_as_a_failure_with_main_ahead_of_live() {
     let gate = support::Gate::new();
     let prefix = selected_home(&gate);
     let source = scratch_repo(gate.root.path(), SCHEMA);
@@ -710,265 +665,10 @@ fn ship_reports_a_rolled_back_deploy_as_a_failure_with_main_ahead_of_live() {
     );
 }
 
-#[test]
-fn deploy_refuses_an_incompatible_commit_before_building_it() {
-    let gate = support::Gate::new();
-    let prefix = selected_home(&gate);
-    let source = scratch_repo(gate.root.path(), SCHEMA + 2);
-    let output = gate
-        .command(&source.join("scripts/deploy"), &["HEAD", "--prefix"])
-        .arg(&prefix)
-        .output()
-        .unwrap();
-    assert!(!output.status.success(), "{}", text(&output));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("--schema-cutover") && stderr.contains("is schema"),
-        "{}",
-        text(&output)
-    );
-    // Refused before the build: no release, no fence, the old selection.
-    assert!(!prefix.join("releases").exists());
-    let status = Installation::at(gate.install.clone())
-        .unwrap()
-        .status()
-        .unwrap();
-    assert!(status.fence.is_none());
-    // A compatible commit is not refused for its schema (it fails later, at the build of
-    // this fixture's empty tree).
-    let compatible = scratch_repo(&gate.root.path().join("same"), SCHEMA);
-    let output = gate
-        .command(&compatible.join("scripts/deploy"), &["HEAD", "--prefix"])
-        .arg(&prefix)
-        .output()
-        .unwrap();
-    assert!(
-        !String::from_utf8_lossy(&output.stderr).contains("--schema-cutover"),
-        "{}",
-        text(&output)
-    );
-}
-
 // ---- deploy --schema-cutover ---------------------------------------------------------------
 
 #[test]
-fn cutover_dry_run_prints_the_notice_and_what_the_deadline_would_stop_and_changes_nothing() {
-    let scratch = Scratch::new();
-    scratch.project(&[("w", "fixture.wait")]);
-    let run = scratch.live_run("step_id='w'");
-    let before = std::fs::read(scratch.gate.install.join("services.json")).unwrap();
-    let output = scratch.cutover(&["--deadline", "+60m", "--dry-run"]);
-    assert!(output.status.success(), "{}", text(&output));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains(&format!("sluice cutover to schema {TARGET} at "))
-            && stdout.contains("new work is refused from now")
-            && stdout.contains("retry it after the cutover"),
-        "{stdout}"
-    );
-    let line = stdout
-        .lines()
-        .find(|l| l.contains(&run))
-        .unwrap_or_else(|| panic!("{stdout}"));
-    assert!(
-        line.contains("p w ") && line.contains("settle=no") && line.contains("step_cancel"),
-        "{line}"
-    );
-    assert!(
-        line.contains(&scratch.releases.old.file_name().unwrap().to_string_lossy()[..12]),
-        "{line}"
-    );
-    // Nothing changed: no fence, no drain, the run still live, the same services.
-    assert_eq!(scratch.fence(), None);
-    assert_eq!(
-        scratch.value("SELECT mode FROM maintenance").as_deref(),
-        Some("normal")
-    );
-    assert_eq!(
-        scratch.value(&format!(
-            "SELECT finished_at FROM runs WHERE run_id='{run}'"
-        )),
-        None
-    );
-    assert!(scratch.unit_active(&run));
-    assert_eq!(
-        std::fs::read(scratch.gate.install.join("services.json")).unwrap(),
-        before
-    );
-    assert!(scratch.deploy_log().is_empty());
-}
-
-#[test]
-fn cutover_takes_only_a_passed_rehearsal_of_this_candidate_over_the_selected_release() {
-    let scratch = Scratch::new();
-    let candidate = scratch
-        .releases
-        .candidate
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
-    let old = scratch
-        .releases
-        .old
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
-    for (rehearsal, refusal) in [
-        (
-            json!({"ok": false, "candidate": candidate, "old": old, "failure": "1 cancel refused"}),
-            "is a failed rehearsal: 1 cancel refused",
-        ),
-        (
-            json!({"ok": true, "candidate": "another", "old": old}),
-            "rehearsed candidate another",
-        ),
-    ] {
-        let path = scratch.gate.root.path().join("other-rehearsal.json");
-        std::fs::write(&path, rehearsal.to_string()).unwrap();
-        let output = scratch
-            .gate
-            .command(&repo().join("scripts/deploy"), &["--prefix"])
-            .arg(&scratch.prefix)
-            .args(["--schema-cutover", "--deadline", "+0s", "--candidate"])
-            .arg(&scratch.releases.candidate)
-            .arg("--rehearsal")
-            .arg(&path)
-            .env("SLUICE_DEPLOY_PROCESS_FIXTURE", "1")
-            .output()
-            .unwrap();
-        assert!(!output.status.success(), "{}", text(&output));
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains(refusal),
-            "{}",
-            text(&output)
-        );
-    }
-    // Refused before the notice: nothing drained, nothing fenced.
-    assert_eq!(scratch.fence(), None);
-    assert_eq!(
-        scratch.value("SELECT mode FROM maintenance").as_deref(),
-        Some("normal")
-    );
-    // A candidate of the home's own schema is no cutover, and --skip-compat has no place in one.
-    let output = scratch
-        .gate
-        .command(&repo().join("scripts/deploy"), &["--prefix"])
-        .arg(&scratch.prefix)
-        .args(["--schema-cutover", "--deadline", "+0s", "--candidate"])
-        .arg(&scratch.releases.old)
-        .output()
-        .unwrap();
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("not a schema change"),
-        "{}",
-        text(&output)
-    );
-    let output = scratch
-        .gate
-        .command(&repo().join("scripts/deploy"), &["--prefix"])
-        .arg(&scratch.prefix)
-        .args([
-            "--schema-cutover",
-            "--deadline",
-            "+0s",
-            "--skip-compat",
-            "why",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("--skip-compat does not apply"),
-        "{}",
-        text(&output)
-    );
-}
-
-#[test]
-fn cutover_with_catalog_drift_stops_fenced_with_the_refusal_named_and_stops_no_unit() {
-    let mut scratch = Scratch::new();
-    scratch.project(&[("w", "fixture.wait")]);
-    let run = scratch.live_run("step_id='w'");
-    let attempt = scratch
-        .value(&format!("SELECT attempt_id FROM runs WHERE run_id='{run}'"))
-        .unwrap();
-    // The catalog drifts under the running step: the old coordinator comes back without the
-    // fixture fns, so the old release's step_cancel, which compiles the plan, refuses.
-    scratch.stop_services();
-    scratch.start_services(false);
-    let output = scratch.cutover(&[
-        "--deadline",
-        "+0s",
-        "--cancel-grace",
-        "2",
-        "--settle-timeout",
-        "5",
-    ]);
-    assert!(!output.status.success(), "{}", text(&output));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("cutover stopped fenced: 1 cancels refused"),
-        "{}",
-        text(&output)
-    );
-    let report = scratch.report();
-    assert!(report.stopped.is_empty(), "{report:?}");
-    assert_eq!(report.refused.len(), 1, "{report:?}");
-    let refused = serde_json::to_value(&report.refused[0]).unwrap();
-    assert_eq!(refused["project"], "p");
-    assert_eq!(refused["step"], "w");
-    assert_eq!(refused["runs"], json!([run]));
-    assert_eq!(refused["attempts"], json!([attempt]));
-    assert_eq!(refused["error"]["error"], "invalid");
-    assert_eq!(refused["error"]["message"], "invalid stored plan");
-    assert!(
-        refused["error"]["errors"][0]
-            .as_str()
-            .unwrap()
-            .contains("unknown fn"),
-        "{refused}"
-    );
-    assert_eq!(
-        report.reason,
-        format!(
-            "schema-{TARGET} cutover at {}: stopped at the deadline; retry it after the cutover",
-            report.deadline
-        )
-    );
-    // Stopped still fenced and drained, the run untouched and its unit still active.
-    assert_eq!(scratch.fence(), Some(format!("schema-{TARGET} cutover")));
-    assert_eq!(
-        scratch
-            .value("SELECT mode || ' ' || owner FROM maintenance")
-            .as_deref(),
-        Some("drain cutover")
-    );
-    assert_eq!(
-        scratch.value(&format!(
-            "SELECT finished_at FROM runs WHERE run_id='{run}'"
-        )),
-        None
-    );
-    assert_eq!(
-        scratch.value(&format!(
-            "SELECT cancel_requested FROM attempts WHERE attempt_id='{attempt}'"
-        )),
-        Some("0".into())
-    );
-    assert!(scratch.unit_active(&run));
-    assert!(
-        scratch
-            .deploy_log()
-            .iter()
-            .any(|l| l["cutover"] == "cutover stopped fenced: 1 cancels refused"),
-        "{:?}",
-        scratch.deploy_log()
-    );
-}
-
-#[test]
-fn cutover_cancels_the_running_steps_stops_the_calls_settles_and_reports_how_each_ended() {
+fn slow_cutover_cancellation_calls_and_imported_baseline() {
     let scratch = Scratch::new();
     scratch.project(&[("w", "fixture.wait")]);
     let step_run = scratch.live_run("step_id='w'");
@@ -978,6 +678,36 @@ fn cutover_cancels_the_running_steps_stops_the_calls_settles_and_reports_how_eac
     );
     let call = call["call"].as_str().unwrap().to_owned();
     let call_run = scratch.live_run(&format!("run_id='{call}'"));
+
+    let imported = scratch.tool("project_create", json!({"name":"imported"}))["project_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The importer's only logged edit is revision 7, with no completion snapshot.
+    let db = rusqlite::Connection::open(scratch.gate.home.join("sluice.db")).unwrap();
+    db.execute_batch(&format!(
+        "UPDATE plans SET rev=7 WHERE project_id='{imported}';
+         UPDATE plan_edits SET rev=7 WHERE project_id='{imported}';
+         UPDATE records SET payload=json_set(payload,'$.rev',7) WHERE kind='plan.edit' AND project_id='{imported}';
+         UPDATE records SET seq=seq+1000 WHERE project_id='{imported}';
+         UPDATE plan_edits SET seq=seq+1000 WHERE project_id='{imported}';"
+    )).unwrap();
+    let floor: i64 = db
+        .query_row(
+            "SELECT coalesce(max(seq),0) FROM records WHERE project_id<>?1",
+            [&imported],
+            |r| r.get(0),
+        )
+        .unwrap();
+    // Retained dynamic records precede the baseline and fill more than one history page.
+    for seq in 1..=201 {
+        db.execute(
+            "INSERT INTO records(seq,project_id,kind,at,payload,payload_version)
+             SELECT ?1, project_id, 'plan.input', at, ?2, 1 FROM plan_edits WHERE project_id=?3 LIMIT 1",
+            rusqlite::params![floor+seq, json!({"kind":"plan.input","rev":1,"name":"old","value":seq,"author":"fixture","reason":"old input"}).to_string(), &imported],
+        ).unwrap();
+    }
+    drop(db);
     let output = scratch.cutover(&[
         "--deadline",
         "+0s",
@@ -1037,7 +767,7 @@ fn cutover_cancels_the_running_steps_stops_the_calls_settles_and_reports_how_eac
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(&format!(
-            "schema {TARGET} · 1 projects · 2 revisions converted · cancel requested for 1 runs · 1 calls stopped"
+            "schema {TARGET} · 2 projects · 3 revisions converted · cancel requested for 1 runs · 1 calls stopped"
         )),
         "{stdout}"
     );
@@ -1074,41 +804,17 @@ fn cutover_cancels_the_running_steps_stops_the_calls_settles_and_reports_how_eac
             .unwrap()),
         i64::from(TARGET)
     );
-}
-
-// ---- compat-check --incompatible --copy -------------------------------------------------------
-
-#[test]
-fn cutover_preserves_an_imported_revision_and_checks_its_baseline() {
-    let scratch = Scratch::new();
-    scratch.tool("project_create", json!({"name": "p"}));
-    // The importer's only logged edit is revision 7, with no completion snapshot.
-    let db = rusqlite::Connection::open(scratch.gate.home.join("sluice.db")).unwrap();
-    db.execute_batch(
-        "UPDATE plans SET rev=7;
-         UPDATE plan_edits SET rev=7;
-         UPDATE records SET payload=json_set(payload,'$.rev',7) WHERE kind='plan.edit';
-         UPDATE records SET seq=seq+1000;
-         UPDATE plan_edits SET seq=seq+1000;",
-    )
-    .unwrap();
-    // Retained dynamic records precede the baseline and fill more than one history page.
-    for seq in 1..=201 {
-        db.execute(
-            "INSERT INTO records(seq,project_id,kind,at,payload,payload_version)
-             SELECT ?1, project_id, 'plan.input', at, ?2, 1 FROM plan_edits LIMIT 1",
-            rusqlite::params![seq, json!({"kind":"plan.input","rev":1,"name":"old","value":seq,"author":"fixture","reason":"old input"}).to_string()],
-        ).unwrap();
-    }
-    drop(db);
-    let output = scratch.cutover(&["--deadline", "+0s"]);
-    assert!(output.status.success(), "{}", text(&output));
-    assert_eq!(scratch.value("SELECT rev FROM plans").as_deref(), Some("7"));
     assert_eq!(
-        scratch.value("SELECT min(rev) FROM plan_edits").as_deref(),
+        scratch
+            .value("SELECT rev FROM plans JOIN projects USING(project_id) WHERE name='imported'")
+            .as_deref(),
         Some("7")
     );
-    assert_eq!(scratch.report().revisions, 1);
+    assert_eq!(
+        scratch.value("SELECT min(rev) FROM plan_edits JOIN projects USING(project_id) WHERE name='imported'").as_deref(),
+        Some("7")
+    );
+    assert_eq!(scratch.report().revisions, 3);
     assert_eq!(scratch.fence(), None);
     let next = scratch
         .gate
@@ -1117,24 +823,42 @@ fn cutover_preserves_an_imported_revision_and_checks_its_baseline() {
             &[
                 "tool",
                 "plan_edit",
-                r#"{"project":"p","rev":7,"reason":"after cutover","ops":[{"op":"input.put","name":"n","declaration":"int"}]}"#,
+                r#"{"project":"imported","rev":7,"reason":"after cutover","ops":[{"op":"input.put","name":"n","declaration":"int"}]}"#,
             ],
         )
         .output()
         .unwrap();
     assert!(next.status.success(), "{}", text(&next));
-    assert_eq!(scratch.value("SELECT rev FROM plans").as_deref(), Some("8"));
     assert_eq!(
-        scratch.value("SELECT max(rev) FROM plan_edits").as_deref(),
+        scratch
+            .value("SELECT rev FROM plans JOIN projects USING(project_id) WHERE name='imported'")
+            .as_deref(),
+        Some("8")
+    );
+    assert_eq!(
+        scratch.value("SELECT max(rev) FROM plan_edits JOIN projects USING(project_id) WHERE name='imported'").as_deref(),
         Some("8")
     );
 }
 
-#[test]
-fn cutover_resumes_failed_checks_after_repair_and_refuses_the_wrong_fence_or_schema() {
+// ---- compat-check --incompatible --copy -------------------------------------------------------
+
+fn failed_cutover(waiting: bool) -> (Scratch, String, Value, PathBuf, PathBuf) {
     let mut scratch = Scratch::new();
-    scratch.project(&[("w", "fixture.wait")]);
-    let stopped_run = scratch.live_run("step_id='w'");
+    let stopped_run = if waiting {
+        scratch.project(&[("w", "fixture.wait")]);
+        scratch.live_run("step_id='w'")
+    } else {
+        // These recovery cases need a converted plan, but no admission or live-run drain.
+        let mut scheduler = scratch.gate.children.remove(1);
+        scheduler.kill().unwrap();
+        scheduler.wait().unwrap();
+        scratch.tool("project_create", json!({"name":"p"}));
+        scratch.tool("plan_patch",json!({"project":"p","rev":1,"reason":"held recovery fixture","ops":[
+            {"op":"add","path":"/steps/w","value":{"run":"fixture.echo","paused":true,"in":{"value":{"default":1}}}}
+        ]}));
+        String::new()
+    };
     // A candidate that serves the real home but returns a wrong plan while the fault marker
     // exists. The release manifest includes both the wrapper and its real binary.
     let candidate = &scratch.releases.candidate;
@@ -1156,14 +880,14 @@ if [ "$1" = loop ] && [ -f "$SLUICE_INSTALL_DIR/fence.json" ]; then
   exit 1
 fi
 if [ "$1" = loop ] && [ -f "$SLUICE_HOME/loop-without-lease" ]; then
-  exec /bin/sleep 120
+  exec /bin/sleep 65
 fi
 if [ "$1" = loop ] && [ -f "$SLUICE_HOME/lose-coordinator-on-loop" ]; then
   exec /usr/bin/python3 - "$SLUICE_INSTALL_DIR/services.json" <<'PY'
 import json, os, pathlib, signal, sys, time
 pid = json.loads(pathlib.Path(sys.argv[1]).read_text())['coordinator']['pid']
 os.kill(pid, signal.SIGTERM)
-time.sleep(120)
+time.sleep(65)
 PY
 fi
 if [ "$1" = drain ] && [ "$2" = --release ] && [ -f "$SLUICE_HOME/lose-release-reply" ]; then
@@ -1252,6 +976,12 @@ exec "$(dirname "$0")/sluice-real" "$@"
     );
     let original = serde_json::to_value(scratch.report()).unwrap();
     let checkpoint = scratch.gate.install.join("schema-cutover-checkpoint.json");
+    (scratch, stopped_run, original, checkpoint, marker)
+}
+
+#[test]
+fn slow_cutover_resumes_failed_checks_after_repair_and_refuses_the_wrong_fence_or_schema() {
+    let (scratch, stopped_run, original, checkpoint, marker) = failed_cutover(true);
     let recorded = std::fs::read(&checkpoint).unwrap();
     std::fs::remove_file(&checkpoint).unwrap();
     let output = scratch.cutover(&["--resume-checks"]);
@@ -1290,26 +1020,6 @@ exec "$(dirname "$0")/sluice-real" "$@"
     assert!(!output.status.success(), "{}", text(&output));
     assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
     std::fs::remove_file(marker).unwrap();
-    // A live loop process alone is insufficient. A lease timeout must preserve
-    // recovery through the same checkpoint and restore the drain after release.
-    let no_lease = scratch.gate.home.join("loop-without-lease");
-    std::fs::write(&no_lease, "fault").unwrap();
-    let output = scratch.cutover(&["--resume-checks"]);
-    assert!(
-        !output.status.success()
-            && String::from_utf8_lossy(&output.stderr)
-                .contains("loop did not hold the scheduler lease within 60 s"),
-        "{}",
-        text(&output)
-    );
-    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
-    assert_eq!(
-        scratch.value("SELECT mode FROM maintenance").as_deref(),
-        Some("drain")
-    );
-    let progress: Value = serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
-    assert_ne!(progress["completed"], true);
-    std::fs::remove_file(no_lease).unwrap();
     // Recovery must re-create a maintenance coordinator through the restored
     // installation fence before it can restore the released drain.
     let lose_coordinator = scratch.gate.home.join("lose-coordinator-on-loop");
@@ -1329,24 +1039,6 @@ exec "$(dirname "$0")/sluice-real" "$@"
         Some("drain")
     );
     std::fs::remove_file(lose_coordinator).unwrap();
-    // A committed release can lose its acknowledgment. Restore the drain even
-    // when the CLI reports failure, rather than treating that as no release.
-    let lose_reply = scratch.gate.home.join("lose-release-reply");
-    std::fs::write(&lose_reply, "fault").unwrap();
-    let output = scratch.cutover(&["--resume-checks"]);
-    assert!(
-        !output.status.success()
-            && String::from_utf8_lossy(&output.stderr).contains("fixture release reply lost")
-            && !String::from_utf8_lossy(&output.stderr).contains("drain restoration failed"),
-        "{}",
-        text(&output)
-    );
-    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
-    assert_eq!(
-        scratch.value("SELECT mode FROM maintenance").as_deref(),
-        Some("drain")
-    );
-    std::fs::remove_file(lose_reply).unwrap();
     // A --collect service that already exited must not prevent service re-creation.
     let services_path = scratch.gate.install.join("services.json");
     let mut services: Value =
@@ -1419,6 +1111,73 @@ exec "$(dirname "$0")/sluice-real" "$@"
     assert!(!scratch.cutover(&["--resume-checks"]).status.success());
 }
 
+#[test]
+fn slow_cutover_lease_timeout_refences_and_restores_the_drain() {
+    let (scratch, _run, original, checkpoint, marker) = failed_cutover(false);
+    std::fs::remove_file(marker).unwrap();
+    // A live loop process alone is insufficient. A lease timeout must preserve
+    // recovery through the same checkpoint and restore the drain after release.
+    let no_lease = scratch.gate.home.join("loop-without-lease");
+    std::fs::write(&no_lease, "fault").unwrap();
+    let output = scratch.cutover(&["--resume-checks"]);
+    assert!(
+        !output.status.success()
+            && String::from_utf8_lossy(&output.stderr)
+                .contains("loop did not hold the scheduler lease within 60 s"),
+        "{}",
+        text(&output)
+    );
+    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
+    assert_eq!(
+        scratch.value("SELECT mode FROM maintenance").as_deref(),
+        Some("drain")
+    );
+    let progress: Value = serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
+    assert_ne!(progress["completed"], true);
+    std::fs::remove_file(no_lease).unwrap();
+    let output = scratch.cutover(&["--resume-checks"]);
+    assert!(output.status.success(), "{}", text(&output));
+    scratch.assert_scheduler_ready();
+    assert_eq!(scratch.fence(), None);
+    assert_eq!(
+        scratch.value("SELECT mode FROM maintenance").as_deref(),
+        Some("normal")
+    );
+    assert_eq!(serde_json::to_value(scratch.report()).unwrap(), original);
+}
+#[test]
+fn slow_cutover_lost_release_reply_restores_the_drain() {
+    let (scratch, _run, original, _checkpoint, marker) = failed_cutover(false);
+    std::fs::remove_file(marker).unwrap();
+    // A committed release can lose its acknowledgment. Restore the drain even
+    // when the CLI reports failure, rather than treating that as no release.
+    let lose_reply = scratch.gate.home.join("lose-release-reply");
+    std::fs::write(&lose_reply, "fault").unwrap();
+    let output = scratch.cutover(&["--resume-checks"]);
+    assert!(
+        !output.status.success()
+            && String::from_utf8_lossy(&output.stderr).contains("fixture release reply lost")
+            && !String::from_utf8_lossy(&output.stderr).contains("drain restoration failed"),
+        "{}",
+        text(&output)
+    );
+    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
+    assert_eq!(
+        scratch.value("SELECT mode FROM maintenance").as_deref(),
+        Some("drain")
+    );
+    std::fs::remove_file(lose_reply).unwrap();
+    let output = scratch.cutover(&["--resume-checks"]);
+    assert!(output.status.success(), "{}", text(&output));
+    scratch.assert_scheduler_ready();
+    assert_eq!(scratch.fence(), None);
+    assert_eq!(
+        scratch.value("SELECT mode FROM maintenance").as_deref(),
+        Some("normal")
+    );
+    assert_eq!(serde_json::to_value(scratch.report()).unwrap(), original);
+}
+
 impl Scratch {
     fn compat_check(&self, args: &[&str]) -> Output {
         self.gate
@@ -1446,108 +1205,6 @@ impl Scratch {
     }
 }
 
-#[test]
-fn compat_check_incompatible_refuses_a_copy_with_live_pins_before_converting_it() {
-    let scratch = Scratch::new();
-    scratch.project(&[("w", "fixture.wait")]);
-    let run = scratch.live_run("step_id='w'");
-    // Chosen by itself: the candidate's manifest says schema 3, the home is schema 1.
-    let home = scratch.gate.home.to_str().unwrap().to_owned();
-    let release = scratch.releases.candidate.to_str().unwrap().to_owned();
-    let output = scratch.compat_check(&["--release", &release, "--home", &home]);
-    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("compat: incompatible: candidate"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains(&format!(
-            "compat: pinned: live run {run} is pinned to release"
-        )) && stdout.contains("scripts/cutover-rehearse"),
-        "{stdout}"
-    );
-    // The same for a prepared copy, which stays the caller's.
-    let copy = scratch.copy_home();
-    let copy_arg = copy.to_str().unwrap().to_owned();
-    let output =
-        scratch.compat_check(&["--release", &release, "--copy", &copy_arg, "--incompatible"]);
-    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
-    assert!(String::from_utf8_lossy(&output.stdout).contains("pinned"));
-    assert!(copy.join("sluice.db").is_file());
-    let schema: i64 = rusqlite::Connection::open(copy.join("sluice.db"))
-        .unwrap()
-        .query_row("SELECT schema_version FROM home_meta", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(schema, 1, "nothing was converted");
-    // --incompatible between two releases of one schema is refused outright.
-    let old = scratch.releases.old.to_str().unwrap().to_owned();
-    let output = scratch.compat_check(&[
-        "--release",
-        &old,
-        "--home",
-        &home,
-        "--incompatible",
-        "--old",
-        &old,
-    ]);
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("both schema"),
-        "{}",
-        text(&output)
-    );
-}
-
-#[test]
-fn compat_check_with_a_prepared_copy_runs_the_compatible_check_and_leaves_the_copy() {
-    let scratch = Scratch::new();
-    scratch.project(&[("w", "fixture.echo")]);
-    let copy = scratch.copy_home();
-    let copy_arg = copy.to_str().unwrap().to_owned();
-    let old = scratch.releases.old.to_str().unwrap().to_owned();
-    let output = scratch.compat_check(&["--release", &old, "--copy", &copy_arg]);
-    assert!(output.status.success(), "{}", text(&output));
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("releases ok"),
-        "{}",
-        text(&output)
-    );
-    assert!(copy.join("sluice.db").is_file());
-}
-
-#[test]
-fn compat_check_incompatible_converts_a_drained_copy_and_the_old_release_refuses_it_unchanged() {
-    let scratch = Scratch::new();
-    scratch.project(&[("w", "fixture.echo")]);
-    wait_for("w to succeed", Duration::from_secs(60), || {
-        scratch
-            .value("SELECT status FROM steps WHERE step_id='w'")
-            .as_deref()
-            == Some("succeeded")
-    });
-    let copy = scratch.copy_home();
-    let copy_arg = copy.to_str().unwrap().to_owned();
-    let candidate = scratch.releases.candidate.to_str().unwrap().to_owned();
-    let old = scratch.releases.old.to_str().unwrap().to_owned();
-    let output =
-        scratch.compat_check(&["--release", &candidate, "--copy", &copy_arg, "--old", &old]);
-    assert!(output.status.success(), "{}", text(&output));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("compat: converted from schema 1"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("incompatible ok"), "{stdout}");
-    let schema: i64 = rusqlite::Connection::open_with_flags(
-        copy.join("sluice.db"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap()
-    .query_row("SELECT schema_version FROM home_meta", [], |r| r.get(0))
-    .unwrap();
-    assert_eq!(schema, i64::from(TARGET));
-}
-
 // ---- scripts/cutover-rehearse ------------------------------------------------------------------
 
 impl Scratch {
@@ -1561,9 +1218,15 @@ impl Scratch {
             .arg("--prefix")
             .arg(&self.prefix)
             .args(["--deadline", "2026-10-12T18:00:00Z"]);
-        if let Some(harness) = harness {
-            command.arg("--harness").arg(harness);
-        }
+        let built;
+        let harness = match harness {
+            Some(harness) => harness,
+            None => {
+                built = old_harness();
+                &built
+            }
+        };
+        command.arg("--harness").arg(harness);
         let output = command.output().unwrap();
         let report = serde_json::from_slice(&output.stdout)
             .unwrap_or_else(|_| panic!("no JSON report: {}", text(&output)));
@@ -1586,110 +1249,8 @@ impl Scratch {
     }
 }
 
-#[test]
-fn rehearse_reports_the_old_release_refusing_a_cancel_and_converts_nothing() {
-    let scratch = Scratch::new();
-    scratch.project(&[("w", "fixture.wait")]);
-    let run = scratch.live_run("step_id='w'");
-    let attempt = scratch
-        .value(&format!("SELECT attempt_id FROM runs WHERE run_id='{run}'"))
-        .unwrap();
-    let refusal = json!({"project":"p","step":"w","runs":[run],"attempts":[attempt],
-        "error":{"error":"invalid","message":"invalid stored plan","errors":["steps.w.run: unknown fn fixture.wait"]}});
-    let harness = scratch.stand_in(json!({"refused":[refusal],"blockers":[]}), 1);
-    let (output, report) = scratch.rehearse(Some(&harness));
-    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
-    assert_eq!(report["ok"], false);
-    assert!(
-        report["failure"]
-            .as_str()
-            .unwrap()
-            .contains("refused 1 cancel(s) on the copy"),
-        "{report}"
-    );
-    let cutover: CutoverReport = serde_json::from_value(report["report"].clone()).unwrap();
-    assert_eq!(
-        serde_json::to_value(&cutover.refused).unwrap(),
-        json!([refusal])
-    );
-    assert!(cutover.stopped.is_empty());
-    assert_eq!(
-        cutover.reason,
-        format!(
-            "schema-{TARGET} cutover at 2026-10-12T18:00:00Z: stopped at the deadline; retry it after the cutover"
-        )
-    );
-    assert_eq!(report["conversion"], Value::Null);
-    // The harness played on the copy, cut off from the user's service manager, and the copy
-    // is gone; the live home is untouched.
-    let args = std::fs::read_to_string(scratch.gate.root.path().join("harness.args")).unwrap();
-    let copy = report["copy"].as_str().unwrap();
-    assert!(
-        args.starts_with(&format!("rehearse\n--home\n{copy}\n"))
-            && args.contains("--deadline\n2026-10-12T18:00:00Z\n")
-            && args.contains(&format!("SLUICE_HOME={copy} DBUS=unix:path=")),
-        "{args}"
-    );
-    assert!(!Path::new(copy).exists());
-    assert!(scratch.unit_active(&run));
-    assert_eq!(
-        scratch.value("SELECT mode FROM maintenance").as_deref(),
-        Some("normal")
-    );
-}
-
-#[test]
-fn rehearse_checks_the_blockers_itself_and_never_converts_a_copy_with_live_work() {
-    let scratch = Scratch::new();
-    scratch.project(&[("w", "fixture.wait")]);
-    scratch.live_run("step_id='w'");
-    // A harness that claims success but ended nothing.
-    let harness = scratch.stand_in(json!({"refused":[],"blockers":[]}), 0);
-    let (output, report) = scratch.rehearse(Some(&harness));
-    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
-    assert!(
-        report["failure"]
-            .as_str()
-            .unwrap()
-            .contains("did not reach zero blockers: 1 attempts, 1 runs"),
-        "{report}"
-    );
-    assert_eq!(report["conversion"], Value::Null);
-}
-
-#[test]
-fn rehearse_plays_the_deadline_with_the_old_release_converts_the_copy_and_passes_the_compat_check()
-{
-    let scratch = Scratch::new();
-    scratch.project(&[("w", "fixture.wait")]);
-    let run = scratch.live_run("step_id='w'");
-    let (output, report) = scratch.rehearse(None);
-    assert!(output.status.success(), "{}", text(&output));
-    assert_eq!(report["ok"], true, "{report}");
-    let cutover: CutoverReport = serde_json::from_value(report["report"].clone()).unwrap();
-    assert!(cutover.refused.is_empty());
-    let stopped = cutover
-        .stopped
-        .iter()
-        .find(|r| r.run.to_string() == run)
-        .unwrap();
-    assert_eq!(stopped.advice, RetryAdvice::Retry);
-    assert!(
-        report["compat"]
-            .as_str()
-            .unwrap()
-            .contains("incompatible ok")
-    );
-    // The live home and its run are untouched.
-    assert!(scratch.unit_active(&run));
-    assert_eq!(
-        scratch.value("SELECT mode FROM maintenance").as_deref(),
-        Some("normal")
-    );
-}
-
-/// The fake agent engine of the composition tests: with `wait_message` it stays busy until a
-/// message comes, so its run lives on after a submission until it is told to stop.
+// The fake agent engine of the composition tests: with `wait_message` it stays busy until a
+// message comes, so its run lives on after a submission until it is told to stop.
 const FAKE_ENGINE: &str = r#"#!/usr/bin/python3
 import os, sys, json, pathlib
 config = json.loads(pathlib.Path(sys.argv[2]).read_text())
@@ -1705,7 +1266,7 @@ for line in sys.stdin:
     print(json.dumps({'observation':state,'outcome':'acknowledged','error':None,'hook':None}), flush=True)
 "#;
 
-/// Resumes a stopped guardian however the test ends.
+// Resumes a stopped guardian however the test ends.
 struct Frozen(u32);
 impl Drop for Frozen {
     fn drop(&mut self) {
@@ -1717,7 +1278,7 @@ impl Drop for Frozen {
 }
 
 #[test]
-fn cutover_reports_a_run_settled_before_the_deadline_as_succeeded_with_no_advice() {
+fn slow_cutover_reports_a_run_settled_before_the_deadline_as_succeeded_with_no_advice() {
     let scratch = Scratch::with_env(|root| {
         let engine = root.join("fake-engine");
         executable::write(&engine, FAKE_ENGINE);
@@ -1811,7 +1372,355 @@ fn migrate(gate: &support::Gate, args: &[&str]) -> Output {
 }
 
 #[test]
-fn home_migrate_converts_a_drained_schema_1_home_only_with_the_writer_lock_free() {
+fn slow_live_cutover_preflight_compatibility_and_rehearsal() {
+    let mut scratch = Scratch::new();
+    scratch.project(&[("w", "fixture.wait")]);
+    {
+        let run = scratch.live_run("step_id='w'");
+        let before = std::fs::read(scratch.gate.install.join("services.json")).unwrap();
+        let output = scratch.cutover(&["--deadline", "+60m", "--dry-run"]);
+        assert!(output.status.success(), "{}", text(&output));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(&format!("sluice cutover to schema {TARGET} at "))
+                && stdout.contains("new work is refused from now")
+                && stdout.contains("retry it after the cutover"),
+            "{stdout}"
+        );
+        let line = stdout
+            .lines()
+            .find(|l| l.contains(&run))
+            .unwrap_or_else(|| panic!("{stdout}"));
+        assert!(
+            line.contains("p w ") && line.contains("settle=no") && line.contains("step_cancel"),
+            "{line}"
+        );
+        assert!(
+            line.contains(&scratch.releases.old.file_name().unwrap().to_string_lossy()[..12]),
+            "{line}"
+        );
+        // Nothing changed: no fence, no drain, the run still live, the same services.
+        assert_eq!(scratch.fence(), None);
+        assert_eq!(
+            scratch.value("SELECT mode FROM maintenance").as_deref(),
+            Some("normal")
+        );
+        assert_eq!(
+            scratch.value(&format!(
+                "SELECT finished_at FROM runs WHERE run_id='{run}'"
+            )),
+            None
+        );
+        assert!(scratch.unit_active(&run));
+        assert_eq!(
+            std::fs::read(scratch.gate.install.join("services.json")).unwrap(),
+            before
+        );
+        assert!(scratch.deploy_log().is_empty());
+    }
+    {
+        let candidate = scratch
+            .releases
+            .candidate
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let old = scratch
+            .releases
+            .old
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        for (rehearsal, refusal) in [
+            (
+                json!({"ok": false, "candidate": candidate, "old": old, "failure": "1 cancel refused"}),
+                "is a failed rehearsal: 1 cancel refused",
+            ),
+            (
+                json!({"ok": true, "candidate": "another", "old": old}),
+                "rehearsed candidate another",
+            ),
+        ] {
+            let path = scratch.gate.root.path().join("other-rehearsal.json");
+            std::fs::write(&path, rehearsal.to_string()).unwrap();
+            let output = scratch
+                .gate
+                .command(&repo().join("scripts/deploy"), &["--prefix"])
+                .arg(&scratch.prefix)
+                .args(["--schema-cutover", "--deadline", "+0s", "--candidate"])
+                .arg(&scratch.releases.candidate)
+                .arg("--rehearsal")
+                .arg(&path)
+                .env("SLUICE_DEPLOY_PROCESS_FIXTURE", "1")
+                .output()
+                .unwrap();
+            assert!(!output.status.success(), "{}", text(&output));
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains(refusal),
+                "{}",
+                text(&output)
+            );
+        }
+        // Refused before the notice: nothing drained, nothing fenced.
+        assert_eq!(scratch.fence(), None);
+        assert_eq!(
+            scratch.value("SELECT mode FROM maintenance").as_deref(),
+            Some("normal")
+        );
+        // A candidate of the home's own schema is no cutover, and --skip-compat has no place in one.
+        let output = scratch
+            .gate
+            .command(&repo().join("scripts/deploy"), &["--prefix"])
+            .arg(&scratch.prefix)
+            .args(["--schema-cutover", "--deadline", "+0s", "--candidate"])
+            .arg(&scratch.releases.old)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("not a schema change"),
+            "{}",
+            text(&output)
+        );
+        let output = scratch
+            .gate
+            .command(&repo().join("scripts/deploy"), &["--prefix"])
+            .arg(&scratch.prefix)
+            .args([
+                "--schema-cutover",
+                "--deadline",
+                "+0s",
+                "--skip-compat",
+                "why",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("--skip-compat does not apply"),
+            "{}",
+            text(&output)
+        );
+    }
+    {
+        let run = scratch.live_run("step_id='w'");
+        // Chosen by itself: the candidate's manifest says schema 3, the home is schema 1.
+        let home = scratch.gate.home.to_str().unwrap().to_owned();
+        let release = scratch.releases.candidate.to_str().unwrap().to_owned();
+        let output = scratch.compat_check(&["--release", &release, "--home", &home]);
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("compat: incompatible: candidate"),
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains(&format!(
+                "compat: pinned: live run {run} is pinned to release"
+            )) && stdout.contains("scripts/cutover-rehearse"),
+            "{stdout}"
+        );
+        // The same for a prepared copy, which stays the caller's.
+        let copy = scratch.copy_home();
+        let copy_arg = copy.to_str().unwrap().to_owned();
+        let output =
+            scratch.compat_check(&["--release", &release, "--copy", &copy_arg, "--incompatible"]);
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("pinned"));
+        assert!(copy.join("sluice.db").is_file());
+        let schema: i64 = rusqlite::Connection::open(copy.join("sluice.db"))
+            .unwrap()
+            .query_row("SELECT schema_version FROM home_meta", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(schema, 1, "nothing was converted");
+        // --incompatible between two releases of one schema is refused outright.
+        let old = scratch.releases.old.to_str().unwrap().to_owned();
+        let output = scratch.compat_check(&[
+            "--release",
+            &old,
+            "--home",
+            &home,
+            "--incompatible",
+            "--old",
+            &old,
+        ]);
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("both schema"),
+            "{}",
+            text(&output)
+        );
+    }
+    {
+        let run = scratch.live_run("step_id='w'");
+        let attempt = scratch
+            .value(&format!("SELECT attempt_id FROM runs WHERE run_id='{run}'"))
+            .unwrap();
+        let refusal = json!({"project":"p","step":"w","runs":[run],"attempts":[attempt],
+        "error":{"error":"invalid","message":"invalid stored plan","errors":["steps.w.run: unknown fn fixture.wait"]}});
+        let harness = scratch.stand_in(json!({"refused":[refusal],"blockers":[]}), 1);
+        let (output, report) = scratch.rehearse(Some(&harness));
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+        assert_eq!(report["ok"], false);
+        assert!(
+            report["failure"]
+                .as_str()
+                .unwrap()
+                .contains("refused 1 cancel(s) on the copy"),
+            "{report}"
+        );
+        let cutover: CutoverReport = serde_json::from_value(report["report"].clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&cutover.refused).unwrap(),
+            json!([refusal])
+        );
+        assert!(cutover.stopped.is_empty());
+        assert_eq!(
+            cutover.reason,
+            format!(
+                "schema-{TARGET} cutover at 2026-10-12T18:00:00Z: stopped at the deadline; retry it after the cutover"
+            )
+        );
+        assert_eq!(report["conversion"], Value::Null);
+        // The harness played on the copy, cut off from the user's service manager, and the copy
+        // is gone; the live home is untouched.
+        let args = std::fs::read_to_string(scratch.gate.root.path().join("harness.args")).unwrap();
+        let copy = report["copy"].as_str().unwrap();
+        assert!(
+            args.starts_with(&format!("rehearse\n--home\n{copy}\n"))
+                && args.contains("--deadline\n2026-10-12T18:00:00Z\n")
+                && args.contains(&format!("SLUICE_HOME={copy} DBUS=unix:path=")),
+            "{args}"
+        );
+        assert!(!Path::new(copy).exists());
+        assert!(scratch.unit_active(&run));
+        assert_eq!(
+            scratch.value("SELECT mode FROM maintenance").as_deref(),
+            Some("normal")
+        );
+    }
+    {
+        scratch.live_run("step_id='w'");
+        // A harness that claims success but ended nothing.
+        let harness = scratch.stand_in(json!({"refused":[],"blockers":[]}), 0);
+        let (output, report) = scratch.rehearse(Some(&harness));
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+        assert!(
+            report["failure"]
+                .as_str()
+                .unwrap()
+                .contains("did not reach zero blockers: 1 attempts, 1 runs"),
+            "{report}"
+        );
+        assert_eq!(report["conversion"], Value::Null);
+    }
+    {
+        let run = scratch.live_run("step_id='w'");
+        let (output, report) = scratch.rehearse(None);
+        assert!(output.status.success(), "{}", text(&output));
+        assert_eq!(report["ok"], true, "{report}");
+        let cutover: CutoverReport = serde_json::from_value(report["report"].clone()).unwrap();
+        assert!(cutover.refused.is_empty());
+        let stopped = cutover
+            .stopped
+            .iter()
+            .find(|r| r.run.to_string() == run)
+            .unwrap();
+        assert_eq!(stopped.advice, RetryAdvice::Retry);
+        assert!(
+            report["compat"]
+                .as_str()
+                .unwrap()
+                .contains("incompatible ok")
+        );
+        // The live home and its run are untouched.
+        assert!(scratch.unit_active(&run));
+        assert_eq!(
+            scratch.value("SELECT mode FROM maintenance").as_deref(),
+            Some("normal")
+        );
+    }
+    {
+        let run = scratch.live_run("step_id='w'");
+        let attempt = scratch
+            .value(&format!("SELECT attempt_id FROM runs WHERE run_id='{run}'"))
+            .unwrap();
+        // The catalog drifts under the running step: the old coordinator comes back without the
+        // fixture fns, so the old release's step_cancel, which compiles the plan, refuses.
+        scratch.stop_services();
+        scratch.start_services(false);
+        let output = scratch.cutover(&[
+            "--deadline",
+            "+0s",
+            "--cancel-grace",
+            "2",
+            "--settle-timeout",
+            "5",
+        ]);
+        assert!(!output.status.success(), "{}", text(&output));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("cutover stopped fenced: 1 cancels refused"),
+            "{}",
+            text(&output)
+        );
+        let report = scratch.report();
+        assert!(report.stopped.is_empty(), "{report:?}");
+        assert_eq!(report.refused.len(), 1, "{report:?}");
+        let refused = serde_json::to_value(&report.refused[0]).unwrap();
+        assert_eq!(refused["project"], "p");
+        assert_eq!(refused["step"], "w");
+        assert_eq!(refused["runs"], json!([run]));
+        assert_eq!(refused["attempts"], json!([attempt]));
+        assert_eq!(refused["error"]["error"], "invalid");
+        assert_eq!(refused["error"]["message"], "invalid stored plan");
+        assert!(
+            refused["error"]["errors"][0]
+                .as_str()
+                .unwrap()
+                .contains("unknown fn"),
+            "{refused}"
+        );
+        assert_eq!(
+            report.reason,
+            format!(
+                "schema-{TARGET} cutover at {}: stopped at the deadline; retry it after the cutover",
+                report.deadline
+            )
+        );
+        // Stopped still fenced and drained, the run untouched and its unit still active.
+        assert_eq!(scratch.fence(), Some(format!("schema-{TARGET} cutover")));
+        assert_eq!(
+            scratch
+                .value("SELECT mode || ' ' || owner FROM maintenance")
+                .as_deref(),
+            Some("drain cutover")
+        );
+        assert_eq!(
+            scratch.value(&format!(
+                "SELECT finished_at FROM runs WHERE run_id='{run}'"
+            )),
+            None
+        );
+        assert_eq!(
+            scratch.value(&format!(
+                "SELECT cancel_requested FROM attempts WHERE attempt_id='{attempt}'"
+            )),
+            Some("0".into())
+        );
+        assert!(scratch.unit_active(&run));
+        assert!(
+            scratch
+                .deploy_log()
+                .iter()
+                .any(|l| l["cutover"] == "cutover stopped fenced: 1 cancels refused"),
+            "{:?}",
+            scratch.deploy_log()
+        );
+    }
+}
+
+#[test]
+fn slow_prepared_copy_compatibility_and_migration_writer_lock() {
     let mut scratch = Scratch::new();
     scratch.project(&[("w", "fixture.wait")]);
     let run = scratch.live_run("step_id='w'");
@@ -1826,51 +1735,176 @@ fn home_migrate_converts_a_drained_schema_1_home_only_with_the_writer_lock_free(
             .as_deref()
             == Some("succeeded")
     });
-    // Refused while the old coordinator holds the home's writer lock.
-    let output = migrate(&scratch.gate, &["--json"]);
-    assert!(!output.status.success(), "{}", text(&output));
-    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(error["error"], "busy", "{error}");
-    assert!(
-        error["message"]
-            .as_str()
+    {
+        let copy = scratch.copy_home();
+        let copy_arg = copy.to_str().unwrap().to_owned();
+        let old = scratch.releases.old.to_str().unwrap().to_owned();
+        let output = scratch.compat_check(&["--release", &old, "--copy", &copy_arg]);
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("releases ok"),
+            "{}",
+            text(&output)
+        );
+        assert!(copy.join("sluice.db").is_file());
+    }
+    {
+        wait_for("w to succeed", Duration::from_secs(60), || {
+            scratch
+                .value("SELECT status FROM steps WHERE step_id='w'")
+                .as_deref()
+                == Some("succeeded")
+        });
+        let copy = scratch.copy_home();
+        let copy_arg = copy.to_str().unwrap().to_owned();
+        let candidate = scratch.releases.candidate.to_str().unwrap().to_owned();
+        let old = scratch.releases.old.to_str().unwrap().to_owned();
+        let output =
+            scratch.compat_check(&["--release", &candidate, "--copy", &copy_arg, "--old", &old]);
+        assert!(output.status.success(), "{}", text(&output));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("compat: converted from schema 1"),
+            "{stdout}"
+        );
+        assert!(stdout.contains("incompatible ok"), "{stdout}");
+        let schema: i64 = rusqlite::Connection::open_with_flags(
+            copy.join("sluice.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap()
+        .query_row("SELECT schema_version FROM home_meta", [], |r| r.get(0))
+        .unwrap();
+        assert_eq!(schema, i64::from(TARGET));
+    }
+
+    {
+        // Refused while the old coordinator holds the home's writer lock.
+        let output = migrate(&scratch.gate, &["--json"]);
+        assert!(!output.status.success(), "{}", text(&output));
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"], "busy", "{error}");
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("coordinator.lock"),
+            "{error}"
+        );
+        scratch.stop_services();
+        let database = scratch.gate.home.join("sluice.db");
+        let before = std::fs::read(&database).unwrap();
+        // A dry run converts a copy and leaves the home's bytes as they were.
+        let output = migrate(&scratch.gate, &["--dry-run", "--json"]);
+        assert!(output.status.success(), "{}", text(&output));
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["from_schema"], 1, "{report}");
+        assert_eq!(report["projects"][0]["name"], "p", "{report}");
+        assert_eq!(report["projects"][0]["revisions"], 2, "{report}");
+        assert_eq!(report["projects"][0]["anchor"], Value::Null, "{report}");
+        assert_eq!(report["anchored"], json!([]), "{report}");
+        assert_eq!(std::fs::read(&database).unwrap(), before);
+        assert_eq!(
+            scratch
+                .value("SELECT schema_version FROM home_meta")
+                .as_deref(),
+            Some("1")
+        );
+        // The conversion itself, in words.
+        let output = migrate(&scratch.gate, &[]);
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(
+            String::from_utf8_lossy(&output.stdout).starts_with(&format!(
+                "converted schema 1 to {SCHEMA}: 1 projects, 2 revisions, 0 anchored, 0 warnings"
+            )),
+            "{}",
+            text(&output)
+        );
+        assert_eq!(
+            scratch
+                .value("SELECT schema_version FROM home_meta")
+                .as_deref(),
+            Some(SCHEMA.to_string().as_str())
+        );
+    }
+}
+
+#[test]
+fn slow_ship_and_deploy_refuse_schema_changes_before_build_or_push() {
+    let gate = support::Gate::new();
+    let prefix = selected_home(&gate);
+    let source = scratch_repo(gate.root.path(), SCHEMA + 2);
+    {
+        let origin = gate.root.path().join("origin.git");
+        git(
+            gate.root.path(),
+            &["init", "-q", "--bare", origin.to_str().unwrap()],
+        );
+        git(
+            &source,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
+        for dry in [true, false] {
+            let mut command = gate.command(&source.join("scripts/ship"), &["--prefix"]);
+            command.arg(&prefix).current_dir(&source);
+            if dry {
+                command.arg("--dry-run");
+            }
+            // No live launcher on PATH: the scratch prefix's is the one ship asks.
+            command.env("PATH", "/usr/bin:/bin");
+            let output = command.output().unwrap();
+            assert!(!output.status.success(), "{}", text(&output));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains(&format!(
+                    "is schema {} and the home is schema {SCHEMA}",
+                    SCHEMA + 2
+                )) && stderr.contains("--schema-cutover"),
+                "{}",
+                text(&output)
+            );
+        }
+        // Nothing was pushed.
+        assert_eq!(
+            git(
+                gate.root.path(),
+                &["--git-dir", origin.to_str().unwrap(), "for-each-ref"]
+            ),
+            ""
+        );
+    }
+    {
+        let output = gate
+            .command(&source.join("scripts/deploy"), &["HEAD", "--prefix"])
+            .arg(&prefix)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{}", text(&output));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--schema-cutover") && stderr.contains("is schema"),
+            "{}",
+            text(&output)
+        );
+        // Refused before the build: no release, no fence, the old selection.
+        assert!(!prefix.join("releases").exists());
+        let status = Installation::at(gate.install.clone())
             .unwrap()
-            .contains("coordinator.lock"),
-        "{error}"
-    );
-    scratch.stop_services();
-    let database = scratch.gate.home.join("sluice.db");
-    let before = std::fs::read(&database).unwrap();
-    // A dry run converts a copy and leaves the home's bytes as they were.
-    let output = migrate(&scratch.gate, &["--dry-run", "--json"]);
-    assert!(output.status.success(), "{}", text(&output));
-    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["from_schema"], 1, "{report}");
-    assert_eq!(report["projects"][0]["name"], "p", "{report}");
-    assert_eq!(report["projects"][0]["revisions"], 2, "{report}");
-    assert_eq!(report["projects"][0]["anchor"], Value::Null, "{report}");
-    assert_eq!(report["anchored"], json!([]), "{report}");
-    assert_eq!(std::fs::read(&database).unwrap(), before);
-    assert_eq!(
-        scratch
-            .value("SELECT schema_version FROM home_meta")
-            .as_deref(),
-        Some("1")
-    );
-    // The conversion itself, in words.
-    let output = migrate(&scratch.gate, &[]);
-    assert!(output.status.success(), "{}", text(&output));
-    assert!(
-        String::from_utf8_lossy(&output.stdout).starts_with(&format!(
-            "converted schema 1 to {SCHEMA}: 1 projects, 2 revisions, 0 anchored, 0 warnings"
-        )),
-        "{}",
-        text(&output)
-    );
-    assert_eq!(
-        scratch
-            .value("SELECT schema_version FROM home_meta")
-            .as_deref(),
-        Some(SCHEMA.to_string().as_str())
-    );
+            .status()
+            .unwrap();
+        assert!(status.fence.is_none());
+        // A compatible commit is not refused for its schema (it fails later, at the build of
+        // this fixture's empty tree).
+        let compatible = scratch_repo(&gate.root.path().join("same"), SCHEMA);
+        let output = gate
+            .command(&compatible.join("scripts/deploy"), &["HEAD", "--prefix"])
+            .arg(&prefix)
+            .output()
+            .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("--schema-cutover"),
+            "{}",
+            text(&output)
+        );
+    }
 }

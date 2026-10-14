@@ -1,7 +1,5 @@
 //! G1a uses only this binary, fresh homes and guarded sluice-test services.
-#[allow(dead_code)]
-#[path = "../../../tests/support/units.rs"]
-mod units;
+use crate::support::home::units;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::CommandReply,
@@ -299,7 +297,7 @@ fn boot_callbacks_restart_adoption_lease_and_direct_caller_death() {
     assert_eq!(gate.status(project)["steps"]["late"]["status"], "pending");
 }
 
-/// Stops exactly one production-named unit this test caused, panics included.
+// Stops exactly one production-named unit this test caused, panics included.
 struct ProductionUnit(String);
 impl Drop for ProductionUnit {
     fn drop(&mut self) {

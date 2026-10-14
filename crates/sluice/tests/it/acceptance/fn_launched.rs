@@ -3,8 +3,8 @@
 //! `runs/<run>/invocations/<invocation>` directory whose control-socket path is longer than a
 //! Unix socket address holds. The real gates are labelled and ignored; the fixture-engine
 //! test runs the same sequence on every `cargo test`.
-use crate::engines::{Gate, credentials, private_write, step_finished_within};
-use crate::support::{Scratch, repo};
+use super::engines::{Gate, credentials, private_write, step_finished_within};
+use super::support::{Scratch, repo};
 use serde_json::{Value, json};
 use sluice_agents::{delivery::DeliveryState, engines::InputId, supervisor::Checkpoint};
 use sluice_model::{
@@ -20,8 +20,8 @@ use std::{
     time::Duration,
 };
 
-/// A cut-down lash.worker: the same imports, header, `report_path`, `ctx.builtin` call,
-/// WallCap continuation, submission read and outputs, without the lash rules.
+// A cut-down lash.worker: the same imports, header, `report_path`, `ctx.builtin` call,
+// WallCap continuation, submission read and outputs, without the lash rules.
 const WORKER: &str = r#"# /// script
 # requires-python = ">=3.12"
 # dependencies = []
@@ -65,7 +65,7 @@ if __name__ == "__main__":
     run(main, retries=1, backoff=600)
 "#;
 
-/// The live home's composed control socket was 142 bytes; `sun_path` holds 108.
+// The live home's composed control socket was 142 bytes; `sun_path` holds 108.
 const SUN_PATH: usize = 108;
 const STEER_WORD: &str = "teal";
 
@@ -85,7 +85,7 @@ fn g3_fn_launched_devin() {
     fn_launched("devin", true);
 }
 #[test]
-fn fn_launched_adapter_fixtures_accept_steer_submit_and_clean_up() {
+fn slow_fn_launched_adapter_fixtures_accept_steer_submit_and_clean_up() {
     for engine in ["codex", "claude", "devin"] {
         fn_launched(engine, false);
     }
@@ -118,6 +118,14 @@ fn fn_launched(engine: &str, real: bool) {
     gate.env.insert("SLUICE_AGENT_POLL_S".into(), "0.1".into());
     gate.env
         .insert("SLUICE_AGENT_SETTLE_S".into(), "0.2".into());
+    if !real {
+        gate.env.insert("SLUICE_AGENT_POLL_S".into(), "0.01".into());
+        gate.env
+            .insert("SLUICE_AGENT_SETTLE_S".into(), "0.02".into());
+        gate.env
+            .insert("SLUICE_AGENT_GRACE_MIN".into(), "0.003".into());
+        gate.env.insert("SLUICE_AGENT_NUDGES".into(), "1".into());
+    }
     gate.boot();
     let CommandReply::Project(p) = gate.rpc(json!({"command":"project_create","args":{"name":"g3-fn","description":"Labelled scratch G3 gate: agents launched through a Python fn","icon":null,"resources":{},"author":"fixture"}})) else {
         panic!("project reply")
@@ -375,8 +383,8 @@ fn fn_launched(engine: &str, real: bool) {
 fn submit(project: &impl serde::Serialize, run: &str, word: Value) -> Value {
     json!({"command":"step_submit","args":{"project":project,"step":"work","run":run,"outputs":{"word":word},"author":"fixture"}})
 }
-/// Retry `work` with `message`; returns its new run and that run's agent invocation once
-/// the message has reached the agent.
+// Retry `work` with `message`; returns its new run and that run's agent invocation once
+// the message has reached the agent.
 fn send_back(gate: &mut Gate, selector: &Value, prior: &str, message: &str) -> (String, PathBuf) {
     gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":message,"reason":"fixture send-back","author":"@fixture"}}));
     let mut run = String::new();
@@ -412,7 +420,7 @@ fn send_back(gate: &mut Gate, selector: &Value, prior: &str, message: &str) -> (
     });
     (run, invocation)
 }
-/// Stop waiting as soon as the step has failed, with its status as the reason.
+// Stop waiting as soon as the step has failed, with its status as the reason.
 #[track_caller]
 fn live(gate: &Gate, selector: &Value) {
     let step = &gate.status(selector)["steps"]["work"];
@@ -439,7 +447,7 @@ fn task_tries(c: &Checkpoint) -> u32 {
 fn tmux_alive(directory: &Path) -> bool {
     let socket = directory.join("tmux.sock");
     socket.exists()
-        && Command::new(crate::engines::workspace().join("target/private-tmux/bin/tmux"))
+        && Command::new(super::engines::workspace().join("target/private-tmux/bin/tmux"))
             .current_dir(directory)
             .args(["-S", "tmux.sock", "list-sessions"])
             .output()
@@ -447,9 +455,9 @@ fn tmux_alive(directory: &Path) -> bool {
             .status
             .success()
 }
-/// The composed invocation's files, next to what `Gate::cleanup` keeps for the outer run.
+// The composed invocation's files, next to what `Gate::cleanup` keeps for the outer run.
 fn keep_evidence(gate: &Gate, run: &str, invocation: &Path) {
-    let evidence = crate::engines::workspace()
+    let evidence = super::engines::workspace()
         .join("target/g3-real-evidence")
         .join(gate.home.parent().unwrap().file_name().unwrap())
         .join(run)
@@ -518,7 +526,7 @@ fn fixture_engine(root: &Path, engine: &str) -> PathBuf {
     } else {
         ""
     };
-    crate::executable::write(
+    super::executable::write(
         &binary,
         format!(
             "#!/bin/sh\nset -e\n{codex_tui}export {variable}='{}'\nexec '{}' {engine} \"$@\"\n",

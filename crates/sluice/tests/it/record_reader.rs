@@ -48,6 +48,7 @@ impl Server {
         let mut command = Command::new(&self.binary);
         command
             .env("SLUICE_HOME", self.home.path())
+            .env("TOKIO_WORKER_THREADS", "2")
             .env("SLUICE_FIXTURE", "1")
             .stdin(Stdio::null());
         command

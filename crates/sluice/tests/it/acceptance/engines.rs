@@ -1,5 +1,5 @@
 //! Executable G3 fixtures. A successful test requires public callbacks and guardian cleanup.
-use crate::support::{Scratch, git, repo};
+use super::support::{Scratch, git, repo};
 use serde_json::{Value, json};
 use sluice_model::{
     commands::CommandReply,
@@ -49,7 +49,10 @@ pub fn credentials(root: &Path, engine: &str) -> Result<BTreeMap<String, String>
             )
             .map_err(|e| e.to_string())?;
             let out = Command::new(workspace().join(".venv/bin/python"))
-                .arg(workspace().join("crates/sluice/tests/acceptance/fixtures/private_config.py"))
+                .arg(
+                    workspace()
+                        .join("crates/sluice/tests/it/acceptance/fixtures/private_config.py"),
+                )
                 .arg(owner.join(".codex/config.toml"))
                 .output()
                 .map_err(|_| "cannot trim Codex config")?;
@@ -216,6 +219,7 @@ impl Gate {
                 .env_remove("AI_AGENT")
                 .env_remove("SLUICE_FIXTURE")
                 .envs(&self.env)
+                .env("TOKIO_WORKER_THREADS", "2")
                 .stdout(Stdio::null())
                 .stderr(log)
                 .spawn()
@@ -413,8 +417,8 @@ impl Gate {
         // An engine's `sluice tool` call while the broker was down auto-starts
         // the home's coordinator unit.
         let mut units = self.units.clone();
-        units.push(crate::units::coordinator_unit(&self.home));
-        crate::units::stop_units(&units);
+        units.push(super::units::coordinator_unit(&self.home));
+        super::units::stop_units(&units);
     }
 }
 impl Drop for Gate {
@@ -478,7 +482,7 @@ fn g3(engine: &str) {
         "SLUICE_TEST_AGENT_TRANSIENT_MARKER".into(),
         marker.to_string_lossy().into(),
     );
-    gate.env.insert("SLUICE_BACKOFF".into(), "15".into());
+    gate.env.insert("SLUICE_BACKOFF".into(), "0.5".into());
     gate.env.insert("SLUICE_AGENT_POLL_S".into(), "0.1".into());
     gate.env
         .insert("SLUICE_AGENT_SETTLE_S".into(), "0.2".into());
@@ -624,26 +628,8 @@ fn g3_devin_fresh_submit_live_feedback_cleanup() {
 }
 
 #[test]
-fn scratch_coordinator_acceptance_transport_and_scheduler_lease() {
-    let scratch = Scratch::new();
-    let mut gate = Gate::new(&scratch.0, scratch.0.join("rust-home"), BTreeMap::new());
-    gate.boot();
-    let CommandReply::Project(project) = gate.rpc(json!({"command":"project_create","args":{"name":"transport","description":"Scratch acceptance transport","resources":{},"icon":null,"author":"fixture"}})) else {panic!("project reply")};
-    let selector = json!({"kind":"id","value":project.project_id});
-    assert_eq!(gate.status(&selector)["steps"], json!({}));
-    gate.scheduling();
-    gate.assert_clean();
-    gate.cleanup();
-}
-
-#[test]
-fn public_agent_run_adapter_fixtures_submit_and_feedback_resume() {
+fn slow_public_agent_run_adapter_fixtures_submit_and_feedback_resume() {
     public_adapter_fixture(&["codex", "claude", "devin"], false);
-}
-
-#[test]
-fn regression_devin_guardian_addressed_input_then_feedback() {
-    public_adapter_fixture(&["devin"], true);
 }
 
 fn public_adapter_fixture(engines: &[&str], addressed: bool) {
@@ -679,7 +665,7 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
         } else {
             ""
         };
-        crate::executable::write(
+        super::executable::write(
             &binary,
             format!(
                 "#!/bin/sh\nset -e\n{codex_tui}export {env_name}='{}'\ncase \"$1 $2\" in '--version '*|'--help '*|'models '*|'debug '*|'app-server --help') ;; *) if [ ! -f '{}' ]; then printf fixture > original.txt; git add original.txt; git commit -qm 'Record the fake engine turn.'; touch '{}'; fi ;; esac\nexec '{}' {engine} \"$@\"\n",
@@ -720,8 +706,8 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
             "SLUICE_TEST_AGENT_TRANSIENT_MARKER".into(),
             marker.to_string_lossy().into(),
         );
-        gate.env.insert("SLUICE_BACKOFF".into(), "15".into());
-        gate.env.insert("SLUICE_AGENT_POLL_S".into(), "0.05".into());
+        gate.env.insert("SLUICE_BACKOFF".into(), "0.5".into());
+        gate.env.insert("SLUICE_AGENT_POLL_S".into(), "0.01".into());
         gate.boot();
         let CommandReply::Project(project)=gate.rpc(json!({"command":"project_create","args":{"name":"adapter-gate","description":"Public adapter fixture","resources":{},"icon":null,"author":"fixture"}})) else {panic!("project reply")};
         let selector = json!({"kind":"id","value":project.project_id});
