@@ -232,33 +232,37 @@ impl Fixture {
             .await
             .unwrap()
     }
-    /// Poll until the step's waiting ask has committed its question row.
+    /// Wait for the commit that publishes the step's question.
     async fn asked_question(&self, run: RunId) -> Message {
         let project = self.project;
-        for _ in 0..100 {
-            let found = self
-                .reads
-                .snapshot(move |sql| {
-                    Ok(sql
-                        .query_row(
-                            "SELECT id FROM messages WHERE project_id=?1 AND run_id=?2 AND needs_reply=1",
-                            (project.to_string(), run.to_string()),
-                            |r| r.get::<_, i64>(0),
-                        )
-                        .ok())
-                })
-                .await
-                .unwrap();
-            if let Some(id) = found {
-                return self
+        let mut changes = self.writer.subscribe();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let found = self
                     .reads
-                    .snapshot(move |sql| messages::message(sql, project, MessageId(id)))
+                    .snapshot(move |sql| {
+                        Ok(sql
+                            .query_row(
+                                "SELECT id FROM messages WHERE project_id=?1 AND run_id=?2 AND needs_reply=1",
+                                (project.to_string(), run.to_string()),
+                                |r| r.get::<_, i64>(0),
+                            )
+                            .ok())
+                    })
                     .await
                     .unwrap();
+                if let Some(id) = found {
+                    return self
+                        .reads
+                        .snapshot(move |sql| messages::message(sql, project, MessageId(id)))
+                        .await
+                        .unwrap();
+                }
+                changes.changed().await.expect("writer stopped before posting the question");
             }
-            tokio::task::yield_now().await;
-        }
-        panic!("run {run} never posted its question");
+        })
+        .await
+        .unwrap_or_else(|_| panic!("run {run} never posted its question"))
     }
     async fn settle(
         &self,

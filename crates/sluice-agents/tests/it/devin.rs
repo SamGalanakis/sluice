@@ -477,6 +477,8 @@ struct DevinHost {
     messages: Vec<DeliveryMessage>,
     /// Messages stay unseen until this file exists in `directory`.
     release: Option<&'static str>,
+    /// Offer live feedback only after the fixture has received its compaction context.
+    context_before_messages: Option<PathBuf>,
     acks: Vec<MessageId>,
     cleanups: u32,
 }
@@ -490,6 +492,19 @@ impl SupervisorHost for DevinHost {
         let released = self
             .release
             .is_none_or(|file| self.directory.join(file).exists());
+        let released = released
+            && self.context_before_messages.as_ref().is_none_or(|path| {
+                fs::read_to_string(path).is_ok_and(|prompts| {
+                    prompts.lines().any(|line| {
+                        serde_json::from_str::<Value>(line).is_ok_and(|prompt| {
+                            prompt["text"].as_str().is_some_and(|text| {
+                                text.contains("Your compacted context")
+                                    || text.contains("current scratch run context")
+                            })
+                        })
+                    })
+                })
+            });
         Ok(HostSnapshot {
             submissions: self.submissions.clone(),
             messages: self
@@ -1221,6 +1236,7 @@ async fn slow_supervisor_devin_inline_hooks_submit_live_compact_and_resume() {
     let mut host = DevinHost {
         directory: cfg.cwd.clone(),
         messages: vec![supervisor_message(1)],
+        context_before_messages: Some(root.join("prompts.jsonl")),
         ..Default::default()
     };
     let result = sluice_agents::supervisor::supervise(
@@ -1261,6 +1277,19 @@ async fn slow_supervisor_devin_inline_hooks_submit_live_compact_and_resume() {
             .entries
             .iter()
             .any(|entry| entry.id == InputId::Reprime { ordinal: 1 })
+    );
+    let refresh = checkpoint
+        .delivery
+        .entries
+        .iter()
+        .find(|entry| entry.id == InputId::Reprime { ordinal: 1 })
+        .unwrap();
+    assert_eq!(
+        prompts
+            .iter()
+            .filter(|prompt| prompt["text"].as_str().unwrap().trim_end() == refresh.text)
+            .count(),
+        1
     );
     assert!(
         !tmux
