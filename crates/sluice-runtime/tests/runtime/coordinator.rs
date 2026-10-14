@@ -25,7 +25,23 @@ use std::{
     time::Duration,
 };
 #[derive(Clone, Default)]
-struct Fake(Arc<Mutex<Vec<Launch>>>);
+struct Fake(Arc<Mutex<Vec<Launch>>>, Arc<tokio::sync::Notify>);
+impl Fake {
+    async fn launched(&self, count: usize) -> Vec<Launch> {
+        loop {
+            let launched = self.1.notified();
+            tokio::pin!(launched);
+            launched.as_mut().enable();
+            {
+                let launches = self.0.lock().unwrap();
+                if launches.len() >= count {
+                    return launches.clone();
+                }
+            }
+            launched.await;
+        }
+    }
+}
 impl FnHost for Fake {
     async fn invoke(&self, _: FnInvocation) -> Result<JsonMap, PublicError> {
         Ok(JsonMap::default())
@@ -44,6 +60,7 @@ impl sluice_process::guardian::AdoptionHost for Fake {
 impl ExecutionHost for Fake {
     async fn launch(&self, l: Launch) -> Result<LaunchOutcome, PublicError> {
         self.0.lock().unwrap().push(l);
+        self.1.notify_waiters();
         Ok(LaunchOutcome::Accepted)
     }
     async fn cleanup_valid(&self, j: &CompletionJournal) -> Result<bool, PublicError> {
@@ -586,13 +603,11 @@ async fn receipts_follow_durable_listening_whether_the_guardian_polls_or_watches
     });
     let socket = home.path().join("coordinator.sock");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !socket.exists() {
-        assert!(tokio::time::Instant::now() < deadline);
-        tokio::task::yield_now().await;
-    }
     b.acquire_scheduler("s".into()).await.unwrap();
-    reconcile_project(&b, p, "s").await.unwrap();
-    let launches = f.0.lock().unwrap().clone();
+    // Serving owns admission; wait for its launches before speaking as guardians.
+    let launches = tokio::time::timeout_at(deadline, f.launched(3))
+        .await
+        .unwrap();
     let launch = |name: &str| {
         launches
             .iter()
