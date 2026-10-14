@@ -42,6 +42,8 @@ The suite is small, fast and end to end. The default run takes about a minute.
 - The slow tier is tests named `slow_*`: durability across releases (cutover, schema
   migration, release builds), browser checks beyond each page's smoke, scale. It runs with
   `scripts/check --slow` for changes to release, deploy, install, schema or storage-format code.
+  It also holds cost gates and scenarios blocked by fixed product retry, quiet-time or stream
+  observation windows until controllable timing is available.
 - Before adding a test, name the real bug it catches that no existing test catches. If you can't,
   don't add it.
 

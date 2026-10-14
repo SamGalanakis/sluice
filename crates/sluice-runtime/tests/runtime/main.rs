@@ -62,3 +62,7 @@ async fn file_ready(
     .await
     .expect("fixture file never became ready");
 }
+
+mod scope;
+
+mod bypass;

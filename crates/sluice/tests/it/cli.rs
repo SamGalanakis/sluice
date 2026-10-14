@@ -1887,4 +1887,3 @@ fn step_bypass_takes_flags_and_settles_a_ready_step() {
     let status = ok(tool(home, "status", r#"{"project":"p","steps":"q"}"#));
     assert_eq!(status["steps"]["q"]["manual"], 1);
 }
-

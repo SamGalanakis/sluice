@@ -2,16 +2,14 @@
 //! it when its writer opens it, a restore of a backup from before it gains it on its private
 //! copy, and the schema version stays 3.
 
-#[allow(dead_code)]
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use super::home;
 use home::ScratchHome;
 use rusqlite::{Connection, params};
 use sluice_model::ids::HomeId;
 use sluice_store::{ReadPool, Writer, backup, schema::SCHEMA_VERSION};
 use std::path::Path;
 
-const SCHEMA_3: &str = include_str!("../migrations/0003.sql");
+const SCHEMA_3: &str = include_str!("../../migrations/0003.sql");
 
 /// A schema-3 home as a release from before the column left it.
 fn before_the_column(dir: &Path) {
@@ -39,7 +37,7 @@ fn has_column(dir: &Path) -> bool {
 }
 
 #[tokio::test]
-async fn a_home_from_before_the_bypass_column_gains_it_at_schema_3() {
+async fn slow_a_home_from_before_the_bypass_column_gains_it_at_schema_3() {
     let scratch = ScratchHome::new().unwrap();
     let home = scratch.path();
     before_the_column(home);
@@ -64,7 +62,7 @@ async fn a_home_from_before_the_bypass_column_gains_it_at_schema_3() {
 }
 
 #[test]
-fn a_restored_backup_from_before_the_column_gains_it() {
+fn slow_a_restored_backup_from_before_the_column_gains_it() {
     let scratch = ScratchHome::new().unwrap();
     let old = scratch.root().join("old");
     before_the_column(&old);

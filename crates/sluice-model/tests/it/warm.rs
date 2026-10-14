@@ -92,7 +92,6 @@ fn slow_warm_edits_compile_no_plan_whole() {
 #[test]
 fn a_step_with_a_fn_the_base_never_used_compiles() {
     let _serial = serial();
-    let _serial = serial();
     let signatures = model_signatures(&generate::catalog());
     let plan = support::compile(base_document(), &signatures).unwrap();
     assert!(plan.steps().values().all(|step| step.run != "t.late"));

@@ -1,8 +1,7 @@
 //! `step_bypass` and `unit_add(bypass=…)` (SPEC §7.5): a pending step with a preset settles as
 //! succeeded (manual) with the preset's outputs once ready, is never launched, and the steps
 //! after it run in order.
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use super::home;
 use home::ScratchHome;
 use serde_json::{Value, json};
 use sluice_model::{

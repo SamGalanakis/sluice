@@ -4,11 +4,8 @@
 //! sender and recipient as the identity it is (a session's `@name`, a step, "You"), and the
 //! address messages were stored under before sessions named themselves as stored,
 //! "orchestrator", muted, never "the orchestrator".
-mod board_fixture;
-mod seed;
-#[allow(dead_code)]
-#[path = "../../../tests/support/messages.rs"]
-mod stored_messages;
+use super::board_fixture;
+use super::stored_messages;
 use board_fixture::Fixture;
 use sluice_model::ids::{AttemptId, RunId};
 use sluice_store::RetrySafety;

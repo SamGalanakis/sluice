@@ -352,7 +352,9 @@ async fn messages_retries_waits_and_run_files() {
         let head = between(list, "<p class=\"mg-head\">", "</p>");
         assert!(!head.contains("mg-to"), "{head}");
         assert!(
-            list.contains("<span class=\"m-to\">to <span class=\"who\">Orchestrator</span></span>"),
+            list.contains(
+                "<span class=\"m-to\">to <span class=\"who who-old\">orchestrator</span></span>"
+            ),
             "{list}"
         );
         // the conversation counts every message

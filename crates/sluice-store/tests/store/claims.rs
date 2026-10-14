@@ -3,9 +3,7 @@
 //! not reading, a reading owner's only with `expected_owner`, the person's only with `force`;
 //! the units' open questions follow them, and a note from `sluice` records each handoff.
 //! Also a session's inbox: its own questions, never another session's.
-#[allow(dead_code)]
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use super::home;
 use home::ScratchHome;
 use rusqlite::params;
 use serde_json::Value;

@@ -2,9 +2,7 @@
 //! records and the messages to it (scope `mine`, its default), everyone's with scope `all`,
 //! unnamed callers as before; each session resumes from its own cursor; and how `sluice next`
 //! prints a long question and a settled unit's outcome.
-#[allow(dead_code)]
-#[path = "../../../tests/support/messages.rs"]
-mod stored_messages;
+use super::stored_messages;
 use sluice_model::{
     commands::{NextResult, Scope, Settles, StepStatus},
     error::PublicError,

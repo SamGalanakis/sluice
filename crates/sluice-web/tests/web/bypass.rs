@@ -2,8 +2,8 @@
 //! "bypass · <author>" tag in its unit's stage cell and its band; once the preset settles it,
 //! its manual result reads "bypassed" where set by hand would, on its plan row, its page and
 //! its drawer, while a value set by hand still reads set by hand.
-mod plan_html;
-mod seed;
+use super::plan_html;
+use super::seed;
 use axum::{
     Extension,
     body::{Body, to_bytes},

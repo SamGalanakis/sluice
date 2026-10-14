@@ -390,8 +390,9 @@ async fn ready_work_repeated_failure_and_answered_questions() {
             .find(|r| r.contains("Parser leak"))
             .unwrap();
         assert!(
-            own.contains("</a> to <span class=\"who-old\">orchestrator</span>: <span class=\"lg-said\">")
-                && own.contains("</span> <a class=\"lg-thread\" href=\""),
+            own.contains(
+                "</a> to <span class=\"who-old\">orchestrator</span>: <span class=\"lg-said\">"
+            ) && own.contains("</span> <a class=\"lg-thread\" href=\""),
             "{own}"
         );
         // the unit page says the note once, in its step view's foot, by its sender's stage
