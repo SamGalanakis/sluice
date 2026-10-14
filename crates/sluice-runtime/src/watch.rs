@@ -537,6 +537,9 @@ pub async fn next(
             beat(writer, &options, cursor).await?;
             heartbeat = options.clock.now() + Duration::from_secs(30);
         }
+        // Only expire against a snapshot begun at or after the deadline. Time
+        // spent reading must not hide a wake committed while that read was pending.
+        let now = options.clock.now();
         let (batch, top) = batch(reads, &options, cursor).await?;
         let mut consumed = 0;
         for (record, classification) in batch {
@@ -560,7 +563,6 @@ pub async fn next(
         }
         cursor = top;
         result.last_seq = cursor;
-        let now = options.clock.now();
         let finish = first
             .zip(last)
             .map(|(f, l)| (f + options.settle_max).min(l + options.settle));

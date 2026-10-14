@@ -389,9 +389,8 @@ async fn multiple_project_pagination_never_skips_a_record() {
 }
 /// Steps a manual clock until the spawned `next` returns, committing a wake
 /// before each step when `wake` is set, and returns the result with the number
-/// of wakes committed. Steps are virtual; each also yields a real millisecond so
-/// the writer and read-pool threads can answer. The step cap only turns a stuck
-/// call into a failure instead of a hang.
+/// of wakes committed. Each step yields, but store reads may still be pending
+/// when the clock advances. The step cap turns a stuck call into a failure.
 async fn drive(
     task: &mut tokio::task::JoinHandle<Result<NextResult, PublicError>>,
     clock: &ManualClock,
@@ -433,6 +432,8 @@ async fn settle_batches_wakes_and_absolute_max_cuts_continuous_wakes() {
     // Settle batches: wakes at t=0,0,20,35,35 with a 40ms settle. A wake is
     // stamped when next reads it, never before its commit, so the earliest
     // possible deadline is 40ms and all five commit before the clock reaches it.
+    // A read begun before the fifth commit must be rechecked if drive advances
+    // the clock past the deadline while that read is pending.
     let mut task = spawn(options_for(RecordSeq(0), Duration::from_millis(40), day));
     settled(&w, p, "u").await;
     settled(&w, p, "u").await;
@@ -440,10 +441,11 @@ async fn settle_batches_wakes_and_absolute_max_cuts_continuous_wakes() {
     settled(&w, p, "u").await;
     clock.advance(Duration::from_millis(15));
     settled(&w, p, "u").await;
-    settled(&w, p, "u").await;
+    let fifth = settled(&w, p, "u").await;
     let (batch, _) = drive(&mut task, &clock, Duration::from_millis(10), None).await;
     assert!(!batch.timed_out);
     assert_eq!(batch.records.len(), 5);
+    assert_eq!(batch.last_seq, fifth.seq);
     // Max cuts continuous wakes: a wake every 30ms keeps a one-day settle open
     // for as long as the producer runs (at most 300s of clock), so only the
     // 70ms absolute maximum can end the call.
