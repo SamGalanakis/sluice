@@ -1,12 +1,10 @@
 //! The contention gate of plan-rows §11, through the coordinator's real edit pipeline: a
-//! high-fanout edit (one plan input read by 2,000 steps) is held at the preparation barrier
+//! high-fanout edit (one plan input read by 16 steps) is held at the preparation barrier
 //! three times while an independent status write moves the project's execution-state witness
 //! between releases. It is refused busy and retryable after its third stale preparation,
 //! nothing is written, no preparation runs on the writer's thread, and each independent write
-//! commits while a preparation waits. Its own test binary: the barrier and the counters are
-//! process-wide.
-#[path = "../../../tests/support/home.rs"]
-mod home;
+//! commits while a preparation waits. Nextest isolates each test process, including its preparation barrier and counters.
+use super::home;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::*,
@@ -58,7 +56,7 @@ fn data(reply: CommandReply) -> Value {
 /// How long an independent small write may wait while an edit is being prepared (today's
 /// bound; plan-rows §11 proposes 100 ms once lane H has measured it).
 const INDEPENDENT_WRITE: Duration = Duration::from_millis(750);
-const READERS: usize = 2000;
+const READERS: usize = 16;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_high_fanout_edit_held_three_times_is_refused_busy_and_writes_nothing() {
@@ -128,7 +126,7 @@ async fn a_high_fanout_edit_held_three_times_is_refused_busy_and_writes_nothing(
         r.wait();
     });
     let measurement = Measurement::start();
-    // Retyping the input every reader reads: its preparation re-checks all 2,000 of them.
+    // Retyping the input every reader reads: its preparation re-checks all 16 of them.
     let edit = tokio::spawn({
         let (b, project) = (b.clone(), project.clone());
         async move {

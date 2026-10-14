@@ -170,7 +170,7 @@ async fn open_owner_question_runs_the_command_once_with_the_message_on_stdin() {
 }
 
 #[tokio::test]
-async fn failed_command_is_retried_and_a_lasting_failure_is_recorded_with_its_stderr() {
+async fn slow_failed_command_is_retried_and_a_lasting_failure_is_recorded_with_its_stderr() {
     let (h, w, r, p, mut n) = setup().await;
     // Fails once, then delivers.
     h.configure(
@@ -226,51 +226,51 @@ async fn timeout_is_uncertain_and_never_retried() {
 }
 
 #[tokio::test]
-async fn a_claim_left_by_a_stopped_coordinator_is_uncertain_and_not_replayed() {
-    let (h, w, r, p, _) = setup().await;
-    h.configure(APPEND, 10.0);
-    let q = question(&w, p).await;
-    let a = attempt(&r, p, &q).await;
-    let (id, token) = (q.id, a.attempt);
-    // The claim commits, then the coordinator dies before recording a result.
-    assert!(
-        w.write(
-            RetrySafety::NonIdempotent,
-            move |tx| messages::notify_claim(tx, p, id, token)
-        )
-        .await
-        .unwrap()
-    );
-    let mut restarted = Notifier::new(h.0.clone(), w.clone(), r.clone());
-    round(&mut restarted).await;
-    let a = attempt(&r, p, &q).await;
-    assert_eq!(a.outcome, NotificationOutcome::Uncertain);
-    assert!(matches!(a.error, Some(PublicError::ProcessLost { .. })));
-    assert!(h.lines().is_empty());
-    w.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn unconfigured_home_keeps_the_reservation_and_a_closed_question_is_not_sent() {
+async fn notification_restart_and_unconfigured_reservations() {
     let (h, w, r, p, mut n) = setup().await;
-    let q = question(&w, p).await;
-    round(&mut n).await;
-    assert_eq!(
-        attempt(&r, p, &q).await.outcome,
-        NotificationOutcome::Reserved
-    );
-    // Answered before notify was configured: settled without running the command.
-    post(
-        &w,
-        p,
-        json!({"verb":"reply","body":"yes","to_message":q.id,"owner":true}),
-    )
-    .await;
-    h.configure(APPEND, 10.0);
-    round(&mut n).await;
-    let a = attempt(&r, p, &q).await;
-    assert_eq!(a.outcome, NotificationOutcome::Failed);
-    assert!(matches!(a.error, Some(PublicError::Cancelled { .. })));
-    assert!(h.lines().is_empty());
+    {
+        h.configure(APPEND, 10.0);
+        let q = question(&w, p).await;
+        let a = attempt(&r, p, &q).await;
+        let (id, token) = (q.id, a.attempt);
+        // The claim commits, then the coordinator dies before recording a result.
+        assert!(
+            w.write(
+                RetrySafety::NonIdempotent,
+                move |tx| messages::notify_claim(tx, p, id, token)
+            )
+            .await
+            .unwrap()
+        );
+        let mut restarted = Notifier::new(h.0.clone(), w.clone(), r.clone());
+        round(&mut restarted).await;
+        let a = attempt(&r, p, &q).await;
+        assert_eq!(a.outcome, NotificationOutcome::Uncertain);
+        assert!(matches!(a.error, Some(PublicError::ProcessLost { .. })));
+        assert!(h.lines().is_empty());
+    }
+    {
+        std::fs::remove_file(h.0.join("config.json")).unwrap();
+
+        let q = question(&w, p).await;
+        round(&mut n).await;
+        assert_eq!(
+            attempt(&r, p, &q).await.outcome,
+            NotificationOutcome::Reserved
+        );
+        // Answered before notify was configured: settled without running the command.
+        post(
+            &w,
+            p,
+            json!({"verb":"reply","body":"yes","to_message":q.id,"owner":true}),
+        )
+        .await;
+        h.configure(APPEND, 10.0);
+        round(&mut n).await;
+        let a = attempt(&r, p, &q).await;
+        assert_eq!(a.outcome, NotificationOutcome::Failed);
+        assert!(matches!(a.error, Some(PublicError::Cancelled { .. })));
+        assert!(h.lines().is_empty());
+    }
     w.shutdown().await.unwrap();
 }

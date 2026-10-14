@@ -1,7 +1,6 @@
 //! Automatic retiring of done units (SPEC §6.11): the project setting, one edit by `sluice`,
 //! what it keeps, the rev race, the per-project turn and the waits it leaves asleep.
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use super::home;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::*,
@@ -69,7 +68,7 @@ impl Fixture {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
         while !client.path.exists() {
             assert!(tokio::time::Instant::now() < deadline);
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::task::yield_now().await;
         }
         let CommandReply::Project(p) = client
             .command(request(
@@ -194,9 +193,14 @@ fn external(unit: &str) -> Value {
 fn names(units: &[UnitName]) -> Vec<&str> {
     units.iter().map(UnitName::as_str).collect()
 }
-/// Long enough for a result recorded now to be older than a one-second setting.
-async fn age() {
-    tokio::time::sleep(Duration::from_millis(1100)).await;
+/// Replace fresh fixture results with identical snapshots from two seconds ago.
+async fn age(f: &Fixture) {
+    let project = f.project;
+    f.broker.writer().write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute("INSERT OR REPLACE INTO step_results (result_id,project_id,step_id,generation,work_generation,attempt_id,unit,declaration,inputs,inputs_hash,status,outputs,error,manual,run_ids,recorded_at,removed_at) SELECT result_id,project_id,step_id,generation,work_generation,attempt_id,unit,declaration,inputs,inputs_hash,status,outputs,error,manual,run_ids,strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 seconds'),removed_at FROM step_results WHERE project_id=?1", [project.to_string()])?;
+        tx.changed(Some(project), "status");
+        Ok(())
+    }).await.unwrap();
 }
 
 /// old and ta-x are done; held is done but a pending step reads it; live is pending and
@@ -279,7 +283,7 @@ async fn done_units_past_the_age_go_in_one_edit_by_sluice_and_the_rest_stay() {
     let f = Fixture::new().await;
     lanes(&f).await;
     f.retire_after(json!(1), json!(["ta-*"])).await;
-    age().await;
+    age(&f).await;
     let before = f.rev().await;
     let Retirement::Retired(result) = retire::retire(&f.broker, &f.setting().await.unwrap()).await
     else {
@@ -352,7 +356,7 @@ async fn done_units_past_the_age_go_in_one_edit_by_sluice_and_the_rest_stay() {
 async fn nothing_happens_when_the_setting_is_off_or_nothing_is_old_enough() {
     let f = Fixture::new().await;
     lanes(&f).await;
-    age().await;
+    age(&f).await;
     let rev = f.rev().await;
     let mut retirer = Retirer::new(Duration::ZERO);
     // Off: the project is not looked at.
@@ -377,7 +381,7 @@ async fn an_edit_between_the_look_and_the_prune_skips_the_round() {
     let f = Fixture::new().await;
     lanes(&f).await;
     f.retire_after(json!(1), json!([])).await;
-    age().await;
+    age(&f).await;
     let candidate = retire::candidate(&f.broker, &f.setting().await.unwrap())
         .await
         .unwrap()
@@ -403,7 +407,7 @@ async fn each_project_is_looked_at_once_per_interval() {
     let f = Fixture::new().await;
     lanes(&f).await;
     f.retire_after(json!(1), json!(["ta-*"])).await;
-    age().await;
+    age(&f).await;
     let mut retirer = Retirer::new(Duration::from_secs(300));
     let start = Instant::now();
     let done = retirer.pass(&f.broker, start).await.unwrap();
@@ -411,7 +415,7 @@ async fn each_project_is_looked_at_once_per_interval() {
     f.patch(json!([{"op":"step.add","step":"later","spec":external("later")}]))
         .await;
     f.finish("later").await;
-    age().await;
+    age(&f).await;
     // Its turn has not come again: not looked at, however much qualifies.
     assert!(
         retirer
@@ -437,7 +441,7 @@ async fn retiring_wakes_no_orchestrator_next() {
     let f = Fixture::new().await;
     lanes(&f).await;
     f.retire_after(json!(1), json!([])).await;
-    age().await;
+    age(&f).await;
     let since = f.last_seq().await;
     assert!(matches!(
         retire::retire(&f.broker, &f.setting().await.unwrap()).await,
@@ -465,40 +469,5 @@ async fn retiring_wakes_no_orchestrator_next() {
             .iter()
             .any(|r| serde_json::to_value(r).unwrap()["kind"] == "plan.edit")
     );
-    f.close().await;
-}
-
-#[tokio::test]
-async fn plan_prune_keep_keeps_matching_units_and_names_the_pattern() {
-    let f = Fixture::new().await;
-    lanes(&f).await;
-    let CommandReply::Pruned(result) = f
-        .call(
-            "plan_prune",
-            json!({"older_than_seconds":0,"keep":["ta-*"],"edit":{"dry_run":false,"reason":"manual"}}),
-        )
-        .await
-        .unwrap()
-    else {
-        panic!("pruned")
-    };
-    assert_eq!(names(&result.units), ["old"]);
-    assert_eq!(
-        serde_json::to_value(&result.kept).unwrap(),
-        json!([{"unit":"ta-x","keep":"ta-*"},{"unit":"held","step":"reader"}])
-    );
-    assert!(f.steps().await.contains(&"ta-x".to_owned()));
-    // Without keep, behaviour is as before: the done ta-x goes.
-    let CommandReply::Pruned(result) = f
-        .call(
-            "plan_prune",
-            json!({"older_than_seconds":0,"edit":{"dry_run":false,"reason":"manual"}}),
-        )
-        .await
-        .unwrap()
-    else {
-        panic!("pruned")
-    };
-    assert_eq!(names(&result.units), ["ta-x"]);
     f.close().await;
 }

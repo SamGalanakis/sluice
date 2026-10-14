@@ -1,5 +1,4 @@
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use super::home;
 use home::ScratchHome;
 use serde_json::{Value, json};
 use sluice_model::{
@@ -75,6 +74,16 @@ struct Fixture {
     project: ProjectId,
 }
 impl Fixture {
+    async fn seed(&mut self, doc: Value, resources: Value) {
+        self.host.launches.lock().unwrap().clear();
+        let reply = command(&self.broker,json!({"command":"project_create","args":{"name":format!("case-{}",ProjectId::new()),"description":"","resources":resources}})).await;
+        let CommandReply::Project(p) = reply else {
+            panic!("project")
+        };
+        self.project = p.project_id;
+        command(&self.broker,json!({"command":"plan_edit","args":{"project":{"kind":"id","value":self.project},"ops":ops_of(&doc),"reason":"fixture"}})).await;
+    }
+
     async fn new(doc: Value, resources: Value) -> Self {
         let home = ScratchHome::new().unwrap();
         assert!(home.root().exists());
@@ -88,7 +97,10 @@ impl Fixture {
             panic!("project reply")
         };
         let project = p.project_id;
-        command(&broker,json!({"command":"plan_edit","args":{"project":json!({"kind":"id","value":project}),"rev":1,"ops":ops_of(&doc),"start":true,"dry_run":false,"reason":"test","author":"test"}})).await;
+        let ops = ops_of(&doc);
+        if !ops.as_array().unwrap().is_empty() {
+            command(&broker,json!({"command":"plan_edit","args":{"project":json!({"kind":"id","value":project}),"rev":1,"ops":ops,"start":true,"dry_run":false,"reason":"test","author":"test"}})).await;
+        }
         broker.acquire_scheduler("test".into()).await.unwrap();
         Self {
             home,
@@ -165,9 +177,8 @@ fn journal(l: &Launch, result: PayloadResult) -> CompletionJournal {
 fn step(value: Value) -> Value {
     json!({"run":"fixture.echo","in":{"value":{"default":value}}})
 }
-#[tokio::test]
-async fn readiness_fan_in_outputs_and_inline_quiescence() {
-    let f=Fixture::new(json!({"inputs":{},"outputs":{"total":{"source":"c/value"}},"steps":{"a":{"run":"core.echo","in":{"value":{"default":4}}},"b":{"run":"fixture.echo","in":{"value":{"source":"a/value"}}},"c":{"run":"core.echo","in":{"value":{"source":"b/value"}}}}}),json!({})).await;
+async fn readiness_fan_in_outputs_and_inline_quiescence(f: &mut Fixture) {
+    f.seed(json!({"inputs":{},"outputs":{"total":{"source":"c/value"}},"steps":{"a":{"run":"core.echo","in":{"value":{"default":4}}},"b":{"run":"fixture.echo","in":{"value":{"source":"a/value"}}},"c":{"run":"core.echo","in":{"value":{"source":"b/value"}}}}}),json!({})).await;
     assert_eq!(f.tick().await, 2);
     let launches = f.launches();
     assert_eq!(launches.len(), 1);
@@ -184,9 +195,8 @@ async fn readiness_fan_in_outputs_and_inline_quiescence() {
     assert_eq!(status["steps"]["c"]["status"], "succeeded");
     assert_eq!(f.tick().await, 0);
 }
-#[tokio::test]
-async fn failed_outputs_and_spawn_failure_block_only_their_dependents() {
-    let f=Fixture::new(json!({"steps":{"bad":step(json!("spawn-fail")),"other":step(json!(2)),"dependent":{"run":"core.echo","in":{"value":{"source":"bad/value"}}}}}),json!({})).await;
+async fn failed_outputs_and_spawn_failure_block_only_their_dependents(f: &mut Fixture) {
+    f.seed(json!({"steps":{"bad":step(json!("spawn-fail")),"other":step(json!(2)),"dependent":{"run":"core.echo","in":{"value":{"source":"bad/value"}}}}}),json!({})).await;
     f.tick().await;
     let status = f.status().await;
     assert_eq!(status["steps"]["bad"]["status"], "failed");
@@ -199,9 +209,8 @@ async fn failed_outputs_and_spawn_failure_block_only_their_dependents() {
     .await;
     assert_eq!(f.status().await["steps"]["other"]["status"], "failed");
 }
-#[tokio::test]
-async fn scatter_reserves_all_items_holds_once_and_retries_only_failed_item() {
-    let f=Fixture::new(json!({"steps":{"each":{"run":"fixture.echo","scatter":"value","in":{"value":{"default":[1,2,3]}},"needs":{"cpu":1}},"waiter":{"run":"fixture.echo","in":{"value":{"default":9}},"needs":{"cpu":1}}}}),json!({"cpu":1})).await;
+async fn scatter_reserves_all_items_holds_once_and_retries_only_failed_item(f: &mut Fixture) {
+    f.seed(json!({"steps":{"each":{"run":"fixture.echo","scatter":"value","in":{"value":{"default":[1,2,3]}},"needs":{"cpu":1}},"waiter":{"run":"fixture.echo","in":{"value":{"default":9}},"needs":{"cpu":1}}}}),json!({"cpu":1})).await;
     assert_eq!(f.tick().await, 3);
     let batch = f.launches();
     assert_eq!(f.status().await["resources"]["cpu"]["held"], 1);
@@ -236,9 +245,8 @@ async fn scatter_reserves_all_items_holds_once_and_retries_only_failed_item() {
     );
     assert_eq!(f.launches().len(), 5);
 }
-#[tokio::test]
-async fn changed_scatter_hash_replaces_every_item_and_predecessor() {
-    let f=Fixture::new(json!({"steps":{"each":{"run":"fixture.echo","scatter":"value","in":{"value":{"default":[1,2]}}}}}),json!({})).await;
+async fn changed_scatter_hash_replaces_every_item_and_predecessor(f: &mut Fixture) {
+    f.seed(json!({"steps":{"each":{"run":"fixture.echo","scatter":"value","in":{"value":{"default":[1,2]}}}}}),json!({})).await;
     f.tick().await;
     let old = f.launches();
     f.finish(&old[0], PayloadResult::Succeeded(map(json!({"value":1}))))
@@ -261,9 +269,8 @@ async fn changed_scatter_hash_replaces_every_item_and_predecessor() {
     assert_eq!(runs.len(), 4);
     assert!(runs[2..].iter().all(|l| l.prev_run.is_none()));
 }
-#[tokio::test]
-async fn priority_ties_and_smaller_requests_that_fit_keep_fair_order() {
-    let f=Fixture::new(json!({"steps":{"plain":step(json!(0)),"big":{"run":"fixture.echo","in":{"value":{"default":1}},"needs":{"cpu":3},"priority":100},"first":{"run":"fixture.echo","in":{"value":{"default":2}},"needs":{"cpu":2},"priority":10},"second":{"run":"fixture.echo","in":{"value":{"default":3}},"needs":{"cpu":2},"priority":10},"small":{"run":"fixture.echo","in":{"value":{"default":4}},"needs":{"cpu":1}}}}),json!({"cpu":3})).await;
+async fn priority_ties_and_smaller_requests_that_fit_keep_fair_order(f: &mut Fixture) {
+    f.seed(json!({"steps":{"plain":step(json!(0)),"big":{"run":"fixture.echo","in":{"value":{"default":1}},"needs":{"cpu":3},"priority":100},"first":{"run":"fixture.echo","in":{"value":{"default":2}},"needs":{"cpu":2},"priority":10},"second":{"run":"fixture.echo","in":{"value":{"default":3}},"needs":{"cpu":2},"priority":10},"small":{"run":"fixture.echo","in":{"value":{"default":4}},"needs":{"cpu":1}}}}),json!({"cpu":3})).await;
     f.tick().await;
     assert_eq!(
         f.launches()
@@ -286,9 +293,8 @@ async fn priority_ties_and_smaller_requests_that_fit_keep_fair_order() {
         ["first", "small"]
     );
 }
-#[tokio::test]
-async fn pause_precedes_skip_and_zero_capacity_does_not_block_plain_work() {
-    let f=Fixture::new(json!({"inputs":{"go":"boolean"},"steps":{"plain":step(json!(1)),"needs":{"run":"fixture.echo","in":{"value":{"default":2}},"needs":{"cpu":1}},"held":{"run":"fixture.echo","in":{"value":{"default":3}},"after":["go"],"paused":true}}}),json!({"cpu":1})).await;
+async fn pause_precedes_skip_and_zero_capacity_does_not_block_plain_work(f: &mut Fixture) {
+    f.seed(json!({"inputs":{"go":"boolean"},"steps":{"plain":step(json!(1)),"needs":{"run":"fixture.echo","in":{"value":{"default":2}},"needs":{"cpu":1}},"held":{"run":"fixture.echo","in":{"value":{"default":3}},"after":["go"],"paused":true}}}),json!({"cpu":1})).await;
     command(&f.broker,json!({"command":"project_update","args":{"project":{"kind":"id","value":f.project},"new_name":null,"description":null,"icon":null,"resources":{"cpu":0},"paused":null,"archived":null,"expected_settings_rev":null,"reason":"lower","author":"test"}})).await;
     command(&f.broker,json!({"command":"plan_set_input","args":{"project":json!({"kind":"id","value":f.project}),"name":"go","value":false,"edit":{"expected":2,"dry_run":false,"reason":"test","author":"test"}}})).await;
     f.tick().await;
@@ -305,18 +311,16 @@ async fn pause_precedes_skip_and_zero_capacity_does_not_block_plain_work() {
     f.tick().await;
     assert_eq!(f.launches().len(), 2);
 }
-#[tokio::test]
-async fn empty_scatter_and_core_scatter_finish_inline_without_runs() {
-    let f=Fixture::new(json!({"steps":{"empty":{"run":"fixture.echo","scatter":"value","in":{"value":{"default":[]}}},"each":{"run":"core.echo","scatter":"value","in":{"value":{"default":[1,2]}}}}}),json!({})).await;
+async fn empty_scatter_and_core_scatter_finish_inline_without_runs(f: &mut Fixture) {
+    f.seed(json!({"steps":{"empty":{"run":"fixture.echo","scatter":"value","in":{"value":{"default":[]}}},"each":{"run":"core.echo","scatter":"value","in":{"value":{"default":[1,2]}}}}}),json!({})).await;
     f.tick().await;
     assert!(f.launches().is_empty());
     let status = f.status().await;
     assert_eq!(status["steps"]["empty"]["outputs"]["value"], json!([]));
     assert_eq!(status["steps"]["each"]["outputs"]["value"], json!([1, 2]));
 }
-#[tokio::test]
-async fn section_waiter_grants_before_plan_admission_even_without_new_ready_work() {
-    let f=Fixture::new(json!({"steps":{"active":step(json!(1)),"pending":{"run":"fixture.echo","in":{"value":{"default":2}},"needs":{"cpu":1},"paused":true}}}),json!({"cpu":1})).await;
+async fn section_waiter_grants_before_plan_admission_even_without_new_ready_work(f: &mut Fixture) {
+    f.seed(json!({"steps":{"active":step(json!(1)),"pending":{"run":"fixture.echo","in":{"value":{"default":2}},"needs":{"cpu":1},"paused":true}}}),json!({"cpu":1})).await;
     f.tick().await;
     let run = f.launches()[0].identity.run;
     let launch = f.launches()[0].clone();
@@ -361,9 +365,8 @@ async fn section_waiter_grants_before_plan_admission_even_without_new_ready_work
     assert_eq!(f.launches().len(), 1);
     assert_eq!(f.status().await["resources"]["cpu"]["held"], 1);
 }
-#[tokio::test]
-async fn supervised_capacity_failure_keeps_last_good_observation() {
-    let f=Fixture::new(json!({"steps":{"waiting":{"run":"fixture.echo","in":{"value":{"default":1}},"needs":{"cpu":1}}}}),json!({"cpu":{"capacity_fn":"fixture.capacity"}})).await;
+async fn supervised_capacity_failure_keeps_last_good_observation(f: &mut Fixture) {
+    f.seed(json!({"steps":{"waiting":{"run":"fixture.echo","in":{"value":{"default":1}},"needs":{"cpu":1}}}}),json!({"cpu":{"capacity_fn":"fixture.capacity"}})).await;
     f.tick().await;
     assert!(f.launches().is_empty());
     f.broker
@@ -427,9 +430,8 @@ async fn pause_running_does_not_cancel_and_lease_conflict_fences_admission() {
     assert_eq!(f.status().await["steps"]["active"]["status"], "succeeded");
 }
 
-#[tokio::test]
-async fn queue_events_are_durable_deduplicated_and_disappear_after_admission() {
-    let f = Fixture::new(
+async fn queue_events_are_durable_deduplicated_and_disappear_after_admission(f: &mut Fixture) {
+    f.seed(
         json!({"steps":{
             "a":{"run":"fixture.echo","in":{"value":{"default":1}},"needs":{"cpu":1}},
             "b":{"run":"fixture.echo","in":{"value":{"default":2}},"needs":{"cpu":1}},
@@ -480,11 +482,10 @@ async fn queue_events_are_durable_deduplicated_and_disappear_after_admission() {
     assert!(f.status().await["steps"]["inline"].get("queued").is_none());
 }
 
-#[tokio::test]
-async fn missing_file_is_typed_failure_and_unrelated_work_progresses() {
+async fn missing_file_is_typed_failure_and_unrelated_work_progresses(f: &mut Fixture) {
     let root = tempfile::tempdir().unwrap();
     let missing = root.path().join("missing.txt");
-    let f = Fixture::new(
+    f.seed(
         json!({"steps":{
             "broken":{"run":"fixture.echo","in":{"value":{"file":missing}}},
             "dependent":{"run":"core.echo","in":{"value":{"source":"broken/value"}}},
@@ -572,11 +573,12 @@ async fn a_guardian_watch_is_held_until_its_message_or_cancel_and_repeated_repor
     };
     let held = watch(MessageId(0));
     tokio::pin!(held);
-    tokio::select! {
-        biased;
-        _ = &mut held => panic!("nothing to report yet"),
-        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
-    }
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut held)
+            .await
+            .is_err(),
+        "nothing to report yet"
+    );
     // Commits elsewhere neither wake nor cost the held watch a read.
     let reads = f.broker.reads().snapshots();
     for _ in 0..20 {
@@ -610,11 +612,12 @@ async fn a_guardian_watch_is_held_until_its_message_or_cancel_and_repeated_repor
     // The next watch holds again until the step is cancelled.
     let held = watch(id);
     tokio::pin!(held);
-    tokio::select! {
-        biased;
-        _ = &mut held => panic!("nothing new yet"),
-        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
-    }
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut held)
+            .await
+            .is_err(),
+        "nothing new yet"
+    );
     command(&f.broker, json!({"command":"step_cancel","args":{"project":project,"selection":{"steps":["active"],"tags":null},"reason":"stop","author":"test"}})).await;
     let reply = tokio::time::timeout(std::time::Duration::from_secs(5), held)
         .await
@@ -627,4 +630,30 @@ async fn a_guardian_watch_is_held_until_its_message_or_cancel_and_repeated_repor
             ..
         }
     ));
+}
+
+#[tokio::test]
+async fn readiness_inline_and_independent_failures() {
+    let mut f = Fixture::new(json!({"steps":{}}), json!({})).await;
+    readiness_fan_in_outputs_and_inline_quiescence(&mut f).await;
+    failed_outputs_and_spawn_failure_block_only_their_dependents(&mut f).await;
+    empty_scatter_and_core_scatter_finish_inline_without_runs(&mut f).await;
+    missing_file_is_typed_failure_and_unrelated_work_progresses(&mut f).await;
+}
+
+#[tokio::test]
+async fn scatter_retry_and_changed_inputs() {
+    let mut f = Fixture::new(json!({"steps":{}}), json!({})).await;
+    scatter_reserves_all_items_holds_once_and_retries_only_failed_item(&mut f).await;
+    changed_scatter_hash_replaces_every_item_and_predecessor(&mut f).await;
+}
+
+#[tokio::test]
+async fn capacity_ordering_pauses_and_queue_records() {
+    let mut f = Fixture::new(json!({"steps":{}}), json!({})).await;
+    priority_ties_and_smaller_requests_that_fit_keep_fair_order(&mut f).await;
+    pause_precedes_skip_and_zero_capacity_does_not_block_plain_work(&mut f).await;
+    section_waiter_grants_before_plan_admission_even_without_new_ready_work(&mut f).await;
+    supervised_capacity_failure_keeps_last_good_observation(&mut f).await;
+    queue_events_are_durable_deduplicated_and_disappear_after_admission(&mut f).await;
 }

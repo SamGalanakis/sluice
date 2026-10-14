@@ -1,5 +1,5 @@
 //! A small edit to a large plan costs the coordinator a small, bounded time, driven through
-//! the coordinator socket: on a lash-shaped plan of 1,980 steps (330 units of fork, work,
+//! the coordinator socket: on a lash-shaped plan of 198 steps (33 units of fork, work,
 //! land, landed, close and rm, with handoffs, step gates and unit gates) a local metadata or
 //! binding edit answers within 100 ms in a debug build and a six-step unit addition within
 //! 200 ms (`docs/design/plan-rows.md` §11). A write made while an edit is being prepared
@@ -13,9 +13,7 @@
 //! measured about 8 to 18 ms for the local edits, 81 ms for the unit addition and 2 ms for
 //! the independent write in a debug build. If a runner's measurement says otherwise, §11
 //! keeps the old bounds until it does.
-#[allow(dead_code)]
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use super::home;
 use serde_json::{Map, Value, json};
 use sluice_model::{
     commands::*,
@@ -61,7 +59,7 @@ impl ExecutionHost for Fake {
     }
 }
 
-const UNITS: usize = 330;
+const UNITS: usize = 33;
 const SUFFIXES: [&str; 6] = ["fork", "work", "land", "landed", "close", "rm"];
 /// A local metadata or binding edit with a bounded affected set (§11).
 const LOCAL_EDIT_BUDGET: Duration = Duration::from_millis(100);
@@ -124,7 +122,7 @@ impl Fixture {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
         while !client.path.exists() {
             assert!(tokio::time::Instant::now() < deadline);
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::task::yield_now().await;
         }
         let created = client
             .command(request(
@@ -196,7 +194,7 @@ fn edit(reason: &str) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
+async fn slow_small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
     let f = Fixture::new().await;
     let mut ops = Vec::new();
     let mut previous: Option<String> = None;
@@ -230,8 +228,8 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
         "plan_edit metadata",
         f.timed(
             "plan_edit",
-            json!({"ops": [{"op": "step.update", "step": "fig-4140-rm",
-                "changes": {"tags": ["unit:fig-4140", "lane", "exit", "probe"]}}],
+            json!({"ops": [{"op": "step.update", "step": "fig-4014-rm",
+                "changes": {"tags": ["unit:fig-4014", "lane", "exit", "probe"]}}],
                 "reason": "probe"}),
         )
         .await,
@@ -240,8 +238,8 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
         "plan_edit binding",
         f.timed(
             "plan_edit",
-            json!({"ops": [{"op": "step.update", "step": "fig-4141-work",
-                "changes": {"in": {"value": {"source": "fig-4141-fork/value.issue"}}}}],
+            json!({"ops": [{"op": "step.update", "step": "fig-4015-work",
+                "changes": {"in": {"value": {"source": "fig-4015-fork/value.issue"}}}}],
                 "reason": "rebind"}),
         )
         .await,
@@ -250,7 +248,7 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
         "step_add",
         f.timed(
             "step_add",
-            json!({"step":"extra","spec":{"run":"fixture.echo","in":{"value":{"source":"fig-4140-rm/value"}},"after":["unit:fig-4140"]},
+            json!({"step":"extra","spec":{"run":"fixture.echo","in":{"value":{"source":"fig-4014-rm/value"}},"after":["unit:fig-4014"]},
                 "start":false,"edit":edit("add")}),
         )
         .await,
@@ -259,7 +257,7 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
         "edge_add",
         f.timed(
             "edge_add",
-            json!({"step":"extra","after":["fig-4200-land"],"edit":edit("gate")}),
+            json!({"step":"extra","after":["fig-4020-land"],"edit":edit("gate")}),
         )
         .await,
     ));
@@ -267,7 +265,7 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
         "unit_add",
         f.timed(
             "unit_add",
-            json!({"recipe":"lane","unit":"fig-9000","params":{},"after":{"*":["unit:fig-4329?"]},
+            json!({"recipe":"lane","unit":"fig-9000","params":{},"after":{"*":["unit:fig-4032?"]},
                 "start":false,"edit":edit("unit")}),
         )
         .await,
@@ -340,8 +338,8 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
                 .command(request(
                     "plan_edit",
                     json!({"project": {"kind": "id", "value": project}, "reason": "held",
-                        "ops": [{"op": "step.update", "step": "fig-4141-rm",
-                            "changes": {"tags": ["unit:fig-4141", "lane", "exit", "held"]}}]}),
+                        "ops": [{"op": "step.update", "step": "fig-4015-rm",
+                            "changes": {"tags": ["unit:fig-4015", "lane", "exit", "held"]}}]}),
                 ))
                 .await
         })

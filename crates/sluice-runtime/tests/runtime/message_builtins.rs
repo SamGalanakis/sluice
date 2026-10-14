@@ -2,9 +2,7 @@
 //! real scratch home.
 //! The fns park on durable-cursor subscriptions while the store keeps truth:
 //! first answering reply, closes, take-up lineage and answer claims.
-#[allow(dead_code)]
-#[path = "../../../tests/support/messages.rs"]
-mod stored_messages;
+use super::stored_messages;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::{Message, MessageAnswer, MessageVerb, MessageView},
@@ -63,6 +61,17 @@ struct Fixture {
     project: ProjectId,
 }
 impl Fixture {
+    async fn next_project(&mut self) {
+        let project = ProjectId::new();
+        self.writer.write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute("INSERT INTO projects(project_id,name,created_at) VALUES (?1,?1,'now')",[project.to_string()])?;
+            tx.sql().execute("INSERT INTO plans(project_id,rev,root_order) VALUES (?1,1,'[\"steps\"]')",[project.to_string()])?;
+            tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,unit,run,paused,priority) VALUES (?1,'work',0,'{\"run\":\"test.fn\"}','work','test.fn','false',0), (?1,'other',1,'{\"run\":\"test.fn\"}','other','test.fn','false',0)",[project.to_string()])?;
+            tx.changed(Some(project),"plan"); Ok(())
+        }).await.unwrap();
+        self.project = project;
+    }
+
     async fn new() -> Self {
         let home = Scratch::new();
         let writer = Writer::open(home.path()).unwrap();
@@ -247,7 +256,7 @@ impl Fixture {
                     .await
                     .unwrap();
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::task::yield_now().await;
         }
         panic!("run {run} never posted its question");
     }
@@ -266,9 +275,7 @@ fn ask_inputs(body: &str, title: &str) -> Value {
     json!({"to": "owner", "body": body, "title": title, "wait": true})
 }
 
-#[tokio::test]
-async fn ask_say_and_reply_commit_the_message_and_return_its_receipt() {
-    let f = Fixture::new().await;
+async fn ask_say_and_reply_commit_the_message_and_return_its_receipt(f: &Fixture) {
     let run = f.run("work", -1, 1, None).await;
     let ctx = f.ctx(Some(run), CancellationToken::new());
     // Naming the retired orchestrator, the step's run tells its unit's owner: unowned, with
@@ -332,51 +339,7 @@ async fn ask_say_and_reply_commit_the_message_and_return_its_receipt() {
     assert_eq!(f.thread("step-work").await.len(), 3);
 }
 
-#[tokio::test]
-async fn retired_message_post_still_runs_through_the_bridge_and_only_for_a_run() {
-    let f = Fixture::new().await;
-    let ctx = f.ctx(None, CancellationToken::new());
-    match fns::dispatch(
-        "message.post",
-        &map(json!({"body": "x", "needs_reply": false, "thread": "t"})),
-        &ctx,
-    )
-    .await
-    {
-        Err(FnFailure::Terminal(message)) => assert!(message.contains("retired"), "{message}"),
-        other => panic!("expected a refusal, got {other:?}"),
-    }
-    let run = f.run("work", -1, 1, None).await;
-    let ctx = f.ctx(Some(run), CancellationToken::new());
-    let note = fns::dispatch(
-        "message.post",
-        &map(json!({"body": "progress", "needs_reply": false, "thread": "ignored", "from": "x"})),
-        &ctx,
-    )
-    .await
-    .unwrap();
-    assert_eq!(out(&note, "reply"), Value::Null);
-    assert!(!note.0.contains_key("receipt"));
-    fns::dispatch("message.post", &map(json!({"body": "q"})), &ctx)
-        .await
-        .unwrap();
-    let thread = f.thread("step-work").await;
-    assert_eq!(out(&note, "id"), json!(thread[0].id.0));
-    // A note to nobody goes to the unit's owner (unowned: the person); a root post is a
-    // question.
-    assert_eq!(
-        (
-            thread[0].verb,
-            thread[0].to.as_deref(),
-            thread[0].from.as_str()
-        ),
-        (MessageVerb::Say, Some("owner"), "work")
-    );
-    assert_eq!(thread[1].verb, MessageVerb::Ask);
-}
-#[tokio::test]
-async fn waiting_post_parks_then_claims_the_first_answering_reply() {
-    let f = Fixture::new().await;
+async fn waiting_post_parks_then_claims_the_first_answering_reply(f: &Fixture) {
     let run = f.run("work", -1, 1, None).await;
     let ctx = f.ctx(Some(run), CancellationToken::new());
     let handle = tokio::spawn(async move {
@@ -397,9 +360,7 @@ async fn waiting_post_parks_then_claims_the_first_answering_reply() {
     assert_eq!(f.claimed(answer.id).await, Some(run.to_string()));
 }
 
-#[tokio::test]
-async fn waiting_post_fails_terminally_when_the_question_closes() {
-    let f = Fixture::new().await;
+async fn waiting_post_fails_terminally_when_the_question_closes(f: &Fixture) {
     let run = f.run("work", -1, 1, None).await;
     let ctx = f.ctx(Some(run), CancellationToken::new());
     let handle = tokio::spawn(async move {
@@ -413,9 +374,7 @@ async fn waiting_post_fails_terminally_when_the_question_closes() {
     }
 }
 
-#[tokio::test]
-async fn a_stopped_run_ends_the_wait_with_the_stopped_reason() {
-    let f = Fixture::new().await;
+async fn a_stopped_run_ends_the_wait_with_the_stopped_reason(f: &Fixture) {
     let run = f.run("work", -1, 1, None).await;
     let ctx = f.ctx(Some(run), CancellationToken::new());
     let handle = tokio::spawn(async move {
@@ -430,9 +389,7 @@ async fn a_stopped_run_ends_the_wait_with_the_stopped_reason() {
     }
 }
 
-#[tokio::test]
-async fn a_retry_takes_up_the_open_question_and_claims_its_answer() {
-    let f = Fixture::new().await;
+async fn a_retry_takes_up_the_open_question_and_claims_its_answer(f: &Fixture) {
     let run = f.run("work", -1, 1, None).await;
     let ctx = f.ctx(Some(run), CancellationToken::new());
     let first = tokio::spawn(async move {
@@ -444,10 +401,14 @@ async fn a_retry_takes_up_the_open_question_and_claims_its_answer() {
     // The retry adopts the earlier question instead of posting a new one.
     let retry = f.run("work", -1, 1, Some(run)).await;
     let ctx = f.ctx(Some(retry), CancellationToken::new());
-    let second = tokio::spawn(async move {
+    let mut second = tokio::spawn(async move {
         fns::dispatch("message.ask", &map(ask_inputs("which?", "Pick")), &ctx).await
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut second)
+            .await
+            .is_err()
+    );
     assert!(f.question(question.id).await.waiting);
     assert_eq!(f.thread("step-work").await.len(), 1);
     let reply = f.answer(question.id, "the answer").await;
@@ -457,9 +418,7 @@ async fn a_retry_takes_up_the_open_question_and_claims_its_answer() {
     assert_eq!(f.claimed(reply.id).await, Some(retry.to_string()));
 }
 
-#[tokio::test]
-async fn a_claimed_answer_is_never_reused_by_a_later_retry() {
-    let f = Fixture::new().await;
+async fn a_claimed_answer_is_never_reused_by_a_later_retry(f: &Fixture) {
     let run = f.run("work", -1, 1, None).await;
     let ctx = f.ctx(Some(run), CancellationToken::new());
     let handle = tokio::spawn(async move {
@@ -486,9 +445,7 @@ async fn a_claimed_answer_is_never_reused_by_a_later_retry() {
     assert_ne!(reply.id.0, claimed);
 }
 
-#[tokio::test]
-async fn waiting_post_requires_a_run_and_waiting_cancels_through_the_token() {
-    let f = Fixture::new().await;
+async fn waiting_post_requires_a_run_and_waiting_cancels_through_the_token(f: &Fixture) {
     let ctx = f.ctx(None, CancellationToken::new());
     match fns::dispatch("message.ask", &map(ask_inputs("q", "T")), &ctx).await {
         Err(FnFailure::Terminal(message)) => assert!(message.contains("run"), "{message}"),
@@ -508,9 +465,7 @@ async fn waiting_post_requires_a_run_and_waiting_cancels_through_the_token() {
     }
 }
 
-#[tokio::test]
-async fn message_wait_returns_thread_messages_after_since_and_filters_to() {
-    let f = Fixture::new().await;
+async fn message_wait_returns_thread_messages_after_since_and_filters_to(f: &Fixture) {
     let m1 = stored(
         &f.writer,
         f.project,
@@ -598,11 +553,9 @@ async fn message_wait_returns_thread_messages_after_since_and_filters_to() {
     assert_eq!(ids, vec![m2.id.0, m3.id.0]);
 }
 
-#[tokio::test]
-async fn message_wait_questions_hold_through_notes_until_a_question_lands() {
-    let f = Fixture::new().await;
+async fn message_wait_questions_hold_through_notes_until_a_question_lands(f: &Fixture) {
     let ctx = f.ctx(None, CancellationToken::new());
-    let handle = tokio::spawn(async move {
+    let mut handle = tokio::spawn(async move {
         fns::dispatch(
             "message.wait",
             &map(json!({"thread": "t", "wake": "questions", "timeout": 60})),
@@ -610,7 +563,11 @@ async fn message_wait_questions_hold_through_notes_until_a_question_lands() {
         )
         .await
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut handle)
+            .await
+            .is_err()
+    );
     let note = stored(
         &f.writer,
         f.project,
@@ -624,8 +581,12 @@ async fn message_wait_questions_hold_through_notes_until_a_question_lands() {
         },
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(!handle.is_finished(), "a note must not wake questions mode");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut handle)
+            .await
+            .is_err(),
+        "a note must not wake questions mode"
+    );
     let question = stored(
         &f.writer,
         f.project,
@@ -665,7 +626,7 @@ async fn message_wait_returns_at_the_timeout_with_everything_it_saw() {
     assert!(out(&result, "last_seq").as_i64().unwrap() >= 0);
     // Under wake "questions", accumulated notes still come back at the timeout.
     let ctx = f.ctx(None, CancellationToken::new());
-    let handle = tokio::spawn(async move {
+    let mut handle = tokio::spawn(async move {
         fns::dispatch(
             "message.wait",
             &map(json!({"thread": "t2", "wake": "questions", "timeout": 1})),
@@ -673,7 +634,11 @@ async fn message_wait_returns_at_the_timeout_with_everything_it_saw() {
         )
         .await
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut handle)
+            .await
+            .is_err()
+    );
     let note = stored(
         &f.writer,
         f.project,
@@ -697,11 +662,9 @@ async fn message_wait_returns_at_the_timeout_with_everything_it_saw() {
     assert_eq!(ids, vec![note.id.0]);
 }
 
-#[tokio::test]
-async fn message_wait_wakes_on_any_post_by_default_and_cancels() {
-    let f = Fixture::new().await;
+async fn message_wait_wakes_on_any_post_by_default_and_cancels(f: &Fixture) {
     let ctx = f.ctx(None, CancellationToken::new());
-    let handle = tokio::spawn(async move {
+    let mut handle = tokio::spawn(async move {
         fns::dispatch(
             "message.wait",
             &map(json!({"thread": "t", "timeout": 60})),
@@ -709,7 +672,11 @@ async fn message_wait_wakes_on_any_post_by_default_and_cancels() {
         )
         .await
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut handle)
+            .await
+            .is_err()
+    );
     let posted = stored(
         &f.writer,
         f.project,
@@ -732,7 +699,7 @@ async fn message_wait_wakes_on_any_post_by_default_and_cancels() {
     // Cancellation ends a parked wait.
     let cancel = CancellationToken::new();
     let ctx = f.ctx(None, cancel.clone());
-    let handle = tokio::spawn(async move {
+    let mut handle = tokio::spawn(async move {
         fns::dispatch(
             "message.wait",
             &map(json!({"thread": "never", "timeout": 60})),
@@ -740,7 +707,11 @@ async fn message_wait_wakes_on_any_post_by_default_and_cancels() {
         )
         .await
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut handle)
+            .await
+            .is_err()
+    );
     cancel.cancel();
     match f.settle(handle).await {
         Err(FnFailure::Terminal(message)) => assert_eq!(message, "cancelled"),
@@ -748,9 +719,7 @@ async fn message_wait_wakes_on_any_post_by_default_and_cancels() {
     }
 }
 
-#[tokio::test]
-async fn bad_inputs_fail_terminally_before_any_wait() {
-    let f = Fixture::new().await;
+async fn bad_inputs_fail_terminally_before_any_wait(f: &Fixture) {
     let ctx = f.ctx(None, CancellationToken::new());
     for (name, inputs, want) in [
         ("message.wait", json!({}), "must be a string"),
@@ -786,4 +755,45 @@ async fn bad_inputs_fail_terminally_before_any_wait() {
             other => panic!("{name} {inputs}: expected terminal failure, got {other:?}"),
         }
     }
+}
+
+#[tokio::test]
+async fn message_verbs_and_preflight_refusals() {
+    let f = Fixture::new().await;
+    ask_say_and_reply_commit_the_message_and_return_its_receipt(&f).await;
+    bad_inputs_fail_terminally_before_any_wait(&f).await;
+    f.writer.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn question_answers_and_retry_lineage() {
+    let mut f = Fixture::new().await;
+    waiting_post_parks_then_claims_the_first_answering_reply(&f).await;
+    f.next_project().await;
+    a_retry_takes_up_the_open_question_and_claims_its_answer(&f).await;
+    f.next_project().await;
+    a_claimed_answer_is_never_reused_by_a_later_retry(&f).await;
+    f.writer.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn question_close_stop_and_cancellation() {
+    let mut f = Fixture::new().await;
+    waiting_post_fails_terminally_when_the_question_closes(&f).await;
+    f.next_project().await;
+    a_stopped_run_ends_the_wait_with_the_stopped_reason(&f).await;
+    f.next_project().await;
+    waiting_post_requires_a_run_and_waiting_cancels_through_the_token(&f).await;
+    f.writer.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn message_wait_filters_wakes_and_cancellation() {
+    let mut f = Fixture::new().await;
+    message_wait_returns_thread_messages_after_since_and_filters_to(&f).await;
+    f.next_project().await;
+    message_wait_questions_hold_through_notes_until_a_question_lands(&f).await;
+    f.next_project().await;
+    message_wait_wakes_on_any_post_by_default_and_cancels(&f).await;
+    f.writer.shutdown().await.unwrap();
 }

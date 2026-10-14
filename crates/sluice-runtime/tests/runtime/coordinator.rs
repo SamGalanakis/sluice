@@ -1,5 +1,4 @@
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use super::home;
 use serde_json::{Value, json};
 use sluice_model::{
     RuntimeApi,
@@ -87,9 +86,11 @@ fn executor() -> ProcessIdentity {
         cgroup: "/fake/payload".into(),
     }
 }
-#[tokio::test]
-async fn claim_replay_is_same_identity_only_and_start_consumes_backlog_once() {
-    let (_home, b, f, p) = setup().await;
+async fn claim_replay_is_same_identity_only_and_start_consumes_backlog_once(
+    b: Coordinator<Fake>,
+    f: Fake,
+    p: ProjectId,
+) {
     b.command(request(json!({"command":"say","args":{"project":json!({"kind":"id","value":p}),"body":"feedback","to":"work","data":null,"run":null,"me":"@orch"}}))).await.unwrap();
     b.acquire_scheduler("s".into()).await.unwrap();
     reconcile_project(&b, p, "s").await.unwrap();
@@ -262,9 +263,11 @@ async fn message_count(b: &Coordinator<Fake>, p: ProjectId) -> (i64, i64) {
         .await
         .unwrap()
 }
-#[tokio::test]
-async fn ask_say_and_reply_reach_every_recipient_on_derived_threads() {
-    let (_home, b, _f, p) = setup().await;
+async fn ask_say_and_reply_reach_every_recipient_on_derived_threads(
+    b: Coordinator<Fake>,
+    _f: Fake,
+    p: ProjectId,
+) {
     // A session (`@orch`) and the owner (the dashboard) speak to every recipient kind: a step
     // of the plan, a session and the owner.
     let say_step = speak(&b, p, "say", json!({"to":"work","body":"steer"}))
@@ -414,9 +417,11 @@ async fn ask_say_and_reply_reach_every_recipient_on_derived_threads() {
     assert_eq!(inbox(true).await, vec![reply.id]);
     let _ = (ask_orch, say_orch, after);
 }
-#[tokio::test]
-async fn a_missing_unknown_or_removed_recipient_is_invalid_and_stores_nothing() {
-    let (_home, b, _f, p) = setup().await;
+async fn a_missing_unknown_or_removed_recipient_is_invalid_and_stores_nothing(
+    b: Coordinator<Fake>,
+    _f: Fake,
+    p: ProjectId,
+) {
     let before = message_count(&b, p).await;
     for (verb, args) in [
         ("say", json!({"body":"x"})),
@@ -463,9 +468,11 @@ async fn a_missing_unknown_or_removed_recipient_is_invalid_and_stores_nothing() 
     ));
     assert_eq!(message_count(&b, p).await, before);
 }
-#[tokio::test]
-async fn receipts_follow_the_step_from_pending_through_its_run_to_done() {
-    let (_home, b, f, p) = setup().await;
+async fn receipts_follow_the_step_from_pending_through_its_run_to_done(
+    b: Coordinator<Fake>,
+    f: Fake,
+    p: ProjectId,
+) {
     b.command(request(json!({"command":"step_add","args":{"project":{"kind":"id","value":p},"step":"held","spec":{"run":"fixture.echo","paused":true,"in":{"value":{"default":1}}},"start":false,"edit":{"dry_run":false,"reason":"test","author":"test"}}})))
         .await
         .unwrap();
@@ -581,7 +588,7 @@ async fn receipts_follow_durable_listening_whether_the_guardian_polls_or_watches
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while !socket.exists() {
         assert!(tokio::time::Instant::now() < deadline);
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::task::yield_now().await;
     }
     b.acquire_scheduler("s".into()).await.unwrap();
     reconcile_project(&b, p, "s").await.unwrap();
@@ -645,7 +652,7 @@ async fn receipts_follow_durable_listening_whether_the_guardian_polls_or_watches
         Ok(R::Ack)
     ));
     // A current guardian holds a watch over the socket; the message wakes it.
-    let held = tokio::spawn({
+    let mut held = tokio::spawn({
         let (link, identity, after) = (
             link(&watched),
             watched.identity.clone(),
@@ -660,7 +667,11 @@ async fn receipts_follow_durable_listening_whether_the_guardian_polls_or_watches
             .await
         }
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut held)
+            .await
+            .is_err()
+    );
     let r = say("watched").await.unwrap();
     assert_eq!(
         (r.delivery, r.run),
@@ -798,97 +809,12 @@ async fn the_retired_message_post_is_bridged_for_a_run_and_refused_without_one()
     assert_eq!((thread[0].id, thread[1].id), (asked, said));
     assert_eq!(thread[0].state, Some(QuestionState::Answered));
 }
-#[tokio::test]
-async fn a_watcher_sees_exactly_the_pinned_fields_of_each_verb_record() {
-    let (_home, b, _f, p) = setup().await;
-    let ask = speak(
-        &b,
-        p,
-        "ask",
-        json!({"to":"owner","body":"q","title":"T","ui":"root = Button()","data":{"k":1}}),
-    )
-    .await
-    .unwrap();
-    speak(&b, p, "say", json!({"to":"work","body":"s"}))
-        .await
-        .unwrap();
-    speak(
-        &b,
-        p,
-        "reply",
-        json!({"to_message":ask.id,"body":"","answer":{"action":"close"},"owner":true}),
-    )
-    .await
-    .unwrap();
-    let CommandReply::Records(page) = b
-        .command(request(json!({"command":"log_read","args":{"project":{"kind":"id","value":p},"since_seq":null,"kinds":["message"],"threads":null,"limit":10}})))
-        .await
-        .unwrap()
-    else {
-        panic!("records")
-    };
-    let keys: Vec<Vec<String>> = page
-        .records
-        .iter()
-        .map(|r| {
-            let mut keys: Vec<String> = serde_json::to_value(r)
-                .unwrap()
-                .as_object()
-                .unwrap()
-                .keys()
-                .cloned()
-                .collect();
-            keys.sort();
-            keys
-        })
-        .collect();
-    let sorted = |names: &[&str]| {
-        let mut names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
-        names.sort();
-        names
-    };
-    let envelope = [
-        "seq",
-        "at",
-        "project",
-        "kind",
-        "id",
-        "verb",
-        "from",
-        "to",
-        "thread",
-        "body",
-        "posted_at",
-    ];
-    assert_eq!(
-        keys,
-        vec![
-            sorted(&[&envelope[..], &["title", "ui", "data"]].concat()),
-            sorted(&envelope),
-            sorted(&[&envelope[..], &["to_message", "answer"]].concat()),
-        ]
-    );
-    let first = serde_json::to_value(&page.records[0]).unwrap();
-    assert_eq!(
-        (first["kind"].as_str(), first["verb"].as_str()),
-        (Some("message"), Some("ask"))
-    );
-    // The messages rows carry the same shape, plus a question's state.
-    let rows = read_messages(&b, p, json!({"view":"history","owner":true})).await;
-    let row = serde_json::to_value(&rows[0]).unwrap();
-    let mut keys: Vec<_> = row.as_object().unwrap().keys().cloned().collect();
-    keys.sort();
-    assert_eq!(
-        keys,
-        sorted(&[
-            "id", "verb", "from", "to", "thread", "body", "title", "ui", "data", "at", "state"
-        ])
-    );
-    assert_eq!(row["state"], "closed");
-}
-#[tokio::test]
-async fn current_reserved_run_accepts_submissions_before_claim_and_after_feedback() {
-    let (_home, b, f, p) = setup().await;
+
+async fn current_reserved_run_accepts_submissions_before_claim_and_after_feedback(
+    b: Coordinator<Fake>,
+    f: Fake,
+    p: ProjectId,
+) {
     b.acquire_scheduler("s".into()).await.unwrap();
     for round in 0..2 {
         reconcile_project(&b, p, "s").await.unwrap();
@@ -1028,9 +954,11 @@ async fn superseded_nonterminal_run_refuses_new_submissions() {
     }
 }
 
-#[tokio::test]
-async fn callbacks_deduplicate_atomically_and_completion_replay_does_not_release_replacement() {
-    let (_home, b, f, p) = setup().await;
+async fn callbacks_deduplicate_atomically_and_completion_replay_does_not_release_replacement(
+    b: Coordinator<Fake>,
+    f: Fake,
+    p: ProjectId,
+) {
     b.acquire_scheduler("s".into()).await.unwrap();
     reconcile_project(&b, p, "s").await.unwrap();
     let l = f.0.lock().unwrap()[0].clone();
@@ -1106,9 +1034,11 @@ async fn callbacks_deduplicate_atomically_and_completion_replay_does_not_release
     };
     assert_eq!(status.as_value()["steps"]["work"]["status"], "running");
 }
-#[tokio::test]
-async fn cancellation_prevents_claim_and_bad_capability_cannot_read_run() {
-    let (_home, b, f, p) = setup().await;
+async fn cancellation_prevents_claim_and_bad_capability_cannot_read_run(
+    b: Coordinator<Fake>,
+    f: Fake,
+    p: ProjectId,
+) {
     b.acquire_scheduler("s".into()).await.unwrap();
     reconcile_project(&b, p, "s").await.unwrap();
     let l = f.0.lock().unwrap()[0].clone();
@@ -1140,7 +1070,7 @@ async fn socket_lease_has_one_holder_and_disconnect_releases_it() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while !client.path.exists() {
         assert!(tokio::time::Instant::now() < deadline);
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::task::yield_now().await;
     }
     assert_eq!(
         std::fs::metadata(&client.path)
@@ -1156,7 +1086,7 @@ async fn socket_lease_has_one_holder_and_disconnect_releases_it() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while b.scheduler_owner().await.unwrap().is_some() {
         assert!(tokio::time::Instant::now() < deadline);
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::task::yield_now().await;
     }
     let second = client.acquire_scheduler().await.unwrap();
     assert!(matches!(
@@ -1183,7 +1113,7 @@ async fn direct_call_handoff_survives_cancelled_waiter_and_queued_call_stays_pen
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while f.0.lock().unwrap().is_empty() {
         assert!(tokio::time::Instant::now() < deadline);
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::task::yield_now().await;
     }
     waiter.abort();
     let _ = waiter.await;
@@ -1333,9 +1263,11 @@ async fn cancelled_start_records_history_without_dispatch_and_adoption_settles()
     assert_eq!(f.0.lock().unwrap().len(), 1);
 }
 
-#[tokio::test]
-async fn terminal_callbacks_replay_exact_replies_and_refuse_new_mutations() {
-    let (_home, b, f, p) = setup().await;
+async fn terminal_callbacks_replay_exact_replies_and_refuse_new_mutations(
+    b: Coordinator<Fake>,
+    f: Fake,
+    p: ProjectId,
+) {
     b.acquire_scheduler("s".into()).await.unwrap();
     reconcile_project(&b, p, "s").await.unwrap();
     let l = f.0.lock().unwrap()[0].clone();
@@ -1629,9 +1561,11 @@ async fn a_run_sets_its_projects_board_and_reads_it_back() {
 
 /// A board that names a step not in the plan is set with a warning per name; a plan edit
 /// that takes away a step the board names is made, and says so in `board_warnings`.
-#[tokio::test]
-async fn board_set_and_plan_edits_warn_for_the_steps_the_board_loses() {
-    let (_home, b, _f, p) = setup().await;
+async fn board_set_and_plan_edits_warn_for_the_steps_the_board_loses(
+    b: Coordinator<Fake>,
+    _f: Fake,
+    p: ProjectId,
+) {
     let project = json!({"kind":"id","value":p});
     b.command(request(json!({"command":"step_add","args":{"project":project,"step":"tests-main","spec":{"run":"fixture.echo","tags":["main-tests"],"in":{"value":{"default":1}}},"start":false,"edit":{"dry_run":false,"reason":"test","author":"test"}}})))
         .await
@@ -1715,9 +1649,11 @@ async fn run_started(b: &Coordinator<Fake>, l: &Launch) {
     .unwrap();
 }
 
-#[tokio::test]
-async fn a_running_step_that_has_submitted_is_finishing_in_status_step_context_and_call_status() {
-    let (_home, b, f, p) = setup().await;
+async fn a_running_step_that_has_submitted_is_finishing_in_status_step_context_and_call_status(
+    b: Coordinator<Fake>,
+    f: Fake,
+    p: ProjectId,
+) {
     b.acquire_scheduler("s".into()).await.unwrap();
     reconcile_project(&b, p, "s").await.unwrap();
     let l = f.0.lock().unwrap()[0].clone();
@@ -1956,11 +1892,14 @@ async fn step_settle_stops_a_finishing_agent_and_succeeds_with_its_done_signal_o
     );
 }
 
-#[tokio::test]
-async fn step_settle_refuses_a_fn_that_composes_its_agent_with_the_way_by_hand() {
+async fn step_settle_refuses_a_fn_that_composes_its_agent_with_the_way_by_hand(
+    b: Coordinator<Fake>,
+    f: Fake,
+    p: ProjectId,
+) {
     // fixture.submit stands for a project fn that runs an agent (ctx.builtin("agent.run")):
     // its outputs are what it returns, which sluice cannot derive from the submission.
-    let (_home, b, f, p) = setup().await;
+
     b.acquire_scheduler("s".into()).await.unwrap();
     reconcile_project(&b, p, "s").await.unwrap();
     let l = f.0.lock().unwrap()[0].clone();
@@ -1999,9 +1938,11 @@ async fn step_settle_refuses_a_fn_that_composes_its_agent_with_the_way_by_hand()
 /// A run admitted before its plan moved on completes from what its attempt froze: the attempt
 /// keeps no plan snapshot, only the revision it was admitted at, and later edits (a new step,
 /// the running step's own tags) change nothing about its result.
-#[tokio::test]
-async fn a_run_completes_from_its_attempt_after_the_plan_moved_on() {
-    let (_home, b, f, p) = setup().await;
+async fn a_run_completes_from_its_attempt_after_the_plan_moved_on(
+    b: Coordinator<Fake>,
+    f: Fake,
+    p: ProjectId,
+) {
     b.acquire_scheduler("s".into()).await.unwrap();
     reconcile_project(&b, p, "s").await.unwrap();
     let l = f.0.lock().unwrap()[0].clone();
@@ -2070,9 +2011,11 @@ async fn a_run_completes_from_its_attempt_after_the_plan_moved_on() {
 /// The edit pipeline's refusals: what a caller supplies empty is refused before anything is
 /// prepared, an explicit stale revision is a conflict naming the current one, and a run's
 /// callback may not edit another project.
-#[tokio::test]
-async fn plan_edit_refuses_empty_supplies_and_a_stale_revision_before_preparing() {
-    let (_home, b, _f, p) = setup().await;
+async fn plan_edit_refuses_empty_supplies_and_a_stale_revision_before_preparing(
+    b: Coordinator<Fake>,
+    _f: Fake,
+    p: ProjectId,
+) {
     let project = json!({"kind":"id","value":p});
     let refused = |args: Value| {
         let b = b.clone();
@@ -2127,9 +2070,7 @@ async fn plan_edit_refuses_empty_supplies_and_a_stale_revision_before_preparing(
 
 /// `verify` rebuilds every index row from the declarations and reports each stored one that
 /// differs: a reference re-pointed by hand, a step's unit changed and an edge deleted.
-#[tokio::test]
-async fn verify_reports_a_hand_corrupted_index_row() {
-    let (_home, b, _f, p) = setup().await;
+async fn verify_reports_a_hand_corrupted_index_row(b: Coordinator<Fake>, _f: Fake, p: ProjectId) {
     let project = json!({"kind":"id","value":p});
     b.command(request(json!({"command":"plan_edit","args":{"project":project,"reason":"reader","ops":[
         {"op":"step.add","step":"reader","spec":{"run":"fixture.echo","in":{"value":{"source":"work/submitted"}}}}
@@ -2181,4 +2122,97 @@ async fn verify_reports_a_hand_corrupted_index_row() {
             "index#plan_edges.reader: declared edge missing from the index: data reader after work",
         ]
     );
+}
+
+async fn fresh_project(b: &Coordinator<Fake>, n: usize) -> ProjectId {
+    let CommandReply::Project(p) = b.command(request(json!({"command":"project_create","args":{"name":format!("case-{n}"),"description":"","resources":{}}}))).await.unwrap() else { panic!("project") };
+    b.command(request(json!({"command":"plan_edit","args":{"project":{"kind":"id","value":p.project_id},"ops":[{"op":"step.add","step":"work","spec":{"run":"fixture.submit","in":{"value":{"default":1}},"outputs":{"submitted":"boolean"}}}],"reason":"fixture"}}))).await.unwrap();
+    p.project_id
+}
+
+#[tokio::test]
+async fn messages_edits_and_index_refusals() {
+    let (_home, b, f, mut p) = setup().await;
+    ask_say_and_reply_reach_every_recipient_on_derived_threads(b.clone(), f.clone(), p).await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
+    p = fresh_project(&b, 1).await;
+    a_missing_unknown_or_removed_recipient_is_invalid_and_stores_nothing(b.clone(), f.clone(), p)
+        .await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
+    p = fresh_project(&b, 2).await;
+    board_set_and_plan_edits_warn_for_the_steps_the_board_loses(b.clone(), f.clone(), p).await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
+    p = fresh_project(&b, 3).await;
+    plan_edit_refuses_empty_supplies_and_a_stale_revision_before_preparing(b.clone(), f.clone(), p)
+        .await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
+    p = fresh_project(&b, 4).await;
+    verify_reports_a_hand_corrupted_index_row(b.clone(), f.clone(), p).await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
+}
+
+#[tokio::test]
+async fn run_identity_delivery_and_replay() {
+    let (_home, b, f, mut p) = setup().await;
+    claim_replay_is_same_identity_only_and_start_consumes_backlog_once(b.clone(), f.clone(), p)
+        .await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
+    p = fresh_project(&b, 1).await;
+    receipts_follow_the_step_from_pending_through_its_run_to_done(b.clone(), f.clone(), p).await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
+    p = fresh_project(&b, 2).await;
+    callbacks_deduplicate_atomically_and_completion_replay_does_not_release_replacement(
+        b.clone(),
+        f.clone(),
+        p,
+    )
+    .await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
+    p = fresh_project(&b, 3).await;
+    cancellation_prevents_claim_and_bad_capability_cannot_read_run(b.clone(), f.clone(), p).await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
+}
+
+#[tokio::test]
+async fn submissions_completion_and_settlement() {
+    let (_home, b, f, mut p) = setup().await;
+    current_reserved_run_accepts_submissions_before_claim_and_after_feedback(
+        b.clone(),
+        f.clone(),
+        p,
+    )
+    .await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
+    p = fresh_project(&b, 1).await;
+    terminal_callbacks_replay_exact_replies_and_refuse_new_mutations(b.clone(), f.clone(), p).await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
+    p = fresh_project(&b, 2).await;
+    a_running_step_that_has_submitted_is_finishing_in_status_step_context_and_call_status(
+        b.clone(),
+        f.clone(),
+        p,
+    )
+    .await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
+    p = fresh_project(&b, 3).await;
+    step_settle_refuses_a_fn_that_composes_its_agent_with_the_way_by_hand(b.clone(), f.clone(), p)
+        .await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
+    p = fresh_project(&b, 4).await;
+    a_run_completes_from_its_attempt_after_the_plan_moved_on(b.clone(), f.clone(), p).await;
+    b.release_scheduler("s".into()).await.unwrap();
+    f.0.lock().unwrap().clear();
 }

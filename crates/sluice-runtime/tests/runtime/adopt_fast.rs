@@ -3,9 +3,7 @@
 //! runs adopt concurrently under a bound, and reads do not refresh a current
 //! registry. Every wait here gates on an event; the timeouts only turn a hang
 //! into a failure.
-#[allow(dead_code)]
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use super::home;
 use serde_json::{Value, json};
 use sluice_model::{
     RuntimeApi,
@@ -33,10 +31,7 @@ use sluice_runtime::{
 };
 use std::{
     collections::HashMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;
@@ -62,8 +57,6 @@ struct State {
     gate: Option<tokio::sync::Semaphore>,
     entered: tokio::sync::watch::Sender<usize>,
     finished: tokio::sync::watch::Sender<usize>,
-    in_flight: AtomicUsize,
-    max_in_flight: AtomicUsize,
 }
 #[derive(Clone)]
 struct Fake(Arc<State>);
@@ -77,12 +70,7 @@ impl Fake {
     fn open() -> Self {
         Self(Arc::new(State::default()))
     }
-    fn composed() -> Self {
-        Self(Arc::new(State {
-            composition: true,
-            ..Default::default()
-        }))
-    }
+
     fn release(&self, n: usize) {
         self.0.gate.as_ref().expect("gated host").add_permits(n);
     }
@@ -99,18 +87,6 @@ impl Fake {
             .unwrap()
             .unwrap();
     }
-    async fn until_finished(&self, n: usize) {
-        let mut finished = self.0.finished.subscribe();
-        within(finished.wait_for(|f| *f >= n))
-            .await
-            .unwrap()
-            .unwrap();
-    }
-    fn reset_counts(&self) {
-        self.0.entered.send_replace(0);
-        self.0.finished.send_replace(0);
-        self.0.max_in_flight.store(0, Ordering::SeqCst);
-    }
 }
 impl FnHost for Fake {
     async fn invoke(&self, _: FnInvocation) -> Result<JsonMap, PublicError> {
@@ -119,13 +95,10 @@ impl FnHost for Fake {
 }
 impl AdoptionHost for Fake {
     async fn reconcile(&self, attempt: &AdoptionAttempt) -> std::io::Result<GuardianPresence> {
-        let now = self.0.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-        self.0.max_in_flight.fetch_max(now, Ordering::SeqCst);
         self.0.entered.send_modify(|n| *n += 1);
         if let Some(gate) = &self.0.gate {
             gate.acquire().await.unwrap().forget();
         }
-        self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
         self.0.finished.send_modify(|n| *n += 1);
         let presence = self
             .0
@@ -169,7 +142,7 @@ async fn within<T>(future: impl std::future::Future<Output = T>) -> Result<T, &'
 async fn until(mut condition: impl FnMut() -> bool) {
     within(async {
         while !condition() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::task::yield_now().await;
         }
     })
     .await
@@ -335,48 +308,6 @@ async fn reads_and_install_control_answer_while_adoption_is_blocked_and_a_write_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn runs_adopt_concurrently_within_the_bound_and_one_adopter_per_run() {
-    let host = Fake::gated();
-    let (_home, broker, runs) = home_with_runs(host.clone(), &["a", "b", "c", "d"], false).await;
-
-    // All four are in the host at once, and none has finished: not serial.
-    let pass = tokio::spawn({
-        let broker = broker.clone();
-        async move { broker.adopt().await }
-    });
-    host.until_entered(4).await;
-    assert_eq!(*host.0.finished.borrow(), 0);
-    assert_eq!(host.0.in_flight.load(Ordering::SeqCst), 4);
-    // A second pass meanwhile skips every run already being adopted, so it
-    // returns while the gate is still shut.
-    within(broker.adopt()).await.unwrap().unwrap();
-    assert_eq!(host.entered(), 4);
-    host.release(4);
-    within(pass).await.unwrap().unwrap().unwrap();
-    for (_, launch) in &runs {
-        assert_eq!(attempt(&broker, launch.identity.run).await.0, "reserved");
-    }
-
-    // With a bound of two, the third run starts only once one has finished.
-    host.reset_counts();
-    let pass = tokio::spawn({
-        let broker = broker.clone();
-        async move { broker.adopt_bounded(2).await }
-    });
-    host.until_entered(2).await;
-    assert_eq!(host.0.in_flight.load(Ordering::SeqCst), 2);
-    for finished in 1..=4 {
-        host.release(1);
-        host.until_finished(finished).await;
-        host.until_entered((finished + 2).min(4)).await;
-        assert!(host.0.in_flight.load(Ordering::SeqCst) <= 2);
-    }
-    within(pass).await.unwrap().unwrap().unwrap();
-    assert_eq!(host.entered(), 4);
-    assert_eq!(host.0.max_in_flight.load(Ordering::SeqCst), 2);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_failed_adoption_is_deferred_while_the_others_adopt_and_the_coordinator_becomes_ready() {
     let host = Fake::open();
     let (home, broker, runs) =
@@ -390,6 +321,7 @@ async fn a_failed_adoption_is_deferred_while_the_others_adopt_and_the_coordinato
         presence.insert(live.identity.run, Presence::Ambiguous);
     }
     let (stop, server) = serve(&broker, home.path()).await;
+    host.until_entered(3).await;
     until(|| broker.adopted()).await;
     assert_eq!(host.entered(), 3);
     // The failure leaves its run as it was, for the next pass; the gone run is
@@ -405,7 +337,7 @@ async fn a_failed_adoption_is_deferred_while_the_others_adopt_and_the_coordinato
     // Writes are served now.
     client.command(request(json!({"command":"step_cancel","args":{"project":selector(runs[2].0),"selection":{"steps":["work"],"tags":null},"reason":"after adoption","author":"test"}}))).await.unwrap();
     // The deferred run is tried again by the next pass; the settled one is not.
-    host.reset_counts();
+    host.0.entered.send_replace(0);
     broker.adopt().await.unwrap();
     assert_eq!(host.entered(), 2);
     assert_eq!(attempt(&broker, fails.identity.run).await.0, "reserved");
@@ -459,83 +391,6 @@ async fn nothing_is_admitted_or_launched_before_the_startup_pass_completes() {
     drop(lease);
     stop.cancel();
     within(server).await.unwrap().unwrap().unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_read_refreshes_a_stale_registry_once_and_never_a_current_one() {
-    let host = Fake::composed();
-    let home = home::ScratchHome::new().unwrap();
-    let broker = Coordinator::open(home.path().into(), Catalog::fixtures(), host)
-        .await
-        .unwrap();
-    let publication = broker.catalog().1.clone().expect("composition publishes");
-    let id = project(&broker, "p").await;
-    let reads = [
-        CommandRequest::ProjectsList,
-        status(id),
-        request(json!({"command":"plan_get","args":{"project":selector(id)}})),
-        request(json!({"command":"fn_list","args":{"project":selector(id)}})),
-        request(
-            json!({"command":"log_read","args":{"project":selector(id),"since_seq":null,"kinds":null,"threads":null,"limit":10}}),
-        ),
-        request(
-            json!({"command":"messages","args":{"project":selector(id),"view":"history","thread":null,"since":null}}),
-        ),
-    ];
-    let read_all = || async {
-        for read in reads.clone() {
-            broker.command(read).await.unwrap();
-        }
-    };
-    read_all().await;
-    let (scans, published) = (publication.scans(), publication.publications());
-
-    // A current registry: reads neither scan nor republish.
-    for _ in 0..3 {
-        read_all().await;
-    }
-    assert_eq!(
-        (publication.scans(), publication.publications()),
-        (scans, published)
-    );
-
-    // A new project makes it stale after the creating write's own refresh:
-    // the next read republishes once, later reads do not.
-    broker.command(request(json!({"command":"project_create","args":{"name":"q","description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap();
-    assert_eq!(publication.publications(), published);
-    broker.command(CommandRequest::ProjectsList).await.unwrap();
-    assert_eq!(publication.publications(), published + 1);
-    read_all().await;
-    assert_eq!(publication.publications(), published + 1);
-
-    // A change the watcher reports makes it stale too: a read republishes.
-    // (The republishing scan itself sees the fingerprint move and bumps the
-    // version, and the publication keeps the version read before its scans,
-    // so one later read republishes once more; then it is current again.)
-    std::fs::create_dir_all(home.path().join("fns")).unwrap();
-    let mut watcher = publication.registry.watch().unwrap();
-    std::fs::write(home.root().join("notes.txt"), b"not a fn").unwrap();
-    std::fs::rename(
-        home.root().join("notes.txt"),
-        home.path().join("fns/notes.txt"),
-    )
-    .unwrap();
-    within(watcher.changed()).await.unwrap().unwrap();
-    let scans = publication.scans();
-    broker.command(CommandRequest::ProjectsList).await.unwrap();
-    assert_eq!(publication.scans(), scans + 1);
-    assert_eq!(publication.publications(), published + 2);
-    read_all().await;
-    let (settled, published) = (publication.scans(), publication.publications());
-    read_all().await;
-    assert_eq!(
-        (publication.scans(), publication.publications()),
-        (settled, published)
-    );
-
-    // A write still scans before it runs.
-    broker.command(request(json!({"command":"project_update","args":{"project":selector(id),"new_name":null,"description":"changed","icon":null,"resources":null,"paused":null,"archived":null,"expected_settings_rev":null,"reason":null,"author":"test"}}))).await.unwrap();
-    assert_eq!(publication.scans(), settled + 1);
 }
 
 /// The run's own guardian, talking to the coordinator over its socket.

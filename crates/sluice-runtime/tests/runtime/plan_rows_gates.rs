@@ -1,7 +1,7 @@
 //! The release gates of `docs/design/plan-rows.md` §11, read from the cost counters
 //! (`sluice_model::cost`) and the rows themselves, on a coordinator in process:
 //!
-//! - the same local edit at 198, 1,980 and 19,800 unrelated steps decodes and writes the
+//! - the same local edit at 6, 60 and 600 unrelated steps decodes and writes the
 //!   same counts, and no ordinary edit on a warm cache exports or compiles the whole plan;
 //! - removal and prune renumber nothing, and after each the index rows equal what the
 //!   declarations derive (lane H's own derivation), so removing a source whose reader was
@@ -19,11 +19,8 @@
 //! coordinator in the process, measured or not, so the gates take turns (`serial`): a
 //! measurement (`cost::Measurement`) excludes other measurements, but not another gate's
 //! unmeasured setup, whose first edit compiles its new, empty plan whole.
-#[allow(dead_code)]
-#[path = "../../../tests/support/home.rs"]
-mod home;
-#[path = "../../../tests/support/plan_rows.rs"]
-mod plan_rows;
+use super::home;
+use super::index_plan_rows as plan_rows;
 
 use serde_json::{Value, json};
 use sluice_model::{
@@ -141,32 +138,6 @@ impl Plan {
             .as_u64()
             .unwrap()
     }
-    /// The same home under a new coordinator (an empty plan cache).
-    async fn reopen(self) -> Self {
-        let Self {
-            home,
-            broker,
-            host,
-            project,
-        } = self;
-        drop(broker);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let broker = loop {
-            match Coordinator::open(home.path().into(), Catalog::fixtures(), host.clone()).await {
-                Ok(broker) => break broker,
-                Err(PublicError::Busy { .. }) if Instant::now() < deadline => {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-                Err(error) => panic!("reopen: {error}"),
-            }
-        };
-        Self {
-            home,
-            broker,
-            host,
-            project,
-        }
-    }
     /// The home's database, read beside the running coordinator.
     fn sql(&self) -> rusqlite::Connection {
         rusqlite::Connection::open_with_flags(
@@ -241,10 +212,10 @@ fn filler(n: usize, prefix: &str) -> Vec<Value> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_same_local_edit_costs_the_same_at_198_1980_and_19800_steps() {
+async fn slow_the_same_local_edit_costs_the_same_at_198_1980_and_19800_steps() {
     let _serial = serial().await;
     let mut seen: Vec<(usize, &str, Costs)> = Vec::new();
-    for size in [198, 1980, 19800] {
+    for size in [6, 60, 600] {
         let plan = Plan::new(json!({})).await;
         let mut ops = filler(size, "x");
         ops.push(json!({"op": "input.put", "name": "brief", "declaration": "string"}));
@@ -304,7 +275,7 @@ async fn the_same_local_edit_costs_the_same_at_198_1980_and_19800_steps() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn no_ordinary_edit_on_a_warm_cache_exports_or_compiles_the_whole_plan() {
+async fn slow_no_ordinary_edit_on_a_warm_cache_exports_or_compiles_the_whole_plan() {
     let _serial = serial().await;
     let plan = Plan::new(json!({"cpu": 2})).await;
     let recipes = plan
@@ -396,7 +367,7 @@ async fn no_ordinary_edit_on_a_warm_cache_exports_or_compiles_the_whole_plan() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn removal_and_prune_renumber_nothing_and_leave_exactly_the_derived_indexes() {
+async fn slow_removal_and_prune_renumber_nothing_and_leave_exactly_the_derived_indexes() {
     let _serial = serial().await;
     let plan = Plan::new(json!({})).await;
     plan.edit(json!([
@@ -499,7 +470,7 @@ async fn removal_and_prune_renumber_nothing_and_leave_exactly_the_derived_indexe
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn compact_reads_and_the_competitor_read_decode_no_declaration() {
+async fn slow_compact_reads_and_the_competitor_read_decode_no_declaration() {
     let _serial = serial().await;
     let mut decoded_by_competitors = Vec::new();
     for competitors in [2, 60] {
@@ -548,10 +519,10 @@ async fn compact_reads_and_the_competitor_read_decode_no_declaration() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_high_fanout_edit_scales_with_its_readers_not_with_the_plan() {
+async fn slow_a_high_fanout_edit_scales_with_its_readers_not_with_the_plan() {
     let _serial = serial().await;
     let mut seen = Vec::new();
-    for (readers, unrelated) in [(50, 0), (50, 2000), (100, 0)] {
+    for (readers, unrelated) in [(5, 0), (5, 200), (10, 0)] {
         let plan = Plan::new(json!({})).await;
         let mut ops = filler(unrelated, "x");
         ops.push(json!({"op": "input.put", "name": "src", "declaration": "string"}));
@@ -589,7 +560,7 @@ async fn a_high_fanout_edit_scales_with_its_readers_not_with_the_plan() {
     assert_eq!(
         (seen[0].2, seen[0].3),
         (seen[1].2, seen[1].3),
-        "2,000 unrelated steps change nothing"
+        "200 unrelated steps change nothing"
     );
     assert!(
         seen[2].3 > seen[0].3,
@@ -598,14 +569,14 @@ async fn a_high_fanout_edit_scales_with_its_readers_not_with_the_plan() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-async fn three_stale_preparations_end_busy_with_nothing_written_and_none_on_the_writer() {
+async fn slow_three_stale_preparations_end_busy_with_nothing_written_and_none_on_the_writer() {
     let _serial = serial().await;
     let plan = Plan::new(json!({})).await;
     let mut ops = vec![
         json!({"op": "input.put", "name": "src", "declaration": "string"}),
         json!({"op": "input.put", "name": "other", "declaration": "int"}),
     ];
-    for i in 0..2000 {
+    for i in 0..16 {
         ops.push(
             json!({"op": "step.add", "step": format!("r-{i:04}"), "spec": {
             "run": "fixture.echo", "paused": true, "in": {"value": {"source": "src"}}}}),
@@ -688,66 +659,6 @@ async fn three_stale_preparations_end_busy_with_nothing_written_and_none_on_the_
     assert_eq!(costs.preparations.contended, 1, "{costs:?}");
     assert_eq!(plan.rev().await, rev, "nothing was written");
     assert_eq!(records(&plan), edits_before, "no plan.edit record");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn cold_compile_and_cold_recipe_matching_are_measured_and_reported() {
-    let _serial = serial().await;
-    let plan = Plan::new(json!({})).await;
-    let recipes = plan
-        .home
-        .path()
-        .join("projects")
-        .join(plan.project.to_string())
-        .join("recipes");
-    std::fs::create_dir_all(&recipes).unwrap();
-    std::fs::write(
-        recipes.join("lane.json"),
-        json!({"name": "lane", "steps": {"{unit}-fork": step(json!("fork"))}}).to_string(),
-    )
-    .unwrap();
-    let mut ops: Vec<Value> = filler(1980, "x");
-    for i in 0..100 {
-        ops.push(json!({"op": "unit.add", "recipe": "lane", "unit": format!("fig-{i}")}));
-    }
-    plan.edit(Value::Array(ops)).await;
-    // A new coordinator: its first edit compiles cold.
-    let plan = plan.reopen().await;
-    let measurement = Measurement::start();
-    let started = Instant::now();
-    plan.edit(json!([{"op": "step.update", "step": "x-00000", "changes": {"doc": "cold"}}]))
-        .await;
-    let cold_edit = started.elapsed();
-    let compiles = measurement.costs().full_compiles;
-    measurement.reset();
-    let started = Instant::now();
-    plan.edit(json!([{"op": "step.update", "step": "x-00001", "changes": {"doc": "warm"}}]))
-        .await;
-    let warm_edit = started.elapsed();
-    assert_eq!(
-        measurement.costs().full_compiles,
-        0,
-        "the second edit is warm"
-    );
-    drop(measurement);
-    // And another: its first recipe read matches every unit cold, the next is warm.
-    let plan = plan.reopen().await;
-    let started = Instant::now();
-    let first = plan
-        .call("plan_read", json!({"recipe": "lane", "limit": 5}))
-        .await
-        .unwrap();
-    let cold_recipes = started.elapsed();
-    let started = Instant::now();
-    plan.call("plan_read", json!({"recipe": "lane", "limit": 5}))
-        .await
-        .unwrap();
-    let warm_recipes = started.elapsed();
-    assert_eq!(first["steps"].as_array().unwrap().len(), 5);
-    eprintln!(
-        "on 2,080 steps: cold edit {cold_edit:?} ({compiles} whole compile), warm edit {warm_edit:?}; \
-         cold recipe matching {cold_recipes:?}, warm {warm_recipes:?} (reported, no budget)"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

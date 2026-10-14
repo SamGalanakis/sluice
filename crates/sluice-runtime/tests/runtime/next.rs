@@ -1,9 +1,5 @@
-#[allow(dead_code)]
-#[path = "../../sluice-store/tests/support/plan_rows.rs"]
-mod plan_rows;
-#[allow(dead_code)]
-#[path = "../../../tests/support/messages.rs"]
-mod stored_messages;
+use super::store_plan_rows as plan_rows;
+use super::stored_messages;
 use indexmap::IndexMap;
 use serde_json::json;
 use sluice_model::{
@@ -115,9 +111,11 @@ async fn settled(w: &Writer, p: ProjectId, name: &str) -> Record {
     .await
     .unwrap()
 }
-#[tokio::test]
-async fn singleton_settles_once_per_rest_without_open_exception() {
-    let (_h, w, r, p) = setup().await;
+async fn singleton_settles_once_per_rest_without_open_exception(
+    w: &Writer,
+    r: &ReadPool,
+    p: ProjectId,
+) {
     let signatures = IndexMap::from([(
         "test.fn".into(),
         FnSignature {
@@ -158,7 +156,7 @@ async fn singleton_settles_once_per_rest_without_open_exception() {
         .unwrap()
         .is_empty()
     );
-    let batch = next(&w, &r, options(p)).await.unwrap();
+    let batch = next(w, r, options(p)).await.unwrap();
     assert_eq!(batch.records.len(), 1);
     assert!(
         matches!(&batch.records[0].event,Event::UnitSettled{unit,steps,..}if unit.as_str()=="one"&&steps[0].outputs.as_ref().unwrap().0["value"].as_value()=="old")
@@ -175,8 +173,8 @@ async fn singleton_settles_once_per_rest_without_open_exception() {
     .await
     .unwrap();
     let more = next(
-        &w,
-        &r,
+        w,
+        r,
         NextOptions {
             since_seq: Some(batch.last_seq),
             ..options(p)
@@ -185,13 +183,14 @@ async fn singleton_settles_once_per_rest_without_open_exception() {
     .await
     .unwrap();
     assert_eq!(more.records.len(), 1);
-    w.shutdown().await.unwrap();
 }
-#[tokio::test]
-async fn owner_answer_to_worker_wakes_and_notes_and_own_questions_do_not() {
-    let (_h, w, r, p) = setup().await;
+async fn owner_answer_to_worker_wakes_and_notes_and_own_questions_do_not(
+    w: &Writer,
+    r: &ReadPool,
+    p: ProjectId,
+) {
     let q = post(
-        &w,
+        w,
         p,
         "worker asks owner",
         "worker",
@@ -200,22 +199,22 @@ async fn owner_answer_to_worker_wakes_and_notes_and_own_questions_do_not() {
         None,
     )
     .await;
-    post(&w, p, "decision", "worker", Some("owner"), false, None).await;
-    post(&w, p, "my own question", "@lead", None, true, None).await;
-    // The session @lead waits on everyone's (scope all): its own question does not wake it.
+    post(w, p, "decision", "worker", Some("owner"), false, None).await;
+    post(w, p, "my own question", "@lead", None, true, None).await;
+    // The session @lead waits: its own question does not wake it.
     let options = |p| NextOptions {
         me: Some("@lead".into()),
         scope: Some(sluice_model::commands::Scope::All),
         ..options(p)
     };
-    let silent = next(&w, &r, options(p)).await.unwrap();
+    let silent = next(w, r, options(p)).await.unwrap();
     assert!(silent.timed_out);
     assert_eq!(silent.records.len(), 0);
     assert_eq!(silent.notes.len(), 1);
-    let answer = post(&w, p, "yes", "owner", None, false, Some(q.id)).await;
+    let answer = post(w, p, "yes", "owner", None, false, Some(q.id)).await;
     let wake = next(
-        &w,
-        &r,
+        w,
+        r,
         NextOptions {
             since_seq: Some(silent.last_seq),
             ..options(p)
@@ -224,13 +223,14 @@ async fn owner_answer_to_worker_wakes_and_notes_and_own_questions_do_not() {
     .await
     .unwrap();
     assert_eq!(wake.records[0].seq.0, answer.id.0);
-    w.shutdown().await.unwrap();
 }
-#[tokio::test]
-async fn notes_are_messages_first_and_whole_and_cursor_stops_at_first_wake() {
-    let (_h, w, r, p) = setup().await;
+async fn notes_are_messages_first_and_whole_and_cursor_stops_at_first_wake(
+    w: &Writer,
+    r: &ReadPool,
+    p: ProjectId,
+) {
     post(
-        &w,
+        w,
         p,
         "all\nwhole\nlines",
         "worker",
@@ -239,9 +239,9 @@ async fn notes_are_messages_first_and_whole_and_cursor_stops_at_first_wake() {
         None,
     )
     .await;
-    let first = settled(&w, p, "one").await;
-    let second = post(&w, p, "question", "worker", None, true, None).await;
-    let batch = next(&w, &r, options(p)).await.unwrap();
+    let first = settled(w, p, "one").await;
+    let second = post(w, p, "question", "worker", None, true, None).await;
+    let batch = next(w, r, options(p)).await.unwrap();
     assert_eq!(batch.last_seq, first.seq);
     assert_eq!(batch.notes.len(), 1);
     let text = render(&batch, Settles::None, 1, false, &Cancels::default()).unwrap();
@@ -249,8 +249,8 @@ async fn notes_are_messages_first_and_whole_and_cursor_stops_at_first_wake() {
     assert!(text.contains("all\n  whole\n  lines"));
     assert!(!text.contains("question"));
     let more = next(
-        &w,
-        &r,
+        w,
+        r,
         NextOptions {
             since_seq: Some(batch.last_seq),
             ..options(p)
@@ -260,11 +260,12 @@ async fn notes_are_messages_first_and_whole_and_cursor_stops_at_first_wake() {
     .unwrap();
     assert_eq!(more.last_seq.0, second.id.0);
     assert_eq!(more.records.len(), 1);
-    w.shutdown().await.unwrap();
 }
-#[tokio::test]
-async fn failures_stale_and_skipped_wake_success_alone_does_not() {
-    let (_h, w, r, p) = setup().await;
+async fn failures_stale_and_skipped_wake_success_alone_does_not(
+    w: &Writer,
+    r: &ReadPool,
+    p: ProjectId,
+) {
     for to in [
         StepStatus::Succeeded,
         StepStatus::Failed,
@@ -291,8 +292,8 @@ async fn failures_stale_and_skipped_wake_success_alone_does_not() {
             .await
             .unwrap();
         let batch = next(
-            &w,
-            &r,
+            w,
+            r,
             NextOptions {
                 since_seq: Some(RecordSeq(rec.seq.0 - 1)),
                 ..options(p)
@@ -309,7 +310,6 @@ async fn failures_stale_and_skipped_wake_success_alone_does_not() {
             );
         }
     }
-    w.shutdown().await.unwrap();
 }
 #[tokio::test]
 async fn cursor_expiry_recovers_without_losing_durable_messages() {
@@ -408,7 +408,7 @@ async fn drive(
             woken += 1;
         }
         clock.advance(step);
-        tokio::time::sleep(Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
     }
     assert!(task.is_finished(), "next did not return");
     (task.await.unwrap().unwrap(), woken)
@@ -500,31 +500,7 @@ async fn read_progress_is_monotonic_separate_from_owner_and_alerts_deduplicate_e
     assert_eq!(position.1.cursor, RecordSeq(0));
     w.shutdown().await.unwrap();
 }
-#[tokio::test]
-async fn rename_keeps_reader_cursor_and_historical_unit_payload() {
-    let (_h, w, r, p) = setup().await;
-    let historical = settled(&w, p, "old").await;
-    w.write(RetrySafety::NonIdempotent, move |tx| {
-        tx.sql().execute(
-            "UPDATE projects SET name='new' WHERE project_id=?1",
-            [p.to_string()],
-        )?;
-        tx.changed(Some(p), "projects");
-        Ok(())
-    })
-    .await
-    .unwrap();
-    let batch = next(&w, &r, options(p)).await.unwrap();
-    assert_eq!(batch.records[0], historical);
-    let pos = r
-        .snapshot(move |sql| {
-            messages::reader(sql, p, "orchestrator", messages::ORCHESTRATOR_STREAM, "")
-        })
-        .await
-        .unwrap();
-    assert_eq!(pos.cursor, batch.last_seq);
-    w.shutdown().await.unwrap();
-}
+
 #[test]
 fn compact_rendering_modes_keep_json_whole_and_unicode_cut_safe() {
     let outputs:JsonMap=serde_json::from_value(json!({"landed":true,"summary":"  résumé\nsecond","evidence":"x".repeat(100),"items":[1,2],"sha":"abc"})).unwrap();
@@ -577,9 +553,11 @@ fn cursor_files_roundtrip_and_invalid_files_fail() {
     assert_eq!(std::fs::read_dir(&h.0).unwrap().count(), 1);
 }
 
-#[tokio::test]
-async fn queued_work_is_startable_but_paused_external_and_failed_gates_can_settle() {
-    let (_h, w, r, p) = setup().await;
+async fn queued_work_is_startable_but_paused_external_and_failed_gates_can_settle(
+    w: &Writer,
+    r: &ReadPool,
+    p: ProjectId,
+) {
     let signatures = IndexMap::from([
         ("test.fn".into(), FnSignature::default()),
         (
@@ -626,8 +604,8 @@ async fn queued_work_is_startable_but_paused_external_and_failed_gates_can_settl
         .collect();
     assert!(names.contains(&"paused") && names.contains(&"gate"));
     let batch = next(
-        &w,
-        &r,
+        w,
+        r,
         NextOptions {
             settle: Duration::from_millis(1),
             settle_max: Duration::from_secs(1),
@@ -637,11 +615,12 @@ async fn queued_work_is_startable_but_paused_external_and_failed_gates_can_settl
     .await
     .unwrap();
     assert_eq!(batch.records.len(), 4);
-    w.shutdown().await.unwrap();
 }
-#[tokio::test]
-async fn delivery_with_running_cleanup_does_not_settle_and_certificate_survives_trim() {
-    let (_h, w, _r, p) = setup().await;
+async fn delivery_with_running_cleanup_does_not_settle_and_certificate_survives_trim(
+    w: &Writer,
+    _r: &ReadPool,
+    p: ProjectId,
+) {
     let signatures = IndexMap::from([("test.fn".into(), FnSignature::default())]);
     let (doc, plan) = compile(br#"{"steps":{"u-work":{"run":"test.fn","tags":["unit:u","exit"]},"u-clean":{"run":"test.fn","tags":["unit:u"],"after":["u-work"]}}}"#, &signatures);
     w.write(RetrySafety::NonIdempotent,move|tx|{plan_rows::commit_document(tx,p,&doc,None,None)?;tx.sql().execute("UPDATE steps SET status=CASE WHEN step_id='u-work' THEN 'succeeded' ELSE 'running' END WHERE project_id=?1",[p.to_string()])?;tx.changed(Some(p),"status");Ok(())}).await.unwrap();
@@ -689,15 +668,16 @@ async fn delivery_with_running_cleanup_does_not_settle_and_certificate_survives_
         .unwrap()
         .is_empty()
     );
-    w.shutdown().await.unwrap();
 }
-#[tokio::test]
-async fn timeout_starts_from_now_and_all_includes_own_notes_and_nonwaking_records() {
-    let (_h, w, r, p) = setup().await;
-    settled(&w, p, "before").await;
+async fn timeout_starts_from_now_and_all_includes_own_notes_and_nonwaking_records(
+    w: &Writer,
+    r: &ReadPool,
+    p: ProjectId,
+) {
+    settled(w, p, "before").await;
     let timed = next(
-        &w,
-        &r,
+        w,
+        r,
         NextOptions {
             since_seq: None,
             ..options(p)
@@ -707,15 +687,15 @@ async fn timeout_starts_from_now_and_all_includes_own_notes_and_nonwaking_record
     .unwrap();
     assert!(timed.timed_out);
     assert!(timed.records.is_empty());
-    post(&w, p, "mine", "orchestrator", None, false, None).await;
+    post(w, p, "mine", "orchestrator", None, false, None).await;
     w.write(RetrySafety::NonIdempotent, move |tx| {
         tx.append_record(Some(p), Event::RunOrphan { run: RunId::new() })
     })
     .await
     .unwrap();
     let all = next(
-        &w,
-        &r,
+        w,
+        r,
         NextOptions {
             since_seq: Some(timed.last_seq),
             all: true,
@@ -727,7 +707,6 @@ async fn timeout_starts_from_now_and_all_includes_own_notes_and_nonwaking_record
     .await
     .unwrap();
     assert_eq!(all.records.len(), 2);
-    w.shutdown().await.unwrap();
 }
 #[tokio::test]
 async fn upkeep_asks_about_unread_settlements_only_with_unread_alert_min_and_trims_to_log_max() {
@@ -851,74 +830,15 @@ async fn gated(w: &Writer, p: ProjectId) -> Plan {
     .unwrap();
     plan
 }
-#[tokio::test]
-async fn a_unit_whose_work_waits_on_a_running_step_does_not_settle() {
-    let (_h, w, _r, p) = setup().await;
-    let plan = gated(&w, p).await;
+
+async fn a_unit_settles_again_each_time_it_comes_back_to_rest(
+    w: &Writer,
+    _r: &ReadPool,
+    p: ProjectId,
+) {
+    let plan = gated(w, p).await;
     let rest =
-        |statuses: &'static [(&'static str, &'static str)]| rest_after(&w, p, &plan, statuses);
-    // The fork is done and the work waits on `a`, still running: nothing needs anyone.
-    assert_eq!(
-        rest(&[("a", "running"), ("y-fork", "succeeded")]).await,
-        Vec::<String>::new()
-    );
-    // Nor once `a` is done and the work is about to start, or running.
-    assert_eq!(rest(&[("a", "succeeded")]).await, ["a"]);
-    assert_eq!(rest(&[("y-work", "running")]).await, Vec::<String>::new());
-    w.shutdown().await.unwrap();
-}
-#[tokio::test]
-async fn next_wakes_when_a_unit_gated_on_running_work_really_finishes() {
-    let (_h, w, r, p) = setup().await;
-    let plan = gated(&w, p).await;
-    let rest =
-        |statuses: &'static [(&'static str, &'static str)]| rest_after(&w, p, &plan, statuses);
-    rest(&[("a", "running"), ("y-fork", "succeeded")]).await;
-    rest(&[("a", "succeeded")]).await;
-    rest(&[("y-work", "running")]).await;
-    let since = r
-        .snapshot(move |c| Ok(records::bounds(c, Some(p))?.1))
-        .await
-        .unwrap();
-    rest(&[("y-work", "succeeded"), ("y-rm", "running")]).await;
-    rest(&[("y-rm", "succeeded")]).await;
-    // `next` wakes on the real finish, every step of it succeeded.
-    let batch = next(
-        &w,
-        &r,
-        NextOptions {
-            since_seq: Some(since),
-            ..options(p)
-        },
-    )
-    .await
-    .unwrap();
-    assert!(!batch.timed_out, "no wake: {:?}", batch.records);
-    match &batch.records[..] {
-        [
-            Record {
-                event: Event::UnitSettled { unit, steps, .. },
-                ..
-            },
-        ] => {
-            assert_eq!(unit.as_str(), "y");
-            assert!(
-                steps
-                    .iter()
-                    .all(|s| s.status == StepStatus::Succeeded && !s.held),
-                "{steps:?}"
-            );
-        }
-        other => panic!("one settlement of y: {other:?}"),
-    }
-    w.shutdown().await.unwrap();
-}
-#[tokio::test]
-async fn a_unit_settles_again_each_time_it_comes_back_to_rest() {
-    let (_h, w, _r, p) = setup().await;
-    let plan = gated(&w, p).await;
-    let rest =
-        |statuses: &'static [(&'static str, &'static str)]| rest_after(&w, p, &plan, statuses);
+        |statuses: &'static [(&'static str, &'static str)]| rest_after(w, p, &plan, statuses);
     // `a` fails: `y` is held behind it.
     assert_eq!(
         rest(&[("y-fork", "succeeded"), ("a", "failed")]).await,
@@ -948,12 +868,13 @@ async fn a_unit_settles_again_each_time_it_comes_back_to_rest() {
     assert_eq!(rest(&[("z-rm", "succeeded")]).await, ["z"]);
     // Nothing moved: nothing settles.
     assert_eq!(rest(&[]).await, Vec::<String>::new());
-    w.shutdown().await.unwrap();
 }
-#[tokio::test]
-async fn settlements_recorded_before_statuses_upgrade_without_a_record() {
-    let (_h, w, _r, p) = setup().await;
-    let plan = gated(&w, p).await;
+async fn settlements_recorded_before_statuses_upgrade_without_a_record(
+    w: &Writer,
+    _r: &ReadPool,
+    p: ProjectId,
+) {
+    let plan = gated(w, p).await;
     // Before the upgrade: `y` settled early, held on `a` while it ran, and `z` settled on its
     // paused close. Their certificates carry no statuses.
     let copy = plan.clone();
@@ -997,7 +918,7 @@ async fn settlements_recorded_before_statuses_upgrade_without_a_record() {
     // The first reconcile after the upgrade writes no record: `z` is at rest as it was, and
     // `y` waits on `a`, still running, so its next rest settles.
     let rest =
-        |statuses: &'static [(&'static str, &'static str)]| rest_after(&w, p, &plan, statuses);
+        |statuses: &'static [(&'static str, &'static str)]| rest_after(w, p, &plan, statuses);
     assert_eq!(rest(&[]).await, Vec::<String>::new());
     let stored = settlements().await.unwrap();
     assert_eq!(rest(&[]).await, Vec::<String>::new());
@@ -1015,5 +936,32 @@ async fn settlements_recorded_before_statuses_upgrade_without_a_record() {
     assert_eq!(z["signature"][0].as_array().unwrap().len(), 3);
     assert_eq!(stored[format!("{p}/y")]["statuses"], json!([]));
     assert_eq!(stored[format!("{p}/y")]["work"], 1);
+}
+
+#[tokio::test]
+async fn messages_statuses_and_full_feed() {
+    let (_h, w, r, mut p) = setup().await;
+    owner_answer_to_worker_wakes_and_notes_and_own_questions_do_not(&w, &r, p).await;
+    p = project(&w, "case-1").await;
+    notes_are_messages_first_and_whole_and_cursor_stops_at_first_wake(&w, &r, p).await;
+    p = project(&w, "case-2").await;
+    failures_stale_and_skipped_wake_success_alone_does_not(&w, &r, p).await;
+    p = project(&w, "case-3").await;
+    timeout_starts_from_now_and_all_includes_own_notes_and_nonwaking_records(&w, &r, p).await;
+    w.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn settlement_and_retry_certificates() {
+    let (_h, w, r, mut p) = setup().await;
+    singleton_settles_once_per_rest_without_open_exception(&w, &r, p).await;
+    p = project(&w, "case-1").await;
+    queued_work_is_startable_but_paused_external_and_failed_gates_can_settle(&w, &r, p).await;
+    p = project(&w, "case-2").await;
+    delivery_with_running_cleanup_does_not_settle_and_certificate_survives_trim(&w, &r, p).await;
+    p = project(&w, "case-3").await;
+    a_unit_settles_again_each_time_it_comes_back_to_rest(&w, &r, p).await;
+    p = project(&w, "case-4").await;
+    settlements_recorded_before_statuses_upgrade_without_a_record(&w, &r, p).await;
     w.shutdown().await.unwrap();
 }

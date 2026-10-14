@@ -1,7 +1,5 @@
 //! Real uv, isolated scratch PEP 723 bundles, and minimal framed callback servers.
-#[allow(dead_code)]
-#[path = "../../sluice-store/tests/support/plan_rows.rs"]
-mod plan_rows;
+use super::store_plan_rows as plan_rows;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::CommandRequest,
@@ -169,88 +167,229 @@ impl Drop for Server {
 }
 
 #[tokio::test]
-async fn g2_real_uv_imports_only_the_standalone_helper_and_separates_stdout() {
+async fn python_environment_context_and_retry() {
     let scratch = Scratch::new();
-    let (host,mut invocation)=scratch.host("from sluice_fn import run\nimport sluice_fn, importlib.util, os\ndef main(inp, ctx):\n    print('user progress')\n    return {'sum':inp['a']+1, 'helper':sluice_fn.__file__, 'old_absent':importlib.util.find_spec('sluice') is None, 'project':os.environ['SLUICE_PROJECT_ID']}\nrun(main)\n",json!({"sum":"int","helper":"string","old_absent":"boolean","project":"string"}));
-    invocation.inputs = map(json!({"a":2}));
-    let out = execute(&host, &invocation).await.unwrap();
-    assert_eq!(value(&out)["sum"], 3);
-    assert_eq!(value(&out)["old_absent"], true);
-    assert_eq!(value(&out)["project"], invocation.project.to_string());
-    assert_eq!(
-        value(&out)["helper"],
-        host.config
-            .helper_dir
-            .join("sluice_fn/__init__.py")
-            .to_str()
-            .unwrap()
-    );
-    let stderr = std::fs::read_to_string(host.context.run_dir.join("stderr.log")).unwrap();
-    assert!(stderr.contains("user progress"));
-    let version = tokio::process::Command::new(&host.config.uv)
-        .arg("--version")
-        .output()
-        .await
-        .unwrap();
-    println!(
-        "G2: {}helper={} old_package_absent=true",
-        String::from_utf8_lossy(&version.stdout),
-        value(&out)["helper"]
-    );
-}
-
-#[tokio::test]
-async fn same_run_transient_preserves_pid_context_and_retry_budget() {
-    let scratch = Scratch::new();
-    let (mut host,invocation)=scratch.host("from sluice_fn import run, Transient\nimport os\npids=[]\ndef main(inp,ctx):\n    pids.append(os.getpid())\n    if ctx.attempt < 3: raise Transient('busy')\n    return {'attempt':ctx.attempt, 'pids':pids, 'run':ctx.run_id}\nrun(main,retries=2,backoff=99)\n",json!({"attempt":"int","pids":"int[]","run":"string"}));
-    host.config
-        .environment
-        .insert("SLUICE_BACKOFF".into(), "0".into());
-    let out = value(&execute(&host, &invocation).await.unwrap());
-    assert_eq!(out["attempt"], 3);
-    let pids = out["pids"].as_array().unwrap();
-    assert_eq!(pids.len(), 3);
-    assert!(pids.iter().all(|p| p == &pids[0]));
-    assert_eq!(out["run"], invocation.run.to_string());
-}
-
-#[tokio::test]
-async fn exhaustion_and_ordinary_failure_are_terminal_typed_errors() {
-    for (error, expected) in [
-        ("Transient('busy')", PythonError::Transient("busy".into())),
-        ("ValueError('bad')", PythonError::Failure("bad".into())),
-        (
-            "Rejected('refused')",
-            PythonError::Rejected("refused".into()),
-        ),
-    ] {
-        let scratch = Scratch::new();
-        let (host,invocation)=scratch.host(&format!("from sluice_fn import run,Transient,Rejected\ndef main(inp,ctx):\n    raise {error}\nrun(main,retries=1,backoff=0)\n"),json!({}));
-        assert_eq!(execute(&host, &invocation).await.unwrap_err(), expected);
+    {
+        let (host,mut invocation)=scratch.host("from sluice_fn import run\nimport sluice_fn, importlib.util, os\ndef main(inp, ctx):\n    print('user progress')\n    return {'sum':inp['a']+1, 'helper':sluice_fn.__file__, 'old_absent':importlib.util.find_spec('sluice') is None, 'project':os.environ['SLUICE_PROJECT_ID']}\nrun(main)\n",json!({"sum":"int","helper":"string","old_absent":"boolean","project":"string"}));
+        invocation.inputs = map(json!({"a":2}));
+        let out = execute(&host, &invocation).await.unwrap();
+        assert_eq!(value(&out)["sum"], 3);
+        assert_eq!(value(&out)["old_absent"], true);
+        assert_eq!(value(&out)["project"], invocation.project.to_string());
+        assert_eq!(
+            value(&out)["helper"],
+            host.config
+                .helper_dir
+                .join("sluice_fn/__init__.py")
+                .to_str()
+                .unwrap()
+        );
+        let stderr = std::fs::read_to_string(host.context.run_dir.join("stderr.log")).unwrap();
+        assert!(stderr.contains("user progress"));
+        let version = tokio::process::Command::new(&host.config.uv)
+            .arg("--version")
+            .output()
+            .await
+            .unwrap();
+        println!(
+            "G2: {}helper={} old_package_absent=true",
+            String::from_utf8_lossy(&version.stdout),
+            value(&out)["helper"]
+        );
     }
-}
-
-#[tokio::test]
-async fn invalid_backoff_never_calls_main() {
-    for backoff in ["-1", "nan", "inf", "nope"] {
-        let scratch = Scratch::new();
-        let (mut host,invocation)=scratch.host("from sluice_fn import run\ndef main(inp,ctx):\n    raise AssertionError('main must not execute')\nrun(main)\n",json!({}));
+    {
+        let (mut host,invocation)=scratch.host("from sluice_fn import run,child_env,sh\nimport os\ndef main(inp,ctx):\n    os.environ['VIRTUAL_ENV']='/uv/environment'\n    os.environ['PATH']='/uv/environment/bin:/bad'\n    os.environ['PYTHONHOME']='/bad'\n    os.environ['UV_PROJECT_ENVIRONMENT']='/bad'\n    os.environ['CLAUDECODE']='1'\n    e=child_env({'X':'yes'})\n    return {'path':e['PATH'], 'x':e['X'], 'clean':all(k not in e for k in ['VIRTUAL_ENV','PYTHONPATH','PYTHONHOME','UV_PROJECT_ENVIRONMENT','CLAUDECODE']), 'run':e['SLUICE_RUN_ID'], 'host':sh(['python3','-c','import sys;print(sys.prefix)']).stdout.strip(), 'binary':sh(['printf','\\\\037\\\\213gz']).stdout}\nrun(main)\n",json!({"path":"string","x":"string","clean":"boolean","run":"string","host":"string","binary":"string"}));
         host.config
             .environment
-            .insert("SLUICE_BACKOFF".into(), backoff.into());
-        let err = execute(&host, &invocation).await.unwrap_err();
-        assert!(matches!(err, PythonError::Failure(_)));
-        assert!(!err.to_string().contains("main must not execute"));
+            .remove(std::ffi::OsStr::new("PYTHONPATH"));
+        host.config
+            .environment
+            .remove(std::ffi::OsStr::new("VIRTUAL_ENV"));
+        let host_path = host.config.environment[std::ffi::OsStr::new("PATH")]
+            .to_string_lossy()
+            .into_owned();
+        let out = value(&execute(&host, &invocation).await.unwrap());
+        assert_eq!(out["path"], host_path);
+        assert_eq!(out["x"], "yes");
+        assert_eq!(out["clean"], true);
+        assert_eq!(out["run"], invocation.run.to_string());
+        assert!(!out["host"].as_str().unwrap().contains("environments-v2"));
+        // Output that is not UTF-8 (a gzip header) is decoded with replacement characters.
+        assert_eq!(out["binary"], "\u{1f}\u{fffd}gz");
+    }
+    {
+        let (host, invocation) = scratch.host(
+            "from sluice_fn import run\nimport os\ndef main(inp,ctx):\n    return {'ctx':str(ctx.project_dir),'env':os.environ['SLUICE_PROJECT_DIR']}\nrun(main)\n",
+            json!({"ctx":"string","env":"string"}),
+        );
+        let expected = scratch
+            .0
+            .join("projects")
+            .join(invocation.project.to_string());
+        let envelope: Value = decode_json(&host.envelope(&invocation).unwrap()).unwrap();
+        assert_eq!(
+            envelope["context"]["project_dir"].as_str().unwrap(),
+            expected.to_str().unwrap()
+        );
+        let out = value(&execute(&host, &invocation).await.unwrap());
+        assert_eq!(out["ctx"], expected.to_str().unwrap());
+        assert_eq!(out["env"], expected.to_str().unwrap());
+    }
+    {
+        let (mut host,invocation)=scratch.host("from sluice_fn import run,Transient\nimport sibling,os\ndef main(inp,ctx):\n    if ctx.attempt==1: raise Transient('busy')\n    return {'previous':ctx.prev_run,'env':os.environ['SLUICE_PREV_RUN'],'sibling':sibling.VALUE}\nrun(main,retries=1,backoff=0)\n",json!({"previous":"string","env":"string","sibling":"int"}));
+        let previous = RunId::new();
+        host.context.prev_run = Some(previous);
+        let sibling = scratch.0.join("approved");
+        std::fs::create_dir(&sibling).unwrap();
+        std::fs::write(sibling.join("sibling.py"), "VALUE=7\n").unwrap();
+        host.bundle.sibling_helper_root = Some(sibling);
+        let out = value(&execute(&host, &invocation).await.unwrap());
+        assert_eq!(
+            out,
+            json!({"previous":previous.to_string(),"env":previous.to_string(),"sibling":7})
+        );
     }
 }
-async fn wait_file(path: &Path) {
-    tokio::time::timeout(Duration::from_secs(20), async {
-        while !path.exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+
+#[tokio::test]
+async fn python_same_run_retries_and_failures() {
+    let scratch = Scratch::new();
+    {
+        let (mut host,invocation)=scratch.host("from sluice_fn import run, Transient\nimport os\npids=[]\ndef main(inp,ctx):\n    pids.append(os.getpid())\n    if ctx.attempt < 3: raise Transient('busy')\n    return {'attempt':ctx.attempt, 'pids':pids, 'run':ctx.run_id}\nrun(main,retries=2,backoff=99)\n",json!({"attempt":"int","pids":"int[]","run":"string"}));
+        host.config
+            .environment
+            .insert("SLUICE_BACKOFF".into(), "0".into());
+        let out = value(&execute(&host, &invocation).await.unwrap());
+        assert_eq!(out["attempt"], 3);
+        let pids = out["pids"].as_array().unwrap();
+        assert_eq!(pids.len(), 3);
+        assert!(pids.iter().all(|p| p == &pids[0]));
+        assert_eq!(out["run"], invocation.run.to_string());
+    }
+    {
+        for (error, expected) in [
+            ("Transient('busy')", PythonError::Transient("busy".into())),
+            ("ValueError('bad')", PythonError::Failure("bad".into())),
+            (
+                "Rejected('refused')",
+                PythonError::Rejected("refused".into()),
+            ),
+        ] {
+            let (host,invocation)=scratch.host(&format!("from sluice_fn import run,Transient,Rejected\ndef main(inp,ctx):\n    raise {error}\nrun(main,retries=1,backoff=0)\n"),json!({}));
+            assert_eq!(execute(&host, &invocation).await.unwrap_err(), expected);
         }
-    })
-    .await
-    .unwrap();
+    }
+}
+#[tokio::test]
+async fn python_backoff_and_input_refusals() {
+    let scratch = Scratch::new();
+    {
+        for backoff in ["-1", "nan", "inf", "nope"] {
+            let (mut host,invocation)=scratch.host("from sluice_fn import run\ndef main(inp,ctx):\n    raise AssertionError('main must not execute')\nrun(main)\n",json!({}));
+            host.config
+                .environment
+                .insert("SLUICE_BACKOFF".into(), backoff.into());
+            let err = execute(&host, &invocation).await.unwrap_err();
+            assert!(matches!(err, PythonError::Failure(_)));
+            assert!(!err.to_string().contains("main must not execute"));
+        }
+    }
+    {
+        let (host,_)=scratch.host("from sluice_fn import run\ndef main(inp,ctx):\n    raise AssertionError('user code ran')\nrun(main)\n",json!({}));
+        for raw in [
+            b"{}".to_vec(),
+            b"{\"protocol\":1,\"inputs\":{},\"context\":{}}{}".to_vec(),
+            b"{\"protocol\":1,\"protocol\":1,\"inputs\":{},\"context\":{}}".to_vec(),
+        ] {
+            let mut command = tokio::process::Command::new(&host.config.uv);
+            command
+                .args(["run", "--no-project", "--quiet"])
+                .arg(host.bundle.bundle_dir.join("main.py"))
+                .env("PYTHONPATH", &host.config.helper_dir)
+                .current_dir(&host.bundle.bundle_dir);
+            use std::process::Stdio;
+            command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
+            let mut child = command.spawn().unwrap();
+            let mut stdin = child.stdin.take().unwrap();
+            let write = async {
+                let _ = stdin.write_all(&raw).await;
+                drop(stdin);
+            };
+            let ((), output) = tokio::join!(write, child.wait_with_output());
+            let output = output.unwrap();
+            assert!(!output.status.success());
+            let envelope: Value = decode_json(&output.stdout).unwrap();
+            assert_eq!(envelope["ok"], false);
+            assert!(
+                !envelope["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("user code ran")
+            );
+        }
+    }
+}
+#[tokio::test]
+async fn slow_python_oversized_input_refusal() {
+    let scratch = Scratch::new();
+    {
+        let (host,_)=scratch.host("from sluice_fn import run\ndef main(inp,ctx):\n    raise AssertionError('user code ran')\nrun(main)\n",json!({}));
+        for raw in [vec![b'x'; MAX_FRAME_BYTES + 1]] {
+            let mut command = tokio::process::Command::new(&host.config.uv);
+            command
+                .args(["run", "--no-project", "--quiet"])
+                .arg(host.bundle.bundle_dir.join("main.py"))
+                .env("PYTHONPATH", &host.config.helper_dir)
+                .current_dir(&host.bundle.bundle_dir);
+            use std::process::Stdio;
+            command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
+            let mut child = command.spawn().unwrap();
+            let mut stdin = child.stdin.take().unwrap();
+            let write = async {
+                let _ = stdin.write_all(&raw).await;
+                drop(stdin);
+            };
+            let ((), output) = tokio::join!(write, child.wait_with_output());
+            let output = output.unwrap();
+            assert!(!output.status.success());
+            let envelope: Value = decode_json(&output.stdout).unwrap();
+            assert_eq!(envelope["ok"], false);
+            assert!(
+                !envelope["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("user code ran")
+            );
+        }
+    }
+}
+
+async fn wait_file(path: &Path) {
+    super::file_ready(
+        path,
+        |path| {
+            if matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some("pid" | "started")
+            ) {
+                std::fs::read_to_string(path)
+                    .ok()
+                    .is_some_and(|pid| pid.trim().parse::<u32>().is_ok())
+            } else {
+                path.exists()
+            }
+        },
+        Duration::from_secs(20),
+    )
+    .await;
 }
 #[tokio::test]
 async fn signal_interrupts_helper_backoff_before_a_second_call() {
@@ -294,51 +433,9 @@ async fn host_cancellation_reaps_uv_while_backoff_is_active() {
 }
 
 #[tokio::test]
-async fn child_environment_restores_host_tools_and_keeps_callbacks() {
-    let scratch = Scratch::new();
-    let (mut host,invocation)=scratch.host("from sluice_fn import run,child_env,sh\nimport os\ndef main(inp,ctx):\n    os.environ['VIRTUAL_ENV']='/uv/environment'\n    os.environ['PATH']='/uv/environment/bin:/bad'\n    os.environ['PYTHONHOME']='/bad'\n    os.environ['UV_PROJECT_ENVIRONMENT']='/bad'\n    os.environ['CLAUDECODE']='1'\n    e=child_env({'X':'yes'})\n    return {'path':e['PATH'], 'x':e['X'], 'clean':all(k not in e for k in ['VIRTUAL_ENV','PYTHONPATH','PYTHONHOME','UV_PROJECT_ENVIRONMENT','CLAUDECODE']), 'run':e['SLUICE_RUN_ID'], 'host':sh(['python3','-c','import sys;print(sys.prefix)']).stdout.strip(), 'binary':sh(['printf','\\\\037\\\\213gz']).stdout}\nrun(main)\n",json!({"path":"string","x":"string","clean":"boolean","run":"string","host":"string","binary":"string"}));
-    host.config
-        .environment
-        .remove(std::ffi::OsStr::new("PYTHONPATH"));
-    host.config
-        .environment
-        .remove(std::ffi::OsStr::new("VIRTUAL_ENV"));
-    let host_path = host.config.environment[std::ffi::OsStr::new("PATH")]
-        .to_string_lossy()
-        .into_owned();
-    let out = value(&execute(&host, &invocation).await.unwrap());
-    assert_eq!(out["path"], host_path);
-    assert_eq!(out["x"], "yes");
-    assert_eq!(out["clean"], true);
-    assert_eq!(out["run"], invocation.run.to_string());
-    assert!(!out["host"].as_str().unwrap().contains("environments-v2"));
-    // Output that is not UTF-8 (a gzip header) is decoded with replacement characters.
-    assert_eq!(out["binary"], "\u{1f}\u{fffd}gz");
-}
-
-#[tokio::test]
-async fn envelope_carries_project_dir_and_the_fn_sees_ctx_project_dir() {
-    let scratch = Scratch::new();
-    let (host, invocation) = scratch.host(
-        "from sluice_fn import run\nimport os\ndef main(inp,ctx):\n    return {'ctx':str(ctx.project_dir),'env':os.environ['SLUICE_PROJECT_DIR']}\nrun(main)\n",
-        json!({"ctx":"string","env":"string"}),
-    );
-    let expected = scratch
-        .0
-        .join("projects")
-        .join(invocation.project.to_string());
-    let envelope: Value = decode_json(&host.envelope(&invocation).unwrap()).unwrap();
-    assert_eq!(
-        envelope["context"]["project_dir"].as_str().unwrap(),
-        expected.to_str().unwrap()
-    );
-    let out = value(&execute(&host, &invocation).await.unwrap());
-    assert_eq!(out["ctx"], expected.to_str().unwrap());
-    assert_eq!(out["env"], expected.to_str().unwrap());
-}
-
-#[tokio::test]
 async fn strict_result_envelopes_and_rust_output_validation_cannot_be_bypassed() {
+    use std::os::unix::process::ExitStatusExt;
+    let schema = output_types(&map(json!({"n":"int"}))).unwrap();
     for raw in [
         "{}",
         "{\"ok\":true,\"outputs\":{\"n\":1}}{}",
@@ -348,14 +445,20 @@ async fn strict_result_envelopes_and_rust_output_validation_cannot_be_bypassed()
         "{\"ok\":false,\"error\":{\"kind\":\"rejected\",\"message\":\"x\"}}",
         "{\"ok\":true,\"outputs\":{\"n\":1,\"other\":0}}",
     ] {
-        let scratch = Scratch::new();
-        let (host, invocation) = scratch.host(
-            &format!("import sys\nsys.stdout.write({raw:?})\n"),
-            json!({"n":"int"}),
-        );
-        assert!(execute(&host, &invocation).await.is_err(), "accepted {raw}");
+        let status = std::process::ExitStatus::from_raw(0);
+        let result = decode_result(raw.as_bytes(), status, "")
+            .and_then(|outputs| validate_outputs(&schema, &outputs, true).map(|()| outputs));
+        assert!(result.is_err(), "accepted {raw}");
     }
     let scratch = Scratch::new();
+    let (host, invocation) = scratch.host(
+        "print('{\"ok\":true,\"outputs\":{\"n\":\"bad\"}}')\n",
+        json!({"n":"int"}),
+    );
+    assert!(
+        execute(&host, &invocation).await.is_err(),
+        "Rust must validate raw fn outputs"
+    );
     let (host, invocation) = scratch.host(
         "print('{\"ok\":true,\"outputs\":{\"n\":1}}')\nraise SystemExit(75)\n",
         json!({"n":"int"}),
@@ -366,7 +469,7 @@ async fn strict_result_envelopes_and_rust_output_validation_cannot_be_bypassed()
     ));
 }
 #[tokio::test]
-async fn size_limits_bound_input_result_stderr_artifact_and_public_tail() {
+async fn slow_size_limits_bound_input_result_stderr_artifact_and_public_tail() {
     let scratch = Scratch::new();
     let (host, mut invocation) = scratch.host(
         "import sys\nsys.stdout.write('x'*(16*1024*1024+1))\n",
@@ -393,13 +496,14 @@ async fn size_limits_bound_input_result_stderr_artifact_and_public_tail() {
 }
 
 #[tokio::test]
-async fn builtin_composition_and_tool_callbacks_keep_the_outer_run_identity() {
+async fn python_callbacks_and_exception_contracts() {
     let scratch = Scratch::new();
-    let (mut host,invocation)=scratch.host("from sluice_fn import run\ndef main(inp,ctx):\n    a=ctx.builtin('agent.fake',{'task':ctx.header('do it')})\n    b=ctx.tool('status',{})\n    return {'session':a['session'],'project':b['project']}\nrun(main)\n",json!({"session":"string","project":"string"}));
-    let outer = invocation.clone();
-    let server = Server::new(
-        scratch.0.join("control.sock"),
-        move |request| match request.command {
+    {
+        let (mut host,invocation)=scratch.host("from sluice_fn import run\ndef main(inp,ctx):\n    a=ctx.builtin('agent.fake',{'task':ctx.header('do it')})\n    b=ctx.tool('status',{})\n    return {'session':a['session'],'project':b['project']}\nrun(main)\n",json!({"session":"string","project":"string"}));
+        let outer = invocation.clone();
+        let server = Server::new(scratch.0.join("control.sock"), move |request| match request
+            .command
+        {
             HelperCommand::Runtime(CommandRequest::Builtin { invocation }) => {
                 assert_eq!(invocation.run, outer.run);
                 assert_eq!(invocation.attempt, outer.attempt);
@@ -419,85 +523,73 @@ async fn builtin_composition_and_tool_callbacks_keep_the_outer_run_identity() {
                 data(json!({}))
             }
             _ => panic!("unexpected callback"),
-        },
-    );
-    host.context.control_socket = Some(server.path.clone());
-    let out = value(&execute(&host, &invocation).await.unwrap());
-    assert_eq!(out["session"], "session-1");
-    server.close().await;
-}
-
-#[tokio::test]
-async fn section_release_allows_a_second_holder_and_same_run_reacquisition() {
-    let scratch = Scratch::new();
-    let first = Scratch::new();
-    let second = Scratch::new();
-    let path = scratch.0.clone();
-    let first_code = format!(
-        "from sluice_fn import run\nfrom pathlib import Path\nimport time\nroot=Path({:?})\ndef main(inp,ctx):\n    with ctx.acquire('land'):\n        (root/'first').touch()\n        while not (root/'waiting').exists(): time.sleep(.01)\n    while not (root/'second').exists(): time.sleep(.01)\n    with ctx.acquire('land'):\n        (root/'reacquired').touch()\n    return {{}}\nrun(main)\n",
-        path.to_str().unwrap()
-    );
-    let second_code = format!(
-        "from sluice_fn import run\nfrom pathlib import Path\nimport time\nroot=Path({:?})\ndef main(inp,ctx):\n    while not (root/'first').exists(): time.sleep(.01)\n    (root/'waiting').touch()\n    with ctx.acquire('land'):\n        (root/'second').touch()\n        time.sleep(.1)\n    return {{}}\nrun(main)\n",
-        path.to_str().unwrap()
-    );
-    let (mut a, ai) = first.host(&first_code, json!({}));
-    let (mut b, bi) = second.host(&second_code, json!({}));
-    let mut owner = None;
-    let mut leases = std::collections::BTreeMap::new();
-    let mut serial = 0i64;
-    let history = Arc::new(Mutex::new(Vec::new()));
-    let trace = history.clone();
-    let server = Server::new(
-        scratch.0.join("control.sock"),
-        move |request| match request.command {
-            HelperCommand::Runtime(CommandRequest::AcquireLease(request)) => {
-                assert_eq!(request.resource, "land");
-                assert_eq!(request.amount, 1);
-                let lease = *leases.entry(request.request_id).or_insert_with(|| {
-                    serial += 1;
-                    serial
-                });
-                if owner.is_none() {
-                    owner = Some((lease, request.run));
-                    trace.lock().unwrap().push(("acquire", request.run));
+        });
+        host.context.control_socket = Some(server.path.clone());
+        let out = value(&execute(&host, &invocation).await.unwrap());
+        assert_eq!(out["session"], "session-1");
+        server.close().await;
+    }
+    {
+        let (mut host,invocation)=scratch.host("from sluice_fn import run,AgentFailure,Transient,CallbackError\ndef main(inp,ctx):\n    if ctx.attempt==1: ctx.builtin('transient',{})\n    try: ctx.builtin('failure',{})\n    except AgentFailure as e: agent={'kind':e.kind,'message':e.message,'session':e.session}\n    try: ctx.tool('invalid',{})\n    except CallbackError as e: tool={'error':e.error,'message':e.message,'errors':e.errors,'current_rev':e.current_rev,'retryable':e.retryable}\n    return {'agent':agent,'tool':tool,'attempt':ctx.attempt}\nrun(main,retries=1,backoff=0)\n",json!({"agent":"Any","tool":"Any","attempt":"int"}));
+        let server = Server::new(scratch.0.join("control.sock"), |request| {
+            match request.command {
+                HelperCommand::Runtime(CommandRequest::Builtin { invocation })
+                    if invocation.name == "transient" =>
+                {
+                    json!({"status":"error","value":{"error":"transient","message":"busy"}})
                 }
-                let state = if owner == Some((lease, request.run)) {
-                    "held"
-                } else {
-                    "waiting"
-                };
-                json!({"reply":"lease","data":{"lease":lease,"state":state}})
-            }
-            HelperCommand::Runtime(CommandRequest::ReleaseLease(request)) => {
-                if owner == Some((request.lease.0, request.run)) {
-                    owner = None;
-                    trace.lock().unwrap().push(("release", request.run));
+                HelperCommand::Runtime(CommandRequest::Builtin { .. }) => {
+                    json!({"status":"error","value":{"error":"agent_failure","kind":"WallCap","message":"time budget exhausted","session":"session-1"}})
                 }
-                json!({"reply":"ack"})
+                HelperCommand::Extension(HelperExtension::Tool(_)) => {
+                    json!({"status":"error","value":{"error":"invalid","message":"bad request","errors":["inputs.n"],"current_rev":3,"retryable":false}})
+                }
+                HelperCommand::Runtime(CommandRequest::Submission { .. }) => data(json!({})),
+                _ => panic!("unexpected"),
             }
-            HelperCommand::Runtime(CommandRequest::Submission { .. }) => data(json!({})),
-            _ => panic!("unexpected callback"),
-        },
-    );
-    a.context.control_socket = Some(server.path.clone());
-    b.context.control_socket = Some(server.path.clone());
-    let (ar, br) = tokio::join!(execute(&a, &ai), execute(&b, &bi));
-    ar.unwrap();
-    br.unwrap();
-    assert!(path.join("reacquired").exists());
-    assert_eq!(
-        *history.lock().unwrap(),
-        vec![
-            ("acquire", ai.run),
-            ("release", ai.run),
-            ("acquire", bi.run),
-            ("release", bi.run),
-            ("acquire", ai.run),
-            ("release", ai.run)
-        ]
-    );
-    server.close().await;
+        });
+        host.context.control_socket = Some(server.path.clone());
+        let out = value(&execute(&host, &invocation).await.unwrap());
+        assert_eq!(out["attempt"], 2);
+        assert_eq!(
+            out["agent"],
+            json!({"kind":"WallCap","message":"time budget exhausted","session":"session-1"})
+        );
+        assert_eq!(
+            out["tool"],
+            json!({"error":"invalid","message":"bad request","errors":["inputs.n"],"current_rev":3,"retryable":false})
+        );
+        server.close().await;
+    }
+    {
+        for waiting in [false, true] {
+            let code = if waiting {
+                "from sluice_fn import run\ndef main(inp,ctx):\n    with ctx.acquire('land',timeout=0): pass\nrun(main)\n"
+            } else {
+                "from sluice_fn import run,Rejected\ndef main(inp,ctx):\n    with ctx.acquire('land'): raise Rejected('no')\nrun(main)\n"
+            };
+            let (mut host, invocation) = scratch.host(code, json!({}));
+            let released = Arc::new(Mutex::new(false));
+            let seen = released.clone();
+            let server = Server::new(scratch.0.join("control.sock"), move |request| match request
+                .command
+            {
+                HelperCommand::Runtime(CommandRequest::AcquireLease(_)) => {
+                    json!({"reply":"lease","data":{"lease":1,"state":if waiting{"waiting"}else{"held"}}})
+                }
+                HelperCommand::Runtime(CommandRequest::ReleaseLease(request)) => {
+                    assert_eq!(request.lease, LeaseId(1));
+                    *seen.lock().unwrap() = true;
+                    json!({"reply":"ack"})
+                }
+                _ => panic!("unexpected"),
+            });
+            host.context.control_socket = Some(server.path.clone());
+            assert!(execute(&host, &invocation).await.is_err());
+            assert!(*released.lock().unwrap());
+            server.close().await;
+        }
+    }
 }
 
 #[tokio::test]
@@ -590,41 +682,6 @@ async fn file_binding_bytes_are_frozen_by_caller_and_read_fresh_for_each_run() {
         value(&execute(&host, &invocation).await.unwrap())["brief"],
         "next"
     );
-}
-
-#[tokio::test]
-async fn agent_failure_transient_and_tool_errors_have_the_requested_exception_shapes() {
-    let scratch = Scratch::new();
-    let (mut host,invocation)=scratch.host("from sluice_fn import run,AgentFailure,Transient,CallbackError\ndef main(inp,ctx):\n    if ctx.attempt==1: ctx.builtin('transient',{})\n    try: ctx.builtin('failure',{})\n    except AgentFailure as e: agent={'kind':e.kind,'message':e.message,'session':e.session}\n    try: ctx.tool('invalid',{})\n    except CallbackError as e: tool={'error':e.error,'message':e.message,'errors':e.errors,'current_rev':e.current_rev,'retryable':e.retryable}\n    return {'agent':agent,'tool':tool,'attempt':ctx.attempt}\nrun(main,retries=1,backoff=0)\n",json!({"agent":"Any","tool":"Any","attempt":"int"}));
-    let server = Server::new(scratch.0.join("control.sock"), |request| {
-        match request.command {
-            HelperCommand::Runtime(CommandRequest::Builtin { invocation })
-                if invocation.name == "transient" =>
-            {
-                json!({"status":"error","value":{"error":"transient","message":"busy"}})
-            }
-            HelperCommand::Runtime(CommandRequest::Builtin { .. }) => {
-                json!({"status":"error","value":{"error":"agent_failure","kind":"WallCap","message":"time budget exhausted","session":"session-1"}})
-            }
-            HelperCommand::Extension(HelperExtension::Tool(_)) => {
-                json!({"status":"error","value":{"error":"invalid","message":"bad request","errors":["inputs.n"],"current_rev":3,"retryable":false}})
-            }
-            HelperCommand::Runtime(CommandRequest::Submission { .. }) => data(json!({})),
-            _ => panic!("unexpected"),
-        }
-    });
-    host.context.control_socket = Some(server.path.clone());
-    let out = value(&execute(&host, &invocation).await.unwrap());
-    assert_eq!(out["attempt"], 2);
-    assert_eq!(
-        out["agent"],
-        json!({"kind":"WallCap","message":"time budget exhausted","session":"session-1"})
-    );
-    assert_eq!(
-        out["tool"],
-        json!({"error":"invalid","message":"bad request","errors":["inputs.n"],"current_rev":3,"retryable":false})
-    );
-    server.close().await;
 }
 
 // These adapters use real store commands. The fixture has no needs or assigned messages.
@@ -960,97 +1017,6 @@ except ProcessLookupError:
             status.is_ok_and(|s| s.success()),
             "scratch child cleanup failed"
         );
-    }
-}
-
-#[tokio::test]
-async fn helper_rejects_malformed_inputs_before_running_user_code() {
-    let scratch = Scratch::new();
-    let (host,_)=scratch.host("from sluice_fn import run\ndef main(inp,ctx):\n    raise AssertionError('user code ran')\nrun(main)\n",json!({}));
-    for raw in [
-        b"{}".to_vec(),
-        b"{\"protocol\":1,\"inputs\":{},\"context\":{}}{}".to_vec(),
-        b"{\"protocol\":1,\"protocol\":1,\"inputs\":{},\"context\":{}}".to_vec(),
-        vec![b'x'; MAX_FRAME_BYTES + 1],
-    ] {
-        let mut command = tokio::process::Command::new(&host.config.uv);
-        command
-            .args(["run", "--no-project", "--quiet"])
-            .arg(host.bundle.bundle_dir.join("main.py"))
-            .env("PYTHONPATH", &host.config.helper_dir)
-            .current_dir(&host.bundle.bundle_dir);
-        use std::process::Stdio;
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let mut child = command.spawn().unwrap();
-        let mut stdin = child.stdin.take().unwrap();
-        let write = async {
-            let _ = stdin.write_all(&raw).await;
-            drop(stdin);
-        };
-        let ((), output) = tokio::join!(write, child.wait_with_output());
-        let output = output.unwrap();
-        assert!(!output.status.success());
-        let envelope: Value = decode_json(&output.stdout).unwrap();
-        assert_eq!(envelope["ok"], false);
-        assert!(
-            !envelope["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("user code ran")
-        );
-    }
-}
-
-#[tokio::test]
-async fn approved_sibling_helper_and_previous_run_context_survive_retry() {
-    let scratch = Scratch::new();
-    let (mut host,invocation)=scratch.host("from sluice_fn import run,Transient\nimport sibling,os\ndef main(inp,ctx):\n    if ctx.attempt==1: raise Transient('busy')\n    return {'previous':ctx.prev_run,'env':os.environ['SLUICE_PREV_RUN'],'sibling':sibling.VALUE}\nrun(main,retries=1,backoff=0)\n",json!({"previous":"string","env":"string","sibling":"int"}));
-    let previous = RunId::new();
-    host.context.prev_run = Some(previous);
-    let sibling = scratch.0.join("approved");
-    std::fs::create_dir(&sibling).unwrap();
-    std::fs::write(sibling.join("sibling.py"), "VALUE=7\n").unwrap();
-    host.bundle.sibling_helper_root = Some(sibling);
-    let out = value(&execute(&host, &invocation).await.unwrap());
-    assert_eq!(
-        out,
-        json!({"previous":previous.to_string(),"env":previous.to_string(),"sibling":7})
-    );
-}
-
-#[tokio::test]
-async fn section_timeout_and_exception_send_idempotent_release() {
-    for waiting in [false, true] {
-        let scratch = Scratch::new();
-        let code = if waiting {
-            "from sluice_fn import run\ndef main(inp,ctx):\n    with ctx.acquire('land',timeout=0): pass\nrun(main)\n"
-        } else {
-            "from sluice_fn import run,Rejected\ndef main(inp,ctx):\n    with ctx.acquire('land'): raise Rejected('no')\nrun(main)\n"
-        };
-        let (mut host, invocation) = scratch.host(code, json!({}));
-        let released = Arc::new(Mutex::new(false));
-        let seen = released.clone();
-        let server = Server::new(scratch.0.join("control.sock"), move |request| match request
-            .command
-        {
-            HelperCommand::Runtime(CommandRequest::AcquireLease(_)) => {
-                json!({"reply":"lease","data":{"lease":1,"state":if waiting{"waiting"}else{"held"}}})
-            }
-            HelperCommand::Runtime(CommandRequest::ReleaseLease(request)) => {
-                assert_eq!(request.lease, LeaseId(1));
-                *seen.lock().unwrap() = true;
-                json!({"reply":"ack"})
-            }
-            _ => panic!("unexpected"),
-        });
-        host.context.control_socket = Some(server.path.clone());
-        assert!(execute(&host, &invocation).await.is_err());
-        assert!(*released.lock().unwrap());
-        server.close().await;
     }
 }
 

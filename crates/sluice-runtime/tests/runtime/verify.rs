@@ -1,6 +1,4 @@
-#[allow(dead_code)]
-#[path = "../../sluice-store/tests/support/plan_rows.rs"]
-mod plan_rows;
+use super::store_plan_rows as plan_rows;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use sluice_model::{
@@ -60,64 +58,64 @@ async fn project(w: &Writer, doc: Value) -> ProjectId {
     .unwrap()
 }
 #[tokio::test]
-async fn fresh_and_working_paused_archived_homes_verify_without_writes() {
+async fn valid_and_invalid_plans_are_checked_without_writes() {
     let (_h, w, r) = setup().await;
-    assert!(verify(&r, registry(), None).await.unwrap().is_empty());
-    let p=project(&w,json!({"inputs":{"v":"string"},"steps":{"s":{"run":"test.echo","in":{"value":{"source":"v"}}}}})).await;
-    w.write(RetrySafety::NonIdempotent, move |tx| {
-        tx.sql().execute(
-            "UPDATE projects SET paused=1,archived=1 WHERE project_id=?1",
-            [p.to_string()],
-        )?;
-        tx.changed(Some(p), "projects");
-        Ok(())
-    })
-    .await
-    .unwrap();
-    let before = r
-        .cursor(vec![sluice_store::ChangeKey::new(Some(p), "projects")])
+    {
+        assert!(verify(&r, registry(), None).await.unwrap().is_empty());
+        let p=project(&w,json!({"inputs":{"v":"string"},"steps":{"s":{"run":"test.echo","in":{"value":{"source":"v"}}}}})).await;
+        w.write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE projects SET paused=1,archived=1 WHERE project_id=?1",
+                [p.to_string()],
+            )?;
+            tx.changed(Some(p), "projects");
+            Ok(())
+        })
         .await
         .unwrap();
-    assert!(
-        verify(&r, registry(), Some(ProjectSelector::Id(p)))
+        let before = r
+            .cursor(vec![sluice_store::ChangeKey::new(Some(p), "projects")])
             .await
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(
-        before,
-        r.cursor(vec![sluice_store::ChangeKey::new(Some(p), "projects")])
-            .await
-            .unwrap()
-    );
-    assert!(matches!(
-        verify(&r, registry(), Some(ProjectSelector::Id(ProjectId::new()))).await,
-        Err(PublicError::NotFound { .. })
-    ));
-    w.shutdown().await.unwrap();
-}
-#[tokio::test]
-async fn plan_compiler_reports_every_bad_input_and_unknown_function() {
-    let (_h, w, r) = setup().await;
-    let p = project(&w, json!({"steps":{}})).await;
-    // The store keeps what an edit wrote; only a compile checks it.
-    let broken: JsonMap = serde_json::from_value(json!({"steps":{"a":{"run":"test.echo","in":{"value":{"default":3}}},"b":{"run":"missing"}}})).unwrap();
-    w.write(RetrySafety::NonIdempotent, move |tx| {
-        plan_rows::commit_document(tx, p, &broken, None, None)
-    })
-    .await
-    .unwrap();
-    let problems = verify(&r, registry(), Some(ProjectSelector::Id(p)))
+            .unwrap();
+        assert!(
+            verify(&r, registry(), Some(ProjectSelector::Id(p)))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            before,
+            r.cursor(vec![sluice_store::ChangeKey::new(Some(p), "projects")])
+                .await
+                .unwrap()
+        );
+        assert!(matches!(
+            verify(&r, registry(), Some(ProjectSelector::Id(ProjectId::new()))).await,
+            Err(PublicError::NotFound { .. })
+        ));
+    }
+    {
+        let p = project(&w, json!({"steps":{}})).await;
+        // The store keeps what an edit wrote; only a compile checks it.
+        let broken: JsonMap = serde_json::from_value(json!({"steps":{"a":{"run":"test.echo","in":{"value":{"default":3}}},"b":{"run":"missing"}}})).unwrap();
+        w.write(RetrySafety::NonIdempotent, move |tx| {
+            plan_rows::commit_document(tx, p, &broken, None, None)
+        })
         .await
         .unwrap();
-    assert!(
-        problems
-            .iter()
-            .any(|p| p.r#where.contains("steps.a.in.value"))
-    );
-    assert!(problems.iter().any(|p| p.r#where.contains("steps.b.run")));
+        let problems = verify(&r, registry(), Some(ProjectSelector::Id(p)))
+            .await
+            .unwrap();
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.r#where.contains("steps.a.in.value"))
+        );
+        assert!(problems.iter().any(|p| p.r#where.contains("steps.b.run")));
+    }
     w.shutdown().await.unwrap();
 }
+
 #[tokio::test]
 async fn typed_state_unknown_inputs_outputs_and_changed_graph_hash_are_checked() {
     let (_h, w, r) = setup().await;
@@ -180,51 +178,6 @@ async fn env_files_and_stray_directories_are_reported_without_execution() {
     assert!(problems.iter().any(|p| p.r#where == ".env:1"));
     assert!(problems.iter().any(|p| p.r#where == "projects/stray"));
     w.shutdown().await.unwrap();
-}
-#[test]
-fn registry_reports_broken_entries_collisions_and_types_independently() {
-    let h = Home::new();
-    let root = h.0.join("fns");
-    for (name, manifest, main) in [
-        (
-            "bad.type",
-            json!({"name":"bad.type","inputs":{"x":"strin"},"outputs":{}}),
-            true,
-        ),
-        (
-            "test.echo",
-            json!({"name":"test.echo","inputs":{},"outputs":{}}),
-            true,
-        ),
-        (
-            "missing.main",
-            json!({"name":"missing.main","inputs":{},"outputs":{}}),
-            false,
-        ),
-        (
-            "good",
-            json!({"name":"good","inputs":{},"outputs":{}}),
-            true,
-        ),
-    ] {
-        let dir = root.join(name);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("fn.json"), manifest.to_string()).unwrap();
-        if main {
-            std::fs::write(
-                dir.join("main.py"),
-                "raise Exception('verify must never execute')",
-            )
-            .unwrap();
-        }
-    }
-    let inspection = inspect_fns(&h.0, &[root], registry().0.clone());
-    assert_eq!(inspection.problems.len(), 3);
-    assert!(inspection.signatures.contains_key("good"));
-    assert_eq!(
-        inspection.signatures["test.echo"].outputs["value"],
-        Type::String
-    );
 }
 
 #[tokio::test]

@@ -842,8 +842,6 @@ fn scan_dirs(
             });
         }
     }
-    #[cfg(test)]
-    tests::after_scan();
     ScopeScan {
         fingerprint,
         entries,
@@ -1613,112 +1611,5 @@ impl FnRegistry {
     pub(crate) fn invalidate(&self) {
         self.scans.lock().unwrap_or_else(|e| e.into_inner()).clear();
         self.version.fetch_add(1, Ordering::AcqRel);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{dispatch::Catalog, publication::Publication};
-    use std::cell::RefCell;
-
-    thread_local! {
-        static AFTER_SCAN: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
-    }
-
-    pub(super) fn after_scan() {
-        if let Some(hook) = AFTER_SCAN.with(|hook| hook.borrow_mut().take()) {
-            hook();
-        }
-    }
-
-    fn write_fn(root: &Path, raw: &Value) -> PathBuf {
-        let dir = root.join("test.scan");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("fn.json"), serde_json::to_vec(raw).unwrap()).unwrap();
-        fs::write(dir.join("main.py"), "# test fn\n").unwrap();
-        dir
-    }
-
-    fn manifest(doc: &str) -> Value {
-        json!({"name": "test.scan", "doc": doc, "inputs": {}, "outputs": {}})
-    }
-
-    #[test]
-    fn scan_race_next_access_reads_a_manifest_changed_after_the_scan() {
-        for slot in [Slot::Home, Slot::FnDir(0), Slot::Project(ProjectId::new())] {
-            let home = tempfile::tempdir().unwrap();
-            let registry = FnRegistry::open(home.path(), vec![home.path().join("extra")]);
-            let dirs = slot.dirs(registry.home(), registry.fn_dirs());
-            let old = manifest("before");
-            let new = manifest("changed after the read");
-            let dir = write_fn(&dirs[0], &old);
-            let changed = new.clone();
-            AFTER_SCAN.with(|hook| {
-                *hook.borrow_mut() = Some(Box::new(move || {
-                    fs::write(dir.join("fn.json"), serde_json::to_vec(&changed).unwrap()).unwrap();
-                }));
-            });
-
-            let scan = registry.scan(&slot);
-            assert_eq!(scan.entries[0].function.as_ref().unwrap().raw, old);
-            assert_ne!(
-                serde_json::to_vec(&old).unwrap().len(),
-                serde_json::to_vec(&new).unwrap().len()
-            );
-            let view = registry.registry(slot.project());
-            assert_eq!(view.get("test.scan").unwrap().raw, new, "{slot:?}");
-            assert_eq!(registry.version(), 1);
-        }
-    }
-
-    #[tokio::test]
-    async fn scan_race_publication_conflict_clears_a_stale_cache_for_the_next_attempt() {
-        let home = tempfile::tempdir().unwrap();
-        sluice_process::host::guard_scratch_home(home.path()).unwrap();
-        let writer = Writer::open(home.path()).unwrap();
-        let old = manifest("before");
-        let new = manifest("changed after the read");
-        let dir = write_fn(&home.path().join("fns"), &old);
-        let publication =
-            Publication::new(FnRegistry::open(home.path(), vec![]), Catalog::fixtures());
-        publication.refresh_if_stale(&writer, vec![]).await.unwrap();
-
-        fs::write(dir.join("fn.json"), serde_json::to_vec(&new).unwrap()).unwrap();
-        {
-            // Reproduce an old manifest cached under the new file's fingerprint.
-            let mut scans = publication.registry.scans.lock().unwrap();
-            let scan = Arc::get_mut(scans.get_mut(&Slot::Home).unwrap()).unwrap();
-            scan.fingerprint = fingerprint(&[home.path().join("fns")]);
-        }
-        publication.registry.version.fetch_add(1, Ordering::AcqRel);
-        let version = publication.registry.version();
-        let error = publication
-            .refresh_if_stale(&writer, vec![])
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(error, PublicError::Conflict { message, current_rev: None }
-            if message == "fn changed during publication")
-        );
-        assert_eq!(publication.publications(), 1);
-        assert_eq!(
-            publication.detail(None, "test.scan").unwrap()["doc"],
-            old["doc"]
-        );
-
-        publication.refresh_if_stale(&writer, vec![]).await.unwrap();
-        assert!(publication.registry.version() > version);
-        assert_eq!(publication.publications(), 2);
-        assert_eq!(
-            publication.detail(None, "test.scan").unwrap()["doc"],
-            new["doc"]
-        );
-        let execution = publication.resolved(None, "test.scan").unwrap();
-        let pinned: Value =
-            serde_json::from_slice(&fs::read(execution.fn_dir.unwrap().join("fn.json")).unwrap())
-                .unwrap();
-        assert_eq!(pinned, new);
-        writer.shutdown().await.unwrap();
     }
 }

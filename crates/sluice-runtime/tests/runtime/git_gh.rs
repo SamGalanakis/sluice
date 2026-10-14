@@ -1,0 +1,743 @@
+//! git.* and gh.* builtins against real scratch repositories and fake `git`/`gh`
+//! executables, porting packs/git/tests/test_git.py. Every repo lives under a TempDir —
+//! nothing touches this repository's own git state, and the fakes mean real GitHub is
+//! never contacted.
+
+use super::executable;
+use indexmap::IndexMap;
+use serde_json::{Value, json};
+use sluice_model::rpc::JsonMap;
+use sluice_runtime::builtins::{
+    gh,
+    git::{self, BuiltinCtx, FnFailure},
+};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
+use tempfile::TempDir;
+
+// ---- fixture git (real, on scratch repos only) --------------------------------
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} in {} failed: {}",
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+fn git_code(dir: &Path, args: &[&str]) -> (i32, String) {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).trim().to_string(),
+    )
+}
+
+struct Repo {
+    path: PathBuf,
+    origin: PathBuf,
+}
+
+/// A repo on `main` with one commit, wired to a bare `origin` remote.
+fn repo(tmp: &TempDir) -> Repo {
+    let path = tmp.path().join("repo");
+    fs::create_dir(&path).unwrap();
+    git(&path, &["init", "-b", "main"]);
+    git(&path, &["config", "user.email", "t@example.com"]);
+    git(&path, &["config", "user.name", "T"]);
+    fs::write(path.join("f.txt"), "one\n").unwrap();
+    git(&path, &["add", "."]);
+    git(&path, &["commit", "-m", "init"]);
+    let origin = tmp.path().join("origin.git");
+    let out = Command::new("git")
+        .args(["init", "--bare"])
+        .arg(&origin)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    git(
+        &path,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&path, &["push", "-u", "origin", "main"]);
+    Repo { path, origin }
+}
+
+/// The run env fn_env would produce: ambient vars, SLUICE_HOST_* records, and — when a
+/// bin dir is given — it prepended to PATH and recorded as SLUICE_HOST_PATH, so the
+/// fakes are what child_env restores.
+fn ctx(run_dir: &Path, bin: Option<&Path>) -> BuiltinCtx {
+    fs::create_dir_all(run_dir).unwrap();
+    let mut env: IndexMap<String, String> = std::env::vars().collect();
+    let path = match bin {
+        Some(dir) => {
+            let mut dirs = vec![dir.to_path_buf()];
+            if let Some(existing) = env.get("PATH") {
+                dirs.extend(std::env::split_paths(existing));
+            }
+            std::env::join_paths(&dirs)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        }
+        None => env.get("PATH").cloned().unwrap_or_default(),
+    };
+    env.insert("PATH".into(), path.clone());
+    env.insert("SLUICE_HOST_PATH".into(), path);
+    env.insert(
+        "SLUICE_HOST_PYTHONPATH".into(),
+        env.get("PYTHONPATH").cloned().unwrap_or_default(),
+    );
+    env.insert(
+        "SLUICE_HOST_VIRTUAL_ENV".into(),
+        env.get("VIRTUAL_ENV").cloned().unwrap_or_default(),
+    );
+    env.insert(
+        "SLUICE_RUN_DIR".into(),
+        run_dir.to_string_lossy().into_owned(),
+    );
+    BuiltinCtx::new(env, run_dir)
+}
+
+fn inputs(value: Value) -> JsonMap {
+    serde_json::from_value(value).unwrap()
+}
+fn get<'a>(out: &'a JsonMap, name: &str) -> &'a Value {
+    out.0.get(name).unwrap().as_value()
+}
+fn tmp() -> TempDir {
+    TempDir::new().unwrap()
+}
+fn run_dir(tmp: &TempDir) -> PathBuf {
+    tmp.path().join("run")
+}
+
+// ---- fake tools (sh scripts on a scratch PATH) ---------------------------------
+
+/// Write `body` as an executable named `name` inside {tmp}/bin; returns the bin dir.
+fn fake_bin(tmp: &TempDir, name: &str, body: &str) -> PathBuf {
+    let bin = tmp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let file = bin.join(name);
+    executable::write(&file, body);
+    bin
+}
+
+/// A fake gh that fails every call on stderr.
+fn make_gh_failing(tmp: &TempDir, msg: &str) -> (PathBuf, PathBuf) {
+    let argv_file = tmp.path().join("gh.argv");
+    let script = format!(
+        "#!/bin/sh\n\
+         printf '%s\\0' \"$@\" >> \"{0}\"\n\
+         printf '\\n' >> \"{0}\"\n\
+         echo \"{1}\" >&2\n\
+         exit 1\n",
+        argv_file.display(),
+        msg
+    );
+    (fake_bin(tmp, "gh", &script), argv_file)
+}
+
+/// A fake gh answering `run list`/`run view`/`run cancel` from canned bodies.
+fn make_gh_runs(
+    tmp: &TempDir,
+    list_body: &str,
+    jobs_body: &str,
+    cancel_code: i32,
+    cancel_err: &str,
+) -> (PathBuf, PathBuf) {
+    let argv_file = tmp.path().join("gh.argv");
+    let script = format!(
+        "#!/bin/sh\n\
+         printf '%s\\0' \"$@\" >> \"{0}\"\n\
+         printf '\\n' >> \"{0}\"\n\
+         if [ \"$1\" = \"run\" ] && [ \"$2\" = \"list\" ]; then\n\
+         \x20 printf '%s\\n' '{1}'\n\
+         elif [ \"$1\" = \"run\" ] && [ \"$2\" = \"view\" ]; then\n\
+         \x20 printf '%s\\n' '{2}'\n\
+         elif [ \"$1\" = \"run\" ] && [ \"$2\" = \"cancel\" ]; then\n\
+         \x20 printf '%s' '{3}' >&2\n\
+         \x20 exit {4}\n\
+         fi\n\
+         exit 0\n",
+        argv_file.display(),
+        list_body,
+        jobs_body,
+        cancel_err,
+        cancel_code
+    );
+    (fake_bin(tmp, "gh", &script), argv_file)
+}
+
+/// A fake git that records argv; argument-safety tests prove it is never invoked.
+fn make_git(tmp: &TempDir) -> (PathBuf, PathBuf) {
+    let argv_file = tmp.path().join("git.argv");
+    let script = format!(
+        "#!/bin/sh\n\
+         printf '%s\\0' \"$@\" >> \"{0}\"\n\
+         printf '\\n' >> \"{0}\"\n",
+        argv_file.display()
+    );
+    (fake_bin(tmp, "git", &script), argv_file)
+}
+
+// ---- git.worktree / worktree_rm / head ------------------------------------------
+
+#[tokio::test]
+async fn worktree_lifecycle_and_head() {
+    let tmp = tmp();
+    let repo = repo(&tmp);
+    {
+        let out = git::worktree(
+            &inputs(json!({"repo": &repo.path, "base": "main", "branch": "feat-0"})),
+            &ctx(&run_dir(&tmp), None),
+        )
+        .await
+        .unwrap();
+        let expected = tmp
+            .path()
+            .join("repo-wt")
+            .join("feat-0")
+            .canonicalize()
+            .unwrap();
+        assert_eq!(get(&out, "path"), &json!(expected.to_str().unwrap()));
+        assert_eq!(get(&out, "branch"), "feat-0");
+        assert_eq!(
+            get(&out, "sha"),
+            &json!(git(&repo.path, &["rev-parse", "main"]))
+        );
+        assert_eq!(
+            git(&expected, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            "feat-0"
+        );
+    }
+    {
+        let wt = tmp.path().join("wt-here");
+        let out = git::worktree(
+            &inputs(json!({"repo": &repo.path, "base": "main", "branch": "feat-1", "path": &wt})),
+            &ctx(&run_dir(&tmp), None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get(&out, "path"),
+            &json!(wt.canonicalize().unwrap().to_str().unwrap())
+        );
+        assert!(wt.join("f.txt").exists());
+    }
+    {
+        git(&repo.path, &["branch", "exists"]);
+        let sha = git(&repo.path, &["rev-parse", "exists"]);
+        let wt = tmp.path().join("wt2");
+        let out = git::worktree(
+            &inputs(json!({"repo": &repo.path, "base": "main", "branch": "exists", "path": &wt})),
+            &ctx(&run_dir(&tmp), None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&out, "sha"), &json!(sha));
+        assert_eq!(get(&out, "branch"), "exists");
+    }
+    {
+        let wt = tmp.path().join("wt-gone");
+        let ctx = ctx(&run_dir(&tmp), None);
+        git::worktree(
+            &inputs(json!({"repo": &repo.path, "base": "main", "branch": "feat-3", "path": &wt})),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        let out = git::worktree_rm(&inputs(json!({"repo": &repo.path, "path": &wt})), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(get(&out, "removed"), &json!(true));
+        assert!(!wt.exists());
+        let out = git::worktree_rm(&inputs(json!({"repo": &repo.path, "path": &wt})), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(get(&out, "removed"), &json!(false));
+    }
+    {
+        let wt = tmp.path().join("wt-dirty");
+        let ctx = ctx(&run_dir(&tmp), None);
+        git::worktree(
+            &inputs(json!({"repo": &repo.path, "base": "main", "branch": "feat-4", "path": &wt})),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        fs::write(wt.join("f.txt"), "dirty\n").unwrap();
+        // git refuses to remove a dirty worktree
+        git::worktree_rm(&inputs(json!({"repo": &repo.path, "path": &wt})), &ctx)
+            .await
+            .unwrap_err();
+        let out = git::worktree_rm(
+            &inputs(json!({"repo": &repo.path, "path": &wt, "force": true})),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&out, "removed"), &json!(true));
+    }
+    {
+        let plain = tmp.path().join("plain");
+        fs::create_dir(&plain).unwrap();
+        let out = git::worktree_rm(
+            &inputs(json!({"repo": &repo.path, "path": &plain})),
+            &ctx(&run_dir(&tmp), None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&out, "removed"), &json!(false));
+        assert!(plain.exists());
+    }
+    {
+        let out = git::head(
+            &inputs(json!({"path": &repo.path})),
+            &ctx(&run_dir(&tmp), None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&out, "branch"), "main",);
+        assert_eq!(
+            get(&out, "sha"),
+            &json!(git(&repo.path, &["rev-parse", "HEAD"]))
+        );
+    }
+}
+
+// ---- git.merge / git.rebase / git.push -------------------------------------------
+
+/// feature work on a side branch, main back on the base commit.
+fn feature_branch(repo: &Repo) {
+    git(&repo.path, &["checkout", "-b", "feature"]);
+    fs::write(repo.path.join("g.txt"), "feature\n").unwrap();
+    git(&repo.path, &["add", "."]);
+    git(&repo.path, &["commit", "-m", "feature work"]);
+    git(&repo.path, &["checkout", "main"]);
+}
+
+#[tokio::test]
+async fn merge_detached_and_checked_out_targets() {
+    let tmp = tmp();
+    let repo = repo(&tmp);
+    {
+        // target is not checked out anywhere: plain `worktree add <wt> target`.
+
+        feature_branch(&repo);
+        git(&repo.path, &["branch", "release"]); // target exists, not checked out
+        let out = git::merge(
+            &inputs(json!({
+                "repo": &repo.path, "source": "feature", "target": "release",
+                "message": "merge feature into release",
+            })),
+            &ctx(&run_dir(&tmp), None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&out, "merged"), &json!(true));
+        assert_eq!(get(&out, "conflicts"), &json!([]));
+        assert_eq!(
+            get(&out, "sha"),
+            &json!(git(&repo.path, &["rev-parse", "release"]))
+        );
+        assert!(git(&repo.path, &["ls-tree", "--name-only", "release"]).contains("g.txt"));
+        // merge commit has two parents
+        assert_eq!(
+            git(&repo.path, &["rev-list", "--parents", "-n", "1", "release"])
+                .split_whitespace()
+                .count(),
+            3
+        );
+        // temporary worktree is gone
+        assert_eq!(git(&repo.path, &["worktree", "list"]).lines().count(), 1);
+    }
+    {
+        // target is checked out in the main worktree: merge detached, then move ref.
+
+        let old_main = git(&repo.path, &["rev-parse", "main"]);
+        let out = git::merge(
+            &inputs(json!({
+                "repo": &repo.path, "source": "feature", "target": "main", "push": true,
+            })),
+            &ctx(&run_dir(&tmp), None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&out, "merged"), &json!(true));
+        let sha = get(&out, "sha").as_str().unwrap();
+        assert_ne!(sha, old_main);
+        assert_eq!(git(&repo.path, &["rev-parse", "main"]), sha);
+        let origin_main = Command::new("git")
+            .arg("--git-dir")
+            .arg(&repo.origin)
+            .args(["rev-parse", "main"])
+            .output()
+            .unwrap()
+            .stdout;
+        assert_eq!(String::from_utf8_lossy(&origin_main).trim(), sha);
+        assert_eq!(git(&repo.path, &["worktree", "list"]).lines().count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn merge_conflict() {
+    let tmp = tmp();
+    let repo = repo(&tmp);
+    git(&repo.path, &["checkout", "-b", "feature"]);
+    fs::write(repo.path.join("f.txt"), "feature version\n").unwrap();
+    git(&repo.path, &["commit", "-am", "feature edit"]);
+    git(&repo.path, &["checkout", "main"]);
+    fs::write(repo.path.join("f.txt"), "main version\n").unwrap();
+    git(&repo.path, &["commit", "-am", "main edit"]);
+    let old_main = git(&repo.path, &["rev-parse", "main"]);
+    let out = git::merge(
+        &inputs(json!({"repo": &repo.path, "source": "feature", "target": "main"})),
+        &ctx(&run_dir(&tmp), None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(get(&out, "merged"), &json!(false));
+    assert_eq!(get(&out, "sha"), &Value::Null);
+    assert_eq!(get(&out, "conflicts"), &json!(["f.txt"]));
+    assert_eq!(git(&repo.path, &["rev-parse", "main"]), old_main);
+    assert_eq!(git(&repo.path, &["worktree", "list"]).lines().count(), 1);
+}
+
+#[tokio::test]
+async fn rebase_success_and_conflict_rollback() {
+    let tmp = tmp();
+    let repo = repo(&tmp);
+    {
+        git(&repo.path, &["checkout", "-b", "topic"]);
+        fs::write(repo.path.join("t.txt"), "topic\n").unwrap();
+        git(&repo.path, &["add", "."]);
+        git(&repo.path, &["commit", "-m", "topic work"]);
+        git(&repo.path, &["checkout", "main"]);
+        fs::write(repo.path.join("m.txt"), "main\n").unwrap();
+        git(&repo.path, &["add", "."]);
+        git(&repo.path, &["commit", "-m", "main work"]);
+        git(&repo.path, &["checkout", "topic"]);
+        let out = git::rebase(
+            &inputs(json!({"path": &repo.path, "onto": "main"})),
+            &ctx(&run_dir(&tmp), None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&out, "ok"), &json!(true));
+        assert_eq!(
+            get(&out, "sha"),
+            &json!(git(&repo.path, &["rev-parse", "HEAD"]))
+        );
+        assert_eq!(get(&out, "conflicts"), &json!([]));
+        git(
+            &repo.path,
+            &["merge-base", "--is-ancestor", "main", "topic"],
+        );
+        assert!(repo.path.join("m.txt").exists());
+        assert!(repo.path.join("t.txt").exists());
+    }
+    {
+        git(&repo.path, &["checkout", "-b", "topic-conflict"]);
+        fs::write(repo.path.join("f.txt"), "topic version\n").unwrap();
+        git(&repo.path, &["commit", "-am", "topic edit"]);
+        let topic_sha = git(&repo.path, &["rev-parse", "HEAD"]);
+        git(&repo.path, &["checkout", "main"]);
+        fs::write(repo.path.join("f.txt"), "main version\n").unwrap();
+        git(&repo.path, &["commit", "-am", "main edit"]);
+        git(&repo.path, &["checkout", "topic-conflict"]);
+        let out = git::rebase(
+            &inputs(json!({"path": &repo.path, "onto": "main"})),
+            &ctx(&run_dir(&tmp), None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&out, "ok"), &json!(false));
+        assert_eq!(get(&out, "sha"), &json!(topic_sha));
+        assert_eq!(get(&out, "conflicts"), &json!(["f.txt"]));
+        // rebase fully aborted
+        assert_eq!(git(&repo.path, &["rev-parse", "HEAD"]), topic_sha);
+        assert_eq!(
+            git_code(&repo.path, &["rev-parse", "-q", "--verify", "REBASE_HEAD"]).1,
+            ""
+        );
+        assert_eq!(git(&repo.path, &["status", "--porcelain"]), "");
+    }
+}
+
+#[tokio::test]
+async fn push_and_lease_guarded_rewrite() {
+    let tmp = tmp();
+    let repo = repo(&tmp);
+    {
+        fs::write(repo.path.join("n.txt"), "new\n").unwrap();
+        git(&repo.path, &["add", "."]);
+        git(&repo.path, &["commit", "-m", "new work"]);
+        let head = git(&repo.path, &["rev-parse", "HEAD"]);
+        let out = git::push(
+            &inputs(json!({"path": &repo.path, "branch": "main"})),
+            &ctx(&run_dir(&tmp), None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&out, "sha"), &json!(head));
+        let origin_main = Command::new("git")
+            .arg("--git-dir")
+            .arg(&repo.origin)
+            .args(["rev-parse", "main"])
+            .output()
+            .unwrap()
+            .stdout;
+        assert_eq!(String::from_utf8_lossy(&origin_main).trim(), head);
+    }
+    {
+        fs::write(repo.path.join("f.txt"), "amended\n").unwrap();
+        git(
+            &repo.path,
+            &["commit", "-am", "amended", "--amend", "--no-edit"],
+        );
+        let head = git(&repo.path, &["rev-parse", "HEAD"]);
+        let out = git::push(
+            &inputs(json!({"path": &repo.path, "branch": "main", "force_with_lease": true})),
+            &ctx(&run_dir(&tmp), None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&out, "sha"), &json!(head));
+        let origin_main = Command::new("git")
+            .arg("--git-dir")
+            .arg(&repo.origin)
+            .args(["rev-parse", "main"])
+            .output()
+            .unwrap()
+            .stdout;
+        assert_eq!(String::from_utf8_lossy(&origin_main).trim(), head);
+    }
+}
+
+// ---- gh.pr ----------------------------------------------------------------------
+
+// ---- gh.pr_wait -------------------------------------------------------------------
+
+// ---- gh.run_latest / gh.run_cancel -------------------------------------------------
+
+// ---- a plan-supplied ref that looks like an option is refused before the tool runs ---
+
+#[tokio::test]
+async fn git_and_gh_option_refusals() {
+    let tmp = tmp();
+    {
+        let cases: [(&str, Value); 7] = [
+            (
+                "push",
+                json!({"path": ".", "branch": "--upload-pack=touch-pwned"}),
+            ),
+            (
+                "push",
+                json!({"path": ".", "branch": "main", "remote": "--all"}),
+            ),
+            ("rebase", json!({"path": ".", "onto": "--exec=touch-pwned"})),
+            (
+                "merge",
+                json!({"repo": ".", "source": "-m pwned", "target": "main"}),
+            ),
+            (
+                "merge",
+                json!({"repo": ".", "source": "feat", "target": "--detach"}),
+            ),
+            (
+                "worktree",
+                json!({"repo": ".", "base": "main", "branch": "-b"}),
+            ),
+            (
+                "worktree",
+                json!({"repo": ".", "base": "--orphan", "branch": "feat"}),
+            ),
+        ];
+        for (name, inp) in cases {
+            let (bin, argv_file) = make_git(&tmp);
+            let ctx = ctx(&run_dir(&tmp), Some(bin.as_path()));
+            let err = git::dispatch(&format!("git.{name}"), &inputs(inp), &ctx)
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("may not start with '-'"),
+                "{name}: {err}"
+            );
+            assert!(!argv_file.exists(), "{name}: git ran");
+        }
+    }
+    {
+        let cases: [(&str, Value); 4] = [
+            (
+                "pr",
+                json!({"path": ".", "base": "main", "head": "--repo=o/r",
+                   "title": "t", "body": "b"}),
+            ),
+            (
+                "pr",
+                json!({"path": ".", "base": "--repo=o/r", "head": "feat",
+                   "title": "t", "body": "b"}),
+            ),
+            (
+                "pr_wait",
+                json!({"path": ".", "pr": "--repo=o/r", "until": "checks", "timeout": 0}),
+            ),
+            ("run_latest", json!({"path": ".", "branch": "--limit"})),
+        ];
+        for (name, inp) in cases {
+            let (bin, argv_file) = make_gh_failing(&tmp, "must not run");
+            let ctx = ctx(&run_dir(&tmp), Some(bin.as_path()));
+            let err = gh::dispatch(&format!("gh.{name}"), &inputs(inp), &ctx)
+                .await
+                .unwrap_err();
+            assert!(!err.is_transient(), "{name}: {err}");
+            assert!(
+                err.to_string().contains("may not start with '-'"),
+                "{name}: {err}"
+            );
+            assert!(!argv_file.exists(), "{name}: gh ran");
+        }
+    }
+    {
+        let (bin, argv_file) = make_gh_runs(&tmp, "[]", "{}", 0, "");
+        let err = gh::run_cancel(
+            &inputs(json!({"path": tmp.path(), "run_id": -1})),
+            &ctx(&run_dir(&tmp), Some(bin.as_path())),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("may not start with '-'"), "{err}");
+        assert!(!argv_file.exists()); // gh never ran
+    }
+}
+
+// ---- beyond the Python suite --------------------------------------------------------
+
+/// Cancellation is explicit: dropping the wait future kills the in-flight gh child
+/// (kill_on_drop), which stops the fake's heartbeat writes.
+#[tokio::test]
+async fn cancelling_the_wait_kills_the_in_flight_gh() {
+    let tmp = tmp();
+    let heartbeat = tmp.path().join("hb");
+    let pid_file = tmp.path().join("pid");
+    let script = format!(
+        "#!/bin/sh\necho $$ > \"{}\"\necho tick > \"{}\"\nexec sleep 600\n",
+        pid_file.display(),
+        heartbeat.display()
+    );
+    let bin = fake_bin(&tmp, "gh", &script);
+    let ctx = ctx(&run_dir(&tmp), Some(bin.as_path()));
+    let task = tokio::spawn(async move {
+        gh::pr_wait(
+            &inputs(json!({"path":".","pr":"3","until":"checks","interval":1})),
+            &ctx,
+        )
+        .await
+    });
+    super::file_ready(&heartbeat, |p| p.exists(), Duration::from_secs(2)).await;
+    assert!(heartbeat.exists(), "fake gh never started");
+    let pid = fs::read_to_string(pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let process = sluice_process::identity::OwnedProcess::capture(pid).unwrap();
+    let exited =
+        tokio::io::unix::AsyncFd::new(process.pidfd().try_clone_to_owned().unwrap()).unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    let _ready = tokio::time::timeout(Duration::from_secs(2), exited.readable())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(process.exited().unwrap(), "gh child survived cancellation");
+    let snapshot = fs::read_to_string(&heartbeat).unwrap();
+    assert_eq!(
+        fs::read_to_string(&heartbeat).unwrap(),
+        snapshot,
+        "gh child survived cancellation"
+    );
+}
+
+/// A failure GitHub caused is Transient, so the step retries past an outage; a failure of the
+/// request itself stays Terminal (issue #20).
+#[tokio::test]
+async fn gh_failures_github_caused_are_transient_and_request_failures_terminal() {
+    let tmp = tmp();
+    let repo = repo(&tmp);
+    let outage = [
+        "GraphQL: Something went wrong while executing your query on 2026-10-07T17:02:05Z. Please include `85F6:1AD696` when reporting this issue.",
+        "HTTP 502: Bad Gateway (https://api.github.com/graphql)",
+        "HTTP 503: Service Unavailable",
+        "read tcp 10.0.0.2:443: connection reset by peer",
+    ];
+    for msg in outage {
+        let (bin, _) = make_gh_failing(&tmp, msg);
+        let failure = gh::pr(
+            &inputs(
+                json!({"path": &repo.path, "base": "main", "head": "feature",
+                           "title": "t", "body": "b"}),
+            ),
+            &ctx(&run_dir(&tmp), Some(bin.as_path())),
+        )
+        .await
+        .unwrap_err();
+        assert!(failure.is_transient(), "{msg}: {failure}");
+        let failure = gh::run_latest(
+            &inputs(json!({"path": &repo.path})),
+            &ctx(&run_dir(&tmp), Some(bin.as_path())),
+        )
+        .await
+        .unwrap_err();
+        assert!(failure.is_transient(), "{msg}: {failure}");
+        let failure = gh::run_cancel(
+            &inputs(json!({"path": &repo.path, "run_id": 7})),
+            &ctx(&run_dir(&tmp), Some(bin.as_path())),
+        )
+        .await
+        .unwrap_err();
+        assert!(failure.is_transient(), "{msg}: {failure}");
+    }
+    for msg in [
+        "pull request create failed: GraphQL: No commits between main and feature (createPullRequest)",
+        "could not find base branch: nope",
+        "HTTP 401: Bad credentials",
+    ] {
+        let (bin, _) = make_gh_failing(&tmp, msg);
+        let failure = gh::pr(
+            &inputs(
+                json!({"path": &repo.path, "base": "main", "head": "feature",
+                           "title": "t", "body": "b"}),
+            ),
+            &ctx(&run_dir(&tmp), Some(bin.as_path())),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(failure, FnFailure::Terminal(_)),
+            "{msg}: {failure}"
+        );
+    }
+    let retries: Vec<_> = gh::descriptors()
+        .iter()
+        .map(|d| (d.name, d.retries))
+        .collect();
+    assert!(retries.iter().all(|(_, r)| *r == 3), "{retries:?}");
+}

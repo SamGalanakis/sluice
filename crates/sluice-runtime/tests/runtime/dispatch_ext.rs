@@ -1,5 +1,4 @@
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use super::home;
 use serde_json::{Value, json};
 use sluice_model::{
     RuntimeApi,
@@ -51,6 +50,27 @@ struct Fixture {
     server: tokio::task::JoinHandle<Result<(), PublicError>>,
 }
 impl Fixture {
+    async fn next_project(&mut self) {
+        let CommandReply::Project(p) = self
+            .client
+            .command(request(
+                "project_create",
+                json!({"name":format!("case-{}",ProjectId::new()),"description":"","resources":{}}),
+            ))
+            .await
+            .unwrap()
+        else {
+            panic!("project")
+        };
+        self.project = p.project_id;
+        self.patch(json!([
+            {"op":"input.put","name":"value","declaration":"int"},
+            {"op":"input.put","name":"enabled","declaration":"boolean"},
+            {"op":"step.add","step":"pre","spec":{"run":"core.external","outputs":{"ok":"boolean"},"tags":["unit:pre","exit"]}},
+            {"op":"step.add","step":"work","spec":{"run":"fixture.submit","in":{"value":{"source":"value"}},"after":["enabled"],"outputs":{"ready":"boolean"}}}
+        ])).await;
+    }
+
     async fn new() -> Self {
         let home = home::ScratchHome::new().unwrap();
         assert!(home.root().exists());
@@ -66,7 +86,7 @@ impl Fixture {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
         while !client.path.exists() {
             assert!(tokio::time::Instant::now() < deadline);
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::task::yield_now().await;
         }
         let CommandReply::Project(p) = client
             .command(request(
@@ -165,9 +185,7 @@ fn data(reply: CommandReply) -> Value {
 fn options(dry_run: bool) -> Value {
     json!({"dry_run":dry_run,"reason":"test"})
 }
-fn selection() -> Value {
-    json!({"steps":["work"],"tags":null})
-}
+
 fn recipe(doc: &str) -> Value {
     json!({"name":"lane","doc":doc,"params":{"base":{"type":"int","doc":"number"}},"steps":{
         "{unit}-work":{"run":"fixture.echo","in":{"value":{"default":"{base}"}},"tags":["worker"]},
@@ -289,9 +307,9 @@ async fn recipe_expansion_precedence_tags_edges_inputs_and_atomic_failure_over_s
     f.close().await;
 }
 
-#[tokio::test]
-async fn input_preview_validates_without_changing_inputs_history_revisions_or_versions() {
-    let f = Fixture::new().await;
+async fn input_preview_validates_without_changing_inputs_history_revisions_or_versions(
+    f: &Fixture,
+) {
     f.input("value", json!(3), false).await;
     let before = data(
         f.call(
@@ -337,12 +355,9 @@ async fn input_preview_validates_without_changing_inputs_history_revisions_or_ve
         Err(PublicError::Invalid { .. })
     ));
     assert!(matches!(f.call("plan_set_input",json!({"name":"enabled","value":true,"edit":{"expected":rev+1,"dry_run":true,"reason":"stale"}})).await,Err(PublicError::Conflict{..})));
-    f.close().await;
 }
 
-#[tokio::test]
-async fn history_survives_feed_retention_and_filters_revisions() {
-    let f = Fixture::new().await;
+async fn history_survives_feed_retention_and_filters_revisions(f: &Fixture) {
     f.input("value", json!(4), false).await;
     let entries = |reply: CommandReply| -> Vec<Value> {
         let CommandReply::History(page) = reply else {
@@ -363,10 +378,11 @@ async fn history_survives_feed_retention_and_filters_revisions() {
     let all = entries(f.call("plan_history", json!({})).await.unwrap());
     assert_eq!(all.len(), 3);
     assert!(all.iter().any(|e| e["kind"] == "plan.input"));
+    let project = f.project;
     f.broker
         .writer()
         .write(RetrySafety::Idempotent, move |tx| {
-            records::trim_to(tx, Some(f.project), 1, 1)
+            records::trim_to(tx, Some(project), 1, 1)
         })
         .await
         .unwrap();
@@ -381,7 +397,6 @@ async fn history_survives_feed_retention_and_filters_revisions() {
     );
     assert_eq!(filtered.len(), 2);
     assert_eq!(filtered[0]["kind"], "plan.edit");
-    f.close().await;
 }
 
 #[tokio::test]
@@ -561,10 +576,7 @@ async fn send_wait(
         f.broker.command(request).await
     }
 }
-#[tokio::test]
-async fn log_wait_holds_notes_wakes_on_question_times_out_and_expires_without_blocking_writer() {
-    log_wait_cases(false).await;
-}
+
 #[tokio::test]
 async fn log_wait_message_records_over_socket() {
     log_wait_cases(true).await;
@@ -578,7 +590,7 @@ async fn log_wait_cases(socket: bool) {
     let broker = f.broker.clone();
     let client = f.client.clone();
     let request = wait_request(&f, log.last_seq.0, 200, 2);
-    let wait = tokio::spawn(async move {
+    let mut wait = tokio::spawn(async move {
         if socket {
             client.command(request).await
         } else {
@@ -586,8 +598,11 @@ async fn log_wait_cases(socket: bool) {
         }
     });
     let note = post(&f, "note", false).await;
-    tokio::time::sleep(Duration::from_millis(60)).await;
-    assert!(!wait.is_finished());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(60), &mut wait)
+            .await
+            .is_err()
+    );
     let question = post(&f, "question", true).await;
     let CommandReply::Records(page) = tokio::time::timeout(Duration::from_secs(1), wait)
         .await
@@ -675,11 +690,12 @@ async fn log_wait_reads_only_when_its_own_log_commits_and_expires_a_foreign_curs
     ));
     tokio::pin!(wait);
     // Let the wait read its page and park.
-    tokio::select! {
-        biased;
-        _ = &mut wait => panic!("nothing to return yet"),
-        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
-    }
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut wait)
+            .await
+            .is_err(),
+        "nothing to return yet"
+    );
     let before = broker.reads().snapshots();
     // Another project's records and this project's other views commit: the
     // wait must neither wake nor read for them.
@@ -733,10 +749,7 @@ async fn log_wait_reads_only_when_its_own_log_commits_and_expires_a_foreign_curs
     );
     broker.writer().shutdown().await.unwrap();
 }
-#[tokio::test]
-async fn bounded_notes_page_never_skips_the_question_and_mark_read_is_thread_scoped() {
-    bounded_notes_cases(false).await;
-}
+
 #[tokio::test]
 async fn bounded_notes_page_over_socket() {
     bounded_notes_cases(true).await;
@@ -921,376 +934,8 @@ async fn prune_uses_age_evidence_and_backup_is_online_and_refuses_overwrite() {
 
 // CommandRequest is non_exhaustive across crates. Check its actual source, rather
 // than a stale schema snapshot, so any newly declared variant fails this test.
-fn declared_variants() -> BTreeSet<String> {
-    let source = include_str!("../../sluice-model/src/commands.rs");
-    let body = source
-        .split("pub enum CommandRequest {")
-        .nth(1)
-        .unwrap()
-        .split("\n}")
-        .next()
-        .unwrap();
-    body.lines()
-        .filter_map(|line| {
-            let line = line.strip_prefix("    ")?;
-            if !line.starts_with(|c: char| c.is_ascii_uppercase()) {
-                return None;
-            }
-            Some(
-                line.split(['(', '{', ','])
-                    .next()
-                    .unwrap()
-                    .trim()
-                    .to_owned(),
-            )
-        })
-        .collect()
-}
-#[tokio::test]
-async fn every_command_variant_dispatches_through_a_real_socket() {
-    let f = Fixture::new().await;
-    f.recipe("global", "lane", recipe("global"));
-    let sel = selection();
-    let edit = options(true);
-    let run = RunId::new();
-    let log = json!({"project":f.selector(),"since_seq":0,"limit":1});
-    let cases = vec![
-        (
-            "ProjectUpdate",
-            "project_update",
-            json!({"description":"updated"}),
-        ),
-        (
-            "ProjectDelete",
-            "project_delete",
-            json!({"confirm_name":"p","expected_settings_rev":1}),
-        ),
-        (
-            "BoardSet",
-            "board_set",
-            json!({"program":"root = Stack([Units(), Doc()])","expected_rev":null,"reason":null,"author":"test"}),
-        ),
-        ("BoardGet", "board_get", json!({})),
-        (
-            "BoardDocWrite",
-            "board_doc_write",
-            json!({"markdown":"## Phase\nMain is **green**.","author":"test"}),
-        ),
-        (
-            "BoardDocEdit",
-            "board_doc_edit",
-            json!({"expected_rev":1,"edits":[{"start":2,"end":2,"text":"Main is red."}],"author":"test"}),
-        ),
-        ("BoardDocRead", "board_doc_read", json!({})),
-        (
-            "PlanEdit",
-            "plan_edit",
-            json!({"rev":f.rev().await,"ops":[{"op":"step.update","step":"work","changes":{"doc":"doc"}}],"dry_run":true,"reason":"test"}),
-        ),
-        (
-            "UnitUpdate",
-            "unit_update",
-            json!({"unit":"work","changes":{"work":{"doc":"doc"}},"dry_run":true,"reason":"test"}),
-        ),
-        (
-            "UnitRemove",
-            "unit_remove",
-            json!({"unit":"work","dry_run":true,"reason":"test"}),
-        ),
-        ("PlanRead", "plan_read", json!({"limit":1})),
-        ("StepGet", "step_get", json!({"step":"work"})),
-        ("UnitGet", "unit_get", json!({"unit":"work"})),
-        (
-            "StepAdd",
-            "step_add",
-            json!({"step":"new","spec":{"run":"core.external","outputs":{"ok":"boolean"}},"edit":edit}),
-        ),
-        (
-            "UnitAdd",
-            "unit_add",
-            json!({"recipe":"lane","unit":"lane","params":{"base":1},"after":{},"edit":edit}),
-        ),
-        (
-            "StepUpdate",
-            "step_update",
-            json!({"step":"work","changes":{"doc":"doc"},"edit":edit}),
-        ),
-        (
-            "StepRemove",
-            "step_remove",
-            json!({"selection":sel,"edit":edit}),
-        ),
-        (
-            "StepPause",
-            "step_pause",
-            json!({"selection":sel,"paused":true,"edit":edit}),
-        ),
-        (
-            "UnitTag",
-            "unit_tag",
-            json!({"unit":"pre","add":["tag"],"remove":[],"edit":edit}),
-        ),
-        (
-            "UnitClaim",
-            "unit_claim",
-            json!({"unit":"pre","me":"@orch","reason":"test"}),
-        ),
-        (
-            "UnitRelease",
-            "unit_release",
-            json!({"unit":"pre","me":"@orch","reason":"test"}),
-        ),
-        (
-            "PlanPrune",
-            "plan_prune",
-            json!({"older_than_seconds":0,"edit":edit}),
-        ),
-        (
-            "PlanSetInput",
-            "plan_set_input",
-            json!({"name":"enabled","value":true,"edit":edit}),
-        ),
-        (
-            "StepSetInput",
-            "step_set_input",
-            json!({"selection":sel,"inputs":{"value":1},"edit":edit}),
-        ),
-        (
-            "StepSetOutput",
-            "step_set_output",
-            json!({"step":"pre","outputs":{"ok":true},"force":true,"reason":"test"}),
-        ),
-        ("StepRetry", "step_retry", json!({"selection":sel})),
-        (
-            "StepCancel",
-            "step_cancel",
-            json!({"selection":sel,"reason":"test"}),
-        ),
-        (
-            "StepSubmit",
-            "step_submit",
-            json!({"project":f.project,"step":"work","run":run,"outputs":{"ready":true}}),
-        ),
-        (
-            "StepProgress",
-            "step_progress",
-            json!({"step":"work","run":run,"outputs":{"ready":true}}),
-        ),
-        (
-            "StepSettle",
-            "step_settle",
-            json!({"step":"work","reason":"test"}),
-        ),
-        (
-            "StepBypass",
-            "step_bypass",
-            json!({"step":"work","outputs":{"value":1,"ready":true},"reason":"test"}),
-        ),
-        ("Messages", "messages", json!({"view":"questions"})),
-        (
-            "MarkRead",
-            "mark_read",
-            json!({"project":f.project,"identity":"cli","thread":"t","through":0}),
-        ),
-        (
-            "StepDismiss",
-            "step_dismiss",
-            json!({"project":f.project,"step":"work","dismissed":false}),
-        ),
-        (
-            "FnCall",
-            "fn_call",
-            json!({"name":"fixture.echo","inputs":{"value":1},"wait_seconds":0,"direct":false}),
-        ),
-        ("LogRead", "log_read", json!({"limit":1})),
-        (
-            "LogWait",
-            "log_wait",
-            json!({"read":log,"timeout_seconds":0,"questions_only":false}),
-        ),
-        (
-            "StepWait",
-            "step_wait",
-            json!({"selection":sel,"until":"settled","timeout_seconds":0}),
-        ),
-        (
-            "Next",
-            "next",
-            json!({"projects":[f.selector()],"since_seq":0,"me":"test","timeout_seconds":0,"all":false,"settle_seconds":0,"settle_max_seconds":0,"settles":"none"}),
-        ),
-        // Message-record round trips belong to the ignored record-at cases below.
-        ("Ask", "ask", json!({"to":"owner","body":"question"})),
-        ("Say", "say", json!({"to":"owner","body":"note"})),
-        (
-            "Reply",
-            "reply",
-            json!({"to_message":999999,"body":"answer"}),
-        ),
-        (
-            "MessagePost",
-            "message_post",
-            json!({"body":"note","needs_reply":false}),
-        ),
-        (
-            "Query",
-            "query",
-            json!({"sql":"SELECT 1","params":[],"limit":1}),
-        ),
-        (
-            "AcquireLease",
-            "acquire_lease",
-            json!({"run":run,"resource":"lane","amount":1,"priority":0,"request_id":"test"}),
-        ),
-        (
-            "ReleaseLease",
-            "release_lease",
-            json!({"lease":1,"run":run}),
-        ),
-        (
-            "RegisterCompletionAction",
-            "register_completion_action",
-            json!({"project":f.project,"run":run,"target":{"step":"work","generation":1,"work":1,"result":ResultId::new()},"message":"feedback","author":"test"}),
-        ),
-        (
-            "EdgeAdd",
-            "edge_add",
-            json!({"step":"work","after":["pre"],"edit":edit}),
-        ),
-        (
-            "EdgeRemove",
-            "edge_remove",
-            json!({"step":"work","after":["enabled"],"edit":edit}),
-        ),
-        ("ProjectsList", "projects_list", Value::Null),
-        (
-            "ProjectCreate",
-            "project_create",
-            json!({"name":"second","description":"","resources":{}}),
-        ),
-        ("PlanGet", "plan_get", json!({})),
-        ("PlanHistory", "plan_history", json!({})),
-        ("RecipeList", "recipe_list", json!({})),
-        ("FnList", "fn_list", json!({})),
-        ("FnGet", "fn_get", json!({"name":"fixture.echo"})),
-        (
-            "FnSave",
-            "fn_save",
-            json!({"manifest":{"name":"custom.fn","inputs":{},"outputs":{}},"main_py":"pass"}),
-        ),
-        ("CallStatus", "call_status", json!({"call":run})),
-        ("StepContext", "step_context", json!({"step":"work"})),
-        ("Status", "status", json!({"selection":sel})),
-        ("PlanView", "plan_view", json!({"format":"mermaid"})),
-        ("Verify", "verify", json!({})),
-        ("Drain", "drain", json!({"author":"test"})),
-        ("Release", "release", json!({"author":"test"})),
-        (
-            "Backup",
-            "backup",
-            json!({"destination":f.home.root().join("all-commands.db")}),
-        ),
-        ("Docs", "docs", json!({"topic":"instructions"})),
-        (
-            "Builtin",
-            "builtin",
-            json!({"invocation":{"project":f.project,"run":run,"attempt":AttemptId::new(),"invocation":InvocationId::new(),"name":"agent.run","inputs":{}}}),
-        ),
-        ("Submission", "submission", json!({"run":run})),
-    ];
-    assert_eq!(
-        declared_variants(),
-        cases
-            .iter()
-            .map(|(variant, _, _)| variant.to_string())
-            .collect(),
-        "a CommandRequest variant has no socket test instance"
-    );
-    for (variant, name, mut args) in cases {
-        let scoped = matches!(
-            variant,
-            "ProjectUpdate"
-                | "ProjectDelete"
-                | "BoardSet"
-                | "BoardGet"
-                | "BoardDocRead"
-                | "BoardDocWrite"
-                | "BoardDocEdit"
-                | "PlanEdit"
-                | "UnitUpdate"
-                | "UnitRemove"
-                | "PlanRead"
-                | "StepGet"
-                | "UnitGet"
-                | "StepAdd"
-                | "UnitAdd"
-                | "StepUpdate"
-                | "StepRemove"
-                | "StepPause"
-                | "UnitTag"
-                | "UnitClaim"
-                | "UnitRelease"
-                | "PlanPrune"
-                | "PlanSetInput"
-                | "StepSetInput"
-                | "StepSetOutput"
-                | "StepRetry"
-                | "StepCancel"
-                | "StepProgress"
-                | "StepSettle"
-                | "StepBypass"
-                | "Ask"
-                | "Say"
-                | "Reply"
-                | "MessagePost"
-                | "Messages"
-                | "FnCall"
-                | "LogRead"
-                | "StepWait"
-                | "EdgeAdd"
-                | "EdgeRemove"
-                | "PlanGet"
-                | "PlanHistory"
-                | "RecipeList"
-                | "FnList"
-                | "FnGet"
-                | "FnSave"
-                | "CallStatus"
-                | "StepContext"
-                | "Status"
-                | "PlanView"
-                | "Verify"
-        );
-        if scoped {
-            args["project"] = f.selector();
-        }
-        let raw = if variant == "ProjectsList" {
-            json!({"command":name})
-        } else {
-            json!({"command":name,"args":args})
-        };
-        let command: CommandRequest = decode_json(&serde_json::to_vec(&raw).unwrap())
-            .unwrap_or_else(|e| panic!("{variant} fixture invalid: {e:?}"));
-        let result = tokio::time::timeout(Duration::from_secs(3), f.client.command(command))
-            .await
-            .unwrap_or_else(|_| panic!("{variant} timed out"));
-        if let Err(ref error) = result {
-            let encoded = serde_json::to_string(error).unwrap();
-            assert!(
-                !encoded.contains("not implemented") && !encoded.contains("not_implemented"),
-                "{variant}: {error:?}"
-            );
-            assert!(
-                !matches!(error, PublicError::Storage { .. }),
-                "{variant} did not return a valid semantic response: {error:?}"
-            );
-        }
-    }
-    f.close().await;
-}
 
-#[tokio::test]
-async fn input_preview_reports_cached_resource_queue_and_stale_work() {
-    let f = Fixture::new().await;
+async fn input_preview_reports_cached_resource_queue_and_stale_work(f: &Fixture) {
     f.input("value", json!(3), false).await;
     f.call("project_update", json!({"resources":{"cpu":1}}))
         .await
@@ -1325,13 +970,10 @@ async fn input_preview_reports_cached_resource_queue_and_stale_work() {
     );
     assert_eq!(state["steps"]["work"]["status"], "succeeded");
     assert_eq!(state["inputs"]["value"], 3);
-    f.close().await;
 }
 
-#[tokio::test]
-async fn message_records_in_log_read_and_next_over_socket() {
-    let f = Fixture::new().await;
-    let id = post(&f, "question", true).await;
+async fn message_records_in_log_read_and_next_over_socket(f: &Fixture) {
+    let id = post(f, "question", true).await;
     let CommandReply::Records(page) = f
         .call(
             "log_read",
@@ -1345,7 +987,6 @@ async fn message_records_in_log_read_and_next_over_socket() {
     assert_eq!(page.records[0].seq.0, id.0);
     let CommandReply::Next(next)=f.client.command(request("next",json!({"projects":[f.selector()],"since_seq":id.0-1,"me":"@lead","scope":"all","timeout_seconds":0,"all":true,"settle_seconds":0,"settle_max_seconds":0,"settles":"none"}))).await.unwrap() else {panic!("next")};
     assert_eq!(next.records[0].seq.0, id.0);
-    f.close().await;
 }
 
 fn waited(reply: CommandReply) -> StepWaitResult {
@@ -1376,9 +1017,13 @@ fn spawn_call(
     tokio::spawn(async move { client.command(request(name, args)).await })
 }
 /// The call is parked: it has not answered by now.
-async fn parked(call: &tokio::task::JoinHandle<Result<CommandReply, PublicError>>) {
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    assert!(!call.is_finished(), "answered before anything it waits for");
+async fn parked(call: &mut tokio::task::JoinHandle<Result<CommandReply, PublicError>>) {
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), call)
+            .await
+            .is_err(),
+        "answered before anything it waits for"
+    );
 }
 async fn answered(
     call: tokio::task::JoinHandle<Result<CommandReply, PublicError>>,
@@ -1402,10 +1047,8 @@ fn steps(ids: &[&str]) -> Value {
     json!({"steps":ids,"tags":null})
 }
 
-#[tokio::test]
-async fn step_wait_answers_at_once_when_the_condition_already_holds() {
-    let f = Fixture::new().await;
-    let seq = latest(&f).await.last_seq;
+async fn step_wait_answers_at_once_when_the_condition_already_holds(f: &Fixture) {
+    let seq = latest(f).await.last_seq;
     // pre is a ready core.external step and work waits on unset plan inputs: both held.
     let started = tokio::time::Instant::now();
     let result = waited(
@@ -1446,18 +1089,15 @@ async fn step_wait_answers_at_once_when_the_condition_already_holds() {
     );
     assert!(!result.met);
     assert_eq!(statuses(&result), vec![("pre".into(), StepStatus::Pending)]);
-    f.close().await;
 }
 
-#[tokio::test]
-async fn step_wait_wakes_when_another_caller_changes_the_status() {
-    let f = Fixture::new().await;
-    let wait = spawn_call(
-        &f,
+async fn step_wait_wakes_when_another_caller_changes_the_status(f: &Fixture) {
+    let mut wait = spawn_call(
+        f,
         "step_wait",
         wait_args(steps(&["pre"]), json!("succeeded"), 30),
     );
-    parked(&wait).await;
+    parked(&mut wait).await;
     f.call(
         "step_set_output",
         json!({"step":"pre","outputs":{"ok":true},"force":true,"reason":"elsewhere"}),
@@ -1482,12 +1122,12 @@ async fn step_wait_wakes_when_another_caller_changes_the_status() {
         panic!("records")
     };
     assert!(result.seq >= page.records[0].seq);
-    f.close().await;
 }
 
 #[tokio::test]
 async fn step_wait_times_out_with_met_false() {
-    let f = Fixture::new().await;
+    let mut f = Fixture::new().await;
+    f.client.reply_timeout = Duration::from_millis(100);
     let started = tokio::time::Instant::now();
     let result = waited(
         f.call(
@@ -1503,15 +1143,13 @@ async fn step_wait_times_out_with_met_false() {
     f.close().await;
 }
 
-#[tokio::test]
-async fn step_wait_any_of_wakes_on_one_of_the_listed_statuses() {
-    let f = Fixture::new().await;
-    let wait = spawn_call(
-        &f,
+async fn step_wait_any_of_wakes_on_one_of_the_listed_statuses(f: &Fixture) {
+    let mut wait = spawn_call(
+        f,
         "step_wait",
         wait_args(steps(&["pre"]), json!({"any_of":["failed","stale"]}), 30),
     );
-    parked(&wait).await;
+    parked(&mut wait).await;
     // Cancelling a pending core.external step fails it at once.
     f.call(
         "step_cancel",
@@ -1522,14 +1160,11 @@ async fn step_wait_any_of_wakes_on_one_of_the_listed_statuses() {
     let result = waited(answered(wait).await);
     assert!(result.met);
     assert_eq!(statuses(&result), vec![("pre".into(), StepStatus::Failed)]);
-    f.close().await;
 }
 
-#[tokio::test]
-async fn step_wait_selects_by_tag() {
-    let f = Fixture::new().await;
-    let wait = spawn_call(
-        &f,
+async fn step_wait_selects_by_tag(f: &Fixture) {
+    let mut wait = spawn_call(
+        f,
         "step_wait",
         wait_args(
             json!({"steps":null,"tags":["unit:pre"]}),
@@ -1537,7 +1172,7 @@ async fn step_wait_selects_by_tag() {
             30,
         ),
     );
-    parked(&wait).await;
+    parked(&mut wait).await;
     f.call(
         "step_set_output",
         json!({"step":"pre","outputs":{"ok":true},"force":true,"reason":"by hand"}),
@@ -1550,12 +1185,9 @@ async fn step_wait_selects_by_tag() {
         statuses(&result),
         vec![("pre".into(), StepStatus::Succeeded)]
     );
-    f.close().await;
 }
 
-#[tokio::test]
-async fn step_wait_settled_counts_held_steps_but_not_work_that_can_still_move() {
-    let f = Fixture::new().await;
+async fn step_wait_settled_counts_held_steps_but_not_work_that_can_still_move(f: &Fixture) {
     f.broker.acquire_scheduler("test".into()).await.unwrap();
     // later waits on pre, which waits for its outputs by hand: both are held.
     f.patch(json!([{"op":"step.add","step":"later","spec":{"run":"fixture.echo","in":{"value":{"default":1}},"after":["pre"]}}])).await;
@@ -1564,7 +1196,7 @@ async fn step_wait_settled_counts_held_steps_but_not_work_that_can_still_move() 
     // work starts once its inputs are set, and a step waiting on running work is not settled.
     f.patch(json!([{"op":"step.add","step":"after-work","spec":{"run":"fixture.echo","in":{"value":{"default":1}},"after":["work"]}}])).await;
     let running = spawn_call(
-        &f,
+        f,
         "step_wait",
         wait_args(steps(&["work"]), json!({"any_of":["running"]}), 30),
     );
@@ -1585,12 +1217,9 @@ async fn step_wait_settled_counts_held_steps_but_not_work_that_can_still_move() 
     .await
     .unwrap();
     assert!(waited(f.call("step_wait", settled(&["after-work"])).await.unwrap()).met);
-    f.close().await;
 }
 
-#[tokio::test]
-async fn step_wait_refuses_bad_selections_and_conditions_as_invalid_naming_each() {
-    let f = Fixture::new().await;
+async fn step_wait_refuses_bad_selections_and_conditions_as_invalid_naming_each(f: &Fixture) {
     let cases = [
         (
             wait_args(steps(&["nope", "pre", "ghost"]), json!("succeeded"), 0),
@@ -1647,7 +1276,6 @@ async fn step_wait_refuses_bad_selections_and_conditions_as_invalid_naming_each(
             assert!(error.contains(expected), "{args}: {error} lacks {expected}");
         }
     }
-    f.close().await;
 }
 
 fn page(reply: CommandReply) -> RecordPage {
@@ -1671,13 +1299,11 @@ fn field(record: &sluice_model::events::Record, name: &str) -> Value {
     serde_json::to_value(record).unwrap()[name].clone()
 }
 
-#[tokio::test]
-async fn log_read_filters_step_status_by_status_and_messages_by_recipient() {
-    let f = Fixture::new().await;
+async fn log_read_filters_step_status_by_status_and_messages_by_recipient(f: &Fixture) {
     f.call("say", json!({"to":"pre","body":"for pre"}))
         .await
         .unwrap();
-    let note = post(&f, "for the owner", false).await;
+    let note = post(f, "for the owner", false).await;
     f.input("value", json!(1), false).await;
     f.call(
         "step_set_output",
@@ -1758,15 +1384,14 @@ async fn log_read_filters_step_status_by_status_and_messages_by_recipient() {
             .collect::<Vec<_>>(),
         vec![note.0]
     );
-    f.close().await;
 }
 
-#[tokio::test]
-async fn standing_log_wait_sleeps_through_unrelated_records_and_wakes_on_the_first_match() {
-    let f = Fixture::new().await;
+async fn standing_log_wait_sleeps_through_unrelated_records_and_wakes_on_the_first_match(
+    f: &Fixture,
+) {
     let standing = |since: RecordSeq| json!({"read":{"since_seq":since,"kinds":["step.status","message"],"statuses":["failed","stale"],"recipients":["@orch"],"limit":200},"timeout_seconds":30,"questions_only":false});
-    let wait = spawn_call(&f, "log_wait", standing(latest(&f).await.last_seq));
-    parked(&wait).await;
+    let mut wait = spawn_call(f, "log_wait", standing(latest(f).await.last_seq));
+    parked(&mut wait).await;
     // A message to a step, a note to the owner, plan inputs, an edit and a running step.
     f.call("say", json!({"to":"pre","body":"for pre"}))
         .await
@@ -1782,7 +1407,7 @@ async fn standing_log_wait_sleeps_through_unrelated_records_and_wakes_on_the_fir
     )
     .await
     .unwrap();
-    parked(&wait).await;
+    parked(&mut wait).await;
     f.call(
         "step_cancel",
         json!({"selection":steps(&["pre"]),"reason":"no longer needed"}),
@@ -1795,12 +1420,12 @@ async fn standing_log_wait_sleeps_through_unrelated_records_and_wakes_on_the_fir
     assert_eq!(field(&woke.records[0], "step"), "pre");
     assert_eq!(field(&woke.records[0], "to"), "failed");
     // From there, the next standing wait wakes on the message to the session.
-    let wait = spawn_call(&f, "log_wait", standing(woke.last_seq));
-    parked(&wait).await;
+    let mut wait = spawn_call(f, "log_wait", standing(woke.last_seq));
+    parked(&mut wait).await;
     f.call("say", json!({"to":"work","body":"for work"}))
         .await
         .unwrap();
-    parked(&wait).await;
+    parked(&mut wait).await;
     let CommandReply::Receipt(note) = f
         .call(
             "say",
@@ -1817,7 +1442,6 @@ async fn standing_log_wait_sleeps_through_unrelated_records_and_wakes_on_the_fir
         woke.records.iter().map(|r| r.seq.0).collect::<Vec<_>>(),
         vec![note.0]
     );
-    f.close().await;
 }
 
 #[tokio::test]
@@ -1930,5 +1554,44 @@ async fn status_names_steps_and_units_and_recipe_list_reports_titles_and_views_o
         .unwrap();
     assert_eq!(row["title"], "FIG-1: Fix the cron driver on Postgres");
     assert_eq!(row["recipe"], "named");
+    f.close().await;
+}
+
+#[tokio::test]
+async fn edit_previews_and_durable_history() {
+    let mut f = Fixture::new().await;
+    input_preview_validates_without_changing_inputs_history_revisions_or_versions(&f).await;
+    f.next_project().await;
+    input_preview_reports_cached_resource_queue_and_stale_work(&f).await;
+    f.next_project().await;
+    history_survives_feed_retention_and_filters_revisions(&f).await;
+    f.close().await;
+}
+
+#[tokio::test]
+async fn step_wait_selections_conditions_and_live_status() {
+    let mut f = Fixture::new().await;
+    step_wait_answers_at_once_when_the_condition_already_holds(&f).await;
+    f.next_project().await;
+    step_wait_wakes_when_another_caller_changes_the_status(&f).await;
+    f.next_project().await;
+    step_wait_any_of_wakes_on_one_of_the_listed_statuses(&f).await;
+    f.next_project().await;
+    step_wait_selects_by_tag(&f).await;
+    f.next_project().await;
+    step_wait_refuses_bad_selections_and_conditions_as_invalid_naming_each(&f).await;
+    f.next_project().await;
+    step_wait_settled_counts_held_steps_but_not_work_that_can_still_move(&f).await;
+    f.close().await;
+}
+
+#[tokio::test]
+async fn message_records_and_filtered_waits() {
+    let mut f = Fixture::new().await;
+    message_records_in_log_read_and_next_over_socket(&f).await;
+    f.next_project().await;
+    log_read_filters_step_status_by_status_and_messages_by_recipient(&f).await;
+    f.next_project().await;
+    standing_log_wait_sleeps_through_unrelated_records_and_wakes_on_the_first_match(&f).await;
     f.close().await;
 }

@@ -1,7 +1,6 @@
 //! Edit replies, no-op edits, project listing and icons and status wait reasons, each
 //! driven through the coordinator socket.
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use super::home;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::*,
@@ -52,6 +51,21 @@ struct Fixture {
     server: tokio::task::JoinHandle<Result<(), PublicError>>,
 }
 impl Fixture {
+    async fn next_project(&mut self) {
+        let CommandReply::Project(p) = self
+            .client
+            .command(request(
+                "project_create",
+                json!({"name":format!("case-{}",ProjectId::new()),"description":"","resources":{}}),
+            ))
+            .await
+            .unwrap()
+        else {
+            panic!("project")
+        };
+        self.project = p.project_id;
+    }
+
     async fn new() -> Self {
         let home = home::ScratchHome::new().unwrap();
         home::ScratchHome::validate(home.path()).unwrap();
@@ -65,7 +79,7 @@ impl Fixture {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
         while !client.path.exists() {
             assert!(tokio::time::Instant::now() < deadline);
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::task::yield_now().await;
         }
         let CommandReply::Project(p) = client
             .command(request(
@@ -158,9 +172,7 @@ const CHAIN: &str = r#"[
   {"op":"step.add","step":"d","spec":{"run":"fixture.echo","in":{"value":{"default":2}},"after":["go"],"tags":["unit:lone"]}}
 ]"#;
 
-#[tokio::test]
-async fn edits_that_change_nothing_commit_no_revision_or_history() {
-    let f = Fixture::new().await;
+async fn edits_that_change_nothing_commit_no_revision_or_history(f: &Fixture) {
     f.patch(serde_json::from_str(CHAIN).unwrap()).await;
     let rev = f.rev().await;
     let history = f.history_len().await;
@@ -288,12 +300,9 @@ async fn edits_that_change_nothing_commit_no_revision_or_history() {
     );
     assert_eq!(changed.rev, Revision(rev + 1));
     assert_eq!(f.history_len().await, history + 1);
-    f.close().await;
 }
 
-#[tokio::test]
-async fn step_pause_keeps_its_reason_and_covers_the_subtree() {
-    let f = Fixture::new().await;
+async fn step_pause_keeps_its_reason_and_covers_the_subtree(f: &Fixture) {
     f.patch(serde_json::from_str(CHAIN).unwrap()).await;
     let rev = f.rev().await;
     let result = edited(
@@ -352,12 +361,9 @@ async fn step_pause_keeps_its_reason_and_covers_the_subtree() {
     assert_eq!(plan["plan"]["steps"]["a"]["paused"], "waiting on review");
     assert!(plan["plan"]["steps"]["b"].get("paused").is_none());
     assert!(plan["plan"]["steps"]["c"].get("paused").is_none());
-    f.close().await;
 }
 
-#[tokio::test]
-async fn step_set_input_reports_changed_and_unsupported_steps() {
-    let f = Fixture::new().await;
+async fn step_set_input_reports_changed_and_unsupported_steps(f: &Fixture) {
     f.patch(serde_json::from_str(CHAIN).unwrap()).await;
     let rev = f.rev().await;
     let CommandReply::Inputs(result) = f
@@ -380,7 +386,6 @@ async fn step_set_input_reports_changed_and_unsupported_steps() {
     let wire = serde_json::to_value(CommandReply::Inputs(result)).unwrap();
     assert_eq!(wire["data"]["rev"], rev + 1);
     assert_eq!(wire["data"]["changed"], json!(["c", "d"]));
-    f.close().await;
 }
 
 #[tokio::test]
@@ -631,5 +636,16 @@ async fn status_says_why_every_pending_step_waits() {
         status["steps"]["held"]["waiting"],
         json!(["paused: by hand", "project paused"])
     );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn no_op_pause_and_input_edit_replies() {
+    let mut f = Fixture::new().await;
+    edits_that_change_nothing_commit_no_revision_or_history(&f).await;
+    f.next_project().await;
+    step_pause_keeps_its_reason_and_covers_the_subtree(&f).await;
+    f.next_project().await;
+    step_set_input_reports_changed_and_unsupported_steps(&f).await;
     f.close().await;
 }

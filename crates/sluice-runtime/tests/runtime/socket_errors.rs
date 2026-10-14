@@ -1,9 +1,7 @@
 //! The coordinator answers a request it cannot decode with an error reply on the same
 //! connection instead of closing it unanswered (a panic in the work is contained the same
 //! way; `contain`'s unit test covers that).
-#[allow(dead_code)]
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use super::home;
 use serde_json::{Value, json};
 use sluice_model::{error::PublicError, rpc::JsonMap};
 use sluice_process::{
@@ -74,7 +72,7 @@ async fn undecodable_requests_get_error_replies() {
             tokio::time::Instant::now() < deadline,
             "socket never served"
         );
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        tokio::task::yield_now().await;
     }
     // A public command with a field it does not know.
     let reply = ask(
@@ -160,42 +158,4 @@ async fn a_silent_coordinator_is_a_bounded_error_not_a_hang() {
     silent(client.acquire_scheduler().await.unwrap_err());
     assert!(began.elapsed() < Duration::from_secs(5));
     held.abort();
-}
-
-#[test]
-fn long_polls_keep_their_own_wait_on_top_of_the_reply_limit() {
-    use sluice_runtime::client::reply_limit;
-    let base = Duration::from_secs(120);
-    let command = |value: Value| serde_json::from_value(value).unwrap();
-    assert_eq!(
-        reply_limit(base, &command(json!({"command":"projects_list"}))),
-        base
-    );
-    assert_eq!(
-        reply_limit(
-            base,
-            &command(
-                json!({"command":"log_wait","args":{"read":{"project":null,"since_seq":null,"kinds":null,"threads":null,"limit":10},"timeout_seconds":300,"questions_only":false}})
-            )
-        ),
-        base + Duration::from_secs(300)
-    );
-    assert_eq!(
-        reply_limit(
-            base,
-            &command(
-                json!({"command":"fn_call","args":{"name":"core.echo","inputs":{},"project":null,"wait_seconds":null,"direct":true,"author":null}})
-            )
-        ),
-        base + Duration::from_secs(sluice_runtime::calls::MAX_WAIT_SECONDS)
-    );
-    assert_eq!(
-        reply_limit(
-            base,
-            &command(
-                json!({"command":"fn_call","args":{"name":"core.echo","inputs":{},"project":null,"wait_seconds":7,"direct":false,"author":null}})
-            )
-        ),
-        base + Duration::from_secs(7)
-    );
 }

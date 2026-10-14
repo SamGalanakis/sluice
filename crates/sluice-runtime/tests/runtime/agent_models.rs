@@ -2,9 +2,7 @@
 //! the edit that adds the step or changes its model, with the launch's message, while a plan
 //! that already holds one still loads and takes every edit that leaves that model alone.
 //! Driven through the coordinator socket.
-#[allow(dead_code)]
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use super::home;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::*,
@@ -106,7 +104,7 @@ async fn serve(home: &home::ScratchHome, catalog: Catalog) -> Served {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while std::os::unix::net::UnixStream::connect(&client.path).is_err() {
         assert!(tokio::time::Instant::now() < deadline);
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        tokio::task::yield_now().await;
     }
     Served {
         client,
