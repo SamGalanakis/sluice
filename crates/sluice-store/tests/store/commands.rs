@@ -1,9 +1,5 @@
-#[allow(dead_code)]
-#[path = "../../../tests/support/home.rs"]
-mod home;
-#[allow(dead_code)]
-#[path = "support/plan_rows.rs"]
-mod plan_rows;
+use crate::home;
+use crate::plan_support as plan_rows;
 mod support {
     use super::home::ScratchHome;
     use rusqlite::params;
@@ -304,71 +300,6 @@ use sluice_store::{
 use support::*;
 
 #[tokio::test]
-async fn failed_composition_rolls_back_edit_state_archive_and_records() {
-    let f =
-        Fixture::new(json!({"steps":{"a":{"run":"core.external","outputs":{"n":"int"}}}})).await;
-    f.manual("a", json!({"n":3}), false).await;
-    let project = f.context.project;
-    let before = f.counts().await;
-    let error = f
-        .writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            crate::plan_rows::commit_document(
-                tx,
-                project,
-                &map(json!({"steps":{}})),
-                Some(&plan(json!({"steps":{}}))),
-                None,
-            )?;
-            Err::<(), _>(
-                PublicError::BadRequest {
-                    message: "later command failed".into(),
-                }
-                .into(),
-            )
-        })
-        .await
-        .unwrap_err();
-    assert!(matches!(error, PublicError::BadRequest { .. }));
-    assert_eq!(f.counts().await, before);
-    assert_eq!(f.state().await.status(&id("a")), StepStatus::Succeeded);
-    let removed: i64 = f
-        .reads
-        .snapshot(|c| Ok(c.query_row("SELECT count(*) FROM outcomes", [], |r| r.get(0))?))
-        .await
-        .unwrap();
-    assert_eq!(removed, 0);
-}
-
-#[tokio::test]
-async fn retry_is_atomic_when_message_storage_fails() {
-    let f = Fixture::new(json!({"steps":{"a":{"run":"empty"},"b":{"run":"empty","after":["a"]}}}))
-        .await;
-    f.manual("a", json!({}), false).await;
-    f.fail_projection("b").await;
-    let before = f.counts().await;
-    let context = f.context.clone();
-    let request = retry_request(context.project, &["a"], Some("feedback"));
-    assert!(
-        f.writer
-            .write(RetrySafety::NonIdempotent, move |tx| plans::step_retry(
-                tx,
-                &context,
-                request,
-                &mut Hooks {
-                    storage_fail: true,
-                    ..Hooks::default()
-                }
-            ))
-            .await
-            .is_err()
-    );
-    assert_eq!(f.counts().await, before);
-    assert_eq!(f.state().await.status(&id("a")), StepStatus::Succeeded);
-    assert_eq!(f.state().await.status(&id("b")), StepStatus::Failed);
-}
-
-#[tokio::test]
 async fn regression_growing_reorder_preserves_old_steps_and_inputs_without_position_collisions() {
     let mut f = Fixture::new(json!({"inputs":{"iz":"int"},"steps":{"z":{"run":"empty"}}})).await;
     f.manual("z", json!({}), false).await;
@@ -536,71 +467,7 @@ async fn dismissal(f: &Fixture) -> bool {
 }
 
 #[tokio::test]
-async fn dismissal_survives_record_retention_until_retry_and_new_cancel() {
-    let f = Fixture::new(json!({"steps":{"a":{"run":"core.external"}}})).await;
-    cancel_external(&f).await;
-    let project = f.context.project;
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            tx.sql().execute("DELETE FROM records", [])?;
-            sluice_store::messages::dismiss(
-                tx,
-                StepDismiss {
-                    project,
-                    step: id("a"),
-                    dismissed: true,
-                },
-            )
-        })
-        .await
-        .unwrap();
-    assert!(dismissal(&f).await);
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            for _ in 0..3 {
-                tx.append_record(
-                    Some(project),
-                    sluice_model::events::Event::StepCancel {
-                        step: id("unrelated"),
-                        author: "owner".into(),
-                        reason: "other work".into(),
-                    },
-                )?;
-            }
-            Ok(())
-        })
-        .await
-        .unwrap();
-    assert!(
-        dismissal(&f).await,
-        "unrelated records must not expire a dismissal"
-    );
-    assert_eq!(
-        f.reads
-            .snapshot(move |sql| sluice_store::messages::dismissed_lately(sql, project, 10.0))
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    let context = f.context.clone();
-    let request = retry_request(project, &["a"], None);
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            plans::step_retry(tx, &context, request, &mut Hooks::default())
-        })
-        .await
-        .unwrap();
-    assert!(!dismissal(&f).await);
-    cancel_external(&f).await;
-    assert!(
-        !dismissal(&f).await,
-        "a new cancel needs its own dismissal even without a run"
-    );
-}
-
-#[tokio::test]
-async fn legacy_dismissal_is_rewritten_without_refreshing_undo_time() {
+async fn slow_legacy_dismissal_is_rewritten_without_refreshing_undo_time() {
     let mut f =
         Fixture::new(json!({"steps":{"a":{"run":"core.external"},"b":{"run":"core.external"},"c":{"run":"core.external"},"d":{"run":"core.external"}}}))
             .await;
@@ -652,39 +519,6 @@ async fn legacy_dismissal_is_rewritten_without_refreshing_undo_time() {
     assert!(
         !dismissal(&f).await,
         "startup must not rebind an already migrated mark"
-    );
-}
-
-#[tokio::test]
-async fn dismissal_does_not_hide_a_failure_or_follow_a_recreated_step() {
-    let doc = json!({"steps":{"a":{"run":"core.external"}}});
-    let mut f = Fixture::new(doc.clone()).await;
-    cancel_external(&f).await;
-    let project = f.context.project;
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            sluice_store::messages::dismiss(
-                tx,
-                StepDismiss {
-                    project,
-                    step: id("a"),
-                    dismissed: true,
-                },
-            )
-        })
-        .await
-        .unwrap();
-    f.fail_projection("a").await;
-    assert!(
-        !dismissal(&f).await,
-        "a non-cancel failure cannot be hidden by an old mark"
-    );
-    f.apply(json!({"steps":{}})).await;
-    f.apply(doc).await;
-    cancel_external(&f).await;
-    assert!(
-        !dismissal(&f).await,
-        "the same step id with a new generation needs a new mark"
     );
 }
 
@@ -858,4 +692,155 @@ async fn a_failed_step_is_cancelled_set_aside_dismissed_and_still_retried() {
     assert_eq!(retried.steps, vec![id("a")]);
     assert_eq!(f.state().await.status(&id("a")), StepStatus::Pending);
     assert!(!dismissal(&f).await);
+}
+
+#[tokio::test]
+async fn dismissal_survives_retention_but_never_hides_new_failure_or_generation() {
+    let doc = json!({"steps":{"a":{"run":"core.external"}}});
+    let mut f = Fixture::new(doc.clone()).await;
+    cancel_external(&f).await;
+    let project = f.context.project;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute("DELETE FROM records", [])?;
+            sluice_store::messages::dismiss(
+                tx,
+                StepDismiss {
+                    project,
+                    step: id("a"),
+                    dismissed: true,
+                },
+            )
+        })
+        .await
+        .unwrap();
+    assert!(dismissal(&f).await);
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            for _ in 0..3 {
+                tx.append_record(
+                    Some(project),
+                    sluice_model::events::Event::StepCancel {
+                        step: id("unrelated"),
+                        author: "owner".into(),
+                        reason: "other work".into(),
+                    },
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(
+        dismissal(&f).await,
+        "unrelated records must not expire a dismissal"
+    );
+    assert_eq!(
+        f.reads
+            .snapshot(move |sql| sluice_store::messages::dismissed_lately(sql, project, 10.0))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let context = f.context.clone();
+    let request = retry_request(project, &["a"], None);
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            plans::step_retry(tx, &context, request, &mut Hooks::default())
+        })
+        .await
+        .unwrap();
+    assert!(!dismissal(&f).await);
+    cancel_external(&f).await;
+    assert!(
+        !dismissal(&f).await,
+        "a new cancel needs its own dismissal even without a run"
+    );
+    let project = f.context.project;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            sluice_store::messages::dismiss(
+                tx,
+                StepDismiss {
+                    project,
+                    step: id("a"),
+                    dismissed: true,
+                },
+            )
+        })
+        .await
+        .unwrap();
+    f.fail_projection("a").await;
+    assert!(
+        !dismissal(&f).await,
+        "a non-cancel failure cannot be hidden by an old mark"
+    );
+    f.apply(json!({"steps":{}})).await;
+    f.apply(doc).await;
+    cancel_external(&f).await;
+    assert!(
+        !dismissal(&f).await,
+        "the same step id with a new generation needs a new mark"
+    );
+    f.writer.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn composition_and_retry_failures_roll_back_all_domain_writes() {
+    let f =
+        Fixture::new(json!({"steps":{"a":{"run":"core.external","outputs":{"n":"int"}},"b":{"run":"empty","after":["a"]}}})).await;
+    f.manual("a", json!({"n":3}), false).await;
+    let project = f.context.project;
+    let before = f.counts().await;
+    let error = f
+        .writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            plan_rows::commit_document(
+                tx,
+                project,
+                &map(json!({"steps":{}})),
+                Some(&plan(json!({"steps":{}}))),
+                None,
+            )?;
+            Err::<(), _>(
+                PublicError::BadRequest {
+                    message: "later command failed".into(),
+                }
+                .into(),
+            )
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(error, PublicError::BadRequest { .. }));
+    assert_eq!(f.counts().await, before);
+    assert_eq!(f.state().await.status(&id("a")), StepStatus::Succeeded);
+    let removed: i64 = f
+        .reads
+        .snapshot(|c| Ok(c.query_row("SELECT count(*) FROM outcomes", [], |r| r.get(0))?))
+        .await
+        .unwrap();
+    assert_eq!(removed, 0);
+    f.fail_projection("b").await;
+    let before = f.counts().await;
+    let context = f.context.clone();
+    let request = retry_request(context.project, &["a"], Some("feedback"));
+    assert!(
+        f.writer
+            .write(RetrySafety::NonIdempotent, move |tx| plans::step_retry(
+                tx,
+                &context,
+                request,
+                &mut Hooks {
+                    storage_fail: true,
+                    ..Hooks::default()
+                }
+            ))
+            .await
+            .is_err()
+    );
+    assert_eq!(f.counts().await, before);
+    assert_eq!(f.state().await.status(&id("a")), StepStatus::Succeeded);
+    assert_eq!(f.state().await.status(&id("b")), StepStatus::Failed);
+    f.writer.shutdown().await.unwrap();
 }

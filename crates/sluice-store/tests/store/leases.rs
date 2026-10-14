@@ -1,5 +1,4 @@
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use crate::home;
 use home::ScratchHome;
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -127,58 +126,56 @@ impl Fixture {
 }
 
 #[tokio::test]
-async fn keyed_request_replay_cannot_reacquire_or_cross_run_and_payload() {
+async fn lease_replay_refusals_and_release_preserve_resource_ownership() {
     let f = Fixture::new(json!({"land":2})).await;
-    let a = f.run("a", 0).await;
-    let b = f.run("b", 0).await;
-    let lease = f.keyed(a, 1, "request").await.unwrap();
-    assert_eq!(f.keyed(a, 1, "request").await.unwrap(), lease);
-    assert!(f.keyed(b, 1, "request").await.is_err());
-    assert!(f.keyed(a, 2, "request").await.is_err());
-    f.grant().await;
-    f.release(lease, a).await;
-    assert_eq!(f.keyed(a, 1, "request").await.unwrap(), lease);
-    assert_eq!(f.held().await, 0);
-    assert!(f.grant().await.is_empty());
-    let new = f.keyed(a, 1, "next-request").await.unwrap();
-    assert!(new.0 > lease.0);
-    assert_eq!(f.grant().await, [new]);
-}
-
-#[tokio::test]
-async fn unknown_oversized_invalid_run_and_zero_requests_are_checked_immediately() {
-    let f = Fixture::new(json!({"land":1})).await;
-    let a = f.run("a", 0).await;
-    assert!(f.request(a, "gpu", 1).await.is_err());
-    assert!(f.request(a, "land", 2).await.is_err());
-    assert!(f.request(RunId::new(), "land", 1).await.is_err());
-    assert!(f.request(a, "land", u64::MAX).await.is_err());
-    let owner = f.request(a, "land", 1).await.unwrap();
-    f.grant().await;
-    let zero = f.request(a, "land", 0).await.unwrap();
-    assert_eq!(f.grant().await, [zero]);
-    assert_eq!(f.held().await, 1);
-    assert!(f.release(zero, a).await);
-    assert_eq!(f.held().await, 1);
-    f.release(owner, a).await;
-    f.stop(a).await;
-    assert!(f.request(a, "land", 1).await.is_err());
-}
-
-#[tokio::test]
-async fn section_request_key_cannot_impersonate_a_needs_bundle() {
-    let f = Fixture::new(json!({"land": 2})).await;
-    let a = f.run("a", 0).await;
-    let needs = f
-        .writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            tx.hold_needs(a, &Needs::from([("land".into(), 1)]))
-        })
-        .await
-        .unwrap();
-    let key = format!("needs/{a}/land");
-    assert!(f.keyed(a, 1, &key).await.is_err());
-    assert!(!f.release(needs[0], a).await);
-    assert!(!f.release(LeaseId(i64::MAX), a).await);
-    assert_eq!(f.held().await, 1);
+    {
+        let a = f.run("a", 0).await;
+        let b = f.run("b", 0).await;
+        let lease = f.keyed(a, 1, "request").await.unwrap();
+        assert_eq!(f.keyed(a, 1, "request").await.unwrap(), lease);
+        assert!(f.keyed(b, 1, "request").await.is_err());
+        assert!(f.keyed(a, 2, "request").await.is_err());
+        f.grant().await;
+        f.release(lease, a).await;
+        assert_eq!(f.keyed(a, 1, "request").await.unwrap(), lease);
+        assert_eq!(f.held().await, 0);
+        assert!(f.grant().await.is_empty());
+        let new = f.keyed(a, 1, "next-request").await.unwrap();
+        assert!(new.0 > lease.0);
+        assert_eq!(f.grant().await, [new]);
+        assert!(f.release(new, a).await);
+    }
+    {
+        let a = f.run("zero", 0).await;
+        assert!(f.request(a, "gpu", 1).await.is_err());
+        assert!(f.request(a, "land", 3).await.is_err());
+        assert!(f.request(RunId::new(), "land", 1).await.is_err());
+        assert!(f.request(a, "land", u64::MAX).await.is_err());
+        let owner = f.request(a, "land", 1).await.unwrap();
+        f.grant().await;
+        let zero = f.request(a, "land", 0).await.unwrap();
+        assert_eq!(f.grant().await, [zero]);
+        assert_eq!(f.held().await, 1);
+        assert!(f.release(zero, a).await);
+        assert_eq!(f.held().await, 1);
+        f.release(owner, a).await;
+        f.stop(a).await;
+        assert!(f.request(a, "land", 1).await.is_err());
+    }
+    {
+        let a = f.run("needs", 0).await;
+        let needs = f
+            .writer
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                tx.hold_needs(a, &Needs::from([("land".into(), 1)]))
+            })
+            .await
+            .unwrap();
+        let key = format!("needs/{a}/land");
+        assert!(f.keyed(a, 1, &key).await.is_err());
+        assert!(!f.release(needs[0], a).await);
+        assert!(!f.release(LeaseId(i64::MAX), a).await);
+        assert_eq!(f.held().await, 1);
+    }
+    f.writer.shutdown().await.unwrap();
 }

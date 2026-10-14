@@ -2,9 +2,7 @@
 //! `orchestrator` as runs pinned to older releases still do, reaches its unit's owner, else
 //! the project's fallback, else the person (`owner`). The stored `to` is who it reached, and
 //! a run's receipt never carries a delivery note.
-#[allow(dead_code)]
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use crate::home;
 use home::ScratchHome;
 use rusqlite::params;
 use sluice_model::{
@@ -111,90 +109,82 @@ fn say(project: ProjectId, run: RunId, to: &str) -> Post {
 }
 
 #[tokio::test]
-async fn a_runs_message_to_nobody_or_the_orchestrator_reaches_its_units_owner() {
+async fn run_messages_resolve_unit_owner_fallback_and_legacy_recipient() {
     let f = Fixture::new().await;
-    f.sql("UPDATE steps SET owner='@lead' WHERE project_id=?1 AND unit='work'")
-        .await;
-    let run = f.run("work").await;
-    for post in [
-        ask(f.project, run, ""),
-        ask(f.project, run, "orchestrator"),
-        say(f.project, run, ""),
-        say(f.project, run, "orchestrator"),
-    ] {
-        let (message, receipt) = f.post(post).await.unwrap();
-        assert_eq!(message.from, "work");
-        assert_eq!(message.to.as_deref(), Some("@lead"));
-        assert_eq!(message.thread, "step-work");
-        assert_eq!(receipt.to, "@lead");
-        // @lead is not reading, but a run's receipt keeps the shape older releases decode.
-        let receipt = serde_json::to_value(&receipt).unwrap();
-        assert!(receipt.get("note").is_none(), "{receipt}");
+    let work = f.run("work").await;
+    {
+        f.sql("UPDATE steps SET owner='@lead' WHERE project_id=?1 AND unit='work'")
+            .await;
+        let run = work;
+        for post in [
+            ask(f.project, run, ""),
+            ask(f.project, run, "orchestrator"),
+            say(f.project, run, ""),
+            say(f.project, run, "orchestrator"),
+        ] {
+            let (message, receipt) = f.post(post).await.unwrap();
+            assert_eq!(message.from, "work");
+            assert_eq!(message.to.as_deref(), Some("@lead"));
+            assert_eq!(message.thread, "step-work");
+            assert_eq!(receipt.to, "@lead");
+            // @lead is not reading, but a run's receipt keeps the shape older releases decode.
+            let receipt = serde_json::to_value(&receipt).unwrap();
+            assert!(receipt.get("note").is_none(), "{receipt}");
+        }
+        // A step named explicitly is still reached.
+        let (message, _) = f.post(say(f.project, run, "other")).await.unwrap();
+        assert_eq!(message.to.as_deref(), Some("other"));
     }
-    // A step named explicitly is still reached.
-    let (message, _) = f.post(say(f.project, run, "other")).await.unwrap();
-    assert_eq!(message.to.as_deref(), Some("other"));
-}
-
-#[tokio::test]
-async fn an_unowned_unit_reaches_the_fallback_else_the_person() {
-    let f = Fixture::new().await;
-    let run = f.run("other").await;
-    let (message, receipt) = f.post(ask(f.project, run, "orchestrator")).await.unwrap();
-    assert_eq!(message.to.as_deref(), Some("owner"));
-    assert_eq!(receipt.to, "owner");
-    // A question to the person reserves its notification, as any question to the owner does.
-    assert_eq!(f.notifications().await, 1);
-    f.sql("UPDATE projects SET fallback='@lead' WHERE project_id=?1")
-        .await;
-    let (message, _) = f.post(ask(f.project, run, "")).await.unwrap();
-    assert_eq!(message.to.as_deref(), Some("@lead"));
-    assert_eq!(f.notifications().await, 1);
-}
-
-/// A run of an older release posts through the retired `message_post`, naming nobody or the
-/// orchestrator: its unit's owner gets it.
-#[tokio::test]
-async fn the_retired_message_post_reaches_the_units_owner() {
-    let f = Fixture::new().await;
-    f.sql("UPDATE steps SET owner='@lead' WHERE project_id=?1 AND unit='work'")
-        .await;
-    let run = f.run("work").await;
-    for to in [None, Some("orchestrator".to_owned())] {
-        let post = bridge(MessagePost {
-            project: ProjectSelector::Id(f.project),
-            body: "stuck on the parser".into(),
-            thread: None,
-            to,
-            needs_reply: Some(false),
-            reply_to: None,
-            answer: None,
-            title: None,
-            ui: None,
-            input: None,
-            data: None,
-            from: None,
-            run: Some(run),
-            author: None,
-        })
-        .unwrap();
-        let (message, _) = f.post(post).await.unwrap();
+    {
+        let run = f.run("other").await;
+        let (message, receipt) = f.post(ask(f.project, run, "orchestrator")).await.unwrap();
+        assert_eq!(message.to.as_deref(), Some("owner"));
+        assert_eq!(receipt.to, "owner");
+        // A question to the person reserves its notification, as any question to the owner does.
+        assert_eq!(f.notifications().await, 1);
+        f.sql("UPDATE projects SET fallback='@lead' WHERE project_id=?1")
+            .await;
+        let (message, _) = f.post(ask(f.project, run, "")).await.unwrap();
+        assert_eq!(message.to.as_deref(), Some("@lead"));
+        assert_eq!(f.notifications().await, 1);
+    }
+    {
+        f.sql("UPDATE steps SET owner='@lead' WHERE project_id=?1 AND unit='work'")
+            .await;
+        let run = work;
+        for to in [None, Some("orchestrator".to_owned())] {
+            let post = bridge(MessagePost {
+                project: ProjectSelector::Id(f.project),
+                body: "stuck on the parser".into(),
+                thread: None,
+                to,
+                needs_reply: Some(false),
+                reply_to: None,
+                answer: None,
+                title: None,
+                ui: None,
+                input: None,
+                data: None,
+                from: None,
+                run: Some(run),
+                author: None,
+            })
+            .unwrap();
+            let (message, _) = f.post(post).await.unwrap();
+            assert_eq!(message.to.as_deref(), Some("@lead"));
+        }
+    }
+    {
+        let run = work;
+        let refused = f.post(ask(f.project, run, "@laed")).await.unwrap_err();
+        assert!(
+            refused
+                .to_string()
+                .contains("@laed is not a session of project p"),
+            "{refused}"
+        );
+        let (message, _) = f.post(ask(f.project, run, "@lead")).await.unwrap();
         assert_eq!(message.to.as_deref(), Some("@lead"));
     }
-}
-
-/// A run names a session or a step that is not there: refused, nothing stored.
-#[tokio::test]
-async fn a_run_naming_an_unknown_session_is_refused() {
-    let f = Fixture::new().await;
-    let run = f.run("work").await;
-    let refused = f.post(ask(f.project, run, "@laed")).await.unwrap_err();
-    assert!(
-        refused
-            .to_string()
-            .contains("@laed is not a session of project p"),
-        "{refused}"
-    );
-    let (message, _) = f.post(ask(f.project, run, "@lead")).await.unwrap();
-    assert_eq!(message.to.as_deref(), Some("@lead"));
+    f.writer.shutdown().await.unwrap();
 }

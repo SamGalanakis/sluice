@@ -1,4 +1,4 @@
-//! Launch boundary tests use p0's fixture binary and disposable user services.
+//! Launch barriers use this Cargo-built test binary; host gates use disposable user services.
 use sluice_model::ids::{InvocationId, RunId};
 use sluice_process::{
     cgroup::{Cgroup, RunCgroups},
@@ -12,7 +12,6 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    thread,
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
@@ -31,95 +30,33 @@ fn fixture_binary() -> PathBuf {
         })
 }
 fn command(home: &Path) -> Command {
-    let mut command = Command::new(fixture_binary());
-    command.env("SLUICE_HOME", home);
+    use std::os::unix::fs::PermissionsExt;
+    let script = home.join("launcher.sh");
+    fs::write(
+        &script,
+        r#"#!/bin/sh
+[ "$1" = payload-exec ] || exit 126
+export SLUICE_TEST_BARRIER_NONCE="$2"
+export SLUICE_TEST_BARRIER_TIMEOUT="$3"
+export SLUICE_TEST_BARRIER_MODE="$4"
+export SLUICE_TEST_BARRIER_PATH="$5"
+exec "$SLUICE_TEST_BARRIER_BINARY" --exact launch::launch_worker --ignored --nocapture
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut command = Command::new(script);
+    command
+        .env("SLUICE_HOME", home)
+        .env(
+            "SLUICE_TEST_BARRIER_BINARY",
+            std::env::current_exe().unwrap(),
+        )
+        .stdout(Stdio::null());
     command
 }
 fn marker_args(home: &Path) -> Vec<OsString> {
     vec!["write-marker".into(), home.join("marker").into_os_string()]
-}
-
-#[test]
-fn post_exec_spawn_returns_and_drop_never_dispatches() {
-    let home = tempfile::tempdir().unwrap();
-    let began = Instant::now();
-    let prepared = PreparedLaunch::spawn(
-        &mut command(home.path()),
-        &marker_args(home.path()),
-        Duration::from_secs(5),
-    )
-    .unwrap();
-    assert!(
-        began.elapsed() < Duration::from_secs(2),
-        "pre-exec stop would deadlock spawn"
-    );
-    let identity = prepared.process().identity().clone();
-    let process = OwnedProcess::open(&identity).unwrap();
-    thread::sleep(Duration::from_millis(50));
-    assert!(!home.path().join("marker").exists());
-    drop(prepared);
-    assert!(process.exited().unwrap());
-    assert!(!identity.matches_current().unwrap());
-    assert!(!home.path().join("marker").exists());
-}
-
-#[test]
-fn pidfd_rejects_stale_generation_and_remains_dead_after_reap() {
-    let child = Command::new("/usr/bin/sleep").arg("10").spawn().unwrap();
-    let process = OwnedProcess::capture(child.id()).unwrap();
-    let mut child = OwnedChild { child, process };
-    let process = &child.process;
-    let mut stale = process.identity().clone();
-    stale.start_time += 1;
-    assert!(OwnedProcess::open(&stale).is_err());
-    stale = process.identity().clone();
-    stale.boot_id = "00000000-0000-0000-0000-000000000000".into();
-    assert!(OwnedProcess::open(&stale).is_err());
-    assert!(child.child.try_wait().unwrap().is_none());
-    process.signal(rustix::process::Signal::KILL).unwrap();
-    child.child.wait().unwrap();
-    assert!(process.exited().unwrap());
-    process.signal(rustix::process::Signal::TERM).unwrap();
-}
-
-#[test]
-fn launcher_timeout_never_dispatches() {
-    let home = tempfile::tempdir().unwrap();
-    let prepared = PreparedLaunch::spawn(
-        &mut command(home.path()),
-        &marker_args(home.path()),
-        Duration::from_millis(150),
-    )
-    .unwrap();
-    thread::sleep(Duration::from_millis(250));
-    assert!(prepared.process().exited().unwrap());
-    assert!(!home.path().join("marker").exists());
-}
-
-#[test]
-fn unit_names_follow_test_mode() {
-    let run = RunId::new();
-    assert!(
-        sluice_process::host::test_mode(),
-        "cargo runs every test with SLUICE_TEST=1"
-    );
-    assert_eq!(sluice_process::systemd::unit_prefix(), "sluice-test-");
-    assert_eq!(
-        TransientService::for_launch(run).name(),
-        format!("sluice-test-{run}.service")
-    );
-    let output = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "production_unit_names", "--ignored"])
-        .env_remove("SLUICE_TEST")
-        .env("SLUICE_TEST_PRODUCTION_NAMES", "1")
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success() && stdout.contains("1 passed"),
-        "{stdout}{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 #[test]
@@ -172,9 +109,14 @@ async fn launch_containment_and_cancellation_gate() {
     let home = tempfile::tempdir().unwrap();
     let mut guard = UnitGuard(TransientService::for_test(RunId::new()));
     let mut spec = ServiceCommand::new(std::env::current_exe().unwrap());
-    spec.args = ["--exact", "launch_worker", "--ignored", "--nocapture"]
-        .map(OsString::from)
-        .to_vec();
+    spec.args = [
+        "--exact",
+        "launch::launch_worker",
+        "--ignored",
+        "--nocapture",
+    ]
+    .map(OsString::from)
+    .to_vec();
     spec.cwd = Some(home.path().into());
     spec.env.insert(
         "SLUICE_TEST_LAUNCH_DIR".into(),
@@ -228,6 +170,18 @@ async fn launch_containment_and_cancellation_gate() {
 #[test]
 #[ignore = "internal launch service worker"]
 fn launch_worker() {
+    if let Some(nonce) = std::env::var_os("SLUICE_TEST_BARRIER_NONCE") {
+        let timeout = std::env::var_os("SLUICE_TEST_BARRIER_TIMEOUT").unwrap();
+        let mode = std::env::var_os("SLUICE_TEST_BARRIER_MODE").unwrap();
+        let path = std::env::var_os("SLUICE_TEST_BARRIER_PATH").unwrap();
+        sluice_process::launcher::payload_exec_main(vec![nonce, timeout, mode, path], |args| {
+            if args[0] != "write-marker" {
+                return Err(io::Error::other("unknown payload"));
+            }
+            fs::write(&args[1], b"dispatched")?;
+            Ok(0)
+        });
+    }
     let Some(home) = std::env::var_os("SLUICE_TEST_LAUNCH_DIR").map(PathBuf::from) else {
         return;
     };
@@ -337,41 +291,140 @@ impl Drop for OwnedChild {
 }
 
 #[test]
-fn wrong_grant_nonce_cannot_dispatch() {
-    use std::{
-        io::{Read, Write},
-        os::{fd::OwnedFd, unix::net::UnixStream},
-    };
+fn launch_barrier_never_dispatches_before_a_valid_continuation() {
     let home = tempfile::tempdir().unwrap();
-    let (mut parent, socket) = UnixStream::pair().unwrap();
-    parent
-        .set_read_timeout(Some(Duration::from_secs(2)))
+    {
+        let began = Instant::now();
+        let prepared = PreparedLaunch::spawn(
+            &mut command(home.path()),
+            &marker_args(home.path()),
+            Duration::from_secs(5),
+        )
         .unwrap();
-    let child = command(home.path())
-        .args(["payload-exec", &"a".repeat(64), "2000", "write-marker"])
-        .arg(home.path().join("marker"))
-        .stdin(Stdio::from(OwnedFd::from(socket)))
-        .spawn()
+        assert!(
+            began.elapsed() < Duration::from_secs(2),
+            "pre-exec stop would deadlock spawn"
+        );
+        let identity = prepared.process().identity().clone();
+        let process = OwnedProcess::open(&identity).unwrap();
+        assert!(!home.path().join("marker").exists());
+        drop(prepared);
+        assert!(process.exited().unwrap());
+        assert!(!identity.matches_current().unwrap());
+        assert!(!home.path().join("marker").exists());
+    }
+    {
+        let prepared = PreparedLaunch::spawn(
+            &mut command(home.path()),
+            &marker_args(home.path()),
+            Duration::from_millis(150),
+        )
         .unwrap();
-    let process = OwnedProcess::capture(child.id()).unwrap();
-    let mut child = OwnedChild { child, process };
-    let mut length = [0; 4];
-    parent.read_exact(&mut length).unwrap();
-    let length = u32::from_be_bytes(length) as usize;
-    assert!(length < 16 * 1024);
-    let mut hello = vec![0; length];
-    parent.read_exact(&mut hello).unwrap();
-    let hello: serde_json::Value = serde_json::from_slice(&hello).unwrap();
-    assert_eq!(hello["identity"]["pid"], child.child.id());
-    let grant = serde_json::to_vec(
-        &serde_json::json!({"nonce":"b".repeat(64),"identity":hello["identity"]}),
-    )
-    .unwrap();
-    parent
-        .write_all(&(grant.len() as u32).to_be_bytes())
+        let pidfd = prepared.process().pidfd();
+        let mut ready = [rustix::event::PollFd::new(
+            &pidfd,
+            rustix::event::PollFlags::IN,
+        )];
+        let deadline = rustix::event::Timespec {
+            tv_sec: 2,
+            tv_nsec: 0,
+        };
+        assert_eq!(rustix::event::poll(&mut ready, Some(&deadline)).unwrap(), 1);
+        assert!(prepared.process().exited().unwrap());
+        assert!(!home.path().join("marker").exists());
+    }
+    {
+        use std::{
+            io::{Read, Write},
+            os::{fd::OwnedFd, unix::net::UnixStream},
+        };
+        let (mut parent, socket) = UnixStream::pair().unwrap();
+        parent
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let child = command(home.path())
+            .args(["payload-exec", &"a".repeat(64), "2000", "write-marker"])
+            .arg(home.path().join("marker"))
+            .stdin(Stdio::from(OwnedFd::from(socket)))
+            .spawn()
+            .unwrap();
+        let process = OwnedProcess::capture(child.id()).unwrap();
+        let mut child = OwnedChild { child, process };
+        let mut length = [0; 4];
+        parent.read_exact(&mut length).unwrap();
+        let length = u32::from_be_bytes(length) as usize;
+        assert!(length < 16 * 1024);
+        let mut hello = vec![0; length];
+        parent.read_exact(&mut hello).unwrap();
+        let hello: serde_json::Value = serde_json::from_slice(&hello).unwrap();
+        assert_eq!(hello["identity"]["pid"], child.child.id());
+        let grant = serde_json::to_vec(
+            &serde_json::json!({"nonce":"b".repeat(64),"identity":hello["identity"]}),
+        )
         .unwrap();
-    parent.write_all(&grant).unwrap();
-    assert_eq!(child.child.wait().unwrap().code(), Some(126));
-    assert!(child.process.exited().unwrap());
-    assert!(!home.path().join("marker").exists());
+        parent
+            .write_all(&(grant.len() as u32).to_be_bytes())
+            .unwrap();
+        parent.write_all(&grant).unwrap();
+        assert_eq!(child.child.wait().unwrap().code(), Some(126));
+        assert!(child.process.exited().unwrap());
+        assert!(!home.path().join("marker").exists());
+    }
+}
+
+#[test]
+fn process_identity_authority_and_unit_names_refuse_stale_or_foreign_owners() {
+    for path in [
+        "/",
+        "/user.slice",
+        "/x/../sluice-test-a.service",
+        "relative/sluice-test-a.service",
+    ] {
+        assert_eq!(
+            Cgroup::open_service(path).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+
+    {
+        let child = Command::new("/usr/bin/sleep").arg("10").spawn().unwrap();
+        let process = OwnedProcess::capture(child.id()).unwrap();
+        let mut child = OwnedChild { child, process };
+        let process = &child.process;
+        let mut stale = process.identity().clone();
+        stale.start_time += 1;
+        assert!(OwnedProcess::open(&stale).is_err());
+        stale = process.identity().clone();
+        stale.boot_id = "00000000-0000-0000-0000-000000000000".into();
+        assert!(OwnedProcess::open(&stale).is_err());
+        assert!(child.child.try_wait().unwrap().is_none());
+        process.signal(rustix::process::Signal::KILL).unwrap();
+        child.child.wait().unwrap();
+        assert!(process.exited().unwrap());
+        process.signal(rustix::process::Signal::TERM).unwrap();
+    }
+    {
+        let run = RunId::new();
+        assert!(
+            sluice_process::host::test_mode(),
+            "cargo runs every test with SLUICE_TEST=1"
+        );
+        assert_eq!(sluice_process::systemd::unit_prefix(), "sluice-test-");
+        assert_eq!(
+            TransientService::for_launch(run).name(),
+            format!("sluice-test-{run}.service")
+        );
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "launch::production_unit_names", "--ignored"])
+            .env_remove("SLUICE_TEST")
+            .env("SLUICE_TEST_PRODUCTION_NAMES", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

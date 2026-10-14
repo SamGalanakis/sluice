@@ -1,8 +1,5 @@
-#[path = "../../../tests/support/home.rs"]
-mod home;
-#[allow(dead_code)]
-#[path = "support/plan_rows.rs"]
-mod plan_rows;
+use crate::home;
+use crate::plan_support as plan_rows;
 #[allow(dead_code)]
 mod support {
     use super::home::ScratchHome;

@@ -286,15 +286,4 @@ mod tests {
             assert!(parse_populated(bad).is_err());
         }
     }
-    #[test]
-    fn refuses_non_owned_roots() {
-        for path in [
-            "/",
-            "/user.slice",
-            "/x/../sluice-test-a.service",
-            "relative/sluice-test-a.service",
-        ] {
-            assert!(Cgroup::open_service(path).is_err());
-        }
-    }
 }

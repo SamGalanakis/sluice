@@ -1,8 +1,5 @@
-#[path = "../../../tests/support/home.rs"]
-mod home;
-#[allow(dead_code)]
-#[path = "support/plan_rows.rs"]
-mod plan_rows;
+use crate::home;
+use crate::plan_support as plan_rows;
 #[allow(dead_code)]
 pub mod support {
     use super::home::ScratchHome;
@@ -575,75 +572,6 @@ async fn feedback(f: &Fixture, step: &str, body: &str) -> Message {
 }
 
 #[tokio::test]
-async fn real_start_hook_accepts_first_run_started() {
-    let f = Fixture::new(json!({"steps":{"a":{"run":"empty"}}})).await;
-    feedback(&f, "a", "first input").await;
-    let r = real_reserve(
-        &f,
-        f.request("a", json!({}), -1, None).await,
-        RealHooks::default(),
-    )
-    .await;
-    let id = r.identity;
-    let result = f
-        .writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            claim(tx, &id, guardian(id.run))?;
-            started(tx, &id, &mut RealHooks::default())
-        })
-        .await;
-    assert!(
-        result.is_ok(),
-        "real message adapter rejected first RunStarted: {result:?}"
-    );
-}
-
-#[tokio::test]
-async fn reservation_rechecks_durable_maintenance_fence() {
-    let mut admitted = vec![];
-    for mode in ["drain"] {
-        let f = Fixture::new(json!({"steps":{"a":{"run":"empty"}}})).await;
-        let request = f.request("a", json!({}), -1, None).await;
-        f.writer
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                tx.sql().execute("UPDATE maintenance SET mode=?1", [mode])?;
-                tx.changed(None, "maintenance");
-                Ok(())
-            })
-            .await
-            .unwrap();
-        let before = f.counts().await;
-        let c = f.context.clone();
-        let result = f
-            .writer
-            .write(RetrySafety::Idempotent, move |tx| {
-                reserve(
-                    tx,
-                    &c,
-                    request,
-                    &mut RealHooks {
-                        refuse_reservation: true,
-                        ..Default::default()
-                    },
-                )
-            })
-            .await;
-        assert!(matches!(
-            result,
-            Err(sluice_model::error::PublicError::Conflict { .. })
-        ));
-        assert_eq!(f.counts().await, before);
-        if result.is_ok() {
-            admitted.push(mode);
-        }
-    }
-    assert!(
-        admitted.is_empty(),
-        "new reservations committed after fences: {admitted:?}"
-    );
-}
-
-#[tokio::test]
 async fn real_adapter_wiring_and_rollback() {
     let f=Fixture::new(json!({"steps":{"work":{"run":"empty","needs":{"lane":1}},"land":{"run":"empty","after":["work"]}},"inputs":{"decision":"int"}})).await;
     let project = f.context.project;
@@ -669,6 +597,44 @@ async fn real_adapter_wiring_and_rollback() {
         .await
         .unwrap();
     assert_eq!(retry.rearmed, vec![id("land")]);
+    {
+        let project = f.context.project;
+        f.writer
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                resources::patch_resources(tx, project, &json!({"lane":0}), &Signatures)
+            })
+            .await
+            .unwrap();
+        let before = f.counts().await;
+        let req = f.request("work", json!({}), -1, None).await;
+        let c = f.context.clone();
+        let out = f
+            .writer
+            .write(RetrySafety::Idempotent, move |tx| {
+                reserve(tx, &c, req, &mut RealHooks::default())
+            })
+            .await;
+        assert!(out.is_err());
+        assert_eq!(f.counts().await, before);
+        assert_eq!(f.state().await.status(&id("work")), StepStatus::Pending);
+        f.reads
+            .snapshot(|c| {
+                assert_eq!(
+                    c.query_row("SELECT count(*) FROM message_deliveries", [], |r| r
+                        .get::<_, i64>(0))?,
+                    0
+                );
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            resources::patch_resources(tx, project, &json!({"lane":1}), &Signatures)
+        })
+        .await
+        .unwrap();
     let r = real_reserve(
         &f,
         f.request("work", json!({}), -1, None).await,
@@ -694,11 +660,57 @@ async fn real_adapter_wiring_and_rollback() {
     let identity = r.identity.clone();
     f.writer
         .write(RetrySafety::Idempotent, move |tx| {
-            claim(tx, &identity, guardian(identity.run))?;
-            started(tx, &identity, &mut RealHooks::default())
+            claim(tx, &identity, guardian(identity.run))
         })
         .await
         .unwrap();
+    {
+        let project = f.context.project;
+        let keys = ["status", "messages", "log"]
+            .map(|view| ChangeKey::new(Some(project), view))
+            .to_vec();
+        let before = f.reads.cursor(keys.clone()).await.unwrap();
+        let counts = f.counts().await;
+        let identity = r.identity.clone();
+        let result = f
+            .writer
+            .write(RetrySafety::Idempotent, move |tx| {
+                started(
+                    tx,
+                    &identity,
+                    &mut RealHooks {
+                        fail_start: true,
+                        ..Default::default()
+                    },
+                )
+            })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(before, f.reads.cursor(keys).await.unwrap());
+        assert_eq!(counts, f.counts().await);
+        let run = r.identity.run;
+        f.reads.snapshot(move |c| {
+        let (phase, start, cursor): (String, Option<String>, i64) = c.query_row(
+            "SELECT a.phase,r.started_at,s.delivery_cursor FROM runs r JOIN attempts a USING(attempt_id) JOIN steps s USING(project_id,step_id) WHERE r.run_id=?1",
+            [run.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        assert_eq!(phase, "claimed");
+        assert!(start.is_none());
+        assert_eq!(cursor, 0);
+        Ok(())
+    }).await.unwrap();
+    }
+    let identity = r.identity.clone();
+    assert!(
+        f.writer
+            .write(RetrySafety::Idempotent, move |tx| started(
+                tx,
+                &identity,
+                &mut RealHooks::default()
+            ))
+            .await
+            .unwrap()
+    );
     let outcome = real_finish(&f, &r, CompletionKind::Succeeded, json!({})).await;
     assert_eq!(outcome.status, StepStatus::Succeeded);
     f.reads
@@ -760,80 +772,6 @@ async fn real_adapter_wiring_and_rollback() {
     assert_eq!(f.state().await.inputs, map(json!({"decision":7})));
 }
 
-#[tokio::test]
-async fn project_adapters_initialize_and_rename_with_real_resources() {
-    let f = Fixture::new(json!({"steps":{}})).await;
-    let p = f
-        .writer
-        .write(RetrySafety::NonIdempotent, |tx| {
-            projects::project_create(
-                tx,
-                projects::CreateProject {
-                    name: "wired".parse().unwrap(),
-                    description: String::new(),
-                    icon: None,
-                    resources: Some(json!({"lane":2})),
-                    author: "sam".into(),
-                },
-                &projects::EmptyPlanInitializer,
-                &ResourceAdapter,
-            )
-        })
-        .await
-        .unwrap();
-    let id = p.project_id;
-    let p = f
-        .writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            projects::project_update(
-                tx,
-                &ProjectSelector::Id(id),
-                projects::UpdateProject {
-                    new_name: Some("renamed".parse().unwrap()),
-                    resources: Some(json!({"lane":3})),
-                    ..Default::default()
-                },
-                &ResourceAdapter,
-            )
-        })
-        .await
-        .unwrap();
-    assert_eq!(p.name.as_str(), "renamed");
-    assert_eq!(p.resources_rev, Revision(2));
-}
-
-/// A prune prepared before a retry of its member is stale at commit (the retry moved the
-/// state epoch), so it writes nothing and the retried work stays.
-#[tokio::test]
-async fn prepared_prune_rechecks_done_after_retry() {
-    let f = Fixture::new(json!({"steps":{"work":{"run":"empty"}}})).await;
-    f.manual("work", json!({}), false).await;
-    let context = f.context.clone();
-    let (commit, evidence) = f
-        .reads
-        .snapshot(move |c| prune_commit(c, &context, time::OffsetDateTime::now_utc()))
-        .await
-        .unwrap();
-    assert_eq!(commit.state.removed, vec![id("work")]);
-    f.retry(&["work"], Some("resume unfinished review")).await;
-    let project = f.context.project;
-    let before = f.counts().await;
-    let result = f
-        .writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            plans::commit_plan_edit(tx, project, &commit, Some(&evidence))
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        result,
-        plans::CommitOutcome::Stale,
-        "stale prune must not delete explicitly retried pending work"
-    );
-    assert_eq!(f.counts().await, before);
-    assert_eq!(f.state().await.status(&id("work")), StepStatus::Pending);
-}
-
 /// A prune of every done unit the evidence names, as its preparation would hand it over.
 fn prune_commit(
     c: &rusqlite::Connection,
@@ -855,7 +793,7 @@ fn prune_commit(
     let current = plans::read_plan_rows(c, context.project)?;
     let mut next = current.clone();
     next.steps.retain(|row| !members.contains(&row.step));
-    let mut commit = crate::plan_rows::rows_commit(
+    let mut commit = plan_rows::rows_commit(
         c,
         context.project,
         &current,
@@ -870,291 +808,6 @@ fn prune_commit(
         kept: Default::default(),
     });
     Ok((commit, evidence))
-}
-
-#[tokio::test]
-async fn delete_invalidates_project_log_and_questions_subscriptions() {
-    let f = Fixture::new(json!({"steps":{}})).await;
-    let project = f.context.project;
-    let mut q = post(project, "question");
-    q.verb = messages::Verb::Ask {
-        to: "owner".into(),
-        title: None,
-        ui: None,
-        input: None,
-        data: None,
-    };
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            messages::post(tx, q, &messages::NoPlanInputs)
-        })
-        .await
-        .unwrap();
-    let p = f
-        .writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            projects::project_update(
-                tx,
-                &ProjectSelector::Id(project),
-                projects::UpdateProject {
-                    archived: Some(true),
-                    ..Default::default()
-                },
-                &ResourceAdapter,
-            )
-        })
-        .await
-        .unwrap();
-    let keys = [
-        "plan",
-        "messages",
-        "resources",
-        "artifacts",
-        "log",
-        "questions",
-        "edits",
-        "outcomes",
-        "readers",
-        "settings",
-        "status",
-    ]
-    .into_iter()
-    .map(|view| ChangeKey::new(Some(project), view))
-    .collect::<Vec<_>>();
-    let before = f.reads.cursor(keys.clone()).await.unwrap();
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            projects::project_delete(
-                tx,
-                &ProjectSelector::Id(project),
-                projects::DeleteProject {
-                    confirm_name: p.name.to_string(),
-                    expected_settings_rev: p.settings_rev,
-                    author: "sam".into(),
-                },
-                &projects::StoredWorkOnly,
-            )
-        })
-        .await
-        .unwrap();
-    let after = f.reads.cursor(keys).await.unwrap();
-    assert_ne!(
-        before, after,
-        "deletion removed log and questions without invalidating either durable cursor"
-    );
-    for (key, previous) in &before.versions {
-        assert_eq!(
-            after.versions[key],
-            previous + 1,
-            "deleted view {key:?} did not advance"
-        );
-    }
-}
-
-#[tokio::test]
-async fn run_range_adapter_includes_feedback_for_unstarted_scatter_retry() {
-    let f = Fixture::new(
-        json!({"steps":{"batch":{"run":"int","scatter":"value","in":{"value":{"default":[1,2]}}}}}),
-    )
-    .await;
-    // The first batch has an empty assigned range; retry feedback must create one.
-
-    let a = real_reserve(
-        &f,
-        f.request("batch", json!({"value":1}), 0, Some(2)).await,
-        RealHooks::default(),
-    )
-    .await;
-    let b = real_reserve(
-        &f,
-        f.request("batch", json!({"value":2}), 1, Some(2)).await,
-        RealHooks::default(),
-    )
-    .await;
-    f.start(&a).await;
-    real_finish(&f, &a, CompletionKind::Succeeded, json!({"value":1})).await;
-    real_finish(
-        &f,
-        &b,
-        CompletionKind::Lost {
-            message: "never started".into(),
-        },
-        json!({}),
-    )
-    .await;
-    let context = f.context.clone();
-    let project = context.project;
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            plans::step_retry(
-                tx,
-                &context,
-                retry_request(project, &["batch"], Some("new feedback")),
-                &mut RealHooks::default(),
-            )
-        })
-        .await
-        .unwrap();
-    let request = f.request("batch", json!({"value":2}), 1, Some(2)).await;
-    let run = request.run;
-    let c = f.context.clone();
-    let r = f
-        .writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            reserve(tx, &c, request, &mut RealHooks::default())
-        })
-        .await
-        .unwrap();
-    let body=f.reads.snapshot(move|c| {
-        let mut q=c.prepare("SELECT body FROM messages m JOIN message_deliveries d ON d.message_id=m.id WHERE d.run_id=?1 ORDER BY m.id")?;
-        Ok(q.query_map([run.to_string()],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
-    }).await.unwrap();
-    assert!(
-        body.iter().any(|s| s == "new feedback"),
-        "retry assigned only {body:?}, range {:?}",
-        r.messages
-    );
-}
-
-#[tokio::test]
-async fn action_registration_has_run_event_identity() {
-    let f = Fixture::new(json!({"steps":{"work":{"run":"empty"},"land":{"run":"empty"}}})).await;
-    f.manual("work", json!({}), false).await;
-    let r = f.reserve("land", json!({})).await;
-    let project = f.context.project;
-    let run = r.identity.run;
-    f.writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            let target = completion_target(tx, project, &id("work"))?.unwrap();
-            register_completion_action(
-                tx,
-                RegisterCompletionAction {
-                    project,
-                    run,
-                    target,
-                    message: "fix".into(),
-                    author: "sam".into(),
-                },
-                &RealHooks::default(),
-            )
-        })
-        .await
-        .unwrap();
-    let rows = f
-        .reads
-        .snapshot(move |c| {
-            let mut q = c.prepare(
-                "SELECT kind,run_id FROM records WHERE kind='run.completion_action.register'",
-            )?;
-            Ok(q.query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?)
-        })
-        .await
-        .unwrap();
-    assert!(
-        rows.iter()
-            .any(|(kind, id)| kind.starts_with("run.") && id.as_deref() == Some(&run.to_string())),
-        "registration cannot be filtered by its run: {rows:?}"
-    );
-    let target = f
-        .reads
-        .snapshot(move |c| {
-            let durable: String = c.query_row(
-                "SELECT completion_action FROM runs WHERE run_id=?1",
-                [run.to_string()],
-                |r| r.get(0),
-            )?;
-            let durable: Value = serde_json::from_str(&durable)?;
-            let mut target = None;
-            for kind in ["run", "run.completion_action.register"] {
-                let page = sluice_store::records::read_records(
-                    c,
-                    Some(project),
-                    &sluice_store::records::RecordFilter {
-                        kinds: vec![kind.into()],
-                        ..Default::default()
-                    },
-                )?
-                .into_page()?;
-                assert_eq!(page.records.len(), 1);
-                match &page.records[0].event {
-                    Event::RunCompletionActionRegistered {
-                        run: event_run,
-                        target: frozen,
-                        message,
-                        author,
-                    } => {
-                        assert_eq!(*event_run, run);
-                        assert_eq!(serde_json::to_value(frozen)?, durable["target"]);
-                        assert_eq!(message, "fix");
-                        assert_eq!(author, "sam");
-                        target = Some(frozen.clone());
-                    }
-                    event => panic!("unexpected registration event: {event:?}"),
-                }
-            }
-            Ok(target.unwrap())
-        })
-        .await
-        .unwrap();
-    let before = f.counts().await;
-    assert!(
-        f.writer
-            .write(RetrySafety::Idempotent, move |tx| {
-                register_completion_action(
-                    tx,
-                    RegisterCompletionAction {
-                        project,
-                        run,
-                        target,
-                        message: "fix".into(),
-                        author: "second author".into(),
-                    },
-                    &RealHooks::default(),
-                )
-            })
-            .await
-            .unwrap()
-    );
-    assert_eq!(f.counts().await, before);
-}
-
-#[tokio::test]
-async fn resource_refusal_rolls_back_assigned_messages_and_attempt() {
-    let f = Fixture::new(json!({"steps":{"work":{"run":"empty","needs":{"lane":1}}}})).await;
-    let project = f.context.project;
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            resources::patch_resources(tx, project, &json!({"lane":0}), &Signatures)
-        })
-        .await
-        .unwrap();
-    feedback(&f, "work", "must remain for next attempt").await;
-    let before = f.counts().await;
-    let req = f.request("work", json!({}), -1, None).await;
-    let c = f.context.clone();
-    let out = f
-        .writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            reserve(tx, &c, req, &mut RealHooks::default())
-        })
-        .await;
-    assert!(out.is_err());
-    assert_eq!(f.counts().await, before);
-    assert_eq!(f.state().await.status(&id("work")), StepStatus::Pending);
-    f.reads
-        .snapshot(|c| {
-            assert_eq!(
-                c.query_row("SELECT count(*) FROM message_deliveries", [], |r| r
-                    .get::<_, i64>(0))?,
-                0
-            );
-            Ok(())
-        })
-        .await
-        .unwrap();
 }
 
 #[tokio::test]
@@ -1192,6 +845,88 @@ async fn real_completion_retries_atomically_and_replay_does_not_release_new_hold
         })
         .await
         .unwrap();
+    {
+        let rows = f
+            .reads
+            .snapshot(move |c| {
+                let mut q = c.prepare(
+                    "SELECT kind,run_id FROM records WHERE kind='run.completion_action.register'",
+                )?;
+                Ok(q.query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .await
+            .unwrap();
+        assert!(
+            rows.iter()
+                .any(|(kind, id)| kind.starts_with("run.")
+                    && id.as_deref() == Some(&run.to_string())),
+            "registration cannot be filtered by its run: {rows:?}"
+        );
+        let target = f
+            .reads
+            .snapshot(move |c| {
+                let durable: String = c.query_row(
+                    "SELECT completion_action FROM runs WHERE run_id=?1",
+                    [run.to_string()],
+                    |r| r.get(0),
+                )?;
+                let durable: Value = serde_json::from_str(&durable)?;
+                let mut target = None;
+                for kind in ["run", "run.completion_action.register"] {
+                    let page = sluice_store::records::read_records(
+                        c,
+                        Some(project),
+                        &sluice_store::records::RecordFilter {
+                            kinds: vec![kind.into()],
+                            ..Default::default()
+                        },
+                    )?
+                    .into_page()?;
+                    assert_eq!(page.records.len(), 1);
+                    match &page.records[0].event {
+                        Event::RunCompletionActionRegistered {
+                            run: event_run,
+                            target: frozen,
+                            message,
+                            author,
+                        } => {
+                            assert_eq!(*event_run, run);
+                            assert_eq!(serde_json::to_value(frozen)?, durable["target"]);
+                            assert_eq!(message, "correct result");
+                            assert_eq!(author, "sam");
+                            target = Some(frozen.clone());
+                        }
+                        event => panic!("unexpected registration event: {event:?}"),
+                    }
+                }
+                Ok(target.unwrap())
+            })
+            .await
+            .unwrap();
+        let before = f.counts().await;
+        assert!(
+            f.writer
+                .write(RetrySafety::Idempotent, move |tx| {
+                    register_completion_action(
+                        tx,
+                        RegisterCompletionAction {
+                            project,
+                            run,
+                            target,
+                            message: "correct result".into(),
+                            author: "second author".into(),
+                        },
+                        &RealHooks::default(),
+                    )
+                })
+                .await
+                .unwrap()
+        );
+        assert_eq!(f.counts().await, before);
+    }
     let out = real_finish(
         &f,
         &land,
@@ -1235,131 +970,6 @@ async fn real_completion_retries_atomically_and_replay_does_not_release_new_hold
 }
 
 #[tokio::test]
-async fn real_scatter_adapter_uses_supplied_cursor_and_keeps_feedback() {
-    let f = Fixture::new(
-        json!({"steps":{"batch":{"run":"int","scatter":"value","in":{"value":{"default":[1,2]}}}}}),
-    )
-    .await;
-    // The first batch has an empty assigned range; retry feedback must create one.
-
-    let a = real_reserve(
-        &f,
-        f.request("batch", json!({"value":1}), 0, Some(2)).await,
-        RealHooks::default(),
-    )
-    .await;
-    let b = real_reserve(
-        &f,
-        f.request("batch", json!({"value":2}), 1, Some(2)).await,
-        RealHooks::default(),
-    )
-    .await;
-    f.start(&a).await;
-    real_finish(&f, &a, CompletionKind::Succeeded, json!({"value":1})).await;
-    real_finish(
-        &f,
-        &b,
-        CompletionKind::Lost {
-            message: "never started".into(),
-        },
-        json!({}),
-    )
-    .await;
-    let context = f.context.clone();
-    let project = context.project;
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            plans::step_retry(
-                tx,
-                &context,
-                retry_request(project, &["batch"], Some("new feedback")),
-                &mut RealHooks::default(),
-            )
-        })
-        .await
-        .unwrap();
-    let request = f.request("batch", json!({"value":2}), 1, Some(2)).await;
-    let run = request.run;
-    let c = f.context.clone();
-    let r = f
-        .writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            reserve(tx, &c, request, &mut RealHooks::default())
-        })
-        .await
-        .unwrap();
-    let body=f.reads.snapshot(move|c| {
-        let mut q=c.prepare("SELECT body FROM messages m JOIN message_deliveries d ON d.message_id=m.id WHERE d.run_id=?1 ORDER BY m.id")?;
-        Ok(q.query_map([run.to_string()],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
-    }).await.unwrap();
-    assert!(
-        body.iter().any(|s| s == "new feedback"),
-        "retry assigned only {body:?}, range {:?}",
-        r.messages
-    );
-}
-
-#[tokio::test]
-async fn start_hook_failure_rolls_back_evidence_cursor_and_versions() {
-    let f = Fixture::new(json!({"steps":{"a":{"run":"empty"}}})).await;
-    feedback(&f, "a", "input").await;
-    let request = f.request("a", json!({}), -1, None).await;
-    let reservation = real_reserve(&f, request, RealHooks::default()).await;
-    let identity = reservation.identity.clone();
-    f.writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            claim(tx, &identity, guardian(identity.run))
-        })
-        .await
-        .unwrap();
-    let project = f.context.project;
-    let keys = ["status", "messages", "log"]
-        .map(|view| ChangeKey::new(Some(project), view))
-        .to_vec();
-    let before = f.reads.cursor(keys.clone()).await.unwrap();
-    let counts = f.counts().await;
-    let identity = reservation.identity.clone();
-    let result = f
-        .writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            started(
-                tx,
-                &identity,
-                &mut RealHooks {
-                    fail_start: true,
-                    ..Default::default()
-                },
-            )
-        })
-        .await;
-    assert!(result.is_err());
-    assert_eq!(before, f.reads.cursor(keys).await.unwrap());
-    assert_eq!(counts, f.counts().await);
-    let run = reservation.identity.run;
-    f.reads.snapshot(move |c| {
-        let (phase, start, cursor): (String, Option<String>, i64) = c.query_row(
-            "SELECT a.phase,r.started_at,s.delivery_cursor FROM runs r JOIN attempts a USING(attempt_id) JOIN steps s USING(project_id,step_id) WHERE r.run_id=?1",
-            [run.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )?;
-        assert_eq!(phase, "claimed");
-        assert!(start.is_none());
-        assert_eq!(cursor, 0);
-        Ok(())
-    }).await.unwrap();
-    let identity = reservation.identity;
-    assert!(
-        f.writer
-            .write(RetrySafety::Idempotent, move |tx| started(
-                tx,
-                &identity,
-                &mut RealHooks::default()
-            ))
-            .await
-            .unwrap()
-    );
-}
-
-#[tokio::test]
 async fn maintenance_preserves_empty_reservation_replay_and_completion() {
     for mode in ["drain"] {
         let f = Fixture::new(json!({"steps":{"a":{"run":"empty"}}})).await;
@@ -1381,6 +991,24 @@ async fn maintenance_preserves_empty_reservation_replay_and_completion() {
             })
             .await
             .unwrap();
+        let fresh = f.request("a", json!({}), -1, None).await;
+        let c = f.context.clone();
+        let before_new = f.counts().await;
+        assert!(matches!(
+            f.writer
+                .write(RetrySafety::Idempotent, move |tx| reserve(
+                    tx,
+                    &c,
+                    fresh,
+                    &mut RealHooks {
+                        refuse_reservation: true,
+                        ..Default::default()
+                    }
+                ))
+                .await,
+            Err(sluice_model::error::PublicError::Conflict { .. })
+        ));
+        assert_eq!(f.counts().await, before_new);
         let before = f.counts().await;
         let replay = real_reserve(
             &f,
@@ -1479,6 +1107,51 @@ async fn scatter_siblings_freeze_empty_and_nonempty_ranges_before_late_feedback(
             })
             .await
             .unwrap();
+        {
+            f.start(&first).await;
+            real_finish(&f, &first, CompletionKind::Succeeded, json!({"value":1})).await;
+            real_finish(
+                &f,
+                &second,
+                CompletionKind::Lost {
+                    message: "never started".into(),
+                },
+                json!({}),
+            )
+            .await;
+            let context = f.context.clone();
+            let project = context.project;
+            f.writer
+                .write(RetrySafety::NonIdempotent, move |tx| {
+                    plans::step_retry(
+                        tx,
+                        &context,
+                        retry_request(project, &["batch"], Some("new feedback")),
+                        &mut RealHooks::default(),
+                    )
+                })
+                .await
+                .unwrap();
+            let request = f.request("batch", json!({"value":2}), 1, Some(2)).await;
+            let run = request.run;
+            let c = f.context.clone();
+            let r = f
+                .writer
+                .write(RetrySafety::Idempotent, move |tx| {
+                    reserve(tx, &c, request, &mut RealHooks::default())
+                })
+                .await
+                .unwrap();
+            let body=f.reads.snapshot(move|c| {
+        let mut q=c.prepare("SELECT body FROM messages m JOIN message_deliveries d ON d.message_id=m.id WHERE d.run_id=?1 ORDER BY m.id")?;
+        Ok(q.query_map([run.to_string()],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+    }).await.unwrap();
+            assert!(
+                body.iter().any(|s| s == "new feedback"),
+                "retry assigned only {body:?}, range {:?}",
+                r.messages
+            );
+        }
     }
 }
 
@@ -1515,7 +1188,7 @@ async fn age_filtered_prune_freezes_cutoff_and_current_results() {
                 .writer
                 .write(RetrySafety::NonIdempotent, move |tx| {
                     if fresh_tokens {
-                        commit.tokens = crate::plan_rows::tokens(tx.sql(), project);
+                        commit.tokens = plan_rows::tokens(tx.sql(), project);
                     }
                     plans::commit_plan_edit(tx, project, &commit, Some(&evidence))
                 })
@@ -1539,4 +1212,121 @@ async fn age_filtered_prune_freezes_cutoff_and_current_results() {
             assert_eq!(f.state().await.status(&id("work")), StepStatus::Succeeded);
         }
     }
+}
+
+#[tokio::test]
+async fn project_resources_rename_and_deletion_invalidate_all_public_views() {
+    let f = Fixture::new(json!({"steps":{}})).await;
+    let p = f
+        .writer
+        .write(RetrySafety::NonIdempotent, |tx| {
+            projects::project_create(
+                tx,
+                projects::CreateProject {
+                    name: "wired".parse().unwrap(),
+                    description: String::new(),
+                    icon: None,
+                    resources: Some(json!({"lane":2})),
+                    author: "sam".into(),
+                },
+                &projects::EmptyPlanInitializer,
+                &ResourceAdapter,
+            )
+        })
+        .await
+        .unwrap();
+    let id = p.project_id;
+    let p = f
+        .writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            projects::project_update(
+                tx,
+                &ProjectSelector::Id(id),
+                projects::UpdateProject {
+                    new_name: Some("renamed".parse().unwrap()),
+                    resources: Some(json!({"lane":3})),
+                    ..Default::default()
+                },
+                &ResourceAdapter,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(p.name.as_str(), "renamed");
+    assert_eq!(p.resources_rev, Revision(2));
+    let project = p.project_id;
+    let mut q = post(project, "question");
+    q.verb = messages::Verb::Ask {
+        to: "owner".into(),
+        title: None,
+        ui: None,
+        input: None,
+        data: None,
+    };
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            messages::post(tx, q, &messages::NoPlanInputs)
+        })
+        .await
+        .unwrap();
+    let p = f
+        .writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            projects::project_update(
+                tx,
+                &ProjectSelector::Id(project),
+                projects::UpdateProject {
+                    archived: Some(true),
+                    ..Default::default()
+                },
+                &ResourceAdapter,
+            )
+        })
+        .await
+        .unwrap();
+    let keys = [
+        "plan",
+        "messages",
+        "resources",
+        "artifacts",
+        "log",
+        "questions",
+        "edits",
+        "outcomes",
+        "readers",
+        "settings",
+        "status",
+    ]
+    .into_iter()
+    .map(|view| ChangeKey::new(Some(project), view))
+    .collect::<Vec<_>>();
+    let before = f.reads.cursor(keys.clone()).await.unwrap();
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            projects::project_delete(
+                tx,
+                &ProjectSelector::Id(project),
+                projects::DeleteProject {
+                    confirm_name: p.name.to_string(),
+                    expected_settings_rev: p.settings_rev,
+                    author: "sam".into(),
+                },
+                &projects::StoredWorkOnly,
+            )
+        })
+        .await
+        .unwrap();
+    let after = f.reads.cursor(keys).await.unwrap();
+    assert_ne!(
+        before, after,
+        "deletion removed log and questions without invalidating either durable cursor"
+    );
+    for (key, previous) in &before.versions {
+        assert_eq!(
+            after.versions[key],
+            previous + 1,
+            "deleted view {key:?} did not advance"
+        );
+    }
+    f.writer.shutdown().await.unwrap();
 }

@@ -72,11 +72,57 @@ fn journal(a: &AdoptionAttempt) -> CompletionJournal {
 }
 
 #[tokio::test]
-async fn journal_import_replays_start_before_completion_and_busy_keeps_it() {
+async fn journal_recovery_refuses_corruption_and_requires_matching_durable_ack() {
     let dir = tempfile::tempdir().unwrap();
     let (a, link) = setup(dir.path());
     let j = journal(&a);
     j.write(dir.path()).unwrap();
+    j.write(dir.path()).unwrap();
+    assert_eq!(
+        CompletionJournal::read(dir.path(), &a.identity).unwrap(),
+        Some(j.clone())
+    );
+    let mut different = j.clone();
+    different.completion_id = "different".into();
+    assert!(different.write(dir.path()).is_err());
+    let mut other = a.identity.clone();
+    other.work = WorkGeneration(2);
+    assert!(CompletionJournal::read(dir.path(), &other).is_err());
+    std::fs::write(
+        dir.path().join("completion.json"),
+        br#"{"protocol":1,"protocol":1}"#,
+    )
+    .unwrap();
+    assert!(CompletionJournal::read(dir.path(), &a.identity).is_err());
+    std::fs::write(dir.path().join("completion.json"), b"{").unwrap();
+    assert!(CompletionJournal::read(dir.path(), &a.identity).is_err());
+    std::fs::remove_file(dir.path().join("completion.json")).unwrap();
+    j.write(dir.path()).unwrap();
+    struct WrongAck;
+    impl CoordinatorLink for WrongAck {
+        async fn request(
+            &self,
+            command: CoordinatorCommand,
+        ) -> Result<CoordinatorReply, sluice_model::error::PublicError> {
+            Ok(match command {
+                CoordinatorCommand::Started { .. } => CoordinatorReply::Started,
+                _ => CoordinatorReply::Completed(DurableAck {
+                    run: RunId::new(),
+                    completion_id: "wrong".into(),
+                }),
+            })
+        }
+    }
+    assert!(
+        adopt_attempt(
+            &a,
+            &WrongAck,
+            &Presence(GuardianPresence::Gone(proof(true)))
+        )
+        .await
+        .is_err()
+    );
+    assert!(dir.path().join("completion.json").exists());
     link.with_state(|s| s.busy_completions = 1);
     let host = Presence(GuardianPresence::Ambiguous("should not be needed".into()));
     assert!(matches!(
@@ -95,62 +141,4 @@ async fn journal_import_replays_start_before_completion_and_busy_keeps_it() {
     ));
     assert!(!dir.path().join("completion.json").exists());
     link.with_state(|s| assert_eq!(s.attempts[&a.identity.run].releases, 1));
-}
-
-#[test]
-fn journal_publication_refuses_corruption_identity_changes_and_overwrite() {
-    let dir = tempfile::tempdir().unwrap();
-    let (a, _) = setup(dir.path());
-    let mut j = journal(&a);
-    j.write(dir.path()).unwrap();
-    j.write(dir.path()).unwrap();
-    assert_eq!(
-        CompletionJournal::read(dir.path(), &a.identity).unwrap(),
-        Some(j.clone())
-    );
-    j.completion_id = "different".into();
-    assert!(j.write(dir.path()).is_err());
-    let mut other = a.identity.clone();
-    other.work = WorkGeneration(2);
-    assert!(CompletionJournal::read(dir.path(), &other).is_err());
-    std::fs::write(
-        dir.path().join("completion.json"),
-        br#"{"protocol":1,"protocol":1}"#,
-    )
-    .unwrap();
-    assert!(CompletionJournal::read(dir.path(), &a.identity).is_err());
-    std::fs::write(dir.path().join("completion.json"), b"{").unwrap();
-    assert!(CompletionJournal::read(dir.path(), &a.identity).is_err());
-}
-#[tokio::test]
-async fn wrong_completion_ack_never_deletes_journal() {
-    struct WrongAck;
-    impl CoordinatorLink for WrongAck {
-        async fn request(
-            &self,
-            command: CoordinatorCommand,
-        ) -> Result<CoordinatorReply, sluice_model::error::PublicError> {
-            Ok(match command {
-                CoordinatorCommand::Started { .. } => CoordinatorReply::Started,
-                _ => CoordinatorReply::Completed(DurableAck {
-                    run: RunId::new(),
-                    completion_id: "wrong".into(),
-                }),
-            })
-        }
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let (a, _) = setup(dir.path());
-    let j = journal(&a);
-    j.write(dir.path()).unwrap();
-    assert!(
-        adopt_attempt(
-            &a,
-            &WrongAck,
-            &Presence(GuardianPresence::Gone(proof(true)))
-        )
-        .await
-        .is_err()
-    );
-    assert!(dir.path().join("completion.json").exists());
 }

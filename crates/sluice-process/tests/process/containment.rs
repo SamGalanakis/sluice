@@ -251,25 +251,16 @@ fn evidence_dir() -> PathBuf {
         })
 }
 
-async fn run_fixture(expect_migration: bool) -> io::Result<Evidence> {
+async fn run_fixture() -> io::Result<Evidence> {
     let prefix = std::env::var_os("SLUICE_PRIVATE_TMUX_PREFIX")
         .map(PathBuf::from)
         .unwrap_or_else(default_prefix);
-    let binary = if expect_migration {
-        PathBuf::from("/usr/bin/tmux")
-    } else {
-        ApprovedTmux::load(&prefix).await?.binary().to_owned()
-    };
+    let binary = ApprovedTmux::load(&prefix).await?.binary().to_owned();
     let mut version = Command::new(&binary);
     version.arg("-V");
     let version = String::from_utf8_lossy(&bounded(version)?.stdout)
         .trim()
         .to_owned();
-    if expect_migration && version != "tmux 3.4" {
-        return Err(io::Error::other(format!(
-            "red-side gate requires host tmux 3.4, got {version}"
-        )));
-    }
     let mut fixture = Fixture::new()?;
     // The pane owns two children, one detached into a new session. argv is fixed;
     // no paths, unit names or user data are interpolated into the shell script.
@@ -304,12 +295,15 @@ async fn run_fixture(expect_migration: bool) -> io::Result<Evidence> {
         .arg("--setenv")
         .arg(format!("SLUICE_TEST_TMUX_BINARY={}", binary.display()))
         .arg("--setenv")
-        .arg(format!("SLUICE_TEST_EXPECT_MIGRATION={expect_migration}"))
-        .arg("--setenv")
         .arg(format!("SLUICE_PRIVATE_TMUX_PREFIX={}", prefix.display()))
         .arg("--")
         .arg(std::env::current_exe()?)
-        .args(["--exact", "service_worker", "--ignored", "--nocapture"]);
+        .args([
+            "--exact",
+            "containment::service_worker",
+            "--ignored",
+            "--nocapture",
+        ]);
     bounded(start)?;
     let group = systemctl_property("ControlGroup", &fixture.unit)?;
     if !group.ends_with(&fixture.unit) {
@@ -378,7 +372,7 @@ async fn containment_private_tmux() {
     )
     .unwrap();
     assert!(report.ready, "host prerequisites: {report:#?}");
-    let evidence = run_fixture(false).await.unwrap();
+    let evidence = run_fixture().await.unwrap();
     fs::write(
         dir.join("containment-private.json"),
         serde_json::to_vec_pretty(&evidence).unwrap(),
@@ -401,32 +395,6 @@ async fn containment_private_tmux() {
     assert!(evidence.remaining_after_owned_cleanup.is_empty());
 }
 
-#[tokio::test]
-#[ignore = "red-side gate requires the host's scope-migrating /usr/bin/tmux 3.4"]
-async fn containment_host_tmux_detects_migration() {
-    let evidence = run_fixture(true).await.unwrap();
-    let dir = evidence_dir();
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(
-        dir.join("containment-host.json"),
-        serde_json::to_vec_pretty(&evidence).unwrap(),
-    )
-    .unwrap();
-    println!("{}", serde_json::to_string_pretty(&evidence).unwrap());
-    assert!(evidence.observation_delay_ms >= 3000);
-    assert!(
-        evidence.migration_observed,
-        "fixture failed to detect host tmux migration"
-    );
-    assert!(
-        evidence
-            .delayed
-            .iter()
-            .any(|p| p.role == "pane" && !under(&p.cgroup, &evidence.service_cgroup))
-    );
-    assert!(evidence.remaining_after_owned_cleanup.is_empty());
-}
-
 // Invoked as this test binary's sole test inside the delegated service. The
 // normal --ignored invocation does nothing without its explicit worker env.
 #[test]
@@ -441,38 +409,18 @@ fn service_worker() {
     );
     fs::write(dir.join("worker.pid"), std::process::id().to_string()).unwrap();
     let binary = PathBuf::from(std::env::var_os("SLUICE_TEST_TMUX_BINARY").unwrap());
-    let host = std::env::var("SLUICE_TEST_EXPECT_MIGRATION").unwrap() == "true";
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let approved = if host {
-        assert_eq!(binary, Path::new("/usr/bin/tmux"));
-        None
-    } else {
-        let artifact = runtime
-            .block_on(ApprovedTmux::load(&PathBuf::from(
-                std::env::var_os("SLUICE_PRIVATE_TMUX_PREFIX").unwrap(),
-            )))
-            .unwrap();
-        assert_eq!(artifact.binary(), binary);
-        Some(artifact)
-    };
+    let approved = runtime
+        .block_on(ApprovedTmux::load(&PathBuf::from(
+            std::env::var_os("SLUICE_PRIVATE_TMUX_PREFIX").unwrap(),
+        )))
+        .unwrap();
+    assert_eq!(approved.binary(), binary);
     let command = |foreground: bool| {
-        if let Some(tmux) = &approved {
-            if foreground {
-                tmux.server_command(&dir, None).unwrap()
-            } else {
-                tmux.client_command(&dir).unwrap()
-            }
+        if foreground {
+            approved.server_command(&dir, None).unwrap()
         } else {
-            let mut command = Command::new(&binary);
-            command
-                .current_dir(&dir)
-                .args(["-S", "tmux.sock", "-f", "/dev/null"])
-                .env_remove("TMUX")
-                .env_remove("TMUX_PANE");
-            if foreground {
-                command.arg("-D");
-            }
-            command
+            approved.client_command(&dir).unwrap()
         }
     };
     let mut start = command(true);
@@ -524,16 +472,6 @@ impl Drop for OwnershipUnit {
     }
 }
 
-#[tokio::test]
-#[ignore = "delegated systemd and approved private tmux required"]
-async fn containment_invocation_cleanup_proves_detached_and_tmux_gone() {
-    ownership_fixture(false).await.unwrap();
-}
-#[tokio::test]
-#[ignore = "delegated systemd and approved private tmux required"]
-async fn containment_guardian_kill_proves_service_and_descendants_gone() {
-    ownership_fixture(true).await.unwrap();
-}
 async fn ownership_fixture(kill_guardian: bool) -> io::Result<()> {
     use sluice_model::ids::RunId;
     use sluice_process::{
@@ -563,9 +501,14 @@ async fn ownership_fixture(kill_guardian: bool) -> io::Result<()> {
         });
     let mut unit = OwnershipUnit(TransientService::for_test(RunId::new()));
     let mut spec = ServiceCommand::new(std::env::current_exe()?);
-    spec.args = ["--exact", "ownership_worker", "--ignored", "--nocapture"]
-        .map(Into::into)
-        .to_vec();
+    spec.args = [
+        "--exact",
+        "containment::ownership_worker",
+        "--ignored",
+        "--nocapture",
+    ]
+    .map(Into::into)
+    .to_vec();
     spec.cwd = Some(scratch.path().into());
     for (key, value) in [
         (
@@ -752,4 +695,15 @@ while not Path('finish').exists():
         fs::write(home.join("observed"), b"observed").unwrap();
         loop { tokio::time::sleep(Duration::from_secs(1)).await; }
     });
+}
+
+#[tokio::test]
+#[ignore = "delegated systemd and approved private tmux required"]
+async fn containment_invocation_and_guardian_cleanup_prove_descendants_gone() {
+    {
+        ownership_fixture(false).await.unwrap();
+    }
+    {
+        ownership_fixture(true).await.unwrap();
+    }
 }

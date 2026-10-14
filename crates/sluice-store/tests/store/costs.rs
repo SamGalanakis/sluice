@@ -1,12 +1,8 @@
-//! The store's cost counters (`docs/design/plan-rows.md` §11). One test in its own binary: the
-//! counters are process-wide.
+//! The store's cost counters (`docs/design/plan-rows.md` §11). Nextest isolates the
+//! scenario in its own process because the counters are process-wide.
 
-#[allow(dead_code)]
-#[path = "../../../tests/support/home.rs"]
-mod home;
-#[allow(dead_code)]
-#[path = "support/plan_rows.rs"]
-mod support;
+use crate::home;
+use crate::plan_support as support;
 use home::ScratchHome;
 use serde_json::{Map, Value, json};
 use sluice_model::cost::{Costs, Measurement};
@@ -64,7 +60,7 @@ async fn commit(
 }
 
 #[tokio::test]
-async fn an_edit_costs_what_it_changes_whatever_the_plan_size() {
+async fn slow_an_edit_costs_what_it_changes_whatever_the_plan_size() {
     let measurement = Measurement::start();
     let mut edits = vec![];
     let mut removals = vec![];

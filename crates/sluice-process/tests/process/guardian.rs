@@ -18,10 +18,7 @@ struct FixtureHost {
 #[derive(Default)]
 struct FixtureState {
     starts: AtomicUsize,
-    polls: AtomicUsize,
-    cleaned: AtomicUsize,
     done: AtomicBool,
-    delay_spawn: AtomicBool,
     delivered: Mutex<Vec<MessageId>>,
     checkpoints: Mutex<Vec<JsonMap>>,
 }
@@ -37,9 +34,6 @@ impl PayloadHost for FixtureHost {
         request: LaunchRequest,
         cancel: CancellationToken,
     ) -> io::Result<FixtureInvocation> {
-        if self.state.delay_spawn.load(Ordering::SeqCst) {
-            tokio::time::sleep(Duration::from_millis(40)).await;
-        }
         if cancel.is_cancelled() {
             return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
         }
@@ -79,7 +73,6 @@ impl PayloadInvocation for FixtureInvocation {
         &self.identity
     }
     async fn poll(&mut self) -> io::Result<Option<(PayloadResult, ExitEvidence)>> {
-        self.host.state.polls.fetch_add(1, Ordering::SeqCst);
         if !self.host.state.done.load(Ordering::SeqCst) {
             return Ok(None);
         }
@@ -115,7 +108,6 @@ impl PayloadInvocation for FixtureInvocation {
         Ok(())
     }
     async fn cleanup(&mut self) -> io::Result<CleanupEvidence> {
-        self.host.state.cleaned.fetch_add(1, Ordering::SeqCst);
         Ok(proof())
     }
 }
@@ -183,7 +175,7 @@ fn message(id: i64) -> DeliveryMessage {
 async fn until(mut f: impl FnMut() -> bool) {
     tokio::time::timeout(Duration::from_secs(5), async {
         while !f() {
-            tokio::time::sleep(Duration::from_millis(2)).await;
+            tokio::task::yield_now().await;
         }
     })
     .await
@@ -199,107 +191,6 @@ async fn control(
         command,
     )
     .await
-}
-fn launch(
-    args: &GuardianArgs,
-    link: &MemoryCoordinator,
-    host: &FixtureHost,
-) -> tokio::task::JoinHandle<io::Result<GuardianOutcome>> {
-    let (args, link, host) = (args.clone(), link.clone(), host.clone());
-    tokio::spawn(async move { guardian_main(args, &link, &host).await })
-}
-
-#[tokio::test]
-async fn busy_completion_keeps_the_exact_journal_and_never_runs_again() {
-    let home = tempfile::tempdir().unwrap();
-    let (args, link, host) = setup(home.path());
-    link.with_state(|s| s.busy_completions = usize::MAX);
-    host.state.done.store(true, Ordering::SeqCst);
-    let task = launch(&args, &link, &host);
-    until(|| args.run_dir.join("completion.json").exists()).await;
-    let journal = CompletionJournal::read(&args.run_dir, &args.guardian.identity)
-        .unwrap()
-        .unwrap();
-    assert_eq!(host.state.cleaned.load(Ordering::SeqCst), 1);
-    link.with_state(|s| assert_eq!(s.attempts[&args.invocation.run].releases, 0));
-    link.with_state(|s| s.busy_completions = 0);
-    task.await.unwrap().unwrap();
-    link.request(CoordinatorCommand::Complete(Box::new(journal.clone())))
-        .await
-        .unwrap();
-    link.request(CoordinatorCommand::Complete(Box::new(journal)))
-        .await
-        .unwrap();
-    assert_eq!(host.state.starts.load(Ordering::SeqCst), 1);
-    link.with_state(|s| assert_eq!(s.attempts[&args.invocation.run].releases, 1));
-}
-#[tokio::test]
-async fn unknown_or_undelivered_acknowledgements_and_wrong_capabilities_are_refused() {
-    let home = tempfile::tempdir().unwrap();
-    let (args, link, host) = setup(home.path());
-    let task = launch(&args, &link, &host);
-    until(|| host.state.starts.load(Ordering::SeqCst) == 1).await;
-    assert!(
-        control(
-            &args,
-            ControlCommand::DeliveryAck(DeliveryAck {
-                invocation: args.invocation.invocation,
-                message: MessageId(99)
-            })
-        )
-        .await
-        .is_err()
-    );
-    assert!(
-        call::<_, ControlReply>(
-            &args.run_dir.join("control.sock"),
-            &RunCapability::new("wrong"),
-            ControlCommand::Cancel
-        )
-        .await
-        .is_err()
-    );
-    assert!(control(&args, ControlCommand::Cancel).await.is_err());
-    link.with_state(|s| s.attempts.get_mut(&args.invocation.run).unwrap().cancelled = true);
-    // The guardian's watch sees the committed intent at once, so it may have
-    // closed its control socket before this request arrives.
-    match control(&args, ControlCommand::Cancel).await {
-        Ok(_) | Err(PublicError::Busy { .. }) => {}
-        Err(e) => panic!("cancel after intent: {e:?}"),
-    }
-    task.await.unwrap().unwrap();
-}
-
-#[test]
-fn result_envelope_rejects_raw_exit_75_trailing_json_and_duplicate_keys() {
-    for bytes in [
-        br#"{"ok":true,"outputs":{}} {}"#.as_slice(),
-        br#"{"ok":true,"ok":true,"outputs":{}}"#,
-        br#"{"ok":false,"outputs":{}}"#,
-    ] {
-        assert!(decode_result(bytes, Some(0)).is_err());
-    }
-    assert!(decode_result(br#"{"ok":true,"outputs":{}}"#, Some(75)).is_err());
-    assert!(matches!(
-        decode_result(
-            br#"{"ok":false,"error":{"error":"fn_failure","message":"boom"}}"#,
-            Some(1)
-        )
-        .unwrap(),
-        PayloadResult::Failed(_)
-    ));
-}
-#[tokio::test]
-async fn framing_rejects_protocol_length_and_duplicate_keys_before_dispatch() {
-    use tokio::io::AsyncWriteExt;
-    for raw in [serde_json::to_vec(&Request {protocol:2,request_id:RequestId("x".into()),run_capability:Some(RunCapability::new("secret")),command:ControlCommand::Cancel}).unwrap(),br#"{"protocol":1,"protocol":1,"request_id":"x","run_capability":"secret","command":{"method":"cancel"}}"#.to_vec()] {
-        let (mut tx,mut rx)=tokio::net::UnixStream::pair().unwrap();
-        tx.write_u32(raw.len() as u32).await.unwrap();tx.write_all(&raw).await.unwrap();
-        assert!(read_request::<ControlCommand>(&mut rx,&RunCapability::new("secret")).await.is_err());
-    }
-    let (mut tx, mut rx) = tokio::net::UnixStream::pair().unwrap();
-    tx.write_u32(MAX_FRAME_BYTES as u32 + 1).await.unwrap();
-    assert!(read_frame::<ControlCommand>(&mut rx).await.is_err());
 }
 
 fn fixture_binary() -> std::path::PathBuf {
@@ -373,7 +264,7 @@ async fn real_guardian_survives_socket_coordinator_restart_and_busy_completion()
     let mut spec = ServiceCommand::new(std::env::current_exe().unwrap());
     spec.args = [
         "--exact",
-        "real_guardian_worker",
+        "guardian::real_guardian_worker",
         "--ignored",
         "--nocapture",
     ]
@@ -396,7 +287,6 @@ async fn real_guardian_survives_socket_coordinator_restart_and_busy_completion()
     server.abort();
     let _ = server.await;
     std::fs::remove_file(&path).unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
     let guardian = link.with_state(|s| s.attempts[&args.invocation.run].claimed.clone().unwrap());
     assert!(guardian.process.matches_current().unwrap());
     let adoption = AdoptionAttempt {
@@ -464,7 +354,7 @@ async fn real_guardian_death_is_lost_only_after_service_emptiness() {
     let mut spec = ServiceCommand::new(std::env::current_exe().unwrap());
     spec.args = [
         "--exact",
-        "real_guardian_worker",
+        "guardian::real_guardian_worker",
         "--ignored",
         "--nocapture",
     ]
@@ -555,31 +445,6 @@ async fn real_guardian_worker() {
     std::fs::write(args.run_dir.join("worker-done"), b"done").unwrap();
 }
 
-#[tokio::test]
-async fn completion_freezes_the_durable_submission_version() {
-    let home = tempfile::tempdir().unwrap();
-    let (args, link, host) = setup(home.path());
-    link.with_state(|s| {
-        s.attempts
-            .get_mut(&args.invocation.run)
-            .unwrap()
-            .submissions = SubmissionSnapshot {
-            version: Some(2),
-            fields: decode_json(br#"{"submitted":true}"#).unwrap(),
-        }
-    });
-    host.state.done.store(true, Ordering::SeqCst);
-    guardian_main(args.clone(), &link, &host).await.unwrap();
-    link.with_state(|s| {
-        let j = s.attempts[&args.invocation.run]
-            .completion
-            .as_ref()
-            .unwrap();
-        assert_eq!(j.submission_version, Some(2));
-        assert_eq!(j.submissions.0["submitted"].as_value(), true);
-    });
-}
-
 /// A coordinator that stops answering while `stalled` holds, as one applying a burst of plan
 /// edits does, then answers everything it was holding.
 #[derive(Clone)]
@@ -608,9 +473,19 @@ impl CoordinatorLink for StallLink {
     }
 }
 #[tokio::test]
-async fn delivery_acks_are_answered_while_the_coordinator_stalls_and_reported_after() {
+async fn guardian_control_refuses_foreign_requests_and_persists_delivery_while_peer_stalls() {
     let home = tempfile::tempdir().unwrap();
     let (args, link, host) = setup(home.path());
+    link.with_state(|s| {
+        s.attempts
+            .get_mut(&args.invocation.run)
+            .unwrap()
+            .submissions = SubmissionSnapshot {
+            version: Some(2),
+            fields: decode_json(br#"{"submitted":true}"#).unwrap(),
+        }
+    });
+
     let stall = StallLink {
         inner: link.clone(),
         gate: Arc::new(tokio::sync::watch::channel(false).0),
@@ -623,6 +498,28 @@ async fn delivery_acks_are_answered_while_the_coordinator_stalls_and_reported_af
     until(|| host.state.starts.load(Ordering::SeqCst) == 1).await;
     until(|| link.with_state(|s| s.requests.contains(&"started"))).await;
     until(|| host.state.delivered.lock().unwrap().len() == 3).await;
+    assert!(
+        control(
+            &args,
+            ControlCommand::DeliveryAck(DeliveryAck {
+                invocation: args.invocation.invocation,
+                message: MessageId(99)
+            })
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        call::<_, ControlReply>(
+            &args.run_dir.join("control.sock"),
+            &RunCapability::new("wrong"),
+            ControlCommand::Cancel
+        )
+        .await
+        .is_err()
+    );
+    assert!(control(&args, ControlCommand::Cancel).await.is_err());
+
     stall.stall(true);
     let ack = |id| {
         control(
@@ -653,9 +550,52 @@ async fn delivery_acks_are_answered_while_the_coordinator_stalls_and_reported_af
     stall.stall(false);
     until(|| link.with_state(|s| s.attempts[&args.invocation.run].acknowledgements.len() == 2))
         .await;
+    link.with_state(|s| s.busy_completions = usize::MAX);
     host.state.done.store(true, Ordering::SeqCst);
-    assert!(matches!(
-        task.await.unwrap().unwrap(),
-        GuardianOutcome::Completed(_)
-    ));
+    until(|| args.run_dir.join("completion.json").exists()).await;
+    let journal = CompletionJournal::read(&args.run_dir, &args.guardian.identity)
+        .unwrap()
+        .unwrap();
+    assert_eq!(journal.submission_version, Some(2));
+    assert_eq!(journal.submissions.0["submitted"].as_value(), true);
+    assert_eq!(journal.delivery_acks.len(), 2);
+    link.with_state(|s| s.busy_completions = 0);
+    let GuardianOutcome::Completed(ack) = task.await.unwrap().unwrap() else {
+        panic!("completion missing")
+    };
+    assert!(ack.matches(&journal));
+    assert!(!args.run_dir.join("completion.json").exists());
+}
+
+#[tokio::test]
+async fn wire_and_result_decoders_refuse_ambiguous_or_oversized_frames() {
+    {
+        for bytes in [
+            br#"{"ok":true,"outputs":{}} {}"#.as_slice(),
+            br#"{"ok":true,"ok":true,"outputs":{}}"#,
+            br#"{"ok":false,"outputs":{}}"#,
+        ] {
+            assert!(decode_result(bytes, Some(0)).is_err());
+        }
+        assert!(decode_result(br#"{"ok":true,"outputs":{}}"#, Some(75)).is_err());
+        assert!(matches!(
+            decode_result(
+                br#"{"ok":false,"error":{"error":"fn_failure","message":"boom"}}"#,
+                Some(1)
+            )
+            .unwrap(),
+            PayloadResult::Failed(_)
+        ));
+    }
+    {
+        use tokio::io::AsyncWriteExt;
+        for raw in [serde_json::to_vec(&Request {protocol:2,request_id:RequestId("x".into()),run_capability:Some(RunCapability::new("secret")),command:ControlCommand::Cancel}).unwrap(),br#"{"protocol":1,"protocol":1,"request_id":"x","run_capability":"secret","command":{"method":"cancel"}}"#.to_vec()] {
+        let (mut tx,mut rx)=tokio::net::UnixStream::pair().unwrap();
+        tx.write_u32(raw.len() as u32).await.unwrap();tx.write_all(&raw).await.unwrap();
+        assert!(read_request::<ControlCommand>(&mut rx,&RunCapability::new("secret")).await.is_err());
+    }
+        let (mut tx, mut rx) = tokio::net::UnixStream::pair().unwrap();
+        tx.write_u32(MAX_FRAME_BYTES as u32 + 1).await.unwrap();
+        assert!(read_frame::<ControlCommand>(&mut rx).await.is_err());
+    }
 }

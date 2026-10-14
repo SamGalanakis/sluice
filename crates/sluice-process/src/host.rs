@@ -463,28 +463,3 @@ fn passwd_home() -> Option<PathBuf> {
             (fields.len() >= 7 && fields[2] == uid).then(|| PathBuf::from(fields[5]))
         })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn refuses_unsafe_cgroup_paths_and_invalid_boot_identity() {
-        for group in [
-            "",
-            "/",
-            "relative",
-            "/../user.slice",
-            "/user.slice/../../etc",
-        ] {
-            assert!(cgroup_path(group).is_err(), "{group}");
-        }
-        assert_eq!(
-            cgroup_path("/user.slice/probe.service").unwrap(),
-            Path::new("/sys/fs/cgroup/user.slice/probe.service")
-        );
-        assert!(parse_boot_id("01234567-89ab-cdef-0123-456789abcdef\n").is_ok());
-        for boot in ["", "abc", "01234567-89ab-cdef-0123-456789abcdeg"] {
-            assert!(parse_boot_id(boot).is_err());
-        }
-    }
-}

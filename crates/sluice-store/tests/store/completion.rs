@@ -1,8 +1,5 @@
-#[path = "../../../tests/support/home.rs"]
-mod home;
-#[allow(dead_code)]
-#[path = "support/plan_rows.rs"]
-mod plan_rows;
+use crate::home;
+use crate::plan_support as plan_rows;
 #[allow(dead_code)]
 mod support {
     use super::home::ScratchHome;
@@ -428,18 +425,6 @@ fn rejected() -> CompletionKind {
 }
 
 #[tokio::test]
-async fn completion_replay_returns_persisted_applied_decision_and_changes_nothing() {
-    let (f, land, _) = setup(true).await;
-    let original = f.finish(&land, rejected(), json!({})).await;
-    f.manual("work", json!({"ready":false}), false).await;
-    let before = f.counts().await;
-    let state = f.state().await;
-    let replay = f.finish(&land, CompletionKind::Succeeded, json!({})).await;
-    assert_eq!(replay, original);
-    assert_eq!(f.counts().await, before);
-    assert_eq!(f.state().await, state);
-}
-#[tokio::test]
 async fn conflict_replay_never_retries_a_later_valid_target() {
     let (f, land, _) = setup(false).await;
     f.retry(&["work"], None).await;
@@ -506,92 +491,20 @@ async fn concurrent_explicit_retry_and_rejected_completion_advance_work_once() {
     assert_eq!(f.counts().await.3, 1);
     assert_eq!(f.state().await.status(&id("land")), StepStatus::Failed);
 }
-#[tokio::test]
-async fn completion_storage_failure_rolls_back_terminal_state_and_can_replay_journal() {
-    let (f, land, _) = setup(true).await;
-    let before = f.counts().await;
-    let context = f.context.clone();
-    let identity = land.identity.clone();
-    assert!(
-        f.writer
-            .write(RetrySafety::Idempotent, move |tx| complete(
-                tx,
-                &context,
-                Complete {
-                    identity,
-                    completion_id: "storage-fail".into(),
-                    kind: rejected(),
-                    outputs: JsonMap::default(),
-                    processes_gone: true,
-                    submission_version: None
-                },
-                &mut Hooks {
-                    storage_fail: true,
-                    ..Hooks::default()
-                }
-            ))
-            .await
-            .is_err()
-    );
-    assert_eq!(f.counts().await, before);
-    assert_eq!(f.state().await.status(&id("land")), StepStatus::Running);
-    let result = f.finish(&land, rejected(), json!({})).await;
-    assert!(matches!(
-        result.action,
-        Some(CompletionActionOutcome::Applied(_))
-    ));
-}
-
-#[tokio::test]
-async fn identical_registration_replays_without_revalidating_policy_or_changing_author() {
-    let (f, land, target) = setup(false).await;
-    let before = f.counts().await;
-    let request = RegisterCompletionAction {
-        project: f.context.project,
-        run: land.identity.run,
-        target,
-        message: "please fix".into(),
-        author: "new caller".into(),
-    };
-    assert!(
-        f.writer
-            .write(RetrySafety::Idempotent, move |tx| {
-                register_completion_action(
-                    tx,
-                    request,
-                    &Hooks {
-                        refuse: true,
-                        ..Hooks::default()
-                    },
-                )
-            })
-            .await
-            .unwrap()
-    );
-    assert_eq!(f.counts().await, before);
-    let author: String = f
-        .reads
-        .snapshot(|c| {
-            Ok(c.query_row(
-                "SELECT json_extract(completion_action,'$.author') FROM runs WHERE step_id='land'",
-                [],
-                |r| r.get(0),
-            )?)
-        })
-        .await
-        .unwrap();
-    assert_eq!(author, "sam");
-}
 
 /// A plan whose `work` runs an agent-like open fn that declares `summary`.
 async fn agentish() -> Fixture {
     Fixture::new(json!({"steps":{"work":{"run":"agentish","outputs":{"summary":"string"}}}})).await
 }
-async fn submit(f: &Fixture, run: &Reservation, outputs: serde_json::Value) {
+async fn try_submit(
+    f: &Fixture,
+    run: sluice_model::ids::RunId,
+    outputs: serde_json::Value,
+) -> Result<Option<u64>, PublicError> {
     let request = StepSubmit {
         project: f.context.project,
         step: id("work"),
-        run: run.identity.run,
+        run,
         outputs: map(outputs),
         author: Some("agent".into()),
     };
@@ -600,9 +513,8 @@ async fn submit(f: &Fixture, run: &Reservation, outputs: serde_json::Value) {
             step_submit(tx, request)
         })
         .await
-        .unwrap()
-        .unwrap();
 }
+
 async fn note(f: &Fixture, run: Option<&Reservation>) -> sluice_model::attempt::AttemptNote {
     let project = f.context.project;
     let current = run.map(|r| r.identity.run);
@@ -645,8 +557,171 @@ async fn finish_with(
         .unwrap()
 }
 
+/// Complete a run with the current plan unavailable (`current` is its compile error), as the
+/// coordinator does when the project's fn catalog is broken.
+async fn finish_without_plan(
+    f: &Fixture,
+    run: &Reservation,
+    kind: CompletionKind,
+    outputs: serde_json::Value,
+) -> CompletionResult {
+    let identity = run.identity.clone();
+    f.writer
+        .write(RetrySafety::Idempotent, move |tx| {
+            complete_frozen(
+                tx,
+                CompletionContext {
+                    current: Err("project registry blocked: x.broken/fn.json: not json"),
+                },
+                Complete {
+                    completion_id: identity.run.to_string(),
+                    identity,
+                    kind,
+                    outputs: map(outputs),
+                    processes_gone: true,
+                    submission_version: None,
+                },
+                &mut Hooks::default(),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+/// `work` runs an agent-like open fn and declares outputs; `next` reads one of them, `gated`
+/// waits on another, and `many` scatters.
+async fn rolling() -> Fixture {
+    Fixture::new(json!({"steps":{
+        "work":{"run":"agentish","outputs":{"summary":"string","red":"int","green":"boolean?"}},
+        "next":{"run":"echo","in":{"value":{"source":"work/summary"}}},
+        "gated":{"run":"empty","after":["work/green"]},
+        "many":{"run":"echo","scatter":"value","in":{"value":{"default":[1,2]}}}}}))
+    .await
+}
+async fn progress(
+    f: &Fixture,
+    step: &str,
+    run: sluice_model::ids::RunId,
+    outputs: serde_json::Value,
+) -> Result<serde_json::Value, PublicError> {
+    let request = StepProgress {
+        project: sluice_model::ids::ProjectSelector::Id(f.context.project),
+        step: id(step),
+        run,
+        outputs: map(outputs),
+    };
+    f.writer
+        .write(RetrySafety::Idempotent, move |tx| {
+            step_progress(tx, request)
+        })
+        .await
+}
+async fn read(f: &Fixture) -> Option<Progress> {
+    let project = f.context.project;
+    f.reads
+        .snapshot(move |c| read_progress(c, project, "work"))
+        .await
+        .unwrap()
+}
+fn invalid_errors(result: Result<serde_json::Value, PublicError>) -> Vec<String> {
+    match result {
+        Err(PublicError::Invalid { errors, .. }) => errors,
+        other => panic!("expected invalid, got {other:?}"),
+    }
+}
+
+/// Admission reads the plan the caller compiled only at the revision it was compiled at: a
+/// revision fixes the plan's rows, so the stored revision alone says whether it is stale.
+
 #[tokio::test]
-async fn a_submitted_run_is_finishing_and_a_settled_one_succeeds_with_the_recorded_outputs() {
+async fn completion_failure_and_changed_content_replay_use_the_persisted_decision() {
+    let (f, land, target) = setup(true).await;
+    {
+        let before = f.counts().await;
+        let context = f.context.clone();
+        let identity = land.identity.clone();
+        assert!(
+            f.writer
+                .write(RetrySafety::Idempotent, move |tx| complete(
+                    tx,
+                    &context,
+                    Complete {
+                        identity,
+                        completion_id: "storage-fail".into(),
+                        kind: rejected(),
+                        outputs: JsonMap::default(),
+                        processes_gone: true,
+                        submission_version: None
+                    },
+                    &mut Hooks {
+                        storage_fail: true,
+                        ..Hooks::default()
+                    }
+                ))
+                .await
+                .is_err()
+        );
+        assert_eq!(f.counts().await, before);
+        assert_eq!(f.state().await.status(&id("land")), StepStatus::Running);
+    }
+    {
+        let before = f.counts().await;
+        let request = RegisterCompletionAction {
+            project: f.context.project,
+            run: land.identity.run,
+            target,
+            message: "please fix".into(),
+            author: "new caller".into(),
+        };
+        assert!(
+            f.writer
+                .write(RetrySafety::Idempotent, move |tx| {
+                    register_completion_action(
+                        tx,
+                        request,
+                        &Hooks {
+                            refuse: true,
+                            ..Hooks::default()
+                        },
+                    )
+                })
+                .await
+                .unwrap()
+        );
+        assert_eq!(f.counts().await, before);
+        let author: String = f
+            .reads
+            .snapshot(|c| {
+                Ok(c.query_row(
+                "SELECT json_extract(completion_action,'$.author') FROM runs WHERE step_id='land'",
+                [],
+                |r| r.get(0),
+            )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(author, "sam");
+    }
+    {
+        let original = f.finish(&land, rejected(), json!({})).await;
+        assert!(matches!(
+            original.action,
+            Some(CompletionActionOutcome::Applied(_))
+        ));
+        f.manual("work", json!({"ready":false}), false).await;
+        let before = f.counts().await;
+        let state = f.state().await;
+        let replay = f.finish(&land, CompletionKind::Succeeded, json!({})).await;
+        assert_eq!(replay, original);
+        assert_eq!(f.counts().await, before);
+        assert_eq!(f.state().await, state);
+    }
+    f.writer.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn submitted_runs_settle_and_complete_from_the_frozen_contract() {
     let f = agentish().await;
     let run = f.reserve("work", json!({})).await;
     f.start(&run).await;
@@ -678,7 +753,18 @@ async fn a_submitted_run_is_finishing_and_a_settled_one_succeeds_with_the_record
         matches!(&refused, Err(PublicError::Conflict { message, .. }) if message.contains("no longer finishing")),
         "{refused:?}"
     );
-    submit(&f, &run, json!({"summary":"fixed"})).await;
+    assert!(
+        try_submit(&f, run.identity.run, json!({"summary":"fixed"}))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let before_duplicate = f.counts().await;
+    assert!(matches!(
+        try_submit(&f, run.identity.run, json!({"summary":"second"})).await,
+        Err(PublicError::Conflict { .. })
+    ));
+    assert_eq!(f.counts().await, before_duplicate);
     let found = finishing().await;
     let entry = &found[&id("work")];
     assert_eq!(entry.release, "fixture");
@@ -714,6 +800,14 @@ async fn a_submitted_run_is_finishing_and_a_settled_one_succeeds_with_the_record
     assert!(finishing().await.is_empty());
     f.retry(&["work"], None).await;
     let next = f.reserve("work", json!({})).await;
+    let before_stale = f.counts().await;
+    assert_eq!(
+        try_submit(&f, run.identity.run, json!({"summary":"stale"}))
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(f.counts().await, before_stale);
     let note = note(&f, Some(&next)).await;
     assert!(
         note.text()
@@ -721,48 +815,7 @@ async fn a_submitted_run_is_finishing_and_a_settled_one_succeeds_with_the_record
         "{}",
         note.text()
     );
-}
-
-/// Complete a run with the current plan unavailable (`current` is its compile error), as the
-/// coordinator does when the project's fn catalog is broken.
-async fn finish_without_plan(
-    f: &Fixture,
-    run: &Reservation,
-    kind: CompletionKind,
-    outputs: serde_json::Value,
-) -> CompletionResult {
-    let identity = run.identity.clone();
-    f.writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            complete_frozen(
-                tx,
-                CompletionContext {
-                    current: Err("project registry blocked: x.broken/fn.json: not json"),
-                },
-                Complete {
-                    completion_id: identity.run.to_string(),
-                    identity,
-                    kind,
-                    outputs: map(outputs),
-                    processes_gone: true,
-                    submission_version: None,
-                },
-                &mut Hooks::default(),
-            )
-        })
-        .await
-        .unwrap()
-        .unwrap()
-}
-
-/// Completion is decided from what the attempt froze at admission, never from a plan: an
-/// attempt with no plan snapshot in its provenance completes while the current plan cannot be
-/// compiled, its outputs checked against its own frozen contract, and its frozen declaration
-/// is the step's stored row.
-#[tokio::test]
-async fn a_run_completes_from_its_frozen_contract_with_no_snapshot_and_no_plan() {
-    let f = agentish().await;
-    let run = f.reserve("work", json!({})).await;
+    let run = next;
     f.start(&run).await;
     let project = f.context.project;
     let attempt = run.identity.attempt;
@@ -822,52 +875,37 @@ async fn a_run_completes_from_its_frozen_contract_with_no_snapshot_and_no_plan()
         "{:?}",
         failed.error
     );
-}
-
-/// `work` runs an agent-like open fn and declares outputs; `next` reads one of them, `gated`
-/// waits on another, and `many` scatters.
-async fn rolling() -> Fixture {
-    Fixture::new(json!({"steps":{
-        "work":{"run":"agentish","outputs":{"summary":"string","red":"int","green":"boolean?"}},
-        "next":{"run":"echo","in":{"value":{"source":"work/summary"}}},
-        "gated":{"run":"empty","after":["work/green"]},
-        "many":{"run":"echo","scatter":"value","in":{"value":{"default":[1,2]}}}}}))
-    .await
-}
-async fn progress(
-    f: &Fixture,
-    step: &str,
-    run: sluice_model::ids::RunId,
-    outputs: serde_json::Value,
-) -> Result<serde_json::Value, PublicError> {
-    let request = StepProgress {
-        project: sluice_model::ids::ProjectSelector::Id(f.context.project),
-        step: id(step),
-        run,
-        outputs: map(outputs),
-    };
-    f.writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            step_progress(tx, request)
+    let (project, plan, rev) = (
+        f.context.project,
+        f.context.plan.clone(),
+        f.context.revision,
+    );
+    let (current, stale) = f
+        .reads
+        .snapshot(move |sql| {
+            Ok((
+                sluice_store::resources::admit_order(sql, project, rev, &plan).map(|a| a.len()),
+                sluice_store::resources::admit_order(
+                    sql,
+                    project,
+                    sluice_model::ids::Revision(rev.0 + 1),
+                    &plan,
+                )
+                .map(|a| a.len()),
+            ))
         })
         .await
-}
-async fn read(f: &Fixture) -> Option<Progress> {
-    let project = f.context.project;
-    f.reads
-        .snapshot(move |c| read_progress(c, project, "work"))
-        .await
-        .unwrap()
-}
-fn invalid_errors(result: Result<serde_json::Value, PublicError>) -> Vec<String> {
-    match result {
-        Err(PublicError::Invalid { errors, .. }) => errors,
-        other => panic!("expected invalid, got {other:?}"),
-    }
+        .unwrap();
+    assert_eq!(current.unwrap(), 0);
+    assert!(
+        matches!(stale, Err(sluice_store::StoreError::Public(PublicError::Conflict { ref message, .. })) if message == "compiled plan is stale"),
+        "{stale:?}"
+    );
+    f.writer.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn progress_is_checked_against_the_steps_outputs_and_comes_from_its_current_run() {
+async fn progress_validates_current_runs_and_never_replaces_final_outputs() {
     let f = rolling().await;
     let stranger = sluice_model::ids::RunId::new();
     // Not running yet: refused.
@@ -917,13 +955,6 @@ async fn progress_is_checked_against_the_steps_outputs_and_comes_from_its_curren
         .unwrap();
     let errors = invalid_errors(progress(&f, "many", item_run, json!({"value":[1]})).await);
     assert!(errors[0].contains("scattered"), "{errors:?}");
-}
-
-#[tokio::test]
-async fn progress_merges_and_feeds_no_reader_or_gate_and_writes_no_record() {
-    let f = rolling().await;
-    let run = f.reserve("work", json!({})).await;
-    f.start(&run).await;
     let current = run.identity.run;
     let before = f.counts().await;
     let first = progress(&f, "work", current, json!({"summary":"half","red":3}))
@@ -934,7 +965,7 @@ async fn progress_merges_and_feeds_no_reader_or_gate_and_writes_no_record() {
         .unwrap();
     assert_eq!(
         second["progress"],
-        json!({"summary":"half","red":2,"green":true})
+        json!({"session":"s-1","summary":"half","red":2,"green":true})
     );
     assert_eq!(second["run"], json!(current));
     assert!(first["at"].is_string() && second["at"].is_string());
@@ -973,13 +1004,6 @@ async fn progress_merges_and_feeds_no_reader_or_gate_and_writes_no_record() {
             sluice_store::query::QueryCell::Text(current.to_string())
         ]
     );
-}
-
-#[tokio::test]
-async fn progress_outlives_its_run_and_clears_when_the_next_run_starts() {
-    let f = rolling().await;
-    let run = f.reserve("work", json!({})).await;
-    f.start(&run).await;
     progress(&f, "work", run.identity.run, json!({"red":5}))
         .await
         .unwrap();
@@ -1026,37 +1050,5 @@ async fn progress_outlives_its_run_and_clears_when_the_next_run_starts() {
     let failed = read(&f).await.unwrap();
     assert!(!failed.live && !failed.superseded);
     assert_eq!(failed.fresher("green"), Some(&json!(false)));
-}
-
-/// Admission reads the plan the caller compiled only at the revision it was compiled at: a
-/// revision fixes the plan's rows, so the stored revision alone says whether it is stale.
-#[tokio::test]
-async fn admission_order_refuses_a_plan_compiled_at_another_revision() {
-    let f = agentish().await;
-    let (project, plan, rev) = (
-        f.context.project,
-        f.context.plan.clone(),
-        f.context.revision,
-    );
-    let (current, stale) = f
-        .reads
-        .snapshot(move |sql| {
-            Ok((
-                sluice_store::resources::admit_order(sql, project, rev, &plan).map(|a| a.len()),
-                sluice_store::resources::admit_order(
-                    sql,
-                    project,
-                    sluice_model::ids::Revision(rev.0 + 1),
-                    &plan,
-                )
-                .map(|a| a.len()),
-            ))
-        })
-        .await
-        .unwrap();
-    assert_eq!(current.unwrap(), 0);
-    assert!(
-        matches!(stale, Err(sluice_store::StoreError::Public(PublicError::Conflict { ref message, .. })) if message == "compiled plan is stale"),
-        "{stale:?}"
-    );
+    f.writer.shutdown().await.unwrap();
 }

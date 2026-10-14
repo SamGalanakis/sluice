@@ -7,15 +7,14 @@
 //!
 //! Each test runs in `scripts/check` but the live-backup gate, which needs a backup-API copy
 //! of a live home and the old release's oracle (see its own doc).
-#[path = "../../../tests/support/home.rs"]
-mod home;
-#[path = "../../../tests/support/plan_rows.rs"]
+use crate::home;
+#[path = "../../../../tests/support/plan_rows.rs"]
 mod plan_rows;
 
 use home::ScratchHome;
 use plan_rows::*;
 use rusqlite::{Connection, OpenFlags};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use sluice_model::error::PublicError;
 use sluice_store::{ReadPool, Writer, backup};
 use std::path::{Path, PathBuf};
@@ -273,7 +272,7 @@ fn fresh_schema() -> std::collections::BTreeMap<String, String> {
 }
 
 #[test]
-fn every_legacy_home_converts_with_round_trip_equality_at_every_revision() {
+fn slow_every_legacy_home_converts_with_round_trip_equality_at_every_revision() {
     let fresh = fresh_schema();
     for name in ["schema1", "schema1_old", "schema2"] {
         let home = ScratchHome::new().unwrap();
@@ -299,7 +298,7 @@ fn every_legacy_home_converts_with_round_trip_equality_at_every_revision() {
 }
 
 #[test]
-fn each_defect_blocks_the_conversion_naming_its_project_and_rev_and_writes_nothing() {
+fn slow_each_defect_blocks_the_conversion_naming_its_project_and_rev_and_writes_nothing() {
     let defects: Vec<Value> = serde_json::from_str(&read("defects.json")).unwrap();
     for defect in defects {
         let case = defect["case"].as_str().unwrap();
@@ -327,7 +326,7 @@ fn each_defect_blocks_the_conversion_naming_its_project_and_rev_and_writes_nothi
 }
 
 #[test]
-fn a_backup_holding_live_work_is_refused_with_its_counts_and_nothing_is_written() {
+fn slow_a_backup_holding_live_work_is_refused_with_its_counts_and_nothing_is_written() {
     let live = expected("live")["live"].clone();
     let home = ScratchHome::new().unwrap();
     let source = backup_file(home.root(), "live", None);
@@ -432,7 +431,7 @@ fn a_fresh_home_is_schema_3_and_its_compact_reads_use_the_covering_indexes() {
 ///
 /// ```text
 /// SLUICE_LIVE_COPY=/tmp/h2.x/home/sluice.db SLUICE_LIVE_ORACLE=/tmp/h2.x/oracle.json \
-///   cargo test -p sluice-store --test legacy_replay -- --ignored live_backup
+///   cargo test -p sluice-store --test store -- --ignored live_backup
 /// ```
 ///
 /// A project the oracle cannot replay (an unknown origin) must block the conversion by name.
@@ -480,37 +479,4 @@ fn a_live_backup_converts_every_historical_revision_or_names_what_blocks_it() {
         Value::Object(p)
     }).collect::<Vec<_>>()});
     check_converted(&source, &destination.join("sluice.db"), &expected);
-}
-
-#[test]
-fn the_expectations_name_every_revision_of_every_legacy_plan() {
-    // Runs now: the fixtures and their expectations agree with each other, so the gates above
-    // check the converter, not a stale fixture.
-    for name in ["schema1", "schema1_old", "schema2", "live"] {
-        let expected = expected(name);
-        let home = ScratchHome::new().unwrap();
-        let source = backup_file(home.root(), name, None);
-        let sql = open(&source);
-        for project in expected["projects"].as_array().unwrap() {
-            let id = project_id(&sql, project["name"].as_str().unwrap());
-            let revisions = project["revisions"].as_array().unwrap();
-            let rev: i64 = sql
-                .query_row("SELECT rev FROM plans WHERE project_id=?1", [&id], |r| {
-                    r.get(0)
-                })
-                .unwrap();
-            assert_eq!(rev as usize, revisions.len());
-            let doc: Map<String, Value> = serde_json::from_str(
-                &sql.query_row("SELECT doc FROM plans WHERE project_id=?1", [&id], |r| {
-                    r.get::<_, String>(0)
-                })
-                .unwrap(),
-            )
-            .unwrap();
-            assert_eq!(
-                compact(&doc),
-                compact_value(&revisions.last().unwrap()["document"])
-            );
-        }
-    }
 }

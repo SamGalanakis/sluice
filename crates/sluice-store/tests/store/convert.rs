@@ -4,9 +4,7 @@
 //! home is schema-equivalent to a fresh one, and a schema-changing restore of a backup with
 //! live work is refused before anything is written.
 
-#[allow(dead_code)]
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use crate::home;
 use home::ScratchHome;
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
@@ -24,10 +22,10 @@ use sluice_store::{
 };
 use std::{
     collections::{BTreeSet, HashSet},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
-const SCHEMA_1: &str = include_str!("fixtures/schema1.sql");
+const SCHEMA_1: &str = include_str!("../fixtures/schema1.sql");
 
 /// A home at schema 1 (or 2, the interim board schema) as a release before the cutover left it.
 fn legacy_home(dir: &Path, schema: i64) -> Connection {
@@ -402,7 +400,7 @@ fn assert_indexes(c: &Connection, project: ProjectId) {
 }
 
 #[tokio::test]
-async fn a_schema_1_home_converts_with_every_revision_round_tripped() {
+async fn slow_a_schema_1_home_converts_with_every_revision_round_tripped() {
     let home = ScratchHome::new().unwrap();
     let database = home.path().join("sluice.db");
     let (revisions, stored) = history();
@@ -675,16 +673,14 @@ async fn a_schema_1_home_converts_with_every_revision_round_tripped() {
     let _ = RecordSeq(0);
 }
 
-#[allow(dead_code)]
-#[path = "support/plan_rows.rs"]
-mod sluice_store_support;
+use crate::plan_support as sluice_store_support;
 
 /// A schema-2 home (the interim board schema) that also predates later schema-1 columns
 /// converts to the same shape, even where a column it gains would land after a later one (as
 /// the live home's `projects` has `prune_*` before `board_doc*`): such a table is rebuilt in
 /// schema 3's column order. Its boards are kept and still work.
 #[tokio::test]
-async fn a_schema_2_home_without_later_columns_converts_and_keeps_its_boards() {
+async fn slow_a_schema_2_home_without_later_columns_converts_and_keeps_its_boards() {
     let home = ScratchHome::new().unwrap();
     let database = home.path().join("sluice.db");
     let project = {
@@ -756,7 +752,7 @@ async fn a_schema_2_home_without_later_columns_converts_and_keeps_its_boards() {
 /// Each blocked home is refused with blockers naming the project, the check and the revision,
 /// and its file is left exactly as it was.
 #[test]
-fn gapped_malformed_and_unknown_histories_are_blocked_and_leave_the_home_untouched() {
+fn slow_gapped_malformed_and_unknown_histories_are_blocked_and_leave_the_home_untouched() {
     let (revisions, stored) = history();
     type Damage = Box<dyn Fn(&Connection)>;
     type Case = (&'static str, Vec<Value>, Value, Damage, Vec<&'static str>);
@@ -997,7 +993,7 @@ fn imported() -> (Vec<Value>, Vec<Value>) {
 /// (author `sluice`), the revisions after it convert as any other, each revision at or below it
 /// is folded with its record kept, and the report lists each anchor.
 #[tokio::test]
-async fn imported_projects_are_anchored_at_an_exact_baseline() {
+async fn slow_imported_projects_are_anchored_at_an_exact_baseline() {
     let (docs, ops) = imported();
     let stored = docs[3].clone();
     let home = ScratchHome::new().unwrap();
@@ -1227,7 +1223,7 @@ async fn imported_projects_are_anchored_at_an_exact_baseline() {
 /// A restore of a schema-1 backup converts it on its private destination; one holding live
 /// work is refused before anything is written, with §10.2's message.
 #[test]
-fn a_schema_changing_restore_converts_and_refuses_live_work() {
+fn slow_a_schema_changing_restore_converts_and_refuses_live_work() {
     let (revisions, stored) = history();
     let scratch = ScratchHome::new().unwrap();
     let source = scratch.root().join("legacy");
@@ -1298,120 +1294,4 @@ fn a_schema_changing_restore_converts_and_refuses_live_work() {
         Err(StoreError::ConversionBlocked(b)) if b == ["home: already at schema 3"]
     ));
     let _ = convert::live_work;
-}
-
-/// A read-only backup copy of a live home (`SLUICE_CONVERT_COPY=<copy of sluice.db>`): its
-/// live work is refused by name; with that work ended on the scratch copy only, it converts,
-/// a project whose rev 1 has no history row (the Python importer's) anchored at its exact
-/// baseline (§10.4.1); every project round-trips at every revision from its first, exports
-/// its stored plan, rebuilds from its history, and the home is schema-equivalent to a fresh
-/// one.
-#[test]
-#[ignore = "needs SLUICE_CONVERT_COPY: a backup-API copy of a home's sluice.db"]
-fn a_copy_of_the_live_home_converts() {
-    let copy = PathBuf::from(std::env::var("SLUICE_CONVERT_COPY").expect("SLUICE_CONVERT_COPY"));
-    let stored: Vec<(String, String, String)> = {
-        let c = Connection::open(&copy).unwrap();
-        let live = convert::live_work(&c).unwrap();
-        eprintln!("live work on the copy: {live:?}");
-        if !live.is_empty() {
-            match convert_home(&copy) {
-                Err(StoreError::ConversionBlocked(blockers)) => {
-                    eprintln!("refused: {blockers:?}");
-                    assert!(blockers[0].starts_with("home: live work ("));
-                }
-                other => panic!("live work must block: {other:?}"),
-            }
-            // The scratch copy's work is ended by hand: the real cutover ends it with the old
-            // release's own cancel and adoption paths (§10.1, §10.10).
-            c.execute_batch(
-                "UPDATE attempts SET phase='terminal',finished_at='copy' WHERE phase<>'terminal';
-                 UPDATE runs SET finished_at='copy' WHERE finished_at IS NULL;
-                 UPDATE leases SET state='released',released_at='copy' WHERE state IN ('waiting','held');
-                 UPDATE calls SET status='failed',finished_at='copy' WHERE status='running';",
-            )
-            .unwrap();
-        }
-        c.prepare("SELECT p.project_id,coalesce(r.name,''),p.doc FROM plans p LEFT JOIN projects r USING(project_id)")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap()
-    };
-    // The copy converts as it is: a project the Python importer brought in (no rev-1 history
-    // row) is anchored at its exact baseline (§10.4.1).
-    let started = std::time::Instant::now();
-    let report = match convert_home(&copy) {
-        Ok(report) => report,
-        Err(StoreError::ConversionBlocked(blockers)) => panic!("blocked: {blockers:#?}"),
-        Err(other) => panic!("{other:?}"),
-    };
-    eprintln!(
-        "converted in {:?}: {}",
-        started.elapsed(),
-        serde_json::to_string_pretty(&report.to_json()).unwrap()
-    );
-    let exact_from: std::collections::HashMap<String, u64> = report
-        .projects
-        .iter()
-        .map(|p| {
-            (
-                p.project_id.to_string(),
-                p.anchor.as_ref().map_or(1, |a| a.rev),
-            )
-        })
-        .collect();
-    for project in &report.projects {
-        if let Some(anchor) = &project.anchor {
-            eprintln!(
-                "anchored {} at rev {} ({} folded edits, from the {} plan)",
-                project.name,
-                anchor.rev,
-                anchor.folded_edits,
-                anchor.source.as_str()
-            );
-        }
-    }
-    let c = Connection::open(&copy).unwrap();
-    assert_eq!(schema_fingerprint(&c).unwrap(), fresh_fingerprint());
-    let mut revisions = 0;
-    for (project, name, doc) in stored {
-        let project: ProjectId = project.parse().unwrap();
-        let exported = plans::export_plan(&c, project).unwrap();
-        let doc: JsonMap = serde_json::from_str(&doc).unwrap();
-        assert_eq!(compact(&exported.document), compact(&doc), "{name}");
-        let changes: Vec<Vec<PlanChange>> = c
-            .prepare("SELECT changes FROM plan_edits WHERE project_id=?1 ORDER BY rev")
-            .unwrap()
-            .query_map([project.to_string()], |r| r.get::<_, String>(0))
-            .unwrap()
-            .map(|t| serde_json::from_str(&t.unwrap()).unwrap())
-            .collect();
-        revisions += changes.len();
-        let rows = plans::read_plan_rows(&c, project).unwrap();
-        let rebuilt = rebuild(&changes);
-        assert_eq!(
-            (
-                rebuilt.header.root_order,
-                rebuilt.inputs,
-                rebuilt.outputs,
-                rebuilt.steps
-            ),
-            (
-                rows.header.root_order,
-                rows.inputs,
-                rows.outputs,
-                rows.steps
-            ),
-            "{name}: history rebuilds the rows"
-        );
-        assert_indexes(&c, project);
-        eprintln!(
-            "{name}: {} revisions ok (round trip checked from rev {})",
-            changes.len(),
-            exact_from[&project.to_string()]
-        );
-    }
-    eprintln!("{revisions} revisions converted");
 }

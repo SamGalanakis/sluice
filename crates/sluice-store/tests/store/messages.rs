@@ -1,5 +1,4 @@
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use crate::home;
 use home::ScratchHome;
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -156,118 +155,6 @@ fn answer(project: ProjectId, id: MessageId, value: Value) -> Post {
     })
 }
 
-#[tokio::test]
-async fn reply_to_log_seq_lists_only_callers_oldest_five_open_questions() {
-    let f = Fixture::new().await;
-    let run = f.run("work", 0, 1, None).await;
-    let answered = f.post(asking(f.project, "Already answered")).await.unwrap();
-    f.post(reply(f.project, answered.id, "Done")).await.unwrap();
-    let closed = f.post(asking(f.project, "Already closed")).await.unwrap();
-    f.post(reply(f.project, closed.id, "").answer(MessageAnswer {
-        action: "close".into(),
-        params: None,
-        values: None,
-    }))
-    .await
-    .unwrap();
-    f.post(asking(f.project, "For another caller").to("work"))
-        .await
-        .unwrap();
-    f.post(draft(f.project, "Just a note")).await.unwrap();
-    let mut questions = Vec::new();
-    for n in 0..6 {
-        questions.push(
-            f.post(
-                asking(f.project, &format!("Question {n}\nMore context"))
-                    .speaker(Speaker::Run(run)),
-            )
-            .await
-            .unwrap(),
-        );
-    }
-    let p = f.project;
-    let record = f
-        .writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            tx.append_record(
-                Some(p),
-                Event::Call {
-                    call: RunId::new(),
-                    name: "test.call".into(),
-                    status: StepStatus::Succeeded,
-                    inputs: None,
-                    outputs: None,
-                    error: None,
-                    direct: true,
-                    author: None,
-                },
-            )
-        })
-        .await
-        .unwrap();
-    let before = f.count("messages").await;
-    let error = f
-        .post(reply(p, MessageId(record.seq.0), "Answer"))
-        .await
-        .unwrap_err();
-    let choices = questions
-        .iter()
-        .take(5)
-        .map(|q| format!("#{} work: {}", q.id.0, q.body.lines().next().unwrap()))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let expected = format!(
-        "{} is a log seq (a call record), not a message. A message's id is the # number on its line. Open questions to you:\n{choices}",
-        record.seq.0
-    );
-    assert!(
-        matches!(error, PublicError::Invalid { ref message, ref errors }
-        if message == &expected && errors == std::slice::from_ref(&expected)),
-        "{error:?}"
-    );
-    assert_eq!(f.count("messages").await, before);
-    for q in &questions {
-        assert_eq!(f.question(q.id).await.state, QuestionState::Open);
-    }
-    let posted = f.post(reply(p, questions[0].id, "Answer")).await.unwrap();
-    assert_eq!(posted.to_message, Some(questions[0].id));
-    assert_eq!(
-        f.question(questions[0].id).await.state,
-        QuestionState::Answered
-    );
-}
-
-#[tokio::test]
-async fn reply_to_missing_id_keeps_plain_missing_message() {
-    let f = Fixture::new().await;
-    let error = f
-        .post(reply(f.project, MessageId(i64::MAX), "Answer"))
-        .await
-        .unwrap_err();
-    assert!(matches!(error, PublicError::NotFound { message }
-        if message == format!("no message {}", i64::MAX)));
-}
-
-#[tokio::test]
-async fn reply_to_another_projects_message_names_the_project() {
-    let f = Fixture::new().await;
-    let other = ProjectId::new();
-    f.writer.write(RetrySafety::NonIdempotent, move |tx| {
-        tx.sql().execute("INSERT INTO projects(project_id,name,created_at) VALUES (?1,'other-project','now')", [other.to_string()])?;
-        tx.changed(Some(other), "project");
-        Ok(())
-    }).await.unwrap();
-    let question = f
-        .post(asking(other, "Other project's question"))
-        .await
-        .unwrap();
-    let error = f
-        .post(reply(f.project, question.id, "Answer"))
-        .await
-        .unwrap_err();
-    assert!(matches!(error, PublicError::Invalid { message, .. }
-        if message == format!("message {} is in project other-project", question.id.0)));
-}
 trait Draft {
     fn to(self, to: &str) -> Self;
     fn speaker(self, speaker: Speaker) -> Self;
@@ -396,60 +283,6 @@ async fn plain_body_and_params_fallback_set_input_and_name_the_answering_author(
 }
 
 #[tokio::test]
-async fn errors_after_the_setter_wrote_still_roll_back_the_whole_transaction() {
-    struct Fault;
-    impl PlanInputSetter for Fault {
-        fn set_input(&self, tx: &mut WriteTransaction<'_>, u: InputAnswer<'_>) -> Result<()> {
-            TestInputs.set_input(tx, u)?;
-            Err(PublicError::Invalid {
-                message: "fault after write".into(),
-                errors: vec![],
-            }
-            .into())
-        }
-    }
-    let f = Fixture::new().await;
-    f.input(json!("int")).await;
-    let q = f.post(asking(f.project, "q").input("n")).await.unwrap();
-    let r = answer(f.project, q.id, json!(4));
-    assert!(
-        f.writer
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                sluice_store::messages::post(tx, r, &Fault)
-            })
-            .await
-            .is_err()
-    );
-    assert_eq!(f.count("records").await, 2);
-    assert_eq!(f.question(q.id).await.state, QuestionState::Open);
-    let rev: i64 = f
-        .reads
-        .snapshot(|c| Ok(c.query_row("SELECT rev FROM plans", [], |r| r.get(0))?))
-        .await
-        .unwrap();
-    assert_eq!(rev, 1);
-}
-
-#[tokio::test]
-async fn simultaneous_ui_answers_set_input_only_once() {
-    let f = Fixture::new().await;
-    f.input(json!("int")).await;
-    let q = f.post(asking(f.project, "q").input("n")).await.unwrap();
-    let (a, b) = tokio::join!(
-        f.post(answer(f.project, q.id, json!(1))),
-        f.post(answer(f.project, q.id, json!(2)))
-    );
-    assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
-    assert_eq!(f.count("messages").await, 2);
-    let rev: i64 = f
-        .reads
-        .snapshot(|c| Ok(c.query_row("SELECT rev FROM plans", [], |r| r.get(0))?))
-        .await
-        .unwrap();
-    assert_eq!(rev, 2);
-}
-
-#[tokio::test]
 async fn rows_and_records_stored_before_the_verbs_read_in_the_current_shape() {
     let f = Fixture::new().await;
     let p = f.project;
@@ -563,4 +396,162 @@ async fn open_questions_of_a_settled_step_can_be_answered_or_closed() {
         }
         _ => panic!("expected the answer"),
     }
+}
+
+#[tokio::test]
+async fn reply_refusals_preserve_questions_and_name_the_correct_message() {
+    let f = Fixture::new().await;
+    {
+        let run = f.run("work", 0, 1, None).await;
+        let answered = f.post(asking(f.project, "Already answered")).await.unwrap();
+        f.post(reply(f.project, answered.id, "Done")).await.unwrap();
+        let closed = f.post(asking(f.project, "Already closed")).await.unwrap();
+        f.post(reply(f.project, closed.id, "").answer(MessageAnswer {
+            action: "close".into(),
+            params: None,
+            values: None,
+        }))
+        .await
+        .unwrap();
+        f.post(asking(f.project, "For another caller").to("work"))
+            .await
+            .unwrap();
+        f.post(draft(f.project, "Just a note")).await.unwrap();
+        let mut questions = Vec::new();
+        for n in 0..6 {
+            questions.push(
+                f.post(
+                    asking(f.project, &format!("Question {n}\nMore context"))
+                        .speaker(Speaker::Run(run)),
+                )
+                .await
+                .unwrap(),
+            );
+        }
+        let p = f.project;
+        let record = f
+            .writer
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                tx.append_record(
+                    Some(p),
+                    Event::Call {
+                        call: RunId::new(),
+                        name: "test.call".into(),
+                        status: StepStatus::Succeeded,
+                        inputs: None,
+                        outputs: None,
+                        error: None,
+                        direct: true,
+                        author: None,
+                    },
+                )
+            })
+            .await
+            .unwrap();
+        let before = f.count("messages").await;
+        let error = f
+            .post(reply(p, MessageId(record.seq.0), "Answer"))
+            .await
+            .unwrap_err();
+        let choices = questions
+            .iter()
+            .take(5)
+            .map(|q| format!("#{} work: {}", q.id.0, q.body.lines().next().unwrap()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let expected = format!(
+            "{} is a log seq (a call record), not a message. A message's id is the # number on its line. Open questions to you:\n{choices}",
+            record.seq.0
+        );
+        assert!(
+            matches!(error, PublicError::Invalid { ref message, ref errors }
+        if message == &expected && errors == std::slice::from_ref(&expected)),
+            "{error:?}"
+        );
+        assert_eq!(f.count("messages").await, before);
+        for q in &questions {
+            assert_eq!(f.question(q.id).await.state, QuestionState::Open);
+        }
+        let posted = f.post(reply(p, questions[0].id, "Answer")).await.unwrap();
+        assert_eq!(posted.to_message, Some(questions[0].id));
+        assert_eq!(
+            f.question(questions[0].id).await.state,
+            QuestionState::Answered
+        );
+    }
+    {
+        let error = f
+            .post(reply(f.project, MessageId(i64::MAX), "Answer"))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, PublicError::NotFound { message }
+        if message == format!("no message {}", i64::MAX)));
+    }
+    {
+        let other = ProjectId::new();
+        f.writer.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute("INSERT INTO projects(project_id,name,created_at) VALUES (?1,'other-project','now')", [other.to_string()])?;
+        tx.changed(Some(other), "project");
+        Ok(())
+    }).await.unwrap();
+        let question = f
+            .post(asking(other, "Other project's question"))
+            .await
+            .unwrap();
+        let error = f
+            .post(reply(f.project, question.id, "Answer"))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, PublicError::Invalid { message, .. }
+        if message == format!("message {} is in project other-project", question.id.0)));
+    }
+    f.writer.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn input_reply_rolls_back_then_accepts_exactly_one_concurrent_answer() {
+    let f = Fixture::new().await;
+    struct Fault;
+    impl PlanInputSetter for Fault {
+        fn set_input(&self, tx: &mut WriteTransaction<'_>, u: InputAnswer<'_>) -> Result<()> {
+            TestInputs.set_input(tx, u)?;
+            Err(PublicError::Invalid {
+                message: "fault after write".into(),
+                errors: vec![],
+            }
+            .into())
+        }
+    }
+    f.input(json!("int")).await;
+    let q = f.post(asking(f.project, "q").input("n")).await.unwrap();
+    let r = answer(f.project, q.id, json!(4));
+    assert!(
+        f.writer
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                sluice_store::messages::post(tx, r, &Fault)
+            })
+            .await
+            .is_err()
+    );
+    assert_eq!(f.count("records").await, 2);
+    assert_eq!(f.question(q.id).await.state, QuestionState::Open);
+    let rev: i64 = f
+        .reads
+        .snapshot(|c| Ok(c.query_row("SELECT rev FROM plans", [], |r| r.get(0))?))
+        .await
+        .unwrap();
+    assert_eq!(rev, 1);
+    let (a, b) = tokio::join!(
+        f.post(answer(f.project, q.id, json!(1))),
+        f.post(answer(f.project, q.id, json!(2)))
+    );
+    assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
+    assert_eq!(f.count("messages").await, 2);
+    let rev: i64 = f
+        .reads
+        .snapshot(|c| Ok(c.query_row("SELECT rev FROM plans", [], |r| r.get(0))?))
+        .await
+        .unwrap();
+    assert_eq!(rev, 2);
+    f.writer.shutdown().await.unwrap();
 }

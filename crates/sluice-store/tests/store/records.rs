@@ -1,5 +1,4 @@
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use crate::home;
 use home::ScratchHome;
 use rusqlite::params;
 use sluice_model::{
@@ -96,135 +95,137 @@ async fn read(r: &ReadPool, p: Option<ProjectId>, filter: RecordFilter) -> Recor
 }
 
 #[tokio::test]
-async fn global_sequence_has_gaps_and_never_reuses_trimmed_committed_ids() {
+async fn log_sequence_retention_and_invalid_reads_preserve_committed_ids() {
     let (_h, w, r, p, q) = setup().await;
-    let a = append(&w, Some(p), 1).await[0];
-    let b = append(&w, None, 1).await[0];
-    let c = append(&w, Some(q), 1).await[0];
-    let d = append(&w, Some(p), 3).await;
-    assert!(a < b && b < c && c < d[0]);
-    assert_eq!(
-        read(&r, None, RecordFilter::default()).await.records[0].seq,
-        b
-    );
-    w.write(RetrySafety::NonIdempotent, move |tx| {
-        trim_to(tx, Some(p), 3, 1)
-    })
-    .await
-    .unwrap();
-    let next = append(&w, Some(p), 1).await[0];
-    assert!(next > d[2]);
-    assert_eq!(
-        read(&r, Some(q), RecordFilter::default()).await.records[0].seq,
-        c
-    );
+    {
+        let a = append(&w, Some(p), 1).await[0];
+        let b = append(&w, None, 1).await[0];
+        let c = append(&w, Some(q), 1).await[0];
+        let d = append(&w, Some(p), 3).await;
+        assert!(a < b && b < c && c < d[0]);
+        assert_eq!(
+            read(&r, None, RecordFilter::default()).await.records[0].seq,
+            b
+        );
+        w.write(RetrySafety::NonIdempotent, move |tx| {
+            trim_to(tx, Some(p), 3, 1)
+        })
+        .await
+        .unwrap();
+        let next = append(&w, Some(p), 1).await[0];
+        assert!(next > d[2]);
+        assert_eq!(
+            read(&r, Some(q), RecordFilter::default()).await.records[0].seq,
+            c
+        );
+    }
+    {
+        append(&w, Some(p), 1).await;
+        for filter in [
+            RecordFilter {
+                kinds: vec!["inbox".into()],
+                ..Default::default()
+            },
+            RecordFilter {
+                limit: 0,
+                ..Default::default()
+            },
+            RecordFilter {
+                since: Some(RecordSeq(-1)),
+                ..Default::default()
+            },
+        ] {
+            assert!(matches!(
+                r.snapshot(move |c| read_records(c, Some(p), &filter)).await,
+                Err(sluice_store::StoreError::Public(
+                    PublicError::BadRequest { .. }
+                ))
+            ));
+        }
+        w.write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE records SET payload_version=3 WHERE project_id=?1",
+                [p.to_string()],
+            )?;
+            tx.changed(Some(p), "log");
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert!(matches!(
+            r.snapshot(move |c| read_records(c, Some(p), &RecordFilter::default()))
+                .await,
+            Err(sluice_store::StoreError::InvalidDatabase(_))
+        ));
+    }
+    w.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn trimming_keeps_messages_calls_results_and_authored_edits_queryable() {
+async fn log_trim_rolls_back_atomically_and_keeps_durable_work_queryable() {
     let (_h, w, r, p, _q) = setup().await;
-    let id=w.write(RetrySafety::NonIdempotent,move |tx|{
+    {
+        let ids = append(&w, Some(p), 11).await;
+        let watch = w.subscribe();
+        let result = w
+            .write(
+                RetrySafety::NonIdempotent,
+                move |tx| -> sluice_store::Result<()> {
+                    trim_to(tx, Some(p), 10, 9)?;
+                    Err(PublicError::Conflict {
+                        message: "rollback".into(),
+                        current_rev: None,
+                    }
+                    .into())
+                },
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(!watch.has_changed().unwrap());
+        let page = read(
+            &r,
+            Some(p),
+            RecordFilter {
+                since: Some(RecordSeq(0)),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(page.records.len(), 11);
+        assert_eq!(page.records[0].seq, ids[0]);
+    }
+    {
+        let id=w.write(RetrySafety::NonIdempotent,move |tx|{
         let m=note_on(tx, p, "t")?;
         tx.sql().execute("INSERT INTO calls(call_id,project_id,fn,status,inputs,outputs,created_at,finished_at) VALUES (?1,?2,'test','succeeded','{}','{}','now','now')",params![RunId::new().to_string(),p.to_string()])?;
         tx.sql().execute("INSERT INTO step_results(result_id,project_id,step_id,generation,declaration,status,outputs,recorded_at,removed_at) VALUES (?1,?2,'removed',1,'{}','succeeded','{}','now','now')",params![ResultId::new().to_string(),p.to_string()])?;
         let edit=tx.append_record(Some(p),Event::PlanEdit {rev:Revision(1),author:"editor".into(),reason:"test".into(),changes:vec![]})?;
         tx.sql().execute("INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,changes) VALUES (?1,1,?2,?3,'editor','test','[]')",params![p.to_string(),edit.seq.0,edit.at])?;Ok(m.id)
     }).await.unwrap();
-    append(&w, Some(p), 12).await;
-    w.write(RetrySafety::NonIdempotent, move |tx| {
-        trim_to(tx, Some(p), 10, 9)
-    })
-    .await
-    .unwrap();
-    let (m, counts) = r
-        .snapshot(move |c| {
-            let counts = ["calls", "step_results", "plan_edits"]
-                .iter()
-                .map(|table| {
-                    c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| {
-                        r.get::<_, i64>(0)
-                    })
-                })
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            Ok((message(c, p, id)?, counts))
+        append(&w, Some(p), 12).await;
+        w.write(RetrySafety::NonIdempotent, move |tx| {
+            trim_to(tx, Some(p), 10, 9)
         })
         .await
         .unwrap();
-    assert_eq!(m.id, id);
-    assert_eq!(counts, vec![1, 1, 1]);
-    let ids = read(&r, Some(p), RecordFilter::default()).await.records;
-    assert!(!ids.iter().any(|r| r.seq.0 == id.0));
-}
-#[tokio::test]
-async fn trim_rollback_preserves_rows_floor_and_change_notifications() {
-    let (_h, w, r, p, _q) = setup().await;
-    let ids = append(&w, Some(p), 11).await;
-    let watch = w.subscribe();
-    let result = w
-        .write(
-            RetrySafety::NonIdempotent,
-            move |tx| -> sluice_store::Result<()> {
-                trim_to(tx, Some(p), 10, 9)?;
-                Err(PublicError::Conflict {
-                    message: "rollback".into(),
-                    current_rev: None,
-                }
-                .into())
-            },
-        )
-        .await;
-    assert!(result.is_err());
-    assert!(!watch.has_changed().unwrap());
-    let page = read(
-        &r,
-        Some(p),
-        RecordFilter {
-            since: Some(RecordSeq(0)),
-            ..Default::default()
-        },
-    )
-    .await;
-    assert_eq!(page.records.len(), 11);
-    assert_eq!(page.records[0].seq, ids[0]);
-}
-#[tokio::test]
-async fn invalid_filters_and_future_payload_versions_fail_explicitly() {
-    let (_h, w, r, p, _q) = setup().await;
-    append(&w, Some(p), 1).await;
-    for filter in [
-        RecordFilter {
-            kinds: vec!["inbox".into()],
-            ..Default::default()
-        },
-        RecordFilter {
-            limit: 0,
-            ..Default::default()
-        },
-        RecordFilter {
-            since: Some(RecordSeq(-1)),
-            ..Default::default()
-        },
-    ] {
-        assert!(matches!(
-            r.snapshot(move |c| read_records(c, Some(p), &filter)).await,
-            Err(sluice_store::StoreError::Public(
-                PublicError::BadRequest { .. }
-            ))
-        ));
+        let (m, counts) = r
+            .snapshot(move |c| {
+                let counts = ["calls", "step_results", "plan_edits"]
+                    .iter()
+                    .map(|table| {
+                        c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| {
+                            r.get::<_, i64>(0)
+                        })
+                    })
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok((message(c, p, id)?, counts))
+            })
+            .await
+            .unwrap();
+        assert_eq!(m.id, id);
+        assert_eq!(counts, vec![1, 1, 1]);
+        let ids = read(&r, Some(p), RecordFilter::default()).await.records;
+        assert!(!ids.iter().any(|r| r.seq.0 == id.0));
     }
-    w.write(RetrySafety::NonIdempotent, move |tx| {
-        tx.sql().execute(
-            "UPDATE records SET payload_version=3 WHERE project_id=?1",
-            [p.to_string()],
-        )?;
-        tx.changed(Some(p), "log");
-        Ok(())
-    })
-    .await
-    .unwrap();
-    assert!(matches!(
-        r.snapshot(move |c| read_records(c, Some(p), &RecordFilter::default()))
-            .await,
-        Err(sluice_store::StoreError::InvalidDatabase(_))
-    ));
+    w.shutdown().await.unwrap();
 }

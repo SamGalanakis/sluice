@@ -1,6 +1,4 @@
-#[allow(dead_code)]
-#[path = "../../../tests/support/home.rs"]
-mod home;
+use crate::home;
 use home::ScratchHome;
 use serde_json::{Value, json};
 use sluice_model::{
