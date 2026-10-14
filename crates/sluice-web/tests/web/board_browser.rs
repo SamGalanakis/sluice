@@ -98,13 +98,17 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         };
         let scroll = scroll_count(&mut browser);
         assert_eq!(scroll, 1);
+        // with a step open, taking the drawer out ends its step's stream
+        browser.eval("location.hash='#step:beta-build'").unwrap();
+        browser.wait("!!window.sluiceStepController").unwrap();
         for _ in 0..3 {
-            browser.eval("(()=>{window.controller=sluiceStream();const board=document.querySelector('sluice-splitter'),parent=board.parentNode,next=board.nextSibling;board.remove();parent.insertBefore(board,next);window.host=document.querySelector('sluice-drawer');window.drawerParent=host.parentNode;window.after=host.nextSibling;host.remove()})()").unwrap();
+            browser.eval("(()=>{window.controller=window.sluiceStepController;const board=document.querySelector('sluice-splitter'),parent=board.parentNode,next=board.nextSibling;board.remove();parent.insertBefore(board,next);window.host=document.querySelector('sluice-drawer');window.drawerParent=host.parentNode;window.after=host.nextSibling;host.remove()})()").unwrap();
             assert_eq!(browser.eval("controller.signal.aborted").unwrap(), true);
             browser.eval("drawerParent.insertBefore(host,after)").unwrap();
             assert_eq!(listener_counts(&mut browser), expected);
             assert_eq!(scroll_count(&mut browser), scroll);
         }
+        browser.eval("history.replaceState(null,'',location.pathname+location.search);dispatchEvent(new HashChangeEvent('hashchange'))").unwrap();
         browser.eval("window.late=0;document.querySelector('#drawer').focus=()=>late++;history.replaceState(null,'','#step:beta-build');dispatchEvent(new HashChangeEvent('hashchange'));host.remove()").unwrap();
         browser.eval("new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))").unwrap();
         assert_eq!(browser.eval("late").unwrap(), 0);

@@ -47,13 +47,8 @@ rocket("sluice-drawer", {
     const listeners = new AbortController();
     const on = (target, type, fn, options = {}) => target.addEventListener(type, fn, { ...options, signal: listeners.signal });
     mergePatch({ step: "", sver: "" });
-    // the drawer's stream: each call ends the previous one (Datastar's requestCancellation)
-    window.sluiceStream = () => {
-      stream?.abort();
-      stream = new AbortController();
-      return stream;
-    };
-    window.sluiceClose = () => {
+    // closing is going back to the plan's own address, as the browser's Back would
+    const close = () => {
       if (!location.hash.startsWith("#step:")) return;
       history.pushState(null, "", location.pathname + location.search);
       window.dispatchEvent(new HashChangeEvent("hashchange"));
@@ -109,6 +104,8 @@ rocket("sluice-drawer", {
       last = sid;
       if (changed) {
         stream?.abort();
+        // the drawer's stream: a step's ends the one before (Datastar's requestCancellation,
+        // which reads its controller from the page's scope)
         stream = new AbortController();
         window.sluiceStepController = stream;
         // a step opened from another opens on its Overview (a failure leads there): the tab
@@ -150,7 +147,7 @@ rocket("sluice-drawer", {
         if (evt.shiftKey && (document.activeElement === first || document.activeElement === drawer)) { evt.preventDefault(); end?.focus(); }
         else if (!evt.shiftKey && document.activeElement === end) { evt.preventDefault(); first?.focus(); }
       }
-      if (evt.key === "Escape" && location.hash.startsWith("#step:")) window.sluiceClose();
+      if (evt.key === "Escape" && location.hash.startsWith("#step:")) close();
     };
     // `[` and `]` open the step before or after this one in the plan's order as drawn (Needs
     // you, then each row's steps, folded or not): each step once, where it is first linked;
@@ -181,7 +178,7 @@ rocket("sluice-drawer", {
       if (document.querySelector("dialog[open]") || !currentStep() || evt.button !== 0 || !(t instanceof Element)) return;
       if (drawer.contains(t) || t.closest(INTERACTIVE)) return;
       if (getSelection && !getSelection().isCollapsed) return;
-      window.sluiceClose();
+      close();
     };
     const scrolled = (evt) => {
       const pre = evt.target;
@@ -196,7 +193,6 @@ rocket("sluice-drawer", {
       if (pre && pinned) pre.scrollTop = pre.scrollHeight;
     });
     follow.observe(drawer, { childList: true, subtree: true, characterData: true });
-    const close = () => window.sluiceClose();
     on($(".close", drawer), "click", close);
     on($(".scrim", host), "click", close);
     on(document, "click", click);
@@ -217,8 +213,6 @@ rocket("sluice-drawer", {
       clearTimeout(scrollTimer);
       document.documentElement.classList.remove("drawer-open");
       for (const el of inertTargets()) el.inert = false;
-      delete window.sluiceStream;
-      delete window.sluiceClose;
     });
   },
 });

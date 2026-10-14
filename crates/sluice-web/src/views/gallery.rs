@@ -893,6 +893,84 @@ fn step_band_part(prefix: &str) -> Result<TrustedHtml, askama::Error> {
         .replace(" data-dialog=\"", &format!(" data-dialog=\"{prefix}"));
     Ok(TrustedHtml::owned(format!("<div class=\"gal-head\">{html}</div>")))
 }
+/// The day line (`sluice-day`) in its states: a project with a run going, its bar ending at the
+/// now rule that moves with the clock; one whose runs all ended, one needing a look; and a day
+/// with nothing running.
+fn day_lines() -> TrustedHtml {
+    use super::day::{DayData, DayProject, DayRun, DayView};
+    let now = crate::clock::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let (almanac, chores) = (ProjectId::new(), ProjectId::new());
+    let run = |project: ProjectId, n: usize, title: &str, step: &str, ago: u64, took: Option<u64>, outcome: Shown| {
+        let started = now - ago * 60;
+        DayRun {
+            project,
+            run_id: format!("run-{n}"),
+            step: step.into(),
+            unit: title.to_lowercase(),
+            n: 1,
+            item: -1,
+            started,
+            ended: took.map(|t| started + t * 60),
+            outcome: Some(outcome),
+            started_at: super::rfc3339(started),
+            kept: true,
+            title: title.into(),
+        }
+    };
+    let projects = vec![
+        DayProject { id: almanac, name: "almanac".into(), paused: false, archived: false },
+        DayProject { id: chores, name: "chores".into(), paused: false, archived: false },
+    ];
+    let runs = vec![
+        run(almanac, 1, "Terns", "draft", 600, Some(95), Shown::Succeeded),
+        run(almanac, 2, "Terns", "review", 470, Some(140), Shown::Succeeded),
+        run(almanac, 3, "Plovers", "draft", 300, Some(70), Shown::Failed),
+        run(almanac, 4, "Gulls", "draft", 95, None, Shown::Running),
+        run(chores, 5, "Gutters", "check", 820, Some(40), Shown::Succeeded),
+        run(chores, 6, "Boiler", "check", 380, Some(25), Shown::Succeeded),
+    ];
+    let live = DayView::new(
+        DayData { projects: projects.clone(), runs: runs.clone(), last_before: BTreeMap::new() },
+        None,
+        now,
+        0,
+    );
+    let still = DayView::new(
+        DayData {
+            projects: projects[1..].to_vec(),
+            runs: runs.into_iter().filter(|r| r.project == chores).collect(),
+            last_before: BTreeMap::new(),
+        },
+        None,
+        now,
+        0,
+    );
+    TrustedHtml::owned(format!(
+        "<div class=\"gal-stack\">{}{}</div>",
+        live.day_line(),
+        still.day_line()
+    ))
+}
+/// The project page's view switch (`sluice-board` shows the chosen view at once and keeps it
+/// per project): Plan, Both and Board, each the current one.
+fn view_switches() -> TrustedHtml {
+    let bar = |on: usize| {
+        let links: Vec<(String, String, bool)> = ["Plan", "Both", "Board"]
+            .iter()
+            .enumerate()
+            .map(|(i, w)| (format!("?view={}", w.to_lowercase()), (*w).to_owned(), i == on))
+            .collect();
+        ui::switch("View", "view-switch", &links)
+    };
+    TrustedHtml::owned(format!(
+        "<div class=\"gal-stack\">{}{}{}</div>",
+        bar(0),
+        bar(1),
+        bar(2)
+    ))
+}
 /// A project's stats, drawn from invented runs: the `article` recipe's stages with their
 /// median and p90, and a week's units finished a day.
 fn stats_part(prefix: &str) -> TrustedHtml {
@@ -1224,6 +1302,8 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Notice", "An action that was not done, and your words kept.", "`ui::notice`.", both(&|_| Ok(notices()))?);
     add("Keys", "The page's keys, listed in display preferences' Keyboard shortcuts.", "`sluice-keys`.", both(&|_| Ok(keys()))?);
     add("Splitter", "The line between the plan and the board.", "`ui::splitter` (`sluice-splitter`).", both(&|p| Ok(splitters(p)))?);
+    add("Day line", "The day's runs as bars, a row a project, the now rule moving with the clock while something runs.", "`DayView::day_line` in `sluice-day`, which moves its now rule and running bars on `sluice-tick`.", both(&|_| Ok(day_lines()))?);
+    add("Project page", "Plan, Both or Board: the chosen view shown at once and kept per project, the board beside the plan. The step drawer opens over it from any step link; its head is the Step head above.", "The view switch (`ui::switch`) in `sluice-board` (`board.js`); the drawer is `ui::drawer` (`sluice-drawer`, `sluice.js`). Each is one a page and binds the page's address, so the gallery draws their parts, not a second live instance.", both(&|_| Ok(view_switches()))?);
     add("Themes", "Each of the thirty themes the display preferences offer, in its light and dark.", "`data-theme` on the page (the cookie `sluice_theme`); Sluice's tokens in `style.css`, each other family's in `assets/themes/`.", (themes_part(), TrustedHtml::default()));
     add("Components", "Every component, the attributes it reads and what it does.", "Rocket components in `components.js`, light DOM.", (components(), TrustedHtml::default()));
     for part in &mut parts {

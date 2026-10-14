@@ -1,6 +1,6 @@
 ---
 name: sluice dashboard
-description: Synthesis. The National Park Service Unigrid in the logo's palette: a slim navy nav bar over cream paper, the page's name at a reading size and its sentence under it, a twelve-column module grid, what identifies an item behind its ⋯, the channel's blue for what runs, coral only for a question to the owner.
+description: Calm briefing. One set of components in the logo's palette: a slim navy nav bar over cream paper, each page's name in the title style with one sentence under it, cards, wells and rows on hairlines, two weights, what identifies an item behind its ⋯, the channel's blue for what runs, coral only for a question to the owner.
 colors:
   paper: "oklch(0.98 0.017 88)"
   paper-2: "oklch(0.955 0.022 86)"
@@ -49,75 +49,64 @@ colors:
   sand-ink-dark: "oklch(0.84 0.11 80)"
   idle-dark: "oklch(0.7 0.03 262)"
 typography:
-  display:
+  title:
     fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, system-ui, sans-serif"
-    fontSize: "clamp(88px, 10.9cqi, 240px)"
-    fontWeight: 900
-    lineHeight: "0.8"
-    letterSpacing: "-0.04em"
-  display-phone:
+    fontSize: "22px"
+    fontWeight: 650
+    lineHeight: "28px"
+    letterSpacing: "-0.01em"
+  title-phone:
     fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, sans-serif"
-    fontSize: "88px"
-    fontWeight: 900
-    lineHeight: "0.8"
-    letterSpacing: "-0.04em"
+    fontSize: "20px"
+    fontWeight: 650
+    lineHeight: "26px"
   section:
     fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, sans-serif"
-    fontSize: "26px"
-    fontWeight: 850
-    lineHeight: "1"
-    letterSpacing: "-0.03em"
-  question:
+    fontSize: "18px"
+    fontWeight: 600
+    lineHeight: "24px"
+  lead:
     fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, sans-serif"
-    fontSize: "23px"
-    fontWeight: 800
-    lineHeight: "1.18"
-    letterSpacing: "-0.022em"
-  summary:
-    fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, sans-serif"
-    fontSize: "19px"
-    fontWeight: 650
-    lineHeight: "1.3"
-    letterSpacing: "-0.01em"
-  module-title:
-    fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, sans-serif"
-    fontSize: "16px"
-    fontWeight: 750
-    lineHeight: "1.25"
+    fontSize: "17px"
+    fontWeight: 400
+    lineHeight: "24px"
   body:
     fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, sans-serif"
     fontSize: "15px"
     fontWeight: 400
     lineHeight: "22px"
+  strong:
+    fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, sans-serif"
+    fontSize: "15px"
+    fontWeight: 600
+    lineHeight: "22px"
+  small:
+    fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, sans-serif"
+    fontSize: "14px"
+    fontWeight: 400
+    lineHeight: "20px"
   meta:
     fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, sans-serif"
     fontSize: "13px"
     fontWeight: 400
     lineHeight: "18px"
-  cell-time:
-    fontFamily: "Schibsted Grotesk Variable, Schibsted Grotesk, ui-sans-serif, sans-serif"
-    fontSize: "20px"
-    fontWeight: 800
-    lineHeight: "1.05"
   data:
     fontFamily: "JetBrains Mono Variable, JetBrains Mono, ui-monospace, monospace"
     fontSize: "12.5px"
     fontWeight: 400
     lineHeight: "18px"
-  data-large:
-    fontFamily: "JetBrains Mono Variable, JetBrains Mono, ui-monospace, monospace"
-    fontSize: "22px"
-    fontWeight: 600
-    lineHeight: "1.05"
-    letterSpacing: "-0.02em"
 rounded:
-  none: "0"
+  cell: "6px"
+  row: "8px"
+  module: "10px"
+  surface: "14px"
+  control: "999px"
+  chip: "999px"
 spacing:
   hair: "4px"
   xs: "6px"
   sm: "8px"
   md: "12px"
-  gutter: "16px"
   lg: "22px"
   xl: "30px"
   gutter: "clamp(16px, calc(10px + 1.5vw), 64px)"
@@ -135,77 +124,105 @@ components:
     height: "52px"
   page-head:
     textColor: "{colors.ink}"
-    typography: "34px/38px 850"
-  inbox-count:
-    backgroundColor: "{colors.coral}"
-    textColor: "{colors.on-coral}"
-    rounded: "{rounded.none}"
-    height: "20px"
+    typography: "{typography.title}"
   section-head:
     typography: "{typography.section}"
     textColor: "{colors.ink}"
-    padding: "0 0 10px"
-  module:
+  tabs:
+    textColor: "{colors.ink-muted}"
+    rounded: "{rounded.control}"
+    height: "36px"
+  tab-current:
+    backgroundColor: "{colors.paper-2}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.control}"
+  card:
     backgroundColor: "{colors.paper}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.none}"
-  module-ask:
+    rounded: "{rounded.module}"
+    padding: "16px 18px"
+  well:
+    backgroundColor: "{colors.paper-2}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.surface}"
+    padding: "2px 18px"
+  well-ask:
+    backgroundColor: "{colors.paper-2}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.surface}"
+    padding: "16px 18px"
+  well-look:
+    backgroundColor: "{colors.paper-2}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.surface}"
+    padding: "16px 18px"
+  row:
+    textColor: "{colors.ink}"
+    rounded: "{rounded.row}"
+    padding: "10px 12px"
+  message-card:
     backgroundColor: "{colors.paper}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.none}"
-    padding: "16px 0 0"
-  module-look:
-    backgroundColor: "{colors.sand-pale}"
+    rounded: "{rounded.module}"
+    padding: "14px 16px"
+  pill:
+    backgroundColor: "{colors.paper-2}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.none}"
-    padding: "14px 16px 16px"
-  module-margin:
-    backgroundColor: "{colors.sky}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.none}"
-    padding: "16px 14px 20px"
-  cell-done:
-    backgroundColor: "{colors.sky}"
-    textColor: "{colors.ink}"
-    height: "56px"
-  cell-run:
-    backgroundColor: "{colors.run}"
-    textColor: "{colors.on-run}"
-    height: "56px"
-  cell-look:
-    backgroundColor: "{colors.sand}"
-    textColor: "{colors.on-sand}"
-    height: "56px"
+    rounded: "{rounded.chip}"
+    height: "20px"
+  pill-ask:
+    backgroundColor: "{colors.coral}"
+    textColor: "{colors.on-coral}"
+    rounded: "{rounded.chip}"
+    height: "20px"
+  inbox-count:
+    backgroundColor: "{colors.coral}"
+    textColor: "{colors.on-coral}"
+    rounded: "{rounded.chip}"
+    height: "20px"
   button-primary:
     backgroundColor: "{colors.navy}"
     textColor: "{colors.on-navy}"
-    rounded: "{rounded.none}"
-    height: "44px"
-    padding: "0 18px"
+    rounded: "{rounded.control}"
+    height: "32px"
+    padding: "0 14px"
   button:
     backgroundColor: "{colors.paper}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.none}"
-    height: "44px"
-    padding: "0 18px"
-  ask-tag:
-    backgroundColor: "{colors.coral}"
-    textColor: "{colors.on-coral}"
-    rounded: "{rounded.none}"
-    height: "20px"
+    rounded: "{rounded.control}"
+    height: "32px"
+    padding: "0 14px"
+  cell-done:
+    backgroundColor: "{colors.sky}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.cell}"
+    height: "52px"
+  cell-run:
+    backgroundColor: "{colors.run}"
+    textColor: "{colors.on-run}"
+    rounded: "{rounded.cell}"
+    height: "52px"
+  cell-look:
+    backgroundColor: "{colors.sand}"
+    textColor: "{colors.on-sand}"
+    rounded: "{rounded.cell}"
+    height: "52px"
 ---
 
 # Design System: sluice dashboard
 
 ## Overview
 
-**Synthesis.** The dashboard is a park map for work. Its parent is the National Park Service
-Unigrid (Massimo Vignelli, 1977): a heavy black title band carrying the place's name huge, a
-module grid everything sits on, and information set in one grotesque at a few decisive sizes.
-Synthesis keeps the grid and the type and sets them in the logo's palette, with the band cut to
-a slim navy nav bar so the work starts near the top of the screen: the paper is the logo's
-cream, the channel's blue is the one active colour, sky is done, sand needs a look, and coral
-is spent on one thing only, an open question to the owner.
+**Calm briefing.** The dashboard is a briefing for work that runs while the owner is elsewhere.
+Every page is drawn from one set of components (Components, below): a page's head (its name in
+the title style, one sentence or a muted note under it), soft pill tabs, cards and wells on
+hairlines, rows that light on hover, pills for a state, buttons that are pills with the next
+move filled, a thing's status line, message cards, a turn's tool calls in a quiet fold and the
+stage strip. Two weights (400 and 600), a short scale of sizes and six radius tokens carry the
+whole frontend. The palette is the logo's: cream paper under a slim navy nav bar, the
+channel's blue the one active colour, sky done, sand needs a look, and coral spent on one thing
+only, an open question to the owner. A theme changes the colours, the faces and the materials,
+never the components.
 
 The owner opens the dashboard between other work, often on a second screen or a phone, to
 answer one question within seconds: does anything need me, and is the work moving? A plan
@@ -216,9 +233,10 @@ unit, the longest silent first, its last twelve hours as a track). A running ste
 it has run; how long a stage usually takes is the project's Stats page's to say, never a
 row's. A row opens in place to its steps.
 
-The old world (rounded cards on cream, three racing stripes under the nav, Archivo and Public
-Sans, seven themes, a green for success and a plum for paused) is gone; nothing of its look is
-kept.
+The Unigrid look the dashboard had before (a heavy navy rule over every section, heads at 850,
+square corners, counter tiles) is retired, and so are its tokens: `--display-tracking`, the
+`--head-*` set, `--section-rule*`, `--look-rule` and `--ask-rule` are gone from Sluice and every
+theme, with `build.rs`'s display-floor generation.
 
 ## The generic rule
 
@@ -258,9 +276,9 @@ chosen the system's. These are Sluice's (Sluice Light and Sluice Dark); every ot
 - **Paper** (`paper`, cream): the page. `paper-2` is a sunk well and a hover; `paper-raised` a
   menu or the drawer.
 - **Ink** (`ink`) for text, `ink-muted` for meta (4.5:1 on paper and on the wells).
-- **Navy** (`navy`): the heavy rules (a band section's 3px head rule, a stopped module's 2px),
-  the filled button, the selected ring. In the dark it turns cream, so a rule stays the
-  heaviest thing on the paper.
+- **Navy** (`navy`): the filled button and the selected ring. `rule` and `rule-faint` (navy at
+  22% and 11%) are the hairlines that part everything else; no page draws a heavy rule. In the
+  dark navy turns cream, so the filled button stays the strongest thing on the paper.
 - **The nav bar** (`band`, `band-ink`, `band-muted`, `band-rule`, `band-accent`): the logo's navy
   in the light, a deeper navy than the paper in the dark, cream text, sky for what the band
   links to and how long things took.
@@ -297,7 +315,7 @@ one scheme. Sluice Light and Sluice Dark are the brand; beside them the display 
 offer twelve more made from well-loved colour schemes, each adapted to sluice's roles: Solarized
 Light and Dark, Nord Light and Nord, Gruvbox Light and Dark, Catppuccin Latte and Mocha, Rosé
 Pine Dawn and Rosé Pine, Flexoki Light and Dark; and deep themes from classics of American
-design, which also set their faces, rules and materials (the deep tokens, below): Empire Builder,
+design, which also set their faces and materials (the deep tokens, below): Empire Builder,
 Williamsburg, Interstate, Ranger, Park Service, Kodachrome, Fiesta and Road Atlas, each Light and
 Dark. A theme's id is `<family>-light` or
 `<family>-dark` (`views::THEMES`): `data-theme` on `<html>` and the `sluice_theme` cookie,
@@ -324,30 +342,29 @@ system's scheme decides until a theme is picked.
 **Mapping by role, not hue.** A family's block (`[data-theme^="nord-"]`) maps every role as
 `light-dark()` of its light and dark theme, and the theme's suffix sets its `color-scheme`. The
 band is the theme's deepest surface (for a light pair it
-borrows the scheme's darkest base, as Unigrid's band is black); paper and paper-2 its base and
-its next surface; ink its text, ink-muted its comment or subtle text; navy, the heavy rules and
-the filled button, its strongest text colour; run its blue (or its nearest); sky a pale wash
+borrows the scheme's darkest base); paper and paper-2 its base and
+its next surface; ink its text, ink-muted its comment or subtle text; navy, the filled button
+and the hairlines' ink, its strongest text colour; run its blue (or its nearest); sky a pale wash
 of its cyan or green, its glyph the full hue; sand its yellow; and the question its one warm or
 vivid colour no other role uses. Status never rests on colour alone in any theme: every state
 keeps its glyph and its word.
 
-**Held by a test** (`tests/themes.rs`), which reads every theme's tokens from
-the stylesheet, in its own scheme:
-text at 4.5:1 (ink and ink-muted on paper, paper-2, paper-raised, sand-pale and sky; run-ink
-and sand-ink on paper and paper-2; band-ink, band-muted and band-accent on the band; the text on
-running, sand, coral, navy and selection fills), 3:1 for the focus ring on paper, paper-2, sky
-and sand-pale and for status marks (sky-ink on paper and sky, sand-ink on sand-pale, sand-mark
-on sand, idle on paper, band-mark and the coral count on the band), the chart colours 3:1 on
-paper and paper-2, the question colour at least 0.1 apart in Oklab from every other role's and
-every chart colour, running apart from done, and the band no lighter than the paper. For the
-deep tokens it also lays the texture's ink at its alpha over the paper and holds ink and navy
-on that; holds the band edge's top row 3:1 against band-ink and band-mark, an outlined done
-cell's edge 3:1 on the paper and a look cell's on sand; checks every token a family sets is
-known and in its allowed set; works out each theme's head faces against the display face's
-floor; and, in Chromium, draws each theme in place on `/_ui`, a plan and home at 320 to 2560px
-with no sideways scroll, every 44px target still 44px on a phone and no words in a display face
-under 19px, holds Williamsburg's sweeps still and every other theme's moving, and lays the
-picker out in one column at 390px and two at 1440px with no name wrapped.
+**The contrast pairs** every theme's values were chosen to, in its own scheme: text at 4.5:1
+(ink and ink-muted on paper, paper-2, paper-raised, sand-pale and sky; run-ink and sand-ink on
+paper and paper-2; band-ink, band-muted and band-accent on the band; the text on running, sand,
+coral, navy and selection fills), 3:1 for the focus ring on paper, paper-2, sky and sand-pale and
+for status marks (sky-ink on paper and sky, sand-ink on sand-pale, sand-mark on sand, idle on
+paper, band-mark and the coral count on the band), the chart colours 3:1 on paper and paper-2,
+the question colour at least 0.1 apart in Oklab from every other role's and every chart colour,
+running apart from done, and the band no lighter than the paper. The adjusted values below say
+where a published value moved to meet them.
+
+**Held by tests** (`tests/web/themes.rs`, in Chromium): each theme drawn in place on `/_ui`, a
+plan and home at 320 to 2560px with no sideways scroll, every 44px target still 44px on a phone,
+no words in a display face under 19px and every stage cell's two lines whole; Williamsburg's
+sweeps still and every other theme's moving; a page fetching only its own theme's faces; the
+first open keeping the system's scheme once; and the picker in one column at 390px and two at
+1440px with no name wrapped, its keyboard as The frame says.
 
 | Theme | Source and licence | Light | Dark |
 |---|---|---|---|
@@ -414,8 +431,7 @@ primitive, `--p-pullman-green`) / cream; the band a deeper green, #2E2815 / #1D1
 livery's gold #E0B45A as its accent and a 3px gold pinstripe under it; done Glacier Green (sky
 #D3EBE2 / #1F3F37, its ink #00775F / #5FD0B6), drawn as an outline on the paper, not a fill;
 running Big Sky Blue; the look the gold; the question Omaha Orange. Its faces: Libre Franklin
-(display black 900, heads 800 in capitals tracked 0.05em at 0.74 of Sluice's size) and Courier
-Prime for data. An Oxford rule (3px over 1px) over each section, a tighter rhythm (density 0.86,
+black (900) for the titles and Courier Prime for data. A tighter rhythm (density 0.86,
 46px cells), narrow columns (0.448: the study's 56% of Sluice's 0.8) on dotted leader rows in Stats, dotted 2px links, and the
 sweep at a train's steady 2.6s linear. Adjusted from the source: the band deepened from Pullman
 Green #3B331C to #2E2815 so Omaha Orange #BB5800 carries white text (4.66:1) and still reads on
@@ -430,11 +446,9 @@ primitive, `--p-washington-blue`), a deeper #1B2630 band in the dark, with a dou
 CW-405 Damask Gold under it; running CW-625 Prussian Blue #325A7D; done CW-585 Ewing Blue (sky
 #D0E2E0), its mark CW-550 Geddy Verdigris; the look Damask Gold #DDB558, its text CW-265
 Charlton Brown #693D2D; the question CW-300 Tucker Orange #DF745D / #E88A74 with dark text. Its
-faces: Libre Caslon Display at its one weight (400) for the display and the heads, a size up
-(1.08), Libre Caslon Text, its kind lines in italic, and Anonymous Pro for data, a
+faces: Libre Caslon Display at its one weight (400) for the titles, Libre Caslon Text, its kind lines in italic, and Anonymous Pro for data, a
 typewriter-cut mono whose zero is slashed, so 0 and O differ by shape at 12px (the study's
-Cutive Mono told them apart by width alone). A Scotch rule
-(1px over 3px) over each section and a 1px rule over a stopped module, a 5px question rule, laid
+Cutive Mono told them apart by width alone). Laid
 lines in the paper (the ink at 4% every 5px), an airier rhythm (density 1.06, 54px cells), cells
 not reached dotted, Stats' columns at 0.56 (the study's 70% of 0.8) on ruled rows, a 3px focus
 offset and 4px link offset, 1.75px glyphs, and no motion: `--sweep-animation: none`, the still
@@ -451,9 +465,9 @@ green; paper #F6F6F2 / #1C2A24, ink #111614 / #F2F3EF, navy a deeper green #0040
 running Blue 294 #002F6D / #3F7FD6; done a pale guide-green wash, its mark the green; the look
 the warning sign's Yellow 122 #FFD241 with black text, its text Brown 469 #6B3F23; and the
 question the incident-management fluorescent pink. Overpass, the open Highway Gothic, heavy
-(800) and mixed case for the display, heads and text (its middle dot, which Overpass draws with
+(800) and mixed case for the titles and the text (its middle dot, which Overpass draws with
 no advance, comes from the fallback face), and Overpass Mono for data. Rounded corners (modules
-8px, cells and buttons 6px, chips 4px), a 3px rule over a stopped module, look cells in the
+8px, cells and buttons 6px, chips 4px), look cells in the
 warning sign's 2px black border, cells not reached on a 1.5px line, Stats' columns on dashed
 lane lines (square: the study's 4px would round every corner of the stretched SVG's columns), a
 3px focus ring, 2px links, 2.5px glyphs and lane dashes running along a running cell's foot
@@ -466,9 +480,8 @@ Naturalist posters, 1938-41, sampled from the Library of Congress's scans (LCCN 
 aged paper and ink. Night band #1C2232 (`--p-night`, also ink and navy) / #151A26 over geyser
 cream; running the poster sky; done pale aqua #AEC1B6 (sky #D4DFD6 / #34474A); the look Lassen
 gold #DEC070, its text umber #6B563A; the question Lassen's rose. Its faces: Jost (a Futura)
-bold, heads in capitals tracked 0.07em at 0.8, and DM Mono for data. The screen print's
-misregistration: a navy rule with an aqua pass 3px off it (7px room) over each section and an
-offset aqua line under the band; a 3px rule over a stopped module and a 7px question rule; cells
+bold for the titles and DM Mono for data. The screen print's misregistration: an offset aqua
+line under the band; cells
 not reached on a 1.5px line; no shadows; a 3px focus ring; 2px links at 4px; 2.25px glyphs and a
 slow 4.8s ease-in-out sweep. Adjusted from the source: paper #F3EDDD from the sampled cream
 #D7CCB2; running #3F6A82 (5.0:1 under cream) from the sky #48748D, its text #345A70; the rose
@@ -479,13 +492,11 @@ ch. 2.4). Band PMS 5605 #22372C (`--p-uniguide-green`, also the light ink) / #14
 rules and the filled button, PMS 1615 brown #8D4820 (`--p-uniguide-brown`) / a lifted #E2A272;
 paper #F1EEE7 / #1F2A24; idle PMS 405 #696158; running PMS 301 #004A88 / #4F8FCF; done PMS 5753
 olive (sky-ink #5F6639 on #DDE2CC); the look PMS 131 #D08A00; the question PMS 485 red. Its
-faces: Besley, a Clarendon, for the display (800) and heads (700), Signika for text and Red Hat
-Mono for data. The UniGuide's heavy overbar, an 8px rule in the band's green, over each section;
-an 8px question rule and a 3px rule over a stopped module; a 3px brown sill under the band; an
+faces: Besley, a Clarendon, for the titles (800), Signika for text and Red Hat
+Mono for data. A 3px brown sill under the band; an
 open rhythm (density 1.08, 54px cells); buttons 3px round, chips 2px; and a 3.6s sweep. Adjusted
 from the source: the red #E1251D lifted to #F33C30 with dark text (4.55:1; it reads on the band
-at 3.33:1) / #F0574C; the look's text #7A5100 from PMS 131; the heads at 1.06 of Sluice's size
-(the study's 0.95 put Besley under 19px on a phone's step modules and a recipe's block head);
+at 3.33:1) / #F0574C; the look's text #7A5100 from PMS 131;
 the sill starts a pixel under the nav, so its top row is the band's.
 
 **Kodachrome** (`assets/themes/kodachrome.css`), Kodak's trade dress on the Kodachrome carton:
@@ -493,30 +504,24 @@ Kodak Yellow (PMS 1235C, #FFB700) and Kodak Red (PMS 485C, #ED0000) as Kodak pub
 over the carton's dark stripe #282C2F, sampled from a 1961 carton (the primitives
 `--p-kodak-yellow`, `--p-kodak-red`, `--p-box-stripe`). Paper white #FBFAF6 / #1D2023, ink
 #1B1D1F / #F3F1EA; navy and the band the stripe, the dark band #121416; the yellow is the look
-and the band's accent and mark; the question the red. Its faces: Alfa Slab One for the display
-and the heads (400, at Sluice's sizes), IBM Plex Sans Condensed for the text, as on a data
-sheet, and IBM Plex Mono for data. A 4px black rule over each section and a 3px one over a
-stopped module, 2px corners as a perforation's, sprocket holes along the band's foot (a 12px
+and the band's accent and mark; the question the red. Its faces: Alfa Slab One for the titles
+(400), IBM Plex Sans Condensed for the text, as on a data
+sheet, and IBM Plex Mono for data. 2px corners as a perforation's, sprocket holes along the band's foot (a 12px
 edge, the paper showing through 8px in every 24px), narrow columns (0.624: the study's 78% of
 0.8), and the sweep
 stepped, `steps(8)` over 2s, advancing a frame at a time. Adjusted from the source: Kodak
 names no blue, so running is a designed blue #1F5FBF (white on it 6.09:1), its text #1D56AD; the
 yellow, Kodak's identity, is the look colour and not the band, the theme's main compromise;
 the red carries black text (4.6:1) and reads on the band at 3.08:1; the dark question lifted to
-#FF4D3D. Done is a designed pale blue (#DDE8F6 / #24364C, its ink #2E5F8A / #9CC0F0). The
-study's heads at 0.92 would set a recipe's 19px head at 17.5px in a display face, so the heads
-keep Sluice's sizes. Contrast minima: text 4.60 / 5.61, marks 3.08 / 5.23.
+#FF4D3D. Done is a designed pale blue (#DDE8F6 / #24364C, its ink #2E5F8A / #9CC0F0). Contrast minima: text 4.60 / 5.61, marks 3.08 / 5.23.
 
 **Fiesta** (`assets/themes/fiesta.css`), Homer Laughlin's Fiesta ware of 1936, Frederick
 Rhead's concentric rings: Cobalt #13294B, Old Ivory #F2EFDE, Lapis #2B64A1, Turquoise #56B1BD,
 Yellow #DAAC49 and Poppy #F24B21, a collectors' guide's matches from photographs, unofficial
 (each a primitive, `--p-cobalt` and so on). Paper Old Ivory / Cobalt #16294A, ink Cobalt / Old
 Ivory; the band Cobalt, #0D1B33 in the dark, with Turquoise its mark; running Lapis; done a
-Turquoise wash; the look the Yellow; the question Poppy. Its faces: Righteous for the display
-and the heads, Nunito for the text and DM Mono for data (declared once, in `ranger.css`, which
-Ranger shares). Three 2px rings over each section (a
-10px room), 14px modules, 10px cells, buttons and chips at 14px (a chip is round at that, a
-button nearly so: the allowed set stops at 14px), a roomy rhythm (density 1.1, 54px cells),
+Turquoise wash; the look the Yellow; the question Poppy. Its faces: Righteous for the titles, Nunito for the text and DM Mono for data (declared once, in `ranger.css`, which
+Ranger shares). 14px modules, 10px cells, buttons and chips at 14px, a roomy rhythm (density 1.1, 54px cells),
 not-reached cells dashed, rounded columns (6px), a 3px focus ring 3px off, 2px links at 4px,
 2.25 glyph strokes, and a 2.4s sweep with a slight overshoot. Adjusted from the source: Poppy
 keeps its value and takes deep cobalt text #0B1A33 (4.8:1), and reads on the band at 4.0:1;
@@ -530,10 +535,9 @@ blue #2C2C4B, map paper #DBC89B, boundary red #9F402E, map ink #30241E (the prim
 `--p-road-blue`, `--p-map-paper`, `--p-map-ink`). Paper buff #F4EAD2 / road blue #272638, ink the
 map's / cream; navy, the rules and the filled button, the road blue; the band #1E1E36 /
 #1A1A2B with the map paper as its accent; running a lifted road blue #34509A; the question the
-boundary red. Its faces: Old Standard TT, bold for the display and regular for the heads, set
-in spaced capitals (0.14em) as a map's place names; Fira Sans Condensed for the text and Source
-Code Pro for data. A dash-dot boundary line over each section and a dashed rule over a stopped
-module, a dashed centre line under the band, a faint graticule on the paper (a line every 72px
+boundary red. Its faces: Old Standard TT bold for the titles, as
+a map's place names; Fira Sans Condensed for the text and Source
+Code Pro for data. A dashed centre line under the band, a faint graticule on the paper (a line every 72px
 each way, the road ink at 6%), a compact rhythm (density 0.92, 48px cells), not-reached cells
 dotted as an unpaved road, and narrow columns (0.512: the study's 64% of 0.8) on a dotted grid
 in Stats, with a 3.4s
@@ -542,9 +546,7 @@ ease-in-out sweep. Adjusted from the source: a two-ink map, so done (a grey-blue
 paper lifted from the aged #DBC89B to #F4EAD2; the road blue lifted to #34509A for running
 (text on it 6.75:1); the band deepened to #1E1E36 so the boundary red, lifted to #B24C38, reads
 on it (3.08:1) and carries cream text (4.89:1); the dark question #E0745C. Adjusted from the
-study: its heads were bold at 0.72 of Sluice's size, which puts a display face at 13.7 to
-18.7px, so they keep Sluice's sizes, in the regular weight with the tracking eased from 0.16em
-to 0.14em; and its text face, Barlow Semi Condensed, draws I and l, 0 and O alike at 12px, so
+study: its text face, Barlow Semi Condensed, draws I and l, 0 and O alike at 12px, so
 the text is Fira Sans Condensed, whose l has a tail and whose zero is narrower than its O.
 Contrast minima: text 4.89 / 4.95, marks 3.08 / 5.20.
 
@@ -562,11 +564,11 @@ Williamsburg 0.56, Kodachrome 0.624, Road Atlas 0.512; the rest keep 0.8.
 roles, the deep tokens it changes, its faces' `@font-face` rules), plus a
 `[data-theme="<family>-dark"]` rule for any non-colour value that differs by scheme
 (`light-dark()` takes colours only). `build.rs` joins `style.css` and every file under
-`assets/themes/`, by name, into the one stylesheet a page loads (`/static/style.css`,
+`assets/themes/`, by name (and versions the fonts' addresses), into the one stylesheet a page loads (`/static/style.css`,
 `views::STYLESHEET`, what `tests/themes.rs` reads). A family's file comes after Sluice's
 defaults, so what it declares wins and what it leaves out inherits. Primitives (`--p-…`, a
 source's named colours) are readable only inside their own family's block; a lint in the test
-fails on one anywhere else. Last, `build.rs` appends the display face's floor (below).
+fails on one anywhere else.
 
 ### The deep tokens
 
@@ -578,28 +580,16 @@ declared value must be in its allowed set (`tests/themes.rs`).
 
 | Token | Sluice | Allowed | What it sets |
 |---|---|---|---|
-| `--font-display` | Schibsted Grotesk Variable | a stack ending in a generic family | the page's name, a step's, home's project names, a question's title (19px and up), section heads at 19px and up (the floor, below) |
+| `--font-display` | Schibsted Grotesk Variable | a stack ending in a generic family | the titles: a page's name, a step's, a project's on home, a docs topic's (20px and up) |
 | `--font-text` | Schibsted Grotesk Variable | the same | body, modules, tables, controls |
 | `--font-mono` | JetBrains Mono Variable | the same | ids, durations, clock times, data |
-| `--display-weight` | 850 | 400 to 900 | the display face's weight (a question's title 50 lighter, a theme card's name 50 heavier) |
-| `--display-tracking` | -0.025em | -0.05em to 0.1em | its letter spacing (the other display sizes keep their offsets from it) |
-| `--head-weight` | 850 | 400 to 900 | a section head's weight (a recipe's block head 50 lighter) |
-| `--head-tracking` | -0.025em | -0.05em to 0.2em; at least 0.05em in capitals | a section head's letter spacing |
-| `--head-case` | none | none, uppercase | a section head's case (tracked capitals) |
-| `--head-style` | normal | normal, italic | a section head's style |
-| `--head-scale` | 1 | 0.7 to 1.1 | a section head's size against Sluice's (26px, 24px on a phone, 22px a step's module, 18px in a narrow drawer, 30px Settings, 19px a recipe block), to even out cap heights |
-| `--head-face-N` | worked out | never a family's | the face a head drawn at N px times the head scale is set in (the floor, below) |
+| `--display-weight` | 650 | 400 to 900 | the titles' weight |
 | `--kind-style` | normal | normal, italic | a module's kind line (its glyph and word stay upright) |
 | `--prose-numerals` | normal | normal, oldstyle-nums, lining-nums | figures in prose; data figures stay tabular |
-| `--radius-module` | 0px | 0 to 14px | a module, a card, an item, an empty state |
-| `--radius-cell` | 0px | 0 to 14px | a stage cell |
-| `--radius-control` | 0px | 0 to 14px | buttons, the primary moves, the view switch |
-| `--radius-chip` | 0px | 0 to 14px | tags and the Inbox count |
-| `--section-rule-height` | 3px | 1 to 10px | the heavy rule's room over a band section's head and a step's, a unit's, Settings' and the docs' modules |
-| `--section-rule-color` | `navy` | a colour, or transparent | the rule drawn plain in that room (the host's top border) |
-| `--section-rule` | none | none, or gradient layers | anything more, painted in that room from the host's border edge: Oxford, Scotch, rings, dashed, misregistered |
-| `--look-rule` | 2px solid `navy` | 1 to 3px, solid or dashed | a stopped module's rule |
-| `--ask-rule` | 6px | 4 to 8px | a question's coral rule (a message's 2px less) |
+| `--radius-module` | 10px | 0 to 14px | a card, a module, a message card, an empty state; the well (`--radius-surface`, 1.4 times it) and a row (`--radius-row`, 0.8 times it) follow it |
+| `--radius-cell` | 6px | 0 to 14px | a stage cell, a notice, a run file, a field table, a confirmation's fold |
+| `--radius-control` | 999px | 0 to 14px, or 999px (a pill) | buttons, pill tabs, the view switch, a find field |
+| `--radius-chip` | 999px | the same | pills and the Inbox count |
 | `--band-edge-height` | 0px | 0 to 12px | a strip under the band, below the nav, where text never sits |
 | `--band-edge` | none | gradient layers | what the strip draws (a livery stripe, a sill, sprockets, hairlines) |
 | `--band-frame` | none | none, or inset shadows | a sign panel's frame inside the band |
@@ -637,19 +627,16 @@ both keyframes (`tide`, `lane`) set the whole bar, so a moving sweep never shows
 `--sweep-animation: none` (Williamsburg) and reduced motion, in every theme, draw that still
 line; the drawer's slide is never a theme's.
 
-**The display face's floor.** A display face never sets text under 19px. Every head sized by
-`--head-scale` reads its face from `--head-face-N` (N its size in px at scale 1), and `build.rs`
-works each out, for Sluice's scale and every family block that sets its own, after the family
-files: the display face when N times the scale is 19px or more, the text face under that (in
-Kodachrome, Fiesta and Road Atlas the narrow drawer's 18px module heads; in Empire Builder its
-heads at 0.74 but the 26px and 30px ones). The other display sizes are fixed at 19px and up. Coral is never a chart's, a rule's but the question's, or a
-band edge's.
+**The titles' face.** Titles (a page's name, a step's, a project's on home, a docs topic's)
+read `--font-display` at `--display-weight`, and nothing smaller does, so a theme's display face
+never sets words under 19px (a Chromium test holds it in every theme). Coral is never a
+chart's, a rule's but a question's, or a band edge's.
 
 ## Type
 
-Sluice's: one family, **Schibsted Grotesk** (variable, 400 to 900) for display and text, with
-**JetBrains Mono** for ids, durations, clock times and data only. Another theme sets its own
-faces (Themes, the deep tokens); its sizes stay these.
+Sluice's: one family, **Schibsted Grotesk** (variable) for titles and text, with **JetBrains
+Mono** for ids, durations, clock times and data only. Another theme sets its own faces (Themes,
+the deep tokens); its sizes and weights stay these.
 
 **Loading.** Every theme's faces are `@font-face` rules in the one stylesheet, pointing at Sluice's
 own copies of pinned fontsource 5.3.0 files (Sluice's `@fontsource-variable/schibsted-grotesk` and
@@ -663,21 +650,28 @@ face (a local Arial or Courier New with `size-adjust` and ascent and descent ove
 from the face) next in its stack, so the swap to it does not move the page. The picker's swatches
 carry no text, so opening it fetches nothing; `/_ui`'s theme cards set each theme's faces.
 
-- The page's name (`ui::page_head`): 34px/38px, 850, -0.025em (28px on a phone), balanced
-  and wrapping anywhere rather than running off; a step's name the same 34px/38px (23px on a phone, 24px in the drawer, three lines at most
-  there). The summary sentence under it: 17px/24px, 500
-  (15px on a phone), at most 75ch a line; its links (the questions, a recipe) are
-  44px targets on a phone without changing the line. A page's note in its place: 14px in
-  `ink-muted`.
-- A band section's head: 26px, 850, -0.025em (24px on a phone), so the page's name outranks it,
-  and so does nothing in it: home's project names are 26px. A question's title in its module:
-  23px, 800. A module's title: 16px, 750, two lines at most.
-- Body 15/22; meta 13/18 in `ink-muted`; a running cell's time 20px 800.
-- Data: JetBrains Mono 12.5px.
+**Two weights.** `--w-regular` (400) for words and `--w-strong` (600) for names: a title in a
+row, a unit's name in a sentence, the current tab, a count that matters. Titles alone take
+`--display-weight` (650 in Sluice). Nothing is 500, 700, 800 or 850; only the nav band's
+wordmark keeps its own weight.
+
+**The sizes** (tokens on `:root`, `--t-*`), each with its role:
+
+| Token | Size | Role |
+|---|---|---|
+| `--t-title` | 22px/28px (20px/26px on a phone) | a page's name, a step's name (two lines at most, the whole in its tooltip), the title face |
+| (section) | 18px/24px, 600 | a section's head (`ui::SectionHead`), a settings section, a tab panel's head |
+| `--t-lead` | 17px/24px | the latest sentence that leads a step's Now |
+| `--t-body` | 15px/22px | body, a sentence in Needs you, a project's summary on home |
+| `--t-md` | 14px/20px | tabs, a module's body, a quiet link |
+| `--t-sm` | 13px/18px | meta in `ink-muted`, a status line, a message card's head, buttons |
+| `--t-xs` | 12px/16px | a table's column names, an axis |
+| (data) | 12.5px/18px mono | ids, durations, clock times, a tool call's key argument |
+
 - Tabular figures only on numeric data (`time`, durations, counts, `.num`), never page-wide:
   Schibsted's tabular figures widen its punctuation.
 - Long tokens (ids, paths) wrap (`overflow-wrap: anywhere`), so a page never scrolls sideways.
-- No uppercase labels, no kickers above a heading.
+- No uppercase labels, no kickers above a heading, no letter-spacing but the title's -0.01em.
 
 ## The grid
 
@@ -745,13 +739,13 @@ head on the paper under it.
   and the keys (script's alone) are not offered.
 - **The page's head** (`Frame::head`, `ui::page_head` and `ui::page_head_with`): on the paper,
   its crumbs when it is one thing in a tab (a step's way back to its plan and its unit, the unit
-  by its title or name cut to 40, never "Its unit"), its name at 34px with its Details' "⋯"
+  by its title or name cut to 40, never "Its unit"), its name in the title style with its Details' "⋯"
   pinned to the head's right edge, and under it on a plan and on home only the summary
   sentence (`ui::summary_sentence`), one line of large body text where it fits; a page that says
   what it shows has a muted note in its place (`ui::page_head_note`: the Log's records, the
   Day's date and clock, the Functions' counts). No page carries a description blurb.
-- **The row** (`.subnav`): its sections as tabs (Plan, Day, Stats, Messages, Log, Functions, Settings;
-  the current one under a 2px ink bar), a count line (`Frame::meta`), and at the right its tools
+- **The row** (`.subnav`): its sections as pill tabs (`ui::tabs`: Plan, Day, Stats, Messages,
+  Log, Functions, Settings; the current one on `paper-2` at weight 600), a count line (`Frame::meta`), and at the right its tools
   (`Frame::tools`: a find field and the view switch on a plan, the messages' switch on For you,
   Questions and History). A hairline closes it. On a phone the tabs stay one line (all seven fit
   at 390px; a narrower screen scrolls them sideways within themselves) and the tools take a
@@ -763,10 +757,10 @@ The budget: at 1440px the plan's first section starts within 200px of the top (a
 it within 220), about 260px on a phone.
 
 **The view switch** (Plan · Both · Board on a project with a board, Plan · Board below 1280px)
-is a segmented bar of links in the row: the current view filled navy with cream
+is a bar of pill links in the row (`ui::switch`): the current view on `paper-2` at weight 600
 (`aria-current`), the others muted words. A link asks the server for its view (`?view=`, kept
 in the project's `sluice_view_<id>` cookie), so it works without script; with script
-`board.js` shows the view at once and keeps it per project. The messages' switch (For you,
+`sluice-board` shows the view at once and keeps it per project. The messages' switch (For you,
 Questions, History) and the log's presets are the same bar.
 
 ## Details
@@ -800,21 +794,27 @@ before sessions named themselves, is shown as stored, in `ink-muted` at weight 5
 never "the orchestrator" and never rewritten. A unit's owner (`own`) is its `@name` (or "you")
 small in `ink-muted`; an unowned unit says nothing.
 
-## Modules
+## Surfaces
 
-A module is a unit, a question or a step on the grid: an `article` spanning whole columns,
-square, with a rule over it. Its parts: `.mod-k` (its kind's line: a glyph, a word, who and
-when), `.mod-t` (its title), `.mod-meta` (its facts; what identifies it in its Details), a stage strip,
-`.mod-body` (prose at the measure), `.mod-actions` (44px buttons).
+Four surfaces carry every page, each from its radius token and nothing heavier than a hairline:
 
-- **The swell**: the module that needs the owner grows. A question to the owner
-  (`Swell::Ask`) takes six columns under a 6px coral rule, its title at 23px, its question
-  whole with Answer first. A stopped unit (`Swell::Look`) sits on `sand-pale` under a 2px navy
-  rule, with Retry with feedback first. Anything else (`Swell::Plain`) is a row under a
-  hairline. Home, a unit's page and a step's page use them; the plan does not (below, The
-  briefing).
-- **A section's head** (`ui::section_head`): home's, the day's and stats' sections, each under
-  a 3px navy rule, its name at 26px at the left and its count line at the right.
+- **A card** (`.card`, `--radius-module`): a region of its own on the paper, edged by a
+  `rule` hairline: a project on home, a finished unit, a message, a fn, a docs topic.
+- **A well** (`ui::well_open` / `well_close`, `--radius-surface`): the raised second paper
+  (`paper-2`), where rows that belong together stand: Needs you, a step's Now. A well that
+  needs a look has a 3px `sand-mark` edge at its left; one asking the owner a 3px `coral` edge.
+- **A row** (`.row`, `--radius-row`): an item in a list, `paper-2` on hover and while open.
+- **A module** (`ui::module_open`, `.mod` on the grid, `--span` twelfths): a step's or a
+  unit's part on the sheet (Now, Progress, what it waits on, a stopped step, a question). Its
+  parts: `.mod-k` (its kind's line: a glyph, a word, who and when), `.mod-t` (its title, 16px at
+  600), `.mod-meta`, a stage strip, `.mod-body` (prose at the measure), `.mod-actions`. The one
+  that needs the owner swells (`Swell::Ask`, `Swell::Look`): a well with the coral or the sand
+  edge, its title at 18px, its next move first (Answer; Retry with feedback). Anything else
+  (`Swell::Plain`) stands on the paper. The plan draws no modules (The briefing).
+
+A section's head (`ui::SectionHead`, `ui::section_head`) names a region at 18px/600, its count
+muted after it, a note or its one action at the right; no rule over it. Pages never nest a card
+in a card or lift anything but the drawer, a menu and a dialog (`--lift`).
 
 ## Status presentation
 
@@ -924,9 +924,9 @@ It is the unit page's body, what a plan row opens in place, and a step's Runs ta
   row reads exactly as the row's track does; a unit's whole history stays linear everywhere
   else. The labels (data mono, 11.5px) sit at a nice spacing
   of the scaled time, 17% apart at least, each with a hairline down the rows; "now" is a
-  `run-ink` line with its word, which `nav.js` moves with the reader's clock every five seconds
-  and after every patch (`data-now`: the last stretch's start, place and rate), as it does a
-  running bar's end. A bar: 8px, `--chart-radius`; done `sky-ink`, running `run`, a look
+  `run-ink` line with its word, which `sluice-steps` moves on the clock's tick (every five
+  seconds and after every patch; `data-now`: the last stretch's start, place and rate), as it
+  does a running bar's end. A bar: 8px, `--chart-radius`; done `sky-ink`, running `run`, a look
   `sand-ink`, no result `idle`; earlier runs at 35%.
 - **The head**: the columns' names in `ink-muted` 12px, and after "Step" its unit's owner
   (`own`), which a screen reader hears alone; under 560px the head keeps only the owner. The
@@ -966,93 +966,181 @@ static line, the dot is still and nothing turns.
 
 ## Components
 
-**The rule: Rust renders, Rocket behaves.** Every shared part is server-drawn from one place:
-`views::ui` (status, time, count, the module grid and every Synthesis part in `ui::grid`, tabs,
-fold, empty state, confirmation, and every component's host in `ui::rocket`),
-`templates/kit.html` (the field row) and `views::threads::Conversation` (messages);
-`style.css`'s kit sections give them their look, on this file's tokens. A part with behaviour
-is a component: a custom element (`sluice-*`) whose host the server draws around the part, and
-a Rocket component of the same name (Datastar's custom-element API, bundled in
-`datastar-rocket-1.0.4.js`) defined in `assets/components.js` (the board and the drawer in
-`assets/sluice.js`), in light DOM, with typed props (its host's attributes) and a manifest (its
-slots and events). A component only enhances what the server drew, in its `setup`: listeners,
-observers, keyboard handling, and state kept in its host's own attributes, which a stream patch
-leaves as they are (`data-preserve-attr`). It never draws content: a page reads whole before
-its script runs and without it, a patch morphs server HTML into server HTML, and a screen
-reader hears what the server wrote; the only words a component writes are chrome with no
-meaning without script ("Copied"). A control that needs script (`.needs-js`) is hidden until its component is
-defined. A host around a part gives it no box (`display: contents`); a host that is its part
-takes the part's. A page makes a host only through `ui::rocket` and `ui::grid`, and Datastar
-attributes stay outside a host.
+### The practices
 
-**`/_ui`** ("States and parts") is the kit's gallery and its documentation: each part led by
-what the owner sees it as and how it is built, every part and component in every state with
-the invented project's data, light and dark side by side (stacked under 900px, and stacked at
-every width for a part that needs the grid's room), and a table of every component, its props
-and events (a Chromium test holds each to its script's manifest). A new part goes there first.
-Display preferences hold the Keys (their Keyboard shortcuts panel) and end with "States and
-parts" (the gallery) and "Agent docs" (`/docs`).
+The dashboard is a Datastar app: the server draws every page, a stream patches it, and
+JavaScript only behaves. These are the practices it adopts from Datastar's own guidance, each
+with where it is written:
 
-The components:
+- **The backend is the source of truth** ([The Tao of Datastar](https://data-star.dev/guide/the_tao_of_datastar)).
+  Every page is HTML from Rust (Askama templates and `views::ui`), whole without script; state
+  lives in the store and the cookies, never in the browser. A component never draws content.
+- **Patch elements, fat morph** ([Tao: Patch Elements](https://data-star.dev/guide/the_tao_of_datastar),
+  [SSE events: datastar-patch-elements](https://data-star.dev/reference/sse_events)). A page's
+  stream (`streams::page_events`) renders the page again and sends each region that changed
+  (`#id`, mode `outer`, the default), so the morph keeps focus, scroll and open folds; it never
+  sends a fragment built for the patch. A quiet page sends nothing.
+- **CQRS** ([Tao: CQRS](https://data-star.dev/guide/the_tao_of_datastar)). One long-lived read
+  (`data-init="@get(stream)"` on `main`) and short writes (plain `<form>` posts, enhanced to
+  fetch by `components.js`'s one submit delegate) whose effect comes back on the stream.
+- **No optimistic updates** ([Tao: Loading Indicators / Optimistic Updates](https://data-star.dev/guide/the_tao_of_datastar)).
+  A press shows that it is in flight (the button disabled, a status line), and the page shows
+  the result only when the stream patches it.
+- **Signals sparingly** ([Tao: Signals](https://data-star.dev/guide/the_tao_of_datastar),
+  [Attributes: data-signals](https://data-star.dev/reference/attributes)). Only what the
+  stream's server needs from the page: `ver` and `stale` (the version the page holds), `tab`,
+  and the drawer's `step` and `sver`. Everything else a component keeps is its host's own
+  attributes.
+- **Keep what the owner holds through a morph** ([Attributes: data-preserve-attr, data-ignore-morph](https://data-star.dev/reference/attributes)).
+  An open `<details>`, a host's chosen tab or width, a composer's text: `data-preserve-attr`
+  on the element that holds it (`Host::keep`); a component's own chrome `data-ignore-morph`.
+- **Reconnect, and rest while hidden** ([Actions: @get options](https://data-star.dev/reference/actions)).
+  Every stream asks `retry: 'always'` (ten tries, at most 30 s apart) and
+  `requestCancellation` (the drawer's step stream is ended by the next step's). A hidden tab's
+  stream closes (Datastar's default, `openWhenHidden: false`) and reopens on return; meanwhile
+  `nav.js` asks `/title` for the tab's title and favicon alone.
+- **Rocket components in light DOM** ([Rocket](https://data-star.dev/reference/rocket)). A part
+  with behaviour is a custom element whose host the server draws; `rocket(tag, {mode: "light",
+  renderOnPropChange: false, props, manifest, setup})` defines it. It has no `render`: `setup`
+  adds listeners (each removed by its `cleanup`, through one `AbortController`), observers
+  (disconnected) and frames (cancelled), and reads its typed props from the host's attributes.
+  So a host can leave the page and come back (a morph that moves it) with exactly one of each.
 
-- **`sluice-steps`**: the step view (above): a row's click opens its step, the arrows move
-  between rows, the selected row in `selected`.
-- **`sluice-tabs`**: an ARIA tablist over its panels (arrows wrap, Home and End); the choice in
-  `$$tab`, its `current`, and with `url` in `?tab=`; without script every panel stands stacked.
-- **`sluice-fold`**: Show all and Show less over a long text, said only when it is cut, and
-  never over an open question the owner can answer (its last line is usually the ask); or a
-  More fold kept open per project or opened on a wide screen.
-- **`sluice-confirm`**: the confirmation dialog (below).
-- **`sluice-conversation`**, **`sluice-composer`**, **`sluice-answer`**: a conversation (Jump
-  to latest, Mark read), the message box (sends as JSON, keeps its text through a patch) and a
-  question's Answer and Close.
-- **`sluice-menu`**: the project switcher, display preferences, the plan's More and every
-  Details "⋯": a click elsewhere or Escape closes it and gives the focus back, its button says
-  `aria-expanded`; the arrows, Home and End move through it. A sub-menu (`details.sub`: display
-  preferences' Theme and Keyboard shortcuts) opens in the same menu, one level at a time: Enter
-  or → opens its row and the focus goes in; its back control, ← or Backspace returns to the row.
-- **`sluice-copy`**: an id or a SHA in data mono with a copy button.
-- **`sluice-toggle`**: a display setting (the theme, value types) applied at once and kept by
-  `/settings`; the Theme row names the theme the page wears, even after a stream patch drawn
-  before the pick.
-- **`sluice-search`**: the board's search, the functions' find, a form of filters.
-- **`sluice-banner`**: the stream line ("Updates paused. Reconnecting…", "Updates stopped at
-  14:02." with Reconnect) and the build line ("sluice was updated · Reload"); the stream's
-  phase is also `html[data-stream]`, which the nav bar's live line reads.
-- **`sluice-keys`**: `/` finds, `[` and `]` move the drawer through the plan's steps in page
-  order (Needs you, then each row's steps, folded or not), `g` then a letter goes to a page,
-  `?` opens display preferences at Keyboard shortcuts; never while typing or under a dialog.
-- **`sluice-splitter`**, **`sluice-drawer`**: the board's splitter and the step drawer.
+### Rocket components and `ui::` helpers
 
-The page's clock is no component: `nav.js` ticks every `<time>` (`data-since` a two-unit
-duration, `data-ago` "12m ago", `data-clock` a time of day on the reader's own clock, which the
-server writes in UTC and names, "17:49 UTC", so it reads without script), the
-server writing each as it read the clock, and its text is left out of the stream's version,
-so a quiet board sends nothing.
+Every shared part is one of two things:
 
-The parts:
+- **A `ui::` helper**: a Rust function or type in `views::ui` (or `views/ui/*.rs`) that returns
+  HTML, with its look in `style.css`'s kit sections, on the tokens. It has no script.
+- **A Rocket component**: drawn by Rust (its host from `ui::rocket::Host`, its insides from
+  helpers), enhanced by Rocket, listed in `ui::rocket::COMPONENTS` (its tag, its script, its
+  props, its slots and events, which a Chromium test holds to the script's manifest), shown in
+  `/_ui` in every state, and safe through a morph (its state in preserved attributes, its
+  listeners set up once). A control that needs script (`.needs-js`) is hidden until its
+  component is defined. A host around a part gives it no box (`display: contents`); a host that
+  is its part takes the part's. Datastar attributes stay outside a host.
 
-- **Buttons**: square, 44px on a phone. The next move is filled navy with cream (`.primary`);
-  others carry a 1.5px navy line; a delete is the deeper navy (`.danger`); a quiet action is
-  muted words. Hover deepens; the focus ring is 2px in `focus`, 2px off.
-- **Tags** (`ui::tag`): 20px, square, a hairline; `attn` is a sand chip, `live` the blue,
-  `ask` coral ("Awaiting your reply", the only coral tag).
-- **Icons**: Lucide (lucide-static 1.52.0, ISC), the published SVG unmodified in
-  `assets/icons/`, each a `<symbol>` in the page's one sprite and drawn as a `<use>` of it in
-  `currentColor`, `aria-hidden`. A new icon is fetched from Lucide at that version, never
-  drawn; the mark and favicon are the owner's SVGs, served as they are.
-- **Confirmation dialogs**: Cancel, a succeeded step's Retry, Delete project (a single
-  confirm), Clear board, Remove a resource and Close all use one native `<dialog>`, drawn by
-  `ui::Confirm` in a `sluice-confirm`: square, on `paper-raised` with the lift and the scrim,
-  its title naming what it acts on in words (a step by its stage and title, never its id). Focus starts on the
-  keep button, stays in the dialog, Escape closes it and focus returns to the opener. Without
-  script a details fold shows the same form inline.
-- **Live updates**: each page's stream patches only the regions that changed, and a quiet
-  board sends nothing. A patch never resets what the owner holds.
+The helpers (`crates/sluice-web/src/views/`):
+
+| Part | File | What it draws |
+|---|---|---|
+| Page head | `ui/head.rs` (`page_head`, `page_head_with`, `page_head_html`, `page_head_note`) | a page's crumbs, name in the title style, its Details' ⋯, its sentence or muted note |
+| Status line | `ui/head.rs` (`Dot`, `status_line`) | how a thing stands: its dot (live breathing, run, quiet, ask, look, done, idle) and one muted sentence |
+| Section head | `ui/section.rs` (`SectionHead`, `section_head`) | a region's name at 18px/600, its count, a note, one action |
+| Tabs | `ui/tabs.rs` (`Tab`, `tabs_open`/`close`, `panel_open`/`close`, `switch`) | pill tabs over panels; the view switch and the messages' switch as pill links |
+| Buttons | `ui/button.rs` (`Btn`, `submit`, `link`) | Primary (the next move, filled navy), Outlined, Quiet, Danger, Icon (44px, a plain glyph) |
+| Pills | `ui/pill.rs` (`Tone`, `pill`, `pill_link`, `ask_link`) | a fact set apart in its state's tone: plain, muted, run (soft blue), look, quiet (sand), done, ask (coral) |
+| Cards and wells | `ui/card.rs` (`well_open`, `well_close`, `message_card`) | a well (plain, look, ask); a message as a card: who to whom, when, its words, the way to the whole |
+| Tool calls | `ui/calls.rs` (`Call`, `calls`) | a turn's calls in a quiet `<details>`: the tool, its key argument on one line, how long or that it failed |
+| Menus and Details | `ui/menu.rs` (`Details`); `ui.rs` (`fold`) | the ⋯ with what identifies a thing, then its actions; a plain fold |
+| Empty and notice | `ui/empty.rs` (`empty`, `empty_with`, `notice`) | one line where a blank would look broken; a notice of what was not done |
+| The grid | `ui/grid.rs` (`grid_open`, `module_open*`, `column_open`, `Swell`, `stage_strip`, `summary_sentence`, `ValueSet`, `latest_list`, `clock`) | the sheet, modules, the stage strip, the summary sentence, a value by its shape |
+| Status and time | `ui.rs` (`status`, `glyph`, `mark`, `word`, `tries`, `duration`, `ago`, `since`, `at`, `count`, `tally`, `progress`, `bar`) | a state's glyph and word, durations and clock times as `<time>` the clock ticks |
+| Who | `ui.rs` (`Party`, `StepRef`, `party_html`) | a sender or recipient as the identity it is |
+| Fields | `ui.rs` (`head`, `field`, `field_start`, `field_end`); `templates/kit.html` | a form's row: its label, its control, its error |
+| Confirmation | `ui.rs` (`Confirm`) in a `sluice-confirm` | the one native `<dialog>` |
+| Conversation | `threads::Conversation` (`cards`, rows, the composer) | a thread's messages and its box |
+
+The Rocket components (`ui::rocket::COMPONENTS`; the hosts' helpers are in `ui/rocket.rs`):
+
+| Tag | Script | What it enhances |
+|---|---|---|
+| `sluice-tabs` | `components.js` | an ARIA tablist over its panels: arrows wrap, Home and End; the choice in `$$tab`, its `current`, with `url` in `?tab=`; without script every panel stands stacked |
+| `sluice-fold` | `components.js` | Show all and Show less over a long text, said only when it is cut, never over an open question the owner can answer; or a More fold kept open per project or opened on a wide screen |
+| `sluice-confirm` | `components.js` | the confirmation dialog (below) |
+| `sluice-conversation` | `components.js` | a conversation: Jump to latest, Mark read |
+| `sluice-composer` | `components.js` | the message box: sends as JSON, keeps its text through a patch |
+| `sluice-answer` | `components.js` | a question's Answer and Close in place |
+| `sluice-menu` | `components.js` | the project switcher, display preferences, the plan's More and every ⋯: a click elsewhere or Escape closes it and gives the focus back, its button says `aria-expanded`, the arrows, Home and End move through it; a sub-menu (`details.sub`) opens in the same menu, one level at a time |
+| `sluice-copy` | `components.js` | an id or a SHA in data mono with a copy button ("Copied") |
+| `sluice-toggle` | `components.js` | a display setting (the theme, value types) applied at once and kept by `/settings` |
+| `sluice-search` | `components.js` | the board's search, the functions' find, a form of filters |
+| `sluice-banner` | `components.js` | the stream line ("Updates paused. Reconnecting…", "Updates stopped at 14:02." with Reconnect) and the build line ("sluice was updated · Reload"); the stream's phase also as `html[data-stream]` |
+| `sluice-splitter` | `components.js` | the board's splitter: drag, arrows, its width kept |
+| `sluice-keys` | `components.js` | `/` finds, `[` and `]` move the drawer through the plan's steps, `g` then a letter goes to a page, `?` opens Keyboard shortcuts; never while typing or under a dialog |
+| `sluice-steps` | `components.js` | the step view: a row's click opens its step, the arrows move between rows, the selected row in `selected`; its now line and running bars move on the clock's tick |
+| `sluice-day` | `components.js` | the day line: its now rule and running bars move on the clock's tick |
+| `sluice-drawer` | `sluice.js` | the step drawer: `#step:<id>` opens it beside the plan (over it below 1200px, a modal dialog; a sheet on a phone) and streams the step into it |
+| `sluice-board` | `board.js` | a project's page: the view switch at once (kept per project), the board column's height and its "More below" cue, a board Button's say sent in place, a step's new state said once in `#announce` |
+
+**The clock is infrastructure, not a component.** `nav.js` ticks every `<time>` (`data-since`
+a two-unit duration, `data-ago` "12m ago", `data-clock` a time of day on the reader's own clock,
+which the server writes in UTC and names, "17:49 UTC", so it reads without script) every five
+seconds and after a patch, then dispatches `sluice-tick` on `window` with the time; a component
+that draws against now (`sluice-steps`, `sluice-day`) moves its own marks on that event. The
+server writes each `<time>` as it read the clock, and its text is left out of the stream's
+version, so a quiet page sends nothing. `nav.js` also keeps the tab's title and favicon (the
+plan's glance) and a first open's theme.
+
+**`/_ui`** ("States and parts") is the gallery and its documentation: each part led by what the
+owner sees it as and how it is built, every helper and component in every state with the
+invented project's data, light and dark side by side (stacked under 900px, and at every width
+for a part that needs the grid's room), and a table of every component, its props and events.
+A new part goes there first. Its sections: Status, Page head, Step head, Details, Finished
+last, Summary sentence, Module grid, Modules, Section heads, Plan briefing, Stage strip, Stats,
+Step view, Pills, Buttons, Status line, Tool calls, Message cards, Tabs, Cards and wells,
+Fields, Folds, Conversation, Empty states, Confirmation, Menus, Copy, Settings, Search,
+Banners, Notice, Keys, Splitter, Day line, Project page, Themes and the Components table. The
+two page components, `sluice-board` and `sluice-drawer`, are one a page and bind the page's
+address and its streams, so the gallery draws their parts (the view switch in each state; the
+step head that tops the drawer) rather than a second live instance; their live states (beside,
+over, a sheet; each view) are held by the Chromium tests (`board_browser`, `live_path`).
+
+### The audit
+
+Where the frontend departed from the practices, and what was done:
+
+| Departure | Resolution |
+|---|---|
+| `board.js` was a page script: listeners on `document` added at load, never removed, and state in module variables, so a morph that replaced the project page left stale handlers. | It is `rocket("sluice-board")` on a `<sluice-board id="project-board">` host the template draws; every listener goes through one `AbortController`, observers are disconnected and frames cancelled in `cleanup`. In `COMPONENTS`. |
+| `nav.js` drew the day line's now rule and the step view's now line and running bars itself, reaching into components' markup on every tick. | `nav.js` only ticks `<time>` and dispatches `sluice-tick`; the day line is a `sluice-day` component and `sluice-steps` moves its own marks. Both in `COMPONENTS` and `/_ui`. |
+| The drawer published `window.sluiceStream` and `window.sluiceClose`, globals no page used. | Deleted: closing is the drawer's own function. `window.sluiceStepController` stays, because Datastar's `requestCancellation` reads its controller from the page's scope. |
+| The step view's head, Now and messages were drawn ad hoc per page (triple rule, counter tiles, an 850 title). | Built from helpers: `page_head`, `status_line`, `ui::tabs`, `calls`, `message_card`; Cancel and the log moved into the ⋯. |
+| Section heads, pills, buttons and wells each had two or three spellings (`.tag`, `.chip`, inline `font-weight: 850`, square boxes). | One helper each (`SectionHead`, `pill`, `button::submit`/`link`, `well_open`); the duplicates are deleted, and every corner reads a radius token. |
+| `components.js` keeps one `submit` listener on `document` for owner action forms. | Kept, documented: forms move into the shared confirmation dialog and arrive in patches, so the delegate on the document is what keeps one handler for each. It posts and leaves the result to the stream. |
+| `nav.js`'s clock and title. | Kept as infrastructure (above): they belong to every page, not to a part. |
+
+The confirmation dialogs (Cancel, a succeeded step's Retry, Delete project, Clear board, Remove a
+resource, Close all) use one native `<dialog>`, drawn by `ui::Confirm` in a `sluice-confirm`: on
+`paper-raised` on `--radius-surface` with the lift and the scrim, its title naming what it acts
+on in words (a step by its stage and title, never its id). Focus starts on the keep button,
+stays in the dialog, Escape closes it and focus returns to the opener (or, when the opener sat
+in a menu that closed, to that menu's button). Without script a details fold shows the same form
+inline.
+
+**Icons**: Lucide (lucide-static 1.52.0, ISC), the published SVG unmodified in `assets/icons/`,
+each a `<symbol>` in the page's one sprite and drawn as a `<use>` of it in `currentColor`,
+`aria-hidden`. A new icon is fetched from Lucide at that version, never drawn; the mark and
+favicon are the owner's SVGs, served as they are.
 
 ## Pages
 
-The pages compose these parts; each lane that redraws one writes its section here.
+Every page is the frame (the nav bar, display preferences, the banners: `templates/layout.html`,
+`render_framed`) around a page head and the page's own regions, each region a patch target of
+the page's stream. A lane that redraws a page writes its notes here.
+
+### The inventory
+
+| Page | Route | Drawn by | Components and helpers |
+|---|---|---|---|
+| Home | `/` (its stream `/stream`; `/title` the tab title alone) | `views::home` | page head and summary sentence, section heads, For you's asking modules (`sluice-answer`), Today, a card a project, pills, the index table |
+| A project's plan | `/projects/id/<p>` (`?view=plan`, `both`, `board`; `/stream`; posts `/needs`, `/seen`) | `views::board::project_page`, `views::plan`, `views::panel` (the board), `templates/project.html` | `sluice-board`, page head, pill tabs and the view switch, the Needs you well, Finished cards, At work rows with `sluice-steps`, pills, buttons, `sluice-search` (Find), `sluice-splitter`, `sluice-drawer`, `sluice-keys`, `sluice-menu`, `sluice-confirm` |
+| A step | `/projects/id/<p>/steps/<s>` (`/stream`; posts `/actions`), and in the drawer | `views::step`, `templates/step.html`, `step_band.html`, `activity.html` | the step head (page head, status line, stage strip, buttons, the ⋯ with its actions), `sluice-tabs`, Now's well with the tool calls fold, asking and stopped modules, message cards, `sluice-steps` (Runs), field tables, `sluice-fold`, `sluice-confirm`, `sluice-composer` |
+| A unit | `/projects/id/<p>/units/<u>` (`/stream`) | `views::unit_page`, `templates/unit_page.html` | page head, status line, `sluice-steps`, asking and stopped modules, `sluice-answer` |
+| A run's file | `/projects/id/<p>/runs/<r>/files/<name>` | `views::step::run_file_page` | page head, the file on a cell-radius card in data mono |
+| Day | `/day`, `/projects/id/<p>/day` (`/stream`) | `views::day` | page head and note, `sluice-day`, the timetable with its pills and folds |
+| Stats | `/projects/id/<p>/stats` (`/stream`) | `views::stats` | page head and note, the window switch (`ui::switch`), section heads, tables, the throughput chart |
+| For you, Questions, History | `/inbox`, `/questions`, `/history`, and each under `/projects/id/<p>/` (`/stream`; posts `/messages`, `/messages/read`, `/messages/close`, a reply) | `views::inbox`, `views::threads`, `templates/inbox.html`, `history.html`, `conversation.html`, `answer.html` | page head, the messages' switch, asking modules (`sluice-answer`), section heads, cards, `sluice-conversation`, `sluice-confirm` (Close all) |
+| A thread | `/projects/id/<p>/thread?thread=<t>` | `views::inbox`, `templates/thread.html` | page head with Details, a conversation's rows, `sluice-conversation`, `sluice-composer`, `sluice-answer` |
+| Log | `/log`, `/projects/id/<p>/log` (`/stream`) | `views::log`, `templates/log.html` | page head and note, the presets (`ui::switch`), `sluice-search` filters, a section head, the records table, `sluice-copy` |
+| Functions | `/fns` (`?project=`; `/fns/stream`) | `views::home`, `templates/functions.html` | page head and note, `sluice-search`, section heads, a card a fn |
+| Settings | `/projects/id/<p>/settings` (`/stream`; posts its fields, `/board`, `/icon`, `/delete`) | `crate::settings`, `views::project_settings`, `templates/settings.html` | page head, the sections' index, section heads, field rows, switches, the danger well, `sluice-confirm` |
+| States and parts | `/_ui` | `views::gallery`, `templates/gallery.html` | every part and component, light and dark |
+| Agent docs | `/docs`, `/docs/<topic>` | `views::gallery::agent_docs` | page head, a card a topic, the topic at the measure, the index sticky beside it |
+| A page that cannot be drawn | any address a browser asks for that answers 4xx | `views::missing`, `templates/missing.html` | page head and note, the ways on |
+| The frame, on every page | | `templates/layout.html`, `views::prefs` | the nav bar, the project switcher and display preferences (`sluice-menu`, `sluice-toggle`, `sluice-keys`), `sluice-banner` |
+
+### Per page
 
 - **A project's plan** (`/projects/id/<p>`, `views::plan`): a briefing over a roster, on its
   own visual system (The briefing, below). The head: the project's name at 22px/650 with its
@@ -1141,98 +1229,96 @@ The pages compose these parts; each lane that redraws one writes its section her
     finished duration: the blue is for what runs).
   Every section is a patch region, and every item and row one inside it, so a change patches
   the item or row it moved and nothing else; a step whose state moves on is said once to a
-  screen reader. The step drawer opens beside the plan from any step link, on paper under the
-  heavy navy rule, a hairline at its edge, lifted off the plan. **The glance**: the plan's tab
+  screen reader. The step drawer opens beside the plan from any step link, on paper, a hairline at its edge, lifted off the plan. **The glance**: the plan's tab
   title is "(1) ⚠4 · almanac · sluice" (the open questions in brackets, a warning sign and the
   steps needing a look not set aside, never a cross that reads as "close", the name) and its favicon wears a coral dot while a question waits, a sand
   square while a step needs a look (`favicon-ask.svg`, `favicon-look.svg`).
-- **The briefing** (the plan's visual system): radii 14px for the well, 10px for a card or the
-  index, 8px for a row, 999px for a pill; one raised well (Needs you) and nothing else lifted;
+- **The briefing** (the plan's visual system, now the whole frontend's): the well on
+  `--radius-surface`, a card or the index on `--radius-module`, a row on `--radius-row`, a pill
+  on `--radius-chip`; one raised well (Needs you) and nothing else lifted;
   hairlines (`rule`, `rule-faint`) for the rest; two weights, 600 and 400 (the name 650). The
   palette's roles hold: coral only for a question, sand for a look, the blue only for what
-  runs, sky for done. It reads in every theme, light and dark, from the same tokens; the radii
-  are the briefing's own, whatever a theme's `--radius-*`. No line explains how to read it.
-- **A step's page** (`/projects/id/<p>/steps/<s>`): under the row, its head (the gallery's
-  Step head, `StepView::band`): its way back to its plan and its unit, its stage muted before
-  its title at 28px with its Details (its id, unit, recipe, fn, run and tags), its state and how
-  long it has run, its words, then its unit's stage strip (its own
-  stage ringed) and its actions, the next move filled: Retry with feedback (its box folded under
-  it, Retry beside it; on a failure that repeated it leads to the box standing open in why it
-  failed and the bare Retry is quiet), a cancel's quiet Dismiss; a failure's Details end with
-  "Set it aside" under a hairline: Cancel and Cancel and dismiss, each opening its
-  confirmation ("Cancel <title>?"; Cancel and dismiss says Undo brings back the cancel, not
-  the failure). Why it failed reads in order: its headline, the words its run said and its last failed
-  call, then the advice (ink at body size), then, when a failure repeated the run before, the
-  feedback box standing open, so the owner reads why before writing. Its tabs follow. Overview is modules on the sheet: the question
-  to the owner swells first on the coral rule, answered in place; then why it failed on the
-  sand, or Now (its live turn: last words, its calls counted once in the turn's line, by tool
-  as tiles when it used more than one, named exactly as the engine's transcript names them,
-  and its latest calls; a progress field that repeats its latest message is said once, as the
-  message); a question to the owner says it is waiting once, in the band's chip and the coral
-  rule; beside them, as titled modules, what
-  it waits on (or when it starts), what it comes after, its progress and its key output. The
-  columns stand one over the other on a narrow sheet (the drawer, a phone, to 900px of sheet),
-  and at seven and five twelfths from there.
-  Activity is its turns as rows numbered in data mono, the running one on the run rule;
-  Messages the conversation; Inputs and Outputs field tables with where each came from; Runs
-  its unit's step view, its own row ringed, over its runs. In the drawer the same head tops the step a size down,
-  three lines at most.
+  runs, sky for done. It reads in every theme, light and dark, from the same tokens; a theme's
+  `--radius-*` reshape it as they do every page. No line explains how to read it.
+- **A step's page** (`/projects/id/<p>/steps/<s>`): under the row, its head (`StepView::band`,
+  `templates/step_band.html`, the gallery's Step head): its way back to its plan and its unit,
+  then its stage muted before its title in the title style, two lines at most with the whole in
+  its tooltip, and beside it its one ⋯ (its Details: its id, unit, recipe, fn, run and tags;
+  then its actions: Pause or Unpause, Cancel, a failure's Set it aside, its log, Message it),
+  next to the close × in the drawer (a plain 44px icon). Under the title its status line: the
+  live dot and one muted sentence ("Running 6h 34m · heard 2m ago · run 2, after 1 failed";
+  "Failed 1h 42m ago · after 18m"; "N awaiting reply" when its messages wait). Then its words,
+  its unit's stage strip (its own stage ringed) and its moves, the next one filled: Retry with
+  feedback (its box folded under it, Retry beside it; on a failure that repeated it leads to the
+  box standing open and the bare Retry is quiet), a cancel's quiet Dismiss. Why it failed reads
+  in order: its headline, the words its run said and its last failed call, then the advice, then
+  the feedback box when a failure repeated. Its tabs follow as pill tabs (`sluice-tabs`).
+  Overview is modules on the sheet: the question to the owner first in the coral-edged well,
+  answered in place; then why it failed in the sand-edged well, or **Now**: the latest sentence
+  the agent said at lead size (17px), then its calls in a quiet fold (`ui::calls`: "12 calls ·
+  1 failed", opening to a line each, the tool, its key argument and how long it took, the latest
+  first); beside them, as titled modules, what it waits on (or when it starts), what it comes
+  after, its progress and its key output. The columns stand one over the other on a narrow
+  sheet (the drawer, a phone, to 900px of sheet), and at seven and five twelfths from there.
+  Activity is its turns as rows numbered in data mono; Messages its conversation as message
+  cards (who to whom, when, the first words cut with the way to the whole; an answered question
+  whole); Inputs and Outputs field tables with where each came from; Runs its unit's step view,
+  its own row ringed, over its runs. In the drawer the same head tops the step. No counter
+  tiles, no rules between the head's parts.
 - **A unit's page** (`/projects/id/<p>/units/<u>`): under the row, its head: its way back,
   its glyph and title with its Details (its id, recipe and params), how its steps stand, a short
   recipe view on that line, its owner. On the sheet its recipe's view whole when it says more than a line,
   then Steps: its step view across the sheet (The step view), and under it a module for each
-  step that needs the owner, in the view's order: the one asking on the coral rule, answered in
-  place, a stop on the sand with why it stopped, each headed by its stage with its Details.
+  step that needs the owner, in the view's order: the one asking in the coral-edged well, answered in
+  place, a stop in the sand-edged well with why it stopped, each headed by its stage with its Details.
 - **The inbox, Questions and a thread**: the head names the page (a thread its step's title,
   its way back over it and its Details); the messages' switch is in the row. Questions to the
   owner
-  come first as swelled modules on the coral rule, answered in place (Answer and Close 44px; on
+  come first as asking modules (the coral-edged well), answered in place (Answer and Close 44px; on
   a phone a whole-width card), one a row to 900px of sheet, two from there; then those between agents, the ones nobody waits on and the unread notes
   (each its thread's name and project, its notes, then Mark read after them). A thread's page
   keeps its thread name and project in its Details.
   A conversation's messages are rows apart by hairlines, each with its Details (its id, its
-  thread, what it replies to), an open question to the owner on the coral rule with its reply
-  under it, the message box under the navy rule.
-- **Home** (`/`, `views::home`): the projects as a cover and an index. The head: "All
-  projects" and one sentence across them (the questions first, in coral, then what runs and
-  where, then what stopped where), the runner stopped on the sand when it is; what each project
-  finished last is on its own module. On the paper, For you (eight
-  columns: each open question to the owner swollen under the coral rule, its title at 23px,
-  its words, Answer and Close in place, the way to its step; an answered one the line that
-  says so) beside Today (four, on the sky: a project's last day in a line, the way to the
-  timetable); with no question For you is one line and Today a row across. Then Projects: a
-  module a project, as many to a row as fit 460px each, what needs the owner first (a
-  question: the coral swell; something stopped: the sand swell): its name at 46px, its
-  state's glyph and size, its words, its summary sentence, a 9px square a unit (coral asks,
-  sand needs a look, blue runs, an outline waits, sky done), its rows (questions, stopped
-  steps, running steps by title, "running for 1h 10m"), what it finished last by title and the way to its plan and its day. Then the Index, a
-  table of every project's units by band, archived ones muted, its counts 10ch each so on a
-  wide screen they stand together at the right; on a phone it drops Changed and Waiting so it
-  fits without a hidden scroll, and its links and Today's are 44px targets.
+  thread, what it replies to), an open question to the owner in the coral-edged well with its reply
+  under it, the message box under a hairline.
+- **Home** (`/`, `views::home`): the projects as cards and an index. The head: "All projects"
+  and one sentence across them (the questions first, in coral, then what runs and where, then
+  what stopped where), "Runner stopped" on the sand when it is. For you (eight columns: each
+  open question to the owner as an asking module, its title at 18px, its words, Answer and
+  Close in place, the way to its step; an answered one the line that says so) beside Today (four:
+  a project's last day in a line, the way to the day); with no question For you is one line and
+  Today a row across. Then Projects, ordered by what needs the owner: a card a project
+  (`.pm.card`, as many to a row as fit 460px each): its name and icon in the title face at
+  20px/26px, its state's glyph and size, its words muted, its summary sentence at body size, a
+  9px square a unit (coral asks, sand needs a look, blue runs, an outline waits, sky done), its
+  rows (questions, stopped steps, running steps by title, "running for 1h 10m"), what it
+  finished last by title, and the way to its plan and its day. Then the Index, a table of every
+  project's units by band on hairlines, archived ones muted, its counts 10ch each so on a wide
+  screen they stand together at the right; on a phone it drops Changed and Waiting so it fits
+  without a hidden scroll, and its links and Today's are 44px targets.
 - **Day** (`/day`, `/projects/id/<p>/day`, `views::day`): the day as a timetable. The head:
   "Day", its note the date. The day line under the day's sentence: a
   row a project, its name in the first 132px, its runs as 5px
   bars on 7px tracks (sky done, blue running, sand-ink needing a look), the hours along the top
   in data mono, the rule at now in the run blue; quick successes are counted, not drawn. The
-  timetable: a 64px hour column (the hour 22px, its day where it changes, its runs counted),
+  timetable: a 64px hour column (the hour in data mono at 18px/600, its day where it changes, its runs counted),
   then a column a project; each run a line, three columns: its minute in mono (never wrapped),
   its unit's title in ink and its stage muted (two lines at most; its step and run in the
-  link's title), then at the right its glyph and duration (sky-ink check), its word on the sand
-  chip when it needs a look, or "running 43m" on the blue, never wrapped; a line is at most
+  link's title), then at the right its glyph and duration (sky-ink check), its word on a sand pill
+  when it needs a look, or "running 43m" on a soft blue pill, never wrapped; a line is at most
   480px, so its outcome stays by its name on a wide screen. Under 400px of frame the title takes
   a line of its own under the minute and outcome. A busy hour (more than six in a cell) lists
   only its notable runs (not a success, still running, or an hour or longer) and folds the successes behind a muted "+23 more succeeded, 1m to 12m" that opens
   in place; a long list flows into columns as wide as the screen allows; four projects or more stack under each hour below
   1100px of content, every project below 640px. The current hour ends on the now rule and
-  says what runs. `nav.js` keeps the reader's zone in a cookie and moves the rule and the
-  running bars with the clock; the page's version is its runs, so it patches only when they
+  says what runs. `nav.js` keeps the reader's zone in a cookie and `sluice-day` moves the
+  rule and the running bars on the clock's tick; the page's version is its runs, so it patches only when they
   change.
 - **Stats** (`/projects/id/<p>/stats`, `views::stats`): a project's numbers over a window, and
   the one place a stage's usual time is said. The head: "Stats", its note how many runs ended
   and units finished in the window; in the row the window
   switch (24 hours, 7 days, the default, 30 days, All), the view-switch bar of links
-  (`?window=`), so it works without script. On the paper four band sections, each under its
-  3px navy rule: **Durations by stage**, a table a recipe in the project's recipe order (its
+  (`?window=`), so it works without script. On the paper four sections, each under its section head: **Durations by stage**, a table a recipe in the project's recipe order (its
   name, how many units and runs) with a row a stage in the recipe's order: how many of its runs
   succeeded ("Succeeded") and their median, p90 and longest in data mono, then, under "median ·
   p90", the median drawn as a sky-ink bar inside its p90 in pale sky with a sky-ink edge,
@@ -1254,29 +1340,27 @@ The pages compose these parts; each lane that redraws one writes its section her
 - **Log** (`views::log`): the head says "Log" and, as its note, what the page shows ("42
   records on this page; the newest …"). The log is the records whole, so it keeps each record's
   seq and names its step by title with its id after it; under the head the presets as one
-  view-switch bar beside the filters, the note on what is left out, then Records under a
-  band section's head, the table under a 2px navy rule with seq, time and kind in data mono. A
+  view-switch bar beside the filters, the note on what is left out, then Records under its
+  section head, the table under a hairline with seq, time and kind in data mono. A
   message row is its sender and recipient as name links, then its words in plain muted text and
   one small "thread" link after them.
 - **Functions** (`/fns`): the head says "Functions" and counts them in its note; the picker and
   the
-  find on one bar, the groups' index, then each group under a band section's head, its
-  entries on the grid as many to a row as fit 400px, each under a hairline (a broken one under
-  the navy rule), its name in data mono.
+  find on one bar, the groups' index, then each group under its section head, its
+  entries on the grid as many to a row as fit 400px, each under a hairline (a broken one saying its problem first), its name in data mono.
 - **Settings** (`/projects/id/<p>/settings`): the head says "Settings"; how the project stands
   (active, paused or archived; its resources; when done units retire) heads its sections. The
   sections' index stands sticky in a quarter of the width, at most 300px (a scrolling row of
-  tabs on a phone), each section beside it under a band section's head, each field a row (its
-  name, then its form at 78ch); pause and archive are rows with a square switch; Delete sits on
-  the sand under its rule. Details end with Fallback (a select of the project's sessions and
+  tabs on a phone), each section beside it under its section head, each field a row (its
+  name, then its form at 78ch); pause and archive are rows with a square switch; Delete sits in a sand well. Details end with Fallback (a select of the project's sessions and
   "none", applied in place as every field is) and, while any session is registered, Sessions:
   one line, each its `@name` in ink and "seen 2m ago" muted. (`settings.css` is folded into `style.css`.)
 - **History** (`/history`): the third of the message views, its head its name as For you
   and Questions; the threads with the owner, counted in their section's head, a module each on
   the grid, as many to a row as fit
-  360px; one with an open question under the coral rule.
+  360px; one with an open question in the coral-edged well.
 - **A page that cannot be drawn** (`views::missing`): the head says what is missing and, as
-  its note, why; the paper lists the ways on, each a heavy link with its arrow.
+  its note, why; the paper lists the ways on, each a 48px link at 17px/600 with its arrow.
 - **Agent docs** (`/docs`): the head names them; the index a row of topic modules; a topic
   its markdown at the measure in eight columns, every topic listed sticky beside it.
 
@@ -1303,12 +1387,15 @@ region that updates says so politely; reduced motion honoured.
 - Do put what needs the owner first, and let that one module swell.
 - Do show state with the glyph's shape and its word first, colour second.
 - Do keep every page a server-rendered picture that works without JavaScript.
+- Do build a part from `views::ui`; when it behaves, make it a Rocket component in
+  `COMPONENTS`, shown in `/_ui` in every state, its state in preserved attributes.
 
 ### Don't:
 - Don't spend coral on anything but an open question waiting on the owner (and the logo).
 - Don't fill anything blue that is not running.
-- Don't round a corner, draw a card inside a card or add a stripe, but as a theme's deep tokens
-  allow (Themes).
+- Don't draw a corner but from a radius token, a weight but 400 or 600 (a title's aside), a
+  heavy rule, a card inside a card or a stripe (a theme's band edge aside).
+- Don't draw content from script, or keep in the browser what the server should know.
 - Don't name a project's own words in view code; take them from what the project supplies.
 - Don't restyle or redraw the mark; it is the owner's SVG.
 - Don't add a legend; each state says itself.
