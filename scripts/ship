@@ -48,17 +48,46 @@ if args.ref in ('HEAD', branch):
 else:
     # Detached, so a branch already checked out in another worktree (a worker's) can ship too;
     # what ships is the rebased commit pushed to main, not the branch ref.
-    temporary = pathlib.Path(tempfile.mkdtemp(prefix='ship-'))
+    temporary = pathlib.Path(tempfile.gettempdir()) / 'ship-XXXX' if dry else pathlib.Path(tempfile.mkdtemp(prefix='ship-'))
     work = temporary / 'tree'
     command = ['worktree', 'add', '--quiet', '--detach', str(work), args.ref]
     say('$ git ' + ' '.join(command))
     if dry: work = worktree
-    else: git(*command, cwd=worktree)
+
+# The cargo-target-dir shim configures this root; metadata is the authority for each checkout.
+targets_root = pathlib.Path('/workspace/.cargo-targets').resolve()
+def cargo_target(checkout):
+    result = subprocess.run(['cargo', 'metadata', '--format-version', '1', '--no-deps'],
+                            cwd=checkout, capture_output=True, text=True)
+    if result.returncode:
+        raise ValueError('cargo metadata in %s failed: %s' % (checkout, result.stderr.strip()))
+    target = pathlib.Path(json.loads(result.stdout)['target_directory'])
+    if not target.is_absolute(): raise ValueError('cargo metadata returned a relative target: %s' % target)
+    return target.resolve()
 
 def cleanup():
     if temporary is None: return
-    if not dry: git('worktree', 'remove', '--force', str(work), cwd=worktree, check=False)
-    shutil.rmtree(temporary, ignore_errors=True)
+    if dry:
+        say('cleanup: would resolve %s/tree cargo target with cargo metadata --format-version 1 --no-deps '
+            'and remove it only under %s, preserving %s cargo target' % (temporary, targets_root, script_repo))
+        return
+    try:
+        if work.exists():
+            target = cargo_target(work)
+            protected = {cargo_target(script_repo)}
+            if worktree != script_repo: protected.add(cargo_target(worktree))
+            if target == targets_root or not target.is_relative_to(targets_root):
+                raise ValueError('target is not inside %s: %s' % (targets_root, target))
+            if any(target == own or target in own.parents or own in target.parents for own in protected):
+                raise ValueError('target overlaps a repository cargo target: %s' % target)
+            if target.exists():
+                shutil.rmtree(target)
+                say('removed temporary cargo target %s' % target)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        say('refusing cargo target cleanup: %s' % error)
+    finally:
+        git('worktree', 'remove', '--force', str(work), cwd=worktree, check=False)
+        shutil.rmtree(temporary, ignore_errors=True)
 
 DURABILITY_PATHS = (
     'scripts/deploy', 'scripts/build-release', 'scripts/compat-check',
@@ -101,6 +130,7 @@ def refuse_incompatible(commit, home):
              'scripts/deploy --schema-cutover --deadline <time> instead' % (commit, match.group(1), current[0]))
 
 try:
+    if temporary is not None and not dry: git(*command, cwd=worktree)
     say('shipping %s from %s%s' % (args.ref, work, ' (dry run)' if dry else ''))
     refuse_incompatible(args.ref, selected())  # an installation that cannot be deployed to, or an incompatible ref, stops this before main moves
     if dry: say('$ git fetch origin main (would refresh origin/main)')

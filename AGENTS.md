@@ -72,6 +72,10 @@ Never `systemctl restart` a deploy-started transient unit; re-create it with `sy
   recorded result, the coordinator, serve and loop units are active, and the dashboard answers
   200 on `/` and a project page. It ends with one line: `shipped <sha> <subject> · deploy ok ·
   compat N releases ok · adopted M runs`. `--dry-run` prints each step and changes nothing.
+  Cleanup removes a temporary checkout's Cargo target before its worktree, on success or failure.
+  It reads the target from Cargo metadata, permits only targets inside `/workspace/.cargo-targets`
+  and protects the script and invoking checkout's own targets. Shipping the current checkout
+  removes no target; a dry run prints the cleanup without creating a temporary checkout.
 - Gate once. A branch passes `scripts/check` once, on its finished change, and never again
   because main moved. Ship's land check runs on the rebased tree before every push: Clippy over
   the whole workspace (every target, so every test compiles) and the fast suite. If the branch's

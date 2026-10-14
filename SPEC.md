@@ -141,6 +141,13 @@ result, that the three units are active and that the dashboard answers, and prin
 deploy that fails or rolls back fails ship, which says that main is ahead of live: the push has
 already happened.
 
+Shipping another ref uses a temporary checkout. On success or failure, ship reads its Cargo
+`target_directory` with `cargo metadata --format-version 1 --no-deps` and removes that target
+before removing the checkout. It refuses targets outside the shim's configured
+`/workspace/.cargo-targets` root, the root itself, or any target overlapping the script or
+invoking checkout's own Cargo target, and reports removals or refusals. Shipping the current
+checkout removes no target. `--dry-run` prints the cleanup it would perform and removes nothing.
+
 A failure stopping the old services (step 5) leaves the installation fenced and says so. A
 failure after the stop, in steps 6 to 9, rolls back when the previous selection serves the same
 home: deploy stops whatever it started, selects the previous release again unless the selection
