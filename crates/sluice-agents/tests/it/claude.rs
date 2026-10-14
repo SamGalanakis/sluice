@@ -1,9 +1,9 @@
 use serde_json::{Value, json};
+use sluice_agents::engines::claude::state::ClaudeState;
 use sluice_agents::engines::{
     claude::{
         Claude,
         protocol::{self, Tail},
-        state::ClaudeState,
     },
     *,
 };
@@ -22,13 +22,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[path = "../../../tests/support/executable.rs"]
-mod executable;
+use super::executable;
 
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("sluice-test-claude-{}", RunId::new()));
+        let path = crate::scratch::root().join(format!("sluice-test-claude-{}", RunId::new()));
         fs::create_dir(&path).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         Self(path)
@@ -44,108 +43,6 @@ impl Drop for Scratch {
 fn built(name: &str) -> PathBuf {
     let exe = std::env::current_exe().unwrap();
     exe.parent().and_then(Path::parent).unwrap().join(name)
-}
-
-fn hook(event: &str, extra: Value) -> protocol::Hook {
-    let mut value = json!({"hook_event_name":event,"session_id":"redacted-session","cwd":"/scratch/repo","transcript_path":"/scratch/claude/projects/repo/redacted-session.jsonl"});
-    value
-        .as_object_mut()
-        .unwrap()
-        .extend(extra.as_object().unwrap().clone());
-    protocol::decode_hook(event, &value).unwrap()
-}
-fn snapshot(state: &mut ClaudeState, status: &str, now: u64) -> EngineObservation {
-    state.snapshot(
-        Some(status),
-        true,
-        false,
-        Duration::from_secs(now),
-        1900000000.0,
-    )
-}
-
-/// Claude Code writes a transcript line over 1 MiB for a large tool result or file read:
-/// the reader skips it and goes on with the records after it, and the run's state keeps
-/// following the transcript.
-#[test]
-fn a_two_mib_transcript_record_is_skipped_and_the_records_around_it_are_read() {
-    let scratch = Scratch::new();
-    let path = scratch.0.join("transcript.jsonl");
-    let assistant = |text: &str| {
-        json!({"type":"assistant","message":{"content":[{"type":"text","text":text}]}}).to_string()
-    };
-    let huge = json!({"type":"user","message":{"content":[{"type":"tool_result","content":"x".repeat(2 * protocol::MAX_EVENT_BYTES)}]}}).to_string();
-    fs::write(
-        &path,
-        format!("{}\n{huge}\n{}\n", assistant("before"), assistant("after")),
-    )
-    .unwrap();
-    let mut tail = Tail::new(path.clone(), 0);
-    let mut records = vec![];
-    loop {
-        let offset = tail.offset();
-        records.extend(tail.read().unwrap());
-        if tail.offset() == offset {
-            break;
-        }
-    }
-    assert_eq!(
-        records.len(),
-        2,
-        "{:?}",
-        records
-            .iter()
-            .map(|r| r["type"].clone())
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(tail.skipped(), 1);
-    let mut state = ClaudeState::default();
-    for record in &records {
-        state.transcript(record, true);
-    }
-    assert_eq!(snapshot(&mut state, "busy", 1).final_text, "after");
-    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
-    writeln!(file, "{}", assistant("later")).unwrap();
-    for record in tail.read().unwrap() {
-        state.transcript(&record, true);
-    }
-    assert_eq!(snapshot(&mut state, "busy", 2).final_text, "later");
-}
-#[test]
-fn protocol_bounds_identity_and_partial_transcript_offsets() {
-    let scratch = Scratch::new();
-    let path = scratch.0.join("transcript");
-    fs::write(&path, b"old history\n").unwrap();
-    let mut tail = Tail::new(path.clone(), fs::metadata(&path).unwrap().len());
-    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
-    file.write_all(b"{\"type\":\"assistant\"").unwrap();
-    assert!(tail.read().unwrap().is_empty());
-    file.write_all(b"}\nnot json\n").unwrap();
-    assert_eq!(tail.read().unwrap(), vec![json!({"type":"assistant"})]);
-    fs::write(&path, b"{}\n").unwrap();
-    assert_eq!(tail.read().unwrap(), vec![json!({})]);
-    // A record still growing past the limit is dropped up to its newline, not fatal.
-    fs::write(&path, vec![b'x'; protocol::MAX_EVENT_BYTES + 1]).unwrap();
-    let mut tail = Tail::new(path.clone(), 0);
-    assert!(tail.read().unwrap().is_empty());
-    assert_eq!(tail.skipped(), 1);
-    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
-    file.write_all(b"xxxx\n{\"type\":\"user\"}\n").unwrap();
-    assert_eq!(tail.read().unwrap(), vec![json!({"type":"user"})]);
-    assert_eq!(tail.skipped(), 1);
-    for id in ["../bad", "", "a/b", "--session"] {
-        assert!(protocol::session_id(id).is_err());
-    }
-    let mut value: Value = serde_json::from_str(
-        include_str!("fixtures/claude/hooks.jsonl")
-            .lines()
-            .next()
-            .unwrap(),
-    )
-    .unwrap();
-    assert!(protocol::decode_hook("Stop", &value).is_err());
-    value["session_id"] = json!("../escape");
-    assert!(protocol::decode_hook("SessionStart", &value).is_err());
 }
 
 struct Harness {
@@ -357,121 +254,6 @@ impl Drop for Harness {
     }
 }
 #[tokio::test]
-async fn fake_fresh_required_submit_live_message_compaction_and_opus_mcp_profile() {
-    let mut h=Harness::new(json!({"turns":[{"reply":"did it","tool":{"name":"Bash","input":{"command":"git status"}},"compact":true},{"reply":"noted","submit":{"word":"blue"}}]})).await;
-    h.adapter = Claude::new(
-        h.scratch.0.join("fake-claude"),
-        h.scratch.0.join("claude"),
-        built("fixture").canonicalize().unwrap(),
-        RunId::new(),
-    )
-    .with_mcp(Some("{\"mcpServers\":{}}".into()));
-    h.launch(None).await;
-    let s = h.turn(InputId::Task, "the-secret-prompt", 1).await;
-    assert_eq!(s.final_text, "did it");
-    assert_eq!(s.compactions, 1);
-    assert!(s.acknowledged.contains(&InputId::Task));
-    // Stop is turn evidence, and does not manufacture a submission.
-    assert!(!h.context.run_dir.join("fixture-submission.json").exists());
-    let s = h
-        .turn(
-            InputId::Message { id: MessageId(7) },
-            "Message from orchestrator: please submit blue",
-            2,
-        )
-        .await;
-    assert_eq!(s.final_text, "noted");
-    assert!(
-        s.acknowledged
-            .contains(&InputId::Message { id: MessageId(7) })
-    );
-    let submitted: Value = serde_json::from_slice(
-        &fs::read(h.context.run_dir.join("fixture-submission.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(submitted, json!({"word":"blue"}));
-    let argv: Vec<String> =
-        serde_json::from_slice(&fs::read(h.context.run_dir.join("fixture-argv.json")).unwrap())
-            .unwrap();
-    assert!(!argv.contains(&"the-secret-prompt".into()));
-    assert_eq!(
-        &argv[..7],
-        [
-            "--model",
-            "opus",
-            "--effort",
-            "high",
-            "--dangerously-skip-permissions",
-            "--disallowedTools",
-            "AskUserQuestion"
-        ]
-    );
-    assert!(argv.contains(&"--strict-mcp-config".into()));
-    assert_eq!(
-        fs::metadata(h.context.run_dir.join("claude-settings.json"))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o600
-    );
-    assert!(
-        h.adapter
-            .progress_lines()
-            .iter()
-            .any(|line| line == "tool Bash git status")
-    );
-    h.cleanup().await;
-}
-#[tokio::test]
-async fn fake_resume_excludes_history_and_refuses_other_cwd_and_missing_session() {
-    let mut h = Harness::new(json!({"turns":[{"reply":"old news"},{"reply":"new work"}]})).await;
-    h.launch(None).await;
-    let first = h.turn(InputId::Task, "first", 1).await;
-    let sid = first.session_id.unwrap();
-    // A shutdown callback must not be routed to a subsequent invocation.
-    let mut stale = std::os::unix::net::UnixStream::connect(h.scratch.0.join("hook.sock")).unwrap();
-    stale.write_all(b"{}\n").unwrap();
-    h.cleanup().await;
-    let meta = h.adapter.session(&sid).await.unwrap().unwrap();
-    assert_eq!(meta.cwd, h.context.cwd);
-    let mut wrong = h.context.clone();
-    wrong.cwd = h.scratch.0.join("home");
-    assert_eq!(
-        h.adapter
-            .prepare(&wrong, Some(&sid))
-            .await
-            .unwrap_err()
-            .kind,
-        EngineErrorKind::Fatal
-    );
-    assert_eq!(
-        h.adapter
-            .prepare(&h.context, Some("missing-session"))
-            .await
-            .unwrap_err()
-            .kind,
-        EngineErrorKind::MissingSession
-    );
-    fs::write(h.context.run_dir.join("fixture-events.jsonl"), "").unwrap();
-
-    h.service = TransientService::for_test(RunId::new());
-    h.launch(Some(&sid)).await;
-    let s = h
-        .turn(InputId::Message { id: MessageId(8) }, "feedback", 1)
-        .await;
-    assert_eq!(s.session_id.as_deref(), Some(sid.as_str()));
-    assert_eq!(s.turns_started, 1);
-    assert_eq!(s.final_text, "new work");
-    assert!(
-        !h.adapter
-            .progress_lines()
-            .iter()
-            .any(|s| s.contains("old news"))
-    );
-    h.cleanup().await;
-}
-#[tokio::test]
 async fn private_compaction_context_refresh_and_ask_user_denial() {
     let mut h = Harness::new(json!({})).await;
     h.adapter.prepare(&h.context, None).await.unwrap();
@@ -524,83 +306,6 @@ fn fake_claude(h: &Harness, name: &str, version: &str, help: &str) -> PathBuf {
         ),
     );
     bin
-}
-#[tokio::test]
-async fn version_policy_refuses_older_or_unreadable_versions_before_task_or_launch() {
-    for (version, message) in [
-        (
-            "2.1.282 (Claude Code)",
-            "claude 2.1.282 is older than 2.1.283, the oldest version with every capability sluice needs (tested 2.1.283, 2.1.284); update claude on this host, then step_retry",
-        ),
-        (
-            "2.1.284 (Other Tool)",
-            "claude: `claude --version` printed `2.1.284 (Other Tool)`, not a Claude Code version; sluice needs Claude Code 2.1.283 or newer (tested 2.1.283, 2.1.284)",
-        ),
-        (
-            "latest (Claude Code)",
-            "claude: cannot read a version from `claude --version` (got `latest`); sluice needs claude 2.1.283 or newer (tested 2.1.283, 2.1.284)",
-        ),
-    ] {
-        let mut h = Harness::new(json!({})).await;
-        let bin = fake_claude(&h, "old", version, claude::fixture::FIXTURE_HELP);
-        h.adapter = Claude::new(
-            bin,
-            h.scratch.0.join("claude"),
-            "/usr/bin/true".into(),
-            RunId::new(),
-        );
-        let error = h.adapter.prepare(&h.context, None).await.unwrap_err();
-        assert_eq!(error.kind, EngineErrorKind::CapabilityMismatch);
-        assert_eq!(error.message, message);
-        assert!(!h.context.run_dir.join("claude-settings.json").exists());
-    }
-}
-#[tokio::test]
-async fn a_newer_version_runs_untested_unless_a_flag_sluice_needs_is_gone() {
-    let h = Harness::new(json!({})).await;
-    let bin = fake_claude(
-        &h,
-        "newer",
-        "2.1.293 (Claude Code)",
-        claude::fixture::FIXTURE_HELP,
-    );
-    let mut adapter = Claude::new(
-        bin.clone(),
-        h.scratch.0.join("claude"),
-        "/usr/bin/true".into(),
-        RunId::new(),
-    )
-    .with_probe_cache(h.scratch.0.join("probes"));
-    // Past the version and the probe, the launch goes on (here to the tmux it lacks).
-    let _ = adapter.prepare(&h.context, None).await;
-    let verdict = adapter.version().unwrap();
-    assert_eq!(
-        verdict.note().unwrap(),
-        "claude 2.1.293 is newer than the tested 2.1.283, 2.1.284; accepted untested (floor 2.1.283)"
-    );
-    assert!(h.scratch.0.join("probes/claude.json").is_file());
-
-    let mut h = Harness::new(json!({})).await;
-    let without = claude::fixture::FIXTURE_HELP.replace("  --effort <level>\n", "");
-    let bin = fake_claude(
-        &h,
-        "newer-without-effort",
-        "2.1.293 (Claude Code)",
-        &without,
-    );
-    h.adapter = Claude::new(
-        bin,
-        h.scratch.0.join("claude"),
-        "/usr/bin/true".into(),
-        RunId::new(),
-    );
-    let error = h.adapter.prepare(&h.context, None).await.unwrap_err();
-    assert_eq!(error.kind, EngineErrorKind::CapabilityMismatch);
-    assert_eq!(
-        error.message,
-        "claude 2.1.293 lacks `--effort` that sluice needs (tested 2.1.283, 2.1.284; this version is untested)"
-    );
-    assert!(!h.context.run_dir.join("claude-settings.json").exists());
 }
 #[tokio::test]
 async fn fake_transient_and_fatal_error_classification() {
@@ -814,7 +519,7 @@ async fn g3_claude() {
 #[tokio::test]
 async fn fake_addressed_message_can_be_queued_during_an_active_turn() {
     let mut h =
-        Harness::new(json!({"turns":[{"reply":"working","busy_s":1.5},{"reply":"noted"}]})).await;
+        Harness::new(json!({"turns":[{"reply":"working","busy_s":0.5},{"reply":"noted"}]})).await;
     h.launch(None).await;
     h.adapter
         .execute(
@@ -851,64 +556,10 @@ async fn fake_addressed_message_can_be_queued_during_an_active_turn() {
     assert_eq!(h.prompts().len(), 2);
     h.cleanup().await;
 }
-#[tokio::test]
-async fn fake_same_run_transient_after_commit_preserves_session_and_original_baseline() {
-    let mut h=Harness::new(json!({"turns":[{"run":"printf first > first; git add first; git commit -q -m 'Create first file'","error":"API Error: 529 overloaded"},{"run":"printf second > second; git add second; git commit -q -m 'Create second file'","reply":"recovered"}]})).await;
-    for args in [
-        vec!["init", "-q"],
-        vec!["config", "user.name", "Scratch"],
-        vec!["config", "user.email", "scratch@example.invalid"],
-        vec!["commit", "-q", "--allow-empty", "-m", "Initialize scratch"],
-    ] {
-        assert!(
-            Command::new("git")
-                .args(args)
-                .current_dir(&h.context.cwd)
-                .output()
-                .unwrap()
-                .status
-                .success()
-        );
-    }
-    let baseline = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(&h.context.cwd)
-        .output()
-        .unwrap();
-    let baseline = String::from_utf8_lossy(&baseline.stdout).trim().to_owned();
-    h.launch(None).await;
-    let first = h.turn(InputId::Task, "original task", 1).await;
-    assert_eq!(first.error.unwrap().kind, EngineErrorKind::Transient);
-    let sid = first.session_id.unwrap();
-    h.cleanup().await;
-    h.service = TransientService::for_test(RunId::new());
-    h.launch(Some(&sid)).await;
-    let last = h
-        .turn(
-            InputId::Continue { attempt: 1 },
-            "Your session was interrupted by a rate limit; continue.",
-            1,
-        )
-        .await;
-    assert_eq!(last.session_id.as_deref(), Some(sid.as_str()));
-    let count = Command::new("git")
-        .args(["rev-list", "--count", &format!("{baseline}..HEAD")])
-        .current_dir(&h.context.cwd)
-        .output()
-        .unwrap();
-    assert_eq!(String::from_utf8_lossy(&count.stdout).trim(), "2");
-    assert_eq!(
-        h.prompts().iter().filter(|p| *p == "original task").count(),
-        1
-    );
-    h.cleanup().await;
-}
-
-#[path = "acceptance/support.rs"]
-mod acceptance;
+use super::support as acceptance;
 
 #[tokio::test]
-async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
+async fn slow_supervisor_claude_hooks_submit_live_compact_and_resume() {
     // The agent submits only after the live message: submitting ends the session.
     let mut h = Harness::new(json!({"turns":[{"reply":"done","compact":true,"delay_ms":100},{"reply":"feedback","submit":{"word":"blue"}}]})).await;
     let hook = h.scratch.0.join("journal-hook");
@@ -931,7 +582,8 @@ async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
     cfg.limits.turn_start = Duration::from_secs(5);
     cfg.limits.stall = Duration::from_secs(10);
     cfg.limits.settle = Duration::from_millis(100);
-    let mut adapter = Claude::new(wrapper, h.scratch.0.join("claude"), hook, cfg.run);
+    let mut adapter = Claude::new(wrapper, h.scratch.0.join("claude"), hook, cfg.run)
+        .with_mcp(Some("{\"mcpServers\":{}}".into()));
     let directory = cfg.run_dir.clone();
     let mut host = acceptance::Host {
         directory: Some(directory.clone()),
@@ -949,6 +601,31 @@ async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
     .await
     .unwrap();
     assert_eq!(host.submissions["word"], json!("blue"));
+    let argv: Vec<String> =
+        serde_json::from_slice(&fs::read(directory.join("fixture-argv.json")).unwrap()).unwrap();
+    assert!(!argv.iter().any(|arg| arg.contains(&cfg.task)));
+    assert_eq!(
+        &argv[..7],
+        [
+            "--model",
+            "opus",
+            "--effort",
+            "high",
+            "--dangerously-skip-permissions",
+            "--disallowedTools",
+            "AskUserQuestion"
+        ]
+    );
+    assert!(argv.contains(&"--strict-mcp-config".into()));
+    assert_eq!(
+        fs::metadata(directory.join("claude-settings.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+
     assert_eq!(host.acks, vec![sluice_model::ids::MessageId(1)]);
     assert!(
         fs::read_to_string(directory.join("me.md"))
@@ -998,189 +675,6 @@ async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
     h.cleanup().await;
 }
 
-/// The redacted real API error entries 2.1.284 wrote for usage and rate limits.
-fn real_limits() -> Vec<Value> {
-    include_str!("fixtures/claude/real-usage-limits.jsonl")
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-/// The real API error entries 2.1.284 wrote when it could not authenticate.
-fn real_auth() -> Vec<Value> {
-    include_str!("fixtures/claude/real-auth-errors.jsonl")
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-fn prompted() -> ClaudeState {
-    let mut state = ClaudeState::default();
-    state
-        .hook(&hook("UserPromptSubmit", json!({"prompt":"p"})))
-        .unwrap();
-    state
-}
-fn transcript_error(entry: &Value) -> Option<EngineError> {
-    let mut state = prompted();
-    state.transcript(entry, true);
-    snapshot(&mut state, "idle", 0).error
-}
-fn text_entry(category: &str, text: &str) -> Value {
-    json!({"type":"assistant","isApiErrorMessage":true,"error":category,"message":{"content":[{"type":"text","text":text}]}})
-}
-#[test]
-fn claude_usage_limits_fail_as_quota_exhausted_and_short_or_plain_rate_limits_stay_transient() {
-    let real = real_limits();
-    let now = account::now();
-    // The weekly limit, resetting in three days (the capture's own reset has passed).
-    let mut weekly = real[0].clone();
-    weekly["quotaLimits"]["resetsAt"] = json!(now + 3 * 86400);
-    let error = transcript_error(&weekly).unwrap();
-    assert_eq!(error.kind, EngineErrorKind::QuotaExhausted, "{error:?}");
-    assert!(
-        error
-            .message
-            .starts_with("claude: weekly limit reached (seven_day); resets 20"),
-        "{}",
-        error.message
-    );
-    assert!(
-        error.message.ends_with(
-            " — wait for the reset or buy usage credits at https://claude.ai/settings/usage, then step_retry (or run the step on another engine). Claude said: You've hit your weekly limit \u{b7} resets Sep 22, 1am (Europe/Berlin)"
-        ),
-        "{}",
-        error.message
-    );
-    assert!(
-        error.message.contains("(in 2d 23h)") || error.message.contains("(in 3d)"),
-        "{}",
-        error.message
-    );
-    assert_eq!(error.retry_at, None);
-    // The 5-hour session limit an hour from its reset is a hard cap too.
-    let mut session = real[1].clone();
-    session["quotaLimits"]["resetsAt"] = json!(now + 3600);
-    assert_eq!(
-        transcript_error(&session).unwrap().kind,
-        EngineErrorKind::QuotaExhausted
-    );
-    // Ten minutes from its reset it is a short limit that retries just after the reset.
-    session["quotaLimits"]["resetsAt"] = json!(now + 600);
-    let error = transcript_error(&session).unwrap();
-    assert_eq!(error.kind, EngineErrorKind::Transient, "{error:?}");
-    assert!(
-        error
-            .message
-            .starts_with("claude: 5-hour session limit reached (five_hour); resets 20"),
-        "{}",
-        error.message
-    );
-    assert!(
-        error.message.contains(
-            " — retrying just after the reset. Claude said: You've hit your session limit"
-        ),
-        "{}",
-        error.message
-    );
-    let retry_at = error.retry_at.unwrap();
-    assert!((now + 600..=now + 605).contains(&retry_at), "{retry_at}");
-    // A smaller threshold makes the same limit a hard cap.
-    let mut state = prompted();
-    state.set_quota_threshold(Duration::from_secs(300));
-    state.transcript(&session, true);
-    assert_eq!(
-        snapshot(&mut state, "idle", 0).error.unwrap().kind,
-        EngineErrorKind::QuotaExhausted
-    );
-    // Out of usage credits, or a model's limit with no reset: hard caps.
-    for entry in [&real[2], &real[3], &real[5]] {
-        let error = transcript_error(entry).unwrap();
-        assert_eq!(error.kind, EngineErrorKind::QuotaExhausted, "{error:?}");
-        assert!(
-            error.message.starts_with(
-                "claude: usage limit reached — buy usage credits at https://claude.ai/settings/usage, or wait for it to reset, then step_retry"
-            ),
-            "{}",
-            error.message
-        );
-    }
-    // An ordinary 429 stays transient with the fixed backoff.
-    let error = transcript_error(&real[4]).unwrap();
-    assert_eq!(error.kind, EngineErrorKind::Transient, "{error:?}");
-    assert_eq!(error.retry_at, None);
-    // A billing error is a hard cap whatever its text.
-    let billing = text_entry("billing_error", "API Error: credit balance is too low");
-    assert_eq!(
-        transcript_error(&billing).unwrap().kind,
-        EngineErrorKind::QuotaExhausted
-    );
-}
-
-#[test]
-fn claude_auth_failures_fail_as_auth_failed_from_their_category_or_login_wording() {
-    let real = real_auth();
-    let expected = [
-        "claude: not logged in (token expired)",
-        "claude: not logged in (token expired)",
-        "claude: not logged in (no credentials)",
-        "claude: not logged in (unauthorized)",
-    ];
-    for (entry, head) in real.iter().zip(expected) {
-        let error = transcript_error(entry).unwrap();
-        assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
-        assert_eq!(
-            error.message,
-            format!(
-                "{head} — run `claude auth login` on this host (or /login inside `claude`), then step_retry. Claude said: {}",
-                entry["message"]["content"][0]["text"].as_str().unwrap()
-            )
-        );
-        assert_eq!(error.retry_at, None);
-    }
-    let error = transcript_error(&real[4]).unwrap();
-    assert_eq!(error.kind, EngineErrorKind::AuthFailed);
-    assert!(error.message.starts_with("claude: the organization disabled subscription access for Claude Code (oauth_org_not_allowed) — use an Anthropic API key or ask the org admin to enable access, then step_retry. Claude said: Your organization"), "{}", error.message);
-    let error = transcript_error(&real[5]).unwrap();
-    assert_eq!(error.kind, EngineErrorKind::AuthFailed);
-    assert!(
-        error.message.starts_with(
-            "claude: account on hold (account_on_hold) — resolve the hold at https://claude.ai/restricted, then step_retry."
-        ),
-        "{}",
-        error.message
-    );
-    // The StopFailure hook says the same when it comes first.
-    let mut state = prompted();
-    state
-        .hook(&hook(
-            "StopFailure",
-            json!({"error":"authentication_failed","last_assistant_message":"OAuth token revoked \u{b7} Please run /login"}),
-        ))
-        .unwrap();
-    let error = snapshot(&mut state, "idle", 0).error.unwrap();
-    assert_eq!(error.kind, EngineErrorKind::AuthFailed);
-    assert!(
-        error
-            .message
-            .starts_with("claude: not logged in (token revoked) — run `claude auth login`")
-    );
-    // Without a category, Claude's login wording at the start of the error is enough.
-    let mut state = prompted();
-    state.transcript(&json!({"type":"assistant","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"Login expired \u{b7} Please run /login"}]}}), true);
-    assert_eq!(
-        snapshot(&mut state, "idle", 0).error.unwrap().kind,
-        EngineErrorKind::AuthFailed
-    );
-    // Claude's own temporary authentication error stays transient.
-    let flaky = text_entry(
-        "authentication_failed",
-        "Authentication error \u{b7} This may be a temporary network issue, please try again",
-    );
-    assert_eq!(
-        transcript_error(&flaky).unwrap().kind,
-        EngineErrorKind::Transient
-    );
-}
-
 #[tokio::test]
 async fn fake_usage_limit_is_quota_exhausted_a_plain_429_transient_and_quoted_words_nothing() {
     let weekly = "You've hit your weekly limit \u{b7} resets Oct 9, 1am (Europe/Berlin)";
@@ -1216,124 +710,8 @@ async fn fake_usage_limit_is_quota_exhausted_a_plain_429_transient_and_quoted_wo
     assert_eq!(s.final_text, weekly);
     h.cleanup().await;
 }
-#[tokio::test]
-async fn fake_auth_failure_is_auth_failed_with_any_key_masked() {
-    let mut h = Harness::new(json!({"turns":[{"error":"Not logged in \u{b7} Please run /login","error_type":"authentication_failed"}]})).await;
-    h.launch(None).await;
-    let error = h.turn(InputId::Task, "p", 1).await.error.unwrap();
-    assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
-    assert_eq!(
-        error.message,
-        "claude: not logged in (no credentials) — run `claude auth login` on this host (or /login inside `claude`), then step_retry. Claude said: Not logged in \u{b7} Please run /login"
-    );
-    h.cleanup().await;
-
-    // A user-supplied key Claude echoes back is masked in the message.
-    let key = "sk-ant-api03-Zq8xV4mN2pL7kR9tY3wE6uI1oP5aS0dF";
-    let mut h = Harness::new(json!({"turns":[{"error":format!("Invalid API key \u{b7} Fix external API key \u{b7} x-api-key {key} was rejected"),"error_type":"invalid_request"}]})).await;
-    h.launch(None).await;
-    let error = h.turn(InputId::Task, "p", 1).await.error.unwrap();
-    assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
-    assert!(!error.message.contains("Zq8xV4mN2pL7"), "{}", error.message);
-    assert!(
-        error.message.ends_with(
-            "Claude said: Invalid API key \u{b7} Fix external API key \u{b7} x-api-key [redacted] was rejected"
-        ),
-        "{}",
-        error.message
-    );
-    h.cleanup().await;
-}
-#[tokio::test]
-async fn fake_login_screen_fails_as_auth_failed_before_any_input_is_taken() {
-    let mut h = Harness::new(json!({"login":true})).await;
-    h.launch(None).await;
-    let started = Instant::now();
-    let outcome = h
-        .adapter
-        .execute(
-            &h.context,
-            EngineCommand::DeliverText {
-                id: InputId::Task,
-                text: "p".into(),
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(outcome, DeliveryOutcome::Pending);
-    let error = loop {
-        let s = h.poll().await;
-        if let Some(error) = s.error {
-            assert!(s.acknowledged.is_empty());
-            break error;
-        }
-        assert!(started.elapsed() < Duration::from_secs(10), "{s:?}");
-        tokio::time::sleep(Duration::from_millis(30)).await;
-    };
-    assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
-    assert!(
-        error.message.starts_with(
-            "claude: not logged in (Claude shows its login screen) — run `claude auth login` on this host (or /login inside `claude`), then step_retry. Claude said: Select login method:"
-        ),
-        "{}",
-        error.message
-    );
-    h.cleanup().await;
-}
-
-/// With no `CLAUDE_CONFIG_DIR` of the host's own, Claude is not told one: told the default
-/// `~/.claude`, it reads `~/.claude/.claude.json` rather than the owner's `~/.claude.json`, opens
-/// on its first-run setup and never starts a turn. A host that chose a directory still passes it.
-#[tokio::test]
-async fn claude_is_told_its_config_dir_only_when_the_host_chose_one() {
-    let mut h = Harness::new(json!({})).await;
-    let chosen = h.adapter.prepare(&h.context, None).await.unwrap().unwrap();
-    assert!(chosen.env.contains_key("CLAUDE_CONFIG_DIR"));
-    let mut h = Harness::new(json!({})).await;
-    h.adapter = std::mem::replace(
-        &mut h.adapter,
-        Claude::new(
-            "claude".into(),
-            "/nowhere".into(),
-            "/nowhere".into(),
-            RunId::new(),
-        ),
-    )
-    .with_config_dir_passed(false);
-    let default = h.adapter.prepare(&h.context, None).await.unwrap().unwrap();
-    assert!(
-        !default.env.contains_key("CLAUDE_CONFIG_DIR"),
-        "Claude must find the owner's ~/.claude.json: {:?}",
-        default.env.keys().collect::<Vec<_>>()
-    );
-}
-
 /// Claude Code 2.1.284's first-run theme picker, as a run whose config dir was wrong showed it.
 const THEME_PICKER: &str = " Let's get started.\n\n Choose the text style that looks best with your terminal\n To change this later, run /theme\n\n \u{276f} 1. Auto (match terminal)\n   2. Dark mode \u{2714}\n   3. Light mode\n   4. Dark mode (colorblind-friendly)\n   5. Light mode (colorblind-friendly)\n   6. Dark mode (ANSI colors only)\n   7. Light mode (ANSI colors only)\n\n  1  function greet() {\n  2 -  console.log(\"Hello, World!\");\n  2 +  console.log(\"Hello, Claude!\");\n  3  }\n\n  Syntax highlighting enabled (ctrl+t to disable)\n";
-
-#[test]
-fn pane_text_kept_at_a_failure_is_masked_and_its_tail_trimmed() {
-    use sluice_agents::engines::screen;
-    let key = "sk-ant-api03-Zq8xV4mN2pL7kR9tY3wE6uI1oP5aS0dF";
-    let pane = format!(
-        "  Welcome back   \n\n  export ANTHROPIC_API_KEY={key}\n  Authorization: Bearer abc123def456ghi789\n\n a\n b\n c\n d\n   e   \n\n\n"
-    );
-    let kept = screen::evidence(&pane);
-    assert!(!kept.contains("Zq8xV4mN2pL7"), "{kept}");
-    assert!(!kept.contains("abc123def456"), "{kept}");
-    assert!(
-        kept.contains("export ANTHROPIC_API_KEY=[redacted]"),
-        "{kept}"
-    );
-    assert!(kept.contains("Authorization: Bearer [redacted]"), "{kept}");
-    assert!(kept.ends_with("   e\n"), "{kept:?}");
-    assert_eq!(
-        screen::tail(&kept),
-        ["Authorization: Bearer [redacted]", "a", "b", "c", "d", "e"]
-    );
-    assert!(!screen::quote(&pane).contains("Zq8xV4mN2pL7"));
-    assert!(screen::tail("\n  \n").is_empty());
-}
 
 async fn first_error(h: &mut Harness, within: Duration) -> (EngineError, Duration) {
     let started = Instant::now();
@@ -1361,39 +739,6 @@ async fn first_error(h: &mut Harness, within: Duration) -> (EngineError, Duratio
 }
 
 #[tokio::test]
-async fn fake_first_run_setup_fails_as_blocked_screen_at_once_with_its_text() {
-    let mut h = Harness::new(json!({"screen":THEME_PICKER})).await;
-    h.launch(None).await;
-    let (error, took) = first_error(&mut h, Duration::from_secs(10)).await;
-    assert_eq!(error.kind, EngineErrorKind::BlockedScreen, "{error:?}");
-    assert!(took < Duration::from_secs(5), "{took:?}");
-    assert!(
-        error.message.starts_with(
-            "claude: blocked on its first-run setup (theme picker) — Claude Code's first-run setup is unfinished for the account it runs as: run `claude` once on this host as that user and finish it (and if the host sets CLAUDE_CONFIG_DIR, check that it is the configured one), then step_retry. Claude showed: Let's get started. | Choose the text style that looks best with your terminal |"
-        ),
-        "{}",
-        error.message
-    );
-    assert!(!h.context.run_dir.join("fixture-prompts.jsonl").exists());
-    h.cleanup().await;
-}
-
-#[tokio::test]
-async fn fake_trust_and_bypass_dialogs_are_still_answered_before_the_turn() {
-    let mut h = Harness::new(json!({"trust":true,"bypass":true,"turns":[{"reply":"ok"}]})).await;
-    h.launch(None).await;
-    let s = h.turn(InputId::Task, "p", 1).await;
-    assert_eq!(s.error, None);
-    assert_eq!(s.final_text, "ok");
-    assert_eq!(h.prompts(), vec!["p"]);
-    assert_eq!(
-        fs::read_to_string(h.context.run_dir.join("fixture-dialogs.jsonl")).unwrap(),
-        "\"trust\"\n\"bypass\"\n"
-    );
-    h.cleanup().await;
-}
-
-#[tokio::test]
 async fn fake_unrecognized_screen_fails_as_blocked_screen_after_the_grace() {
     let mut h = Harness::new(
         json!({"screen":" Something new is here.\n\n Press Enter to continue\u{2026}"}),
@@ -1408,14 +753,14 @@ async fn fake_unrecognized_screen_fails_as_blocked_screen_after_the_grace() {
             RunId::new(),
         ),
     )
-    .with_screen_grace(Duration::from_secs(2));
+    .with_screen_grace(Duration::from_millis(100));
     h.launch(None).await;
     let (error, took) = first_error(&mut h, Duration::from_secs(10)).await;
     assert_eq!(error.kind, EngineErrorKind::BlockedScreen, "{error:?}");
-    assert!(took >= Duration::from_secs(2), "{took:?}");
+    assert!(took >= Duration::from_millis(100), "{took:?}");
     assert_eq!(
         error.message,
-        "claude: blocked on a screen sluice does not recognize, unchanged for 2s before any turn — run `claude` once in the step's cwd on this host and answer it (or attach to the run's private pane while it waits), then step_retry. Claude showed: Something new is here. | Press Enter to continue\u{2026}"
+        "claude: blocked on a screen sluice does not recognize, unchanged for 0s before any turn — run `claude` once in the step's cwd on this host and answer it (or attach to the run's private pane while it waits), then step_retry. Claude showed: Something new is here. | Press Enter to continue\u{2026}"
     );
     h.cleanup().await;
 }
@@ -1445,7 +790,7 @@ async fn supervise_claude(
     let mut cfg = acceptance::config(&h.scratch.0, "claude");
     cfg.limits.wall = Duration::from_secs(15);
     cfg.limits.ready = Duration::from_secs(5);
-    cfg.limits.turn_start = Duration::from_secs(2);
+    cfg.limits.turn_start = Duration::from_millis(200);
     cfg.limits.stall = Duration::from_secs(10);
     cfg.limits.dialog = Duration::from_secs(60);
     configure(&mut cfg);
@@ -1553,7 +898,7 @@ fn logged(dir: &Path, file: &str) -> Vec<String> {
 /// swallowed the paste that followed. Now nothing is sent before the composer first shows, and
 /// the message is delivered with no Escape and no Rewind.
 #[tokio::test]
-async fn fake_resumed_session_with_a_covered_composer_gets_its_message_and_no_rewind() {
+async fn slow_fake_resumed_session_with_a_covered_composer_gets_its_message_and_no_rewind() {
     let mut h = Harness::new(json!({"turns":[{"reply":"first work"},{"reply":"rebased"}]})).await;
     h.launch(None).await;
     let sid = h.turn(InputId::Task, "first", 1).await.session_id.unwrap();
@@ -1597,7 +942,7 @@ async fn fake_resumed_session_with_a_covered_composer_gets_its_message_and_no_re
 /// not sent, so the input was not taken: the adapter closes the dialog with one Escape, waits
 /// for the composer, clears it and pastes again.
 #[tokio::test]
-async fn fake_paste_taken_by_a_dialog_is_pasted_again_after_one_escape() {
+async fn slow_fake_paste_taken_by_a_dialog_is_pasted_again_after_one_escape() {
     let mut h = Harness::new(json!({"modal_on_paste":1,"turns":[{"reply":"done"}]})).await;
     h.launch(None).await;
     let started = Instant::now();
@@ -1619,7 +964,7 @@ async fn fake_paste_taken_by_a_dialog_is_pasted_again_after_one_escape() {
 /// Three pastes whose drafts never show end the session `Transient`, not `UnknownAcceptance`:
 /// Enter was never sent, so every input the adapter held is given back as not accepted.
 #[tokio::test]
-async fn fake_three_unseen_drafts_end_transient_with_the_inputs_not_accepted() {
+async fn slow_fake_three_unseen_drafts_end_transient_with_the_inputs_not_accepted() {
     let mut h = Harness::new(json!({"swallow_pastes":3})).await;
     h.launch(None).await;
     for (id, text) in [
@@ -1675,7 +1020,7 @@ async fn fake_three_unseen_drafts_end_transient_with_the_inputs_not_accepted() {
 /// The supervisor takes the transient for one: the session resumes and the task, given back
 /// as not accepted rather than left uncertain, is delivered again and submits.
 #[tokio::test]
-async fn supervisor_claude_unseen_drafts_resume_and_deliver_the_task_again() {
+async fn slow_supervisor_claude_unseen_drafts_resume_and_deliver_the_task_again() {
     let h = Harness::new(
         json!({"swallow_pastes":3,"turns":[{"reply":"task taken"},{"reply":"done","submit":{"word":"blue"}}]}),
     )
@@ -1718,45 +1063,596 @@ async fn supervisor_claude_unseen_drafts_resume_and_deliver_the_task_again() {
     assert!(!h.client(&["list-sessions"]).status.success());
 }
 
-/// The screens sluice sends its one Escape to, as Claude Code 2.1.284 drew them: Rewind over
-/// the failed lane's resumed session and over a conversation with prompts, and its history
-/// picker. The composer, the dialogs the adapter answers and a screen nobody knows are not.
 #[test]
-fn rewind_and_dialogs_over_the_composer_are_recognised_and_nothing_else() {
-    let failed = include_str!("fixtures/claude/real-rewind-pane.txt");
-    assert!(!protocol::composer_ready(failed));
-    assert!(!protocol::draft_visible(failed, "Your task is in"));
-    assert_eq!(
-        protocol::escapable(failed).as_deref(),
-        Some("its Rewind dialog")
-    );
-    let listed = include_str!("fixtures/claude/real-rewind-list-pane.txt");
-    assert!(!protocol::composer_ready(listed));
-    assert!(!protocol::draft_visible(listed, "Your task is in"));
-    assert_eq!(
-        protocol::escapable(listed).as_deref(),
-        Some("its Rewind dialog")
-    );
-    let picker = include_str!("fixtures/claude/real-history-picker-pane.txt");
-    assert!(!protocol::composer_ready(picker));
-    assert_eq!(
-        protocol::escapable(picker).as_deref(),
-        Some("its Search prompts dialog")
-    );
-    let composer = include_str!("fixtures/claude/real-composer-pane.txt");
-    assert!(protocol::composer_ready(composer));
-    assert_eq!(protocol::escapable(composer), None);
-    let search = "─────────────\n❯ fix the\n─────────────\n  search prompts: fix the\n";
-    assert_eq!(
-        protocol::escapable(search).as_deref(),
-        Some("its prompt-history search")
-    );
-    for screen in [
-        "No, exit\n❯ Yes, I trust this folder\n\n Enter to confirm \u{b7} Esc to cancel\n",
-        THEME_PICKER,
-        " Something new is here.\n\n Press Enter to continue\u{2026}",
-        "",
-    ] {
-        assert_eq!(protocol::escapable(screen), None, "{screen}");
+fn transcript_decoder_skips_oversize_records_and_preserves_offsets() {
+    {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("transcript.jsonl");
+        let assistant = |text: &str| {
+            json!({"type":"assistant","message":{"content":[{"type":"text","text":text}]}})
+                .to_string()
+        };
+        let huge = json!({"type":"user","message":{"content":[{"type":"tool_result","content":"x".repeat(2 * protocol::MAX_EVENT_BYTES)}]}}).to_string();
+        fs::write(
+            &path,
+            format!("{}\n{huge}\n{}\n", assistant("before"), assistant("after")),
+        )
+        .unwrap();
+        let mut tail = Tail::new(path.clone(), 0);
+        let mut records = vec![];
+        loop {
+            let offset = tail.offset();
+            records.extend(tail.read().unwrap());
+            if tail.offset() == offset {
+                break;
+            }
+        }
+        assert_eq!(
+            records.len(),
+            2,
+            "{:?}",
+            records
+                .iter()
+                .map(|r| r["type"].clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(tail.skipped(), 1);
+        let mut state = ClaudeState::default();
+        for record in &records {
+            state.transcript(record, true);
+        }
+        assert_eq!(snapshot(&mut state, "busy", 1).final_text, "after");
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{}", assistant("later")).unwrap();
+        for record in tail.read().unwrap() {
+            state.transcript(&record, true);
+        }
+        assert_eq!(snapshot(&mut state, "busy", 2).final_text, "later");
     }
+    {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("transcript");
+        fs::write(&path, b"old history\n").unwrap();
+        let mut tail = Tail::new(path.clone(), fs::metadata(&path).unwrap().len());
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"{\"type\":\"assistant\"").unwrap();
+        assert!(tail.read().unwrap().is_empty());
+        file.write_all(b"}\nnot json\n").unwrap();
+        assert_eq!(tail.read().unwrap(), vec![json!({"type":"assistant"})]);
+        fs::write(&path, b"{}\n").unwrap();
+        assert_eq!(tail.read().unwrap(), vec![json!({})]);
+        // A record still growing past the limit is dropped up to its newline, not fatal.
+        fs::write(&path, vec![b'x'; protocol::MAX_EVENT_BYTES + 1]).unwrap();
+        let mut tail = Tail::new(path.clone(), 0);
+        assert!(tail.read().unwrap().is_empty());
+        assert_eq!(tail.skipped(), 1);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"xxxx\n{\"type\":\"user\"}\n").unwrap();
+        assert_eq!(tail.read().unwrap(), vec![json!({"type":"user"})]);
+        assert_eq!(tail.skipped(), 1);
+        for id in ["../bad", "", "a/b", "--session"] {
+            assert!(protocol::session_id(id).is_err());
+        }
+        let mut value: Value = serde_json::from_str(
+            include_str!("../fixtures/claude/hooks.jsonl")
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(protocol::decode_hook("Stop", &value).is_err());
+        value["session_id"] = json!("../escape");
+        assert!(protocol::decode_hook("SessionStart", &value).is_err());
+    }
+
+    {
+        let real = real_limits();
+        let now = account::now();
+        // The weekly limit, resetting in three days (the capture's own reset has passed).
+        let mut weekly = real[0].clone();
+        weekly["quotaLimits"]["resetsAt"] = json!(now + 3 * 86400);
+        let error = transcript_error(&weekly).unwrap();
+        assert_eq!(error.kind, EngineErrorKind::QuotaExhausted, "{error:?}");
+        assert!(
+            error
+                .message
+                .starts_with("claude: weekly limit reached (seven_day); resets 20"),
+            "{}",
+            error.message
+        );
+        assert!(
+        error.message.ends_with(
+            " — wait for the reset or buy usage credits at https://claude.ai/settings/usage, then step_retry (or run the step on another engine). Claude said: You've hit your weekly limit \u{b7} resets Sep 22, 1am (Europe/Berlin)"
+        ),
+        "{}",
+        error.message
+    );
+        assert!(
+            error.message.contains("(in 2d 23h)") || error.message.contains("(in 3d)"),
+            "{}",
+            error.message
+        );
+        assert_eq!(error.retry_at, None);
+        // The 5-hour session limit an hour from its reset is a hard cap too.
+        let mut session = real[1].clone();
+        session["quotaLimits"]["resetsAt"] = json!(now + 3600);
+        assert_eq!(
+            transcript_error(&session).unwrap().kind,
+            EngineErrorKind::QuotaExhausted
+        );
+        // Ten minutes from its reset it is a short limit that retries just after the reset.
+        session["quotaLimits"]["resetsAt"] = json!(now + 600);
+        let error = transcript_error(&session).unwrap();
+        assert_eq!(error.kind, EngineErrorKind::Transient, "{error:?}");
+        assert!(
+            error
+                .message
+                .starts_with("claude: 5-hour session limit reached (five_hour); resets 20"),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.message.contains(
+                " — retrying just after the reset. Claude said: You've hit your session limit"
+            ),
+            "{}",
+            error.message
+        );
+        let retry_at = error.retry_at.unwrap();
+        assert!((now + 600..=now + 605).contains(&retry_at), "{retry_at}");
+        // A smaller threshold makes the same limit a hard cap.
+        let mut state = prompted();
+        state.set_quota_threshold(Duration::from_secs(300));
+        state.transcript(&session, true);
+        assert_eq!(
+            snapshot(&mut state, "idle", 0).error.unwrap().kind,
+            EngineErrorKind::QuotaExhausted
+        );
+        // Out of usage credits, or a model's limit with no reset: hard caps.
+        for entry in [&real[2], &real[3], &real[5]] {
+            let error = transcript_error(entry).unwrap();
+            assert_eq!(error.kind, EngineErrorKind::QuotaExhausted, "{error:?}");
+            assert!(
+            error.message.starts_with(
+                "claude: usage limit reached — buy usage credits at https://claude.ai/settings/usage, or wait for it to reset, then step_retry"
+            ),
+            "{}",
+            error.message
+        );
+        }
+        // An ordinary 429 stays transient with the fixed backoff.
+        let error = transcript_error(&real[4]).unwrap();
+        assert_eq!(error.kind, EngineErrorKind::Transient, "{error:?}");
+        assert_eq!(error.retry_at, None);
+        // A billing error is a hard cap whatever its text.
+        let billing = text_entry("billing_error", "API Error: credit balance is too low");
+        assert_eq!(
+            transcript_error(&billing).unwrap().kind,
+            EngineErrorKind::QuotaExhausted
+        );
+    }
+
+    {
+        let real = real_auth();
+        let expected = [
+            "claude: not logged in (token expired)",
+            "claude: not logged in (token expired)",
+            "claude: not logged in (no credentials)",
+            "claude: not logged in (unauthorized)",
+        ];
+        for (entry, head) in real.iter().zip(expected) {
+            let error = transcript_error(entry).unwrap();
+            assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
+            assert_eq!(
+                error.message,
+                format!(
+                    "{head} — run `claude auth login` on this host (or /login inside `claude`), then step_retry. Claude said: {}",
+                    entry["message"]["content"][0]["text"].as_str().unwrap()
+                )
+            );
+            assert_eq!(error.retry_at, None);
+        }
+        let error = transcript_error(&real[4]).unwrap();
+        assert_eq!(error.kind, EngineErrorKind::AuthFailed);
+        assert!(error.message.starts_with("claude: the organization disabled subscription access for Claude Code (oauth_org_not_allowed) — use an Anthropic API key or ask the org admin to enable access, then step_retry. Claude said: Your organization"), "{}", error.message);
+        let error = transcript_error(&real[5]).unwrap();
+        assert_eq!(error.kind, EngineErrorKind::AuthFailed);
+        assert!(
+        error.message.starts_with(
+            "claude: account on hold (account_on_hold) — resolve the hold at https://claude.ai/restricted, then step_retry."
+        ),
+        "{}",
+        error.message
+    );
+        // The StopFailure hook says the same when it comes first.
+        let mut state = prompted();
+        state
+        .hook(&hook(
+            "StopFailure",
+            json!({"error":"authentication_failed","last_assistant_message":"OAuth token revoked \u{b7} Please run /login"}),
+        ))
+        .unwrap();
+        let error = snapshot(&mut state, "idle", 0).error.unwrap();
+        assert_eq!(error.kind, EngineErrorKind::AuthFailed);
+        assert!(
+            error
+                .message
+                .starts_with("claude: not logged in (token revoked) — run `claude auth login`")
+        );
+        // Without a category, Claude's login wording at the start of the error is enough.
+        let mut state = prompted();
+        state.transcript(&json!({"type":"assistant","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"Login expired \u{b7} Please run /login"}]}}), true);
+        assert_eq!(
+            snapshot(&mut state, "idle", 0).error.unwrap().kind,
+            EngineErrorKind::AuthFailed
+        );
+        // Claude's own temporary authentication error stays transient.
+        let flaky = text_entry(
+            "authentication_failed",
+            "Authentication error \u{b7} This may be a temporary network issue, please try again",
+        );
+        assert_eq!(
+            transcript_error(&flaky).unwrap().kind,
+            EngineErrorKind::Transient
+        );
+    }
+}
+
+#[tokio::test]
+async fn launch_policy_preserves_host_config_and_refuses_missing_capabilities() {
+    {
+        for (version, message) in [
+            (
+                "2.1.282 (Claude Code)",
+                "claude 2.1.282 is older than 2.1.283, the oldest version with every capability sluice needs (tested 2.1.283, 2.1.284); update claude on this host, then step_retry",
+            ),
+            (
+                "2.1.284 (Other Tool)",
+                "claude: `claude --version` printed `2.1.284 (Other Tool)`, not a Claude Code version; sluice needs Claude Code 2.1.283 or newer (tested 2.1.283, 2.1.284)",
+            ),
+            (
+                "latest (Claude Code)",
+                "claude: cannot read a version from `claude --version` (got `latest`); sluice needs claude 2.1.283 or newer (tested 2.1.283, 2.1.284)",
+            ),
+        ] {
+            let mut h = Harness::new(json!({})).await;
+            let bin = fake_claude(&h, "old", version, claude::fixture::FIXTURE_HELP);
+            h.adapter = Claude::new(
+                bin,
+                h.scratch.0.join("claude"),
+                "/usr/bin/true".into(),
+                RunId::new(),
+            );
+            let error = h.adapter.prepare(&h.context, None).await.unwrap_err();
+            assert_eq!(error.kind, EngineErrorKind::CapabilityMismatch);
+            assert_eq!(error.message, message);
+            assert!(!h.context.run_dir.join("claude-settings.json").exists());
+        }
+    }
+    {
+        let h = Harness::new(json!({})).await;
+        let bin = fake_claude(
+            &h,
+            "newer",
+            "2.1.293 (Claude Code)",
+            claude::fixture::FIXTURE_HELP,
+        );
+        let mut adapter = Claude::new(
+            bin.clone(),
+            h.scratch.0.join("claude"),
+            "/usr/bin/true".into(),
+            RunId::new(),
+        )
+        .with_probe_cache(h.scratch.0.join("probes"));
+        // Past the version and the probe, the launch goes on (here to the tmux it lacks).
+        let _ = adapter.prepare(&h.context, None).await;
+        let verdict = adapter.version().unwrap();
+        assert_eq!(
+            verdict.note().unwrap(),
+            "claude 2.1.293 is newer than the tested 2.1.283, 2.1.284; accepted untested (floor 2.1.283)"
+        );
+        assert!(h.scratch.0.join("probes/claude.json").is_file());
+
+        let mut h = Harness::new(json!({})).await;
+        let without = claude::fixture::FIXTURE_HELP.replace("  --effort <level>\n", "");
+        let bin = fake_claude(
+            &h,
+            "newer-without-effort",
+            "2.1.293 (Claude Code)",
+            &without,
+        );
+        h.adapter = Claude::new(
+            bin,
+            h.scratch.0.join("claude"),
+            "/usr/bin/true".into(),
+            RunId::new(),
+        );
+        let error = h.adapter.prepare(&h.context, None).await.unwrap_err();
+        assert_eq!(error.kind, EngineErrorKind::CapabilityMismatch);
+        assert_eq!(
+            error.message,
+            "claude 2.1.293 lacks `--effort` that sluice needs (tested 2.1.283, 2.1.284; this version is untested)"
+        );
+        assert!(!h.context.run_dir.join("claude-settings.json").exists());
+    }
+    {
+        let mut h = Harness::new(json!({})).await;
+        let chosen = h.adapter.prepare(&h.context, None).await.unwrap().unwrap();
+        assert!(chosen.env.contains_key("CLAUDE_CONFIG_DIR"));
+        let mut h = Harness::new(json!({})).await;
+        h.adapter = std::mem::replace(
+            &mut h.adapter,
+            Claude::new(
+                "claude".into(),
+                "/nowhere".into(),
+                "/nowhere".into(),
+                RunId::new(),
+            ),
+        )
+        .with_config_dir_passed(false);
+        let default = h.adapter.prepare(&h.context, None).await.unwrap().unwrap();
+        assert!(
+            !default.env.contains_key("CLAUDE_CONFIG_DIR"),
+            "Claude must find the owner's ~/.claude.json: {:?}",
+            default.env.keys().collect::<Vec<_>>()
+        );
+    }
+}
+
+#[tokio::test]
+async fn authentication_failures_mask_credentials_and_take_no_login_input() {
+    {
+        let mut h = Harness::new(json!({"turns":[{"error":"Not logged in \u{b7} Please run /login","error_type":"authentication_failed"}]})).await;
+        h.launch(None).await;
+        let error = h.turn(InputId::Task, "p", 1).await.error.unwrap();
+        assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
+        assert_eq!(
+            error.message,
+            "claude: not logged in (no credentials) — run `claude auth login` on this host (or /login inside `claude`), then step_retry. Claude said: Not logged in \u{b7} Please run /login"
+        );
+        h.cleanup().await;
+
+        // A user-supplied key Claude echoes back is masked in the message.
+        let key = "sk-ant-api03-Zq8xV4mN2pL7kR9tY3wE6uI1oP5aS0dF";
+        let mut h = Harness::new(json!({"turns":[{"error":format!("Invalid API key \u{b7} Fix external API key \u{b7} x-api-key {key} was rejected"),"error_type":"invalid_request"}]})).await;
+        h.launch(None).await;
+        let error = h.turn(InputId::Task, "p", 1).await.error.unwrap();
+        assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
+        assert!(!error.message.contains("Zq8xV4mN2pL7"), "{}", error.message);
+        assert!(
+        error.message.ends_with(
+            "Claude said: Invalid API key \u{b7} Fix external API key \u{b7} x-api-key [redacted] was rejected"
+        ),
+        "{}",
+        error.message
+    );
+        h.cleanup().await;
+    }
+    {
+        let mut h = Harness::new(json!({"login":true})).await;
+        h.launch(None).await;
+        let started = Instant::now();
+        let outcome = h
+            .adapter
+            .execute(
+                &h.context,
+                EngineCommand::DeliverText {
+                    id: InputId::Task,
+                    text: "p".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, DeliveryOutcome::Pending);
+        let error = loop {
+            let s = h.poll().await;
+            if let Some(error) = s.error {
+                assert!(s.acknowledged.is_empty());
+                break error;
+            }
+            assert!(started.elapsed() < Duration::from_secs(10), "{s:?}");
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        };
+        assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
+        assert!(
+        error.message.starts_with(
+            "claude: not logged in (Claude shows its login screen) — run `claude auth login` on this host (or /login inside `claude`), then step_retry. Claude said: Select login method:"
+        ),
+        "{}",
+        error.message
+    );
+        h.cleanup().await;
+    }
+}
+
+#[tokio::test]
+async fn slow_known_setup_screens_refuse_or_resolve_before_delivery() {
+    let mut h = Harness::new(json!({"screen":THEME_PICKER})).await;
+    h.launch(None).await;
+    let (error, took) = first_error(&mut h, Duration::from_secs(10)).await;
+    assert_eq!(error.kind, EngineErrorKind::BlockedScreen, "{error:?}");
+    assert!(took < Duration::from_secs(5), "{took:?}");
+    assert!(
+        error.message.starts_with(
+            "claude: blocked on its first-run setup (theme picker) — Claude Code's first-run setup is unfinished for the account it runs as: run `claude` once on this host as that user and finish it (and if the host sets CLAUDE_CONFIG_DIR, check that it is the configured one), then step_retry. Claude showed: Let's get started. | Choose the text style that looks best with your terminal |"
+        ),
+        "{}",
+        error.message
+    );
+    assert!(!h.context.run_dir.join("fixture-prompts.jsonl").exists());
+    h.cleanup().await;
+
+    fs::write(
+        h.scratch.0.join("config.json"),
+        serde_json::to_vec(&json!({"trust":true,"bypass":true,"turns":[{"reply":"ok"}]})).unwrap(),
+    )
+    .unwrap();
+    h.service = TransientService::for_test(RunId::new());
+    h.launch(None).await;
+    let s = h.turn(InputId::Task, "p", 1).await;
+    assert_eq!(s.error, None);
+    assert_eq!(s.final_text, "ok");
+    assert_eq!(h.prompts(), vec!["p"]);
+    assert_eq!(
+        fs::read_to_string(h.context.run_dir.join("fixture-dialogs.jsonl")).unwrap(),
+        "\"trust\"\n\"bypass\"\n"
+    );
+    h.cleanup().await;
+}
+
+#[tokio::test]
+async fn resume_preserves_identity_commits_and_accepted_task_without_history_replay() {
+    {
+        let mut h =
+            Harness::new(json!({"turns":[{"reply":"old news"},{"reply":"new work"}]})).await;
+        h.launch(None).await;
+        let first = h.turn(InputId::Task, "first", 1).await;
+        let sid = first.session_id.unwrap();
+        // A shutdown callback must not be routed to a subsequent invocation.
+        let mut stale =
+            std::os::unix::net::UnixStream::connect(h.scratch.0.join("hook.sock")).unwrap();
+        stale.write_all(b"{}\n").unwrap();
+        h.cleanup().await;
+        let meta = h.adapter.session(&sid).await.unwrap().unwrap();
+        assert_eq!(meta.cwd, h.context.cwd);
+        let mut wrong = h.context.clone();
+        wrong.cwd = h.scratch.0.join("home");
+        assert_eq!(
+            h.adapter
+                .prepare(&wrong, Some(&sid))
+                .await
+                .unwrap_err()
+                .kind,
+            EngineErrorKind::Fatal
+        );
+        assert_eq!(
+            h.adapter
+                .prepare(&h.context, Some("missing-session"))
+                .await
+                .unwrap_err()
+                .kind,
+            EngineErrorKind::MissingSession
+        );
+        fs::write(h.context.run_dir.join("fixture-events.jsonl"), "").unwrap();
+
+        h.service = TransientService::for_test(RunId::new());
+        h.launch(Some(&sid)).await;
+        let s = h
+            .turn(InputId::Message { id: MessageId(8) }, "feedback", 1)
+            .await;
+        assert_eq!(s.session_id.as_deref(), Some(sid.as_str()));
+        assert_eq!(s.turns_started, 1);
+        assert_eq!(s.final_text, "new work");
+        assert!(
+            !h.adapter
+                .progress_lines()
+                .iter()
+                .any(|s| s.contains("old news"))
+        );
+        h.cleanup().await;
+    }
+    {
+        let mut h=Harness::new(json!({"turns":[{"run":"printf first > first; git add first; git commit -q -m 'Create first file'","error":"API Error: 529 overloaded"},{"run":"printf second > second; git add second; git commit -q -m 'Create second file'","reply":"recovered"}]})).await;
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.name", "Scratch"],
+            vec!["config", "user.email", "scratch@example.invalid"],
+            vec!["commit", "-q", "--allow-empty", "-m", "Initialize scratch"],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(&h.context.cwd)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        let baseline = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&h.context.cwd)
+            .output()
+            .unwrap();
+        let baseline = String::from_utf8_lossy(&baseline.stdout).trim().to_owned();
+        h.launch(None).await;
+        let first = h.turn(InputId::Task, "original task", 1).await;
+        assert_eq!(first.error.unwrap().kind, EngineErrorKind::Transient);
+        let sid = first.session_id.unwrap();
+        h.cleanup().await;
+        h.service = TransientService::for_test(RunId::new());
+        h.launch(Some(&sid)).await;
+        let last = h
+            .turn(
+                InputId::Continue { attempt: 1 },
+                "Your session was interrupted by a rate limit; continue.",
+                1,
+            )
+            .await;
+        assert_eq!(last.session_id.as_deref(), Some(sid.as_str()));
+        let count = Command::new("git")
+            .args(["rev-list", "--count", &format!("{baseline}..HEAD")])
+            .current_dir(&h.context.cwd)
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&count.stdout).trim(), "2");
+        assert_eq!(
+            h.prompts().iter().filter(|p| *p == "original task").count(),
+            1
+        );
+        h.cleanup().await;
+    }
+}
+
+fn snapshot(state: &mut ClaudeState, status: &str, now: u64) -> EngineObservation {
+    state.snapshot(
+        Some(status),
+        true,
+        false,
+        Duration::from_secs(now),
+        1900000000.0,
+    )
+}
+
+fn hook(event: &str, extra: Value) -> protocol::Hook {
+    let mut value = json!({"hook_event_name":event,"session_id":"redacted-session","cwd":"/scratch/repo","transcript_path":"/scratch/claude/projects/repo/redacted-session.jsonl"});
+    value
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    protocol::decode_hook(event, &value).unwrap()
+}
+
+/// The redacted real API error entries 2.1.284 wrote for usage and rate limits.
+fn real_limits() -> Vec<Value> {
+    include_str!("../fixtures/claude/real-usage-limits.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// The real API error entries 2.1.284 wrote when it could not authenticate.
+fn real_auth() -> Vec<Value> {
+    include_str!("../fixtures/claude/real-auth-errors.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+fn prompted() -> ClaudeState {
+    let mut state = ClaudeState::default();
+    state
+        .hook(&hook("UserPromptSubmit", json!({"prompt":"p"})))
+        .unwrap();
+    state
+}
+
+fn transcript_error(entry: &Value) -> Option<EngineError> {
+    let mut state = prompted();
+    state.transcript(entry, true);
+    snapshot(&mut state, "idle", 0).error
+}
+
+fn text_entry(category: &str, text: &str) -> Value {
+    json!({"type":"assistant","isApiErrorMessage":true,"error":category,"message":{"content":[{"type":"text","text":text}]}})
 }

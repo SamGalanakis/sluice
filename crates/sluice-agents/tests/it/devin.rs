@@ -1,0 +1,2070 @@
+use serde_json::{Value, json};
+use sluice_agents::engines::{
+    DeliveryOutcome, EngineAdapter, EngineCommand, EngineContext, EngineErrorKind, EngineLaunch,
+    EngineObservation, EngineStatus, HookEvent, InputId,
+    devin::{Devin, DevinOptions, protocol},
+};
+use sluice_agents::supervisor::{
+    Checkpoint, HostSnapshot, Limits, RetryPolicy, State, SupervisorConfig, SupervisorHost,
+};
+use sluice_model::ids::{AttemptId, InvocationId, MessageId, RunId};
+use sluice_process::socket::{AssignedRange, DeliveryMessage};
+use std::{
+    collections::BTreeMap,
+    fs, io,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant},
+};
+
+use super::executable;
+
+struct Scratch(PathBuf);
+impl Scratch {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = crate::scratch::root().join(format!(
+            "sluice-test-devin-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        Self(path)
+    }
+    fn join(&self, path: &str) -> PathBuf {
+        self.0.join(path)
+    }
+}
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+/// A workspace binary from the profile directory cargo built this test into (the
+/// shared or configured target dir), never a stale `<repo>/target/debug` copy.
+fn built(name: &str) -> PathBuf {
+    let exe = std::env::current_exe().unwrap();
+    exe.parent().and_then(Path::parent).unwrap().join(name)
+}
+fn workspace() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap()
+}
+fn options(root: &Scratch, script: Value) -> DevinOptions {
+    let fixture = built("fixture");
+    assert!(
+        fixture.is_file(),
+        "build the workspace binaries before the Devin executable tests"
+    );
+    let wrapper = root.join("devin");
+    executable::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nexec {} devin \"$@\"\n",
+            protocol::shell_quote(&fixture.to_string_lossy())
+        ),
+    );
+    let mut script = script;
+    script["prompts"] = root
+        .join("prompts.jsonl")
+        .to_string_lossy()
+        .into_owned()
+        .into();
+    protocol::private_write(
+        &root.join("fixture.json"),
+        &serde_json::to_vec(&script).unwrap(),
+    )
+    .unwrap();
+    DevinOptions {
+        binary: wrapper,
+        hook_binary: fixture,
+        config: root.join("owner-config.json"),
+        data_home: root.join("data"),
+        probe_cache: None,
+        environment: BTreeMap::from([
+            (
+                "SLUICE_HOME".into(),
+                root.join("home").to_string_lossy().into_owned(),
+            ),
+            (
+                "XDG_DATA_HOME".into(),
+                root.join("data").to_string_lossy().into_owned(),
+            ),
+            (
+                "FAKE_DEVIN".into(),
+                root.join("fixture.json").to_string_lossy().into_owned(),
+            ),
+        ]),
+        ready_timeout: Duration::from_secs(5),
+        delivery_timeout: Duration::from_secs(4),
+        // Most tests read a Stop as the turn's end at once; the post-Stop tests set their own.
+        turn_quiet: Duration::ZERO,
+        screen_grace: sluice_agents::engines::screen::DEFAULT_GRACE,
+    }
+}
+fn context(root: &Scratch, name: &str, tmux: bool) -> EngineContext {
+    let run = root.join(name);
+    fs::create_dir(&run).unwrap();
+    fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
+    let cwd = root.join("work");
+    fs::create_dir_all(&cwd).unwrap();
+    EngineContext {
+        run_dir: run,
+        cwd,
+        model: None,
+        tmux_binary: tmux.then(|| workspace().join("target/private-tmux/bin/tmux")),
+    }
+}
+fn event(adapter: &mut Devin, payload: Value) {
+    let event = payload["hook_event_name"].as_str().unwrap().into();
+    assert_eq!(
+        adapter
+            .on_hook(HookEvent { event, payload })
+            .unwrap()
+            .exit_code,
+        0
+    );
+}
+
+struct Pane {
+    run: PathBuf,
+    binary: PathBuf,
+    server: Child,
+}
+impl Pane {
+    async fn start(context: &EngineContext, launch: EngineLaunch) -> Self {
+        let artifact =
+            sluice_process::tmux::ApprovedTmux::load(&workspace().join("target/private-tmux"))
+                .await
+                .unwrap();
+        // Resolved on both sides: a checkout may link target/private-tmux to another one's.
+        assert_eq!(
+            artifact.binary().canonicalize().ok(),
+            context
+                .tmux_binary
+                .as_deref()
+                .and_then(|p| p.canonicalize().ok())
+        );
+        let server = artifact
+            .server_command(&context.run_dir, None)
+            .unwrap()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut pane = Self {
+            run: context.run_dir.clone(),
+            binary: artifact.binary().into(),
+            server,
+        };
+        let start = Instant::now();
+        while !context.run_dir.join("tmux.sock").exists() {
+            assert!(pane.server.try_wait().unwrap().is_none());
+            assert!(start.elapsed() < Duration::from_secs(5));
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            pane.cmd(&["set-option", "-g", "remain-on-exit", "on"])
+                .success()
+        );
+        let mut shell = format!(
+            "cd {} && exec /usr/bin/env",
+            protocol::shell_quote(&context.cwd.to_string_lossy())
+        );
+        for (k, v) in launch.env {
+            shell.push_str(&format!(" {}", protocol::shell_quote(&format!("{k}={v}"))));
+        }
+        for arg in launch.argv {
+            shell.push_str(&format!(" {}", protocol::shell_quote(&arg)));
+        }
+        assert!(
+            pane.cmd(&[
+                "new-session",
+                "-d",
+                "-s",
+                "sluice-test-devin",
+                "-x",
+                "140",
+                "-y",
+                "40",
+                &shell
+            ])
+            .success()
+        );
+        pane
+    }
+    fn cmd(&self, args: &[&str]) -> std::process::ExitStatus {
+        Command::new(&self.binary)
+            .current_dir(&self.run)
+            .args(["-S", "tmux.sock", "-f", "/dev/null"])
+            .args(args)
+            .env_remove("TMUX")
+            .env_remove("TMUX_PANE")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+    }
+    fn pid(&self) -> u32 {
+        let out = Command::new(&self.binary)
+            .current_dir(&self.run)
+            .args([
+                "-S",
+                "tmux.sock",
+                "display-message",
+                "-p",
+                "-t",
+                "%0",
+                "#{pane_pid}",
+            ])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+    fn close(&mut self) {
+        self.cmd(&["kill-server"]);
+        let _ = self.server.wait();
+    }
+}
+impl Drop for Pane {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+async fn poll(
+    adapter: &mut Devin,
+    ctx: &EngineContext,
+    done: impl Fn(&EngineObservation) -> bool,
+) -> EngineObservation {
+    let deadline = Instant::now() + Duration::from_secs(12);
+    loop {
+        let obs = adapter.observe(ctx).await.unwrap();
+        if done(&obs) {
+            return obs;
+        }
+        assert!(Instant::now() < deadline, "timed out: {obs:?}");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+}
+async fn deliver(adapter: &mut Devin, ctx: &EngineContext, id: InputId, text: &str) {
+    assert_eq!(
+        adapter
+            .execute(
+                ctx,
+                EngineCommand::DeliverText {
+                    id: id.clone(),
+                    text: text.into()
+                }
+            )
+            .await
+            .unwrap(),
+        DeliveryOutcome::Pending
+    );
+    poll(adapter, ctx, |o| o.acknowledged.contains(&id)).await;
+}
+
+/// A hook just under the 1 MiB the relay accepts is journaled with its envelope (the
+/// invocation, its absent fields as nulls), a line over 1 MiB the reader must still read.
+#[tokio::test]
+async fn a_hook_just_under_the_limit_is_journaled_and_read_back() {
+    let root = Scratch::new();
+    let mut adapter = Devin::new(options(&root, json!({})));
+    let ctx = context(&root, "run", true);
+    adapter.prepare(&ctx, None).await.unwrap().unwrap();
+    let mut hook = json!({"hook_event_name":"PostToolUse","tool_name":"Read","tool_response":""});
+    let room = protocol::MAX_HOOK_BYTES - serde_json::to_vec(&hook).unwrap().len();
+    hook["tool_response"] = json!("x".repeat(room));
+    assert_eq!(
+        serde_json::to_vec(&hook).unwrap().len(),
+        protocol::MAX_HOOK_BYTES
+    );
+    event(&mut adapter, hook);
+    let journal = fs::read_to_string(ctx.run_dir.join("devin-hooks.jsonl")).unwrap();
+    assert!(journal.lines().next().unwrap().len() > protocol::MAX_HOOK_BYTES);
+    // Each hook is read back as it is journaled: a refused line would have failed it.
+    event(
+        &mut adapter,
+        json!({"hook_event_name":"UserPromptSubmit","prompt_id":"0"}),
+    );
+    let journal = fs::read_to_string(ctx.run_dir.join("devin-hooks.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 2);
+
+    {
+        let quota_exhausted = |pane: &str| {
+            protocol::account_notice(pane).map(|failure| {
+                assert_eq!(failure.kind, EngineErrorKind::QuotaExhausted);
+                failure.message
+            })
+        };
+        // A live Fusion pane out of weekly quota: the notice follows each prompt and the composer
+        // stays idle; Devin sent no hook after the prompt.
+        let real = include_str!("../fixtures/devin/real-quota-exhausted-pane.txt");
+        let notice = quota_exhausted(real).unwrap();
+        assert!(
+        notice.starts_with("devin: weekly usage quota exhausted — buy usage or turn on auto-reload at https://app.devin.ai/settings/usage, or wait for it to reset, then step_retry (or run the step on another engine). Devin said: Your weekly usage quota has been exhausted."),
+        "{notice}"
+    );
+        assert!(notice.contains("Visit https://app.devin.ai/settings/usage to purchase"));
+        assert!(notice.ends_with("(trace ID: e9458d5f1c1f53d495a3c90d6af85159)"));
+        let coloured = real.replace(
+            "Quota exhausted",
+            "\x1b[1;33mQuota\x1b[0m exhausted\x1b]8;;\x07",
+        );
+        assert_eq!(quota_exhausted(&coloured).as_deref(), Some(notice.as_str()));
+        // A narrower pane wraps the explanation over indented rows.
+        let wrapped = real.replace(" Visit https", "\n   Visit https");
+        assert_eq!(quota_exhausted(&wrapped).as_deref(), Some(notice.as_str()));
+        // The bypass indicator drawn as its own row above the composer is not an entry.
+        let rule = "\u{2500}".repeat(20);
+        let indicator = real.replacen(&rule, &format!("(bypass permissions on)\n{rule}"), 1);
+        assert_eq!(
+            quota_exhausted(&indicator).as_deref(),
+            Some(notice.as_str())
+        );
+
+        // The same words as the transcript's last entry but in tool output or an agent message.
+        let last = real.rfind(" \u{26a0}\u{fe0e} Quota exhausted").unwrap();
+        let (before, notice_rows) = real.split_at(last);
+        for quoted in [
+            " \u{25cf} Ran cat notes.md\n \u{2502} \u{26a0}\u{fe0e} Quota exhausted\n \u{2502}   Your",
+            " \u{25cf} Ran cat notes.md\n \u{2514} \u{26a0}\u{fe0e} Quota exhausted\n     Your",
+            " \u{25cf} \u{26a0}\u{fe0e} Quota exhausted\n   Your",
+        ] {
+            let pane = format!(
+                "{before}{}",
+                notice_rows.replacen(" \u{26a0}\u{fe0e} Quota exhausted\n   Your", quoted, 1)
+            );
+            assert_ne!(pane, real);
+            assert_eq!(quota_exhausted(&pane), None, "{quoted}");
+        }
+        // The notice is an earlier entry: Devin took the next prompt.
+        let later = real.replacen(
+            &format!("\n\n{rule}"),
+            &format!("\n\n\u{276d} Continue the task\n\n{rule}"),
+            1,
+        );
+        assert_ne!(later, real);
+        assert_eq!(quota_exhausted(&later), None);
+        // Devin is working, or a draft sits in the composer.
+        let idle = "Ask Devin to build features, fix bugs, or work on your code";
+        assert_eq!(
+            quota_exhausted(&real.replace(idle, "Guide Devin while it works")),
+            None
+        );
+        assert_eq!(quota_exhausted(&real.replace(idle, "/exit")), None);
+        // The title alone, without its explanation, is not the notice.
+        assert_eq!(
+            quota_exhausted(&real.replace("usage quota", "allowance")),
+            None
+        );
+        for pane in [
+            include_str!("../fixtures/devin/real-fusion-busy-pane.txt"),
+            include_str!("../fixtures/devin/real-fresh-bypass-pane.txt"),
+            include_str!("../fixtures/devin/real-resume-bypass-pane.txt"),
+            include_str!("../fixtures/devin/resume-footer-excerpt.txt"),
+            include_str!("../fixtures/devin/composer.txt"),
+        ] {
+            assert_eq!(quota_exhausted(pane), None);
+        }
+    }
+
+    {
+        // The real quota pane with its last notice swapped for 3000.11.3's auth notice.
+        let real = include_str!("../fixtures/devin/real-quota-exhausted-pane.txt");
+        let last = real.rfind(" \u{26a0}\u{fe0e} Quota exhausted").unwrap();
+        let (before, rows) = real.split_at(last);
+        let end = rows.find("\n\n").unwrap();
+        let auth = format!(
+            "{before} \u{26a0}\u{fe0e} Authentication required\n   Your session is no longer authenticated. Run `/login` to re-authenticate here (or\n   `devin auth login`), then send a message to continue{}",
+            &rows[end..]
+        );
+        let failure = protocol::account_notice(&auth).unwrap();
+        assert_eq!(failure.kind, EngineErrorKind::AuthFailed);
+        assert_eq!(
+            failure.message,
+            "devin: not logged in (session no longer authenticated) — run `devin auth login` on this host (or /login inside `devin`), then step_retry. Devin said: Your session is no longer authenticated. Run `/login` to re-authenticate here (or `devin auth login`), then send a message to continue"
+        );
+        // The same notice quoted in tool output or an agent message, or as an earlier entry.
+        for quoted in [
+            " \u{2502} \u{26a0}\u{fe0e} Authentication required",
+            " \u{25cf} \u{26a0}\u{fe0e} Authentication required",
+        ] {
+            let pane = auth.replacen(" \u{26a0}\u{fe0e} Authentication required", quoted, 1);
+            assert_eq!(protocol::account_notice(&pane), None, "{quoted}");
+        }
+        let rule = "\u{2500}".repeat(20);
+        let later = auth.replacen(
+            &format!("\n\n{rule}"),
+            &format!("\n\n\u{276d} Continue the task\n\n{rule}"),
+            1,
+        );
+        assert_ne!(later, auth);
+        assert_eq!(protocol::account_notice(&later), None);
+        let idle = "Ask Devin to build features, fix bugs, or work on your code";
+        assert_eq!(
+            protocol::account_notice(&auth.replace(idle, "Guide Devin while it works")),
+            None
+        );
+    }
+}
+
+#[tokio::test]
+async fn devin_visible_composer_reports_readiness_without_session_start() {
+    let root = Scratch::new();
+    let mut adapter = Devin::new(options(
+        &root,
+        json!({"omit_session_start":true,"boot_ms":100}),
+    ));
+    let ctx = context(&root, "run", true);
+    let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+    let mut pane = Pane::start(&ctx, launch).await;
+    let pid = pane.pid();
+    adapter
+        .execute(&ctx, EngineCommand::StartFresh)
+        .await
+        .unwrap();
+    let ready = poll(&mut adapter, &ctx, |o| o.status == EngineStatus::Idle).await;
+    assert_eq!((ready.turns_started, ready.turns_completed), (0, 0));
+    assert!(ready.acknowledged.is_empty());
+    assert!(ready.session_id.is_none());
+    assert!(!root.join("prompts.jsonl").exists());
+    assert!(
+        fs::read(ctx.run_dir.join("devin-hooks.jsonl"))
+            .unwrap()
+            .is_empty()
+    );
+
+    event(
+        &mut adapter,
+        json!({"hook_event_name":"UserPromptSubmit","prompt_id":"0"}),
+    );
+    assert_eq!(
+        adapter.observe(&ctx).await.unwrap().status,
+        EngineStatus::Busy
+    );
+    event(&mut adapter, json!({"hook_event_name":"SessionEnd"}));
+    assert_eq!(
+        adapter.observe(&ctx).await.unwrap().status,
+        EngineStatus::Exited
+    );
+    adapter
+        .execute(&ctx, EngineCommand::RequestExit)
+        .await
+        .unwrap();
+    poll(&mut adapter, &ctx, |o| {
+        o.status == EngineStatus::Exited && !Path::new(&format!("/proc/{pid}")).exists()
+    })
+    .await;
+    adapter.close().await.unwrap();
+    pane.close();
+    assert!(!Path::new(&format!("/proc/{pid}")).exists());
+}
+
+#[derive(Default)]
+struct DevinHost {
+    directory: PathBuf,
+    submissions: BTreeMap<String, Value>,
+    messages: Vec<DeliveryMessage>,
+    /// Messages stay unseen until this file exists in `directory`.
+    release: Option<&'static str>,
+    acks: Vec<MessageId>,
+    cleanups: u32,
+}
+impl SupervisorHost for DevinHost {
+    async fn snapshot(&mut self, after: MessageId) -> io::Result<HostSnapshot> {
+        match fs::read(self.directory.join("submission.json")) {
+            Ok(bytes) => self.submissions = serde_json::from_slice(&bytes)?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        let released = self
+            .release
+            .is_none_or(|file| self.directory.join(file).exists());
+        Ok(HostSnapshot {
+            submissions: self.submissions.clone(),
+            messages: self
+                .messages
+                .iter()
+                .filter(|m| released && m.id > after)
+                .cloned()
+                .collect(),
+            ..HostSnapshot::default()
+        })
+    }
+    async fn acknowledge(&mut self, ids: &[MessageId]) -> io::Result<()> {
+        for id in ids {
+            if !self.acks.contains(id) {
+                self.acks.push(*id);
+            }
+        }
+        Ok(())
+    }
+    async fn me(&mut self) -> io::Result<String> {
+        Ok("current scratch run context".into())
+    }
+    async fn note(&mut self, _body: &str) -> io::Result<()> {
+        Ok(())
+    }
+    async fn checkpoint(&mut self, _checkpoint: &Checkpoint) -> io::Result<()> {
+        Ok(())
+    }
+    async fn cleanup(&mut self) -> io::Result<()> {
+        self.cleanups += 1;
+        Ok(())
+    }
+}
+fn supervisor_config(root: &Scratch) -> SupervisorConfig {
+    let cwd = root.join("work");
+    fs::create_dir_all(&cwd).unwrap();
+    SupervisorConfig {
+        run: RunId::new(),
+        attempt: AttemptId::new(),
+        invocation: InvocationId::new(),
+        project: "readiness".into(),
+        home: root.0.clone(),
+        run_dir: root.join("run"),
+        cwd,
+        engine: "devin".into(),
+        task: "Submit the declared word blue and finish.".into(),
+        required: vec!["word".into()],
+        session: None,
+        previous: None,
+        assigned: AssignedRange {
+            after: MessageId(0),
+            through: MessageId(0),
+        },
+        messages: vec![],
+        model: None,
+        limits: Limits {
+            wall: Duration::from_secs(15),
+            ready: Duration::from_secs(5),
+            turn_start: Duration::from_secs(5),
+            stall: Duration::from_secs(10),
+            settle: Duration::from_millis(100),
+            ..Limits::test_profile()
+        },
+        retry: RetryPolicy::agent(),
+        internal_attempt: 1,
+    }
+}
+fn supervisor_message(id: i64) -> DeliveryMessage {
+    DeliveryMessage {
+        id: MessageId(id),
+        body: sluice_model::rpc::JsonValue::try_from(
+            json!({"body":"Keep word blue and finish after feedback."}),
+        )
+        .unwrap(),
+    }
+}
+
+#[tokio::test]
+async fn devin_collapsed_large_paste_and_missing_hook_do_not_duplicate_input() {
+    let root = Scratch::new();
+    let mut opts = options(&root, json!({"turns":[{"omit_ack":true}]}));
+    opts.delivery_timeout = Duration::from_millis(600);
+    let mut adapter = Devin::new(opts);
+    let ctx = context(&root, "run", true);
+    let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+    let _pane = Pane::start(&ctx, launch).await;
+    let text = format!("Task {}\nline2\nline3\nline4", "x".repeat(1200));
+    adapter
+        .execute(
+            &ctx,
+            EngineCommand::DeliverText {
+                id: InputId::Task,
+                text: text.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let obs = poll(&mut adapter, &ctx, |o| {
+        o.error
+            .as_ref()
+            .is_some_and(|e| e.kind == EngineErrorKind::UnknownAcceptance)
+    })
+    .await;
+    assert!(obs.acknowledged.is_empty());
+    assert!(obs.not_accepted.is_empty());
+    assert_eq!(
+        adapter
+            .execute(
+                &ctx,
+                EngineCommand::DeliverText {
+                    id: InputId::Task,
+                    text
+                }
+            )
+            .await
+            .unwrap(),
+        DeliveryOutcome::Pending
+    );
+    let prompts = fs::read_to_string(root.join("prompts.jsonl")).unwrap();
+    assert_eq!(prompts.lines().count(), 1);
+}
+
+#[tokio::test]
+async fn devin_transient_resume_keeps_session_and_new_invocation_counters() {
+    let root = Scratch::new();
+    let opts = options(
+        &root,
+        json!({"turns":[{"reply":"committed","commit":"first","error":"HTTP status 529"}]}),
+    );
+    let ctx = context(&root, "run", true);
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.email", "fixture@example.invalid"],
+        vec!["config", "user.name", "Fixture"],
+        vec!["commit", "--allow-empty", "-qm", "baseline"],
+    ] {
+        assert!(
+            Command::new("git")
+                .current_dir(&ctx.cwd)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let baseline = Command::new("git")
+        .current_dir(&ctx.cwd)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap()
+        .stdout;
+    let mut adapter = Devin::new(opts.clone());
+    let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+    let mut pane = Pane::start(&ctx, launch).await;
+    deliver(&mut adapter, &ctx, InputId::Task, "Commit first").await;
+    let obs = poll(&mut adapter, &ctx, |o| o.error.is_some()).await;
+    let session = obs.session_id.unwrap();
+    assert_eq!(obs.error.unwrap().kind, EngineErrorKind::Transient);
+    pane.close();
+    adapter.close().await.unwrap();
+    let mut script: Value =
+        serde_json::from_slice(&fs::read(root.join("fixture.json")).unwrap()).unwrap();
+    script["turns"] = json!([{"reply":"continued","commit":"second"}]);
+    fs::write(
+        root.join("fixture.json"),
+        serde_json::to_vec(&script).unwrap(),
+    )
+    .unwrap();
+    let resumed = context(&root, "resume", true);
+    let launch = adapter
+        .prepare(&resumed, Some(&session))
+        .await
+        .unwrap()
+        .unwrap();
+    let _pane = Pane::start(&resumed, launch).await;
+    adapter
+        .execute(
+            &resumed,
+            EngineCommand::Resume {
+                session: session.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(adapter.observe(&resumed).await.unwrap().turns_completed, 0);
+    deliver(
+        &mut adapter,
+        &resumed,
+        InputId::Continue { attempt: 1 },
+        "Continue after transient",
+    )
+    .await;
+    let obs = poll(&mut adapter, &resumed, |o| o.turns_completed == 1).await;
+    assert_eq!(obs.session_id.as_deref(), Some(session.as_str()));
+    let range = format!("{}..HEAD", String::from_utf8(baseline).unwrap().trim());
+    let count = Command::new("git")
+        .current_dir(&ctx.cwd)
+        .args(["rev-list", "--count", &range])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(count.stdout).unwrap().trim(), "2");
+    assert_eq!(
+        fs::read_to_string(root.join("prompts.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+    adapter.close().await.unwrap();
+}
+
+async fn exit_probe(on_client: bool) {
+    for stop in [false, true] {
+        let root = Scratch::new();
+        let opts = options(&root, json!({}));
+        let mut ctx = context(&root, "exit-probe", false);
+        let tmux = root.join("probe-tmux");
+        executable::write(
+            &tmux,
+            include_str!("../fixtures/devin/exit-during-probe.py"),
+        );
+        ctx.tmux_binary = Some(tmux);
+        let mut adapter = Devin::new(opts);
+        adapter.prepare(&ctx, None).await.unwrap();
+        adapter
+            .execute(
+                &ctx,
+                EngineCommand::DeliverText {
+                    id: InputId::Task,
+                    text: "finish the task".into(),
+                },
+            )
+            .await
+            .unwrap();
+        adapter.observe(&ctx).await.unwrap();
+        let mut hooks = vec![
+            json!({"hook_event_name":"UserPromptSubmit", "session_id":"fixture-devin-session", "prompt_id":"last", "prompt":"finish the task"}),
+        ];
+        if stop {
+            hooks.push(json!({"hook_event_name":"Stop", "session_id":"fixture-devin-session", "prompt_id":"last", "last_assistant_message":"done"}));
+        }
+        if on_client {
+            fs::write(ctx.run_dir.join("exit-on-client"), "").unwrap();
+        }
+        fs::write(
+            ctx.run_dir.join("exit-hooks.json"),
+            serde_json::to_vec(&hooks).unwrap(),
+        )
+        .unwrap();
+        let observation = adapter.observe(&ctx).await.unwrap();
+        assert_eq!(observation.status, EngineStatus::Exited);
+        assert_eq!(observation.acknowledged, vec![InputId::Task]);
+        assert_eq!(observation.turns_started, 1);
+        assert_eq!(observation.turns_completed, u64::from(stop));
+        adapter.close().await.unwrap();
+    }
+}
+
+async fn resumed_bypass(settings: Value) {
+    let root = Scratch::new();
+    let mut script = json!({"resume_bypass":true,"turns":[{"reply":"continued"}]});
+    script
+        .as_object_mut()
+        .unwrap()
+        .extend(settings.as_object().unwrap().clone());
+    let opts = options(&root, script);
+    let ctx = context(&root, "resume", true);
+    fs::create_dir_all(opts.data_home.join("devin/cli")).unwrap();
+    assert!(Command::new("/usr/bin/sqlite3")
+        .arg(opts.data_home.join("devin/cli/sessions.db"))
+        .arg(format!("CREATE TABLE sessions(id TEXT PRIMARY KEY, working_directory TEXT); INSERT INTO sessions VALUES('fixture-devin-session','{}');", ctx.cwd.display()))
+        .status().unwrap().success());
+    let mut adapter = Devin::new(opts);
+    let launch = adapter
+        .prepare(&ctx, Some("fixture-devin-session"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(launch.env["DEVIN_PERMISSION_MODE"], "dangerous");
+    assert!(
+        launch
+            .argv
+            .windows(2)
+            .any(|args| args == ["--permission-mode", "dangerous"])
+    );
+    let _pane = Pane::start(&ctx, launch).await;
+    adapter
+        .execute(
+            &ctx,
+            EngineCommand::Resume {
+                session: "fixture-devin-session".into(),
+            },
+        )
+        .await
+        .unwrap();
+    deliver(
+        &mut adapter,
+        &ctx,
+        InputId::Continue { attempt: 2 },
+        "Continue without toggling permission mode",
+    )
+    .await;
+    let observation = poll(&mut adapter, &ctx, |o| o.turns_completed == 1).await;
+    assert_eq!(
+        observation.session_id.as_deref(),
+        Some("fixture-devin-session")
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("prompts.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    adapter.close().await.unwrap();
+}
+
+/// A lead's tool calls after its sidekick's Stop, `gap_ms` apart.
+fn post_stop_work(tools: usize, gap_ms: u64) -> Vec<Value> {
+    (0..tools)
+        .map(|i| json!({"ms":gap_ms,"hook":if i % 2 == 0 {"PostToolUse"} else {"PreToolUse"}}))
+        .collect()
+}
+fn fixture_prompts(root: &Scratch) -> Vec<Value> {
+    fs::read_to_string(root.join("prompts.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+fn capture(ctx: &EngineContext) -> String {
+    let out = Command::new(ctx.tmux_binary.as_ref().unwrap())
+        .current_dir(&ctx.run_dir)
+        .args(["-S", "tmux.sock", "capture-pane", "-p", "-t", "%0"])
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+async fn supervise_fixture(
+    adapter: &mut Devin,
+    cfg: SupervisorConfig,
+    host: &mut DevinHost,
+) -> Result<sluice_agents::supervisor::AgentResult, sluice_agents::supervisor::AgentFailure> {
+    let tmux = sluice_process::tmux::ApprovedTmux::load(&workspace().join("target/private-tmux"))
+        .await
+        .unwrap();
+    sluice_agents::supervisor::supervise(
+        cfg,
+        adapter,
+        host,
+        &mut Default::default(),
+        Some(&tmux),
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn supervisor_devin_nudges_only_once_post_stop_work_ends() {
+    let root = Scratch::new();
+    let mut work = post_stop_work(4, 150);
+    work.push(json!({"ms":150,"hook":"Stop","reply":"lead done"}));
+    let mut opts = options(
+        &root,
+        json!({"turns":[{"reply":"sidekick report","after_stop":work},{"reply":"submitted","submit":{"word":"blue"}}]}),
+    );
+    opts.turn_quiet = Duration::from_millis(60);
+    let mut adapter = Devin::new(opts);
+    let cfg = supervisor_config(&root);
+    let dir = cfg.run_dir.clone();
+    let mut host = DevinHost {
+        directory: cfg.cwd.clone(),
+        ..Default::default()
+    };
+    supervise_fixture(&mut adapter, cfg, &mut host)
+        .await
+        .unwrap();
+    assert_eq!(host.submissions["word"], json!("blue"));
+    assert_eq!(Checkpoint::read(&dir).unwrap().unwrap().nudges, 1);
+    let prompts = fixture_prompts(&root);
+    assert_eq!(prompts.len(), 2);
+    assert!(
+        prompts[1]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Your turn ended")
+    );
+    // The nudge met an idle composer: it was never pasted behind the lead's work.
+    assert_eq!(prompts[1]["queued"], json!(false));
+}
+
+/// With SLUICE_G3_DEVIN_EVIDENCE set, saves the latest real pane and the pane behind each
+/// permission-mode verdict change, for redacted replay fixtures.
+fn g3_capture(ctx: &EngineContext, verdict: &mut Option<protocol::PermissionMode>) {
+    let Some(dir) = std::env::var_os("SLUICE_G3_DEVIN_EVIDENCE").map(PathBuf::from) else {
+        return;
+    };
+    let Ok(out) = Command::new(ctx.tmux_binary.as_ref().unwrap())
+        .current_dir(&ctx.run_dir)
+        .args([
+            "-S",
+            "tmux.sock",
+            "-f",
+            "/dev/null",
+            "capture-pane",
+            "-p",
+            "-t",
+            "%0",
+        ])
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
+        .output()
+    else {
+        return;
+    };
+    if !out.status.success() {
+        return;
+    }
+    let pane = String::from_utf8_lossy(&out.stdout);
+    let run = ctx.run_dir.file_name().unwrap().to_string_lossy();
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join(format!("{run}-latest.txt")), pane.as_bytes());
+    let mode = protocol::permission_mode(&pane);
+    if *verdict != Some(mode) {
+        *verdict = Some(mode);
+        println!("g3_devin {run} permission verdict {mode:?}");
+        let _ = fs::write(dir.join(format!("{run}-{mode:?}.txt")), pane.as_bytes());
+    }
+}
+async fn real_poll(
+    adapter: &mut Devin,
+    ctx: &EngineContext,
+    done: impl Fn(&EngineObservation) -> bool,
+) -> io::Result<EngineObservation> {
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let mut reported_session = None;
+    let mut verdict = None;
+    loop {
+        g3_capture(ctx, &mut verdict);
+        let obs = adapter.observe(ctx).await.map_err(io::Error::other)?;
+        if obs.session_id.is_some() && obs.session_id != reported_session {
+            println!(
+                "g3_devin session={:?} run_dir={}",
+                obs.session_id,
+                ctx.run_dir.display()
+            );
+            reported_session = obs.session_id.clone();
+        }
+        if done(&obs) {
+            return Ok(obs);
+        }
+        if let Some(error) = obs.error {
+            return Err(io::Error::other(error));
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::other(format!(
+                "g3_devin timed out in {:?}, starts={}, completed={}",
+                obs.status, obs.turns_started, obs.turns_completed
+            )));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+fn git(cwd: &Path, args: &[&str]) -> io::Result<String> {
+    let out = Command::new("git").current_dir(cwd).args(args).output()?;
+    if !out.status.success() {
+        return Err(io::Error::other("scratch git command failed"));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().into())
+}
+
+async fn g3_wait_reaped(identity: &sluice_process::identity::ProcessIdentity) -> io::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while identity.matches_current()? {
+        if Instant::now() >= deadline {
+            return Err(io::Error::other(format!(
+                "g3_devin pane survived shutdown: {identity:?}"
+            )));
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    println!(
+        "g3_devin cleanup reaped pid={} start={}",
+        identity.pid, identity.start_time
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "labelled real engine gate; run separately in a private home"]
+async fn g3_devin() -> io::Result<()> {
+    let root = Scratch::new();
+    let owner = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+    let owner_data = std::env::var_os("SLUICE_G3_DEVIN_OWNER_DATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| owner.join(".local/share"));
+    let credentials = owner_data.join("devin/credentials.toml");
+    if !credentials.is_file() {
+        return Err(io::Error::other(
+            "PENDING: no privately copyable Devin credentials.toml",
+        ));
+    }
+    let home = root.join("engine-home");
+    for path in [
+        &home,
+        &home.join(".config/devin"),
+        &home.join(".local/share/devin"),
+        &home.join(".cache"),
+        &home.join(".local/state"),
+    ] {
+        fs::create_dir_all(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    protocol::private_write(
+        &home.join(".local/share/devin/credentials.toml"),
+        &fs::read(credentials)?,
+    )?;
+    // Only authentication/provider configuration is needed. Owner callbacks are not run in G3.
+    let owner_config = std::env::var_os("SLUICE_G3_DEVIN_OWNER_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| owner.join(".config/devin/config.json"));
+    let original: Value =
+        serde_json::from_str(&protocol::strip_jsonc(&fs::read_to_string(owner_config)?)?)?;
+    let mut cfg = json!({});
+    for key in ["version", "devin"] {
+        if let Some(value) = original.get(key) {
+            cfg[key] = value.clone();
+        }
+    }
+    protocol::private_write(
+        &home.join(".config/devin/config.json"),
+        &serde_json::to_vec(&cfg)?,
+    )?;
+    let fixture = built("fixture");
+    let mut adapter = Devin::new(DevinOptions {
+        binary: std::env::var_os("SLUICE_G3_DEVIN_BINARY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| owner.join(".local/bin/devin")),
+        hook_binary: fixture.clone(),
+        config: home.join(".config/devin/config.json"),
+        data_home: home.join(".local/share"),
+        probe_cache: None,
+        environment: BTreeMap::from([
+            ("HOME".into(), home.to_string_lossy().into_owned()),
+            (
+                "XDG_CONFIG_HOME".into(),
+                home.join(".config").to_string_lossy().into_owned(),
+            ),
+            (
+                "XDG_DATA_HOME".into(),
+                home.join(".local/share").to_string_lossy().into_owned(),
+            ),
+            (
+                "XDG_CACHE_HOME".into(),
+                home.join(".cache").to_string_lossy().into_owned(),
+            ),
+            (
+                "XDG_STATE_HOME".into(),
+                home.join(".local/state").to_string_lossy().into_owned(),
+            ),
+            (
+                "SLUICE_HOME".into(),
+                root.join("scratch-sluice").to_string_lossy().into_owned(),
+            ),
+        ]),
+        ready_timeout: Duration::from_secs(60),
+        delivery_timeout: Duration::from_secs(30),
+        turn_quiet: Duration::from_secs(10),
+        screen_grace: sluice_agents::engines::screen::DEFAULT_GRACE,
+    });
+    let ctx = context(&root, "g3_devin-fresh", true);
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.name", "Fixture"],
+        vec!["config", "user.email", "fixture@example.invalid"],
+        vec!["commit", "--allow-empty", "-qm", "baseline"],
+    ] {
+        git(&ctx.cwd, &args)?;
+    }
+    let baseline = git(&ctx.cwd, &["rev-parse", "HEAD"])?;
+    let launch = adapter
+        .prepare(&ctx, None)
+        .await
+        .map_err(io::Error::other)?
+        .unwrap();
+    let mut pane = Pane::start(&ctx, launch).await;
+    let pid = pane.pid();
+    let identity = sluice_process::identity::ProcessIdentity::read(pid)?;
+    println!(
+        "g3_devin owned pane pid={pid} start={}",
+        identity.start_time
+    );
+    adapter
+        .execute(&ctx, EngineCommand::StartFresh)
+        .await
+        .map_err(io::Error::other)?;
+    let prompt = format!(
+        "g3_devin labelled scratch acceptance task. Work only in this scratch cwd. Do not spawn subagents. Declared output is word:string. Run {} devin-submit {} '{{\"word\":\"blue\"}}' to submit it. Then write work.txt containing first and git add work.txt && git commit -m 'First scratch change'. Finish briefly. Do not touch any other directories, account settings, or services.",
+        protocol::shell_quote(&fixture.to_string_lossy()),
+        protocol::shell_quote(&ctx.cwd.join("submission.json").to_string_lossy())
+    );
+    adapter
+        .execute(
+            &ctx,
+            EngineCommand::DeliverText {
+                id: InputId::Task,
+                text: prompt,
+            },
+        )
+        .await
+        .map_err(io::Error::other)?;
+    real_poll(&mut adapter, &ctx, |o| {
+        o.acknowledged.contains(&InputId::Task)
+    })
+    .await?;
+    let live = InputId::Message {
+        id: sluice_model::ids::MessageId(1),
+    };
+    adapter.execute(&ctx,EngineCommand::Steer {id:live.clone(),text:"Addressed live message for g3_devin: also write live.txt containing addressed. Keep the declared word blue. Finish after the first scratch commit.".into()}).await.map_err(io::Error::other)?;
+    let obs = real_poll(&mut adapter, &ctx, |o| {
+        o.acknowledged.contains(&live) && o.turns_completed >= 1 && o.status == EngineStatus::Idle
+    })
+    .await?;
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(ctx.cwd.join("submission.json"))?)?,
+        json!({"word":"blue"})
+    );
+    assert_eq!(
+        fs::read_to_string(ctx.cwd.join("live.txt"))?.trim(),
+        "addressed"
+    );
+    let session = obs
+        .session_id
+        .ok_or_else(|| io::Error::other("g3_devin did not report a session"))?;
+    adapter.inject_transient_once();
+    assert_eq!(
+        adapter
+            .observe(&ctx)
+            .await
+            .map_err(io::Error::other)?
+            .error
+            .unwrap()
+            .kind,
+        EngineErrorKind::Transient
+    );
+    adapter
+        .execute(&ctx, EngineCommand::RequestExit)
+        .await
+        .map_err(io::Error::other)?;
+    real_poll(&mut adapter, &ctx, |o| o.status == EngineStatus::Exited).await?;
+    adapter.close().await?;
+    pane.close();
+    g3_wait_reaped(&identity).await?;
+    let resumed = context(&root, "g3_devin-resume", true);
+    let launch = adapter
+        .prepare(&resumed, Some(&session))
+        .await
+        .map_err(io::Error::other)?
+        .unwrap();
+    let mut pane = Pane::start(&resumed, launch).await;
+    let pid = pane.pid();
+    let identity = sluice_process::identity::ProcessIdentity::read(pid)?;
+    println!(
+        "g3_devin owned pane pid={pid} start={}",
+        identity.start_time
+    );
+    adapter
+        .execute(
+            &resumed,
+            EngineCommand::Resume {
+                session: session.clone(),
+            },
+        )
+        .await
+        .map_err(io::Error::other)?;
+    assert_eq!(
+        adapter
+            .observe(&resumed)
+            .await
+            .map_err(io::Error::other)?
+            .turns_completed,
+        0
+    );
+    let continuation = InputId::Continue { attempt: 1 };
+    adapter.execute(&resumed,EngineCommand::DeliverText {id:continuation.clone(),text:"g3_devin same-run continuation after an injected transient, with feedback: keep word blue, replace work.txt with second, git add work.txt && git commit -m 'Second scratch change', and finish briefly. Do not submit the original task again.".into()}).await.map_err(io::Error::other)?;
+    let obs = real_poll(&mut adapter, &resumed, |o| {
+        o.acknowledged.contains(&continuation)
+            && o.turns_completed >= 1
+            && o.status == EngineStatus::Idle
+    })
+    .await?;
+    assert_eq!(obs.session_id.as_deref(), Some(session.as_str()));
+    assert_eq!(
+        git(
+            &ctx.cwd,
+            &["rev-list", "--count", &format!("{baseline}..HEAD")]
+        )?,
+        "2"
+    );
+    adapter
+        .execute(&resumed, EngineCommand::RequestExit)
+        .await
+        .map_err(io::Error::other)?;
+    real_poll(&mut adapter, &resumed, |o| o.status == EngineStatus::Exited).await?;
+    adapter.close().await?;
+    pane.close();
+    g3_wait_reaped(&identity).await?;
+    println!(
+        "g3_devin PASS: session {}, fresh declared word=blue, addressed live message, feedback/transient resume, original baseline has two commits, both pane processes reaped",
+        session
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn slow_supervisor_devin_inline_hooks_submit_live_compact_and_resume() {
+    let root = Scratch::new();
+    let opts = options(
+        &root,
+        // Submitting ends the session, so the agent submits only after its live message.
+        json!({"turns":[{"reply":"done","compact":true,"busy_ms":100},{"reply":"next","busy_ms":100},{"reply":"feedback","submit":{"word":"blue"}},{"reply":"feedback","submit":{"word":"blue"}}]}),
+    );
+    let mut adapter = Devin::new(opts);
+    let tmux = sluice_process::tmux::ApprovedTmux::load(&workspace().join("target/private-tmux"))
+        .await
+        .unwrap();
+    let mut cfg = supervisor_config(&root);
+    let dir = cfg.run_dir.clone();
+    let mut host = DevinHost {
+        directory: cfg.cwd.clone(),
+        messages: vec![supervisor_message(1)],
+        ..Default::default()
+    };
+    let result = sluice_agents::supervisor::supervise(
+        cfg.clone(),
+        &mut adapter,
+        &mut host,
+        &mut Default::default(),
+        Some(&tmux),
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(host.submissions["word"], json!("blue"));
+    assert_eq!(host.acks, vec![sluice_model::ids::MessageId(1)]);
+    let checkpoint = Checkpoint::read(&dir).unwrap().unwrap();
+    assert_eq!(checkpoint.state, State::Done);
+    assert_eq!(checkpoint.compactions, 1);
+    assert!(checkpoint.delivery.all_acknowledged());
+    let task = checkpoint
+        .delivery
+        .entries
+        .iter()
+        .find(|entry| entry.id == InputId::Task)
+        .unwrap();
+    assert_eq!(task.tries, 1);
+    let prompts = fixture_prompts(&root);
+    assert_eq!(
+        prompts
+            .iter()
+            .filter(|prompt| prompt["text"].as_str().unwrap().trim_end() == task.text)
+            .count(),
+        1
+    );
+
+    assert!(
+        checkpoint
+            .delivery
+            .entries
+            .iter()
+            .any(|entry| entry.id == InputId::Reprime { ordinal: 1 })
+    );
+    assert!(
+        !tmux
+            .client_command(&dir)
+            .unwrap()
+            .arg("list-sessions")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    );
+    fs::remove_file(cfg.cwd.join("submission.json")).unwrap();
+    let mut script: Value =
+        serde_json::from_slice(&fs::read(root.join("fixture.json")).unwrap()).unwrap();
+    script["turns"] = json!([{"reply":"resumed","busy_ms":100},{"reply":"feedback","busy_ms":100,"submit":{"word":"blue"}}]);
+    fs::write(
+        root.join("fixture.json"),
+        serde_json::to_vec(&script).unwrap(),
+    )
+    .unwrap();
+
+    cfg.run = sluice_model::ids::RunId::new();
+    cfg.attempt = sluice_model::ids::AttemptId::new();
+    cfg.invocation = sluice_model::ids::InvocationId::new();
+    cfg.run_dir = root.join("resumed");
+    cfg.previous = Some(sluice_agents::supervisor::PreviousSession {
+        engine: "devin".into(),
+        cwd: cfg.cwd.clone(),
+        session: Some(result.session.clone()),
+    });
+    cfg.assigned.through = sluice_model::ids::MessageId(2);
+    cfg.messages = vec![supervisor_message(2)];
+    let mut host = DevinHost {
+        directory: cfg.cwd.clone(),
+        ..Default::default()
+    };
+    let next = sluice_agents::supervisor::supervise(
+        cfg,
+        &mut adapter,
+        &mut host,
+        &mut Default::default(),
+        Some(&tmux),
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(next.session, result.session);
+    assert_eq!(host.acks, vec![sluice_model::ids::MessageId(2)]);
+}
+
+/// Launches the fixture on `pane` (drawn instead of the composer, no SessionStart), offers the
+/// task and returns the first failure with how long it took.
+async fn blocked_on(
+    pane: &str,
+    grace: Option<Duration>,
+) -> (sluice_agents::engines::EngineError, Duration) {
+    let root = Scratch::new();
+    let mut options = options(&root, json!({"ready_pane":pane,"omit_session_start":true}));
+    if let Some(grace) = grace {
+        options.screen_grace = grace;
+    }
+    let mut adapter = Devin::new(options);
+    let ctx = context(&root, "run", true);
+    let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+    let _pane = Pane::start(&ctx, launch).await;
+    adapter
+        .execute(&ctx, EngineCommand::StartFresh)
+        .await
+        .unwrap();
+    let started = Instant::now();
+    assert_eq!(
+        adapter
+            .execute(
+                &ctx,
+                EngineCommand::DeliverText {
+                    id: InputId::Task,
+                    text: "Start the task".into()
+                }
+            )
+            .await
+            .unwrap(),
+        DeliveryOutcome::Pending
+    );
+    let failed = poll(&mut adapter, &ctx, |o| o.error.is_some()).await;
+    let took = started.elapsed();
+    assert!(failed.acknowledged.is_empty());
+    assert_eq!(failed.turns_started, 0);
+    assert!(!root.join("prompts.jsonl").exists());
+    adapter.close().await.unwrap();
+    (failed.error.unwrap(), took)
+}
+
+#[tokio::test]
+async fn devin_setup_screens_fail_typed_at_once_before_any_input() {
+    let (error, took) = blocked_on(
+        "Select your Devin organization:\n\n\u{276f} Acme Corp\n  Personal",
+        None,
+    )
+    .await;
+    assert_eq!(error.kind, EngineErrorKind::BlockedScreen, "{error}");
+    assert!(took < Duration::from_secs(5), "{took:?}");
+    assert_eq!(
+        error.message,
+        "devin: blocked on its organization picker — run `devin` once on this host and choose the organization (/org), then step_retry. Devin showed: Select your Devin organization: | \u{276f} Acme Corp | Personal"
+    );
+    let (error, _) = blocked_on(
+        "Do you trust the authors of /scratch/work?\n\n\u{276f} Yes, trust this folder\n  No, exit",
+        None,
+    )
+    .await;
+    assert_eq!(error.kind, EngineErrorKind::BlockedScreen, "{error}");
+    assert!(
+        error
+            .message
+            .starts_with("devin: blocked on its workspace-trust prompt — "),
+        "{}",
+        error.message
+    );
+    // Logged out, Devin opens on its login picker: an auth failure, as its notices are.
+    let (error, took) = blocked_on(
+        "How would you like to log in?\n\n\u{276f} Log in with browser\n  Recommended for most users\n  Paste a token manually\n  For SSH or remote sessions without browser access",
+        None,
+    )
+    .await;
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error}");
+    assert!(took < Duration::from_secs(5), "{took:?}");
+    assert!(
+        error.message.starts_with(
+            "devin: not logged in (Devin shows its login screen) — run `devin auth login` on this host (or /login inside `devin`), then step_retry. Devin said: How would you like to log in? |"
+        ),
+        "{}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn devin_unrecognized_screen_fails_as_blocked_screen_after_the_grace() {
+    let (error, took) = blocked_on(
+        "Something new is here.\n\nPress Enter to continue",
+        Some(Duration::from_millis(100)),
+    )
+    .await;
+    assert_eq!(error.kind, EngineErrorKind::BlockedScreen, "{error}");
+    assert!(took >= Duration::from_millis(100), "{took:?}");
+    assert_eq!(
+        error.message,
+        "devin: blocked on a screen sluice does not recognize, unchanged for 0s before any turn — run `devin` once in the step's cwd on this host and answer it (or attach to the run's private pane while it waits), then step_retry. Devin showed: Something new is here. | Press Enter to continue"
+    );
+}
+
+/// Devin takes the pasted task but never submits it: the run fails `TurnStartTimeout`, and the
+/// pane, kept before teardown, shows the task still in its composer.
+#[tokio::test]
+async fn supervisor_devin_turn_start_timeout_keeps_the_pane_at_failure() {
+    let root = Scratch::new();
+    let mut adapter = Devin::new(options(&root, json!({"drop_enters":1000})));
+    let mut cfg = supervisor_config(&root);
+    cfg.limits.turn_start = Duration::from_millis(200);
+    let dir = cfg.run_dir.clone();
+    let mut host = DevinHost {
+        directory: cfg.cwd.clone(),
+        ..Default::default()
+    };
+    let failure = supervise_fixture(&mut adapter, cfg, &mut host)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.kind,
+        sluice_agents::supervisor::FailureKind::TurnStartTimeout,
+        "{failure}"
+    );
+    let path = fs::canonicalize(&dir).unwrap().join("pane-at-failure.txt");
+    let head = format!(
+        "refusing blind replay\npane at failure (last rows; whole screen: {}):\n",
+        path.display()
+    );
+    let at = failure.message.find(&head).expect(&failure.message);
+    let rows: Vec<_> = failure.message[at + head.len()..].lines().collect();
+    assert_eq!(rows.len(), 6, "{}", failure.message);
+    assert!(rows.iter().all(|row| row.starts_with("  ")), "{rows:?}");
+    assert!(
+        rows.contains(&"  \u{276f} Submit the declared word blue and finish."),
+        "{rows:?}"
+    );
+    assert!(rows[5].starts_with("  SWE-2 High"), "{rows:?}");
+    let kept = fs::read_to_string(&path).unwrap();
+    assert!(kept.contains("Submit the declared word blue and finish."));
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(host.cleanups, 1);
+}
+
+#[tokio::test]
+async fn account_refusals_preserve_open_turn_and_never_retry() {
+    {
+        let root = Scratch::new();
+        let mut adapter = Devin::new(options(&root, json!({"turns":[{"auth":true}]})));
+        let ctx = context(&root, "run", true);
+        let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+        let _pane = Pane::start(&ctx, launch).await;
+        deliver(&mut adapter, &ctx, InputId::Task, "Start the task").await;
+        let failed = poll(&mut adapter, &ctx, |o| o.error.is_some()).await;
+        let error = failed.error.unwrap();
+        assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error}");
+        assert!(
+            error.message.starts_with(
+                "devin: not logged in (session no longer authenticated) — run `devin auth login`"
+            ),
+            "{}",
+            error.message
+        );
+        assert_eq!(
+            (failed.status, failed.turns_started, failed.turns_completed),
+            (EngineStatus::Busy, 1, 0)
+        );
+        adapter.close().await.unwrap();
+    }
+    {
+        let root = Scratch::new();
+        let mut adapter = Devin::new(options(&root, json!({"turns":[{"auth":true}]})));
+        let cfg = supervisor_config(&root);
+        let dir = cfg.run_dir.clone();
+        let stall = cfg.limits.stall;
+        let mut host = DevinHost {
+            directory: cfg.cwd.clone(),
+            ..Default::default()
+        };
+        let started = Instant::now();
+        let failure = supervise_fixture(&mut adapter, cfg, &mut host)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure.kind,
+            sluice_agents::supervisor::FailureKind::AuthFailed,
+            "{failure}"
+        );
+        assert!(started.elapsed() < stall / 2, "{:?}", started.elapsed());
+        assert!(
+            failure
+                .message
+                .contains("run `devin auth login` on this host")
+        );
+        assert_eq!(failure.session.as_deref(), Some("fixture-devin-session"));
+        assert_eq!(host.cleanups, 1);
+        let checkpoint = Checkpoint::read(&dir).unwrap().unwrap();
+        assert_eq!(checkpoint.internal_attempt, 1);
+        assert_eq!(checkpoint.delivery.entries.len(), 1);
+        assert_eq!(checkpoint.delivery.entries[0].tries, 1);
+        assert_eq!(fixture_prompts(&root).len(), 1);
+    }
+    {
+        let root = Scratch::new();
+        let mut adapter = Devin::new(options(&root, json!({"turns":[{"quota":true}]})));
+        let ctx = context(&root, "run", true);
+        let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+        let _pane = Pane::start(&ctx, launch).await;
+        deliver(&mut adapter, &ctx, InputId::Task, "Start the task").await;
+        let failed = poll(&mut adapter, &ctx, |o| o.error.is_some()).await;
+        let error = failed.error.unwrap();
+        assert_eq!(error.kind, EngineErrorKind::QuotaExhausted, "{error}");
+        assert!(
+            error
+                .message
+                .contains("https://app.devin.ai/settings/usage")
+        );
+        assert!(error.message.ends_with("(trace ID: fixture-trace)"));
+        // Devin sent no Stop: the turn it took is still open.
+        assert_eq!(
+            (failed.status, failed.turns_started, failed.turns_completed),
+            (EngineStatus::Busy, 1, 0)
+        );
+        assert_eq!(failed.session_id.as_deref(), Some("fixture-devin-session"));
+        adapter.close().await.unwrap();
+    }
+    {
+        let root = Scratch::new();
+        let mut adapter = Devin::new(options(&root, json!({"turns":[{"quota":true}]})));
+        let cfg = supervisor_config(&root);
+        let dir = cfg.run_dir.clone();
+        let stall = cfg.limits.stall;
+        let mut host = DevinHost {
+            directory: cfg.cwd.clone(),
+            ..Default::default()
+        };
+        let started = Instant::now();
+        let failure = supervise_fixture(&mut adapter, cfg, &mut host)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure.kind,
+            sluice_agents::supervisor::FailureKind::QuotaExhausted,
+            "{failure}"
+        );
+        assert!(started.elapsed() < stall / 2, "{:?}", started.elapsed());
+        assert!(
+            failure
+                .message
+                .contains("Your weekly usage quota has been exhausted")
+        );
+        assert!(
+            failure
+                .message
+                .contains("https://app.devin.ai/settings/usage")
+        );
+        assert!(failure.message.contains("(trace ID: fixture-trace)"));
+        // The session stays on the failure, so a later retry resumes it.
+        assert_eq!(failure.session.as_deref(), Some("fixture-devin-session"));
+        assert!(
+            failure
+                .to_string()
+                .contains("session: fixture-devin-session")
+        );
+        assert_eq!(host.cleanups, 1);
+        let checkpoint = Checkpoint::read(&dir).unwrap().unwrap();
+        assert_eq!(checkpoint.internal_attempt, 1);
+        assert_eq!(checkpoint.delivery.entries.len(), 1);
+        assert_eq!(checkpoint.delivery.entries[0].tries, 1);
+        assert_eq!(fixture_prompts(&root).len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn resumed_permission_modes_accept_one_input_without_toggling() {
+    {
+        resumed_bypass(
+            json!({"ready_pane":include_str!("../fixtures/devin/real-resume-bypass-pane.txt")}),
+        )
+        .await;
+    }
+    {
+        resumed_bypass(json!({"restore_ms":400})).await;
+    }
+}
+
+#[tokio::test]
+async fn launch_configuration_and_session_metadata_are_private_and_validated() {
+    {
+        let root = Scratch::new();
+        let opts = options(&root, json!({}));
+        let raw = "// owner\n{\"theme_mode\":\"dark\",\"agent\":{\"model\":\"old\"},\"permissions\":{\"allow\":[\"read\"]},\"link\":\"https://example.org/a//b\",\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"true\"}]}]}} /* end */";
+        fs::write(&opts.config, raw).unwrap();
+        let mut adapter = Devin::new(opts.clone());
+        let mut ctx = context(&root, "run", false);
+        let fusion = sluice_agents::model::ModelChoice::parse(&json!({"type":"fusion","main":{"model":"claude-opus-5-5","effort":"high"},"sidekick":{"model":"swe-2","effort":"high"}})).unwrap();
+        ctx.model = Some(sluice_agents::model::compose("devin", &fusion).unwrap());
+        let fusion = "fusion-claude-opus-5-5-high-sidekick-swe-2-high";
+        let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+        let cfg: Value =
+            serde_json::from_slice(&fs::read(ctx.run_dir.join("devin-config.json")).unwrap())
+                .unwrap();
+        assert_eq!(cfg["agent"]["model"], fusion);
+        assert_eq!(cfg["theme_mode"], "dark");
+        assert_eq!(cfg["permissions"], json!({"allow":["read"]}));
+        assert_eq!(cfg["link"], "https://example.org/a//b");
+        assert_eq!(cfg["hooks"]["SessionStart"].as_array().unwrap().len(), 2);
+        assert_eq!(fs::read_to_string(&opts.config).unwrap(), raw);
+        assert_eq!(
+            fs::metadata(ctx.run_dir.join("devin-config.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert!(launch.argv.windows(2).any(|w| w == ["--model", fusion]));
+        assert_eq!(
+            &launch.argv[launch.argv.len() - 4..],
+            [
+                "--permission-mode",
+                "dangerous",
+                "--respect-workspace-trust",
+                "false"
+            ]
+        );
+        assert!(launch.argv.windows(2).any(|w| w == ["-u", "CLAUDECODE"]));
+        assert!(launch.argv.windows(2).any(|w| w == ["-u", "PYTHONPATH"]));
+        assert!(launch.argv.windows(2).any(|w| w == ["-u", "VIRTUAL_ENV"]));
+        let command = cfg["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(command.contains("agent-hook devin Stop"));
+        assert!(!command.contains("cat >>"));
+        let children: Vec<_> = (0..12)
+            .map(|_| {
+                let mut child = Command::new("/bin/sh")
+                    .args(["-c", command])
+                    .envs(&launch.env)
+                    .stdin(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                use std::io::Write;
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(b"{\"hook_event_name\":\"Stop\"}")
+                    .unwrap();
+                child
+            })
+            .collect();
+        for mut child in children {
+            assert!(child.wait().unwrap().success());
+        }
+        let journal = fs::read_to_string(ctx.run_dir.join("devin-hooks.jsonl")).unwrap();
+        assert_eq!(journal.lines().count(), 12);
+        for line in journal.lines() {
+            serde_json::from_str::<protocol::JournalEntry>(line).unwrap();
+        }
+    }
+    {
+        let root = Scratch::new();
+        let opts = options(&root, json!({}));
+        let ctx = context(&root, "run", false);
+        fs::create_dir_all(opts.data_home.join("devin/cli")).unwrap();
+        let db = opts.data_home.join("devin/cli/sessions.db");
+        let sql = format!(
+            "CREATE TABLE sessions(id TEXT, working_directory TEXT); INSERT INTO sessions VALUES('s1','{}');",
+            ctx.cwd.display()
+        );
+        assert!(
+            Command::new("sqlite3")
+                .arg(&db)
+                .arg(sql)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let before = fs::read(&db).unwrap();
+        let mut adapter = Devin::new(opts);
+        assert_eq!(adapter.session("s1").await.unwrap().unwrap().cwd, ctx.cwd);
+        assert!(adapter.session("missing").await.unwrap().is_none());
+        assert!(adapter.session("s1' OR 1=1 --").await.unwrap().is_none());
+        let alias = root.join("prior.log");
+        fs::write(root.join("prior.log.session"), "s1\n").unwrap();
+        assert_eq!(
+            adapter
+                .session(alias.to_str().unwrap())
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "s1"
+        );
+        let launch = adapter.prepare(&ctx, Some("s1")).await.unwrap().unwrap();
+        assert_eq!(&launch.argv[launch.argv.len() - 2..], ["--resume", "s1"]);
+        assert_eq!(adapter.observe(&ctx).await.unwrap().turns_completed, 0);
+        let mut wrong = ctx.clone();
+        wrong.cwd = root.0.clone();
+        assert_eq!(
+            adapter.prepare(&wrong, Some("s1")).await.unwrap_err().kind,
+            EngineErrorKind::CapabilityMismatch
+        );
+        assert_eq!(fs::read(&db).unwrap(), before);
+        assert!(
+            Command::new("sqlite3")
+                .arg(&db)
+                .arg("PRAGMA user_version=1")
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            adapter.session("s1").await.unwrap_err().kind,
+            EngineErrorKind::CapabilityMismatch
+        );
+    }
+    {
+        // A newer major is refused (Devin's major marks a CLI line, not a release), as is an
+        // older version or a flag sluice launches with that `--help` no longer lists.
+        for (script, message) in [
+            (
+                json!({"version":"3001.0.0"}),
+                "devin 3001.0.0 is a newer major version than the tested 3000.11.3; sluice runs an untested devin major only after its wire fixtures are recorded for it (floor 3000.11.3). Pin devin to a 3000.x release on this host, then step_retry",
+            ),
+            (
+                json!({"version":"3000.10.9"}),
+                "devin 3000.10.9 is older than 3000.11.3, the oldest version with every capability sluice needs (tested 3000.11.3); update devin on this host, then step_retry",
+            ),
+            (
+                json!({"version":"3000.12.0","help":"--config --model --resume --respect-workspace-trust"}),
+                "devin 3000.12.0 lacks `--export` that sluice needs (tested 3000.11.3; this version is untested)",
+            ),
+        ] {
+            let root = Scratch::new();
+            let mut adapter = Devin::new(options(&root, script));
+            let ctx = context(&root, "run", false);
+            let error = adapter.prepare(&ctx, None).await.unwrap_err();
+            assert_eq!(error.kind, EngineErrorKind::CapabilityMismatch);
+            assert_eq!(error.message, message);
+            assert!(!ctx.run_dir.join("devin-config.json").exists());
+            assert!(!root.join("prompts.jsonl").exists());
+        }
+        // A newer 3000.x runs untested.
+        let root = Scratch::new();
+        let mut adapter = Devin::new(options(&root, json!({"version":"3000.12.0"})));
+        let ctx = context(&root, "run", false);
+        let _ = adapter.prepare(&ctx, None).await;
+        assert_eq!(
+            adapter.version().unwrap().note().unwrap(),
+            "devin 3000.12.0 is newer than the tested 3000.11.3; accepted untested (floor 3000.11.3)"
+        );
+        for raw in [
+            "[]",
+            "{\"agent\":[]}",
+            "{\"hooks\":[]}",
+            "{\"hooks\":{\"Stop\":{}}}",
+            "/* unterminated",
+        ] {
+            assert!(
+                protocol::config(
+                    raw,
+                    "swe-2-high",
+                    Path::new("sluice"),
+                    Path::new("journal"),
+                    "inv"
+                )
+                .is_err()
+            );
+        }
+        assert!(protocol::decode_hook(b"{}", "Stop").is_err());
+        assert!(protocol::decode_hook(br#"{"hook_event_name":"Stop"}"#, "SessionEnd").is_err());
+    }
+}
+
+#[tokio::test]
+async fn queued_delivery_preserves_message_ids_and_discards_previous_invocation_hooks() {
+    {
+        let root = Scratch::new();
+        let mut adapter = Devin::new(options(
+            &root,
+            json!({"dialog":true,"turns":[{"reply":"first"},{"reply":"second"}]}),
+        ));
+        let ctx = context(&root, "run", true);
+        let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+        let _pane = Pane::start(&ctx, launch).await;
+        let message = InputId::Message {
+            id: sluice_model::ids::MessageId(2),
+        };
+        for (id, text) in [
+            (InputId::Task, "First queued prompt"),
+            (message.clone(), "Second queued prompt"),
+        ] {
+            assert_eq!(
+                adapter
+                    .execute(
+                        &ctx,
+                        EngineCommand::DeliverText {
+                            id,
+                            text: text.into()
+                        }
+                    )
+                    .await
+                    .unwrap(),
+                DeliveryOutcome::Pending
+            );
+        }
+        let obs = poll(&mut adapter, &ctx, |o| {
+            o.turns_completed == 2 && o.acknowledged.contains(&message)
+        })
+        .await;
+        assert!(obs.acknowledged.contains(&InputId::Task));
+        assert_eq!(
+            fs::read_to_string(root.join("prompts.jsonl"))
+                .unwrap()
+                .lines()
+                .count(),
+            2
+        );
+    }
+    {
+        let root = Scratch::new();
+        let mut adapter = Devin::new(options(&root, json!({})));
+        let ctx = context(&root, "run", false);
+        adapter.prepare(&ctx, None).await.unwrap();
+        let cfg: Value =
+            serde_json::from_slice(&fs::read(ctx.run_dir.join("devin-config.json")).unwrap())
+                .unwrap();
+        let old_command = cfg["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        adapter
+            .execute(
+                &ctx,
+                EngineCommand::DeliverText {
+                    id: InputId::Task,
+                    text: "Cancelled before any paste".into(),
+                },
+            )
+            .await
+            .unwrap();
+        adapter.close().await.unwrap();
+        let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", old_command])
+            .envs(launch.env)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            br#"{"hook_event_name":"UserPromptSubmit","session_id":"old-session","prompt_id":"0"}"#,
+        )
+        .unwrap();
+        assert!(child.wait().unwrap().success());
+        let obs = adapter.observe(&ctx).await.unwrap();
+        assert_eq!(obs.turns_started, 0);
+        assert!(obs.session_id.is_none());
+        assert!(obs.acknowledged.is_empty());
+        assert!(!root.join("prompts.jsonl").exists());
+    }
+}
+
+#[tokio::test]
+async fn queued_messages_wait_for_work_and_never_replay_unknown_input() {
+    {
+        let root = Scratch::new();
+        let mut opts = options(
+            &root,
+            json!({"turns":[{"reply":"sidekick report","after_stop":[{"ms":100,"hook":"PostToolUse"},{"ms":500,"hook":"Stop","reply":"lead done"}]},{"reply":"message taken"}]}),
+        );
+        opts.delivery_timeout = Duration::from_millis(120);
+        opts.turn_quiet = Duration::from_millis(60);
+        let mut adapter = Devin::new(opts);
+        let ctx = context(&root, "run", true);
+        let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+        let _pane = Pane::start(&ctx, launch).await;
+        deliver(&mut adapter, &ctx, InputId::Task, "Lead a sidekick").await;
+        // SessionStart, the task, the sidekick's Stop and the lead's returning call: the lead now
+        // thinks for 2.5 s without a hook.
+        poll(&mut adapter, &ctx, |o| o.progress >= 4).await;
+        let message = InputId::Message { id: MessageId(1) };
+        adapter
+            .execute(
+                &ctx,
+                EngineCommand::Steer {
+                    id: message.clone(),
+                    text: "Addressed while the lead works".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let pasted = Instant::now();
+        let mut seen_queued = false;
+        loop {
+            let o = adapter.observe(&ctx).await.unwrap();
+            assert!(
+                o.error.is_none(),
+                "{:?} after {:?}",
+                o.error,
+                pasted.elapsed()
+            );
+            seen_queued |= protocol::input_queued(&capture(&ctx));
+            if o.acknowledged.contains(&message) {
+                break;
+            }
+            assert!(pasted.elapsed() < Duration::from_secs(10), "{o:?}");
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        assert!(seen_queued);
+        assert!(pasted.elapsed() > Duration::from_millis(120));
+        let prompts = fixture_prompts(&root);
+        assert_eq!(prompts.len(), 2);
+        assert_eq!(prompts[1]["queued"], json!(true));
+        adapter.close().await.unwrap();
+    }
+    {
+        let root = Scratch::new();
+        let mut opts = options(
+            &root,
+            json!({"turns":[{"reply":"sidekick report","after_stop":post_stop_work(4, 150),"drop_queued":true}]}),
+        );
+        opts.delivery_timeout = Duration::from_millis(120);
+        opts.turn_quiet = Duration::from_millis(60);
+        let mut adapter = Devin::new(opts);
+        let ctx = context(&root, "run", true);
+        let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+        let _pane = Pane::start(&ctx, launch).await;
+        deliver(&mut adapter, &ctx, InputId::Task, "Lead a sidekick").await;
+        poll(&mut adapter, &ctx, |o| o.progress >= 4).await;
+        let message = InputId::Message { id: MessageId(1) };
+        adapter
+            .execute(
+                &ctx,
+                EngineCommand::Steer {
+                    id: message.clone(),
+                    text: "Lost behind the lead's work".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let pasted = Instant::now();
+        let failed = poll(&mut adapter, &ctx, |o| o.error.is_some()).await;
+        assert_eq!(
+            failed.error.unwrap().kind,
+            EngineErrorKind::UnknownAcceptance
+        );
+        // Only after all of the turn's hooks: SessionStart, the task, the Stop and ten tool calls.
+        let journal = fs::read_to_string(ctx.run_dir.join("devin-hooks.jsonl")).unwrap();
+        assert_eq!(journal.lines().count(), 7);
+        assert!(pasted.elapsed() > Duration::from_millis(120));
+        assert!(!failed.acknowledged.contains(&message));
+        assert_eq!(fixture_prompts(&root).len(), 1);
+        adapter.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn devin_exit_probe_drains_terminal_hooks_before_reporting_exit() {
+    exit_probe(false).await;
+}
+
+#[tokio::test]
+async fn terminal_hooks_after_probe_client_exit_still_acknowledge_the_task() {
+    exit_probe(true).await;
+}
+
+#[tokio::test]
+async fn devin_fake_tui_fresh_required_submit_live_message_compaction_and_cleanup() {
+    let root = Scratch::new();
+    let mut adapter = Devin::new(options(
+        &root,
+        json!({"boot_ms":100,"drop_enters":1,"drop_exit_enter":true,"wrap":14,"turns":[{"reply":"blue","submit":{"word":"blue"},"tool":true,"compact":true},{"reply":"addressed"},{"reply":"reprimed"}]}),
+    ));
+    let ctx = context(&root, "run", true);
+    let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+    let mut pane = Pane::start(&ctx, launch).await;
+    let engine_pid = pane.pid();
+    adapter
+        .execute(&ctx, EngineCommand::StartFresh)
+        .await
+        .unwrap();
+    deliver(
+        &mut adapter,
+        &ctx,
+        InputId::Task,
+        "Submit word blue.\nMultiline task ending with slash\\",
+    )
+    .await;
+    let first = poll(&mut adapter, &ctx, |o| o.turns_completed == 1).await;
+    assert_eq!(first.compactions, 1);
+    assert_eq!(first.final_text, "blue");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(ctx.cwd.join("submission.json")).unwrap())
+            .unwrap(),
+        json!({"word":"blue"})
+    );
+    let id = InputId::Message {
+        id: sluice_model::ids::MessageId(1),
+    };
+    adapter
+        .execute(
+            &ctx,
+            EngineCommand::Steer {
+                id: id.clone(),
+                text: "Addressed live message".into(),
+            },
+        )
+        .await
+        .unwrap();
+    poll(&mut adapter, &ctx, |o| {
+        o.acknowledged.contains(&id) && o.turns_completed == 2
+    })
+    .await;
+    deliver(
+        &mut adapter,
+        &ctx,
+        InputId::Reprime { ordinal: 1 },
+        "Reprime current me snapshot",
+    )
+    .await;
+    poll(&mut adapter, &ctx, |o| o.turns_completed == 3).await;
+    assert_eq!(
+        adapter
+            .execute(
+                &ctx,
+                EngineCommand::DeliverText {
+                    id: InputId::Task,
+                    text: "never replay".into()
+                }
+            )
+            .await
+            .unwrap(),
+        DeliveryOutcome::Acknowledged
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("prompts.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        3
+    );
+    adapter
+        .execute(&ctx, EngineCommand::RequestExit)
+        .await
+        .unwrap();
+    poll(&mut adapter, &ctx, |o| o.status == EngineStatus::Exited).await;
+    adapter.close().await.unwrap();
+    pane.close();
+    assert!(!Path::new(&format!("/proc/{engine_pid}")).exists());
+}

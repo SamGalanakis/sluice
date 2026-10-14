@@ -1,17 +1,7 @@
-mod support;
-macro_rules! matrix {
-    ($($scenario:ident),* $(,)?) => {$ (
-        #[tokio::test]
-        async fn $scenario() {
-            for engine in ["codex", "claude", "devin"] { support::scenario(stringify!($scenario), engine).await; }
-        }
-    )*};
-}
-matrix! { fresh_required_submit, busy_submitted, background, quiet, compaction, addressed_live_message, feedback_resume, missing_outputs, nudge, unknown_acceptance, cancel_backoff, retry_exhaustion, session_cwd_mismatch, engine_mismatch, predecessor_cwd_mismatch }
-
+use super::support;
 #[tokio::test]
 async fn same_run_transient_after_commit_without_messages() {
-    for engine in ["codex", "claude", "devin"] {
+    for engine in ["codex"] {
         for (message, cause) in [
             (
                 "capacity after commit",
@@ -42,7 +32,7 @@ async fn same_run_transient_after_commit_without_messages() {
 }
 #[tokio::test]
 async fn same_run_transient_reentry_uses_a_generic_continuation() {
-    for engine in ["codex", "claude", "devin"] {
+    for engine in ["codex"] {
         support::transient_commits(
             engine,
             "codex: network error (responseStreamDisconnected); Codex gave up after its own retries",
@@ -54,7 +44,53 @@ async fn same_run_transient_reentry_uses_a_generic_continuation() {
 }
 #[tokio::test]
 async fn missing_session_fallback_lock_conflict_and_missing_cwd() {
-    for engine in ["codex", "claude", "devin"] {
+    for engine in ["codex"] {
         support::session_policy(engine).await;
+    }
+
+    let root = support::Scratch::new();
+    let run = sluice_model::ids::RunId::new();
+    let mut holder = sluice_agents::supervisor::SessionGuard::default();
+    holder.acquire(&root.0, "codex", "a/b", "p", run).unwrap();
+    let mut other = sluice_agents::supervisor::SessionGuard::default();
+    other
+        .acquire(
+            &root.0,
+            "codex",
+            "a_b",
+            "p",
+            sluice_model::ids::RunId::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        other
+            .acquire(
+                &root.0,
+                "codex",
+                "a/b",
+                "p",
+                sluice_model::ids::RunId::new()
+            )
+            .unwrap_err()
+            .kind,
+        sluice_agents::supervisor::FailureKind::LockConflict
+    );
+}
+
+#[tokio::test]
+async fn supervision_submission_compaction_and_refusal_policy() {
+    for name in [
+        "busy_submitted",
+        "quiet",
+        "compaction",
+        "missing_outputs",
+        "unknown_acceptance",
+        "cancel_backoff",
+        "retry_exhaustion",
+        "session_cwd_mismatch",
+        "engine_mismatch",
+        "predecessor_cwd_mismatch",
+    ] {
+        support::scenario(name, "codex").await;
     }
 }

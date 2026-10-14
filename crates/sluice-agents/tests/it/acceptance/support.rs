@@ -16,7 +16,7 @@ pub struct Scratch(pub PathBuf);
 impl Scratch {
     pub fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let path = std::env::temp_dir().join(format!(
+        let path = crate::scratch::root().join(format!(
             "sluice-test-acceptance-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)

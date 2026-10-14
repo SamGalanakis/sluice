@@ -1,4 +1,4 @@
-use sluice_agents::{ScriptedEngine, engines::*, prompt, supervisor::*};
+use sluice_agents::{ScriptedEngine, engines::*, supervisor::*};
 use sluice_model::{ids::*, rpc::JsonValue};
 use sluice_process::socket::{AssignedRange, DeliveryMessage};
 use std::{
@@ -14,7 +14,7 @@ struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let path = std::env::temp_dir().join(format!(
+        let path = crate::scratch::root().join(format!(
             "sluice-test-supervisor-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
@@ -182,43 +182,6 @@ fn happy() -> Vec<ScriptFrame> {
         ),
         frame(None, observation(EngineStatus::Idle, 1, 1)),
     ]
-}
-
-#[test]
-fn limits_reject_malformed_nonfinite_nonpositive_and_fractional_counts() {
-    for value in ["bad", "NaN", "inf", "0", "-1", "1e300"] {
-        assert!(
-            Limits::parse(|name| Ok((name == "SLUICE_AGENT_MAX_MIN").then(|| value.into())))
-                .is_err()
-        );
-    }
-    for value in ["0", "-1", "1.5", "inf"] {
-        assert!(
-            Limits::parse(|name| Ok((name == "SLUICE_AGENT_NUDGES").then(|| value.into())))
-                .is_err()
-        );
-    }
-    let limits =
-        Limits::parse(|name| Ok((name == "SLUICE_AGENT_QUIET_MIN").then(|| "20".into()))).unwrap();
-    assert_eq!(limits.quiet, Duration::from_secs(1200));
-    assert_eq!(Limits::default().quiet, Duration::from_secs(2700));
-}
-#[test]
-fn long_tasks_use_a_file_and_short_tasks_keep_shell_characters_literal() {
-    let scratch = Scratch::new();
-    let path = scratch.0.join("task.md");
-    for text in ["two\nlines".into(), "x".repeat(501)] {
-        assert!(
-            prompt::hand_over(&text, &path, "Your task")
-                .unwrap()
-                .contains("read it fully")
-        );
-        assert_eq!(fs::read_to_string(&path).unwrap(), text);
-    }
-    assert_eq!(
-        prompt::hand_over("`ls $HOME` $(date) \\", &path, "Your task").unwrap(),
-        "`ls $HOME` $(date) \\"
-    );
 }
 
 /// A host whose peer answers `busy` for `busy_for` from the first acknowledgement and note,

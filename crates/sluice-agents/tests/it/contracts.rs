@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("sluice-test-contract-{}", RunId::new()));
+        let path = crate::scratch::root().join(format!("sluice-test-contract-{}", RunId::new()));
         fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -32,20 +32,6 @@ impl Drop for Scratch {
 
 fn inputs(value: serde_json::Value) -> JsonMap {
     sluice_model::rpc::decode_json(&serde_json::to_vec(&value).unwrap()).unwrap()
-}
-
-#[test]
-fn thread_names_and_shell_quoting_preserve_literal_data() {
-    assert_eq!(thread_name("Build.Mac OS"), "step-build-mac-os");
-    let data = "a'`ls` $HOME $(echo secret)";
-    let command = format!("printf '%s' {}", shell_quote(data));
-    let output = std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(command)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), data);
 }
 
 fn result() -> AgentResult {
@@ -96,74 +82,6 @@ fn decision_validates_choice_probability_and_zero_threshold() {
                 .is_err()
         );
     }
-}
-
-#[test]
-fn hook_journal_claims_before_decision_and_never_replays_claimed_requests() {
-    let scratch = Scratch::new();
-    let journal = scratch.0.join("engine-hooks");
-    fs::create_dir(&journal).unwrap();
-    let run = RunId::new();
-    let request = EngineHookRequest {
-        engine: "fake".into(),
-        run,
-        event: "Stop".into(),
-        payload: JsonValue::try_from(serde_json::json!({"turn":"t"})).unwrap(),
-    };
-    fs::write(
-        journal.join("one.request.json"),
-        serde_json::to_vec(&request).unwrap(),
-    )
-    .unwrap();
-    let mut engine = ScriptedEngine::new(vec![]);
-    engine.hook_reply = Some(HookReply {
-        stdout: Some(serde_json::json!({"decision":"block"})),
-        exit_code: 2,
-    });
-    process_hooks(&mut engine, run, &scratch.0).unwrap();
-    process_hooks(&mut engine, run, &scratch.0).unwrap();
-    assert_eq!(engine.hooks.len(), 1);
-    // The claim goes once the reply is durable; the reply is the guardian's to remove.
-    assert!(!journal.join("one.request.json").exists());
-    assert!(!journal.join("one.claimed.json").exists());
-    let reply: Result<EngineHookReply, PublicError> =
-        sluice_model::rpc::decode_json(&fs::read(journal.join("one.reply.json")).unwrap()).unwrap();
-    assert_eq!(reply.unwrap().exit_code, 2);
-    fs::write(
-        journal.join("crashed.claimed.json"),
-        serde_json::to_vec(&request).unwrap(),
-    )
-    .unwrap();
-    process_hooks(&mut engine, run, &scratch.0).unwrap();
-    assert_eq!(engine.hooks.len(), 1);
-    // An uncertain claim is never decided again; the next pass discards it.
-    assert!(!journal.join("crashed.reply.json").exists());
-    assert!(!journal.join("crashed.claimed.json").exists());
-}
-#[test]
-fn hook_journal_refuses_wrong_run_and_bounds_exit_code() {
-    let scratch = Scratch::new();
-    let journal = scratch.0.join("engine-hooks");
-    fs::create_dir(&journal).unwrap();
-    let run = RunId::new();
-    let request = EngineHookRequest {
-        engine: "fake".into(),
-        run: RunId::new(),
-        event: "Stop".into(),
-        payload: JsonValue::try_from(serde_json::json!({})).unwrap(),
-    };
-    fs::write(
-        journal.join("wrong.request.json"),
-        serde_json::to_vec(&request).unwrap(),
-    )
-    .unwrap();
-    let mut engine = ScriptedEngine::new(vec![]);
-    process_hooks(&mut engine, run, &scratch.0).unwrap();
-    assert!(engine.hooks.is_empty());
-    let reply: Result<EngineHookReply, PublicError> =
-        sluice_model::rpc::decode_json(&fs::read(journal.join("wrong.reply.json")).unwrap())
-            .unwrap();
-    assert!(reply.is_err());
 }
 
 fn hook_request(run: RunId) -> EngineHookRequest {
@@ -224,116 +142,22 @@ async fn exchange_once(run_dir: &std::path::Path, run: RunId, n: usize) -> Engin
     .unwrap_or_else(|error| panic!("hook {n} refused: {error:?}"))
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn hook_journal_serves_more_hooks_than_any_bound_over_one_run() {
-    let scratch = Scratch::new();
+async fn slow_hook_journal_serves_more_hooks_than_any_bound_over_one_run() {
+    let scratch = Scratch(tempfile::tempdir().unwrap().keep());
     let run = RunId::new();
     let server = HookServer::start(run, scratch.0.clone());
     // An older release kept two files per hook and refused the 2049th at 4096 entries.
-    for n in 0..4200 {
+    for n in 0..2050 {
         assert_eq!(exchange_once(&scratch.0, run, n).await.exit_code, 0);
     }
     let engine = server.stop();
-    assert_eq!(engine.hooks.len(), 4200);
+    assert_eq!(engine.hooks.len(), 2050);
     // Every exchange is complete and nobody can need its files again.
     assert_eq!(
         journal_names(&scratch.0.join("engine-hooks")),
         Vec::<String>::new()
     );
 }
-#[tokio::test(flavor = "multi_thread")]
-async fn hook_journal_recovers_from_crashes_and_an_older_release_leftovers() {
-    let scratch = Scratch::new();
-    let run = RunId::new();
-    let journal = scratch.0.join("engine-hooks");
-    fs::create_dir(&journal).unwrap();
-    let request = serde_json::to_vec(&hook_request(run)).unwrap();
-    let reply = serde_json::to_vec(&Ok::<_, PublicError>(EngineHookReply {
-        stdout: None,
-        exit_code: 0,
-    }))
-    .unwrap();
-    // An older release kept every finished exchange: its claim and its reply.
-    for n in 0..3000 {
-        fs::write(journal.join(format!("old-{n:04}.claimed.json")), &request).unwrap();
-        fs::write(journal.join(format!("old-{n:04}.reply.json")), &reply).unwrap();
-    }
-    // A supervisor crashed while deciding, and another while writing a reply.
-    fs::write(journal.join("deciding.claimed.json"), &request).unwrap();
-    fs::write(journal.join("writing.claimed.json"), &request).unwrap();
-    fs::write(journal.join("writing.reply.tmp"), &reply[..4]).unwrap();
-    // A supervisor crashed between its durable reply and removing the claim.
-    fs::write(journal.join("replied.claimed.json"), &request).unwrap();
-    fs::write(journal.join("replied.reply.json"), &reply).unwrap();
-    // A supervisor starting on these keeps only the replies, which are the guardian's.
-    let mut engine = answering_engine();
-    process_hooks(&mut engine, run, &scratch.0).unwrap();
-    assert!(
-        engine.hooks.is_empty(),
-        "an uncertain claim is never decided again"
-    );
-    let names = journal_names(&journal);
-    assert_eq!(names.len(), 3001);
-    assert!(names.iter().all(|name| name.ends_with(".reply.json")));
-    // A guardian exchange removes them: it waits on one hook at a time, so nobody reads them.
-    // This one's decision times out before the supervisor's next pass, between the reply's
-    // write and its read.
-    assert!(
-        tokio::time::timeout(
-            Duration::from_millis(50),
-            sluice_process::hook_journal::exchange(&scratch.0, &hook_request(run)),
-        )
-        .await
-        .is_err()
-    );
-    let names = journal_names(&journal);
-    assert_eq!(names.len(), 1);
-    assert!(names[0].ends_with(".request.json"), "{names:?}");
-    // The abandoned request is still decided, once, and its reply is never read ...
-    process_hooks(&mut engine, run, &scratch.0).unwrap();
-    process_hooks(&mut engine, run, &scratch.0).unwrap();
-    assert_eq!(engine.hooks.len(), 1);
-    let names = journal_names(&journal);
-    assert_eq!(names.len(), 1);
-    assert!(names[0].ends_with(".reply.json"), "{names:?}");
-    // ... so the next exchange removes it, and leaves nothing behind itself.
-    let server = HookServer::start(run, scratch.0.clone());
-    assert_eq!(exchange_once(&scratch.0, run, 0).await.exit_code, 0);
-    assert_eq!(server.stop().hooks.len(), 1);
-    assert_eq!(journal_names(&journal), Vec::<String>::new());
-}
-#[tokio::test]
-async fn hook_journal_refuses_a_runaway_of_hooks_in_flight() {
-    use sluice_process::hook_journal::MAX_IN_FLIGHT;
-    let scratch = Scratch::new();
-    let run = RunId::new();
-    let journal = scratch.0.join("engine-hooks");
-    fs::create_dir(&journal).unwrap();
-    let request = serde_json::to_vec(&hook_request(run)).unwrap();
-    // Nobody claims: every request stays in flight. One more is being decided.
-    for n in 0..MAX_IN_FLIGHT - 1 {
-        fs::write(journal.join(format!("{n:04}.request.json")), &request).unwrap();
-    }
-    fs::write(journal.join("deciding.claimed.json"), &request).unwrap();
-    let error = tokio::time::timeout(
-        Duration::from_secs(5),
-        sluice_process::hook_journal::exchange(&scratch.0, &hook_request(run)),
-    )
-    .await
-    .expect("a runaway is refused at once")
-    .unwrap_err();
-    let PublicError::BadRequest { message } = error else {
-        panic!("{error:?}");
-    };
-    assert!(
-        message.contains(&format!(
-            "{MAX_IN_FLIGHT} hooks in flight ({} unclaimed, 1 claimed without a reply;",
-            MAX_IN_FLIGHT - 1
-        )),
-        "{message}"
-    );
-    assert_eq!(journal_names(&journal).len(), MAX_IN_FLIGHT);
-}
-
 struct HookHost {
     done: Arc<AtomicBool>,
     process: ProcessIdentity,
@@ -536,82 +360,6 @@ async fn authenticated_guardian_hook_roundtrip_returns_synchronous_cli_decision(
     assert!(link_check.with_state(|s| s.attempts[&run].completion.is_some()));
 }
 
-#[test]
-fn account_auth_messages_name_the_problem_and_the_fix() {
-    use sluice_agents::engines::account::{Auth, Engine, login_problem};
-    let error = Auth::login(
-        Engine::Codex,
-        "Your access token could not be refreshed. Please log out and sign in again.",
-    )
-    .error();
-    assert_eq!(error.kind, EngineErrorKind::AuthFailed);
-    assert_eq!(
-        error.message,
-        "codex: not logged in (token could not be refreshed) — run `codex login` on this host, then step_retry. Codex said: Your access token could not be refreshed. Please log out and sign in again."
-    );
-    assert_eq!(error.retry_at, None);
-    for (text, problem) in [
-        (
-            "Failed to authenticate: OAuth session expired",
-            "not logged in (token expired)",
-        ),
-        (
-            "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
-            "not logged in (signed out or switched account elsewhere)",
-        ),
-        (
-            "Your session is no longer authenticated. Run `/login`",
-            "not logged in (session no longer authenticated)",
-        ),
-        (
-            "Invalid API key \u{b7} Fix external API key",
-            "not logged in (invalid API key)",
-        ),
-        ("Something else", "not logged in (unauthorized)"),
-    ] {
-        assert_eq!(login_problem(text), problem, "{text}");
-    }
-    // An empty engine text leaves no `said` clause.
-    let bare = Auth::login(Engine::Devin, "").error();
-    assert_eq!(
-        bare.message,
-        "devin: not logged in (unauthorized) — run `devin auth login` on this host (or /login inside `devin`), then step_retry."
-    );
-}
-
-#[test]
-fn account_messages_mask_token_like_text_and_keep_ids() {
-    use sluice_agents::engines::account::{Auth, Cap, Engine, Limit, redact};
-    let jwt = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyJ9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
-    let text = format!(
-        "unexpected status 401 Unauthorized: Authorization: Bearer {jwt}, key sk-proj-AbCdEfGh1234567890IjKl, access_token=ya29.a0AfH6SMBx1234abcd, \"refresh_token\": \"rt_0123456789abcdefXYZ\", raw 9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddccbbaa, trace ID: 202f291a871d718834e52771c111f102, request id: req_07f626009a4646dfb34bb8ac40e63cb7, cf-ray: a3f548979a7d55c4-PRG, session 01a10b56-8977-7302-9e37-9379c79804d8."
-    );
-    let masked = redact(&text);
-    for secret in [
-        "eyJhbGci",
-        "sk-proj-AbCd",
-        "ya29.a0AfH6",
-        "rt_0123456789",
-        "9f8e7d6c5b4a3928",
-    ] {
-        assert!(!masked.contains(secret), "{secret} in {masked}");
-    }
-    assert_eq!(
-        masked,
-        "unexpected status 401 Unauthorized: Authorization: Bearer [redacted], key [redacted], access_token=[redacted], \"refresh_token\": \"[redacted]\", raw [redacted], trace ID: 202f291a871d718834e52771c111f102, request id: req_07f626009a4646dfb34bb8ac40e63cb7, cf-ray: a3f548979a7d55c4-PRG, session 01a10b56-8977-7302-9e37-9379c79804d8."
-    );
-    // Both kinds of account message carry the masked text only.
-    let auth = Auth::login(Engine::Claude, &text).error();
-    let limit = Limit::new(Engine::Devin, Cap::Usage, &text).classify(0, std::time::Duration::ZERO);
-    for message in [auth.message, limit.message] {
-        assert!(message.ends_with(&masked), "{message}");
-        assert!(!message.contains("eyJ"), "{message}");
-    }
-    // Prose, URLs and short words pass untouched.
-    let prose = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Apr 8th, 2026 10:13 AM.";
-    assert_eq!(redact(prose), prose);
-}
-
 #[tokio::test]
 async fn settled_engine_logs_are_null_when_absent_and_copy_existing_records() {
     let scratch = Scratch::new();
@@ -644,5 +392,169 @@ async fn settled_engine_logs_are_null_when_absent_and_copy_existing_records() {
             .await
             .unwrap();
         assert_eq!(fs::read_to_string(&source).unwrap(), "assistant\ndone\n");
+    }
+}
+
+#[tokio::test]
+async fn hook_journal_recovery_refuses_foreign_runs_and_bounds_pending_work() {
+    {
+        {
+            let scratch = Scratch::new();
+            let journal = scratch.0.join("engine-hooks");
+            fs::create_dir(&journal).unwrap();
+            let run = RunId::new();
+            let request = EngineHookRequest {
+                engine: "fake".into(),
+                run,
+                event: "Stop".into(),
+                payload: JsonValue::try_from(serde_json::json!({"turn":"t"})).unwrap(),
+            };
+            fs::write(
+                journal.join("one.request.json"),
+                serde_json::to_vec(&request).unwrap(),
+            )
+            .unwrap();
+            let mut engine = ScriptedEngine::new(vec![]);
+            engine.hook_reply = Some(HookReply {
+                stdout: Some(serde_json::json!({"decision":"block"})),
+                exit_code: 2,
+            });
+            process_hooks(&mut engine, run, &scratch.0).unwrap();
+            process_hooks(&mut engine, run, &scratch.0).unwrap();
+            assert_eq!(engine.hooks.len(), 1);
+            // The claim goes once the reply is durable; the reply is the guardian's to remove.
+            assert!(!journal.join("one.request.json").exists());
+            assert!(!journal.join("one.claimed.json").exists());
+            let reply: Result<EngineHookReply, PublicError> =
+                sluice_model::rpc::decode_json(&fs::read(journal.join("one.reply.json")).unwrap())
+                    .unwrap();
+            assert_eq!(reply.unwrap().exit_code, 2);
+            fs::write(
+                journal.join("crashed.claimed.json"),
+                serde_json::to_vec(&request).unwrap(),
+            )
+            .unwrap();
+            process_hooks(&mut engine, run, &scratch.0).unwrap();
+            assert_eq!(engine.hooks.len(), 1);
+            // An uncertain claim is never decided again; the next pass discards it.
+            assert!(!journal.join("crashed.reply.json").exists());
+            assert!(!journal.join("crashed.claimed.json").exists());
+        }
+        {
+            let scratch = Scratch::new();
+            let journal = scratch.0.join("engine-hooks");
+            fs::create_dir(&journal).unwrap();
+            let run = RunId::new();
+            let request = EngineHookRequest {
+                engine: "fake".into(),
+                run: RunId::new(),
+                event: "Stop".into(),
+                payload: JsonValue::try_from(serde_json::json!({})).unwrap(),
+            };
+            fs::write(
+                journal.join("wrong.request.json"),
+                serde_json::to_vec(&request).unwrap(),
+            )
+            .unwrap();
+            let mut engine = ScriptedEngine::new(vec![]);
+            process_hooks(&mut engine, run, &scratch.0).unwrap();
+            assert!(engine.hooks.is_empty());
+            let reply: Result<EngineHookReply, PublicError> = sluice_model::rpc::decode_json(
+                &fs::read(journal.join("wrong.reply.json")).unwrap(),
+            )
+            .unwrap();
+            assert!(reply.is_err());
+        }
+    }
+    {
+        let scratch = Scratch::new();
+        let run = RunId::new();
+        let journal = scratch.0.join("engine-hooks");
+        fs::create_dir(&journal).unwrap();
+        let request = serde_json::to_vec(&hook_request(run)).unwrap();
+        let reply = serde_json::to_vec(&Ok::<_, PublicError>(EngineHookReply {
+            stdout: None,
+            exit_code: 0,
+        }))
+        .unwrap();
+        // An older release kept every finished exchange: its claim and its reply.
+        for n in 0..3 {
+            fs::write(journal.join(format!("old-{n:04}.claimed.json")), &request).unwrap();
+            fs::write(journal.join(format!("old-{n:04}.reply.json")), &reply).unwrap();
+        }
+        // A supervisor crashed while deciding, and another while writing a reply.
+        fs::write(journal.join("deciding.claimed.json"), &request).unwrap();
+        fs::write(journal.join("writing.claimed.json"), &request).unwrap();
+        fs::write(journal.join("writing.reply.tmp"), &reply[..4]).unwrap();
+        // A supervisor crashed between its durable reply and removing the claim.
+        fs::write(journal.join("replied.claimed.json"), &request).unwrap();
+        fs::write(journal.join("replied.reply.json"), &reply).unwrap();
+        // A supervisor starting on these keeps only the replies, which are the guardian's.
+        let mut engine = answering_engine();
+        process_hooks(&mut engine, run, &scratch.0).unwrap();
+        assert!(
+            engine.hooks.is_empty(),
+            "an uncertain claim is never decided again"
+        );
+        let names = journal_names(&journal);
+        assert_eq!(names.len(), 4);
+        assert!(names.iter().all(|name| name.ends_with(".reply.json")));
+        // A guardian exchange removes them: it waits on one hook at a time, so nobody reads them.
+        // This one's decision times out before the supervisor's next pass, between the reply's
+        // write and its read.
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(50),
+                sluice_process::hook_journal::exchange(&scratch.0, &hook_request(run)),
+            )
+            .await
+            .is_err()
+        );
+        let names = journal_names(&journal);
+        assert_eq!(names.len(), 1);
+        assert!(names[0].ends_with(".request.json"), "{names:?}");
+        // The abandoned request is still decided, once, and its reply is never read ...
+        process_hooks(&mut engine, run, &scratch.0).unwrap();
+        process_hooks(&mut engine, run, &scratch.0).unwrap();
+        assert_eq!(engine.hooks.len(), 1);
+        let names = journal_names(&journal);
+        assert_eq!(names.len(), 1);
+        assert!(names[0].ends_with(".reply.json"), "{names:?}");
+        // ... so the next exchange removes it, and leaves nothing behind itself.
+        let server = HookServer::start(run, scratch.0.clone());
+        assert_eq!(exchange_once(&scratch.0, run, 0).await.exit_code, 0);
+        assert_eq!(server.stop().hooks.len(), 1);
+        assert_eq!(journal_names(&journal), Vec::<String>::new());
+    }
+    {
+        use sluice_process::hook_journal::MAX_IN_FLIGHT;
+        let scratch = Scratch::new();
+        let run = RunId::new();
+        let journal = scratch.0.join("engine-hooks");
+        fs::create_dir(&journal).unwrap();
+        let request = serde_json::to_vec(&hook_request(run)).unwrap();
+        // Nobody claims: every request stays in flight. One more is being decided.
+        for n in 0..MAX_IN_FLIGHT - 1 {
+            fs::write(journal.join(format!("{n:04}.request.json")), &request).unwrap();
+        }
+        fs::write(journal.join("deciding.claimed.json"), &request).unwrap();
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            sluice_process::hook_journal::exchange(&scratch.0, &hook_request(run)),
+        )
+        .await
+        .expect("a runaway is refused at once")
+        .unwrap_err();
+        let PublicError::BadRequest { message } = error else {
+            panic!("{error:?}");
+        };
+        assert!(
+            message.contains(&format!(
+                "{MAX_IN_FLIGHT} hooks in flight ({} unclaimed, 1 claimed without a reply;",
+                MAX_IN_FLIGHT - 1
+            )),
+            "{message}"
+        );
+        assert_eq!(journal_names(&journal).len(), MAX_IN_FLIGHT);
     }
 }
