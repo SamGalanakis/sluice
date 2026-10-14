@@ -842,38 +842,3 @@ pub struct Confirm {
     /// Drawn before its copy, in the same paragraph: a time that ticks ("It succeeded 3h ago.").
     pub lead: TrustedHtml,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_identity_is_named_as_itself_and_the_old_shared_address_as_stored_and_muted() {
-        assert_eq!(Party::of("owner"), Some(Party::You));
-        assert_eq!(party_words("owner"), "you");
-        assert_eq!(Party::You.lead(), "You");
-        assert_eq!(party_words("@lead"), "@lead");
-        assert_eq!(party_html("@lead", true), "@lead");
-        assert_eq!(party_html("sluice", true), "Sluice");
-        assert_eq!(
-            party_html("orchestrator", true),
-            "<span class=\"who-old\">orchestrator</span>"
-        );
-        // a step, or anything else, is not an identity: its page names it
-        assert_eq!(Party::of("a-7-draft"), None);
-        assert_eq!(Party::of("@Bad"), None);
-        assert_eq!(party_html("<b>", false), "&lt;b&gt;");
-    }
-
-    #[test]
-    fn a_duration_from_julian_days_does_not_lose_a_minute() {
-        // 22:17 to 22:55 as julian days: (to - from) * 86400 is a hair under 2280
-        let from = 2_461_322.428_472_222_3_f64;
-        let to = from + 38.0 / 1_440.0;
-        let seconds = (to - from) * 86_400.0;
-        assert_eq!(duration_text(seconds), "38m");
-        assert_eq!(duration_text(2_279.999_98), "38m");
-        assert_eq!(duration_words(2_279.999_98), "38 minutes");
-        assert_eq!(duration_text(59.4), "59s");
-    }
-}

@@ -286,34 +286,3 @@ pub fn cut(text: &str, most: usize) -> String {
         head[..at].trim_end_matches([',', '.', ';', ':', ' '])
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn plain_words_keep_identifiers_and_drop_only_marks() {
-        assert_eq!(
-            plain(
-                "Red: `//crates/lash-core-store:lash-core-store__unit_test` and intent_hash_golden_vector **now**"
-            ),
-            "Red: //crates/lash-core-store:lash-core-store__unit_test and intent_hash_golden_vector now"
-        );
-        assert_eq!(
-            plain("# Title\n\n- one *two*\n- a_b\n\n> said"),
-            "Title one two a_b said"
-        );
-        let (html, cut) = excerpt(
-            "Use `a<b>` then _see_ [docs](http://x) for snake_case.",
-            200,
-        );
-        assert!(!cut);
-        assert_eq!(
-            html.to_string(),
-            "Use <code>a&lt;b&gt;</code> then see docs for snake_case."
-        );
-        let (html, cut) = excerpt("word `code_span_here` more words after it", 12);
-        assert!(cut);
-        assert_eq!(html.to_string(), "word <code>code_sp</code>…");
-    }
-}

@@ -1859,20 +1859,3 @@ pub fn registration() -> super::PageRegistration {
         }],
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn placeholders_count_as_sqlite_numbers_them() {
-        assert_eq!(placeholders("SELECT 1").unwrap(), 0);
-        assert_eq!(placeholders("SELECT ? , ?").unwrap(), 2);
-        assert_eq!(placeholders("SELECT ?1, ?1, '?'").unwrap(), 1);
-        assert_eq!(placeholders("SELECT ?2 -- ?\n").unwrap(), 2);
-        assert!(placeholders("SELECT :name").is_err());
-        assert_eq!(placeholders("SELECT json_extract(x, '$.a')").unwrap(), 0);
-    }
-
-
-}

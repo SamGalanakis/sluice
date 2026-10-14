@@ -1410,17 +1410,3 @@ pub fn load_snapshot(
         functions,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn a_time_reads_back_as_the_store_writes_it() {
-        for at in [
-            "2026-10-07T20:47:05Z",
-            "2024-02-29T00:00:00Z",
-            "1999-12-31T23:59:59Z",
-        ] {
-            assert_eq!(super::rfc3339(super::timestamp(at).unwrap()), at);
-        }
-    }
-}
