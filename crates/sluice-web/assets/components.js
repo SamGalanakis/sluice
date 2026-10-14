@@ -88,7 +88,7 @@ document.addEventListener("submit", async (event) => {
 });
 
 // ---- sluice-tabs -------------------------------------------------------------------------------
-// An ARIA tablist (`[role=tab][data-tab]` in its `.tabbar`) over its `.tp[data-tab]` panels. The
+// An ARIA tablist (`[role=tab][data-tab]` in its `.tabs`) over its `.tp[data-tab]` panels. The
 // choice is `$$tab`, reflected into the host's `current` (kept through a patch), the chosen
 // tab's aria-selected and tabindex and its panel's `data-chosen` (the stylesheet hides the rest
 // while script runs); also the page's `tab` signal, which the step's stream reads when it
@@ -99,16 +99,16 @@ document.addEventListener("submit", async (event) => {
 define("sluice-tabs", {
   props: ({ string, bool }) => ({ current: string, url: bool }),
   manifest: {
-    slots: [{ name: "tabbar", description: "The server's .tabbar with its [role=tablist] of [role=tab][data-tab] buttons." },
+    slots: [{ name: "tabs", description: "The server's .tabs[role=tablist] of [role=tab][data-tab] buttons." },
             { name: "panels", description: "Its .tp[data-tab] sections, each under its own head (stacked without script)." }],
     events: [{ name: "sluice-tab", description: "A tab was chosen; detail.key is its key." }],
   },
   setup({ host, props, $$, effect, observeProps, cleanup }) {
     const on = listening(cleanup);
-    const tabs = () => [...host.querySelectorAll(":scope > .tabbar [role=tab]")];
+    const tabs = () => [...host.querySelectorAll(":scope > .tabs > [role=tab]")];
     const panels = () => [...host.querySelectorAll(":scope > .tp")];
     const valid = (key) => (tabs().some((t) => t.dataset.tab === key) ? key : tabs()[0]?.dataset.tab ?? "");
-    const bar = () => host.querySelector(":scope > .tabbar > .tablist");
+    const bar = () => host.querySelector(":scope > .tabs");
     // a bar wider than its room says so: it fades out at its end until scrolled there
     const overflow = () => {
       const list = bar();
@@ -366,7 +366,12 @@ define("sluice-confirm", {
     else { place.remove(); form.remove(); }
     const back = opener.isConnected ? opener
       : [...document.querySelectorAll("sluice-confirm")].find((c) => c.heading === heading)?.querySelector("details.confirm-flow > summary");
-    back?.focus();
+    // an opener in a menu the dialog closed: back onto the menu's own summary
+    let to = back;
+    while (to && !(to.checkVisibility?.() ?? true)) {
+      to = to.closest("details")?.parentElement?.closest("details")?.querySelector(":scope > summary");
+    }
+    to?.focus();
     host.dispatchEvent(new CustomEvent("sluice-confirm-close", { bubbles: true }));
   });
   dialog?.addEventListener("click", (event) => {

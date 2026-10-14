@@ -147,7 +147,7 @@ async fn a_step_with_messages_has_a_messages_tab() {
             .get(&format!("/projects/id/{id}/steps/l1-work?tab={tab}"))
             .await;
         assert!(
-            page.contains("<sluice-tabs id=\"tabs\" class=\"tabs\" current=\"messages\""),
+            page.contains("<sluice-tabs id=\"tabs\" current=\"messages\""),
             "{tab}: {page}"
         );
     }
@@ -161,9 +161,14 @@ async fn a_step_with_messages_has_a_messages_tab() {
         )),
         "{thread}"
     );
-    // a step with none links its thread page as Messages too
+    // a step with none offers its thread page in its head's menu
     let (_, other) = f.get(&format!("/projects/id/{id}/steps/l2-work")).await;
-    assert!(other.contains(">Messages · none yet</a>"), "{other}");
+    assert!(
+        other.contains(&format!(
+            "<a href=\"/projects/id/{id}/thread?thread=step-l2-work\">Message it</a>"
+        )),
+        "{other}"
+    );
 }
 
 #[tokio::test]
@@ -492,7 +497,7 @@ async fn messages_retries_waits_and_run_files() {
         .await
         .unwrap();
         let (_, page) = f.get(&format!("/projects/id/{id}/steps/a")).await;
-        let actions = between(&page, "<div class=\"d-actions\">", "</header>");
+        let actions = between(&page, "<div class=\"sh-acts\">", "</header>");
         assert!(
             actions.contains("<sluice-confirm heading=\"Retry a?\"")
                 && actions.contains("<details class=\"confirm-flow\"><summary>Retry</summary>"),
@@ -537,7 +542,7 @@ async fn messages_retries_waits_and_run_files() {
             )
             .await;
         let (_, page) = f.get(&format!("/projects/id/{id}/steps/w")).await;
-        let h1 = between(&page, "<h1 id=\"d-title\" class=\"sb-t\">", "</h1>");
+        let h1 = between(&page, "<h1 id=\"d-title\" class=\"sh-t\"", "</h1>");
         assert!(h1.ends_with("no aliases at all (FIG-5571)"), "{h1}");
         // the tab's own title stays cut
         assert!(between(&page, "<title>", "</title>").contains('…'));
@@ -550,7 +555,7 @@ async fn messages_retries_waits_and_run_files() {
         let (_, inbox) = f.get(&format!("/projects/id/{}/inbox", f.id)).await;
         let seg = between(
             &inbox,
-            "<nav class=\"view-switch\" aria-label=\"Messages\">",
+            "<nav class=\"tabs\" aria-label=\"Messages\">",
             "</nav>",
         );
         assert!(

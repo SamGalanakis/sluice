@@ -73,9 +73,9 @@ async fn slow_chromium_the_drawers_strip_and_step_view_say_quiet_like_the_plan()
     let (addr, server) = serve(&f);
     tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}#step:a-6-draft")).unwrap();
-        browser.wait("document.querySelector('#step-detail[data-step=\"a-6-draft\"] .sb-lane')").unwrap();
-        assert_eq!(browser.eval("document.querySelector('#u-a-6 .pill-quiet') !== null").unwrap(), json!(true));
-        assert_eq!(browser.eval("document.querySelector('#step-detail .sb-lane .sc[data-state=\"quiet\"] .sc-word')?.textContent").unwrap(), json!("quiet"));
+        browser.wait("document.querySelector('#step-detail[data-step=\"a-6-draft\"] .sh-lane')").unwrap();
+        assert_eq!(browser.eval("document.querySelector('#u-a-6 .pill.quiet') !== null").unwrap(), json!(true));
+        assert_eq!(browser.eval("document.querySelector('#step-detail .sh-lane .sc[data-state=\"quiet\"] .sc-word')?.textContent").unwrap(), json!("quiet"));
         assert_eq!(browser.eval("document.querySelector('#step-detail li[data-sv=\"a-6-draft\"] .st-w')?.textContent").unwrap(), json!("quiet"));
     }).await.unwrap();
     server.abort();

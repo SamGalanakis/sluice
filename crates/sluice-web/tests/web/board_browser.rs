@@ -21,7 +21,7 @@ const GEOMETRY: &str = r#"(() => {
           navLeft: n.left + parseFloat(css.paddingLeft), navRight: n.right - parseFloat(css.paddingRight),
           plan: box('#plan-pane'),
           board: box('#board-pane'), sum: box('.page-line'),
-          navFits: (l => l.scrollWidth <= l.clientWidth)(document.querySelector('.subnav nav.links')), tabs: box('.view-switch'), split: box('.splitter'),
+          navFits: (l => l.scrollWidth <= l.clientWidth)(document.querySelector('.subnav nav.tabs.lead')), tabs: box('.view-switch'), split: box('.splitter'),
           view: document.querySelector('#project-board').dataset.view ?? null,
           h1: box('.page-head h1'),
           // the page is as tall as its main column (or the window): nothing hangs below it
@@ -259,7 +259,7 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         // At 1440px each choice of the switch shows its view at once, says it is the current
         // one (filled), and is kept: a fresh load draws it from the server.
         browser.viewport(1440, "light").unwrap();
-        let shown = "(() => { const v = s => document.querySelector(s)?.checkVisibility() ?? false; return [document.querySelector('#project-board').dataset.view, v('#plan-pane'), v('#board-pane'), [...document.querySelectorAll('[data-view-tab]')].filter(a => a.getAttribute('aria-current') === 'true').map(a => a.dataset.viewTab).join(), getComputedStyle(document.querySelector('[data-view-tab][aria-current=true]')).backgroundColor !== getComputedStyle(document.querySelector('[data-view-tab][aria-current=false]')).backgroundColor]; })()";
+        let shown = "(() => { const v = s => document.querySelector(s)?.checkVisibility() ?? false; return [document.querySelector('#project-board').dataset.view, v('#plan-pane'), v('#board-pane'), [...document.querySelectorAll('[data-view-tab]')].filter(a => a.getAttribute('aria-current') === 'true').map(a => a.dataset.viewTab).join(), getComputedStyle(document.querySelector('[data-view-tab][aria-current=true]'), '::before').backgroundColor !== getComputedStyle(document.querySelector('[data-view-tab][aria-current=false]'), '::before').backgroundColor]; })()";
         for (choice, plan, board) in [("plan", true, false), ("board", false, true), ("both", true, true)] {
             browser
                 .eval(&format!("document.querySelector('[data-view-tab={choice}]').click()"))

@@ -163,7 +163,7 @@ async fn the_plan_card_and_the_step_page_give_one_retry_advice() {
         let band = between(&page, "<header id=\"step-band\"", "</header>");
         if step == "rep" {
             // a repeated failure: Retry with feedback leads on both (the plan's to its page's
-            // box), the bare Retry quiet on the page
+            // box), the bare Retry outlined beside it on the page
             assert!(
                 card.contains(
                     "/steps/rep#why-feedback\" data-step=\"rep\">Retry with feedback</a>"
@@ -171,14 +171,13 @@ async fn the_plan_card_and_the_step_page_give_one_retry_advice() {
                 "{card}"
             );
             assert!(
-                band.contains("<a class=\"d-fb\" href=\"#why-feedback\">")
-                    && band.contains("value=\"retry\" class=\"quiet-act\""),
+                band.contains("<a class=\"btn primary\" href=\"#why-feedback\">Retry with feedback</a><button name=\"action\" value=\"retry\">Retry</button>"),
                 "{band}"
             );
             assert!(page.contains("id=\"why-feedback\""), "{page}");
         } else {
             assert!(!card.contains(">Retry with feedback</a>"), "{step}: {card}");
-            assert!(!band.contains("d-fb"), "{step}: {band}");
+            assert!(!band.contains("#why-feedback"), "{step}: {band}");
         }
     }
     assert_eq!(
@@ -458,9 +457,9 @@ async fn slow_chromium_dismiss_a_stop_in_place_with_the_focus_on_undo() {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
         for (width, step) in [(1440, "first"), (390, "exited")] {
             browser.viewport(width, "light").unwrap();
-            browser.wait(&format!("document.querySelector('#n-stop-{step} button.x')?.checkVisibility()")).unwrap();
+            browser.wait(&format!("document.querySelector('#n-stop-{step} button.icon')?.checkVisibility()")).unwrap();
             browser.eval("window.marker = 'same document'; window.navigations = performance.getEntriesByType('navigation').length").unwrap();
-            browser.eval(&format!("document.querySelector('#n-stop-{step} button.x').click()")).unwrap();
+            browser.eval(&format!("document.querySelector('#n-stop-{step} button.icon').click()")).unwrap();
             browser.wait(&format!("document.activeElement?.id === 'undo-n-stop-{step}' && !document.querySelector('#n-stop-{step}')")).unwrap();
             assert_eq!(
                 browser.eval("[window.marker, performance.getEntriesByType('navigation').length === window.navigations, document.documentElement.scrollWidth <= innerWidth]").unwrap(),

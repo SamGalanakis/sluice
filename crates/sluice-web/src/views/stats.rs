@@ -609,25 +609,17 @@ impl StatsView {
     }
     /// The window switch in the row: a link a window, the chosen one filled.
     pub fn switch(&self) -> TrustedHtml {
-        let links: String = Span::EVERY
+        let links: Vec<(String, String, bool)> = Span::EVERY
             .into_iter()
             .map(|span| {
-                format!(
-                    "<a href=\"{}?window={}\"{}>{}</a>",
-                    esc(&self.href()),
-                    span.key(),
-                    if span == self.window.span {
-                        " aria-current=\"page\""
-                    } else {
-                        ""
-                    },
-                    span.label()
+                (
+                    format!("{}?window={}", self.href(), span.key()),
+                    span.label().to_owned(),
+                    span == self.window.span,
                 )
             })
             .collect();
-        TrustedHtml::owned(format!(
-            "<nav class=\"view-switch\" aria-label=\"Window\">{links}</nav>"
-        ))
+        ui::switch("Window", "", &links)
     }
     pub fn href(&self) -> String {
         format!("/projects/id/{}/stats", self.project)

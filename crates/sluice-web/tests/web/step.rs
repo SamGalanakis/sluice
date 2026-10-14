@@ -269,7 +269,10 @@ async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawe
         .step;
     let html = step.body("").unwrap();
     let html = html.as_str();
-    assert!(html.contains("finishing · running for <time"), "{html}");
+    assert!(
+        html.contains("<b>Finishing</b> <time data-since="),
+        "{html}"
+    );
     assert!(
         html.contains("<h4 id=\"ov-fin-h\">Finishing</h4>"),
         "{html}"
@@ -597,54 +600,51 @@ async fn a_running_step_says_what_it_is_doing_now() {
     let now = &now[..now.find("</article>").unwrap()];
     // Now is the Overview tab's first module, its head a level under the drawer's panel heads
     assert!(
-        now.contains(
-            "aria-labelledby=\"ov-now-h\"><div class=\"mod-h\"><h4 id=\"ov-now-h\">Now</h4>"
-        ),
+        now.contains("aria-labelledby=\"ov-now-h\"><h4 id=\"ov-now-h\">Now</h4>"),
         "{now}"
     );
-    // its latest exchange as messages: its own latest (to the orchestrator), its first words
+    // its latest exchange as message cards: its own latest (to the orchestrator), its first
+    // words cut with the whole a link away; then what was said to it since, identifiers whole
     let this = "<span class=\"who who-this\">This step</span>";
     let orchestrator = "<span class=\"who who-old\">orchestrator</span>";
-    assert!(
-        now.contains(&format!("<p class=\"mg-head\">{this}")),
-        "{now}"
-    );
+    let own = now
+        .find(&format!(
+            "<p class=\"mc-h\"><b>{this}</b><span class=\"mc-to\"> to </span>{orchestrator}"
+        ))
+        .unwrap_or_else(|| panic!("{now}"));
+    let to_it = now
+        .find(&format!(
+            "<p class=\"mc-h\"><b>{orchestrator}</b><span class=\"mc-to\"> to </span>{this}"
+        ))
+        .unwrap_or_else(|| panic!("the message to it: {now}"));
+    assert!(own < to_it, "{now}");
     assert!(now.contains("datetime=\"2026-10-05T09:40:00Z\""), "{now}");
     assert!(
-        now.contains("<p class=\"m-text\">Landed the seams on main."),
-        "{now}"
-    );
-    assert!(
-        now.contains("…</p>") && now.contains("Read it whole"),
+        now.contains("<div class=\"mc-b\"><p>Landed the seams on main.")
+            && now.contains(
+                "…</p></div><p class=\"mc-more\"><a href=\"#message-900002\">Read it whole</a></p>"
+            ),
         "{now}"
     );
     assert!(
         !now.contains("Start with the seams"),
         "the latest only: {now}"
     );
-    // its own voice leads; what was said to it since comes under it, named by who sent it,
-    // identifiers whole
-    let own = now.find(&format!("<p class=\"mg-head\">{this}")).unwrap();
-    let to_it = &now[now
-        .find(&format!("<p class=\"mg-head\">{orchestrator}"))
-        .expect("the message to it")..];
-    assert!(own < now.len() - to_it.len(), "{now}");
-    assert!(to_it.contains(this), "{to_it}");
     assert!(
-        now.contains("class=\"mg mg-out\"") && now.contains("class=\"mg mg-in\""),
-        "{now}"
-    );
-    assert!(
-        to_it.contains(
+        now[to_it..].contains(
             "<code>lash-core-store__unit_test</code> and intent_hash_golden_vector are red."
         ),
-        "{to_it}"
-    );
-    // it last said something days ago (its own message) and its run has written nothing since:
-    // quiet, and Now says for how long
-    assert!(
-        now.contains("<span>Nothing written for <time data-since=\"2026-10-05T09:40:00Z\""),
         "{now}"
+    );
+    // its last word was days ago and its run has written nothing since: its status line says
+    // it has gone quiet, and since when
+    let status = &drawer[drawer.find("<p class=\"status-line\">").unwrap()..];
+    let status = &status[..status.find("</p>").unwrap()];
+    assert!(
+        status.contains("<span class=\"dot quiet\"")
+            && status.contains("<span class=\"pill quiet\">quiet ")
+            && status.contains("not heard from since <time data-ago=\"2026-10-05T09:40:00Z\""),
+        "{status}"
     );
     // the Now section comes before everything else under the head
     assert!(
@@ -657,7 +657,7 @@ async fn a_running_step_says_what_it_is_doing_now() {
     let band = step.band("p", None).unwrap();
     assert!(
         band.as_str()
-            .contains("<h1 id=\"d-title\" class=\"sb-t\">work</h1>"),
+            .contains("<h1 id=\"d-title\" class=\"sh-t\" title=\"work\">work</h1>"),
         "{}",
         band.as_str()
     );
@@ -782,7 +782,7 @@ async fn a_refused_action_comes_back_to_its_step_saying_why_with_its_feedback_ke
         "{html}"
     );
     assert!(
-        html.contains("<details class=\"pl-fb\" data-preserve-attr=\"open\" open><summary")
+        html.contains("<details class=\"sh-fb\" data-preserve-attr=\"open\" open><summary")
             && html.contains("data-ignore-morph placeholder=\"What its next run should do differently\">Look again</textarea>"),
         "{html}"
     );

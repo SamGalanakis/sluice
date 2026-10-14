@@ -414,7 +414,7 @@ async fn slow_chromium_without_script_every_page_still_reads() {
                 .unwrap();
             let shown = browser
                 .eval(&format!(
-                    "({{reads: document.body.innerText.includes({}), scripted: [...document.querySelectorAll('.needs-js, .types-toggle, .tabbar')].filter(e => e.checkVisibility()).map(e => e.className), defined: [...document.querySelectorAll('*')].some(e => e.localName.startsWith('sluice-') && e.matches(':defined')), sideways: document.documentElement.scrollWidth > document.documentElement.clientWidth, text: document.body.innerText.slice(0, 300)}})",
+                    "({{reads: document.body.innerText.includes({}), scripted: [...document.querySelectorAll('.needs-js, .types-toggle, sluice-tabs > .tabs')].filter(e => e.checkVisibility()).map(e => e.className), defined: [...document.querySelectorAll('*')].some(e => e.localName.startsWith('sluice-') && e.matches(':defined')), sideways: document.documentElement.scrollWidth > document.documentElement.clientWidth, text: document.body.innerText.slice(0, 300)}})",
                     json!(reads)
                 ))
                 .unwrap();

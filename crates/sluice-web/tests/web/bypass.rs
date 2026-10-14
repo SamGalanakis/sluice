@@ -152,12 +152,12 @@ async fn a_bypassed_step_reads_bypassed_and_a_waiting_one_carries_its_tag() {
     assert_eq!(plan_html::place(&plan, "l"), "waiting");
     let row = plan_html::row(&plan, "l");
     assert!(
-        sv_row(row, "l-close").contains("<span class=\"tag sv-tag\">bypass · orchestrator</span>"),
+        sv_row(row, "l-close").contains("<span class=\"pill sv-tag\">bypass · orchestrator</span>"),
         "{row}"
     );
     let waiting = drawer(&state, project, "l-close").await;
     assert!(
-        waiting.contains("<span class=\"tag\">bypass · orchestrator</span>"),
+        waiting.contains("<span class=\"pill\">bypass · orchestrator</span>"),
         "{waiting}"
     );
     // land is set by hand: the preset settles close in the same transaction.
@@ -198,7 +198,7 @@ async fn a_bypassed_step_reads_bypassed_and_a_waiting_one_carries_its_tag() {
         drawer(&state, project, "l-close").await,
         page(&state, format!("/projects/id/{project}/steps/l-close")).await,
     ] {
-        assert!(html.contains("</svg></span>bypassed</span>"), "{html}");
+        assert!(html.contains("<b>Bypassed</b>"), "{html}");
         assert!(
             html.contains("<span class=\"f-src\">Bypassed</span>"),
             "{html}"
@@ -206,7 +206,7 @@ async fn a_bypassed_step_reads_bypassed_and_a_waiting_one_carries_its_tag() {
         assert!(!html.contains("bypass · orchestrator"), "{html}");
     }
     let land = drawer(&state, project, "l-land").await;
-    assert!(land.contains("</svg></span>set by hand</span>"), "{land}");
+    assert!(land.contains("<b>Set by hand</b>"), "{land}");
     assert!(
         land.contains("<span class=\"f-src\">Set by hand</span>"),
         "{land}"

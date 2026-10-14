@@ -4,10 +4,28 @@
 use super::TrustedHtml;
 use super::icons::{Icon, solid};
 
+mod button;
+mod calls;
+mod card;
+mod empty;
 mod grid;
+mod head;
+mod menu;
+mod pill;
 mod rocket;
+mod section;
+mod tabs;
+pub use button::*;
+pub use calls::*;
+pub use card::*;
+pub use empty::*;
 pub use grid::*;
+pub use head::*;
+pub use menu::*;
+pub use pill::*;
 pub use rocket::*;
+pub use section::*;
+pub use tabs::*;
 
 /// Text escaped for HTML content and attribute values.
 pub fn esc(text: &str) -> String {
@@ -436,44 +454,6 @@ pub fn field_start(name: &str) -> TrustedHtml {
 pub fn field_end() -> TrustedHtml {
     TrustedHtml::owned("</dd></div>".into())
 }
-/// A small fact set apart: `tone` "" (plain), "attn" (gold), "muted", "failed" or "live",
-/// with a glyph before its words when given.
-pub fn tag(text: &str, tone: &str, mark: Option<TrustedHtml>) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<span class=\"tag{}\">{}{}</span>",
-        tone_class(tone),
-        mark.map(|m| m.0).unwrap_or_default(),
-        esc(text)
-    ))
-}
-/// A tag that leads somewhere.
-pub fn tag_link(href: &str, text: &str, tone: &str, mark: Option<TrustedHtml>) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<a class=\"tag{}\" href=\"{}\">{}{}</a>",
-        tone_class(tone),
-        esc(href),
-        mark.map(|m| m.0).unwrap_or_default(),
-        esc(text)
-    ))
-}
-/// The coral "Awaiting your reply" that leads to an open question to the owner, where it is
-/// answered: the one place, besides the nav's count, coral is spent. Its question is its title.
-pub fn ask_link(href: &str, question: &str) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<a class=\"tag ask\" href=\"{}\" title=\"{}\" aria-label=\"Awaiting your reply: {}\">Awaiting your reply</a>",
-        esc(href),
-        esc(question),
-        esc(question)
-    ))
-}
-fn tone_class(tone: &str) -> String {
-    match tone {
-        "" => String::new(),
-        "failed" => " t-failed".into(),
-        other => format!(" {}", esc(other)),
-    }
-}
-
 // ---- who: the identities that are not a step (SPEC §8.1) -------------------------------------
 
 /// Someone a page names who is not a step: the person ("you"), a session by its `@name`,
@@ -660,156 +640,11 @@ impl StepRef {
 // works without it, each part falling back to plain HTML (tabs to their panels stacked under
 // their heads, a fold to its details, a confirmation to its form inline).
 
-/// One tab of a tab set: its key (the `?tab=` word and its panel's id), its label and a count
-/// after it ("15", "3/7"), with the count's words for a screen reader ("3 of 7 set").
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Tab {
-    pub key: &'static str,
-    pub label: &'static str,
-    pub count: String,
-    pub said: String,
-}
-impl Tab {
-    pub fn new(key: &'static str, label: &'static str) -> Self {
-        Self {
-            key,
-            label,
-            count: String::new(),
-            said: String::new(),
-        }
-    }
-    /// With a count after its label, and the words a screen reader hears for it.
-    pub fn counted(mut self, count: impl Into<String>, said: impl Into<String>) -> Self {
-        self.count = count.into();
-        self.said = said.into();
-        self
-    }
-}
-/// A tab set's host (`sluice-tabs`) and its bar: an ARIA tablist, the tab `selected` chosen.
-/// Its panels follow (`panel_open` … `panel_close`), then `tabs_close`. `prefix` keeps two tab
-/// sets on one page apart; `url` mirrors the chosen tab into the address's `?tab=`. The chosen
-/// tab is the host's `current`, which a stream patch never resets: the script owns it once the
-/// page is drawn.
-pub fn tabs_open(
-    prefix: &str,
-    label: &str,
-    tabs: &[Tab],
-    selected: &str,
-    url: bool,
-) -> TrustedHtml {
-    let selected = tabs
-        .iter()
-        .find(|t| t.key == selected)
-        .or(tabs.first())
-        .map_or("", |t| t.key);
-    let mut bar = String::new();
-    for tab in tabs {
-        let on = tab.key == selected;
-        // a counted tab's name is one phrase, "Activity, 3 turns": its label in words, so a
-        // screen reader never hears the count apart from it
-        let (count, name) = if tab.count.is_empty() {
-            (String::new(), String::new())
-        } else if tab.said.is_empty() {
-            (
-                format!("<span class=\"n\">{}</span>", esc(&tab.count)),
-                String::new(),
-            )
-        } else {
-            (
-                format!(
-                    "<span class=\"n\" aria-hidden=\"true\">{}</span>",
-                    esc(&tab.count)
-                ),
-                format!(" aria-label=\"{}, {}\"", esc(tab.label), esc(&tab.said)),
-            )
-        };
-        bar.push_str(&format!(
-            "<button type=\"button\" role=\"tab\" id=\"{p}tt-{k}\" aria-controls=\"{p}tp-{k}\" aria-selected=\"{on}\" tabindex=\"{ti}\" data-tab=\"{k}\" data-preserve-attr=\"aria-selected tabindex\"{name}>{label}{count}</button>",
-            p = esc(prefix),
-            k = tab.key,
-            ti = if on { 0 } else { -1 },
-            label = esc(tab.label),
-        ));
-    }
-    let host = Host::new("sluice-tabs")
-        .attr("id", format!("{prefix}tabs"))
-        .attr("class", "tabs")
-        .attr("current", selected)
-        .flag("url", url)
-        .keep("current");
-    TrustedHtml::owned(format!(
-        "{}<div class=\"tabbar\"><div class=\"tablist\" role=\"tablist\" aria-label=\"{label}\">{bar}</div></div>",
-        host.open(),
-        label = esc(label),
-    ))
-}
-pub fn tabs_close() -> TrustedHtml {
-    Host::new("sluice-tabs").close()
-}
-/// A tab's panel: a section under its own head (at `level`), which stands alone without script
-/// (every panel stacked) and is the tab's words for a screen reader with it. With `region`, a
-/// stream patches the panel on its own (`<!--r:…-->`).
-pub fn panel_open(
-    prefix: &str,
-    key: &str,
-    label: &str,
-    level: u8,
-    selected: bool,
-    region: bool,
-) -> TrustedHtml {
-    let level = level.clamp(1, 6);
-    let id = format!("{}tp-{}", esc(prefix), esc(key));
-    TrustedHtml::owned(format!(
-        "{open}<section class=\"tp\" id=\"{id}\" role=\"tabpanel\" aria-labelledby=\"{p}tt-{k}\" data-tab=\"{k}\"{on} data-preserve-attr=\"data-chosen tabindex\"><h{level} class=\"tp-h\">{label}</h{level}>",
-        open = if region {
-            format!("<!--r:{id}-->")
-        } else {
-            String::new()
-        },
-        p = esc(prefix),
-        k = esc(key),
-        on = if selected { " data-chosen" } else { "" },
-        label = esc(label),
-    ))
-}
-pub fn panel_close(prefix: &str, key: &str, region: bool) -> TrustedHtml {
-    TrustedHtml::owned(if region {
-        format!("</section><!--/r:{}tp-{}-->", esc(prefix), esc(key))
-    } else {
-        "</section>".into()
-    })
-}
 /// A fold around HTML that may run long: its first lines, faded, and "Show all" under them
 /// (`sluice-fold`; said only when the text is cut).
 pub fn fold(class: &str, html: &TrustedHtml) -> TrustedHtml {
     TrustedHtml::owned(format!("{}{html}{}", fold_open(class), fold_close()))
 }
-/// What a place says when it has nothing to show: one plain sentence.
-pub fn empty(text: &str) -> TrustedHtml {
-    empty_with(text, &TrustedHtml::owned(String::new()))
-}
-/// The same with a way on after it (a link).
-pub fn empty_with(text: &str, more: &TrustedHtml) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<div class=\"empty-state\"><p>{}</p>{}</div>",
-        esc(text),
-        if more.as_str().is_empty() {
-            String::new()
-        } else {
-            format!("<p class=\"es-more\">{more}</p>")
-        }
-    ))
-}
-/// What a page says at its top after something the owner asked for was not done: one calm box
-/// with the attention mark, read out as it appears.
-pub fn notice(words: &str) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<div class=\"notice\" role=\"alert\">{}<p>{}</p></div>",
-        crate::views::icons::icon(crate::views::icons::Icon::TriangleAlert, 16, "notice-i"),
-        esc(words)
-    ))
-}
-
 /// A confirmation (Cancel, Close all, Delete project), drawn by `html` (`ui::rocket`): its
 /// opener's words, the dialog's title with an `id` after it in data mono, the form it confirms
 /// and its words.

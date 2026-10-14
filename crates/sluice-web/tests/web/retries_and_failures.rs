@@ -161,10 +161,7 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
     // the row of a quiet run: how long it has been silent; which run it is and how the earlier
     // ones ended are its steps', not its line's
     let row = plan_html::row(&html, "l1");
-    assert!(
-        row.contains("<span class=\"pill pill-quiet\">quiet "),
-        "{row}"
-    );
+    assert!(row.contains("<span class=\"pill quiet\">quiet "), "{row}");
     let line = &row[..row.find("<div class=\"ro-drill\">").unwrap_or(row.len())];
     assert!(
         !line.contains("class=\"tries\"") && !line.contains(">run 6<"),

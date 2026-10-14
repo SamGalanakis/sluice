@@ -542,7 +542,7 @@ async fn filtered_units_progress_done_and_paused() {
         let red = output(&html, "red");
         assert!(red.contains("<span class=\"v num\">2</span>"), "{red}");
         assert!(
-        red.contains("<span class=\"tag live\">")
+        red.contains("<span class=\"pill run\">")
             && red.contains("live</span><time data-ago=\"2026-10-06T10:00:00.5Z\" datetime=\"2026-10-06T10:00:00.5Z\" title=\"2026-10-06 10:00 UTC\">")
             && red.contains(" ago</time>"),
         "{red}"
@@ -587,7 +587,7 @@ async fn filtered_units_progress_done_and_paused() {
         let red = output(&html, "red");
         assert!(
             red.contains("<span class=\"v num\">2</span>")
-                && red.contains("<span class=\"tag muted\">progress</span>")
+                && red.contains("<span class=\"pill muted\">progress</span>")
                 && !red.contains("live"),
             "{red}"
         );
@@ -741,7 +741,7 @@ async fn filtered_units_progress_done_and_paused() {
         // its page links its log
         assert!(
             step.contains(&format!(
-                "href=\"/projects/id/{held}/log?step=hold\">Log</a>"
+                "href=\"/projects/id/{held}/log?step=hold\">Its log</a>"
             )),
             "{step}"
         );

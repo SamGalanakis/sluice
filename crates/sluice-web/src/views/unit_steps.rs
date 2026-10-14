@@ -846,7 +846,7 @@ impl View<'_> {
                 ui::status_as(step.shown, step.word),
                 step.bypass_by
                     .as_ref()
-                    .map(|by| format!("<span class=\"tag sv-tag\">bypass · {}</span>", esc(by)))
+                    .map(|by| format!("<span class=\"pill sv-tag\">bypass · {}</span>", esc(by)))
                     .unwrap_or_default(),
                 step.runs
             );

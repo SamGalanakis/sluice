@@ -621,7 +621,7 @@ impl Restart {
             out.push_str(&format!(", <a href=\"#message-{m}\">with feedback</a>"));
             if !self.feedback_text.is_empty() {
                 out.push_str(&format!(
-                    ": <q class=\"d-fb\">{}</q>",
+                    ": <q class=\"fb-q\">{}</q>",
                     esc(&self.feedback_text)
                 ));
                 if self.feedback_text.ends_with(['.', '!', '?', '…']) {
@@ -740,24 +740,19 @@ impl ProgressView {
     pub fn shown(&self) -> Vec<&FieldView> {
         self.fields.iter().filter(|f| !f.identifies()).collect()
     }
-    /// Those that identify (a head's sha, a path), behind one "⋯" under the rows.
+    /// Those that identify (a head's sha, a path), in a quiet fold under the rows.
     pub fn held_menu(&self) -> TrustedHtml {
-        held_menu(self.fields.iter(), "its progress")
+        held_menu(self.fields.iter())
     }
 }
-/// What identifies among `fields`, in a Details "⋯" about `about`; nothing when none does.
-fn held_menu<'a>(fields: impl Iterator<Item = &'a FieldView>, about: &str) -> TrustedHtml {
+/// What identifies among `fields` (a sha, a path), whole with their copy buttons, under a quiet
+/// fold that says what it holds ("2 ids"); nothing when none does.
+fn held_menu<'a>(fields: impl Iterator<Item = &'a FieldView>) -> TrustedHtml {
     let mut details = super::ui::Details::new();
     for field in fields.filter(|f| f.identifies()) {
         details = details.id(&field.name, &field.value);
     }
-    if details.is_empty() {
-        return TrustedHtml::default();
-    }
-    TrustedHtml::owned(format!(
-        "<div class=\"f-held\">{}</div>",
-        details.menu(about).as_str()
-    ))
+    details.fold(&super::ui::count(details.len(), "id", "ids"))
 }
 impl StepView {
     /// What its page lists under "Waits on": its waits, less those the After row says (each
@@ -848,6 +843,16 @@ impl StepView {
         self.progress
             .as_ref()
             .is_some_and(|p| p.live && own.is_none_or(|at| p.at.as_str() > at))
+    }
+    /// Now has something to say while it runs: its agent's turns, an unread transcript, its
+    /// live progress, a message, or that none came yet. A step that only waits on the owner's
+    /// answer says so in its status line and its question, and draws no Now.
+    pub fn now_says(&self) -> bool {
+        let only_asks = self.asking.is_some()
+            && self.activity.is_none()
+            && !self.transcript_unread
+            && self.progress.as_ref().is_none_or(|p| !p.live);
+        self.running() && !only_asks
     }
     pub fn new(project: ProjectId, plan: &Plan, state: &StateSnapshot, id: &StepId) -> Self {
         let step = &plan.steps()[id];
@@ -1175,26 +1180,6 @@ impl StepView {
     pub fn is_quiet(&self) -> bool {
         self.shown() == Shown::Quiet
     }
-    /// A running step's badge, before "running for 2h": its state's word when it is more than
-    /// running ("quiet · ", "stopping · ").
-    pub fn badge_lead(&self) -> String {
-        match self.shown() {
-            Shown::Running => String::new(),
-            shown => format!("{} · ", shown.word()),
-        }
-    }
-    /// Its badge's tone: gold when its state needs a look but is no failure.
-    pub fn badge_tone(&self) -> &'static str {
-        match self.shown().spec().tone {
-            sluice_model::shown::Tone::Attention => " attn",
-            sluice_model::shown::Tone::Ink
-            | sluice_model::shown::Tone::Muted
-            | sluice_model::shown::Tone::Active
-            | sluice_model::shown::Tone::Paused
-            | sluice_model::shown::Tone::Idle
-            | sluice_model::shown::Tone::Success => "",
-        }
-    }
     /// How its result says it ended, for a step with no run kept: "Cancelled", "Failed",
     /// "Ended".
     pub fn ended_word(&self) -> &'static str {
@@ -1274,10 +1259,6 @@ impl StepView {
             doc
         }
     }
-    /// "3/5 runs": a scattered step's items done.
-    pub fn runs_tag(&self) -> TrustedHtml {
-        super::ui::tag(&format!("{} runs", self.caption()), "", None)
-    }
     /// What identifies it, behind its head's "⋯": its id, its unit and recipe, its fn, its
     /// run and its tags.
     pub fn details(&self) -> super::ui::Details {
@@ -1304,20 +1285,6 @@ impl StepView {
             );
         }
         details.text("Tags", &tags.join(", "))
-    }
-    /// Its header's word on the questions on its thread nobody has answered: its own to the owner
-    /// the coral "Awaiting your reply", leading to its Overview, where it is answered; else "2
-    /// awaiting reply", gold, leading to its Messages.
-    pub fn awaiting_tag(&self) -> TrustedHtml {
-        match &self.asking {
-            Some(ask) => super::ui::ask_link(&format!("#ov-message-{}", ask.message), &ask.title),
-            None => super::ui::tag_link(
-                "#tp-messages",
-                &format!("{} awaiting reply", self.awaiting),
-                "attn",
-                None,
-            ),
-        }
     }
     /// Under its card on the board and its unit's matrix row: the coral "Awaiting your reply",
     /// leading to its page, where its Overview draws the question whole to answer.
@@ -1493,27 +1460,6 @@ impl StepView {
             said: super::ui::duration_words(t.seconds),
             title,
         })
-    }
-    /// How its last run ended, for its header: a finished step's "Ended 2h ago · took 4m",
-    /// one waiting to run again "Last run ended 12h ago (took 3m)".
-    pub fn ended_line(&self) -> Option<TrustedHtml> {
-        let run = self.last_run().filter(|r| !r.finished.is_empty())?;
-        let ago = super::ui::ago(&run.finished);
-        let took = super::ui::esc(&run.took());
-        Some(TrustedHtml::owned(if self.pending() {
-            if took.is_empty() {
-                format!("Last run ended {}.", ago.as_str())
-            } else {
-                format!("Last run ended {} ({took}).", ago.as_str())
-            }
-        } else {
-            let mut line = format!("Ended {}", ago.as_str());
-            if !took.is_empty() {
-                line.push_str(" · ");
-                line.push_str(&took);
-            }
-            line
-        }))
     }
     /// Its run's number and how its earlier runs ended (oldest first), when it has had more
     /// than one and the latest is its own (running, or failed); a quiet run keeps its count.
@@ -1829,17 +1775,163 @@ impl StepView {
             .html(),
         ]
     }
-    /// Its head's ⋯ Details: what identifies it, and on a failure its Cancel and Cancel and
-    /// dismiss (`set_aside_actions`). In the drawer (not its `page`) they come back to the plan.
-    pub fn band_details(&self, page: bool) -> super::ui::Details {
+    /// One muted sentence under its name (`ui::status_line`): how it stands and since when;
+    /// while it runs, when it was last heard from (the live dot breathing for five minutes
+    /// after, a sand "quiet" once it has gone quiet, coral while it waits on the owner); how
+    /// its run ended once it has; and its run, when it has had more than one.
+    pub fn status_html(&self) -> TrustedHtml {
+        use super::ui::{Dot, Tone, ago, esc, pill, since, status_line};
+        let now = crate::clock::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let shown = self.shown();
+        let own = |s: String| TrustedHtml::owned(s);
+        let mut parts: Vec<TrustedHtml> = vec![];
+        let dot = if self.running() {
+            let lead = match shown {
+                Shown::Stopping => "Stopping",
+                Shown::Finishing => "Finishing",
+                _ => "Running",
+            };
+            parts.push(own(match self.running_since() {
+                Some(at) => format!("<b>{lead}</b> {}", since(at)),
+                None => format!("<b>{lead}</b>"),
+            }));
+            let heard = super::timestamp(&self.active_at).map(|at| now.saturating_sub(at));
+            // its question leads to where Overview draws it whole to answer; one put to
+            // someone else, to its Messages
+            if let Some(ask) = &self.asking {
+                parts.push(own(format!(
+                    "<a href=\"#ov-message-{}\" title=\"{}\">waiting on your answer</a>",
+                    ask.message,
+                    esc(&ask.title)
+                )));
+            } else if self.awaiting > 0 {
+                parts.push(own(format!(
+                    "<a href=\"#tp-messages\">{} awaiting reply</a>",
+                    self.awaiting
+                )));
+            }
+            if self.is_quiet() {
+                parts.push(pill(
+                    &format!(
+                        "quiet {}",
+                        super::ui::duration_text(heard.unwrap_or(0) as f64)
+                    ),
+                    Tone::Quiet,
+                    None,
+                ));
+                parts.push(own(format!(
+                    "not heard from since {}",
+                    ago(&self.active_at)
+                )));
+            } else if heard.is_some() {
+                parts.push(own(format!("heard {}", ago(&self.active_at))));
+            } else {
+                parts.push(own("no word yet".into()));
+            }
+            if self.asking.is_some() {
+                Dot::Ask
+            } else if self.is_quiet() {
+                Dot::Quiet
+            } else if heard.is_some_and(|h| h < 300) {
+                Dot::Live
+            } else {
+                Dot::Run
+            }
+        } else {
+            let word = {
+                let w = self.word();
+                let mut c = w.chars();
+                c.next()
+                    .map(|f| f.to_uppercase().chain(c).collect::<String>())
+                    .unwrap_or_default()
+            };
+            let ended = self.last_run().filter(|r| !r.finished.is_empty());
+            let after = |run: &RunView| {
+                let took = run.took();
+                let took = took.strip_prefix("took ").unwrap_or(&took).to_owned();
+                (!took.is_empty()).then(|| own(format!("after {}", esc(&took))))
+            };
+            match (self.pending(), ended) {
+                (false, Some(run)) => {
+                    parts.push(own(format!("<b>{}</b> {}", esc(&word), ago(&run.finished))));
+                    parts.extend(after(run));
+                }
+                (false, None) if !self.result_at.is_empty() => {
+                    parts.push(own(format!(
+                        "<b>{}</b> {}",
+                        esc(&word),
+                        ago(&self.result_at)
+                    )));
+                }
+                (true, Some(run)) => {
+                    parts.push(own(format!("<b>{}</b>", esc(&word))));
+                    parts.push(own(format!("its last run ended {}", ago(&run.finished))));
+                    parts.extend(after(run));
+                }
+                _ => parts.push(own(format!("<b>{}</b>", esc(&word)))),
+            }
+            match shown {
+                Shown::Failed | Shown::Stale | Shown::Blocked => Dot::Look,
+                Shown::Succeeded | Shown::Manual => Dot::Done,
+                _ => Dot::Idle,
+            }
+        };
+        if let Some((run, _)) = self.retries() {
+            let words = self.retries_words();
+            parts.push(own(if words.is_empty() {
+                format!("run {run}")
+            } else {
+                format!("run {run}, {}", esc(&words))
+            }));
+        } else if self.runs.len() > 1 {
+            parts.push(own(format!("{} runs", self.runs.len())));
+        }
+        if let Some(total) = self.total {
+            parts.push(own(format!("{} of {total} items done", self.done)));
+        }
+        if let Some(by) = &self.bypass_by {
+            parts.push(pill(&format!("bypass · {by}"), Tone::Plain, None));
+        }
+        status_line(dot, &parts)
+    }
+    /// Its head's one "⋯": what identifies it, then what can be done to it that is no next
+    /// move: Pause or Unpause, Cancel (a confirmation), a failure's Cancel and Cancel and
+    /// dismiss, and its log. In the drawer (not its `page`) a set-aside comes back to the plan.
+    pub fn head_menu(&self, page: bool) -> super::ui::Details {
         let (cancel, dismiss) = if page {
             (self.href(), self.href())
         } else {
             let plan = format!("/projects/id/{}", self.project);
             (plan.clone(), format!("{plan}#undo-{}", self.id))
         };
-        self.details()
-            .actions("Set it aside", self.set_aside_actions(&cancel, &dismiss))
+        let mut actions = vec![];
+        if self.pausable() {
+            actions.push(TrustedHtml::owned(format!(
+                "<form method=\"post\" action=\"{}/actions\"><input type=\"hidden\" name=\"revision\" value=\"{}\"><input type=\"hidden\" name=\"seen\" value=\"{}\"><button name=\"action\" value=\"{v}\">{w}</button></form>",
+                self.href(),
+                self.revision,
+                super::ui::esc(&self.seen()),
+                v = if self.paused { "unpause" } else { "pause" },
+                w = if self.paused { "Unpause" } else { "Pause" },
+            )));
+        }
+        if self.cancellable() {
+            actions.push(self.cancel_confirm().html());
+        }
+        actions.extend(self.set_aside_actions(&cancel, &dismiss));
+        actions.push(TrustedHtml::owned(format!(
+            "<a href=\"{}\">Its log</a>",
+            super::ui::esc(&self.log_href())
+        )));
+        if self.thread.is_empty() {
+            actions.push(TrustedHtml::owned(format!(
+                "<a href=\"{}\">Message it</a>",
+                super::ui::esc(&self.thread_href())
+            )));
+        }
+        self.details().actions("Actions", actions)
     }
     /// Cancel applies: running and not already stopping (a cancel asked for is not offered
     /// again), or pending work outside sluice (`step_cancel` takes no other).
@@ -1973,7 +2065,7 @@ impl StepView {
     }
     /// Its outputs that identify (a commit hash), which Overview's preview keeps behind "⋯".
     pub fn overview_held(&self) -> TrustedHtml {
-        held_menu(self.outputs_set().into_iter(), "its outputs")
+        held_menu(self.outputs_set().into_iter())
     }
     /// How Now's progress is introduced: "Live progress from run 4" (the run going now), or
     /// "Live progress" when no run of it is kept.
@@ -1990,9 +2082,21 @@ impl StepView {
     /// How the run going now came about, after `previous_run`: "Run 3 started 7m ago, after run
     /// 2 failed: the style check failed after the merge. Sluice retried it on its own." (the run
     /// before linked to it in Runs; who retried it in words, a retry's feedback linked).
+    /// Said only when the run before did not succeed: its status line already says "run 2,
+    /// after 1 succeeded".
     pub fn rerun_html(&self) -> TrustedHtml {
         use super::ui::{ago, esc};
-        let Some((n, prev)) = self.previous_run() else {
+        // a run after a success that nobody asked for (a loop's next pass) is said by the status
+        // line's "run 2, after 1 succeeded"; one somebody retried says who and why here
+        let restarted = self
+            .runs
+            .last()
+            .and_then(|r| r.restart.as_ref())
+            .is_some_and(|r| !r.sentence(self.id.as_str()).is_empty());
+        let Some((n, prev)) = self
+            .previous_run()
+            .filter(|(_, prev)| restarted || prev.outcome != Outcome::Ended(Shown::Succeeded))
+        else {
             return TrustedHtml::owned(String::new());
         };
         let mut out = String::new();
@@ -3232,7 +3336,7 @@ pub struct StepStreamQuery {
 fn gone(project: ProjectId, id: &StepId, page: bool) -> Result<TrustedHtml, askama::Error> {
     #[derive(Template)]
     #[template(
-        source = "<article id=\"step-detail\" data-step=\"{{ id }}\" data-gone>{% if !page %}<header class=\"d-head step-band in-drawer\"><div class=\"sb-top\"><div class=\"sb-name\"><h2 id=\"d-title\" class=\"sb-t\">{{ id }}</h2></div></div></header>{% endif %}<p class=\"d-gone\">This step left the plan; it may have retired. <a href=\"/projects/id/{{ project }}/log?step={{ id }}\">Search the log for it</a></p></article>",
+        source = "<article id=\"step-detail\" data-step=\"{{ id }}\" data-gone>{% if !page %}<header class=\"step-head in-drawer\"><div class=\"sh-name\"><h2 id=\"d-title\" class=\"sh-t\">{{ id }}</h2></div></header>{% endif %}<p class=\"d-gone\">This step left the plan; it may have retired. <a href=\"/projects/id/{{ project }}/log?step={{ id }}\">Search the log for it</a></p></article>",
         ext = "html"
     )]
     struct Gone<'a> {
@@ -3246,7 +3350,7 @@ fn gone(project: ProjectId, id: &StepId, page: bool) -> Result<TrustedHtml, aska
 fn gone_band(id: &StepId) -> Result<TrustedHtml, askama::Error> {
     #[derive(Template)]
     #[template(
-        source = "<header id=\"step-band\" class=\"d-head step-band\" data-gone><div class=\"sb-top\"><div class=\"sb-name\"><h1 id=\"d-title\" class=\"sb-t\">{{ id }}</h1></div></div></header>",
+        source = "<header id=\"step-band\" class=\"step-head\" data-gone><div class=\"sh-name\"><h1 id=\"d-title\" class=\"sh-t\">{{ id }}</h1></div></header>",
         ext = "html"
     )]
     struct GoneBand<'a> {

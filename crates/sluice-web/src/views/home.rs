@@ -327,7 +327,7 @@ impl HomeProject {
             let href = format!("{}/steps/{}", p.href(), s.step);
             let dismiss = if s.cancelled {
                 format!(
-                    "<form class=\"sr-dismiss\" method=\"post\" action=\"{}/steps/{}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"next\" value=\"/\"><button class=\"text-button\" aria-label=\"Dismiss the cancel of {}\">Dismiss</button></form>",
+                    "<form class=\"sr-dismiss\" method=\"post\" action=\"{}/steps/{}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"next\" value=\"/\"><button class=\"quiet\" aria-label=\"Dismiss the cancel of {}\">Dismiss</button></form>",
                     p.href(),
                     esc(&s.step),
                     esc(&sref.link_name(72))

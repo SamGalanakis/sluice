@@ -83,7 +83,7 @@ async fn recipe_titles_and_search() {
         let (status, step) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
         assert_eq!(status, StatusCode::OK, "{step}");
         assert!(
-        step.contains("<h1 id=\"d-title\" class=\"sb-t\"><span class=\"d-stage\">work ·</span> FIG-1: Fix the cron driver</h1><sluice-menu><details class=\"dm\"")
+        step.contains("<h1 id=\"d-title\" class=\"sh-t\" title=\"FIG-1: Fix the cron driver\"><span class=\"d-stage\">work ·</span> FIG-1: Fix the cron driver</h1><sluice-menu><details class=\"dm\"")
             && step.contains("<dt>Step</dt><dd><sluice-copy value=\"l1-work\"><code>l1-work</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy step\""),
         "{step}"
     );
@@ -94,22 +94,24 @@ async fn recipe_titles_and_search() {
         // a doc's first line is its title; the page says the rest of it once
         let (_, watch) = f.get(&format!("/projects/id/{id}/steps/watch")).await;
         assert!(
-            watch.contains("<h1 id=\"d-title\" class=\"sb-t\">Watches main for red</h1>"),
+            watch.contains("<h1 id=\"d-title\" class=\"sh-t\" title=\"Watches main for red\">Watches main for red</h1>"),
             "{watch}"
         );
         assert!(
-            watch.contains("<p class=\"d-doc\">It says so on the thread.</p>"),
+            watch.contains("<p class=\"sh-doc\">It says so on the thread.</p>"),
             "{watch}"
         );
         // a literal prompt's heading; and a step with neither is its id
         let (_, bare) = f.get(&format!("/projects/id/{id}/steps/bare")).await;
         assert!(
-            bare.contains("<h1 id=\"d-title\" class=\"sb-t\">Bare heading</h1>"),
+            bare.contains(
+                "<h1 id=\"d-title\" class=\"sh-t\" title=\"Bare heading\">Bare heading</h1>"
+            ),
             "{bare}"
         );
         let (_, plain) = f.get(&format!("/projects/id/{id}/steps/plain")).await;
         assert!(
-            plain.contains("<h1 id=\"d-title\" class=\"sb-t\">plain</h1>")
+            plain.contains("<h1 id=\"d-title\" class=\"sh-t\" title=\"plain\">plain</h1>")
                 && !plain.contains("d-id"),
             "{plain}"
         );

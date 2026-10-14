@@ -381,8 +381,8 @@ async fn slow_chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refuse
     let mut browser = tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&page).unwrap();
         browser.wait("document.querySelector('#step-detail details.confirm-flow > summary')").unwrap();
-        // the running step's Cancel: the summary the server draws, focused
-        browser.eval("window.cancel=document.querySelector('#step-detail details.confirm-flow > summary');cancel.focus();window.sver=document.querySelector('#step-detail').outerHTML.length").unwrap();
+        // the running step's Cancel, in its head's open ⋯: the summary the server draws, focused
+        browser.eval("document.querySelector('#step-detail .sh-name details.dm').open=true;window.cancel=document.querySelector('#step-detail details.confirm-flow > summary');cancel.focus();window.sver=document.querySelector('#step-detail').outerHTML.length").unwrap();
         browser
     })
     .await
@@ -399,11 +399,12 @@ async fn slow_chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refuse
     let mut browser = tokio::task::spawn_blocking(move || {
         browser.wait("document.querySelector('#step-detail').textContent.includes('Main is green again.')").unwrap();
         assert_eq!(browser.eval("cancel.isConnected && document.activeElement===cancel").unwrap(), true);
-        // and it still opens the dialog, which Keep closes back onto it
+        // and it still opens the dialog
         browser.eval("cancel.click()").unwrap();
         browser.wait("document.querySelector('#confirmation').open").unwrap();
         browser.eval("document.querySelector('#confirmation [data-keep]').click()").unwrap();
-        browser.wait("!document.querySelector('#confirmation').open && document.activeElement===cancel").unwrap();
+        // the menu it was in closed behind the dialog: Keep puts the focus back on the menu's "⋯"
+        browser.wait("!document.querySelector('#confirmation').open && document.activeElement===document.querySelector('#step-detail .sh-name details.dm > summary')").unwrap();
         browser.navigate(&format!("{base}/projects/id/{lanes}")).unwrap();
         browser.wait("document.querySelector('form.board-form') && document.querySelector('#project-board')").unwrap();
         // a refused field: its note under the field

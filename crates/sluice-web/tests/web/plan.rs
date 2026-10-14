@@ -147,7 +147,12 @@ async fn plan_units_and_loose_steps() {
             "{cause}"
         );
         for item in &needs {
-            assert_eq!(item.matches("class=\"x\"").count(), 1, "{item}");
+            assert_eq!(
+                item.matches("<button class=\"icon\" aria-label=\"Set aside")
+                    .count(),
+                1,
+                "{item}"
+            );
         }
         assert!(
             needs[0].contains("<span class=\"nk nk-ask\" role=\"img\" aria-label=\"Question\">")
@@ -221,7 +226,7 @@ async fn plan_units_and_loose_steps() {
         // quiet: the sand pill says how long, its stage pill no time of its own
         let s3 = plan_html::row(&html, "s-3");
         assert!(
-            s3.contains("</span>scan</span><span class=\"pill pill-quiet\">quiet "),
+            s3.contains("</span>scan</span><span class=\"pill quiet\">quiet "),
             "{s3}"
         );
         // nothing heard since its run began: said once
@@ -587,7 +592,7 @@ async fn a_big_roster_folds_its_unremarkable_groups() {
         at(scan, "<!--r:u-c-50-->")
             < at(
                 scan,
-                "<details class=\"ro-fold\"><summary>+7 running · each heard from in the last "
+                "<details class=\"qf ro-fold\"><summary>+7 running · each heard from in the last "
             )
             && scan.matches("<details id=\"u-c-").count() == 8,
         "{scan}"

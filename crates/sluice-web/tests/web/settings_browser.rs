@@ -249,7 +249,7 @@ try:
  assert chrome.eval("document.querySelector('#resource-workers').value==='-1'")
  states('resource-error')
  apply('paused','true')
- chrome.wait("document.querySelector('#settings-live .tag')?.textContent==='Paused'")
+ chrome.wait("document.querySelector('#settings-live .pill')?.textContent==='Paused'")
  states('paused')
  # Delete a live, unarchived project after its work finishes.
  chrome.wait("document.querySelector('#delete-button').getAttribute('aria-disabled')==='false'")

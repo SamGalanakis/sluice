@@ -350,13 +350,22 @@ async fn states_priorities_cancellation_and_skipped_units() {
                 )),
                 "{state:?}: {pane}"
             );
-            // its own page: the badge's glyph and word are the state's, never two readings
+            // its own page: the status line's word is the state's, never two readings
             let (status, page) = f.get(&format!("/projects/id/{id}/steps/{step}")).await;
             assert_eq!(status, StatusCode::OK, "{page}");
-            let badge = between(&page, "<p class=\"d-badges\">", "</p>");
+            let line = between(&page, "<p class=\"status-line\">", "</p>");
+            // quiet is a running step's: its sand pill says so after "Running"
+            let word = match state {
+                Shown::Quiet => "running",
+                _ => state.word(),
+            };
             assert!(
-                badge.contains(&format!("g g-{}", state.key())) && badge.contains(state.word()),
-                "{state:?}: {badge}"
+                line.contains(&format!(
+                    "<b>{}{}</b>",
+                    word[..1].to_uppercase(),
+                    &word[1..]
+                )) && (state != Shown::Quiet || line.contains("<span class=\"pill quiet\">quiet ")),
+                "{state:?}: {line}"
             );
             // a cancel asked for is not offered again
             if state == Shown::Stopping {

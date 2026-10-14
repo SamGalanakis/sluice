@@ -292,7 +292,7 @@ async fn ready_work_repeated_failure_and_answered_questions() {
     );
         let band = between(&page, "<header id=\"step-band\"", "</header>");
         assert!(
-            !band.contains("pl-fb") && band.contains(">Retry</button>"),
+            !band.contains("sh-fb") && band.contains(">Retry</button>"),
             "{band}"
         );
         // a failure unlike the run before keeps its kind's advice, and its box folded in the band
@@ -302,7 +302,7 @@ async fn ready_work_repeated_failure_and_answered_questions() {
         assert!(!page.contains("err-retry"), "{page}");
         assert!(
             page.contains(
-                "<details class=\"pl-fb\" data-preserve-attr=\"open\"><summary class=\"primary\">"
+                "<details class=\"sh-fb\" data-preserve-attr=\"open\"><summary class=\"btn primary\">"
             ) && page.contains("Retry with feedback</summary>"),
             "{page}"
         );
@@ -436,7 +436,11 @@ async fn ready_work_repeated_failure_and_answered_questions() {
         .await;
         let (_, page) = f.get(&format!("/projects/id/{id}/steps/s")).await;
         let last = between(&page, "<article class=\"mod d-sec d-last\"", "</article>");
-        let replies = between(last, "<ol class=\"m-replies\">", "</ol>");
+        let replies = between(
+            last,
+            "<span class=\"mc-to\"> replied</span>",
+            "</div></div>",
+        );
         assert!(
             replies.contains("Option (b) is live: re-measure."),
             "{replies}"

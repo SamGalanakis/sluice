@@ -177,14 +177,14 @@ async fn slow_chromium_stats_fits_every_width_and_its_window_switch_works() {
         browser.viewport(1440, "light").unwrap();
         browser.navigate(&page).unwrap();
         browser.wait("document.readyState === 'complete'").unwrap();
-        let chosen = "document.querySelector('nav.view-switch[aria-label=\"Window\"] a[aria-current=\"page\"]')";
+        let chosen = "document.querySelector('nav.tabs[aria-label=\"Window\"] a[aria-current=\"page\"]')";
         assert_eq!(browser.eval(&format!("{chosen}.textContent")).unwrap(), "7 days");
         assert_ne!(
             browser.eval(&format!("getComputedStyle({chosen}).backgroundColor")).unwrap(),
             browser.eval("getComputedStyle(document.body).backgroundColor").unwrap()
         );
         browser
-            .eval("[...document.querySelectorAll('nav.view-switch a')].find(a => a.textContent === '24 hours').click()")
+            .eval("[...document.querySelectorAll('nav.tabs[aria-label=Window] a')].find(a => a.textContent === '24 hours').click()")
             .unwrap();
         browser
             .wait(&format!("location.search === '?window=24h' && document.readyState === 'complete' && {chosen}?.textContent === '24 hours'"))
@@ -296,7 +296,7 @@ async fn windows_outcomes_and_stage_statistics() {
         let (status, page) = get(&router, &format!("/projects/id/{}/stats", n.almanac)).await;
         assert_eq!(status, StatusCode::OK, "{page}");
         // the tab after Day, current; the head says what the window holds
-        let tabs = page.split("<nav class=\"links\"").nth(1).unwrap();
+        let tabs = page.split("<nav class=\"tabs lead\"").nth(1).unwrap();
         let tabs = &tabs[..tabs.find("</nav>").unwrap()];
         let day = tabs.find(">Day</a>").unwrap();
         let stats = tabs

@@ -6,6 +6,9 @@ use sluice_web::views::{DashboardState, PageState, page_router};
 use std::sync::Arc;
 #[path = "dashboard_fixture/mod.rs"]
 mod dashboard_fixture;
+/// A real (trimmed, masked) Claude transcript, laid out as its engine leaves it.
+#[path = "../../sluice-agents/tests/fixtures/activity/lay.rs"]
+mod lay;
 /// The neutral projects (`almanac`, `chores`) every page must render (tests/neutral).
 #[path = "../tests/web/neutral/mod.rs"]
 mod neutral;
@@ -23,10 +26,38 @@ async fn main() {
     println!("ALMANAC {}", n.almanac);
     println!("CHORES {}", n.chores);
     println!("ATLAS {}", neutral::seed_big(&writer, home.path()).await);
-    let state = DashboardState::new(
+    // almanac's long survey reads as an agent at work: its running run's transcript, turn by turn
+    let run: String = writer
+        .write(sluice_store::RetrySafety::NonIdempotent, move |tx| {
+            let ids: String = tx.sql().query_row(
+                "SELECT run_ids FROM steps WHERE project_id=?1 AND step_id='survey'",
+                [n.almanac.to_string()],
+                |r| r.get(0),
+            )?;
+            let ids: Vec<String> = serde_json::from_str(&ids).unwrap();
+            Ok(ids.last().cloned().unwrap())
+        })
+        .await
+        .unwrap();
+    let claude = home.path().join("claude-home");
+    // its records moved to the last hour, inside the run (they were written on 2026-10-08)
+    let laid = lay::lay(home.path(), &claude, "claude", &run);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let hour = &sluice_web::views::rfc3339(now - 3600)[..14];
+    let text: String = laid
+        .lines
+        .iter()
+        .map(|l| format!("{}\n", l.replace("2026-10-08T10:", hour)))
+        .collect();
+    std::fs::write(&laid.transcript, text).unwrap();
+    let mut state = DashboardState::new(
         ReadPool::open(home.path(), 2).unwrap(),
         Arc::new(home::FixtureCatalog),
     );
+    state.claude_home = Some(claude);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     println!("URL http://{}", listener.local_addr().unwrap());
     let mut state = PageState::new(state);

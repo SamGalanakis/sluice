@@ -105,7 +105,7 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/b")).await;
     assert!(
         step.contains(
-            "<input type=\"hidden\" name=\"action\" value=\"dismiss\"><button class=\"quiet-act\">Dismiss</button>"
+            "<input type=\"hidden\" name=\"action\" value=\"dismiss\"><button class=\"quiet\">Dismiss</button>"
         ),
         "{step}"
     );
@@ -529,13 +529,12 @@ async fn composing_waits_and_previous_outputs() {
             .await
             .unwrap();
         let (_, page) = f.get(&format!("/projects/id/{id}/steps/redo")).await;
-        let when = between(&page, "<span class=\"meta d-when\">", "</p>");
-        let when = &when[..when.rfind("</span>").unwrap()];
+        let when = between(&page, "<p class=\"status-line\">", "</p>");
         assert!(
-            when.starts_with("<span class=\"meta d-when\">Last run ended <time"),
+            when.contains("<span>its last run ended <time")
+                && when.contains("</time></span><span>after &lt;1s</span>"),
             "{when}"
         );
-        assert!(when.ends_with(" (took &lt;1s)."), "{when}");
         assert!(!page.contains(">Ended "), "{page}");
         let (_, said) = f
             .get(&format!("/projects/id/{id}/steps/said?tab=outputs"))

@@ -1272,9 +1272,9 @@ impl Draw<'_> {
             Some((at, live)) => format!(
                 "<span class=\"meta board-progress\">{}{}</span>",
                 if live {
-                    super::ui::tag("live", "live", Some(super::ui::mark(super::ui::Shown::Running)))
+                    super::ui::pill("live", super::ui::Tone::Run, Some(super::ui::mark(super::ui::Shown::Running)))
                 } else {
-                    super::ui::tag("progress", "muted", None)
+                    super::ui::pill("progress", super::ui::Tone::Muted, None)
                 },
                 ago(&at)
             ),

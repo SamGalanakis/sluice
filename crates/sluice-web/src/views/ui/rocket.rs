@@ -96,7 +96,7 @@ pub const COMPONENTS: &[Component] = &[
         does: "An ARIA tablist over its panels: arrows wrap, Home and End; the chosen tab in $$tab, the page's tab signal and, with url, ?tab=; an anchor in a panel opens its tab.",
         props: &[("current", "string"), ("url", "boolean")],
         events: &["sluice-tab"],
-        slots: &["tabbar", "panels"],
+        slots: &["tabs", "panels"],
     },
     Component {
         tag: "sluice-fold",
@@ -469,7 +469,7 @@ pub fn drawer(base: &str) -> TrustedHtml {
             .attr("id", "step-drawer")
             .attr("base", base)
             .wrap(&TrustedHtml::owned(format!(
-                "<div class=\"scrim\" hidden></div><aside id=\"drawer\" class=\"drawer\" hidden tabindex=\"-1\" aria-labelledby=\"d-title\"><div class=\"d-top\"><button type=\"button\" class=\"close\" aria-label=\"Close\">{}</button></div><div id=\"step-detail\"></div></aside>",
+                "<div class=\"scrim\" hidden></div><aside id=\"drawer\" class=\"drawer\" hidden tabindex=\"-1\" aria-labelledby=\"d-title\"><div class=\"d-top\"><button type=\"button\" class=\"icon big close\" aria-label=\"Close\" title=\"Close\">{}</button></div><div id=\"step-detail\"></div></aside>",
                 icon(Icon::X, 20, "")
             )))
     ))

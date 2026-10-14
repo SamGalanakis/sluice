@@ -423,7 +423,7 @@ impl<'a> Plan<'a> {
                 sentence: format!("<b>{who}</b> asks: {}", esc(&ask.title)),
                 more: String::new(),
                 act: format!(
-                    "<a class=\"act\" href=\"{}\"{}>Answer</a>",
+                    "<a class=\"btn\" href=\"{}\"{}>Answer</a>",
                     esc(&ask.href(&project)),
                     if ask.step.is_empty() {
                         String::new()
@@ -504,7 +504,7 @@ impl<'a> Plan<'a> {
                 ),
                 more: String::new(),
                 act: format!(
-                    "<a class=\"act\" href=\"{}\">Message it</a>",
+                    "<a class=\"btn\" href=\"{}\">Message it</a>",
                     esc(&step.thread_href())
                 ),
                 short: format!("the silence of {}", ui::cut(title(unit), 60)),
@@ -591,7 +591,7 @@ impl<'a> Plan<'a> {
         let act = if step.feedback_in_why() && shown == Shown::Failed {
             // a failure that repeated: its feedback first, on its page
             format!(
-                "<a class=\"act\" href=\"{}#why-feedback\" data-step=\"{}\">Retry with feedback</a>",
+                "<a class=\"btn\" href=\"{}#why-feedback\" data-step=\"{}\">Retry with feedback</a>",
                 esc(&step.href()),
                 esc(step.id.as_str())
             )
@@ -605,7 +605,7 @@ impl<'a> Plan<'a> {
             }
         } else {
             format!(
-                "<a class=\"act\" href=\"{}\" data-step=\"{}\">Open step</a>",
+                "<a class=\"btn\" href=\"{}\" data-step=\"{}\">Open step</a>",
                 esc(&step.href()),
                 esc(step.id.as_str())
             )
@@ -689,7 +689,7 @@ impl<'a> Plan<'a> {
                     .unwrap_or_default()
             ),
             more: format!(
-                "<details class=\"nd-more\" data-preserve-attr=\"open\"><summary>Show the {}</summary><ul>{list}</ul></details>",
+                "<details class=\"qf nd-more\" data-preserve-attr=\"open\"><summary>Show the {}</summary><ul>{list}</ul></details>",
                 leading(n).to_lowercase()
             ),
             act,
@@ -711,14 +711,14 @@ impl<'a> Plan<'a> {
         let next = format!("{}#needs", self.view.href());
         match steps {
             [step] => format!(
-                "<form class=\"nd-form\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"act\">{word}</button></form>",
+                "<form class=\"nd-form\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"btn\">{word}</button></form>",
                 h = esc(&step.href()),
                 rev = step.revision,
                 seen = esc(&step.seen()),
                 next = esc(&next),
             ),
             steps => format!(
-                "<form class=\"nd-form\" method=\"post\" action=\"{h}/needs\"><input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"items\" value=\"{items}\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"act\">{word}</button></form>",
+                "<form class=\"nd-form\" method=\"post\" action=\"{h}/needs\"><input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"items\" value=\"{items}\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"btn\">{word}</button></form>",
                 h = esc(&self.view.href()),
                 items = esc(&steps
                     .iter()
@@ -734,7 +734,7 @@ impl<'a> Plan<'a> {
     /// can undo it).
     fn settle_form(&self, unit: &UnitView, step: &StepView) -> String {
         format!(
-            "<form class=\"nd-form\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"act\" title=\"{label}\" aria-label=\"{label}\">Settle as done</button></form>",
+            "<form class=\"nd-form\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"btn\" title=\"{label}\" aria-label=\"{label}\">Settle as done</button></form>",
             h = esc(&step.href()),
             rev = step.revision,
             seen = esc(&step.seen()),
@@ -806,7 +806,7 @@ impl<'a> Plan<'a> {
             out.push_str(&self.needs_form(
                 "dismiss",
                 &keys,
-                "link",
+                "quiet",
                 &format!("{words}: each stop and silence comes back when it changes"),
                 words,
                 "",
@@ -831,7 +831,8 @@ impl<'a> Plan<'a> {
             for (n, need) in live.iter().enumerate() {
                 // one filled action in the well: the first item's
                 let act = if n == 0 {
-                    need.act.replacen("class=\"act\"", "class=\"act main\"", 1)
+                    need.act
+                        .replacen("class=\"btn\"", "class=\"btn primary\"", 1)
                 } else {
                     need.act.clone()
                 };
@@ -854,7 +855,7 @@ impl<'a> Plan<'a> {
                     &self.needs_form(
                         "dismiss",
                         &need.keys,
-                        "x",
+                        "icon",
                         &format!("Set aside {}: it comes back when it changes", need.short),
                         "×",
                         "",
@@ -875,7 +876,7 @@ impl<'a> Plan<'a> {
                     self.needs_form(
                         "undo",
                         &need.keys,
-                        "link",
+                        "quiet",
                         &format!("Undo setting aside {}", need.short),
                         "Undo",
                         &format!("undo-{}", need.id),
@@ -1090,7 +1091,7 @@ impl<'a> Plan<'a> {
             .unwrap_or(0)
             .max(self.view.seen.unwrap_or(0));
         let mut out = format!(
-            "<section id=\"plan-finished\" class=\"pb-sec\" aria-labelledby=\"finished\"><div class=\"pb-label\"><h2 id=\"finished\">{head}</h2>{since}<span class=\"pb-grow\"></span><form class=\"nd-form\" method=\"post\" action=\"{h}/seen\"><input type=\"hidden\" name=\"through\" value=\"{through}\"><button class=\"link\">Mark as seen</button></form></div><ul class=\"fin\">",
+            "<section id=\"plan-finished\" class=\"pb-sec\" aria-labelledby=\"finished\"><div class=\"pb-label\"><h2 id=\"finished\">{head}</h2>{since}<span class=\"pb-grow\"></span><form class=\"nd-form\" method=\"post\" action=\"{h}/seen\"><input type=\"hidden\" name=\"through\" value=\"{through}\"><button class=\"quiet\">Mark as seen</button></form></div><ul class=\"fin\">",
             h = esc(&self.view.href()),
         );
         for unit in &self.finished {
@@ -1208,7 +1209,7 @@ impl<'a> Plan<'a> {
                     draw(&mut out, &marked);
                     let _ = write!(
                         out,
-                        "<details class=\"ro-fold\"><summary>+{}{}</summary>",
+                        "<details class=\"qf ro-fold\"><summary>+{}{}</summary>",
                         row_counts(&healthy),
                         heard(&healthy)
                     );
@@ -1324,7 +1325,7 @@ impl<'a> Plan<'a> {
                 (Some(q), _) if !q.active_at.is_empty() => {
                     let _ = write!(
                         meta,
-                        "<span class=\"pill pill-quiet\">quiet {}</span>",
+                        "<span class=\"pill quiet\">quiet {}</span>",
                         ui::since(&q.active_at)
                     );
                 }
@@ -1343,7 +1344,7 @@ impl<'a> Plan<'a> {
                             ""
                         },
                         if age < LIVE {
-                            "<i class=\"live-dot\" aria-hidden=\"true\"></i>"
+                            "<span class=\"dot run pulse\" aria-hidden=\"true\"></span>"
                         } else {
                             ""
                         },
@@ -1472,7 +1473,7 @@ impl<'a> Plan<'a> {
         if let Some(step) = current(unit) {
             let _ = write!(
                 out,
-                "<a class=\"act\" href=\"{}\" data-step=\"{}\">Open step</a>",
+                "<a class=\"btn\" href=\"{}\" data-step=\"{}\">Open step</a>",
                 esc(&step.href()),
                 esc(step.id.as_str()),
             );
@@ -1922,7 +1923,7 @@ fn view_switch(href: &str, chosen: Option<&str>) -> String {
         )
     })
     .collect();
-    format!("<nav class=\"view-switch\" aria-label=\"View\">{links}</nav>")
+    format!("<nav class=\"tabs view-switch\" aria-label=\"View\">{links}</nav>")
 }
 /// "a", "a and b", "a, b and c".
 fn join(items: &[&str]) -> String {

@@ -84,7 +84,7 @@ async fn slow_chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_
         browser.navigate(&failed).unwrap();
         browser.wait("document.readyState === 'complete'").unwrap();
         let band: Value = browser
-            .eval("(() => { const b = document.querySelector('.page-top #step-band'); return [b.querySelector('h1#d-title').textContent, b.querySelector('[aria-current=step] .sc-name').textContent, [...b.querySelectorAll('.d-actions :is(button, summary)')].filter(x => x.checkVisibility()).map(x => x.textContent.trim())]; })()")
+            .eval("(() => { const b = document.querySelector('.page-top #step-band'); return [b.querySelector('h1#d-title').textContent, b.querySelector('[aria-current=step] .sc-name').textContent, [...b.querySelectorAll('.sh-acts :is(button, summary)')].filter(x => x.checkVisibility()).map(x => x.textContent.trim())]; })()")
             .unwrap();
         // Retry with feedback, as on the plan's Stopped cards, its box folded; Retry beside it
         assert_eq!(
@@ -123,10 +123,10 @@ async fn slow_chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_
         browser
             .wait("document.readyState === 'complete' && !!document.querySelector('#tp-overview .swell-ask sluice-answer .answer[data-drawn]')")
             .unwrap();
-        // it swells first, above Now
+        // it swells first: Overview's first module
         assert_eq!(
             browser
-                .eval("(() => { const a = document.querySelector('#tp-overview .d-ask'), n = document.querySelector('#tp-overview .d-now'); return a.classList.contains('swell-ask') && !!(a.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING); })()")
+                .eval("(() => { const a = document.querySelector('#tp-overview .d-ask'); return a.classList.contains('swell-ask') && a === document.querySelector('#tp-overview .mod'); })()")
                 .unwrap(),
             json!(true)
         );

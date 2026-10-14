@@ -133,7 +133,11 @@ async fn an_answered_or_closed_question_keeps_its_place_and_reads_whole() {
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
     assert!(!page.contains("d-sec d-ask"), "answered: nothing waits");
     let now = between(&page, "<article class=\"mod d-sec d-now\"", "</article>");
-    let item = between(now, &format!("id=\"ov-message-{q}\""), "</ol></li>");
+    let item = between(
+        now,
+        &format!("id=\"ov-message-{q}\""),
+        "<div class=\"msg-card\"",
+    );
     assert!(
         item.contains("<li><strong>Now:</strong> land it.</li>"),
         "{item}"
@@ -142,9 +146,12 @@ async fn an_answered_or_closed_question_keeps_its_place_and_reads_whole() {
         !item.contains("m-text"),
         "never a run-together excerpt: {item}"
     );
+    // its answer the card after it, whole too
     assert!(
-        item.contains(&format!("<li class=\"m-reply\" id=\"ov-message-{reply}\"")),
-        "{item}"
+        now.contains(&format!(
+            "<div class=\"msg-card\" id=\"ov-message-{reply}\">"
+        )),
+        "{now}"
     );
 
     // closed on the inbox: kept in its place for ten minutes as the line that says so
@@ -212,10 +219,10 @@ async fn elapsed_time_retry_feedback_and_settled_log() {
         let started = ago(85 * 60 + 10);
         run(&f, id, "s", started, None, None).await;
         let (_, page) = f.get(&format!("/projects/id/{id}/steps/s")).await;
-        let badge = between(&page, "<p class=\"d-badges\">", "</p>");
+        let badge = between(&page, "<p class=\"status-line\">", "</p>");
         assert!(
             badge.contains(&format!(
-                "running for <time data-since=\"{started}\" datetime=\"{started}\" title=\""
+                "<b>Running</b> <time data-since=\"{started}\" datetime=\"{started}\" title=\""
             )) && badge.contains(" UTC\">1h 25m</time>"),
             "{badge}"
         );
@@ -275,29 +282,29 @@ async fn elapsed_time_retry_feedback_and_settled_log() {
         .id
         .0;
         let (_, page) = f.get(&format!("/projects/id/{id}/steps/w")).await;
-        let said = between(&page, "<p class=\"d-retried\">", "</p>");
+        let said = between(&page, "<p class=\"sh-note\">", "</p>");
         assert!(
             said.contains("You retried it <time data-ago=\"") && said.contains(">just now</time>"),
             "{said}"
         );
         assert!(
         said.contains(&format!(
-            ", <a href=\"#message-{feedback}\">with feedback</a>: <q class=\"d-fb\">try with a longer cap</q>."
+            ", <a href=\"#message-{feedback}\">with feedback</a>: <q class=\"fb-q\">try with a longer cap</q>."
         )),
         "{said}"
     );
         // when it starts is Overview's to say (`polish6.rs`), not the header's
         assert!(!said.contains("It starts when"), "{said}");
-        // it sits under the head's state line, which says when its last run ended
+        // it sits under the head's status line, which says when its last run ended
         assert!(
-            page.find("Last run ended").unwrap() < page.find("d-retried").unwrap(),
+            page.find("its last run ended").unwrap() < page.find("You retried it").unwrap(),
             "{page}"
         );
         // once it runs again the header no longer says it: Runs and Now do
         let (_, other) = f
             .get(&format!("/projects/id/{}/steps/beta-build", f.id))
             .await;
-        assert!(!other.contains("d-retried"));
+        assert!(!other.contains("<p class=\"sh-note\">"), "{other}");
     }
     {
         let id = f

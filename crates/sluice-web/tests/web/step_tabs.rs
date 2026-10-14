@@ -22,7 +22,7 @@ fn between<'a>(html: &'a str, start: &str, end: &str) -> &'a str {
 }
 /// The tabs a page draws, in order, each its key and its count ("" for none).
 fn tabs(html: &str) -> Vec<(String, String)> {
-    let bar = between(html, "<div class=\"tablist\"", "</div>");
+    let bar = between(html, "<div class=\"tabs\" role=\"tablist\"", "</div>");
     bar.split("role=\"tab\"")
         .skip(1)
         .map(|tab| {
@@ -240,7 +240,7 @@ async fn slow_chromium_tabs_keep_their_choice_through_a_patch_move_by_keyboard_a
         browser.navigate(&format!("{page}?tab=runs")).unwrap();
         browser.wait("document.readyState === 'complete'").unwrap();
         let stacked = browser
-            .eval("[[...document.querySelectorAll('.tp')].filter(p => p.checkVisibility()).map(p => p.dataset.tab).join(' '), document.querySelector('.tabbar').checkVisibility(), [...document.querySelectorAll('.tp-h')].every(h => h.getBoundingClientRect().height > 10)]")
+            .eval("[[...document.querySelectorAll('.tp')].filter(p => p.checkVisibility()).map(p => p.dataset.tab).join(' '), document.querySelector('sluice-tabs > .tabs').checkVisibility(), [...document.querySelectorAll('.tp-h')].every(h => h.getBoundingClientRect().height > 10)]")
             .unwrap();
         assert_eq!(stacked, json!(["overview messages outputs runs", false, true]));
         browser
@@ -309,9 +309,11 @@ async fn tabs_values_and_owner_conversations() {
         assert!(!html.contains("class=\"d-thread\""), "{html}");
         // Overview is chosen; its panel leads, every panel drawn (stacked without script)
         assert!(
-        html.contains("<sluice-tabs id=\"tabs\" class=\"tabs\" current=\"overview\" url data-preserve-attr=\"current\">"),
-        "{html}"
-    );
+            html.contains(
+                "<sluice-tabs id=\"tabs\" current=\"overview\" url data-preserve-attr=\"current\">"
+            ),
+            "{html}"
+        );
         assert!(html.contains(
             "id=\"tt-overview\" aria-controls=\"tp-overview\" aria-selected=\"true\" tabindex=\"0\""
         ));
@@ -336,7 +338,7 @@ async fn tabs_values_and_owner_conversations() {
         assert!(overview.contains("Built &#60;12&#62; crates"), "{overview}");
         assert!(
             overview.contains("<h3 id=\"ov-last-h\">Its last message</h3>")
-                && overview.contains("<p class=\"m-text\">The summary is ready.</p>"),
+                && overview.contains("<div class=\"mc-b\"><p>The summary is ready.</p></div>"),
             "{overview}"
         );
     }
@@ -440,7 +442,7 @@ async fn tabs_values_and_owner_conversations() {
                 "{place}: {question}"
             );
             assert!(
-                question.contains("<span class=\"tag muted\">Answered</span>"),
+                question.contains("<span class=\"pill muted\">Answered</span>"),
                 "{place}: {question}"
             );
             assert!(

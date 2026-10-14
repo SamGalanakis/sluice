@@ -95,13 +95,13 @@ fn statuses() -> TrustedHtml {
 fn tags() -> TrustedHtml {
     TrustedHtml::owned(format!(
         "<p class=\"gal-row\">{}{}{}{}{}{}{}</p>",
-        ui::tag("unit: a-7", "", None),
-        ui::tag("Answered", "muted", None),
-        ui::tag("2 awaiting reply", "attn", None),
-        ui::tag("Awaiting your reply", "ask", None),
-        ui::tag("live", "live", Some(ui::mark(Shown::Running))),
-        ui::tag("failed", "", Some(ui::mark(Shown::Failed))),
-        ui::tag_link("#", "Its unit", "", None),
+        ui::pill("unit: a-7", ui::Tone::Plain, None),
+        ui::pill("Answered", ui::Tone::Muted, None),
+        ui::pill("2 awaiting reply", ui::Tone::Look, None),
+        ui::pill("Awaiting your reply", ui::Tone::Ask, None),
+        ui::pill("live", ui::Tone::Run, Some(ui::mark(Shown::Running))),
+        ui::pill("failed", ui::Tone::Plain, Some(ui::mark(Shown::Failed))),
+        ui::pill_link("#", "Its unit", ui::Tone::Plain, None),
     ))
 }
 fn buttons() -> TrustedHtml {
@@ -552,7 +552,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
         .floor()
         * 60.0;
     let h = 3_600.0;
-    let x = "<button type=\"button\" class=\"x\" aria-label=\"Dismiss\" title=\"Dismiss\">×</button>";
+    let x = "<button type=\"button\" class=\"icon\" aria-label=\"Dismiss\" title=\"Dismiss\">×</button>";
     let needs = [
         need_item(
             Mark::Ask,
@@ -560,7 +560,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             " data-unit=\"a-7\"",
             "<b><a href=\"#\">Shorebirds: the spring guide's entries</a></b> asks: Use the checklist's new spring dates in this draft?",
             "",
-            "<a class=\"act main\" href=\"#\">Answer</a>",
+            "<a class=\"btn primary\" href=\"#\">Answer</a>",
             x,
         ),
         need_item(
@@ -568,8 +568,8 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             &format!("{prefix}n-cause"),
             "",
             "Three units failed: they hit their wall-clock cap.",
-            "<details class=\"nd-more\"><summary>Show the three</summary><ul><li><a href=\"#\">Waders: the autumn guide's entries</a> <span>· “Two of five maps redrawn”</span></li><li><a href=\"#\">Gannets: the spring guide's entries</a></li><li><a href=\"#\">Scan the range maps for broken links</a></li></ul></details>",
-            "<button type=\"button\" class=\"act\">Retry all</button>",
+            "<details class=\"qf nd-more\"><summary>Show the three</summary><ul><li><a href=\"#\">Waders: the autumn guide's entries</a> <span>· “Two of five maps redrawn”</span></li><li><a href=\"#\">Gannets: the spring guide's entries</a></li><li><a href=\"#\">Scan the range maps for broken links</a></li></ul></details>",
+            "<button type=\"button\" class=\"btn\">Retry all</button>",
             x,
         ),
         need_item(
@@ -582,7 +582,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
                 ui::ago(&before(9_840))
             ),
             "",
-            "<a class=\"act\" href=\"#\">Message it</a>",
+            "<a class=\"btn\" href=\"#\">Message it</a>",
             x,
         ),
     ]
@@ -618,7 +618,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             "Gannets: the spring guide's entries",
             "Two of the five range maps redrawn; checking the third.",
             format!(
-                "<span class=\"pill\">{}<span class=\"vh\">quiet, </span>review · {}</span><span class=\"pill pill-quiet\">quiet {}</span>",
+                "<span class=\"pill\">{}<span class=\"vh\">quiet, </span>review · {}</span><span class=\"pill quiet\">quiet {}</span>",
                 ui::mark(Shown::Quiet),
                 ui::since(&before(5 * 3_600)),
                 ui::since(&before(9_840))
@@ -632,7 +632,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             "Terns: the spring guide's entries",
             "Entries 41 to 58 drafted; the maps moved under maps/coast/.",
             format!(
-                "<span class=\"pill\">{}<span class=\"vh\">running, </span>draft · {}</span><span class=\"ro-heard\"><i class=\"live-dot\" aria-hidden=\"true\"></i>heard {}</span>",
+                "<span class=\"pill\">{}<span class=\"vh\">running, </span>draft · {}</span><span class=\"ro-heard\"><span class=\"dot run pulse\" aria-hidden=\"true\"></span>heard {}</span>",
                 ui::mark(Shown::Running),
                 ui::since(&before(4_200)),
                 ui::ago(&before(120))
@@ -643,7 +643,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
     ]
     .concat();
     TrustedHtml::owned(format!(
-        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\"><div class=\"pb-label\"><h2>Needs you</h2><span class=\"pb-count\">3</span></div><ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"link\">Undo</button></li></ul></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>Finished since you looked</h2><span class=\"pb-note\">since {}</span><span class=\"pb-grow\"></span><button type=\"button\" class=\"link\">Mark as seen</button></div><ul class=\"fin\">{finished}</ul></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>At work</h2><span class=\"pb-note\">2 units</span></div><div class=\"ro\">{}<details class=\"ro-g\" open><summary class=\"ro-group\"><h3><b>article</b> · 2 running</h3></summary>{}{rows}</details></div><p class=\"ro-more\"><b>2 waiting</b> on earlier work · <a href=\"#\"><b>5 done</b></a>, the last {}</p></section></div></div>",
+        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\"><div class=\"pb-label\"><h2>Needs you</h2><span class=\"pb-count\">3</span></div><ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>Finished since you looked</h2><span class=\"pb-note\">since {}</span><span class=\"pb-grow\"></span><button type=\"button\" class=\"quiet\">Mark as seen</button></div><ul class=\"fin\">{finished}</ul></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>At work</h2><span class=\"pb-note\">2 units</span></div><div class=\"ro\">{}<details class=\"ro-g\" open><summary class=\"ro-group\"><h3><b>article</b> · 2 running</h3></summary>{}{rows}</details></div><p class=\"ro-more\"><b>2 waiting</b> on earlier work · <a href=\"#\"><b>5 done</b></a>, the last {}</p></section></div></div>",
         ui::clock(&before(14_400)),
         axis(""),
         axis(" ro-axis-g"),
@@ -1078,9 +1078,9 @@ fn themes_part() -> TrustedHtml {
                     "Stages of a-12",
                     &article(Some(Shown::Succeeded), Some(Shown::Running), Some(Shown::Failed))
                 ),
-                ask = ui::tag("Awaiting your reply", "ask", None),
-                attn = ui::tag("quiet 42m", "attn", None),
-                live = ui::tag("live", "live", Some(ui::mark(Shown::Running))),
+                ask = ui::pill("Awaiting your reply", ui::Tone::Ask, None),
+                attn = ui::pill("quiet 42m", ui::Tone::Look, None),
+                live = ui::pill("live", ui::Tone::Run, Some(ui::mark(Shown::Running))),
             )
         })
         .collect();

@@ -120,11 +120,11 @@ async fn slow_in_chromium_a_cancel_set_aside_and_undone_in_place() {
         let mut browser = Chrome::open(&plan).unwrap();
         browser.viewport(1440, "light").unwrap();
         browser
-            .wait("document.querySelector('#n-stop-b button.x')?.checkVisibility()")
+            .wait("document.querySelector('#n-stop-b button.icon')?.checkVisibility()")
             .unwrap();
         browser.eval("(() => { const item = document.querySelector('#n-stop-b'); document.querySelector('#project-board').before(Object.assign(document.createElement('div'), {style:'height:700px'})); document.querySelector('#content').append(Object.assign(document.createElement('div'), {style:'height:1400px'})); window.scrollTo(0, item.getBoundingClientRect().top + scrollY - 400); window.dismissMarker = 'same document'; window.dismissNavigations = performance.getEntriesByType('navigation').length; window.dismissScroll = scrollY; })()").unwrap();
         browser
-            .eval("document.querySelector('#n-stop-b button.x').click()")
+            .eval("document.querySelector('#n-stop-b button.icon').click()")
             .unwrap();
         browser
             .wait("!document.querySelector('#n-stop-b') && document.activeElement?.id === 'undo-n-stop-b'")
@@ -142,9 +142,9 @@ async fn slow_in_chromium_a_cancel_set_aside_and_undone_in_place() {
             .wait("document.activeElement?.id === 'n-stop-b' && !document.querySelector('#undo-n-stop-b')")
             .unwrap();
         assert_eq!(browser.eval("[window.dismissMarker, performance.getEntriesByType('navigation').length === window.dismissNavigations, Math.abs(scrollY - window.dismissScroll) <= 3]").unwrap(), json!(["same document", true, true]));
-        browser.eval("window.realFetch = window.fetch; window.fetch = (...args) => /\\/(needs|actions)$/.test(String(args[0])) ? Promise.reject(new TypeError('Failed to fetch')) : realFetch(...args); document.querySelector('#n-stop-b button.x').click()").unwrap();
+        browser.eval("window.realFetch = window.fetch; window.fetch = (...args) => /\\/(needs|actions)$/.test(String(args[0])) ? Promise.reject(new TypeError('Failed to fetch')) : realFetch(...args); document.querySelector('#n-stop-b button.icon').click()").unwrap();
         browser.wait("document.querySelector('#n-stop-b .notice')?.textContent.includes('Sluice did not answer')").unwrap();
-        assert_eq!(browser.eval("[window.dismissMarker, !document.querySelector('#n-stop-b button.x').disabled]").unwrap(), json!(["same document", true]));
+        assert_eq!(browser.eval("[window.dismissMarker, !document.querySelector('#n-stop-b button.icon').disabled]").unwrap(), json!(["same document", true]));
         assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
     })
     .await
@@ -168,13 +168,15 @@ async fn slow_chromium_plan_and_drawer_action_forms_submit_in_place() {
         browser.wait("posts.length === 1 && document.querySelector('#n-stop-b .notice')?.textContent.includes('Fixture refusal')").unwrap();
         assert_eq!(browser.eval("[posts[0].data.action, !!posts[0].data.revision, !!posts[0].data.seen]").unwrap(), json!(["retry", true, true]));
         browser.eval("location.hash = 'step:b'").unwrap();
-        browser.wait("document.querySelector('#drawer .d-actions form > button[value=retry]')?.checkVisibility()").unwrap();
-        browser.eval("document.querySelector('#drawer .d-actions form > button[value=retry]').click()").unwrap();
-        browser.wait("posts.length === 2 && document.querySelector('#drawer .d-actions .notice')").unwrap();
-        browser.eval("document.querySelector('#drawer .pl-fb').open = true; document.querySelector('#drawer textarea[name=message]').value = 'Drawer feedback'; document.querySelector('#drawer .pl-fb button').click()").unwrap();
-        browser.wait("posts.length === 3 && !document.querySelector('#drawer .pl-fb button').disabled").unwrap();
+        browser.wait("document.querySelector('#drawer .sh-acts form > button[value=retry]')?.checkVisibility()").unwrap();
+        browser.eval("document.querySelector('#drawer .sh-acts form > button[value=retry]').click()").unwrap();
+        browser.wait("posts.length === 2 && document.querySelector('#drawer .sh-acts .notice')").unwrap();
+        browser.eval("document.querySelector('#drawer .sh-fb').open = true; document.querySelector('#drawer textarea[name=message]').value = 'Drawer feedback'; document.querySelector('#drawer .sh-fb button').click()").unwrap();
+        browser.wait("posts.length === 3 && !document.querySelector('#drawer .sh-fb button').disabled").unwrap();
         assert_eq!(browser.eval("[posts[2].data.action, posts[2].data.message, document.querySelector('#drawer textarea[name=message]').value]").unwrap(), json!(["retry", "Drawer feedback", "Drawer feedback"]));
         browser.eval("location.hash = 'step:c'").unwrap();
+        browser.wait("document.querySelector('#drawer .sh-name details.dm')").unwrap();
+        browser.eval("document.querySelector('#drawer .sh-name details.dm').open = true").unwrap();
         browser.wait("document.querySelector('#drawer sluice-confirm summary')?.checkVisibility()").unwrap();
         browser.eval("document.querySelector('#drawer sluice-confirm summary').click()").unwrap();
         browser.wait("document.querySelector('#confirmation').open").unwrap();

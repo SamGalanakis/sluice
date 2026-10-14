@@ -118,10 +118,12 @@ impl MessageItem {
     /// anyone else "Awaiting reply" in gold, else "Answered" or "Closed", muted; a note none.
     pub fn state_tag(&self) -> TrustedHtml {
         match self.state.as_str() {
-            "open" if self.awaits_owner() => super::ui::tag("Awaiting your reply", "ask", None),
-            "open" => super::ui::tag("Awaiting reply", "attn", None),
-            "answered" => super::ui::tag("Answered", "muted", None),
-            "closed" => super::ui::tag("Closed", "muted", None),
+            "open" if self.awaits_owner() => {
+                super::ui::pill("Awaiting your reply", super::ui::Tone::Ask, None)
+            }
+            "open" => super::ui::pill("Awaiting reply", super::ui::Tone::Look, None),
+            "answered" => super::ui::pill("Answered", super::ui::Tone::Muted, None),
+            "closed" => super::ui::pill("Closed", super::ui::Tone::Muted, None),
             _ => TrustedHtml::owned(String::new()),
         }
     }
@@ -565,28 +567,24 @@ impl InboxView {
     /// The messages' switch on the tab row's right (For you, Questions, History), drawn as the
     /// plan's view switch is: the page it is on filled. A thread has none.
     pub fn switch(&self) -> TrustedHtml {
-        use super::ui::esc;
         if self.view == MessageView::Thread {
             return TrustedHtml::default();
         }
-        let links: String = [
+        let links: Vec<(String, String, bool)> = [
             ("inbox", "For you"),
             ("questions", "Questions"),
             ("history", "History"),
         ]
         .into_iter()
         .map(|(slug, word)| {
-            let on = if slug == self.slug() {
-                " aria-current=\"page\""
-            } else {
-                ""
-            };
-            format!("<a href=\"{}/{slug}\"{on}>{word}</a>", esc(&self.base()))
+            (
+                format!("{}/{slug}", self.base()),
+                word.to_owned(),
+                slug == self.slug(),
+            )
         })
         .collect();
-        TrustedHtml::owned(format!(
-            "<nav class=\"view-switch\" aria-label=\"Messages\">{links}</nav>"
-        ))
+        super::ui::switch("Messages", "", &links)
     }
     pub fn render(
         &self,
@@ -1165,6 +1163,89 @@ impl Conversation {
     /// and what goes before them.
     pub fn render(&self) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&ConversationTemplate { c: self })
+    }
+    /// Each message as a card (`ui::message_card`): who sent it and to whom, when, and its
+    /// words: an excerpt's first words with "Read it whole" when they were cut, else whole under
+    /// its title (an answered question keeps its place so, its list kept), its anchor its own.
+    /// What was said back to it follows, a card each. A step's Overview quotes its latest so.
+    pub fn cards(&self) -> TrustedHtml {
+        use super::ui::{ago, esc, message_card};
+        let mut out = String::new();
+        let anchor = |excerpt: bool, id: i64| {
+            if excerpt {
+                String::new()
+            } else {
+                format!("{}message-{id}", self.slot)
+            }
+        };
+        for row in &self.rows {
+            let Row::Group(g) = row else { continue };
+            for e in &g.entries {
+                let who = format!(
+                    "<b>{}</b>{}{}",
+                    e.from.html(&self.project),
+                    if matches!(e.to, Who::Anyone) {
+                        String::new()
+                    } else {
+                        format!(
+                            "<span class=\"mc-to\"> to </span>{}",
+                            e.to.html(&self.project)
+                        )
+                    },
+                    e.item.state_tag()
+                );
+                let (body, whole) = if e.excerpt {
+                    let (body, cut) = e.excerpt_html();
+                    (
+                        format!("<p>{body}</p>"),
+                        if cut { e.href.as_str() } else { "" },
+                    )
+                } else {
+                    let title = if e.item.message.title.is_some() {
+                        format!("<p class=\"m-title\">{}</p>", esc(&e.item.title()))
+                    } else {
+                        String::new()
+                    };
+                    (format!("{title}<div class=\"md\">{}</div>", e.body()), "")
+                };
+                out.push_str(
+                    message_card(
+                        &anchor(e.excerpt, e.item.id()),
+                        &TrustedHtml::owned(who),
+                        &ago(&e.item.message.at),
+                        &TrustedHtml::owned(body),
+                        whole,
+                    )
+                    .as_str(),
+                );
+                for r in &e.replies {
+                    let href = format!("#message-{}", r.item.id());
+                    let (body, whole) = if e.excerpt {
+                        let (body, cut) = r.excerpt_html();
+                        (
+                            format!("<p>{body}</p>"),
+                            if cut { href.as_str() } else { "" },
+                        )
+                    } else {
+                        (format!("<div class=\"md\">{}</div>", r.item.body), "")
+                    };
+                    out.push_str(
+                        message_card(
+                            &anchor(e.excerpt, r.item.id()),
+                            &TrustedHtml::owned(format!(
+                                "<b>{}</b><span class=\"mc-to\"> replied</span>",
+                                r.from.html(&self.project)
+                            )),
+                            &ago(&r.item.message.at),
+                            &TrustedHtml::owned(body),
+                            whole,
+                        )
+                        .as_str(),
+                    );
+                }
+            }
+        }
+        TrustedHtml::owned(out)
     }
     /// Its messages in their host (`sluice-conversation`).
     pub fn html(&self) -> Result<TrustedHtml, askama::Error> {

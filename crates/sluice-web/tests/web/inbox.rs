@@ -622,10 +622,14 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
     );
     assert!(html.contains(r#"<div class="q-box" id="qbox-"#), "{html}");
     assert!(
-        html.contains("<h2>Questions for you</h2><p class=\"sec-n\">1 question</p>"),
+        html.contains(
+            "<h2 id=\"yours-h\">Questions for you</h2><span class=\"sec-note\">1 question</span>"
+        ),
         "the inbox counts the questions put to the owner"
     );
-    assert!(html.contains("<h2>Nobody is waiting</h2><p class=\"sec-n\">3 questions</p>"));
+    assert!(html.contains(
+        "<h2 id=\"stopped-h\">Nobody is waiting</h2><span class=\"sec-note\">3 questions</span>"
+    ));
     assert!(html.contains("<summary>Close all 3</summary>"));
     assert!(html.contains("<sluice-confirm heading=\"Close all 3 questions?\">"));
     assert!(html.contains("data-keep>Keep them</button>"));
@@ -660,7 +664,7 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
         .find("<section class=\"q-group agents\"")
         .expect("between agents")..];
     assert!(
-        agents.contains("<div class=\"sec-h\" id=\"between-h\"><h2>Between agents</h2><p class=\"sec-n\">1 question</p></div>"),
+        agents.contains("<div class=\"sec-h\"><h2 id=\"between-h\">Between agents</h2><span class=\"sec-note\">1 question</span></div>"),
         "{agents}"
     );
     assert!(agents.contains(">Answer as owner</button>"), "{agents}");

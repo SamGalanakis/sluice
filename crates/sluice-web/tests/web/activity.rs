@@ -180,7 +180,7 @@ async fn each_engines_run_reads_as_turns_and_calls_with_its_failures_flagged() {
         assert_eq!(status, StatusCode::OK, "{engine}");
         let activity = section(&html);
         let words = format!(
-            "Run 1 · {count} turns · {calls} tool calls · {failed} failed · read from its {}",
+            "Run 1 · {count} turns · {calls} tool calls, {failed} failed · read from its {}",
             match engine {
                 "claude" => "Claude session transcript",
                 "codex" => "Codex session rollout",
@@ -280,9 +280,9 @@ async fn failures_show_through_every_fold() {
                 .contains("?activity=all&#38;tab=activity#activity\">Show earlier turns</a>"),
         "{activity}"
     );
-    // a turn with a failure says so in its meta line, in ink with the failed glyph
+    // a turn with a failure says how many in its meta line, in words
     assert!(
-        shown[0].contains("<span class=\"act-failed\"><span class=\"g g-failed\""),
+        shown[0].contains("<span class=\"act-failed\">1 failed</span>"),
         "{}",
         shown[0]
     );
@@ -386,7 +386,7 @@ async fn a_live_runs_open_turn_ticks_and_new_turns_arrive_over_its_stream() {
     let open = shown[2];
     assert!(open.starts_with(" is-running\""), "{open}");
     assert!(
-        open.contains("<span class=\"act-live\"><span class=\"g g-running\"")
+        open.contains("<span class=\"act-live\"><span class=\"dot run pulse\"></span>")
             && open.contains("running for <time data-since=\"2026-10-08T10:"),
         "{open}"
     );
@@ -544,8 +544,8 @@ async fn slow_chromium_draws_the_outline_in_one_column_on_a_phone_and_its_failur
     server.abort();
 }
 
-/// A running step's Now leads with its live turn: what it last said, the call in flight and
-/// its activity in a line, before anything else.
+/// A running step's Now leads with its live turn: how long it has run, what it last said and
+/// its calls in a fold, before anything else.
 #[tokio::test]
 async fn a_running_steps_now_leads_with_its_live_turn() {
     let f = fixture("claude", "running").await;
@@ -559,37 +559,27 @@ async fn a_running_steps_now_leads_with_its_live_turn() {
     let (_, html) = f.get(&f.page()).await;
     let now = &html[html.find("<article class=\"mod d-sec d-now\"").unwrap()..];
     let now = &now[..now.find("</article>").unwrap()];
-    let turn = &now[now
-        .find("<div class=\"now-turn is-running\">")
-        .unwrap_or_else(|| panic!("{now}"))..];
+    // nothing comes before its turn but the module's head: how long the turn has run, under
+    // the live dot, then what it last said at reading size
+    let head = "<h3 id=\"ov-now-h\">Now</h3>";
+    let turn = &now[now.find(head).unwrap_or_else(|| panic!("{now}")) + head.len()..];
     assert!(
         turn.starts_with(
-            "<div class=\"now-turn is-running\"><p class=\"now-turn-h\"><span class=\"g g-running\""
-        ) && turn.contains("<span>Turn 3, running for <time data-since=\"2026-10-08T10:"),
+            "<div class=\"now-turn\"><p class=\"now-meta\"><span class=\"dot run pulse\" aria-hidden=\"true\"></span>Turn 3 · running for <time data-since=\"2026-10-08T10:"
+        ) && turn.contains("</p><div class=\"now-said\">Starting phase 1"),
         "{turn}"
     );
+    // its calls counted once, in a closed fold, the latest first, each linking to its row on
+    // the Activity tab
+    let calls = &turn[turn
+        .find("<details class=\"qf calls\"")
+        .unwrap_or_else(|| panic!("{turn}"))..];
     assert!(
-        turn.contains("<p class=\"now-call\">"),
-        "the call in flight: {turn}"
-    );
-    // its activity is named in the module's head, beside "Now"
-    let before = &now[..now.find("<div class=\"now-turn").unwrap()];
-    assert!(
-        before.contains(
-            "<a href=\"#activity\" data-tab-to=\"activity\">Its activity</a> · run 1 · 3 turns"
+        calls.starts_with(
+            "<details class=\"qf calls\" data-preserve-attr=\"open\"><summary>8 tool calls</summary><ol><li class=\"call\"><a href=\"#act-r1-t3-c8\" data-tab-to=\"activity\"><span class=\"call-t\">Bash</span>"
         ),
-        "{before}"
+        "{calls}"
     );
-    // nothing comes before it but the module's head
-    let body = &before[before.find("</div>").unwrap()..];
-    assert!(body == "</div>" && !before.contains("convo"), "{before}");
-    // its calls counted once, in the turn's line; a turn of one tool (Bash here) draws no
-    // tiles by tool, which would count them again
-    assert!(
-        turn.contains("<span class=\"meta\">8 tool calls</span>"),
-        "{turn}"
-    );
-    assert!(!turn.contains("<ul class=\"now-tools\""), "{turn}");
     drop(f.writer);
     drop(f.home);
 }
@@ -645,9 +635,9 @@ async fn a_message_turn_whose_file_is_gone_reads_back_from_its_message() {
     }
 }
 
-/// In Chromium a running step's Now reads its live turn on the grid: its last words, its calls
-/// by tool as tiles (each tool named as the transcript names it) and its latest calls, each a
-/// link into Activity; nothing scrolls sideways at a phone's width or a wide screen's.
+/// In Chromium a running step's Now reads its live turn on the grid: its last words at
+/// reading size, its calls in a closed fold that opens without script to one-line rows, each
+/// a link into Activity; nothing scrolls sideways at a phone's width or a wide screen's.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_a_running_steps_now_reads_its_live_turn_on_the_grid() {
     let f = fixture("claude", "running").await;
@@ -674,14 +664,13 @@ async fn slow_chromium_a_running_steps_now_reads_its_live_turn_on_the_grid() {
                 browser.navigate(&page).unwrap();
                 browser.wait(ready).unwrap();
                 let g = browser
-                    .eval("(() => { const now = document.querySelector('#tp-overview .d-now'), tiles = [...now.querySelectorAll('.now-tools > li')], calls = now.querySelectorAll('.now-calls a[data-tab-to=activity]'); return {tiles: tiles.length, named: tiles.every(t => t.querySelector('.nt-tool').textContent.trim().length > 0 && /^[0-9]+$/.test(t.querySelector('.nt-n').textContent)), calls: calls.length, last: !!now.querySelector('.now-call')?.checkVisibility(), scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth}; })()")
+                    .eval("(() => { const now = document.querySelector('#tp-overview .d-now'), fold = now.querySelector('details.calls'), closed = !fold.open; fold.open = true; const rows = [...fold.querySelectorAll('li.call > a[data-tab-to=activity]')]; return {said: now.querySelector('.now-said').checkVisibility(), closed, rows: rows.length, oneLine: rows.every(r => r.querySelector('.call-k').getBoundingClientRect().height < 24), scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth}; })()")
                     .unwrap();
                 let label = format!("{width} {theme}");
-                // one tool this turn: no tiles by tool
-                assert_eq!(g["tiles"], 0, "{label}: {g}");
-                assert_eq!(g["named"], true, "{label}: {g}");
-                assert!(g["calls"].as_u64().unwrap() >= 1, "{label}: {g}");
-                assert_eq!(g["last"], true, "{label}: {g}");
+                assert_eq!(g["said"], true, "{label}: {g}");
+                assert_eq!(g["closed"], true, "{label}: {g}");
+                assert!(g["rows"].as_u64().unwrap() >= 1, "{label}: {g}");
+                assert_eq!(g["oneLine"], true, "{label}: {g}");
                 assert_eq!(g["scroll"], 0, "{label}: sideways {g}");
                 if let Some(dir) = &screens {
                     browser
@@ -695,7 +684,7 @@ async fn slow_chromium_a_running_steps_now_reads_its_live_turn_on_the_grid() {
         browser.navigate(&page).unwrap();
         browser.wait(ready).unwrap();
         browser
-            .eval("document.querySelector('#tp-overview .now-calls a').click()")
+            .eval("document.querySelector('#tp-overview details.calls').open = true; document.querySelector('#tp-overview li.call > a').click()")
             .unwrap();
         browser
             .wait("document.querySelector('#activity').checkVisibility()")

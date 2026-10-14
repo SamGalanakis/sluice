@@ -1,18 +1,13 @@
 //! A run's activity outline on the step page and in the drawer: what its agent did, turn by
 //! turn (what sluice sent, the agent's last words, its calls counted), each turn folding open to
-//! its tool calls (a kind's icon, the tool, its key argument, how long it took, how it ended),
+//! its tool calls (the tool, its key argument, how long it took, how it ended),
 //! each call folding open to its arguments and result. Read when the page draws, from the
 //! transcript its engine keeps (`sluice_agents::activity`); nothing is stored.
 //!
 //! Failures are never hidden: a failed call and its turn always show, whatever is left out (the
 //! latest turns only, the latest calls of a long turn, a fold of reads and searches), and on a
 //! failed step the last call that failed is open, its turn too, and "Why it failed" links to it.
-use super::{
-    DashboardState, TrustedHtml,
-    icons::{Icon, icon},
-    step::StepView,
-    ui,
-};
+use super::{DashboardState, TrustedHtml, step::StepView, ui};
 use askama::Template;
 use serde::Serialize;
 use sluice_agents::activity::{self as act, Homes, Kind, Outcome, SentKind, Window};
@@ -113,20 +108,6 @@ pub struct CallView {
     pub failing: bool,
 }
 impl CallView {
-    pub fn icon(&self) -> TrustedHtml {
-        let shape = match self.kind {
-            Kind::Shell => Icon::Terminal,
-            Kind::Edit => Icon::FilePen,
-            Kind::Read => Icon::FileText,
-            Kind::Search => Icon::Search,
-            Kind::List => Icon::FolderOpen,
-            Kind::Agent => Icon::Bot,
-            Kind::Web => Icon::Globe,
-            Kind::Message => Icon::MessageSquare,
-            Kind::Other => Icon::Wrench,
-        };
-        icon(shape, 16, "act-k")
-    }
     /// Its result folds behind "Show all": more than a few lines.
     pub fn long(&self) -> bool {
         self.result.lines().count() > RESULT_LINES || self.result.chars().count() > RESULT_CHARS
@@ -180,23 +161,26 @@ impl TurnView {
     }
 }
 impl TurnView {
-    /// Its calls by tool, most first, each tool named exactly as its engine's transcript names
-    /// it (`tools`, "Bash 8 · Edit 3"): Now's tiles.
-    /// Its calls counted, as Now's turn line says them (its tools are Now's tiles).
-    pub fn calls_count(&self) -> String {
-        if self.calls == 0 {
-            return "No tool calls".into();
-        }
-        ui::count(self.calls, "tool call", "tool calls")
+    /// How long it took, "49s" ("" while it runs): Now's turn line, "Turn 5 · 49s".
+    pub fn took_short(&self) -> &str {
+        self.took.strip_prefix("took ").unwrap_or(&self.took)
     }
-    pub fn tool_counts(&self) -> Vec<(String, usize)> {
-        self.tools
-            .split(" · ")
-            .filter_map(|part| {
-                let (tool, n) = part.rsplit_once(' ')?;
-                Some((tool.to_owned(), n.parse().ok()?))
+    /// Its latest `n` calls as Now's quiet fold (`ui::calls`): "5 tool calls", compact rows
+    /// in data mono, each leading to its row on the Activity tab.
+    pub fn calls_html(&self, n: usize) -> TrustedHtml {
+        let rows: Vec<ui::Call> = self
+            .latest_calls(n)
+            .into_iter()
+            .map(|c| ui::Call {
+                tool: c.tool.clone(),
+                key: c.key.clone(),
+                took: c.took.clone(),
+                failed: c.outcome == "failed",
+                running: c.outcome == "running",
+                href: format!("#{}", c.anchor),
             })
-            .collect()
+            .collect();
+        ui::calls(self.calls, self.failed, &rows)
     }
     /// Its latest calls, newest first, `n` at most (a fold's calls among them): Now's "Last
     /// calls".
@@ -230,25 +214,18 @@ impl ActivityView {
     pub fn render(&self) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&ActivityTemplate { a: self })
     }
-    /// "8 turns · 34 tool calls · 2 failed".
+    /// "8 turns · 34 tool calls, 2 failed": a failure counted is a tool call's, said beside
+    /// them so it never reads as the step's.
     pub fn summary(&self) -> String {
-        let mut parts = vec![
+        let mut calls = ui::count(self.calls, "tool call", "tool calls");
+        if self.failed > 0 {
+            calls.push_str(&format!(", {} failed", self.failed));
+        }
+        [
             ui::count(self.turns.len() + self.earlier, "turn", "turns"),
-            ui::count(self.calls, "tool call", "tool calls"),
-        ];
-        if self.failed > 0 {
-            parts.push(format!("{} failed", self.failed));
-        }
-        parts.join(" · ")
-    }
-    /// Now's head: its turns and how many calls failed, the calls themselves counted once, on
-    /// the turn under it.
-    pub fn turns_words(&self) -> String {
-        let mut words = ui::count(self.turns.len() + self.earlier, "turn", "turns");
-        if self.failed > 0 {
-            words.push_str(&format!(" · {} failed", self.failed));
-        }
-        words
+            calls,
+        ]
+        .join(" · ")
     }
     pub fn all_href(&self) -> String {
         format!("{}?activity=all&tab=activity#activity", self.step_href)

@@ -178,7 +178,10 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
         "{asks}"
     );
     let row = between(module, "<li class=\"pm-row pm-running", "</li>");
-    assert!(!row.contains("tag ask") && !row.contains("mk-ask"), "{row}");
+    assert!(
+        !row.contains("pill ask") && !row.contains("mk-ask"),
+        "{row}"
+    );
 
     // the plan: its sentence counts them, linked to Needs you, where each is an item of its own
     // under the coral dot, its Answer leading to where it was asked
@@ -189,7 +192,7 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     assert!(q.contains("<span class=\"nk nk-ask\""), "{q}");
     assert!(
         q.contains(&format!(
-            "<a class=\"act main\" href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\" data-opens=\"l1-work\">Answer"
+            "<a class=\"btn primary\" href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\" data-opens=\"l1-work\">Answer"
         )) && q.contains(" asks: Land l1 first?"),
         "{q}"
     );
@@ -207,7 +210,7 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     assert_ne!(plan_html::place(&plan, "l2"), "asks");
     // coral is spent on nothing else on the plan
     assert_eq!(plan.matches("nk-ask").count(), 3, "{plan}");
-    assert!(!plan.contains("class=\"tag ask\""), "{plan}");
+    assert!(!plan.contains("class=\"pill ask\""), "{plan}");
 }
 
 #[tokio::test]
@@ -223,15 +226,15 @@ async fn a_steps_overview_draws_its_open_question_whole_to_answer_and_its_header
     )
     .await;
     let (_, page) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
-    // the header's chip is the coral one, to the question on Overview
-    let actions = between(&page, "<div class=\"d-actions\">", "</header>");
+    // the head's status line leads to the question on Overview
+    let status = between(&page, "<p class=\"status-line\">", "</p>");
     assert!(
-        actions.contains(&format!(
-            "<a class=\"tag ask\" href=\"#ov-message-{q}\" title=\"Land l1 first?\""
-        )),
-        "{actions}"
+        status.contains(&format!(
+            "<a href=\"#ov-message-{q}\" title=\"Land l1 first?\">waiting on your answer</a>"
+        )) && status.contains("<span class=\"dot ask\""),
+        "{status}"
     );
-    assert!(!actions.contains("awaiting reply"), "{actions}");
+    assert!(!status.contains("awaiting reply"), "{status}");
     // Overview: first, above Now, whole, its list kept, with Answer and Close in the shared
     // component
     let asked = between(
@@ -240,12 +243,11 @@ async fn a_steps_overview_draws_its_open_question_whole_to_answer_and_its_header
         "</article>",
     );
     assert!(asked.contains("Its question for you</h3>"), "{asked}");
+    // a step that is only waiting on the answer has no Now to say besides it
     assert!(
-        page.find("d-sec d-ask").unwrap() < page.find("d-sec d-now").unwrap(),
-        "the question comes before Now"
+        page.contains("d-sec d-ask") && !page.contains("d-sec d-now"),
+        "the question is all it is doing"
     );
-    let now = between(&page, "<article class=\"mod d-sec d-now\"", "</article>");
-    assert!(!now.contains(&format!("ov-message-{q}")), "{now}");
     let item = between(asked, &format!("id=\"ov-message-{q}\""), "</sluice-answer>");
     assert!(
         item.contains("<li><strong>Land now:</strong> l2 rebases.</li>"),
@@ -657,7 +659,7 @@ async fn retry_causes_dependencies_and_log_filters() {
         .await;
         let (_, history) = f.get("/history").await;
         let card = between(&history, "You and orchestrator", "</article>");
-        assert!(card.contains("<p class=\"t-ask\"><span class=\"t-ask-title\">Accept revision 3?</span><a class=\"tag ask\""), "{card}");
+        assert!(card.contains("<p class=\"t-ask\"><span class=\"t-ask-title\">Accept revision 3?</span><a class=\"pill ask\""), "{card}");
         assert!(card.contains(&format!("#message-{q}\"")), "{card}");
     }
 }

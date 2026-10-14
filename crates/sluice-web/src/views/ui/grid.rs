@@ -8,7 +8,6 @@
 //! count, and a progress field is whatever a step reported. Nothing here knows a project.
 use super::{Shown, Tally, count, duration, duration_text, esc, mark, since, word};
 use crate::views::TrustedHtml;
-use crate::views::icons::{Icon, icon};
 use sluice_model::shown::Band;
 
 // ---- the module grid ---------------------------------------------------------------------------
@@ -112,28 +111,6 @@ pub fn column_open(span: u8) -> TrustedHtml {
 }
 pub fn column_close() -> TrustedHtml {
     TrustedHtml::owned("</div>".into())
-}
-
-// ---- a band section's head -------------------------------------------------------------------
-
-/// A band's head on the paper (For you, Stopped, Running, Waiting, Done): a heavy rule over
-/// it, its name big at the left, its count line at the right ("1 failed · 1 cancelled"), the
-/// count line left out when empty. `id` names it for a link ("#for-you").
-pub fn section_head(id: &str, name: &str, line: &str) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<div class=\"sec-h\"{}><h2>{}</h2>{}</div>",
-        if id.is_empty() {
-            String::new()
-        } else {
-            format!(" id=\"{}\"", esc(id))
-        },
-        esc(name),
-        if line.is_empty() {
-            String::new()
-        } else {
-            format!("<p class=\"sec-n\">{}</p>", esc(line))
-        }
-    ))
 }
 
 // ---- the stage strip -------------------------------------------------------------------------
@@ -509,54 +486,6 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
     TrustedHtml::owned(parts.join(" "))
 }
 
-// ---- the page's head and what finished last ---------------------------------------------------
-
-/// The page's head on the paper (`Frame::head`), under the slim nav bar: the page's name as its
-/// heading at a reading size (the project's name on its plan, the page's elsewhere), and on the
-/// plan and home only the summary sentence under it, one line of large body text.
-pub fn page_head(name: &str, line: &TrustedHtml) -> TrustedHtml {
-    page_head_html(&TrustedHtml::owned(esc(name)), line)
-}
-/// The page's head with its heading already drawn, the summary sentence under it.
-pub fn page_head_html(name: &TrustedHtml, line: &TrustedHtml) -> TrustedHtml {
-    page_head_with(
-        &TrustedHtml::default(),
-        name,
-        &TrustedHtml::default(),
-        &if line.as_str().is_empty() {
-            TrustedHtml::default()
-        } else {
-            TrustedHtml::owned(format!("<p class=\"page-line\">{line}</p>"))
-        },
-    )
-}
-/// The page's head with a muted note under its name instead of a summary sentence: what a
-/// page shows ("42 records on this page"), or why it cannot be drawn.
-pub fn page_head_note(name: &str, note: &TrustedHtml) -> TrustedHtml {
-    page_head_with(
-        &TrustedHtml::default(),
-        &TrustedHtml::owned(esc(name)),
-        &TrustedHtml::default(),
-        &if note.as_str().is_empty() {
-            TrustedHtml::default()
-        } else {
-            TrustedHtml::owned(format!("<p class=\"page-note\">{note}</p>"))
-        },
-    )
-}
-/// The page's head whole: its way back (`crumbs`, a breadcrumb nav) over its name, what stands
-/// beside the name (`beside`: its Details' "⋯"), and what goes under it (`under`: its lines,
-/// its strip, its actions).
-pub fn page_head_with(
-    crumbs: &TrustedHtml,
-    name: &TrustedHtml,
-    beside: &TrustedHtml,
-    under: &TrustedHtml,
-) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<div class=\"page-head\">{crumbs}<div class=\"ph-name\"><h1>{name}</h1>{beside}</div>{under}</div>"
-    ))
-}
 /// One unit (or a step of no unit) whose run ended: when, its name and title, how long.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Finished {
@@ -619,107 +548,6 @@ pub fn latest_list(label: &str, items: &[Finished]) -> TrustedHtml {
         "<ol class=\"latest\" aria-label=\"{}\">{rows}</ol>",
         esc(label)
     ))
-}
-
-// ---- details: what identifies an item, behind its "⋯" ------------------------------------------
-
-/// What identifies an item rather than explains it (its ids, run, fn, engine, tags, recipe,
-/// hashes and paths), kept behind one "⋯" control at the item's end (`Details::menu`): a
-/// `<details>` that opens without script, inside a `sluice-menu` (Escape and a click elsewhere
-/// close it, the focus back on its button). Each id is shown whole with a copy button.
-#[derive(Clone, Debug, Default)]
-pub struct Details {
-    rows: Vec<(String, String)>,
-    /// What can be done to the item that is no next move (a failure's Cancel, set aside):
-    /// drawn under its rows, under a head of their own (`acts`).
-    actions: Vec<String>,
-    acts: &'static str,
-}
-impl Details {
-    pub fn new() -> Self {
-        Self::default()
-    }
-    /// An id, hash or path: whole, in data mono, with a copy button. Left out when empty.
-    pub fn id(mut self, name: &str, value: &str) -> Self {
-        if !value.is_empty() {
-            self.rows.push((
-                name.to_owned(),
-                super::copy(value, &format!("Copy {}", name.to_lowercase())).0,
-            ));
-        }
-        self
-    }
-    /// Words or a short value. Left out when empty.
-    pub fn text(mut self, name: &str, value: &str) -> Self {
-        if !value.is_empty() {
-            self.rows
-                .push((name.to_owned(), format!("<span>{}</span>", esc(value))));
-        }
-        self
-    }
-    /// A value in data mono with no copy (a fn's name, a tag). Left out when empty.
-    pub fn code(mut self, name: &str, value: &str) -> Self {
-        if !value.is_empty() {
-            self.rows
-                .push((name.to_owned(), format!("<code>{}</code>", esc(value))));
-        }
-        self
-    }
-    /// Values already drawn. Left out when empty.
-    pub fn html(mut self, name: &str, value: &TrustedHtml) -> Self {
-        if !value.as_str().is_empty() {
-            self.rows.push((name.to_owned(), value.0.clone()));
-        }
-        self
-    }
-    /// A link onward.
-    pub fn link(mut self, name: &str, href: &str, text: &str) -> Self {
-        if !href.is_empty() {
-            self.rows.push((
-                name.to_owned(),
-                format!("<a href=\"{}\">{}</a>", esc(href), esc(text)),
-            ));
-        }
-        self
-    }
-    /// Actions under the rows, headed `head` ("Set it aside"): each already drawn (a
-    /// `ui::Confirm`'s opener and form). Left out when there are none.
-    pub fn actions(mut self, head: &'static str, actions: Vec<TrustedHtml>) -> Self {
-        self.acts = head;
-        self.actions = actions.into_iter().map(|a| a.0).collect();
-        self
-    }
-    pub fn is_empty(&self) -> bool {
-        self.rows.is_empty() && self.actions.is_empty()
-    }
-    /// The "⋯" control for the item `about` ("Details of a-12"): a 44px button on a phone that
-    /// opens the Details panel, nothing when there is nothing to hold.
-    pub fn menu(&self, about: &str) -> TrustedHtml {
-        if self.is_empty() {
-            return TrustedHtml::default();
-        }
-        let rows: String = self
-            .rows
-            .iter()
-            .map(|(name, value)| format!("<div><dt>{}</dt><dd>{value}</dd></div>", esc(name)))
-            .collect();
-        let rows = if self.actions.is_empty() {
-            format!("<dl class=\"dm-l\">{rows}</dl>")
-        } else {
-            format!(
-                "<dl class=\"dm-l\">{rows}</dl><div class=\"dm-acts\" role=\"group\" aria-label=\"{h}\"><p class=\"dm-h\">{h}</p>{}</div>",
-                self.actions.concat(),
-                h = esc(self.acts),
-            )
-        };
-        TrustedHtml::owned(format!(
-            "{}<details class=\"dm\" data-preserve-attr=\"open\"><summary class=\"dm-b\" aria-label=\"Details of {a}\" title=\"Details\" data-preserve-attr=\"aria-expanded\">{}</summary><div class=\"menu dm-p\" role=\"group\" aria-label=\"Details of {a}\" data-preserve-attr=\"style\"><p class=\"dm-h\">Details</p>{rows}</div></details>{}",
-            super::menu_open(),
-            icon(Icon::Ellipsis, 18, ""),
-            super::menu_close(),
-            a = esc(about),
-        ))
-    }
 }
 
 /// A time of day: "17:49 UTC" on the server, so it says its zone without script; the reader's
