@@ -696,6 +696,8 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
             ),
         ]);
         let mut gate = Gate::new(&scratch.0, scratch.0.join("rust-home"), env);
+        gate.env
+            .insert("SLUICE_TEST_DEVIN_TURN_QUIET_S".into(), "0.01".into());
         gate.env.insert(
             format!("SLUICE_{}_BIN", engine.to_uppercase()),
             binary.to_string_lossy().into(),

@@ -18,6 +18,7 @@ use chrome::Chrome;
 use futures_util::{Stream, StreamExt};
 use sluice_model::{commands::StepStatus, error::PublicError, events::Event, ids::ProjectSelector};
 use sluice_store::{RetrySafety, projects};
+use sluice_web::clock::Clock;
 use std::time::Duration;
 use tower::ServiceExt;
 
@@ -156,9 +157,13 @@ async fn a_state_change_patches_only_the_regions_it_changed() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_a_step_or_unit_that_left_the_plan_is_said_in_place_and_its_stream_stays_quiet() {
-    let f = Fixture::new().await;
+#[tokio::test]
+async fn a_step_or_unit_that_left_the_plan_is_said_in_place_and_its_stream_stays_quiet() {
+    let mut f = Fixture::new().await;
+    tokio::time::pause();
+    f.dashboard = f
+        .dashboard
+        .with_clock(Clock::tokio(std::time::SystemTime::now()));
     {
         touch(&f, "alpha-review").await;
         let router = f.router();

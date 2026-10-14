@@ -109,6 +109,8 @@ fn fn_launched(engine: &str, real: bool) {
     repo(&cwd);
     let mut gate = Gate::new(&scratch.0, scratch.0.join("rust-home"), env);
     if !real {
+        gate.env
+            .insert("SLUICE_TEST_DEVIN_TURN_QUIET_S".into(), "0.01".into());
         let binary = fixture_engine(&scratch.0, engine);
         gate.env.insert(
             format!("SLUICE_{}_BIN", engine.to_uppercase()),

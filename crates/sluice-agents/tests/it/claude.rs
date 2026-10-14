@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 use sluice_agents::engines::claude::state::ClaudeState;
 use sluice_agents::engines::{
     claude::{
-        Claude,
+        Claude, ClaudeDeliveryTiming,
         protocol::{self, Tail},
     },
     *,
@@ -23,6 +23,21 @@ use std::{
 };
 
 use super::executable;
+
+fn delivery_timing() -> ClaudeDeliveryTiming {
+    let timing = ClaudeDeliveryTiming::default();
+    ClaudeDeliveryTiming {
+        draft_wait: timing.draft_wait / 20,
+        escape_gap: timing.escape_gap / 20,
+        escape_settle: timing.escape_settle / 20,
+        cover_wait: timing.cover_wait / 20,
+        dialog_retry: timing.dialog_retry / 20,
+        draft_settle: timing.draft_settle / 20,
+        enter_retry: timing.enter_retry / 20,
+        enter_retry_max: timing.enter_retry_max / 20,
+        ..timing
+    }
+}
 
 struct Scratch(PathBuf);
 impl Scratch {
@@ -88,7 +103,8 @@ impl Harness {
             tmux_binary: Some(tmux.binary().into()),
         };
         let run = RunId::new();
-        let adapter = Claude::new(wrapper, scratch.0.join("claude"), fixture.clone(), run);
+        let adapter = Claude::new(wrapper, scratch.0.join("claude"), fixture.clone(), run)
+            .with_delivery_timing(delivery_timing());
         let hook_listener =
             std::os::unix::net::UnixListener::bind(scratch.0.join("hook.sock")).unwrap();
         hook_listener.set_nonblocking(true).unwrap();
@@ -559,7 +575,7 @@ async fn fake_addressed_message_can_be_queued_during_an_active_turn() {
 use super::support as acceptance;
 
 #[tokio::test]
-async fn slow_supervisor_claude_hooks_submit_live_compact_and_resume() {
+async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
     // The agent submits only after the live message: submitting ends the session.
     let mut h = Harness::new(json!({"turns":[{"reply":"done","compact":true,"delay_ms":100},{"reply":"feedback","submit":{"word":"blue"}}]})).await;
     let hook = h.scratch.0.join("journal-hook");
@@ -583,6 +599,7 @@ async fn slow_supervisor_claude_hooks_submit_live_compact_and_resume() {
     cfg.limits.stall = Duration::from_secs(10);
     cfg.limits.settle = Duration::from_millis(100);
     let mut adapter = Claude::new(wrapper, h.scratch.0.join("claude"), hook, cfg.run)
+        .with_delivery_timing(delivery_timing())
         .with_mcp(Some("{\"mcpServers\":{}}".into()));
     let directory = cfg.run_dir.clone();
     let mut host = acceptance::Host {
@@ -794,7 +811,8 @@ async fn supervise_claude(
     cfg.limits.stall = Duration::from_secs(10);
     cfg.limits.dialog = Duration::from_secs(60);
     configure(&mut cfg);
-    let mut adapter = Claude::new(wrapper, h.scratch.0.join("claude"), hook, cfg.run);
+    let mut adapter = Claude::new(wrapper, h.scratch.0.join("claude"), hook, cfg.run)
+        .with_delivery_timing(delivery_timing());
     let directory = cfg.run_dir.clone();
     let mut host = acceptance::Host {
         directory: Some(directory.clone()),
@@ -898,17 +916,15 @@ fn logged(dir: &Path, file: &str) -> Vec<String> {
 /// swallowed the paste that followed. Now nothing is sent before the composer first shows, and
 /// the message is delivered with no Escape and no Rewind.
 #[tokio::test]
-async fn slow_fake_resumed_session_with_a_covered_composer_gets_its_message_and_no_rewind() {
+async fn fake_resumed_session_with_a_covered_composer_gets_its_message_and_no_rewind() {
     let mut h = Harness::new(json!({"turns":[{"reply":"first work"},{"reply":"rebased"}]})).await;
     h.launch(None).await;
     let sid = h.turn(InputId::Task, "first", 1).await.session_id.unwrap();
     h.cleanup().await;
     fs::write(
         h.scratch.0.join("config.json"),
-        serde_json::to_vec(
-            &json!({"cover_ms":2500,"hold_ms":3200,"turns":[{},{"reply":"rebased"}]}),
-        )
-        .unwrap(),
+        serde_json::to_vec(&json!({"cover_ms":125,"hold_ms":160,"turns":[{},{"reply":"rebased"}]}))
+            .unwrap(),
     )
     .unwrap();
     h.service = TransientService::for_test(RunId::new());
@@ -927,7 +943,7 @@ async fn slow_fake_resumed_session_with_a_covered_composer_gets_its_message_and_
         s.acknowledged
             .contains(&InputId::Message { id: MessageId(9) })
     );
-    assert!(started.elapsed() >= Duration::from_millis(3200));
+    assert!(started.elapsed() >= Duration::from_millis(160));
     assert_eq!(
         h.prompts(),
         ["first", "You were sent back: rebase onto main."]
@@ -942,7 +958,7 @@ async fn slow_fake_resumed_session_with_a_covered_composer_gets_its_message_and_
 /// not sent, so the input was not taken: the adapter closes the dialog with one Escape, waits
 /// for the composer, clears it and pastes again.
 #[tokio::test]
-async fn slow_fake_paste_taken_by_a_dialog_is_pasted_again_after_one_escape() {
+async fn fake_paste_taken_by_a_dialog_is_pasted_again_after_one_escape() {
     let mut h = Harness::new(json!({"modal_on_paste":1,"turns":[{"reply":"done"}]})).await;
     h.launch(None).await;
     let started = Instant::now();
@@ -950,7 +966,7 @@ async fn slow_fake_paste_taken_by_a_dialog_is_pasted_again_after_one_escape() {
     assert_eq!(s.error, None);
     assert_eq!(s.final_text, "done");
     assert!(s.acknowledged.contains(&InputId::Task));
-    assert!(started.elapsed() >= Duration::from_secs(5));
+    assert!(started.elapsed() >= delivery_timing().draft_wait);
     assert_eq!(h.prompts(), ["the task"]);
     let run = &h.context.run_dir;
     assert_eq!(logged(run, "fixture-modals.jsonl"), ["Rewind"]);
@@ -964,7 +980,7 @@ async fn slow_fake_paste_taken_by_a_dialog_is_pasted_again_after_one_escape() {
 /// Three pastes whose drafts never show end the session `Transient`, not `UnknownAcceptance`:
 /// Enter was never sent, so every input the adapter held is given back as not accepted.
 #[tokio::test]
-async fn slow_fake_three_unseen_drafts_end_transient_with_the_inputs_not_accepted() {
+async fn fake_three_unseen_drafts_end_transient_with_the_inputs_not_accepted() {
     let mut h = Harness::new(json!({"swallow_pastes":3})).await;
     h.launch(None).await;
     for (id, text) in [
@@ -1002,7 +1018,7 @@ async fn slow_fake_three_unseen_drafts_end_transient_with_the_inputs_not_accepte
         "{}",
         error.message
     );
-    assert!(started.elapsed() >= Duration::from_secs(15));
+    assert!(started.elapsed() >= delivery_timing().draft_wait * 3);
     assert!(s.acknowledged.is_empty());
     assert_eq!(
         s.not_accepted,
@@ -1020,7 +1036,7 @@ async fn slow_fake_three_unseen_drafts_end_transient_with_the_inputs_not_accepte
 /// The supervisor takes the transient for one: the session resumes and the task, given back
 /// as not accepted rather than left uncertain, is delivered again and submits.
 #[tokio::test]
-async fn slow_supervisor_claude_unseen_drafts_resume_and_deliver_the_task_again() {
+async fn supervisor_claude_unseen_drafts_resume_and_deliver_the_task_again() {
     let h = Harness::new(
         json!({"swallow_pastes":3,"turns":[{"reply":"task taken"},{"reply":"done","submit":{"word":"blue"}}]}),
     )
@@ -1466,7 +1482,7 @@ async fn authentication_failures_mask_credentials_and_take_no_login_input() {
 }
 
 #[tokio::test]
-async fn slow_known_setup_screens_refuse_or_resolve_before_delivery() {
+async fn known_setup_screens_refuse_or_resolve_before_delivery() {
     let mut h = Harness::new(json!({"screen":THEME_PICKER})).await;
     h.launch(None).await;
     let (error, took) = first_error(&mut h, Duration::from_secs(10)).await;

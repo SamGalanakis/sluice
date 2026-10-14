@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 use sluice_agents::engines::{
     DeliveryOutcome, EngineAdapter, EngineCommand, EngineContext, EngineErrorKind, EngineLaunch,
     EngineObservation, EngineStatus, HookEvent, InputId,
-    devin::{Devin, DevinOptions, protocol},
+    devin::{Devin, DevinDeliveryTiming, DevinOptions, protocol},
 };
 use sluice_agents::supervisor::{
     Checkpoint, HostSnapshot, Limits, RetryPolicy, State, SupervisorConfig, SupervisorHost,
@@ -1220,14 +1220,19 @@ async fn g3_devin() -> io::Result<()> {
 }
 
 #[tokio::test]
-async fn slow_supervisor_devin_inline_hooks_submit_live_compact_and_resume() {
+async fn supervisor_devin_inline_hooks_submit_live_compact_and_resume() {
     let root = Scratch::new();
     let opts = options(
         &root,
         // Submitting ends the session, so the agent submits only after its live message.
         json!({"turns":[{"reply":"done","compact":true,"busy_ms":100},{"reply":"next","busy_ms":100},{"reply":"feedback","submit":{"word":"blue"}},{"reply":"feedback","submit":{"word":"blue"}}]}),
     );
-    let mut adapter = Devin::new(opts);
+    let mut adapter = Devin::new(opts).with_delivery_timing(DevinDeliveryTiming {
+        menu_retry: Duration::from_millis(2),
+        restore_wait: Duration::from_millis(10),
+        enter_retry: Duration::from_millis(10),
+        escape_retry: Duration::from_millis(10),
+    });
     let tmux = sluice_process::tmux::ApprovedTmux::load(&workspace().join("target/private-tmux"))
         .await
         .unwrap();

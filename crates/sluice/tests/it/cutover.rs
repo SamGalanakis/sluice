@@ -473,6 +473,9 @@ impl Scratch {
         path
     }
     fn cutover(&self, extra: &[&str]) -> Output {
+        self.cutover_command(extra).output().unwrap()
+    }
+    fn cutover_command(&self, extra: &[&str]) -> Command {
         let mut command = self
             .gate
             .command(&repo().join("scripts/deploy"), &["--prefix"]);
@@ -488,9 +491,8 @@ impl Scratch {
             .args(extra)
             .env("SLUICE_DEPLOY_PROCESS_FIXTURE", "1")
             .env("SLUICE_DEPLOY_PORT", self.port.to_string())
-            .env("SLUICE_DEPLOY_READY_SECONDS", "3")
-            .output()
-            .unwrap()
+            .env("SLUICE_DEPLOY_READY_SECONDS", "3");
+        command
     }
     fn report(&self) -> CutoverReport {
         let reports: Vec<_> = std::fs::read_dir(&self.gate.install)
@@ -880,7 +882,8 @@ if [ "$1" = loop ] && [ -f "$SLUICE_INSTALL_DIR/fence.json" ]; then
   exit 1
 fi
 if [ "$1" = loop ] && [ -f "$SLUICE_HOME/loop-without-lease" ]; then
-  exec /bin/sleep 65
+  while [ -f "$SLUICE_HOME/loop-without-lease" ]; do /bin/sleep .01; done
+  exit 0
 fi
 if [ "$1" = loop ] && [ -f "$SLUICE_HOME/lose-coordinator-on-loop" ]; then
   exec /usr/bin/python3 - "$SLUICE_INSTALL_DIR/services.json" <<'PY'
@@ -1119,11 +1122,15 @@ fn slow_cutover_lease_timeout_refences_and_restores_the_drain() {
     // recovery through the same checkpoint and restore the drain after release.
     let no_lease = scratch.gate.home.join("loop-without-lease");
     std::fs::write(&no_lease, "fault").unwrap();
-    let output = scratch.cutover(&["--resume-checks"]);
+    let output = scratch
+        .cutover_command(&["--resume-checks"])
+        .env("SLUICE_TEST_CUTOVER_LEASE_S", "1")
+        .output()
+        .unwrap();
     assert!(
         !output.status.success()
             && String::from_utf8_lossy(&output.stderr)
-                .contains("loop did not hold the scheduler lease within 60 s"),
+                .contains("loop did not hold the scheduler lease within 1 s"),
         "{}",
         text(&output)
     );

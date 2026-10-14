@@ -21,6 +21,7 @@ use sluice_model::{
     ids::{AttemptId, ProjectId, RunId},
 };
 use sluice_store::RetrySafety;
+use sluice_web::clock::Clock;
 use std::time::Duration;
 use tower::ServiceExt;
 
@@ -192,10 +193,14 @@ fn drawn_version(page: &str) -> String {
         .to_owned()
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_the_day_patches_only_when_its_runs_change() {
-    let f = Fixture::new().await;
+#[tokio::test]
+async fn the_day_patches_only_when_its_runs_change() {
+    let mut f = Fixture::new().await;
     let n = neutral::seed(&f.writer, f._home.path()).await;
+    tokio::time::pause();
+    f.dashboard = f
+        .dashboard
+        .with_clock(Clock::tokio(std::time::SystemTime::now()));
     let router = f.router();
     let page = get_with(&router, "/day", "sluice_zone=0").await;
     let version = drawn_version(&page);

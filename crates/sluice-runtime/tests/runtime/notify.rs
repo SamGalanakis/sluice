@@ -6,7 +6,7 @@ use sluice_model::{
     events::NotificationOutcome,
     ids::{ProjectId, RunId},
 };
-use sluice_runtime::notify::Notifier;
+use sluice_runtime::notify::{Notifier, RetryTiming};
 use sluice_store::{ReadPool, RetrySafety, Writer, messages};
 use std::path::PathBuf;
 
@@ -170,8 +170,11 @@ async fn open_owner_question_runs_the_command_once_with_the_message_on_stdin() {
 }
 
 #[tokio::test]
-async fn slow_failed_command_is_retried_and_a_lasting_failure_is_recorded_with_its_stderr() {
+async fn failed_command_is_retried_and_a_lasting_failure_is_recorded_with_its_stderr() {
     let (h, w, r, p, mut n) = setup().await;
+    n = n.with_retry_timing(RetryTiming {
+        backoff: [std::time::Duration::ZERO; 2],
+    });
     // Fails once, then delivers.
     h.configure(
         "if [ -e \"$1.first\" ]; then cat >> \"$1\"; echo >> \"$1\"; else touch \"$1.first\"; echo boom >&2; exit 3; fi",

@@ -308,6 +308,8 @@ fn agent(g: &Gate) -> Value {
 // Point `g` at the fake `engine` CLI, run through a wrapper that records its environment
 // and commits once per internal attempt; `native-fixture.json` is its script.
 fn native_engine(g: &mut Gate, engine: &str) {
+    g.env
+        .insert("SLUICE_TEST_DEVIN_TURN_QUIET_S".into(), "0.01".into());
     let root = g.temp.path().to_path_buf();
     let owner = root.join("owner");
     for suffix in [
@@ -750,7 +752,7 @@ fn slow_composed_devin_environment_and_resumed_permission_mode() {
 // or its task is never acknowledged ("Devin prompt acceptance unknown"). The fixture, like
 // the real CLI, carries on past a hook command that fails.
 #[test]
-fn slow_composed_devin_hooks_reach_the_guardian_from_a_python_fn() {
+fn composed_devin_hooks_reach_the_guardian_from_a_python_fn() {
     let g = Gate::configured(|g| native_engine(g, "devin"));
     let root = g.temp.path();
     std::fs::write(
