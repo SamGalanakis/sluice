@@ -485,7 +485,7 @@ a.row:hover, .row:is(:hover, [open] > *) { background: var(--paper-2); color: va
 main { display: grid; padding: calc(14px * var(--density)) 0 calc(72px * var(--density)); container: frame / inline-size;
        grid-template-columns: [full-start] minmax(var(--gutter), 1fr) [col-start] minmax(0, var(--frame)) [col-end]
                               minmax(var(--gutter), 1fr) [full-end]; }
-main > *, #graph > * { grid-column: col; }
+main > * { grid-column: col; }
 .site-head a { text-decoration: none; }
 .site-head a:hover { color: var(--band-accent); }
 .site-head :focus-visible { outline-color: var(--band-ink); }
@@ -1003,13 +1003,6 @@ details.about[open] > summary::after { content: "Show less"; }
 .long[fits] > .clip { mask-image: none; }
 .long[fits] > .fold-toggle { display: none; }
 
-/* ---- the board: lanes of rows by dependency depth, inside the column -----------------
-   Each lane (steps joined by handoffs) is a column of rows of compact bubbles; lanes stand
-   side by side and wrap, and every lane has the same rows, so depths line up across them.
-   <sluice-board> draws the edges into the SVG under the cards. Details live in the drawer. */
-#graph { margin-top: 20px; }
-#graph:focus { outline: none; }  /* the skip link's target, not a control */
-sluice-board { display: block; }
 /* The components' hosts (views::ui::rocket; DESIGN.md, Components): a host that is its part
    (tabs, a long text's fold, a copyable id, the splitter, a banner) takes that part's box; a
    host around a part (a menu, a confirmation, a conversation, a setting) gives it none, so the
@@ -2494,6 +2487,7 @@ details.read-today .item { opacity: .85; }
   --board-min: 320px;
   --plan-min: 560px;
 }
+sluice-board { display: block; }
 .project-page { min-width: 0; }
 .plan-pane { min-width: 0; container: plan / inline-size; }
 .board-side { min-width: 0; }

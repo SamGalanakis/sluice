@@ -1162,6 +1162,36 @@ define("sluice-splitter", {
 // link (with `data-step` the drawer opens it). A click anywhere on a row follows its link, the
 // arrows, Home and End move between the rows' links, and the row in focus, clicked, or open in
 // the drawer (`#step:<id>`) is the one selected: the host's `selected`, kept through a patch.
+// ---- sluice-day --------------------------------------------------------------------------------
+// The day line (/day): the server lays its hours out and draws its rule at now and each running
+// run's bar to it as it read the clock; each tick of the page's clock moves them on (the
+// stream's version leaves the clock out). `data-from` and `data-to` are its first and last
+// instant (seconds); a running bar's `data-open` is when its run started.
+define("sluice-day", {
+  props: () => ({}),
+  manifest: {
+    slots: [{ name: "ticks", description: ".dl-ticks: the hours and the now rule." },
+            { name: "rows", description: ".dl-row a project: its name and its track of run bars (a.dl-bar)." }],
+    events: [],
+  },
+  setup({ host, cleanup }) {
+    const on = listening(cleanup);
+    const toNow = (now = Date.now()) => {
+      const from = Number(host.dataset.from) * 1000, to = Number(host.dataset.to) * 1000;
+      if (!(to > from)) return;
+      const at = (t) => Math.min(100, Math.max(0, (t - from) / (to - from) * 100));
+      const here = `${at(now).toFixed(3)}%`;
+      if (host.style.getPropertyValue("--now") !== here) host.style.setProperty("--now", here);
+      for (const bar of host.querySelectorAll(".dl-bar[data-open]")) {
+        const width = `${Math.max(0.15, at(now) - at(Number(bar.dataset.open) * 1000)).toFixed(3)}%`;
+        if (bar.style.width !== width) bar.style.width = width;
+      }
+    };
+    on(window, "sluice-tick", (event) => toNow(event.detail));
+    toNow();
+  },
+});
+
 define("sluice-steps", {
   props: ({ string }) => ({ selected: string }),
   manifest: {
@@ -1170,6 +1200,25 @@ define("sluice-steps", {
   },
   setup({ host, cleanup }) {
     const on = listening(cleanup);
+    // its "now" line and each running run's bar to it: the server draws the axis to now
+    // rounded up, so it redraws once a step and never with the clock; `data-now` on .sv-g is
+    // the axis's last stretch, its start (seconds), its place and how far a second moves along
+    // it (percent), from which each tick of the page's clock keeps them at the reader's now
+    const toNow = (now = Date.now()) => {
+      const view = host.querySelector(".sv-g[data-now]");
+      if (!view) return;
+      const [from, place, rate] = view.dataset.now.split(" ").map(Number);
+      if (![from, place, rate].every(Number.isFinite)) return;
+      const at = Math.min(100, Math.max(0, place + (now / 1000 - from) * rate));
+      const here = `${at.toFixed(3)}%`;
+      if (view.style.getPropertyValue("--now") !== here) view.style.setProperty("--now", here);
+      for (const bar of view.querySelectorAll(".sv-b[data-open]")) {
+        const width = `${Math.max(0, at - Number(bar.dataset.open)).toFixed(3)}%`;
+        if (bar.style.getPropertyValue("--w") !== width) bar.style.setProperty("--w", width);
+      }
+    };
+    on(window, "sluice-tick", (event) => toNow(event.detail));
+    toNow();
     const rows = () => [...host.querySelectorAll("li.sv-row")];
     const mark = () => {
       const id = host.getAttribute("selected") ?? "";

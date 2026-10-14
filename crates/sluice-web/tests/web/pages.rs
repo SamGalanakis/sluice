@@ -564,7 +564,7 @@ async fn home_attention_and_reader_day() {
         // the head says the date, not whose clock the hours are on
         assert!(!page.contains("hours on"), "{page}");
         // the day line: a row a project, its bars, the rule at now
-        let line = between(&page, "<div class=\"dl\"", "</section>");
+        let line = between(&page, "<sluice-day class=\"dl\"", "</section>");
         assert!(
             line.contains("<h3 class=\"dl-name\">almanac</h3>"),
             "{line}"

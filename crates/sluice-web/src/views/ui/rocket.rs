@@ -219,6 +219,22 @@ pub const COMPONENTS: &[Component] = &[
         events: &[],
         slots: &["scrim", "drawer"],
     },
+    Component {
+        tag: "sluice-day",
+        script: "components.js",
+        does: "The day line (/day): its rule at now and each running run's bar to it, moved on with each tick of the page's clock.",
+        props: &[],
+        events: &[],
+        slots: &["ticks", "rows"],
+    },
+    Component {
+        tag: "sluice-board",
+        script: "board.js",
+        does: "A project's page (#project-board): the Plan · Both · Board switch shows its view at once and keeps it per project, the board's column fits the window with its More below cue, a board Button's say posts in place with its answer under the board, and a step the live plan moves on is said once in #announce.",
+        props: &[],
+        events: &[],
+        slots: &["plan", "board"],
+    },
 ];
 
 // ---- the renderers ---------------------------------------------------------------------------

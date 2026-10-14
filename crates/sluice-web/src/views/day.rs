@@ -584,7 +584,7 @@ impl DayView {
             "<p class=\"dl-empty\">No run in the last 24 hours.</p>".to_owned()
         } else {
             format!(
-                "<div class=\"dl\" data-from=\"{from}\" data-to=\"{to}\" style=\"--now:{now_at:.3}%\"><div class=\"dl-ticks\" aria-hidden=\"true\">{ticks}<div class=\"dl-now\"><span>now, {clock}</span></div></div>{rows}</div>",
+                "<sluice-day class=\"dl\" data-from=\"{from}\" data-to=\"{to}\" style=\"--now:{now_at:.3}%\"><div class=\"dl-ticks\" aria-hidden=\"true\">{ticks}<div class=\"dl-now\"><span>now, {clock}</span></div></div>{rows}</sluice-day>",
                 from = w.start,
                 to = w.end,
                 clock = ui::clock(&super::rfc3339(self.now)),

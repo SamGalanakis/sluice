@@ -110,8 +110,8 @@ function tick() {
     }
   }
   if (wider) window.dispatchEvent(new Event("sluice-resized"));
-  dayLine(now);
-  stepViews(now);
+  // the components that draw against now (a step view's now line, the day line) move it on
+  window.dispatchEvent(new CustomEvent("sluice-tick", { detail: now }));
   // a running step on the index gone quiet: "quiet" when it has written nothing since it
   // started, else "quiet 42m"
   let quiet = 0;
@@ -136,38 +136,6 @@ function tick() {
   const zone = String(-new Date().getTimezoneOffset());
   if (!document.cookie.split("; ").includes(`sluice_zone=${zone}`)) {
     document.cookie = `sluice_zone=${zone}; path=/; max-age=34560000; samesite=lax`;
-  }
-}
-// The day line's rule at now, and each running run's bar to it: the server draws both as it
-// read the clock; this moves them on (the stream's version leaves the clock out).
-function dayLine(now) {
-  for (const line of document.querySelectorAll(".dl[data-from][data-to]")) {
-    const from = Number(line.dataset.from) * 1000, to = Number(line.dataset.to) * 1000;
-    if (!(to > from)) continue;
-    const at = (t) => Math.min(100, Math.max(0, (t - from) / (to - from) * 100));
-    const here = `${at(now).toFixed(3)}%`;
-    if (line.style.getPropertyValue("--now") !== here) line.style.setProperty("--now", here);
-    for (const bar of line.querySelectorAll(".dl-bar[data-open]")) {
-      const width = `${Math.max(0.15, at(now) - at(Number(bar.dataset.open) * 1000)).toFixed(3)}%`;
-      if (bar.style.width !== width) bar.style.width = width;
-    }
-  }
-}
-// A step view's "now" line, and each running run's bar to it (`unit_steps`): the server draws the
-// axis to now rounded up, so it redraws once a step and never with the clock; `data-now` is the
-// axis's last stretch, its start (seconds), its place and how far a second moves along it
-// (percent), from which this keeps the line and the open bars at the reader's now.
-function stepViews(now) {
-  for (const view of document.querySelectorAll(".sv-g[data-now]")) {
-    const [from, place, rate] = view.dataset.now.split(" ").map(Number);
-    if (![from, place, rate].every(Number.isFinite)) continue;
-    const at = Math.min(100, Math.max(0, place + (now / 1000 - from) * rate));
-    const here = `${at.toFixed(3)}%`;
-    if (view.style.getPropertyValue("--now") !== here) view.style.setProperty("--now", here);
-    for (const bar of view.querySelectorAll(".sv-b[data-open]")) {
-      const width = `${Math.max(0, at - Number(bar.dataset.open)).toFixed(3)}%`;
-      if (bar.style.getPropertyValue("--w") !== width) bar.style.setProperty("--w", width);
-    }
   }
 }
 tick();
