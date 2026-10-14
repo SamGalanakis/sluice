@@ -379,7 +379,7 @@ async fn states_priorities_cancellation_and_skipped_units() {
         // its tab counts what needs a look, its icon the sand square
         assert!(
             html.contains(
-                "data-page-title=\"✕4 · states · sluice\" data-favicon=\"/static/favicon-look.svg"
+                "data-page-title=\"⚠4 · states · sluice\" data-favicon=\"/static/favicon-look.svg"
             ),
             "{html}"
         );

@@ -123,13 +123,10 @@ spacing:
   gutter: "clamp(16px, calc(10px + 1.5vw), 64px)"
   col-gap: "clamp(8px, calc(4px + 0.8vw), 28px)"
 grid:
-  frame: "fluid"
+  frame: "1440px, centred"
   columns: 12
-  columns-narrow: 6
-  columns-wide: 24
   sheet-narrow-below: "640px"
   sheet-regular-from: "1200px"
-  sheet-wide-from: "2000px"
   phone-below: "760px"
 components:
   band-nav:
@@ -684,12 +681,14 @@ carry no text, so opening it fetches nothing; `/_ui`'s theme cards set each them
 
 ## The grid
 
-**Fluid at every width, 320px to 3840px.** There is no frame cap: the column is the window less
-a gutter each side (less the step drawer when it stands beside the page), and the nav bar, the
-page's head, its row and the page share its edges. The gutter grows with the window,
+**Fluid to a centred frame, 320px to 3840px.** The column is the window less a gutter each side
+(less the step drawer when it stands beside the page), up to `--frame` (1440px), centred; the
+nav bar's contents, the page's head, its row and the page share its edges at every width, so
+on a wide screen the page reads as one centred column under the controls that act on it
+rather than a strip pinned left. The gutter grows with the window,
 `clamp(16px, 10px + 1.5vw, 64px)` (16px on a phone, 32 at 1440, 48 at 2560, 64 at 3840), and
-so does the gap between columns, `clamp(8px, 4px + 0.8vw, 28px)`. A wide screen gets more
-modules a row, never longer lines: prose keeps `--measure` (68ch) at every width.
+so does the gap between columns, `clamp(8px, 4px + 0.8vw, 28px)`. Prose keeps `--measure`
+(68ch) at every width.
 
 **Lay out by the box, not the window.** `main` is the `frame` container and every sheet the
 `sheet` container, so what sits in them follows the room it has, the drawer and a board beside
@@ -697,22 +696,17 @@ the plan counted. Media queries are for the frame outside `main` (the nav bar, t
 row), and
 for input (pointer, hover, motion, colour scheme).
 
-**The sheet** (`ui::grid_open`, a plain `div.sheet`) has four modes, by its own width:
+**The sheet** (`ui::grid_open`, a plain `div.sheet`) has three modes, by its own width (the
+frame keeps it to 1440px, so a wide screen gets the same sheet as a laptop, centred):
 
 | sheet | columns | a module of span N (twelfths) |
 |---|---|---|
-| under 640px (narrow) | 6 | across the whole sheet |
+| under 640px (narrow) | 1 | across the whole sheet |
 | 640 to 1199px (medium) | 12 | half (6) when N is 6 or less, else whole |
-| 1200 to 1999px (regular) | 12 | N |
-| 2000px and over (wide) | 24 | 2N, its fraction kept; N when it halves |
+| 1200px and over (regular) | 12 | N |
 
-- Underneath, the sheet is always twice its columns in tracks (24 for twelve), and the lines
-  of 12 or 6 columns are a subset of them, so nothing jumps between modes.
-- **A module's wide behaviour.** `ui::module_open(span, swell, label)` and
-  `ui::column_open(span)` keep their fraction on a wide sheet. `ui::module_open_wide(span,
-  swell, label, ui::Wide::Halve)` (or `ui::column_open_wide`, or `data-wide="halve"` beside
-  `style="--span:N"`) halves it instead, so two whole-width modules stand side by side from
-  2000px. A child with no span takes the whole sheet.
+- `ui::module_open(span, swell, label)` and `ui::column_open(span)` take `span` twelfths; a
+  child with no span takes the whole sheet.
 - Nothing is drawn over the sheet: the grid is the layout, not a picture of it.
 - **Narrow end.** At 320 and 390 nothing clips and the page never scrolls sideways; every
   control is 44px tall on a phone.
@@ -724,7 +718,8 @@ head on the paper under it.
 
 - **The nav bar** (`nav#top-nav`, 52px; 48px on a phone): the mark and "sluice", "Projects",
   the project switcher (its button the current project's icon and name in a box of the band's
-  rule, the menu every project), Inbox with its coral count, then at the right the live line (a
+  rule, the menu every project; its letter icon the band's mark deepened toward the band, so
+  its ink reads at 5:1 or more), Inbox with its coral count, then at the right the live line (a
   square in `band-mark` and "Live" while the page's stream is, from `html[data-stream]`) and
   display preferences (below). The current place carries a 3px underline in
   `band-mark`. On a phone the wordmark and Projects give way to the switcher (whose menu has
@@ -1067,14 +1062,14 @@ The pages compose these parts; each lane that redraws one writes its section her
   question linked under the coral underline; what the owner set aside still counts there
   (setting aside is about attention, never status). The project's sections are soft pills
   under it (the current one on `paper-2` at weight 600), one line that scrolls within itself
-  on a phone; the row's tools (Find, the switch, More) beside them. The head (its More, the
-  row and its rule included) and the sheet under it keep a measure of at most 1400px from the
-  nav's left edge, so a row's parts and an item's action stay with their words on a wide
-  screen (beside the board the head spans both); three sections, each headed by an 18px/600 label
-  (body text is 15px):
+  on a phone; the row's tools (Find, the switch) beside them. One ⋯, the head's Details: the
+  project's id, its words, Settings and Export (the plan as Mermaid text). On a phone Find is
+  a 44px icon by that ⋯ that opens across the head as it takes the focus (or holds a find),
+  never a row of its own. The page keeps the frame's centred column; three sections, each
+  headed by an 18px/600 label (body text is 15px):
   - **Needs you**: the one raised well (`paper-2`, 14px), an item a line: its mark (a 12px
     coral dot a question, outranking an 8px sand square a stop and an 8px sand ring a silence,
-    said in words to a screen reader), its sentence (the unit's title in weight 600 linking the
+    said in words to a screen reader), its sentence (at most 90ch; the unit's title in weight 600 linking the
     step, what happened, its owner small and muted; under it the failure's headline, what it
     last said and the advice, muted), its one action (a pill: Answer, Retry, Retry with
     feedback, Retry all, Message it) and its × (a 32px circle, 44px on a phone). Only the first
@@ -1087,31 +1082,43 @@ The pages compose these parts; each lane that redraws one writes its section her
     in the project's .env), then Retry all."). A cancel stays here: a cancelled step leaves its
     unit unfinished and holds the steps after it, and the status table counts it as needing a
     look everywhere, so the owner still decides: Retry, or Settle as done. Setting aside (the ×,
-    Set all aside) is about attention only and never settles. A count and "Set all
-    aside" stand in the head. An item set aside leaves a line under the well for ten minutes,
+    Set the rest aside) is about attention only and never settles. A count and "Set all aside"
+    stand in the head; it takes the stops and silences only, and reads "Set the rest aside"
+    while a question is open: a question keeps its own ×, so the head and the well never
+    disagree about it. An item set aside leaves a line under the well for ten minutes,
     "Set aside: the silence of <title>" and Undo, and comes back by itself when it changes; with
     script the × and Undo post in place, the focus going to Undo and back to the item. With
-    nothing to say, the well says "Nothing.". Each Set aside line reads as one sentence with
-    its Undo after it, wrapping as text does at any width.
+    nothing to say, no well: one muted line, "Nothing needs you. 4 set aside.". Each Set aside
+    line reads as one sentence with its Undo after it, wrapping as text does at any width.
   - **Finished since you looked**: cards (10px, a hairline inset, filling their row, one
     under 760px, each as tall as its own content): when it finished and how long it took, the
-    title in weight 600 linking the unit, what it produced: its output's name muted, the value
-    in ink. "since 14:02" and "Mark as seen"
-    (a plain form) in the head; with no look kept, "Finished lately", the latest four.
+    title in weight 600 linking the unit, what it produced, always: its output's name small and
+    muted on a line of its own, the value in ink under it; with no output that explains or
+    identifies, "its last message" and that message cut to 160 characters; with neither, "No
+    output, and nothing said." muted. "since 14:02" and "Mark as seen" (a plain form) in the
+    head; with no look kept, "Finished lately", the latest four. Under 760px the section
+    follows At work: what is at work comes before what finished.
   - **At work**: the roster, under an axis row (12h, 4h, 1h, 15m, now, 12px over the tracks'
     column; it says its scale to a screen reader and on hover: "The last 12 hours on a log
     scale, now at the right; a tick is a message."). A group a recipe (a `<details>`, its
     triangle, its name at 15px/600 in ink, so a big plan scans by its groups, and its counts
-    13px muted); the units of no recipe after, the long runs last. **Folding**: a roster of
-    more than 12 rows folds each group of more than 3 rows that has nothing remarkable in it (no
-    silence, none of its recipe's units in Needs you, alone or in a group of failures) to its
-    line, "article · 42 running · each heard
-    from in the last 25m"; a group with quiet or stopped work stays open. A row (8px,
+    13px muted: "1 quiet, 7 running, 2 waiting"); the units of no recipe after ("Other
+    units"), the long runs last. **Folding, by row**: in a roster of more than 12 rows a
+    group shows its remarkable rows first (a silence, a wait of an hour or more since its last
+    run, a unit with an open item in Needs you) and folds the rest, when more than 3, to one
+    line under them, "+7 running · each heard from in the last 11m", a `<details>` that opens
+    in place without script; a group with nothing remarkable folds whole to its own line,
+    "article · 23 running · each heard from in the last 27m". A stop is in Needs you, not a
+    row, so it keeps no healthy sibling in sight. A row (8px,
     `paper-2` on hover and open) is a grid: the badge (a 30px circle, an engine's name; drawn
     only when rows run on more than one thing, never "fn"), its title in ink at weight 600 with
-    its owner muted and under it its recipe's view or its last message on one line, muted; its
-    stage pill (the state's glyph, the stage and its time, on `paper-2`, 999px) and "heard 12m
-    ago" muted, or the quiet pill solid sand with its ink (`on-sand`) in both schemes; its
+    its owner muted and under it its recipe's view or its last message on one line, muted (who
+    said it, never when); its meta one statement about time: the stage pill (the state's
+    glyph, the stage and how long it has run, on `paper-2`, 999px), then "heard 12m ago" when
+    it was heard from since its run began (in `ink` from 15 minutes, at weight 600 from 30, so
+    a silence shows before the quiet pill says it; the sand stays for quiet), else "no word
+    yet" muted; once quiet, the stage pill drops its time and the quiet pill, solid sand with
+    its ink (`on-sand`) in both schemes, says it; its
     track (its last twelve hours on a log scale, `clamp(180px, 34cqi, 560px)` wide, so a wide
     screen gives its room to the time rather than to a gap after the title); the live dot. Waiting rows follow the running
     ones. A line ends it: "4 waiting on earlier work · 25 done, the last 2h ago". Under 760px
@@ -1126,9 +1133,9 @@ The pages compose these parts; each lane that redraws one writes its section her
     measured, at every width), in the track's tones: a run still going reads as its step does
     now (a quiet one on the sand from when it fell silent), one that began earlier starts at the
     left edge, saying "from 3d ago". Its "Runs on" column only when its steps differ, its
-    Progress only when one reports any. Its foot: the latest message, or with none "Last heard
-    22:51 (6m ago)" ("Not heard from since 19:14 (3h ago)" for a quiet unit), then Message and
-    Unit page as quiet links and Open step, its one outlined move.
+    Progress only when one reports any. Its foot: "Last heard 22:51 (6m ago)" ("Not heard from
+    since 19:14 (3h ago)" for a quiet unit; the row already says what it said last), then
+    Message and Unit page as quiet links and Open step, its one outlined move.
   - **Done**, asked for (Show: Done, a find, a recipe's units): the index, a dense list newest
     first in columns: finish time, glyph, title, how long it took (in `ink-muted`, like every
     finished duration: the blue is for what runs).
@@ -1136,8 +1143,8 @@ The pages compose these parts; each lane that redraws one writes its section her
   the item or row it moved and nothing else; a step whose state moves on is said once to a
   screen reader. The step drawer opens beside the plan from any step link, on paper under the
   heavy navy rule, a hairline at its edge, lifted off the plan. **The glance**: the plan's tab
-  title is "(1) ✕4 · almanac · sluice" (the open questions in brackets, a cross and the stops
-  not set aside, the name) and its favicon wears a coral dot while a question waits, a sand
+  title is "(1) ⚠4 · almanac · sluice" (the open questions in brackets, a warning sign and the
+  steps needing a look not set aside, never a cross that reads as "close", the name) and its favicon wears a coral dot while a question waits, a sand
   square while a step needs a look (`favicon-ask.svg`, `favicon-look.svg`).
 - **The briefing** (the plan's visual system): radii 14px for the well, 10px for a card or the
   index, 8px for a row, 999px for a pill; one raised well (Needs you) and nothing else lifted;
@@ -1165,8 +1172,7 @@ The pages compose these parts; each lane that redraws one writes its section her
   rule; beside them, as titled modules, what
   it waits on (or when it starts), what it comes after, its progress and its key output. The
   columns stand one over the other on a narrow sheet (the drawer, a phone, to 900px of sheet),
-  at seven and five twelfths to 2000px, as halves from there with the side's modules two to a
-  row, and at a third and two thirds from 3000px: more modules a row, never longer lines.
+  and at seven and five twelfths from there.
   Activity is its turns as rows numbered in data mono, the running one on the run rule;
   Messages the conversation; Inputs and Outputs field tables with where each came from; Runs
   its unit's step view, its own row ringed, over its runs. In the drawer the same head tops the step a size down,
@@ -1181,8 +1187,7 @@ The pages compose these parts; each lane that redraws one writes its section her
   its way back over it and its Details); the messages' switch is in the row. Questions to the
   owner
   come first as swelled modules on the coral rule, answered in place (Answer and Close 44px; on
-  a phone a whole-width card), one a row to 900px of sheet, two to 2000, three from there and
-  four from 3000; then those between agents, the ones nobody waits on and the unread notes
+  a phone a whole-width card), one a row to 900px of sheet, two from there; then those between agents, the ones nobody waits on and the unread notes
   (each its thread's name and project, its notes, then Mark read after them). A thread's page
   keeps its thread name and project in its Details.
   A conversation's messages are rows apart by hairlines, each with its Details (its id, its

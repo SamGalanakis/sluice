@@ -166,7 +166,7 @@ async fn plan_units_and_loose_steps() {
         );
         // the tab says it too, and its icon is the question's
         assert!(
-            html.contains("<title>(1) ✕4 · almanac · sluice</title>"),
+            html.contains("<title>(1) ⚠4 · almanac · sluice</title>"),
             "{html}"
         );
         assert!(html.contains("href=\"/static/favicon-ask.svg?v="), "{html}");
@@ -177,6 +177,13 @@ async fn plan_units_and_loose_steps() {
             "{cards}"
         );
         assert_eq!(cards.matches("<li class=\"fin-i\"").count(), 4, "{cards}");
+        // each says what it produced, its label over its value, or that it left nothing
+        assert!(
+            cards.contains("<p class=\"fin-o\"><span class=\"fin-n\">summary</span><span class=\"fin-v\">Fourteen entries")
+                && cards.matches("<p class=\"fin-o").count() == 4
+                && cards.contains("<p class=\"fin-o fin-none\">No output, and nothing said.</p>"),
+            "{cards}"
+        );
         assert!(
             at(cards, "/units/a-3\"") < at(cards, "/units/s-2\""),
             "{cards}"
@@ -186,8 +193,8 @@ async fn plan_units_and_loose_steps() {
         let roster = plan_html::band(&html, "plan-roster");
         assert!(
             at(roster, ">article</a></b>") < at(roster, ">scan</a></b>")
-                && at(roster, ">scan</a></b>") < at(roster, "<b>No recipe</b>")
-                && at(roster, "<b>No recipe</b>") < at(roster, "<b>Long runs</b>"),
+                && at(roster, ">scan</a></b>") < at(roster, "<b>Other units</b>")
+                && at(roster, "<b>Other units</b>") < at(roster, "<b>Long runs</b>"),
             "{roster}"
         );
         assert!(at(roster, "<!--r:u-a-6-->") < at(roster, "<!--r:u-a-7-->"));
@@ -200,19 +207,28 @@ async fn plan_units_and_loose_steps() {
                 && roster.contains("<b>5 done</b></a>, the last"),
             "{roster}"
         );
-        // a row: its state in words beside its mark, its track a tick a message
+        // a row: its state in words beside its mark, how long it has run, when it was heard
+        // from (its line says what it said, not again when), its track a tick a message
         let a6 = plan_html::row(&html, "a-6");
         assert!(
             a6.contains("<span class=\"vh\">running, </span>draft · ")
-                && a6.contains("heard ")
+                && a6.contains("<span class=\"ro-heard\">heard ")
+                && a6.contains("<b class=\"uv-from\">draft</b>: Entries 41 to 58")
                 && a6.contains("aria-label=\"Its last twelve hours, on a log scale: 3 messages\""),
             "{a6}"
         );
         assert_eq!(a6.matches("<i class=\"tk-m\"").count(), 3, "{a6}");
+        // quiet: the sand pill says how long, its stage pill no time of its own
         let s3 = plan_html::row(&html, "s-3");
         assert!(
-            s3.contains("<span class=\"pill pill-quiet\">quiet "),
+            s3.contains("</span>scan</span><span class=\"pill pill-quiet\">quiet "),
             "{s3}"
+        );
+        // nothing heard since its run began: said once
+        let index = plan_html::row(&html, "index");
+        assert!(
+            index.contains("<span class=\"ro-heard\">no word yet</span>"),
+            "{index}"
         );
         assert!(s3.contains("<i class=\"tk-quiet\""), "{s3}");
         // the drilldown, without script: a disclosure whose body is the unit's steps on its
@@ -234,16 +250,17 @@ async fn plan_units_and_loose_steps() {
                 && !drill.contains(">Progress<"),
             "{drill}"
         );
-        // its foot: Open step the one move, the rest quiet links
+        // its foot: when it was last heard from (its row says what), Open step the one move,
+        // the rest quiet links
         assert!(
-            drill.contains("<p class=\"ro-ev\">Latest · ")
+            drill.contains("<p class=\"ro-ev\">Last heard ")
+                && !drill.contains("Entries 41 to 58")
                 && drill.contains("<span class=\"ro-links\"><a href=")
                 && drill.contains(">Message</a>")
                 && drill.contains(" data-step=\"a-6-draft\">Open step</a>"),
             "{drill}"
         );
         // a unit of no recipe: in its step view its two gathers fan in to its merge
-        let index = plan_html::row(&html, "index");
         let merge = plan_html::between(index, "data-sv=\"index-merge\"", "</li>");
         assert_eq!(merge.matches("class=\"sv-arrow\"").count(), 2, "{merge}");
         // the Done index when asked for: every done unit
@@ -271,7 +288,10 @@ async fn plan_units_and_loose_steps() {
             plan_html::summary(&html).contains("1 at work, all heard from recently. 1 of 3 done."),
             "{html}"
         );
-        assert!(plan_html::band(&html, "plan-needs").contains("<p class=\"nd-none\">Nothing.</p>"));
+        assert!(
+            plan_html::band(&html, "plan-needs")
+                .contains("<p class=\"nd-none\">Nothing needs you.</p>")
+        );
     }
 }
 
@@ -395,7 +415,7 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
         "{well}"
     );
     assert!(
-        html.contains("<title>(1) ✕2 · almanac · sluice</title>"),
+        html.contains("<title>(1) ⚠2 · almanac · sluice</title>"),
         "{html}"
     );
     // one of them changes: a retry ran and failed again (its work generation moved on)
@@ -415,15 +435,17 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
     assert_eq!(plan_html::place(&html, "a-4"), "stopped", "{html}");
     assert!(!plan_html::band(&html, "plan-needs").contains("Set aside: two units"));
     assert!(
-        html.contains("<title>(1) ✕3 · almanac · sluice</title>"),
+        html.contains("<title>(1) ⚠3 · almanac · sluice</title>"),
         "{html}"
     );
-    // Set all aside sets every item aside; Undo brings one back
+    // Set the rest aside sets every stop and silence aside, the question keeping its own ×;
+    // Undo brings one back
     let keys = value(&html, "name=\"items\" value=\"").to_owned();
     assert!(
-        keys.starts_with("ask:") && keys.contains("quiet:s-3-scan@"),
+        keys.starts_with("stop:") && keys.contains("quiet:s-3-scan@") && !keys.contains("ask:"),
         "{keys}"
     );
+    assert!(html.contains(">Set the rest aside</button>"), "{html}");
     let (status, _, _, _) = browse(
         &router,
         &format!("{plan}/needs"),
@@ -433,13 +455,27 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let (_, _, _, html) = browse(&router, &plan, None, "").await;
-    assert!(plan_html::needs(&html).is_empty(), "{html}");
-    // the tab still counts the open question (the inbox holds it), no longer the stops
+    assert_eq!(plan_html::needs(&html).len(), 1, "{html}");
+    // the tab still counts the open question, no longer the stops
     assert!(
         html.contains("<title>(1) almanac · sluice</title>"),
         "{html}"
     );
-    assert!(html.contains("<p class=\"nd-none\">Nothing.</p>"), "{html}");
+    // the question set aside by its own ×: the well one muted line
+    let ask = value(&html, "name=\"items\" value=\"").to_owned();
+    assert!(ask.starts_with("ask:"), "{ask}");
+    browse(
+        &router,
+        &format!("{plan}/needs"),
+        Some(&[("action", "dismiss"), ("items", &ask), ("next", &plan)]),
+        "",
+    )
+    .await;
+    let (_, _, _, html) = browse(&router, &plan, None, "").await;
+    assert!(
+        html.contains("<p class=\"nd-none\">Nothing needs you. 4 set aside.</p>"),
+        "{html}"
+    );
     // setting aside is about attention alone: the head still says what is true (the failures,
     // the cancel, which Set all aside never settles, and the silence), and the cancelled unit
     // is still a stop, never a row
@@ -532,26 +568,35 @@ async fn a_big_roster_folds_its_unremarkable_groups() {
     let atlas = neutral::seed_big(&f.writer, f._home.path()).await;
     let (_, html) = f.get(&format!("/projects/id/{atlas}")).await;
     let roster = plan_html::band(&html, "plan-roster");
-    // entry, healthy, folds to its line, its rows still drawn for a click (or no script)
-    let entry = &roster[at(
-        roster,
-        "<details class=\"ro-g\"><summary class=\"ro-group\"><h3><b><a ",
-    )..];
+    // entry and article, healthy (article's failures are in Needs you, not on the roster),
+    // fold whole to their lines, their rows still drawn for a click (or no script)
     assert!(
-        entry.contains(">entry</a></b> · 25 running · each heard from in the last ")
+        roster.contains(">entry</a></b> · 25 running · each heard from in the last ")
+            && roster.contains(">article</a></b> · 23 running · each heard from in the last ")
             && roster.matches("<details id=\"u-e-").count() == 25,
         "{roster}"
     );
-    // article (two failures at their cap, said together) and scan (a silence) stay open
     assert_eq!(
-        roster.matches("<details class=\"ro-g\" open>").count(),
+        roster.matches("<details class=\"ro-g\"><summary").count(),
         2,
         "{roster}"
     );
-    assert_eq!(
-        roster.matches("<details class=\"ro-g\">").count(),
-        1,
-        "{roster}"
+    // scan: its quiet row in sight, first, the seven healthy folded to one line under it
+    let scan = &roster[at(roster, ">scan</a></b> · 1 quiet, 7 running</h3>")..];
+    assert!(
+        at(scan, "<!--r:u-c-50-->")
+            < at(
+                scan,
+                "<details class=\"ro-fold\"><summary>+7 running · each heard from in the last "
+            )
+            && scan.matches("<details id=\"u-c-").count() == 8,
+        "{scan}"
+    );
+    // a finished card with no output says the unit's last message
+    let cards = plan_html::band(&html, "plan-finished");
+    assert!(
+        cards.contains("<span class=\"fin-n\">its last message</span>"),
+        "{cards}"
     );
     // a small plan leaves every group open
     let (_, html) = f.get(&format!("/projects/id/{}", f.id)).await;

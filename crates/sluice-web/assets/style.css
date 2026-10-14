@@ -51,9 +51,11 @@
   unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 :root {
   --measure: 68ch;    /* prose: about 72 characters a line of the text face, at every width */
-  /* the frame is fluid: the window less a gutter each side, which grows with the window (16px
-     on a phone, 32 at 1440, 48 at 2560, 64 at 3840); the gap between grid columns grows with
-     it (8px to 28px). Wide screens get more modules a row, never longer lines. */
+  /* the frame: the window less a gutter each side, which grows with the window (16px on a
+     phone, 32 at 1440, 48 at 2560, 64 at 3840), up to `--frame`, centred, the nav bar's
+     contents, the page's head and the page sharing its edges; the gap between grid columns
+     grows with it (8px to 28px) */
+  --frame: 1440px;
   --gutter: clamp(16px, calc(10px + 1.5vw), 64px);
   --col-gap: clamp(8px, calc(4px + 0.8vw), 28px);
   --nav-pad: 10px;
@@ -289,11 +291,12 @@ p { margin: 0; }
 .site-head { background: var(--band); color: var(--band-ink); box-shadow: var(--band-frame);
              border-radius: var(--band-radius); margin: var(--band-margin); }
 .site-head::after { content: ""; display: block; height: var(--band-edge-height); background: var(--band-edge); }
-.band-in { padding: 0 calc(var(--gutter) - var(--band-margin)); }
-.page-top { padding: 0 var(--gutter); }
+.band-in { max-width: calc(var(--frame) + 2 * (var(--gutter) - var(--band-margin))); margin-inline: auto;
+           padding: 0 calc(var(--gutter) - var(--band-margin)); }
+.page-top { max-width: calc(var(--frame) + 2 * var(--gutter)); margin-inline: auto; padding: 0 var(--gutter); }
 main { display: grid; padding: calc(14px * var(--density)) 0 calc(72px * var(--density)); container: frame / inline-size;
-       grid-template-columns: [full-start] var(--gutter) [col-start] minmax(0, 1fr) [col-end]
-                              var(--gutter) [full-end]; }
+       grid-template-columns: [full-start] minmax(var(--gutter), 1fr) [col-start] minmax(0, var(--frame)) [col-end]
+                              minmax(var(--gutter), 1fr) [full-end]; }
 main > *, #graph > * { grid-column: col; }
 .site-head a { text-decoration: none; }
 .site-head a:hover { color: var(--band-accent); }
@@ -340,7 +343,7 @@ details.switcher.current > summary:has(> .proj-icon) { box-shadow: inset 0 0 0 1
 /* a project with no icon of its own: its initial in a square of the band's mark */
 .proj-icon.pi-mono, .proj-icon.pi-text { display: inline-grid; place-items: center; font-size: 12px;
   font-weight: 800; line-height: 1; }
-.proj-icon.pi-mono { background: var(--band-mark); color: var(--band-ink); }
+.proj-icon.pi-mono { background: color-mix(in oklch, var(--band-mark) 62%, var(--band)); color: var(--band-ink); }
 .proj-icon.pi-text { font-size: 16px; }
 .icon { flex: none; }  /* every Lucide icon keeps its size in a flex row */
 .chev { flex: none; color: var(--ink-muted); transition: transform 120ms ease-out; }
@@ -545,6 +548,24 @@ nav.links > a[aria-current]::before { background: var(--paper-2); }
   .subnav .subnav-tools .q-field { flex: 1 1 auto; min-width: 0; max-width: none; }
   .subnav-tools .view-switch a { padding: 0 10px; }
   .subnav-tools :is(button, input, select, a) { min-height: 44px; }
+  /* the plan's Find alone: a 44px icon by the head's Details, opening across the head as it
+     takes the focus (or holds a find) */
+  .page-top { position: relative; }
+  .subnav-tools:not(:has(.view-switch)):has(.pl-find) { position: absolute; z-index: 5;
+    top: calc(12px * var(--density)); right: calc(var(--gutter) + 48px); margin: 0; }
+  .subnav-tools:not(:has(.view-switch)) .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) .q-field {
+    flex: none; width: 44px; }
+  .subnav-tools:not(:has(.view-switch)) .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) input[type=search] {
+    width: 44px; padding: 0; border-color: transparent; background: transparent; color: transparent;
+    cursor: pointer; }
+  .subnav-tools:not(:has(.view-switch)) .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) input::placeholder {
+    color: transparent; }
+  .subnav-tools:not(:has(.view-switch)) .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) .q-icon {
+    left: 14px; color: var(--ink); }
+  .subnav-tools:not(:has(.view-switch)) .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) .apply {
+    display: none; }
+  .subnav-tools:not(:has(.view-switch)):has(.pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) {
+    left: var(--gutter); right: var(--gutter); background: var(--paper); }
   .prefs .themes label, .prefs label.check, .sub-row, .sub-back { min-height: 44px; }
   .page-head { padding: calc(12px * var(--density)) 0 calc(8px * var(--density)); }
   .ph-name > h1, .page-head > h1 { font-size: 28px; line-height: 32px; }
@@ -555,28 +576,20 @@ nav.links > a[aria-current]::before { background: var(--paper-2); }
 
 /* ---- the module grid (`ui::grid_open`, `.sheet`): a sheet of modules, the `sheet`
    container, so its columns follow its own width (the drawer and a board beside it counted),
-   never the window's. Underneath it is always twice its columns in tracks (24 for twelve),
-   whose lines at 12 or 6 columns are a subset, so nothing jumps between its four modes:
-   narrow (under 640px): 6 columns, every module across the whole sheet;
+   never the window's; the frame keeps it to 1440px. Its three modes:
+   narrow (under 640px): every module across the whole sheet;
    medium (640 to 1199px): 12 columns, a module half the sheet (span 6 or less) or whole;
-   regular (1200 to 1999px): 12 columns, a module its span;
-   wide (2000px and over): 24 columns, a module twice its span (its fraction kept), or its
-   span when it halves (`data-wide="halve"`: two whole-width modules side by side).
-   `--take` is the columns a module takes in its sheet's mode, `--per` the tracks a column. -- */
+   regular (1200px and over): 12 columns, a module its span.
+   `--take` is the columns a module takes in its sheet's mode. ------------------------------ */
 .sheet { display: grid; align-items: start; container: sheet / inline-size;
-              grid-template-columns: repeat(calc(var(--cols, 12) * 2), minmax(0, 1fr));
+              grid-template-columns: repeat(var(--cols, 12), minmax(0, 1fr));
               column-gap: var(--col-gap); row-gap: calc(max(16px, var(--col-gap)) * var(--density)); }
-.sheet > * { --take: var(--span, var(--cols, 12)); --per: 2;
-                  grid-column: span calc(var(--take) * var(--per)); min-width: 0; }
+.sheet > * { --take: var(--span, var(--cols, 12)); grid-column: span var(--take); min-width: 0; }
 @container sheet (max-width: 639.98px) {
   .sheet > * { grid-column: 1 / -1; --take: round(down, calc(var(--cols, 12) / 2), 1); }
 }
 @container sheet (min-width: 640px) and (max-width: 1199.98px) {
   .sheet > * { --take: min(var(--cols, 12), max(6, round(up, var(--span, 12), 6))); }
-}
-@container sheet (min-width: 2000px) {
-  .sheet > * { --per: 1; --take: calc(var(--span, var(--cols, 12)) * 2); }
-  .sheet > [data-wide="halve"] { --take: var(--span, var(--cols, 12)); }
 }
 .mod-col { display: flex; flex-direction: column; gap: calc(max(16px, var(--col-gap)) * var(--density)); }
 
@@ -994,8 +1007,8 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--ink) 86%, var(--pa
   .drawer { width: var(--drawer-w); box-shadow: none; }
   html.drawer-open body { padding-right: var(--drawer-w); }
   html.drawer-open main {
-    grid-template-columns: [full-start] var(--gutter) [col-start] minmax(0, 1fr) [col-end]
-                           var(--drawer-gap) [full-end]; }
+    grid-template-columns: [full-start] minmax(var(--gutter), 1fr) [col-start] minmax(0, var(--frame)) [col-end]
+                           minmax(var(--drawer-gap), 1fr) [full-end]; }
   html.drawer-open :is(.band-in, .subnav) { padding-right: var(--drawer-gap); }
 }
 /* the close button stays at the top on a band of its own: clear at rest, opaque once the
@@ -1093,32 +1106,17 @@ article#step-detail { display: flow-root; }  /* its head's margins stay its own 
 /* ---- a step's Overview (DESIGN.md, A step's page): modules on the grid, the question to the
    owner swelling first, then why it failed or what it does now; beside them what it waits on,
    what it comes after, its progress and its key output. One column on a narrow sheet (the
-   drawer, a phone); two to a row from 900px of sheet; from 2000px more modules to a row, never
-   longer lines. -------------------------------------------------------------------------------- */
+   drawer, a phone); two to a row from 900px of sheet. -------------------------------------------------------------------------------- */
 .ov { container: ov / inline-size; }
 .ov > .sheet { row-gap: calc(26px * var(--density)); }
 .ov .mod-col { gap: calc(26px * var(--density)); }
 /* by its sheet's mode (DESIGN.md, The module grid): the columns one over the other on a narrow
-   sheet and to 900px; 7 and 5 twelfths to 2000px; from there halves, the side's modules two to
-   a row (and with no side, the first column's two to a row); from 3000px a third and two
-   thirds, so three modules stand in a row */
+   sheet and to 900px; 7 and 5 twelfths from there */
 @container sheet (min-width: 640px) and (max-width: 899.98px) {
   .ov > .sheet > .mod-col { --take: 12; }
 }
 @container sheet (min-width: 900px) and (max-width: 1199.98px) {
   .ov > .sheet > .mod-col { --take: var(--span); }
-}
-@container sheet (min-width: 2000px) {
-  .ov > .sheet > .mod-col { --take: 12; }
-  .ov:not(.ov-two) > .sheet > .mod-col { --take: 24; }
-  .ov.ov-two > .sheet > .mod-col[data-span="5"],
-  .ov:not(.ov-two) > .sheet > .mod-col {
-    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start;
-    column-gap: var(--col-gap); }
-}
-@container sheet (min-width: 3000px) {
-  .ov.ov-two > .sheet > .mod-col[data-span="7"] { --take: 8; }
-  .ov.ov-two > .sheet > .mod-col[data-span="5"] { --take: 16; }
 }
 /* nothing in the first column (a step done with no words or outputs of its own): its waits and
    what it comes after take the sheet, as many to a row as fit */
@@ -1585,13 +1583,11 @@ li.m.q-done > .md, li.m.q-done > .m-body { opacity: 0.7; }
 #messages-view > details.read-today { margin-top: calc(30px * var(--density)); }
 #messages-view > #inbox-items > section:first-child { margin-top: calc(22px * var(--density)); }
 #messages-view .sec-h { margin-bottom: 4px; }
-/* its questions and notes by the sheet's mode: one to a row to 900px, two to 2000px, three
-   from there and four from 3000px, each at its reading measure */
+/* its questions and notes by the sheet's mode: one to a row to 900px, two from there, each at
+   its reading measure */
 .q-sheet { margin-top: 12px; }
 .q-sheet > .sheet { row-gap: calc(26px * var(--density)); }
 @container sheet (min-width: 640px) and (max-width: 899.98px) { .q-sheet > .sheet > .mod { --take: 12; } }
-@container sheet (min-width: 2000px) { .q-sheet > .sheet > .mod { --take: 8; } }
-@container sheet (min-width: 3000px) { .q-sheet > .sheet > .mod { --take: 6; } }
 .q-sheet article.item { margin: 0; padding: 0; border-inline: 0; border-bottom: 0; background: none; }
 .q-sheet article.item.swell-ask { padding-top: 14px; border-top: var(--ask-rule) solid var(--coral); }
 .q-sheet article.item:not(.swell-ask) { padding-top: 12px; border-top: 1.5px solid var(--navy); }
@@ -1941,7 +1937,7 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
 
 /* ---- a unit's page (DESIGN.md, A unit's page): its head on the paper (its way back, its glyph
    and title at a reading size with its Details' "⋯", how its steps stand, its stage strip); its
-   steps are modules, three to a row (one on a phone, four past 2000px of sheet), the one asking
+   steps are modules, three to a row (one on a phone), the one asking
    the owner on the coral rule, a stop on the sand; then its timeline and its last message. -- */
 h1.unit-h { display: flex; align-items: flex-start; gap: 10px; }
 h1.unit-h > span { min-width: 0; }
@@ -2303,12 +2299,7 @@ details.read-today .item { opacity: .85; }
   --track-quiet-edge: light-dark(var(--sand-mark), var(--sand));
   --track-past: color-mix(in oklch, var(--sky-ink) 45%, var(--paper));
 }
-/* composed: a measure from the nav's left edge, so a row's parts stay together on a wide screen */
-.plan-sheet { display: grid; gap: 36px; min-width: 0; max-width: 1400px; padding-top: 14px; }
-/* the plan alone: its head (name, sentence, the row of tabs and tools, its rule) keeps the
-   sheet's measure; beside the board it spans both */
-body:has(.project-page:is(:not(.has-panel), [data-view="plan"])) .page-top:has(#plan-band) {
-  max-width: calc(1400px + 2 * var(--gutter)); }
+.plan-sheet { display: grid; gap: 36px; min-width: 0; padding-top: 14px; }
 .pb-sec { display: grid; gap: 8px; min-width: 0; align-content: start; }
 .pb-label { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0;
             font-size: 13px; line-height: 20px; color: var(--ink-muted); }
@@ -2349,7 +2340,7 @@ body:has(.project-page:is(:not(.has-panel), [data-view="plan"])) .page-top:has(#
 .nk-ask { width: 12px; height: 12px; border-radius: 50%; background: var(--coral); }
 .nk-stop { border-radius: 2px; background: var(--sand); box-shadow: inset 0 0 0 1px var(--sand-mark); }
 .nk-quiet { border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--sand-ink); }
-.nd-say { min-width: 0; overflow-wrap: anywhere; }
+.nd-say { min-width: 0; max-width: 90ch; overflow-wrap: anywhere; }
 .nd-say > p { margin: 0; }
 .nd-say b { font-weight: 600; }
 .nd-say a { color: inherit; }
@@ -2360,8 +2351,7 @@ body:has(.project-page:is(:not(.has-panel), [data-view="plan"])) .page-top:has(#
 .nd-more ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }
 .nd-more li span { color: var(--ink-muted); }
 .nd-acts { display: flex; align-items: center; gap: 6px; }
-.nd-none { margin: 0; padding: 14px 18px; border-radius: 14px; background: var(--paper-2);
-           color: var(--ink-muted); }
+.nd-none { margin: 0; color: var(--ink-muted); }
 .nd-gone { list-style: none; margin: 2px 0 0; padding: 0 4px; display: grid; gap: 2px; font-size: 13px;
            color: var(--ink-muted); }
 .nd-gone li > span { margin-right: 8px; }
@@ -2377,9 +2367,11 @@ body:has(.project-page:is(:not(.has-panel), [data-view="plan"])) .page-top:has(#
 .fin-t { font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .fin-t a { color: inherit; text-decoration: none; }
 .fin-t a:hover { text-decoration: underline; text-underline-offset: var(--link-offset); }
-.fin-o { font-size: 14px; color: var(--ink); overflow-wrap: anywhere; display: -webkit-box;
-         -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
-.fin-n { color: var(--ink-muted); }
+.fin-o { display: grid; gap: 1px; font-size: 14px; color: var(--ink); overflow-wrap: anywhere; }
+.fin-n { font-size: 12px; line-height: 16px; color: var(--ink-muted); }
+.fin-v { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3;
+         overflow: hidden; }
+.fin-o.fin-none { color: var(--ink-muted); }
 .fin-o code { padding: 1px 5px; border-radius: 5px; background: var(--paper-2); font-size: 12.5px; }
 
 /* At work: the axis's labels, a group's line, a row a unit (badge | who | where | track | chevron) */
@@ -2408,6 +2400,13 @@ body:has(.project-page:is(:not(.has-panel), [data-view="plan"])) .page-top:has(#
                color: var(--ink-muted); }
 .ro-group b { font-size: 15px; font-weight: 600; color: var(--ink); }
 .ro-group a { color: inherit; }
+.ro-fold > summary { display: flex; align-items: center; gap: 6px; min-height: 36px; list-style: none;
+                     cursor: pointer; font-size: 13px; color: var(--ink-muted); }
+.ro-fold > summary::-webkit-details-marker { display: none; }
+.ro-fold > summary::before { content: ""; flex: none; width: 0; height: 0; border-block: 4px solid transparent;
+                             border-inline-start: 6px solid currentColor; transition: transform .15s ease-out; }
+.ro-fold[open] > summary::before { transform: rotate(90deg); }
+.ro-fold > summary:hover { color: var(--ink); }
 .ro > .uv-broken { margin: 4px 0; }
 .ro-u { min-width: 0; }
 .ro-u > summary { list-style: none; }
@@ -2442,6 +2441,8 @@ body:has(.project-page:is(:not(.has-panel), [data-view="plan"])) .page-top:has(#
 .plan-sheet .pill.pill-quiet, .ro-r:hover .pill.pill-quiet, .ro-u[open] .pill.pill-quiet {
   background: var(--sand); color: var(--on-sand); font-weight: 600; }
 .ro-heard { white-space: nowrap; }
+.ro-heard.is-aging { color: var(--ink); }
+.ro-heard.is-old { color: var(--ink); font-weight: 600; }
 .live-dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; vertical-align: 1px;
             border-radius: 50%; background: var(--track-run); }
 @media (prefers-reduced-motion: no-preference) {
@@ -2503,6 +2504,9 @@ body:has(.project-page:is(:not(.has-panel), [data-view="plan"])) .page-top:has(#
 /* a narrow plan: a row is its badge and who, then where it is, then its track, the axis gone */
 @container plan (max-width: 759.98px) {
   .plan-sheet { gap: 30px; }
+  /* what is at work before what finished */
+  .plan-sheet > #plan-finished { order: 2; }
+  .plan-sheet > #plan-done { order: 3; }
   .nd { padding: 2px 14px; }
   .nd-i { grid-template-columns: 14px minmax(0, 1fr); }
   .nd-acts { grid-column: 2; justify-self: start; }
@@ -2547,17 +2551,6 @@ body:has(.project-page:is(:not(.has-panel), [data-view="plan"])) .page-top:has(#
 .subnav-tools .pl-find { margin: 0; flex-wrap: nowrap; }
 .subnav-tools .q-field { min-width: 200px; max-width: 280px; }
 .subnav-tools .pl-find input[type=search] { height: 38px; }
-.subnav-tools .tool-more { position: relative; }
-.subnav-tools .tool-more > summary { display: grid; place-items: center; width: 38px; height: 38px;
-  list-style: none; cursor: pointer; color: var(--ink-muted); }
-.subnav-tools .tool-more > summary::-webkit-details-marker { display: none; }
-.subnav-tools .tool-more > summary:hover, .subnav-tools .tool-more[open] > summary {
-  color: var(--ink); background: var(--paper-2); }
-.subnav-tools .tool-more .menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30;
-  min-width: 220px; padding: 4px; background: var(--paper-raised); box-shadow: inset 0 3px 0 var(--navy), var(--lift); }
-.subnav-tools .tool-more .menu a { display: block; padding: 8px 10px; color: var(--ink);
-  text-decoration: none; white-space: nowrap; }
-.subnav-tools .tool-more .menu a:hover { background: var(--paper-2); }
 
 /* Done, when asked for: a dense index, newest first, in columns */
 .pl-idx { list-style: none; margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--paper-2);
@@ -2661,19 +2654,6 @@ sluice-drawer#step-drawer .drawer .close:hover { background: var(--paper-2); }
                         color: var(--ink-muted); }
 .board-tools .q-clear:hover { color: var(--ink); background: var(--paper-2); }
 .board-tools .q-field:has(input:placeholder-shown) .q-clear { display: none; }
-/* more ways to see the plan (Mermaid): a quiet menu at the tools' end, not a primary control */
-.board-tools .tool-more { position: relative; margin-left: auto; }
-.board-tools .tool-more > summary { display: grid; place-items: center; width: 30px; height: 30px;
-  list-style: none; cursor: pointer; border-radius: 0; color: var(--ink-muted); }
-.board-tools .tool-more > summary::-webkit-details-marker { display: none; }
-.board-tools .tool-more > summary:hover, .board-tools .tool-more[open] > summary {
-  color: var(--ink); background: var(--paper-2); }
-.board-tools .tool-more .menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30;
-  min-width: 220px; padding: 4px; border: 1px solid var(--rule-faint); border-radius: 0;
-  background: var(--paper-raised); box-shadow: var(--lift); }
-.board-tools .tool-more .menu a { display: block; padding: 7px 10px; border-radius: 0;
-  color: var(--ink); text-decoration: none; white-space: nowrap; }
-.board-tools .tool-more .menu a:hover { background: var(--paper-2); }
 /* a form of filters applies as it changes while its sluice-search runs: no Apply then */
 sluice-search:defined .apply { display: none; }
 .match-note { margin: calc(-1 * var(--space-xs)) 0 var(--space-md); }
@@ -2775,7 +2755,6 @@ html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane { display: 
   .more-fold > summary { min-height: 44px; margin-top: 0; }
   .board-tools .q-field { flex-basis: 100%; max-width: none; }
   .board-tools input[type=search] { height: 44px; }
-  .board-tools .tool-more > summary { width: 44px; height: 44px; }
   .board-tools .q-clear { right: 0; width: 44px; height: 44px; }
   .board-tools input[type=search] { padding-right: 44px; }
 }
@@ -3067,7 +3046,6 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: var(
 .gal-th .empty-state + .empty-state { margin-top: 10px; }
 .gal-th .stream-state + .stream-state { margin-top: 8px; }
 .gal-th .board-tools { display: flex; margin: 0; }
-.gal-th .board-tools .tool-more { margin-left: 0; }
 .gal-menus { gap: 12px; }
 /* display preferences at each level, as pictures: the panel where the page floats it */
 .gal-prefs { position: static; max-width: 100%; max-height: none; }
@@ -3229,11 +3207,6 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: var(
    throughput a column a bucket, the busiest in navy. Under 640px of frame a row is a block: its
    stage, then its numbers in labelled cells. ------------------------------------------------- */
 .stats { display: grid; gap: calc(44px * var(--density)); min-width: 0; }
-/* a wide screen sets the sections two to a row: durations beside outcomes, throughput beside
-   the slowest runs; never longer lines */
-@container frame (min-width: 2000px) {
-  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--gutter, 48px); }
-}
 .st-sec { min-width: 0; }
 .st-group + .st-group { margin-top: calc(26px * var(--density)); }
 .st-gh { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin: 6px 0 8px;

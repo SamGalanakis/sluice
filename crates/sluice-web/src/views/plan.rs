@@ -36,11 +36,17 @@ use std::fmt::Write;
 pub const LONG_RUN: f64 = 6.0 * 3600.0;
 /// A unit heard from within this long (seconds) wears the live dot.
 const LIVE: f64 = 300.0;
-/// A roster of more than this many rows folds its unremarkable groups to their lines...
+/// A roster of more than this many rows folds each group's unremarkable rows to one line...
 const FOLD_ROSTER: usize = 12;
-/// ...each of more than this many rows.
+/// ...when there are more than this many of them.
 const FOLD_GROUP: usize = 3;
-/// How long (minutes) an item the owner set aside keeps its Dismissed line, with its Undo.
+/// A unit waiting this long (seconds) since its last run ended is worth a look in a big roster.
+const WAIT_LONG: f64 = 3600.0;
+/// How long since a unit was heard from (seconds) before its "heard" line takes the ink, then
+/// its weight: silence shows before the quiet pill says it.
+const HEARD_AGING: f64 = 15.0 * 60.0;
+const HEARD_OLD: f64 = 30.0 * 60.0;
+/// How long (minutes) an item the owner set aside keeps its Set aside line, with its Undo.
 const UNDO_MINUTES: f64 = 10.0;
 /// At most this many finished units are drawn in Finished since you looked.
 const FINISHED_MOST: usize = 8;
@@ -314,7 +320,7 @@ impl<'a> Plan<'a> {
                 Some(group) => group.rows.push(row),
                 None => groups.push(Group {
                     name: if unit.recipe.is_empty() {
-                        "No recipe".into()
+                        "Other units".into()
                     } else {
                         unit.recipe.clone()
                     },
@@ -786,22 +792,40 @@ impl<'a> Plan<'a> {
         if !live.is_empty() {
             let _ = write!(out, "<span class=\"pb-count\">{}</span>", live.len());
         }
-        if live.len() > 1 {
-            let keys: Vec<String> = live.iter().flat_map(|n| n.keys.clone()).collect();
+        // the stops and silences, at once; a question keeps its own ×, so the head and the well
+        // never disagree about it
+        let rest: Vec<&&Need> = live.iter().filter(|n| n.mark != Mark::Ask).collect();
+        if rest.len() > 1 {
+            let keys: Vec<String> = rest.iter().flat_map(|n| n.keys.clone()).collect();
+            let words = if rest.len() < live.len() {
+                "Set the rest aside"
+            } else {
+                "Set all aside"
+            };
             out.push_str("<span class=\"pb-grow\"></span>");
             out.push_str(&self.needs_form(
                 "dismiss",
                 &keys,
                 "link",
-                "Set all aside: each comes back when it changes",
-                "Set all aside",
+                &format!("{words}: each stop and silence comes back when it changes"),
+                words,
                 "",
                 "needs",
             ));
         }
         out.push_str("</div>");
         if live.is_empty() {
-            out.push_str("<p class=\"nd-none\">Nothing.</p>");
+            // one muted line, not an empty well
+            let aside = self.needs.iter().filter(|n| n.aside.is_some()).count();
+            let _ = write!(
+                out,
+                "<p class=\"nd-none\">Nothing needs you.{}</p>",
+                if aside > 0 {
+                    format!(" {aside} set aside.")
+                } else {
+                    String::new()
+                }
+            );
         } else {
             out.push_str("<ul class=\"nd\">");
             for (n, need) in live.iter().enumerate() {
@@ -951,6 +975,15 @@ impl<'a> Plan<'a> {
                 "Settings",
                 &format!("{}/settings", project.href()),
                 "Its settings",
+            )
+            .link(
+                "Export",
+                &if self.view.plan_empty() {
+                    String::new()
+                } else {
+                    format!("{}?format=mermaid&all=true", self.view.href())
+                },
+                "The plan as Mermaid text",
             );
         let head = ui::page_head_with(
             &TrustedHtml::default(),
@@ -971,8 +1004,8 @@ impl<'a> Plan<'a> {
             ui::count(steps, "step", "steps")
         ))
     }
-    /// The paper row's tools: Find, the Plan · Both · Board switch with a board, and the plan as
-    /// Mermaid text.
+    /// The paper row's tools: Find, and the Plan · Both · Board switch with a board (the plan as
+    /// Mermaid text is in the head's Details, its one ⋯).
     pub fn tools(&self) -> TrustedHtml {
         let view = self.view;
         let href = view.href();
@@ -1000,15 +1033,6 @@ impl<'a> Plan<'a> {
         }
         if view.panel.is_some() {
             out.push_str(&view_switch(&href, view.view));
-        }
-        if !view.plan_empty() {
-            out.push_str(&format!(
-                "{}<details class=\"tool-more\" data-preserve-attr=\"open\"><summary aria-label=\"More ways to see the plan\" title=\"More ways to see the plan\">{}</summary><div class=\"menu\"><a href=\"{}?format=mermaid&amp;all=true\">The plan as Mermaid text</a></div></details>{}",
-                ui::menu_open(),
-                icon(Icon::Ellipsis, 16, ""),
-                esc(&href),
-                ui::menu_close()
-            ));
         }
         TrustedHtml::owned(out)
     }
@@ -1121,49 +1145,26 @@ impl<'a> Plan<'a> {
             );
             out.push_str(&axis(""));
             for group in &self.groups {
-                let running = group.rows.iter().filter(|r| !r.waiting).count();
-                let waiting = group.rows.len() - running;
-                let mut counts = vec![];
-                if running > 0 {
-                    counts.push(format!("{running} running"));
-                }
-                if waiting > 0 {
-                    counts.push(format!("{waiting} waiting"));
-                }
-                // a big roster folds a group with nothing remarkable in it to its line: no
-                // silence, none of its recipe's units in Needs you
-                let remarkable = group
-                    .rows
-                    .iter()
-                    .any(|r| r.unit.steps.iter().any(|s| s.shown() == Shown::Quiet))
-                    || (!group.recipe.is_empty()
-                        && self.needs.iter().filter(|n| n.aside.is_none()).any(|n| {
-                            // an item about one unit, or a group of stops (its steps')
-                            self.view.units.iter().any(|u| {
-                                u.recipe == group.recipe
-                                    && (u.id.as_str() == n.unit
-                                        || n.keys.iter().any(|k| {
-                                            k.strip_prefix("stop:").is_some_and(|step| {
-                                                u.steps.iter().any(|s| s.id.as_str() == step)
-                                            })
-                                        }))
-                            })
-                        }));
-                let folded = rows > FOLD_ROSTER && group.rows.len() > FOLD_GROUP && !remarkable;
-                // folded, how long since the most silent of them was heard from
-                let heard = group
-                    .rows
-                    .iter()
-                    .filter_map(|r| r.heard)
-                    .reduce(f64::min)
-                    .filter(|_| folded)
-                    .map(|t| {
-                        format!(
-                            " · each heard from in the last {}",
-                            esc(&ui::duration_text((self.now - t).max(60.0)))
-                        )
-                    })
-                    .unwrap_or_default();
+                // a big roster shows a group's remarkable rows first and folds the rest to one
+                // line ("+21 running · each heard from in the last 28m"), opening in place; a
+                // group with nothing remarkable folds whole to its own line
+                let (marked, healthy): (Vec<&Row<'_>>, Vec<&Row<'_>>) =
+                    group.rows.iter().partition(|r| self.remarkable(r));
+                let fold = rows > FOLD_ROSTER && healthy.len() > FOLD_GROUP;
+                let whole = fold && marked.is_empty();
+                let heard = |rows: &[&Row<'_>]| {
+                    rows.iter()
+                        .filter_map(|r| r.heard)
+                        .reduce(f64::min)
+                        .map(|t| {
+                            format!(
+                                " · each heard from in the last {}",
+                                esc(&ui::duration_text((self.now - t).max(60.0)))
+                            )
+                        })
+                        .unwrap_or_default()
+                };
+                let counts = row_counts(&group.rows.iter().collect::<Vec<_>>());
                 let name = if group.recipe.is_empty() {
                     esc(&group.name)
                 } else {
@@ -1177,9 +1178,13 @@ impl<'a> Plan<'a> {
                 };
                 let _ = write!(
                     out,
-                    "<details class=\"ro-g\"{}><summary class=\"ro-group\"><h3><b>{name}</b> · {}{heard}</h3></summary>{}",
-                    if folded { "" } else { " open" },
-                    counts.join(", "),
+                    "<details class=\"ro-g\"{}><summary class=\"ro-group\"><h3><b>{name}</b> · {counts}{}</h3></summary>{}",
+                    if whole { "" } else { " open" },
+                    if whole {
+                        heard(&healthy)
+                    } else {
+                        String::new()
+                    },
                     axis(" ro-axis-g"),
                 );
                 // a recipe whose view does not check: said once
@@ -1191,11 +1196,26 @@ impl<'a> Plan<'a> {
                 {
                     out.push_str(super::unit_view::broken(error).as_str());
                 }
-                for row in &group.rows {
-                    out.push_str(&region(
-                        &format!("u-{}", row.unit.id),
-                        &self.row_html(row, badged),
-                    ));
+                let draw = |out: &mut String, rows: &[&Row<'_>]| {
+                    for row in rows {
+                        out.push_str(&region(
+                            &format!("u-{}", row.unit.id),
+                            &self.row_html(row, badged),
+                        ));
+                    }
+                };
+                if fold && !whole {
+                    draw(&mut out, &marked);
+                    let _ = write!(
+                        out,
+                        "<details class=\"ro-fold\"><summary>+{}{}</summary>",
+                        row_counts(&healthy),
+                        heard(&healthy)
+                    );
+                    draw(&mut out, &healthy);
+                    out.push_str("</details>");
+                } else {
+                    draw(&mut out, &group.rows.iter().collect::<Vec<_>>());
                 }
                 out.push_str("</details>");
             }
@@ -1224,6 +1244,20 @@ impl<'a> Plan<'a> {
         }
         out.push_str("</section>");
         out
+    }
+    /// A row a big roster keeps in sight: a silence, a wait of an hour or more since its last
+    /// run, or a unit with an open item in Needs you.
+    fn remarkable(&self, row: &Row<'_>) -> bool {
+        let unit = row.unit;
+        unit.steps.iter().any(|s| s.shown() == Shown::Quiet)
+            || (row.waiting && last_end(unit).is_some_and(|end| self.now - end >= WAIT_LONG))
+            || self.needs.iter().filter(|n| n.aside.is_none()).any(|n| {
+                n.unit == unit.id.as_str()
+                    || n.keys.iter().any(|k| {
+                        k.strip_prefix("stop:")
+                            .is_some_and(|step| unit.steps.iter().any(|s| s.id.as_str() == step))
+                    })
+            })
     }
     /// One unit's row: its badge, its title and what it said last, its stage and when it was
     /// heard from, its activity; open, its steps.
@@ -1263,9 +1297,16 @@ impl<'a> Plan<'a> {
                     let _ = write!(meta, "<span class=\"ro-why\">{why}</span>");
                 }
             } else {
+                // how long it has run, unless it is quiet: then the sand pill says the time
+                let ran = step
+                    .timing
+                    .as_ref()
+                    .filter(|t| t.finished.is_none() && shown != Shown::Quiet)
+                    .map(|t| format!(" · {}", ui::since(&t.started).0))
+                    .unwrap_or_default();
                 let _ = write!(
                     meta,
-                    "<span class=\"pill\">{}{}{} · {}</span>",
+                    "<span class=\"pill\">{}{}{}{ran}</span>",
                     ui::mark(shown),
                     // its state in words where its stage does not say it
                     if stage == shown.word() {
@@ -1274,11 +1315,6 @@ impl<'a> Plan<'a> {
                         format!("<span class=\"vh\">{}, </span>", esc(shown.word()))
                     },
                     esc(&stage),
-                    step.timing
-                        .as_ref()
-                        .filter(|t| t.finished.is_none())
-                        .map(|t| ui::since(&t.started).0)
-                        .unwrap_or_default()
                 );
             }
         }
@@ -1292,12 +1328,21 @@ impl<'a> Plan<'a> {
                         ui::since(&q.active_at)
                     );
                 }
-                (_, Some(heard)) => {
+                // heard from since its run began: when, the line taking the ink as it ages
+                (_, Some(heard)) if heard - started(unit).unwrap_or(heard) > 120.0 => {
                     let at = super::rfc3339(heard as u64);
+                    let age = self.now - heard;
                     let _ = write!(
                         meta,
-                        "<span class=\"ro-heard\">{}heard {}</span>",
-                        if self.now - heard < LIVE {
+                        "<span class=\"ro-heard{}\">{}heard {}</span>",
+                        if age >= HEARD_OLD {
+                            " is-old"
+                        } else if age >= HEARD_AGING {
+                            " is-aging"
+                        } else {
+                            ""
+                        },
+                        if age < LIVE {
                             "<i class=\"live-dot\" aria-hidden=\"true\"></i>"
                         } else {
                             ""
@@ -1305,6 +1350,8 @@ impl<'a> Plan<'a> {
                         ui::ago(&at)
                     );
                 }
+                // nothing since its run began: said once, the pill already says how long
+                (_, Some(_)) => meta.push_str("<span class=\"ro-heard\">no word yet</span>"),
                 _ => {}
             }
         }
@@ -1390,39 +1437,27 @@ impl<'a> Plan<'a> {
         steps.recent = true;
         steps.html().0
     }
-    /// The drilldown's foot: the latest that was said, then Message and Open step.
+    /// The drilldown's foot: when it was last heard from (its row already says what it said
+    /// last), then Message and Unit page, and Open step.
     fn foot_html(&self, unit: &UnitView) -> String {
         let mut out = String::from("<div class=\"ro-foot\"><p class=\"ro-ev\">");
-        if unit.last_message.trim().is_empty() {
-            let quiet = unit.steps.iter().any(|s| s.shown() == Shown::Quiet);
-            match heard(unit).or_else(|| last_end(unit)) {
-                Some(at) => {
-                    let at = super::rfc3339(at as u64);
-                    let _ = write!(
-                        out,
-                        "{} {} ({})",
-                        if quiet {
-                            "Not heard from since"
-                        } else {
-                            "Last heard"
-                        },
-                        ui::clock(&at),
-                        ui::ago(&at)
-                    );
-                }
-                None => out.push_str("Not begun"),
+        let quiet = unit.steps.iter().any(|s| s.shown() == Shown::Quiet);
+        match heard(unit).or_else(|| last_end(unit)) {
+            Some(at) => {
+                let at = super::rfc3339(at as u64);
+                let _ = write!(
+                    out,
+                    "{} {} ({})",
+                    if quiet {
+                        "Not heard from since"
+                    } else {
+                        "Last heard"
+                    },
+                    ui::clock(&at),
+                    ui::ago(&at)
+                );
             }
-        } else {
-            let _ = write!(
-                out,
-                "Latest · {} · <b>{}</b> · {}",
-                ui::clock(&unit.changed),
-                unit.sender_html(),
-                esc(&crate::markdown::cut(
-                    &crate::markdown::plain(&unit.last_message),
-                    200
-                ))
-            );
+            None => out.push_str("Not begun"),
         }
         out.push_str("</p>");
         out.push_str("<span class=\"ro-links\">");
@@ -1517,6 +1552,29 @@ fn last_end(unit: &UnitView) -> Option<f64> {
         .flat_map(|t| t.spans.iter())
         .filter_map(|s| s.to)
         .reduce(f64::max)
+}
+/// When its running step's current run began.
+fn started(unit: &UnitView) -> Option<f64> {
+    unit.steps
+        .iter()
+        .filter(|s| s.running())
+        .filter_map(|s| s.timing.as_ref().and_then(|t| epoch(&t.started)))
+        .reduce(f64::max)
+}
+/// Rows counted by how they stand: "1 quiet, 7 running, 2 waiting".
+fn row_counts(rows: &[&Row<'_>]) -> String {
+    let quiet = rows
+        .iter()
+        .filter(|r| !r.waiting && r.unit.steps.iter().any(|s| s.shown() == Shown::Quiet))
+        .count();
+    let waiting = rows.iter().filter(|r| r.waiting).count();
+    let running = rows.len() - quiet - waiting;
+    [(quiet, "quiet"), (running, "running"), (waiting, "waiting")]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, word)| format!("{n} {word}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 // ---- the plan's parts, drawn here and on `/_ui` -------------------------------------------------
@@ -1809,29 +1867,40 @@ fn why_waiting(unit: &UnitView) -> String {
         _ => step.waits.first().cloned().unwrap_or_default(),
     })
 }
-/// What a done unit produced: its last step's first output that explains (as its Overview
-/// reads them), its name before it; else the first that identifies, in data mono.
+/// What a done unit produced, its label on a line of its own over it: its last step's first
+/// output that explains (as its Overview reads them); else the first that identifies, in data
+/// mono; else its last message; else that it left neither.
 fn produced(unit: &UnitView) -> String {
+    let said = |label: &str, value: String| {
+        format!(
+            "<p class=\"fin-o\"><span class=\"fin-n\">{}</span><span class=\"fin-v\">{value}</span></p>",
+            esc(label)
+        )
+    };
     for step in unit.steps.iter().rev() {
         if let Some(field) = step.overview_outputs().first() {
             let value = crate::markdown::cut(&crate::markdown::plain(&field.value), 160);
-            return format!(
-                "<p class=\"fin-o\"><span class=\"fin-n\">{}</span> {}</p>",
-                esc(&field.name.replace(['_', '-'], " ")),
-                esc(&value)
-            );
+            return said(&field.name.replace(['_', '-'], " "), esc(&value));
         }
     }
     for step in unit.steps.iter().rev() {
         if let Some(field) = step.outputs.iter().find(|f| f.available && f.identifies()) {
-            return format!(
-                "<p class=\"fin-o\"><span class=\"fin-n\">{}</span> <code>{}</code></p>",
-                esc(&field.name.replace(['_', '-'], " ")),
-                esc(&ui::cut(&field.value, 24))
+            return said(
+                &field.name.replace(['_', '-'], " "),
+                format!("<code>{}</code>", esc(&ui::cut(&field.value, 24))),
             );
         }
     }
-    String::new()
+    if !unit.last_message.trim().is_empty() {
+        return said(
+            "its last message",
+            esc(&crate::markdown::cut(
+                &crate::markdown::plain(&unit.last_message),
+                160,
+            )),
+        );
+    }
+    "<p class=\"fin-o fin-none\">No output, and nothing said.</p>".to_owned()
 }
 
 /// The Plan · Both · Board switch: a link each, so a choice works without script (the page

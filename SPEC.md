@@ -1839,7 +1839,7 @@ recorded) or its going stale: "You retried it: <reason>, with feedback.", "`fig-
 | `POST /projects/id/<p>/board/action` | a board Button: `board_rev`, `button` (its number), `field-<n>`; JSON `{ok, message}` with `Accept: application/json`, else a redirect to the board |
 | `/projects/id/<p>/icon` | the project's image icon |
 | `POST /settings` | display preferences: `theme` (one of the theme ids, `<family>-light` or `<family>-dark`: `sluice-light`, `sluice-dark`, `solarized-…`, `nord-…`, `gruvbox-…`, `catppuccin-…`, `rose-pine-…`, `flexoki-…`; anything else is refused) and value types (`types`), each kept a year in its own cookie (`sluice_theme`, `sluice_types`). With no theme cookie a page names no theme and draws Sluice Light or Dark by the system's scheme; its script posts that choice once, so from then on only a pick changes it |
-| `/title`, `/title?project=<p>` | a page's tab title alone, as text, and its favicon's address in `x-sluice-favicon`: the index's ("2 questions · 2 failed · 1 quiet · Projects · sluice") or a project's, the plan's glance: its open questions to the owner in brackets, a cross and how many of its steps need a look the owner has not set aside, its name ("(1) ✕4 · almanac · sluice", "✕2 · almanac · sluice", "(1) almanac · sluice", its name alone when nothing needs the owner), its favicon the mark with a coral dot while a question waits, a sand square while a step needs a look; what a hidden tab asks for every 30 s while its stream is closed; the open questions to the owner someone waits on lead it (the inbox's title too: "2 questions · Inbox") |
+| `/title`, `/title?project=<p>` | a page's tab title alone, as text, and its favicon's address in `x-sluice-favicon`: the index's ("2 questions · 2 failed · 1 quiet · Projects · sluice") or a project's, the plan's glance: its open questions to the owner in brackets, a warning sign and how many of its steps need a look the owner has not set aside, its name ("(1) ⚠4 · almanac · sluice", "⚠2 · almanac · sluice", "(1) almanac · sluice", its name alone when nothing needs the owner), its favicon the mark with a coral dot while a question waits, a sand square while a step needs a look; what a hidden tab asks for every 30 s while its stream is closed; the open questions to the owner someone waits on lead it (the inbox's title too: "2 questions · Inbox") |
 | `/_ui` | "States and parts": what each state and shared part of the dashboard means as its pages show it, in every state, in the house pair's light and dark (DESIGN.md, Components), how each is built under it, and every component with its props and events; nothing on it is read from the store |
 | `/docs`, `/docs/<topic>` | the agent docs (`docs/agent`, what `sluice docs` and the MCP `docs` tool serve) as pages: an index of the topics (the overview first, then by task), then each topic's markdown drawn, every topic listed beside it (under it on a narrow screen); display preferences link it beside the guide |
 | `/static/<name>` | assets |
@@ -2106,12 +2106,14 @@ state in its own word: the questions first, linked to where they are answered ("
 you"), then each stop and silence by its word ("2 failed, 1 cancelled, 1 quiet"), then "10 at
 work; 73 of 92 done."; with nothing for the owner, "3 at work, all heard from recently."; it
 names no unit. It says what is true whatever the owner set aside: setting an item aside is
-about attention alone, so only Needs you's list, the tab title's ✕ count and the favicon leave
+about attention alone, so only Needs you's list, the tab title's ⚠ count and the favicon leave
 it out (a cancel settled as done is no longer one: its unit is done). The project's sections
 (Plan, Day, Stats, Messages, Log, Functions, Settings) are pills under it, on one line that
 scrolls sideways within itself on a phone. The head and three sections under it, each a patch
-region, keep a measure of at most 1400px from the nav's left edge (beside the board the head
-spans both):
+region, keep the frame's centred column, its edges the nav bar's (at most 1440px; on a
+phone Find is an icon by the head's Details that opens across the head, and Finished follows At
+work). The head's Details, the plan's one ⋯, holds Export (the plan as Mermaid text,
+`?format=mermaid&all=true`):
 
 - **Needs you**: every item that needs the owner, in one well, a sentence each with one action
   and a ×: the open questions to the owner someone waits on ("<title> asks: <its title>",
@@ -2138,28 +2140,38 @@ spans both):
   move on; a silent run writes; a question is answered or closed), when it comes back by
   itself. For ten minutes after, "Set aside: <what> · Undo" stands under the well ("Set aside:
   the silence of <title>"), Undo putting it back. "Set all aside" in the section's head sets
-  every item aside the same way, a cancel included, and settles nothing. With nothing to say
-  the well says "Nothing.".
+  every stop and silence aside the same way, a cancel included, and settles nothing; a
+  question keeps its own × ("Set the rest aside" while one is open), so the head never counts
+  a question the well hides. With nothing to say the well is one muted line, "Nothing needs
+  you. 4 set aside.".
 - **Finished since you looked**: a card a unit finished since this browser last marked the
   project seen (its `sluice_seen_<p>` cookie), at most eight and how many more, newest first,
   "since 14:02"; with no mark kept, "Finished lately", the latest four. A card: when it finished
   and how long it took, its title linking its page, what it produced (its latest step's first
-  output that reads at a glance, else one that identifies, such as a commit). "Mark as seen"
+  output that reads at a glance, else one that identifies, such as a commit, else its last
+  message cut to 160 characters, its label on a line over it; with none of them "No output, and
+  nothing said."). "Mark as seen"
   (`POST …/seen`) moves the mark to the latest drawn; it works without script. The cards fill
   their row, each as tall as what it says.
 - **At work**: a row a unit at work or waiting once begun, grouped by recipe (its name linking
-  `?recipe=<name>&show=all`, its rows counted running and waiting), then the units of no recipe,
+  `?recipe=<name>&show=all`, its rows counted quiet, running and waiting), then the units of
+  no recipe ("Other units"),
   then the long runs (a unit of one step and no recipe reporting progress, or running six hours
   or more). In a group the running rows come first, the longest since it was heard from first,
   then the waiting ones in plan order. A group is a `<details>`, open, its line its name in
-  ink over its counts; in a roster of more than 12 rows a group of more than 3 with nothing
-  remarkable in it (no silence, none of its recipe's units in Needs you, alone or in a group
-  of failures) folds to its line ("article · 42 running · each heard from in
-  the last 25m"), opening without script. A row: what its steps run on as a badge, only where
-  that tells rows apart and never for a fn (an engine's name), its title with its owner small
-  and muted, under it its recipe's view or its last message and who sent it; its stage (its
+  ink over its counts. In a roster of more than 12 rows a group folds by row: its remarkable
+  rows first (a silence, a wait of an hour or more since its last run, a unit with an open
+  item in Needs you), the rest, when more than 3, folded under them to one line ("+7 running ·
+  each heard from in the last 11m"), a `<details>` opening in place without script; a group
+  with nothing remarkable folds whole to its line ("article · 23 running · each heard from in
+  the last 27m"). A stop is in Needs you, not a row, so it keeps no row in sight. A row: what
+  its steps run on as a badge, only where that tells rows apart and never for a fn (an
+  engine's name), its title with its owner small and muted, under it its recipe's view or its
+  last message and who sent it (when, its meta says); its stage (its
   step's name in a unit of several or of a recipe; a loose step's state alone), its state and
-  how long it has run or waited; "heard 12m ago", or "quiet 2h 3m" on the sand; a breathing dot
+  how long it has run or waited; "heard 12m ago" when it was heard from since its run began
+  (inked from 15 minutes, bold from 30), else "no word yet"; once quiet, "quiet 2h 3m" on the
+  sand in place of the stage's time; a breathing dot
   while it was heard from in the last five minutes; and its last twelve hours as a track on a
   log scale (its runs, a quiet stretch on the sand, a wait dotted, a tick a message), under one
   axis (12h, 4h, 1h, 15m, now; on a phone, "12h" and "now" over each group's first track),
@@ -2172,7 +2184,8 @@ spans both):
   as the track and ending where it does, how long each took before it), its current step's
   row tinted (a run that began earlier starts at the left edge, saying "from 3d ago"; one over
   before it is said, not drawn), then its latest message, or with none when it was last heard
-  from ("Last heard 22:51 (6m ago)"; for a quiet unit "Not heard from since 19:14 (3h ago)"),
+  from ("Last heard 22:51 (6m ago)"; for a quiet unit "Not heard from since 19:14 (3h ago)";
+  never the message its row already says),
   Open step, and Message and Unit page as quiet links; it stays open through a patch. A failed, cancelled or stale unit is
   a stop in Needs you, not a row.
 

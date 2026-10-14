@@ -101,7 +101,7 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
         "{row}"
     );
     let (_, page) = f.get(&format!("/projects/id/{id}")).await;
-    assert!(title(&page).contains(">✕1 · aside"), "{}", title(&page));
+    assert!(title(&page).contains(">⚠1 · aside"), "{}", title(&page));
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/b")).await;
     assert!(
         step.contains(
@@ -117,7 +117,7 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     assert!(!title(&home).contains("cancelled"), "{}", title(&home));
     assert!(!home.contains("sr-dismiss"), "the index lists it no more");
     let (_, page) = f.get(&format!("/projects/id/{id}")).await;
-    assert!(!title(&page).contains('✕'), "{}", title(&page));
+    assert!(!title(&page).contains('⚠'), "{}", title(&page));
     // no longer stopped: its unit is done, a line of the Done index that still reads cancelled
     let (_, index) = f.get(&format!("/projects/id/{id}?show=done")).await;
     assert_eq!(plan_html::place(&index, "u"), "done", "{index}");

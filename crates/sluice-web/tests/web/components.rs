@@ -236,18 +236,18 @@ async fn slow_chromium_the_project_page_components_keep_their_state_through_a_pa
             json!([336, true])
         );
         // opening another menu closes it: one menu open at a time
-        browser.eval("document.querySelector('details.tool-more > summary').click()").unwrap();
+        browser.eval("document.querySelector('details.switcher > summary').click()").unwrap();
         assert_eq!(
-            browser.eval("[document.querySelector('details.tool-more').open, document.querySelector('#plan-band details.dm').open]").unwrap(),
+            browser.eval("[document.querySelector('details.switcher').open, document.querySelector('#plan-band details.dm').open]").unwrap(),
             json!([true, false])
         );
         // the menu: ArrowDown moves into it, Escape closes it back on its summary
-        browser.eval("document.querySelector('details.tool-more > summary').focus()").unwrap();
+        browser.eval("document.querySelector('details.switcher > summary').focus()").unwrap();
         press(&mut browser, "ArrowDown", 40, 0);
-        browser.wait("document.activeElement.closest('details.tool-more .menu')").unwrap();
+        browser.wait("document.activeElement.closest('details.switcher .menu')").unwrap();
         press(&mut browser, "Escape", 27, 0);
         assert_eq!(
-            browser.eval("[document.querySelector('details.tool-more').open, document.activeElement.matches('details.tool-more > summary')]").unwrap(),
+            browser.eval("[document.querySelector('details.switcher').open, document.activeElement.matches('details.switcher > summary')]").unwrap(),
             json!([false, true])
         );
         // the board as wide after a reload

@@ -274,13 +274,13 @@ async fn a_hidden_tab_asks_for_its_title_alone() {
     let (status, lanes) = f.get(&format!("/title?project={}", f.id)).await;
     assert_eq!(
         (status, lanes.as_str()),
-        (StatusCode::OK, "✕1 · lanes · sluice")
+        (StatusCode::OK, "⚠1 · lanes · sluice")
     );
     let (_, page) = f.get(&format!("/projects/id/{}", f.id)).await;
-    assert!(page.contains("<title>✕1 · lanes · sluice</title>"));
+    assert!(page.contains("<title>⚠1 · lanes · sluice</title>"));
     // the title carries the state, the favicon its look variant: a stop, a sand square
     assert!(page.contains(
-        "data-page-title=\"✕1 · lanes · sluice\" data-favicon=\"/static/favicon-look.svg?v="
+        "data-page-title=\"⚠1 · lanes · sluice\" data-favicon=\"/static/favicon-look.svg?v="
     ));
     assert!(page.contains(&format!("data-title-src=\"/title?project={}\"", f.id)));
     assert!(page.contains("<link id=\"favicon\" rel=\"icon\" href=\"/static/favicon-look.svg?v="));
@@ -407,7 +407,7 @@ async fn slow_chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refuse
         browser.navigate(&format!("{base}/projects/id/{lanes}")).unwrap();
         browser.wait("document.querySelector('form.board-form') && document.querySelector('#project-board')").unwrap();
         // a refused field: its note under the field
-        browser.eval("document.querySelector('details.tool-more').open=true").unwrap();
+        browser.eval("document.querySelector('#plan-band details.dm').open=true").unwrap();
         browser.eval("(()=>{const f=document.querySelector('form.board-form');f.querySelector('[name=field-0]').value='';f.requestSubmit(f.querySelector('button[value=\"0\"]'))})()").unwrap();
         browser.wait("!document.querySelector('[data-error-for=\"field-0\"]').hidden").unwrap();
         browser.eval("window.note=document.querySelector('[data-error-for=\"field-0\"]').textContent").unwrap();
@@ -440,7 +440,7 @@ async fn slow_chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refuse
     let mut browser = tokio::task::spawn_blocking(move || {
         browser.wait("document.querySelector('#plan-band').textContent.includes('Lanes, rewritten.')").unwrap();
         browser.wait("document.querySelector('#board-pane').textContent.includes('alpha-review') && [...document.querySelectorAll('#board-pane .ou-table td')].some(td=>td.textContent==='succeeded' && td.previousElementSibling?.textContent==='alpha-review')").unwrap();
-        assert_eq!(browser.eval("document.querySelector('details.tool-more').open").unwrap(), true);
+        assert_eq!(browser.eval("document.querySelector('#plan-band details.dm').open").unwrap(), true);
         assert_eq!(browser.eval("(()=>{const n=document.querySelector('[data-error-for=\"field-0\"]');return !n.hidden && n.textContent===note && note.length>0})()").unwrap(), true);
         // editing the field clears its note
         browser.eval("(()=>{const i=document.querySelector('[name=field-0]');i.value='gamma';i.dispatchEvent(new Event('input',{bubbles:true}))})()").unwrap();
@@ -473,7 +473,7 @@ async fn slow_chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refuse
             .unwrap();
         assert_eq!(
             browser
-                .eval("plan.isConnected && document.querySelector('details.tool-more').open")
+                .eval("plan.isConnected && document.querySelector('#plan-band details.dm').open")
                 .unwrap(),
             true
         );
@@ -534,7 +534,7 @@ async fn slow_chromium_updates_stopped_say_so_reconnect_and_a_new_build_asks_for
             .eval("document.dispatchEvent(new Event('visibilitychange'))")
             .unwrap();
         browser
-            .wait("document.title==='✕2 · lanes · sluice'")
+            .wait("document.title==='⚠2 · lanes · sluice'")
             .unwrap();
     })
     .await

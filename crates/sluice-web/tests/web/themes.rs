@@ -87,16 +87,14 @@ async fn slow_chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
                 }
                 // the sheet's modules take the columns its own width gives them: every one
                 // across a narrow sheet, halves and wholes on a medium one, a share of twelve
-                // to 2000px and of twenty-four from there
+                // from there (the frame keeps the sheet to 1440px)
                 let sheet = m["sheet"].as_f64().unwrap();
                 let (cols, takes) = if sheet < 640.0 {
-                    (6.0, [6.0, 6.0, 6.0, 6.0, 6.0, 6.0])
+                    (6.0, [6.0, 6.0, 6.0, 6.0])
                 } else if sheet < 1200.0 {
-                    (12.0, [6.0, 6.0, 6.0, 12.0, 12.0, 12.0])
-                } else if sheet < 2000.0 {
-                    (12.0, [6.0, 4.0, 2.0, 12.0, 12.0, 12.0])
+                    (12.0, [6.0, 6.0, 6.0, 12.0])
                 } else {
-                    (24.0, [12.0, 8.0, 4.0, 24.0, 12.0, 12.0])
+                    (12.0, [6.0, 4.0, 2.0, 12.0])
                 };
                 let (tracks, track, gap) = (
                     m["tracks"].as_f64().unwrap(),

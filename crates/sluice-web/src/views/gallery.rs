@@ -185,10 +185,12 @@ fn folds() -> TrustedHtml {
 }
 fn menus() -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<div class=\"gal-row gal-menus\"><div class=\"board-tools\">{}<details class=\"tool-more\" data-preserve-attr=\"open\"><summary aria-label=\"More ways to see the plan\" title=\"More ways to see the plan\">{}</summary><div class=\"menu\"><a href=\"#\">The plan as Mermaid text</a><a href=\"#\">Its units as JSON</a></div></details>{}</div><p class=\"meta\">The plan's More: Escape or a click elsewhere closes it, ArrowDown goes into it.</p></div>",
-        ui::menu_open(),
-        super::icons::icon(super::icons::Icon::Ellipsis, 16, ""),
-        ui::menu_close(),
+        "<div class=\"gal-row gal-menus\">{}<p class=\"meta\">A project's Details, its one ⋯: Escape or a click elsewhere closes it, ArrowDown goes into it.</p></div>",
+        ui::Details::new()
+            .id("Project", "01JA3V7KQ2W8M5T1X9C4ZB6NHE")
+            .link("Settings", "#", "Its settings")
+            .link("Export", "#", "The plan as Mermaid text")
+            .menu("almanac"),
     ))
 }
 fn copies() -> TrustedHtml {
@@ -446,23 +448,21 @@ fn article(draft: Option<Shown>, review: Option<Shown>, publish: Option<Shown>) 
     ]
 }
 fn grid_part(prefix: &str) -> TrustedHtml {
-    let module = |span: u8, wide: ui::Wide, words: &str| {
+    let module = |span: u8, words: &str| {
         format!(
             "{}<p>{}</p>{}",
-            ui::module_open_wide(span, ui::Swell::Plain, words, wide),
+            ui::module_open(span, ui::Swell::Plain, words),
             ui::esc(words),
             ui::module_close()
         )
     };
     TrustedHtml::owned(format!(
-        "{}{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}",
         ui::grid_open(&format!("{prefix}grid"), 12),
-        module(6, ui::Wide::Keep, "Six columns"),
-        module(4, ui::Wide::Keep, "Four"),
-        module(2, ui::Wide::Keep, "Two"),
-        module(12, ui::Wide::Keep, "Twelve"),
-        module(12, ui::Wide::Halve, "Twelve, halved on a wide sheet"),
-        module(12, ui::Wide::Halve, "Twelve, halved on a wide sheet"),
+        module(6, "Six columns"),
+        module(4, "Four"),
+        module(2, "Two"),
+        module(12, "Twelve"),
         ui::grid_close(),
     ))
 }
@@ -1102,7 +1102,7 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Details", "What identifies an item, behind one ⋯ at its end; a failure's ⋯ also holds Set it aside.", "`ui::Details`, its `actions` and its `menu` (`sluice-menu`).", both(&|p| Ok(details_part(p)))?);
     add("Finished last", "What finished most recently, newest first.", "`ui::latest_list` from `ui::Finished`s.", both(&|_| Ok(latest_part()))?);
     add("Summary sentence", "One sentence from the counts alone, the question for you first.", "`ui::summary_sentence`.", both(&|_| Ok(summary_part()))?);
-    add("Module grid", "Twelve columns every module spans, twenty-four from 2000px.", "`ui::grid_open`, `ui::module_open`, `ui::module_open_wide` with `ui::Wide`.", both(&|p| Ok(grid_part(p)))?);
+    add("Module grid", "Twelve columns every module spans, half or whole on a medium sheet.", "`ui::grid_open`, `ui::module_open`.", both(&|p| Ok(grid_part(p)))?);
     add("Modules", "A unit, a question or a step on the grid; the one that needs you swells.", "`ui::module_open` with `ui::Swell`, `.mod-k`, `.mod-t`, `.mod-meta`, `.mod-body`, `.mod-actions`.", both(&|_| Ok(modules_part()))?);
     add("Section heads", "A section's name and its count line.", "`ui::section_head`.", both(&|_| Ok(heads_part()))?);
     add("Plan briefing", "A plan's Needs you (each item a sentence, one action and a ×; what was set aside, with Undo), what finished since you looked, and At work: a row a unit, its activity over twelve hours.", "`plan::need_item`, `plan::finished_card`, `plan::axis`, `plan::track` and `plan::roster_row`, drawn by `views::plan::Plan`.", both(&|p| Ok(plan_part(p)))?);

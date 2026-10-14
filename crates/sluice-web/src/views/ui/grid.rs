@@ -18,7 +18,7 @@ use sluice_model::shown::Band;
 ///
 /// The sheet is fluid and lays out by its own width (DESIGN.md, The grid): half its columns
 /// under 640px with every module across it, its columns from 640px (a module half the sheet or
-/// whole under 1200px), and twice its columns from 2000px.
+/// whole under 1200px); the frame keeps it to 1440px.
 pub fn grid_open(id: &str, cols: u8) -> TrustedHtml {
     let cols = cols.clamp(1, 12);
     TrustedHtml::owned(format!(
@@ -55,41 +55,16 @@ impl Swell {
         }
     }
 }
-/// What a module does on a wide sheet (2000px and over, where the sheet has twice its
-/// columns): keep its fraction of the sheet, or halve it so twice as many stand in a row.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Wide {
-    /// Twice its span of the doubled columns: the same fraction of the sheet.
-    #[default]
-    Keep,
-    /// Its span of the doubled columns: half the fraction, so two whole-width modules stand
-    /// side by side.
-    Halve,
-}
-impl Wide {
-    fn attr(self) -> &'static str {
-        match self {
-            Wide::Keep => "",
-            Wide::Halve => " data-wide=\"halve\"",
-        }
-    }
-}
 /// A module on the grid: an `article` spanning `span` of its sheet's columns (all of them on a
-/// narrow sheet, half or all on a medium one, twice as many of a wide sheet's), named `label`
+/// narrow sheet, half or all on a medium one), named `label`
 /// for a screen reader. Its parts go between this and `module_close`: `.mod-k` (its kind's
 /// line: a glyph, a word, who and when), `.mod-t` (its title), `.mod-meta` (its id and facts),
 /// a stage strip, `.mod-body`, `.mod-actions`.
 pub fn module_open(span: u8, swell: Swell, label: &str) -> TrustedHtml {
-    module_open_wide(span, swell, label, Wide::Keep)
-}
-/// `module_open`, saying what it does on a wide sheet (`Wide::Halve`: two whole-width modules
-/// side by side from 2000px).
-pub fn module_open_wide(span: u8, swell: Swell, label: &str, wide: Wide) -> TrustedHtml {
     let span = span.clamp(1, 12);
     TrustedHtml::owned(format!(
-        "<article class=\"{}\" style=\"--span:{span}\" data-span=\"{span}\"{} aria-label=\"{}\">",
+        "<article class=\"{}\" style=\"--span:{span}\" data-span=\"{span}\" aria-label=\"{}\">",
         swell.class(),
-        wide.attr(),
         esc(label)
     ))
 }
@@ -130,14 +105,9 @@ pub fn module_open_with(
 /// A column of the sheet that holds modules stacked (`span` columns wide): a band's modules
 /// under its head.
 pub fn column_open(span: u8) -> TrustedHtml {
-    column_open_wide(span, Wide::Keep)
-}
-/// `column_open`, saying what it does on a wide sheet.
-pub fn column_open_wide(span: u8, wide: Wide) -> TrustedHtml {
     let span = span.clamp(1, 12);
     TrustedHtml::owned(format!(
-        "<div class=\"mod-col\" style=\"--span:{span}\" data-span=\"{span}\"{}>",
-        wide.attr()
+        "<div class=\"mod-col\" style=\"--span:{span}\" data-span=\"{span}\">"
     ))
 }
 pub fn column_close() -> TrustedHtml {

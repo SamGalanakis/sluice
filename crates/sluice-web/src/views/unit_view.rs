@@ -194,16 +194,16 @@ impl Draw<'_> {
                     .unwrap_or(ROW_CHARS)
                     .min(if self.row { ROW_CHARS * 2 } else { usize::MAX });
                 let (body, _) = crate::markdown::excerpt(&self.unit.last_message, chars);
+                // when, the row's meta says
                 let _ = write!(
                     out,
-                    "<span class=\"uv-msg\"><b class=\"uv-from\">{}{}</b> {}: {body}</span>",
+                    "<span class=\"uv-msg\"><b class=\"uv-from\">{}{}</b>: {body}</span>",
                     if self.unit.last_received {
                         "Note from "
                     } else {
                         ""
                     },
                     self.unit.sender_html(),
-                    ui::ago(&self.unit.changed)
                 );
             }
             _ => {}

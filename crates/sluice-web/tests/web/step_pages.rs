@@ -92,23 +92,16 @@ async fn slow_chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_
             json!(["review · Waders: the autumn guide's entries", "review", ["Retry with feedback", "Retry"]])
         );
 
-        // Overview at 2560: two to a row, its columns side by side from the top
+        // Overview at 2560, in the frame's centred column: its two columns side by side from
+        // the top, seven and five twelfths, the sheet centred under the nav
         browser.viewport(2560, "dark").unwrap();
         browser.navigate(&failed).unwrap();
         browser.wait("document.querySelector('#tp-overview .d-failure')").unwrap();
         browser.eval(FRAMES).unwrap();
         let cols: Value = browser
-            .eval("(() => { const c = [...document.querySelectorAll('#tp-overview .ov > .sheet > .mod-col')].map(e => e.getBoundingClientRect()); return [c.length, Math.round(c[0].top) === Math.round(c[1].top), c[0].right < c[1].left]; })()")
+            .eval("(() => { const c = [...document.querySelectorAll('#tp-overview .ov > .sheet > .mod-col')].map(e => e.getBoundingClientRect()), s = document.querySelector('#tp-overview .ov > .sheet').getBoundingClientRect(); return [c.length, Math.round(c[0].top) === Math.round(c[1].top), c[0].right < c[1].left, c[0].width > c[1].width, s.width <= 1440.5, Math.abs(s.left - (innerWidth - s.right)) < 24]; })()")
             .unwrap();
-        assert_eq!(cols, json!([2, true, true]));
-        // and with no side, the first column's own modules two to a row: the question, then Now
-        browser.navigate(&asking).unwrap();
-        browser.wait("document.querySelector('#tp-overview .d-ask')").unwrap();
-        browser.eval(FRAMES).unwrap();
-        let row: Value = browser
-            .eval("(() => { const a = document.querySelector('#tp-overview .d-ask').getBoundingClientRect(), n = document.querySelector('#tp-overview .d-now').getBoundingClientRect(); return [Math.round(a.top) === Math.round(n.top), a.right < n.left]; })()")
-            .unwrap();
-        assert_eq!(row, json!([true, true]));
+        assert_eq!(cols, json!([2, true, true, true, true, true]));
 
         // a phone: the question first, a whole-width card, its Answer and Close 44px tall
         for url in [&asking, &format!("{base}/inbox")] {

@@ -566,6 +566,23 @@ pub async fn seed_big(writer: &Writer, home: &Path) -> ProjectId {
         });
     }
     plan(writer, atlas, json!({"steps": steps}), states).await;
+    // the latest entries to finish each said what they did
+    for n in 1..=4u64 {
+        let step: &'static str = Box::leak(format!("e-{n:03}-check").into_boxed_str());
+        let thread: &'static str = Box::leak(format!("step-{step}").into_boxed_str());
+        stored_messages::stored(
+            writer,
+            atlas,
+            stored_messages::Stored {
+                thread,
+                from: step,
+                to: Some("orchestrator"),
+                body: "Checked against the regional list: range, season and photograph credit all match.",
+                ..Default::default()
+            },
+        )
+        .await;
+    }
     let recipes = home
         .join("projects")
         .join(atlas.to_string())

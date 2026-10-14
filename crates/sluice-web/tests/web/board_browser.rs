@@ -159,9 +159,16 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                             assert!(near(&g["split"]["left"], plan["right"].as_f64().unwrap()), "{label}: {g}");
                             assert!(near(&board["right"], g["right"].as_f64().unwrap()), "{label}: {g}");
                             let page = right - left;
-                            // the frame's fluid column, the band's content on the same edges
+                            // the frame's centred column, at most 1440px, the band's content on
+                            // the same edges
                             let column = g["navRight"].as_f64().unwrap() - g["navLeft"].as_f64().unwrap();
-                            assert!((page - column).abs() < 1.0 && page > vw - 140.0, "{label}: {g}");
+                            assert!(
+                                (page - column).abs() < 1.0
+                                    && page > (vw - 140.0).min(1439.0)
+                                    && page < 1441.0
+                                    && (left - (vw - right)).abs() < 24.0,
+                                "{label}: {g}"
+                            );
                             assert!(plan["width"].as_f64().unwrap() >= 560.0, "{label}: {g}");
                         }
                         _ => {

@@ -468,8 +468,8 @@ impl ProjectView {
         }
     }
     /// Its plan's tab words, its glance: its open questions to the owner counted in brackets,
-    /// then a cross and how many of its steps need a look that the owner has not set aside
-    /// (`looks`), then its name: "(1) ✕4 · almanac", "✕2 · almanac", "(1) almanac"; its name
+    /// then a warning sign and how many of its steps need a look that the owner has not set
+    /// aside (`looks`), then its name: "(1) ⚠4 · almanac", "⚠2 · almanac", "(1) almanac"; its name
     /// alone when nothing needs the owner.
     pub fn tab_words(&self) -> String {
         let mut words = String::new();
@@ -477,7 +477,7 @@ impl ProjectView {
             words.push_str(&format!("({}) ", self.asks.len()));
         }
         if self.looks > 0 {
-            words.push_str(&format!("✕{} · ", self.looks));
+            words.push_str(&format!("⚠{} · ", self.looks));
         }
         words.push_str(&self.name);
         words
