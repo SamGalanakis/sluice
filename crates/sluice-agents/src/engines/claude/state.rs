@@ -518,23 +518,41 @@ pub fn classify(text: &str) -> EngineError {
     failure(kind, text.chars().take(2048).collect::<String>())
 }
 
-/// Claude Code's double-press window (2.1.284's `lW`, 800 ms): two Escapes it handles this
-/// close together on its composer open Rewind, or clear a draft. Claude handles keys only when
-/// its event loop is free, so two Escapes sent further apart can still reach it inside the
-/// window: resuming a long session, 2.1.284 took two sent 1.1 s and 2 s apart for a double
-/// press. Sluice therefore sends an Escape only to a surface that takes it, never to a screen
-/// still starting, and at most one per surface, `ESCAPE_GAP` after any other.
-const ESCAPE_GAP: Duration = Duration::from_secs(3);
-/// After an Escape, how long the composer must have been back before a paste: a dialog the
-/// Escape opened or closed late shows by then instead of swallowing the paste.
-const ESCAPE_SETTLE: Duration = Duration::from_millis(1500);
-/// How long a screen sluice does not recognize must cover a composer it has seen, unchanged
-/// and with Claude not working, before one Escape. Escape on a working Claude interrupts it.
-const COVER_WAIT: Duration = Duration::from_secs(2);
-/// How long a pasted draft may take to show in the composer.
-const DRAFT_WAIT: Duration = Duration::from_secs(5);
-/// How many pastes an input gets before it is given back as not accepted.
-const DRAFT_ATTEMPTS: u32 = 3;
+/// Composer safeguards and delivery retries. These options are not read from configuration.
+#[derive(Clone, Copy, Debug)]
+pub struct ClaudeDeliveryTiming {
+    /// Minimum gap between Escapes, once per surface. Claude's double-press window is 800 ms;
+    /// a busy event loop can receive even more widely spaced keys together.
+    pub escape_gap: Duration,
+    /// Time for a dialog opened or closed late by Escape to appear before the next paste.
+    pub escape_settle: Duration,
+    /// Time an unchanged unknown screen must cover a seen composer before one Escape.
+    pub cover_wait: Duration,
+    /// Time a pasted draft gets to appear, before it is cleared and pasted again.
+    pub draft_wait: Duration,
+    pub draft_attempts: u32,
+    pub dialog_retry: Duration,
+    /// Minimum time a visible draft settles before Enter.
+    pub draft_settle: Duration,
+    /// Initial Enter retry, doubled on each retry, up to `enter_retry_max`.
+    pub enter_retry: Duration,
+    pub enter_retry_max: Duration,
+}
+impl Default for ClaudeDeliveryTiming {
+    fn default() -> Self {
+        Self {
+            escape_gap: Duration::from_secs(3),
+            escape_settle: Duration::from_millis(1500),
+            cover_wait: Duration::from_secs(2),
+            draft_wait: Duration::from_secs(5),
+            draft_attempts: 3,
+            dialog_retry: Duration::from_millis(750),
+            draft_settle: Duration::from_millis(100),
+            enter_retry: Duration::from_secs(1),
+            enter_retry_max: Duration::from_secs(8),
+        }
+    }
+}
 /// `RequestExit`'s input, which the supervisor's ledger does not hold.
 const EXIT: InputId = InputId::Continue { attempt: u32::MAX };
 
@@ -593,6 +611,7 @@ pub struct Claude {
     environment: BTreeMap<String, String>,
     /// How long a screen sluice does not recognize may stand unchanged before any turn.
     screen_grace: Duration,
+    delivery_timing: ClaudeDeliveryTiming,
     watch: screen::Watch,
     /// Where the `--help` probe's report is kept (`version::cached`); `None` probes each launch.
     probe_cache: Option<PathBuf>,
@@ -624,10 +643,16 @@ impl Claude {
             prepared_session: None,
             environment: super::super::environment::host_environment(),
             screen_grace: screen::DEFAULT_GRACE,
+            delivery_timing: ClaudeDeliveryTiming::default(),
             watch: screen::Watch::default(),
             probe_cache: None,
             version: None,
         }
+    }
+    /// Override delivery timing for a directly constructed adapter.
+    pub fn with_delivery_timing(mut self, timing: ClaudeDeliveryTiming) -> Self {
+        self.delivery_timing = timing;
+        self
     }
     /// Keep the `--help` probe's report in `dir` (`<home>/engine-probes`).
     pub fn with_probe_cache(mut self, dir: PathBuf) -> Self {
@@ -812,15 +837,19 @@ impl Claude {
     }
     /// What covers the composer, if it gets an Escape now: a surface Escape closes
     /// (`protocol::escapable`), or a screen sluice does not recognize once it has stood
-    /// unchanged for `COVER_WAIT` with Claude not working. Only over a composer this launch has
+    /// unchanged for `cover_wait` with Claude not working. Only over a composer this launch has
     /// shown (before that Claude is starting, and keys reach it late and together), never
-    /// within `ESCAPE_GAP` of another Escape, and once per surface until the composer is back.
+    /// within `escape_gap` of another Escape, and once per surface until the composer is back.
     fn dismissal(&mut self, pane: &str, busy: bool) -> Option<String> {
         if self.cover.since.is_none() || self.cover.pane != pane {
             self.cover.pane = pane.into();
             self.cover.since = Some(Instant::now());
         }
-        if !self.composer_seen || self.escaped_at.is_some_and(|at| at.elapsed() < ESCAPE_GAP) {
+        if !self.composer_seen
+            || self
+                .escaped_at
+                .is_some_and(|at| at.elapsed() < self.delivery_timing.escape_gap)
+        {
             return None;
         }
         let what = match protocol::escapable(pane) {
@@ -833,7 +862,7 @@ impl Claude {
                 && self
                     .cover
                     .since
-                    .is_some_and(|since| since.elapsed() >= COVER_WAIT) =>
+                    .is_some_and(|since| since.elapsed() >= self.delivery_timing.cover_wait) =>
             {
                 "a screen sluice does not recognize".into()
             }
@@ -872,7 +901,7 @@ impl Claude {
             phase: PastePhase::Ready,
             since: Instant::now(),
             retry_at: Instant::now(),
-            retry: Duration::from_secs(1),
+            retry: self.delivery_timing.enter_retry,
             failed: 0,
         });
         DeliveryOutcome::Pending
@@ -916,7 +945,7 @@ impl Claude {
                 }
                 let settled = self
                     .escaped_at
-                    .is_none_or(|at| at.elapsed() >= ESCAPE_SETTLE);
+                    .is_none_or(|at| at.elapsed() >= self.delivery_timing.escape_settle);
                 if !ready || !bracketed || !settled {
                     if front.since.elapsed() > Duration::from_secs(180) {
                         let delivery = self.outgoing.pop_front().unwrap();
@@ -953,7 +982,7 @@ impl Claude {
                         self.cover.escaped = Some(what);
                     }
                     let front = self.outgoing.front_mut().unwrap();
-                    front.retry_at = Instant::now() + Duration::from_millis(750);
+                    front.retry_at = Instant::now() + self.delivery_timing.dialog_retry;
                     return Ok(());
                 }
                 let path = self.context.as_ref().unwrap().run_dir.join("claude-paste");
@@ -986,14 +1015,14 @@ impl Claude {
             }
             PastePhase::Draft => {
                 if protocol::draft_visible(pane, &needle)
-                    && front.since.elapsed() >= Duration::from_millis(100)
+                    && front.since.elapsed() >= self.delivery_timing.draft_settle
                 {
                     let front = self.outgoing.front_mut().unwrap();
                     front.phase = PastePhase::Submitted;
                     front.since = Instant::now();
-                    front.retry_at = Instant::now() + Duration::from_secs(1);
+                    front.retry_at = Instant::now() + self.delivery_timing.enter_retry;
                     self.key("Enter").await?;
-                } else if front.since.elapsed() >= DRAFT_WAIT {
+                } else if front.since.elapsed() >= self.delivery_timing.draft_wait {
                     // Enter was not sent and a bracketed paste cannot submit, so Claude did
                     // not take the input: clear the composer and paste again, in `Ready`.
                     let failed = front.failed + 1;
@@ -1004,14 +1033,15 @@ impl Claude {
                         }
                         None => "no composer".into(),
                     };
+                    let draft_attempts = self.delivery_timing.draft_attempts;
                     eprintln!(
-                        "claude: pasted draft {failed} of {DRAFT_ATTEMPTS} did not show within {}s, so Enter was not sent; Claude showed {showed}: {}",
-                        DRAFT_WAIT.as_secs(),
+                        "claude: pasted draft {failed} of {draft_attempts} did not show within {}s, so Enter was not sent; Claude showed {showed}: {}",
+                        self.delivery_timing.draft_wait.as_secs(),
                         screen::tail(&screen::evidence(pane)).join(" | ")
                     );
-                    if failed >= DRAFT_ATTEMPTS {
+                    if failed >= draft_attempts {
                         self.give_back(format!(
-                            "claude: the pasted input did not show in the composer after {DRAFT_ATTEMPTS} pastes, so Enter was never sent and Claude did not take it; Claude showed {showed}: {}",
+                            "claude: the pasted input did not show in the composer after {draft_attempts} pastes, so Enter was never sent and Claude did not take it; Claude showed {showed}: {}",
                             screen::quote(pane)
                         ));
                         return Ok(());
@@ -1033,7 +1063,7 @@ impl Claude {
                     }
                     if front.retry_at <= Instant::now() {
                         let front = self.outgoing.front_mut().unwrap();
-                        front.retry = (front.retry * 2).min(Duration::from_secs(8));
+                        front.retry = (front.retry * 2).min(self.delivery_timing.enter_retry_max);
                         front.retry_at = Instant::now() + front.retry;
                         self.key("Enter").await?;
                     }

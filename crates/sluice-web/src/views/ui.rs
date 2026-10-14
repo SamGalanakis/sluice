@@ -168,7 +168,7 @@ pub fn at_text(at: &str) -> String {
 /// Seconds from a stored time to now, when it parses.
 fn seconds_since(at: &str) -> Option<f64> {
     let then = super::timestamp(at)?;
-    let now = std::time::SystemTime::now()
+    let now = crate::clock::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs();

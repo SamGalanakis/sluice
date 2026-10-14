@@ -44,11 +44,15 @@ pub struct PageRegistration {
     pub assets: &'static [Asset],
 }
 pub fn page_router(state: PageState) -> Router {
-    super::PAGES.iter().fold(
+    let clock = state.dashboard.clock;
+    let router = super::PAGES.iter().fold(
         Router::new()
             .route("/static/{name}", get(super::static_asset))
             .route("/static/fonts/{name}", get(super::static_font))
             .route("/settings", axum::routing::post(super::display_preferences)),
         |router, page| router.merge(((page)().routes)(&state)),
-    )
+    );
+    router.layer(axum::middleware::from_fn(
+        move |request, next: axum::middleware::Next| clock.scope(next.run(request)),
+    ))
 }

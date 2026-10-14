@@ -5,6 +5,7 @@
 //! the ones that need the owner first: its own summary sentence, a square a unit, its questions,
 //! its stopped steps, its running steps with how long each has run and what it finished last;
 //! then the index of every project, archived ones too.
+use crate::clock::ClockRead;
 use super::*;
 use crate::streams::{PatchRegion, RenderedBatch};
 use axum::{
@@ -855,7 +856,7 @@ pub async fn load(
     let functions = state.catalog.catalog(None)?;
     let (shared, boards, data) = state
         .reads
-        .snapshot(move |c| {
+        .clock_snapshot(move |c| {
             let shared = load_snapshot(c, functions)?;
             let mut boards = BTreeMap::new();
             for (id, exact, catalog) in &providers {

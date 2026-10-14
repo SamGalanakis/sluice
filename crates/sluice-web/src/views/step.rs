@@ -1452,7 +1452,7 @@ impl StepView {
         }
         if self.shown() == Shown::Quiet {
             // how long it has written nothing, ticking, in place of its run's time
-            let now = std::time::SystemTime::now()
+            let now = crate::clock::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);

@@ -3,4 +3,4 @@ pub mod fixture;
 pub mod profile;
 pub mod protocol;
 pub mod state;
-pub use state::Claude;
+pub use state::{Claude, ClaudeDeliveryTiming};

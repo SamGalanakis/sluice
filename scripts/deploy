@@ -2,7 +2,7 @@
 set -euo pipefail
 repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
 exec python3 - "$repo" "$@" <<'PY'
-import argparse, datetime, hashlib, json, os, pathlib, re, shlex, shutil, signal, socket, sqlite3, subprocess, sys, tarfile, tempfile, time, urllib.request
+import argparse, datetime, hashlib, json, math, os, pathlib, re, shlex, shutil, signal, socket, sqlite3, subprocess, sys, tarfile, tempfile, time, urllib.request
 parser = argparse.ArgumentParser(prog='scripts/deploy', description=
     'Build REF into a release, check it, and switch the installation to it. A release whose '
     'schema differs from the home\'s goes out only with --schema-cutover.')
@@ -249,10 +249,16 @@ def start_services(binary, release_dir, include_loop=True):
     subprocess.run([str(binary), 'doctor', '--json'], env=env, check=True, stdout=sys.stderr)
     return services
 def ensure_cutover_services(binary, release_dir):
-    deadline = time.monotonic() + 60
+    seconds = 60
+    if os.environ.get('SLUICE_TEST') == '1':
+        seconds = float(os.environ.get('SLUICE_TEST_CUTOVER_LEASE_S', '60'))
+        if not math.isfinite(seconds) or seconds <= 0:
+            raise RuntimeError('SLUICE_TEST_CUTOVER_LEASE_S: expected finite positive seconds')
+    deadline = time.monotonic() + seconds
+    timeout_error = 'loop did not hold the scheduler lease within %g s after cutover release' % seconds
     services = json.loads((install / 'services.json').read_text())
     for name, arguments in service_commands().items():
-        if time.monotonic() >= deadline: raise RuntimeError('loop did not hold the scheduler lease within 60 s after cutover release')
+        if time.monotonic() >= deadline: raise RuntimeError(timeout_error)
         if name not in services or not alive(services[name]):
             say('re-creating ' + name + ' after cutover release')
             if name in services: stop_service(services[name])
@@ -260,7 +266,7 @@ def ensure_cutover_services(binary, release_dir):
             publish('services.json', services)
         if name == 'coordinator': wait_for_coordinator(binary, services[name], seconds=max(.1, deadline - time.monotonic()))
     while True:
-        if time.monotonic() >= deadline: raise RuntimeError('loop did not hold the scheduler lease within 60 s after cutover release')
+        if time.monotonic() >= deadline: raise RuntimeError(timeout_error)
         for name in service_commands():
             if not alive(services[name]): raise RuntimeError('%s exited after cutover release' % name)
         # This owner is set while the loop's lease connection is open, and cleared

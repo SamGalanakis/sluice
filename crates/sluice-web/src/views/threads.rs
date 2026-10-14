@@ -1,6 +1,7 @@
 //! Owned conversation projections, loaded with navigation in one SQLite snapshot.
 use super::ui::StepRef;
 use super::{DashboardSnapshot, FunctionCatalog, NavView, TrustedHtml, Viewer, load_snapshot};
+use crate::clock::ClockRead;
 use askama::Template;
 use rusqlite::OptionalExtension;
 use sluice_model::{
@@ -1345,14 +1346,14 @@ pub async fn load(
     thread: Option<String>,
 ) -> Result<InboxView, PublicError> {
     reads
-        .snapshot(move |sql| {
+        .clock_snapshot(move |sql| {
             let nav = load_snapshot(sql, FunctionCatalog::default())?;
             if let Some(id) = project {
                 messages::resolve_project(sql, &sluice_model::ids::ProjectSelector::Id(id))?;
             }
             // "today": the last day, so a note read last night is still there in the morning
             let since = super::rfc3339(
-                std::time::SystemTime::now()
+                crate::clock::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0)

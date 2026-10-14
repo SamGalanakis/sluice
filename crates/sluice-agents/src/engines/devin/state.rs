@@ -67,6 +67,30 @@ impl Default for DevinOptions {
     }
 }
 
+/// Delivery intervals for a directly constructed adapter, alongside DevinOptions' deadlines.
+/// Not read from production configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct DevinDeliveryTiming {
+    /// Delay between capture/Enter attempts while resolving the exit menu.
+    pub menu_retry: Duration,
+    /// Time a non-bypass composer must settle before restoring its permission mode.
+    pub restore_wait: Duration,
+    /// Delay between Enter retries for a visible draft or permission-mode restore.
+    pub enter_retry: Duration,
+    /// Delay between Escape attempts on a dialog covering queued input.
+    pub escape_retry: Duration,
+}
+impl Default for DevinDeliveryTiming {
+    fn default() -> Self {
+        Self {
+            menu_retry: Duration::from_millis(200),
+            restore_wait: Duration::from_secs(1),
+            enter_retry: Duration::from_secs(1),
+            escape_retry: Duration::from_secs(1),
+        }
+    }
+}
+
 struct Pending {
     id: InputId,
     text: String,
@@ -96,6 +120,7 @@ struct Restore {
 
 pub struct Devin {
     options: DevinOptions,
+    delivery_timing: DevinDeliveryTiming,
     observation: EngineObservation,
     prepared: Option<EngineContext>,
     resume: Option<String>,
@@ -121,6 +146,7 @@ impl Devin {
     pub fn new(options: DevinOptions) -> Self {
         Self {
             options,
+            delivery_timing: DevinDeliveryTiming::default(),
             observation: EngineObservation::default(),
             prepared: None,
             resume: None,
@@ -141,6 +167,10 @@ impl Devin {
             watch: Default::default(),
             version: None,
         }
+    }
+    pub fn with_delivery_timing(mut self, timing: DevinDeliveryTiming) -> Self {
+        self.delivery_timing = timing;
+        self
     }
     /// One observation reports a transient without changing delivery or session evidence.
     pub fn inject_transient_once(&mut self) {
@@ -468,7 +498,7 @@ impl Devin {
         restore.unbypassed = (mode == protocol::PermissionMode::NotBypass)
             .then(|| restore.unbypassed.unwrap_or_else(Instant::now));
         if let Some(entered) = restore.entered {
-            if entered.elapsed() >= Duration::from_secs(1)
+            if entered.elapsed() >= self.delivery_timing.enter_retry
                 && protocol::draft_visible(&pane, "/bypass")
             {
                 restore.entered = Some(Instant::now());
@@ -478,7 +508,7 @@ impl Devin {
             }
         } else if restore
             .unbypassed
-            .is_some_and(|t| t.elapsed() >= Duration::from_secs(1))
+            .is_some_and(|t| t.elapsed() >= self.delivery_timing.restore_wait)
         {
             restore.entered = Some(Instant::now());
             self.restore_mode = Some(restore);
@@ -580,7 +610,7 @@ impl Devin {
             && self.observation.status != EngineStatus::Exited
             && self
                 .exit_enter
-                .is_none_or(|t| t.elapsed() >= Duration::from_millis(200))
+                .is_none_or(|t| t.elapsed() >= self.delivery_timing.menu_retry)
         {
             let pane = self.capture(context).await?;
             if protocol::draft_visible(&pane, "/exit") {
@@ -647,7 +677,7 @@ impl Devin {
                     if confirmed
                         && pending
                             .last_escape
-                            .is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
+                            .is_none_or(|t| t.elapsed() >= self.delivery_timing.escape_retry)
                     {
                         self.tmux(context, &["send-keys", "-t", "%0", "Escape"])
                             .await?;
@@ -704,7 +734,7 @@ impl Devin {
             if (draft || queued)
                 && pending
                     .last_enter
-                    .is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
+                    .is_none_or(|t| t.elapsed() >= self.delivery_timing.enter_retry)
             {
                 self.tmux(context, &["send-keys", "-t", "%0", "Enter"])
                     .await?;

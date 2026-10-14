@@ -7,6 +7,7 @@
 //! Generic by rule: a run is a step's run, named by its unit and its step, its outcome read
 //! from the status table. Read-only and server-rendered; its stream patches only when the runs
 //! (or the band's nav) change: its version is the runs' facts, never the clock.
+use crate::clock::ClockRead;
 use super::ui::{self, Shown, esc};
 use super::{
     DashboardState, Frame, NavView, TrustedHtml, Viewer, render_framed, render_nav,
@@ -147,7 +148,7 @@ pub fn zone(headers: &HeaderMap) -> i64 {
         .unwrap_or(0)
 }
 pub fn now() -> u64 {
-    std::time::SystemTime::now()
+    crate::clock::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
 }
@@ -938,7 +939,7 @@ pub async fn snapshot(
     let catalog = state.catalog.catalog(project)?;
     let (shared, data) = state
         .reads
-        .snapshot(move |c| {
+        .clock_snapshot(move |c| {
             let shared = super::load_snapshot(c, catalog)?;
             let data = load(c, project, now)?;
             Ok((shared, data))

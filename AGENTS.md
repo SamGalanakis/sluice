@@ -7,6 +7,14 @@
   into cargo's configured target dir; leave it to cargo's configuration and never set `CARGO_*`
   variables. To pin one invocation to this checkout's `target/`, pass
   `--config 'build.target-dir="<worktree>/target"'`, as `scripts/check` does.
+- Timing seams are direct Rust APIs, never home settings: `Notifier::with_retry_timing`,
+  `Claude::with_delivery_timing`, `Devin::with_delivery_timing` and
+  `DashboardState::with_clock`. Dashboard `Clock::tokio` ties wall time to Tokio time;
+  paused current-thread tests can advance stream deadlines and rendered ages together.
+  Use `Clock::scope` for helpers called outside the page router. Production uses the system
+  clock and the original intervals. Child-process fixtures can set
+  `SLUICE_TEST_DEVIN_TURN_QUIET_S` or `SLUICE_TEST_CUTOVER_LEASE_S`; both are read only
+  when `SLUICE_TEST=1` and otherwise ignored. Notification command timeouts stay real.
 - Tests start the binaries they test through `env!("CARGO_BIN_EXE_sluice")` (and the other
   `CARGO_BIN_EXE_*`), never a path under `target/`, so each test runs what cargo just built.
 - The only Python left is the fn helper (`python/`), the custom-fn and engine test fixtures,

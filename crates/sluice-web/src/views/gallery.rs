@@ -424,7 +424,7 @@ fn keys() -> TrustedHtml {
 
 /// An instant `seconds` before now, as the store writes one.
 fn before(seconds: u64) -> String {
-    let now = std::time::SystemTime::now()
+    let now = crate::clock::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     super::rfc3339(now.saturating_sub(seconds))
@@ -757,7 +757,7 @@ fn stats_part(prefix: &str) -> TrustedHtml {
             .recipes
             .insert("article".into(), std::sync::Arc::new(recipe));
     }
-    let now = std::time::SystemTime::now()
+    let now = crate::clock::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     let mut runs = vec![];
@@ -861,7 +861,7 @@ fn trace_part(prefix: &str) -> TrustedHtml {
 /// a unit idle for a day between steps.
 fn steps_part() -> TrustedHtml {
     use super::unit_steps::{Edge, Latest, Progress, RunSpan, Span, Step, View};
-    let now = std::time::SystemTime::now()
+    let now = crate::clock::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs() as f64);
     // a run from `from` to `to` seconds before now (none: still going), ending as `outcome`

@@ -27,8 +27,18 @@ use tokio::{
 
 /// Runs of the command per question, the first included.
 pub const TRIES: usize = 3;
-/// The pause before each further try.
-const BACKOFF: [Duration; TRIES - 1] = [Duration::from_secs(1), Duration::from_secs(2)];
+/// Retry pauses, independent of the command's real-time timeout. Not part of home config.
+#[derive(Clone, Copy, Debug)]
+pub struct RetryTiming {
+    pub backoff: [Duration; TRIES - 1],
+}
+impl Default for RetryTiming {
+    fn default() -> Self {
+        Self {
+            backoff: [Duration::from_secs(1), Duration::from_secs(2)],
+        }
+    }
+}
 /// The stderr tail kept with the result.
 const STDERR_TAIL: usize = 2048;
 
@@ -39,6 +49,7 @@ pub struct Notifier {
     reads: ReadPool,
     tasks: JoinSet<()>,
     recovered: bool,
+    retry_timing: RetryTiming,
 }
 
 impl Notifier {
@@ -49,7 +60,14 @@ impl Notifier {
             reads,
             tasks: JoinSet::new(),
             recovered: false,
+            retry_timing: RetryTiming::default(),
         }
+    }
+
+    /// Override retry pauses for a directly constructed dispatcher, without changing timeouts.
+    pub fn with_retry_timing(mut self, timing: RetryTiming) -> Self {
+        self.retry_timing = timing;
+        self
     }
 
     /// Settle what an earlier coordinator left in flight, then claim every reservation and
@@ -110,8 +128,9 @@ impl Notifier {
                 continue;
             }
             let (writer, home, config) = (self.writer.clone(), self.home.clone(), config.clone());
+            let timing = self.retry_timing;
             self.tasks.spawn(async move {
-                let (outcome, stderr, error) = dispatch(&config, &home, &item).await;
+                let (outcome, stderr, error) = dispatch(&config, &home, &item, timing).await;
                 let result = writer
                     .write(RetrySafety::Idempotent, move |tx| {
                         messages::notify_result(
@@ -160,6 +179,7 @@ async fn dispatch(
     config: &NotifyConfig,
     home: &Path,
     item: &PendingNotify,
+    timing: RetryTiming,
 ) -> (NotificationOutcome, Option<String>, Option<PublicError>) {
     let input = serde_json::to_vec(&payload(item)).unwrap_or_default();
     let env = crate::dotenv::run_environment(home, Some(item.project));
@@ -167,7 +187,7 @@ async fn dispatch(
     let mut reason = String::new();
     for attempt in 0..TRIES {
         if attempt > 0 {
-            tokio::time::sleep(BACKOFF[attempt - 1]).await;
+            tokio::time::sleep(timing.backoff[attempt - 1]).await;
         }
         let (result, stderr) = run_once(config, home, &env, &input).await;
         tail = stderr;

@@ -1,4 +1,5 @@
 //! The v2 board. Relations retain their gate form and unit endpoints.
+use crate::clock::ClockRead;
 use super::step::{FieldView, RunTiming, StepView};
 use super::ui::{Shown, Tally};
 use super::{DashboardSnapshot, DashboardState, FunctionCatalog, TrustedHtml, Viewer};
@@ -1374,7 +1375,7 @@ pub struct StepDetail {
 /// when it last wrote.
 fn observe(c: &Connection, project: ProjectId, step: &mut StepView) -> sluice_store::Result<()> {
     if let Some(mut run) = super::RunningView::of(c, project, step.id.as_str())? {
-        let now = std::time::SystemTime::now()
+        let now = crate::clock::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         super::observe_run(&super::home_of(c), &mut run, now);
@@ -1815,7 +1816,7 @@ pub async fn step_detail(
     let id = step.clone();
     let (shared, detail) = state
         .reads
-        .snapshot(move |c| {
+        .clock_snapshot(move |c| {
             let detail = match &exact {
                 Some(exact) => {
                     let version = format!("registry:{}", exact.version);
@@ -1851,7 +1852,7 @@ async fn load(
     let plans = state.plans.clone();
     let (shared, board, loaded) = state
         .reads
-        .snapshot(move |c| {
+        .clock_snapshot(move |c| {
             let shared = super::load_snapshot(c, catalog)?;
             let (board, plan) = if let Some(exact) = exact {
                 let version = format!("registry:{}", exact.version);
@@ -2025,7 +2026,7 @@ async fn plan_mermaid(
 ) -> Result<String, PublicError> {
     state
         .reads
-        .snapshot(move |c| {
+        .clock_snapshot(move |c| {
             sluice_runtime::dispatch_ext::render_plan_view(
                 c,
                 &super::home_of(c),
@@ -2146,7 +2147,7 @@ pub async fn project_redirect(
 ) -> Response {
     let result = state
         .reads
-        .snapshot(move |c| {
+        .clock_snapshot(move |c| {
             let raw: Option<String> = c
                 .query_row(
                     "SELECT project_id FROM projects WHERE name=?1 AND deleted_at IS NULL",

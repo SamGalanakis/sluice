@@ -8,6 +8,7 @@
 //! the recipe whose stages fit its runs best; units of no recipe and loose steps form one group
 //! by step. Read-only and server-rendered; its stream patches only when what it draws changes:
 //! its version is the drawing, which reads no clock but the window's edges.
+use crate::clock::ClockRead;
 use super::failure::Failure;
 use super::ui::{self, Shown, esc};
 use super::{DashboardState, Frame, NavView, TrustedHtml, Viewer, render_framed, render_nav};
@@ -973,7 +974,7 @@ pub async fn snapshot(
     let catalog = state.catalog.catalog(Some(project))?;
     let (shared, data) = state
         .reads
-        .snapshot(move |c| {
+        .clock_snapshot(move |c| {
             let shared = super::load_snapshot(c, catalog)?;
             if !shared.projects.iter().any(|p| p.id == project) {
                 return Ok((shared, None));

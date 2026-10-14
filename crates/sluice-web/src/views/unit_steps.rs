@@ -1002,7 +1002,7 @@ pub fn of_unit<'a>(
         selected: selected.to_owned(),
         opens,
         live: !unit.done,
-        now: std::time::SystemTime::now()
+        now: crate::clock::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0.0, |d| d.as_secs_f64()),
     }

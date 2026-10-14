@@ -1,6 +1,7 @@
 //! Project settings commands and id-scoped views. The host supplies its resource
 //! adapter and coordinator deletion guard, and mounts this router inside its
 //! Host/Origin policy. All mutations use the store's single writer transaction.
+use crate::clock::ClockRead;
 use crate::{
     markdown,
     streams::{self, PatchRegion, RenderedBatch, StreamQuery, VersionSignal},
@@ -132,7 +133,7 @@ impl SettingsState {
         let plans = self.dashboard.plans.clone();
         self.dashboard
             .reads
-            .snapshot(move |c| {
+            .clock_snapshot(move |c| {
                 let shared = views::load_snapshot(c, functions)?;
                 let project = projects::resolve(c, &ProjectSelector::Id(id))?;
                 let blocker = projects::live_work_blocker(c, id)?.or_else(|| {
@@ -842,7 +843,7 @@ async fn named_page(State(state): State<SettingsState>, Path(name): Path<String>
     match state
         .dashboard
         .reads
-        .snapshot(move |c| projects::resolve(c, &ProjectSelector::Name(name)))
+        .clock_snapshot(move |c| projects::resolve(c, &ProjectSelector::Name(name)))
         .await
     {
         Ok(p) => {
@@ -1126,7 +1127,9 @@ async fn image(
     match state
         .dashboard
         .reads
-        .snapshot(move |c| projects::icon_image(c, &ProjectSelector::Id(id), query.generation))
+        .clock_snapshot(move |c| {
+            projects::icon_image(c, &ProjectSelector::Id(id), query.generation)
+        })
         .await
     {
         Ok((ty, bytes, hash)) => (

@@ -20,8 +20,10 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
+
+use tokio::time::Instant;
 
 /// A part of a page a stream patches, by its element's id. Its HTML may mark parts of it as
 /// regions of their own, `<!--r:id-->` and `<!--/r:id-->` around the element with that id: a
@@ -279,6 +281,7 @@ where
     L: Fn() -> F + Send + 'static,
     F: Future<Output = Result<RenderedBatch, PublicError>> + Send + 'static,
 {
+    let clock = crate::clock::Clock::current();
     struct Gate {
         token: Option<String>,
         rendered: Option<Instant>,
@@ -295,44 +298,45 @@ where
             false,
             stop,
         ),
-        move |((watch, loader), mut comparison, mut pending, mut gate, mut ended, stop)| async move {
-            loop {
-                if stop.load(Ordering::Acquire) {
-                    return None;
-                }
-                if let Some(event) = pending.pop_front() {
-                    return Some((
-                        Ok(event),
-                        ((watch, loader), comparison, pending, gate, ended, stop),
-                    ));
-                }
-                if ended {
-                    return None;
-                }
-                if gate.rendered.is_some() {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                }
-                // read before the loader's snapshot: a change after it moves the next token
-                let token = watch().await.ok();
-                if token.is_some()
-                    && token == gate.token
-                    && gate.rendered.is_some_and(|at| at.elapsed() < FRESH)
-                {
-                    continue;
-                }
-                gate.token = token;
-                gate.rendered = Some(Instant::now());
-                match loader().await {
-                    Ok(batch) => {
-                        pending.extend(comparison.events(batch).iter().map(StreamEvent::axum_event))
+        move |((watch, loader), mut comparison, mut pending, mut gate, mut ended, stop)| {
+            clock.scope(async move {
+                loop {
+                    if stop.load(Ordering::Acquire) {
+                        return None;
                     }
-                    Err(_) => {
-                        let stale = serde_json::json!({ signal.stale(): true }).to_string();
-                        pending.push_back(PatchSignals::new(stale).write_as_axum_sse_event());
-                        ended = true;
+                    if let Some(event) = pending.pop_front() {
+                        return Some((
+                            Ok(event),
+                            ((watch, loader), comparison, pending, gate, ended, stop),
+                        ));
+                    }
+                    if ended {
+                        return None;
+                    }
+                    if gate.rendered.is_some() {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                    // read before the loader's snapshot: a change after it moves the next token
+                    let token = watch().await.ok();
+                    if token.is_some()
+                        && token == gate.token
+                        && gate.rendered.is_some_and(|at| at.elapsed() < FRESH)
+                    {
+                        continue;
+                    }
+                    gate.token = token;
+                    gate.rendered = Some(Instant::now());
+                    match loader().await {
+                        Ok(batch) => pending
+                            .extend(comparison.events(batch).iter().map(StreamEvent::axum_event)),
+                        Err(_) => {
+                            let stale = serde_json::json!({ signal.stale(): true }).to_string();
+                            pending.push_back(PatchSignals::new(stale).write_as_axum_sse_event());
+                            ended = true;
+                        }
                     }
                 }
-            }
+            })
         },
     )
 }

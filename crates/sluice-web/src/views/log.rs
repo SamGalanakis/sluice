@@ -1,4 +1,5 @@
 //! Bounded, snapshot-coherent log pages with kind/thread filters and keyset paging.
+use crate::clock::ClockRead;
 use super::{DashboardSnapshot, DashboardState, FunctionCatalog, NavView, TrustedHtml, Viewer};
 use askama::Template;
 use axum::{
@@ -508,7 +509,7 @@ pub async fn load(
     project: Option<ProjectId>,
     query: LogQuery,
 ) -> Result<LogView, PublicError> {
-    reads.snapshot(move |sql| {
+    reads.clock_snapshot(move |sql| {
         if let Some(project) = project { sluice_store::messages::resolve_project(sql, &sluice_model::ids::ProjectSelector::Id(project))?; }
         let nav = super::load_snapshot(sql, FunctionCatalog::default())?;
         // The store owns the closed set of valid event kinds.

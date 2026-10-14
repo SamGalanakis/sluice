@@ -1,5 +1,6 @@
 //! Shared dashboard facade. Load once per page or SSE batch, then render owned
 //! models. URLs use immutable project IDs; labels may change independently.
+use crate::clock::ClockRead;
 mod registration;
 pub use registration::{Asset, NavEntry, PageRegistration, PageState, page_router};
 macro_rules! register_pages {
@@ -567,6 +568,8 @@ impl DashboardSnapshot {
 #[derive(Clone)]
 pub struct DashboardState {
     pub reads: ReadPool,
+    /// Rendering clock; set directly by tests, never loaded from home or environment.
+    pub clock: crate::clock::Clock,
     pub catalog: Arc<dyn CatalogSource>,
     pub stop: Arc<std::sync::atomic::AtomicBool>,
     /// Each project's plan compiled from its rows, kept by revision and signatures: every page
@@ -581,11 +584,16 @@ impl DashboardState {
     pub fn new(reads: ReadPool, catalog: Arc<dyn CatalogSource>) -> Self {
         Self {
             reads,
+            clock: crate::clock::Clock::default(),
             catalog,
             stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             plans: board::PlanCache::default(),
             claude_home: sluice_agents::activity::Homes::claude_from_env(),
         }
+    }
+    pub fn with_clock(mut self, clock: crate::clock::Clock) -> Self {
+        self.clock = clock;
+        self
     }
     /// The catalog, one store snapshot and the runs' activity, each read once. A page renders
     /// what this returns; nothing that moves while it renders can fail it.
@@ -594,8 +602,11 @@ impl DashboardState {
         project: Option<ProjectId>,
     ) -> Result<DashboardSnapshot, PublicError> {
         let functions = self.catalog.catalog(project)?;
-        self.reads
-            .snapshot(move |c| load_snapshot(c, functions))
+        self.clock
+            .scope(
+                self.reads
+                    .clock_snapshot(move |c| load_snapshot(c, functions)),
+            )
             .await
             .map_err(|e| e.into_public(true))
     }
@@ -611,9 +622,8 @@ impl DashboardState {
         live: Option<StepId>,
     ) -> Result<String, PublicError> {
         let catalog = self.catalog.version(project)?;
-        let (sum, count, running): (i64, i64, bool) = self
-            .reads
-            .snapshot(move |c| {
+        let (sum, count, running): (i64, i64, bool) = self.clock.scope(self.reads
+            .clock_snapshot(move |c| {
                 let (sum, count) = c.query_row(
                     "SELECT coalesce(sum(version),0),count(*) FROM change_versions",
                     [],
@@ -631,11 +641,12 @@ impl DashboardState {
                     _ => false,
                 };
                 Ok((sum, count, running))
-            })
+            }))
             .await
             .map_err(|e| e.into_public(true))?;
         let tick = if running {
-            std::time::SystemTime::now()
+            self.clock
+                .now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs())
         } else {
@@ -1159,8 +1170,8 @@ pub fn quiet_after(tags: &[String]) -> u64 {
 /// in seconds; quiet once none is newer than its `quiet_after`. Read once, with the store's
 /// snapshot, before any page counts or draws a step, so every surface sees the same quiet.
 pub fn observe_activity(home: &std::path::Path, running: &mut [RunningView]) {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now()
+    use std::time::UNIX_EPOCH;
+    let now = crate::clock::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);

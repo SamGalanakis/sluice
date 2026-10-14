@@ -1,5 +1,6 @@
 //! sluice-web: HTTP, MCP and dashboard views.
 
+pub mod clock;
 pub mod http;
 pub mod markdown;
 pub mod mcp;

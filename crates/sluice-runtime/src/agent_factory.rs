@@ -239,6 +239,25 @@ fn public(error: AgentFailure) -> sluice_model::error::PublicError {
         }
     }
 }
+/// Test child processes can shorten Devin's quiet window; production never reads the override.
+fn devin_turn_quiet() -> io::Result<std::time::Duration> {
+    if std::env::var("SLUICE_TEST").as_deref() != Ok("1") {
+        return Ok(devin::DevinOptions::default().turn_quiet);
+    }
+    match std::env::var("SLUICE_TEST_DEVIN_TURN_QUIET_S") {
+        Err(std::env::VarError::NotPresent) => Ok(devin::DevinOptions::default().turn_quiet),
+        raw => {
+            let invalid = || {
+                io::Error::other(
+                    "SLUICE_TEST_DEVIN_TURN_QUIET_S: expected finite nonnegative seconds",
+                )
+            };
+            let seconds: f64 = raw.map_err(|_| invalid())?.parse().map_err(|_| invalid())?;
+            std::time::Duration::try_from_secs_f64(seconds).map_err(|_| invalid())
+        }
+    }
+}
+
 pub struct Factory {
     home: PathBuf,
     launch: Launch,
@@ -489,6 +508,7 @@ impl AgentFactory for Factory {
                 hook_binary: bin.clone(),
                 environment,
                 screen_grace,
+                turn_quiet: devin_turn_quiet().map_err(invalid)?,
                 probe_cache: Some(self.home.join(version::CACHE_DIR)),
                 ..Default::default()
             }))),
