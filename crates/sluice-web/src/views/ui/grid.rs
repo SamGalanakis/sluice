@@ -1139,6 +1139,17 @@ pub fn expand(unit: &str, label: &str, body: &TrustedHtml) -> TrustedHtml {
         chev = icon(Icon::ChevronDown, 16, "chev"),
     ))
 }
+/// A Done unit's disclosure: a unit-page link without script, a fragment fetched on open with
+/// script. The fetched body survives stream morphs; the trace keeps the disclosure open.
+pub fn expand_on_open(unit: &str, label: &str, href: &str) -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<details class=\"x\" data-x=\"{u}\" data-steps-url=\"{h}/steps\" data-preserve-attr=\"open\"><summary class=\"x-s\" aria-label=\"{l}\" title=\"{l}\"><a class=\"x-page\" href=\"{h}\" aria-label=\"{l}\">{chev}</a></summary><div id=\"x-body-{u}\" class=\"x-body\" data-ignore-morph></div></details>",
+        u = esc(unit),
+        l = esc(label),
+        h = esc(href),
+        chev = icon(Icon::ChevronDown, 16, "chev"),
+    ))
+}
 /// A unit's place on the trace's rail, in the margin at its left (inside its `.rail-slot`).
 pub fn rail() -> TrustedHtml {
     TrustedHtml::owned("<span class=\"rail\" aria-hidden=\"true\"></span>".into())

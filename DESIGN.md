@@ -837,6 +837,8 @@ when), `.mod-t` (its title), `.mod-meta` (its facts; what identifies it in its D
 
 Status words, glyphs and ranks come from the status table (`sluice_model::shown`) only, and
 status is never colour alone: every state has its Lucide glyph and its word.
+The board, plan, drawer and step page use the same activity observer for quiet steps, including
+every step in the drawer's unit.
 
 **The stage strip** (`ui::stage_strip`): a unit's stages in recipe order, one 56px cell each
 (48px on a phone), the cell's kind read from the status table (`ui::Cell::of`). Wherever a
@@ -975,7 +977,9 @@ first part (its own row ringed).
   across the content; a Done index line has one at its end and opens across the index's
   columns. Enter or Space toggles it. The title still traces; the disclosure only opens. The
   units open are the trace host's `expanded`, so a patch, or the unit moving between bands,
-  leaves them open.
+  leaves them open. Done units fetch their step view on first open and keep it through patches;
+  their summary links to the unit page without script. Running and Waiting keep their views
+  in the page so the stream updates them.
 - **Narrow** (under 560px of its own width: a phone, a narrow drawer): one column, the rail
   and name, then state, progress and span, then the runs as a 4px bar; the head and the axis's
   labels give way. Nothing scrolls sideways.

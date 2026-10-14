@@ -1099,6 +1099,14 @@ impl<'a> Plan<'a> {
     /// A unit's step view (`unit_steps`) behind its disclosure, its steps opening in the
     /// drawer; which are open is the trace's to keep (`expanded`).
     fn steps_html(&self, unit: &UnitView) -> String {
+        if unit.done {
+            return ui::expand_on_open(
+                unit.id.as_str(),
+                &format!("Steps of {}", title(unit)),
+                &unit.href(&self.view.project.id),
+            )
+            .0;
+        }
         let mut steps = super::unit_steps::of_unit(unit, &self.view.relations, true, "");
         steps.owner.clear();
         ui::expand(

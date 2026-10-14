@@ -164,8 +164,22 @@ async fn three_loose_steps_are_a_cell_each() {
         "{html}"
     );
     assert!(!html.contains("each draws its own steps"), "{html}");
-    // a loose step's links lead to its own page, not a unit page
-    assert!(!html.contains("/units/water-plants"), "{html}");
+    // A loose step's index link leads to its own page; its Done disclosure fetches its unit.
+    let done = plan_html::band(&html, "plan-done");
+    assert!(
+        done.contains(&format!(
+            "href=\"/projects/id/{}/steps/water-plants\"",
+            n.chores
+        )),
+        "{done}"
+    );
+    assert!(
+        done.contains(&format!(
+            "data-steps-url=\"/projects/id/{}/units/water-plants/steps\"",
+            n.chores
+        )),
+        "{done}"
+    );
 }
 
 /// The plan never scrolls sideways and keeps its bands in its column from a 320px phone to a

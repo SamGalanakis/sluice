@@ -1217,16 +1217,46 @@ define("sluice-trace", {
       if (clear && clear.hidden === !!unit) clear.hidden = !unit;
     };
     const expanded = () => new Set((host.getAttribute("expanded") ?? "").split(" ").filter(Boolean));
+    const loaded = new Map();
+    const controller = new AbortController();
+    cleanup(() => controller.abort());
+    const loadSteps = async (fold) => {
+      const url = fold.dataset.stepsUrl;
+      const body = fold.querySelector(":scope > .x-body");
+      if (!fold.open || !url || !body || body.hasChildNodes()) return;
+      body.innerHTML = '<p role="status">Loading steps…</p>';
+      body.setAttribute("aria-busy", "true");
+      if (!loaded.has(fold.dataset.x)) {
+        loaded.set(fold.dataset.x, fetch(url, { signal: controller.signal, headers: { accept: "text/html" } })
+          .then((response) => {
+            if (!response.ok) throw new Error("Could not load steps.");
+            return response.text();
+          }));
+      }
+      try {
+        const html = await loaded.get(fold.dataset.x);
+        if (host.contains(body)) body.innerHTML = html;
+      } catch {
+        if (!controller.signal.aborted && host.contains(body)) {
+          body.innerHTML = '<p role="alert">Could not load steps. <button type="button" class="x-retry">Retry</button></p>';
+        }
+      } finally {
+        body.removeAttribute("aria-busy");
+      }
+    };
     const expand = () => {
       const open = expanded();
       for (const fold of host.querySelectorAll("details[data-x]")) {
+        if (!fold.dataset.stepsUrl) loaded.delete(fold.dataset.x);
         if (fold.open !== open.has(fold.dataset.x)) fold.open = open.has(fold.dataset.x);
+        loadSteps(fold);
       }
     };
     // toggle does not bubble: caught on its way down
     on(host, "toggle", (event) => {
       const fold = event.target;
       if (!(fold instanceof HTMLDetailsElement) || !fold.matches("details[data-x]")) return;
+      loadSteps(fold);
       const open = expanded();
       if (fold.open) open.add(fold.dataset.x); else open.delete(fold.dataset.x);
       const value = [...open].join(" ");
@@ -1239,6 +1269,21 @@ define("sluice-trace", {
       host.dispatchEvent(new CustomEvent("sluice-trace", { bubbles: true, detail: { unit: id } }));
     };
     on(host, "click", (event) => {
+      const page = event.target.closest?.("summary > a.x-page");
+      if (page && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+        event.preventDefault();
+        const fold = page.closest("details[data-x]");
+        fold.open = !fold.open;
+        return;
+      }
+      const retry = event.target.closest?.(".x-retry");
+      if (retry) {
+        const fold = retry.closest("details[data-x]");
+        loaded.delete(fold.dataset.x);
+        fold.querySelector(":scope > .x-body").replaceChildren();
+        loadSteps(fold);
+        return;
+      }
       if (event.target.closest?.(".trace-clear")) {
         const was = host.getAttribute("selected");
         choose("");

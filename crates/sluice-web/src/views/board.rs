@@ -1410,18 +1410,19 @@ pub fn load_step(
     let depths = Depths::new(&plan, &state);
     let names = sluice_runtime::naming::for_project(c, &super::home_of(c), project)?;
     let cards = Cards::read(c, project)?;
-    let unit_of = |unit: &sluice_model::units::Unit| {
+    let unit_of = |unit: &sluice_model::units::Unit| -> sluice_store::Result<UnitView> {
         let mut view = UnitView::new(project, "", &plan, &state, unit, &depths);
         view.name(&names);
-        for step in &mut view.steps {
+        for step in view.steps.iter_mut().chain(view.rows.iter_mut().flatten()) {
             cards.decorate(step, revision);
+            observe(c, project, step)?;
         }
-        view
+        Ok(view)
     };
     let Some(home) = plan.units().values().find(|u| u.steps.contains(id)) else {
         return Ok(None);
     };
-    let mut unit = unit_of(home);
+    let mut unit = unit_of(home)?;
     unit.owner = c
         .prepare_cached("SELECT owner FROM steps WHERE project_id=?1 AND step_id=?2")?
         .query_row(rusqlite::params![project.to_string(), id.as_str()], |r| {
@@ -1464,7 +1465,6 @@ pub fn load_step(
         }
     }
     step.downstream = after.len();
-    observe(c, project, &mut step)?;
     // its waits name what they wait on by how each reads, as the board's do (`known`)
     let mut shown = BTreeMap::new();
     for other in plan
@@ -2174,6 +2174,10 @@ pub fn registration() -> super::PageRegistration {
                 .route("/projects/id/{project}", get(project_page))
                 .route("/projects/id/{project}/stream", get(project_stream))
                 .route("/projects/id/{project}/units/{unit}", get(super::unit_page::unit_page))
+                .route(
+                    "/projects/id/{project}/units/{unit}/steps",
+                    get(super::unit_page::steps_fragment),
+                )
                 .route(
                     "/projects/id/{project}/units/{unit}/stream",
                     get(super::unit_page::unit_stream),

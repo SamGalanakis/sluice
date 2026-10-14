@@ -1991,8 +1991,9 @@ skeleton (its HTML with its own regions left out) is unchanged: one unit's state
 unit's row, and a unit moving between bands the bands it left and joined. A stream renders its
 page again only when a cheap token moves (the store's `change_versions`, which every commit
 bumps, and the function catalog's version), and at least every 30 s for what the clock alone
-changes (a run going quiet); the drawer and a step's page read that one step, not the board,
-and while the step runs render every second (its transcript grows with no commit). A
+changes (a run going quiet); the drawer and a step's page read that step and its unit, not the board,
+and apply the board's activity observer before drawing the unit's stage strip or step view.
+While the step runs, its detail renders every second (its transcript grows with no commit). A
 step or unit no longer in the plan, or a deleted project, is said in place ("This step left the
 plan; it may have retired.", with its log) and its stream stays open and quiet. The drawer's
 stream has its own `sver` and `sstale` (a step's own page streams under the page's `ver`); the page's line under the nav reads only the page's
@@ -2113,8 +2114,11 @@ recipe's columns (its glyph or word, its time ticking while it runs; a link to t
 recipe its steps in plan order, six to a line (the gates between them are its step view's), a
 loose step one cell. Every row,
 and every line of Done's index, has a disclosure before its Details that opens its unit's step
-view (below) in place under it, across the content (a `<details>` without script; Enter or
-Space on it); one opened stays open through a patch and a move between bands, and a step's row in it opens
+view (below) in place under it, across the content (a `<details>`; Enter or Space on it).
+Done units fetch `/projects/id/<p>/units/<u>/steps` on first open, a step view fragment;
+the fetched view stays in place through patches and reopening does not fetch it again.
+Without script their summary links to the unit page. Running and Waiting views stay inline
+and patch live. One opened stays open through a patch and a move between bands, and a step's row in it opens
 the step in the drawer.
 No line is drawn between units. Selecting a unit (its row's button, a module's head) traces it:
 every unit up its chain and down it is marked, the rest fade, a sentence says the chain

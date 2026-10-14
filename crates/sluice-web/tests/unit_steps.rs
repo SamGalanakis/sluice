@@ -7,6 +7,7 @@
 mod board_fixture;
 #[path = "../../../tests/support/chrome.rs"]
 mod chrome;
+mod neutral;
 mod seed;
 use board_fixture::Fixture;
 use chrome::Chrome;
@@ -60,6 +61,82 @@ const FRAMES: &str = "new Promise(r=>requestAnimationFrame(()=>requestAnimationF
 /// The open step view of l1 as the page reads it: each row's step and state word, and whether
 /// the row is selected.
 const ROWS: &str = "[...document.querySelectorAll('#u-l1 details.x[open] li.sv-row')].map(r => [r.dataset.sv, r.querySelector('.st-w').textContent, r.classList.contains('is-sel')])";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_the_drawers_strip_and_step_view_say_quiet_like_the_plan() {
+    let f = Fixture::new().await;
+    let n = neutral::seed(&f.writer, f._home.path()).await;
+    let id = n.almanac;
+    f.writer.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute("UPDATE runs SET started_at=strftime('%Y-%m-%dT%H:%M:%SZ','now','-3 hours'),created_at=strftime('%Y-%m-%dT%H:%M:%SZ','now','-3 hours') WHERE project_id=?1 AND step_id='a-6-draft'", [id.to_string()])?;
+        tx.changed(Some(id), "runs");
+        Ok(())
+    }).await.unwrap();
+    let (addr, server) = serve(&f);
+    tokio::task::spawn_blocking(move || {
+        let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}#step:a-6-draft")).unwrap();
+        browser.wait("document.querySelector('#step-detail[data-step=\"a-6-draft\"] .sb-lane')").unwrap();
+        assert_eq!(browser.eval("document.querySelector('#u-a-6 .sc[data-state=\"quiet\"]') !== null").unwrap(), json!(true));
+        assert_eq!(browser.eval("document.querySelector('#step-detail .sb-lane .sc[data-state=\"quiet\"] .sc-word')?.textContent").unwrap(), json!("quiet"));
+        assert_eq!(browser.eval("document.querySelector('#step-detail li[data-sv=\"a-6-draft\"] .st-w')?.textContent").unwrap(), json!("quiet"));
+    }).await.unwrap();
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_done_steps_load_once_on_open_and_survive_a_stream_patch() {
+    let f = Fixture::new().await;
+    let id = f.titled().await;
+    f.writer.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute("UPDATE steps SET status='succeeded' WHERE project_id=?1 AND step_id IN ('l1-work','l1-land')", [id.to_string()])?;
+        tx.changed(Some(id), "steps");
+        Ok(())
+    }).await.unwrap();
+    let (_, html) = f.get(&format!("/projects/id/{id}")).await;
+    let fold = html
+        .split("data-x=\"l1\"")
+        .nth(1)
+        .unwrap()
+        .split("</details>")
+        .next()
+        .unwrap();
+    assert!(!fold.contains("<sluice-steps"));
+    assert!(fold.contains(&format!("href=\"/projects/id/{id}/units/l1\"")));
+    let (status, fragment) = f.get(&format!("/projects/id/{id}/units/l1/steps")).await;
+    assert!(status.is_success());
+    assert!(fragment.starts_with("<sluice-steps") && !fragment.contains("<html"));
+    let (missing, _) = f
+        .get(&format!("/projects/id/{id}/units/missing/steps"))
+        .await;
+    assert_eq!(missing, axum::http::StatusCode::NOT_FOUND);
+    let (addr, server) = serve(&f);
+    let writer = f.writer.clone();
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
+        browser.wait("customElements.get('sluice-trace') && document.querySelector('details[data-x=\"l1\"]')").unwrap();
+        browser.eval("window.stepFetches=0;const originalFetch=window.fetch;window.fetch=(...args)=>{if(String(args[0]).endsWith('/units/l1/steps'))++stepFetches;return originalFetch(...args)};document.querySelector('.pl-index').open=true").unwrap();
+        assert_eq!(browser.eval("document.querySelector('details[data-x=\"l1\"] sluice-steps') === null").unwrap(), json!(true));
+        browser.eval("document.querySelector('details[data-x=\"l1\"] summary a').click()").unwrap();
+        browser.wait("document.querySelector('details[data-x=\"l1\"][open] sluice-steps')").unwrap();
+        browser.eval("window.loadedSteps=document.querySelector('details[data-x=\"l1\"] sluice-steps')").unwrap();
+        rt.block_on(writer.write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute("UPDATE steps SET manual=1 WHERE project_id=?1 AND step_id='l1-fork'", [id.to_string()])?;
+            tx.changed(Some(id), "steps");
+            Ok(())
+        })).unwrap();
+        browser.wait("document.querySelector('details[data-x=\"l1\"]')?.closest('li')?.dataset.said?.includes('set by hand')").unwrap();
+        browser.wait("document.querySelector('details[data-x=\"l1\"][open] sluice-steps')").unwrap();
+        assert_eq!(browser.eval("[stepFetches, document.querySelector('details[data-x=\"l1\"] sluice-steps') === loadedSteps]").unwrap(), json!([1, true]));
+        browser.eval("document.querySelector('details[data-x=\"l1\"] summary').click()").unwrap();
+        browser.wait("!document.querySelector('details[data-x=\"l1\"]').open").unwrap();
+        browser.eval("document.querySelector('details[data-x=\"l1\"] summary').click()").unwrap();
+        browser.wait("document.querySelector('details[data-x=\"l1\"]').open").unwrap();
+        assert_eq!(browser.eval("stepFetches").unwrap(), json!(1));
+        assert_eq!(browser.eval("browserErrors").unwrap(), json!([]));
+    }).await.unwrap();
+    server.abort();
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn chromium_a_rows_disclosure_opens_its_step_view_in_place_through_a_patch() {
