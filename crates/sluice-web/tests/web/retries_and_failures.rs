@@ -158,14 +158,14 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
     let id = retried(&f).await;
     let (status, html) = f.get(&format!("/projects/id/{id}")).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    // the row of a quiet run: its quiet time and how long it has been silent; which run it is
-    // and how the earlier ones ended are its Details', not its line's
+    // the row of a quiet run: how long it has been silent; which run it is and how the earlier
+    // ones ended are its steps', not its line's
     let row = plan_html::row(&html, "l1");
     assert!(
-        row.contains("<b>quiet</b>") && row.contains(", silent "),
+        row.contains("<span class=\"pill pill-quiet\">quiet "),
         "{row}"
     );
-    let line = &row[..row.find("<details class=\"x\"").unwrap_or(row.len())];
+    let line = &row[..row.find("<div class=\"ro-drill\">").unwrap_or(row.len())];
     assert!(
         !line.contains("class=\"tries\"") && !line.contains(">run 6<"),
         "{row}"
@@ -178,19 +178,12 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
         5,
         "{view}"
     );
-    assert!(
-        row.contains("<dt>Run</dt><dd><span>6, after 4 failed and 1 cancelled</span></dd>"),
-        "{row}"
-    );
-    // a unit of no recipe: its second run, the first failed
+    // a unit of no recipe: its second run, the first faint before it
     let kit = plan_html::row(&html, "kit");
-    assert!(
-        kit.contains("<dt>Run</dt><dd><span>2, after 1 failed</span></dd>"),
-        "{kit}"
-    );
+    assert!(kit.contains(">run 2<"), "{kit}");
     // a first run says nothing of runs
     let first = plan_html::row(&html, "probe");
-    assert!(!first.contains("<dt>Run</dt>"), "{first}");
+    assert!(!first.contains(">run 1<"), "{first}");
 
     // its page: its head's Details say the run, Now says how the run before ended and why,
     // linked to that run under Runs
@@ -259,35 +252,31 @@ async fn a_stopped_card_names_its_failures_kind_and_says_why_under_it() {
         .await
         .unwrap();
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
-    // a stopped module: the glyph and its word, the failure's kind in a word, why under it;
-    // never the stored JSON
+    // a stop in Needs you: its word, then why in a sentence and what to try; never the
+    // stored JSON
     let l2 = plan_html::stopped(&html, "l2");
     assert!(
-        l2.contains("<b>failed</b> <span class=\"pl-kind\">quota</span>"),
-        "{l2}"
-    );
-    assert!(
-        l2.contains("<p class=\"pl-why\">Its engine hit a usage cap.</p>"),
+        l2.contains("</a></b> failed at work. Its engine hit a usage cap."),
         "{l2}"
     );
     assert!(!l2.contains("agent_failure"), "{l2}");
     let plain = plan_html::stopped(&html, "plain");
     assert!(
-        plain.contains("<span class=\"pl-kind\">lost</span>")
-            && plain.contains("<p class=\"pl-why\">Its process was lost.</p>"),
+        plain.contains("</a></b> failed. Its process was lost."),
         "{plain}"
     );
-    // the work's own failure: no kind beside "failed"
     let bare = plan_html::stopped(&html, "bare");
     assert!(
-        !bare.contains("pl-kind") && bare.contains("<p class=\"pl-why\">Its fn failed: boom.</p>"),
+        bare.contains("</a></b> failed. Its fn failed: boom."),
         "{bare}"
     );
     // a fn stopped at its wall-clock cap reads as an agent's cap does
     let kit = plan_html::stopped(&html, "kit");
     assert!(
-        kit.contains("<span class=\"pl-kind\">cap</span>")
-            && kit.contains("<p class=\"pl-why\">Stopped at its wall-clock cap after 10h 0m.</p>"),
+        kit.contains("Stopped at its wall-clock cap after 10h 0m.")
+            && kit.contains(
+                "<span class=\"nd-next\">Raise its agent&#39;s time limit, then Retry.</span>"
+            ),
         "{kit}"
     );
     // a running unit says no why

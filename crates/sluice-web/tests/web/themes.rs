@@ -19,8 +19,7 @@ fn serve(f: &Fixture) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
     )
 }
 const FRAMES: &str = "new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))";
-/// The page's width against the window's, the light sheet's tracks and its modules' widths, and
-/// the strip head's stage columns against its rows' cells.
+/// The page's width against the window's, and the light sheet's tracks and its modules' widths.
 const MEASURE: &str = "(() => {
   const d = document.documentElement, g = document.querySelector('#l-grid');
   const r = {scroll: d.scrollWidth, width: d.clientWidth};
@@ -31,9 +30,6 @@ const MEASURE: &str = "(() => {
     r.track = tracks[0];
     r.gap = parseFloat(css.columnGap);
     r.widths = [...g.querySelectorAll(':scope > .mod')].map(m => m.getBoundingClientRect().width);
-    const s = document.querySelector('.gal-strips');
-    r.heads = [...s.querySelectorAll('.sh-stage')].map(e => Math.round(e.getBoundingClientRect().left));
-    r.rows = [...s.querySelectorAll('.strip-row > .strip')].map(st => [...st.children].map(e => Math.round(e.getBoundingClientRect().left)));
   }
   return r; })()";
 /// Every control a phone taps on the page, in document order: its height, the height a rule
@@ -79,11 +75,11 @@ async fn slow_chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
                 assert_eq!(browser.eval(WORDS).unwrap(), json!([]), "{name} at {width}");
                 assert_eq!(browser.eval(LINES).unwrap(), json!([]), "{name} at {width}");
                 if name == "ui" {
-                    // the gallery's waiting rows: "⊖ review", then "blocked" under it
-                    let blocked = browser.eval("(() => { const c = document.querySelector('.gal-waits .sc-empty[data-state=blocked]'); const top = c.querySelector('.sc-top'), w = c.querySelector('.sc-word'); return [top.firstElementChild.matches('.g-blocked'), top.textContent, w.textContent, w.getBoundingClientRect().top >= top.getBoundingClientRect().bottom - 0.5, w.getClientRects().length > 0]; })()").unwrap();
+                    // the gallery's held strip: "⊖ review", then "blocked" under it
+                    let blocked = browser.eval("(() => { const c = document.querySelector('ol.strip[aria-label=\"Stages of a-15\"] .sc-empty[data-state=blocked]'); const top = c.querySelector('.sc-top'), w = c.querySelector('.sc-word'); return [top.firstElementChild.matches('.g-blocked'), top.textContent, w.textContent, w.getBoundingClientRect().top >= top.getBoundingClientRect().bottom - 0.5, w.getClientRects().length > 0]; })()").unwrap();
                     assert_eq!(blocked, json!([true, "review", "blocked", true, true]), "{width}");
                     // and a running cell: its turning glyph before "review", its time under them
-                    let running = browser.eval("(() => { const c = document.querySelector('.gal-strips .sc-run[data-state=running]'); const top = c.querySelector('.sc-top'); return [top.firstElementChild.matches('.g-running'), top.textContent, c.querySelector('.sc-time').getBoundingClientRect().top >= top.getBoundingClientRect().bottom - 0.5]; })()").unwrap();
+                    let running = browser.eval("(() => { const c = document.querySelector('ol.strip[aria-label=\"Stages of a-12\"] .sc-run[data-state=running]'); const top = c.querySelector('.sc-top'); return [top.firstElementChild.matches('.g-running'), top.textContent, c.querySelector('.sc-time').getBoundingClientRect().top >= top.getBoundingClientRect().bottom - 0.5]; })()").unwrap();
                     assert_eq!(running, json!([true, "review", true]), "{width}");
                 }
                 if name != "ui" {
@@ -113,16 +109,6 @@ async fn slow_chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
                     let spans = take * tracks / cols;
                     let want = if sheet < 640.0 { sheet } else { spans * track + (spans - 1.0) * gap };
                     assert!((w.as_f64().unwrap() - want).abs() <= 2.0, "{width}: {take} of {cols} is {w}, not {want}: {m}");
-                }
-                // the strip head's stages stand over its rows' cells wherever the sheet sets
-                // them beside their lead; under 640px the names give way and each row's cells
-                // share its width
-                for row in m["rows"].as_array().unwrap() {
-                    if sheet < 640.0 {
-                        assert_eq!(m["heads"], json!([0, 0, 0]), "{width}: {m}");
-                    } else {
-                        assert_eq!(row, &m["heads"], "{width}: {m}");
-                    }
                 }
             }
         }

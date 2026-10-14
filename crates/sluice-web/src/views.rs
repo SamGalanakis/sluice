@@ -368,6 +368,10 @@ pub struct ProjectView {
     /// nav's Inbox counts, each with the step that asked it.
     #[serde(default)]
     pub asks: Vec<AskView>,
+    /// Its steps that need a look (failed, cancelled, stale or quiet) and that the owner has
+    /// neither dismissed (a cancel) nor set aside in its plan's Needs you: what its tab counts.
+    #[serde(default)]
+    pub looks: usize,
 }
 /// An open question to the owner that someone waits on: its message, the step that asked it
 /// ("" for a session or anyone else), and its title (its body's first line without one).
@@ -463,19 +467,31 @@ impl ProjectView {
             None => ui::Shown::Pending,
         }
     }
-    /// Its pages' tab words, what needs a look first, as the index's tab counts it
-    /// (`home::HomeView::title`): "1 question · 2 failed · 1 quiet · almanac", its open questions
-    /// to the owner, then the states that need attention.
+    /// Its plan's tab words, its glance: its open questions to the owner counted in brackets,
+    /// then a cross and how many of its steps need a look that the owner has not set aside
+    /// (`looks`), then its name: "(1) ✕4 · almanac", "✕2 · almanac", "(1) almanac"; its name
+    /// alone when nothing needs the owner.
     pub fn tab_words(&self) -> String {
-        let mut words: Vec<String> = questions_words(self.asks.len()).into_iter().collect();
-        words.extend(
-            self.standing()
-                .iter()
-                .filter(|(s, _)| s.spec().attention)
-                .map(|(s, n)| format!("{n} {}", s.word())),
-        );
-        words.push(self.name.clone());
-        words.join(" · ")
+        let mut words = String::new();
+        if !self.asks.is_empty() {
+            words.push_str(&format!("({}) ", self.asks.len()));
+        }
+        if self.looks > 0 {
+            words.push_str(&format!("✕{} · ", self.looks));
+        }
+        words.push_str(&self.name);
+        words
+    }
+    /// The favicon its plan's tab wears with `tab_words`: the mark with a coral dot while a
+    /// question waits on the owner, a sand square while a step needs a look, else the mark.
+    pub fn favicon(&self) -> &'static str {
+        if !self.asks.is_empty() {
+            "favicon-ask.svg"
+        } else if self.looks > 0 {
+            "favicon-look.svg"
+        } else {
+            "favicon.svg"
+        }
     }
     pub fn summary(&self) -> &str {
         self.description.split("\n\n").next().unwrap_or("")
@@ -1305,6 +1321,7 @@ pub fn load_snapshot(
             names: Default::default(),
             dismissed: Default::default(),
             asks: vec![],
+            looks: 0,
         };
         let mut steps = c.prepare_cached(&format!("SELECT {STEP_LIVE} FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position"))?;
         // a failed step's error says whether the owner cancelled it: listed apart
@@ -1352,6 +1369,13 @@ pub fn load_snapshot(
         observe_activity(&home_of(c), &mut view.running);
         // every step by how it reads from what the store says (the board evaluates the plan
         // too: blocked, held, queued and outside work count as pending here)
+        // what the owner set aside in the plan's Needs you: a stop as the store still holds it,
+        // a quiet run while it has written nothing since
+        let set_aside: std::collections::BTreeMap<String, i64> =
+            sluice_store::messages::needs_set_aside(c, id)?
+                .into_iter()
+                .map(|s| (s.key, s.stamp))
+                .collect();
         let mut rows = c.prepare_cached("SELECT step_id,status,paused IS NOT NULL AND paused <> 'false',manual,error FROM steps WHERE project_id=?1")?;
         let mut found = rows.query([&raw])?;
         while let Some(r) = found.next()? {
@@ -1360,7 +1384,8 @@ pub fn load_snapshot(
                 r.get::<_, String>(1)?.parse().map_err(|e| {
                     sluice_store::StoreError::InvalidDatabase(format!("step {step}: {e}"))
                 })?;
-            let shown = match view.running.iter().find(|run| run.step == step) {
+            let run = view.running.iter().find(|run| run.step == step);
+            let shown = match run {
                 Some(run) if status == sluice_model::commands::StepStatus::Running => run.shown(),
                 _ => sluice_model::shown::classify(&sluice_model::shown::Facts {
                     cancelled: r
@@ -1371,6 +1396,16 @@ pub fn load_snapshot(
                     ..sluice_model::shown::Facts::of(status)
                 }),
             };
+            let aside = match shown {
+                ui::Shown::Quiet => run.and_then(|r| r.activity).is_some_and(|at| {
+                    set_aside.get(&format!("quiet:{step}")) == Some(&(at as i64))
+                }),
+                ui::Shown::Cancelled => view.dismissed.contains(&step),
+                _ => set_aside.contains_key(&format!("stop:{step}")),
+            };
+            if shown.spec().attention && !aside {
+                view.looks += 1;
+            }
             view.counts.add(shown);
         }
         // the steps the index lists, named (`sluice_model::naming`)

@@ -889,6 +889,7 @@ async fn owner_actions_send_the_displayed_revision_and_author_through_the_socket
                 revision: 7,
                 message: "continue".into(),
                 author: "owner",
+                items: vec![],
             })
             .await
             .unwrap();

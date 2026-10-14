@@ -1,7 +1,7 @@
 //! The seventh critique's fixes, each through the pages it changed: every Details panel opens
-//! inside the window; a cancel is dismissed from its card in Stopped and undone from the line
-//! Stopped then says, with or without script; and who cancelled a run, and why, is read from
-//! the run once the log has trimmed the record that said it.
+//! inside the window; a cancel is set aside from Needs you and undone from the line it leaves,
+//! in place; and who cancelled a run, and why, is read from the run once the log has trimmed
+//! the record that said it.
 use crate::board_fixture;
 use crate::chrome;
 use crate::neutral;
@@ -104,10 +104,11 @@ async fn aside(f: &Fixture) -> ProjectId {
     id
 }
 
-/// In Chromium: Dismiss takes the card out of Stopped and puts the line with its Undo there;
-/// Undo brings the card back.
+/// In Chromium: the × on a cancel in Needs you sets it aside in place (the same document, the
+/// scroll kept) and Undo, which takes the focus, brings it back; a × that never reaches sluice
+/// says so under the item and leaves it there.
 #[tokio::test(flavor = "multi_thread")]
-async fn slow_in_chromium_dismiss_and_undo_move_the_card_out_of_stopped_and_back() {
+async fn slow_in_chromium_a_cancel_set_aside_and_undone_in_place() {
     let f = Fixture::new().await;
     let id = aside(&f).await;
     let (addr, server) = serve(router(&f)).await;
@@ -116,41 +117,31 @@ async fn slow_in_chromium_dismiss_and_undo_move_the_card_out_of_stopped_and_back
         let mut browser = Chrome::open(&plan).unwrap();
         browser.viewport(1440, "light").unwrap();
         browser
-            .wait("document.querySelector('#s-u .pl-dismiss button')?.checkVisibility()")
+            .wait("document.querySelector('#n-stop-b button.x')?.checkVisibility()")
             .unwrap();
-        browser.eval("(() => { const card = document.querySelector('#s-u'); document.querySelector('#project-board').before(Object.assign(document.createElement('div'), {style:'height:700px'})); document.querySelector('#content').append(Object.assign(document.createElement('div'), {style:'height:1400px'})); window.scrollTo(0, card.getBoundingClientRect().top + scrollY - 400); window.dismissMarker = 'same document'; window.dismissNavigations = performance.getEntriesByType('navigation').length; window.dismissScroll = scrollY; })()").unwrap();
-
+        browser.eval("(() => { const item = document.querySelector('#n-stop-b'); document.querySelector('#project-board').before(Object.assign(document.createElement('div'), {style:'height:700px'})); document.querySelector('#content').append(Object.assign(document.createElement('div'), {style:'height:1400px'})); window.scrollTo(0, item.getBoundingClientRect().top + scrollY - 400); window.dismissMarker = 'same document'; window.dismissNavigations = performance.getEntriesByType('navigation').length; window.dismissScroll = scrollY; })()").unwrap();
         browser
-            .eval("document.querySelector('#s-u .pl-dismiss button').click()")
+            .eval("document.querySelector('#n-stop-b button.x').click()")
             .unwrap();
         browser
-            .wait("document.readyState === 'complete' && document.querySelector('.pl-dismissed') && !document.querySelector('#s-u.pl-stop')")
+            .wait("!document.querySelector('#n-stop-b') && document.activeElement?.id === 'undo-n-stop-b'")
             .unwrap();
         assert_eq!(browser.eval("[window.dismissMarker, performance.getEntriesByType('navigation').length === window.dismissNavigations, Math.abs(scrollY - window.dismissScroll) <= 3]").unwrap(), json!(["same document", true, true]));
-        // the glyph, the title and Undo on one line; the focus on Undo, where Dismiss sent it
+        // the line says what was set aside and offers Undo, on one line
         let line = browser
-            .eval("(() => { const p = document.querySelector('.pl-dismissed p'), b = p.querySelector('button'); return [p.querySelector('.pl-dn').textContent, b.textContent, Math.round(p.getBoundingClientRect().height) <= 48, document.activeElement === b]; })()")
+            .eval("(() => { const b = document.querySelector('#undo-n-stop-b'), li = b.closest('li'); return [li.textContent.includes('Dismissed'), b.textContent, Math.round(li.getBoundingClientRect().height) <= 48]; })()")
             .unwrap();
-        assert_eq!(line, json!(["Dismissed: u", "Undo", true, true]));
+        assert_eq!(line, json!([true, "Undo", true]));
         browser
-            .eval("document.querySelector('.pl-dismissed button').click()")
+            .eval("document.querySelector('#undo-n-stop-b').click()")
             .unwrap();
         browser
-            .wait("document.readyState === 'complete' && document.querySelector('#s-u.pl-stop') && !document.querySelector('.pl-dismissed')")
+            .wait("document.activeElement?.id === 'n-stop-b' && !document.querySelector('#undo-n-stop-b')")
             .unwrap();
-        // the focus on the card Undo restored
-        assert_eq!(
-            browser.eval("document.activeElement?.id").unwrap(),
-            json!("s-u")
-        );
         assert_eq!(browser.eval("[window.dismissMarker, performance.getEntriesByType('navigation').length === window.dismissNavigations, Math.abs(scrollY - window.dismissScroll) <= 3]").unwrap(), json!(["same document", true, true]));
-        browser.eval("window.realFetch = window.fetch; window.fetch = (...args) => String(args[0]).endsWith('/actions') ? Promise.reject(new TypeError('Failed to fetch')) : realFetch(...args); document.querySelector('#s-u .pl-dismiss button').click()").unwrap();
-        browser.wait("document.querySelector('#s-u .pl-dismiss .notice')?.textContent.includes('Sluice did not answer')").unwrap();
-        assert_eq!(browser.eval("[window.dismissMarker, !!document.querySelector('#s-u.pl-stop'), !document.querySelector('#s-u .pl-dismiss button').disabled]").unwrap(), json!(["same document", true, true]));
-        browser.eval("window.fetch = window.realFetch").unwrap();
-        browser.eval("document.querySelector('#s-u .pl-fb').open = true; document.querySelector('#s-u textarea').value = 'Keep this feedback'; document.querySelector('#s-u .pl-fb button').click()").unwrap();
-        browser.wait("document.querySelector('#s-u .pl-retry .notice')?.textContent.includes('only marks here')").unwrap();
-        assert_eq!(browser.eval("[window.dismissMarker, document.querySelector('#s-u textarea').value, !document.querySelector('#s-u .pl-fb button').disabled]").unwrap(), json!(["same document", "Keep this feedback", true]));
+        browser.eval("window.realFetch = window.fetch; window.fetch = (...args) => /\\/(needs|actions)$/.test(String(args[0])) ? Promise.reject(new TypeError('Failed to fetch')) : realFetch(...args); document.querySelector('#n-stop-b button.x').click()").unwrap();
+        browser.wait("document.querySelector('#n-stop-b .notice')?.textContent.includes('Sluice did not answer')").unwrap();
+        assert_eq!(browser.eval("[window.dismissMarker, !document.querySelector('#n-stop-b button.x').disabled]").unwrap(), json!(["same document", true]));
         assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
     })
     .await
@@ -158,52 +149,35 @@ async fn slow_in_chromium_dismiss_and_undo_move_the_card_out_of_stopped_and_back
     server.abort();
 }
 
+/// The plan's Retry and the drawer's action forms post in place: a refusal reads under the
+/// form that sent it, the page and a typed message kept.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_plan_and_drawer_action_forms_submit_in_place() {
     let f = Fixture::new().await;
     let id = aside(&f).await;
-    stored(
-        &f.writer,
-        id,
-        Stored {
-            thread: "step-c",
-            from: "c",
-            to: Some("owner"),
-            body: "Continue this work?",
-            question: true,
-            ..Default::default()
-        },
-    )
-    .await;
     let (addr, server) = serve(router(&f)).await;
     tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
         browser.viewport(1440, "light").unwrap();
-        browser.wait("customElements.get('sluice-confirm') && document.querySelector('.pl-close button')").unwrap();
-        browser.eval("window.marker = true; window.posts = []; window.realFetch = fetch; window.fetch = (url, options) => { if (options?.method === 'POST' && (/\\/actions$/.test(String(url)) || String(url).endsWith('/messages/close'))) { posts.push({url:String(url), data:Object.fromEntries(options.body)}); return Promise.resolve(new Response('Fixture refusal', {status:409})); } return realFetch(url, options); }").unwrap();
-        browser.eval("document.querySelector('#s-u .pl-retry > button').click()").unwrap();
-        browser.wait("posts.length === 1 && document.querySelector('#s-u .pl-retry .notice')").unwrap();
-        assert_eq!(browser.eval("posts[0].data.action").unwrap(), "retry");
-        browser.eval("document.querySelector('#s-u .pl-fb').open = true; document.querySelector('#s-u textarea').value = 'Use the new input'; document.querySelector('#s-u .pl-fb button').click()").unwrap();
-        browser.wait("posts.length === 2 && !document.querySelector('#s-u .pl-fb button').disabled").unwrap();
-        assert_eq!(browser.eval("[posts[1].data.action, posts[1].data.message, !!posts[1].data.revision, !!posts[1].data.seen]").unwrap(), json!(["retry", "Use the new input", true, true]));
-        browser.eval("document.querySelector('.pl-close button').click()").unwrap();
-        browser.wait("posts.length === 3 && document.querySelector('.pl-close .notice')").unwrap();
-        assert_eq!(browser.eval("!!posts[2].data.m").unwrap(), true);
+        browser.wait("customElements.get('sluice-confirm') && document.querySelector('#n-stop-b form[action$=\"/actions\"] button')").unwrap();
+        browser.eval("window.marker = true; window.posts = []; window.realFetch = fetch; window.fetch = (url, options) => { if (options?.method === 'POST' && /\\/(actions|needs)$/.test(String(url))) { posts.push({url:String(url), data:Object.fromEntries(options.body)}); return Promise.resolve(new Response('Fixture refusal', {status:409})); } return realFetch(url, options); }").unwrap();
+        browser.eval("document.querySelector('#n-stop-b form[action$=\"/actions\"] button').click()").unwrap();
+        browser.wait("posts.length === 1 && document.querySelector('#n-stop-b .notice')?.textContent.includes('Fixture refusal')").unwrap();
+        assert_eq!(browser.eval("[posts[0].data.action, !!posts[0].data.revision, !!posts[0].data.seen]").unwrap(), json!(["retry", true, true]));
         browser.eval("location.hash = 'step:b'").unwrap();
         browser.wait("document.querySelector('#drawer .d-actions form > button[value=retry]')?.checkVisibility()").unwrap();
         browser.eval("document.querySelector('#drawer .d-actions form > button[value=retry]').click()").unwrap();
-        browser.wait("posts.length === 4 && document.querySelector('#drawer .d-actions .notice')").unwrap();
+        browser.wait("posts.length === 2 && document.querySelector('#drawer .d-actions .notice')").unwrap();
         browser.eval("document.querySelector('#drawer .pl-fb').open = true; document.querySelector('#drawer textarea[name=message]').value = 'Drawer feedback'; document.querySelector('#drawer .pl-fb button').click()").unwrap();
-        browser.wait("posts.length === 5 && !document.querySelector('#drawer .pl-fb button').disabled").unwrap();
-        assert_eq!(browser.eval("[posts[4].data.action, posts[4].data.message]").unwrap(), json!(["retry", "Drawer feedback"]));
+        browser.wait("posts.length === 3 && !document.querySelector('#drawer .pl-fb button').disabled").unwrap();
+        assert_eq!(browser.eval("[posts[2].data.action, posts[2].data.message, document.querySelector('#drawer textarea[name=message]').value]").unwrap(), json!(["retry", "Drawer feedback", "Drawer feedback"]));
         browser.eval("location.hash = 'step:c'").unwrap();
         browser.wait("document.querySelector('#drawer sluice-confirm summary')?.checkVisibility()").unwrap();
         browser.eval("document.querySelector('#drawer sluice-confirm summary').click()").unwrap();
         browser.wait("document.querySelector('#confirmation').open").unwrap();
         browser.eval("document.querySelector('#confirmation textarea').value = 'Stop this work'; document.querySelector('#confirmation button.danger').click()").unwrap();
-        browser.wait("posts.length === 6 && document.querySelector('#confirmation .notice')").unwrap();
-        assert_eq!(browser.eval("[window.marker, document.querySelector('#confirmation').open, posts[5].data.action, posts[5].data.message, document.querySelector('#confirmation textarea').value]").unwrap(), json!([true, true, "cancel", "Stop this work", "Stop this work"]));
+        browser.wait("posts.length === 4 && document.querySelector('#confirmation .notice')").unwrap();
+        assert_eq!(browser.eval("[window.marker, document.querySelector('#confirmation').open, posts[3].data.action, posts[3].data.message, document.querySelector('#confirmation textarea').value]").unwrap(), json!([true, true, "cancel", "Stop this work", "Stop this work"]));
         browser.eval("window.fetch = () => Promise.resolve(new Response(null, {status:204})); document.querySelector('#confirmation button.danger').click()").unwrap();
         browser.wait("!document.querySelector('#confirmation').open").unwrap();
         assert_eq!(browser.eval("[window.marker, window.browserErrors]").unwrap(), json!([true, []]));

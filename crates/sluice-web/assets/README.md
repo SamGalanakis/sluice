@@ -1,7 +1,10 @@
 Dashboard assets, compiled into the binary (each page module under `src/views/` embeds its
 own) and served at `/static/<name>?v=<fingerprint>`: `style.css` (joined by `build.rs` with every
 theme family's file in `themes/`, one stylesheet), sluice's
-scripts (`components.js`, `sluice.js`, `nav.js`, `openui.js`, `board.js`), the logo and favicon, and the pinned
+scripts (`components.js`, `sluice.js`, `nav.js`, `openui.js`, `board.js`), the logo and favicon
+(with its two glance variants a plan's tab wears: `favicon-ask.svg`, the mark with a coral dot
+while a question waits on the owner, and `favicon-look.svg`, with a sand square while something
+needs a look; each the owner's favicon unchanged with the one shape after it), and the pinned
 third-party scripts (Datastar 1.0.4, OpenUI lang-core 0.3.0, zod 4.6.5). OpenUI and zod are
 the ES-module bundles jsDelivr's `/npm/<package>@<version>/+esm` endpoint built; each keeps its
 header naming the bundler and the original file, less the CDN's own note.

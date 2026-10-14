@@ -15,9 +15,15 @@
     fetch("/settings", { method: "POST", keepalive: true, body: new URLSearchParams({ theme }) }).catch(() => {});
   }
 }
+// a plan's glance: its tab's title and its favicon, as the page's stream patches them
+function favicon(href) {
+  const link = document.getElementById("favicon");
+  if (link && href && link.getAttribute("href") !== href) link.setAttribute("href", href);
+}
 document.addEventListener("datastar-signal-patch", () => {
   const title = document.querySelector("[data-page-title]");
   if (title) document.title = title.dataset.pageTitle;
+  favicon(document.querySelector("[data-favicon]")?.dataset.favicon);
   tick();
 });
 // A hidden tab's stream is closed (Datastar reopens it when the tab shows again), but its title
@@ -31,6 +37,8 @@ async function pollTitle() {
     const response = await fetch(el.dataset.titleSrc, { headers: { accept: "text/plain" } });
     const text = response.ok ? (await response.text()).trim() : "";
     if (text) { el.dataset.pageTitle = text; document.title = text; }
+    const icon = response.ok ? response.headers.get("x-sluice-favicon") : "";
+    if (icon && el.dataset.favicon !== undefined) { el.dataset.favicon = icon; favicon(icon); }
   } catch { /* the next poll, or the stream when the tab shows again */ }
 }
 document.addEventListener("visibilitychange", () => {

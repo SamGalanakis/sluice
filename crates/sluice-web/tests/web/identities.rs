@@ -1,5 +1,5 @@
 //! The dashboard names who is who (SPEC §8.1): a unit's owner small and muted on its plan row,
-//! on its Stopped card, in its Runs tab's step view and in its page's head line, once per
+//! on its stop in Needs you, in its Runs tab's step view and in its page's head line, once per
 //! view and nothing for an unowned unit; every
 //! sender and recipient as the identity it is (a session's `@name`, a step, "You"), and the
 //! address messages were stored under before sessions named themselves as stored,
@@ -51,14 +51,15 @@ async fn a_units_owner_is_said_once_on_its_plan_row_and_in_its_page_head_and_kep
         .unwrap();
     let own = "<span class=\"own\">@lash-f4</span>";
     let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
-    let row = between(&plan, "id=\"u-alpha\"", "<div class=\"pl-cells\">");
-    assert!(row.contains(own), "the row's state line: {row}");
+    let row = between(&plan, "id=\"u-alpha\"", "<div class=\"ro-drill\">");
+    assert!(row.contains(own), "the row's title line: {row}");
     let (_, runs) = f
         .get(&format!("/projects/id/{id}/steps/alpha-build?tab=runs"))
         .await;
     let runs_head = between(&runs, "<div class=\"sv-hd has-own\">", "</div>");
     assert!(runs_head.contains(own), "the Runs tab's head: {runs_head}");
-    let view = between(&plan, "data-x=\"alpha\"", "</details>");
+    let view = between(&plan, "id=\"u-alpha\"", "</details>");
+    let view = &view[view.find("<div class=\"ro-drill\">").unwrap()..];
     assert!(
         !view.contains("class=\"own\"") && !view.contains("has-own"),
         "the open row already says its owner: {view}"
@@ -88,12 +89,12 @@ async fn a_units_owner_is_said_once_on_its_plan_row_and_in_its_page_head_and_kep
         .await
         .unwrap();
     let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
-    let row = between(&plan, "id=\"u-alpha\"", "<div class=\"pl-cells\">");
+    let row = between(&plan, "id=\"u-alpha\"", "<div class=\"ro-drill\">");
     assert!(row.contains("<span class=\"own\">you</span>"), "{row}");
 }
 
 #[tokio::test]
-async fn stopped_cards_say_their_owner_in_the_kind_line_and_an_unowned_card_says_nothing() {
+async fn stops_say_their_owner_after_their_title_and_an_unowned_one_says_nothing() {
     let f = Fixture::new().await;
     let id = f.id;
     f.writer
@@ -112,12 +113,12 @@ async fn stopped_cards_say_their_owner_in_the_kind_line_and_an_unowned_card_says
         .await
         .unwrap();
     let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
-    let unowned = between(&plan, "id=\"s-alpha\"", "<!--/r:s-alpha-->");
+    let unowned = super::plan_html::stopped(&plan, "alpha");
     assert!(!unowned.contains("class=\"own\""), "{unowned}");
-    let kind = between(&plan, "id=\"k-s-beta\"", "<span class=\"mod-t\">");
+    let owned = super::plan_html::stopped(&plan, "beta");
     assert!(
-        kind.contains("<span class=\"own\">@lash-f4</span>"),
-        "the stopped card's kind line: {kind}"
+        owned.contains("</a></b> <span class=\"own\">@lash-f4</span> failed"),
+        "the stop's sentence: {owned}"
     );
 }
 
@@ -198,10 +199,10 @@ async fn messages_name_their_identities_and_the_old_shared_address_stays_as_stor
         "{page}"
     );
 
-    // the question card, as the plan, home and the inbox draw it
+    // the question, as the plan, home and the inbox draw it
     let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
     assert!(
-        plan.contains("from <span class=\"who-old\">orchestrator</span>"),
+        plan.contains("<b><span class=\"who-old\">orchestrator</span></b> asks:"),
         "{plan}"
     );
     never(&plan);

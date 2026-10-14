@@ -211,14 +211,13 @@ cream, the channel's blue is the one active colour, sky is done, sand needs a lo
 is spent on one thing only, an open question to the owner.
 
 The owner opens the dashboard between other work, often on a second screen or a phone, to
-answer one question within seconds: does anything need me, and is the work moving? The page
-answers in its order. The page's head says it in one sentence; under it the paper lists what needs the
-owner first and what is done last: **For you** (a question to the owner) → **Stopped**
-(failed, cancelled, stale) → **Running** (quiet first, then the longest running) →
-**Waiting** → **Done** (a dense index, folded). The module that needs the owner swells. A
-running step shows how long it has run; how long a stage usually takes is the project's Stats
-page's to say, never a row's. Selecting a unit traces it: it opens in place, its upstream and downstream
-chain lights with a rail in the margin, a sentence states the chain, and the rest fades.
+answer one question within seconds: does anything need me, and is the work moving? A plan
+answers in its order, a briefing over a roster. Its head says it in one sentence; under it
+**Needs you** (questions, stops and silences, each a sentence with one action and a ×) →
+**Finished since you looked** (what this browser has not seen finish) → **At work** (a row a
+unit, the longest silent first, its last twelve hours as a track). A running step shows how long
+it has run; how long a stage usually takes is the project's Stats page's to say, never a
+row's. A row opens in place to its steps.
 
 The old world (rounded cards on cream, three racing stripes under the nav, Archivo and Public
 Sans, seven themes, a green for success and a plum for paused) is gone; nothing of its look is
@@ -230,15 +229,18 @@ The dashboard knows only sluice's own concepts: project, recipe, unit, step, sta
 table, `sluice_model::shown`), run, wait, message (owner, sessions, steps), progress fields,
 outputs and the project's board document. Nothing in view code assumes a project's vocabulary.
 
-- **Stage columns** come from a unit's recipe's own steps, in recipe order. A project with
-  several recipes gets a block per recipe, each with its own columns. A unit of no recipe has
-  its steps as its cells, in plan order, six to a line (its gates are its step view's); a
-  one-step unit is one cell.
+- **Stages** come from a unit's recipe's own steps, in recipe order. A project with several
+  recipes gets a group a recipe in At work; a unit's row names its current stage, and its step
+  view draws them all.
 - **"Finished last"** is the units (or steps of no unit) whose run ended most recently, by
   title, with when and how long they took.
-- **A long run** (a step of no recipe running six hours or more, or reporting `step_progress`) shows
-  its progress fields in the margin module, as it reported them: sluice never reads or names
-  them.
+- **A long run** (a step of no recipe running six hours or more, or reporting `step_progress`)
+  goes with the long runs, last in At work; its progress fields show as it reported them:
+  sluice never reads or names them.
+- **A badge** says what a unit's steps run on: an engine's own name, else `fn`.
+- **A shared cause** is said once for the stops it holds, from the failure kind alone (a
+  wall-clock cap, a stall, an engine's usage cap, sign-in, exit or readiness, a lost process, a
+  passing failure, exiting without submitting); a fn's own failure is always its own.
 - **The summary sentence** is built only from status counts, quiet runs and open
   questions, naming recipes by their own names.
 - **Project-specific words** come only from what the project supplies: recipe definitions
@@ -636,7 +638,7 @@ declared value must be in its allowed set (`tests/themes.rs`).
 **The still line.** At rest a sweep's bar lies across the whole foot of a running cell at .6;
 both keyframes (`tide`, `lane`) set the whole bar, so a moving sweep never shows the rest.
 `--sweep-animation: none` (Williamsburg) and reduced motion, in every theme, draw that still
-line; the trace's fades and the drawer's slide are never a theme's.
+line; the drawer's slide is never a theme's.
 
 **The display face's floor.** A display face never sets text under 19px. Every head sized by
 `--head-scale` reads its face from `--head-face-N` (N its size in px at scale 1), and `build.rs`
@@ -712,16 +714,6 @@ for input (pointer, hover, motion, colour scheme).
   `style="--span:N"`) halves it instead, so two whole-width modules stand side by side from
   2000px. A child with no span takes the whole sheet.
 - Nothing is drawn over the sheet: the grid is the layout, not a picture of it.
-- **Strip tables.** A plan's stages sit on fixed columns: a band's strip head
-  (`ui::strip_head(…, stages)`) names each stage over its column, and each row under it (a
-  plan's unit, or `ui::strip_row_open(n)`: its lead, then its `ui::stage_strip`) shares one
-  track list: the lead takes what the cells leave, the cells `--cell` wide each
-  (`clamp(68px, 6cqi, 104px)`) close beside it, then the row's end (72px: a plan row's
-  disclosure and its "⋯"). So each cell stands under
-  its name at every width. Where the sheet is under 640px the lead stands over the cells, the
-  head's names give way and each row's cells share its width.
-- The trace rail sits in the gutter and narrows with it (28px from 1200px, the gutter less a
-  pixel below).
 - **Narrow end.** At 320 and 390 nothing clips and the page never scrolls sideways; every
   control is 44px tall on a phone.
 
@@ -799,7 +791,7 @@ Outputs and Runs tabs stay whole).
 **A value by its shape** (`ui::ValueSet`), never its name: a number, a boolean or a short word
 shows; a hash, an id, a path, a URL or a long token goes to the Details; prose shows clamped to
 two lines, whole in the Details. Every preview goes through it: a step's progress fields (Now,
-its Progress module, the margin), Overview's outputs and a recipe's view on a unit's row and
+its Progress module, a long run's row), Overview's outputs and a recipe's view on a unit's row and
 head (a "land sha" is in the unit's Details); only the Inputs and Outputs tabs draw every value
 whole. A message line on a row names its sender in words (the
 sending step's stage, a session's `@name`, "orchestrator" for a message stored before sessions
@@ -822,16 +814,11 @@ when), `.mod-t` (its title), `.mod-meta` (its facts; what identifies it in its D
 - **The swell**: the module that needs the owner grows. A question to the owner
   (`Swell::Ask`) takes six columns under a 6px coral rule, its title at 23px, its question
   whole with Answer first. A stopped unit (`Swell::Look`) sits on `sand-pale` under a 2px navy
-  rule, with Retry with feedback first. A long run (`Swell::Margin`) is the margin module on
-  sky under a 3px navy rule. Anything else (`Swell::Plain`) is a row under a hairline.
-- **A band section's head** (`ui::section_head`): For you, Stopped, Running, Waiting, Done,
-  each under a 3px navy rule, its name at 26px at the left and its count line at the right
-  ("1 failed · 1 cancelled").
-- **The margin module** (`ui::margin_module`): two columns at the sheet's right; a long run's
-  title (linking its page) with its Details, its words, its running time on the blue with the
-  sweep, then the progress fields that read at a glance, when it last reported. A value is set
-  by its shape alone (`ui::ValueSet`): the first short one at display size, prose clamped to
-  two lines; an id, a hash, a path or a list only in its Details.
+  rule, with Retry with feedback first. Anything else (`Swell::Plain`) is a row under a
+  hairline. Home, a unit's page and a step's page use them; the plan does not (below, The
+  briefing).
+- **A section's head** (`ui::section_head`): home's, the day's and stats' sections, each under
+  a 3px navy rule, its name at 26px at the left and its count line at the right.
 
 ## Status presentation
 
@@ -842,16 +829,16 @@ every step in the drawer's unit.
 
 **The stage strip** (`ui::stage_strip`): a unit's stages in recipe order, one 56px cell each
 (48px on a phone), the cell's kind read from the status table (`ui::Cell::of`). Wherever a
-strip is narrow (a phone's row, the drawer, the For you card) one rule holds: three cells a
+strip is narrow (a phone, the drawer, a half-width module) one rule holds: three cells a
 row, never under 72px, so a stage's name is never cut; where a cell says its state in a word,
 the word goes under the name, never beside it.
 
 - **Not reached**: an outline in `rule` with the stage's name; a waiting state that says
   itself (held, queued, paused, blocked) writes its glyph before the name and its word under
   them ("⊖ land", then "blocked").
-- **Done** (the Done band): sky, its glyph (check, set by hand, skipped) and its name, how long
+- **Done**: sky, its glyph (check, set by hand, skipped) and its name, how long
   it took under it.
-- **Running** (the rest of the Running band: running, finishing, stopping, outside): the blue,
+- **Running** (running, finishing, stopping, outside): the blue,
   its glyph (in `on-run`) and its name small, its elapsed time big and ticking under them, a
   sweep along its foot. It is never set
   against a usual time: that is the Stats page's.
@@ -861,10 +848,8 @@ the word goes under the name, never beside it.
 
 Every cell has the same two lines: its glyph before its name (a cell not reached that says
 nothing draws none), then its word or its time alone, big for a run and a look, small for done.
-So a state word never shares its line with the glyph, and it fits the narrowest cell, a plan
-row's 68px at 1440, in every theme; a word wider than its cell would wrap within it, never clip
-or go out of sight. In a plan row a look cell's second line is its time (the row's head says its
-state in words); a cell waiting in its own way keeps its word there.
+So a state word never shares its line with the glyph, and it fits the narrowest cell in every
+theme; a word wider than its cell would wrap within it, never clip or go out of sight.
 
 Each cell's state is said in words to a screen reader, and a cell with a page links to it.
 `ui::stage_marks` draws the same strip as 12px squares in a line of words.
@@ -899,44 +884,25 @@ draws:
 - **The One Coral Rule.** Coral is an open question to the owner and the logo, nothing else.
 - **The One Blue Rule.** Blue fills only what runs now.
 
-**The summary sentence** (`ui::summary_sentence`): "1 question for you. 1 failed, 1
-cancelled. 3 units at work: 1 quiet for 53m. 2 waiting. 3 of 10 units done; the last finished
-57m ago." It names no unit: quiet runs are counted, the longest said ("3 quiet, the longest for
-1h 6m"), and the rows under it name them. The units at work are counted, not split by recipe
-(Running's groups say which recipe made them), each part is left out
-when it has nothing to say, and the question links to where it is answered, under a coral
-underline. A quiet run's time ticks on the page.
-
-## Select to trace
-
-`sluice-trace` (`ui::trace_open`) around the units it traces, its line first: "Select any unit
-to trace what it waits for and what waits on it." Each unit carries its whole chain in its
-markup (`ui::Trace::attrs`: `data-up`, `data-down`, `data-chain`), so the trace fetches
-nothing. Selecting a unit (its `[data-trace-pick]` button):
-
-- opens its `[data-trace-more]` in place and rings it in navy;
-- marks every unit selected, upstream or downstream (a navy chip says which,
-  `ui::trace_role`), and fades the rest to 25%;
-- draws the rail in the margin at the units' left, from the first lit unit to the last, a
-  square at each (filled for the selected), through the section heads between;
-- puts the chain's sentence in the line ("Tracing a-13. It waits for a-12 and s-3. a-14 waits
-  on it."), politely, with Clear trace beside it.
-
-Selecting it again, Clear trace or Escape clears and gives the focus back to its button; the
-arrows move between the units' buttons. The choice is the host's `selected`, kept through a
-stream patch and drawn again after one. Without script the units link to their pages.
+**The summary sentence** (`ui::summary_sentence`), on home's project modules: "1 question
+for you. 1 failed, 1 cancelled. 3 units at work: 1 quiet for 53m. 2 waiting. 3 of 10 units
+done; the last finished 57m ago." It names no unit: quiet runs are counted, the longest said
+("3 quiet, the longest for 1h 6m"). Each part is left out when it has nothing to say, and the
+question links to where it is answered, under a coral underline. A quiet run's time ticks on
+the page. A plan's head says it shorter, each state in its own word (The briefing).
 
 ## The step view
 
 `views::unit_steps` (`View`, from a unit by `unit_steps::of_unit`) in a `sluice-steps`: a unit
 drawn step by step, after the reference the owner chose (a pipeline's run view), in Synthesis.
-It is the unit page's body, what a plan row's disclosure opens in place, and a step's Runs tab's
-first part (its own row ringed).
+It is the unit page's body, what a plan row opens in place, and a step's Runs tab's first part
+(its own row ringed).
 
 - **Rows are steps**, in graph order: the recipe's (else the plan's), each after every step of
   its unit it comes after. Each row: the rail, the name (its stage, linking the step; a
   condition it runs on muted before it, "if ok", "if not ok"; a wait on another unit under it,
-  "waits for Terns"), **State** (`ui::status`: glyph and word, "bypassed" for a result its
+  "waits for Terns"), **On** (what it runs on: an engine's name, a fn; muted, its own column
+  from 560px), **State** (`ui::status`: glyph and word, "bypassed" for a result its
   bypass preset settled, then a "bypass · <who set it>" tag while one waits, then `ui::tries`'
   "run 3"),
   **Progress** (a scatter's "12/40" or a short `step_progress` field, a 3px bar under an "a/b";
@@ -972,14 +938,10 @@ first part (its own row ringed).
   on the plan and in the drawer, its page elsewhere); the arrows, Home and End move between rows;
   the row in focus, clicked or open in the drawer is selected: `paper-2` under a 2px navy ring
   (the host's `selected`, kept through a patch). Hover is `paper-2` alone.
-- **In the plan.** A row's disclosure (`ui::expand`: a `<details>`, its summary a chevron 34px,
-  44px on a phone, before the row's "⋯", named "Steps of <title>") opens the view under the row
-  across the content; a Done index line has one at its end and opens across the index's
-  columns. Enter or Space toggles it. The title still traces; the disclosure only opens. The
-  units open are the trace host's `expanded`, so a patch, or the unit moving between bands,
-  leaves them open. Done units fetch their step view on first open and keep it through patches;
-  their summary links to the unit page without script. Running and Waiting keep their views
-  in the page so the stream updates them.
+- **In the plan.** A row of At work is a `<details>`: open, its step view stands under it on
+  `paper-2`, the current step's row tinted (`run` at 7%, `sand` at 18% for a look), then its
+  latest message, Message and Open step, and Unit page. It opens without script, and stays open
+  through a patch (`data-preserve-attr="open"`), the unit moving between groups included.
 - **Narrow** (under 560px of its own width: a phone, a narrow drawer): one column, the rail
   and name, then state, progress and span, then the runs as a 4px bar; the head and the axis's
   labels give way. Nothing scrolls sideways.
@@ -988,10 +950,11 @@ first part (its own row ringed).
 ## Motion
 
 One moment, the work moving: the sweep along a running cell's foot (Sluice's: 3.2s, ease-out,
-the bright sky crossing the blue; a theme sets its duration, easing and shape, or none). The trace's fades (0.35s ease-out) and the rail drawing down
-(0.45s) answer a selection, and a disclosure's chevron turns (0.2s). A step view's now line
+the bright sky crossing the blue; a theme sets its duration, easing and shape, or none), and a
+plan row's live dot breathing (2.4s) while its unit was heard from in the last five minutes. A
+row's chevron turns as it opens (0.15s). A step view's now line
 moves with the clock in steps of five seconds, never animated. Everything else is still. Under reduced motion the sweep is a
-static line and nothing draws or fades.
+static line, the dot is still and nothing turns.
 
 ## Components
 
@@ -1009,8 +972,7 @@ observers, keyboard handling, and state kept in its host's own attributes, which
 leaves as they are (`data-preserve-attr`). It never draws content: a page reads whole before
 its script runs and without it, a patch morphs server HTML into server HTML, and a screen
 reader hears what the server wrote; the only words a component writes are chrome with no
-meaning without script ("Copied", the trace's sentence, which the server carries in
-`data-chain`). A control that needs script (`.needs-js`) is hidden until its component is
+meaning without script ("Copied"). A control that needs script (`.needs-js`) is hidden until its component is
 defined. A host around a part gives it no box (`display: contents`); a host that is its part
 takes the part's. A page makes a host only through `ui::rocket` and `ui::grid`, and Datastar
 attributes stay outside a host.
@@ -1025,8 +987,6 @@ parts" (the gallery) and "Agent docs" (`/docs`).
 
 The components:
 
-- **`sluice-trace`**: select to trace (above); it keeps the plan rows whose step view the owner
-  opened open (`expanded`).
 - **`sluice-steps`**: the step view (above): a row's click opens its step, the arrows move
   between rows, the selected row in `selected`.
 - **`sluice-tabs`**: an ARIA tablist over its panels (arrows wrap, Home and End); the choice in
@@ -1051,7 +1011,8 @@ The components:
 - **`sluice-banner`**: the stream line ("Updates paused. Reconnecting…", "Updates stopped at
   14:02." with Reconnect) and the build line ("sluice was updated · Reload"); the stream's
   phase is also `html[data-stream]`, which the nav bar's live line reads.
-- **`sluice-keys`**: `/` finds, `[` and `]` move the drawer, `g` then a letter goes to a page,
+- **`sluice-keys`**: `/` finds, `[` and `]` move the drawer through the plan's steps in page
+  order (Needs you, then each row's steps, folded or not), `g` then a letter goes to a page,
   `?` opens display preferences at Keyboard shortcuts; never while typing or under a dialog.
 - **`sluice-splitter`**, **`sluice-drawer`**: the board's splitter and the step drawer.
 
@@ -1084,76 +1045,66 @@ The parts:
 
 The pages compose these parts; each lane that redraws one writes its section here.
 
-- **A project's plan** (`/projects/id/<p>`, `views::plan`): the head with the project's name,
-  its Details (its id, its description, its settings) and its summary sentence; the row with
-  its sections, the count line ("103 units · 475 steps"), Find, the Plan · Both · Board switch
-  when the project has a board and a quiet menu; the trace line (said to a screen reader, seen
-  only while tracing); then the sheet. Each live unit is drawn once, in the first band that
-  holds it:
-  - **For you**: each open question to the owner a swelled module (the coral rule, the
-    question as its title, who asked in words and when, the unit's title and how long it has
-    run, its stage strip the first time a unit asks (three cells a row in the half-width card,
-    each name whole, its state its glyph), the question's body, Answer primary, Open
-    step, Message, Close question, its Details). Beside it, **Stopped**: each failed, cancelled
-    or stale unit a module on the sand (its glyph and word, its failure's kind in a word, its
-    owner small and muted in the kind line when owned, its stage marks, the failure's sentence
-    and what to try next (one advice with the step page, `failure::Advice`), Retry with feedback
-    first, the bare Retry quiet when the failure repeated, Open step, Unit page, its Details). A failure's Details end with "Set it aside"
-    under a hairline: Cancel and Cancel and dismiss, each an outlined row opening its
-    confirmation ("Cancel <title>?"; Cancel and dismiss says Undo brings back the cancel, not
-    the failure); with script both
-    post in place, Cancel and dismiss handing the focus to Undo. Failures before
-    cancels, in plan order. A cancelled card ends with a quiet Dismiss (a plain form, no
-    confirm): its unit then stops marking the plan and the summary, and stands in Done's index
-    as "b cancelled and dismissed". The dismissal persists through record retention and later
-    project activity; a retry or a new cancel brings the card back. For ten minutes after,
-    Stopped says "Dismissed: <title>" and Undo in one
-    polite status line a cancel (glyph, title clamped to two lines, Undo), the Undo a plain
-    form too. With script, both post in place and the live stream updates Stopped without a
-    navigation or scroll jump. Dismiss gives Undo the focus; Undo gives the restored card the
-    focus. Retry, retry feedback, Cancel and Close question also post in place, including forms
-    moved into the confirmation dialog. A failed post shows a notice beside the form and keeps
-    its typed feedback. Without script, the forms keep their POST and redirect round trip.
-    A failure is never dismissed as it is: it is cancelled first (a cancel that set a failure
-    aside says "It had failed: …" under its sentence). A card's stage names it on a unit of several; a step's
-    id never heads or leads a card. A card or row is its unit's trace button, named "Trace
-    <title>", its state and time its description.
-  - **Running**, quiet first then the longest running, and **Waiting**, in plan order, as rows
-    (Running's count line "3 running", Waiting's "4 waiting", with ", all held by <title>" when
-    one source holds them all and ", 1 blocked"; a band of one block says its block's line):
-    a block a recipe (its name, linking to every unit it made, its count by state, its stages
-    as the columns over its rows), then the units of no recipe and the loose steps. A row (72 to
-    88px at 1440) is the unit's trace button: its glyph and word, how long it has run ("1h 51m",
-    and how long silent when quiet), its owner small and muted (`@lash-f4`), then its title, two lines at most; under it one line, what holds a waiting unit
-    (each source by title, linked, and what it is doing) or the recipe's `view` (else its last
-    message, its sender in words); its cells close beside it, sized to them, on the recipe's
-    columns (a loose step one cell; a unit of no recipe its steps, six to a line); its
-    disclosure and its Details at the end. The disclosure opens its step view under it (The
-    step view); selecting the row opens its last message and actions in place.
-  - **The margin**: a long run alone (no recipe, reporting progress, or running six hours or
-    more, `plan::LONG_RUN`) as the sky module in the sheet's last two columns, down beside the
-    bands; its title opens the step in the drawer.
-  - **Done**: its count and when the last finished; what finished last, the latest four by
-    title with their clock time and how long they took (`ui::latest_list`); then the index
-    folded behind "Show the n done units" (open for Show: Done, a find or a recipe's every
-    unit), a dense list newest first in columns: finish time, glyph, title, how long it took
-    (in `ink-muted`, like every finished duration: the blue is for what runs), its disclosure.
-  The sheet's modes: on a medium sheet (under 1200px, a board or the drawer beside it) a row's
-  cells narrow to 68px each, the modules sit two to a band's row and the long
-  runs go side by side under Running; under 640px everything stacks; from 2000px the bands of
-  modules set twice as many to a row and Running and Waiting stand side by side. Every band
-  is a patch region and every unit one inside it, so a change patches the bands a unit moved
-  between and nothing else; a step whose state moves on is said once to a screen reader. The
-  step drawer opens beside the plan from any cell, Open or margin title, on paper under the
-  heavy navy rule a band's head wears, a hairline at its edge, lifted off the plan.
+- **A project's plan** (`/projects/id/<p>`, `views::plan`): a briefing over a roster, on its
+  own visual system (The briefing, below). The head: the project's name at 22px/650 with its
+  Details, then one sentence from the status table's counts, the silences and the open
+  questions, each state in its own word ("1 question for you, 2 failed, 1 quiet. 10 at work;
+  73 of 92 done."; "3 at work, all heard from recently." when nothing needs the owner), the
+  question linked under the coral underline. The project's sections are soft pills under it
+  (the current one on `paper-2` at weight 600); the row's tools (Find, the switch, More) beside
+  them. Then the sheet, three sections each headed by a 13px label of weight 600:
+  - **Needs you**: the one raised well (`paper-2`, 14px), an item a line: its mark (a coral dot a
+    question, a sand square a stop, a sand ring a silence, said in words to a screen reader),
+    its sentence (the unit's title in weight 600 linking the step, what happened, its owner
+    small and muted; under it the failure's headline, what it last said and the advice, muted),
+    its one action (a pill: Answer, Retry, Retry with feedback, Retry all, Message it) and its
+    × (a 28px circle, 44px on a phone). Questions first, then stops (a shared cause said once,
+    its units folded in a `<details>`, Retry all), then silences, the longest first. A count
+    and "Dismiss all" stand in the head. An item set aside leaves a line under the well for ten
+    minutes, "Dismissed <what>" and Undo, and comes back by itself when it changes; with script
+    the × and Undo post in place, the focus going to Undo and back to the item. With nothing to
+    say, the well says "Nothing.".
+  - **Finished since you looked**: cards (10px, a hairline inset, three to a row from 760px,
+    one under it): when it finished and how long it took, the title in weight 600 linking the
+    unit, what it produced, a label muted before the value. "since 14:02" and "Mark as seen"
+    (a plain form) in the head; with no look kept, "Finished lately", the latest four.
+  - **At work**: the roster, under an axis row (12h, 4h, 1h, 15m, now, in data mono 11px
+    over the tracks' column). A group a recipe, its name in weight 600 and its counts muted;
+    the units of no recipe after, the long runs last. A row (8px, `paper-2` on hover and open)
+    is a grid: the badge (a 30px circle, what it runs on), its title in weight 600 with its
+    owner muted and under it its recipe's view or its last message on one line, muted; its
+    stage pill (the state's glyph, the stage and its time, on `paper-2`, 999px) and "heard 12m
+    ago" muted, or the quiet pill on the sand; its track (its last twelve hours on a log scale:
+    a done run `sky-ink` at 24%, a run the blue, quiet the sand, a wait dotted, a message a 1px
+    tick); the live dot. Waiting rows follow the running ones, muted. A line ends it: "4
+    waiting on earlier work · 25 done, the last 2h ago". Under 760px of the pane the row
+    stacks: badge and title, then the meta, then the track full width; the axis gives way.
+  - **Done**, asked for (Show: Done, a find, a recipe's units): the index, a dense list newest
+    first in columns: finish time, glyph, title, how long it took (in `ink-muted`, like every
+    finished duration: the blue is for what runs).
+  Every section is a patch region, and every item and row one inside it, so a change patches
+  the item or row it moved and nothing else; a step whose state moves on is said once to a
+  screen reader. The step drawer opens beside the plan from any step link, on paper under the
+  heavy navy rule, a hairline at its edge, lifted off the plan. **The glance**: the plan's tab
+  title is "(1) ✕4 · almanac · sluice" (the open questions in brackets, a cross and the stops
+  not set aside, the name) and its favicon wears a coral dot while a question waits, a sand
+  square while a step needs a look (`favicon-ask.svg`, `favicon-look.svg`).
+- **The briefing** (the plan's visual system): radii 14px for the well, 10px for a card or the
+  index, 8px for a row, 999px for a pill; one raised well (Needs you) and nothing else lifted;
+  hairlines (`rule`, `rule-faint`) for the rest; two weights, 600 and 400 (the name 650). The
+  palette's roles hold: coral only for a question, sand for a look, the blue only for what
+  runs, sky for done. It reads in every theme, light and dark, from the same tokens; the radii
+  are the briefing's own, whatever a theme's `--radius-*`.
 - **A step's page** (`/projects/id/<p>/steps/<s>`): under the row, its head (the gallery's
   Step head, `StepView::band`): its way back to its plan and its unit, its stage muted before
   its title at 28px with its Details (its id, unit, recipe, fn, run and tags), its state and how
   long it has run, its words, then its unit's stage strip (its own
-  stage ringed) and its actions, the next move filled: Retry with feedback as on the plan's
-  Stopped cards (its box folded under it, Retry beside it; on a failure that repeated it leads
-  to the box standing open in why it failed and the bare Retry is quiet), a cancel's quiet
-  Dismiss; a failure's Details hold Set it aside as its card's do. Why it failed reads in order: its headline, the words its run said and its last failed
+  stage ringed) and its actions, the next move filled: Retry with feedback (its box folded under
+  it, Retry beside it; on a failure that repeated it leads to the box standing open in why it
+  failed and the bare Retry is quiet), a cancel's quiet Dismiss; a failure's Details end with
+  "Set it aside" under a hairline: Cancel and Cancel and dismiss, each opening its
+  confirmation ("Cancel <title>?"; Cancel and dismiss says Undo brings back the cancel, not
+  the failure). Why it failed reads in order: its headline, the words its run said and its last failed
   call, then the advice (ink at body size), then, when a failure repeated the run before, the
   feedback box standing open, so the owner reads why before writing. Its tabs follow. Overview is modules on the sheet: the question
   to the owner swells first on the coral rule, answered in place; then why it failed on the

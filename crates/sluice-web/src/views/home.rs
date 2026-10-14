@@ -1105,29 +1105,41 @@ struct TitleQuery {
     project: Option<ProjectId>,
 }
 /// A page's tab title alone, as its stream would write it: what a hidden tab asks for while its
-/// stream is closed (`nav.js`). The index's by default; a project's with `?project=`.
+/// stream is closed (`nav.js`). The index's by default; a project's plan's glance with
+/// `?project=`, its favicon's address in `x-sluice-favicon`.
 async fn title_handler(
     State(state): State<DashboardState>,
     Query(query): Query<TitleQuery>,
 ) -> Response {
     let title = async {
         let snapshot = state.snapshot(None).await?;
-        let words = match query.project {
-            None => home::HomeView::new(&snapshot).title(),
-            Some(id) => snapshot
-                .projects
-                .iter()
-                .find(|p| p.id == id)
-                .ok_or_else(|| PublicError::NotFound {
-                    message: "project not found".into(),
-                })?
-                .tab_words(),
+        let (words, favicon) = match query.project {
+            None => (home::HomeView::new(&snapshot).title(), "favicon.svg"),
+            Some(id) => {
+                let project = snapshot
+                    .projects
+                    .iter()
+                    .find(|p| p.id == id)
+                    .ok_or_else(|| PublicError::NotFound {
+                        message: "project not found".into(),
+                    })?;
+                (project.tab_words(), project.favicon())
+            }
         };
-        Ok::<_, PublicError>(format!("{words} · sluice"))
+        Ok::<_, PublicError>((format!("{words} · sluice"), super::asset_url(favicon)))
     };
     match title.await {
-        Ok(title) => (
-            [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        Ok((title, favicon)) => (
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8".to_owned(),
+                ),
+                (
+                    axum::http::header::HeaderName::from_static("x-sluice-favicon"),
+                    favicon,
+                ),
+            ],
             title,
         )
             .into_response(),
@@ -1185,6 +1197,16 @@ pub fn registration() -> PageRegistration {
                 names: &["favicon.svg"],
                 media_type: "image/svg+xml",
                 bytes: include_bytes!("../../assets/favicon.svg"),
+            },
+            Asset {
+                names: &["favicon-ask.svg"],
+                media_type: "image/svg+xml",
+                bytes: include_bytes!("../../assets/favicon-ask.svg"),
+            },
+            Asset {
+                names: &["favicon-look.svg"],
+                media_type: "image/svg+xml",
+                bytes: include_bytes!("../../assets/favicon-look.svg"),
             },
         ],
     }

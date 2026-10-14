@@ -101,7 +101,7 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
         "{row}"
     );
     let (_, page) = f.get(&format!("/projects/id/{id}")).await;
-    assert!(title(&page).contains("1 cancelled"), "{}", title(&page));
+    assert!(title(&page).contains(">✕1 · aside"), "{}", title(&page));
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/b")).await;
     assert!(
         step.contains(
@@ -117,22 +117,26 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     assert!(!title(&home).contains("cancelled"), "{}", title(&home));
     assert!(!home.contains("sr-dismiss"), "the index lists it no more");
     let (_, page) = f.get(&format!("/projects/id/{id}")).await;
-    assert!(!title(&page).contains("cancelled"), "{}", title(&page));
+    assert!(!title(&page).contains('✕'), "{}", title(&page));
     // no longer stopped: its unit is done, a line of the Done index that still reads cancelled
-    assert_eq!(plan_html::place(&page, "u"), "done", "{page}");
-    let done = plan_html::band(&page, "plan-done");
-    let line = between(done, "<li data-said=\"a succeeded|b cancelled\">", "</li>");
+    let (_, index) = f.get(&format!("/projects/id/{id}?show=done")).await;
+    assert_eq!(plan_html::place(&index, "u"), "done", "{index}");
+    let done = plan_html::band(&index, "plan-done");
+    let line = between(done, "/units/u\">", "</li>");
     assert!(
         line.contains("g-cancelled") && line.contains(">b cancelled and dismissed</span>"),
         "{line}"
     );
     assert!(!plan_html::summary(&page).contains("cancelled"), "{page}");
-    // Stopped holds no card now, only the line that offers its Undo, for ten minutes
-    let stopped = plan_html::band(&page, "plan-stopped");
+    // Needs you holds no item now, only the line that offers its Undo, for ten minutes
+    let well = plan_html::band(&page, "plan-needs");
     assert!(
-        !stopped.contains("pl-item pl-stop")
-            && stopped.contains("<div class=\"pl-dismissed\" role=\"status\">"),
-        "{stopped}"
+        plan_html::needs(&page).is_empty()
+            && well.contains(
+                "<ul class=\"nd-gone\" role=\"status\"><li><span>Dismissed u (cancelled)</span>"
+            )
+            && well.contains("value=\"cancel:b\""),
+        "{well}"
     );
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/b")).await;
     assert!(step.contains("cancelled"), "the step still reads cancelled");

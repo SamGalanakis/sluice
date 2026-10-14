@@ -2,7 +2,8 @@
 //! order. A rail at the left draws its gates (a node a step: filled done, ringed not reached,
 //! turning while it runs; a join or a branch with arrows; a condition named at its row), then
 //! each step's name, its state (glyph and word from the status table), its progress, its runs
-//! as bars on one time axis shared by every row, and how long its run took. Its foot is the
+//! as bars on one time axis shared by every row (a tick on a bar for each message the step
+//! sent), and how long its run took. Its current step's row is tinted. Its foot is the
 //! unit's last message. The plan's rows open to it in place, the unit page is it, and a step's
 //! Runs tab draws its unit's with the step ringed.
 //!
@@ -135,6 +136,13 @@ pub struct Step<'a> {
     pub span: Span,
     /// What it waits for outside its unit, in words ("waits for Terns"), "" for nothing.
     pub note: String,
+    /// What it runs on (`StepView::runs_on`): an agent's model or engine, else its fn.
+    pub runs_on: String,
+    /// When it said something (each message it sent), seconds since the epoch: a tick on its
+    /// track.
+    pub ticks: Vec<f64>,
+    /// It is the step that says how its live unit stands now: its row is tinted.
+    pub current: bool,
 }
 /// A gate between two of the unit's steps: `to` comes after `from`, on a condition named
 /// `when` ("ok", "not ok") or none.
@@ -656,7 +664,7 @@ impl View<'_> {
         // eye; a screen reader hears the owner alone)
         let _ = write!(
             out,
-            "<div class=\"sv-hd{}\"><span class=\"sv-h-name\"><span class=\"sv-h-w\" aria-hidden=\"true\">Step</span>{}</span><span class=\"sv-h-st\" aria-hidden=\"true\">State</span><span class=\"sv-h-pr\" aria-hidden=\"true\">Progress</span>{}<span class=\"sv-h-sp\" aria-hidden=\"true\">Span</span></div>",
+            "<div class=\"sv-hd{}\"><span class=\"sv-h-name\"><span class=\"sv-h-w\" aria-hidden=\"true\">Step</span>{}</span><span class=\"sv-h-on\" aria-hidden=\"true\">Runs on</span><span class=\"sv-h-st\" aria-hidden=\"true\">State</span><span class=\"sv-h-pr\" aria-hidden=\"true\">Progress</span>{}<span class=\"sv-h-sp\" aria-hidden=\"true\">Took</span></div>",
             if self.owner.is_empty() {
                 ""
             } else {
@@ -700,9 +708,10 @@ impl View<'_> {
             let selected = step.id == self.selected;
             let _ = write!(
                 out,
-                "<li class=\"sv-row sv-c-{}{}\" data-sv=\"{}\">",
+                "<li class=\"sv-row sv-c-{}{}{}\" data-sv=\"{}\">",
                 cell.key(),
                 if selected { " is-sel" } else { "" },
+                if step.current { " is-cur" } else { "" },
                 esc(&step.id)
             );
             out.push_str(&rail_svg(r, width, cell, step.shown));
@@ -740,6 +749,11 @@ impl View<'_> {
                 let _ = write!(out, "<span class=\"sv-note\">{}</span>", esc(&step.note));
             }
             out.push_str("</span>");
+            let _ = write!(
+                out,
+                "<span class=\"sv-on\"><span class=\"vh\">runs on </span>{}</span>",
+                esc(&step.runs_on)
+            );
             let _ = write!(
                 out,
                 "<span class=\"sv-st\">{}{}{}</span>",
@@ -897,6 +911,19 @@ fn track(axis: &Axis, step: &Step<'_>) -> String {
             None => format!("Run {} running since {}", n + 1, ui::at_text(&span.started)),
         });
     }
+    // a tick for each message it sent, over its bars
+    for t in &step.ticks {
+        if *t >= axis.t0 && *t <= axis.t1 {
+            let _ = write!(
+                bars,
+                "<i class=\"sv-m\" style=\"--l:{:.3}%\"></i>",
+                axis.at(*t)
+            );
+        }
+    }
+    if !step.ticks.is_empty() {
+        said.push(ui::count(step.ticks.len(), "message", "messages"));
+    }
     format!(
         "<span class=\"sv-tr\" role=\"img\" aria-label=\"{}\">{bars}</span>",
         esc(&if said.is_empty() {
@@ -957,6 +984,12 @@ pub fn of_unit<'a>(
     let steps = ordered(unit);
     let edges = edges(relations, &steps);
     let project = steps.first().map(|s| s.project);
+    // the step that says how a live unit stands, when it runs or wants a look
+    let shown = unit.shown();
+    let current = (!unit.done && matches!(Cell::of(Some(shown)), Cell::Run | Cell::Look))
+        .then(|| unit.steps.iter().find(|s| s.standing() == shown))
+        .flatten()
+        .map(|s| s.id.clone());
     let views = steps
         .iter()
         .map(|s| Step {
@@ -981,6 +1014,14 @@ pub fn of_unit<'a>(
                 .first()
                 .map(|w| format!("waits for {}", w.name.text(48)))
                 .unwrap_or_default(),
+            runs_on: s.runs_on(),
+            ticks: unit
+                .said
+                .iter()
+                .filter(|(from, _)| from == s.id.as_str())
+                .map(|(_, at)| *at)
+                .collect(),
+            current: current.as_ref() == Some(&s.id),
         })
         .collect();
     let latest = (!unit.last_message.trim().is_empty())

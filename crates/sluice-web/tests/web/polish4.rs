@@ -150,7 +150,7 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     let (_, home) = f.get("/title").await;
     assert!(home.starts_with("3 questions · "), "{home}");
     let (_, project) = f.get(&format!("/title?project={id}")).await;
-    assert!(project.starts_with("3 questions · "), "{project}");
+    assert!(project.starts_with("(3) "), "{project}");
     assert!(project.ends_with("titled · sluice"), "{project}");
     let (_, page) = f.get("/").await;
     assert!(page.contains("<title>3 questions · "), "{page}");
@@ -180,20 +180,19 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     let row = between(module, "<li class=\"pm-row pm-running", "</li>");
     assert!(!row.contains("tag ask") && !row.contains("mk-ask"), "{row}");
 
-    // the plan: its summary counts them, linked to For you, where each is a module of its own
-    // under the coral rule, answered where it was asked
+    // the plan: its sentence counts them, linked to Needs you, where each is an item of its own
+    // under the coral dot, its Answer leading to where it was asked
     let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
     let summary = plan_html::summary(&plan);
-    assert!(summary.contains("3 questions for you</a>."), "{summary}");
+    assert!(summary.contains("3 questions for you</a>,"), "{summary}");
     let q = plan_html::question(&plan, lane);
-    assert!(q.contains("<article class=\"mod swell-ask\""), "{q}");
+    assert!(q.contains("<span class=\"nk nk-ask\""), "{q}");
     assert!(
         q.contains(&format!(
-            "<a class=\"primary\" href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\" data-opens=\"l1-work\">Answer"
-        )),
+            "<a class=\"act main\" href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\" data-opens=\"l1-work\">Answer"
+        )) && q.contains(" asks: Land l1 first?"),
         "{q}"
     );
-    assert!(q.contains("It touches <strong>two</strong> files."), "{q}");
     assert!(
         plan_html::question(&plan, boxed).contains("steps/kit-a#ov-message-"),
         "{plan}"
@@ -203,11 +202,11 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
             .contains(&format!("/projects/id/{id}/inbox#item-{id}-{orchestrator}")),
         "{plan}"
     );
-    // the asking unit is drawn there, once: not again in Running
+    // the asking unit is the question's
     assert_eq!(plan_html::place(&plan, "l1"), "asks");
     assert_ne!(plan_html::place(&plan, "l2"), "asks");
     // coral is spent on nothing else on the plan
-    assert_eq!(plan.matches("swell-ask").count(), 3, "{plan}");
+    assert_eq!(plan.matches("nk-ask").count(), 3, "{plan}");
     assert!(!plan.contains("class=\"tag ask\""), "{plan}");
 }
 

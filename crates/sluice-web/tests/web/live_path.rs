@@ -99,7 +99,7 @@ async fn a_state_change_patches_only_the_regions_it_changed() {
     assert!(!page.contains("class=\"board-edges\""));
     let mut body = open(&router, &format!("{path}/stream")).await;
     first_batch(&mut body).await;
-    // beta-build stays failed, for another reason: only its stopped module and the board's
+    // beta-build stays failed, for another reason: only its item in Needs you and the board's
     // StepStatus say it
     let id = f.id;
     f.writer
@@ -118,12 +118,12 @@ async fn a_state_change_patches_only_the_regions_it_changed() {
         .unwrap();
     let wire = first_batch(&mut body).await;
     let sent = selectors(&wire);
-    assert!(sent.contains(&"#s-beta"), "{sent:?}");
+    assert!(sent.contains(&"#n-stop-beta-build"), "{sent:?}");
     for whole in [
         "#project-board",
         "#plan-band",
-        "#plan-stopped",
-        "#plan-waiting",
+        "#plan-needs",
+        "#plan-roster",
         "#plan-done",
     ] {
         assert!(!sent.contains(&whole), "{whole}: {sent:?}");
@@ -135,8 +135,8 @@ async fn a_state_change_patches_only_the_regions_it_changed() {
         wire.len(),
         page.len()
     );
-    // alpha-review starts: alpha moves from Waiting to Running, and the band's sentence says so;
-    // the stopped module and the Done index are not sent
+    // alpha-review starts: alpha's row goes from waiting to at work, and the head's sentence
+    // says so; Needs you and the Done index are not sent
     sql(
         &f,
         "UPDATE steps SET status='running' WHERE project_id=?1 AND step_id='alpha-review'",
@@ -145,8 +145,13 @@ async fn a_state_change_patches_only_the_regions_it_changed() {
     let wire = first_batch(&mut body).await;
     let sent = selectors(&wire);
     assert!(sent.contains(&"#plan-band"), "{sent:?}");
-    assert!(wire.contains("data-unit=\"alpha\""), "{wire}");
-    for whole in ["#project-board", "#s-beta", "#plan-stopped", "#plan-done"] {
+    assert!(wire.contains("id=\"u-alpha\" class=\"ro-u\""), "{wire}");
+    for whole in [
+        "#project-board",
+        "#n-stop-beta-build",
+        "#plan-needs",
+        "#plan-done",
+    ] {
         assert!(!sent.contains(&whole), "{whole}: {sent:?}");
     }
     assert!(
@@ -269,14 +274,16 @@ async fn a_hidden_tab_asks_for_its_title_alone() {
     let (status, lanes) = f.get(&format!("/title?project={}", f.id)).await;
     assert_eq!(
         (status, lanes.as_str()),
-        (StatusCode::OK, "1 failed · lanes · sluice")
+        (StatusCode::OK, "✕1 · lanes · sluice")
     );
     let (_, page) = f.get(&format!("/projects/id/{}", f.id)).await;
-    assert!(page.contains("<title>1 failed · lanes · sluice</title>"));
-    assert!(page.contains(&format!(
-        "data-page-title=\"1 failed · lanes · sluice\" data-title-src=\"/title?project={}\"",
-        f.id
-    )));
+    assert!(page.contains("<title>✕1 · lanes · sluice</title>"));
+    // the title carries the state, the favicon its look variant: a stop, a sand square
+    assert!(page.contains(
+        "data-page-title=\"✕1 · lanes · sluice\" data-favicon=\"/static/favicon-look.svg?v="
+    ));
+    assert!(page.contains(&format!("data-title-src=\"/title?project={}\"", f.id)));
+    assert!(page.contains("<link id=\"favicon\" rel=\"icon\" href=\"/static/favicon-look.svg?v="));
     let (status, _) = f.get(&format!("/title?project={}", f.plain)).await;
     assert_eq!(status, StatusCode::OK);
 }
@@ -443,7 +450,7 @@ async fn slow_chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refuse
     })
     .await
     .unwrap();
-    // one unit's state: its stopped module alone is patched, in place
+    // one unit's state: its item in Needs you alone is patched, in place
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
             let error = PublicError::FnFailure {
@@ -460,7 +467,9 @@ async fn slow_chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refuse
         .unwrap();
     tokio::task::spawn_blocking(move || {
         browser
-            .wait("document.querySelector('#s-beta').textContent.includes('lint failed')")
+            .wait(
+                "document.querySelector('#n-stop-beta-build').textContent.includes('lint failed')",
+            )
             .unwrap();
         assert_eq!(
             browser
@@ -525,7 +534,7 @@ async fn slow_chromium_updates_stopped_say_so_reconnect_and_a_new_build_asks_for
             .eval("document.dispatchEvent(new Event('visibilitychange'))")
             .unwrap();
         browser
-            .wait("document.title==='2 failed · lanes · sluice'")
+            .wait("document.title==='✕2 · lanes · sluice'")
             .unwrap();
     })
     .await

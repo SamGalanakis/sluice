@@ -1,74 +1,80 @@
-//! A project's plan (DESIGN.md, Pages): the navy band with the project's name, its summary
-//! sentence and what finished most recently; then on the module grid, ordered by what needs the
-//! owner, For you (a question to the owner, swollen), Stopped (failed, cancelled, stale), Running
-//! (quiet first, then the longest), Waiting (each held up by whom) and Done (a dense index,
-//! folded), with a long run's progress in the margin. Every unit is one row or module; select a
-//! unit to trace its chain (`sluice-trace`); a row's disclosure opens its step view in place
-//! (`unit_steps`).
+//! A project's plan (DESIGN.md, Pages: a project's plan): a briefing, then a roster. The head
+//! says in one sentence what needs the owner and how the work stands; **Needs you**, the one
+//! raised well, says each question, stop and silence in a sentence with one action and a quick
+//! dismissal; **Finished since you looked** lists what finished since this browser last looked
+//! with what it produced; **At work** is a roster of the live units, a row each, grouped by
+//! recipe and ordered by how long since each was heard from, with its activity over the last
+//! twelve hours on a log scale. A row opens in place to its steps (`unit_steps`).
 //!
-//! Generic by rule: a unit's cells are its recipe's own stages in recipe order (a block a recipe,
-//! its columns that recipe's steps), a unit of no recipe its steps in plan order (its gates are
-//! its step view's), a loose step one cell, and every word comes from the status table, the recipe or what the project's
-//! steps reported.
-use super::board::{ProjectView, Question, UnitView};
+//! Generic by rule: every word comes from the status table, the recipe, the failure's own
+//! reading or what the project's steps said and reported; the badge from what a step runs on.
+use super::board::{ProjectView, SAID_WINDOW, UnitView};
 use super::icons::{Icon, icon};
-use super::step::StepView;
-use super::ui::{self, Cell, Shown, Stage, Swell, Trace, esc};
-use super::{AskView, DashboardSnapshot, Frame, NavView, TrustedHtml, Viewer};
+use super::step::{self, Action, ActionForm, OwnerCommand, StepView};
+use super::ui::{self, Shown, esc};
+use super::{DashboardSnapshot, DashboardState, Frame, NavView, TrustedHtml, Viewer};
 use crate::streams::{PatchRegion, RenderedBatch};
 use askama::Template;
-use sluice_model::{error::PublicError, shown::Band};
-use std::collections::BTreeSet;
+use axum::{
+    Extension,
+    extract::{Form, Path, State},
+    http::HeaderMap,
+    response::{IntoResponse, Redirect, Response},
+};
+use serde::Deserialize;
+use sluice_model::{
+    commands::NeedsItem,
+    error::PublicError,
+    ids::{ProjectId, StepId},
+    shown::Band,
+};
+use std::collections::BTreeMap;
+use std::fmt::Write;
 
-/// The grid every plan sits on.
-pub const GRID: &str = "plan-grid";
 /// A run of no recipe, alone in its unit, that has run this long (seconds) is a long run: the
-/// margin draws it, as it does one reporting progress.
+/// roster lists it with the long runs, last.
 pub const LONG_RUN: f64 = 6.0 * 3600.0;
-
-/// Where a unit not done is drawn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Place {
-    Stopped,
-    Running,
-    Waiting,
-    Margin,
+/// A unit heard from within this long (seconds) wears the live dot.
+const LIVE: f64 = 300.0;
+/// The log scale's knee, seconds: the track gives the last few minutes as much room as hours.
+const KNEE: f64 = 360.0;
+/// The labels over the tracks: how long ago, and their words.
+const AXIS: [(f64, &str); 5] = [
+    (SAID_WINDOW, "12h"),
+    (4.0 * 3600.0, "4h"),
+    (3600.0, "1h"),
+    (900.0, "15m"),
+    (0.0, "now"),
+];
+/// How long (minutes) an item the owner set aside keeps its Dismissed line, with its Undo.
+const UNDO_MINUTES: f64 = 10.0;
+/// At most this many finished units are drawn in Finished since you looked.
+const FINISHED_MOST: usize = 8;
+/// The cookie that keeps how far this browser has looked at a project's finished units.
+pub fn seen_cookie(project: ProjectId) -> String {
+    format!("sluice_seen_{project}")
+}
+/// What a request's cookie says it has seen of a project: the finish time (seconds since the
+/// epoch) of the last finished unit it marked seen.
+pub fn seen_of(headers: &HeaderMap, project: ProjectId) -> Option<u64> {
+    let name = seen_cookie(project);
+    headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|c| c.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .filter_map(|c| c.trim().split_once('='))
+        .find(|(n, _)| *n == name)
+        .and_then(|(_, v)| v.parse().ok())
 }
 
-/// A question to the owner as For you draws it: its message, its words, and the unit whose step
-/// asked it (its strip drawn with the first of its questions).
-struct Ask<'a> {
-    ask: &'a AskView,
-    question: Option<&'a Question>,
-    unit: Option<&'a UnitView>,
-    step: Option<&'a StepView>,
-    strip: bool,
-}
-
-/// The plan as drawn: each unit placed once, in its order.
-pub struct Plan<'a> {
-    view: &'a ProjectView,
-    asks: Vec<Ask<'a>>,
-    stopped: Vec<&'a UnitView>,
-    running: Vec<&'a UnitView>,
-    waiting: Vec<&'a UnitView>,
-    margin: Vec<&'a UnitView>,
-    /// The done units, the latest finished first.
-    done: Vec<&'a UnitView>,
-    /// The cancels the owner dismissed in the last ten minutes, each with its unit: Stopped
-    /// says each with its Undo.
-    dismissed: Vec<(&'a UnitView, &'a StepView)>,
-    trace: Trace,
-}
-
-fn now() -> u64 {
+fn now() -> f64 {
     crate::clock::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
+        .map_or(0.0, |d| d.as_secs_f64())
 }
-/// Seconds from a stored time to now.
-fn since_secs(at: &str) -> Option<f64> {
-    super::timestamp(at).map(|then| now().saturating_sub(then) as f64)
+fn epoch(at: &str) -> Option<f64> {
+    super::timestamp(at).map(|t| t as f64)
 }
 /// The step that says how its unit stands: the first whose state is the unit's.
 fn current(unit: &UnitView) -> Option<&StepView> {
@@ -78,102 +84,7 @@ fn current(unit: &UnitView) -> Option<&StepView> {
         .find(|s| s.standing() == shown)
         .or_else(|| unit.steps.first())
 }
-/// How long a running step's run has gone.
-fn elapsed(step: &StepView) -> Option<f64> {
-    let t = step.timing.as_ref()?;
-    (step.running() && t.finished.is_none()).then_some(t.seconds)
-}
-/// How long a quiet run has written nothing.
-fn quiet_secs(step: &StepView) -> Option<f64> {
-    (step.shown() == Shown::Quiet)
-        .then(|| since_secs(&step.active_at))
-        .flatten()
-}
-/// A step's name in its unit's cell: its stage, else its id without the unit's prefix.
-fn short(unit: &UnitView, step: &StepView) -> String {
-    unit.step_name(step)
-}
-/// A step as its cell: its state from the status table, its time, its page.
-fn stage_of(step: &StepView, name: &str) -> Stage {
-    let shown = step.shown();
-    let mut stage = Stage::new(name, Some(shown))
-        .href(step.href())
-        .step(step.id.as_str());
-    stage = step.bypass_marks(stage);
-    match (Cell::of(Some(shown)), step.timing.as_ref()) {
-        (_, Some(t)) if step.running() && t.finished.is_none() => {
-            stage = stage.running_since(t.started.clone(), t.seconds);
-        }
-        (Cell::Done | Cell::Look, _) => {
-            if let Some(t) = step.shown_timing() {
-                stage = stage.took(t.seconds);
-            }
-        }
-        _ => {}
-    }
-    stage
-}
-/// A unit's cells: its recipe's stages in recipe order, else its steps in plan order.
-/// Each step's state in words, "a-build succeeded|a-review skipped": what a unit drawn without
-/// its cells (a stopped module, a line of the Done index) gives the page's announcer, so a step
-/// whose state a patch moves on is said even when its unit changes band.
-fn states_said(unit: &UnitView) -> String {
-    unit.steps
-        .iter()
-        .map(|s| format!("{} {}", s.id, s.shown().word()))
-        .collect::<Vec<_>>()
-        .join("|")
-}
-
-fn strip(unit: &UnitView) -> Vec<Stage> {
-    if unit.stages.is_empty() {
-        return unit
-            .steps
-            .iter()
-            .map(|s| stage_of(s, &short(unit, s)))
-            .collect();
-    }
-    unit.stages
-        .iter()
-        .map(|name| match unit.stage_step(name) {
-            Some(step) => stage_of(step, name),
-            None => Stage::new(name.clone(), None),
-        })
-        .collect()
-}
-/// How long a unit's work took, first start to last end, and its most runs of any step.
-fn took(unit: &UnitView) -> (f64, usize) {
-    let mut from = u64::MAX;
-    let mut to = 0;
-    let mut runs = 1;
-    for t in unit.steps.iter().filter_map(|s| s.shown_timing()) {
-        if let Some(start) = super::timestamp(&t.started) {
-            from = from.min(start);
-        }
-        if let Some(end) = t.finished.as_deref().and_then(super::timestamp) {
-            to = to.max(end);
-        }
-        runs = runs.max(t.runs);
-    }
-    let took = if to >= from && from != u64::MAX {
-        (to - from) as f64
-    } else {
-        0.0
-    };
-    (took, runs)
-}
 /// Where a unit's name leads: a loose step's own page, else the unit's.
-/// A project's description in its head's Details, as markdown (its lists as lists), "" when it
-/// has none.
-fn about_html(description: &str) -> TrustedHtml {
-    if description.is_empty() {
-        return TrustedHtml::default();
-    }
-    TrustedHtml::owned(format!(
-        "<div class=\"md dm-md\">{}</div>",
-        crate::markdown::render(description).as_str()
-    ))
-}
 fn unit_href(view: &ProjectView, unit: &UnitView) -> String {
     match unit.steps.as_slice() {
         [only] if !unit.tagged => only.href(),
@@ -184,178 +95,831 @@ fn unit_href(view: &ProjectView, unit: &UnitView) -> String {
 fn title(unit: &UnitView) -> &str {
     unit.heading()
 }
+/// How long a unit's work took, first start to last end.
+fn took(unit: &UnitView) -> f64 {
+    let mut from = f64::MAX;
+    let mut to = 0.0f64;
+    for t in unit.steps.iter().filter_map(|s| s.shown_timing()) {
+        if let Some(start) = epoch(&t.started) {
+            from = from.min(start);
+        }
+        if let Some(end) = t.finished.as_deref().and_then(epoch) {
+            to = to.max(end);
+        }
+    }
+    if to >= from { to - from } else { 0.0 }
+}
+/// A project's description in its head's Details, as markdown, "" when it has none.
+fn about_html(description: &str) -> TrustedHtml {
+    if description.is_empty() {
+        return TrustedHtml::default();
+    }
+    TrustedHtml::owned(format!(
+        "<div class=\"md dm-md\">{}</div>",
+        crate::markdown::render(description).as_str()
+    ))
+}
+/// "Two", "Three", … "Ten", then the figure: a count leading a sentence.
+fn leading(n: usize) -> String {
+    const WORDS: [&str; 9] = [
+        "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+    ];
+    match n {
+        2..=10 => WORDS[n - 2].to_owned(),
+        n => n.to_string(),
+    }
+}
+/// What a group of stops that share a failure's kind did, after "Three units": the kinds that
+/// say the same of every unit they stop. Any other kind is said a unit at a time.
+fn shared_cause(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "WallCap" => "stopped at their wall-clock cap",
+        "StallCap" => "stopped: their agents wrote nothing for too long",
+        "QuotaExhausted" => "stopped: their engines hit a usage cap",
+        "AuthFailed" => "stopped: their engines could not sign in",
+        "EngineExited" => "stopped: their engines exited",
+        "ReadyTimeout" => "stopped: their engines never became ready",
+        "ExitedWithoutSubmit" | "exited_without_submit" => {
+            "stopped without submitting their outputs"
+        }
+        "process_lost" => "stopped: their processes were lost",
+        "Transient" | "transient" => "stopped: a passing failure outlasted their retries",
+        _ => return None,
+    })
+}
+
+/// How an item of Needs you is marked: a coral dot for a question to the owner, a sand square
+/// for a stop, a sand ring for a silence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    Ask,
+    Stop,
+    Quiet,
+}
+impl Mark {
+    fn class(self) -> &'static str {
+        match self {
+            Mark::Ask => "nk-ask",
+            Mark::Stop => "nk-stop",
+            Mark::Quiet => "nk-quiet",
+        }
+    }
+    fn word(self) -> &'static str {
+        match self {
+            Mark::Ask => "Question",
+            Mark::Stop => "Stopped",
+            Mark::Quiet => "Quiet",
+        }
+    }
+}
+/// One item of Needs you: a sentence, its one action and what its dismissal sets aside.
+struct Need {
+    mark: Mark,
+    /// The unit it is about ("" for a group, whose units are listed under it).
+    unit: String,
+    /// Its element's id.
+    id: String,
+    /// What its dismissal names, as the form posts them: `stop:<step>`, `quiet:<step>@<stamp>`,
+    /// `ask:<message>`, `cancel:<step>` (a cancel, set aside as its step's own Dismiss does).
+    keys: Vec<String>,
+    /// Its sentence, HTML.
+    sentence: String,
+    /// A group's list of its units, HTML ("" for one).
+    more: String,
+    /// Its one action, HTML.
+    act: String,
+    /// What its Dismissed line calls it, in words.
+    short: String,
+    /// The owner has set it aside, and it has not changed since: when (its Undo is offered for
+    /// a while).
+    aside: Option<String>,
+}
+
+/// One row of At work.
+struct Row<'a> {
+    unit: &'a UnitView,
+    /// When it was last heard from (seconds since the epoch), when it runs.
+    heard: Option<f64>,
+    waiting: bool,
+}
+/// A group of rows: a recipe's, the units of no recipe, the long runs.
+struct Group<'a> {
+    name: String,
+    recipe: String,
+    rows: Vec<Row<'a>>,
+}
+
+/// The plan as drawn.
+pub struct Plan<'a> {
+    view: &'a ProjectView,
+    now: f64,
+    needs: Vec<Need>,
+    groups: Vec<Group<'a>>,
+    /// Live units that have not started and wait on earlier work.
+    later: usize,
+    /// Units at work (running).
+    at_work: usize,
+    /// Of them, quiet.
+    quiet: usize,
+    /// The done units, the latest finished first.
+    done: Vec<&'a UnitView>,
+    /// Finished since this browser looked (or lately, with no look kept), newest first, and how
+    /// many more there are.
+    finished: Vec<&'a UnitView>,
+    finished_more: usize,
+}
 
 impl<'a> Plan<'a> {
     pub fn new(view: &'a ProjectView) -> Self {
-        // a run reporting progress, or running `LONG_RUN` or more, of no recipe and alone in its
-        // unit, is a long run: the margin draws it
+        let now = now();
+        let live = |unit: &&UnitView| !unit.done;
+        let mut done: Vec<&UnitView> = view.units.iter().filter(|u| u.done).collect();
+        done.sort_by(|a, b| b.finished().cmp(a.finished()).then(a.pos.cmp(&b.pos)));
+        // what finished since this browser looked: after its mark, else the last few
+        let mut finished: Vec<&UnitView> = done
+            .iter()
+            .copied()
+            .filter(|u| !u.finished().is_empty())
+            .filter(|u| match view.seen {
+                Some(seen) => epoch(u.finished()).is_some_and(|t| t > seen as f64),
+                None => true,
+            })
+            .collect();
+        let cap = if view.seen.is_some() {
+            FINISHED_MOST
+        } else {
+            ui::LATEST
+        };
+        let finished_more = if view.seen.is_some() {
+            finished.len().saturating_sub(cap)
+        } else {
+            0
+        };
+        finished.truncate(cap);
+
+        // the roster: every unit at work, and every waiting unit that has begun
         let is_long = |unit: &UnitView| match unit.steps.as_slice() {
-            // a quiet one needs a look: it leads Running instead
-            [step] if unit.recipe.is_empty() && step.running() && step.shown() != Shown::Quiet => {
+            [step] if unit.recipe.is_empty() && step.running() => {
                 step.progress
                     .as_ref()
                     .is_some_and(|p| p.live && !p.fields.is_empty())
-                    || elapsed(step).is_some_and(|e| e >= LONG_RUN)
+                    || step
+                        .timing
+                        .as_ref()
+                        .is_some_and(|t| t.finished.is_none() && t.seconds >= LONG_RUN)
             }
             _ => false,
         };
-        let live = |unit: &&UnitView| !unit.done;
-        let mut asks: Vec<Ask<'a>> = vec![];
-        let mut asked: BTreeSet<&str> = BTreeSet::new();
-        for ask in &view.project.asks {
-            let unit = view
+        // a find, a chain or a recipe's units asked for: each one a row, none only counted
+        let narrowed = !view.q.is_empty() || !view.root.is_empty() || !view.recipe.is_empty();
+        let mut groups: Vec<Group> = vec![];
+        let mut long: Vec<Row> = vec![];
+        let (mut later, mut at_work, mut quiet) = (0, 0, 0);
+        for unit in view.units.iter().filter(live) {
+            let shown = unit.shown();
+            let band = shown.spec().band;
+            if matches!(shown, Shown::Failed | Shown::Cancelled | Shown::Stale) {
+                continue;
+            }
+            let row = if band == Band::Running {
+                at_work += 1;
+                if unit.steps.iter().any(|s| s.shown() == Shown::Quiet) {
+                    quiet += 1;
+                }
+                Row {
+                    unit,
+                    heard: heard(unit),
+                    waiting: false,
+                }
+            } else {
+                // never begun and blocked on earlier work: counted; begun (a step ran or is
+                // settled), ready, or held in a way of its own: a row
+                let begun = unit
+                    .steps
+                    .iter()
+                    .any(|s| s.timing.is_some() || s.standing().spec().band == Band::Done);
+                let blocked = current(unit)
+                    .is_some_and(|s| matches!(s.shown(), Shown::Pending | Shown::Blocked))
+                    && !unit.steps.iter().any(|s| s.ready());
+                if !begun && blocked && !narrowed {
+                    later += 1;
+                    continue;
+                }
+                Row {
+                    unit,
+                    heard: None,
+                    waiting: true,
+                }
+            };
+            if is_long(unit) {
+                long.push(row);
+                continue;
+            }
+            match groups.iter_mut().find(|g| g.recipe == unit.recipe) {
+                Some(group) => group.rows.push(row),
+                None => groups.push(Group {
+                    name: if unit.recipe.is_empty() {
+                        "No recipe".into()
+                    } else {
+                        unit.recipe.clone()
+                    },
+                    recipe: unit.recipe.clone(),
+                    rows: vec![row],
+                }),
+            }
+        }
+        // a unit of no recipe in its own group after the recipes'; the long runs last
+        groups.sort_by_key(|g| g.recipe.is_empty());
+        if !long.is_empty() {
+            groups.push(Group {
+                name: "Long runs".into(),
+                recipe: String::new(),
+                rows: long,
+            });
+        }
+        // running first, the longest silent first; then waiting, in plan order
+        for group in &mut groups {
+            group.rows.sort_by(|a, b| {
+                a.waiting
+                    .cmp(&b.waiting)
+                    .then(
+                        a.heard
+                            .unwrap_or(f64::MAX)
+                            .total_cmp(&b.heard.unwrap_or(f64::MAX)),
+                    )
+                    .then(a.unit.pos.cmp(&b.unit.pos))
+            });
+        }
+        let mut plan = Plan {
+            view,
+            now,
+            needs: vec![],
+            groups,
+            later,
+            at_work,
+            quiet,
+            done,
+            finished,
+            finished_more,
+        };
+        plan.needs = plan.needs();
+        plan
+    }
+    fn project(&self) -> ProjectId {
+        self.view.project.id
+    }
+    /// Whether the owner set `key` aside and it is still as it was: a stop while its step is
+    /// on the generations it was set aside at (the store holds that), a silence while the run
+    /// has written nothing since, a question while it is open.
+    fn aside(&self, key: &str) -> Option<String> {
+        let (key, stamp) = match key.split_once('@') {
+            Some((key, stamp)) => (key, stamp.parse::<i64>().ok()),
+            None => (key, None),
+        };
+        self.view
+            .set_aside
+            .iter()
+            .find(|s| s.key == key && stamp.is_none_or(|t| t == s.stamp))
+            .map(|s| s.at.clone())
+    }
+
+    // ---- Needs you -----------------------------------------------------------------------------
+
+    /// Every item of Needs you, in order: the questions to the owner, then the stops (failures
+    /// sharing a kind together), then the silences, the longest first.
+    fn needs(&self) -> Vec<Need> {
+        let project = self.project();
+        let mut out = vec![];
+        // the questions to the owner
+        for ask in &self.view.project.asks {
+            let unit = self
+                .view
                 .units
                 .iter()
-                .filter(live)
                 .find(|u| u.steps.iter().any(|s| s.id.as_str() == ask.step));
-            let step = unit.and_then(|u| u.steps.iter().find(|s| s.id.as_str() == ask.step));
-            // with no step of this view (a question from no step, or one the view leaves out),
-            // only a question from no step is drawn
+            // a question from a step this view leaves out is the inbox's alone
             if unit.is_none() && !ask.step.is_empty() {
                 continue;
             }
-            let strip = unit.is_some_and(|u| asked.insert(u.id.as_str()));
-            asks.push(Ask {
-                ask,
-                question: view.questions.iter().find(|q| q.message == ask.message),
-                unit,
-                step,
-                strip,
+            let who = match unit {
+                Some(unit) => format!(
+                    "<a href=\"{}\"{}>{}</a>",
+                    esc(&ask.href(&project)),
+                    if ask.step.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" data-opens=\"{}\"", esc(&ask.step))
+                    },
+                    esc(title(unit))
+                ),
+                None => ask.sender_html(),
+            };
+            let key = format!("ask:{}", ask.message);
+            out.push(Need {
+                mark: Mark::Ask,
+                unit: unit.map(|u| u.id.to_string()).unwrap_or_default(),
+                id: format!("n-ask-{}", ask.message),
+                sentence: format!("<b>{who}</b> asks: {}", esc(&ask.title)),
+                more: String::new(),
+                act: format!(
+                    "<a class=\"act main\" href=\"{}\"{}>Answer</a>",
+                    esc(&ask.href(&project)),
+                    if ask.step.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" data-opens=\"{}\"", esc(&ask.step))
+                    },
+                ),
+                short: format!("the question “{}”", ui::cut(&ask.title, 60)),
+                aside: self.aside(&key),
+                keys: vec![key],
             });
         }
-        let (mut stopped, mut running, mut waiting, mut margin) = (vec![], vec![], vec![], vec![]);
-        for unit in view.units.iter().filter(live) {
-            if asked.contains(unit.id.as_str()) {
-                continue;
-            }
-            let place = match unit.shown() {
-                Shown::Failed | Shown::Cancelled | Shown::Stale => Place::Stopped,
-                shown if shown.spec().band == Band::Running => {
-                    if is_long(unit) {
-                        Place::Margin
-                    } else {
-                        Place::Running
-                    }
+        // the stops: a failure that shares its kind with another's goes with it
+        let mut stops: Vec<(&UnitView, &StepView)> = self
+            .view
+            .units
+            .iter()
+            .filter_map(|u| {
+                if u.done {
+                    // a cancel set aside lately: its unit is done, its Undo still offered
+                    u.steps
+                        .iter()
+                        .find(|s| s.cancelled() && s.dismissed && !s.dismissed_at.is_empty())
+                        .map(|s| (u, s))
+                } else if matches!(u.shown(), Shown::Failed | Shown::Cancelled | Shown::Stale) {
+                    current(u).map(|s| (u, s))
+                } else {
+                    None
                 }
-                _ => Place::Waiting,
-            };
-            match place {
-                Place::Stopped => stopped.push(unit),
-                Place::Running => running.push(unit),
-                Place::Waiting => waiting.push(unit),
-                Place::Margin => margin.push(unit),
+            })
+            .collect();
+        stops.sort_by_key(|(u, _)| (u.shown(), u.pos));
+        let kind = |step: &StepView| {
+            step.failure
+                .as_ref()
+                .filter(|f| !f.cancelled && step.shown() == Shown::Failed)
+                .map(|f| f.kind.clone())
+                .filter(|k| shared_cause(k).is_some())
+        };
+        let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+        for (_, step) in &stops {
+            if let Some(k) = kind(step) {
+                *kinds.entry(k).or_default() += 1;
             }
         }
-        stopped.sort_by_key(|u| (u.shown(), u.pos));
-        // quiet first (the longest quiet first), then the longest running
-        running.sort_by(|a, b| {
-            let key = |u: &UnitView| {
-                let step = current(u);
-                (
-                    step.and_then(quiet_secs).unwrap_or(-1.0),
-                    step.and_then(elapsed).unwrap_or(0.0),
-                )
-            };
-            let (ka, kb) = (key(a), key(b));
-            kb.0.total_cmp(&ka.0)
-                .then(kb.1.total_cmp(&ka.1))
-                .then(a.pos.cmp(&b.pos))
-        });
-        waiting.sort_by_key(|u| u.pos);
-        let mut done: Vec<&UnitView> = view.units.iter().filter(|u| u.done).collect();
-        done.sort_by(|a, b| b.finished().cmp(a.finished()).then(a.pos.cmp(&b.pos)));
-        let drawn: BTreeSet<&str> = view
+        let mut grouped: Vec<String> = vec![];
+        for (unit, step) in &stops {
+            match kind(step).filter(|k| kinds.get(k).copied().unwrap_or(0) > 1) {
+                Some(k) if grouped.contains(&k) => {}
+                Some(k) => {
+                    let members: Vec<(&UnitView, &StepView)> = stops
+                        .iter()
+                        .filter(|(_, s)| kind(s).as_deref() == Some(k.as_str()))
+                        .copied()
+                        .collect();
+                    out.push(self.group_need(&k, &members));
+                    grouped.push(k);
+                }
+                None => out.push(self.stop_need(unit, step)),
+            }
+        }
+        // the silences, the longest first
+        let mut quiet: Vec<(&UnitView, &StepView, f64)> = self
+            .view
             .units
             .iter()
-            .filter(live)
-            .map(|u| u.id.as_str())
-            .collect();
-        let trace = Trace::new(
-            view.unit_waits()
-                .into_iter()
-                .filter(|(u, on)| drawn.contains(u) && drawn.contains(on)),
-        );
-        let mut dismissed: Vec<(&UnitView, &StepView)> = view
-            .units
-            .iter()
+            .filter(|u| !u.done)
             .flat_map(|u| {
                 u.steps
                     .iter()
-                    .filter(|s| s.dismissed && !s.dismissed_at.is_empty())
-                    .map(move |s| (u, s))
+                    .filter(|s| s.shown() == Shown::Quiet)
+                    .filter_map(move |s| epoch(&s.active_at).map(|at| (u, s, at)))
             })
             .collect();
-        dismissed.sort_by(|a, b| b.1.dismissed_at.cmp(&a.1.dismissed_at));
-        Plan {
-            view,
-            asks,
-            stopped,
-            running,
-            waiting,
-            margin,
-            done,
-            dismissed,
-            trace,
+        quiet.sort_by(|a, b| a.2.total_cmp(&b.2));
+        for (unit, step, at) in quiet {
+            let key = format!("quiet:{}@{}", step.id, at as i64);
+            out.push(Need {
+                mark: Mark::Quiet,
+                unit: unit.id.to_string(),
+                id: format!("n-quiet-{}", step.id),
+                sentence: format!(
+                    "<b>{}</b> has not been heard from since {}, {}.",
+                    self.step_link(unit, step),
+                    ui::clock(&step.active_at),
+                    ui::ago(&step.active_at)
+                ),
+                more: String::new(),
+                act: format!(
+                    "<a class=\"act\" href=\"{}\">Message it</a>",
+                    esc(&step.thread_href())
+                ),
+                short: format!("{} going quiet", ui::cut(title(unit), 60)),
+                aside: self.aside(&key),
+                keys: vec![key],
+            });
+        }
+        out
+    }
+    /// A unit's title linking its stopped or quiet step, which opens in the drawer.
+    fn step_link(&self, unit: &UnitView, step: &StepView) -> String {
+        format!(
+            "<a href=\"{}\" data-step=\"{}\">{}</a>",
+            esc(&step.href()),
+            esc(step.id.as_str()),
+            esc(title(unit))
+        )
+    }
+    /// A stop said alone: "<title> failed at review. Its fn failed: …", Retry.
+    fn stop_need(&self, unit: &UnitView, step: &StepView) -> Need {
+        let shown = if step.cancelled() {
+            Shown::Cancelled
+        } else {
+            unit.shown()
+        };
+        let stage = if unit.steps.len() > 1 {
+            format!(" at {}", esc(&unit.step_name(step)))
+        } else {
+            String::new()
+        };
+        let owner = unit.owner_words();
+        // how long its last run took, when it ran
+        let after = step
+            .timing
+            .as_ref()
+            .filter(|t| t.finished.is_some() && t.seconds > 0.0)
+            .map(|t| format!(" after {}", esc(&ui::duration_text(t.seconds))))
+            .unwrap_or_default();
+        let mut sentence = format!(
+            "<b>{}</b>{} {}{stage}{after}.",
+            self.step_link(unit, step),
+            if owner.is_empty() {
+                String::new()
+            } else {
+                format!(" <span class=\"own\">{}</span>", esc(&owner))
+            },
+            esc(shown.word())
+        );
+        match (shown, step.failure.as_ref()) {
+            (Shown::Cancelled, Some(f)) => {
+                let reason = f
+                    .headline
+                    .strip_prefix("Cancelled: ")
+                    .unwrap_or(&f.headline);
+                let _ = write!(sentence, " {}", esc(reason));
+                // the failure a cancel set aside stays readable
+                if !f.set_aside.is_empty() {
+                    let _ = write!(
+                        sentence,
+                        " <span class=\"nd-aside\">It had failed: {}</span>",
+                        esc(&ui::cut(&f.set_aside, 160))
+                    );
+                }
+            }
+            (_, Some(f)) => {
+                let _ = write!(sentence, " {}", esc(&f.headline));
+                let said = f.said.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+                if !said.is_empty() {
+                    let _ = write!(
+                        sentence,
+                        " It last said “{}”",
+                        esc(&ui::cut(said.trim(), 140))
+                    );
+                }
+                // what to try next, as its page says it (`failure::Advice`)
+                let next = step.next_step();
+                if !next.is_empty() {
+                    let _ = write!(sentence, " <span class=\"nd-next\">{}</span>", esc(&next));
+                }
+            }
+            (Shown::Stale, None) => sentence.push_str(" An input it read changed after it ran."),
+            _ => {}
+        }
+        let act = if step.feedback_in_why() && shown == Shown::Failed {
+            // a failure that repeated: its feedback first, on its page
+            format!(
+                "<a class=\"act main\" href=\"{}#why-feedback\" data-step=\"{}\">Retry with feedback</a>",
+                esc(&step.href()),
+                esc(step.id.as_str())
+            )
+        } else if step.retryable() && !step.retry_asks() {
+            self.retry_form(&[step], "Retry", step.cancelled())
+        } else {
+            format!(
+                "<a class=\"act\" href=\"{}\" data-step=\"{}\">Open step</a>",
+                esc(&step.href()),
+                esc(step.id.as_str())
+            )
+        };
+        // a cancel is set aside as its step's own Dismiss sets it; any other stop is kept
+        // against its step's generations
+        let key = if step.cancelled() {
+            format!("cancel:{}", step.id)
+        } else {
+            format!("stop:{}", step.id)
+        };
+        Need {
+            mark: Mark::Stop,
+            unit: unit.id.to_string(),
+            id: format!("n-stop-{}", step.id),
+            sentence,
+            more: String::new(),
+            act,
+            short: format!("{} ({})", ui::cut(title(unit), 60), shown.word()),
+            aside: if step.cancelled() {
+                step.dismissed.then(|| step.dismissed_at.clone())
+            } else {
+                self.aside(&key)
+            },
+            keys: vec![key],
         }
     }
-    /// The columns of the twelve the bands under the first row take: all of them, or ten
-    /// beside the margin.
-    fn cols(&self) -> u8 {
-        if self.margin.is_empty() { 12 } else { 10 }
-    }
-    fn project(&self) -> sluice_model::ids::ProjectId {
-        self.view.project.id
-    }
-
-    // ---- the band ------------------------------------------------------------------------------
-
-    /// What the summary sentence counts: every unit of the view.
-    fn facts(&self) -> Vec<ui::UnitFact> {
-        self.view
-            .units
+    /// Stops that share a failure's kind, said once: "Three units stopped at their wall-clock
+    /// cap.", the units under it, Retry all.
+    fn group_need(&self, kind: &str, members: &[(&UnitView, &StepView)]) -> Need {
+        let mut list = String::new();
+        for (unit, step) in members {
+            let said = if unit.last_message.trim().is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " <span>· “{}”</span>",
+                    esc(&crate::markdown::cut(
+                        &crate::markdown::plain(&unit.last_message),
+                        90
+                    ))
+                )
+            };
+            let _ = write!(
+                list,
+                "<li data-unit=\"{}\" data-said=\"{}\">{}{said}</li>",
+                esc(unit.id.as_str()),
+                esc(&said_states(unit)),
+                self.step_link(unit, step)
+            );
+        }
+        let n = members.len();
+        let keys: Vec<String> = members
             .iter()
-            .map(|u| {
-                let step = current(u);
-                let shown = if u.done {
-                    Shown::Succeeded
-                } else {
-                    // held up by a failure: it waits, the failure is counted where it is
-                    match u.shown() {
-                        Shown::Blocked => Shown::Pending,
-                        shown => shown,
-                    }
-                };
-                let quiet = step.and_then(quiet_secs);
-                ui::UnitFact {
-                    name: u.id.to_string(),
-                    recipe: u.recipe.clone(),
-                    shown: Some(shown),
-                    quiet,
-                    quiet_since: if quiet.is_some() {
-                        step.map(|s| s.active_at.clone()).unwrap_or_default()
-                    } else {
-                        String::new()
-                    },
-                }
-            })
-            .collect()
-    }
-    /// The page's head: the project's name, the summary sentence under it, and its Details
-    /// (the project's id and its words), in one region its stream patches.
-    pub fn band(&self) -> TrustedHtml {
-        let facts = self.facts();
-        let ask_href = match self.view.project.asks.as_slice() {
-            [one] => one.href(&self.project()),
-            _ => "#for-you".to_owned(),
+            .map(|(_, s)| format!("stop:{}", s.id))
+            .collect();
+        let steps: Vec<&StepView> = members
+            .iter()
+            .map(|(_, s)| *s)
+            .filter(|s| s.retryable() && !s.retry_asks())
+            .collect();
+        let act = if steps.len() == n {
+            self.retry_form(&steps, "Retry all", false)
+        } else {
+            String::new()
         };
-        let last = self.done.first().map(|u| u.finished()).unwrap_or("");
-        let summary = ui::summary_sentence(&ui::Summary {
-            asks: self.view.project.asks.len(),
-            ask_href: &ask_href,
-            units: &facts,
-            last_done: last,
-            noun: ("unit", "units"),
-        });
+        Need {
+            mark: Mark::Stop,
+            unit: String::new(),
+            id: format!("n-cause-{}", kind.to_lowercase().replace('_', "-")),
+            sentence: format!(
+                "{} units {}.{}",
+                leading(n),
+                shared_cause(kind).unwrap_or("stopped"),
+                // what to try next, as each one's page says it
+                members
+                    .first()
+                    .and_then(|(_, s)| s.failure.as_ref())
+                    .map(|f| f.next_step())
+                    .filter(|next| !next.is_empty())
+                    .map(|next| format!(" <span class=\"nd-next\">{}</span>", esc(next)))
+                    .unwrap_or_default()
+            ),
+            more: format!(
+                "<details class=\"nd-more\" data-preserve-attr=\"open\"><summary>Show the {}</summary><ul>{list}</ul></details>",
+                leading(n).to_lowercase()
+            ),
+            act,
+            short: format!(
+                "{} units {}",
+                leading(n).to_lowercase(),
+                shared_cause(kind).unwrap_or("stopped")
+            ),
+            aside: keys
+                .iter()
+                .map(|k| self.aside(k))
+                .collect::<Option<Vec<String>>>()
+                .and_then(|at| at.into_iter().max()),
+            keys,
+        }
+    }
+    /// Retry for `steps`: one step's own action form, or the plan's for several.
+    fn retry_form(&self, steps: &[&StepView], word: &str, quiet: bool) -> String {
+        let next = format!("{}#needs", self.view.href());
+        let class = if quiet { "act" } else { "act main" };
+        match steps {
+            [step] => format!(
+                "<form class=\"nd-form\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"{class}\">{word}</button></form>",
+                h = esc(&step.href()),
+                rev = step.revision,
+                seen = esc(&step.seen()),
+                next = esc(&next),
+            ),
+            steps => format!(
+                "<form class=\"nd-form\" method=\"post\" action=\"{h}/needs\"><input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"items\" value=\"{items}\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"{class}\">{word}</button></form>",
+                h = esc(&self.view.href()),
+                items = esc(&steps
+                    .iter()
+                    .map(|s| format!("stop:{}@{}", s.id, s.seen()))
+                    .collect::<Vec<_>>()
+                    .join(" ")),
+                rev = self.view.revision,
+                next = esc(&next),
+            ),
+        }
+    }
+    /// A form posting `action` for `keys` to the plan's Needs you, coming back to `#back` (with
+    /// script the focus goes there).
+    #[allow(clippy::too_many_arguments)]
+    fn needs_form(
+        &self,
+        action: &str,
+        keys: &[String],
+        class: &str,
+        label: &str,
+        words: &str,
+        id: &str,
+        back: &str,
+    ) -> String {
+        format!(
+            "<form class=\"nd-form\" method=\"post\" action=\"{h}/needs\"><input type=\"hidden\" name=\"action\" value=\"{action}\"><input type=\"hidden\" name=\"items\" value=\"{items}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button{id} class=\"{class}\" aria-label=\"{label}\" title=\"{label}\">{words}</button></form>",
+            h = esc(&self.view.href()),
+            items = esc(&keys.join(" ")),
+            next = esc(&format!("{}#{back}", self.view.href())),
+            id = if id.is_empty() {
+                String::new()
+            } else {
+                format!(" id=\"{}\"", esc(id))
+            },
+            label = esc(label),
+        )
+    }
+    /// Needs you: the well of what needs the owner, each item a sentence with its one action
+    /// and a ×, then a line for each item set aside, with its Undo.
+    fn needs_html(&self) -> String {
+        let live: Vec<&Need> = self.needs.iter().filter(|n| n.aside.is_none()).collect();
+        // what was set aside lately, with its Undo; earlier ones are gone from sight
+        let aside: Vec<&Need> = self
+            .needs
+            .iter()
+            .filter(|n| {
+                n.aside
+                    .as_deref()
+                    .and_then(epoch)
+                    .is_some_and(|at| at >= self.now - UNDO_MINUTES * 60.0)
+            })
+            .collect();
+        let mut out = String::from(
+            "<section id=\"plan-needs\" class=\"pb-sec\" aria-labelledby=\"needs\"><div class=\"pb-label\"><h2 id=\"needs\">Needs you</h2>",
+        );
+        if !live.is_empty() {
+            let _ = write!(out, "<span class=\"pb-count\">{}</span>", live.len());
+        }
+        if live.len() > 1 {
+            let keys: Vec<String> = live.iter().flat_map(|n| n.keys.clone()).collect();
+            out.push_str("<span class=\"pb-grow\"></span>");
+            out.push_str(&self.needs_form(
+                "dismiss",
+                &keys,
+                "link",
+                "Dismiss all: each comes back when it changes",
+                "Dismiss all",
+                "",
+                "needs",
+            ));
+        }
+        out.push_str("</div>");
+        if live.is_empty() {
+            out.push_str("<p class=\"nd-none\">Nothing.</p>");
+        } else {
+            out.push_str("<ul class=\"nd\">");
+            for need in &live {
+                // a region each, so a change to one patches it alone
+                let attrs = match self.view.units.iter().find(|u| u.id.as_str() == need.unit) {
+                    Some(unit) => format!(
+                        " data-unit=\"{}\" data-said=\"{}\"",
+                        esc(&need.unit),
+                        esc(&said_states(unit))
+                    ),
+                    None => String::new(),
+                };
+                let item = need_item(
+                    need.mark,
+                    &need.id,
+                    &attrs,
+                    &need.sentence,
+                    &need.more,
+                    &need.act,
+                    &self.needs_form(
+                        "dismiss",
+                        &need.keys,
+                        "x",
+                        &format!("Dismiss {}: it comes back when it changes", need.short),
+                        "×",
+                        "",
+                        &format!("undo-{}", need.id),
+                    ),
+                );
+                out.push_str(&region(&need.id, &item));
+            }
+            out.push_str("</ul>");
+        }
+        if !aside.is_empty() {
+            out.push_str("<ul class=\"nd-gone\" role=\"status\">");
+            for need in &aside {
+                let _ = write!(
+                    out,
+                    "<li><span>Dismissed {}</span>{}</li>",
+                    esc(&need.short),
+                    self.needs_form(
+                        "undo",
+                        &need.keys,
+                        "link",
+                        &format!("Undo dismissing {}", need.short),
+                        "Undo",
+                        &format!("undo-{}", need.id),
+                        &need.id,
+                    )
+                );
+            }
+            out.push_str("</ul>");
+        }
+        out.push_str("</section>");
+        out
+    }
+
+    // ---- the head ------------------------------------------------------------------------------
+
+    /// The head's sentence, from status counts, silences and open questions only, each state in
+    /// its own word: "1 question for you, 2 failed, 1 quiet. 10 at work; 73 of 92 done." or,
+    /// healthy, "10 at work, all heard from recently. 73 of 92 done."
+    fn sentence(&self) -> String {
+        let live: Vec<&Need> = self.needs.iter().filter(|n| n.aside.is_none()).collect();
+        let asks = self.view.project.asks.len();
+        // each stop and silence by its state's word, in the status table's order
+        let mut states: BTreeMap<Shown, usize> = BTreeMap::new();
+        for need in &live {
+            for key in &need.keys {
+                let step = key.split_once(':').map_or("", |(_, rest)| {
+                    rest.split_once('@').map_or(rest, |(step, _)| step)
+                });
+                let shown = match need.mark {
+                    Mark::Ask => continue,
+                    Mark::Quiet => Shown::Quiet,
+                    Mark::Stop => self
+                        .view
+                        .units
+                        .iter()
+                        .flat_map(|u| u.steps.iter())
+                        .find(|s| s.id.as_str() == step)
+                        .map_or(Shown::Failed, |s| s.shown()),
+                };
+                *states.entry(shown).or_default() += 1;
+            }
+        }
+        let mut first: Vec<String> = vec![];
+        if asks > 0 {
+            let href = match self.view.project.asks.as_slice() {
+                [one] => one.href(&self.project()),
+                _ => "#needs".to_owned(),
+            };
+            first.push(format!(
+                "<a class=\"ask\" href=\"{}\">{}</a>",
+                esc(&href),
+                ui::count(asks, "question for you", "questions for you")
+            ));
+        }
+        for (shown, n) in states {
+            first.push(format!("{n} {}", esc(shown.word())));
+        }
+        let total = self.view.units.len();
+        let done = format!("{} of {total} done.", self.done.len());
+        let work = match self.at_work {
+            0 => "Nothing at work".to_owned(),
+            n => format!("{n} at work"),
+        };
+        if total == 0 {
+            return "No units yet.".into();
+        }
+        if first.is_empty() {
+            if self.at_work > 0 && self.quiet == 0 {
+                format!("{work}, all heard from recently. {done}")
+            } else {
+                format!("{work}; {done}")
+            }
+        } else {
+            format!("{}. {work}; {done}", first.join(", "))
+        }
+    }
+    /// The page's head: the project's name, the sentence under it, and its Details (the
+    /// project's id and its words), in one region its stream patches.
+    pub fn band(&self) -> TrustedHtml {
         let project = &self.view.project;
         let details = ui::Details::new()
             .id("Project", &project.id.to_string())
@@ -369,36 +933,11 @@ impl<'a> Plan<'a> {
             &TrustedHtml::default(),
             &TrustedHtml::owned(esc(&project.name)),
             &details.menu(&project.name),
-            &TrustedHtml::owned(format!("<p class=\"page-line\">{summary}</p>")),
+            &TrustedHtml::owned(format!("<p class=\"page-line\">{}</p>", self.sentence())),
         );
         TrustedHtml::owned(format!(
             "<div id=\"plan-band\" class=\"plan-band\">{head}</div>"
         ))
-    }
-    /// What finished last, newest first, for the Done head.
-    fn latest(&self) -> Vec<ui::Finished> {
-        self.done
-            .iter()
-            .filter(|u| !u.finished().is_empty())
-            .take(ui::LATEST)
-            .map(|u| {
-                let (took, runs) = took(u);
-                ui::Finished {
-                    name: u.id.to_string(),
-                    title: if u.titled() {
-                        u.title.clone()
-                    } else {
-                        String::new()
-                    },
-                    href: unit_href(self.view, u),
-                    at: u.finished().to_owned(),
-                    took,
-                    runs,
-                    shown: Some(Shown::Succeeded),
-                    place: String::new(),
-                }
-            })
-            .collect()
     }
     /// The paper row's count line: "21 units · 52 steps".
     pub fn meta(&self) -> TrustedHtml {
@@ -453,673 +992,265 @@ impl<'a> Plan<'a> {
 
     // ---- the sheet -----------------------------------------------------------------------------
 
-    /// The plan's sheet: the trace line, then the grid of its bands, each a region of its own.
+    /// The plan's sheet: Needs you, Finished since you looked, At work, each a region of its
+    /// own; the done index when it is asked for.
     pub fn sheet(&self) -> TrustedHtml {
-        let mut out = String::new();
-        out.push_str(ui::trace_open("plan-trace").as_str());
-        out.push_str(ui::grid_open(GRID, 12).as_str());
-        let cols = self.cols();
-        let mut rows = 0;
-        // the first row: For you beside Stopped
-        // Stopped stands while a unit is stopped, or a cancel was dismissed lately (its Undo)
-        let stops = !self.stopped.is_empty() || !self.dismissed.is_empty();
-        let stopped_span = match (self.asks.is_empty(), !stops) {
-            (_, true) => 0,
-            (true, false) => cols,
-            (false, false) => 4,
-        };
-        // every band is a region, an empty one a hidden placeholder: a unit moving between
-        // bands patches the bands it left and joined, never the page around them
-        let band = |id: &str, html: Option<String>| match html {
-            Some(html) => region(id, &html),
-            None => region(id, &format!("<div id=\"{id}\" hidden></div>")),
-        };
-        out.push_str(&band(
-            "plan-asks",
-            (!self.asks.is_empty()).then(|| self.asks_html(cols - stopped_span)),
+        let mut out = String::from("<div class=\"plan-sheet\">");
+        out.push_str(&region("plan-needs", &self.needs_html()));
+        out.push_str(&region(
+            "plan-finished",
+            &if self.finished.is_empty() {
+                "<div id=\"plan-finished\" hidden></div>".to_owned()
+            } else {
+                self.finished_html()
+            },
         ));
-        out.push_str(&band(
-            "plan-stopped",
-            stops.then(|| self.stopped_html(stopped_span)),
-        ));
-        if !self.asks.is_empty() || stops {
-            rows += 1;
-        }
-        let bands = [
-            ("plan-running", "running", "Running", &self.running),
-            ("plan-waiting", "waiting", "Waiting", &self.waiting),
-        ];
-        // from 2000px of sheet, Running and Waiting stand side by side when both are there
-        let both = !self.running.is_empty() && !self.waiting.is_empty();
-        for (id, key, name, units) in bands {
-            if !units.is_empty() {
-                rows += 1;
-            }
-            out.push_str(&band(
-                id,
-                (!units.is_empty()).then(|| {
-                    let html = self.band_html(id, key, name, units, cols);
-                    if both {
-                        html.replacen(" data-span=", " data-wide=\"halve\" data-span=", 1)
-                    } else {
-                        html
-                    }
-                }),
-            ));
-        }
-        if !self.done.is_empty() {
-            rows += 1;
-        }
-        out.push_str(&band(
+        out.push_str(&region("plan-roster", &self.roster_html()));
+        let index = self.view.show == "done"
+            || !self.view.q.is_empty()
+            || !self.view.recipe.is_empty()
+            || !self.view.root.is_empty();
+        out.push_str(&region(
             "plan-done",
-            (!self.done.is_empty()).then(|| self.done_html(cols)),
+            &if index && !self.done.is_empty() {
+                self.done_html()
+            } else {
+                "<div id=\"plan-done\" hidden></div>".to_owned()
+            },
         ));
-        out.push_str(&band(
-            "plan-margin",
-            (!self.margin.is_empty())
-                .then(|| self.margin_html(rows.max(1), (rows - usize::from(both)).max(1))),
-        ));
-        out.push_str(ui::grid_close().as_str());
-        out.push_str(ui::trace_close().as_str());
+        out.push_str("</div>");
         TrustedHtml::owned(out)
     }
-    /// A traced unit's attributes, for the element that holds it.
-    fn attrs(&self, unit: &UnitView) -> String {
-        self.trace.attrs(unit.id.as_str()).0
-    }
 
-    /// For you: each open question to the owner whole, swollen, Answer first.
-    fn asks_html(&self, span: u8) -> String {
-        let oldest = self
-            .asks
+    // ---- Finished since you looked ------------------------------------------------------------
+
+    fn finished_html(&self) -> String {
+        let (head, since) = match self.view.seen {
+            Some(seen) => (
+                "Finished since you looked",
+                format!(
+                    "<span class=\"pb-note\">since {}</span>",
+                    ui::clock(&super::rfc3339(seen))
+                ),
+            ),
+            None => ("Finished lately", String::new()),
+        };
+        let through = self
+            .finished
             .iter()
-            .filter_map(|a| a.question.map(|q| q.at.as_str()))
-            .min()
-            .unwrap_or("");
-        let line = format!(
-            "{}{}",
-            ui::count(self.asks.len(), "question", "questions"),
-            if oldest.is_empty() {
-                String::new()
-            } else {
-                format!(", the first asked {}", ui::ago_text(oldest))
-            }
-        );
+            .filter_map(|u| super::timestamp(u.finished()))
+            .max()
+            .unwrap_or(0)
+            .max(self.view.seen.unwrap_or(0));
         let mut out = format!(
-            "<section id=\"plan-asks\" class=\"pl-sec pl-asks\" style=\"--span:{span}\" data-span=\"{span}\" aria-labelledby=\"for-you\">{}",
-            ui::section_head("for-you", "For you", &line)
+            "<section id=\"plan-finished\" class=\"pb-sec\" aria-labelledby=\"finished\"><div class=\"pb-label\"><h2 id=\"finished\">{head}</h2>{since}<span class=\"pb-grow\"></span><form class=\"nd-form\" method=\"post\" action=\"{h}/seen\"><input type=\"hidden\" name=\"through\" value=\"{through}\"><button class=\"link\">Mark as seen</button></form></div><ul class=\"fin\">",
+            h = esc(&self.view.href()),
         );
-        let module = span.min(6);
-        for ask in &self.asks {
-            out.push_str(&region(
-                &format!("q-{}", ask.ask.message),
-                &self.ask_html(ask, module),
+        for unit in &self.finished {
+            out.push_str(&finished_card(
+                unit.finished(),
+                took(unit),
+                &unit_href(self.view, unit),
+                title(unit),
+                &produced(unit),
+                &said_states(unit),
             ));
+        }
+        out.push_str("</ul>");
+        if self.finished_more > 0 {
+            let _ = write!(
+                out,
+                "<p class=\"pb-note\"><a href=\"{}?show=done#done\">and {} more</a></p>",
+                esc(&self.view.href()),
+                self.finished_more
+            );
         }
         out.push_str("</section>");
         out
     }
-    fn ask_html(&self, a: &Ask<'_>, span: u8) -> String {
-        let project = self.project();
-        let ask = a.ask;
-        // who asked, in words: its stage (its unit's title is under the question), else the
-        // session, sluice, or before sessions named themselves "orchestrator", muted
-        let from = match (a.unit, a.step) {
-            (Some(unit), Some(step)) => esc(&short(unit, step)),
-            _ if ask.step.is_empty() => ui::party_html(ask.sender_id(), false),
-            _ => "a step".to_owned(),
-        };
-        let when = a
-            .question
-            .map(|q| format!(" at {}, {}", ui::clock(&q.at), ui::ago(&q.at)))
-            .unwrap_or_default();
-        let (attrs, meta, strip, details) = match (a.unit, a.step) {
-            (Some(unit), Some(step)) => {
-                // the unit that asks: its title and how its run goes
-                let mut meta = String::new();
-                if unit.titled() {
-                    meta.push_str(&format!("<b>{}</b>", esc(&ui::cut(&unit.title, 90))));
+
+    // ---- At work -------------------------------------------------------------------------------
+
+    /// At work: the axis's labels, then each group's rows, then the line that counts the rest.
+    fn roster_html(&self) -> String {
+        let rows: usize = self.groups.iter().map(|g| g.rows.len()).sum();
+        let mut out = format!(
+            "<section id=\"plan-roster\" class=\"pb-sec\" aria-labelledby=\"at-work\"><div class=\"pb-label\"><h2 id=\"at-work\">At work</h2><span class=\"pb-note\">{}</span></div>",
+            if rows == 0 {
+                "Nothing now".to_owned()
+            } else {
+                format!(
+                    "{}, the longest silent first",
+                    ui::count(rows, "unit", "units")
+                )
+            }
+        );
+        if rows > 0 {
+            out.push_str("<div class=\"ro\">");
+            out.push_str(&axis());
+            for group in &self.groups {
+                let running = group.rows.iter().filter(|r| !r.waiting).count();
+                let waiting = group.rows.len() - running;
+                let mut counts = vec![];
+                if running > 0 {
+                    counts.push(format!("{running} running"));
                 }
-                let run = self.run_words(step);
-                if !run.is_empty() {
-                    if !meta.is_empty() {
-                        meta.push_str(" · ");
-                    }
-                    meta.push_str(&format!("running {run}"));
+                if waiting > 0 {
+                    counts.push(format!("{waiting} waiting"));
                 }
-                let strip = if a.strip {
-                    ui::stage_strip(&format!("Stages of {}", unit.heading()), &strip(unit)).0
+                let name = if group.recipe.is_empty() {
+                    esc(&group.name)
                 } else {
-                    String::new()
+                    format!(
+                        "<a href=\"{}?recipe={}&amp;show=all\">{}</a>",
+                        esc(&self.view.href()),
+                        url::form_urlencoded::byte_serialize(group.recipe.as_bytes())
+                            .collect::<String>(),
+                        esc(&group.name)
+                    )
                 };
-                (
-                    self.attrs(unit),
-                    if meta.is_empty() {
+                let _ = write!(
+                    out,
+                    "<h3 class=\"ro-group\"><b>{name}</b> · {}</h3>",
+                    counts.join(", ")
+                );
+                // a recipe whose view does not check: said once
+                if let Some(error) = group
+                    .rows
+                    .first()
+                    .and_then(|r| self.view.names.recipe_of(r.unit.id.as_str()))
+                    .and_then(|r| r.view_error())
+                {
+                    out.push_str(super::unit_view::broken(error).as_str());
+                }
+                for row in &group.rows {
+                    out.push_str(&region(&format!("u-{}", row.unit.id), &self.row_html(row)));
+                }
+            }
+            out.push_str("</div>");
+        }
+        // the rest: what waits on earlier work, and what is done
+        let mut more = vec![];
+        if self.later > 0 {
+            more.push(format!("<b>{} waiting</b> on earlier work", self.later));
+        }
+        if !self.done.is_empty() {
+            let last = self.done.first().map(|u| u.finished()).unwrap_or("");
+            more.push(format!(
+                "<a href=\"{}?show=done#done\"><b>{} done</b></a>{}",
+                esc(&self.view.href()),
+                self.done.len(),
+                if last.is_empty() {
+                    String::new()
+                } else {
+                    format!(", the last {}", ui::ago(last))
+                }
+            ));
+        }
+        if !more.is_empty() {
+            let _ = write!(out, "<p class=\"ro-more\">{}</p>", more.join(" · "));
+        }
+        out.push_str("</section>");
+        out
+    }
+    /// One unit's row: its badge, its title and what it said last, its stage and when it was
+    /// heard from, its activity; open, its steps.
+    fn row_html(&self, row: &Row<'_>) -> String {
+        let unit = row.unit;
+        let shown = unit.shown();
+        let step = current(unit);
+        let (badge, runs_on) = step.map_or_else(
+            || ("fn".to_owned(), String::new()),
+            |s| (s.badge(), s.runs_on()),
+        );
+        // where it is: its stage and how long in it, or what holds it
+        let mut meta = String::new();
+        if let Some(step) = step {
+            let stage = if unit.steps.len() > 1 || !unit.recipe.is_empty() {
+                unit.step_name(step)
+            } else {
+                shown.word().to_owned()
+            };
+            if row.waiting {
+                // a loose step's stage is its state: said once
+                let words = if stage == shown.word() {
+                    stage.clone()
+                } else {
+                    format!("{} {stage}", waiting_words(shown))
+                };
+                let _ = write!(
+                    meta,
+                    "<span class=\"pill\">{}{}</span>",
+                    ui::mark(shown),
+                    esc(&words)
+                );
+                let why = why_waiting(unit);
+                if !why.is_empty() {
+                    let _ = write!(meta, "<span class=\"ro-why\">{why}</span>");
+                }
+            } else {
+                let _ = write!(
+                    meta,
+                    "<span class=\"pill\">{}{}{} · {}</span>",
+                    ui::mark(shown),
+                    // its state in words where its stage does not say it
+                    if stage == shown.word() {
                         String::new()
                     } else {
-                        format!("<p class=\"mod-meta\">{meta}</p>")
+                        format!("<span class=\"vh\">{}, </span>", esc(shown.word()))
                     },
-                    strip,
-                    self.unit_details(unit, Some(step)),
-                )
-            }
-            _ => (
-                String::new(),
-                String::new(),
-                String::new(),
-                ui::Details::new(),
-            ),
-        };
-        let details = details.text("Message", &ask.message.to_string());
-        let body = a
-            .question
-            .map(|q| crate::markdown::render(&q.body).0)
-            .unwrap_or_default();
-        let answer = ask.href(&project);
-        let mut actions = format!(
-            "<a class=\"primary\" href=\"{}\"{}>Answer{}</a>",
-            esc(&answer),
-            if ask.step.is_empty() {
-                String::new()
-            } else {
-                format!(" data-opens=\"{}\"", esc(&ask.step))
-            },
-            icon(Icon::ArrowRight, 16, "")
-        );
-        if let Some(step) = a.step {
-            actions.push_str(&format!(
-                "<a href=\"{}\" data-step=\"{}\">Open step</a><a class=\"quiet-act\" href=\"{}\">{}Message</a>",
-                esc(&step.href()),
-                esc(step.id.as_str()),
-                esc(&step.thread_href()),
-                icon(Icon::MessageSquare, 16, ""),
-            ));
-        }
-        actions.push_str(&format!(
-            "<form class=\"pl-close\" method=\"post\" action=\"/messages/close\"><input type=\"hidden\" name=\"m\" value=\"{project}/{m}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"quiet-act\">Close question</button></form>",
-            m = ask.message,
-            next = esc(&self.view.href()),
-        ));
-        let head = format!(
-            "<span class=\"mod-k\">{role}{q}<b>Question for you</b><span class=\"quiet\">from {from}{when}</span></span><span class=\"mod-t\">{title}</span>",
-            role = if attrs.is_empty() {
-                String::new()
-            } else {
-                ui::trace_role().0
-            },
-            q = icon(Icon::MessageSquare, 16, "ask-i"),
-            title = esc(&ask.title),
-        );
-        let head = if attrs.is_empty() {
-            head
-        } else {
-            format!(
-                "{}{head}{}",
-                ui::trace_button_open(&ask.title, ""),
-                ui::trace_button_close()
-            )
-        };
-        format!(
-            "<div id=\"q-{m}\" class=\"pl-item pl-ask\" style=\"--span:{span}\"{attrs}>{open}{head}{menu}{meta}{strip}<div class=\"mod-body md\">{body}</div><div class=\"mod-actions\">{actions}</div>{close}</div>",
-            m = ask.message,
-            open = ui::module_open(
-                span,
-                Swell::Ask,
-                &format!("Question for you: {}", ask.title)
-            ),
-            menu = details.menu(&ask.title),
-            close = ui::module_close(),
-        )
-    }
-    /// How long a running step has run: "1h 15m" (ticking), ", silent 42m" after it when it is
-    /// quiet; "" when it is not running.
-    fn run_words(&self, step: &StepView) -> String {
-        let Some(t) = step.timing.as_ref().filter(|_| step.running()) else {
-            return String::new();
-        };
-        let mut words = format!("<span class=\"pl-time\">{}</span>", ui::since(&t.started));
-        if step.shown() == Shown::Quiet && !step.active_at.is_empty() {
-            words.push_str(&format!(
-                "<span class=\"pl-note\">, silent {}</span>",
-                ui::since(&step.active_at)
-            ));
-        }
-        words
-    }
-    /// What identifies a unit, behind its row's or module's "⋯": its id and recipe, the step
-    /// that says how it stands (its id, fn, run and tags), its params and its page.
-    fn unit_details(&self, unit: &UnitView, step: Option<&StepView>) -> ui::Details {
-        let mut details = ui::Details::new()
-            .id("Unit", unit.id.as_str())
-            .text("Recipe", &unit.recipe);
-        if let Some(step) = step {
-            details = details
-                .id("Step", step.id.as_str())
-                .code("Function", &step.function);
-            if let Some((run, _)) = step.retries() {
-                let words = format!("{run}, {}", step.retries_words());
-                details = details.text("Run", words.trim_end_matches(", "));
-            }
-            let tags: Vec<&str> = step
-                .tags
-                .iter()
-                .map(String::as_str)
-                .filter(|t| !t.starts_with("unit:"))
-                .collect();
-            details = details.text("Tags", &tags.join(", "));
-        }
-        for (name, value) in &unit.params {
-            details = match ui::ValueSet::of_text(value) {
-                ui::ValueSet::Detail => details.id(name, value),
-                _ => details.text(name, value),
-            };
-        }
-        details.link("Page", &unit_href(self.view, unit), "The unit's page")
-    }
-
-    /// Stopped: each failed, cancelled or stale unit on the sand, its failure's sentence and
-    /// Retry with feedback first.
-    fn stopped_html(&self, span: u8) -> String {
-        let tally: ui::Tally = self.stopped.iter().map(|u| u.shown()).collect();
-        let module = if span <= 6 {
-            span
-        } else if span == 10 {
-            5
-        } else {
-            4
-        };
-        let mut out = format!(
-            "<section id=\"plan-stopped\" class=\"pl-sec pl-stopped\" style=\"--span:{span}\" data-span=\"{span}\" aria-labelledby=\"stopped\">{}",
-            ui::section_head("stopped", "Stopped", &ui::states_words(&tally))
-        );
-        for unit in &self.stopped {
-            out.push_str(&region(
-                &format!("s-{}", unit.id),
-                &self.stop_html(unit, module),
-            ));
-        }
-        // a cancel dismissed in the last ten minutes: one polite line, with its Undo
-        if !self.dismissed.is_empty() {
-            out.push_str("<div class=\"pl-dismissed\" role=\"status\">");
-            for (unit, step) in &self.dismissed {
-                // its unit's title, and its stage on a unit of several (never its id)
-                let name = if unit.steps.len() > 1 && !step.stage.is_empty() {
-                    format!("{} ({})", title(unit), step.stage)
-                } else {
-                    title(unit).to_owned()
-                };
-                // Undo comes back to the card it restores, the focus on it
-                out.push_str(&format!(
-                    "<form method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"undismiss\"><input type=\"hidden\" name=\"next\" value=\"{next}#s-{u}\"><p>{ic}<span class=\"pl-dn\">Dismissed: <a href=\"{h}\">{name}</a></span><button id=\"undo-{s}\" class=\"text-button\" aria-label=\"Undo dismissing {name}\">Undo</button></p></form>",
-                    h = esc(&step.href()),
-                    next = esc(&self.view.href()),
-                    u = esc(unit.id.as_str()),
-                    s = esc(step.id.as_str()),
-                    ic = icon(Icon::Check, 16, ""),
-                    name = esc(&name),
-                ));
-            }
-            out.push_str("</div>");
-        }
-        out.push_str("</section>");
-        out
-    }
-    fn stop_html(&self, unit: &UnitView, span: u8) -> String {
-        let shown = unit.shown();
-        let step = current(unit);
-        let mut said = String::new();
-        if let Some(step) = step {
-            // the stage that stopped, on a unit of several; a unit of one step is that step,
-            // whose title heads the card (its id is in the card's Details)
-            // its stage on a unit of several; never a step's id (a unit of no recipe's steps
-            // have no stage: the card's title says the unit)
-            let stage = (unit.steps.len() > 1 && !step.stage.is_empty()).then(|| esc(&step.stage));
-            let when = step
-                .timing
-                .as_ref()
-                .and_then(|t| t.finished.as_ref().map(|end| (end, t.seconds)))
-                .map(|(end, took)| {
-                    format!(
-                        "at {} after {}",
-                        ui::clock(end),
-                        esc(&ui::duration_text(took))
-                    )
-                });
-            said = [stage, when]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join(", ");
-        }
-        let marks = ui::stage_marks(&format!("Stages of {}", unit.heading()), &strip(unit));
-        let mut body = String::new();
-        if let Some(step) = step {
-            if !step.why().is_empty() {
-                body.push_str(&format!("<p class=\"pl-why\">{}</p>", esc(step.why())));
-            }
-            // what to try next, as its page says it (`failure::Advice`)
-            let next = step.next_step();
-            if !next.is_empty() && shown == Shown::Failed {
-                body.push_str(&format!("<p class=\"meta\">{}</p>", esc(&next)));
-            }
-            // a cancel that set a failure aside keeps it readable
-            if let Some(f) = step
-                .failure
-                .as_ref()
-                .filter(|f| f.cancelled && !f.set_aside.is_empty())
-            {
-                body.push_str(&format!(
-                    "<p class=\"meta pl-aside\" title=\"It had failed: {w}\">It had failed: {w}</p>",
-                    w = esc(&f.set_aside)
-                ));
-            }
-        }
-        let mut actions = String::new();
-        if let Some(step) = step.filter(|s| s.retryable() && !s.retry_asks()) {
-            let first = step.retry_first();
-            // a failure that repeated: Retry with feedback leads, the bare Retry is quiet
-            let bare = if step.advice().repeated() {
-                " class=\"quiet-act\""
-            } else {
-                ""
-            };
-            actions.push_str(&format!(
-                "<form class=\"pl-retry\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><details class=\"pl-fb\" data-preserve-attr=\"open\"><summary class=\"{fb}\">{ic}Retry with feedback</summary><label class=\"vh\" for=\"fb-{s}\">Feedback for the next run of {name}</label><textarea id=\"fb-{s}\" name=\"message\" rows=\"3\" maxlength=\"16384\" placeholder=\"What its next run should do differently\" data-ignore-morph></textarea><button name=\"action\" value=\"retry\" class=\"primary\">Retry with this feedback</button></details><button name=\"action\" value=\"retry\"{bare}>Retry</button></form>",
-                h = esc(&step.href()),
-                rev = step.revision,
-                seen = esc(&step.seen()),
-                next = esc(&self.view.href()),
-                fb = if first { "primary" } else { "" },
-                ic = icon(Icon::RotateCw, 16, ""),
-                s = esc(step.id.as_str()),
-                name = esc(&short(unit, step)),
-            ));
-        }
-        if let Some(step) = step {
-            actions.push_str(&format!(
-                "<a href=\"{}\" data-step=\"{}\">Open step</a>",
-                esc(&step.href()),
-                esc(step.id.as_str())
-            ));
-        }
-        actions.push_str(&format!(
-            "<a class=\"quiet-act\" href=\"{}\">Unit page</a>",
-            esc(&unit_href(self.view, unit))
-        ));
-        // a cancel is set aside here, no confirm (Stopped then offers its Undo); a failure is
-        // never dismissed
-        if let Some(step) = step.filter(|s| s.cancelled() && !s.dismissed) {
-            actions.push_str(&format!(
-                "<form class=\"pl-dismiss\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"next\" value=\"{next}#undo-{s}\"><button class=\"quiet-act\" aria-label=\"Dismiss {name}\">Dismiss</button></form>",
-                h = esc(&step.href()),
-                next = esc(&self.view.href()),
-                s = esc(step.id.as_str()),
-                name = esc(title(unit)),
-            ));
-        }
-        format!(
-            "<div id=\"s-{id}\" class=\"pl-item pl-stop\" tabindex=\"-1\" style=\"--span:{span}\"{attrs} data-said=\"{states}\">{open}{pick}<span class=\"mod-k\" id=\"k-s-{id}\">{role}{g}<b>{word}</b>{kind}{owner}<span class=\"quiet\">{said}</span>{marks}</span><span class=\"mod-t\">{title}</span>{pick_end}{menu}<div class=\"mod-body\">{body}</div><div class=\"mod-actions\">{actions}</div>{close}</div>",
-            id = esc(unit.id.as_str()),
-            attrs = self.attrs(unit),
-            states = esc(&states_said(unit)),
-            open = ui::module_open(
-                span,
-                Swell::Look,
-                &format!("{}, {}", unit.heading(), shown.word())
-            ),
-            pick = ui::trace_button_open(title(unit), &format!("k-s-{}", unit.id)),
-            role = ui::trace_role(),
-            g = ui::mark(shown),
-            word = esc(shown.word()),
-            owner = owner_html(unit),
-            // a failure's kind in a word ("quota", "lost", "cap") when it says more
-            kind = step
-                .map(|s| s.caption())
-                .filter(|c| !c.is_empty() && c != shown.word())
-                .map(|c| format!(" <span class=\"pl-kind\">{}</span>", esc(&c)))
-                .unwrap_or_default(),
-            title = esc(title(unit)),
-            pick_end = ui::trace_button_close(),
-            // a failure's Cancel and Cancel and dismiss, under what identifies it
-            menu = self
-                .unit_details(unit, step)
-                .actions(
-                    "Set it aside",
-                    step.map(|s| {
-                        s.set_aside_actions(
-                            &format!("{}#s-{}", self.view.href(), unit.id),
-                            &format!("{}#undo-{}", self.view.href(), s.id),
-                        )
-                    })
-                    .unwrap_or_default(),
-                )
-                .menu(title(unit)),
-            close = ui::module_close(),
-        )
-    }
-
-    /// Running or Waiting: a block a recipe (its columns its stages), then the units of no
-    /// recipe, each unit one row.
-    fn band_html(&self, id: &str, key: &str, name: &str, units: &[&UnitView], cols: u8) -> String {
-        // the blocks: a recipe's units together, in the order of their first unit
-        let mut groups: Vec<(&str, Vec<&UnitView>)> = vec![];
-        for unit in units {
-            match groups.iter_mut().find(|(r, _)| *r == unit.recipe.as_str()) {
-                Some((_, rows)) => rows.push(unit),
-                None => groups.push((unit.recipe.as_str(), vec![unit])),
-            }
-        }
-        let line = match key {
-            "running" => self.running_line(),
-            _ => self.waiting_line(),
-        };
-        // one block: its own head says the count, and Waiting adds what holds every unit
-        let held = match key {
-            "running" => String::new(),
-            _ => self.held_by(),
-        };
-        let mut out = format!(
-            "<section id=\"{id}\" class=\"pl-sec pl-rows\" style=\"--span:{cols}\" data-span=\"{cols}\" aria-labelledby=\"{key}\">"
-        );
-        let single = groups.len() == 1;
-        if !single {
-            out.push_str(&rail_slot(&ui::section_head(key, name, &line).0));
-        }
-        for (recipe, rows) in &groups {
-            let stages: Vec<&str> = rows[0].stages.iter().map(String::as_str).collect();
-            let head = if recipe.is_empty() {
-                // a loose step is one cell; a unit of no recipe draws its own steps
-                let loose = rows.iter().filter(|u| u.steps.len() == 1).count();
-                let boxed = rows.len() - loose;
-                let words = match (boxed, loose) {
-                    (0, n) => ui::count(n, "loose step", "loose steps"),
-                    (n, 0) => ui::no_recipe(n, ("unit", "units")),
-                    (n, m) => format!(
-                        "{} and {}",
-                        ui::no_recipe(n, ("unit", "units")),
-                        ui::count(m, "loose step", "loose steps")
-                    ),
-                };
-                let title = if boxed == 0 {
-                    "Loose steps"
-                } else {
-                    "No recipe"
-                };
-                if single {
-                    ui::section_head(key, name, &format!("{words}{held}")).0
-                } else {
-                    group_head(title, &words, &[])
-                }
-            } else {
-                let tally: ui::Tally = rows.iter().map(|u| u.shown()).collect();
-                let words = format!(
-                    "{} · {}",
-                    ui::count(rows.len(), "unit", "units"),
-                    ui::states_words(&tally)
+                    esc(&stage),
+                    step.timing
+                        .as_ref()
+                        .filter(|t| t.finished.is_none())
+                        .map(|t| ui::since(&t.started).0)
+                        .unwrap_or_default()
                 );
-                // the recipe's name leads to every unit it made, done ones too
-                let link = format!(
-                    "<a class=\"sec-a\" href=\"{}?recipe={}&#38;show=all\">{}</a>",
-                    esc(&self.view.href()),
-                    url::form_urlencoded::byte_serialize(recipe.as_bytes()).collect::<String>(),
-                    esc(recipe)
-                );
-                if single {
-                    ui::strip_head(key, name, &format!("{recipe}: {words}{held}"), &stages)
-                        .0
-                        .replacen(&format!(">{}: ", esc(recipe)), &format!(">{link}: "), 1)
-                } else {
-                    group_head(recipe, &words, &stages).replacen(
-                        &format!("<h3>{}</h3>", esc(recipe)),
-                        &format!("<h3>{link}</h3>"),
-                        1,
-                    )
+            }
+        }
+        if !row.waiting {
+            let quiet_step = unit.steps.iter().find(|s| s.shown() == Shown::Quiet);
+            match (quiet_step, row.heard) {
+                (Some(q), _) if !q.active_at.is_empty() => {
+                    let _ = write!(
+                        meta,
+                        "<span class=\"pill pill-quiet\">quiet {}</span>",
+                        ui::since(&q.active_at)
+                    );
                 }
-            };
-            out.push_str(&format!(
-                "<div class=\"pl-group{}\" style=\"--n:{}\">{}",
-                if recipe.is_empty() { " pl-free" } else { "" },
-                stages.len().max(1),
-                rail_slot(&head)
-            ));
-            // a recipe whose view does not check: its rows go on without it, said once
-            if let Some(error) = self
-                .view
-                .names
-                .recipe_of(rows[0].id.as_str())
-                .and_then(|r| r.view_error())
-            {
-                out.push_str(super::unit_view::broken(error).as_str());
-            }
-            for unit in rows {
-                out.push_str(&region(&format!("u-{}", unit.id), &self.row_html(unit)));
-            }
-            out.push_str("</div>");
-        }
-        out.push_str("</section>");
-        out
-    }
-    /// Running's count line: "3 running".
-    fn running_line(&self) -> String {
-        format!("{} running", self.running.len())
-    }
-    /// Waiting's count line: "3 waiting, all held by Review the spring guide" or "3 waiting,
-    /// 1 blocked".
-    fn waiting_line(&self) -> String {
-        let blocked = self
-            .waiting
-            .iter()
-            .filter(|u| u.shown() == Shown::Blocked)
-            .count();
-        let mut line = format!("{} waiting{}", self.waiting.len(), self.held_by());
-        if blocked > 0 {
-            line.push_str(&format!(", {blocked} blocked"));
-        }
-        line
-    }
-    /// ", all held by Review the spring guide" when every waiting unit (two or more) waits on
-    /// the same first source; "" otherwise.
-    fn held_by(&self) -> String {
-        let n = self.waiting.len();
-        let firsts: BTreeSet<String> = self
-            .waiting
-            .iter()
-            .filter_map(|u| {
-                u.all_waits()
-                    .and_then(|(_, w)| w.first().map(|w| w.name.text(60)))
-            })
-            .collect();
-        let held = self
-            .waiting
-            .iter()
-            .filter(|u| u.all_waits().is_some())
-            .count();
-        if n > 1 && held == n && firsts.len() == 1 {
-            format!(
-                ", all held by {}",
-                firsts.iter().next().map(String::as_str).unwrap_or("")
-            )
-        } else {
-            String::new()
-        }
-    }
-    /// One unit's row: its head (the trace's button: its state, how long it has run, its
-    /// title), its one line under it, its cells beside it at their recipe's
-    /// columns, its "⋯" at the end, and what opens in place when it is traced.
-    fn row_html(&self, unit: &UnitView) -> String {
-        let shown = unit.shown();
-        let step = current(unit);
-        let mut state = String::new();
-        if let Some(step) = step {
-            let run = self.run_words(step);
-            if !run.is_empty() {
-                state = run;
-            } else if unit.steps.len() > 1 && shown.spec().band != Band::Running {
-                // its steps by state, when they stand apart ("1 succeeded · 5 pending"); one
-                // state for all its steps is the word before it already
-                let tally = unit.tally_words();
-                if tally.contains('·') {
-                    state = format!("<span class=\"pl-note\">, {}</span>", esc(&tally));
+                (_, Some(heard)) => {
+                    let at = super::rfc3339(heard as u64);
+                    let _ = write!(
+                        meta,
+                        "<span class=\"ro-heard\">{}heard {}</span>",
+                        if self.now - heard < LIVE {
+                            "<i class=\"live-dot\" aria-hidden=\"true\"></i>"
+                        } else {
+                            ""
+                        },
+                        ui::ago(&at)
+                    );
                 }
+                _ => {}
             }
         }
-        // its one line: what it said last (its recipe's view, else its last message); a waiting
-        // unit what holds it
-        let sub = if shown.spec().band == Band::Running {
-            self.said_html(unit)
-        } else {
-            let waits = waits_html(unit);
-            if waits.is_empty() {
-                self.said_html(unit)
-            } else {
-                waits
-            }
-        };
-        let cells = ui::stage_strip(&format!("Stages of {}", unit.heading()), &strip(unit)).0;
-        format!(
-            "<div id=\"u-{id}\" class=\"pl-row rail-slot\"{attrs}>{rail}<div class=\"pl-lead\">{pick}<span class=\"pl-head\"><span class=\"pl-k\" id=\"k-u-{id}\"><span class=\"pl-w\">{role}{mark}<b>{word}</b></span> {state}{owner}</span> <span class=\"pl-t\">{title}</span></span>{pick_end}{sub}<a class=\"pl-page nojs\" href=\"{href}\">Open the unit</a></div><div class=\"pl-cells\">{cells}</div><div class=\"pl-end\">{menu}</div>{steps}{more}{more_body}{more_end}</div>",
-            id = esc(unit.id.as_str()),
-            attrs = self.attrs(unit),
-            rail = ui::rail(),
-            pick = ui::trace_button_open(title(unit), &format!("k-u-{}", unit.id)),
-            role = ui::trace_role(),
-            mark = ui::mark(shown),
-            word = esc(shown.word()),
-            owner = owner_html(unit),
-            title = esc(title(unit)),
-            pick_end = ui::trace_button_close(),
-            href = esc(&unit_href(self.view, unit)),
-            menu = self.unit_details(unit, step).menu(title(unit)),
-            steps = self.steps_html(unit),
-            more = ui::trace_more_open(),
-            more_body = self.more_html(unit),
-            more_end = ui::trace_more_close(),
-        )
+        roster_row(&RowParts {
+            id: unit.id.as_str(),
+            waiting: row.waiting,
+            said_states: &said_states(unit),
+            badge: &badge,
+            runs_on: &runs_on,
+            title: title(unit),
+            owner: &unit.owner_words(),
+            said: &self.said(unit),
+            meta: &meta,
+            track: &self.track_html(row),
+            drill: &format!("{}{}", self.steps_html(unit), self.foot_html(unit)),
+        })
     }
-    /// A unit's step view (`unit_steps`) behind its disclosure, its steps opening in the
-    /// drawer; which are open is the trace's to keep (`expanded`).
-    fn steps_html(&self, unit: &UnitView) -> String {
-        if unit.done {
-            return ui::expand_on_open(
-                unit.id.as_str(),
-                &format!("Steps of {}", title(unit)),
-                &unit.href(&self.view.project.id),
-            )
-            .0;
-        }
-        let mut steps = super::unit_steps::of_unit(unit, &self.view.relations, true, "");
-        steps.owner.clear();
-        ui::expand(
-            unit.id.as_str(),
-            &format!("Steps of {}", title(unit)),
-            &steps.html(),
-        )
-        .0
-    }
-    /// A unit's one line: its recipe's view (the project's own summary of it, its params kept
-    /// in the row's Details), else its last message, its sender named in words and its text on
-    /// one line.
-    fn said_html(&self, unit: &UnitView) -> String {
+    /// A unit's one line: its recipe's view (the project's own summary of it), else what it said
+    /// last.
+    fn said(&self, unit: &UnitView) -> String {
         if let Some(view) = self
             .view
             .names
@@ -1127,116 +1258,104 @@ impl<'a> Plan<'a> {
             .and_then(|r| r.view())
         {
             let drawn = super::unit_view::draw(view, unit, true);
-            if super::unit_view::empty(&drawn) {
-                return String::new();
-            }
-            return format!("<div class=\"pl-sub pl-view\">{drawn}</div>");
+            return if super::unit_view::empty(&drawn) {
+                String::new()
+            } else {
+                drawn.0
+            };
         }
-        if unit.last_message.trim().is_empty() {
-            return String::new();
-        }
-        format!(
-            "<p class=\"pl-sub\"><b>{}</b> {}: {}</p>",
-            unit.sender_html(),
-            ui::ago(&unit.changed),
-            esc(&crate::markdown::cut(
-                &crate::markdown::plain(&unit.last_message),
-                240
-            ))
-        )
+        said_html(unit)
     }
-    /// What opens in place while a unit is traced: its last message and its buttons (its
-    /// steps are its disclosure's).
-    fn more_html(&self, unit: &UnitView) -> String {
-        let said = if unit.last_message.trim().is_empty() {
-            "<p class=\"meta\">No message yet.</p>".to_owned()
-        } else {
-            format!(
-                "<p class=\"meta\"><b>{}{}</b> · {}</p><div class=\"md pl-said-t\">{}</div>",
-                if unit.last_received { "Note from " } else { "" },
-                unit.sender_html(),
-                ui::ago(&unit.changed),
-                crate::markdown::excerpt(&unit.last_message, 420).0
-            )
-        };
-        let mut actions = String::new();
-        if let Some(step) = current(unit) {
-            actions.push_str(&format!(
-                "<a class=\"primary\" href=\"{}\" data-step=\"{}\">Open step{}</a><a class=\"quiet-act\" href=\"{}\">{}Message</a>",
-                esc(&step.href()),
-                esc(step.id.as_str()),
-                icon(Icon::ArrowRight, 16, ""),
-                esc(&step.thread_href()),
-                icon(Icon::MessageSquare, 16, ""),
-            ));
-        }
-        actions.push_str(&format!(
-            "<a class=\"quiet-act\" href=\"{}\">Unit page</a>",
-            esc(&unit_href(self.view, unit))
-        ));
-        format!(
-            "<div class=\"pl-more\"><div class=\"pl-said\"><h3 class=\"pl-mh\">Last message</h3>{said}</div><div class=\"mod-actions\">{actions}</div></div>"
-        )
-    }
-    /// The margin: each long run's progress as it reported it.
-    /// The margin: the long runs, down the sheet's right beside `rows` of it (`wide` from
-    /// 2000px, where Running and Waiting share one).
-    fn margin_html(&self, rows: usize, wide: usize) -> String {
-        let mut out = format!(
-            "<aside id=\"plan-margin\" class=\"pl-margin\" style=\"--span:2;--rows:{rows};--rows-w:{wide}\" data-span=\"2\" aria-label=\"Long runs\">"
-        );
-        for unit in &self.margin {
-            let Some(step) = unit.steps.first() else {
+    /// A unit's activity over the last twelve hours on a log scale: its earlier runs faint, the
+    /// one going now blue, sand once it went quiet, a tick a message, dotted while it waits.
+    fn track_html(&self, row: &Row<'_>) -> String {
+        let unit = row.unit;
+        let now = (self.now / 60.0).floor() * 60.0;
+        let from = now - SAID_WINDOW;
+        let mut segs: Vec<(&'static str, f64, f64)> = vec![];
+        let mut last_end: Option<f64> = None;
+        for step in &unit.steps {
+            let Some(timing) = step.timing.as_ref() else {
                 continue;
             };
-            let progress = step.progress.as_ref();
-            let run = ui::LongRun {
-                name: step.id.to_string(),
-                title: step.heading().to_owned(),
-                doc: step.doc_rest().to_owned(),
-                href: step.href(),
-                run: step.timing.as_ref().map_or(1, |t| t.runs),
-                since: step
-                    .timing
-                    .as_ref()
-                    .map(|t| t.started.clone())
-                    .unwrap_or_default(),
-                fields: progress
-                    .map(|p| {
-                        p.fields
-                            .iter()
-                            .map(|f| (f.name.clone(), serde_json::Value::String(f.value.clone())))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                at: progress.map(|p| p.at.clone()).unwrap_or_default(),
-            };
-            out.push_str(&region(
-                &format!("m-{}", unit.id),
-                &format!(
-                    "<div id=\"m-{}\" class=\"pl-item\"{} data-said=\"{}\">{}</div>",
-                    esc(unit.id.as_str()),
-                    self.attrs(unit),
-                    esc(&states_said(unit)),
-                    // its title opens the step in the drawer, as a stage's cell does
-                    ui::margin_module(&run).0.replacen(
-                        &format!("<a href=\"{}\">", esc(&run.href)),
-                        &format!(
-                            "<a href=\"{}\" id=\"n-{s}\" data-step=\"{s}\">",
-                            esc(&run.href),
-                            s = esc(step.id.as_str())
-                        ),
-                        1
-                    )
-                ),
-            ));
+            let quiet = (step.shown() == Shown::Quiet)
+                .then(|| epoch(&step.active_at))
+                .flatten();
+            for span in &timing.spans {
+                let end = span.to.unwrap_or(now);
+                last_end = Some(last_end.map_or(end, |e: f64| e.max(end)));
+                if end < from {
+                    continue;
+                }
+                let a = span.from.max(from);
+                let open = span.to.is_none() && step.running();
+                match (open, quiet) {
+                    (true, Some(q)) if q > a => {
+                        segs.push(("tk-run", a, q));
+                        segs.push(("tk-quiet", q, now));
+                    }
+                    (true, Some(_)) => segs.push(("tk-quiet", a, now)),
+                    (true, None) => segs.push(("tk-run", a, now)),
+                    (false, _) => segs.push(("tk-past", a, end)),
+                }
+            }
         }
-        out.push_str("</aside>");
+        if row.waiting
+            && let Some(end) = last_end.filter(|e| *e < now)
+        {
+            segs.push(("tk-wait", end.max(from), now));
+        }
+        let ticks: Vec<f64> = unit.said.iter().map(|(_, t)| *t).collect();
+        track(&segs, &ticks, now)
+    }
+    /// A unit's steps, open under its row: its step view (`unit_steps`), its rows opening in
+    /// the drawer, its foot the plan's own.
+    fn steps_html(&self, unit: &UnitView) -> String {
+        let mut steps = super::unit_steps::of_unit(unit, &self.view.relations, true, "");
+        steps.owner.clear();
+        steps.latest = None;
+        steps.html().0
+    }
+    /// The drilldown's foot: the latest that was said, then Message and Open step.
+    fn foot_html(&self, unit: &UnitView) -> String {
+        let mut out = String::from("<div class=\"ro-foot\"><p class=\"ro-ev\">");
+        if unit.last_message.trim().is_empty() {
+            out.push_str("No message yet.");
+        } else {
+            let _ = write!(
+                out,
+                "Latest · {} · <b>{}</b> · {}",
+                ui::clock(&unit.changed),
+                unit.sender_html(),
+                esc(&crate::markdown::cut(
+                    &crate::markdown::plain(&unit.last_message),
+                    200
+                ))
+            );
+        }
+        out.push_str("</p>");
+        if let Some(step) = current(unit) {
+            let _ = write!(
+                out,
+                "<a class=\"act\" href=\"{}\">Message</a><a class=\"act\" href=\"{}\" data-step=\"{}\">Open step</a>",
+                esc(&step.thread_href()),
+                esc(&step.href()),
+                esc(step.id.as_str()),
+            );
+        }
+        let _ = write!(
+            out,
+            "<a class=\"act\" href=\"{}\">Unit page</a></div>",
+            esc(&unit_href(self.view, unit))
+        );
         out
     }
 
-    /// Done: a dense index of every done unit, newest first, folded.
-    fn done_html(&self, cols: u8) -> String {
+    // ---- the done index ------------------------------------------------------------------------
+
+    /// Done, when asked for (Show: done, a find, a recipe's units): a dense index of every done
+    /// unit, newest first.
+    fn done_html(&self) -> String {
         let steps: usize = self.done.iter().map(|u| u.steps.len()).sum();
         let last = self.done.first().map(|u| u.finished()).unwrap_or("");
         let mut line = format!(
@@ -1247,40 +1366,22 @@ impl<'a> Plan<'a> {
         if !last.is_empty() {
             line.push_str(&format!(" · the last finished {}", ui::ago_text(last)));
         }
-        let times: Vec<f64> = self
-            .done
-            .iter()
-            .map(|u| took(u).0)
-            .filter(|t| *t > 0.0)
-            .collect();
-        let range = match (
-            times.iter().copied().reduce(f64::min),
-            times.iter().copied().reduce(f64::max),
-        ) {
-            (Some(a), Some(b)) if a < b => format!(
-                "<p class=\"meta pl-range\">Took {} to {}.</p>",
-                esc(&ui::duration_text(a)),
-                esc(&ui::duration_text(b))
-            ),
-            _ => String::new(),
-        };
-        let latest = ui::latest_list("Finished last", &self.latest());
         let mut items = String::new();
         for unit in &self.done {
-            let (took, _) = took(unit);
-            // a cancel the owner dismissed leaves its unit done, still said: "b cancelled and
-            // dismissed" (its step's page has the Undo)
+            let took = took(unit);
+            // a cancel the owner dismissed leaves its unit done, still said
             let cancels: Vec<String> = unit
                 .steps
                 .iter()
                 .filter(|s| s.cancelled())
-                .map(|s| short(unit, s))
+                .map(|s| unit.step_name(s))
                 .collect();
             let dismissed = unit.steps.iter().any(|s| s.cancelled() && s.dismissed);
-            items.push_str(&format!(
-                "<li data-said=\"{states}\"><a href=\"{h}\"><span class=\"pl-at\">{at}</span>{g}<span class=\"pl-dt\">{t}</span><span class=\"pl-dk\">{k}</span></a>{x}</li>",
+            let _ = write!(
+                items,
+                "<li data-said=\"{said}\"><a href=\"{h}\"><span class=\"pl-at\">{at}</span>{g}<span class=\"pl-dt\">{t}</span><span class=\"pl-dk\">{k}</span></a></li>",
+                said = esc(&said_states(unit)),
                 h = esc(&unit_href(self.view, unit)),
-                states = esc(&states_said(unit)),
                 at = if unit.finished().is_empty() {
                     String::new()
                 } else {
@@ -1304,20 +1405,318 @@ impl<'a> Plan<'a> {
                 } else {
                     esc(unit.shown().word())
                 },
-                x = self.steps_html(unit),
-            ));
+            );
         }
-        // open when asked for: Show done, a find, or a recipe's every unit
-        let open =
-            self.view.show == "done" || !self.view.q.is_empty() || !self.view.recipe.is_empty();
         format!(
-            "<section id=\"plan-done\" class=\"pl-sec pl-done\" style=\"--span:{cols}\" data-span=\"{cols}\" aria-labelledby=\"done\">{head}{latest}<details class=\"pl-index\" data-preserve-attr=\"open\"{open}><summary>{chev}<span class=\"pl-show\">Show the {n}</span><span class=\"pl-hide\">Hide the {n}</span></summary>{range}<ol class=\"pl-idx\">{items}</ol></details></section>",
-            head = ui::section_head("done", "Done", &line),
-            open = if open { " open" } else { "" },
-            chev = icon(Icon::ChevronDown, 16, "chev"),
-            n = esc(&ui::count(self.done.len(), "done unit", "done units")),
+            "<section id=\"plan-done\" class=\"pb-sec\" aria-labelledby=\"done\"><div class=\"pb-label\"><h2 id=\"done\">Done</h2><span class=\"pb-note\">{}</span></div><ol class=\"pl-idx\">{items}</ol></section>",
+            esc(&line)
         )
     }
+}
+
+/// A moment `ago` seconds before now on the track's log scale, percent from its left.
+fn x_of(ago: f64) -> f64 {
+    let ago = ago.clamp(0.0, SAID_WINDOW);
+    100.0 * (1.0 - (1.0 + ago / KNEE).ln() / (1.0 + SAID_WINDOW / KNEE).ln())
+}
+
+// ---- the plan's parts, drawn here and on `/_ui` -------------------------------------------------
+
+/// An item of Needs you: its mark (said in words to a screen reader), its attributes (`attrs`,
+/// HTML: the unit it is about and its steps' states), its sentence and what opens under it, its
+/// one action and its ×.
+pub fn need_item(
+    mark: Mark,
+    id: &str,
+    attrs: &str,
+    sentence: &str,
+    more: &str,
+    act: &str,
+    x: &str,
+) -> String {
+    format!(
+        "<li id=\"{id}\" class=\"nd-i\"{attrs} tabindex=\"-1\"><span class=\"nk {mk}\" role=\"img\" aria-label=\"{word}\"></span><div class=\"nd-say\"><p>{sentence}</p>{more}</div><span class=\"nd-acts\">{act}{x}</span></li>",
+        id = esc(id),
+        mk = mark.class(),
+        word = mark.word(),
+    )
+}
+/// A card of Finished since you looked: when it finished and how long it took (nothing for no
+/// time), its title linking its page, what it produced (`output`, HTML), its steps' states
+/// (`said`, as `data-said` carries them; "" for none).
+pub fn finished_card(
+    at: &str,
+    took: f64,
+    href: &str,
+    title: &str,
+    output: &str,
+    said: &str,
+) -> String {
+    format!(
+        "<li class=\"fin-i\"{said}><p class=\"fin-w\">{at}{took}</p><p class=\"fin-t\"><a href=\"{href}\">{title}</a></p>{output}</li>",
+        at = ui::clock(at),
+        // a value set by hand took no time of its own
+        took = if took > 0.0 {
+            format!(" · took {}", esc(&ui::duration_text(took)))
+        } else {
+            String::new()
+        },
+        href = esc(href),
+        title = esc(title),
+        said = if said.is_empty() {
+            String::new()
+        } else {
+            format!(" data-said=\"{}\"", esc(said))
+        },
+    )
+}
+/// The labels over At work's tracks: 12h, 4h, 1h, 15m and now, where the log scale puts them.
+pub fn axis() -> String {
+    let mut out =
+        String::from("<div class=\"ro-axis\" aria-hidden=\"true\"><span class=\"ro-ticks\">");
+    for (ago, words) in AXIS {
+        let _ = write!(out, "<span style=\"left:{:.2}%\">{words}</span>", x_of(ago));
+    }
+    out.push_str("</span></div>");
+    out
+}
+/// A unit's track over the last twelve hours to `now` on the log scale: each `(class, from,
+/// to)` a bar (`tk-past` an earlier run, `tk-run` the one going, `tk-quiet` its silence,
+/// `tk-wait` dotted while it waits), a tick for each message in `ticks`.
+pub fn track(segs: &[(&str, f64, f64)], ticks: &[f64], now: f64) -> String {
+    let from = now - SAID_WINDOW;
+    let mut bars = String::new();
+    for (class, a, b) in segs {
+        if *b < from {
+            continue;
+        }
+        let (l, r) = (x_of(now - a.max(from)), x_of(now - b));
+        let _ = write!(
+            bars,
+            "<i class=\"{class}\" style=\"left:{l:.2}%;width:{:.2}%\"></i>",
+            (r - l).max(0.0)
+        );
+    }
+    let mut said = 0;
+    for t in ticks.iter().filter(|t| **t >= from && **t <= now + 60.0) {
+        said += 1;
+        let _ = write!(
+            bars,
+            "<i class=\"tk-m\" style=\"left:{:.2}%\"></i>",
+            x_of(now - t)
+        );
+    }
+    format!(
+        "<span class=\"ro-track\" role=\"img\" aria-label=\"{}\">{bars}</span>",
+        esc(&format!(
+            "Its last twelve hours: {}",
+            ui::count(said, "message", "messages")
+        ))
+    )
+}
+/// What a row of At work is drawn from (HTML where it says so).
+pub struct RowParts<'a> {
+    pub id: &'a str,
+    /// It waits (its track dotted since its last run); else it is at work.
+    pub waiting: bool,
+    /// Its steps' states, as `data-said` carries them ("" for none).
+    pub said_states: &'a str,
+    pub badge: &'a str,
+    pub runs_on: &'a str,
+    pub title: &'a str,
+    /// Who owns it (`@lead`, "you"), small and muted after its title; "" for no one.
+    pub owner: &'a str,
+    /// HTML: what it said last.
+    pub said: &'a str,
+    /// HTML: its stage pill and when it was heard from.
+    pub meta: &'a str,
+    /// HTML: its `track`.
+    pub track: &'a str,
+    /// HTML: what it opens to.
+    pub drill: &'a str,
+}
+/// A row of At work: a disclosure whose summary is the row and whose body is its steps, so it
+/// opens in place without script.
+pub fn roster_row(row: &RowParts<'_>) -> String {
+    format!(
+        "<details id=\"u-{id}\" class=\"ro-u{wait}\" data-unit=\"{id}\"{states} data-preserve-attr=\"open\"><summary class=\"ro-r\"><span class=\"ro-badge\" title=\"{on}\">{badge}</span><span class=\"ro-who\"><span class=\"ro-t\">{title}{own}</span><span class=\"ro-s\">{said}</span></span><span class=\"ro-meta\">{meta}</span>{track}<span class=\"ro-chev\" aria-hidden=\"true\">{chev}</span></summary><div class=\"ro-drill\">{drill}</div></details>",
+        id = esc(row.id),
+        wait = if row.waiting { " is-wait" } else { "" },
+        states = if row.said_states.is_empty() {
+            String::new()
+        } else {
+            format!(" data-said=\"{}\"", esc(row.said_states))
+        },
+        on = esc(&if row.runs_on.is_empty() {
+            String::new()
+        } else {
+            format!("Runs on {}", row.runs_on)
+        }),
+        badge = esc(&ui::cut(row.badge, 5)),
+        title = esc(row.title),
+        own = if row.owner.is_empty() {
+            String::new()
+        } else {
+            format!(" <span class=\"own\">{}</span>", esc(row.owner))
+        },
+        said = row.said,
+        meta = row.meta,
+        track = row.track,
+        chev = icon(Icon::ChevronDown, 16, ""),
+        drill = row.drill,
+    )
+}
+/// Each of a unit's steps and how it reads, as `data-said` carries them for `board.js` to say a
+/// step's new state to a screen reader ("a-build succeeded|a-review skipped").
+fn said_states(unit: &UnitView) -> String {
+    unit.steps
+        .iter()
+        .map(|s| format!("{} {}", s.id, s.shown().word()))
+        .collect::<Vec<_>>()
+        .join("|")
+}
+/// When a unit at work was last heard from: its running step's last write, else its last
+/// message, else its run's start.
+fn heard(unit: &UnitView) -> Option<f64> {
+    let running = unit.steps.iter().filter(|s| s.running());
+    let wrote = running
+        .clone()
+        .filter_map(|s| epoch(&s.active_at))
+        .reduce(f64::max);
+    let said = epoch(&unit.changed).filter(|_| !unit.last_message.trim().is_empty());
+    let started = running
+        .filter_map(|s| s.timing.as_ref().and_then(|t| epoch(&t.started)))
+        .reduce(f64::max);
+    match (wrote, said) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b).or(started),
+    }
+}
+/// What a unit said last, on one line: its latest message, or its live progress when that is
+/// newer; another's message to it after who sent it.
+fn said_html(unit: &UnitView) -> String {
+    let progress = unit
+        .steps
+        .iter()
+        .filter_map(|s| s.progress.as_ref().filter(|p| p.live))
+        .max_by(|a, b| a.at.cmp(&b.at));
+    let message_at = if unit.last_message.trim().is_empty() {
+        ""
+    } else {
+        unit.changed.as_str()
+    };
+    if let Some(p) = progress.filter(|p| p.at.as_str() > message_at) {
+        let words: Vec<String> = p
+            .shown()
+            .into_iter()
+            .filter(|f| !f.value.trim().is_empty() && !f.long())
+            .take(3)
+            .map(|f| format!("{} {}", f.name.replace(['_', '-'], " "), f.value.trim()))
+            .collect();
+        if !words.is_empty() {
+            return esc(&words.join(" · "));
+        }
+    }
+    if message_at.is_empty() {
+        return String::new();
+    }
+    let text = esc(&crate::markdown::cut(
+        &crate::markdown::plain(&unit.last_message),
+        240,
+    ));
+    let own = unit.steps.iter().any(|s| s.id.as_str() == unit.last_from);
+    if own {
+        text
+    } else {
+        format!("<b>{}</b>: {text}", unit.sender_html())
+    }
+}
+/// A waiting row's pill, before its stage: "waiting for", or the state that holds it.
+fn waiting_words(shown: Shown) -> String {
+    match shown {
+        Shown::Queued | Shown::Paused | Shown::Held | Shown::Blocked | Shown::External => {
+            format!("{} at", shown.word())
+        }
+        _ => "waiting for".into(),
+    }
+}
+/// Why a waiting unit waits, in words: what it waits for in other units, or what else holds
+/// its first step not done.
+fn why_waiting(unit: &UnitView) -> String {
+    if let Some((_, waits)) = unit.all_waits() {
+        let named: Vec<String> = waits
+            .iter()
+            .take(2)
+            .map(|w| {
+                format!(
+                    "<a href=\"{}\"{}>{}</a>{}",
+                    esc(&w.href),
+                    if w.opens.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" data-opens=\"{}\"", esc(&w.opens))
+                    },
+                    esc(&w.name.text(48)),
+                    if w.note.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", esc(&w.note))
+                    }
+                )
+            })
+            .collect();
+        let more = waits.len().saturating_sub(2);
+        return format!(
+            "behind {}{}",
+            named.join(" and "),
+            if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            }
+        );
+    }
+    let Some(step) = unit
+        .steps
+        .iter()
+        .find(|s| s.standing().spec().band != Band::Done)
+    else {
+        return String::new();
+    };
+    esc(&match step.shown() {
+        Shown::Paused => step.hold_words(),
+        Shown::Queued => step
+            .queued
+            .first()
+            .map(|q| format!("Queued: {q}"))
+            .unwrap_or_default(),
+        Shown::Blocked => "Held up by a failure upstream.".into(),
+        _ => step.waits.first().cloned().unwrap_or_default(),
+    })
+}
+/// What a done unit produced: its last step's first output that explains (as its Overview
+/// reads them), its name before it; else the first that identifies, in data mono.
+fn produced(unit: &UnitView) -> String {
+    for step in unit.steps.iter().rev() {
+        if let Some(field) = step.overview_outputs().first() {
+            let value = crate::markdown::cut(&crate::markdown::plain(&field.value), 160);
+            return format!(
+                "<p class=\"fin-o\"><span class=\"fin-n\">{}</span> {}</p>",
+                esc(&field.name.replace(['_', '-'], " ")),
+                esc(&value)
+            );
+        }
+    }
+    for step in unit.steps.iter().rev() {
+        if let Some(field) = step.outputs.iter().find(|f| f.available && f.identifies()) {
+            return format!(
+                "<p class=\"fin-o\"><span class=\"fin-n\">{}</span> <code>{}</code></p>",
+                esc(&field.name.replace(['_', '-'], " ")),
+                esc(&ui::cut(&field.value, 24))
+            );
+        }
+    }
+    String::new()
 }
 
 /// The Plan · Both · Board switch: a link each, so a choice works without script (the page
@@ -1342,15 +1741,6 @@ fn view_switch(href: &str, chosen: Option<&str>) -> String {
     format!("<nav class=\"view-switch\" aria-label=\"View\">{links}</nav>")
 }
 /// "a", "a and b", "a, b and c".
-/// A unit's owner, small and muted on its row's state line or Stopped card: `@lead`, or
-/// "you"; nothing when it is unowned.
-fn owner_html(unit: &UnitView) -> String {
-    let owner = unit.owner_words();
-    if owner.is_empty() {
-        return owner;
-    }
-    format!(" <span class=\"own\">{}</span>", esc(&owner))
-}
 fn join(items: &[&str]) -> String {
     match items {
         [] => String::new(),
@@ -1362,109 +1752,26 @@ fn join(items: &[&str]) -> String {
 fn region(id: &str, html: &str) -> String {
     format!("<!--r:{id}-->{html}<!--/r:{id}-->")
 }
-/// A head between rows, a place the trace's rail runs through.
-fn rail_slot(html: &str) -> String {
-    format!("<div class=\"rail-slot\">{}{html}</div>", ui::rail())
-}
-/// A block's head inside a band: its recipe's name and count, each stage over its column.
-fn group_head(name: &str, line: &str, stages: &[&str]) -> String {
-    ui::strip_head("", name, line, stages)
-        .0
-        .replacen(
-            "class=\"sec-h sec-strip\"",
-            "class=\"sec-h sec-strip sec-group\"",
-            1,
-        )
-        .replacen("<h2>", "<h3>", 1)
-        .replacen("</h2>", "</h3>", 1)
-}
-/// A unit's waits, said: "review waits for publish · Terns (running)"; or what else holds its
-/// first step.
-fn waits_html(unit: &UnitView) -> String {
-    if let Some((step, waits)) = unit.all_waits() {
-        const NAMED: usize = 2;
-        let named: Vec<String> = waits
-            .iter()
-            .take(NAMED)
-            .map(|w| {
-                // by its title in words; an untitled step by its id, its only name
-                let words = if w.name.titled() {
-                    esc(&w.name.text(60))
-                } else {
-                    format!("<code>{}</code>", esc(&w.name.id))
-                };
-                format!(
-                    "<a href=\"{}\"{}>{words}</a>{}",
-                    esc(&w.href),
-                    if w.opens.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" data-opens=\"{}\"", esc(&w.opens))
-                    },
-                    if w.note.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" ({})", esc(&w.note))
-                    }
-                )
-            })
-            .collect();
-        let more = waits.len().saturating_sub(NAMED);
-        let mut list = match named.as_slice() {
-            [one] => one.clone(),
-            [a, b] if more == 0 => format!("{a} and {b}"),
-            all => all.join(", "),
-        };
-        if more > 0 {
-            list.push_str(&format!(" and {more} more"));
-        }
-        return format!(
-            "<p class=\"pl-sub pl-waits\">{} waits for {list}.</p>",
-            esc(&short(unit, step))
-        );
-    }
-    let Some(step) = unit
-        .steps
-        .iter()
-        .find(|s| s.standing().spec().band != Band::Done)
-    else {
-        return String::new();
-    };
-    let words = match step.shown() {
-        Shown::Paused => step.hold_words(),
-        Shown::Queued => step
-            .queued
-            .first()
-            .map(|q| format!("Queued: {q}"))
-            .unwrap_or_else(|| "Queued.".into()),
-        Shown::Held => step
-            .waits
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "Held.".into()),
-        Shown::Blocked => "Held up by a failure upstream.".into(),
-        _ if step.ready() => "Ready: it starts next.".into(),
-        _ => step.waits.first().cloned().unwrap_or_default(),
-    };
-    if words.is_empty() {
-        return String::new();
-    }
-    format!("<p class=\"pl-sub pl-waits\">{}</p>", esc(&words))
-}
 
 #[derive(Template)]
 #[template(path = "project.html")]
 struct ProjectTemplate<'a> {
     view: &'a ProjectView,
     plan: &'a Plan<'a>,
+    glance: (String, String),
     js_url: String,
     board_js_url: String,
 }
 /// The page body: the plan's sheet in its pane, the board beside it, the step drawer.
-pub fn body(view: &ProjectView, plan: &Plan<'_>) -> Result<TrustedHtml, askama::Error> {
+fn body(
+    view: &ProjectView,
+    plan: &Plan<'_>,
+    glance: (String, String),
+) -> Result<TrustedHtml, askama::Error> {
     TrustedHtml::from_template(&ProjectTemplate {
         view,
         plan,
+        glance,
         js_url: super::asset_url("sluice.js"),
         board_js_url: super::asset_url("board.js"),
     })
@@ -1480,6 +1787,16 @@ fn board_region(body: &TrustedHtml) -> TrustedHtml {
 fn render_error(error: askama::Error) -> PublicError {
     super::board::render_error(error)
 }
+/// The project's glance as the snapshot reads it (`ProjectView::tab_words`, `favicon`): its
+/// tab's words and its favicon's address.
+fn glance(view: &ProjectView, shared: &DashboardSnapshot) -> (String, String) {
+    let summary = shared
+        .projects
+        .iter()
+        .find(|p| p.id == view.project.id)
+        .unwrap_or(&view.project);
+    (summary.tab_words(), super::asset_url(summary.favicon()))
+}
 /// The page body, its frame's parts and the batch its stream patches: the board region, the
 /// band's head, the count line and the nav, versioned by that HTML, so the page and its stream
 /// agree while nothing shown changes.
@@ -1490,7 +1807,7 @@ pub fn draw(
 ) -> Result<(TrustedHtml, Frame, RenderedBatch), PublicError> {
     let plan = Plan::new(view);
     let nav = NavView::new(shared, Some(view.project.id), "plan")?;
-    let body = body(view, &plan).map_err(render_error)?;
+    let body = body(view, &plan, glance(view, shared)).map_err(render_error)?;
     let frame = Frame {
         head: plan.band(),
         meta: plan.meta(),
@@ -1508,7 +1825,7 @@ pub fn draw(
     ]);
     Ok((body, frame, batch))
 }
-/// The whole page.
+/// The whole page: its title the project's glance, its favicon the glance's.
 pub fn render(
     view: &ProjectView,
     shared: &DashboardSnapshot,
@@ -1516,8 +1833,9 @@ pub fn render(
 ) -> Result<TrustedHtml, PublicError> {
     let nav = NavView::new(shared, Some(view.project.id), "plan")?;
     let (body, frame, batch) = draw(view, shared, viewer)?;
-    super::render_framed(
-        &view.project.tab_words(),
+    let (words, favicon) = glance(view, shared);
+    let html = super::render_framed(
+        &words,
         &body,
         &nav,
         viewer,
@@ -1526,5 +1844,195 @@ pub fn render(
         &view.href(),
         &frame,
     )
-    .map_err(render_error)
+    .map_err(render_error)?;
+    // the favicon says what the title says
+    Ok(TrustedHtml::owned(html.0.replacen(
+        &format!("href=\"{}\"", super::asset_url("favicon.svg")),
+        &format!("href=\"{}\"", esc(&favicon)),
+        1,
+    )))
+}
+
+// ---- the plan's own posts --------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct NeedsForm {
+    /// `dismiss`, `undo` or `retry`.
+    pub action: String,
+    /// The items, space apart: `stop:<step>`, `quiet:<step>@<stamp>`, `ask:<message>`,
+    /// `cancel:<step>`; for `retry`, `stop:<step>@<seen>`.
+    pub items: String,
+    #[serde(default)]
+    pub revision: u64,
+    #[serde(default)]
+    pub next: String,
+}
+/// `POST /projects/id/<p>/needs`: set items of Needs you aside or back, or retry a group's
+/// steps. A cancel is set aside as its step's own Dismiss does (`StepDismiss`); any other item
+/// as the plan's (`NeedsDismiss`). Retry all retries each step as its own Retry would, the first
+/// refusal answered as that step's.
+pub async fn needs(
+    State(state): State<DashboardState>,
+    registry: Option<Extension<super::board::Registry>>,
+    commands: Option<Extension<step::Commands>>,
+    Path(project): Path<ProjectId>,
+    headers: HeaderMap,
+    Form(form): Form<NeedsForm>,
+) -> Response {
+    let next = if form.next.starts_with('/') && !form.next.starts_with("//") {
+        form.next.clone()
+    } else {
+        format!("/projects/id/{project}#needs")
+    };
+    let items: Vec<&str> = form.items.split_whitespace().collect();
+    if items.is_empty() || items.len() > 500 {
+        return crate::http::error_response(PublicError::BadRequest {
+            message: "name one to 500 items".into(),
+        });
+    }
+    if form.action == "retry" {
+        for item in &items {
+            let Some((step, seen)) = item
+                .strip_prefix("stop:")
+                .and_then(|rest| rest.split_once('@'))
+            else {
+                return crate::http::error_response(PublicError::BadRequest {
+                    message: format!("{item} is not a stop to retry"),
+                });
+            };
+            let Ok(id) = step.parse::<StepId>() else {
+                return crate::http::error_response(PublicError::BadRequest {
+                    message: format!("{step} is not a step"),
+                });
+            };
+            let form = ActionForm {
+                action: Action::Retry,
+                revision: form.revision,
+                message: String::new(),
+                next: next.clone(),
+                seen: seen.to_owned(),
+            };
+            match step::try_action(
+                &state,
+                commands.clone(),
+                registry.as_ref(),
+                project,
+                &id,
+                form,
+            )
+            .await
+            {
+                Ok(_) => {}
+                Err(Ok(refusal)) => {
+                    return step::refused(project, &id, &headers, "", &Action::Retry, refusal);
+                }
+                Err(Err(e)) => return crate::http::error_response(e),
+            }
+        }
+        return Redirect::to(&next).into_response();
+    }
+    let dismissed = match form.action.as_str() {
+        "dismiss" => true,
+        "undo" => false,
+        other => {
+            return crate::http::error_response(PublicError::BadRequest {
+                message: format!("{other} is not an action on Needs you"),
+            });
+        }
+    };
+    let Some(Extension(commands)) = commands else {
+        return crate::http::error_response(PublicError::Busy {
+            message:
+                "Nothing was done: sluice's coordinator is not answering. Try again in a moment."
+                    .into(),
+            retryable: true,
+        });
+    };
+    let mut marks = vec![];
+    for item in items {
+        if let Some(step) = item.strip_prefix("cancel:") {
+            let Ok(id) = step.parse::<StepId>() else {
+                return crate::http::error_response(PublicError::BadRequest {
+                    message: format!("{step} is not a step"),
+                });
+            };
+            let sent = commands
+                .0
+                .execute(OwnerCommand {
+                    project,
+                    step: Some(id),
+                    action: if dismissed {
+                        Action::Dismiss
+                    } else {
+                        Action::Undismiss
+                    },
+                    revision: 0,
+                    message: String::new(),
+                    author: "owner",
+                    items: vec![],
+                })
+                .await;
+            if let Err(e) = sent {
+                return crate::http::error_response(e);
+            }
+            continue;
+        }
+        let (key, stamp) = match item.split_once('@') {
+            Some((key, stamp)) => match stamp.parse::<i64>() {
+                Ok(stamp) => (key, stamp),
+                Err(_) => {
+                    return crate::http::error_response(PublicError::BadRequest {
+                        message: format!("{item} has no stamp"),
+                    });
+                }
+            },
+            None => (item, 0),
+        };
+        marks.push(NeedsItem {
+            key: key.to_owned(),
+            stamp,
+        });
+    }
+    if !marks.is_empty() {
+        let sent = commands
+            .0
+            .execute(OwnerCommand {
+                project,
+                step: None,
+                action: if dismissed {
+                    Action::SetAside
+                } else {
+                    Action::Restore
+                },
+                revision: 0,
+                message: String::new(),
+                author: "owner",
+                items: marks,
+            })
+            .await;
+        if let Err(e) = sent {
+            return crate::http::error_response(e);
+        }
+    }
+    Redirect::to(&next).into_response()
+}
+#[derive(Deserialize)]
+pub struct SeenForm {
+    /// The finish time (seconds since the epoch) of the last finished unit the page drew.
+    pub through: u64,
+}
+/// `POST /projects/id/<p>/seen`: Mark as seen. This browser's look at the project's finished
+/// units moves to `through`, kept in its cookie (`sluice_seen_<p>`), and the plan draws again.
+pub async fn mark_seen(Path(project): Path<ProjectId>, Form(form): Form<SeenForm>) -> Response {
+    let mut response = Redirect::to(&format!("/projects/id/{project}")).into_response();
+    let cookie = format!(
+        "{}={}; Path=/; Max-Age=34560000; SameSite=Lax",
+        seen_cookie(project),
+        form.through
+    );
+    response.headers_mut().append(
+        axum::http::header::SET_COOKIE,
+        cookie.parse().expect("an ASCII cookie"),
+    );
+    response
 }

@@ -1913,6 +1913,40 @@ impl StepView {
     pub fn no_run_kept(&self) -> bool {
         self.runs.is_empty() && (self.failed() || self.succeeded()) && !self.manual
     }
+    /// What it runs on, in a word or two: an agent's model as its `model` input names it
+    /// ("sol"), else its engine (`engine`, or the agent fn's own: "codex"); any other step its
+    /// fn ("custom.open"). The step view's "Runs on".
+    pub fn runs_on(&self) -> String {
+        self.agent_word().unwrap_or_else(|| self.function.clone())
+    }
+    /// Its plan row's badge: an agent's model or engine (`runs_on`), "fn" for a fn's step.
+    pub fn badge(&self) -> String {
+        self.agent_word().unwrap_or_else(|| "fn".into())
+    }
+    /// An agent step's model, else its engine; none for a fn's step.
+    fn agent_word(&self) -> Option<String> {
+        let input = |name: &str| {
+            self.inputs
+                .iter()
+                .find(|f| f.name == name && f.available && !f.value.trim().is_empty())
+        };
+        if let Some(model) = input("model") {
+            if let Some((_, m)) = model
+                .pairs
+                .iter()
+                .find(|(n, v)| n == "model" && !v.is_empty())
+            {
+                return Some(m.clone());
+            }
+            if model.kind == "text" {
+                return Some(model.value.trim().to_owned());
+            }
+        }
+        if let Some(engine) = input("engine").filter(|f| f.kind == "text") {
+            return Some(engine.value.trim().to_owned());
+        }
+        self.function.strip_prefix("agent.").map(str::to_owned)
+    }
     /// The output its Overview leads with: the first set of `summary`, `result`, `report`,
     /// `final`, `answer` or `verdict`.
     pub fn key_output(&self) -> Option<&FieldView> {
@@ -2739,6 +2773,10 @@ pub enum Action {
     /// Set a cancel aside (`StepDismiss`): no plan edit, so no revision to match.
     Dismiss,
     Undismiss,
+    /// Set items of the plan's Needs you aside (`NeedsDismiss`, its `items`), or back: no plan
+    /// edit and no step of its own. Only the plan's Needs you sends them (`plan::needs`).
+    SetAside,
+    Restore,
 }
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct OwnerCommand {
@@ -2748,6 +2786,8 @@ pub struct OwnerCommand {
     pub revision: u64,
     pub message: String,
     pub author: &'static str,
+    /// What `SetAside` and `Restore` name; empty for every other action.
+    pub items: Vec<sluice_model::commands::NeedsItem>,
 }
 pub trait CommandService: Send + Sync {
     fn execute(
@@ -2793,14 +2833,14 @@ impl Action {
             Self::Retry => "Retry",
             Self::Cancel => "Cancel",
             Self::CancelDismiss => "Cancel and dismiss",
-            Self::Dismiss => "Dismiss",
-            Self::Undismiss => "Undo",
+            Self::Dismiss | Self::SetAside => "Dismiss",
+            Self::Undismiss | Self::Restore => "Undo",
         }
     }
 }
 /// An action the page asked for and sluice did not take: the HTTP status, and what its step's
 /// page says over it (the feedback typed with it kept in its box).
-struct Refusal {
+pub(crate) struct Refusal {
     status: StatusCode,
     words: String,
     /// The action still applies, so what was typed with it is kept in its box for another try.
@@ -2825,9 +2865,22 @@ async fn execute_action(
         Err(Ok(refusal)) => refusal,
         Err(Err(e)) => return board::error_response(e),
     };
+    refused(project, &id, &headers, &kept, &action, refusal)
+}
+/// What a refused action answers: a browser goes back to its step's page, which says why with
+/// what was typed kept in its box; any other client gets the JSON error.
+pub(crate) fn refused(
+    project: ProjectId,
+    id: &StepId,
+    headers: &HeaderMap,
+    kept: &str,
+    action: &Action,
+    refusal: Refusal,
+) -> Response {
+    let kept = kept.to_owned();
     // a browser's form comes back to its step's page, saying what happened over it, its
     // feedback still in its box; a script or tool gets the error as JSON
-    if !super::missing::accepts_html(&headers) {
+    if !super::missing::accepts_html(headers) {
         let error = match refusal.status {
             StatusCode::CONFLICT => PublicError::Conflict {
                 message: refusal.words,
@@ -2858,7 +2911,7 @@ async fn execute_action(
     };
     // back to the step's own address (303), so a reload never posts the action again: the
     // notice and the typed text wait under a key no one can guess, for a while only
-    let key = notices::keep(project, &id, Notice { words, kept });
+    let key = notices::keep(project, id, Notice { words, kept });
     Redirect::to(&format!("/projects/id/{project}/steps/{id}?notice={key}")).into_response()
 }
 /// What a step's page says over it after an action it could not take, and the feedback typed
@@ -2917,7 +2970,7 @@ pub mod notices {
 }
 /// The action, or why not: `Ok` where to go once done; `Err(Ok)` a refusal its step's page says;
 /// `Err(Err)` an error with no page to say it on (no such step, a broken read).
-async fn try_action(
+pub(crate) async fn try_action(
     state: &DashboardState,
     commands: Option<Extension<Commands>>,
     registry: Option<&Extension<board::Registry>>,
@@ -2969,6 +3022,7 @@ async fn try_action(
         Action::Unpause => step.paused,
         Action::Dismiss => step.cancelled() && !step.dismissed,
         Action::Undismiss => step.dismissed,
+        Action::SetAside | Action::Restore => false,
     };
     if !valid {
         return Err(Ok(Refusal {
@@ -3031,6 +3085,7 @@ async fn try_action(
                 revision,
                 message: form.message.clone(),
                 author: "owner",
+                items: vec![],
             })
             .await;
         match sent {

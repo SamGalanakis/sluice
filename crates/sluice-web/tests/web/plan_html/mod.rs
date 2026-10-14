@@ -1,5 +1,6 @@
-//! Where a plan page (`views::plan`) draws each thing, for the tests that read one: a step's
-//! cell, a unit's row or module, a band's section, each by the region its stream patches.
+//! Where a plan page (`views::plan`) draws each thing, for the tests that read one: an item of
+//! Needs you, a unit's row at work and the steps it opens to, a section, each by the region its
+//! stream patches or the element that carries its name.
 #![allow(dead_code)]
 
 /// `html` from the first `from` to the next `to` after it (or its end).
@@ -27,56 +28,97 @@ pub fn region<'a>(html: &'a str, id: &str) -> &'a str {
 pub fn has_region(html: &str, id: &str) -> bool {
     html.contains(&format!("<!--r:{id}-->"))
 }
-/// A step's cell on the plan: its `li`, whose link carries `id="n-<step>"`.
+/// A step's row in the step view a unit's row opens to (`data-sv="<step>"`).
 pub fn cell<'a>(html: &'a str, step: &str) -> &'a str {
     let at = html
-        .find(&format!(" id=\"n-{step}\" data-step=\"{step}\""))
-        .unwrap_or_else(|| panic!("the cell of {step} in {html}"));
-    let start = html[..at].rfind("<li class=\"sc").expect("its cell");
+        .find(&format!(" data-sv=\"{step}\">"))
+        .unwrap_or_else(|| panic!("the row of {step} in {html}"));
+    let start = html[..at].rfind("<li class=\"sv-row").expect("its row");
     let end = html[at..].find("</li>").expect("its end") + at;
     &html[start..end]
 }
-/// A unit's row (Running, Waiting).
+/// A unit's row in At work.
 pub fn row<'a>(html: &'a str, unit: &str) -> &'a str {
     region(html, &format!("u-{unit}"))
 }
-/// A stopped unit's module.
+/// Every item of Needs you, whole.
+pub fn needs(html: &str) -> Vec<&str> {
+    if !has_region(html, "plan-needs") {
+        return vec![];
+    }
+    let well = region(html, "plan-needs");
+    let mut out = vec![];
+    let mut rest = well;
+    while let Some(at) = rest.find("<li id=\"n-") {
+        let item = &rest[at..];
+        // an item ends where its actions (the × last, a form) close
+        let end = item
+            .find("</form></span></li>")
+            .map_or(item.len(), |e| e + "</form></span></li>".len());
+        out.push(&item[..end]);
+        rest = &item[end..];
+    }
+    out
+}
+/// The item of Needs you about `unit`: its own, or the group that lists it.
 pub fn stopped<'a>(html: &'a str, unit: &str) -> &'a str {
-    region(html, &format!("s-{unit}"))
+    let mark = format!("data-unit=\"{unit}\"");
+    needs(html)
+        .into_iter()
+        .find(|item| item.contains(&mark) && !item.contains("nk-quiet"))
+        .unwrap_or_else(|| panic!("an item of Needs you for {unit} in {html}"))
 }
-/// A question's module in For you, by its message.
+/// A question's item of Needs you, by its message.
 pub fn question(html: &str, message: i64) -> &str {
-    region(html, &format!("q-{message}"))
+    let id = format!("<li id=\"n-ask-{message}\"");
+    needs(html)
+        .into_iter()
+        .find(|item| item.starts_with(&id))
+        .unwrap_or_else(|| panic!("the question {message} in {html}"))
 }
-/// A band's section: "plan-asks", "plan-stopped", "plan-running", "plan-waiting", "plan-done",
-/// "plan-margin".
+/// A section: "plan-needs", "plan-finished", "plan-roster", "plan-done".
 pub fn band<'a>(html: &'a str, id: &str) -> &'a str {
     region(html, id)
 }
-/// The band's summary sentence.
+/// The head's sentence.
 pub fn summary(html: &str) -> &str {
     between(html, "<p class=\"page-line\">", "</p>")
 }
-/// Where a unit is drawn: the band whose section holds its row or module, "done" in the index.
+/// Where a unit is drawn: "asks" (a question of its in Needs you), "stopped" (a stop in Needs
+/// you), "running" or "waiting" (its row at work), "done" (a card of what finished, or a line
+/// of the Done index); "" when it is only counted (waiting on earlier work, done long ago).
 pub fn place(html: &str, unit: &str) -> &'static str {
-    for (id, name) in [
-        ("plan-asks", "asks"),
-        ("plan-stopped", "stopped"),
-        ("plan-running", "running"),
-        ("plan-waiting", "waiting"),
-        ("plan-margin", "margin"),
-    ] {
-        if has_region(html, id) {
-            let b = band(html, id);
-            if b.contains(&format!("data-unit=\"{unit}\"")) {
-                return name;
+    let mark = format!("data-unit=\"{unit}\"");
+    for item in needs(html) {
+        if item.contains(&mark) {
+            if item.contains("nk-ask") {
+                return "asks";
+            }
+            if item.contains("nk-stop") {
+                return "stopped";
             }
         }
     }
-    if done_lines(html, unit) > 0 {
+    if has_region(html, &format!("u-{unit}")) {
+        return if row(html, unit).contains("class=\"ro-u is-wait\"") {
+            "waiting"
+        } else {
+            "running"
+        };
+    }
+    if finished(html, unit) || done_lines(html, unit) > 0 {
         return "done";
     }
     ""
+}
+/// Whether a card of Finished since you looked leads to `unit` (its page, or a loose step's).
+pub fn finished(html: &str, unit: &str) -> bool {
+    has_region(html, "plan-finished") && {
+        let cards = band(html, "plan-finished");
+        ["units", "steps"]
+            .iter()
+            .any(|kind| cards.contains(&format!("/{kind}/{unit}\">")))
+    }
 }
 /// How many lines of the Done index lead to `unit` (its unit's page, or a loose step's own).
 pub fn done_lines(html: &str, unit: &str) -> usize {

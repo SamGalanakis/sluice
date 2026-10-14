@@ -233,34 +233,6 @@ pub async fn unit_page(
         Err(e) => board::error_response(e),
     }
 }
-/// The plan's Done disclosure fetches just its unit's step view on first open.
-pub async fn steps_fragment(
-    State(state): State<super::DashboardState>,
-    registry: Option<Extension<Registry>>,
-    Path((project, unit)): Path<(ProjectId, UnitName)>,
-) -> Response {
-    let fragment = async {
-        let (_, view) = board::snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await?;
-        let unit =
-            view.units
-                .iter()
-                .find(|u| u.id == unit)
-                .ok_or_else(|| PublicError::NotFound {
-                    message: "unit not found".into(),
-                })?;
-        let mut steps = super::unit_steps::of_unit(unit, &view.relations, true, "");
-        steps.owner.clear();
-        Ok::<_, PublicError>(steps.html())
-    };
-    match fragment.await {
-        Ok(html) => (
-            [(axum::http::header::CACHE_CONTROL, "no-store")],
-            Html(html.0),
-        )
-            .into_response(),
-        Err(e) => board::error_response(e),
-    }
-}
 /// What a page drew is gone: one calm line where it was (`id`'s element), with a way on.
 fn gone(id: &str, unit: &UnitName, href: &str) -> Result<TrustedHtml, askama::Error> {
     #[derive(Template)]

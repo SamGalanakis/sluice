@@ -1,8 +1,8 @@
-//! A failure's retry advice and its setting aside, through the pages: the plan's Stopped card
-//! and the step's page give one advice, read from the step's last two runs (a repeated failure
-//! leads with Retry with feedback, the bare Retry quiet); an engine that exited partway is
-//! told apart from one that would not start; a failed card's ⋯ offers Cancel and Cancel and
-//! dismiss, whose forms post without script and in place with it (the focus on Undo).
+//! A failure's retry advice and its setting aside, through the pages: the plan's item in Needs
+//! you and the step's page give one advice, read from the step's last two runs (a repeated
+//! failure leads with Retry with feedback); an engine that exited partway is told apart from
+//! one that would not start; the step's head offers Cancel and Cancel and dismiss, whose forms
+//! post without script and in place with it, and the plan then offers its Undo.
 use crate::board_fixture;
 use crate::chrome;
 use crate::plan_html;
@@ -16,7 +16,7 @@ use board_fixture::Fixture;
 use chrome::Chrome;
 use serde_json::json;
 use sluice_model::{
-    commands::{StepCancel, StepDismiss, StepSelection},
+    commands::{NeedsDismiss, StepCancel, StepDismiss, StepSelection},
     error::PublicError,
     ids::{AttemptId, ProjectId, ProjectSelector, RunId},
     plan::Plan,
@@ -132,11 +132,11 @@ async fn advice(f: &Fixture) -> ProjectId {
     id
 }
 
-/// The advice a stopped card says under its sentence ("" for none).
+/// The advice a stop in Needs you says after its sentence ("" for none).
 fn card_advice(card: &str) -> String {
-    card.split("<p class=\"meta\">")
+    card.split("<span class=\"nd-next\">")
         .nth(1)
-        .map(|rest| rest[..rest.find("</p>").unwrap()].to_owned())
+        .map(|rest| rest[..rest.find("</span>").unwrap()].to_owned())
         .unwrap_or_default()
 }
 /// The advice a step's page says under why it failed ("" for none).
@@ -162,12 +162,12 @@ async fn the_plan_card_and_the_step_page_give_one_retry_advice() {
         said.push(on_card);
         let band = between(&page, "<header id=\"step-band\"", "</header>");
         if step == "rep" {
-            // a repeated failure: Retry with feedback leads on both, the bare Retry is quiet
+            // a repeated failure: Retry with feedback leads on both (the plan's to its page's
+            // box), the bare Retry quiet on the page
             assert!(
-                card.contains("<summary class=\"primary\">")
-                    && card.contains(
-                        "<button name=\"action\" value=\"retry\" class=\"quiet-act\">Retry</button>"
-                    ),
+                card.contains(
+                    "/steps/rep#why-feedback\" data-step=\"rep\">Retry with feedback</a>"
+                ) && !card.contains("value=\"retry\""),
                 "{card}"
             );
             assert!(
@@ -177,10 +177,7 @@ async fn the_plan_card_and_the_step_page_give_one_retry_advice() {
             );
             assert!(page.contains("id=\"why-feedback\""), "{page}");
         } else {
-            assert!(
-                !card.contains("class=\"quiet-act\">Retry<"),
-                "{step}: {card}"
-            );
+            assert!(!card.contains(">Retry with feedback</a>"), "{step}: {card}");
             assert!(!band.contains("d-fb"), "{step}: {band}");
         }
     }
@@ -202,8 +199,8 @@ async fn the_plan_card_and_the_step_page_give_one_retry_advice() {
     );
 }
 
-/// Cancel, Dismiss and Undismiss as the coordinator takes them: `step_cancel` and the owner's
-/// mark in the store.
+/// Cancel, Dismiss and Undismiss, and setting items of Needs you aside, as the coordinator
+/// takes them: `step_cancel` and the owner's marks in the store.
 struct Store(Writer, Plan);
 impl CommandService for Store {
     fn execute(
@@ -211,11 +208,13 @@ impl CommandService for Store {
         command: OwnerCommand,
     ) -> Pin<Box<dyn Future<Output = Result<(), PublicError>> + Send + '_>> {
         Box::pin(async move {
-            let (project, step) = (command.project, command.step.expect("a step"));
+            let project = command.project;
+            let step = command.step.clone();
             let plan = self.1.clone();
             self.0
                 .write(RetrySafety::NonIdempotent, move |tx| match command.action {
                     Action::Cancel => {
+                        let step = step.expect("a step");
                         let revision = plans::plan_revision(tx.sql(), project)?;
                         let context = PlanContext {
                             project,
@@ -242,8 +241,16 @@ impl CommandService for Store {
                         tx,
                         StepDismiss {
                             project,
-                            step,
+                            step: step.expect("a step"),
                             dismissed: command.action == Action::Dismiss,
+                        },
+                    ),
+                    Action::SetAside | Action::Restore => sluice_store::messages::needs_dismiss(
+                        tx,
+                        NeedsDismiss {
+                            project,
+                            items: command.items,
+                            dismissed: command.action == Action::SetAside,
                         },
                     ),
                     _ => Err(PublicError::BadRequest {
@@ -318,42 +325,28 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
     let router = router(&f);
     let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
     let plan_href = format!("/projects/id/{id}");
-    // a failure's card: Cancel and Cancel and dismiss in its ⋯, each a confirmation
-    let card = plan_html::stopped(&plan, "first");
-    let acts = between(card, "<div class=\"dm-acts\"", "</details></sluice-menu>");
-    assert!(
-        acts.contains("<p class=\"dm-h\">Set it aside</p>"),
-        "{acts}"
-    );
-    assert!(
-        acts.contains("heading=\"Cancel Fails once?\"") && !acts.contains("Retry still works"),
-        "{acts}"
-    );
+    // the step's head offers Cancel and Cancel and dismiss, each a confirmation
+    let (_, page) = f.get(&format!("{plan_href}/steps/first")).await;
+    let acts = between(&page, "<header id=\"step-band\"", "</header>").to_owned();
+    let acts = acts.as_str();
+    assert!(acts.contains("value=\"cancel_dismiss\""), "{acts}");
     assert!(
         acts.contains("heading=\"Cancel and dismiss Fails once?\"")
             && acts.contains("Undo brings back the cancel, not the failure.</p>"),
         "{acts}"
     );
-    // no Dismiss on a failure, and nothing to set aside on a cancel
-    assert!(!card.contains("pl-dismiss"), "{card}");
+    // on the plan, the failure's item is its own; the cancel's sets it aside as Dismiss does
+    let card = plan_html::stopped(&plan, "first");
+    assert!(card.contains("value=\"stop:first\""), "{card}");
     let cancelled = plan_html::stopped(&plan, "cxl");
-    assert!(
-        !cancelled.contains("dm-acts") && cancelled.contains("pl-dismiss"),
-        "{cancelled}"
-    );
-    // the step's head offers the same
-    let (_, page) = f.get(&format!("{plan_href}/steps/first")).await;
-    let band = between(&page, "<header id=\"step-band\"", "</header>");
-    assert!(band.contains("value=\"cancel_dismiss\""), "{band}");
+    assert!(cancelled.contains("value=\"cancel:cxl\""), "{cancelled}");
 
-    // Cancel and dismiss, posted without script: back to the plan at its Undo
-    let mut fields = form_fields(acts, "cancel_dismiss");
-    assert!(
-        fields
-            .iter()
-            .any(|(n, v)| n == "next" && v == &format!("{plan_href}#undo-first")),
-        "{fields:?}"
-    );
+    // Cancel and dismiss, posted without script, sent back to the plan
+    let mut fields: Vec<(String, String)> = form_fields(acts, "cancel_dismiss")
+        .into_iter()
+        .filter(|(n, _)| n != "next")
+        .collect();
+    fields.push(("next".into(), format!("{plan_href}#undo-n-stop-first")));
     fields.push(("message".into(), "superseded".into()));
     let pairs: Vec<(&str, &str)> = fields
         .iter()
@@ -365,19 +358,20 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
         (status, location.as_str()),
         (
             StatusCode::SEE_OTHER,
-            format!("{plan_href}#undo-first").as_str()
+            format!("{plan_href}#undo-n-stop-first").as_str()
         )
     );
+    // the plan: no longer an item, a Dismissed line with its Undo instead
     let (_, plan) = f.get(&plan_href).await;
-    let stopped = plan_html::band(&plan, "plan-stopped");
+    let well = plan_html::band(&plan, "plan-needs");
     assert!(
-        !plan_html::has_region(&plan, "s-first")
-            && stopped.contains("id=\"undo-first\"")
-            && stopped.contains("Dismissed: <a"),
-        "{stopped}"
+        plan_html::place(&plan, "first") == "done"
+            && well.contains("id=\"undo-n-stop-first\"")
+            && well.contains("<span>Dismissed Fails once (cancelled)</span>"),
+        "{well}"
     );
-    // its dependent is held as before, and the plan no longer counts a failure for it
-    assert_eq!(plan_html::place(&plan, "after"), "waiting", "{plan}");
+    // its dependent is held as before, waiting on earlier work: counted, not a row
+    assert_eq!(plan_html::place(&plan, "after"), "", "{plan}");
     // its page: cancelled, the failure it set aside kept on Overview and its run
     let (_, page) = f.get(&format!("{plan_href}/steps/first")).await;
     assert!(
@@ -392,7 +386,7 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
         "{runs}"
     );
 
-    // Undo, without script: the card is back as a cancel (not the failure), with its Dismiss
+    // Undo, without script: the item is back as a cancel (not the failure), with its ×
     let (status, _) = post(
         &router,
         &format!("{plan_href}/steps/first/actions"),
@@ -403,36 +397,28 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
     let (_, plan) = f.get(&plan_href).await;
     let card = plan_html::stopped(&plan, "first");
     assert!(
-        card.contains("<b>cancelled</b>")
-            && card.contains("<p class=\"pl-why\">Cancelled: superseded.</p>")
+        card.contains("</b> cancelled after 4m. superseded.")
             && card.contains("It had failed: process_lost: gone")
-            && card.contains("pl-dismiss")
-            && !card.contains("dm-acts"),
+            && card.contains("value=\"cancel:first\""),
         "{card}"
     );
-    // Cancel alone, without script, on another failure: it stays stopped, now a cancel
-    let (_, plan) = f.get(&plan_href).await;
+    // Cancel alone, without script, on another failure from its head: it stays stopped, now
+    // a cancel
+    let (_, page) = f.get(&format!("{plan_href}/steps/rep")).await;
     let fields = form_fields(
-        between(
-            plan_html::stopped(&plan, "rep"),
-            "<div class=\"dm-acts\"",
-            "</sluice-menu>",
-        ),
+        between(&page, "<header id=\"step-band\"", "</header>"),
         "cancel",
     );
     let pairs: Vec<(&str, &str)> = fields
         .iter()
         .map(|(n, v)| (n.as_str(), v.as_str()))
         .collect();
-    let (status, location) = post(&router, &format!("{plan_href}/steps/rep/actions"), &pairs).await;
-    assert_eq!(
-        (status, location.as_str()),
-        (StatusCode::SEE_OTHER, format!("{plan_href}#s-rep").as_str())
-    );
+    let (status, _) = post(&router, &format!("{plan_href}/steps/rep/actions"), &pairs).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
     let (_, plan) = f.get(&plan_href).await;
     let card = plan_html::stopped(&plan, "rep");
     assert!(
-        card.contains("<b>cancelled</b>")
+        card.contains("</b> cancelled after 4m.")
             && card.contains("Cancelled after it failed.")
             && !card.contains("Run 1 failed the same way"),
         "{card}"
@@ -457,11 +443,10 @@ async fn serve(router: Router) -> (std::net::SocketAddr, tokio::task::JoinHandle
     (addr, server)
 }
 
-/// Cancel and dismiss from a failed card's ⋯, in Chromium: one confirmation, posted in place
-/// (no navigation, no scroll jump), the card gives way to the Dismissed line and Undo takes the
-/// focus.
+/// The × on a stop in Needs you, in Chromium: posted in place (no navigation, no scroll jump),
+/// the item gives way to its Dismissed line and Undo takes the focus; Undo brings it back.
 #[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_cancel_and_dismiss_a_failed_card_in_place_with_the_focus_on_undo() {
+async fn slow_chromium_dismiss_a_stop_in_place_with_the_focus_on_undo() {
     let f = Fixture::new().await;
     let id = advice(&f).await;
     let (addr, server) = serve(router(&f)).await;
@@ -469,22 +454,16 @@ async fn slow_chromium_cancel_and_dismiss_a_failed_card_in_place_with_the_focus_
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
         for (width, step) in [(1440, "first"), (390, "exited")] {
             browser.viewport(width, "light").unwrap();
-            browser.wait(&format!("customElements.get('sluice-confirm') && document.querySelector('#s-{step} details.dm > summary')?.checkVisibility()")).unwrap();
+            browser.wait(&format!("document.querySelector('#n-stop-{step} button.x')?.checkVisibility()")).unwrap();
             browser.eval("window.marker = 'same document'; window.navigations = performance.getEntriesByType('navigation').length").unwrap();
-            browser.eval(&format!("document.querySelector('#s-{step} details.dm > summary').click()")).unwrap();
-            browser.wait(&format!("document.querySelector('#s-{step} .dm-acts sluice-confirm:last-of-type summary')?.checkVisibility()")).unwrap();
-            browser.eval(&format!("document.querySelector('#s-{step} .dm-acts sluice-confirm:last-of-type summary').click()")).unwrap();
-            browser.wait("document.querySelector('#confirmation').open").unwrap();
+            browser.eval(&format!("document.querySelector('#n-stop-{step} button.x').click()")).unwrap();
+            browser.wait(&format!("document.activeElement?.id === 'undo-n-stop-{step}' && !document.querySelector('#n-stop-{step}')")).unwrap();
             assert_eq!(
-                browser.eval("[document.querySelector('#confirmation-title').textContent, document.activeElement.matches('[data-keep]')]").unwrap()[1],
-                json!(true)
+                browser.eval("[window.marker, performance.getEntriesByType('navigation').length === window.navigations, document.documentElement.scrollWidth <= innerWidth]").unwrap(),
+                json!(["same document", true, true])
             );
-            browser.eval("window.scrollAt = scrollY; document.querySelector('#confirmation textarea').value = 'set aside'; document.querySelector('#confirmation button.primary').click()").unwrap();
-            browser.wait(&format!("document.activeElement?.id === 'undo-{step}' && !document.querySelector('#s-{step}.pl-stop')")).unwrap();
-            assert_eq!(
-                browser.eval("[window.marker, performance.getEntriesByType('navigation').length === window.navigations, !document.querySelector('#confirmation').open, document.documentElement.scrollWidth <= innerWidth]").unwrap(),
-                json!(["same document", true, true, true])
-            );
+            browser.eval(&format!("document.querySelector('#undo-n-stop-{step}').click()")).unwrap();
+            browser.wait(&format!("document.activeElement?.id === 'n-stop-{step}'")).unwrap();
         }
         assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
     })

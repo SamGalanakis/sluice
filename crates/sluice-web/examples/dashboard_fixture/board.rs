@@ -3,8 +3,53 @@ use sluice_store::{
     RetrySafety, Writer,
     projects::{self, CreateProject, EmptyPlanInitializer, NoResourceSettings},
 };
-use sluice_web::views::{PageState, board};
-use std::sync::Arc;
+use sluice_web::views::{PageState, board, step};
+use std::sync::{Arc, OnceLock};
+/// The owner's set-aside writes (Dismiss and Undo on a cancel, × and Undo on any item of Needs
+/// you), put straight through the store, so they work in review; every other action is refused
+/// as the fixture has no runner.
+struct FixtureCommands;
+static WRITER: OnceLock<Writer> = OnceLock::new();
+impl step::CommandService for FixtureCommands {
+    fn execute(
+        &self,
+        command: step::OwnerCommand,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), PublicError>> + Send + '_>> {
+        Box::pin(async move {
+            let writer = WRITER.get().cloned().ok_or_else(|| PublicError::Rejected {
+                message: "the fixture's store is not open".into(),
+            })?;
+            writer
+                .write(RetrySafety::Idempotent, move |tx| match (&command.action, command.step) {
+                    (step::Action::Dismiss | step::Action::Undismiss, Some(step)) => {
+                        sluice_store::messages::dismiss(
+                            tx,
+                            sluice_model::commands::StepDismiss {
+                                project: command.project,
+                                step,
+                                dismissed: command.action == step::Action::Dismiss,
+                            },
+                        )
+                    }
+                    (step::Action::SetAside | step::Action::Restore, _) => {
+                        sluice_store::messages::needs_dismiss(
+                            tx,
+                            sluice_model::commands::NeedsDismiss {
+                                project: command.project,
+                                items: command.items,
+                                dismissed: command.action == step::Action::SetAside,
+                            },
+                        )
+                    }
+                    _ => Err(PublicError::Rejected {
+                        message: "the fixture has no runner".into(),
+                    }
+                    .into()),
+                })
+                .await
+        })
+    }
+}
 struct BoardFixtureRegistry;
 impl sluice_model::plan::SignatureProvider for BoardFixtureRegistry {
     fn signature(&self, name: &str) -> Option<sluice_model::plan::FnSignature> {
@@ -99,9 +144,13 @@ pub async fn seed(writer: &Writer, _id: ProjectId) {
     println!("BOARD-PAUSED {paused}");
 }
 
-pub async fn configure(_state: &mut PageState, _writer: &Writer, _id: ProjectId) {}
+pub async fn configure(_state: &mut PageState, writer: &Writer, _id: ProjectId) {
+    let _ = WRITER.set(writer.clone());
+}
 pub fn layer(router: axum::Router) -> axum::Router {
-    router.layer(axum::Extension(board::Registry(Arc::new(
-        BoardFixtureRegistry,
-    ))))
+    router
+        .layer(axum::Extension(board::Registry(Arc::new(
+            BoardFixtureRegistry,
+        ))))
+        .layer(axum::Extension(step::Commands(Arc::new(FixtureCommands))))
 }

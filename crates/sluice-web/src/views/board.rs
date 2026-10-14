@@ -250,6 +250,10 @@ pub struct UnitView {
     pub waits: BTreeMap<String, Vec<Wait>>,
     /// A done unit a search matched in: drawn open, its matching cards in view.
     pub open: bool,
+    /// What its steps said in the last `SAID_WINDOW` seconds: each message's step and when (in
+    /// seconds since the epoch), oldest first. The plan's activity tracks tick each.
+    #[serde(skip)]
+    pub said: Vec<(String, f64)>,
 }
 /// Each step's depth in the plan (the longest chain of what it waits on), the steps held up
 /// by a stopped step (`sluice_model::status::blocked`) and the settled steps (§7.1).
@@ -325,6 +329,7 @@ impl UnitView {
             solo: unit.steps.len() == 1,
             waits: BTreeMap::new(),
             open: false,
+            said: vec![],
         }
     }
     /// Name it and its steps (`sluice_runtime::naming`): titles, stages, its recipe and params.
@@ -561,8 +566,15 @@ pub struct ProjectView {
     /// Its steps' and units' names, and the recipes they came from.
     #[serde(skip)]
     pub names: std::sync::Arc<sluice_runtime::naming::ProjectNaming>,
-    /// Its open questions to the owner (`project.asks`) as asked: what For you draws whole.
+    /// Its open questions to the owner (`project.asks`) as asked: what Needs you says.
     pub questions: Vec<Question>,
+    /// How far this browser has looked at its finished units (`plan::seen_of`): the finish
+    /// time of the last it marked seen; `None` before it ever did.
+    #[serde(skip)]
+    pub seen: Option<u64>,
+    /// The items of its Needs you the owner set aside (`NeedsDismiss`), newest first.
+    #[serde(skip)]
+    pub set_aside: Vec<sluice_store::messages::SetAside>,
 }
 /// An open question to the owner as its plan's For you draws it: its words and when it was
 /// asked, by its message's id.
@@ -656,6 +668,8 @@ impl ProjectView {
             view: None,
             names: Default::default(),
             questions: vec![],
+            set_aside: vec![],
+            seen: None,
         };
         view.settle();
         view
@@ -1191,6 +1205,8 @@ pub fn load_board(
         project,
     )?);
     let mut last = last_messages(c, project, &board)?;
+    let mut said = said_lately(c, project)?;
+    board.set_aside = sluice_store::messages::needs_set_aside(c, project)?;
     let cards = Cards::read(c, project)?;
     let owners = owners(c, project)?;
     for unit in &mut board.units {
@@ -1200,6 +1216,7 @@ pub fn load_board(
             .find_map(|s| owners.get(s.id.as_str()))
             .cloned()
             .unwrap_or_default();
+        unit.said = said.remove(unit.id.as_str()).unwrap_or_default();
         if let Some((message, at, from, thread, id, received)) = last.remove(unit.id.as_str()) {
             unit.last_message = message;
             unit.changed = at;
@@ -1758,6 +1775,46 @@ fn last_messages(
     }
     Ok(own)
 }
+/// How far back the plan's activity tracks reach, seconds: twelve hours.
+pub const SAID_WINDOW: f64 = 12.0 * 3600.0;
+/// What each unit's steps said in the last `SAID_WINDOW`: by unit, each message's step and when
+/// (seconds since the epoch), oldest first. One pass over the project's messages, newest first,
+/// stopping at the window's start.
+fn said_lately(
+    c: &Connection,
+    project: ProjectId,
+) -> sluice_store::Result<BTreeMap<String, Vec<(String, f64)>>> {
+    let now = crate::clock::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64());
+    let mut unit_of = BTreeMap::new();
+    let mut steps = c.prepare_cached("SELECT step_id,coalesce(unit,step_id) FROM steps WHERE project_id=?1")?;
+    let mut rows = steps.query([project.to_string()])?;
+    while let Some(r) = rows.next()? {
+        unit_of.insert(r.get::<_, String>(0)?, r.get::<_, String>(1)?);
+    }
+    let mut out: BTreeMap<String, Vec<(String, f64)>> = BTreeMap::new();
+    let mut messages = c.prepare_cached(
+        "SELECT \"from\",at FROM messages WHERE project_id=?1 ORDER BY id DESC",
+    )?;
+    let mut rows = messages.query([project.to_string()])?;
+    while let Some(r) = rows.next()? {
+        let (from, at): (String, String) = (r.get(0)?, r.get(1)?);
+        let Some(t) = super::timestamp(&at).map(|t| t as f64) else {
+            continue;
+        };
+        if t < now - SAID_WINDOW {
+            break;
+        }
+        if let Some(unit) = unit_of.get(&from) {
+            out.entry(unit.clone()).or_default().push((from, t));
+        }
+    }
+    for said in out.values_mut() {
+        said.reverse();
+    }
+    Ok(out)
+}
 /// Exact registry signatures, including open/submitted ports, supplied by the
 /// application. Display catalog ports alone cannot describe arbitrary open fns.
 #[derive(Clone, Debug, PartialEq)]
@@ -2073,6 +2130,7 @@ pub async fn project_page(
                 .into_response());
         }
         view.view = chosen_view(&query, &headers, project);
+        view.seen = super::plan::seen_of(&headers, project);
         let html = super::plan::render(&view, &shared, &Viewer::from_headers(&headers))?;
         let mut response = Html(html.0).into_response();
         // a view chosen by its link (without script) is kept for the next visit
@@ -2128,6 +2186,7 @@ pub async fn project_stream(
             };
             query.apply(&mut view)?;
             view.view = chosen_view(&query, &headers, project);
+            view.seen = super::plan::seen_of(&headers, project);
             Ok(super::plan::draw(&view, &shared, &viewer)?.2)
         }
     };
@@ -2176,10 +2235,6 @@ pub fn registration() -> super::PageRegistration {
                 .route("/projects/id/{project}/stream", get(project_stream))
                 .route("/projects/id/{project}/units/{unit}", get(super::unit_page::unit_page))
                 .route(
-                    "/projects/id/{project}/units/{unit}/steps",
-                    get(super::unit_page::steps_fragment),
-                )
-                .route(
                     "/projects/id/{project}/units/{unit}/stream",
                     get(super::unit_page::unit_stream),
                 )
@@ -2194,6 +2249,14 @@ pub fn registration() -> super::PageRegistration {
                 .route(
                     "/projects/id/{project}/steps/{step}/actions",
                     axum::routing::post(super::step::action),
+                )
+                .route(
+                    "/projects/id/{project}/needs",
+                    axum::routing::post(super::plan::needs),
+                )
+                .route(
+                    "/projects/id/{project}/seen",
+                    axum::routing::post(super::plan::mark_seen),
                 )
                 .route(
                     "/projects/id/{project}/runs/{run}/files/{name}",

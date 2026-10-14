@@ -77,11 +77,8 @@ async fn every_data_component_is_filled_from_the_project_and_a_bad_query_is_an_e
         "{error}"
     );
     assert!(board.contains("<button type=\"submit\" name=\"button\" value=\"0\" class=\"primary\">Retry the lane</button>"));
-    // The plan is still all there: the failed unit stopped, the other running.
-    assert!(
-        html.contains("<div id=\"s-beta\" class=\"pl-item pl-stop\""),
-        "{html}"
-    );
+    // The plan is still all there: the failed unit stopped.
+    assert!(html.contains("<li id=\"n-stop-beta-build\""), "{html}");
     // A project with no board draws none, and no switch.
     let (_, plain) = f.get(&format!("/projects/id/{}", f.plain)).await;
     assert!(
@@ -299,35 +296,33 @@ async fn settings_save_clear_and_preview_the_board() {
     );
 }
 
-/// The cards a page draws on the plan, by step id, in page order.
-/// The units the plan draws, in its order: its rows and modules, then its done index.
+/// The units the plan draws, in its order: its items of Needs you and its rows (each one's
+/// `data-unit`), its cards of what finished and its Done index (each one's link).
 fn units(html: &str) -> Vec<String> {
-    if !html.contains("id=\"plan-grid\"") {
+    if !html.contains("<div class=\"plan-sheet\">") {
         return vec![];
     }
-    let sheet = between(html, "id=\"plan-grid\"", "</sluice-trace>");
+    let sheet = between(html, "<div class=\"plan-sheet\">", "<!--/r:plan-done-->");
     let mut out: Vec<String> = vec![];
-    for (rest, quote) in sheet
-        .split(" data-unit=\"")
-        .skip(1)
-        .map(|r| (r, '"'))
-        .chain(
-            sheet
-                .split("<details class=\"pl-index\"")
-                .nth(1)
-                .unwrap_or("")
-                .split("<li data-said=")
-                .skip(1)
-                .map(|r| {
-                    let href = &r[r.find(" href=\"").unwrap() + 7..];
-                    let href = &href[..href.find('"').unwrap()];
-                    (&href[href.rfind('/').unwrap() + 1..], '"')
-                }),
-        )
-    {
-        let unit = rest[..rest.find(quote).unwrap_or(rest.len())].to_owned();
-        if !out.contains(&unit) {
-            out.push(unit);
+    let mut push = |unit: &str| {
+        if !out.iter().any(|u| u == unit) {
+            out.push(unit.to_owned());
+        }
+    };
+    for rest in sheet.split(" data-unit=\"").skip(1) {
+        push(&rest[..rest.find('"').unwrap()]);
+    }
+    for list in ["<ul class=\"fin\">", "<ol class=\"pl-idx\">"] {
+        let Some(at) = sheet.find(list) else { continue };
+        let items = &sheet[at..];
+        let items = &items[..items.find("</").map_or(items.len(), |_| items.len())];
+        for item in items.split("<li").skip(1) {
+            let Some(h) = item.find(" href=\"") else {
+                continue;
+            };
+            let href = &item[h + 7..];
+            let href = &href[..href.find('"').unwrap()];
+            push(&href[href.rfind('/').unwrap() + 1..]);
         }
     }
     out
@@ -432,13 +427,11 @@ async fn filtered_units_progress_done_and_paused() {
             .unwrap();
         let (status, escaped) = f.get(&format!("/projects/id/{escaped_id}")).await;
         assert_eq!(status, StatusCode::OK);
-        // the failed unit is stopped; the done one is a line of the index
-        assert_eq!(units(&escaped), ["build", "finished"], "{escaped}");
-        assert!(
-            escaped.contains("<div id=\"s-build\" class=\"pl-item pl-stop\""),
-            "{escaped}"
-        );
-        assert!(escaped.contains("<details class=\"pl-index\" data-preserve-attr=\"open\">"));
+        // the failed unit is stopped; the done one (skipped, it never ran) a line of the index
+        assert_eq!(units(&escaped), ["build"], "{escaped}");
+        let (_, index) = f.get(&format!("/projects/id/{escaped_id}?show=done")).await;
+        assert_eq!(units(&index), ["finished"], "{index}");
+        assert!(escaped.contains("<li id=\"n-stop-start\""), "{escaped}");
         assert!(!escaped.contains("<script>failure"));
         assert!(!escaped.contains("Fixture <script>"));
         assert!(escaped.contains("&lt;script&gt;"));
@@ -643,11 +636,25 @@ async fn filtered_units_progress_done_and_paused() {
         })
         .await
         .unwrap();
+        // the plan: what finished lately, the latest four, newest first; the rest counted
         let (status, html) = f.get(&format!("/projects/id/{id}")).await;
         assert_eq!(status, StatusCode::OK, "{html}");
+        let recent = plan_html::band(&html, "plan-finished");
+        assert_eq!(recent.matches("<li class=\"fin-i\"").count(), 4, "{recent}");
+        assert!(
+            recent.find("/u24\"").unwrap() < recent.find("/u21\"").unwrap(),
+            "{recent}"
+        );
+        assert!(!recent.contains("/u20\""), "{recent}");
+        assert!(recent.contains(" · took 1h 24m</p>"), "{recent}");
+        assert!(
+            plan_html::band(&html, "plan-roster").contains("<b>25 done</b></a>, the last"),
+            "{html}"
+        );
+        // Show: Done, the index: every one, newest first
+        let (_, html) = f.get(&format!("/projects/id/{id}?show=done")).await;
         let done = plan_html::band(&html, "plan-done");
         assert!(done.contains("25 units · 25 steps"), "{done}");
-        // every one, newest first, folded until opened
         assert_eq!(done.matches("<span class=\"pl-at\">").count(), 25, "{done}");
         for i in 0..25 {
             assert_eq!(
@@ -656,10 +663,6 @@ async fn filtered_units_progress_done_and_paused() {
                 "u{i:02}"
             );
         }
-        assert!(
-            done.contains("<details class=\"pl-index\" data-preserve-attr=\"open\">"),
-            "{done}"
-        );
         let at = |u: &str| {
             ["units", "steps"]
                 .iter()
@@ -669,32 +672,16 @@ async fn filtered_units_progress_done_and_paused() {
         assert!(at("u24") < at("u23") && at("u23") < at("u00"), "{done}");
         // a line says when it finished (the reader's clock), its title and how long it took; its
         // id is its link's
-        let index = &done[done.find("<details class=\"pl-index\"").unwrap()..];
         let line = plan_html::between(
-            index,
+            done,
             "<time data-clock datetime=\"2026-10-06T11:24:00Z\"",
             "</li>",
         );
         assert!(
-        line.contains("<span class=\"pl-dt\">Ship the parser fix</span><span class=\"pl-dk\">took 1h 24m</span>"),
-        "{line}"
-    );
+            line.contains("<span class=\"pl-dt\">Ship the parser fix</span><span class=\"pl-dk\">took 1h 24m</span>"),
+            "{line}"
+        );
         assert!(!line.contains("pl-did"), "{line}");
-        // Done's head: what finished last, the latest four, newest first
-        let recent = plan_html::between(done, "<ol class=\"latest\"", "</ol>");
-        assert_eq!(recent.matches("<li>").count(), 4, "{recent}");
-        assert!(
-            recent.find("/u24\"").unwrap() < recent.find("/u21\"").unwrap(),
-            "{recent}"
-        );
-        assert!(!recent.contains("/u20\""), "{recent}");
-        assert!(recent.contains("took 1h 24m"), "{recent}");
-        // Show: Done opens the index
-        let (_, html) = f.get(&format!("/projects/id/{id}?show=done")).await;
-        assert!(
-            html.contains("<details class=\"pl-index\" data-preserve-attr=\"open\" open>"),
-            "{html}"
-        );
     }
     {
         let held = f
@@ -709,11 +696,12 @@ async fn filtered_units_progress_done_and_paused() {
             .await;
         let (status, html) = f.get(&format!("/projects/id/{held}")).await;
         assert_eq!(status, StatusCode::OK, "{html}");
-        // the plan: the paused one waits, its cell says paused; the band counts it waiting
+        // the plan: the paused one waits, a row whose steps say paused; nothing is at work
+        assert_eq!(plan_html::place(&html, "hold"), "waiting", "{html}");
         let cell = plan_html::cell(&html, "hold");
-        assert!(cell.contains("data-state=\"paused\""), "{cell}");
+        assert!(cell.contains("aria-label=\"paused\""), "{cell}");
         assert!(
-            plan_html::summary(&html).contains("2 waiting. 1 of 3 units done"),
+            plan_html::summary(&html).contains("Nothing at work; 1 of 3 done."),
             "{html}"
         );
         let reads = sluice_store::ReadPool::open(f._home.path(), 1).unwrap();

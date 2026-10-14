@@ -147,13 +147,10 @@ async fn a_bypassed_step_reads_bypassed_and_a_waiting_one_carries_its_tag() {
         .unwrap();
     let state =
         views::DashboardState::new(ReadPool::open(home.path(), 2).unwrap(), Arc::new(Catalog));
-    // Waiting: the tag with who set it, in its stage's cell and its band.
+    // Waiting, its first step ready: a row, whose steps carry the tag with who set it.
     let plan = page(&state, format!("/projects/id/{project}")).await;
+    assert_eq!(plan_html::place(&plan, "l"), "waiting");
     let row = plan_html::row(&plan, "l");
-    assert!(
-        row.contains("<span class=\"sc-word sc-tag\" aria-hidden=\"true\" title=\"bypass by orchestrator\">bypass · orchestrator</span><span class=\"vh\">: pending, bypass by orchestrator</span>"),
-        "{row}"
-    );
     assert!(
         sv_row(row, "l-close").contains("<span class=\"tag sv-tag\">bypass · orchestrator</span>"),
         "{row}"
@@ -182,20 +179,8 @@ async fn a_bypassed_step_reads_bypassed_and_a_waiting_one_carries_its_tag() {
         .await
         .unwrap();
     let plan = page(&state, format!("/projects/id/{project}")).await;
+    // begun: its row at work, its steps under it
     let row = plan_html::row(&plan, "l");
-    assert!(
-        row.contains(
-            "<span class=\"sc-name\">land</span></span><span class=\"vh\">: set by hand</span>"
-        ),
-        "{row}"
-    );
-    assert!(
-        row.contains(
-            "<span class=\"sc-name\">close</span></span><span class=\"vh\">: bypassed</span>"
-        ),
-        "{row}"
-    );
-    assert!(!row.contains("sc-tag"), "{row}");
     // its unit's step view: the state cell says it
     let close = sv_row(row, "l-close");
     assert!(

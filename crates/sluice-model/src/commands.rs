@@ -637,6 +637,29 @@ pub struct StepDismiss {
     pub dismissed: bool,
 }
 
+/// The owner sets items of a plan's Needs you aside (`dismissed`), or back: a stop (`stop:<step>`,
+/// kept against the step's generations, so a retry or a new failure brings it back), a quiet
+/// run (`quiet:<step>`, its `stamp` the run's last activity in seconds since the epoch, so the
+/// run going quiet again after writing brings it back) or a question (`ask:<message>`). Kept
+/// like a read mark (`readers`, stream `needs`), never a log record; it changes nothing but
+/// what the owner's plan lists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NeedsDismiss {
+    pub project: ProjectId,
+    pub items: Vec<NeedsItem>,
+    pub dismissed: bool,
+}
+
+/// One item of a plan's Needs you, as `NeedsDismiss` names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NeedsItem {
+    pub key: String,
+    #[serde(default)]
+    pub stamp: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MarkRead {
@@ -1226,6 +1249,7 @@ pub enum CommandRequest {
     Messages(Messages),
     MarkRead(MarkRead),
     StepDismiss(StepDismiss),
+    NeedsDismiss(NeedsDismiss),
     FnCall(FnCall),
     LogRead(LogRead),
     LogWait(LogWait),

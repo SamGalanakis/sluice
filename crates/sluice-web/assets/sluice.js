@@ -13,19 +13,9 @@ function currentStep() {
   } catch { return ""; }
 }
 
-function markOpen(sid) {
-  // a stage's cell on the plan
-  for (const n of $$(".open[id^='n-']")) {
-    if (n.id !== `n-${sid}`) n.classList.remove("open");
-  }
-  const card = sid && document.getElementById(`n-${sid}`);
-  if (!card) return;
-  if (!card.classList.contains("open")) card.classList.add("open");
-  // a folded part of the plan holding it opens to it
-  for (let d = card.closest("details:not([open])"); d; d = d.parentElement?.closest("details:not([open])")) {
-    d.open = true;
-  }
-}
+// what the plan shows of a step: the first shown link that opens it (its item in Needs you, its
+// row's step line once the row is open)
+const onPlan = (sid) => sid && $$("#plan-pane a[data-step]").find((a) => a.dataset.step === sid && shown(a));
 
 const PHONE = matchMedia("(max-width: 720px)");  // the drawer a sheet
 const OVER = matchMedia("(max-width: 1199px)");  // the drawer over the page, a modal dialog
@@ -104,17 +94,13 @@ rocket("sluice-drawer", {
       drawer.hidden = !sid;
       $(".scrim", host).hidden = !sid;
       modal();
-      markOpen(sid);
       if (!sid) {
         stream?.abort();
         $("#drawer-stream").replaceChildren();
         mergePatch({ step: "", sver: "" });
         tabInAddress("");
-        // back to the card (beside the drawer, the page brought it into view); a phone's sheet
-        // did not, so a name in a card's waits that opened it takes the focus back
-        const card = last && document.getElementById(`n-${last}`);
-        const named = PHONE.matches && opener?.matches(".pl-waits a") ? opener : null;
-        (named || card || opener)?.focus({ preventScroll: true });
+        // back to what opened it
+        opener?.focus({ preventScroll: true });
         opener = null;
         last = "";
         return;
@@ -142,9 +128,9 @@ rocket("sluice-drawer", {
         pinned = true;  // a new step's log starts following again
       }
       focusFrame = requestAnimationFrame(() => drawer.focus({ preventScroll: true }));
-      // once the page has made room, bring the card into view beside the drawer
+      // once the page has made room, bring what the plan shows of it into view beside the drawer
       if (!PHONE.matches) {
-        scrollTimer = setTimeout(() => document.getElementById(`n-${sid}`)
+        scrollTimer = setTimeout(() => onPlan(sid)
           ?.scrollIntoView({ block: "nearest", inline: "nearest" }), 220);
       }
     };
@@ -166,23 +152,23 @@ rocket("sluice-drawer", {
       }
       if (evt.key === "Escape" && location.hash.startsWith("#step:")) window.sluiceClose();
     };
-    // `[` and `]` open the step before or after this one in the board's order as drawn (its
-    // bands, live first): each step once, as its first card, pill or dot shows it; never while
-    // typing, with a modifier or under an open dialog
+    // `[` and `]` open the step before or after this one in the plan's order as drawn (Needs
+    // you, then each row's steps, folded or not): each step once, where it is first linked;
+    // never while typing, with a modifier or under an open dialog
     const step = (evt) => {
       const sid = currentStep();
       if (!sid || (evt.key !== "[" && evt.key !== "]") || evt.defaultPrevented
           || evt.ctrlKey || evt.metaKey || evt.altKey || document.querySelector("dialog[open]")) return;
       const t = evt.target;
       if (t instanceof Element && t.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return;
-      // the plan's stage cells and its open step views' rows, in page order
-      const ids = [...new Set($$("#project-board :is(a.sc-a, a.sv-a)[data-step]")
-        .filter(shown).map((a) => a.dataset.step || a.dataset.opens))];
+      // every link on the plan that opens a step, in page order
+      const links = $$("#plan-pane a[data-step]");
+      const ids = [...new Set(links.map((a) => a.dataset.step))];
       const at = ids.indexOf(sid);
       const next = ids[evt.key === "]" ? at + 1 : (at < 0 ? ids.length : at) - 1];
       if (!next) return;
       evt.preventDefault();
-      opener = document.getElementById(`n-${next}`) || opener;
+      opener = links.find((a) => a.dataset.step === next && shown(a)) || opener;
       location.hash = `step:${encodeURIComponent(next)}`;
     };
     // a click on the page around the board (not on a card, a step view's row, a control, the

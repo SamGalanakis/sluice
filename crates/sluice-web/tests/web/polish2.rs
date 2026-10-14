@@ -451,22 +451,23 @@ async fn messages_retries_waits_and_run_files() {
             !page.contains("mx-shared") && !page.contains("board-edges"),
             "{page}"
         );
-        for unit in ["a1", "a2"] {
-            let row = plan_html::row(&page, unit);
-            assert!(
-                row.contains(&format!(
-                    "waits for <a href=\"/projects/id/{id}/steps/base\""
-                )) && row.contains(">The substrate lands first</a> (running)."),
-                "{unit}: {row}"
-            );
+        // not begun, they are counted on the plan; each one's steps say what they wait for
+        for unit in ["a1", "a2", "a3"] {
+            assert_eq!(plan_html::place(&page, unit), "", "{unit}");
         }
-        let row = plan_html::row(&page, "a3");
         assert!(
-            row.contains(&format!(
-                "waits for <a href=\"/projects/id/{id}/steps/other\""
-            )) && row.contains("<code>other</code></a> (running)."),
-            "{row}"
+            plan_html::band(&page, "plan-roster").contains("<b>3 waiting</b> on earlier work"),
+            "{page}"
         );
+        for (unit, on) in [
+            ("a1", "The substrate lands first"),
+            ("a2", "The substrate lands first"),
+            ("a3", "other"),
+        ] {
+            let (_, unit_page) = f.get(&format!("/projects/id/{id}/units/{unit}")).await;
+            let note = between(&unit_page, "<span class=\"sv-note\">", "</span>");
+            assert!(note.contains(&format!("waits for {on}")), "{unit}: {note}");
+        }
     }
     {
         let id = f

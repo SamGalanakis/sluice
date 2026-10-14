@@ -176,17 +176,12 @@ document.addEventListener("submit", async event => {
 });
 
 // ---- what the live plan moved on, said once ---------------------------------------------------
-// Each step's state in words: a stage cell's (its link's data-step, its hidden ": word"), and a
-// stopped module's or a Done line's data-said ("a-build succeeded|a-review skipped"), so a step
-// is still read when its unit changes band.
+// Each step's state in words, from the data-said its unit's item, row, card or Done line carries
+// ("a-build succeeded|a-review skipped"), so a step is still read when its unit moves on.
 function states() {
   const out = new Map();
   const plan = document.querySelector("#plan-pane");
   if (!plan) return out;
-  for (const a of plan.querySelectorAll("li.sc[data-state] > a.sc-a[data-step]")) {
-    const word = a.querySelector(":scope > .vh")?.textContent.replace(/^:\s*/, "").split(",")[0].trim();
-    if (word) out.set(a.dataset.step, word);
-  }
   for (const el of plan.querySelectorAll("[data-said]")) {
     for (const pair of el.dataset.said.split("|")) {
       const at = pair.indexOf(" ");

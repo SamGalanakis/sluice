@@ -526,6 +526,13 @@ impl step::CommandService for SocketOwnerCommands {
                         dismissed: command.action == step::Action::Dismiss,
                     })
                 }
+                step::Action::SetAside | step::Action::Restore => {
+                    CommandRequest::NeedsDismiss(sluice_model::commands::NeedsDismiss {
+                        project: command.project,
+                        items: command.items,
+                        dismissed: command.action == step::Action::SetAside,
+                    })
+                }
                 // the page sends a cancel and then its dismissal
                 step::Action::CancelDismiss => {
                     return Err(PublicError::BadRequest {

@@ -40,8 +40,8 @@ document.addEventListener("submit", async (event) => {
   const form = event.target;
   if (!(form instanceof HTMLFormElement) || form.method !== "post") return;
   const url = new URL(form.getAttribute("action"), location.href);
-  if (url.origin !== location.origin || !(/^\/projects\/id\/[^/]+\/steps\/[^/]+\/actions$/.test(url.pathname)
-      || form.matches(".pl-close"))) return;
+  if (url.origin !== location.origin
+      || !/^\/projects\/id\/[^/]+\/(steps\/[^/]+\/actions|needs)$/.test(url.pathname)) return;
   event.preventDefault();
   if (postingActions.has(form)) return;
   postingActions.add(form);
@@ -50,7 +50,7 @@ document.addEventListener("submit", async (event) => {
   const dialog = form.closest("dialog");
   const next = new URL(data.get("next") || location.href, location.href);
   const focusId = next.pathname === location.pathname
-    && /^(undo-|s-)/.test(next.hash.slice(1)) ? decodeURIComponent(next.hash.slice(1)) : "";
+    && /^(undo-|s-|n-)/.test(next.hash.slice(1)) ? decodeURIComponent(next.hash.slice(1)) : "";
   const scroll = { left: scrollX, top: scrollY };
   let observer, timer;
   const stop = () => { observer?.disconnect(); clearTimeout(timer); };
@@ -1149,181 +1149,6 @@ define("sluice-splitter", {
       resized();
     });
     requestAnimationFrame(values);
-  },
-});
-
-// ---- sluice-trace ------------------------------------------------------------------------------
-// Select to trace (`ui::trace_open`). Each traceable unit is an element with `data-unit` (its
-// name), `data-up` and `data-down` (every unit up and down its chain, as the server worked them
-// out) and `data-chain` (the sentence that says it); its `[data-trace-pick]` button selects it.
-// Selecting marks every unit `data-trace` selected, up, down or faded, opens the selected one's
-// `[data-trace-more]` in place, draws the rail (each `.rail-slot`'s `.rail`, in page order,
-// gets `data-rail`: top, bottom and a node) and puts the sentence in the line; selecting it
-// again, Clear trace or Escape clears. The arrows move between the units' buttons. The choice
-// is the host's `selected`, kept through a patch, and drawn again after one.
-// A unit's steps (`ui::expand`, a `details[data-x]`) stay as the owner left them: the units open
-// are the host's `expanded`, so a patch, or the unit moving to another band, leaves them open.
-define("sluice-trace", {
-  props: ({ string }) => ({ selected: string, expanded: string }),
-  manifest: {
-    slots: [{ name: "line", description: "The server's .trace-line: .trace-words (the sentence, polite) and button.trace-clear." },
-            { name: "units", description: "Elements with data-unit, data-up, data-down and data-chain, each a .rail-slot with its .rail and a [data-trace-pick] button; section heads may be .rail-slot too. A unit's details[data-x] is its steps' disclosure." }],
-    events: [{ name: "sluice-trace", description: "A unit was traced or the trace cleared; detail.unit is its name or \"\"." }],
-  },
-  setup({ host, cleanup }) {
-    const on = listening(cleanup);
-    const words = host.querySelector(".trace-words");
-    const idle = words?.textContent ?? "";
-    const units = () => [...host.querySelectorAll("[data-unit]")];
-    const picks = () => [...host.querySelectorAll("[data-trace-pick]")].filter((b) => b.checkVisibility?.() ?? true);
-    const draw = () => {
-      const id = host.getAttribute("selected") ?? "";
-      const unit = id ? units().find((u) => u.dataset.unit === id) : null;
-      const set = (attr) => new Set((unit?.dataset[attr] ?? "").split(" ").filter(Boolean));
-      const up = set("up"), down = set("down");
-      host.toggleAttribute("tracing", !!unit);
-      for (const u of units()) {
-        const name = u.dataset.unit;
-        const role = !unit ? "" : name === id ? "selected" : up.has(name) ? "up" : down.has(name) ? "down" : "faded";
-        if (role) { if (u.dataset.trace !== role) u.dataset.trace = role; } else if (u.dataset.trace) delete u.dataset.trace;
-        for (const pick of u.querySelectorAll(":scope [data-trace-pick]")) {
-          if (pick.closest("[data-unit]") !== u) continue;
-          const pressed = String(role === "selected");
-          if (pick.getAttribute("aria-pressed") !== pressed) pick.setAttribute("aria-pressed", pressed);
-          if (pick.getAttribute("aria-expanded") !== pressed) pick.setAttribute("aria-expanded", pressed);
-        }
-        for (const more of u.querySelectorAll(":scope [data-trace-more]")) {
-          if (more.closest("[data-unit]") === u && more.hidden !== (role !== "selected")) more.hidden = role !== "selected";
-        }
-      }
-      // the rail: from the first lit slot down to the last, through whatever lies between
-      const slots = [...host.querySelectorAll(".rail-slot")];
-      const lit = slots.map((s) => !!unit && ["selected", "up", "down"].includes(s.dataset.trace));
-      const first = lit.indexOf(true), last = lit.lastIndexOf(true);
-      const drawn = first >= 0 && last > first;
-      slots.forEach((slot, i) => {
-        const rail = slot.querySelector(":scope > .rail");
-        if (!rail) return;
-        const parts = [];
-        if (drawn && i > first && i <= last) parts.push("top");
-        if (drawn && i >= first && i < last) parts.push("bottom");
-        if (drawn && lit[i]) parts.push(slot.dataset.trace === "selected" ? "chosen" : "node");
-        const value = parts.join(" ");
-        if ((rail.dataset.rail ?? "") !== value) { if (value) rail.dataset.rail = value; else delete rail.dataset.rail; }
-      });
-      const said = unit ? unit.dataset.chain : idle;
-      if (words && words.textContent !== said) words.textContent = said;
-      const clear = host.querySelector(".trace-clear");
-      if (clear && clear.hidden === !!unit) clear.hidden = !unit;
-    };
-    const expanded = () => new Set((host.getAttribute("expanded") ?? "").split(" ").filter(Boolean));
-    const loaded = new Map();
-    const controller = new AbortController();
-    cleanup(() => controller.abort());
-    const loadSteps = async (fold) => {
-      const url = fold.dataset.stepsUrl;
-      const body = fold.querySelector(":scope > .x-body");
-      if (!fold.open || !url || !body || body.hasChildNodes()) return;
-      body.innerHTML = '<p role="status">Loading steps…</p>';
-      body.setAttribute("aria-busy", "true");
-      if (!loaded.has(fold.dataset.x)) {
-        loaded.set(fold.dataset.x, fetch(url, { signal: controller.signal, headers: { accept: "text/html" } })
-          .then((response) => {
-            if (!response.ok) throw new Error("Could not load steps.");
-            return response.text();
-          }));
-      }
-      try {
-        const html = await loaded.get(fold.dataset.x);
-        if (host.contains(body)) body.innerHTML = html;
-      } catch {
-        if (!controller.signal.aborted && host.contains(body)) {
-          body.innerHTML = '<p role="alert">Could not load steps. <button type="button" class="x-retry">Retry</button></p>';
-        }
-      } finally {
-        body.removeAttribute("aria-busy");
-      }
-    };
-    const expand = () => {
-      const open = expanded();
-      for (const fold of host.querySelectorAll("details[data-x]")) {
-        if (!fold.dataset.stepsUrl) loaded.delete(fold.dataset.x);
-        if (fold.open !== open.has(fold.dataset.x)) fold.open = open.has(fold.dataset.x);
-        loadSteps(fold);
-      }
-    };
-    // toggle does not bubble: caught on its way down
-    on(host, "toggle", (event) => {
-      const fold = event.target;
-      if (!(fold instanceof HTMLDetailsElement) || !fold.matches("details[data-x]")) return;
-      loadSteps(fold);
-      const open = expanded();
-      if (fold.open) open.add(fold.dataset.x); else open.delete(fold.dataset.x);
-      const value = [...open].join(" ");
-      if (value === (host.getAttribute("expanded") ?? "")) return;
-      if (value) host.setAttribute("expanded", value); else host.removeAttribute("expanded");
-    }, { capture: true });
-    const choose = (id) => {
-      if (id) host.setAttribute("selected", id); else host.removeAttribute("selected");
-      draw();
-      host.dispatchEvent(new CustomEvent("sluice-trace", { bubbles: true, detail: { unit: id } }));
-    };
-    on(host, "click", (event) => {
-      const page = event.target.closest?.("summary > a.x-page");
-      if (page && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-        event.preventDefault();
-        const fold = page.closest("details[data-x]");
-        fold.open = !fold.open;
-        return;
-      }
-      const retry = event.target.closest?.(".x-retry");
-      if (retry) {
-        const fold = retry.closest("details[data-x]");
-        loaded.delete(fold.dataset.x);
-        fold.querySelector(":scope > .x-body").replaceChildren();
-        loadSteps(fold);
-        return;
-      }
-      if (event.target.closest?.(".trace-clear")) {
-        const was = host.getAttribute("selected");
-        choose("");
-        units().find((u) => u.dataset.unit === was)?.querySelector("[data-trace-pick]")?.focus();
-        return;
-      }
-      const pick = event.target.closest?.("[data-trace-pick]");
-      const unit = pick?.closest("[data-unit]");
-      if (!unit || !host.contains(unit)) return;
-      choose(host.getAttribute("selected") === unit.dataset.unit ? "" : unit.dataset.unit);
-    });
-    on(host, "keydown", (event) => {
-      if (event.altKey || event.ctrlKey || event.metaKey) return;
-      if (event.key === "Escape" && host.hasAttribute("selected")) {
-        const was = host.getAttribute("selected");
-        event.preventDefault();
-        choose("");
-        units().find((u) => u.dataset.unit === was)?.querySelector("[data-trace-pick]")?.focus();
-        return;
-      }
-      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-      const pick = event.target.closest?.("[data-trace-pick]");
-      if (!pick) return;
-      const all = picks(), at = all.indexOf(pick);
-      const next = all[at + (event.key === "ArrowDown" ? 1 : -1)];
-      if (!next) return;
-      event.preventDefault();
-      next.focus();
-    });
-    // a patch redraws the units as the server has them: mark them again
-    let queued = false;
-    const observer = new MutationObserver(() => {
-      if (queued) return;
-      queued = true;
-      queueMicrotask(() => { queued = false; draw(); expand(); });
-    });
-    observer.observe(host, { childList: true, subtree: true });
-    cleanup(() => observer.disconnect());
-    draw();
-    expand();
   },
 });
 

@@ -355,12 +355,12 @@ async fn windows_outcomes_and_stage_statistics() {
         assert_eq!(cells(article, "draft"), ["4", "0", "1", "0", "0%", ""]);
         assert_eq!(
             cells(article, "review"),
-            ["3", "1", "0", "0", "25%", "fn failure 1"]
+            ["3", "1", "0", "0", "25%", "wall-clock cap 1"]
         );
         let scan = group(&page, "st-out-h", "scan");
         assert_eq!(
             cells(scan, "scan"),
-            ["2", "2", "0", "1", "50%", "fn failure 2"]
+            ["2", "2", "0", "1", "50%", "fn failure 1 · wall-clock cap 1"]
         );
 
         // throughput: a-1, a-2, a-3, s-1 and s-2 finished; thirteen units started

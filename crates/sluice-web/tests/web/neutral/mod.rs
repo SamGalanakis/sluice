@@ -3,8 +3,9 @@
 //!
 //! `almanac`, a team writing a field guide, has two recipes with different steps: `article`
 //! (draft → review → publish) and the one-step `scan`. Its units sit in every band: done ones
-//! (whose runs its Stats page measures), a failed and a cancelled one, one running longer than
-//! its stage's done runs took, a quiet one, one whose step asks the owner a question, a wait chain across units
+//! (whose runs its Stats page measures), two stopped at their wall-clock cap (stops sharing a
+//! cause) and a cancelled one, one running longer than its stage's done runs took (it has said
+//! something three times lately), a quiet one, one whose step asks the owner a question, a wait chain across units
 //! (a-8 after a-6, a-9 after a-8; s-5 after s-3), a unit of no recipe (`index`: two gathers
 //! fanning in to a merge), and a long run of no unit (`survey`) reporting progress fields.
 //! `chores` is a tiny project of three loose steps.
@@ -230,11 +231,10 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
     let cancelled = PublicError::Cancelled {
         message: "The editors set the owls aside for the next edition.".into(),
     };
-    let failed = PublicError::FnFailure {
-        message: "The style check found two entries without a photograph credit.".into(),
-    };
-    let broken = PublicError::FnFailure {
-        message: "Three range maps link to a folder that no longer exists.".into(),
+    let capped = || PublicError::AgentFailure {
+        kind: "WallCap".into(),
+        message: "The run reached its wall-clock cap.".into(),
+        session: None,
     };
     let done = |unit: &str, at: u64, draft: u64, review: u64| {
         vec![
@@ -262,10 +262,10 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
     states.extend([
         step("s-1-scan", "succeeded", &[(3 * H, Some(4 * M))]),
         step("s-2-scan", "succeeded", &[(80 * M, Some(6 * M))]),
-        // stopped: a review failed, a draft cancelled, a scan failed
+        // stopped: a review and a scan at their wall-clock cap (one cause), a draft cancelled
         step("a-4-draft", "succeeded", &[(3 * H, Some(28 * M))]),
         Step {
-            error: Some(failed),
+            error: Some(capped()),
             ..step("a-4-review", "failed", &[(2 * H, Some(18 * M))])
         },
         Step {
@@ -273,7 +273,7 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
             ..step("a-5-draft", "failed", &[(4 * H, Some(12 * M))])
         },
         Step {
-            error: Some(broken),
+            error: Some(capped()),
             ..step("s-4-scan", "failed", &[(40 * M, Some(3 * M))])
         },
         // running: a-6 longer than its stage's done runs took, a-7 asking the owner, s-3 quiet
@@ -348,6 +348,39 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
         },
     )
     .await;
+    // a-6 has said something three times lately: a tick each on its track
+    for (body, at) in [
+        ("Entries 1 to 20 drafted.", 60 * M),
+        ("Entries 21 to 40 drafted.", 35 * M),
+        (
+            "Entries 41 to 58 drafted; the maps moved under maps/coast/.",
+            10 * M,
+        ),
+    ] {
+        let id = stored_messages::stored(
+            writer,
+            almanac,
+            stored_messages::Stored {
+                thread: "step-a-6-draft",
+                from: "a-6-draft",
+                to: Some("orchestrator"),
+                body,
+                ..Default::default()
+            },
+        )
+        .await
+        .id
+        .0;
+        writer
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                tx.sql()
+                    .execute("UPDATE messages SET at=?2 WHERE id=?1", (id, ago(at)))?;
+                tx.changed(Some(almanac), "messages");
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
     let chores = project(
         writer,
         "chores",

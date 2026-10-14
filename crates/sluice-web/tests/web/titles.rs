@@ -1,6 +1,6 @@
 //! Steps and units by their titles (SPEC §13): every page names a step by its title with its id
-//! after it in mono, a recipe with a view draws its live units as rows under its stages, the
-//! stopped ones first, and the plan's find finds a step by its title.
+//! after it in mono, a recipe with a view draws its live units as rows, the stops first, and the
+//! plan's find finds a step by its title.
 use crate::board_fixture;
 use crate::plan_html;
 use axum::http::StatusCode;
@@ -23,73 +23,42 @@ async fn recipe_titles_and_search() {
     {
         let (status, html) = f.get(&format!("/projects/id/{id}")).await;
         assert_eq!(status, StatusCode::OK, "{html}");
-        // l2 failed: a module under Stopped, above everything else; l1 runs, a row under Running;
-        // l3, held by l2, a row under Waiting
+        // l2 failed: an item of Needs you, above everything else; l1 runs, a row at work; l3,
+        // held by l2 and not begun, counted
         assert_eq!(plan_html::place(&html, "l2"), "stopped");
         assert_eq!(plan_html::place(&html, "l1"), "running");
-        assert_eq!(plan_html::place(&html, "l3"), "waiting");
+        assert_eq!(plan_html::place(&html, "l3"), "");
         let at = |needle: &str| {
             html.find(needle)
                 .unwrap_or_else(|| panic!("{needle}: {html}"))
         };
-        assert!(at(">Stopped</h2>") < at("<!--r:s-l2-->"));
-        assert!(at("<!--r:s-l2-->") < at(">Running</h2>"));
-        assert!(at("<!--r:u-l1-->") < at(">Waiting</h2>"));
-        assert!(at(">Waiting</h2>") < at("<!--r:u-l3-->"));
-        // the recipe's block heads its stages' columns
-        let running = plan_html::band(&html, "plan-running");
-        for stage in ["fork", "work", "land"] {
-            assert!(
-                running.contains(&format!("<span class=\"sh-stage\">{stage}</span>")),
-                "{running}"
-            );
-        }
-        // a cell a stage, each with its state; one nothing has reached is drawn empty
-        assert!(plan_html::cell(&html, "l1-work").contains("data-state=\"running\""));
-        let fork = plan_html::cell(&html, "l3-fork");
-        assert!(
-            fork.starts_with("<li class=\"sc sc-empty\" data-state=\"blocked\""),
-            "{fork}"
-        );
-        // a wait to or from a row is said in its row, never drawn
-        let l3 = plan_html::row(&html, "l3");
-        assert!(
-            l3.contains("<p class=\"pl-sub pl-waits\">fork waits for <a"),
-            "{l3}"
-        );
-        assert!(!html.contains("board-edges"), "{html}");
-        // its title, and a way to its unit's page; its id, recipe and params in its Details
+        assert!(at("<!--r:n-stop-l2-work-->") < at("<!--r:u-l1-->"));
+        // its row: its title, its state at its stage; open, its steps, each with its state, and
+        // a way to its unit's page
         let l1 = plan_html::row(&html, "l1");
         assert!(
-            l1.contains("<span class=\"pl-t\">FIG-1: Fix the cron driver</span>")
-                && !l1.contains("pl-id"),
+            l1.contains("<span class=\"ro-t\">FIG-1: Fix the cron driver</span>")
+                && l1.contains("<span class=\"vh\">running, </span>work · "),
+            "{l1}"
+        );
+        assert!(
+            plan_html::cell(l1, "l1-work").contains("aria-label=\"running\""),
             "{l1}"
         );
         assert!(
             l1.contains(&format!("href=\"/projects/id/{id}/units/l1\"")),
             "{l1}"
         );
-        assert!(
-            l1.contains("<sluice-copy value=\"l1\">")
-                && l1.contains("<dt>Recipe</dt><dd><span>lane</span></dd>")
-                && l1.contains("<dt>ticket</dt><dd><span>FIG-1</span></dd>"),
-            "{l1}"
-        );
-        // the recipe's view draws its summary in the unit's row; a param is its Details', not
-        // drawn again
+        assert!(!html.contains("board-edges"), "{html}");
+        // the recipe's view draws its summary in the unit's row, a param not drawn again
         assert!(!l1.contains("uv-param"), "{l1}");
         // a recipe whose view does not check: its units are still rows, with one note
-        let waiting = plan_html::band(&html, "plan-waiting");
-        assert_eq!(
-            waiting.matches("view does not check").count(),
-            1,
-            "{waiting}"
-        );
-        assert_eq!(plan_html::place(&html, "r1"), "waiting");
-        // a unit of no recipe draws its own steps: kit's two, a cell each, the gate between them
-        // its step view's
+        let roster = plan_html::band(&html, "plan-roster");
+        assert_eq!(roster.matches("view does not check").count(), 1, "{roster}");
+        assert_ne!(plan_html::place(&html, "r1"), "");
+        // a unit of no recipe draws its own steps: kit's two, the gate between them its step
+        // view's
         let kit = plan_html::row(&html, "kit");
-        assert_eq!(kit.matches("<li class=\"sc").count(), 2, "{kit}");
         assert_eq!(kit.matches("<li class=\"sv-row").count(), 2, "{kit}");
     }
     {

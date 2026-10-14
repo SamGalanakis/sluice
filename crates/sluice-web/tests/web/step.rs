@@ -281,8 +281,8 @@ async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawe
     );
 }
 
-/// The step's place on the project page, as the page draws it: its stopped module, its row,
-/// its long run in the margin, or its line of the Done index.
+/// The step's place on the project page, as the page draws it: its item in Needs you, its row
+/// at work, its card of what finished; "" when it is only counted.
 async fn card(state: &views::DashboardState, project: ProjectId) -> String {
     let app = views::dashboard_router(state.clone()).layer(Extension(Registry(Arc::new(Exact))));
     let response = app
@@ -299,14 +299,13 @@ async fn card(state: &views::DashboardState, project: ProjectId) -> String {
     let body = String::from_utf8(body.to_vec()).unwrap();
     match plan_html::place(&body, "work") {
         "stopped" => plan_html::stopped(&body, "work").to_owned(),
-        "margin" => plan_html::region(&body, "m-work").to_owned(),
         "done" => {
-            let at = body
-                .find("/steps/work\"><span class=\"pl-at\">")
-                .expect("its line");
-            body[at..at + body[at..].find("</li>").unwrap()].to_owned()
+            let cards = plan_html::band(&body, "plan-finished");
+            let at = cards.find("/steps/work\">").expect("its card");
+            let start = cards[..at].rfind("<li class=\"fin-i\"").unwrap();
+            cards[start..at + cards[at..].find("</li>").unwrap()].to_owned()
         }
-        "" => panic!("the step's unit: {body}"),
+        "" => String::new(),
         _ => plan_html::row(&body, "work").to_owned(),
     }
 }
@@ -357,15 +356,18 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
     );
     set("UPDATE steps SET status='pending' WHERE project_id=?1").await;
     let html = card(&state, project).await;
-    assert!(!html.contains("sc-time"), "{html}");
+    assert!(!html.contains("data-since"), "{html}");
 
-    // running for days, alone: a long run in the margin, its time a <time data-since> at its
-    // run's start, which the page ticks
+    // running for days, alone: a long run, its time a <time data-since> at its run's start,
+    // which the page ticks
     run("2026-10-05T09:00:00Z", None).await;
     set("UPDATE steps SET status='running' WHERE project_id=?1").await;
     let html = card(&state, project).await;
+    let pill = &html[html.find("<span class=\"pill\">").expect("its pill")..];
     assert!(
-        html.contains("<span class=\"mm-time\"><time data-since=\"2026-10-05T09:00:00Z\" datetime=\"2026-10-05T09:00:00Z\""),
+        pill.contains(
+            "<time data-since=\"2026-10-05T09:00:00Z\" datetime=\"2026-10-05T09:00:00Z\""
+        ),
         "{html}"
     );
 
@@ -374,38 +376,33 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
     set("UPDATE runs SET finished_at='2026-10-05T09:30:00Z' WHERE project_id=?1").await;
     set("UPDATE steps SET status='failed' WHERE project_id=?1").await;
     let html = card(&state, project).await;
-    assert!(html.contains(" after 30m</span>"), "{html}");
+    assert!(html.contains(" failed after 30m."), "{html}");
     assert!(!html.contains("data-since"), "{html}");
     set("UPDATE steps SET status='pending' WHERE project_id=?1").await;
     let html = card(&state, project).await;
     assert!(
-        !html.contains("sc-time"),
+        !html.contains("data-since"),
         "a pending step shows no timer: {html}"
     );
 
-    // the retry runs: the timer is the current run's, not the first's, and its Details say
+    // the retry runs: the timer is the current run's, not the first's, and its steps say
     // which run
     run("2026-10-05T10:00:00Z", None).await;
     set("UPDATE steps SET status='running' WHERE project_id=?1").await;
     let html = card(&state, project).await;
+    let pill = &html[html.find("<span class=\"pill\">").expect("its pill")..];
+    let pill = &pill[..pill.find("</span><span class=\"ro").unwrap()];
     assert!(
-        html.contains("<time data-since=\"2026-10-05T10:00:00Z\"")
-            && !html.contains("2026-10-05T09:00:00Z"),
-        "{html}"
+        pill.contains("<time data-since=\"2026-10-05T10:00:00Z\""),
+        "{pill}"
     );
-    assert!(
-        html.contains("<dt>Run</dt><dd><span>2</span></dd>"),
-        "{html}"
-    );
+    assert!(html.contains(">run 2<"), "{html}");
 
     // it succeeds: done, how long its last run took, static
     set("UPDATE runs SET finished_at='2026-10-05T12:14:30Z' WHERE project_id=?1 AND finished_at IS NULL").await;
     set("UPDATE steps SET status='succeeded' WHERE project_id=?1").await;
     let html = card(&state, project).await;
-    assert!(
-        html.contains("<span class=\"pl-dk\">took 2h 14m</span>"),
-        "{html}"
-    );
+    assert!(html.contains(" · took 2h 14m</p>"), "{html}");
     assert!(!html.contains("data-since"), "{html}");
 
     // a value set by hand did not take its run's time

@@ -163,13 +163,13 @@ async fn slow_chromium_a_code_block_keeps_its_lines_and_the_keys_find_and_move()
             .unwrap();
         assert_eq!(browser.eval("location.hash").unwrap(), json!(""));
 
-        // `]` and `[` move the drawer through the plan's cells, in its order as drawn
+        // `]` and `[` move the drawer through the plan's steps, in its order as drawn
         browser.navigate(&format!("{base}#step:l1-work")).unwrap();
         browser
             .wait("customElements.get('sluice-drawer') && document.querySelector('#step-detail[data-step=\"l1-work\"] #d-title')")
             .unwrap();
         let order = browser
-            .eval("[...new Set([...document.querySelectorAll('#project-board a.sc-a[data-step]')].filter(a => a.checkVisibility()).map(a => a.dataset.step))]")
+            .eval("[...new Set([...document.querySelectorAll('#plan-pane a[data-step]')].map(a => a.dataset.step))]")
             .unwrap();
         let order: Vec<String> = serde_json::from_value(order).unwrap();
         let at = order.iter().position(|s| s == "l1-work").unwrap();
@@ -345,9 +345,9 @@ async fn ready_work_repeated_failure_and_answered_questions() {
             .await;
         }
         let (_, html) = f.get(&format!("/projects/id/{id}")).await;
-        // the asking unit is a question for you, its row not drawn again
+        // the asking unit is a question for you; the note it sent is not the question
         assert_eq!(plan_html::place(&html, "l1"), "asks");
-        let q = plan_html::band(&html, "plan-asks");
+        let q = plan_html::needs(&html)[0];
         assert!(
             q.contains("Land the cron fix now?") && !q.contains("Heads up"),
             "{q}"
@@ -355,21 +355,11 @@ async fn ready_work_repeated_failure_and_answered_questions() {
         // a stopped unit says why it stopped, not the note sent to it
         let l2 = plan_html::stopped(&html, "l2");
         assert!(
-            l2.contains("<b>failed</b>") && !l2.contains("Heads up"),
+            l2.contains("</a></b> failed") && !l2.contains("Heads up"),
             "{l2}"
         );
-        // a waiting row's one line is what holds it; the note and who sent it, by its stage, are
-        // in its more
-        let l3 = plan_html::row(&html, "l3");
-        assert!(
-            l3.contains("<p class=\"pl-sub pl-waits\">fork waits for"),
-            "{l3}"
-        );
-        let more = &l3[l3.find("<div class=\"pl-said\">").expect("its more")..];
-        assert!(
-            more.contains("<b>Note from work</b>") && more.contains("Heads up"),
-            "{more}"
-        );
+        // l3 has not begun: the plan counts it, its page says the note
+        assert_eq!(plan_html::place(&html, "l3"), "");
         // the log: the note is one row, its sender named as pages name a step and linked
         let (_, log) = f.get(&format!("/projects/id/{id}/log")).await;
         let rows: Vec<&str> = log

@@ -315,7 +315,7 @@ async fn a_unit_page_draws_its_steps_on_one_axis_its_long_waits_broken_and_its_r
     let own = between(tl, "data-sv=\"l1-work\"", "</li>");
     assert!(own.contains("aria-current=\"step\""), "{own}");
     assert!(
-        between(tl, "<li class=\"sv-row sv-c-run is-sel\"", "</li>").contains("l1-work"),
+        between(tl, "<li class=\"sv-row sv-c-run is-sel is-cur\"", "</li>").contains("l1-work"),
         "{tl}"
     );
     assert!(
@@ -398,7 +398,7 @@ async fn a_recipes_head_leads_to_every_unit_it_made_done_ones_too() {
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
     assert!(
         html.contains(&format!(
-            "<a class=\"sec-a\" href=\"/projects/id/{id}?recipe=lane&#38;show=all\">lane</a>"
+            "<h3 class=\"ro-group\"><b><a href=\"/projects/id/{id}?recipe=lane&amp;show=all\">lane</a></b>"
         )),
         "{html}"
     );
@@ -410,15 +410,11 @@ async fn a_recipes_head_leads_to_every_unit_it_made_done_ones_too() {
         html.contains("Every unit of recipe <code>lane</code>: 4 units · 1 running · 3 done."),
         "{html}"
     );
-    // the live one a row, the done ones in the Done index, drawn open
+    // the live one a row, the done ones in the Done index
     assert_eq!(plan_html::place(&html, "r1"), "running");
     for unit in ["d1", "d2", "d3"] {
-        assert_eq!(plan_html::place(&html, unit), "done", "{unit}");
+        assert_eq!(plan_html::done_lines(&html, unit), 1, "{unit}");
     }
-    assert!(
-        html.contains("<details class=\"pl-index\" data-preserve-attr=\"open\" open>"),
-        "{html}"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

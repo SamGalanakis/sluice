@@ -229,7 +229,7 @@ async fn slow_chromium_the_project_page_components_keep_their_state_through_a_pa
                 .await
                 .unwrap()
         });
-        browser.wait("document.querySelector('li.sc[data-state=running] > #n-alpha-review')").unwrap();
+        browser.wait("document.querySelector('[data-said*=\"alpha-review running\"]')").unwrap();
         assert_ne!(browser.eval("document.body.dataset.signals").unwrap(), json!(null), "{version}");
         assert_eq!(
             browser.eval(&format!("[{width}, document.querySelector('#plan-band details.dm').open]")).unwrap(),
@@ -261,10 +261,10 @@ async fn slow_chromium_the_project_page_components_keep_their_state_through_a_pa
         browser.send("Input.insertText", json!({"text": "beta"})).unwrap();
         browser.wait("location.search === '?q=beta'").unwrap();
         browser.wait("document.querySelector('main').getAttribute('data-init').includes('/stream?q=beta')").unwrap();
-        browser.wait("!document.querySelector('#n-alpha-build')").unwrap();
+        browser.wait("!document.querySelector('#plan-pane [data-unit=alpha]')").unwrap();
         assert_eq!(browser.eval("document.querySelector('#stream-state').hidden").unwrap(), true);
         press(&mut browser, "Escape", 27, 0);
-        browser.wait("location.search === '' && document.querySelector('#n-alpha-build')").unwrap();
+        browser.wait("location.search === '' && document.querySelector('#plan-pane [data-unit=alpha]')").unwrap();
         // the drawer: a step opens beside the board, its tab goes into the address and a
         // reload opens it there; closing takes the tab out
         browser.navigate(&format!("{page}#step:alpha-build")).unwrap();

@@ -161,6 +161,15 @@ pub async fn dispatch_ext<H: ExecutionHost>(
                 .await?;
             CommandReply::Ack
         }
+        CommandRequest::NeedsDismiss(request) => {
+            broker
+                .writer()
+                .write(RetrySafety::Idempotent, move |tx| {
+                    messages::needs_dismiss(tx, request)
+                })
+                .await?;
+            CommandReply::Ack
+        }
         CommandRequest::MarkRead(request) => {
             broker
                 .writer()

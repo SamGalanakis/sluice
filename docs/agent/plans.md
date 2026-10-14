@@ -330,10 +330,9 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
 - **Title and view.** A recipe may say how its units read on the dashboard. `"title"` is a
   template filled with the unit's params: `"title": "{ticket}: {spec}"`. A param bound as
   `{"file": "{spec}"}` stands for that file's title (its first heading), not its path. `"view"`
-  is an OpenUI Lang program drawing a unit's one-line summary; the plan draws
-  a recipe's live units as one block per band (a row a unit, a column a stage, the units that
-  need someone in For you and Stopped first), the view in each unit's row, and the view whole on
-  the unit's page:
+  is an OpenUI Lang program drawing a unit's one-line summary; the plan groups a recipe's units
+  at work together (a row a unit; the ones that need someone are in Needs you instead), the
+  view under each unit's title, and the view whole on the unit's page:
 
   ```json
   "title": "{spec}",

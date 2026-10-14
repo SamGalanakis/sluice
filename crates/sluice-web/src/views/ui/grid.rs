@@ -1,17 +1,15 @@
 //! The Synthesis kit (DESIGN.md, The grid, The page head, Modules, Details, Status
 //! presentation): the parts every page composes on the module grid. The module grid, a module
 //! and its swell, a band section's head, a unit's stage strip, the summary sentence, the page's
-//! head, what finished last, an item's Details behind its "⋯", the margin module for a long
-//! run's progress, and the trace rail with its chain sentence. Each returns escaped HTML; the
-//! trace is a Rocket component (`sluice-trace`) that only behaves: what it shows is drawn here.
+//! head, what finished last, an item's Details behind its "⋯", and a value set by its shape.
+//! Each returns escaped HTML.
 //!
 //! Generic by rule: a stage is whatever a unit's recipe names it, a count is a status table
 //! count, and a progress field is whatever a step reported. Nothing here knows a project.
-use super::{Host, Shown, Tally, count, duration, duration_text, esc, mark, since, word};
+use super::{Shown, Tally, count, duration, duration_text, esc, mark, since, word};
 use crate::views::TrustedHtml;
 use crate::views::icons::{Icon, icon};
 use sluice_model::shown::Band;
-use std::collections::{BTreeMap, BTreeSet};
 
 // ---- the module grid ---------------------------------------------------------------------------
 
@@ -47,8 +45,6 @@ pub enum Swell {
     Ask,
     /// It needs a look (stopped: failed, cancelled, stale): on the sand, a navy rule over it.
     Look,
-    /// A long run's margin module: on the sky, a heavy rule over it.
-    Margin,
 }
 impl Swell {
     fn class(self) -> &'static str {
@@ -56,7 +52,6 @@ impl Swell {
             Swell::Plain => "mod",
             Swell::Ask => "mod swell-ask",
             Swell::Look => "mod swell-look",
-            Swell::Margin => "mod swell-margin",
         }
     }
 }
@@ -169,44 +164,6 @@ pub fn section_head(id: &str, name: &str, line: &str) -> TrustedHtml {
             format!("<p class=\"sec-n\">{}</p>", esc(line))
         }
     ))
-}
-/// A band's head over a table of strips: its name and line, then each stage's name over its
-/// column, the columns as wide as a row's cells (`strip_row_open`), so each name stands over its
-/// cell at every width.
-pub fn strip_head(id: &str, name: &str, line: &str, stages: &[&str]) -> TrustedHtml {
-    let names: String = stages
-        .iter()
-        .map(|s| format!("<span class=\"sh-stage\">{}</span>", esc(s)))
-        .collect();
-    TrustedHtml::owned(format!(
-        "<div class=\"sec-h sec-strip\"{} style=\"--n:{n}\"><div class=\"sh-lead\"><h2>{}</h2>{}</div><div class=\"sh-stages\" aria-hidden=\"true\">{names}</div><span class=\"sh-end\" aria-hidden=\"true\"></span></div>",
-        if id.is_empty() {
-            String::new()
-        } else {
-            format!(" id=\"{}\"", esc(id))
-        },
-        esc(name),
-        if line.is_empty() {
-            String::new()
-        } else {
-            format!("<p class=\"sec-n\">{}</p>", esc(line))
-        },
-        n = stages.len().max(1),
-    ))
-}
-
-/// A row under a `strip_head` of `n` stages: its head (the unit's status and title) taking what
-/// the cells leave, then its `stage_strip`, each cell as wide as every other row's, so a cell
-/// stands under its stage's name; then the row's end (its Details). Head and cells stack when
-/// their container is narrow.
-pub fn strip_row_open(n: usize) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<div class=\"strip-row\" style=\"--n:{}\">",
-        n.max(1)
-    ))
-}
-pub fn strip_row_close() -> TrustedHtml {
-    TrustedHtml::owned("</div>".into())
 }
 
 // ---- the stage strip -------------------------------------------------------------------------
@@ -415,7 +372,7 @@ pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
                 if stage.step.is_empty() {
                     String::new()
                 } else {
-                    format!(" id=\"n-{s}\" data-step=\"{s}\"", s = esc(&stage.step))
+                    format!(" data-step=\"{}\"", esc(&stage.step))
                 }
             )
         };
@@ -457,26 +414,6 @@ pub fn stage_strip_at(label: &str, stages: &[Stage], at: usize) -> TrustedHtml {
     }
     out.push_str(rest);
     TrustedHtml::owned(out)
-}
-/// The same strip small, for a line of words (a stopped module's meta): a square a stage,
-/// its state's fill, the strip's words for a screen reader.
-pub fn stage_marks(label: &str, stages: &[Stage]) -> TrustedHtml {
-    let said = stages
-        .iter()
-        .filter(|s| s.gap.is_none())
-        .map(|s| format!("{} {}", s.name, s.shown.map_or("not reached", word)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let marks: String = stages
-        .iter()
-        .filter(|s| s.gap.is_none())
-        .map(|s| format!("<i class=\"mk mk-{}\"></i>", Cell::of(s.shown).key()))
-        .collect();
-    TrustedHtml::owned(format!(
-        "<span class=\"marks\" role=\"img\" aria-label=\"{}: {}\">{marks}</span>",
-        esc(label),
-        esc(&said)
-    ))
 }
 
 // ---- the summary sentence ---------------------------------------------------------------------
@@ -600,23 +537,6 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
         parts.push("Nothing has started yet.".into());
     }
     TrustedHtml::owned(parts.join(" "))
-}
-/// What units of no recipe are called where the plan's Running groups them: "1 unit without
-/// a recipe", "3 units without a recipe".
-pub fn no_recipe(n: usize, noun: (&str, &str)) -> String {
-    count(
-        n,
-        &format!("{} without a recipe", noun.0),
-        &format!("{} without a recipe", noun.1),
-    )
-}
-/// "a", "a and b", "a, b and c".
-fn join(items: &[String]) -> String {
-    match items {
-        [] => String::new(),
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
 }
 
 // ---- the page's head and what finished last ---------------------------------------------------
@@ -844,23 +764,8 @@ pub fn clock(at: &str) -> TrustedHtml {
     ))
 }
 
-// ---- the margin module: a long run's progress ------------------------------------------------
+// ---- a value by its shape --------------------------------------------------------------------
 
-/// A step whose run has gone on for hours, or reports progress (`step_progress`):
-/// its fields as it reported them, never read or named by sluice.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct LongRun {
-    pub name: String,
-    pub title: String,
-    pub doc: String,
-    pub href: String,
-    /// Its run's number and when it started.
-    pub run: usize,
-    pub since: String,
-    /// Its progress fields in the order it reported them, and when it last did.
-    pub fields: Vec<(String, serde_json::Value)>,
-    pub at: String,
-}
 /// How a progress value or an output's preview is set, decided from its JSON type and shape
 /// alone, never its name (DESIGN.md, Details).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -939,252 +844,4 @@ fn token_identifies(t: &str) -> bool {
         return true;
     }
     n >= 6 && letters && digits && t.contains(['-', '_', ':', '#', '@'])
-}
-/// A value as words: a string as it is, nothing as "none", anything else as its JSON.
-fn value_text(v: &serde_json::Value) -> String {
-    match v {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Null => "none".into(),
-        other => other.to_string(),
-    }
-}
-/// The margin module (`Swell::Margin`, two columns at the sheet's right): its title and words,
-/// its running time on the blue, then each progress field in the order reported as its shape
-/// says (`ValueSet`: the first number or short word at display size, other short values as they
-/// are, prose clamped to two lines), when it last reported, and its "⋯" Details holding its
-/// step, its run and every value whole, the hashes, ids and paths among them.
-pub fn margin_module(run: &LongRun) -> TrustedHtml {
-    let mut fields = String::new();
-    let lead = run.fields.iter().position(|(_, v)| ValueSet::display(v));
-    let mut details = Details::new().id("Step", &run.name).text(
-        "Run",
-        &if run.run > 0 {
-            run.run.to_string()
-        } else {
-            String::new()
-        },
-    );
-    for (i, (key, v)) in run.fields.iter().enumerate() {
-        let text = value_text(v);
-        match ValueSet::of(v) {
-            ValueSet::Detail => {
-                details = details.id(key, &text);
-            }
-            ValueSet::Prose => {
-                details = details.text(key, &text);
-                fields.push_str(&format!(
-                    "<div class=\"mm-f mm-prose\"><dt>{}</dt><dd>{}</dd></div>",
-                    esc(key),
-                    esc(&text)
-                ));
-            }
-            ValueSet::Show => fields.push_str(&format!(
-                "<div class=\"{}\"><dt>{}</dt><dd>{}</dd></div>",
-                if Some(i) == lead {
-                    "mm-f mm-lead"
-                } else {
-                    "mm-f"
-                },
-                esc(key),
-                esc(&text)
-            )),
-        }
-    }
-    let shown_title = if run.title.is_empty() {
-        &run.name
-    } else {
-        &run.title
-    };
-    TrustedHtml::owned(format!(
-        "{open}<div class=\"mm-head\"><h3 class=\"mm-t\"><a href=\"{href}\">{title}</a></h3>{menu}</div>{doc}<div class=\"mm-run\"><span class=\"mm-k\">{run_mark}running</span><span class=\"mm-time\">{since}</span><span class=\"sweep\" aria-hidden=\"true\"></span></div>{fields}{at}{close}",
-        open = module_open(2, Swell::Margin, &format!("{shown_title}, running")).as_str(),
-        href = esc(&run.href),
-        title = esc(shown_title),
-        menu = details.menu(shown_title),
-        doc = if run.doc.is_empty() {
-            String::new()
-        } else {
-            format!("<p class=\"mm-doc\">{}</p>", esc(&run.doc))
-        },
-        run_mark = mark(Shown::Running),
-        since = since(&run.since),
-        fields = if fields.is_empty() {
-            if run.fields.is_empty() {
-                "<p class=\"mm-none\">No progress reported.</p>".to_owned()
-            } else {
-                String::new()
-            }
-        } else {
-            format!("<dl class=\"mm-fields\">{fields}</dl>")
-        },
-        at = if run.at.is_empty() {
-            String::new()
-        } else {
-            format!("<p class=\"mm-at\">Reported {}</p>", super::ago(&run.at))
-        },
-        close = module_close(),
-    ))
-}
-
-// ---- select to trace --------------------------------------------------------------------------
-
-/// What waits on what, unit to unit, and each unit's whole chain both ways: drawn into the
-/// page's markup (`attrs`) so the trace (`sluice-trace`) reads it there and fetches nothing.
-#[derive(Clone, Debug, Default)]
-pub struct Trace {
-    up: BTreeMap<String, BTreeSet<String>>,
-    down: BTreeMap<String, BTreeSet<String>>,
-}
-impl Trace {
-    /// From each wait: `unit` waits for `on`.
-    pub fn new<'a>(waits: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
-        let mut trace = Trace::default();
-        for (unit, on) in waits {
-            if unit == on {
-                continue;
-            }
-            trace
-                .up
-                .entry(unit.to_owned())
-                .or_default()
-                .insert(on.to_owned());
-            trace
-                .down
-                .entry(on.to_owned())
-                .or_default()
-                .insert(unit.to_owned());
-        }
-        trace
-    }
-    fn reach(edges: &BTreeMap<String, BTreeSet<String>>, start: &str) -> Vec<String> {
-        let mut seen: Vec<String> = vec![];
-        let mut frontier = vec![start.to_owned()];
-        while let Some(at) = frontier.pop() {
-            for next in edges.get(&at).into_iter().flatten() {
-                if next != start && !seen.contains(next) {
-                    seen.push(next.clone());
-                    frontier.push(next.clone());
-                }
-            }
-        }
-        seen
-    }
-    /// Every unit `unit` waits for, nearest first.
-    pub fn upstream(&self, unit: &str) -> Vec<String> {
-        Self::reach(&self.up, unit)
-    }
-    /// Every unit that waits on `unit`, nearest first.
-    pub fn downstream(&self, unit: &str) -> Vec<String> {
-        Self::reach(&self.down, unit)
-    }
-    /// The chain in one sentence: "Tracing a-12. It waits for a-11 and s-4. a-13 waits on it."
-    pub fn sentence(&self, unit: &str) -> String {
-        let (up, down) = (self.upstream(unit), self.downstream(unit));
-        format!(
-            "Tracing {unit}. {} {}",
-            if up.is_empty() {
-                "It waits for nothing on this plan.".to_owned()
-            } else {
-                format!("It waits for {}.", join(&up))
-            },
-            match down.len() {
-                0 => "Nothing waits on it.".to_owned(),
-                1 => format!("{} waits on it.", down[0]),
-                _ => format!("{} wait on it.", join(&down)),
-            }
-        )
-    }
-    /// A traceable unit's attributes, for the element that holds it (`.rail-slot`): its name,
-    /// its whole chain up and down, and its sentence.
-    pub fn attrs(&self, unit: &str) -> TrustedHtml {
-        TrustedHtml::owned(format!(
-            " data-unit=\"{}\" data-up=\"{}\" data-down=\"{}\" data-chain=\"{}\"",
-            esc(unit),
-            esc(&self.upstream(unit).join(" ")),
-            esc(&self.downstream(unit).join(" ")),
-            esc(&self.sentence(unit))
-        ))
-    }
-}
-/// The words the trace line says while nothing is traced.
-pub const TRACE_IDLE: &str = "Select any unit to trace what it waits for and what waits on it.";
-/// The trace's host (`sluice-trace`) around the units it traces: its line first, the sentence
-/// the chain reads in (polite, and its Clear trace there only while tracing).
-pub fn trace_open(id: &str) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "{}<div class=\"trace-line needs-js\"><p class=\"trace-said\" aria-live=\"polite\">{}<span class=\"trace-words\">{}</span></p><button type=\"button\" class=\"trace-clear\" hidden>{}Clear trace</button></div>",
-        Host::new("sluice-trace")
-            .attr("id", id)
-            .attr("class", "trace")
-            .keep("selected")
-            .keep("expanded")
-            .open(),
-        icon(Icon::Workflow, 18, ""),
-        esc(TRACE_IDLE),
-        icon(Icon::X, 14, "")
-    ))
-}
-pub fn trace_close() -> TrustedHtml {
-    Host::new("sluice-trace").close()
-}
-/// A unit's steps behind a disclosure (DESIGN.md, The step view): a `<details>` whose summary
-/// is a chevron named `label` ("Steps of Terns") and whose content is `body`. Inside
-/// `sluice-trace` the units open are kept (`data-x`) in the host's `expanded`, so they hold
-/// through a patch and a move between bands; without script it is the plain disclosure.
-pub fn expand(unit: &str, label: &str, body: &TrustedHtml) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<details class=\"x\" data-x=\"{u}\" data-preserve-attr=\"open\"><summary class=\"x-s\" aria-label=\"{l}\" title=\"{l}\">{chev}</summary>{body}</details>",
-        u = esc(unit),
-        l = esc(label),
-        chev = icon(Icon::ChevronDown, 16, "chev"),
-    ))
-}
-/// A Done unit's disclosure: a unit-page link without script, a fragment fetched on open with
-/// script. The fetched body survives stream morphs; the trace keeps the disclosure open.
-pub fn expand_on_open(unit: &str, label: &str, href: &str) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<details class=\"x\" data-x=\"{u}\" data-steps-url=\"{h}/steps\" data-preserve-attr=\"open\"><summary class=\"x-s\" aria-label=\"{l}\" title=\"{l}\"><a class=\"x-page\" href=\"{h}\" aria-label=\"{l}\">{chev}</a></summary><div id=\"x-body-{u}\" class=\"x-body\" data-ignore-morph></div></details>",
-        u = esc(unit),
-        l = esc(label),
-        h = esc(href),
-        chev = icon(Icon::ChevronDown, 16, "chev"),
-    ))
-}
-/// A unit's place on the trace's rail, in the margin at its left (inside its `.rail-slot`).
-pub fn rail() -> TrustedHtml {
-    TrustedHtml::owned("<span class=\"rail\" aria-hidden=\"true\"></span>".into())
-}
-/// The button that selects a unit to trace: its head (its kind's line, its id and its title,
-/// phrasing content only; its strip and the rest go after it), and the part of it that opens
-/// in place while it is traced (`trace_more_open`).
-/// Its name says what pressing does, "Trace <name>", so the card's state, its strip's image
-/// and its title are not read as one run-together label; `described` names the element that
-/// says how it stands (its kind's line), read as its description ("" for none).
-pub fn trace_button_open(name: &str, described: &str) -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<button type=\"button\" class=\"trace-pick\" data-trace-pick aria-pressed=\"false\" aria-expanded=\"false\" data-preserve-attr=\"aria-pressed aria-expanded\" aria-label=\"Trace {}\"{}>",
-        esc(name),
-        if described.is_empty() {
-            String::new()
-        } else {
-            format!(" aria-describedby=\"{}\"", esc(described))
-        }
-    ))
-}
-pub fn trace_button_close() -> TrustedHtml {
-    TrustedHtml::owned("</button>".into())
-}
-/// Where a traced unit says how it stands to the one selected: "Selected", "Upstream" or
-/// "Downstream" in a navy chip while tracing, nothing otherwise (the line says it in words).
-pub fn trace_role() -> TrustedHtml {
-    TrustedHtml::owned("<span class=\"trace-role\" aria-hidden=\"true\"></span>".into())
-}
-/// What a traced unit opens to in place, hidden until then (and without script).
-pub fn trace_more_open() -> TrustedHtml {
-    TrustedHtml::owned(
-        "<div class=\"trace-more\" data-trace-more hidden data-preserve-attr=\"hidden\">".into(),
-    )
-}
-pub fn trace_more_close() -> TrustedHtml {
-    TrustedHtml::owned("</div>".into())
 }

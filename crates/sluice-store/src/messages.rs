@@ -6,7 +6,7 @@ pub use sluice_model::commands::QuestionState;
 use sluice_model::{
     commands::{
         Ask, Delivery, MarkRead, Message, MessageAnswer, MessagePost, MessageReceipt, MessageVerb,
-        MessageView, Reply, Say, StepDismiss,
+        MessageView, NeedsDismiss, Reply, Say, StepDismiss,
     },
     error::PublicError,
     events::{Event, NotificationOutcome},
@@ -1491,6 +1491,80 @@ pub fn dismissed_lately(
         .into_iter()
         .filter(|(step, _)| still.contains(step))
         .collect())
+}
+/// The owner's marks on items of a plan's Needs you it set aside (`NeedsDismiss`): the stream
+/// its `readers` rows are kept under, a row an item (its `thread` the item's key). A stop's
+/// (`stop:<step>`) `cursor` is the step's work generation and `unread_alert_min` its
+/// generation, so a retry or recreating the step brings it back; any other item's `cursor` is
+/// its stamp. `heartbeat_at` is when the owner set it aside.
+const NEEDS_STREAM: &str = "needs";
+/// An item of Needs you the owner set aside, still as it was (`needs_set_aside`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SetAside {
+    pub key: String,
+    pub stamp: i64,
+    /// When it was set aside (RFC 3339).
+    pub at: String,
+}
+/// Set items of a plan's Needs you aside, or back (`NeedsDismiss`). A key is `stop:<step>`,
+/// `quiet:<step>` or `ask:<message>`; a stop's step must exist.
+pub fn needs_dismiss(tx: &mut WriteTransaction<'_>, request: NeedsDismiss) -> Result<()> {
+    let project = request.project.to_string();
+    if request.items.is_empty() || request.items.len() > 500 {
+        return Err(invalid("set aside one to 500 items"));
+    }
+    for item in &request.items {
+        let (kind, rest) = item.key.split_once(':').unwrap_or(("", ""));
+        if !matches!(kind, "stop" | "quiet" | "ask") || rest.is_empty() || item.key.len() > 512 {
+            return Err(invalid(format!("{} is not an item of Needs you", item.key)));
+        }
+        if !request.dismissed {
+            tx.sql().execute(
+                "DELETE FROM readers WHERE project_id=?1 AND identity='owner' AND stream=?2 AND thread=?3",
+                params![project, NEEDS_STREAM, item.key],
+            )?;
+            continue;
+        }
+        let (cursor, generation) = if kind == "stop" {
+            let found: Option<(i64, i64)> = tx
+                .sql()
+                .query_row(
+                    "SELECT work_generation,generation FROM steps WHERE project_id=?1 AND step_id=?2",
+                    params![project, rest],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            let Some((work, generation)) = found else {
+                return Err(missing(format!("no step {rest}")));
+            };
+            (work, Some(generation))
+        } else {
+            (item.stamp.max(0), None)
+        };
+        tx.sql().execute(
+            "INSERT INTO readers(project_id,identity,stream,thread,cursor,unread_alert_min,heartbeat_at) VALUES (?1,'owner',?2,?3,?4,?5,?6) ON CONFLICT(project_id,identity,stream,thread) DO UPDATE SET cursor=excluded.cursor,unread_alert_min=excluded.unread_alert_min,heartbeat_at=excluded.heartbeat_at",
+            params![project, NEEDS_STREAM, item.key, cursor, generation, now()?],
+        )?;
+    }
+    changed(tx, request.project);
+    Ok(())
+}
+/// The items of a project's Needs you the owner set aside: a stop's only while its step is on
+/// the generations it was set aside at; the rest as kept (the page holds each to its stamp).
+pub fn needs_set_aside(sql: &Connection, project: ProjectId) -> Result<Vec<SetAside>> {
+    let mut q = sql.prepare_cached(
+        "SELECT r.thread,r.cursor,coalesce(r.heartbeat_at,'') FROM readers r WHERE r.project_id=?1 AND r.identity='owner' AND r.stream=?2 AND (substr(r.thread,1,5)<>'stop:' OR EXISTS (SELECT 1 FROM steps s WHERE s.project_id=r.project_id AND s.step_id=substr(r.thread,6) AND s.work_generation=r.cursor AND s.generation=r.unread_alert_min)) ORDER BY r.heartbeat_at DESC,r.thread",
+    )?;
+    let rows = q
+        .query_map(params![project.to_string(), NEEDS_STREAM], |r| {
+            Ok(SetAside {
+                key: r.get(0)?,
+                stamp: r.get(1)?,
+                at: r.get(2)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 pub fn mark_read(tx: &mut WriteTransaction<'_>, read: MarkRead) -> Result<MessageId> {
     if read.through.0 < 0 || read.identity.trim().is_empty() {
