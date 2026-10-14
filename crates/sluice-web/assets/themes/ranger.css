@@ -66,24 +66,11 @@
   --coral: light-dark(#c9736d, #d98a7f);
   --on-coral: light-dark(var(--p-night), #151a26);
   --idle: light-dark(#6e716c, #9a9d98);
-  /* type: Jost bold, its heads in capitals tracked wide a size down, as a poster's lettering;
-     DM Mono for data */
+  /* type: Jost bold for the titles, as a poster's lettering; DM Mono for data */
   --font-display: "Jost Variable", "Jost Fallback", ui-sans-serif, sans-serif;
   --font-text: "Jost Variable", "Jost Fallback", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "DM Mono", "DM Mono Fallback", ui-monospace, monospace;
   --display-weight: 700;
-  --display-tracking: 0.005em;
-  --head-weight: 700;
-  --head-tracking: 0.07em;
-  --head-case: uppercase;
-  --head-scale: 0.8;
-  /* the screen print's misregistration: the aqua pass 3px off the navy one */
-  --section-rule-height: 7px;
-  --section-rule-color: transparent;
-  --section-rule: linear-gradient(var(--sweep), var(--sweep)) 3px 4px / 100% 3px no-repeat,
-                  linear-gradient(var(--navy), var(--navy)) 0 0 / 100% 4px no-repeat;
-  --look-rule: 3px solid var(--navy);
-  --ask-rule: 7px;
   /* the aqua line under the band, off register */
   --band-edge-height: 4px;
   --band-edge: linear-gradient(var(--band-accent), var(--band-accent)) 3px 1px / 100% 2px no-repeat,

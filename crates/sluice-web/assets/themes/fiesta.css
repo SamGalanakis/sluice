@@ -64,26 +64,17 @@
   --coral: light-dark(var(--p-poppy), #f7703f);
   --on-coral: light-dark(#0b1a33, #0d1b33);
   --idle: light-dark(#68728a, #97a1b5);
-  /* type: Righteous for the display and the heads, as it comes; Nunito for the text; DM Mono
+  /* type: Righteous for the titles, as it comes; Nunito for the text; DM Mono
      for data */
   --font-display: "Righteous", "Righteous Fallback", ui-rounded, ui-sans-serif, sans-serif;
   --font-text: "Nunito Variable", "Nunito Fallback", ui-rounded, ui-sans-serif, system-ui, sans-serif;
   --font-mono: "DM Mono", "DM Mono Fallback", ui-monospace, monospace;
   --display-weight: 400;
-  --display-tracking: 0em;
-  --head-weight: 400;
-  --head-tracking: 0.005em;
   /* rounded everything: 14px modules, 10px cells, buttons and chips as round as the set allows */
   --radius-module: 14px;
   --radius-cell: 10px;
   --radius-control: 14px;
   --radius-chip: 14px;
-  /* three 2px rings over each section, as on the ware's rim */
-  --section-rule-height: 10px;
-  --section-rule-color: transparent;
-  --section-rule: linear-gradient(var(--navy), var(--navy)) 0 0 / 100% 2px no-repeat,
-                  linear-gradient(var(--navy), var(--navy)) 0 4px / 100% 2px no-repeat,
-                  linear-gradient(var(--navy), var(--navy)) 0 8px / 100% 2px no-repeat;
   /* a roomy rhythm */
   --density: 1.1;
   --cell-height: 54px;

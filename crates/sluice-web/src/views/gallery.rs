@@ -92,23 +92,107 @@ fn statuses() -> TrustedHtml {
         .collect();
     TrustedHtml::owned(format!("<ul class=\"gal-states\">{rows}</ul>"))
 }
-fn tags() -> TrustedHtml {
+/// Every pill's tone: a plain fact, a muted one, running, needs a look, quiet, done, and the
+/// coral one for a question to the owner; one with a mark, one a link.
+fn pills() -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<p class=\"gal-row\">{}{}{}{}{}{}{}</p>",
+        "<p class=\"gal-row\">{}{}{}{}{}{}{}{}{}</p>",
         ui::pill("unit: a-7", ui::Tone::Plain, None),
         ui::pill("Answered", ui::Tone::Muted, None),
-        ui::pill("2 awaiting reply", ui::Tone::Look, None),
-        ui::pill("Awaiting your reply", ui::Tone::Ask, None),
         ui::pill("live", ui::Tone::Run, Some(ui::mark(Shown::Running))),
+        ui::pill("2 awaiting reply", ui::Tone::Look, None),
+        ui::pill("quiet 3h", ui::Tone::Quiet, None),
+        ui::pill("done", ui::Tone::Done, None),
+        ui::pill("Awaiting your reply", ui::Tone::Ask, None),
         ui::pill("failed", ui::Tone::Plain, Some(ui::mark(Shown::Failed))),
         ui::pill_link("#", "Its unit", ui::Tone::Plain, None),
     ))
 }
+/// Every button: the filled next move, the outlined others, a quiet one, the danger one, an
+/// icon, one disabled, and the same as links.
 fn buttons() -> TrustedHtml {
-    TrustedHtml::owned(
-        "<p class=\"gal-row\"><button class=\"primary\" type=\"button\">Retry</button><button type=\"button\">Pause</button><button class=\"danger\" type=\"button\">Delete almanac</button><button type=\"button\" disabled>Unpause</button></p>"
-            .into(),
-    )
+    use ui::{Btn, link, submit};
+    let t = |s: &str| TrustedHtml::owned(ui::esc(s));
+    TrustedHtml::owned(format!(
+        "<p class=\"gal-row\">{}{}{}{}{}<button type=\"button\" disabled>Unpause</button></p><p class=\"gal-row\">{}{}{}</p>",
+        submit(Btn::Primary, "action", "retry", &t("Retry with feedback"), ""),
+        submit(Btn::Outlined, "action", "retry", &t("Retry"), ""),
+        submit(Btn::Quiet, "action", "dismiss", &t("Dismiss"), ""),
+        submit(Btn::Danger, "action", "delete", &t("Delete almanac"), ""),
+        submit(Btn::Icon, "action", "dismiss", &t("×"), "Set it aside"),
+        link(Btn::Primary, "#", &t("Answer"), ""),
+        link(Btn::Outlined, "#", &t("Message it"), ""),
+        link(Btn::Quiet, "#", &t("Set the rest aside"), ""),
+    ))
+}
+/// A thing's status line in each state: running and heard lately (the dot breathing), running
+/// and heard a while ago, gone quiet, waiting on the owner's answer, failed, succeeded and
+/// waiting; a run of several and items done.
+fn status_lines() -> TrustedHtml {
+    use ui::{Dot, Tone, pill, status_line};
+    let t = |s: &str| TrustedHtml::owned(s.into());
+    let rows = [
+        status_line(Dot::Live, &[t("<b>Running</b> 6h 34m"), t("heard 2m ago"), t("run 2, after 1 failed")]),
+        status_line(Dot::Run, &[t("<b>Running</b> 6h 34m"), t("heard 1h 18m ago")]),
+        status_line(Dot::Quiet, &[t("<b>Running</b> 9h 2m"), pill("quiet 3h", Tone::Quiet, None), t("not heard from since 3h ago")]),
+        status_line(Dot::Ask, &[t("<b>Running</b> 20m"), t("<a href=\"#\">waiting on your answer</a>"), t("heard just now")]),
+        status_line(Dot::Look, &[t("<b>Failed</b> 1h 42m ago"), t("after 18m")]),
+        status_line(Dot::Done, &[t("<b>Succeeded</b> 57m ago"), t("after 1h 27m"), t("14 of 14 items done")]),
+        status_line(Dot::Idle, &[t("<b>Pending</b>"), t("its last run ended 12h ago"), t("after 3m")]),
+    ];
+    TrustedHtml::owned(format!(
+        "<div class=\"gal-stack\">{}</div>",
+        rows.iter().map(|r| r.as_str()).collect::<String>()
+    ))
+}
+/// A turn's tool calls, folded shut and open: the latest first, one failed, one running.
+fn tool_calls() -> TrustedHtml {
+    let call = |tool: &str, key: &str, took: &str, failed: bool, running: bool| ui::Call {
+        tool: tool.into(),
+        key: key.into(),
+        took: took.into(),
+        failed,
+        running,
+        href: "#".into(),
+    };
+    let rows = [
+        call("Bash", "cargo nextest run -p sluice-web -E 'test(step)'", "", false, true),
+        call("Edit", "crates/sluice-web/src/views/step.rs", "<1s", false, false),
+        call("Bash", "git rebase origin/main", "4s", true, false),
+        call("Read", "crates/sluice-web/templates/step.html", "<1s", false, false),
+    ];
+    let shut = ui::calls(12, 1, &rows);
+    let open = shut.as_str().replacen("<details class=\"qf calls\"", "<details open class=\"qf calls\"", 1);
+    TrustedHtml::owned(format!("{shut}{open}"))
+}
+/// A message as a card: its first words cut, with the way to the whole; and one short enough
+/// to read whole.
+fn message_cards() -> TrustedHtml {
+    let who = |from: &str, to: &str| {
+        TrustedHtml::owned(format!(
+            "<b>{}</b><span class=\"mc-to\"> to </span>{}",
+            ui::esc(from),
+            ui::esc(to)
+        ))
+    };
+    let when = TrustedHtml::owned("<time>12m ago</time>".into());
+    TrustedHtml::owned(format!(
+        "<div class=\"gal-stack\">{}{}</div>",
+        ui::message_card(
+            "",
+            &who("This step", "orchestrator"),
+            &when,
+            &TrustedHtml::owned("<p>Landed the seams on main. Then the rest of the lane: the parser's leak, the two flaky checks and the docs for the new flag, each in its own commit so the review reads one change at a…</p>".into()),
+            "#",
+        ),
+        ui::message_card(
+            "",
+            &who("orchestrator", "This step"),
+            &when,
+            &TrustedHtml::owned("<p>Rebase first: <code>lash-core-store__unit_test</code> is red.</p>".into()),
+            "",
+        ),
+    ))
 }
 fn tabs(prefix: &str) -> TrustedHtml {
     let set = [
@@ -136,10 +220,17 @@ fn tabs(prefix: &str) -> TrustedHtml {
     html.push_str(ui::tabs_close().as_str());
     TrustedHtml::owned(html)
 }
+/// A card around a region, and the wells: plain, the sand's for what needs a look, the coral
+/// mark's for a question to the owner.
 fn sections() -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<section class=\"d-sec\">{}<p>A section's rows.</p></section><div class=\"card gal-card\"><p class=\"m-title\">A card</p><p class=\"meta\">A region of its own.</p></div>",
-        ui::head(3, "Queued", Some(2), "")
+        "<div class=\"gal-stack\"><div class=\"card gal-card\"><p class=\"card-k\">00:12 · took 1h 29m</p><p class=\"card-t\">A card</p><p class=\"meta\">A region of its own.</p></div>{}<p>A well's rows.</p>{}{}<p>Something stopped: why, and its next move.</p>{}{}<p>A question to you, answered here.</p>{}</div>",
+        ui::well_open("div", "", "", true),
+        ui::well_close("div"),
+        ui::well_open("div", "", "look", true),
+        ui::well_close("div"),
+        ui::well_open("div", "", "ask", true),
+        ui::well_close("div"),
     ))
 }
 fn fields(prefix: &str, project: &ProjectId) -> Result<TrustedHtml, askama::Error> {
@@ -535,9 +626,13 @@ fn latest_part() -> TrustedHtml {
 /// A band section's head, as the other pages' sections wear it.
 fn heads_part() -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "{}{}",
+        "{}{}{}",
+        ui::SectionHead::new("", "Needs you")
+            .count(4)
+            .action(&TrustedHtml::owned("<a class=\"quiet\" href=\"#\">Set the rest aside</a>".into()))
+            .html(),
         ui::section_head("", "Durations by stage", "2 recipes · 41 runs"),
-        ui::section_head("", "Projects", "3 projects"),
+        ui::SectionHead::new("", "Projects").level(3).count(7).html(),
     ))
 }
 /// A plan's briefing (`views::plan`): Needs you with a question, a group of stops and a
@@ -1104,15 +1199,18 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Summary sentence", "One sentence from the counts alone, the question for you first.", "`ui::summary_sentence`.", both(&|_| Ok(summary_part()))?);
     add("Module grid", "Twelve columns every module spans, half or whole on a medium sheet.", "`ui::grid_open`, `ui::module_open`.", both(&|p| Ok(grid_part(p)))?);
     add("Modules", "A unit, a question or a step on the grid; the one that needs you swells.", "`ui::module_open` with `ui::Swell`, `.mod-k`, `.mod-t`, `.mod-meta`, `.mod-body`, `.mod-actions`.", both(&|_| Ok(modules_part()))?);
-    add("Section heads", "A section's name and its count line.", "`ui::section_head`.", both(&|_| Ok(heads_part()))?);
+    add("Section heads", "A section's name, its count muted, a note and its one action at the right.", "`ui::SectionHead`, `ui::section_head`.", both(&|_| Ok(heads_part()))?);
     add("Plan briefing", "A plan's Needs you (each item a sentence, one action and a ×; what was set aside, with Undo), what finished since you looked, and At work: a row a unit, its activity over twelve hours.", "`plan::need_item`, `plan::finished_card`, `plan::axis`, `plan::track` and `plan::roster_row`, drawn by `views::plan::Plan`.", both(&|p| Ok(plan_part(p)))?);
     add("Stage strip", "A unit's stages in recipe order, one cell each.", "`ui::stage_strip` from `ui::Stage`s (`ui::Cell::of` reads the status table).", both(&|_| Ok(strips_part()))?);
     add("Stats", "A project's numbers over a window.", "`views::stats::StatsView` (`durations`, `outcomes`, `throughput`, `slowest_html`), from `StatsData`.", both(&|p| Ok(stats_part(p)))?);
     add("Step view", "A unit step by step: its gates, what each step runs on, its state, progress, runs on one time axis with a tick a message, how long it took, and its last message.", "`unit_steps::View` (`unit_steps::of_unit` from a unit) in `sluice-steps`; a plan row opens to it (`plan::roster_row`).", both(&|_| Ok(steps_part()))?);
-    add("Tags", "A small fact set apart.", "`ui::tag`, `ui::tag_link`, `ui::ask_link`.", both(&|_| Ok(tags()))?);
-    add("Buttons", "The filled button is the next move.", "Plain `button`, `.primary`, `.danger`.", both(&|_| Ok(buttons()))?);
+    add("Pills", "A small fact set apart, in its state's tone; coral only for a question to you.", "`ui::pill`, `ui::pill_link`, `ui::ask_link` with `ui::Tone`.", both(&|_| Ok(pills()))?);
+    add("Buttons", "The filled button is the next move; the others outlined, quiet or an icon.", "`ui::submit`, `ui::link` with `ui::Btn` (`ui/button.rs`).", both(&|_| Ok(buttons()))?);
+    add("Status line", "How a thing stands in one muted sentence after its dot: running (breathing while heard lately), quiet, waiting on you, failed, done, waiting.", "`ui::status_line` with `ui::Dot`.", both(&|_| Ok(status_lines()))?);
+    add("Tool calls", "A turn's calls in a quiet fold, shut and open: the tool, its key argument on one line, how long it took or that it failed.", "`ui::calls` from `ui::Call`s.", both(&|_| Ok(tool_calls()))?);
+    add("Message cards", "A message as a card: who to whom, when, its first words and the way to the whole.", "`ui::message_card`; `threads::Conversation::cards`.", both(&|_| Ok(message_cards()))?);
     add("Tabs", "A step's parts, one at a time.", "`ui::tabs_open`, `panel_open`, `panel_close`, `tabs_close` (`sluice-tabs`).", both(&|p| Ok(tabs(&format!("{p}tabs-"))))?);
-    add("Sections and cards", "A heading over a section's rows, and a card around a region.", "`ui::head`.", both(&|_| Ok(sections()))?);
+    add("Cards and wells", "A card around a region; a well for rows that belong together, the sand's for what needs a look, the coral mark's for a question to you.", "`.card`; `ui::well_open`, `ui::well_close`.", both(&|_| Ok(sections()))?);
     add("Fields", "Inputs, outputs and progress, one row each.", "`kit.html`'s `field`.", both(&|p| fields(p, &project))?);
     add("Folds", "A long value cut to its first lines, and More and Less.", "`ui::fold`, `ui::more_open` (`sluice-fold`).", both(&|_| Ok(folds()))?);
     add("Conversation", "Messages in one column, the message box at the end.", "`threads::Conversation` in `sluice-conversation`, `sluice-composer`, `sluice-answer`.", both(&|p| conversation(p, &project))?);

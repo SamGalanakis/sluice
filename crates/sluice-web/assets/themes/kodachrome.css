@@ -80,25 +80,18 @@
   --coral: light-dark(var(--p-kodak-red), #ff4d3d);
   --on-coral: #000000;
   --idle: light-dark(#6c7076, #8e9297);
-  /* type: Alfa Slab One for the display and the heads, set as they come; IBM Plex Sans
+  /* type: Alfa Slab One for the titles, set as it comes; IBM Plex Sans
      Condensed for the text, as a data sheet; IBM Plex Mono for data */
   --font-display: "Alfa Slab One", "Alfa Slab One Fallback", ui-serif, serif;
   --font-text: "IBM Plex Sans Condensed", "IBM Plex Sans Condensed Fallback", ui-sans-serif, system-ui,
                sans-serif;
   --font-mono: "IBM Plex Mono", "IBM Plex Mono Fallback", ui-monospace, monospace;
   --display-weight: 400;
-  --display-tracking: 0em;
-  --head-weight: 400;
-  --head-tracking: 0.01em;
-  /* heads at Sluice's sizes: the slab is a display face, and a recipe's 19px head is its floor */
   /* 2px corners, as a perforation's */
   --radius-module: 2px;
   --radius-cell: 2px;
   --radius-control: 2px;
   --radius-chip: 2px;
-  /* a 4px black rule over each section, a 3px one over a stopped module */
-  --section-rule-height: 4px;
-  --look-rule: 3px solid var(--navy);
   /* sprocket holes along the band's foot: the paper showing through, 8px in every 24px */
   --band-edge-height: 12px;
   --band-edge: repeating-linear-gradient(90deg, transparent 0 8px, var(--paper) 8px 16px, transparent 16px 24px)

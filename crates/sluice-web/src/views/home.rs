@@ -412,11 +412,6 @@ impl HomeProject {
     /// finished last and the way to its plan and its day.
     pub fn module(&self) -> TrustedHtml {
         let p = &self.project;
-        let swell = match self.rank() {
-            0 => ui::Swell::Ask,
-            1 => ui::Swell::Look,
-            _ => ui::Swell::Plain,
-        };
         let size = if self.read {
             format!(
                 "{} · {}",
@@ -440,13 +435,13 @@ impl HomeProject {
             String::new()
         };
         TrustedHtml::owned(format!(
-            "{open}<div class=\"pm-head\"><h3 class=\"pm-name{long}\"><a href=\"{href}\">{icon}{text}{name}</a></h3><p class=\"pm-size\">{state}{size}{paused}</p></div>{about}<p class=\"pm-summary\">{sentence}</p>{squares}{rows}{finished}<p class=\"pm-open\"><a href=\"{href}\">Open the {name} plan</a><a href=\"{href}/day\">Its day</a></p>{close}",
-            open = ui::module_open(6, swell, &p.name),
-            long = match p.name.chars().count() {
-                0..=10 => "",
-                11..=18 => " long",
-                _ => " longer",
-            },
+            "{open}<div class=\"pm-head\"><h3 class=\"pm-name\"><a href=\"{href}\">{icon}{text}{name}</a></h3><p class=\"pm-size\">{state}{size}{paused}</p></div>{about}<p class=\"pm-summary\">{sentence}</p>{squares}{rows}{finished}<p class=\"pm-open\"><a href=\"{href}\">Open the {name} plan</a><a href=\"{href}/day\">Its day</a></p>{close}",
+            // a card, not a well: a project is no question; its sentence says what needs the
+            // owner, the coral only on its questions
+            open = format!(
+                "<article class=\"mod pm card\" style=\"--span:6\" data-span=\"6\" aria-label=\"{}\">",
+                esc(&p.name)
+            ),
             href = esc(&p.href()),
             text = if p.icon_text.is_empty() {
                 String::new()

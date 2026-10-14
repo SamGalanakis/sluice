@@ -60,9 +60,44 @@ async fn main() {
     state.claude_home = Some(claude);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     println!("URL http://{}", listener.local_addr().unwrap());
+    let missing = state.clone();
     let mut state = PageState::new(state);
     configure(&mut state, &writer, id).await;
-    let router = layers(page_router(state)).merge(home::extra_router(writer, id));
+    // a page that is not there, drawn as `sluice serve` draws it (its HTTP layer's missing page)
+    let router = layers(page_router(state))
+        .merge(home::extra_router(writer, id))
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                let missing = missing.clone();
+                async move {
+                    let path = request.uri().path().to_owned();
+                    let headers = request.headers().clone();
+                    let wants =
+                        sluice_web::views::missing::wants_page(request.method(), &headers, &path);
+                    let response = next.run(request).await;
+                    let drawn = response
+                        .headers()
+                        .get(axum::http::header::CONTENT_TYPE)
+                        .is_some_and(|v| v.as_bytes().starts_with(b"text/html"));
+                    if !wants || drawn || !response.status().is_client_error() {
+                        return response;
+                    }
+                    let status = response.status();
+                    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                        .await
+                        .unwrap_or_default();
+                    let message = serde_json::from_slice::<serde_json::Value>(&bytes)
+                        .ok()
+                        .and_then(|v| v["message"].as_str().map(str::to_owned))
+                        .unwrap_or_else(|| String::from_utf8_lossy(&bytes).trim().to_owned());
+                    sluice_web::views::missing::page(&missing, &path, status, &message, &headers)
+                        .await
+                        .unwrap_or_else(|| {
+                            axum::response::IntoResponse::into_response((status, message))
+                        })
+                }
+            },
+        ));
     axum::serve(listener, router)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

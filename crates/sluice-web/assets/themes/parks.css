@@ -78,23 +78,14 @@
   --coral: light-dark(#f33c30, #f0574c);
   --on-coral: #141c18;
   --idle: light-dark(#696158, #9c9586);
-  /* type: Besley, a Clarendon, for the display and the heads; Signika for text; Red Hat Mono
+  /* type: Besley, a Clarendon, for the titles; Signika for text; Red Hat Mono
      for data */
   --font-display: "Besley Variable", "Besley Fallback", serif;
   --font-text: "Signika Variable", "Signika Fallback", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Red Hat Mono Variable", "Red Hat Mono Fallback", ui-monospace, monospace;
   --display-weight: 800;
-  --display-tracking: -0.01em;
-  --head-weight: 700;
-  --head-tracking: -0.005em;
-  --head-scale: 1.06;
   --radius-control: 3px;
   --radius-chip: 2px;
-  /* the UniGuide's heavy overbar, in the band's green */
-  --section-rule-height: 8px;
-  --section-rule-color: var(--band);
-  --look-rule: 3px solid var(--navy);
-  --ask-rule: 8px;
   /* a brown sill under the band, a pixel down from the nav */
   --band-edge-height: 4px;
   --band-edge: linear-gradient(var(--navy), var(--navy)) 0 1px / 100% 3px no-repeat, var(--band);

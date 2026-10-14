@@ -65,22 +65,11 @@
   --coral: light-dark(#bb5800, #e07a1f);
   --on-coral: light-dark(#ffffff, #14110a);
   --idle: light-dark(#756c58, #a69c84);
-  /* type: Libre Franklin black for the display, its heads in tracked capitals a size down;
-     Courier Prime for data */
+  /* type: Libre Franklin black for the titles; Courier Prime for data */
   --font-display: "Libre Franklin Variable", "Libre Franklin Fallback", ui-sans-serif, sans-serif;
   --font-text: "Libre Franklin Variable", "Libre Franklin Fallback", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Courier Prime", "Courier Prime Fallback", ui-monospace, monospace;
   --display-weight: 900;
-  --display-tracking: -0.02em;
-  --head-weight: 800;
-  --head-tracking: 0.05em;
-  --head-case: uppercase;
-  --head-scale: 0.74;
-  /* the Oxford rule: 3px over 1px */
-  --section-rule-height: 6px;
-  --section-rule-color: transparent;
-  --section-rule: linear-gradient(var(--navy), var(--navy)) 0 0 / 100% 3px no-repeat,
-                  linear-gradient(var(--navy), var(--navy)) 0 5px / 100% 1px no-repeat;
   /* the livery's gold pinstripe under the band */
   --band-edge-height: 7px;
   --band-edge: linear-gradient(var(--band-accent), var(--band-accent)) 0 2px / 100% 3px no-repeat,

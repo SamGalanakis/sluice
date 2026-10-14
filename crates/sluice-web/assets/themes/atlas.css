@@ -86,25 +86,13 @@
   --coral: light-dark(#b24c38, #e0745c);
   --on-coral: light-dark(#fbf6ea, #121220);
   --idle: light-dark(#76695a, #9d97a3);
-  /* type: Old Standard TT bold for the display, and its regular in spaced capitals for the
-     heads, as a map's place names, at Sluice's sizes (a display face, so never scaled down);
-     Fira Sans Condensed for the text (the study's Barlow Semi Condensed draws I and l, 0 and O
+  /* type: Old Standard TT bold for the titles, as a map's place names; Fira Sans Condensed for the text (the study's Barlow Semi Condensed draws I and l, 0 and O
      alike at 12px); Source Code Pro for data */
   --font-display: "Old Standard TT", "Old Standard TT Fallback", ui-serif, serif;
   --font-text: "Fira Sans Condensed", "Fira Sans Condensed Fallback", ui-sans-serif, system-ui,
                sans-serif;
   --font-mono: "Source Code Pro Variable", "Source Code Pro Fallback", ui-monospace, monospace;
   --display-weight: 700;
-  --display-tracking: 0em;
-  --head-weight: 400;
-  --head-case: uppercase;
-  --head-tracking: 0.14em;
-  /* the boundary line, dash-dot, over each section; a dashed rule over a stopped module */
-  --section-rule-color: transparent;
-  --section-rule: repeating-linear-gradient(90deg, var(--navy) 0 16px, transparent 16px 22px,
-                                            var(--navy) 22px 25px, transparent 25px 31px)
-                  0 0 / 100% 3px no-repeat;
-  --look-rule: 2px dashed var(--navy);
   /* a dashed centre line under the band, a row down from it */
   --band-edge-height: 3px;
   --band-edge: repeating-linear-gradient(90deg, var(--band-accent) 0 14px, transparent 14px 22px)

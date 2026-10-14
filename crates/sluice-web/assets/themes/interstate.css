@@ -72,15 +72,11 @@
   --font-text: "Overpass Variable", "Overpass Fallback", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Overpass Mono Variable", "Overpass Mono Fallback", ui-monospace, monospace;
   --display-weight: 800;
-  --display-tracking: -0.01em;
-  --head-weight: 800;
-  --head-tracking: -0.01em;
   /* a sign's rounded corners */
   --radius-module: 8px;
   --radius-cell: 6px;
   --radius-control: 6px;
   --radius-chip: 4px;
-  --look-rule: 3px solid var(--navy);
   /* the band a sign panel: inset from the window, rounded, its white border inside the green */
   --band-frame: inset 0 0 0 3px var(--band), inset 0 0 0 5px var(--band-ink);
   --band-radius: 10px;

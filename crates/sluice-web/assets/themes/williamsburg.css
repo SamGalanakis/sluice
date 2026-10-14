@@ -85,25 +85,14 @@
   --coral: light-dark(#df745d, #e88a74);
   --on-coral: light-dark(#1f2122, #1b2630);
   --idle: light-dark(#6f6e66, #9aa0a0);
-  /* type: Libre Caslon Display at its one weight for the display and the heads, a size up;
+  /* type: Libre Caslon Display at its one weight for the titles;
      Libre Caslon Text, its kind lines in italic; Anonymous Pro, a typewriter-cut mono
      whose zero is slashed apart from its O, for data */
   --font-display: "Libre Caslon Display", "Libre Caslon Display Fallback", serif;
   --font-text: "Libre Caslon Text", "Libre Caslon Text Fallback", serif;
   --font-mono: "Anonymous Pro", "Anonymous Pro Fallback", ui-monospace, monospace;
   --display-weight: 400;
-  --display-tracking: 0em;
-  --head-weight: 400;
-  --head-tracking: 0.005em;
-  --head-scale: 1.08;
   --kind-style: italic;
-  /* the Scotch rule: 1px over 3px */
-  --section-rule-height: 6px;
-  --section-rule-color: transparent;
-  --section-rule: linear-gradient(var(--navy), var(--navy)) 0 0 / 100% 1px no-repeat,
-                  linear-gradient(var(--navy), var(--navy)) 0 3px / 100% 3px no-repeat;
-  --look-rule: 1px solid var(--navy);
-  --ask-rule: 5px;
   /* a double gold hairline under the band */
   --band-edge-height: 5px;
   --band-edge: linear-gradient(var(--band-mark), var(--band-mark)) 0 1px / 100% 1px no-repeat,
