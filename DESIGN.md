@@ -605,7 +605,7 @@ declared value must be in its allowed set (`tests/themes.rs`).
 | `--cell-empty-edge` | inset 1px `rule` | none, or an inset shadow | a cell not reached, solid |
 | `--cell-empty-outline` | none | none, or a 1 to 2px dashed or dotted outline | a cell not reached, dashed or dotted, just inside it |
 | `--chart-ink` | `sky-ink` | a colour 3:1 on paper and paper-2, 0.1 from coral | Stats: the columns, a median, a p90's edge |
-| `--chart-busiest` | `navy` | the same | Stats: the busiest column |
+| `--chart-busiest` | `navy` by day; dark: `sky-ink` mixed 55% into `navy` | the same | Stats: the busiest column, one step brighter than the rest, never the loudest thing on a dark page |
 | `--chart-series` | `run-ink` | the same | the board's charts: bars, lines and dots |
 | `--chart-range` | `sky` | a colour 0.1 from coral | Stats: a p90's fill |
 | `--chart-grid` | none | none, or gradients | the rows behind the throughput's columns (leaders, lanes) |
@@ -1049,7 +1049,12 @@ for each.
   defines it. It has no `render`: `setup` adds listeners (each removed by its `cleanup`, through
   one `AbortController`), observers (disconnected) and frames (cancelled), and reads its typed
   props from the host's attributes. So a host can leave the page and come back (a morph that
-  moves it) with exactly one of each.
+  moves it) with exactly one of each. This is a deliberate departure from Rocket's own pattern,
+  where a component renders its insides from its props: here the server draws every host and
+  its insides, and a component only sets up behaviour. The reason is that the server is the
+  page's one source. A stream's patch morphs the same HTML the first load drew, the page reads
+  whole without a script, and the content is never drawn twice, once in Rust and once in
+  JavaScript.
 
 ### Writes
 
@@ -1118,7 +1123,7 @@ The helpers (`crates/sluice-web/src/views/`):
 | Page head | `ui/head.rs` (`page_head`, `page_head_with`, `page_head_html`, `page_head_note`) | a page's crumbs, name in the title style, its Details' ⋯, its sentence or muted note |
 | Status line | `ui/head.rs` (`Dot`, `status_line`) | how a thing stands: its state's glyph (the coral dot when it asks the owner) and one muted sentence |
 | Section head | `ui/section.rs` (`SectionHead`, `section_head`) | a region's name at 18px/600, its count, a note, one action |
-| Tabs | `ui/tabs.rs` (`Tab`, `tabs_open`/`close`, `panel_open`/`close`, `switch`) | pill tabs over panels; the view switch and the messages' switch as pill links |
+| Tabs | `ui/tabs.rs` (`Tab`, `tabs_open`/`close`, `panel_open`/`close`, `switch`) | pill tabs over panels (a bar wider than its room, as a step's on a phone, ends in a chevron over a fade until scrolled to its end); the view switch and the messages' switch as pill links |
 | Buttons | `ui/button.rs` (`Btn`, `submit`, `link`) | Primary (the next move, filled navy), Outlined, Quiet, Danger, Icon (44px, a plain glyph); one height, 32px (44px on a phone), a quiet text button its line's on a desktop; the filled one is the page's next move, so a group's "Retry all" is filled and "Set all aside" (one wording everywhere) outlined |
 | Pills | `ui/pill.rs` (`Tone`, `pill`, `pill_link`, `ask_link`) | a fact set apart in its state's tone: plain, muted, run (soft blue), look, quiet (sand), done; `ask_link` the way to an open question, its coral dot and "Waiting on your answer" (never a coral pill) |
 | Needs you | `ui/need.rs` (`Mark`, `need_line`) | an item a line: its mark (the coral dot for a question, else its state's glyph from the status table), its sentence, its one action, its × |
@@ -1165,9 +1170,12 @@ and nothing else: a write sluice never answered is said by its own form's `.catc
 a two-unit duration, `data-ago` "12m ago", `data-clock` a time of day on the reader's own clock,
 which the server writes in UTC and names, "17:49 UTC", so it reads right before the clock first ticks) every five
 seconds and after a patch, then dispatches `sluice-tick` on `window` with the time; a component
-that draws against now (`sluice-steps`, `sluice-day`) moves its own marks on that event. The
-server writes each `<time>` as it read the clock, and its text is left out of the stream's
-version, so a quiet page sends nothing. `nav.js` also keeps the tab's title and favicon (the
+that draws against now (`sluice-steps`, `sluice-day`) moves its own marks on that event. On the
+same tick it keeps At work's log scale (a box with `data-log`, its knee and span: each bar's
+`--l` and `--w` from its `data-a` and `data-b`, empty while open; a tick's `--l`) and each heard
+line's ink (`data-heard`: its dot from 0 to 5 minutes, ink from 15, bold from 30). The server
+writes each as it read the clock, and the stream's version leaves all of it out (SPEC §13), so a
+quiet page sends nothing. `nav.js` also keeps the tab's title and favicon (the
 plan's glance) and a first open's theme.
 
 **`/_ui`** ("States and parts") is the gallery and its documentation: each part led by what the
@@ -1295,7 +1303,7 @@ the page's stream. A lane that redraws a page writes its notes here.
     in place; a group with nothing remarkable folds whole to its own line,
     "article · 23 running · each heard from in the last 27m". A stop is in Needs you, not a
     row, so it keeps no healthy sibling in sight. A row (8px,
-    `paper-2` on hover and open) is a grid: the badge (a 52px chip, an engine's name; drawn
+    `paper-2` on hover and open) is a grid: the badge (a 60px chip, an engine's name at 12px; drawn
     only when rows run on more than one thing, never "fn"), its title in ink at weight 600 with
     its owner muted and under it its recipe's view or its last message on one line, muted (who
     said it, never when); its meta one statement about time, two lines at most: the stage pill
@@ -1316,7 +1324,9 @@ the page's stream. A lane that redraws a page writes its notes here.
     `--track-run` (the blue light, `run-ink` dark, where the blue would be 2.7:1); a done run
     `sky-ink` at 45% on the paper edged in `sky-ink`; a silence the sand edged in `sand-mark`
     (light) or filled sand (dark); a wait dotted; a message a 1px tick.
-    **The drilldown**: open, a row's step view (The step view) on the row's own scale, the
+    **The drilldown**: asked for as the row opens (`data-on:toggle`'s `@get`, a patch that
+    replaces the row's empty body, `data-ignore-morph` so the row's own patches leave it be;
+    open, a new stamp on the row asks again), a row's step view (The step view) on the row's own scale, the
     last twelve hours on the same log scale across exactly the row's track (the same x-range,
     measured, at every width), in the track's tones: a run still going reads as its step does
     now (a quiet one on the sand from when it fell silent), one that began earlier starts at the
@@ -1371,7 +1381,8 @@ the page's stream. A lane that redraws a page writes its notes here.
   answered in place; then why it failed in the sand well, or **Now**: the latest sentence
   the agent said at lead size (17px), then its calls in a quiet fold (`ui::calls`: "12 calls ·
   1 failed", opening to a line each, the tool, its key argument and how long it took, the latest
-  first); under Now on a running step, **Its brief** (its prompt's first paragraph, cut at about
+  first), then its live progress, then its messages: one form, in that order, for every running
+  step; under Now on a running step, **Its brief** (its prompt's first paragraph, cut at about
   280 characters, "Whole brief" opening Inputs) and **So far** (the outputs it has set, an earlier
   run's said so and muted, then "Not set yet:" and each unset output by name with its type,
   "All outputs" opening Outputs); beside

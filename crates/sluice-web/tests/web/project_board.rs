@@ -736,8 +736,7 @@ async fn filtered_units_progress_done_and_paused() {
                 &[("done", "succeeded")],
             )
             .await;
-        let (status, html) = f.get(&format!("/projects/id/{held}")).await;
-        assert_eq!(status, StatusCode::OK, "{html}");
+        let html = f.opened(&format!("/projects/id/{held}")).await;
         // the plan: the paused one waits, a row whose steps say paused; nothing is at work
         assert_eq!(plan_html::place(&html, "hold"), "waiting", "{html}");
         let cell = plan_html::cell(&html, "hold");

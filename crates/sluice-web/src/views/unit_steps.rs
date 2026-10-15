@@ -203,6 +203,29 @@ pub const RECENT: [(f64, &str); 5] = [
     (900.0, "15m"),
     (0.0, "now"),
 ];
+/// The log scale's knee and span, for the page's clock (`nav.js`): a box with it keeps each
+/// `i[data-a]` in it at the reader's now.
+pub const LOG_SCALE: &str = "data-log=\"360 43200\"";
+const _: () = assert!(KNEE == 360.0 && SAID_WINDOW == 43_200.0);
+/// A bar `class` on the log scale from `a` to `b` (None: to now), drawn to `now`. Its place is
+/// the clock's: it carries its times (`data-a`, `data-b`, empty while open) for `nav.js` to keep
+/// it at the reader's now, its `style` first after them, and a stream's version leaves the
+/// style out (`streams::without_clock`).
+pub fn bar(class: &str, a: f64, b: Option<f64>, now: f64) -> String {
+    let l = recent_at(now - a);
+    format!(
+        "<i data-a=\"{a:.0}\" data-b=\"{}\" style=\"--l:{l:.2}%;--w:{:.2}%\" class=\"{class}\"></i>",
+        b.map_or(String::new(), |b| format!("{b:.0}")),
+        (recent_at(now - b.unwrap_or(now)) - l).max(0.0)
+    )
+}
+/// A mark `class` at `t` on the log scale, drawn to `now`, kept by the page's clock as a bar is.
+pub fn mark(class: &str, t: f64, now: f64) -> String {
+    format!(
+        "<i data-a=\"{t:.0}\" style=\"--l:{:.2}%\" class=\"{class}\"></i>",
+        recent_at(now - t)
+    )
+}
 /// A moment `ago` seconds before now on the last twelve hours' log scale, percent from its
 /// left; anything older at its left edge.
 pub fn recent_at(ago: f64) -> f64 {
@@ -706,9 +729,8 @@ impl View<'_> {
             if pr { "" } else { " sv-no-pr" },
             // the page's clock moves a linear axis's now; the log scale's stays at its end
             match &axis {
-                Some(axis) if axis.live && !axis.recent => {
-                    format!(" data-now=\"{}\"", axis.now_data())
-                }
+                Some(axis) if axis.recent => format!(" {LOG_SCALE}"),
+                Some(axis) if axis.live => format!(" data-now=\"{}\"", axis.now_data()),
                 _ => String::new(),
             },
             esc(&self.label)
@@ -1006,6 +1028,20 @@ fn track(axis: &Axis, step: &Step<'_>) -> String {
             _ => (end, outcome),
         };
         let mut piece = |from: f64, to: f64, shown: Shown, open: bool| {
+            if axis.recent {
+                let class = format!(
+                    "sv-b sv-b-{}{}{}",
+                    Cell::of(Some(shown)).key(),
+                    if n < last { " is-old" } else { "" },
+                    if earlier && from == span.from {
+                        " is-clip"
+                    } else {
+                        ""
+                    },
+                );
+                bars.push_str(&bar(&class, from, (!open).then_some(to), axis.t1));
+                return;
+            }
             let l = axis.at(from);
             let _ = write!(
                 bars,
@@ -1018,7 +1054,7 @@ fn track(axis: &Axis, step: &Step<'_>) -> String {
                     ""
                 },
                 (axis.at(to) - l).max(0.0),
-                if open && !axis.recent {
+                if open {
                     format!(" data-open=\"{l:.3}\"")
                 } else {
                     String::new()
@@ -1035,19 +1071,23 @@ fn track(axis: &Axis, step: &Step<'_>) -> String {
             // where it began, said at the left edge
             let _ = write!(
                 bars,
-                "<span class=\"sv-clip\">from {} ago</span>",
-                esc(&tick_text(axis.t1 - span.from))
+                "<span class=\"sv-clip\">from {}</span>",
+                ui::ago(&super::rfc3339(span.from as u64))
             );
         }
     }
     // a tick for each message it sent, over its bars
     for t in &step.ticks {
         if *t >= axis.t0 && *t <= axis.t1 + 60.0 {
-            let _ = write!(
-                bars,
-                "<i class=\"sv-m\" style=\"--l:{:.3}%\"></i>",
-                axis.at(*t)
-            );
+            if axis.recent {
+                bars.push_str(&mark("sv-m", *t, axis.t1));
+            } else {
+                let _ = write!(
+                    bars,
+                    "<i class=\"sv-m\" style=\"--l:{:.3}%\"></i>",
+                    axis.at(*t)
+                );
+            }
         }
     }
     if !step.ticks.is_empty() {

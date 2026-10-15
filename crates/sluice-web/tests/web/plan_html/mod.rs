@@ -137,3 +137,47 @@ pub fn done_lines(html: &str, unit: &str) -> usize {
         })
         .sum()
 }
+/// The page `html` as it reads with each row of At work opened: each row's drilldown asked for
+/// as a browser asks when the row opens (its `data-on:toggle`'s `@get`), drawn in its place.
+pub async fn opened(router: &axum::Router, mut html: String) -> String {
+    use tower::ServiceExt;
+    const ASK: &str = "data-on:toggle=\"el.open &amp;&amp; @get('";
+    let asks: Vec<String> = html
+        .match_indices(ASK)
+        .map(|(at, _)| {
+            let src = &html[at + ASK.len()..];
+            src[..src.find('\'').expect("its end")].replace("&amp;", "&")
+        })
+        .collect();
+    for src in asks {
+        let response = router
+            .clone()
+            .oneshot(
+                axum::http::Request::get(&src)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK, "{src}");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("data: mode replace"), "{body}");
+        let drawn = body
+            .lines()
+            .filter_map(|l| l.strip_prefix("data: elements "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let id = drawn["<div id=\"".len()..]
+            .split('"')
+            .next()
+            .expect("its id")
+            .to_owned();
+        let empty = format!("<div id=\"{id}\" class=\"ro-drill\" data-ignore-morph></div>");
+        assert!(html.contains(&empty), "{id}'s empty drilldown");
+        html = html.replacen(&empty, &drawn, 1);
+    }
+    html
+}

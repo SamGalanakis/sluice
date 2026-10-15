@@ -141,8 +141,7 @@ async fn retried(f: &Fixture) -> ProjectId {
 async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
     let f = Fixture::new().await;
     let id = retried(&f).await;
-    let (status, html) = f.get(&format!("/projects/id/{id}")).await;
-    assert_eq!(status, StatusCode::OK, "{html}");
+    let html = f.opened(&format!("/projects/id/{id}")).await;
     // the row of a quiet run: how long it has been silent; which run it is and how the earlier
     // ones ended are its steps', not its line's
     let row = plan_html::row(&html, "l1");
@@ -151,7 +150,7 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
             && row.contains(" · quiet <time"),
         "{row}"
     );
-    let line = &row[..row.find("<div class=\"ro-drill\">").unwrap_or(row.len())];
+    let line = &row[..row.find("<div id=\"drill-").unwrap_or(row.len())];
     assert!(
         !line.contains("class=\"tries\"") && !line.contains(">run 6<"),
         "{row}"

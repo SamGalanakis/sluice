@@ -284,6 +284,7 @@ async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawe
 async fn card(state: &views::DashboardState, project: ProjectId) -> String {
     let app = views::dashboard_router(state.clone()).layer(Extension(Registry(Arc::new(Exact))));
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri(format!("/projects/id/{project}"))
@@ -294,7 +295,7 @@ async fn card(state: &views::DashboardState, project: ProjectId) -> String {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), 1 << 22).await.unwrap();
-    let body = String::from_utf8(body.to_vec()).unwrap();
+    let body = plan_html::opened(&app, String::from_utf8(body.to_vec()).unwrap()).await;
     match plan_html::place(&body, "work") {
         "stopped" => plan_html::stopped(&body, "work").to_owned(),
         "done" => {

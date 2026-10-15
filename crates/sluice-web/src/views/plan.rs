@@ -988,7 +988,7 @@ impl<'a> Plan<'a> {
                     .map(|t| {
                         format!(
                             " · each heard from in the last {}",
-                            esc(&ui::duration_text((self.now - t).max(60.0)))
+                            ui::since(&super::rfc3339(t as u64))
                         )
                     })
                     .unwrap_or_default()
@@ -1287,7 +1287,7 @@ impl<'a> Plan<'a> {
                         .map(|t| {
                             format!(
                                 " · each heard from in the last {}",
-                                esc(&ui::duration_text((self.now - t).max(60.0)))
+                                ui::since(&super::rfc3339(t as u64))
                             )
                         })
                         .unwrap_or_default()
@@ -1462,18 +1462,17 @@ impl<'a> Plan<'a> {
                 (_, Some(heard)) if heard - started(unit).unwrap_or(heard) > 120.0 => {
                     let at = super::rfc3339(heard as u64);
                     let age = self.now - heard;
+                    // its class is the clock's: `nav.js` keeps it from `data-heard`, and a
+                    // stream's version leaves it out
                     let _ = write!(
                         meta,
-                        "<span class=\"ro-heard{}\">{}heard {}</span>",
+                        "<span data-heard=\"{heard:.0}\" class=\"ro-heard{}\"><span class=\"dot run pulse\" aria-hidden=\"true\"></span>heard {}</span>",
                         if age >= HEARD_OLD {
                             " is-old"
                         } else if age >= HEARD_AGING {
                             " is-aging"
-                        } else {
-                            ""
-                        },
-                        if age < LIVE {
-                            "<span class=\"dot run pulse\" aria-hidden=\"true\"></span> "
+                        } else if age < LIVE {
+                            " is-live"
                         } else {
                             ""
                         },
@@ -1496,7 +1495,15 @@ impl<'a> Plan<'a> {
             said: &self.said(unit),
             meta: &meta,
             track: &self.track_html(row),
-            drill: &format!("{}{}", self.steps_html(unit), self.foot_html(unit)),
+            drill: Some(Drill {
+                src: format!("{}/units/{}/drill", self.view.href(), unit.id),
+                stamp: crate::streams::skeleton_hash(&drill_html(self.view, unit)),
+                steps: super::unit_steps::ordered(unit)
+                    .iter()
+                    .map(|s| s.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            }),
         })
     }
     /// A unit's one line: its recipe's view (the project's own summary of it), else what it said
@@ -1537,7 +1544,7 @@ impl<'a> Plan<'a> {
                 if end < from {
                     continue;
                 }
-                let a = span.from.max(from);
+                let a = span.from;
                 let open = span.to.is_none() && step.running();
                 match (open, quiet) {
                     (true, Some(q)) if q > a => {
@@ -1553,15 +1560,15 @@ impl<'a> Plan<'a> {
         if row.waiting
             && let Some(end) = last_end.filter(|e| *e < now)
         {
-            segs.push(("tk-wait", end.max(from), now));
+            segs.push(("tk-wait", end, now));
         }
         let ticks: Vec<f64> = unit.said.iter().map(|(_, t)| *t).collect();
         track(&segs, &ticks, now)
     }
     /// A unit's steps, open under its row: its step view (`unit_steps`), its rows opening in
     /// the drawer, its foot the plan's own.
-    fn steps_html(&self, unit: &UnitView) -> String {
-        let mut steps = super::unit_steps::of_unit(unit, &self.view.relations, true, "");
+    fn steps_html(view: &ProjectView, unit: &UnitView) -> String {
+        let mut steps = super::unit_steps::of_unit(unit, &view.relations, true, "");
         steps.owner.clear();
         steps.latest = None;
         steps.recent = true;
@@ -1569,7 +1576,7 @@ impl<'a> Plan<'a> {
     }
     /// The drilldown's foot: when it was last heard from (its row already says what it said
     /// last), then Message and Unit page, and Open step.
-    fn foot_html(&self, unit: &UnitView) -> String {
+    fn foot_html(view: &ProjectView, unit: &UnitView) -> String {
         let mut out = String::from("<div class=\"ro-foot\"><p class=\"ro-ev\">");
         let quiet = unit.steps.iter().any(|s| s.shown() == Shown::Quiet);
         match heard(unit).or_else(|| last_end(unit)) {
@@ -1597,7 +1604,7 @@ impl<'a> Plan<'a> {
         let _ = write!(
             out,
             "<a href=\"{}\">Unit page</a></span>",
-            esc(&unit_href(self.view, unit))
+            esc(&unit_href(view, unit))
         );
         if let Some(step) = current(unit) {
             out.push_str(&ui::link_with(
@@ -1768,7 +1775,9 @@ pub fn axis(class: &str) -> String {
 }
 /// A unit's track over the last twelve hours to `now` on the log scale: each `(class, from,
 /// to)` a bar (`tk-past` an earlier run, `tk-run` the one going, `tk-quiet` its silence,
-/// `tk-wait` dotted while it waits), a tick for each message in `ticks`.
+/// `tk-wait` dotted while it waits; `to` at `now` open), a tick for each message in `ticks`.
+/// Its places are the clock's (`unit_steps::bar`): drawn here to `now`, kept at the reader's
+/// now by `nav.js`, and left out of a stream's version.
 pub fn track(segs: &[(&str, f64, f64)], ticks: &[f64], now: f64) -> String {
     let from = now - SAID_WINDOW;
     let mut bars = String::new();
@@ -1776,27 +1785,21 @@ pub fn track(segs: &[(&str, f64, f64)], ticks: &[f64], now: f64) -> String {
         if *b < from {
             continue;
         }
-        let (l, r) = (
-            super::unit_steps::recent_at(now - a.max(from)),
-            super::unit_steps::recent_at(now - b),
-        );
-        let _ = write!(
-            bars,
-            "<i class=\"{class}\" style=\"left:{l:.2}%;width:{:.2}%\"></i>",
-            (r - l).max(0.0)
-        );
+        bars.push_str(&super::unit_steps::bar(
+            class,
+            *a,
+            (*b < now).then_some(*b),
+            now,
+        ));
     }
     let mut said = 0;
     for t in ticks.iter().filter(|t| **t >= from && **t <= now + 60.0) {
         said += 1;
-        let _ = write!(
-            bars,
-            "<i class=\"tk-m\" style=\"left:{:.2}%\"></i>",
-            super::unit_steps::recent_at(now - t)
-        );
+        bars.push_str(&super::unit_steps::mark("tk-m", *t, now));
     }
     format!(
-        "<span class=\"ro-track\" role=\"img\" aria-label=\"{}\">{bars}</span>",
+        "<span class=\"ro-track\" {} role=\"img\" aria-label=\"{}\">{bars}</span>",
+        super::unit_steps::LOG_SCALE,
         esc(&format!(
             "Its last twelve hours, on a log scale: {}",
             ui::count(said, "message", "messages")
@@ -1822,14 +1825,49 @@ pub struct RowParts<'a> {
     pub meta: &'a str,
     /// HTML: its `track`.
     pub track: &'a str,
-    /// HTML: what it opens to.
-    pub drill: &'a str,
+    /// Where what it opens to is asked for when it opens, None for nothing.
+    pub drill: Option<Drill>,
+}
+/// A row's drilldown, drawn only once the row opens: asked for from `src` (`drill`), asked
+/// again while open whenever its `stamp` (what it draws, the clock left out) changes.
+pub struct Drill {
+    pub src: String,
+    pub stamp: u64,
+    /// Its steps in its step view's order, space-separated: the row carries them (`data-steps`)
+    /// so `[` and `]` step through a closed row's steps as through an open one's.
+    pub steps: String,
+}
+/// What a row of At work opens to: its unit's steps, its rows opening in the drawer, and its
+/// foot.
+fn drill_html(view: &ProjectView, unit: &UnitView) -> String {
+    format!(
+        "{}{}",
+        Plan::steps_html(view, unit),
+        Plan::foot_html(view, unit)
+    )
 }
 /// A row of At work: a disclosure whose summary is the row and whose body is its steps, opening
-/// in place.
+/// in place. Its body is asked for when it opens (`drill`): the stream sends the row, never
+/// what a closed row would open to; while open, a new stamp on the row asks for it again.
 pub fn roster_row(row: &RowParts<'_>) -> String {
+    let (on_open, drill) = match &row.drill {
+        Some(d) => (
+            format!(
+                " data-steps=\"{steps}\" data-on:toggle=\"el.open &amp;&amp; @get('{src}')\"",
+                steps = esc(&d.steps),
+                src = esc(&d.src)
+            ),
+            format!(
+                "<div id=\"drill-{id}\" class=\"ro-drill\" data-ignore-morph></div><i hidden data-init=\"el.parentElement.open &amp;&amp; @get('{src}?at={stamp:x}')\"></i>",
+                id = esc(row.id),
+                src = esc(&d.src),
+                stamp = d.stamp
+            ),
+        ),
+        None => (String::new(), "<div class=\"ro-drill\"></div>".to_owned()),
+    };
     format!(
-        "<details id=\"u-{id}\" class=\"ro-u{wait}\" data-unit=\"{id}\"{states} data-preserve-attr=\"open\"><summary class=\"ro-r\">{badge}<span class=\"ro-who\"><span class=\"ro-t\">{title}{own}</span><span class=\"ro-s\">{said}</span></span><span class=\"ro-meta\">{meta}</span>{track}<span class=\"ro-chev\" aria-hidden=\"true\">{chev}</span></summary><div class=\"ro-drill\">{drill}</div></details>",
+        "<details id=\"u-{id}\" class=\"ro-u{wait}\" data-unit=\"{id}\"{states} data-preserve-attr=\"open\"{on_open}><summary class=\"ro-r\">{badge}<span class=\"ro-who\"><span class=\"ro-t\">{title}{own}</span><span class=\"ro-s\">{said}</span></span><span class=\"ro-meta\">{meta}</span>{track}<span class=\"ro-chev\" aria-hidden=\"true\">{chev}</span></summary>{drill}</details>",
         id = esc(row.id),
         wait = if row.waiting { " is-wait" } else { "" },
         states = if row.said_states.is_empty() {
@@ -1857,7 +1895,6 @@ pub fn roster_row(row: &RowParts<'_>) -> String {
         meta = row.meta,
         track = row.track,
         chev = icon(Icon::ChevronDown, 16, ""),
-        drill = row.drill,
     )
 }
 /// Each of a unit's steps and how it reads, as `data-said` carries them for `board.js` to say a
@@ -2375,6 +2412,34 @@ pub struct SeenForm {
 /// at the project's finished units moves to `through`, kept in its cookie (`sluice_seen_<p>`)
 /// for its next page. To the page's form the answer empties its notice and sets the page's
 /// `seen` signal, whose change reopens the stream on the new look (`seen_watch`).
+/// A row's drilldown (`roster_row`), asked for as it opens: its unit's steps and foot, drawn
+/// in place of what it showed (the row's stream never morphs it).
+pub async fn drill(
+    State(state): State<DashboardState>,
+    registry: Option<axum::Extension<super::board::Registry>>,
+    Path((project, unit)): Path<(ProjectId, sluice_model::ids::UnitName)>,
+) -> Response {
+    let drawn = async {
+        let (_, view) =
+            super::board::snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await?;
+        let found = view.units.iter().find(|u| u.id == unit);
+        Ok::<_, sluice_model::error::PublicError>(found.map(|u| {
+            format!(
+                "<div id=\"drill-{id}\" class=\"ro-drill\" data-ignore-morph>{body}</div>",
+                id = esc(u.id.as_str()),
+                body = drill_html(&view, u)
+            )
+        }))
+    };
+    match drawn.await {
+        Ok(Some(html)) => write::events([crate::streams::StreamEvent::Elements(
+            datastar::prelude::PatchElements::new(html)
+                .mode(datastar::prelude::ElementPatchMode::Replace),
+        )]),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => super::board::error_response(e),
+    }
+}
 pub async fn mark_seen(
     Path(project): Path<ProjectId>,
     headers: axum::http::HeaderMap,

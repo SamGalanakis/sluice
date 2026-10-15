@@ -134,17 +134,19 @@ rocket("sluice-drawer", {
       }
     };
     // `[` and `]` open the step before or after this one in the plan's order as drawn (Needs
-    // you, then each row's steps, folded or not): each step once, where it is first linked;
-    // never while typing, with a modifier or under an open dialog
+    // you, then each row's steps, open or not: a row names them in `data-steps` before its body
+    // is asked for): each step once, where it is first named; never while typing, with a
+    // modifier or under an open dialog
     const step = (evt) => {
       const sid = currentStep();
       if (!sid || (evt.key !== "[" && evt.key !== "]") || evt.defaultPrevented
           || evt.ctrlKey || evt.metaKey || evt.altKey || document.querySelector("dialog[open]")) return;
       const t = evt.target;
       if (t instanceof Element && t.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return;
-      // every link on the plan that opens a step, in page order
+      // every link on the plan that opens a step, and every row's steps, in page order
       const links = $$("#plan-pane a[data-step]");
-      const ids = [...new Set(links.map((a) => a.dataset.step))];
+      const ids = [...new Set($$("#plan-pane a[data-step], #plan-pane [data-steps]")
+        .flatMap((e) => (e.matches("a[data-step]") ? [e.dataset.step] : e.dataset.steps.split(" "))))];
       const at = ids.indexOf(sid);
       const next = ids[evt.key === "]" ? at + 1 : (at < 0 ? ids.length : at) - 1];
       if (!next) return;

@@ -2305,6 +2305,10 @@ pub fn registration() -> super::PageRegistration {
                     axum::routing::post(super::plan::needs),
                 )
                 .route(
+                    "/projects/id/{project}/units/{unit}/drill",
+                    get(super::plan::drill),
+                )
+                .route(
                     "/projects/id/{project}/seen",
                     axum::routing::post(super::plan::mark_seen),
                 )

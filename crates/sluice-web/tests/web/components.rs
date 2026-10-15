@@ -192,7 +192,7 @@ async fn slow_chromium_the_project_page_components_keep_their_state_through_a_pa
         let mut browser = Chrome::open(&page).unwrap();
         browser.viewport(1440, "light").unwrap();
         browser.navigate(&page).unwrap();
-        let ready = "document.readyState === 'complete' && customElements.get('sluice-splitter') && document.querySelector('#project-board').dataset.view === 'both'";
+        let ready = "document.readyState === 'complete' && customElements.get('sluice-splitter') && document.querySelector('#board-pane').checkVisibility() && document.querySelector('#plan-pane').checkVisibility()";
         browser.wait(ready).unwrap();
         browser.eval(FRAMES).unwrap();
         // the splitter: arrows widen and narrow the board, Home and End to its bounds

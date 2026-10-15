@@ -176,7 +176,9 @@
   --cell-empty-outline: none;
   /* charts (Stats and the board's): never the question's colour */
   --chart-ink: var(--sky-ink);
-  --chart-busiest: var(--navy);
+  /* the busiest column: navy by day; at night navy is the page's near-white, so it is mixed back
+     toward the columns' ink, one step brighter than them, not the loudest thing on the page */
+  --chart-busiest: light-dark(var(--navy), color-mix(in oklch, var(--sky-ink) 55%, var(--navy)));
   --chart-range: var(--sky);
   --chart-series: var(--run-ink);
   --chart-grid: none;
@@ -339,7 +341,12 @@ a.pill:hover { filter: brightness(.96); color: inherit; }
 .tabs { display: flex; flex-wrap: nowrap; gap: 2px; min-width: 0; overflow-x: auto;
   overscroll-behavior-x: contain; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
-.tabs[data-more] { mask-image: linear-gradient(to right, black calc(100% - 64px), transparent); }
+/* a bar wider than its room (`data-more`, `sluice-tabs`): a chevron at its right edge over a
+   fade, until it is scrolled to its end */
+.tabs[data-more]::after { content: "›"; position: sticky; right: 0; flex: none; display: grid;
+  place-items: center end; width: 44px; margin-left: -44px; padding-right: 4px; pointer-events: none;
+  font: var(--w-strong) 22px/1 var(--font-text); color: var(--ink-muted);
+  background: linear-gradient(to right, transparent, var(--paper) 60%); }
 .tabs > :is(a, button) { position: relative; isolation: isolate; flex: none; display: inline-flex;
   align-items: center; gap: 6px; min-height: 44px; padding: 0 12px; border: 0; border-radius: 0;
   background: none; box-shadow: none; color: var(--ink-muted); font: var(--w-regular) var(--t-md)/20px var(--font-text);
@@ -2320,7 +2327,7 @@ details.read-today .item { opacity: .85; }
 /* At work: the axis's labels, a group's line, a row a unit (badge | who | where | track | chevron) */
 @property --track { syntax: "<length>"; inherits: true; initial-value: 240px; }
 .ro { --track: clamp(180px, 34cqi, 560px); --track-end: 34px; --track-in: 0px; display: grid; min-width: 0;
-      --ro-cols: 52px minmax(0, 1fr) minmax(120px, 180px) var(--track) 16px;
+      --ro-cols: 60px minmax(0, 1fr) minmax(120px, 180px) var(--track) 16px;
       --ro-areas: "badge who meta track chev"; }
 .ro.no-badge { --ro-cols: minmax(0, 1fr) minmax(120px, 180px) var(--track) 16px;
                --ro-areas: "who meta track chev"; }
@@ -2353,9 +2360,9 @@ details.read-today .item { opacity: .85; }
 .ro-r:hover, .ro-u[open] > .ro-r { background: var(--paper-2); }
 .ro-u[open] > .ro-r { border-radius: var(--radius-row) var(--radius-row) 0 0; }
 /* what a row runs on, a word in a chip the column's width ("claude", "codex") */
-.ro-badge { grid-area: badge; display: grid; place-items: center; width: 52px; height: 22px; margin-top: 1px; overflow: hidden;
+.ro-badge { grid-area: badge; display: grid; place-items: center; width: 60px; height: 22px; margin-top: 1px; overflow: hidden;
             border-radius: var(--radius-chip); background: var(--paper-2); box-shadow: inset 0 0 0 1px var(--rule-faint);
-            font-size: 10.5px; font-weight: var(--w-strong); letter-spacing: 0.02em; color: var(--ink-muted);
+            font-size: 12px; font-weight: var(--w-strong); letter-spacing: 0.01em; color: var(--ink-muted);
             white-space: nowrap; }
 .ro-r:hover .ro-badge, .ro-u[open] .ro-badge { background: var(--paper); }
 .ro-who { grid-area: who; display: grid; min-width: 0; }
@@ -2371,6 +2378,8 @@ details.read-today .item { opacity: .85; }
 .ro-meta { grid-area: meta; display: grid; justify-items: start; gap: 4px; min-width: 0; padding-top: 1px; font-size: 13px;
            line-height: 20px; color: var(--ink-muted); }
 .ro-heard { white-space: nowrap; }
+.ro-heard > .dot { margin-right: 5px; }
+.ro-heard:not(.is-live) > .dot { display: none; }
 .ro-heard.is-aging { color: var(--ink); }
 .ro-heard.is-old { color: var(--ink); font-weight: var(--w-strong); }
 .ro-why { font-size: 12.5px; line-height: 18px; }
@@ -2380,7 +2389,8 @@ details.read-today .item { opacity: .85; }
 .ro-track { grid-area: track; position: relative; display: block; height: 22px; margin-top: 4px; }
 .ro-track::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px;
                     background: var(--rule); }
-.ro-track > i { position: absolute; top: 5px; height: 12px; min-width: 2px; border-radius: 3px; }
+.ro-track > i { position: absolute; top: 5px; left: var(--l); width: var(--w); height: 12px; min-width: 2px;
+                border-radius: 3px; }
 .ro-track > .tk-past { background: var(--track-past); box-shadow: inset 0 0 0 1px var(--sky-ink); }
 .ro-track > .tk-run { background: var(--track-run); }
 .ro-track > .tk-quiet { background: var(--sand); box-shadow: inset 0 0 0 1.5px var(--track-quiet-edge); }
@@ -2431,7 +2441,7 @@ details.read-today .item { opacity: .85; }
   .nd { padding: 2px 14px; }
   .nd-i { grid-template-columns: 14px minmax(0, 1fr); }
   .nd-acts { grid-column: 2; justify-self: start; }
-  .ro { --ro-cols: 52px minmax(0, 1fr) 16px; --ro-areas: "badge who chev" ". meta ." ". track .";
+  .ro { --ro-cols: 60px minmax(0, 1fr) 16px; --ro-areas: "badge who chev" ". meta ." ". track .";
         --track-end: 28px; --track-in: 42px; }
   .ro.no-badge { --ro-cols: minmax(0, 1fr) 16px; --ro-areas: "who chev" "meta ." "track ."; --track-in: 0px; }
   .ro-axis, .ro-r { column-gap: 12px; }

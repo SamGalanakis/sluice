@@ -169,7 +169,7 @@ async fn slow_chromium_a_code_block_keeps_its_lines_and_the_keys_find_and_move()
             .wait("customElements.get('sluice-drawer') && document.querySelector('#step-detail[data-step=\"l1-work\"] #d-title')")
             .unwrap();
         let order = browser
-            .eval("[...new Set([...document.querySelectorAll('#plan-pane a[data-step]')].map(a => a.dataset.step))]")
+            .eval("[...new Set([...document.querySelectorAll('#plan-pane a[data-step], #plan-pane [data-steps]')].flatMap(e => e.matches('a[data-step]') ? [e.dataset.step] : e.dataset.steps.split(' ')))]")
             .unwrap();
         let order: Vec<String> = serde_json::from_value(order).unwrap();
         let at = order.iter().position(|s| s == "l1-work").unwrap();

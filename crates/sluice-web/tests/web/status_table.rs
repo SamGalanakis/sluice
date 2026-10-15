@@ -214,7 +214,7 @@ async fn a_project_pause_and_outside_work_read_as_themselves() {
         .await
         .unwrap();
     board(&f, id, "root = Units()".into()).await;
-    let (_, html) = f.get(&format!("/projects/id/{id}")).await;
+    let html = f.opened(&format!("/projects/id/{id}")).await;
     // the plan: a waiting unit held by the pause is a row that says so, its mark and word
     let row = plan_html::row(&html, "l3");
     assert!(
@@ -284,8 +284,7 @@ async fn states_priorities_cancellation_and_skipped_units() {
     let f = Fixture::new().await;
     {
         let id = states(&f).await;
-        let (status, html) = f.get(&format!("/projects/id/{id}")).await;
-        assert_eq!(status, StatusCode::OK, "{html}");
+        let html = f.opened(&format!("/projects/id/{id}")).await;
         let plan = between(&html, "<div id=\"plan-pane\"", "<aside id=\"board-pane\"");
         let (_, index) = f.get(&format!("/projects/id/{id}?show=done")).await;
         let pane = between(&html, "<aside id=\"board-pane\"", "</aside>");
@@ -539,7 +538,7 @@ async fn states_priorities_cancellation_and_skipped_units() {
         // blocked and never begun, the plan counts them; found, each row says what it waits on
         // and how that reads: cancelled, never failed
         assert_eq!(plan_html::place(&html, "gated"), "", "{html}");
-        let (_, found) = f.get(&format!("/projects/id/{id}?q=gated")).await;
+        let found = f.opened(&format!("/projects/id/{id}?q=gated")).await;
         let gated = plan_html::row(&found, "gated");
         assert!(gated.contains(">up</a> (cancelled)</span>"), "{gated}");
         assert!(!gated.contains("(failed)"), "{gated}");

@@ -61,6 +61,7 @@ fn lane() -> serde_json::Value {
 async fn page(state: &views::DashboardState, uri: String) -> String {
     let app = views::dashboard_router(state.clone()).layer(Extension(Registry(Arc::new(Exact))));
     let response = app
+        .clone()
         .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
         .await
         .unwrap();
@@ -68,7 +69,8 @@ async fn page(state: &views::DashboardState, uri: String) -> String {
     let body = to_bytes(response.into_body(), 1 << 22).await.unwrap();
     let body = String::from_utf8(body.to_vec()).unwrap();
     assert_eq!(status, StatusCode::OK, "{body}");
-    body
+    // a plan's rows opened, as a reader opens them
+    crate::plan_html::opened(&app, body).await
 }
 async fn drawer(state: &views::DashboardState, project: ProjectId, step: &str) -> String {
     let registry = Registry(Arc::new(Exact));

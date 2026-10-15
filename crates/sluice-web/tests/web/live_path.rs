@@ -401,8 +401,10 @@ async fn slow_chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refuse
         browser.eval("cancel.click()").unwrap();
         browser.wait("document.querySelector('#confirmation').open").unwrap();
         browser.eval("document.querySelector('#confirmation [data-keep]').click()").unwrap();
-        // the menu it was in closed behind the dialog: Keep puts the focus back on the menu's "⋯"
-        browser.wait("!document.querySelector('#confirmation').open && document.activeElement===document.querySelector('#step-detail .sh-name details.dm > summary')").unwrap();
+        // Keep puts the focus back on its opener, in the menu it was in, still open: the form is
+        // back in its details before the click reaches the page, so the menu never saw a click
+        // outside it
+        browser.wait("!document.querySelector('#confirmation').open && document.activeElement===document.querySelector('#step-detail details.confirm-flow > summary') && document.querySelector('#step-detail .sh-name details.dm').open").unwrap();
         browser.navigate(&format!("{base}/projects/id/{lanes}")).unwrap();
         browser.wait("document.querySelector('form.board-form') && document.querySelector('#project-board')").unwrap();
         // a refused field: its note under the field
@@ -561,4 +563,33 @@ async fn touch(f: &Fixture, step: &'static str) {
         })
         .await
         .unwrap();
+}
+
+/// The bug this catches: a plan at scale resent its rows as the clock moved (a running time
+/// "46m" turning "47m", a track's bars shifting along the log scale), hundreds of kilobytes a
+/// minute with nothing changed. The clock is the page's to move (`nav.js`'s tick): an idle
+/// atlas-sized plan's stream sends nothing while minutes pass.
+#[tokio::test]
+async fn an_idle_plan_at_scale_sends_nothing_as_the_clock_moves() {
+    let mut f = Fixture::new().await;
+    let atlas = crate::neutral::seed_big(&f.writer, f._home.path()).await;
+    tokio::time::pause();
+    f.dashboard = f
+        .dashboard
+        .with_clock(Clock::tokio(std::time::SystemTime::now()));
+    let router = f.router();
+    let mut body = open(&router, &format!("/projects/id/{atlas}/stream")).await;
+    let first = first_batch(&mut body).await;
+    assert!(
+        first.contains("selector #project-board"),
+        "{:?}",
+        selectors(&first)
+    );
+    let rest = read_for(&mut body, Duration::from_secs(5 * 60)).await;
+    assert!(
+        !rest.contains("datastar-patch-elements") && !rest.contains("datastar-patch-signals"),
+        "an idle plan sent {} bytes as the clock moved: {:?}",
+        rest.len(),
+        selectors(&rest)
+    );
 }

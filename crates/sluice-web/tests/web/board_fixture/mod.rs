@@ -257,6 +257,12 @@ impl Fixture {
         }
         (status, body)
     }
+    /// A project's page as it reads with each row of At work opened (`plan_html::opened`).
+    pub async fn opened(&self, path: &str) -> String {
+        let (status, body) = self.get(path).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        crate::plan_html::opened(&self.router(), body).await
+    }
     pub async fn post(&self, path: &str, form: &[(&str, &str)]) -> (StatusCode, Value) {
         let body = url::form_urlencoded::Serializer::new(String::new())
             .extend_pairs(form)

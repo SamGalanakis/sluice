@@ -719,7 +719,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             said,
             meta: &meta,
             track: &track(segs, ticks, now),
-            drill: "",
+            drill: None,
         })
     };
     let rows = [

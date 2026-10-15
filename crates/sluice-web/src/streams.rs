@@ -92,26 +92,60 @@ impl RenderedBatch {
         }
     }
 }
-/// `html` with the text of each ticking `<time data-since=…>` and `<time data-ago=…>` left out
-/// (its tag kept).
+/// What the page's clock keeps, so the clock alone never changes a version: each tag that opens
+/// with one of these, and what of it is the clock's: the text of a ticking time, the `style` of
+/// a bar or mark on the log scale (`unit_steps::bar`), the `class` of a row's heard line.
+const CLOCK: [(&str, Clocked); 4] = [
+    ("<time data-since=", Clocked::Text),
+    ("<time data-ago=", Clocked::Text),
+    ("<i data-a=", Clocked::Attr(" style=\"")),
+    ("<span data-heard=", Clocked::Attr(" class=\"")),
+];
+#[derive(Clone, Copy)]
+enum Clocked {
+    /// Its text, to its `</time>`.
+    Text,
+    /// This attribute's value, in its tag.
+    Attr(&'static str),
+}
+/// `html` with what the page's clock keeps left out (`CLOCK`), each tag otherwise kept.
 fn without_clock(html: &str, out: &mut Vec<u8>) {
     let mut rest = html;
-    while let Some(at) = ["<time data-since=", "<time data-ago="]
+    while let Some((at, clocked)) = CLOCK
         .iter()
-        .filter_map(|open| rest.find(open))
-        .min()
+        .filter_map(|(open, c)| rest.find(open).map(|at| (at, *c)))
+        .min_by_key(|(at, _)| *at)
     {
         let Some(tag) = rest[at..].find('>') else {
             break;
         };
         let (kept, after) = rest.split_at(at + tag + 1);
-        out.extend_from_slice(kept.as_bytes());
-        rest = after.find("</time>").map_or(after, |end| &after[end..]);
+        match clocked {
+            Clocked::Text => {
+                out.extend_from_slice(kept.as_bytes());
+                rest = after.find("</time>").map_or(after, |end| &after[end..]);
+            }
+            Clocked::Attr(name) => {
+                let tag = &kept[at..];
+                out.extend_from_slice(&kept.as_bytes()[..at]);
+                match tag.find(name).and_then(|from| {
+                    let value = from + name.len();
+                    tag[value..].find('"').map(|end| (from, value + end + 1))
+                }) {
+                    Some((from, to)) => {
+                        out.extend_from_slice(&tag.as_bytes()[..from]);
+                        out.extend_from_slice(&tag.as_bytes()[to..]);
+                    }
+                    None => out.extend_from_slice(tag.as_bytes()),
+                }
+                rest = after;
+            }
+        }
     }
     out.extend_from_slice(rest.as_bytes());
 }
 /// A region's skeleton as the comparison keeps it: hashed, its clock left out.
-fn skeleton_hash(skeleton: &str) -> u64 {
+pub fn skeleton_hash(skeleton: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut bytes = Vec::with_capacity(skeleton.len());
     without_clock(skeleton, &mut bytes);

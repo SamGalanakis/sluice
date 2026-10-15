@@ -828,18 +828,10 @@ impl StepView {
         }
         words
     }
-    /// Now leads with what the step itself wrote last: its live progress when that is newer
-    /// than its own latest message.
-    pub fn progress_first(&self) -> bool {
-        let own = self.exchange.rows.iter().find_map(|row| match row {
-            super::threads::Row::Group(g) if g.from == super::threads::Who::This => {
-                g.entries.first().map(|e| e.item.message.at.as_str())
-            }
-            _ => None,
-        });
-        self.progress
-            .as_ref()
-            .is_some_and(|p| p.live && own.is_none_or(|at| p.at.as_str() > at))
+    /// Its live progress, which Now draws in one place for every running step: after its
+    /// agent's turn, before its messages.
+    pub fn live_progress(&self) -> Option<&ProgressView> {
+        self.progress.as_ref().filter(|p| p.live)
     }
     /// Its open question to the owner as the question card, answered in place ("" for none).
     pub fn asking_card(&self) -> Result<TrustedHtml, askama::Error> {

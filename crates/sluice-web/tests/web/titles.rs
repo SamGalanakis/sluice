@@ -21,8 +21,7 @@ async fn recipe_titles_and_search() {
     let f = Fixture::new().await;
     let id = f.titled().await;
     {
-        let (status, html) = f.get(&format!("/projects/id/{id}")).await;
-        assert_eq!(status, StatusCode::OK, "{html}");
+        let html = f.opened(&format!("/projects/id/{id}")).await;
         // l2 failed: an item of Needs you, above everything else; l1 runs, a row at work; l3,
         // held by l2 and not begun, counted
         assert_eq!(plan_html::place(&html, "l2"), "stopped");

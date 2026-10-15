@@ -50,8 +50,8 @@ async fn a_units_owner_is_said_once_on_its_plan_row_and_in_its_page_head_and_kep
         .await
         .unwrap();
     let own = "<span class=\"own\">@lash-f4</span>";
-    let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
-    let row = between(&plan, "id=\"u-alpha\"", "<div class=\"ro-drill\">");
+    let plan = f.opened(&format!("/projects/id/{id}")).await;
+    let row = between(&plan, "id=\"u-alpha\"", "<div id=\"drill-");
     assert!(row.contains(own), "the row's title line: {row}");
     let (_, runs) = f
         .get(&format!("/projects/id/{id}/steps/alpha-build?tab=runs"))
@@ -59,7 +59,7 @@ async fn a_units_owner_is_said_once_on_its_plan_row_and_in_its_page_head_and_kep
     let runs_head = between(&runs, "<div class=\"sv-hd has-own\">", "</div>");
     assert!(runs_head.contains(own), "the Runs tab's head: {runs_head}");
     let view = between(&plan, "id=\"u-alpha\"", "</details>");
-    let view = &view[view.find("<div class=\"ro-drill\">").unwrap()..];
+    let view = &view[view.find("<div id=\"drill-").unwrap()..];
     assert!(
         !view.contains("class=\"own\"") && !view.contains("has-own"),
         "the open row already says its owner: {view}"
@@ -88,8 +88,8 @@ async fn a_units_owner_is_said_once_on_its_plan_row_and_in_its_page_head_and_kep
         })
         .await
         .unwrap();
-    let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
-    let row = between(&plan, "id=\"u-alpha\"", "<div class=\"ro-drill\">");
+    let plan = f.opened(&format!("/projects/id/{id}")).await;
+    let row = between(&plan, "id=\"u-alpha\"", "<div id=\"drill-");
     assert!(row.contains("<span class=\"own\">you</span>"), "{row}");
 }
 
@@ -112,7 +112,7 @@ async fn stops_say_their_owner_after_their_title_and_an_unowned_one_says_nothing
         })
         .await
         .unwrap();
-    let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
+    let plan = f.opened(&format!("/projects/id/{id}")).await;
     let unowned = super::plan_html::stopped(&plan, "alpha");
     assert!(!unowned.contains("class=\"own\""), "{unowned}");
     let owned = super::plan_html::stopped(&plan, "beta");
@@ -200,7 +200,7 @@ async fn messages_name_their_identities_and_the_old_shared_address_stays_as_stor
     );
 
     // the question, as the plan, home and the inbox draw it
-    let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
+    let plan = f.opened(&format!("/projects/id/{id}")).await;
     assert!(
         plan.contains("<b><span class=\"who-old\">orchestrator</span></b> asks:"),
         "{plan}"

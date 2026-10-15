@@ -95,15 +95,15 @@ async fn slow_chromium_a_row_opens_its_step_view_in_place_through_a_patch() {
         browser
             .wait("customElements.get('sluice-steps') && document.querySelector('#u-l1 > summary')")
             .unwrap();
-        // closed at first: the view is drawn but out of sight
+        // closed at first, its view not drawn: the page has only the rows
         assert_eq!(
-            browser.eval("[document.querySelector('#u-l1').open, document.querySelector('#u-l1 sluice-steps').checkVisibility()]").unwrap(),
-            json!([false, false])
+            browser.eval("[document.querySelector('#u-l1').open, document.querySelector('#u-l1 sluice-steps')]").unwrap(),
+            json!([false, null])
         );
-        // Enter on the row opens it
+        // Enter on the row opens it, asking for its view
         browser.eval("document.querySelector('#u-l1 > summary').focus()").unwrap();
         press(&mut browser, "Enter", 13);
-        browser.wait("document.querySelector('#u-l1').open").unwrap();
+        browser.wait("document.querySelector('#u-l1').open && document.querySelector('#u-l1 sluice-steps')").unwrap();
         browser.eval(FRAMES).unwrap();
         assert_eq!(browser.eval("document.querySelector('#u-l1 sluice-steps').checkVisibility()").unwrap(), json!(true));
         // its rows: the unit's steps in its recipe's order, each with its state's word
@@ -140,9 +140,9 @@ async fn slow_chromium_a_row_opens_its_step_view_in_place_through_a_patch() {
         // Space on another row opens it too
         browser.eval("window.other = [...document.querySelectorAll('details.ro-u')].find(d => d.id !== 'u-l1').id; document.querySelector(`#${other} > summary`).focus()").unwrap();
         press(&mut browser, " ", 32);
-        browser.wait("document.getElementById(other).open").unwrap();
+        browser.wait("document.getElementById(other).open && document.getElementById(other).querySelector('sluice-steps')").unwrap();
         // a stream patch: l1's work finishes, so l1 waits on its next step, drawn anew; its
-        // view stays open and says the new state
+        // view stays open and, asked for again by the row's new stamp, says the new state
         assert_eq!(browser.eval("document.querySelector('#u-l1').classList.contains('is-wait')").unwrap(), json!(false));
         rt.block_on(async {
             writer
@@ -161,6 +161,9 @@ async fn slow_chromium_a_row_opens_its_step_view_in_place_through_a_patch() {
             .wait("document.querySelector('#u-l1')?.classList.contains('is-wait')")
             .unwrap();
         browser.wait("document.querySelector('#u-l1').open").unwrap();
+        browser
+            .wait("document.querySelector('#u-l1 li.sv-row[data-sv=\"l1-work\"] .st-w')?.textContent === 'succeeded'")
+            .unwrap();
         browser.eval(FRAMES).unwrap();
         assert_eq!(
             browser.eval(ROWS).unwrap(),

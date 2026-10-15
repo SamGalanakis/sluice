@@ -53,7 +53,6 @@ async fn slow_chromium_the_plan_fits_every_width_from_a_phone_to_a_wide_screen()
         const LOOK: &str = r#"(() => {
   const sheet = document.querySelector('.plan-sheet');
   const box = sheet.getBoundingClientRect();
-  const row = document.querySelector('.ro-u'); if (row) row.open = true;
   const out = [...sheet.querySelectorAll(':scope > section')].filter(e => e.checkVisibility()).filter(b => { const r = b.getBoundingClientRect(); return r.left < box.left - 1 || r.right > box.right + 1; }).map(b => b.id);
   const head = document.querySelector('.plan-band h1').getBoundingClientRect();
   return {scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -65,6 +64,22 @@ async fn slow_chromium_the_plan_fits_every_width_from_a_phone_to_a_wide_screen()
             browser.navigate(&format!("{base}/projects/id/{project}")).unwrap();
             browser
                 .wait("document.readyState === 'complete' && document.querySelector('.plan-sheet')")
+                .unwrap();
+            // a row open, its steps asked for and drawn
+            browser
+                .eval("(() => { const row = document.querySelector('.ro-u'); if (row) row.open = true; })()")
+                .unwrap();
+            browser
+                .wait("!document.querySelector('.ro-u') || document.querySelector('.ro-u .ro-drill sluice-steps')")
+                .unwrap();
+            // the tracks' places are the page's clock's (the server's version leaves them
+            // out): each moved off, the next tick puts it back
+            let moved = browser
+                .eval("(() => { const bars = [...document.querySelectorAll('[data-log] i[data-a]')]; for (const b of bars) b.style.setProperty('--l', '-1%'); document.querySelector('main').append(document.createElement('i')); return bars.length; })()")
+                .unwrap();
+            assert!(slug != "almanac" || moved.as_u64().unwrap() > 0, "{slug}: {moved}");
+            browser
+                .wait("[...document.querySelectorAll('[data-log] i[data-a]')].every(b => b.style.getPropertyValue('--l') !== '-1%')")
                 .unwrap();
             for width in [390, 1440, 2560] {
                 for theme in ["light", "dark"] {
@@ -95,8 +110,7 @@ async fn plan_units_and_loose_steps() {
     let f = Fixture::new().await;
     let n = neutral::seed(&f.writer, f._home.path()).await;
     {
-        let (status, html) = f.get(&format!("/projects/id/{}", n.almanac)).await;
-        assert!(status.is_success(), "{html}");
+        let html = f.opened(&format!("/projects/id/{}", n.almanac)).await;
         // a-7 asks the owner; the stops in Needs you; at work a row each; done ones lately
         // finished as cards, the oldest only counted; units not begun only counted
         let mut want: Vec<(&str, &str)> = vec![("a-7", "asks"), ("a-1", "")];
@@ -250,12 +264,12 @@ async fn plan_units_and_loose_steps() {
         let a6 = plan_html::row(&html, "a-6");
         assert!(
             a6.contains("<span class=\"vh\">running, </span>draft · ")
-                && a6.contains("<span class=\"ro-heard\">heard ")
+                && a6.contains("class=\"ro-heard\"><span class=\"dot run pulse\" aria-hidden=\"true\"></span>heard <time data-ago=")
                 && a6.contains("<b class=\"uv-from\">draft</b>: Entries 41 to 58")
                 && a6.contains("aria-label=\"Its last twelve hours, on a log scale: 3 messages\""),
             "{a6}"
         );
-        assert_eq!(a6.matches("<i class=\"tk-m\"").count(), 3, "{a6}");
+        assert_eq!(a6.matches(" class=\"tk-m\"></i>").count(), 3, "{a6}");
         // quiet: one sand pill, its stage and how long it has been silent
         let s3 = plan_html::row(&html, "s-3");
         assert!(
@@ -269,14 +283,17 @@ async fn plan_units_and_loose_steps() {
             index.contains("<span class=\"ro-heard\">no word yet</span>"),
             "{index}"
         );
-        assert!(s3.contains("<i class=\"tk-quiet\""), "{s3}");
+        assert!(s3.contains(" class=\"tk-quiet\"></i>"), "{s3}");
         // the drilldown: a disclosure whose body is the unit's steps on its
         // axis, the current one marked, each step what it runs on, then its latest and actions
         assert!(
-            a6.starts_with("<details id=\"u-a-6\" class=\"ro-u\" data-unit=\"a-6\" data-said=\"a-6-draft running|a-6-review pending|a-6-publish pending\" data-preserve-attr=\"open\"><summary class=\"ro-r\">"),
+            a6.starts_with(&format!("<details id=\"u-a-6\" class=\"ro-u\" data-unit=\"a-6\" data-said=\"a-6-draft running|a-6-review pending|a-6-publish pending\" data-preserve-attr=\"open\" data-steps=\"a-6-draft a-6-review a-6-publish\" data-on:toggle=\"el.open &amp;&amp; @get('/projects/id/{}/units/a-6/drill')\"><summary class=\"ro-r\">", n.almanac)),
             "{a6}"
         );
-        let drill = &a6[at(a6, "<div class=\"ro-drill\">")..];
+        let drill = &a6[at(
+            a6,
+            "<div id=\"drill-a-6\" class=\"ro-drill\" data-ignore-morph>",
+        )..];
         assert!(drill.contains("<sluice-steps class=\"sv\""), "{drill}");
         assert!(
             plan_html::cell(drill, "a-6-draft").starts_with("<li class=\"sv-row sv-c-run is-cur\""),

@@ -1997,9 +1997,12 @@ files), each fetched only for a face the page's theme sets text in (their `@font
 in the one stylesheet). A page and each stream batch are drawn from one store
 snapshot, with each running run's activity (its run files' modification times) read once;
 nothing that changes meanwhile fails the page. The version a page carries (`ver`) is a
-fingerprint of the HTML its stream patches (a ticking `<time data-since>`'s or
-`<time data-ago>`'s text left out: every time that ticks is one, the board's Units ages too), so
-a stream opened at it sends nothing until something shown changes. A page marks parts of what
+fingerprint of the HTML its stream patches with what the page's clock keeps left out: a ticking
+`<time data-since>`'s or `<time data-ago>`'s text (every time that ticks is one, the board's
+Units ages too), the place of each bar and tick on At work's log scale (`<i data-a>`'s style,
+kept by `nav.js` from its times) and a row's heard line's ink (`data-heard`'s class). So a
+stream opened at it sends nothing until something shown changes, however long the page stays
+open. A page marks parts of what
 it patches as regions of their own (`<!--r:id-->…<!--/r:id-->` around the element of that id):
 the plan's head, its count line, each section of the sheet (Needs you, At work, Finished
 since you looked, Done; one with nothing in it a hidden placeholder, so it keeps its place), each
@@ -2011,7 +2014,7 @@ skeleton (its HTML with its own regions left out) is unchanged: one unit's state
 unit's row, and a unit moving between sections the sections it left and joined. A stream renders its
 page again only when a cheap token moves (the store's `change_versions`, which every commit
 bumps, and the function catalog's version), and at least every 30 s for what the clock alone
-changes (a run going quiet); the drawer and a step's page read that step and its unit, not the board,
+changes (a run going quiet), which patches only when that changes what is shown; the drawer and a step's page read that step and its unit, not the board,
 and apply the board's activity observer before drawing the unit's stage strip or step view.
 While the step runs, its detail renders every second (its transcript grows with no commit). A
 step or unit no longer in the plan, or a deleted project, is said in place ("This step left the
@@ -2160,7 +2163,7 @@ work). The head's Details, the plan's one ⋯, holds Export (the plan as Mermaid
   last message and who sent it (when, its meta says); its stage (its
   step's name in a unit of several or of a recipe; a loose step's state alone), its state and
   how long it has run or waited; "heard 12m ago" when it was heard from since its run began
-  (inked from 15 minutes, bold from 30), else "no word yet"; once quiet, "quiet 2h 3m" on the
+  (inked from 15 minutes, bold from 30, the page's clock moving it on), else "no word yet"; once quiet, "quiet 2h 3m" on the
   sand in place of the stage's time; a breathing dot
   while it was heard from in the last five minutes; and its last twelve hours as a track on a
   log scale (its runs, a quiet stretch on the sand, a wait dotted, a tick a message), under one
@@ -2169,7 +2172,11 @@ work). The head's Details, the plan's one ⋯, holds Export (the plan as Mermaid
   a tick is a message."). A
   unit that has not begun and waits on earlier work is counted, not drawn ("4 waiting on earlier
   work · 25 done, the last 2h ago"), unless a find, `root=` or `recipe=` asks for it. A row is
-  a `<details>`: it opens to its step view (below) on the row's own scale, the
+  a `<details>`: opening it asks for its body (`GET /projects/id/<p>/units/<u>/drill`, which
+  answers a Datastar patch that replaces the row's empty body; while it is open the row's stream
+  carries a stamp of that body, and a new stamp asks for it again), so the page and its stream
+  carry rows, never the steps of rows nobody opened. It opens to its step view (below) on the
+  row's own scale, the
   same twelve hours on the same log scale across exactly the row's track (its timeline as wide
   as the track and ending where it does, how long each took before it), its current step's
   row tinted (a run that began earlier starts at the left edge, saying "from 3d ago"; one over
