@@ -226,7 +226,7 @@ async fn a_steps_overview_draws_its_open_question_whole_to_answer_and_its_header
     assert!(
         status.contains(&format!(
             "<a href=\"#ov-message-{q}\" title=\"Land l1 first?\">waiting on your answer</a>"
-        )) && status.contains("<span class=\"dot ask\""),
+        )) && status.contains("<p class=\"status-line\"><span class=\"nk-ask\""),
         "{status}"
     );
     assert!(!status.contains("awaiting reply"), "{status}");

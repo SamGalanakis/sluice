@@ -49,8 +49,9 @@ pub struct DayRun {
     /// When it started and ended, seconds since the epoch; no end while it runs.
     pub started: u64,
     pub ended: Option<u64>,
-    /// How it ended, from the status table; `Running` while it runs, none when it ended with
-    /// no result recorded.
+    /// How it reads, from the status table: while it runs, as its step does (running, quiet,
+    /// stopping, finishing); once ended, how it ended; none when it ended with no result
+    /// recorded.
     pub outcome: Option<Shown>,
     /// Its start as stored (RFC 3339), for a ticking "running for".
     pub started_at: String,
@@ -301,6 +302,29 @@ pub fn load(
     }
     // each run named by its unit's title, as its plan names it now
     let home = super::home_of(c);
+    // a run still going reads as its step does (`shown`): quiet, stopping or finishing too
+    let now_s = crate::clock::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut moving = BTreeMap::new();
+    for run in runs.iter_mut().filter(|r| r.outcome == Some(Shown::Running)) {
+        let (stopping, finishing) = moving.entry(run.project).or_insert_with(|| {
+            (
+                sluice_store::attempts::stopping(c, run.project).unwrap_or_default(),
+                sluice_store::attempts::finishing(c, run.project).unwrap_or_default(),
+            )
+        });
+        if let Some(mut live) = super::RunningView::of(c, run.project, &run.step)?
+            && live.run_id == run.run_id
+        {
+            super::observe_run(&home, &mut live, now_s);
+            let id = live.step.parse::<sluice_model::ids::StepId>().ok();
+            live.stopping = id.as_ref().is_some_and(|s| stopping.contains(s));
+            live.finishing = id.as_ref().is_some_and(|s| finishing.contains_key(s));
+            run.outcome = Some(live.shown());
+        }
+    }
     let mut names = BTreeMap::new();
     for run in &mut runs {
         let naming = names.entry(run.project).or_insert_with(|| {
@@ -555,7 +579,8 @@ impl DayView {
                         },
                         run.n,
                         match run.outcome {
-                            Some(Shown::Running) | None => ui::duration_text(run.seconds(self.now) as f64),
+                            None => ui::duration_text(run.seconds(self.now) as f64),
+                            Some(s) if run.running() => format!("{} {}", s.word(), ui::duration_text(run.seconds(self.now) as f64)),
                             Some(s) => format!("{} after {}", s.word(), ui::duration_text(run.seconds(self.now) as f64)),
                         }
                     ))
@@ -776,9 +801,15 @@ impl DayView {
         };
         let took = ui::duration_text(r.seconds(self.now) as f64);
         let outcome = match r.outcome {
-            Some(Shown::Running) => format!(
-                "<span class=\"tt-out tt-live\">{}running {}</span>",
-                ui::mark(Shown::Running),
+            Some(s) if s.spec().band == sluice_model::shown::Band::Running => format!(
+                "<span class=\"tt-out tt-live{}\">{}{} {}</span>",
+                if s.spec().attention {
+                    format!(" tt-look tt-{}", s.key())
+                } else {
+                    String::new()
+                },
+                ui::mark(s),
+                esc(s.word()),
                 ui::since(&r.started_at)
             ),
             Some(s) if s.spec().band == sluice_model::shown::Band::Done => format!(
@@ -895,7 +926,7 @@ pub fn band_with_id(head: &TrustedHtml, id: &str) -> TrustedHtml {
 fn ended_words(tally: &ui::Tally) -> Vec<String> {
     tally
         .iter()
-        .filter(|(s, _)| *s != Shown::Running && s.spec().attention)
+        .filter(|(s, _)| s.spec().band != sluice_model::shown::Band::Running && s.spec().attention)
         .map(|(s, n)| match s {
             Shown::Failed => format!("{n} failed"),
             Shown::Cancelled if n == 1 => "1 was cancelled".to_owned(),

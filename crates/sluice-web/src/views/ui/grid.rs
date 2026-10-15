@@ -255,8 +255,17 @@ pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
                 _ => format!("<span class=\"sc-time\">{}</span>", duration(s)),
             }
         };
+        // a reached cell's second line: its state's word, as the status table says it, then its
+        // time
+        let said = |shown: Shown| {
+            format!(
+                "<span class=\"sc-said\"><span class=\"sc-word\" aria-hidden=\"true\">{}</span>{}</span>",
+                esc(word(shown)),
+                stage.seconds.map(time).unwrap_or_default()
+            )
+        };
         // a cell's first line is its glyph (where it draws one) and its name; under it its word
-        // or its time, alone
+        // and its time
         let inner = match cell {
             Cell::Empty => match stage.shown {
                 Some(s) if s.spec().caption || s == Shown::Paused => format!(
@@ -281,28 +290,33 @@ pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
                     ),
                 },
             },
-            Cell::Done => format!(
-                "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span>{}<span class=\"vh\">: {}</span>",
-                mark(stage.shown.unwrap_or(Shown::Succeeded)),
-                esc(&stage.name),
-                stage.seconds.map(time).unwrap_or_default(),
-                esc(state)
-            ),
-            Cell::Run => format!(
-                "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span>{}<span class=\"vh\">: {}</span><span class=\"sweep\" aria-hidden=\"true\"></span>",
-                mark(stage.shown.unwrap_or(Shown::Running)),
-                esc(&stage.name),
-                stage.seconds.map(time).unwrap_or_default(),
-                esc(state),
-            ),
+            Cell::Done => {
+                let shown = stage.shown.unwrap_or(Shown::Succeeded);
+                format!(
+                    "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span>{}<span class=\"vh\">: {}</span>",
+                    mark(shown),
+                    esc(&stage.name),
+                    said(shown),
+                    esc(state)
+                )
+            }
+            Cell::Run => {
+                let shown = stage.shown.unwrap_or(Shown::Running);
+                format!(
+                    "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span>{}<span class=\"vh\">: {}</span><span class=\"sweep\" aria-hidden=\"true\"></span>",
+                    mark(shown),
+                    esc(&stage.name),
+                    said(shown),
+                    esc(state),
+                )
+            }
             Cell::Look => {
                 let shown = stage.shown.expect("a look has a state");
                 format!(
-                    "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span><span class=\"sc-word\" aria-hidden=\"true\">{}</span>{}<span class=\"vh\">: {}</span>",
+                    "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span>{}<span class=\"vh\">: {}</span>",
                     mark(shown),
                     esc(&stage.name),
-                    esc(word(shown)),
-                    stage.seconds.map(time).unwrap_or_default(),
+                    said(shown),
                     esc(state)
                 )
             }

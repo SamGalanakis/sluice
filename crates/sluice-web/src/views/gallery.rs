@@ -129,16 +129,16 @@ fn buttons() -> TrustedHtml {
 /// and heard a while ago, gone quiet, waiting on the owner's answer, failed, succeeded and
 /// waiting; a run of several and items done.
 fn status_lines() -> TrustedHtml {
-    use ui::{Dot, Tone, pill, status_line};
+    use ui::{Dot, Shown, Tone, pill, status_line};
     let t = |s: &str| TrustedHtml::owned(s.into());
     let rows = [
-        status_line(Dot::Live, &[t("<b>Running</b> 6h 34m"), t("heard 2m ago"), t("run 2, after 1 failed")]),
-        status_line(Dot::Run, &[t("<b>Running</b> 6h 34m"), t("heard 1h 18m ago")]),
-        status_line(Dot::Quiet, &[t("<b>Running</b> 9h 2m"), pill("quiet 3h", Tone::Quiet, None), t("not heard from since 3h ago")]),
+        status_line(Dot::State(Shown::Running), &[t("<b>Running</b> 6h 34m"), t("heard 2m ago"), t("run 2, after 1 failed")]),
+        status_line(Dot::State(Shown::Running), &[t("<b>Running</b> 6h 34m"), t("heard 1h 18m ago")]),
+        status_line(Dot::State(Shown::Quiet), &[t("<b>Running</b> 9h 2m"), pill("quiet 3h", Tone::Quiet, None), t("not heard from since 3h ago")]),
         status_line(Dot::Ask, &[t("<b>Running</b> 20m"), t("<a href=\"#\">waiting on your answer</a>"), t("heard just now")]),
-        status_line(Dot::Look, &[t("<b>Failed</b> 1h 42m ago"), t("after 18m")]),
-        status_line(Dot::Done, &[t("<b>Succeeded</b> 57m ago"), t("after 1h 27m"), t("14 of 14 items done")]),
-        status_line(Dot::Idle, &[t("<b>Pending</b>"), t("its last run ended 12h ago"), t("after 3m")]),
+        status_line(Dot::State(Shown::Failed), &[t("<b>Failed</b> 1h 42m ago"), t("after 18m")]),
+        status_line(Dot::State(Shown::Succeeded), &[t("<b>Succeeded</b> 57m ago"), t("after 1h 27m"), t("14 of 14 items done")]),
+        status_line(Dot::State(Shown::Pending), &[t("<b>Pending</b>"), t("its last run ended 12h ago"), t("after 3m")]),
     ];
     TrustedHtml::owned(format!(
         "<div class=\"gal-stack\">{}</div>",
@@ -180,14 +180,14 @@ fn message_cards() -> TrustedHtml {
         "<div class=\"gal-stack\">{}{}</div>",
         ui::message_card(
             "",
-            &who("This step", "orchestrator"),
+            &who("This step", "@lead"),
             &when,
             &TrustedHtml::owned("<p>Landed the seams on main. Then the rest of the lane: the parser's leak, the two flaky checks and the docs for the new flag, each in its own commit so the review reads one change at a…</p>".into()),
             "#",
         ),
         ui::message_card(
             "",
-            &who("orchestrator", "This step"),
+            &who("@lead", "This step"),
             &when,
             &TrustedHtml::owned("<p>Rebase first: <code>lash-core-store__unit_test</code> is red.</p>".into()),
             "",
@@ -427,7 +427,7 @@ fn conversation(prefix: &str, project: &ProjectId) -> Result<TrustedHtml, askama
     let long = "the regional checklist disagrees with entries/red-knot.md and with the range maps.\n\n".to_owned()
         + &"Keep both range notes; take the checklist's dates and say so in each entry. ".repeat(12);
     let items = vec![
-        item(message(152885, "orchestrator", "a-7-draft", "2026-10-08T19:33:41Z", "The sibling entries in your brief are now concrete: the autumn waders are a-6-draft.", MessageVerb::Say), "note"),
+        item(message(152885, "@lead", "a-7-draft", "2026-10-08T19:33:41Z", "The sibling entries in your brief are now concrete: the autumn waders are a-6-draft.", MessageVerb::Say), "note"),
         item(ask, "answered"),
         item(reply, "note"),
         item(message(153341, "a-8-draft", "a-7-draft", "2026-10-08T19:48:08Z", "The coastal maps are under `maps/coast/` now.", MessageVerb::Say), "note"),

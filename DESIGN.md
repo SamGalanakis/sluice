@@ -829,20 +829,23 @@ the word goes under the name, never beside it.
 - **Not reached**: an outline in `rule` with the stage's name; a waiting state that says
   itself (held, queued, paused, blocked) writes its glyph before the name and its word under
   them ("⊖ land", then "blocked").
-- **Done**: sky, its glyph (check, set by hand, skipped) and its name, how long
-  it took under it.
+- **Done**: sky, its glyph (check, set by hand, skipped) and its name, its word and how long
+  it took under them ("succeeded 28m").
 - **Running** (running, finishing, stopping, outside): the blue,
-  its glyph (in `on-run`) and its name small, its elapsed time big and ticking under them, a
-  sweep along its foot. It is never set
+  its glyph (in `on-run`) and its name small, its word and its elapsed time big and ticking
+  under them, a sweep along its foot. It is never set
   against a usual time: that is the Stats page's.
 - **Needs a look** (a state that wants attention: failed, cancelled, stale, quiet): sand, its
   glyph, its name and its word, its time; a quiet run keeps running's blue edge.
 - A note may span the cells not reached ("then review and publish").
 
 Every cell has the same two lines: its glyph before its name (a cell not reached that says
-nothing draws none), then its word or its time alone, big for a run and a look, small for done.
-So a state word never shares its line with the glyph, and it fits the narrowest cell in every
-theme; a word wider than its cell would wrap within it, never clip or go out of sight.
+nothing draws none), then its state's word, as the status table says it, and its time, big for
+a run and a look, small for done. The word prints in every strip, the drawer's and a phone's
+too; the time wraps under it when the cell is narrow. A state word never shares its line with
+the glyph, and a word wider than its cell wraps within it, never clipped or out of sight. The
+cell of the page's own stage is ringed inside its own edge, so the ring never reaches the cell
+beside it.
 
 Each cell's state is said in words to a screen reader, and a cell with a page links to it.
 `ui::stage_marks` draws the same strip as 12px squares in a line of words.
@@ -1022,7 +1025,7 @@ The helpers (`crates/sluice-web/src/views/`):
 | Part | File | What it draws |
 |---|---|---|
 | Page head | `ui/head.rs` (`page_head`, `page_head_with`, `page_head_html`, `page_head_note`) | a page's crumbs, name in the title style, its Details' ⋯, its sentence or muted note |
-| Status line | `ui/head.rs` (`Dot`, `status_line`) | how a thing stands: its dot (live breathing, run, quiet, ask, look, done, idle) and one muted sentence |
+| Status line | `ui/head.rs` (`Dot`, `status_line`) | how a thing stands: its state's glyph (the coral dot when it asks the owner) and one muted sentence |
 | Section head | `ui/section.rs` (`SectionHead`, `section_head`) | a region's name at 18px/600, its count, a note, one action |
 | Tabs | `ui/tabs.rs` (`Tab`, `tabs_open`/`close`, `panel_open`/`close`, `switch`) | pill tabs over panels; the view switch and the messages' switch as pill links |
 | Buttons | `ui/button.rs` (`Btn`, `submit`, `link`) | Primary (the next move, filled navy), Outlined, Quiet, Danger, Icon (44px, a plain glyph) |
@@ -1247,9 +1250,11 @@ the page's stream. A lane that redraws a page writes its notes here.
   then its stage muted before its title in the title style, two lines at most with the whole in
   its tooltip, and beside it its one ⋯ (its Details: its id, unit, recipe, fn, run and tags;
   then its actions: Pause or Unpause, Cancel, a failure's Set it aside, its log, Message it),
-  next to the close × in the drawer (a plain 44px icon). Under the title its status line: the
-  live dot and one muted sentence ("Running 6h 34m · heard 2m ago · run 2, after 1 failed";
-  "Failed 1h 42m ago · after 18m"; "N awaiting reply" when its messages wait). Then its words,
+  next to the close × in the drawer (a plain 44px icon). Under the title its status line: its
+  state's glyph (the coral dot while it asks the owner) and one muted sentence ("Running 6h 34m
+  · heard 2m ago · run 2, after 1 failed"; "Failed 1h 42m ago · after 18m"; "N awaiting reply"
+  when its messages wait). Each part but the last ends with its "·", so a wrapped line never
+  starts with one. Then its words,
   its unit's stage strip (its own stage ringed) and its moves, the next one filled: Retry with
   feedback (its box folded under it, Retry beside it; on a failure that repeated it leads to the
   box standing open and the bare Retry is quiet), a cancel's quiet Dismiss. Why it failed reads
@@ -1312,7 +1317,8 @@ the page's stream. A lane that redraws a page writes its notes here.
   then a column a project; each run a line, three columns: its minute in mono (never wrapped),
   its unit's title in ink and its stage muted (two lines at most; its step and run in the
   link's title), then at the right its glyph and duration (sky-ink check), its word on a sand pill
-  when it needs a look, or "running 43m" on a soft blue pill, never wrapped; a line is at most
+  when it needs a look, or "running 43m" on a soft blue pill, never wrapped. A run still going
+  reads as its step does in the status table, so a quiet one says "quiet 3h" on the sand; a line is at most
   480px, so its outcome stays by its name on a wide screen. Under 400px of frame the title takes
   a line of its own under the minute and outcome. A busy hour (more than six in a cell) lists
   only its notable runs (not a success, still running, or an hour or longer) and folds the successes behind a muted "+23 more succeeded, 1m to 12m" that opens

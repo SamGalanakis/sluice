@@ -52,30 +52,21 @@ pub fn page_head_with(
     ))
 }
 
-/// A status line's mark: the live dot (breathing while it was heard from lately), a sand ring
-/// once quiet, sand when it needs a look, coral when it asks the owner, sky when done.
+/// A status line's mark: its state's glyph, as the status table draws it everywhere, or the
+/// coral dot when it asks the owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dot {
     None,
-    Run,
-    Live,
-    Quiet,
-    Look,
     Ask,
-    Done,
-    Idle,
+    State(super::Shown),
 }
 impl Dot {
-    fn html(self) -> &'static str {
+    fn html(self) -> String {
         match self {
-            Dot::None => "",
-            Dot::Run => "<span class=\"dot run\" aria-hidden=\"true\"></span>",
-            Dot::Live => "<span class=\"dot run pulse\" aria-hidden=\"true\"></span>",
-            Dot::Quiet => "<span class=\"dot quiet\" aria-hidden=\"true\"></span>",
-            Dot::Look => "<span class=\"dot look\" aria-hidden=\"true\"></span>",
-            Dot::Ask => "<span class=\"dot ask\" aria-hidden=\"true\"></span>",
-            Dot::Done => "<span class=\"dot done\" aria-hidden=\"true\"></span>",
-            Dot::Idle => "<span class=\"dot\" aria-hidden=\"true\"></span>",
+            Dot::None => String::new(),
+            Dot::Ask => "<span class=\"nk-ask\" aria-hidden=\"true\"></span>".into(),
+            // the line's first part says the state in words
+            Dot::State(shown) => super::mark(shown).as_str().to_owned(),
         }
     }
 }
@@ -92,7 +83,7 @@ pub fn status_line(dot: Dot, parts: &[TrustedHtml]) -> TrustedHtml {
         dot.html(),
         parts
             .iter()
-            .map(|p| format!("<span>{p}</span>"))
+            .map(|p| format!("<span class=\"sl-p\">{p}</span>"))
             .collect::<Vec<_>>()
             .join(""),
     ))

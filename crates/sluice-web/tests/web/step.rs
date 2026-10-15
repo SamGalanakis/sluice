@@ -616,7 +616,7 @@ async fn a_running_step_says_what_it_is_doing_now() {
     let status = &drawer[drawer.find("<p class=\"status-line\">").unwrap()..];
     let status = &status[..status.find("</p>").unwrap()];
     assert!(
-        status.contains("<span class=\"dot quiet\"")
+        status.contains("<span class=\"g g-quiet\"")
             && status.contains("<span class=\"pill quiet\">quiet ")
             && status.contains("not heard from since <time data-ago=\"2026-10-05T09:40:00Z\""),
         "{status}"

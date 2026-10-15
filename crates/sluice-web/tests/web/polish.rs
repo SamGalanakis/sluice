@@ -517,8 +517,8 @@ async fn composing_waits_and_previous_outputs() {
         let (_, page) = f.get(&format!("/projects/id/{id}/steps/redo")).await;
         let when = between(&page, "<p class=\"status-line\">", "</p>");
         assert!(
-            when.contains("<span>its last run ended <time")
-                && when.contains("</time></span><span>after &lt;1s</span>"),
+            when.contains("<span class=\"sl-p\">its last run ended <time")
+                && when.contains("</time></span><span class=\"sl-p\">after &lt;1s</span>"),
             "{when}"
         );
         assert!(!page.contains(">Ended "), "{page}");

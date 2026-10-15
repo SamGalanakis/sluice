@@ -1849,12 +1849,8 @@ impl StepView {
             }
             if self.asking.is_some() {
                 Dot::Ask
-            } else if self.is_quiet() {
-                Dot::Quiet
-            } else if heard.is_some_and(|h| h < 300) {
-                Dot::Live
             } else {
-                Dot::Run
+                Dot::State(shown)
             }
         } else {
             let word = {
@@ -1889,11 +1885,7 @@ impl StepView {
                 }
                 _ => parts.push(own(format!("<b>{}</b>", esc(&word)))),
             }
-            match shown {
-                Shown::Failed | Shown::Stale | Shown::Blocked => Dot::Look,
-                Shown::Succeeded | Shown::Manual => Dot::Done,
-                _ => Dot::Idle,
-            }
+            Dot::State(shown)
         };
         if let Some((run, _)) = self.retries() {
             let words = self.retries_words();
