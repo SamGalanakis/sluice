@@ -2436,6 +2436,12 @@ Claude's transcript (its session JSONL and its subagents') is read for progress,
 message so far and API errors. A record over 1 MiB (Claude Code writes one for a large tool
 result or file read) is skipped, never fatal, and the run's log says how many were skipped; the
 turn still ends at its `Stop` hook, which carries the final message, or on a stable idle pane.
+A turn that ended with background work running waits on it (`SLUICE_AGENT_WAIT_MIN`), even while
+Claude's own status says busy: after such a turn 2.1.294 says so under a compaction spinner
+frozen at `(0s)` and writes nothing until the work notifies it. Once the `Stop` hook and the
+transcript (`stop_hook_summary`, `turn_duration`) have both ended the turn, a busy status with
+background work the `Stop` hook listed is that wait, not a turn for `SLUICE_AGENT_STALL_MIN`; a
+prompt, tool result or reply in the transcript makes it a turn again.
 
 Input reaches Claude as one bracketed paste into its composer, sent with Enter once the draft
 shows, and the `UserPromptSubmit` that carries it accepts it. The adapter pastes only into a
@@ -2541,7 +2547,7 @@ engine's policy and then probes what it needs, rather than pinning one version:
 | engine | tested | floor | a newer major |
 |---|---|---|---|
 | Codex | 0.160.0, 0.160.1 | 0.160.0 | runs untested |
-| Claude Code | 2.1.283, 2.1.284 | 2.1.283 | runs untested |
+| Claude Code | 2.1.283, 2.1.284, 2.1.294 | 2.1.283 | runs untested |
 | Devin | 3000.11.3 | 3000.11.3 | refused |
 
 - A tested version runs as it is. A version at or above the floor that was not tested runs too:

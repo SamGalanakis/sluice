@@ -6,7 +6,8 @@ https://code.claude.com/docs/en/hooks
 
 The wire schema is the evidence under test. Provider prose and session paths
 are replacements. Recorded on 2.1.284; the wrapped composer case also preserves
-the recorded 2.1.283 behavior. Those two are `profile::POLICY`'s tested versions;
+the recorded 2.1.283 behavior, and the compaction case below 2.1.294's. Those three are
+`profile::POLICY`'s tested versions;
 a newer Claude Code runs untested (SPEC §15). The fake executable uses
 these channels and scripts turn timing, submit, tools/errors, background shell,
 wakeup, compaction, startup/trust, dropped Enter, resume and early exit. Its
@@ -32,3 +33,14 @@ which takes every key and paste but Escape) and scripts a resume's covered compo
 input (`cover_ms`, `hold_ms`), a dialog that takes the next paste (`modal_on_paste`) and pastes
 that leave no draft (`swallow_pastes`, counted across launches). It logs the keys and pastes it
 takes to `fixture-keys.jsonl` and each dialog it opens to `fixture-modals.jsonl`.
+
+`real-compacting-pane.txt` is the bottom of the pane four 2.1.294 lanes failed `StallCap` on:
+the turn ended with the gate in a background shell (`done 9:47 AM · 1 shell still running`),
+then a compaction spinner frozen at `(0s)` over a footer offering `esc to interrupt`, while
+Claude's session status said `busy` and its transcript took nothing until the shell's
+notification. `real-compacting-transcript.jsonl` is that session's transcript tail, cut to the
+fields sluice reads with the commands and tool output replaced: the background `Bash` call, the
+last reply, the `Stop` hook's record, then `stop_hook_summary` and `turn_duration`, which 2.1.284
+and 2.1.294 write at every turn's end. The fake writes those two after each `Stop`, and scripts
+the freeze (`compacting`, a screen it draws cut to the pane's width while it says `busy`) and a
+compaction inside a busy turn (`compact_every_ms`).

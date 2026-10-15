@@ -1,4 +1,4 @@
-//! Claude Code hook/status/TUI profile, tested on 2.1.283 and 2.1.284.
+//! Claude Code hook/status/TUI profile, tested on 2.1.283, 2.1.284 and 2.1.294.
 use super::protocol::failure;
 use crate::engines::{
     EngineError, EngineErrorKind, EngineProfile,
@@ -9,13 +9,14 @@ use std::path::Path;
 
 /// Claude Code's version policy. 2.1.283 is the floor: the hook, status, transcript and screen
 /// fixtures were recorded on 2.1.284 and the wrapped composer on 2.1.283, and nothing older was
-/// checked. Claude Code updates itself in patch releases several times a week, and its 1.x to
-/// 2.x change kept the hooks, `--settings` and transcript sluice reads, so a newer version,
-/// a newer major too, runs untested: the `--help` probe and the session's own hooks say what
-/// changed.
+/// checked. 2.1.294's busy status after a turn that left a shell running, its frozen compaction
+/// screen, its transcript's turn ends and its `Stop` hook's background tasks were recorded too.
+/// Claude Code updates itself in patch releases several times a week, and its 1.x to 2.x change
+/// kept the hooks, `--settings` and transcript sluice reads, so a newer version, a newer major
+/// too, runs untested: the `--help` probe and the session's own hooks say what changed.
 pub const POLICY: Policy = Policy {
     engine: "claude",
-    tested: &["2.1.283", "2.1.284"],
+    tested: &["2.1.283", "2.1.284", "2.1.294"],
     floor: "2.1.283",
     newer_major: Major::Accept,
 };

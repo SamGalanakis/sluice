@@ -81,6 +81,10 @@ struct Fake {
     notification: Option<Instant>,
     wakeup: bool,
     status: String,
+    /// The screen drawn instead of the composer view (`compacting`).
+    screen: Option<String>,
+    /// When the busy turn last wrote a compaction (`compact_every_ms`).
+    compacted: Option<Instant>,
     draft: String,
     paste: bool,
     input: Vec<u8>,
@@ -159,6 +163,23 @@ impl Fake {
     }
     fn draw(&self) -> io::Result<()> {
         let mut out = io::stdout().lock();
+        if let Some(screen) = &self.screen {
+            // A recorded screen, cut to the pane's width as Claude draws it.
+            let size = Command::new("stty")
+                .arg("size")
+                .stdin(Stdio::inherit())
+                .output()?;
+            let width = String::from_utf8_lossy(&size.stdout)
+                .split_whitespace()
+                .nth(1)
+                .and_then(|w| w.parse().ok())
+                .unwrap_or(80);
+            write!(out, "\x1b[H\x1b[2J")?;
+            for line in screen.lines() {
+                write!(out, "{}\r\n", line.chars().take(width).collect::<String>())?;
+            }
+            return out.flush();
+        }
         if self.cover_until.is_some() {
             write!(out, "\x1b[H\x1b[2J  Resuming the conversation\u{2026}\r\n")?;
             return out.flush();
@@ -336,8 +357,21 @@ impl Fake {
         if self.escape_wait.is_some() && !self.feed(&[])? {
             return Ok(false);
         }
+        if let Some((_, turn)) = &self.active
+            && let Some(every) = turn["compact_every_ms"].as_u64()
+            && self.compacted.get_or_insert_with(Instant::now).elapsed()
+                >= Duration::from_millis(every)
+        {
+            // A compaction inside the turn, as Claude writes one: its boundary, then the summary.
+            self.compacted = Some(Instant::now());
+            self.entry(json!({"type":"system","subtype":"compact_boundary"}))?;
+            self.entry(
+                json!({"type":"user","isCompactSummary":true,"message":{"content":"summary"}}),
+            )?;
+        }
         if self.notification.is_some_and(|t| Instant::now() >= t) {
             self.notification = None;
+            self.screen = None;
             for child in &mut self.background.0 {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -426,11 +460,26 @@ impl Fake {
             self.entry(entry)?;
             self.hook(if turn.get("error").is_some() { "StopFailure" } else { "Stop" }, json!({"error":turn.get("error_type").unwrap_or(&turn["error"]),"last_assistant_message":text,
                 "background_tasks":if self.background.0.is_empty(){json!([])}else{json!([{"id":"b1","type":"shell","status":"running","description":"sleep"}])},"session_crons":[]}))?;
-            self.status(if self.background.0.is_empty() {
-                "idle"
+            // Claude records the turn's end once its Stop hooks have run.
+            self.entry(json!({"type":"system","subtype":"stop_hook_summary","hookCount":1}))?;
+            self.entry(json!({"type":"system","subtype":"turn_duration"}))?;
+            self.compacted = None;
+            if let Some(screen) = turn["compacting"].as_str() {
+                // 2.1.294 after a turn that left a shell running: busy under a frozen
+                // `Compacting conversation… (0s)`, writing nothing until the notification.
+                self.screen = Some(screen.into());
+                self.status("busy")?;
+                // The freeze lasts the whole delay, however long the hooks took.
+                if let Some(delay) = turn["background_s"].as_f64() {
+                    self.notification = Some(Instant::now() + Duration::from_secs_f64(delay));
+                }
             } else {
-                "shell"
-            })?;
+                self.status(if self.background.0.is_empty() {
+                    "idle"
+                } else {
+                    "shell"
+                })?;
+            }
             self.draw()?;
         }
         if self.active.is_none()
@@ -445,8 +494,10 @@ impl Fake {
                 &self.home.join("fixture.cursor"),
                 self.cursor.to_string().as_bytes(),
             )?;
-            self.status("busy")?;
+            // The prompt hook before `busy`, so a stall counts from the turn's start, not
+            // from the idle composer before it.
             self.hook("UserPromptSubmit", json!({"prompt":format!("\n{text}")}))?;
+            self.status("busy")?;
             self.entry(json!({"type":"user","message":{"content":text}}))?;
             self.active = Some((
                 Instant::now() + Duration::from_secs_f64(turn["busy_s"].as_f64().unwrap_or(0.1)),
@@ -541,6 +592,8 @@ pub fn main(args: Vec<String>) -> io::Result<()> {
         notification: None,
         wakeup: false,
         status: String::new(),
+        screen: None,
+        compacted: None,
         draft: String::new(),
         paste: false,
         input: vec![],

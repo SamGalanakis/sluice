@@ -23,6 +23,9 @@ pub struct ClaudeState {
     observation: EngineObservation,
     open_turn: bool,
     ended: bool,
+    /// The main transcript's last turn record ends a turn (`stop_hook_summary`,
+    /// `turn_duration`): no prompt, tool result or reply follows it.
+    closed: bool,
     idle_since: Option<Duration>,
     idle_progress: u64,
     pending: VecDeque<(InputId, String)>,
@@ -260,6 +263,22 @@ impl ClaudeState {
         let main = main && entry.get("isSidechain").and_then(Value::as_bool) != Some(true);
         let kind = entry["type"].as_str().unwrap_or_default();
         let content = &entry["message"]["content"];
+        if main {
+            match kind {
+                "assistant" => self.closed = false,
+                // A compaction's summary is not a turn.
+                "user" if entry["isCompactSummary"].as_bool() != Some(true) => self.closed = false,
+                "system"
+                    if matches!(
+                        entry["subtype"].as_str(),
+                        Some("stop_hook_summary" | "turn_duration")
+                    ) =>
+                {
+                    self.closed = true
+                }
+                _ => {}
+            }
+        }
         if kind == "assistant" {
             if entry["isApiErrorMessage"].as_bool() == Some(true) {
                 let message = text_of(content);
@@ -374,6 +393,12 @@ impl ClaudeState {
         now: Duration,
         epoch: f64,
     ) -> EngineObservation {
+        // Claude 2.1.294 reports `busy` after a turn that left background work, under a frozen
+        // `Compacting conversation… (0s)` and a footer offering `esc to interrupt`, and writes
+        // nothing until that work notifies it. The Stop hook and the transcript both ended
+        // the turn, so this `busy` is no turn, and says nothing of its shells: the Stop
+        // hook's list does.
+        let after_turn = status == Some("busy") && self.ended && self.closed;
         let mut work = vec![];
         if status == Some("shell") {
             work.push("a background shell is running".into());
@@ -385,7 +410,7 @@ impl ClaudeState {
             ) {
                 continue;
             }
-            if status.is_some() && task["type"] == "shell" {
+            if status.is_some() && !after_turn && task["type"] == "shell" {
                 continue;
             }
             work.push(format!(
@@ -419,7 +444,9 @@ impl ClaudeState {
         } else if status == Some("waiting") || (!composer && status != Some("busy")) {
             self.observation.status = EngineStatus::Blocked;
             self.idle_since = None;
-        } else if status == Some("busy") {
+        } else if status == Some("busy")
+            && !(after_turn && !self.observation.background_work.is_empty())
+        {
             self.observation.status = EngineStatus::Busy;
             self.idle_since = None;
         } else if matches!(status, Some("idle" | "shell")) || self.ended {

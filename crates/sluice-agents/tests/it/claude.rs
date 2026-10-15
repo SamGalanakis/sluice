@@ -901,6 +901,111 @@ async fn supervisor_claude_required_update_at_exit_fails_as_blocked_screen() {
 }
 
 /// What the fake logged to `file` in `dir` (one JSON string per line), empty without it.
+/// The bottom of the pane four opus lanes failed `StallCap` on, Claude Code 2.1.294: the turn
+/// ended with the gate in a background shell, then a compaction spinner frozen at `(0s)` over
+/// a footer offering `esc to interrupt`, with nothing written to the transcript.
+const COMPACTING_PANE: &str = include_str!("../fixtures/claude/real-compacting-pane.txt");
+
+/// That lane's transcript tail, its Stop hook as 2.1.294 sends it with a shell running, and
+/// Claude's `busy` status: the turn waits on the shell. Claude saying `busy` keeps a turn the
+/// hooks and transcript never ended busy, and a finished turn with nothing running too.
+#[test]
+fn a_turn_ended_with_a_shell_running_waits_on_it_while_claude_says_busy() {
+    let stop = || {
+        hook(
+            "Stop",
+            json!({"last_assistant_message":"Gate for the fix is running on the box; waiting for it.",
+                "background_tasks":[{"id":"b6348wg30","type":"shell","status":"running","description":"Run the gate","command":"./check.sh"}],
+                "session_crons":[]}),
+        )
+    };
+    let mut state = prompted();
+    assert_eq!(snapshot(&mut state, "busy", 0).status, EngineStatus::Busy);
+    // The hook comes before the adapter reads the turn's last records.
+    state.hook(&stop()).unwrap();
+    for line in include_str!("../fixtures/claude/real-compacting-transcript.jsonl").lines() {
+        state.transcript(&serde_json::from_str(line).unwrap(), true);
+    }
+    assert!(protocol::composer_ready(COMPACTING_PANE));
+    let o = snapshot(&mut state, "busy", 1);
+    assert_eq!(
+        (o.status, o.waiting.as_deref()),
+        (EngineStatus::Idle, Some("background task: Run the gate"))
+    );
+    // A compaction that writes is progress, and no turn.
+    state.transcript(&json!({"type":"system","subtype":"compact_boundary"}), true);
+    state.transcript(
+        &json!({"type":"user","isCompactSummary":true,"message":{"content":"summary"}}),
+        true,
+    );
+    let compacted = snapshot(&mut state, "busy", 2);
+    assert!(compacted.progress > o.progress);
+    assert_eq!(compacted.status, EngineStatus::Idle);
+    // The shell's notification starts a turn without a prompt hook.
+    state.transcript(
+        &json!({"type":"user","origin":{"kind":"task-notification"},"message":{"content":"<summary>gate done</summary>"}}),
+        true,
+    );
+    assert_eq!(snapshot(&mut state, "busy", 3).status, EngineStatus::Busy);
+
+    let mut idle = prompted();
+    idle.hook(&hook(
+        "Stop",
+        json!({"last_assistant_message":"done","background_tasks":[],"session_crons":[]}),
+    ))
+    .unwrap();
+    for line in include_str!("../fixtures/claude/real-compacting-transcript.jsonl").lines() {
+        idle.transcript(&serde_json::from_str(line).unwrap(), true);
+    }
+    assert_eq!(snapshot(&mut idle, "busy", 0).status, EngineStatus::Busy);
+}
+
+/// Supervised, the frozen compaction after a turn that left a shell running waits under the
+/// `wait` limit, not `stall`, and the run submits once the shell's notification starts a turn.
+/// A busy turn that writes nothing still fails `StallCap`; one that compacts, writing to the
+/// transcript, does not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn supervisor_claude_waits_through_a_frozen_compaction_and_stalls_a_silent_turn() {
+    let limits = |cfg: &mut sluice_agents::supervisor::SupervisorConfig| {
+        cfg.limits.stall = Duration::from_millis(500);
+        cfg.limits.wait = Duration::from_secs(60);
+        cfg.limits.turn_start = Duration::from_secs(2);
+    };
+    let (frozen, silent, compacting) = tokio::join!(
+        Harness::new(json!({"turns":[
+            {"reply":"waiting for the gate","background_s":1.5,"compacting":COMPACTING_PANE},
+            {"reply":"gate passed","submit":{"word":"blue"}}
+        ]})),
+        Harness::new(json!({"turns":[{"busy_s":5}]})),
+        Harness::new(json!({"turns":[
+            {"reply":"compacted","busy_s":1.2,"compact_every_ms":100,"submit":{"word":"blue"}}
+        ]})),
+    );
+    // Each on its own thread: one run's teardown must not hide another's stall.
+    let supervise = |h: Harness| {
+        tokio::spawn(async move {
+            let (result, _) = supervise_claude(&h, limits).await;
+            result
+        })
+    };
+    let (frozen_result, silent_result, compacting_result) =
+        tokio::join!(supervise(frozen), supervise(silent), supervise(compacting));
+    let (frozen_result, silent_result, compacting_result) = (
+        frozen_result.unwrap(),
+        silent_result.unwrap(),
+        compacting_result.unwrap(),
+    );
+    // Only the turn the shell's notification starts submits.
+    frozen_result.unwrap();
+    let error = silent_result.unwrap_err();
+    assert_eq!(
+        error.kind,
+        sluice_agents::supervisor::FailureKind::StallCap,
+        "{error}"
+    );
+    compacting_result.unwrap();
+}
+
 fn logged(dir: &Path, file: &str) -> Vec<String> {
     fs::read_to_string(dir.join(file))
         .unwrap_or_default()
@@ -1320,15 +1425,15 @@ async fn launch_policy_preserves_host_config_and_refuses_missing_capabilities() 
         for (version, message) in [
             (
                 "2.1.282 (Claude Code)",
-                "claude 2.1.282 is older than 2.1.283, the oldest version with every capability sluice needs (tested 2.1.283, 2.1.284); update claude on this host, then step_retry",
+                "claude 2.1.282 is older than 2.1.283, the oldest version with every capability sluice needs (tested 2.1.283, 2.1.284, 2.1.294); update claude on this host, then step_retry",
             ),
             (
                 "2.1.284 (Other Tool)",
-                "claude: `claude --version` printed `2.1.284 (Other Tool)`, not a Claude Code version; sluice needs Claude Code 2.1.283 or newer (tested 2.1.283, 2.1.284)",
+                "claude: `claude --version` printed `2.1.284 (Other Tool)`, not a Claude Code version; sluice needs Claude Code 2.1.283 or newer (tested 2.1.283, 2.1.284, 2.1.294)",
             ),
             (
                 "latest (Claude Code)",
-                "claude: cannot read a version from `claude --version` (got `latest`); sluice needs claude 2.1.283 or newer (tested 2.1.283, 2.1.284)",
+                "claude: cannot read a version from `claude --version` (got `latest`); sluice needs claude 2.1.283 or newer (tested 2.1.283, 2.1.284, 2.1.294)",
             ),
         ] {
             let mut h = Harness::new(json!({})).await;
@@ -1350,7 +1455,7 @@ async fn launch_policy_preserves_host_config_and_refuses_missing_capabilities() 
         let bin = fake_claude(
             &h,
             "newer",
-            "2.1.293 (Claude Code)",
+            "2.1.295 (Claude Code)",
             claude::fixture::FIXTURE_HELP,
         );
         let mut adapter = Claude::new(
@@ -1365,7 +1470,7 @@ async fn launch_policy_preserves_host_config_and_refuses_missing_capabilities() 
         let verdict = adapter.version().unwrap();
         assert_eq!(
             verdict.note().unwrap(),
-            "claude 2.1.293 is newer than the tested 2.1.283, 2.1.284; accepted untested (floor 2.1.283)"
+            "claude 2.1.295 is newer than the tested 2.1.283, 2.1.284, 2.1.294; accepted untested (floor 2.1.283)"
         );
         assert!(h.scratch.0.join("probes/claude.json").is_file());
 
@@ -1374,7 +1479,7 @@ async fn launch_policy_preserves_host_config_and_refuses_missing_capabilities() 
         let bin = fake_claude(
             &h,
             "newer-without-effort",
-            "2.1.293 (Claude Code)",
+            "2.1.295 (Claude Code)",
             &without,
         );
         h.adapter = Claude::new(
@@ -1387,7 +1492,7 @@ async fn launch_policy_preserves_host_config_and_refuses_missing_capabilities() 
         assert_eq!(error.kind, EngineErrorKind::CapabilityMismatch);
         assert_eq!(
             error.message,
-            "claude 2.1.293 lacks `--effort` that sluice needs (tested 2.1.283, 2.1.284; this version is untested)"
+            "claude 2.1.295 lacks `--effort` that sluice needs (tested 2.1.283, 2.1.284, 2.1.294; this version is untested)"
         );
         assert!(!h.context.run_dir.join("claude-settings.json").exists());
     }

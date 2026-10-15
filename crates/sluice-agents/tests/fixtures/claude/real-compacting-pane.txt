@@ -1,0 +1,15 @@
+● Telling the unit owner that main carries a scoped-loop regression and the fix is gating.
+
+  Ran 1 shell command
+
+● Gate for the fix is running on the box; waiting for it.
+
+✻ Sautéed for 3m 9s · done 9:47 AM · 1 shell still running
+
+✢ Compacting conversation… (0s)
+  ⎿  Tip: Send messages to Claude while it works to steer Claude in real-time
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell · esc to interrupt · ← 2 agents · ↓ to manage
