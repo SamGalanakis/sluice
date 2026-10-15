@@ -605,7 +605,12 @@ impl StatsView {
                 self.window.words(),
             )
         };
-        ui::page_head_note("Stats", &TrustedHtml::owned(esc(&note)))
+        ui::lead_head(
+            "Stats",
+            &TrustedHtml::owned(esc(&note)),
+            &self.switch(),
+            &TrustedHtml::default(),
+        )
     }
     /// The window switch in the row: a link a window, the chosen one filled.
     pub fn switch(&self) -> TrustedHtml {
@@ -1050,7 +1055,6 @@ async fn page(
             &view.href(),
             &Frame {
                 head: drawn.regions[1].html.clone(),
-                tools: view.switch(),
                 ..Frame::default()
             },
         )

@@ -495,7 +495,12 @@ impl LogView {
         };
         TrustedHtml::owned(format!(
             "<div id=\"log-band\" class=\"band-wrap\">{}</div>",
-            super::ui::page_head_note("Log", &TrustedHtml::owned(note))
+            super::ui::lead_head(
+                "Log",
+                &TrustedHtml::owned(note),
+                &TrustedHtml::default(),
+                &TrustedHtml::default()
+            )
         ))
     }
 }

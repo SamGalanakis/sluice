@@ -127,6 +127,7 @@
   --band-muted: color-mix(in oklch, var(--band-ink) 74%, transparent);
   --band-rule: color-mix(in oklch, var(--band-ink) 30%, transparent);
   --band-hover: color-mix(in oklch, var(--band-ink) 12%, transparent);
+  --band-on: color-mix(in oklch, var(--band-ink) 22%, transparent);
   --lift: 0 1px 2px light-dark(color-mix(in oklch, var(--band) 10%, transparent), transparent),
           0 14px 32px light-dark(color-mix(in oklch, var(--band) 16%, transparent),
                                  color-mix(in oklch, black 55%, transparent));
@@ -345,8 +346,8 @@ a.pill:hover { filter: brightness(.96); color: inherit; }
    fade, until it is scrolled to its end */
 .tabs[data-more]::after { content: "›"; position: sticky; right: 0; flex: none; display: grid;
   place-items: center end; width: 44px; margin-left: -44px; padding-right: 4px; pointer-events: none;
-  font: var(--w-strong) 22px/1 var(--font-text); color: var(--ink-muted);
-  background: linear-gradient(to right, transparent, var(--paper) 60%); }
+  font: var(--w-strong) 22px/1 var(--font-text); color: var(--tabs-cue, var(--ink-muted));
+  background: linear-gradient(to right, transparent, var(--tabs-bg, var(--paper)) 60%); }
 .tabs > :is(a, button) { position: relative; isolation: isolate; flex: none; display: inline-flex;
   align-items: center; gap: 6px; min-height: 44px; padding: 0 12px; border: 0; border-radius: 0;
   background: none; box-shadow: none; color: var(--ink-muted); font: var(--w-regular) var(--t-md)/20px var(--font-text);
@@ -360,7 +361,6 @@ a.pill:hover { filter: brightness(.96); color: inherit; }
 .tabs > :is([aria-selected=true], [aria-current=page], [aria-current=true])::before { background: var(--paper-2); }
 .tabs > :is(a, button):focus-visible { outline-offset: -4px; }
 .tabs .n { color: var(--ink-muted); font-weight: var(--w-regular); font-size: var(--t-sm); }
-.tabs.lead { margin-left: -12px; }
 /* a tablist over its panels sticks to the top of what scrolls (the window; in the drawer, under
    its close band) */
 sluice-tabs { display: block; min-width: 0; }
@@ -386,6 +386,8 @@ sluice-tabs > .tabs { position: sticky; top: 0; z-index: 4; margin: 0 0 20px -12
 .sec-h > :is(h2, h3) { margin: 0; font: var(--w-strong) var(--t-section)/26px var(--font-text); letter-spacing: -0.005em;
   color: var(--ink); }
 .sec-h .n { font-variant-numeric: tabular-nums; }
+/* a note and what stands in it (At work's ⓘ) on one line */
+.sec-note { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
 .sec-h > .grow { flex: 1; }
 .sec-h a { color: inherit; }
 
@@ -505,10 +507,27 @@ main > * { grid-column: col; }
 .site-head :focus-visible { outline-color: var(--band-ink); }
 .site-head ::selection { background: var(--band-ink); color: var(--band); }
 
-/* the band's top row: the mark and the name, Projects, the project, Inbox with the coral
-   count; the live line and display preferences at the right */
-nav.top { display: flex; align-items: center; gap: 0 24px; min-height: 52px;
-          font-size: 14px; font-weight: 600; }
+/* the bar (`layout.html`): one row on the band from the mark to display preferences: the mark
+   (and "sluice" on a page of no project), the project switcher, the page's sections as tabs;
+   at the right the page's tools (the plan's Find and view switch), Inbox with the coral count,
+   Live, display preferences. Narrower than it fits (`@container bar`), it wraps to two rows:
+   the nav row, then the sections (scrolling sideways, a chevron while there is more) with the
+   tools at their right. The nav (`#top-nav`, which a stream patches) and the tools are its
+   items in one flex row (`display: contents`). */
+.site-head { container: bar / inline-size; }
+.site-bar { display: flex; flex-wrap: wrap; align-items: center; column-gap: 18px; min-height: 52px;
+       font-size: 14px; font-weight: 600; }
+.site-bar > nav.top { display: contents; }
+.site-bar a.brand { order: 1; }
+.site-bar details.switcher { order: 2; min-width: 0; }
+.site-bar > nav > .bar-tabs { order: 3; }
+.site-bar > .bar-tools { order: 4; }
+.site-bar #nav-inbox { order: 5; }
+.site-bar .live { order: 6; }
+.site-bar details.settings { order: 7; }
+.site-bar::after { content: ""; order: 8; display: none; flex-basis: 100%; }
+/* what goes right: the tools when the page has some, else Inbox */
+.site-bar > .bar-tools, .site-bar:not(:has(> .bar-tools)) #nav-inbox { margin-left: auto; }
 nav.top > a, nav.top details.switcher > summary { display: flex; align-items: center; gap: 8px;
   min-height: 52px; color: var(--band-ink); }
 nav.top a.brand { gap: 10px; font-size: 16px; font-weight: 800; letter-spacing: -0.01em; }
@@ -518,18 +537,111 @@ nav.top > a[aria-current], details.switcher.current > summary {
 .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px;
          height: 20px; padding: 0 6px; background: var(--coral); color: var(--on-coral);
          border-radius: var(--radius-chip); font-size: 12px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
-/* unread notes and no question: a small square in the band's ink (coral is for questions) */
-.notes-dot { width: 8px; height: 8px; background: var(--band-ink); }
+/* unread notes and no question: a small dot in the band's ink (coral is for questions) */
+.notes-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--band-ink); }
 /* the page's stream: "Live" while it is, set from the stream's banner (`html[data-stream]`) */
-.live { display: none; margin-left: auto; align-items: center; gap: 8px; color: var(--band-muted);
+.live { display: none; align-items: center; gap: 8px; color: var(--band-muted);
         font-weight: 500; white-space: nowrap; }
 .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--band-mark); }
 html[data-stream="live"] .live { display: flex; }
-html[data-stream="live"] .live + sluice-menu > details.settings,
-.live[hidden] + sluice-menu > details.settings { margin-left: 0; }
+/* the sections on the band: muted words, the current one in ink on a pill of the band's hover */
+.bar-tabs { flex: 0 1 auto; align-self: stretch; --tabs-bg: var(--band); --tabs-cue: var(--band-ink); }
+.bar-tabs > a { min-height: 52px; padding: 0 10px; color: var(--band-muted); font-size: 14px; }
+.bar-tabs > a:hover { color: var(--band-ink); }
+.bar-tabs > a:hover::before { background: var(--band-hover); }
+.bar-tabs > a[aria-current=page] { color: var(--band-ink); }
+.bar-tabs > a[aria-current=page]::before { background: var(--band-hover); }
+.site-head .bar-tabs > a:focus-visible { outline-offset: -6px; }
+/* the tools: Find an icon that opens into its field (on a click or `/`; it stays open while it
+   holds a find), then the view switch, three icons */
+.bar-tools { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.bar-tools .pl-find { margin: 0; flex-wrap: nowrap; min-width: 0; }
+.bar-tools .q-field { flex: 0 1 260px; width: 260px; min-width: 0; max-width: 260px; }
+.bar-tools .pl-find input[type=search] { height: 36px; color: var(--ink); }
+.bar-tools .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) .q-field {
+  flex: none; width: 40px; min-width: 40px; }
+.bar-tools .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) input[type=search] {
+  width: 40px; padding: 0; border-color: transparent; background: transparent; color: transparent;
+  box-shadow: none; cursor: pointer; }
+.bar-tools .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) input::placeholder {
+  color: transparent; }
+.bar-tools .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) .q-icon {
+  left: 12px; color: var(--band-ink); }
+.bar-tools .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) input[type=search]:hover {
+  background: var(--band-hover); }
+.view-switch { display: inline-flex; flex: none; gap: 2px; padding: 2px;
+  border-radius: var(--radius-control); box-shadow: inset 0 0 0 1px var(--band-rule); }
+.view-switch > a { display: grid; place-items: center; width: 36px; height: 32px;
+  border-radius: var(--radius-control); color: var(--band-muted); }
+.view-switch > a:hover { color: var(--band-ink); background: var(--band-hover); }
+.view-switch > a[aria-current=true] { color: var(--band-ink); background: var(--band-on); }
+.view-switch > a:focus-visible { outline-offset: -2px; }
+/* narrower than one row holds, the bar wraps: the sections and the tools a second row. Its
+   items measured: the mark 26px, a switcher 134px (220px at its 22ch), seven sections 445px,
+   Find 40px, the view switch 116px, Inbox, Live and preferences 155px, and eight gaps. So a
+   plan with a board wraps under 1180px of band, any other project's page under 1060px, and a
+   page of no project (three sections, no tools) only on a phone */
+@container bar (max-width: 1180px) {
+  .site-bar:has(.view-switch)::after { display: block; }
+  .site-bar:has(.view-switch) details.switcher { flex: 1 1 0; }
+  .site-bar:has(.view-switch) > nav > .bar-tabs { order: 9; flex: 1 1 0; margin-left: -10px; }
+  .site-bar:has(.view-switch) > .bar-tools { order: 10; }
+  .site-bar:has(.view-switch):has(> .bar-tools) #nav-inbox { margin-left: auto; }
+  .site-bar:has(.view-switch) .bar-tabs > a { min-height: 44px; }
+  /* the find open takes the row: the sections step aside until it closes */
+  .site-bar:has(.view-switch):has(> .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) > nav > .bar-tabs {
+    display: none; }
+  .site-bar:has(.view-switch):has(> .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) > .bar-tools,
+  .site-bar:has(.view-switch) > .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown))),
+  .site-bar:has(.view-switch) > .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown))) .q-field {
+    flex: 1 1 auto; width: auto; max-width: none; }
+  .site-bar:has(.view-switch):has(> .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) > .bar-tools {
+    margin-left: 0; }
+}
+@container bar (max-width: 1060px) {
+  .site-bar:has(.project-settings)::after { display: block; }
+  .site-bar:has(.project-settings) details.switcher { flex: 1 1 0; }
+  .site-bar:has(.project-settings) > nav > .bar-tabs { order: 9; flex: 1 1 0; margin-left: -10px; }
+  .site-bar:has(.project-settings) > .bar-tools { order: 10; }
+  .site-bar:has(.project-settings):has(> .bar-tools) #nav-inbox { margin-left: auto; }
+  .site-bar:has(.project-settings) .bar-tabs > a { min-height: 44px; }
+  /* the find open takes the row: the sections step aside until it closes */
+  .site-bar:has(.project-settings):has(> .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) > nav > .bar-tabs {
+    display: none; }
+  .site-bar:has(.project-settings):has(> .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) > .bar-tools,
+  .site-bar:has(.project-settings) > .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown))),
+  .site-bar:has(.project-settings) > .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown))) .q-field {
+    flex: 1 1 auto; width: auto; max-width: none; }
+  .site-bar:has(.project-settings):has(> .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) > .bar-tools {
+    margin-left: 0; }
+}
+@container bar (max-width: 760px) {
+  .site-bar { column-gap: 12px; }
+  .site-bar::after { display: block; }
+  .site-bar details.switcher { flex: 1 1 0; }
+  .site-bar > nav > .bar-tabs { order: 9; flex: 1 1 0; margin-left: -10px; }
+  .site-bar > .bar-tools { order: 10; }
+  .site-bar:has(> .bar-tools) #nav-inbox { margin-left: auto; }
+  .site-bar .bar-tabs > a { min-height: 44px; }
+  /* the find open takes the row: the sections step aside until it closes */
+  .site-bar:has(> .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) > nav > .bar-tabs {
+    display: none; }
+  .site-bar:has(> .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) > .bar-tools,
+  .site-bar > .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown))),
+  .site-bar > .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown))) .q-field {
+    flex: 1 1 auto; width: auto; max-width: none; }
+  .site-bar:has(> .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) > .bar-tools {
+    margin-left: 0; }
+}
 
+/* on the narrowest phones the mark alone says sluice, leaving the switcher its name */
+@container bar (max-width: 360px) {
+  .site-bar .wordmark { display: none; }
+}
 /* ---- the project switcher: its button is the project's name, a menu of every project ---- */
-details.switcher { position: relative; flex: none; }
+details.switcher { position: relative; flex: 0 1 auto; min-width: 0; }
+details.switcher > summary { width: fit-content; max-width: 100%; }
+details.switcher > summary, .sw-name { min-width: 0; }
 details.switcher > summary { list-style: none; cursor: pointer; user-select: none; gap: 8px; }
 details.switcher > summary::-webkit-details-marker { display: none; }
 details.switcher > summary .chev { color: var(--band-muted); }
@@ -573,7 +685,7 @@ details.switcher .menu a.all[aria-current] { color: var(--ink); }
 
 /* ---- display preferences, at the band's right end (`views::prefs`): a short menu of rows,
    Theme and Keyboard shortcuts each a sub-menu whose panel opens in the same popover -------- */
-details.settings { position: relative; flex: none; margin-left: auto; margin-right: -10px; }
+details.settings { position: relative; flex: none; margin-right: -10px; }
 details.settings > summary { display: grid; place-items: center; width: 44px; height: 44px;
   list-style: none; cursor: pointer; color: var(--band-muted); user-select: none; }
 details.settings > summary::-webkit-details-marker { display: none; }
@@ -674,6 +786,8 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; box-shadow: inset 
         background: var(--paper-raised); color: var(--ink); font-weight: var(--w-strong);
         transform: translateY(-300%); }
 .skip:focus { transform: none; box-shadow: var(--lift); }
+/* where the skip link and a returned focus land: the page, never ringed across its width */
+main#content:focus { outline: none; }
 
 /* ---- the page's head (`ui::page_head`): on the paper under the nav bar, the page's name at a
    reading size (30px, 26px on a phone), its Details' "⋯" beside it, and on a plan and home the
@@ -694,65 +808,38 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; box-shadow: inset 
              max-width: var(--measure); }
 .page-note code { font-size: 12.5px; }
 .page-head .crumbs { margin: 0 0 6px; font-size: 13px; }
+/* a page the bar already names (`ui::lead_head`): its lead line first, what stands beside it
+   (the project's "⋯", Stats' window) at its right */
+.page-head.is-lead { padding-top: calc(16px * var(--density)); }
+/* with nothing to show (settings) only its heading, for a screen reader, and no space */
+.page-head.is-lead:not(:has(> .ph-lead, > :not(h1))) { display: contents; }
+.ph-lead { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; min-width: 0; }
+.ph-lead > .page-line { flex: 1 1 14rem; min-width: 0; margin: 0; font-size: var(--t-lead); line-height: 26px; }
+.ph-lead > .page-line:empty { flex: 0; }
+.ph-lead > :not(.page-line, sluice-menu), .ph-lead > sluice-menu > details.dm { flex: none; margin-left: auto; }
+.ph-lead > sluice-menu > details.dm { margin-top: 1px; }
 .page-alert { display: flex; gap: 10px; align-items: flex-start; margin: 8px 0 0; padding: 8px 14px;
   width: fit-content; max-width: 100%; border-radius: var(--radius-cell); background: var(--sand-pale); }
 .page-alert .ro-icon { flex: none; margin-top: 1px; color: var(--sand-ink); }
 
-/* ---- the page's row on the paper: its sections as tabs, a count line, a find and switches -- */
-.subnav-in { display: flex; flex-wrap: wrap; align-items: center; gap: 0 28px; min-height: 44px;
-              padding: 0; border-bottom: 1px solid var(--rule); }
-.subnav-meta { font-size: 13px; color: var(--ink-muted); }
-/* the drawer beside the page leaves the row its sections and a narrower Find, on one line */
-.drawer-open .subnav-meta { display: none; }
-.drawer-open .subnav-in { column-gap: 20px; }
-.drawer-open .subnav-tools :is(.q-field, input[type=search]) { width: 160px; min-width: 0; }
-.subnav-tools { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-                min-width: 0; }
 
-/* ---- the frame on a phone (to 760px): the nav bar one row of 48px (the wordmark and the way
-   to every project give way to the switcher, whose menu has them; the live line a square), the
-   page's name a size down, the row's sections a line that scrolls, its tools on a line of their
-   own; targets 44px */
+/* ---- the frame on a phone (to 760px): the bar's rows 48px and 44px (the switcher shortens
+   first; the live line a dot), the sections a size down, every target 44px */
 @media (max-width: 760px) {
   main { padding: calc(14px * var(--density)) 0 calc(48px * var(--density)); }
-  nav.top { gap: 0 14px; min-height: 48px; }
+  .site-bar { column-gap: 12px; min-height: 48px; }
   nav.top > a, nav.top details.switcher > summary { min-height: 48px; }
-  nav.top > a.home, nav.top a.brand .wordmark { display: none; }
-  /* the switcher gives way first: its name shortens so the bar stays one row at 320px */
-  nav.top details.switcher { flex: 0 1 auto; min-width: 0; }
   nav.top details.switcher > summary:has(> .proj-icon) { min-height: 36px; margin: 6px 0; min-width: 0; }
   .sw-name { min-width: 0; max-width: none; }
   .live { font-size: 0; gap: 0; }
   details.settings { margin-right: 0; }
-  .subnav-in { gap: 0 18px; min-height: 44px; }
-  /* a project's sections all in a phone's width: tighter pills, a size down */
-  .tabs.lead { gap: 0; margin-left: -5px; }
-  .tabs.lead > a { padding: 0 4px; font-size: 13.5px; }
-  .subnav-meta { display: none; }
-  .subnav-tools { margin: 0 0 6px; flex-basis: 100%; flex-wrap: nowrap; gap: 8px; }
-  .subnav-tools > * { min-width: 0; }
-  .subnav .subnav-tools :is(sluice-search, .pl-find) { flex: 1 1 auto; min-width: 0; }
-  .subnav .subnav-tools .q-field { flex: 1 1 auto; min-width: 0; max-width: none; }
-  .subnav-tools :is(button, input, select, a) { min-height: 44px; }
-  /* the plan's Find alone: a 44px icon by the head's Details (the head under the row's 44px
-     and its hairline), opening across the head as it takes the focus (or holds a find) */
-  .page-top { position: relative; }
-  .subnav-tools:not(:has(.view-switch)):has(.pl-find) { position: absolute; z-index: 5;
-    top: calc(45px + 12px * var(--density)); right: calc(var(--gutter) + 48px); margin: 0; }
-  .subnav-tools:not(:has(.view-switch)) .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) .q-field {
-    flex: none; width: 44px; }
-  .subnav-tools:not(:has(.view-switch)) .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) input[type=search] {
-    width: 44px; padding: 0; border-color: transparent; background: transparent; color: transparent;
-    cursor: pointer; }
-  .subnav-tools:not(:has(.view-switch)) .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) input::placeholder {
-    color: transparent; }
-  .subnav-tools:not(:has(.view-switch)) .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) .q-icon {
-    left: 14px; color: var(--ink); }
-  .subnav-tools:not(:has(.view-switch)):has(.pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) {
-    left: var(--gutter); right: var(--gutter); background: var(--paper); }
+  .bar-tabs > a { padding: 0 7px; font-size: 13.5px; }
+  .bar-tools .pl-find input[type=search], .view-switch > a { height: 40px; }
+  .view-switch > a { width: 40px; }
   .prefs .themes label, .prefs label.check, .sub-row, .sub-back { min-height: 44px; }
   .page-head { padding: calc(12px * var(--density)) 0 calc(8px * var(--density)); }
   .ph-name > h1, .page-head > h1 { font-size: 22px; line-height: 28px; }
+  .ph-lead > .page-line { font-size: var(--t-body); line-height: 22px; }
   /* its links (the questions, a recipe) a 44px target, the line's height unchanged */
   .page-line a { display: inline-block; padding: 11.5px 0; margin: -11.5px 0; }
 }
@@ -1129,7 +1216,7 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--ink) 86%, var(--pa
   html.drawer-open main {
     grid-template-columns: [full-start] minmax(var(--gutter), 1fr) [col-start] minmax(0, var(--frame)) [col-end]
                            minmax(var(--drawer-gap), 1fr) [full-end]; }
-  html.drawer-open :is(.band-in, .subnav) { padding-right: var(--drawer-gap); }
+  html.drawer-open .band-in { padding-right: var(--drawer-gap); }
 }
 /* its close: the round icon button at the top right, on a band of its own that turns opaque
    once the drawer scrolls (`scrolled`, set by sluice.js), so what passes under it is hidden
@@ -2257,6 +2344,7 @@ details.read-today .item { opacity: .85; }
 }
 .plan-sheet { display: grid; gap: 36px; min-width: 0; padding-top: 14px; }
 .pb-sec { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.pb-sec[hidden] { display: none; }
 /* a section's head in the sheet: the section's own gap sets it off */
 .pb-sec > .sec-h { margin: 0; }
 .pb-sec > .sec-h .nd-form { display: contents; }
@@ -2297,7 +2385,6 @@ details.read-today .item { opacity: .85; }
 .nd-more ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }
 .nd-more li span { color: var(--ink-muted); }
 .nd-acts { display: flex; align-items: center; gap: 6px; }
-.nd-none { margin: 0; color: var(--ink-muted); }
 .nd-gone { list-style: none; margin: 2px 0 0; padding: 0 4px; display: grid; gap: 2px; font-size: 13px;
            color: var(--ink-muted); }
 .nd-gone li > span { margin-right: 8px; }
@@ -2335,6 +2422,10 @@ details.read-today .item { opacity: .85; }
                   grid-template-areas: var(--ro-areas); }
 .ro-axis { padding: 2px 0; font-size: 12px; line-height: 16px; color: var(--ink-muted); }
 .ro-axis-g { display: none; }
+/* At work's head on the axis's line: its name, counts and ⓘ over the rows' own columns, the
+   labels over the tracks */
+.ro > .ro-axis.ro-head { align-items: end; padding: 0 0 6px; }
+.ro-head > .sec-h { grid-column: 1 / track-start; margin: 0; font-size: var(--t-body); line-height: 22px; color: var(--ink-muted); }
 .ro-ticks { grid-area: track; position: relative; height: 16px; }
 .ro-ticks > span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
 .ro-ticks > span:first-child { transform: none; }
@@ -2446,7 +2537,9 @@ details.read-today .item { opacity: .85; }
   .ro.no-badge { --ro-cols: minmax(0, 1fr) 16px; --ro-areas: "who chev" "meta ." "track ."; --track-in: 0px; }
   .ro-axis, .ro-r { column-gap: 12px; }
   /* the scale over each group's first track, its ends alone */
-  .ro > .ro-axis { display: none; }
+  .ro > .ro-axis:not(.ro-head) { display: none; }
+  .ro-head > .sec-h { grid-column: 1 / -1; }
+  .ro-head > .ro-ticks { display: none; }
   .ro-axis-g { display: grid; padding-top: 6px; }
   .ro-axis-g .ro-ticks > span:not(:first-child, :last-child) { display: none; }
   .ro-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
@@ -2465,9 +2558,6 @@ details.read-today .item { opacity: .85; }
 }
 
 /* the page's row: the plan's other ways to look, a quiet menu at its end */
-.subnav-tools .pl-find { margin: 0; flex-wrap: nowrap; }
-.subnav-tools .q-field { min-width: 200px; max-width: 280px; }
-.subnav-tools .pl-find input[type=search] { height: 38px; }
 
 /* Done, when asked for: a dense index, newest first, in columns */
 .pl-idx { list-style: none; margin: 0; padding: 12px 14px; border-radius: var(--radius-module); background: var(--paper-2);
@@ -2597,31 +2687,21 @@ html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane { display: 
    owner, or the address asks the plan something) */
 @media (min-width: 1280px) {
   body:has(.project-page.has-panel:not([data-view])) .view-switch > [data-view-tab="both"] {
-    color: var(--ink); font-weight: var(--w-strong); }
-  body:has(.project-page.has-panel:not([data-view])) .view-switch > [data-view-tab="both"]::before {
-    background: var(--paper-2); }
+    color: var(--band-ink); background: var(--band-on); }
 }
 @media (min-width: 720.02px) and (max-width: 1279px) {
   body:has(.project-page.has-panel:not([data-view])) .view-switch > [data-view-tab="plan"] {
-    color: var(--ink); font-weight: var(--w-strong); }
-  body:has(.project-page.has-panel:not([data-view])) .view-switch > [data-view-tab="plan"]::before {
-    background: var(--paper-2); }
+    color: var(--band-ink); background: var(--band-on); }
 }
 @media (max-width: 720px) {
   html:not(.drawer-open) .project-page.has-panel:not([data-view], [data-plan-first]) > .plan-pane { display: none; }
   .project-page.has-panel:not([data-view], [data-plan-first]) > .board-side { display: block; }
   body:has(.project-page.has-panel:not([data-view], [data-plan-first])) .view-switch > [data-view-tab="board"],
   body:has(.project-page.has-panel[data-plan-first]:not([data-view])) .view-switch > [data-view-tab="plan"] {
-    color: var(--ink); font-weight: var(--w-strong); }
-  body:has(.project-page.has-panel:not([data-view], [data-plan-first])) .view-switch > [data-view-tab="board"]::before,
-  body:has(.project-page.has-panel[data-plan-first]:not([data-view])) .view-switch > [data-view-tab="plan"]::before {
-    background: var(--paper-2); }
+    color: var(--band-ink); background: var(--band-on); }
 }
 @media (max-width: 1279px) {
   .view-switch [data-view-tab="both"] { display: none; }
-  /* the switch whole beside the find, which gives way */
-  .subnav-tools .view-switch { flex: none; overflow: visible; }
-  .subnav-tools .view-switch > a { padding: 0 10px; }
   .project-page:not([data-view="board"]) > .board-side { display: none; }
   .board-pane { margin-top: 0; }
   .board-h.generic { position: absolute; width: 1px; height: 1px; overflow: hidden;

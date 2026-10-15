@@ -51,14 +51,6 @@ define("sluice-tabs", {
     const tabs = () => [...host.querySelectorAll(":scope > .tabs > [role=tab]")];
     const panels = () => [...host.querySelectorAll(":scope > .tp")];
     const valid = (key) => (tabs().some((t) => t.dataset.tab === key) ? key : tabs()[0]?.dataset.tab ?? "");
-    const bar = () => host.querySelector(":scope > .tabs");
-    // a bar wider than its room says so: it fades out at its end until scrolled there
-    const overflow = () => {
-      const list = bar();
-      if (!list) return;
-      const more = list.scrollLeft + list.clientWidth < list.scrollWidth - 2;
-      if (list.hasAttribute("data-more") !== more) list.toggleAttribute("data-more", more);
-    };
     const apply = (key) => {
       key = valid(key);
       for (const tab of tabs()) {
@@ -73,7 +65,6 @@ define("sluice-tabs", {
         if (panel.getAttribute("tabindex") !== "0") panel.setAttribute("tabindex", "0");
       }
       if (props.current !== key) host.current = key;
-      overflow();
       return key;
     };
     $$("tab", valid(props.current));
@@ -104,9 +95,6 @@ define("sluice-tabs", {
       event.preventDefault();
       choose(all[(next + all.length) % all.length].dataset.tab, { focus: true });
     });
-    on(host, "scroll", (event) => { if (event.target === bar()) overflow(); }, { capture: true });
-    on(window, "resize", overflow);
-    document.fonts?.ready.then(overflow);
 
     // deep links: the tab holding the target is chosen, a fold around it opened, and it is
     // brought into view
@@ -572,7 +560,7 @@ define("sluice-keys", {
     cleanup(() => clearTimeout(go));
     const typing = (target) =>
       target instanceof Element && Boolean(target.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])"));
-    const finder = () => [...document.querySelectorAll(":is(main, .subnav) [data-find]")].find((el) => el.checkVisibility?.() ?? true);
+    const finder = () => [...document.querySelectorAll(":is(main, .site-head) [data-find]")].find((el) => el.checkVisibility?.() ?? true);
     // arrived from `/` on a page with nothing to find: the find takes the focus
     if (location.hash === "#find") requestAnimationFrame(() => finder()?.focus());
     on(document, "keydown", (event) => {

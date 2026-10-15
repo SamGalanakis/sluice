@@ -614,11 +614,11 @@ impl InboxView {
                     )
                 }
             },
-            // the page's one tab row, For you, Questions and History, under its name: the
-            // nav's row above it is the site's or the project's, never a second row of these
-            _ => super::ui::page_head_with(
+            // the page's one tab row, For you, Questions and History, its lead (the bar says
+            // Inbox or Messages already)
+            _ => super::ui::lead_head(
+                self.title(),
                 &TrustedHtml::default(),
-                &TrustedHtml::owned(super::ui::esc(self.title())),
                 &TrustedHtml::default(),
                 &self.switch(),
             ),

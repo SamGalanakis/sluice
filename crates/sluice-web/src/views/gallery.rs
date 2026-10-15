@@ -824,17 +824,90 @@ fn summary_part() -> TrustedHtml {
         })
     ))
 }
+/// The bar in its states: a project's plan with a board (Find closed, Both chosen), the same
+/// holding a find, and a page of no project; each in a band of its own (the ids of the page's
+/// own bar left to it).
+fn bars() -> Result<TrustedHtml, askama::Error> {
+    let id = project();
+    let base = format!("/projects/id/{id}");
+    let link = |label: &str, href: String, current: bool| super::NavLink {
+        href,
+        label: label.into(),
+        current,
+    };
+    let project_nav = super::NavView {
+        projects: vec![],
+        label: "almanac".into(),
+        links: vec![
+            link("Plan", base.clone(), true),
+            link("Day", format!("{base}/day"), false),
+            link("Stats", format!("{base}/stats"), false),
+            link("Messages", format!("{base}/inbox"), false),
+            link("Log", format!("{base}/log"), false),
+            link("Functions", format!("/fns?project={id}"), false),
+        ],
+        inbox: 3,
+        notes: 0,
+        settings_href: format!("{base}/settings"),
+        selected: Some(id),
+        icon: TrustedHtml::owned("<span class=\"proj-icon pi-mono\" aria-hidden=\"true\">A</span>".into()),
+    };
+    let home_nav = super::NavView {
+        label: "All projects".into(),
+        links: vec![
+            link("Day", "/day".into(), false),
+            link("Log", "/log".into(), false),
+            link("Functions", "/fns".into(), false),
+        ],
+        inbox: 0,
+        notes: 2,
+        settings_href: String::new(),
+        selected: None,
+        icon: TrustedHtml::default(),
+        ..project_nav.clone()
+    };
+    let tools = |q: &str| {
+        TrustedHtml::owned(format!(
+            "<form class=\"board-tools pl-find\" role=\"search\" aria-label=\"Find units\" onsubmit=\"return false\"><div class=\"q-field\">{}<input type=\"search\" name=\"q\" value=\"{}\" placeholder=\"Find\" aria-label=\"Find units\" autocomplete=\"off\"><a class=\"q-clear\" href=\"#\" aria-label=\"Clear the find\">{}</a></div></form>{}",
+            super::icons::icon(super::icons::Icon::Search, 16, "q-icon"),
+            ui::esc(q),
+            super::icons::icon(super::icons::Icon::X, 16, ""),
+            super::plan::view_switch_sample(Some("both")),
+        ))
+    };
+    let viewer = super::Viewer::default();
+    let bar = |nav: &super::NavView, tools: TrustedHtml| -> Result<String, askama::Error> {
+        let frame = super::Frame { tools, ..super::Frame::default() };
+        let html = TrustedHtml::from_template(&super::Bar {
+            frame: &frame,
+            nav,
+            viewer: &viewer,
+            stream: "",
+            path: "/_ui",
+        })?;
+        Ok(html
+            .as_str()
+            .replace(" id=\"top-nav\"", "")
+            .replace(" id=\"nav-inbox\"", ""))
+    };
+    Ok(TrustedHtml::owned(format!(
+        "<div class=\"gal-bars\"><p class=\"meta\">A project's plan with a board</p>{}<p class=\"meta\">Holding a find</p>{}<p class=\"meta\">A page of no project</p>{}</div>",
+        bar(&project_nav, tools(""))?,
+        bar(&project_nav, tools("gulls"))?,
+        bar(&home_nav, TrustedHtml::default())?,
+    )))
+}
 fn head_part() -> TrustedHtml {
     let details = ui::Details::new()
         .id("Project", "01a2b3c4-5d6e-7f80-9a1b-2c3d4e5f6a7b")
         .text("About", "The field guide's spring and autumn editions, written a section at a time.");
     TrustedHtml::owned(format!(
         "<div class=\"gal-head\">{}</div>",
-        ui::page_head_with(
-            &TrustedHtml::default(),
-            &TrustedHtml::owned("almanac".into()),
+        ui::lead_head(
+            "almanac",
+            &TrustedHtml::owned("<a class=\"ask\" href=\"#\">1 question for you</a>, 1 failed, 1 cancelled. 3 at work; 3 of 10 done · 24 steps.".into()),
             &details.menu("almanac"),
-            &TrustedHtml::owned("<p class=\"page-line\"><a class=\"ask\" href=\"#\">1 question for you</a>. 1 failed, 1 cancelled. 3 units at work: 1 quiet for 53m. 2 waiting. 3 of 10 units done; the last finished 57m ago.</p>".into()),
+            &TrustedHtml::default(),
         )
     ))
 }
@@ -976,15 +1049,13 @@ fn day_lines() -> TrustedHtml {
     ))
 }
 /// The project page's view switch (`sluice-board` shows the chosen view at once and keeps it
-/// per project): Plan, Both and Board, each the current one.
+/// per project): Plan, Both and Board, each the current one, on the band it sits on.
 fn view_switches() -> TrustedHtml {
     let bar = |on: usize| {
-        let links: Vec<(String, String, bool)> = ["Plan", "Both", "Board"]
-            .iter()
-            .enumerate()
-            .map(|(i, w)| (format!("?view={}", w.to_lowercase()), (*w).to_owned(), i == on))
-            .collect();
-        ui::switch("View", "view-switch", &links)
+        format!(
+            "<div class=\"site-head\"><div class=\"band-in site-bar\">{}</div></div>",
+            super::plan::view_switch_sample(Some(["plan", "both", "board"][on]))
+        )
     };
     TrustedHtml::owned(format!(
         "<div class=\"gal-stack\">{}{}{}</div>",
@@ -1292,7 +1363,8 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
         parts.push(Part { name, wide: false, about, built, light, dark })
     };
     add("Status", "Each state a step, unit or project can be in: its glyph, its word and what it means.", "`ui::status`, `ui::glyph` or `ui::mark`, from the status table.", both(&|_| Ok(statuses()))?);
-    add("Page head", "The page's name and, on a plan and home, the summary sentence; what identifies the page sits behind its ⋯.", "`ui::page_head`, `ui::page_head_with` in `Frame::head` (`render_framed`); `ui::summary_sentence` from `ui::UnitFact`s.", both(&|_| Ok(head_part()))?);
+    add("The bar", "One row on the band: the mark, the project switcher (All projects first in its menu), the page's sections, then the plan's Find (an icon that opens into its field, open while it holds a find) and its view switch, Inbox, Live and display preferences. Narrower than it fits, a second row holds the sections, scrolling sideways with a chevron, and the tools.", "`templates/bar.html` (`views::Bar`), included by `layout.html`; its nav the region a stream patches as `top-nav`; the tools `Frame::tools` (`Plan::tools`).", both(&|_| bars())?);
+    add("Page head", "On a page the bar already names (a plan, home, a project's sections) the lead line alone, its name a heading for a screen reader, its ⋯ beside it; elsewhere (a unit, a step, a thread) the page's name over its line.", "`ui::lead_head`; `ui::page_head`, `ui::page_head_with` in `Frame::head` (`render_framed`); `ui::summary_sentence` from `ui::UnitFact`s.", both(&|_| Ok(head_part()))?);
     add("Step head", "A step's way back, name, state, words, its unit's stages and its actions.", "`StepView::band` (`templates/step_band.html`) in `Frame::head`, the region a step's stream patches as `step-band`; `ui::stage_strip_at`.", both(&|p| step_band_part(p))?);
     add("Details", "What identifies an item, behind one ⋯ at its end; a failure's ⋯ also holds Set it aside.", "`ui::Details`, its `actions` and its `menu` (`sluice-menu`).", both(&|p| Ok(details_part(p)))?);
     add("Summary sentence", "One sentence from the counts alone, the question for you first.", "`ui::summary_sentence`.", both(&|_| Ok(summary_part()))?);
@@ -1325,7 +1397,7 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Keys", "The page's keys, listed in display preferences' Keyboard shortcuts.", "`sluice-keys`.", both(&|_| Ok(keys()))?);
     add("Splitter", "The line between the plan and the board.", "`ui::splitter` (`sluice-splitter`).", both(&|p| Ok(splitters(p)))?);
     add("Day line", "The day's runs as bars, a row a project, the now rule moving with the clock while something runs.", "`DayView::day_line` in `sluice-day`, which moves its now rule and running bars on `sluice-tick`.", both(&|_| Ok(day_lines()))?);
-    add("Project page", "Plan, Both or Board: a link each, the server drawing the chosen view and keeping it per project, the board beside the plan. The step drawer opens over it from any step link; its head is the Step head above.", "`ui::switch` in `sluice-board` (`board.js`); the drawer `ui::drawer` in `sluice-drawer` (`sluice.js`). Each is one a page and binds the page's address, so the gallery draws their parts, not a second live instance.", both(&|_| Ok(view_switches()))?);
+    add("Project page", "Plan, Both or Board: an icon each in the bar, named by its title, a link each, the server drawing the chosen view and keeping it per project, the board beside the plan. The step drawer opens over it from any step link; its head is the Step head above.", "The view switch in `Plan::tools`, its tabs `sluice-board` (`board.js`); the drawer `ui::drawer` in `sluice-drawer` (`sluice.js`). Each is one a page and binds the page's address, so the gallery draws their parts, not a second live instance.", both(&|_| Ok(view_switches()))?);
     add("Themes", "Each of the thirty themes the display preferences offer, in its light and dark.", "`data-theme` on the page (the cookie `sluice_theme`); Sluice's tokens in `style.css`, each other family's in `assets/themes/`.", (themes_part(), TrustedHtml::default()));
     add("Components", "Every component, the attributes it reads and what it does.", "Rocket components in `components.js`, light DOM.", (components(), TrustedHtml::default()));
     for part in &mut parts {

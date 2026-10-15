@@ -39,6 +39,10 @@ async fn check_pages(family: &str) {
             // promise each id once (a patch targets the first match and misses the rest).
             if path != "/_ui" {
                 assert_eq!(browser.eval("[...document.querySelectorAll('[id]')].map(e => e.id).filter((id, i, all) => all.indexOf(id) !== i)").unwrap(), json!([]), "{path} repeats an id");
+            } else {
+                // Inbox's unread-notes mark is a dot (it once drew as a square ■ beside the word);
+                // the gallery's bar of no project holds notes and no question
+                assert_eq!(browser.eval("(d => !!d && d.checkVisibility() && getComputedStyle(d).borderRadius === '50%')(document.querySelector('.notes-dot'))").unwrap(), true, "the notes mark is not a dot");
             }
             // A menu keeps its panel: a <details> inside a <p> is closed out of it by the parser.
             assert_eq!(browser.eval("document.querySelectorAll('sluice-menu:empty').length").unwrap(), json!(0), "{path} has a menu the parser emptied");

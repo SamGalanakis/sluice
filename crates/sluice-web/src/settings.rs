@@ -548,11 +548,17 @@ impl ProjectSettingsView {
         )
         .map_err(render_error)
     }
-    /// The page's head: "Settings" (the nav's switcher names the project).
+    /// The page's head: its name for a screen reader alone (the bar's switcher names the
+    /// project, its tab the page).
     pub fn head(&self) -> TrustedHtml {
         TrustedHtml::owned(format!(
             "<div id=\"settings-band\" class=\"band-wrap\">{}</div>",
-            views::ui::page_head("Settings", &TrustedHtml::default())
+            views::ui::lead_head(
+                "Settings",
+                &TrustedHtml::default(),
+                &TrustedHtml::default(),
+                &TrustedHtml::default()
+            )
         ))
     }
     /// The page's body; `board` the program its box shows instead of the board's (a cleared

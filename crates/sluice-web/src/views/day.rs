@@ -492,13 +492,14 @@ impl DayView {
         }
         TrustedHtml::owned(parts.join(" "))
     }
-    /// The page's head: "Day" (the nav names a project's), and under it the date and whose
-    /// clock its hours are on.
+    /// The page's head: its lead line, the date and the window (the bar's tab says "Day").
     pub fn head(&self) -> TrustedHtml {
         let (_, date) = self.window.day_name(self.now);
-        ui::page_head_note(
+        ui::lead_head(
             "Day",
             &TrustedHtml::owned(format!("{} · the last 24 hours", esc(&date))),
+            &TrustedHtml::default(),
+            &TrustedHtml::default(),
         )
     }
     pub fn title(&self) -> String {

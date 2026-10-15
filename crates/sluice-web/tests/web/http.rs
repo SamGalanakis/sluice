@@ -562,7 +562,7 @@ async fn http_refusals_assets_and_shutdown() {
         // the band sits in a header, its landmark named apart from the settings' index
         assert!(
         page.contains(
-            "<header class=\"site-head\"><div class=\"band-in\"><nav id=\"top-nav\" class=\"top\" aria-label=\"Main\">"
+            "<header class=\"site-head\"><div class=\"band-in site-bar\"><nav id=\"top-nav\" class=\"top\" aria-label=\"Main\">"
         ),
         "{page}"
     );

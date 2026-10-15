@@ -381,7 +381,7 @@ async fn states_priorities_cancellation_and_skipped_units() {
         for said in [
             "1 failed, 1 cancelled, 1 stale, 1 quiet.",
             "5 at work;",
-            "3 of 16 done.",
+            "3 of 16 done · 16 steps.",
         ] {
             assert!(sum.contains(said), "{said}: {sum}");
         }

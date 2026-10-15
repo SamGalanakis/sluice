@@ -292,8 +292,8 @@ impl HomeView {
         };
         TrustedHtml::owned(sentence)
     }
-    /// The page's head: "All projects", the sentence across them under it, and the runner
-    /// stopped when it is. What each project finished last is on its module.
+    /// The page's head: the sentence across every project (the bar's switcher says "Projects"),
+    /// and the runner stopped when it is. What each project finished last is on its module.
     pub fn head(&self) -> TrustedHtml {
         let alert = if self.runner_stopped {
             format!(
@@ -305,14 +305,11 @@ impl HomeView {
         };
         TrustedHtml::owned(format!(
             "<div id=\"home-band\" class=\"band-wrap\">{}</div>",
-            ui::page_head_with(
+            ui::lead_head(
+                "All projects",
+                &self.summary(),
                 &TrustedHtml::default(),
-                &TrustedHtml::owned("All projects".into()),
-                &TrustedHtml::default(),
-                &TrustedHtml::owned(format!(
-                    "<p class=\"page-line\">{}</p>{alert}",
-                    self.summary()
-                )),
+                &TrustedHtml::owned(alert),
             )
         ))
     }
@@ -641,7 +638,12 @@ fn function_head(snapshot: &DashboardSnapshot, nav: &NavView) -> TrustedHtml {
     }
     TrustedHtml::owned(format!(
         "<div id=\"fns-band\" class=\"band-wrap\">{}</div>",
-        ui::page_head_note("Functions", &TrustedHtml::owned(esc(&summary)))
+        ui::lead_head(
+            "Functions",
+            &TrustedHtml::owned(esc(&summary)),
+            &TrustedHtml::default(),
+            &TrustedHtml::default()
+        )
     ))
 }
 pub fn render_functions(

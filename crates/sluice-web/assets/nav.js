@@ -146,6 +146,22 @@ function tick() {
     document.cookie = `sluice_zone=${zone}; path=/; max-age=34560000; samesite=lax`;
   }
 }
+// ---- a row of tabs wider than its room (the bar's sections on a phone, a step's tabs): it
+// says so, `data-more` drawing a chevron at its end until it is scrolled there -------------
+function more(list) {
+  const more = list.scrollLeft + list.clientWidth < list.scrollWidth - 2;
+  if (list.hasAttribute("data-more") !== more) list.toggleAttribute("data-more", more);
+}
+const everyMore = () => document.querySelectorAll(".tabs").forEach(more);
+document.addEventListener("scroll", (event) => {
+  if (event.target instanceof Element && event.target.matches(".tabs")) more(event.target);
+}, { capture: true, passive: true });
+window.addEventListener("resize", everyMore);
+document.fonts?.ready.then(everyMore);
+// a patch can draw a row anew; a tab chosen can change what a row holds
+new MutationObserver(everyMore).observe(document.body, { childList: true, subtree: true });
+everyMore();
+
 tick();
 setInterval(tick, 5000);
 new MutationObserver(tick).observe(document.querySelector("main") ?? document.body,

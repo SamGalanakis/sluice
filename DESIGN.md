@@ -1,6 +1,6 @@
 ---
 name: sluice dashboard
-description: Calm briefing. One set of components in the logo's palette: a slim navy nav bar over cream paper, each page's name in the title style with one sentence under it, cards, wells and rows on hairlines, two weights, what identifies an item behind its ⋯, the channel's blue for what runs, coral only for a question to the owner.
+description: Calm briefing. One set of components in the logo's palette: one slim navy bar over cream paper, each page led by one sentence (a page the bar does not name, its name in the title style over it), cards, wells and rows on hairlines, two weights, what identifies an item behind its ⋯, the channel's blue for what runs, coral only for a question to the owner.
 colors:
   paper: "oklch(0.98 0.017 88)"
   paper-2: "oklch(0.955 0.022 86)"
@@ -214,7 +214,7 @@ the title style, one sentence or a muted note under it), soft pill tabs, cards a
 hairlines, rows that light on hover, pills for a state, buttons that are pills with the next
 move filled, a thing's status line, message cards, a turn's tool calls in a quiet fold and the
 stage strip. Two weights (400 and 600), a short scale of sizes and six radius tokens carry the
-whole frontend. The palette is the logo's: cream paper under a slim navy nav bar, the
+whole frontend. The palette is the logo's: cream paper under one slim navy bar, the
 channel's blue the one active colour, sky done, sand needs a look, and coral spent on one thing
 only, an open question to the owner. A theme changes the colours, the faces and the materials,
 never the components.
@@ -277,11 +277,12 @@ chosen the system's. These are Sluice's (Sluice Light and Sluice Dark); every ot
 - **Navy** (`navy`): the filled button and the selected ring. `rule` and `rule-faint` (navy at
   22% and 11%) are the hairlines that part everything else; no page draws a heavy rule. In the
   dark navy turns cream, so the filled button stays the strongest thing on the paper.
-- **The nav bar** (`band`, `band-ink`, `band-muted`, `band-rule`, `band-accent`): the logo's navy
+- **The bar** (`band`, `band-ink`, `band-muted`, `band-rule`, `band-accent`, `band-hover`,
+  `band-on`): the logo's navy
   in the light, a deeper navy than the paper in the dark, cream text, sky for what the band
   links to and how long things took.
 - **The band's mark** (`band-mark`): the logo's blue on the band, the current place's underline
-  and the live square.
+  and the live dot.
 - **Run** (`run`): the channel's blue, the one active colour: a running cell's fill (cream on
   it), a running mark (edged in `run-ink`). `run-ink` is the blue as text, `focus` the focus
   ring.
@@ -297,7 +298,7 @@ chosen the system's. These are Sluice's (Sluice Light and Sluice Dark); every ot
 **The One Coral Rule.** Coral marks a question waiting on the owner, nothing else.
 **The One Blue Rule.** Blue fills only what is running now.
 
-Sluice Dark is navy paper (`paper-dark`), never black; the nav bar goes deeper than the paper
+Sluice Dark is navy paper (`paper-dark`), never black; the bar goes deeper than the paper
 so it still reads as the heaviest thing on the page. Text holds 4.5:1 in both, large text
 3:1.
 
@@ -677,7 +678,7 @@ wordmark keeps its own weight.
 
 **Fluid to a centred frame, 320px to 3840px.** The column is the window less a gutter each side
 (less the step drawer when it stands beside the page), up to `--frame` (1440px), centred; the
-nav bar's contents, the page's head, its row and the page share its edges at every width, so
+bar's contents, the page's head and the page share its edges at every width, so
 on a wide screen the page reads as one centred column under the controls that act on it
 rather than a strip pinned left. The gutter grows with the window,
 `clamp(16px, 10px + 1.5vw, 64px)` (16px on a phone, 32 at 1440, 48 at 2560, 64 at 3840), and
@@ -686,9 +687,9 @@ so does the gap between columns, `clamp(8px, 4px + 0.8vw, 28px)`. Prose keeps `-
 
 **Lay out by the box, not the window.** `main` is the `frame` container and every sheet the
 `sheet` container, so what sits in them follows the room it has, the drawer and a board beside
-the plan counted. Media queries are for the frame outside `main` (the nav bar, the head and the
-row), and
-for input (pointer, hover, motion, colour scheme).
+the plan counted; the bar is the `bar` container (the band's width), so it wraps by its own
+room. Media queries are for the rest of the frame outside `main` (the head) and for input
+(pointer, hover, motion, colour scheme).
 
 **The sheet** (`ui::grid_open`, a plain `div.sheet`) has three modes, by its own width (the
 frame keeps it to 1440px, so a wide screen gets the same sheet as a laptop, centred):
@@ -707,17 +708,36 @@ frame keeps it to 1440px, so a wide screen gets the same sheet as a laptop, cent
 
 ## The frame
 
-The page's frame (`templates/layout.html`, `render_framed`) is a slim nav bar, the page's
-row under it and the page's head on the paper under the row.
+The page's frame (`templates/layout.html`, `render_framed`) is one bar on the band and the
+page's head on the paper under it.
 
-- **The nav bar** (`nav#top-nav`, 52px; 48px on a phone): the mark and "sluice", "Projects",
-  the project switcher (its button the current project's icon and name in a box of the band's
-  rule, the menu every project; its letter icon the band's mark deepened toward the band, so
-  its ink reads at 5:1 or more), Inbox with its coral count, then at the right the live line (a
-  square in `band-mark` and "Live" while the page's stream is, from `html[data-stream]`) and
-  display preferences (below). The current place carries a 3px underline in
-  `band-mark`. On a phone the wordmark and Projects give way to the switcher (whose menu has
-  them), its name shortens before anything wraps, and the live line is its square.
+- **The bar** (`templates/bar.html`, `views::Bar`; `header.site-head`, 52px): one row, left to
+  right, the mark (it goes home; "sluice" after it on a page of no project), the project
+  switcher (its button the current project's icon and name in a box of the band's rule; on a
+  page of no project "Projects"; its menu All projects first, then every project; its letter
+  icon the band's mark deepened toward the band, so its ink reads at 5:1 or more), the page's
+  sections (Plan, Day, Stats, Messages, Log, Functions, Settings; on a page of no project Day,
+  Log, Functions): muted words on the band, the current one in band ink on a pill of
+  `band-hover`. At the right the page's tools (`Frame::tools`: the plan's Find and its view
+  switch), Inbox with its coral count (an 8px round dot in band ink for unread notes and no
+  question), the live line (a dot in `band-mark` and "Live" while the page's stream is, from
+  `html[data-stream]`; on a phone the dot alone) and display preferences (below). The
+  switcher of the current place carries a 3px underline in `band-mark`. The nav (`#top-nav`,
+  which a stream patches whole, Live and Inbox included) and the tools are the row's items
+  through `display: contents`, placed by `order`.
+- **Wrapping**: the band is the `bar` container, and where one row no longer holds what it
+  carries the bar wraps to two: the nav row (mark, switcher, Inbox, Live, preferences), then
+  the sections row (44px tabs, scrolling sideways within themselves with a chevron over a fade
+  at their end while there is more, `data-more` from `nav.js`) with the tools at its right.
+  The widths come from the items measured (the mark 26px, a switcher 134px and at most 22ch,
+  seven sections 445px, Find 40px, the view switch 116px, Inbox, Live and preferences 155px,
+  and the gaps): a plan with a board wraps under 1180px of band, any other project's page under
+  1060px, a page of no project under 760px. Wrapped, the switcher takes what the row leaves
+  and its name shortens before anything moves; under 360px the wordmark gives way to the mark.
+- **Find** (the plan's, `sluice-search`): a 40px icon on the band that opens into its 260px
+  field on a click or `/` (which focuses it from anywhere on the page), and closes back to the
+  icon when it is empty and loses the focus; it stays open while it holds a find. Wrapped, the
+  open field takes the sections' room on their row.
 - **Display preferences** (`views::prefs`, the sliders at the bar's right end) are a short
   menu, a row each on the raised paper: **Theme** (the current theme's name in muted ink and its
   swatch in the page's own tokens, then a "›"), **Show value types** (its checkbox, toggled in
@@ -737,37 +757,39 @@ row under it and the page's head on the paper under the row.
   and the back control are 40px, 44px on a phone. A pick applies at once, with no Save: the
   theme radios and the value types switch are bound to the page's signals and a change posts
   them to `/settings` (Writes).
-- **The page's head** (`Frame::head`, `ui::page_head` and `ui::page_head_with`): on the paper,
-  its crumbs when it is one thing in a tab (a step's way back to its plan and its unit, the unit
-  by its title or name cut to 40, never "Its unit"), its name in the title style with its Details' "⋯"
-  pinned to the head's right edge, and under it on a plan and on home only the summary
-  sentence (`ui::summary_sentence`), one line of large body text where it fits; a page that says
-  what it shows has a muted note in its place (`ui::page_head_note`: the Log's records, the
-  Day's date and clock, the Functions' counts). No page carries a description blurb.
-- **The row** (`.subnav`): its sections as pill tabs (`ui::tabs`: Plan, Day, Stats, Messages,
-  Log, Functions, Settings; the current one on `paper-2` at weight 600), a count line (`Frame::meta`), and at the right its tools
-  (`Frame::tools`: a find field and the view switch on a plan). A hairline closes it. A page
-  has one row of tabs: For you, Questions and History carry their switch under the page's name,
-  in the head, not in the row. On a phone the tabs stay one line (all seven fit
-  at 390px; a narrower screen scrolls them sideways within themselves) and the tools take a
-  line of their own.
-- **Where they stand**: the row comes first on every page, right under the nav bar, and the
-  head under it, so the row never moves with a head's height: a plan's, a step's, a unit's and
-  a thread's tabs are in the same place.
+- **The page's head** (`Frame::head`): no visible title where the bar already names the page
+  (`ui::lead_head`: a plan, home, Day, Stats, Messages, Log, Functions, Settings). Its name is
+  an `h1` for a screen reader alone, and its lead line comes first, in large body text: the
+  summary sentence on a plan and home (`ui::summary_sentence`), what the page shows elsewhere
+  (the Day's date and clock, Stats' window, the Log's records, the Functions' counts), with what
+  stands beside it at its right (the plan's Details' "⋯", Stats' window switch; under the line
+  when the line needs the room) and under it what belongs there (home's runner alert, the
+  messages' switch). Settings, whose sections say it all, has none. A page the bar does not name
+  keeps its heading (`ui::page_head`, `ui::page_head_with`): its crumbs when it is one thing in
+  a tab (a step's way back to its plan and its unit, the unit by its title or name cut to 40,
+  never "Its unit"), its name in the title style with its Details' "⋯" pinned to the head's
+  right edge, its status line under it (a step, a unit, a thread, a run's file, a page that
+  cannot be drawn with its muted note, `ui::page_head_note`). No page carries a description
+  blurb, and no count line: the plan's lead counts its steps.
+- **Where they stand**: the bar first on every page and the head under it, so the sections
+  never move with a head's height.
+- `main` takes the focus when the skip link or a page's script sends it there
+  (`tabindex="-1"`) but draws no ring: it is the page, not a control.
 
-The budget: at 1440px the plan's first section starts within 200px of the top (a test holds
-it within 220), about 260px on a phone.
+The budget: at 1440px the plan's first section starts within 130px of the top, about 185px on
+a phone.
 
 **The view switch** (Plan · Both · Board on a project with a board, Plan · Board below 1280px)
-is a bar of pill links in the row (`ui::switch`): the current view on `paper-2` at weight 600
-(`aria-current`), the others muted words. The server is the view's one source: a link asks it
+is three icons in a box of the band's rule among the bar's tools (a flow for Plan, two
+columns for Both, a dashboard for Board), each named by its `title` and `aria-label`: the
+current view filled in `band-on` (`aria-current`), the others muted. The server is the view's one source: a link asks it
 for its view (`?view=`, kept in the project's `sluice_view_<id>` cookie, one for every width),
 and no script remembers or switches it. With none chosen the stylesheet shows the width's
 default and fills its link: Both from 1280px, the plan between, and on a phone the board unless
 the plan comes first (`data-plan-first`: something needs the owner, or the address asks the plan
 something, a find, a Show, a chain, a recipe's units, which also sets aside a kept Board). The
-messages' switch (For you,
-Questions, History, under the page's name) and the log's presets are the same bar.
+messages' switch (For you, Questions, History, under the lead) and the log's presets are pill
+links on the paper (`ui::switch`).
 
 ## Details
 
@@ -1120,10 +1142,10 @@ The helpers (`crates/sluice-web/src/views/`):
 
 | Part | File | What it draws |
 |---|---|---|
-| Page head | `ui/head.rs` (`page_head`, `page_head_with`, `page_head_html`, `page_head_note`) | a page's crumbs, name in the title style, its Details' ⋯, its sentence or muted note |
+| Page head | `ui/head.rs` (`lead_head`, `page_head`, `page_head_with`, `page_head_html`, `page_head_note`) | on a page the bar names, its lead line with what stands beside it and its name for a screen reader; elsewhere a page's crumbs, name in the title style, its Details' ⋯, its sentence or muted note |
 | Status line | `ui/head.rs` (`Dot`, `status_line`) | how a thing stands: its state's glyph (the coral dot when it asks the owner) and one muted sentence |
 | Section head | `ui/section.rs` (`SectionHead`, `section_head`) | a region's name at 18px/600, its count, a note, one action |
-| Tabs | `ui/tabs.rs` (`Tab`, `tabs_open`/`close`, `panel_open`/`close`, `switch`) | pill tabs over panels (a bar wider than its room, as a step's on a phone, ends in a chevron over a fade until scrolled to its end); the view switch and the messages' switch as pill links |
+| Tabs | `ui/tabs.rs` (`Tab`, `tabs_open`/`close`, `panel_open`/`close`, `switch`) | pill tabs over panels (a bar wider than its room, as a step's on a phone or the bar's sections, ends in a chevron over a fade until scrolled to its end, `nav.js`'s `data-more`); the messages' switch and Stats' window as pill links |
 | Buttons | `ui/button.rs` (`Btn`, `submit`, `link`) | Primary (the next move, filled navy), Outlined, Quiet, Danger, Icon (44px, a plain glyph); one height, 32px (44px on a phone), a quiet text button its line's on a desktop; the filled one is the page's next move, so a group's "Retry all" is filled and "Set all aside" (one wording everywhere) outlined |
 | Pills | `ui/pill.rs` (`Tone`, `pill`, `pill_link`, `ask_link`) | a fact set apart in its state's tone: plain, muted, run (soft blue), look, quiet (sand), done; `ask_link` the way to an open question, its coral dot and "Waiting on your answer" (never a coral pill) |
 | Needs you | `ui/need.rs` (`Mark`, `need_line`) | an item a line: its mark (the coral dot for a question, else its state's glyph from the status table), its sentence, its one action, its × |
@@ -1182,13 +1204,14 @@ plan's glance) and a first open's theme.
 owner sees it as and how it is built, every helper and component in every state with the
 invented project's data, light and dark side by side (stacked under 900px, and at every width
 for a part that needs the grid's room), and a table of every component, its props and events.
-A new part goes there first. Its sections: Status, Page head, Step head, Details, Finished
+A new part goes there first. Its sections: Status, The bar (a plan with a board, the same
+holding a find, a page of no project), Page head, Step head, Details, Finished
 last, Summary sentence, Module grid, Modules, Section heads, Plan briefing, Stage strip, Stats,
 Step view, Pills, Buttons, Status line, Tool calls, Message cards, Tabs, Cards and wells,
 Fields, Folds, Conversation, Empty states, Confirmation, Menus, Copy, Settings, Search,
 Banners, Notice, Keys, Splitter, Day line, Project page, Themes and the Components table. The
 two page components, `sluice-board` and `sluice-drawer`, are one a page and bind the page's
-address and its streams, so the gallery draws their parts (the view switch in each state; the
+address and its streams, so the gallery draws their parts (the view switch on the band in each state; the
 step head that tops the drawer) rather than a second live instance; their live states (beside,
 over, a sheet; each view) are held by the Chromium tests (`board_browser`, `live_path`).
 
@@ -1224,45 +1247,45 @@ favicon are the owner's SVGs, served as they are.
 
 ## Pages
 
-Every page is the frame (the nav bar, display preferences, the banners: `templates/layout.html`,
-`render_framed`) around a page head and the page's own regions, each region a patch target of
+Every page is the frame (the bar, display preferences, the banners: `templates/layout.html`,
+`templates/bar.html`, `render_framed`) around a page head and the page's own regions, each region a patch target of
 the page's stream. A lane that redraws a page writes its notes here.
 
 ### The inventory
 
 | Page | Route | Drawn by | Components and helpers |
 |---|---|---|---|
-| Home | `/` (its stream `/stream`; `/title` the tab title alone) | `views::home` | page head and summary sentence, section heads, For you as Needs-you lines, Today, a card a project, pills, the index table |
-| A project's plan | `/projects/id/<p>` (`?view=plan`, `both`, `board`; `/stream`; posts `/needs`, `/seen`) | `views::board::project_page`, `views::plan`, `views::panel` (the board), `templates/project.html` | `sluice-board`, page head, pill tabs and the view switch, the Needs you well, Finished cards, At work rows with `sluice-steps`, pills, buttons, `sluice-search` (Find), `sluice-splitter`, `sluice-drawer`, `sluice-keys`, `sluice-menu`, `sluice-confirm` |
+| Home | `/` (its stream `/stream`; `/title` the tab title alone) | `views::home` | lead head (the summary sentence), section heads, For you as Needs-you lines, Today, a card a project, pills, the index table |
+| A project's plan | `/projects/id/<p>` (`?view=plan`, `both`, `board`; `/stream`; posts `/needs`, `/seen`) | `views::board::project_page`, `views::plan`, `views::panel` (the board), `templates/project.html` | `sluice-board`, lead head, the bar's Find and view switch, the Needs you well, Finished cards, At work rows with `sluice-steps`, pills, buttons, `sluice-search` (Find), `sluice-splitter`, `sluice-drawer`, `sluice-keys`, `sluice-menu`, `sluice-confirm` |
 | A step | `/projects/id/<p>/steps/<s>` (`/stream`; posts `/actions`), and in the drawer | `views::step`, `templates/step.html`, `step_band.html`, `activity.html` | the step head (page head, status line, stage strip, buttons, the ⋯ with its actions), `sluice-tabs`, Now's well with the tool calls fold, asking and stopped modules, message cards, `sluice-steps` (Runs), field tables, `sluice-fold`, `sluice-confirm`, the message box (`ui::post_form`) |
 | A unit | `/projects/id/<p>/units/<u>` (`/stream`) | `views::unit_page`, `templates/unit_page.html` | page head, status line, `sluice-steps`, asking and stopped modules, `sluice-answer` |
 | A run's file | `/projects/id/<p>/runs/<r>/files/<name>` | `views::step::run_file_page` | page head, the file on a cell-radius card in data mono |
-| Day | `/day`, `/projects/id/<p>/day` (`/stream`) | `views::day` | page head and note, `sluice-day`, the timetable with its pills and folds |
-| Stats | `/projects/id/<p>/stats` (`/stream`) | `views::stats` | page head and note, the window switch (`ui::switch`), section heads, tables, the throughput chart |
-| For you, Questions, History | `/inbox`, `/questions`, `/history`, and each under `/projects/id/<p>/` (`/stream`; posts `/messages`, `/messages/read`, `/messages/close`, a reply) | `views::inbox`, `views::threads`, `templates/inbox.html`, `history.html`, `conversation.html`, `answer.html` | page head, the messages' switch, question cards (`sluice-answer`), section heads, cards, `sluice-conversation`, `sluice-confirm` (Close all) |
+| Day | `/day`, `/projects/id/<p>/day` (`/stream`) | `views::day` | lead head, `sluice-day`, the timetable with its pills and folds |
+| Stats | `/projects/id/<p>/stats` (`/stream`) | `views::stats` | lead head with the window switch (`ui::switch`) beside it, section heads, tables, the throughput chart |
+| For you, Questions, History | `/inbox`, `/questions`, `/history`, and each under `/projects/id/<p>/` (`/stream`; posts `/messages`, `/messages/read`, `/messages/close`, a reply) | `views::inbox`, `views::threads`, `templates/inbox.html`, `history.html`, `conversation.html`, `answer.html` | lead head over the messages' switch, question cards (`sluice-answer`), section heads, cards, `sluice-conversation`, `sluice-confirm` (Close all) |
 | A thread | `/projects/id/<p>/thread?thread=<t>` | `views::inbox`, `templates/thread.html` | page head with Details, a conversation's rows, `sluice-conversation`, the message box (`ui::post_form`), `sluice-answer` |
-| Log | `/log`, `/projects/id/<p>/log` (`/stream`) | `views::log`, `templates/log.html` | page head and note, the presets (`ui::switch`), `sluice-search` filters, a section head, the records table, `sluice-copy` |
-| Functions | `/fns` (`?project=`; `/fns/stream`) | `views::home`, `templates/functions.html` | page head and note, `sluice-search`, section heads, a card a fn |
-| Settings | `/projects/id/<p>/settings` (`/stream`; posts its fields, `/board`, `/icon`, `/delete`) | `crate::settings`, `views::project_settings`, `templates/settings.html` | page head, the sections' index, section heads, field rows, switches, the danger well, `sluice-confirm` |
+| Log | `/log`, `/projects/id/<p>/log` (`/stream`) | `views::log`, `templates/log.html` | lead head, the presets (`ui::switch`), `sluice-search` filters, a section head, the records table, `sluice-copy` |
+| Functions | `/fns` (`?project=`; `/fns/stream`) | `views::home`, `templates/functions.html` | lead head, `sluice-search`, section heads, a card a fn |
+| Settings | `/projects/id/<p>/settings` (`/stream`; posts its fields, `/board`, `/icon`, `/delete`) | `crate::settings`, `views::project_settings`, `templates/settings.html` | its name for a screen reader, the sections' index, section heads, field rows, switches, the danger well, `sluice-confirm` |
 | States and parts | `/_ui` | `views::gallery`, `templates/gallery.html` | every part and component, light and dark |
 | Agent docs | `/docs`, `/docs/<topic>` | `views::gallery::agent_docs` | page head, a card a topic, the topic at the measure, the index sticky beside it |
 | A page that cannot be drawn | any address a browser asks for that answers 4xx | `views::missing`, `templates/missing.html` | page head and note, the ways on |
-| The frame, on every page | | `templates/layout.html`, `views::prefs` | the nav bar, the project switcher and display preferences (`sluice-menu`, `sluice-keys`), `sluice-banner`, the confirmation (`sluice-dialog`) |
+| The frame, on every page | | `templates/layout.html`, `templates/bar.html` (`views::Bar`), `views::prefs` | the bar, the project switcher and display preferences (`sluice-menu`, `sluice-keys`), `sluice-banner`, the confirmation (`sluice-dialog`) |
 
 ### Per page
 
 - **A project's plan** (`/projects/id/<p>`, `views::plan`): a briefing over a roster, on its
-  own visual system (The briefing, below). The head: the project's name at 22px/650 with its
-  Details, then one sentence from the status table's counts, the silences and the open
-  questions, each state in its own word ("1 question for you, 2 failed, 1 quiet. 10 at work;
-  73 of 92 done."; "3 at work, all heard from recently." when nothing needs the owner), the
-  question linked under the coral underline; what the owner set aside still counts there
-  (setting aside is about attention, never status). The project's sections are soft pills
-  under it (the current one on `paper-2` at weight 600), one line that scrolls within itself
-  on a phone; the row's tools (Find, the switch) beside them. One ⋯, the head's Details: the
-  project's id, its words, Settings and Export (the plan as Mermaid text). On a phone Find is
-  a 44px icon by that ⋯ that opens across the head as it takes the focus (or holds a find),
-  never a row of its own. The page keeps the frame's centred column; three sections, each
+  own visual system (The briefing, below). The head is its lead line (the bar names the
+  project): one sentence from the status table's counts, the silences and the open questions,
+  each state in its own word, then the steps counted ("1 question for you, 2 failed, 1 quiet.
+  10 at work; 73 of 92 done · 412 steps."), and "Nothing needs you" first when nothing does
+  ("Nothing needs you. 9 at work, all heard from recently. 75 of 106 done · 487 steps.";
+  "Nothing needs you; 4 set aside." when the owner set it all aside; never under a find, which
+  narrows Needs you too). The question is linked under the coral underline; what the owner set
+  aside still counts there (setting aside is about attention, never status). The line's ⋯ at
+  its right, the head's Details: the project's id, its words, Settings and Export (the plan as
+  Mermaid text). Find and the view switch are in the bar. The page keeps the frame's centred
+  column; three sections, each
   headed by an 18px/600 label (body text is 15px):
   - **Needs you**: the one raised well (`paper-2`, 14px), an item a line: its mark (a 12px
     coral dot a question, outranking an 8px sand square a stop and an 8px sand ring a silence,
@@ -1286,11 +1309,13 @@ the page's stream. A lane that redraws a page writes its notes here.
     outlined everywhere. An item set aside leaves a line under the well for ten minutes,
     "Set aside: the silence of <title>" and Undo, and comes back by itself when it changes; with
     script the × and Undo post in place, the focus going to Undo and back to the item. With
-    nothing to say, no well: one muted line, "Nothing needs you. 4 set aside.". Each Set aside
+    nothing to say, no section: the lead line says "Nothing needs you" (a section labelled "Set
+    aside" holds the Undo lines while there are some). Each Set aside
     line reads as one sentence with its Undo after it, wrapping as text does at any width.
-  - **At work**: the roster, under an axis row (12h, 4h, 1h, 15m, now, 12px over the tracks'
-    column; it says its scale to a screen reader and on hover: "The last 12 hours on a log
-    scale, now at the right; a tick is a message."). Its head carries an ⓘ, a 32px round
+  - **At work**: the roster, its head one line: the name, its counts and its ⓘ over the
+    roster's first columns, the axis (12h, 4h, 1h, 15m, now, 12px) on the same line over the
+    tracks' column; the axis says its scale to a screen reader and on hover: "The last 12 hours
+    on a log scale, now at the right; a tick is a message." The ⓘ is a 32px round
     button (44px on a phone) whose popover, the Details' look, says how to read a track: the
     last 12 hours on a log scale, now at the right; blue the run going now, pale an earlier run,
     sand a quiet one, dotted a wait; a tick a message. A group a recipe (a `<details>`, its
@@ -1319,7 +1344,8 @@ the page's stream. A lane that redraws a page writes its notes here.
     counts as the summary sentence does: a blocked, held or queued unit waits, so "At work · 2
     units · 3 waiting", or "Nothing at work · 3 waiting". Under 760px
     of the pane the row stacks: badge and title, then the meta, then the track full width; the
-    long axis gives way to "12h … now" over each group's first track.
+    long axis leaves the head's line and gives way to "12h … now" over each group's first
+    track.
     **The track's tones**, each at least 3:1 on the paper in both schemes: a run going
     `--track-run` (the blue light, `run-ink` dark, where the blue would be 2.7:1); a done run
     `sky-ink` at 45% on the paper edged in `sky-ink`; a silence the sand edged in `sand-mark`
@@ -1459,10 +1485,9 @@ the page's stream. A lane that redraws a page writes its notes here.
   rule and the running bars on the clock's tick; the page's version is its runs, so it patches only when they
   change.
 - **Stats** (`/projects/id/<p>/stats`, `views::stats`): a project's numbers over a window, and
-  the one place a stage's usual time is said. The head: "Stats", its note how many runs ended
-  and units finished in the window; in the row the window
-  switch (24 hours, 7 days, the default, 30 days, All), the view-switch bar of links
-  (`?window=`). On the paper four sections, each under its section head: **Durations by stage**, a table a recipe in the project's recipe order (its
+  the one place a stage's usual time is said. The head: its lead line how many runs ended
+  and units finished in the window, the window switch at its right (24 hours, 7 days, the
+  default, 30 days, All; pill links, `?window=`). On the paper four sections, each under its section head: **Durations by stage**, a table a recipe in the project's recipe order (its
   name, how many units and runs) with a row a stage in the recipe's order: how many of its runs
   succeeded ("Succeeded") and their median, p90 and longest in data mono, then, under "median ·
   p90", the median drawn as a sky-ink bar inside its p90 in pale sky with a sky-ink edge, on

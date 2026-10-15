@@ -351,8 +351,8 @@ async fn slow_chromium_no_page_scrolls_sideways_from_a_small_phone_to_a_wide_scr
                         g["scroll"].as_f64() <= g["width"].as_f64(),
                         "{name} at {width}px scrolls sideways: {g}"
                     );
-                    // the band's content and the page share their left edge
-                    let edges = browser.eval("(n => [Math.round(n.getBoundingClientRect().left), Math.round(document.querySelector('main > :not(sluice-banner):not([hidden])')?.getBoundingClientRect().left ?? n.getBoundingClientRect().left)])(document.querySelector('#top-nav'))").unwrap();
+                    // the band's content (its mark first) and the page share their left edge
+                    let edges = browser.eval("(n => [Math.round(n.getBoundingClientRect().left), Math.round(document.querySelector('main > :not(sluice-banner):not([hidden])')?.getBoundingClientRect().left ?? n.getBoundingClientRect().left)])(document.querySelector('.site-bar a.brand'))").unwrap();
                     assert_eq!(edges[0], edges[1], "{name} {width}: {edges}");
                     if let (true, Some(dir)) = (shoot, &screens) {
                         browser
@@ -376,14 +376,18 @@ async fn home_attention_and_reader_day() {
     {
         let (status, home) = f.get("/").await;
         assert_eq!(status, 200);
-        // the head: "All projects", the sentence across the projects under it, counts alone:
-        // the question first, linked to For you; what finished is on each project's card
+        // the head: "All projects" for a screen reader (the bar names the page), the sentence
+        // across the projects its lead, counts alone: the question first, linked to For you;
+        // what finished is on each project's card
         let band = between(
             &home,
             "<div id=\"home-band\" class=\"band-wrap\">",
-            "<div class=\"subnav\">",
+            "<main id=\"content\"",
         );
-        assert!(band.contains("<h1>All projects</h1>"), "{band}");
+        assert!(
+            band.contains("<h1 class=\"vh\">All projects</h1>"),
+            "{band}"
+        );
         assert!(
             band.contains("<p class=\"page-line\"><a class=\"ask\" href=\"#for-you\">1 question for you</a>, 3 failed, 1 cancelled, 1 quiet; 6 running in 2 projects.</p>"),
             "{band}"
@@ -623,9 +627,9 @@ async fn home_attention_and_reader_day() {
         ),
         "{failed}"
     );
-        // a project's own day: its column alone, the page's name, the tab current
+        // a project's own day: its column alone, the page's name for a screen reader, the tab current
         let own = get_with(&router, &format!("/projects/id/{}/day", n.chores), "").await;
-        assert!(own.contains("<h1>Day</h1>"), "{own}");
+        assert!(own.contains("<h1 class=\"vh\">Day</h1>"), "{own}");
         assert!(!own.contains("Waders"), "{own}");
         assert!(
             own.contains(&format!(

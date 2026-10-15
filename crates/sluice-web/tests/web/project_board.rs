@@ -742,7 +742,8 @@ async fn filtered_units_progress_done_and_paused() {
         let cell = plan_html::cell(&html, "hold");
         assert!(cell.contains("aria-label=\"paused\""), "{cell}");
         assert!(
-            plan_html::summary(&html).contains("Nothing at work; 1 of 3 done."),
+            plan_html::summary(&html)
+                .contains("Nothing needs you. Nothing at work; 1 of 3 done · 3 steps."),
             "{html}"
         );
         let reads = sluice_store::ReadPool::open(f._home.path(), 1).unwrap();

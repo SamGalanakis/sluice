@@ -7,20 +7,8 @@
 <script type="module" data-datastar-runtime src="{{ datastar_url }}"></script>
 </head><body data-release="{{ release }}">{{ crate::views::icons::sprite()|safe }}
 <a class="skip" href="#content">Skip to content</a>
-<header class="site-head"><div class="band-in"><nav id="top-nav" class="top" aria-label="Main">
-<a class="brand" href="/" aria-label="sluice: all projects"><img class="mark" src="{{ crate::views::asset_url("logo.svg") }}" width="26" height="26" alt=""><span class="wordmark">sluice</span></a>
-{% if nav.selected.is_some() %}<a class="home" href="/">Projects</a>{% endif %}
-{{ crate::views::ui::menu_open()|safe }}<details class="switcher{% if nav.selected.is_some() || path == "/" %} current{% endif %}" data-preserve-attr="open"><summary aria-label="{% if nav.selected.is_some() %}Project: {{ nav.label }}, switch project{% else %}Switch project{% endif %}">{% if nav.selected.is_some() %}{{ nav.icon|safe }}{% endif %}<span class="sw-name">{% if nav.selected.is_some() %}{{ nav.label }}{% else %}Projects{% endif %}</span>{{ crate::views::icons::icon(crate::views::icons::Icon::ChevronDown, 16, "chev")|safe }}</summary>
-<div class="menu"><a class="all" href="/"{% if nav.selected.is_none() %} aria-current="page"{% endif %}>All projects</a>
-{% for project in nav.projects %}{% if !project.archived %}<a href="{{ project.href() }}"{% if nav.is_selected(project.id) %} aria-current="page"{% endif %}>{{ crate::views::ui::glyph(project.shown())|safe }}{% if !project.icon_url.is_empty() %}<img class="proj-icon" src="{{ project.icon_url }}" alt="">{% endif %}<span>{{ project.icon_text }} {{ project.name }}</span>{% if !project.asks.is_empty() %}<span class="badge sw-q" aria-hidden="true">{{ project.asks.len() }}</span><span class="vh">, {{ crate::views::ui::count(project.asks.len(), "question", "questions") }} for you</span>{% endif %}</a>{% endif %}{% endfor %}
-{% if nav.has_archived() %}<p class="menu-label">Archived</p>{% endif %}
-{% for project in nav.projects %}{% if project.archived %}<a href="{{ project.href() }}"><span>{{ project.icon_text }} {{ project.name }}</span></a>{% endif %}{% endfor %}</div></details>{{ crate::views::ui::menu_close()|safe }}
-<a id="nav-inbox" href="/inbox" aria-label="{{ nav.inbox_label() }}"{% if path == "/inbox" || path == "/questions" || path == "/history" %} aria-current="page"{% endif %}><span class="inbox-word">Inbox</span>{% if nav.inbox > 0 %}<span class="badge" aria-hidden="true">{{ nav.inbox }}</span>{% else if nav.notes > 0 %}<span class="notes-dot" aria-hidden="true" title="{{ nav.notes }} unread {% if nav.notes == 1 %}note{% else %}notes{% endif %}"></span>{% endif %}</a>
-{% if !stream.is_empty() %}<span class="live">Live</span>{% endif %}
-{{ crate::views::ui::menu_open()|safe }}<details class="settings" data-preserve-attr="open"><summary aria-label="Display preferences" title="Display preferences">{{ crate::views::icons::icon(crate::views::icons::Icon::SlidersHorizontal, 20, "")|safe }}</summary>
-{{ crate::views::prefs::menu(viewer, nav.keys().as_slice())|safe }}</details>{{ crate::views::ui::menu_close()|safe }}
-</nav></div></header>
-{% if !frame.head.as_str().is_empty() || !nav.links.is_empty() || !frame.tools.as_str().is_empty() || !frame.meta.as_str().is_empty() %}<div class="page-top">{% if !nav.links.is_empty() || !frame.tools.as_str().is_empty() || !frame.meta.as_str().is_empty() %}<div class="subnav"><div class="subnav-in">{% if !nav.links.is_empty() %}<nav class="tabs lead" aria-label="{% if nav.selected.is_some() %}{{ nav.label }}{% else %}Sections{% endif %}">{% for link in nav.links %}<a href="{{ link.href }}"{% if link.current %} aria-current="page"{% endif %}>{{ link.label }}</a>{% endfor %}{% if !nav.settings_href.is_empty() %}<a class="project-settings" href="{{ nav.settings_href }}" aria-label="Project settings"{% if path == nav.settings_href %} aria-current="page"{% endif %}>Settings</a>{% endif %}</nav>{% endif %}{% if !frame.meta.as_str().is_empty() %}<p class="subnav-meta">{{ frame.meta|safe }}</p>{% endif %}{% if !frame.tools.as_str().is_empty() %}<div class="subnav-tools">{{ frame.tools|safe }}</div>{% endif %}</div></div>{% endif %}{{ frame.head|safe }}</div>{% endif %}
+{%- include "bar.html" %}
+{% if !frame.head.as_str().is_empty() %}<div class="page-top">{{ frame.head|safe }}</div>{% endif %}
 <main id="content" tabindex="-1"{% if !stream.is_empty() %} data-init="{{ crate::views::ui::stream_get(stream) }}"{% endif %}>
 {{ crate::views::ui::banners(stream)|safe }}
 {{ body|safe }}

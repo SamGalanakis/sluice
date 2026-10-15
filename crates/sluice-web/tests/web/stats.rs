@@ -190,7 +190,7 @@ async fn slow_chromium_stats_fits_every_width_and_its_window_switch_works() {
             .wait(&format!("location.search === '?window=24h' && document.readyState === 'complete' && {chosen}?.textContent === '24 hours'"))
             .unwrap();
         let note = browser
-            .eval("document.querySelector('.page-note').textContent")
+            .eval("document.querySelector('.page-line').textContent")
             .unwrap();
         // the reader's clock is its own; the counts are the window's
         assert!(
@@ -222,7 +222,7 @@ async fn windows_outcomes_and_stage_statistics() {
         );
         assert!(
         day.contains(
-            "<p class=\"page-note\">16 runs ended and 5 units finished in the last 24 hours.</p>"
+            "<p class=\"page-line\">16 runs ended and 5 units finished in the last 24 hours.</p>"
         ),
         "{day}"
     );
@@ -257,7 +257,7 @@ async fn windows_outcomes_and_stage_statistics() {
         let (status, plain) = get(&router, &format!("/projects/id/{}/stats", f.plain)).await;
         assert_eq!(status, StatusCode::OK, "{plain}");
         assert!(
-            plain.contains("<p class=\"page-note\">No run yet.</p>"),
+            plain.contains("<p class=\"page-line\">No run yet.</p>"),
             "{plain}"
         );
         assert_eq!(
@@ -296,7 +296,7 @@ async fn windows_outcomes_and_stage_statistics() {
         let (status, page) = get(&router, &format!("/projects/id/{}/stats", n.almanac)).await;
         assert_eq!(status, StatusCode::OK, "{page}");
         // the tab after Day, current; the head says what the window holds
-        let tabs = page.split("<nav class=\"tabs lead\"").nth(1).unwrap();
+        let tabs = page.split("<nav class=\"tabs bar-tabs\"").nth(1).unwrap();
         let tabs = &tabs[..tabs.find("</nav>").unwrap()];
         let day = tabs.find(">Day</a>").unwrap();
         let stats = tabs
@@ -311,7 +311,7 @@ async fn windows_outcomes_and_stage_statistics() {
         );
         assert!(
             page.contains(
-                "<p class=\"page-note\">18 runs ended and 5 units finished in the last 7 days.</p>"
+                "<p class=\"page-line\">18 runs ended and 5 units finished in the last 7 days.</p>"
             ),
             "{page}"
         );

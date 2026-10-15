@@ -14,16 +14,16 @@ use sluice_store::RetrySafety;
 const GEOMETRY: &str = r#"(() => {
   const box = s => { const e = document.querySelector(s); if (!e || !e.checkVisibility()) return null;
                      const r = e.getBoundingClientRect(); return {left: r.left, right: r.right, width: r.width, top: r.top}; };
-  const nav = document.querySelector('#top-nav'), n = nav.getBoundingClientRect(), css = getComputedStyle(nav);
+  const nav = document.querySelector('.site-bar'), n = nav.getBoundingClientRect(), css = getComputedStyle(nav);
   const page = document.querySelector('#project-board').getBoundingClientRect();
   return {scroll: document.documentElement.scrollWidth, width: document.documentElement.clientWidth,
           left: page.left, right: page.right,
           navLeft: n.left + parseFloat(css.paddingLeft), navRight: n.right - parseFloat(css.paddingRight),
           plan: box('#plan-pane'),
           board: box('#board-pane'), sum: box('.page-line'),
-          navFits: (l => l.scrollWidth <= l.clientWidth)(document.querySelector('.subnav nav.tabs.lead')), tabs: box('.view-switch'), split: box('.splitter'),
+          // the sections fit the bar, or scroll sideways with the chevron that says so
+          navFits: (l => l.scrollWidth <= l.clientWidth || l.hasAttribute('data-more'))(document.querySelector('.bar-tabs')), tabs: box('.view-switch'), split: box('.splitter'),
           view: (() => { const p = document.querySelector('#plan-pane')?.checkVisibility(), b = document.querySelector('#board-pane')?.checkVisibility(); return p && b ? 'both' : b ? 'board' : 'plan'; })(),
-          h1: box('.page-head h1'),
           // the page is as tall as its main column (or the window): nothing hangs below it
           below: document.documentElement.scrollHeight - Math.max(innerHeight,
             Math.ceil(document.querySelector('main').getBoundingClientRect().bottom + scrollY)),
@@ -142,12 +142,12 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                     let plan = &g["plan"];
                     match (slug, width) {
                         // a phone opens on the plan while something needs attention (beta-build
-                        // failed), the switch in the row over the project's title
+                        // failed), the switch in the bar over the lead line
                         ("board", 390) => {
                             assert!(g["tabs"].is_object() && g["board"].is_null() && plan.is_object(), "{label}: {g}");
                             assert_eq!(g["view"], "plan", "{label}: {g}");
-                            assert!(g["h1"].is_object(), "{label}: the project's title stays over its board {g}");
-                            assert!(g["tabs"]["top"].as_f64().unwrap() < g["h1"]["top"].as_f64().unwrap(), "{label}: the switch in the row, over the title {g}");
+                            assert!(g["sum"].is_object(), "{label}: the lead line stays over its board {g}");
+                            assert!(g["tabs"]["top"].as_f64().unwrap() < g["sum"]["top"].as_f64().unwrap(), "{label}: the switch in the bar, over the lead {g}");
                             assert!(g["board"].is_null(), "{label}: {g}");
                         }
                         ("board", _) => {
@@ -187,8 +187,8 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                 }
             }
         }
-        // Across 1280px the page keeps its edges and the switch its place, in the tools' row
-        // under the summary.
+        // Across 1280px the page keeps its edges and the switch its place, in the bar over the
+        // lead line.
         browser
             .navigate(&format!("{base}/projects/id/{lanes}"))
             .unwrap();
@@ -202,8 +202,8 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
             let gutter = (10.0 + 0.015 * width as f64).clamp(16.0, 64.0);
             assert!(near(&g["left"], gutter) && near(&g["right"], g["width"].as_f64().unwrap() - gutter), "{label}: {g}");
             assert!(near(&g["left"], g["navLeft"].as_f64().unwrap()) && near(&g["right"], g["navRight"].as_f64().unwrap()), "{label}: {g}");
-            // the switch in the row, over the title
-            assert!(g["tabs"]["top"].as_f64().unwrap() < g["h1"]["top"].as_f64().unwrap(), "{label}: {g}");
+            // the switch in the bar, over the lead
+            assert!(g["tabs"]["top"].as_f64().unwrap() < g["sum"]["top"].as_f64().unwrap(), "{label}: {g}");
         }
         // Every page's times are nav.js's, in one vocabulary: a running time is a two-unit
         // duration, never "… ago".
@@ -261,7 +261,7 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         // At 1440px each choice of the switch is drawn by the server, says it is the current
         // one (filled), and is kept: a fresh load draws it again from the cookie.
         browser.viewport(1440, "light").unwrap();
-        let shown = "(() => { const v = s => document.querySelector(s)?.checkVisibility() ?? false; return [document.querySelector('#project-board').dataset.view, v('#plan-pane'), v('#board-pane'), [...document.querySelectorAll('[data-view-tab]')].filter(a => a.getAttribute('aria-current') === 'true').map(a => a.dataset.viewTab).join(), getComputedStyle(document.querySelector('[data-view-tab][aria-current=true]'), '::before').backgroundColor !== getComputedStyle(document.querySelector('[data-view-tab][aria-current=false]'), '::before').backgroundColor]; })()";
+        let shown = "(() => { const v = s => document.querySelector(s)?.checkVisibility() ?? false; return [document.querySelector('#project-board').dataset.view, v('#plan-pane'), v('#board-pane'), [...document.querySelectorAll('[data-view-tab]')].filter(a => a.getAttribute('aria-current') === 'true').map(a => a.dataset.viewTab).join(), getComputedStyle(document.querySelector('[data-view-tab][aria-current=true]')).backgroundColor !== getComputedStyle(document.querySelector('[data-view-tab][aria-current=false]')).backgroundColor]; })()";
         for (choice, plan, board) in [("plan", true, false), ("board", false, true), ("both", true, true)] {
             pick(&mut browser, choice, ready);
             assert_eq!(browser.eval(shown).unwrap(), serde_json::json!([choice, plan, board, choice, true]), "{choice}");

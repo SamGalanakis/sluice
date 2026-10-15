@@ -181,7 +181,7 @@ try:
   chrome.eval("document.documentElement.dataset.theme='sluice-"+theme+"'")
   chrome.eval('document.fonts.ready')
   chrome.eval('window.scrollTo(0,0);new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
-  g=chrome.eval("(()=>{const content=document.querySelector('.settings-page, #projects, #functions').getBoundingClientRect(),nav=document.querySelector('#top-nav .switcher').getBoundingClientRect(),cog=document.querySelector('.project-settings')?.getBoundingClientRect();return {scroll:document.documentElement.scrollWidth,width:document.documentElement.clientWidth,left:content.left,nav:document.querySelector('#top-nav').getBoundingClientRect().left+parseFloat(getComputedStyle(document.querySelector('#top-nav')).paddingLeft),column:content.width,height:document.documentElement.scrollHeight,cog:cog&&{width:cog.width,height:cog.height}}})()")
+  g=chrome.eval("(()=>{const content=document.querySelector('.settings-page, #projects, #functions').getBoundingClientRect(),nav=document.querySelector('#top-nav .switcher').getBoundingClientRect(),cog=document.querySelector('.project-settings')?.getBoundingClientRect();return {scroll:document.documentElement.scrollWidth,width:document.documentElement.clientWidth,left:content.left,nav:document.querySelector('.site-bar a.brand').getBoundingClientRect().left,column:content.width,height:document.documentElement.scrollHeight,cog:cog&&{width:cog.width,height:cog.height}}})()")
   assert g['scroll']<=g['width'],(name,width,g)
   assert abs(g['left']-g['nav'])<1,(name,g)
   assert abs(g['left']-(g['width']-g['column'])/2)<1,(name,g)

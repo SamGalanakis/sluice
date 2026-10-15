@@ -5,9 +5,9 @@
 use super::esc;
 use crate::views::TrustedHtml;
 
-/// The page's head on the paper (`Frame::head`), under the slim nav bar: the page's name as its
-/// heading at a reading size (the project's name on its plan, the page's elsewhere), and on the
-/// plan and home only the summary sentence under it, one line of large body text.
+/// The page's head on the paper (`Frame::head`), under the bar, on a page the bar does not name
+/// (a unit, a step, a thread): the page's name as its heading at a reading size, and the line
+/// under it when it has one.
 pub fn page_head(name: &str, line: &TrustedHtml) -> TrustedHtml {
     page_head_html(&TrustedHtml::owned(esc(name)), line)
 }
@@ -37,6 +37,26 @@ pub fn page_head_note(name: &str, note: &TrustedHtml) -> TrustedHtml {
             TrustedHtml::owned(format!("<p class=\"page-note\">{note}</p>"))
         },
     )
+}
+/// The head of a page the bar already names (its project in the switcher, its section a tab):
+/// no visible title, its name a heading for a screen reader alone, and its lead line first,
+/// what stands beside it (the project's "⋯", a window switch) at its right, then `under`
+/// (a switch, an alert). `line` empty leaves only what is under it.
+pub fn lead_head(
+    name: &str,
+    line: &TrustedHtml,
+    beside: &TrustedHtml,
+    under: &TrustedHtml,
+) -> TrustedHtml {
+    let lead = if line.as_str().is_empty() && beside.as_str().is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"ph-lead\"><p class=\"page-line\">{line}</p>{beside}</div>")
+    };
+    TrustedHtml::owned(format!(
+        "<div class=\"page-head is-lead\"><h1 class=\"vh\">{}</h1>{lead}{under}</div>",
+        esc(name)
+    ))
 }
 /// The page's head whole: its way back (`crumbs`, a breadcrumb nav) over its name, what stands
 /// beside the name (`beside`: its Details' "⋯"), and what goes under it (`under`: its lines,

@@ -213,7 +213,7 @@ async fn plan_units_and_loose_steps() {
         let summary = plan_html::summary(&html);
         assert!(
             summary.contains(
-                "1 question for you</a>, 2 failed, 1 cancelled, 1 quiet. 5 at work; 5 of 16 done."
+                "1 question for you</a>, 2 failed, 1 cancelled, 1 quiet. 5 at work; 5 of 16 done · 36 steps."
             ),
             "{summary}"
         );
@@ -341,12 +341,16 @@ async fn plan_units_and_loose_steps() {
             "{html}"
         );
         assert!(
-            plan_html::summary(&html).contains("1 at work, all heard from recently. 1 of 3 done."),
+            plan_html::summary(&html).contains(
+                "Nothing needs you. 1 at work, all heard from recently. 1 of 3 done · 3 steps."
+            ),
             "{html}"
         );
+        // Needs you is not drawn while nothing needs you
         assert!(
             plan_html::band(&html, "plan-needs")
-                .contains("<p class=\"nd-none\">Nothing needs you.</p>")
+                .starts_with("<section id=\"plan-needs\" class=\"pb-sec\" hidden></section>"),
+            "{html}"
         );
     }
 }
@@ -521,8 +525,11 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
     )
     .await;
     let (_, _, _, html) = browse(&router, &plan, None, "").await;
+    // Needs you is then only its Undo, and the lead says so first
+    let said = plan_html::summary(&html);
+    assert!(said.contains(">Nothing needs you; 4 set aside. "), "{said}");
     assert!(
-        html.contains("<p class=\"nd-none\">Nothing needs you. 4 set aside.</p>"),
+        plan_html::band(&html, "plan-needs").contains("aria-label=\"Set aside\""),
         "{html}"
     );
     // setting aside is about attention alone: the head still says what is true (the failures,

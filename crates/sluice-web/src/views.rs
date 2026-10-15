@@ -753,8 +753,10 @@ impl NavView {
 /// head's height. A page with none of it draws the nav bar alone.
 #[derive(Clone, Debug, Default)]
 pub struct Frame {
+    /// Under the bar on the paper: the page's lead line, or its head where its name says what
+    /// the bar does not (a unit, a step, a thread).
     pub head: TrustedHtml,
-    pub meta: TrustedHtml,
+    /// In the bar, between the tabs and Inbox: the plan's Find and its view switch.
     pub tools: TrustedHtml,
     /// The page's own signals beside the frame's (`ver`, `stale`): what it sends its stream
     /// when it opens it (the plan's find and read cursor).
@@ -778,6 +780,18 @@ struct Layout<'a> {
     import_map: &'static str,
     /// The build that drew the page (`streams::release`): a stream from another says so.
     release: &'static str,
+}
+/// The bar on the band (`templates/bar.html`, which `layout.html` includes): the nav a stream
+/// patches (`render_nav`) and the page's tools beside it.
+#[derive(Template)]
+#[template(path = "bar.html")]
+pub struct Bar<'a> {
+    pub frame: &'a Frame,
+    pub nav: &'a NavView,
+    pub viewer: &'a Viewer,
+    /// The page's stream ("" for none: no Live).
+    pub stream: &'a str,
+    pub path: &'a str,
 }
 pub fn render_layout(
     title: &str,
@@ -862,23 +876,22 @@ pub fn render_nav(
     viewer: &Viewer,
     path: &str,
 ) -> Result<TrustedHtml, askama::Error> {
-    let layout = render_layout(
-        "",
-        &TrustedHtml::owned(String::new()),
+    let layout = TrustedHtml::from_template(&Bar {
+        frame: &Frame::default(),
         nav,
         viewer,
-        "streamed",
-        "",
+        stream: "streamed",
         path,
-    )?;
+    })?;
     let start = layout
         .as_str()
         .find("<nav id=\"top-nav\"")
-        .expect("owned layout has nav");
+        .expect("the bar has its nav");
+    // the bar's nav holds the project's tabs, a nav of their own: it ends at its marker
     let end = start
         + layout.as_str()[start..]
-            .find("</nav>")
-            .expect("owned layout closes nav")
+            .find("</nav><!--/top-nav-->")
+            .expect("the bar closes its nav")
         + 6;
     Ok(TrustedHtml::owned(layout.as_str()[start..end].into()))
 }

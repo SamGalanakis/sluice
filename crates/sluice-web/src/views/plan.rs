@@ -809,23 +809,20 @@ impl<'a> Plan<'a> {
                 "needs",
             )));
         }
-        let mut out = format!(
-            "<section id=\"plan-needs\" class=\"pb-sec\" aria-labelledby=\"needs\">{}",
-            head.html()
-        );
-        if live.is_empty() {
-            // one muted line, not an empty well
-            let aside = self.needs.iter().filter(|n| n.aside.is_some()).count();
-            let _ = write!(
-                out,
-                "<p class=\"nd-none\">Nothing needs you.{}</p>",
-                if aside > 0 {
-                    format!(" {aside} set aside.")
-                } else {
-                    String::new()
-                }
-            );
+        // nothing needs you: the lead line says so, and the section is a placeholder (its
+        // region keeps its place), or only what was set aside lately, with its Undo
+        if live.is_empty() && aside.is_empty() {
+            return "<section id=\"plan-needs\" class=\"pb-sec\" hidden></section>".into();
+        }
+        let mut out = if live.is_empty() {
+            "<section id=\"plan-needs\" class=\"pb-sec\" aria-label=\"Set aside\">".to_owned()
         } else {
+            format!(
+                "<section id=\"plan-needs\" class=\"pb-sec\" aria-labelledby=\"needs\">{}",
+                head.html()
+            )
+        };
+        if !live.is_empty() {
             out.push_str("<ul class=\"nd\">");
             for need in &live {
                 // a question's Answer is the well's one filled action; every other is outlined,
@@ -966,6 +963,28 @@ impl<'a> Plan<'a> {
     pub fn sentence_html(&self) -> String {
         self.sentence()
     }
+    /// The plan's lead line: its sentence, "Nothing needs you" first when nothing does (Needs
+    /// you is then not drawn; never under a find, which narrows Needs you too), and its steps
+    /// counted after its units: "Nothing needs you. 9 at work, all heard from recently. 75 of
+    /// 106 done · 487 steps."
+    fn lead(&self) -> String {
+        if self.view.units.is_empty() {
+            return self.sentence();
+        }
+        let steps: usize = self.view.units.iter().map(|u| u.steps.len()).sum();
+        let sentence = self.sentence();
+        let sentence = sentence.strip_suffix('.').unwrap_or(&sentence);
+        let counted = format!("{sentence} · {}.", ui::count(steps, "step", "steps"));
+        if self.needs_count() > 0 || !self.view.q.is_empty() {
+            return counted;
+        }
+        let aside = self.needs.iter().filter(|n| n.aside.is_some()).count();
+        let nothing = match aside {
+            0 => "Nothing needs you.".to_owned(),
+            n => format!("Nothing needs you; {n} set aside."),
+        };
+        format!("{nothing} {counted}")
+    }
     /// How many items of Needs you stand (what the owner set aside not counted).
     pub fn needs_count(&self) -> usize {
         self.needs.iter().filter(|n| n.aside.is_none()).count()
@@ -1066,27 +1085,19 @@ impl<'a> Plan<'a> {
                 },
                 "The plan as Mermaid text",
             );
-        let head = ui::page_head_with(
-            &TrustedHtml::default(),
-            &TrustedHtml::owned(esc(&project.name)),
+        // the switcher names the project: the lead line is the summary, its "⋯" beside it
+        let head = ui::lead_head(
+            &project.name,
+            &TrustedHtml::owned(self.lead()),
             &details.menu(&project.name),
-            &TrustedHtml::owned(format!("<p class=\"page-line\">{}</p>", self.sentence())),
+            &TrustedHtml::default(),
         );
         TrustedHtml::owned(format!(
             "<div id=\"plan-band\" class=\"plan-band\">{head}</div>"
         ))
     }
-    /// The paper row's count line: "21 units · 52 steps".
-    pub fn meta(&self) -> TrustedHtml {
-        let steps: usize = self.view.units.iter().map(|u| u.steps.len()).sum();
-        TrustedHtml::owned(format!(
-            "<span id=\"plan-meta\">{} · {}</span>",
-            ui::count(self.view.units.len(), "unit", "units"),
-            ui::count(steps, "step", "steps")
-        ))
-    }
-    /// The paper row's tools: Find, and the Plan · Both · Board switch with a board (the plan as
-    /// Mermaid text is in the head's Details, its one ⋯).
+    /// The bar's tools: Find, an icon that opens into its field, and the plan · both · board
+    /// switch with a board (the plan as Mermaid text is in the lead line's Details, its "⋯").
     pub fn tools(&self) -> TrustedHtml {
         let view = self.view;
         let href = view.href();
@@ -1097,7 +1108,7 @@ impl<'a> Plan<'a> {
             // address like any other; Escape clears it
             let reopen = ui::stream_reopen(&view.stream_href());
             out.push_str(&format!(
-                "<form class=\"board-tools pl-find\" method=\"get\" action=\"{h}\" role=\"search\" aria-label=\"Find units\"><div class=\"q-field\">{i}<input type=\"search\" name=\"q\" value=\"{q}\" data-find placeholder=\"Find\" aria-label=\"Find units by id or title, or by a step's id, title or description\" autocomplete=\"off\" spellcheck=\"false\" enterkeyhint=\"search\" data-preserve-attr=\"value\" data-reopens-stream data-bind:q__root data-on:input__debounce.200ms=\"{get}\" data-on:keydown=\"evt.key === 'Escape' &amp;&amp; $q &amp;&amp; (evt.preventDefault(), evt.stopPropagation(), $q = '', {get})\"><a class=\"q-clear\" href=\"{c}\" aria-label=\"Clear the find\" title=\"Clear the find\">{x}</a></div>{focus}{show}</form>",
+                "<form class=\"board-tools pl-find\" method=\"get\" action=\"{h}\" role=\"search\" aria-label=\"Find units\"><div class=\"q-field\">{i}<input type=\"search\" name=\"q\" value=\"{q}\" data-find placeholder=\"Find\" title=\"Find (/)\" aria-label=\"Find units by id or title, or by a step's id, title or description\" autocomplete=\"off\" spellcheck=\"false\" enterkeyhint=\"search\" data-preserve-attr=\"value\" data-reopens-stream data-bind:q__root data-on:input__debounce.200ms=\"{get}\" data-on:keydown=\"evt.key === 'Escape' &amp;&amp; $q &amp;&amp; (evt.preventDefault(), evt.stopPropagation(), $q = '', {get})\"><a class=\"q-clear\" href=\"{c}\" aria-label=\"Clear the find\" title=\"Clear the find\">{x}</a></div>{focus}{show}</form>",
                 h = esc(&href),
                 get = esc(&reopen),
                 i = icon(Icon::Search, 16, "q-icon"),
@@ -1251,13 +1262,14 @@ impl<'a> Plan<'a> {
         } else {
             format!("{}{}", esc(&note), track_help())
         };
-        let mut out = format!(
-            "<section id=\"plan-roster\" class=\"pb-sec\" aria-labelledby=\"at-work\">{}",
-            ui::SectionHead::new("at-work", "At work")
-                .note(&TrustedHtml::owned(note))
-                .html()
-        );
-        if rows > 0 {
+        let head = ui::SectionHead::new("at-work", "At work")
+            .note(&TrustedHtml::owned(note))
+            .html();
+        let mut out =
+            "<section id=\"plan-roster\" class=\"pb-sec\" aria-labelledby=\"at-work\">".to_owned();
+        if rows == 0 {
+            out.push_str(head.as_str());
+        } else {
             // a badge says what a row's steps run on only where that tells rows apart
             let badges: std::collections::BTreeSet<String> = self
                 .groups
@@ -1271,7 +1283,8 @@ impl<'a> Plan<'a> {
                 "<div class=\"ro{}\">",
                 if badged { "" } else { " no-badge" }
             );
-            out.push_str(&axis(""));
+            // the head on one line with the axis's labels, which stand over the tracks
+            out.push_str(&axis_with(" ro-head", head.as_str()));
             for group in &self.groups {
                 // a big roster shows a group's remarkable rows first and folds the rest to one
                 // line ("+21 running · each heard from in the last 28m"), opening in place; a
@@ -1760,8 +1773,12 @@ fn track_help() -> String {
 /// The labels over At work's tracks: 12h, 4h, 1h, 15m and now, where the log scale puts them;
 /// `class` " ro-axis-g" for a group's own, which a narrow plan shows over its tracks.
 pub fn axis(class: &str) -> String {
+    axis_with(class, "")
+}
+/// The axis with `lead` (HTML: At work's head) at its left, over the rows' own columns.
+fn axis_with(class: &str, lead: &str) -> String {
     let mut out = format!(
-        "<div class=\"ro-axis{class}\" title=\"{SCALE}\"><span class=\"vh\">{SCALE}</span><span class=\"ro-ticks\" aria-hidden=\"true\">"
+        "<div class=\"ro-axis{class}\">{lead}<span class=\"vh\">{SCALE}</span><span class=\"ro-ticks\" aria-hidden=\"true\" title=\"{SCALE}\">"
     );
     for (ago, words) in super::unit_steps::RECENT {
         let _ = write!(
@@ -2121,9 +2138,14 @@ pub fn finished_list(view: &ProjectView, units: &[&UnitView]) -> String {
     out
 }
 
-/// The Plan · Both · Board switch: a link each, which the server answers with the page in that
-/// view and keeps in the project's cookie. The chosen one is filled; with none chosen, the
-/// stylesheet fills the one its width shows.
+/// The view switch as `/_ui` shows it, `chosen` the view filled.
+pub fn view_switch_sample(chosen: Option<&str>) -> String {
+    view_switch("#", chosen)
+}
+/// The Plan · Both · Board switch in the bar: three icons, each named by its title and label, a
+/// link each, which the server answers with the page in that view and keeps in the project's
+/// cookie. The chosen one is filled; with none chosen, the stylesheet fills the one its width
+/// shows.
 fn view_switch(href: &str, chosen: Option<&str>) -> String {
     let links: String = [
         ("plan", "Plan", Icon::Workflow),
@@ -2133,14 +2155,14 @@ fn view_switch(href: &str, chosen: Option<&str>) -> String {
     .into_iter()
     .map(|(key, word, glyph)| {
         format!(
-            "<a href=\"{h}?view={key}\" data-view-tab=\"{key}\" aria-current=\"{on}\" data-preserve-attr=\"aria-current\">{i}{word}</a>",
+            "<a href=\"{h}?view={key}\" data-view-tab=\"{key}\" aria-current=\"{on}\" data-preserve-attr=\"aria-current\" title=\"{word}\" aria-label=\"{word}\">{i}</a>",
             h = esc(href),
             on = chosen == Some(key),
-            i = icon(glyph, 16, ""),
+            i = icon(glyph, 18, ""),
         )
     })
     .collect();
-    format!("<nav class=\"tabs view-switch\" aria-label=\"View\">{links}</nav>")
+    format!("<nav class=\"view-switch\" aria-label=\"View\">{links}</nav>")
 }
 /// "a", "a and b", "a, b and c".
 fn join(items: &[&str]) -> String {
@@ -2217,14 +2239,12 @@ pub fn draw(
     signals.insert("seen".into(), view.seen.unwrap_or(0).into());
     let frame = Frame {
         head: plan.band(),
-        meta: plan.meta(),
         tools: plan.tools(),
         signals,
     };
     let batch = RenderedBatch::new(vec![
         PatchRegion::new("project-board", board_region(&body)),
         PatchRegion::new("plan-band", frame.head.clone()),
-        PatchRegion::new("plan-meta", frame.meta.clone()),
         PatchRegion::new(
             "top-nav",
             super::render_nav(&nav, viewer, &view.href()).map_err(render_error)?,
