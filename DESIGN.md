@@ -760,9 +760,13 @@ it within 220), about 260px on a phone.
 
 **The view switch** (Plan · Both · Board on a project with a board, Plan · Board below 1280px)
 is a bar of pill links in the row (`ui::switch`): the current view on `paper-2` at weight 600
-(`aria-current`), the others muted words. A link asks the server for its view (`?view=`, kept
-in the project's `sluice_view_<id>` cookie); `sluice-board` shows the chosen view at once and
-keeps it per project. The messages' switch (For you,
+(`aria-current`), the others muted words. The server is the view's one source: a link asks it
+for its view (`?view=`, kept in the project's `sluice_view_<id>` cookie, one for every width),
+and no script remembers or switches it. With none chosen the stylesheet shows the width's
+default and fills its link: Both from 1280px, the plan between, and on a phone the board unless
+the plan comes first (`data-plan-first`: something needs the owner, or the address asks the plan
+something, a find, a Show, a chain, a recipe's units, which also sets aside a kept Board). The
+messages' switch (For you,
 Questions, History, under the page's name) and the log's presets are the same bar.
 
 ## Details
@@ -1150,7 +1154,7 @@ why each is script rather than Datastar attributes:
 | `sluice-steps` | `components.js` | the step view: a row's click opens its step, the arrows move between rows, the selected row in `selected`; its now line and running bars move on the clock's tick | roving focus, and marks placed by time on each tick |
 | `sluice-day` | `components.js` | the day line: its now rule and running bars move on the clock's tick | marks placed by time on each tick, measured against the window |
 | `sluice-drawer` | `sluice.js` | the step drawer: `#step:<id>` opens it beside the plan (over it below 1200px, a modal dialog; a sheet on a phone) and binds the step's stream; it follows the browser's own `hashchange` (no `pushState`, no event of its own): its close is a plain link to `#`, the scrim and Escape set `location.hash` from `data-on` (`data-on:keydown__window`), and a step link's click sets the hash | `inert` behind a modal, its focus trap, `[` and `]` (the plan's order as drawn, read from its links) and the stream binding it swaps per step |
-| `sluice-board` | `board.js` | a project's page: the view switch at once (kept per project), the board column's height and its "More below" cue, a board Button's say sent in place, a step's new state said once in `#announce`, and after a form with `data-focus-after` is taken the focus on that element once a patch draws it | switching views without a load, fitting a column to the window, announcing changes and moving the focus |
+| `sluice-board` | `board.js` | a project's page: the board column's height and its "More below" cue, a board Button's say sent in place, a step's new state said once in `#announce`, and after a form with `data-focus-after` is taken the focus on that element once a patch draws it (the view is the server's: the switch is links) | fitting a column to the window, announcing changes and moving the focus |
 
 Beside the components, one piece of script belongs to every page rather than a part:
 `nav.js`'s clock and title (below: a time that ticks in the reader's own words and zone is

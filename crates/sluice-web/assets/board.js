@@ -3,13 +3,8 @@
 // undone by its cleanup (the splitter is `sluice-splitter`, the description's More and the
 // board's document `sluice-fold`: components.js; the find and the board's Buttons are
 // Datastar's, in the markup):
-// - the view switch: Plan · Both · Board from 1280px, Plan · Board below; a click shows the
-//   view at once and keeps it per project (localStorage, wide and narrow apart, and the cookie
-//   for the server's first paint); until one is picked the server's choice holds, else a phone
-//   shows the board (its live lanes are the quick check) unless the project needs attention (a
-//   failure, a cancel, a quiet run or a pause: `data-attention`), when it shows the plan, which
-//   leads with what stopped; the window between a phone and 1280px shows the plan. The view is
-//   the host's `data-view`, which a patch leaves as it is (`data-preserve-attr`);
+// (the view, Plan · Both · Board, is the server's alone: the switch is links, the choice kept
+// in the project's cookie, and with none chosen the stylesheet picks by the window's width)
 // - the board column's height and its "More below" cue;
 // - a step whose state the live plan moves on is said once, politely, in #announce;
 // - after a write from a form with `data-focus-after`, the focus goes to that element once the
@@ -17,25 +12,6 @@
 const runtime = document.querySelector("script[data-datastar-runtime]")?.src;
 const { rocket } = await import(runtime);
 
-const WIDE = matchMedia("(min-width: 1280px)");
-const PHONE = matchMedia("(max-width: 720px)");  // a phone opens on the board, unless something needs attention
-const store = {
-  get(key) { try { return localStorage.getItem(key); } catch { return null; } },
-  set(key, value) {
-    try {
-      if (value == null) localStorage.removeItem(key); else localStorage.setItem(key, value);
-    } catch { /* private mode: not remembered */ }
-  },
-};
-const mode = () => (WIDE.matches ? "wide" : "narrow");
-const viewKey = (m, id) => (m === "wide" ? `sluice.view-wide.${id}` : `sluice.view.${id}`);
-// an address that asks for a search, a Show, an Order, a step's chain or a recipe's units is
-// about the plan
-const planAsked = () => {
-  const q = new URLSearchParams(location.search);
-  return ["q", "show", "order", "root", "recipe"].some((k) => q.get(k));
-};
-const plainClick = (event) => event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
 
 rocket("sluice-board", {
   mode: "light",
@@ -70,41 +46,6 @@ rocket("sluice-board", {
         frames.add(frame);
       };
     };
-
-    // ---- the view: Plan · Both · Board ----
-    const chosen = {};  // this tab's choice, should storage refuse it
-    const served = host.dataset.view;  // the server's: `?view=` or the project's cookie
-    const viewOf = () => {
-      if (!host.classList.contains("has-panel")) return "plan";
-      const m = mode();
-      const views = m === "wide" ? ["plan", "both", "board"] : ["plan", "board"];
-      const v = chosen[m] ?? store.get(viewKey(m, host.dataset.project)) ?? served;
-      if (!(m in chosen) && planAsked()) return m === "wide" && v === "plan" ? "plan" : m === "wide" ? "both" : "plan";
-      if (views.includes(v)) return v;
-      if (m === "wide") return "both";
-      return PHONE.matches && !host.hasAttribute("data-attention") ? "board" : "plan";
-    };
-    // the page in its view and the switch (in the page's row, under its name) in step with it
-    const sync = () => {
-      const view = viewOf();
-      if (host.dataset.view !== view) host.dataset.view = view;
-      for (const tab of document.querySelectorAll("[data-view-tab]")) {
-        const current = String(tab.dataset.viewTab === view);
-        if (tab.getAttribute("aria-current") !== current) tab.setAttribute("aria-current", current);
-      }
-    };
-    on(document, "click", (event) => {
-      const tab = event.target.closest?.("[data-view-tab]");
-      if (!tab || !plainClick(event)) return;
-      event.preventDefault();
-      const view = tab.dataset.viewTab;
-      chosen[mode()] = view;
-      store.set(viewKey(mode(), host.dataset.project), view);
-      document.cookie = `sluice_view_${host.dataset.project}=${view}; Path=/; Max-Age=34560000; SameSite=Lax`;
-      sync();
-    });
-    on(WIDE, "change", sync);
-    on(PHONE, "change", sync);
 
     // ---- the board column ----
     // It scrolls on its own and is at most the window's height once it sticks; until the page
@@ -195,9 +136,7 @@ rocket("sluice-board", {
     observe(host, (records) => {
       fit();
       if (records.some((r) => r.type === "childList" || r.attributeName === "data-said" || r.attributeName === "data-state")) say();
-      sync();
     }, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "data-said", "data-state"] });
-    sync();
     fitPane();
   },
 });

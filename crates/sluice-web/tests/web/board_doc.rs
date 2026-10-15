@@ -202,7 +202,7 @@ async fn board_document_messages_and_retired_data() {
         set_board(&f, f.id, BOARD).await;
         let html = board(&f).await;
         assert!(
-        html.contains("<p class=\"ou-text muted board-message\">No message from <span class=\"ou-id\">tests-main</span> yet.</p>"),
+        html.contains("<p class=\"ou-text muted board-none\">No message from <span class=\"ou-id\">tests-main</span> yet.</p>"),
         "{html}"
     );
         message(

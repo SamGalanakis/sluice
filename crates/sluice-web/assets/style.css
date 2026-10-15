@@ -2581,7 +2581,33 @@ html.resizing, html.resizing * { cursor: col-resize !important; -webkit-user-sel
    it and the row its switch */
 html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane { display: none; }
 .project-page[data-view="plan"] > .board-side { display: none; }
-@media (max-width: 1279px) and (scripting: enabled) {
+/* no view chosen (`ProjectView::view`, the server's alone): the window's width picks it, and
+   the switch fills the one it shows: Both from 1280px, the plan between, and on a phone the
+   board (its quick check) unless the plan comes first (`data-plan-first`: something needs the
+   owner, or the address asks the plan something) */
+@media (min-width: 1280px) {
+  body:has(.project-page.has-panel:not([data-view])) .view-switch > [data-view-tab="both"] {
+    color: var(--ink); font-weight: var(--w-strong); }
+  body:has(.project-page.has-panel:not([data-view])) .view-switch > [data-view-tab="both"]::before {
+    background: var(--paper-2); }
+}
+@media (min-width: 720.02px) and (max-width: 1279px) {
+  body:has(.project-page.has-panel:not([data-view])) .view-switch > [data-view-tab="plan"] {
+    color: var(--ink); font-weight: var(--w-strong); }
+  body:has(.project-page.has-panel:not([data-view])) .view-switch > [data-view-tab="plan"]::before {
+    background: var(--paper-2); }
+}
+@media (max-width: 720px) {
+  html:not(.drawer-open) .project-page.has-panel:not([data-view], [data-plan-first]) > .plan-pane { display: none; }
+  .project-page.has-panel:not([data-view], [data-plan-first]) > .board-side { display: block; }
+  body:has(.project-page.has-panel:not([data-view], [data-plan-first])) .view-switch > [data-view-tab="board"],
+  body:has(.project-page.has-panel[data-plan-first]:not([data-view])) .view-switch > [data-view-tab="plan"] {
+    color: var(--ink); font-weight: var(--w-strong); }
+  body:has(.project-page.has-panel:not([data-view], [data-plan-first])) .view-switch > [data-view-tab="board"]::before,
+  body:has(.project-page.has-panel[data-plan-first]:not([data-view])) .view-switch > [data-view-tab="plan"]::before {
+    background: var(--paper-2); }
+}
+@media (max-width: 1279px) {
   .view-switch [data-view-tab="both"] { display: none; }
   /* the switch whole beside the find, which gives way */
   .subnav-tools .view-switch { flex: none; overflow: visible; }
@@ -2710,7 +2736,8 @@ html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane { display: 
 .board-md.muted { color: var(--ink-muted); }
 .board-md table { display: block; max-width: 100%; overflow: auto; }
 .board-md img { max-width: 100%; height: auto; }
-.board-fresh, .board-msg-head, .board-more, p.board-message { margin: 0; }
+/* "No message from x yet.": one line of prose, its id kept whole in it */
+.board-fresh, .board-msg-head, .board-more, .board-none { margin: 0; }
 .board-msg-head .m-from { font-weight: var(--w-strong); color: var(--ink); }
 .board-output .v.num { font-variant-numeric: tabular-nums; text-align: left; }  /* under its name, as text is */
 /* a value from step_progress: not final; "live" (the running ring) while the step runs */

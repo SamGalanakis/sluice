@@ -1387,7 +1387,7 @@ impl Draw<'_> {
         let Some(message) = self.loaded.latest.get(named).cloned().flatten() else {
             let _ = write!(
                 self.out,
-                "<p class=\"ou-text muted board-message\">No message from {} yet.</p>",
+                "<p class=\"ou-text muted board-none\">No message from {} yet.</p>",
                 prose(from)
             );
             return;

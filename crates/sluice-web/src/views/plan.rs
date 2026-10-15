@@ -2084,9 +2084,9 @@ pub fn finished_list(view: &ProjectView, units: &[&UnitView]) -> String {
     out
 }
 
-/// The Plan · Both · Board switch: a link each (the page drawn in its view and the choice kept
-/// in a cookie); `board.js` takes the click, shows the view at once and keeps it per project,
-/// wide and narrow apart. The chosen one is filled.
+/// The Plan · Both · Board switch: a link each, which the server answers with the page in that
+/// view and keeps in the project's cookie. The chosen one is filled; with none chosen, the
+/// stylesheet fills the one its width shows.
 fn view_switch(href: &str, chosen: Option<&str>) -> String {
     let links: String = [
         ("plan", "Plan", Icon::Workflow),

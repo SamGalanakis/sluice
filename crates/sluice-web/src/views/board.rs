@@ -559,8 +559,8 @@ pub struct ProjectView {
     /// The project's board, drawn beside the plan (`docs("board")`), when it has one.
     pub panel: Option<super::panel::Panel>,
     /// With a board, the view chosen (Plan, Both or Board: `VIEWS`): from `?view=`, else the
-    /// project's `sluice_view_<id>` cookie; `None` when none was chosen, so the page's script
-    /// (or, without it, the stylesheet) picks.
+    /// project's `sluice_view_<id>` cookie; `None` when none was chosen, so the stylesheet picks
+    /// by the window's width (`plan_first`).
     #[serde(skip)]
     pub view: Option<&'static str>,
     /// Its steps' and units' names, and the recipes they came from.
@@ -1052,10 +1052,16 @@ impl ProjectView {
         }
     }
     /// Something in it needs the owner: a step needs attention (failed, cancelled, stale, a
-    /// quiet run), or a pause holds work back. A phone then opens on the plan, not the board.
+    /// quiet run), or a pause holds work back.
     pub fn needs_attention(&self) -> bool {
         let c = &self.project.standing();
         c.attention() + c.get(Shown::Paused) > 0 || self.project.paused
+    }
+    /// With no view chosen, a phone opens on the plan rather than the board (its quick check):
+    /// when something needs the owner (the plan leads with what stopped) or the address asks the
+    /// plan something (a find, a Show, a chain, a recipe's units).
+    pub fn plan_first(&self) -> bool {
+        self.needs_attention() || plan_asked(&self.q, &self.show, &self.root, &self.recipe)
     }
     /// The plan under the same show and focus, without its find: the find's clear link.
     pub fn clear_href(&self) -> String {
@@ -1977,21 +1983,36 @@ pub const VIEWS: [&str; 3] = ["plan", "both", "board"];
 pub fn view_cookie(project: ProjectId) -> String {
     format!("sluice_view_{project}")
 }
-/// The view a page is drawn in: `?view=` when it names one, else the project's cookie.
+/// The view a page is drawn in: `?view=` when it names one, else the project's cookie. The
+/// server is its one source: the switch is links (`?view=`, kept in the cookie), never a script's
+/// memory. An address that asks the plan something does not open on the board alone a cookie
+/// kept: it is drawn with no view chosen, so the stylesheet shows the plan (beside the board
+/// on a wide window).
 pub fn chosen_view(query: &BoardQuery, headers: &HeaderMap, project: ProjectId) -> Option<&'static str> {
     let named = |v: &str| VIEWS.iter().copied().find(|w| *w == v);
     if let Some(v) = query.view.as_deref().and_then(named) {
         return Some(v);
     }
     let name = view_cookie(project);
-    headers
+    let kept = headers
         .get(axum::http::header::COOKIE)
         .and_then(|c| c.to_str().ok())
         .unwrap_or("")
         .split(';')
         .filter_map(|c| c.trim().split_once('='))
         .find(|(n, _)| *n == name)
-        .and_then(|(_, v)| named(v))
+        .and_then(|(_, v)| named(v));
+    let asked = plan_asked(
+        query.q.as_deref().unwrap_or(""),
+        query.show.as_deref().unwrap_or("all"),
+        query.root.as_deref().unwrap_or(""),
+        query.recipe.as_deref().unwrap_or(""),
+    );
+    kept.filter(|v| !(asked && *v == "board"))
+}
+/// The address asks the plan something: a find, a Show other than all, a chain or a recipe.
+fn plan_asked(q: &str, show: &str, root: &str, recipe: &str) -> bool {
+    !q.is_empty() || !matches!(show, "" | "all") || !root.is_empty() || !recipe.is_empty()
 }
 impl BoardQuery {
     /// Filter and find in `view` as the page's query asks. The plan keeps a unit whole: a find

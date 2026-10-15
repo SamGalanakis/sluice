@@ -22,7 +22,7 @@ const GEOMETRY: &str = r#"(() => {
           plan: box('#plan-pane'),
           board: box('#board-pane'), sum: box('.page-line'),
           navFits: (l => l.scrollWidth <= l.clientWidth)(document.querySelector('.subnav nav.tabs.lead')), tabs: box('.view-switch'), split: box('.splitter'),
-          view: document.querySelector('#project-board').dataset.view ?? null,
+          view: (() => { const p = document.querySelector('#plan-pane')?.checkVisibility(), b = document.querySelector('#board-pane')?.checkVisibility(); return p && b ? 'both' : b ? 'board' : 'plan'; })(),
           h1: box('.page-head h1'),
           // the page is as tall as its main column (or the window): nothing hangs below it
           below: document.documentElement.scrollHeight - Math.max(innerHeight,
@@ -78,7 +78,7 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         let screens = std::env::var_os("SLUICE_BOARD_SCREENS").map(std::path::PathBuf::from);
         let base = format!("http://{addr}");
         let mut browser = Chrome::open(&format!("{base}/projects/id/{lanes}")).unwrap();
-        let ready = "document.querySelector('#project-board') && document.readyState === 'complete' && (!document.querySelector('.has-panel') || document.querySelector('#project-board').dataset.view)";
+        let ready = "document.querySelector('#project-board') && document.readyState === 'complete' && !!customElements.get('sluice-board')";
         browser.wait(ready).unwrap();
         let listener_counts = |browser: &mut Chrome| {
             browser.send("Runtime.evaluate", serde_json::json!({
@@ -213,16 +213,14 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         assert_eq!(since, "1h 0m", "{since}");
         assert_eq!(browser.eval("document.querySelector('#t-since').textContent").unwrap(), "1h 0m");
         browser.eval("document.querySelector('#t-since').remove()").unwrap();
-        // On a phone the switch shows one section at a time (the board until one is picked)
-        // and remembers the choice.
+        // On a phone the switch shows one section at a time and the server keeps the choice:
+        // it is a link, answered with the page in that view and the project's cookie.
         browser
             .navigate(&format!("{base}/projects/id/{lanes}"))
             .unwrap();
         browser.wait(ready).unwrap();
         browser.viewport(390, "light").unwrap();
-        browser
-            .eval("document.querySelector('[data-view-tab=plan]').click()")
-            .unwrap();
+        pick(&mut browser, "plan", ready);
         let g = browser.eval(GEOMETRY).unwrap();
         check(&g, "plan tab");
         assert!(g["plan"].is_object() && g["board"].is_null(), "{g}");
@@ -244,12 +242,10 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         let g = browser.eval(GEOMETRY).unwrap();
         assert_eq!(g["view"], "plan", "remembered {g}");
         assert!(g["plan"].is_object() && g["board"].is_null(), "{g}");
-        // an address that asks for a search, a Show or an Order opens on the plan, whatever
+        // an address that asks the plan something (a find, a Show) opens on the plan, whatever
         // view was picked last
-        browser
-            .eval("document.querySelector('[data-view-tab=board]').click()")
-            .unwrap();
-        for query in ["q=alpha", "show=attention", "order=plan"] {
+        pick(&mut browser, "board", ready);
+        for query in ["q=alpha", "show=attention"] {
             browser
                 .navigate(&format!("{base}/projects/id/{lanes}?{query}"))
                 .unwrap();
@@ -262,15 +258,12 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
             .unwrap();
         browser.wait(ready).unwrap();
         assert_eq!(browser.eval(GEOMETRY).unwrap()["view"], "board", "the pick is kept");
-        // At 1440px each choice of the switch shows its view at once, says it is the current
-        // one (filled), and is kept: a fresh load draws it from the server.
+        // At 1440px each choice of the switch is drawn by the server, says it is the current
+        // one (filled), and is kept: a fresh load draws it again from the cookie.
         browser.viewport(1440, "light").unwrap();
         let shown = "(() => { const v = s => document.querySelector(s)?.checkVisibility() ?? false; return [document.querySelector('#project-board').dataset.view, v('#plan-pane'), v('#board-pane'), [...document.querySelectorAll('[data-view-tab]')].filter(a => a.getAttribute('aria-current') === 'true').map(a => a.dataset.viewTab).join(), getComputedStyle(document.querySelector('[data-view-tab][aria-current=true]'), '::before').backgroundColor !== getComputedStyle(document.querySelector('[data-view-tab][aria-current=false]'), '::before').backgroundColor]; })()";
         for (choice, plan, board) in [("plan", true, false), ("board", false, true), ("both", true, true)] {
-            browser
-                .eval(&format!("document.querySelector('[data-view-tab={choice}]').click()"))
-                .unwrap();
-            browser.eval("new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))").unwrap();
+            pick(&mut browser, choice, ready);
             assert_eq!(browser.eval(shown).unwrap(), serde_json::json!([choice, plan, board, choice, true]), "{choice}");
             browser
                 .navigate(&format!("{base}/projects/id/{lanes}"))
@@ -286,11 +279,6 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
             .navigate(&format!("{base}/projects/id/{lanes}"))
             .unwrap();
         browser.wait(ready).unwrap();
-        // the phone's choice is its own: the plan there, both on a wide window
-        browser.viewport(390, "light").unwrap();
-        browser
-            .eval("document.querySelector('[data-view-tab=plan]').click()")
-            .unwrap();
         // The splitter: End and Home take the board to its bounds, the width is remembered,
         // a double-click forgets it; Board shows the board alone.
         browser.viewport(1440, "light").unwrap();
@@ -323,15 +311,11 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
             .eval("document.querySelector('.splitter').dispatchEvent(new MouseEvent('dblclick', {bubbles: true}))")
             .unwrap();
         assert_eq!(width(&mut browser), default, "reset");
-        browser
-            .eval("document.querySelector('[data-view-tab=board]').click()")
-            .unwrap();
+        pick(&mut browser, "board", ready);
         let g = browser.eval(GEOMETRY).unwrap();
         check(&g, "board alone");
         assert!(g["plan"].is_null() && near(&g["board"]["width"], g["right"].as_f64().unwrap() - g["left"].as_f64().unwrap()), "{g}");
-        browser
-            .eval("document.querySelector('[data-view-tab=both]').click()")
-            .unwrap();
+        pick(&mut browser, "both", ready);
         // A button press on the page sends the say and says so under the board.
         browser
             .eval("document.querySelector('#board-pane input[name=\"field-0\"]').value='gamma'; document.querySelector('#board-pane input[name=\"field-0\"]').closest('form').querySelector('[name=\"field-1\"]').value='go now'; document.querySelector('#board-pane button[name=button][value=\"0\"]').click()")
@@ -469,24 +453,26 @@ async fn slow_chromium_a_phone_opens_on_the_plan_while_something_needs_attention
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let url = format!("http://{addr}/projects/id/{lanes}");
-    const READY: &str = "document.readyState === 'complete' && document.querySelector('#project-board')?.dataset.view";
+    const READY: &str = "document.readyState === 'complete' && !!document.querySelector('#project-board') && !!customElements.get('sluice-board')";
+    const SHOWN: &str = "[document.querySelector('#plan-pane').checkVisibility() ? 'plan' : 'board', document.querySelector('#project-board').hasAttribute('data-plan-first'), document.querySelector('#project-board').dataset.view ?? null]";
     let first = url.clone();
     let view = tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&first).unwrap();
         browser.viewport(390, "light").unwrap();
         browser.navigate(&first).unwrap();
         browser.wait(READY).unwrap();
-        let view = browser
-            .eval("[document.querySelector('#project-board').dataset.view, document.querySelector('#project-board').hasAttribute('data-attention')]")
-            .unwrap();
-        assert_eq!(browser.eval("window.browserErrors").unwrap(), serde_json::json!([]));
+        let view = browser.eval(SHOWN).unwrap();
+        assert_eq!(
+            browser.eval("window.browserErrors").unwrap(),
+            serde_json::json!([])
+        );
         view
     })
     .await
     .unwrap();
     assert_eq!(
         view,
-        serde_json::json!(["plan", true]),
+        serde_json::json!(["plan", true, null]),
         "beta-build failed: the plan"
     );
     // the failure is put right: nothing needs attention, and a phone opens on the board
@@ -506,15 +492,13 @@ async fn slow_chromium_a_phone_opens_on_the_plan_while_something_needs_attention
         browser.viewport(390, "light").unwrap();
         browser.navigate(&url).unwrap();
         browser.wait(READY).unwrap();
-        browser
-            .eval("[document.querySelector('#project-board').dataset.view, document.querySelector('#project-board').hasAttribute('data-attention')]")
-            .unwrap()
+        browser.eval(SHOWN).unwrap()
     })
     .await
     .unwrap();
     assert_eq!(
         view,
-        serde_json::json!(["board", false]),
+        serde_json::json!(["board", false, null]),
         "nothing needs attention: the board"
     );
     server.abort();
@@ -583,4 +567,16 @@ fn open_live(url: &str) -> Chrome {
     browser.navigate(url).unwrap();
     browser.wait("window.sluiceStreamReady === true").unwrap();
     browser
+}
+
+/// Follow the view switch's link to `view`, as a click would: the server draws the page in it
+/// and keeps it in the project's cookie.
+fn pick(browser: &mut Chrome, view: &str, ready: &str) {
+    let href = browser
+        .eval(&format!(
+            "document.querySelector('[data-view-tab={view}]').href"
+        ))
+        .unwrap();
+    browser.navigate(href.as_str().unwrap()).unwrap();
+    browser.wait(ready).unwrap();
 }
