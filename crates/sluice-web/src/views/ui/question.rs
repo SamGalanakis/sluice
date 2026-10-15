@@ -66,26 +66,35 @@ pub fn answer_link(answer_href: &str, reply_url: &str, title: &str) -> TrustedHt
             &TrustedHtml::owned("Answer".into()),
             ""
         ),
-        close_form(
-            "",
-            reply_url,
-            "Close question",
-            &format!("Close question: {title}")
-        ),
+        close_form("", reply_url, title, ""),
     ))
 }
-/// A question's Close (`words`, quiet), posted as its owner's reply with the action `close`;
-/// `slot` tells apart the cards one question has on a page (a step's Overview and Messages).
-pub fn close_form(slot: &str, reply_url: &str, words: &str, label: &str) -> String {
-    let id = super::form_id(&format!("close {slot}{reply_url} {words}"));
-    format!(
-        "{}<input type=\"hidden\" name=\"action\" value=\"close\"><button class=\"{}\" aria-label=\"{}\">{}</button>{}</form>",
-        super::post_form(&id, "q-close", reply_url),
-        Btn::Quiet.class(),
-        esc(label),
-        esc(words),
-        super::form_said(&id),
-    )
+/// A question's Close question, behind the page's confirmation: it is posted as its owner's
+/// reply with the action `close`, which reaches whoever asked at once and cannot be taken
+/// back (the store has no reopen), so it is confirmed rather than undone. `slot` tells apart
+/// the cards one question has on a page (a step's Overview and Messages); `area` is the id of
+/// the answer area the line that says so takes the place of ("" where the stream redraws it).
+pub fn close_form(slot: &str, reply_url: &str, title: &str, area: &str) -> String {
+    super::Confirm {
+        opener: "Close question".into(),
+        title: format!("Close “{}”?", super::cut(title, 80)),
+        action: reply_url.into(),
+        form_id: super::form_id(&format!("close {slot}{reply_url}")),
+        hidden: vec![("action", "close".into())],
+        copy: "Whoever asked is told you closed it, without an answer. It cannot be reopened."
+            .into(),
+        confirm: "Close question".into(),
+        keep: "Keep it open",
+        form_class: "q-close",
+        form_attrs: if area.is_empty() {
+            String::new()
+        } else {
+            format!(" data-closes=\"{}\"", esc(area))
+        },
+        ..Default::default()
+    }
+    .html()
+    .0
 }
 /// The way on under a card: "Open its step" or "Open its thread".
 pub fn way_on(href: &str, words: &str) -> TrustedHtml {

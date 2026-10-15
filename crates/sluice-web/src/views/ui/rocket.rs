@@ -593,7 +593,13 @@ impl Confirm {
                 ""
             },
             opener = esc(&self.opener),
-            form = super::post_form_with(&form_id, "", &self.action, "", &focus),
+            form = super::post_form_with(
+                &form_id,
+                self.form_class,
+                &self.action,
+                "",
+                &format!("{focus}{}", self.form_attrs)
+            ),
             said = super::form_said(&form_id),
             lead = self.lead,
             copy = esc(&self.copy),

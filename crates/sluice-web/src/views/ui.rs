@@ -682,4 +682,8 @@ pub struct Confirm {
     pub after: TrustedHtml,
     /// Drawn before its copy, in the same paragraph: a time that ticks ("It succeeded 3h ago.").
     pub lead: TrustedHtml,
+    /// Its form's class ("" for none), for a component that answers to what it confirms.
+    pub form_class: &'static str,
+    /// More attributes on its form, each with its leading space, already escaped.
+    pub form_attrs: String,
 }

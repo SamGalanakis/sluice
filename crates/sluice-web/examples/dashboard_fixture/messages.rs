@@ -44,7 +44,7 @@ impl MessageCommands for FixtureCommands {
 
 pub async fn seed(writer: &Writer, id: ProjectId) {
     let fixture_project = id;
-    let form = r#"root = Stack([Heading("Choose the release limit"), Text("The number is sent as a JSON number."), Form("limit", [Input("value", "Limit", "1 to 10", "number", "3", ["required", "min:1", "max:10"]), Checkbox("confirmed", "I checked the evidence", false)], [Button("Apply", "submit"), Button("Close", "close", {}, "secondary")])])"#;
+    let form = r#"root = Stack([Heading("Choose the release limit"), Text("The number is sent as a JSON number."), Form("limit", [Input("value", "Limit", "1 to 10", "number", "3", ["required", "min:1", "max:10"]), Checkbox("confirmed", "I checked the evidence", false)], [Button("Apply", "submit"), Button("Close question", "close", {}, "secondary")])])"#;
     for (index, thread, from, to, title, body, needs_reply, ui) in [
         (
             0,
