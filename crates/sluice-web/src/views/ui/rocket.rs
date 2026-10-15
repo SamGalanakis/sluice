@@ -48,7 +48,8 @@ impl Host {
         }
         self
     }
-    /// An attribute the script owns once the page is drawn: a patch never resets it.
+    /// An attribute the script owns once the page is drawn: a patch never resets it (as it never
+    /// resets Rocket's own `data-rocket-host`).
     pub fn keep(mut self, name: &'static str) -> Self {
         self.keep.push(name);
         self
@@ -61,10 +62,15 @@ impl Host {
                 None => out.push_str(&format!(" {name}")),
             }
         }
-        if !self.keep.is_empty() {
-            out.push_str(&format!(" data-preserve-attr=\"{}\"", self.keep.join(" ")));
+        // Rocket marks a host it has set up `data-rocket-host` and finds an element's host (for
+        // its actions, `@post` among them) by that mark: a patch must never take it away
+        // (https://data-star.dev/reference/rocket)
+        out.push_str(" data-preserve-attr=\"data-rocket-host");
+        for name in &self.keep {
+            out.push(' ');
+            out.push_str(name);
         }
-        out.push('>');
+        out.push_str("\">");
         TrustedHtml::owned(out)
     }
     pub fn close(&self) -> TrustedHtml {
@@ -74,6 +80,16 @@ impl Host {
     pub fn wrap(&self, inner: &TrustedHtml) -> TrustedHtml {
         TrustedHtml::owned(format!("{}{inner}{}", self.open(), self.close()))
     }
+}
+
+/// The page's one confirmation dialog (`sluice-confirm` moves the form it confirms into it while
+/// it is open), in its own component: a form in it is in a Rocket host, which is where Rocket
+/// looks for the actions its attributes call (https://data-star.dev/reference/rocket). No patch
+/// morphs it (`data-ignore-morph`); a write's answer puts its notice in whole.
+pub fn confirmation() -> TrustedHtml {
+    Host::new("sluice-dialog").wrap(&TrustedHtml::owned(
+        "<dialog id=\"confirmation\" class=\"confirmation\" aria-labelledby=\"confirmation-title\" data-ignore-morph><h2 id=\"confirmation-title\"></h2><div id=\"confirmation-body\"></div></dialog>".into(),
+    ))
 }
 
 /// A component as its script declares it: its props (as attributes, with their codec), the
@@ -93,8 +109,8 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-tabs",
         script: "components.js",
-        does: "An ARIA tablist over its panels: arrows wrap, Home and End; the chosen tab in $$tab, the page's tab signal and, with url, ?tab=; an anchor in a panel opens its tab.",
-        props: &[("current", "string"), ("url", "boolean")],
+        does: "An ARIA tablist over its panels: arrows wrap, Home and End; the chosen tab in $$tab and the page's tab signal; an anchor in a panel opens its tab.",
+        props: &[("current", "string")],
         events: &["sluice-tab"],
         slots: &["tabs", "panels"],
     },
@@ -110,34 +126,30 @@ pub const COMPONENTS: &[Component] = &[
         tag: "sluice-confirm",
         script: "components.js",
         does: "Its summary opens the page's one dialog with its form; focus starts on the keep button, stays in the dialog and goes back to the opener.",
-        props: &[
-            ("heading", "string"),
-            ("ref-id", "string"),
-            ("disabled", "boolean"),
-        ],
+        props: &[("heading", "string"), ("ref-id", "string")],
         events: &["sluice-confirm-open", "sluice-confirm-close"],
         slots: &["summary", "form"],
     },
     Component {
-        tag: "sluice-conversation",
+        tag: "sluice-dialog",
         script: "components.js",
-        does: "Jump to latest, a thread's page opening at its end, and Mark read: a note is read only when asked, the mark covering what the page drew.",
-        props: &[("start", "string")],
-        events: &["sluice-read"],
-        slots: &["lead", "list"],
+        does: "The page's one confirmation dialog: keep closes it, Tab stays in it, and closing puts the form it holds back where it came from, the focus on its opener.",
+        props: &[],
+        events: &[],
+        slots: &["dialog"],
     },
     Component {
-        tag: "sluice-composer",
+        tag: "sluice-conversation",
         script: "components.js",
-        does: "Sends a note or a question as JSON and stays on the page, keeping what is typed through a patch; Ctrl or Cmd with Enter sends.",
-        props: &[],
-        events: &["sluice-sent"],
-        slots: &["form"],
+        does: "Jump to latest, and a thread's page opening at its end.",
+        props: &[("start", "string")],
+        events: &[],
+        slots: &["lead", "list"],
     },
     Component {
         tag: "sluice-answer",
         script: "components.js",
-        does: "A question's Answer opens its box (the question's own form, drawn by openui.js from its program), and Close question closes it at once.",
+        does: "A question's Answer opens its box (the question's own form, drawn by openui.js from its program).",
         props: &[],
         events: &[],
         slots: &["actions", "box"],
@@ -159,25 +171,17 @@ pub const COMPONENTS: &[Component] = &[
         slots: &["text", "button"],
     },
     Component {
-        tag: "sluice-toggle",
-        script: "components.js",
-        does: "A display setting applied at once and kept by posting it to /settings: value types (every Types switch follows) or the theme (the Theme row names it).",
-        props: &[("setting", "string")],
-        events: &["sluice-setting"],
-        slots: &["control"],
-    },
-    Component {
         tag: "sluice-search",
         script: "components.js",
-        does: "Finds as one types: the board's search and filters point the page's stream at the new query (the address follows), or a list hides what does not match; Escape clears. A form of filters (form[data-applies]) sends itself as a choice in it changes, its Apply hidden.",
-        props: &[("mode", "oneOf"), ("base", "string")],
-        events: &["sluice-stream-restart"],
-        slots: &["form", "list"],
+        does: "A list found as one types: what does not match hides, a group with none left too, and a status says how many match; Escape clears.",
+        props: &[],
+        events: &[],
+        slots: &["list"],
     },
     Component {
         tag: "sluice-banner",
         script: "components.js",
-        does: "Says how the page's stream stands (paused, stopped with Reconnect) or that sluice was updated (Reload); hidden while live.",
+        does: "Says how the page's stream stands (paused, stopped with Reconnect, the stream's own @get) or that sluice was updated (Reload); hidden while live.",
         props: &[("kind", "oneOf")],
         events: &[],
         slots: &["words", "button"],
@@ -214,7 +218,7 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-drawer",
         script: "sluice.js",
-        does: "Opens a step beside the plan (over it below 1200px, a sheet on a phone) from #step:<id>, a stage's cell or any link with data-step, streams it, writes its tab into ?tab= and closes on Escape or a click away; [ and ] open the step before or after it in the plan's order.",
+        does: "Opens a step beside the plan (over it below 1200px, a sheet on a phone) from #step:<id>, a stage's cell or any link with data-step, streams it and closes on Escape or a click away; [ and ] open the step before or after it in the plan's order.",
         props: &[("base", "string")],
         events: &[],
         slots: &["scrim", "drawer"],
@@ -230,7 +234,7 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-board",
         script: "board.js",
-        does: "A project's page (#project-board): the Plan · Both · Board switch shows its view at once and keeps it per project, the board's column fits the window with its More below cue, a board Button's say posts in place with its answer under the board, and a step the live plan moves on is said once in #announce.",
+        does: "A project's page (#project-board): the Plan · Both · Board switch shows its view at once and keeps it per project, the board's column fits the window with its More below cue, a step the live plan moves on is said once in #announce, and a form with data-focus-after hands the focus on once its write is drawn.",
         props: &[],
         events: &[],
         slots: &["plan", "board"],
@@ -267,17 +271,6 @@ pub fn more_open(class: &str, more: &str, less: &str, remember: &str, wide: bool
         less,
     )
 }
-/// The same, hidden until its page's script shows it (`data-<name>` names it there).
-pub fn more_open_hidden(class: &str, more: &str, less: &str, name: &str) -> TrustedHtml {
-    more_host(
-        Host::new("sluice-fold")
-            .attr(&format!("data-{name}"), "")
-            .flag("hidden", true),
-        class,
-        more,
-        less,
-    )
-}
 fn more_host(host: Host, class: &str, more: &str, less: &str) -> TrustedHtml {
     let words = if less.is_empty() {
         format!("<span>{}</span>", esc(more))
@@ -296,7 +289,7 @@ fn more_host(host: Host, class: &str, more: &str, less: &str) -> TrustedHtml {
     ))
 }
 /// A More's end: `less` a "Read less" there (the reader is at its end), folding it from where
-/// the reader is (only with script).
+/// the reader is (`sluice-fold`).
 pub fn more_close(less: &str) -> TrustedHtml {
     TrustedHtml::owned(format!(
         "{}</details></sluice-fold>",
@@ -304,7 +297,7 @@ pub fn more_close(less: &str) -> TrustedHtml {
             String::new()
         } else {
             format!(
-                "<button type=\"button\" class=\"fold-less link-quiet needs-js\">{}</button>",
+                "<button type=\"button\" class=\"fold-less link-quiet\">{}</button>",
                 esc(less)
             )
         }
@@ -325,7 +318,7 @@ pub fn copy(value: &str, label: &str) -> TrustedHtml {
 pub fn copy_with(value: &str, label: &str, class: &str) -> TrustedHtml {
     let host = Host::new("sluice-copy").attr("value", value);
     TrustedHtml::owned(format!(
-        "{}<code{}>{}</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"{}\" title=\"{}\">{}{}</button>{}",
+        "{}<code{}>{}</code><button type=\"button\" class=\"copy\" aria-label=\"{}\" title=\"{}\">{}{}</button>{}",
         host.open(),
         if class.is_empty() {
             String::new()
@@ -341,19 +334,12 @@ pub fn copy_with(value: &str, label: &str, class: &str) -> TrustedHtml {
     ))
 }
 
-/// The Types switch: value types shown or not, everywhere at once.
+/// The Types switch: value types shown or not, everywhere at once (the page's `types` signal,
+/// kept by `/settings`).
 pub fn types_toggle() -> TrustedHtml {
-    Host::new("sluice-toggle").attr("setting", "types").wrap(&TrustedHtml::owned(
-        "<button type=\"button\" class=\"types-toggle\" aria-pressed=\"false\" data-preserve-attr=\"aria-pressed\">Types<span class=\"sw\" aria-hidden=\"true\"></span></button>".into(),
-    ))
-}
-/// A display setting's control in the display preferences (`setting` "theme" or "types"):
-/// the host before it, then `setting_close`.
-pub fn setting_open(setting: &str) -> TrustedHtml {
-    Host::new("sluice-toggle").attr("setting", setting).open()
-}
-pub fn setting_close() -> TrustedHtml {
-    Host::new("sluice-toggle").close()
+    TrustedHtml::owned(
+        "<button type=\"button\" class=\"types-toggle\" data-attr:aria-pressed=\"String($types)\" data-on:click=\"$types = !$types; @post('/settings')\">Types<span class=\"sw\" aria-hidden=\"true\"></span></button>".into(),
+    )
 }
 
 /// A menu's host (the project switcher, display preferences, an item's Details): its
@@ -366,22 +352,24 @@ pub fn menu_close() -> TrustedHtml {
 }
 
 /// The page's stream line ("Updates paused. Reconnecting…", "Updates stopped at 14:02." with
-/// Reconnect) and the build line ("sluice was updated · Reload"), each hidden until it applies.
-pub fn banners() -> TrustedHtml {
+/// Reconnect, which opens `stream` again) and the build line ("sluice was updated · Reload"),
+/// each hidden until it applies.
+pub fn banners(stream: &str) -> TrustedHtml {
     TrustedHtml::owned(format!(
         "{}{}",
         banner(
             "stream",
             "stream-state",
             "Updates paused. Reconnecting…",
-            true
+            true,
+            stream
         ),
-        banner("release", "release-state", "", true)
+        banner("release", "release-state", "", true, "")
     ))
 }
 /// One banner: `kind` "stream" with its words, or "release"; `id` empty for a copy that is not
-/// the page's own (the gallery's).
-pub fn banner(kind: &str, id: &str, words: &str, hidden: bool) -> TrustedHtml {
+/// the page's own (the gallery's), `stream` the page's stream's address (none for a copy).
+pub fn banner(kind: &str, id: &str, words: &str, hidden: bool, stream: &str) -> TrustedHtml {
     let host = Host::new("sluice-banner")
         .attr("kind", kind)
         .some("id", id)
@@ -398,8 +386,16 @@ pub fn banner(kind: &str, id: &str, words: &str, hidden: bool) -> TrustedHtml {
         .flag("hidden", hidden);
     host.wrap(&TrustedHtml::owned(if kind == "stream" {
         format!(
-            "<span class=\"stream-words\">{}</span> <button type=\"button\" class=\"stream-retry\">Reconnect</button>",
-            esc(words)
+            "<span class=\"stream-words\">{}</span> <button type=\"button\" class=\"stream-retry\"{}>Reconnect</button>",
+            esc(words),
+            if stream.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " data-reopens-stream data-on:click=\"{}\"",
+                    esc(&super::stream_reopen(stream))
+                )
+            }
         )
     } else {
         "sluice was updated · <button type=\"button\" class=\"release-reload\">Reload</button>"
@@ -442,22 +438,18 @@ pub fn splitter_for(frame: &str, pane: &str, store: &str, min: u32, rest: u32) -
         .wrap(&icon(Icon::GripVertical, 16, "grip"))
 }
 
-/// A search: `mode` "stream" around the board's tools form, pointing the page's stream at its
-/// query under `base` (the project's address); `mode` "filter" around a list whose items carry
-/// their words in `data-find`, its field (`search_field`) first.
-pub fn search_open(mode: &str, base: &str) -> TrustedHtml {
-    Host::new("sluice-search")
-        .attr("mode", mode)
-        .some("base", base)
-        .open()
+/// A list found as one types: its items carry their words in `data-find`, its field
+/// (`search_field`) first.
+pub fn search_open() -> TrustedHtml {
+    Host::new("sluice-search").open()
 }
 pub fn search_close() -> TrustedHtml {
     Host::new("sluice-search").close()
 }
-/// A filter's field, there only with script.
+/// A filter's field.
 pub fn search_field(id: &str, placeholder: &str, label: &str) -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<div class=\"q-field fn-find needs-js\">{}<input type=\"search\" id=\"{}\" placeholder=\"{}\" aria-label=\"{}\" autocomplete=\"off\" spellcheck=\"false\" data-preserve-attr=\"value\" data-find></div>",
+        "<div class=\"q-field fn-find\">{}<input type=\"search\" id=\"{}\" placeholder=\"{}\" aria-label=\"{}\" autocomplete=\"off\" spellcheck=\"false\" data-preserve-attr=\"value\" data-find></div>",
         icon(Icon::Search, 16, "q-icon"),
         esc(id),
         esc(placeholder),
@@ -491,7 +483,7 @@ pub fn drawer(base: &str) -> TrustedHtml {
     ))
 }
 
-/// A note's Mark read: the watermark of what the page drew of its thread (only with script).
+/// A note's Mark read: a form posting the watermark of what the page drew of its thread.
 pub fn mark_read(
     url: &str,
     thread: &str,
@@ -499,16 +491,18 @@ pub fn mark_read(
     words: &str,
     label: &str,
 ) -> TrustedHtml {
+    let id = super::form_id(&format!("read {url} {thread}"));
     TrustedHtml::owned(format!(
-        "<button type=\"button\" class=\"mark-read needs-js\" data-read-url=\"{}\" data-thread=\"{}\" data-through=\"{through}\"{}>{}</button>",
-        esc(url),
+        "{open}<input type=\"hidden\" name=\"thread\" value=\"{}\"><input type=\"hidden\" name=\"through\" value=\"{through}\"><button{}>{}</button>{said}</form>",
         esc(thread),
         if label.is_empty() {
             String::new()
         } else {
             format!(" aria-label=\"{}\"", esc(label))
         },
-        esc(words)
+        esc(words),
+        open = super::post_form(&id, "mark-read", url),
+        said = super::form_said(&id),
     ))
 }
 /// A conversation's host: what the page draws before it (a note's head, a thread's line) goes
@@ -523,10 +517,10 @@ pub fn conversation_open(id: &str, start: &str) -> TrustedHtml {
 pub fn conversation_close() -> TrustedHtml {
     Host::new("sluice-conversation").close()
 }
-/// "Mark all read" over a page's notes, and the line that says when a mark did not go through.
+/// "Mark all read" over a page's notes: it sends each note's own Mark read in its section.
 pub fn mark_all() -> TrustedHtml {
     TrustedHtml::owned(
-        "<button type=\"button\" class=\"mark-all needs-js\" data-mark-all>Mark all read</button>"
+        "<button type=\"button\" class=\"mark-all\" data-on:click=\"el.closest('section').querySelectorAll('form.mark-read').forEach((f) =&gt; f.requestSubmit())\">Mark all read</button>"
             .into(),
     )
 }
@@ -539,18 +533,10 @@ pub fn answer_close() -> TrustedHtml {
     Host::new("sluice-answer").close()
 }
 
-/// The message box at a conversation's end.
-pub fn composer_open() -> TrustedHtml {
-    Host::new("sluice-composer").open()
-}
-pub fn composer_close() -> TrustedHtml {
-    Host::new("sluice-composer").close()
-}
-
 impl Confirm {
     /// The confirmation as a page draws it: the server's `<details>` (its summary the opener,
     /// its form what is confirmed) in a `sluice-confirm`, whose summary opens the shared
-    /// dialog with the form in it; without script the details open the same form inline.
+    /// dialog (`sluice-dialog`) with the form in it.
     pub fn html(&self) -> TrustedHtml {
         let hidden: String = self
             .hidden
@@ -565,15 +551,28 @@ impl Confirm {
             .collect();
         // the box is the owner's while open: a stream patch never empties it (`data-ignore-morph`)
         let reason = self.reason.map_or(String::new(), |placeholder| format!(
-            "<label class=\"confirm-reason\">{}<textarea name=\"message\" rows=\"3\" maxlength=\"16384\" placeholder=\"{}\" data-ignore-morph>{}</textarea></label>",
+            "<label class=\"confirm-reason\">{}<textarea name=\"message\" rows=\"3\" maxlength=\"16384\" placeholder=\"{}\" data-ignore-morph></textarea></label>",
             esc(if self.reason_label.is_empty() { "Reason (optional)" } else { self.reason_label }),
             esc(placeholder),
-            esc(&self.reason_value)
         ));
+        // a form posts through Datastar (`ui::post_form`), under its own id or one made from
+        // what it confirms
+        let form_id = if self.form_id.is_empty() {
+            super::form_id(&format!(
+                "{} {} {:?}",
+                self.action, self.opener, self.hidden
+            ))
+        } else {
+            self.form_id.clone()
+        };
+        let focus = if self.focus_after.is_empty() {
+            String::new()
+        } else {
+            format!(" data-focus-after=\"{}\"", esc(&self.focus_after))
+        };
         let host = Host::new("sluice-confirm")
             .attr("heading", &self.title)
-            .some("ref-id", &self.id)
-            .flag("disabled", self.disabled);
+            .some("ref-id", &self.id);
         let id = |id: &str| {
             if id.is_empty() {
                 String::new()
@@ -582,7 +581,7 @@ impl Confirm {
             }
         };
         TrustedHtml::owned(format!(
-            "{open}<details class=\"confirm-flow\"><summary{opener_id}{disabled}>{opener}</summary><form method=\"post\" action=\"{action}\"{form_id}>{hidden}<p class=\"confirm-copy\">{lead}{copy}</p>{reason}<div class=\"confirm-actions\"><button class=\"{tone}\">{confirm}</button><button type=\"button\" data-keep>{keep}</button></div>{after}</form></details>{close}",
+            "{open}<details class=\"confirm-flow\"><summary{opener_id}{disabled}>{opener}</summary>{form}{hidden}<p class=\"confirm-copy\">{lead}{copy}</p>{reason}<div class=\"confirm-actions\"><button class=\"{tone}\">{confirm}</button><button type=\"button\" data-keep>{keep}</button></div>{after}{said}</form></details>{close}",
             open = host.open(),
             close = host.close(),
             opener_id = id(&self.opener_id),
@@ -592,8 +591,8 @@ impl Confirm {
                 ""
             },
             opener = esc(&self.opener),
-            action = esc(&self.action),
-            form_id = id(&self.form_id),
+            form = super::post_form_with(&form_id, "", &self.action, "", &focus),
+            said = super::form_said(&form_id),
             lead = self.lead,
             copy = esc(&self.copy),
             tone = if self.danger { "danger" } else { "primary" },

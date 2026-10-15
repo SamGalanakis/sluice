@@ -211,7 +211,7 @@ fn tabs(prefix: &str) -> TrustedHtml {
         "Each value and which run set it; one repeated is said once.",
         "Its unit's timeline, then one row per run.",
     ];
-    let mut html = ui::tabs_open(prefix, "Example", &set, "overview", false).0;
+    let mut html = ui::tabs_open(prefix, "Example", &set, "overview").0;
     for (tab, said) in set.iter().zip(words) {
         html.push_str(ui::panel_open(prefix, tab.key, tab.label, 3, tab.key == "overview", false).as_str());
         html.push_str(&format!("<p>{}</p>", ui::esc(said)));
@@ -324,7 +324,7 @@ fn searches(prefix: &str) -> TrustedHtml {
     .collect();
     TrustedHtml::owned(format!(
         "{}{}<p class=\"meta\" role=\"status\" hidden data-find-status data-none=\"No function matches\" data-one=\"function matches\" data-many=\"functions match\"></p><ul class=\"gal-list\" data-find-group>{items}</ul>{}",
-        ui::search_open("filter", ""),
+        ui::search_open(),
         ui::search_field(&format!("{prefix}find"), "Find a function", "Find functions by name or description"),
         ui::search_close(),
     ))
@@ -332,9 +332,9 @@ fn searches(prefix: &str) -> TrustedHtml {
 fn banners() -> TrustedHtml {
     TrustedHtml::owned(format!(
         "{}{}{}",
-        ui::banner("stream", "", "Updates paused. Reconnecting…", false),
-        ui::banner("stream", "", "Updates stopped at 14:02.", false),
-        ui::banner("release", "", "", false),
+        ui::banner("stream", "", "Updates paused. Reconnecting…", false, ""),
+        ui::banner("stream", "", "Updates stopped at 14:02.", false, ""),
+        ui::banner("release", "", "", false, ""),
     ))
 }
 fn splitters(prefix: &str) -> TrustedHtml {
@@ -1298,12 +1298,12 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Cards and wells", "A card around a region; a well for rows that belong together, the pale sand's for what needs a look.", "`.card`; `ui::well_open`, `ui::well_close`.", both(&|_| Ok(sections()))?);
     add("Fields", "Inputs, outputs and progress, one row each.", "`kit.html`'s `field`.", both(&|p| fields(p, &project))?);
     add("Folds", "A long value cut to its first lines, and More and Less.", "`ui::fold`, `ui::more_open` (`sluice-fold`).", both(&|_| Ok(folds()))?);
-    add("Conversation", "Messages in one column, the message box at the end.", "`threads::Conversation` in `sluice-conversation`, `sluice-composer`, `sluice-answer`.", both(&|p| conversation(p, &project))?);
+    add("Conversation", "Messages in one column, the message box at the end.", "`threads::Conversation` in `sluice-conversation`, `sluice-answer`; its message box a `ui::post_form`.", both(&|p| conversation(p, &project))?);
     add("Empty states", "One line where a place has nothing to show.", "`ui::empty`, `ui::empty_with`.", both(&|_| Ok(empties()))?);
     add("Confirmation", "Asked before Cancel, a succeeded step's Retry, Close all and a delete.", "`ui::Confirm` in `sluice-confirm`.", both(&|_| Ok(dialog()))?);
     add("Menus", "The project switcher, display preferences and an item's Details.", "`ui::menu_open` (`sluice-menu`).", both(&|_| Ok(menus()))?);
     add("Copy", "An id or a SHA, with a copy button.", "`ui::copy` (`sluice-copy`).", both(&|_| Ok(copies()))?);
-    add("Settings", "Display preferences: Theme, Show value types and Keyboard shortcuts, applied at once and kept.", "`views::prefs::menu` (`ui::setting_open`, `sluice-toggle`; `details.sub` in `sluice-menu`), `ui::types_toggle`.", both(&|p| Ok(toggles(p)))?);
+    add("Settings", "Display preferences: Theme, Show value types and Keyboard shortcuts, applied at once and kept.", "`views::prefs::menu` (the `theme` and `types` signals; `details.sub` in `sluice-menu`), `ui::types_toggle`.", both(&|p| Ok(toggles(p)))?);
     add("Search", "A list filtered as you type, or the plan's find.", "`ui::search_open` (`sluice-search`).", both(&|p| Ok(searches(p)))?);
     add("Banners", "Updates paused or stopped, or a newer build of sluice.", "`ui::banner` (`sluice-banner`).", both(&|_| Ok(banners()))?);
     add("Notice", "An action that was not done, and your words kept.", "`ui::notice`.", both(&|_| Ok(notices()))?);

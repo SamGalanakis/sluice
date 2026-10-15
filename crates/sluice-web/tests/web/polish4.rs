@@ -1,18 +1,13 @@
 //! The fourth critique's fixes, each through the pages it changed. An open question to the
 //! owner is impossible to miss: it leads the index's and a project's tab titles, the coral
 //! "Awaiting your reply" marks its step's row on the index and its unit on the plan, and the
-//! step's Overview draws it whole with Answer; an answer is confirmed where it was given, with or
-//! without script. A rerun says what started it on Runs; a pending step names what holds its
+//! step's Overview draws it whole with Answer; an answer is confirmed where it was given. A rerun says what started it on Runs; a pending step names what holds its
 //! chain and a stopped runner; the log keeps sluice's bookkeeping quiet; and the small fixes:
 //! a lane string's overrun, a live run file's end, the step view's unreached stages, readable
 //! types, the owner's thread by name.
 use crate::board_fixture;
 use crate::plan_html;
 use crate::stored_messages;
-use axum::{
-    body::{Body, to_bytes},
-    http::Request,
-};
 use board_fixture::Fixture;
 use serde_json::json;
 use sluice_model::{
@@ -21,7 +16,6 @@ use sluice_model::{
 };
 use sluice_store::RetrySafety;
 use stored_messages::{Stored, stored};
-use tower::ServiceExt;
 
 fn between<'a>(html: &'a str, from: &str, to: &str) -> &'a str {
     let start = html
@@ -277,7 +271,7 @@ async fn a_steps_overview_draws_its_open_question_whole_to_answer_and_its_header
 }
 
 #[tokio::test]
-async fn an_answer_is_confirmed_in_its_place_with_or_without_script() {
+async fn an_answer_is_confirmed_in_its_place() {
     let f = Fixture::new().await;
     let id = f.titled().await;
     let answered = ask(&f, id, "l1-work", "Land l1 first?", "Yes or no.").await;
@@ -335,33 +329,6 @@ async fn an_answer_is_confirmed_in_its_place_with_or_without_script() {
         )),
         "{card}"
     );
-
-    // without script the words-only form goes back where it was sent from, to its place
-    for (referer, to) in [
-        (
-            "http://127.0.0.1:1/inbox".to_owned(),
-            format!("/inbox#item-{id}-{waiting}"),
-        ),
-        (
-            format!("http://127.0.0.1:1/projects/id/{id}/steps/l1-work?tab=messages#x"),
-            format!("/projects/id/{id}/steps/l1-work?tab=messages"),
-        ),
-    ] {
-        let response = f
-            .router()
-            .oneshot(
-                Request::post(format!("/projects/id/{id}/messages/{waiting}/reply"))
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .header("referer", referer)
-                    .body(Body::from("body=Accept+it"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 303);
-        assert_eq!(response.headers()["location"], to.as_str());
-        let _ = to_bytes(response.into_body(), usize::MAX).await;
-    }
 }
 
 #[tokio::test]

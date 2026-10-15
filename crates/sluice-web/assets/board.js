@@ -1,11 +1,8 @@
 // <sluice-board>: the project page with its board beside the plan (docs("board")). Rust draws
 // the host (`#project-board`) and everything in it; this setup only enhances it, all of it
-// undone by its cleanup. Without script both sections show (side by side from 1280px, one after
-// the other below) until a view is chosen by its link (`?view=`, kept in the project's
-// `sluice_view_<id>` cookie and drawn by the server), the board's tools apply with their Apply
-// button and a Button posts the page. With script (its search is `sluice-search`, the splitter
-// `sluice-splitter`, the description's More and the board's document `sluice-fold`:
-// components.js):
+// undone by its cleanup (the splitter is `sluice-splitter`, the description's More and the
+// board's document `sluice-fold`: components.js; the find and the board's Buttons are
+// Datastar's, in the markup):
 // - the view switch: Plan · Both · Board from 1280px, Plan · Board below; a click shows the
 //   view at once and keeps it per project (localStorage, wide and narrow apart, and the cookie
 //   for the server's first paint); until one is picked the server's choice holds, else a phone
@@ -14,8 +11,9 @@
 //   leads with what stopped; the window between a phone and 1280px shows the plan. The view is
 //   the host's `data-view`, which a patch leaves as it is (`data-preserve-attr`);
 // - the board column's height and its "More below" cue;
-// - a board Button's say is sent without leaving the page, the answer shown under the board;
-// - a step whose state the live plan moves on is said once, politely, in #announce.
+// - a step whose state the live plan moves on is said once, politely, in #announce;
+// - after a write from a form with `data-focus-after`, the focus goes to that element once the
+//   stream draws it (an item's Undo, the next item).
 const runtime = document.querySelector("script[data-datastar-runtime]")?.src;
 const { rocket } = await import(runtime);
 
@@ -139,57 +137,31 @@ rocket("sluice-board", {
       if (p) p.scrollBy({ top: p.clientHeight * 0.8, behavior: "smooth" });
     });
 
-    // ---- a board Button: its say, sent without leaving the page ----
-    // A refused field's note stays through the board's patches (`data-ignore-morph`) until the
-    // owner edits that field, or sends the form again.
-    const clearNote = (event) => {
-      const field = event.target.closest?.("form.board-form [name]");
-      const note = field && field.form?.querySelector(`[data-error-for="${CSS.escape(field.name)}"]`);
-      if (note && !note.hidden) {
-        note.hidden = true;
-        note.textContent = "";
-      }
+    // ---- the focus after a write ----
+    // A form's write ends (Datastar's datastar-fetch "finished") before or after the stream
+    // draws what it did; once the write was taken (its notice is no alert), the element named
+    // in `data-focus-after` takes the focus as soon as it is there, the page left where it was.
+    let focusAfter = null;
+    const focusNow = () => {
+      if (!focusAfter) return;
+      const target = document.getElementById(focusAfter.id);
+      if (!target) return;
+      const { left, top } = focusAfter;
+      focusAfter = null;
+      target.focus({ preventScroll: true });
+      window.scrollTo({ left, top });
     };
-    on(host, "input", clearNote);
-    on(host, "change", clearNote);
-    on(host, "submit", async (event) => {
-      const form = event.target.closest?.("form.board-form");
-      if (!form) return;
-      event.preventDefault();
-      const status = form.querySelector(".board-status");
-      const buttons = [...form.querySelectorAll("button[name=button]")];
-      for (const note of form.querySelectorAll("[data-error-for]")) {
-        note.hidden = true;
-        note.textContent = "";
-      }
-      const body = new URLSearchParams(new FormData(form, event.submitter));
-      buttons.forEach((b) => { b.disabled = true; });
-      status.textContent = "Sending…";
-      try {
-        const response = await fetch(form.action, { method: "POST", headers: { accept: "application/json" }, body });
-        const got = await response.json().catch(() => ({}));
-        if (response.ok) {
-          status.textContent = got.message ?? "Sent.";
-          return;
-        }
-        status.textContent = got.message ?? `Not sent: sluice refused it (${response.status}).`;
-        for (const raw of got.errors ?? []) {
-          let error;
-          try { error = JSON.parse(raw); } catch { continue; }
-          const note = form.querySelector(`[data-error-for="${CSS.escape(error.field ?? "")}"]`);
-          if (note) {
-            note.textContent = error.message;
-            note.hidden = false;
-          }
-        }
-      } catch (error) {
-        status.textContent = error instanceof TypeError
-          ? "Not sent: sluice did not answer. Is it running? Try again in a moment."
-          : `Not sent: ${error.message}`;
-      } finally {
-        buttons.forEach((b) => { b.disabled = false; });
-      }
+    on(document, "datastar-fetch", (event) => {
+      const form = event.detail.el;
+      if (event.detail.type !== "finished" || !(form instanceof HTMLFormElement) || !form.dataset.focusAfter) return;
+      if (form.querySelector(".form-said[role=alert]")?.textContent) return;
+      focusAfter = { id: form.dataset.focusAfter, left: scrollX, top: scrollY, until: Date.now() + 10000 };
+      focusNow();
     });
+    observe(document.body, () => {
+      if (focusAfter && Date.now() > focusAfter.until) focusAfter = null;
+      focusNow();
+    }, { childList: true, subtree: true });
 
     // ---- what the live plan moved on, said once ----
     // Each step's state in words, from the data-said its unit's item, row, card or Done line

@@ -16,8 +16,8 @@ use rusqlite::OptionalExtension;
 use axum::{
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Redirect, Response},
+    http::HeaderMap,
+    response::Response,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -67,7 +67,7 @@ impl Panel {
         TrustedHtml::owned(self.html.clone())
     }
     /// The board's head: its title (the program's, else "Board"), and with `age` when its words
-    /// last changed, "the plan has changed since" when it has. The time reads "2h ago" with script.
+    /// last changed, "the plan has changed since" when it has. The page's clock reads the time "2h ago".
     pub fn head(&self, age: bool) -> TrustedHtml {
         let mut out = format!(
             "<div class=\"board-head\"><h2 id=\"board-h\" class=\"board-h{}\">{}{}</h2>",
@@ -691,7 +691,7 @@ fn kept_whole(word: &str) -> bool {
             .windows(3)
             .any(|w| w[1] == '-' && w[0].is_alphanumeric() && w[2].is_alphanumeric())
 }
-/// A time the page's script reads as "2h ago": without script the UTC day and minute.
+/// A time the page's clock reads as "2h ago": the UTC day and minute until it does.
 fn ago(at: &str) -> String {
     super::ui::ago(at).0
 }
@@ -814,9 +814,20 @@ fn render(
         out: String::new(),
     };
     let rev = loaded.rev;
+    // a send first hides what the last one said of each field (`views::write`'s answer says
+    // it again); editing a field hides its own
     let _ = write!(
         d.out,
-        "<form class=\"board-form\" method=\"post\" action=\"/projects/id/{project}/board/action\" novalidate data-board-rev=\"{rev}\"><input type=\"hidden\" name=\"board_rev\" value=\"{rev}\">"
+        "{open}<input type=\"hidden\" name=\"board_rev\" value=\"{rev}\">",
+        open = super::ui::post_form_with(
+            BOARD_FORM,
+            "board-form",
+            &format!("/projects/id/{project}/board/action"),
+            "el.querySelectorAll('.ou-error').forEach((n) =&gt; { n.hidden = true; });",
+            &format!(
+                " novalidate data-board-rev=\"{rev}\" data-on:input=\"evt.target.closest('.ou-field')?.querySelector('.ou-error')?.setAttribute('hidden', '')\""
+            ),
+        ),
     );
     match &loaded.board {
         Ok(board) => {
@@ -834,9 +845,8 @@ fn render(
             );
         }
     }
-    d.out.push_str(
-        "<p class=\"board-status ou-status\" role=\"status\" aria-live=\"polite\" data-ignore-morph></p></form>",
-    );
+    d.out.push_str(&super::ui::form_said(BOARD_FORM));
+    d.out.push_str("</form>");
     (d.out, title)
 }
 
@@ -1070,7 +1080,8 @@ impl Draw<'_> {
         }
         let _ = write!(
             self.out,
-            "{control}<span class=\"ou-error\" data-error-for=\"{name}\" data-ignore-morph hidden></span></{tag}>"
+            "{control}{}</{tag}>",
+            field_note(&name, "")
         );
     }
     fn table(
@@ -1751,22 +1762,19 @@ pub fn action(
     })
 }
 
-fn wants_json(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("application/json"))
-}
-fn error_response(error: PublicError) -> Response {
-    let status = match &error {
-        PublicError::Conflict { .. } => StatusCode::CONFLICT,
-        PublicError::Invalid { .. } => StatusCode::UNPROCESSABLE_ENTITY,
-        PublicError::BadRequest { .. } => StatusCode::BAD_REQUEST,
-        PublicError::NotFound { .. } => StatusCode::NOT_FOUND,
-        PublicError::Busy { .. } => StatusCode::SERVICE_UNAVAILABLE,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    (status, axum::Json(error)).into_response()
+/// The board's form (`ui::post_form`): one a page.
+const BOARD_FORM: &str = "board-form";
+/// What the board says under field `name` when its last send refused it: kept through the
+/// board's patches (`data-ignore-morph`) until the owner edits that field or sends again, and
+/// drawn in its place by a refusal (`write`, replacing it whole).
+fn field_note(name: &str, words: &str) -> String {
+    format!(
+        "<span id=\"{BOARD_FORM}-err-{}\" class=\"ou-error\" data-error-for=\"{}\" data-ignore-morph{}>{}</span>",
+        esc(name),
+        esc(name),
+        if words.is_empty() { " hidden" } else { "" },
+        esc(words)
+    )
 }
 
 /// `POST /projects/id/<p>/board/action`: a board Button, as a form post (`board_rev`,
@@ -1827,15 +1835,39 @@ async fn post_action(
     }
     .await;
     match result {
-        Ok(reply) if wants_json(&headers) => {
+        Ok(reply) => {
             let to = match reply {
                 CommandReply::Receipt(receipt) => receipt.to,
                 _ => "the project's fallback".into(),
             };
-            axum::Json(json!({"ok": true, "message": format!("Sent to {to}.")})).into_response()
+            super::write::said(&headers, &format!("Sent to {to}."))
         }
-        Ok(_) => Redirect::to(&format!("/projects/id/{project}")).into_response(),
-        Err(error) => error_response(error),
+        // each refused field says why under it, the form's notice the whole
+        Err(error) if super::write::form(&headers).is_some() => {
+            let mut events = vec![super::write::notice(
+                BOARD_FORM,
+                &format!("Not sent: {error}"),
+            )];
+            if let PublicError::Invalid { errors, .. } = &error {
+                for raw in errors {
+                    let Ok(note) = serde_json::from_str::<serde_json::Value>(raw) else {
+                        continue;
+                    };
+                    let (Some(field), Some(message)) = (
+                        note.get("field").and_then(|f| f.as_str()),
+                        note.get("message").and_then(|m| m.as_str()),
+                    ) else {
+                        continue;
+                    };
+                    events.push(crate::streams::StreamEvent::Elements(
+                        datastar::prelude::PatchElements::new(field_note(field, message))
+                            .mode(datastar::prelude::ElementPatchMode::Replace),
+                    ));
+                }
+            }
+            super::write::events(events)
+        }
+        Err(error) => super::inbox::error_response(error),
     }
 }
 

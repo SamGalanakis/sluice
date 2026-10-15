@@ -225,16 +225,25 @@ async fn p605_views_keep_questions_separate_and_advance_only_the_rendered_thread
         html.as_str().find("Owner question").unwrap() < html.as_str().find("Unread notes").unwrap()
     );
     let router = inbox::router(state.clone());
+    // Mark read: its form, the watermark of what the page drew
     for _ in 0..2 {
+        let through = a.to_string();
         assert_eq!(
-            send(
-                &router,
-                &format!("/projects/id/{project}/messages/read"),
-                serde_json::json!({"thread":"a","through":a})
-            )
-            .await
-            .status(),
-            200
+            router
+                .clone()
+                .oneshot(
+                    Request::post(format!("/projects/id/{project}/messages/read"))
+                        .header("content-type", "application/x-www-form-urlencoded")
+                        .body(Body::from(super::forms::encoded(&[
+                            ("thread", "a"),
+                            ("through", &through)
+                        ])))
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
         );
     }
     let page = threads::load(
@@ -413,7 +422,10 @@ async fn p605_pages_escape_programs_and_validate_projects_thread_and_reply_paylo
     assert!(!html.contains("<img src=x"));
     assert!(html.contains("data-ignore-morph"));
     // its behaviour is the components' (the question's answer, the conversations), every page's
-    assert!(html.contains("<sluice-answer>"), "{html}");
+    assert!(
+        html.contains("<sluice-answer data-preserve-attr=\"data-rocket-host\">"),
+        "{html}"
+    );
     assert!(html.contains("/static/components.js"));
     for path in [
         format!("/projects/id/{project}/thread"),
@@ -629,7 +641,7 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
         "<h2 id=\"stopped-h\">Nobody is waiting</h2><span class=\"sec-note\">3 questions</span>"
     ));
     assert!(html.contains("<summary>Close all 3</summary>"));
-    assert!(html.contains("<sluice-confirm heading=\"Close all 3 questions?\">"));
+    assert!(html.contains("<sluice-confirm heading=\"Close all 3 questions?\" data-preserve-attr=\"data-rocket-host\">"));
     assert!(html.contains("data-keep>Keep them</button>"));
     // its body does not say its title again
     assert!(!html.contains("Close these 3 questions?"));
@@ -676,7 +688,6 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
     }
     let router = inbox::router(state.clone());
     let form: String = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("next", "/questions")
         .extend_pairs(gone.iter().map(|id| ("m", format!("{project}/{id}"))))
         .finish();
     let response = router
@@ -691,8 +702,7 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert_eq!(response.headers()["location"], "/questions");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
     let closes = commands
         .requests
         .lock()

@@ -2,7 +2,7 @@
 //! it, and the component only behaves. Over HTTP every page draws its components' hosts and no
 //! template writes one by hand; in a real Chromium each component is defined as the server
 //! declares it, behaves, keeps its state through a stream patch of its region, takes the
-//! keyboard and logs nothing, and every page still reads with script disabled.
+//! keyboard and logs nothing.
 use crate::board_fixture;
 use crate::chrome;
 use crate::stored_messages;
@@ -139,7 +139,7 @@ async fn slow_chromium_the_step_page_components_keep_their_state_through_a_patch
         // Ctrl+Enter sends the box's text; its status says so
         browser.eval("document.querySelector('#tp-messages textarea').focus()").unwrap();
         press(&mut browser, "Enter", 13, 2);
-        browser.wait("document.querySelector('#tp-messages .ou-status').textContent === 'Sent.'").unwrap();
+        browser.wait("document.querySelector('#tp-messages .form-said').textContent === 'Sent.'").unwrap();
         let sent: Vec<_> = f
             .commands
             .0
@@ -213,7 +213,7 @@ async fn slow_chromium_the_project_page_components_keep_their_state_through_a_pa
         browser.eval(FRAMES).unwrap();
         // the head's Details open: a patch keeps it and the board's width
         browser.eval("document.querySelector('#plan-band details.dm > summary').click()").unwrap();
-        let version = browser.eval("document.body.dataset.signals").unwrap();
+        let version = browser.eval("document.documentElement.dataset.signals").unwrap();
         rt.block_on(note(&f, "alpha-build", "The board moves."));
         rt.block_on(async {
             let id = f.id;
@@ -230,7 +230,7 @@ async fn slow_chromium_the_project_page_components_keep_their_state_through_a_pa
                 .unwrap()
         });
         browser.wait("document.querySelector('[data-said*=\"alpha-review running\"]')").unwrap();
-        assert_ne!(browser.eval("document.body.dataset.signals").unwrap(), json!(null), "{version}");
+        assert_ne!(browser.eval("document.documentElement.dataset.signals").unwrap(), json!(null), "{version}");
         assert_eq!(
             browser.eval(&format!("[{width}, document.querySelector('#plan-band details.dm').open]")).unwrap(),
             json!([336, true])
@@ -255,23 +255,20 @@ async fn slow_chromium_the_project_page_components_keep_their_state_through_a_pa
         browser.wait(ready).unwrap();
         browser.eval(FRAMES).unwrap();
         assert_eq!(browser.eval(width).unwrap(), json!(336));
-        // the search: the address and the stream follow as one types, the banner stays hidden
-        // (the old stream ends on purpose), Escape clears
+        // the find: the stream reopens on the page's `q` as one types and draws the plan as
+        // found, the banner staying hidden (the old stream ends on purpose); Escape clears it
         browser.eval("document.querySelector('form.board-tools input[name=q]').focus()").unwrap();
         browser.send("Input.insertText", json!({"text": "beta"})).unwrap();
-        browser.wait("location.search === '?q=beta'").unwrap();
-        browser.wait("document.querySelector('main').getAttribute('data-init').includes('/stream?q=beta')").unwrap();
         browser.wait("!document.querySelector('#plan-pane [data-unit=alpha]')").unwrap();
         assert_eq!(browser.eval("document.querySelector('#stream-state').hidden").unwrap(), true);
         press(&mut browser, "Escape", 27, 0);
-        browser.wait("location.search === '' && document.querySelector('#plan-pane [data-unit=alpha]')").unwrap();
-        // the drawer: a step opens beside the board, its tab goes into the address and a
-        // reload opens it there; closing takes the tab out
+        browser.wait("document.querySelector('#plan-pane [data-unit=alpha]')").unwrap();
+        assert_eq!(browser.eval("[location.search, document.querySelector('#stream-state').hidden]").unwrap(), json!(["", true]));
+        // the drawer: a step opens beside the board, on the tab chosen in it; closing leaves
+        // the address as it was
         browser.navigate(&format!("{page}#step:alpha-build")).unwrap();
         browser.wait("document.querySelector('#step-detail sluice-tabs #tt-outputs')").unwrap();
         browser.eval("document.querySelector('#step-detail #tt-outputs').click()").unwrap();
-        assert_eq!(browser.eval("location.search + location.hash").unwrap(), json!("?tab=outputs#step:alpha-build"));
-        browser.navigate(&format!("{page}?tab=outputs#step:alpha-build")).unwrap();
         browser.wait("document.querySelector('#step-detail sluice-tabs')?.current === 'outputs'").unwrap();
         assert_eq!(
             browser.eval("[...document.querySelectorAll('#step-detail .tp')].filter(p => p.checkVisibility()).map(p => p.dataset.tab)").unwrap(),
@@ -349,7 +346,7 @@ async fn slow_chromium_conversations_answers_copies_and_the_dialog_take_the_keyb
         // the dialog: focus starts on keep, Tab stays in it, Escape closes it back on its opener
         browser.navigate(&gallery).unwrap();
         browser.wait("document.readyState === 'complete' && customElements.get('sluice-confirm')").unwrap();
-        browser.eval("document.querySelector('.gal-th sluice-confirm:not(.dm-acts > *):not([disabled]) summary').click()").unwrap();
+        browser.eval("document.querySelector('.gal-th sluice-confirm:not(.dm-acts > *) summary:not([aria-disabled=true])').click()").unwrap();
         assert_eq!(
             browser.eval("[document.querySelector('#confirmation').open, document.activeElement.matches('[data-keep]')]").unwrap(),
             json!([true, true])
@@ -361,98 +358,9 @@ async fn slow_chromium_conversations_answers_copies_and_the_dialog_take_the_keyb
             .wait("!document.querySelector('#confirmation').open && document.activeElement.matches('.gal-th sluice-confirm summary') && !!document.querySelector('.gal-th sluice-confirm details > form')")
             .unwrap();
         // a disabled one does nothing
-        browser.eval("document.querySelector('.gal-th sluice-confirm[disabled] summary').click()").unwrap();
+        browser.eval("document.querySelector('.gal-th sluice-confirm summary[aria-disabled=true]').click()").unwrap();
         assert_eq!(browser.eval("document.querySelector('#confirmation').open").unwrap(), false);
         assert_eq!(logged(&mut browser), Vec::<String>::new());
-    })
-    .await
-    .unwrap();
-    server.abort();
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_without_script_every_page_still_reads() {
-    let f = Fixture::new().await;
-    long_output(&f).await;
-    note(&f, "alpha-build", "Build the crates.").await;
-    stored(
-        &f.writer,
-        f.id,
-        Stored {
-            thread: "step-alpha-build",
-            from: "alpha-build",
-            to: Some("owner"),
-            body: "Twelve crates built.",
-            ..Default::default()
-        },
-    )
-    .await;
-    let (addr, server) = serve(&f);
-    let base = format!("http://{addr}");
-    let p = format!("/projects/id/{}", f.id);
-    tokio::task::spawn_blocking(move || {
-        let mut browser = Chrome::open(&format!("{base}/")).unwrap();
-        browser.viewport(1440, "light").unwrap();
-        browser
-            .send("Emulation.setScriptExecutionDisabled", json!({"value": true}))
-            .unwrap();
-        for (path, reads) in [
-            (format!("{p}/steps/alpha-build"), "The rebase onto main conflicts"),
-            (p.clone(), "alpha-build"),
-            (format!("{p}/thread?thread=step-alpha-build"), "Build the crates."),
-            ("/inbox".to_owned(), "Twelve crates built."),
-            ("/fns".to_owned(), "Functions"),
-            (format!("{p}/settings"), "Delete project"),
-            ("/_ui".to_owned(), "States and parts"),
-        ] {
-            browser.navigate(&format!("{base}{path}")).unwrap();
-            browser
-                .wait(&format!(
-                    "location.pathname + location.search === {} && document.readyState === 'complete'",
-                    json!(path)
-                ))
-                .unwrap();
-            let shown = browser
-                .eval(&format!(
-                    "({{reads: document.body.innerText.includes({}), scripted: [...document.querySelectorAll('.needs-js, .types-toggle, sluice-tabs > .tabs')].filter(e => e.checkVisibility()).map(e => e.className), defined: [...document.querySelectorAll('*')].some(e => e.localName.startsWith('sluice-') && e.matches(':defined')), sideways: document.documentElement.scrollWidth > document.documentElement.clientWidth, text: document.body.innerText.slice(0, 300)}})",
-                    json!(reads)
-                ))
-                .unwrap();
-            let text = shown["text"].clone();
-            let mut shown = shown;
-            shown.as_object_mut().unwrap().remove("text");
-            assert_eq!(
-                shown,
-                json!({"reads": true, "scripted": [], "defined": false, "sideways": false}),
-                "{path}: {text}"
-            );
-        }
-        // every tab's panel stands stacked, the display preferences keep their Save, and a
-        // confirmation's form opens inline
-        browser.navigate(&format!("{base}{p}/steps/alpha-build")).unwrap();
-        browser.wait("document.readyState === 'complete'").unwrap();
-        assert_eq!(
-            browser.eval("[...document.querySelectorAll('.tp')].filter(p => p.checkVisibility()).map(p => p.dataset.tab).join(' ')").unwrap(),
-            json!("overview messages outputs runs")
-        );
-        browser.eval("document.querySelector('details.settings').open = true").unwrap();
-        assert_eq!(browser.eval("document.querySelector('form.prefs .save').checkVisibility()").unwrap(), true);
-        // display preferences without script: Theme opens its list in place, under its row,
-        // with the value types and Save still there; the keys (script's) are not offered
-        let prefs = "(() => { const m = document.querySelector('details.settings .menu'); const seen = (s) => [...m.querySelectorAll(s)].filter(e => e.checkVisibility()).length; return [seen('.sub-themes > summary'), seen('.themes label'), seen('label.check'), seen('.save'), seen('.sub-keys, .sub-back')]; })()";
-        assert_eq!(browser.eval(prefs).unwrap(), json!([1, 0, 1, 1, 0]));
-        browser.eval("document.querySelector('details.settings .sub-themes > summary').click()").unwrap();
-        assert_eq!(
-            browser.eval(prefs).unwrap(),
-            json!([1, sluice_web::views::THEMES.len(), 1, 1, 0])
-        );
-        browser.navigate(&format!("{base}/_ui")).unwrap();
-        browser.wait("document.readyState === 'complete'").unwrap();
-        browser.eval("document.querySelector('.gal-th sluice-confirm:not(.dm-acts > *):not([disabled]) summary').click()").unwrap();
-        assert_eq!(
-            browser.eval("document.querySelector('.gal-th sluice-confirm:not(.dm-acts > *):not([disabled]) form').checkVisibility()").unwrap(),
-            true
-        );
     })
     .await
     .unwrap();

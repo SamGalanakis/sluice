@@ -83,8 +83,8 @@ async fn recipe_titles_and_search() {
         let (status, step) = f.get(&format!("/projects/id/{id}/steps/l1-work")).await;
         assert_eq!(status, StatusCode::OK, "{step}");
         assert!(
-        step.contains("<h1 id=\"d-title\" class=\"sh-t\" title=\"FIG-1: Fix the cron driver\"><span class=\"d-stage\">work ·</span> FIG-1: Fix the cron driver</h1><sluice-menu><details class=\"dm\"")
-            && step.contains("<dt>Step</dt><dd><sluice-copy value=\"l1-work\"><code>l1-work</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy step\""),
+        step.contains("<h1 id=\"d-title\" class=\"sh-t\" title=\"FIG-1: Fix the cron driver\"><span class=\"d-stage\">work ·</span> FIG-1: Fix the cron driver</h1><sluice-menu data-preserve-attr=\"data-rocket-host\"><details class=\"dm\"")
+            && step.contains("<dt>Step</dt><dd><sluice-copy value=\"l1-work\" data-preserve-attr=\"data-rocket-host\"><code>l1-work</code><button type=\"button\" class=\"copy\" aria-label=\"Copy step\""),
         "{step}"
     );
         assert!(
@@ -124,7 +124,7 @@ async fn recipe_titles_and_search() {
             "{unit}"
         );
         assert!(
-        unit.contains("<dt>Unit</dt><dd><sluice-copy value=\"l2\"><code>l2</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy unit\"")
+        unit.contains("<dt>Unit</dt><dd><sluice-copy value=\"l2\" data-preserve-attr=\"data-rocket-host\"><code>l2</code><button type=\"button\" class=\"copy\" aria-label=\"Copy unit\"")
             && unit.contains("<dt>Recipe</dt><dd><span>lane</span></dd>")
             && unit.contains("<dt>ticket</dt><dd><span>FIG-2</span></dd>"),
         "{unit}"

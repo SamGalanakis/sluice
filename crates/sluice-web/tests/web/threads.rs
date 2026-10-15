@@ -68,7 +68,7 @@ async fn p605_history_includes_full_owner_conversations_without_marking_unrender
     let html = thread.body().unwrap();
     assert!(html.as_str().contains("<strong>Evidence</strong>"));
     assert_eq!(html.as_str().matches("data-seq=").count(), 2);
-    assert!(html.as_str().contains("data-through="));
+    assert!(html.as_str().contains("name=\"through\" value="));
     assert_eq!(
         threads::load(&reads, Some(project), MessageView::Inbox, None)
             .await

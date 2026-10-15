@@ -245,7 +245,7 @@ async fn windows_outcomes_and_stage_statistics() {
         );
         // its stream carries its window
         assert!(
-            day.contains(&format!("@get('{base}/stream?window=24h'")),
+            day.contains(&format!("@get(&#39;{base}/stream?window=24h&#39;")),
             "{day}"
         );
         // the loose steps of a tiny project, one group by step

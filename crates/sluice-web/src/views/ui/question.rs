@@ -59,17 +59,31 @@ impl QuestionCard<'_> {
 /// Close question, quiet, posted to `reply_url`.
 pub fn answer_link(answer_href: &str, reply_url: &str, title: &str) -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<div class=\"q-actions\">{}<form class=\"q-close\" method=\"post\" action=\"{}\"><input type=\"hidden\" name=\"action\" value=\"close\"><button class=\"{}\" aria-label=\"Close question: {}\">Close question</button></form></div>",
+        "<div class=\"q-actions\">{}{}</div>",
         super::link(
             Btn::Primary,
             answer_href,
             &TrustedHtml::owned("Answer".into()),
             ""
         ),
-        esc(reply_url),
-        Btn::Quiet.class(),
-        esc(title),
+        close_form(
+            reply_url,
+            "Close question",
+            &format!("Close question: {title}")
+        ),
     ))
+}
+/// A question's Close (`words`, quiet), posted as its owner's reply with the action `close`.
+pub fn close_form(reply_url: &str, words: &str, label: &str) -> String {
+    let id = super::form_id(&format!("close {reply_url} {words}"));
+    format!(
+        "{}<input type=\"hidden\" name=\"action\" value=\"close\"><button class=\"{}\" aria-label=\"{}\">{}</button>{}</form>",
+        super::post_form(&id, "q-close", reply_url),
+        Btn::Quiet.class(),
+        esc(label),
+        esc(words),
+        super::form_said(&id),
+    )
 }
 /// The way on under a card: "Open its step" or "Open its thread".
 pub fn way_on(href: &str, words: &str) -> TrustedHtml {

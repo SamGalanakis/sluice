@@ -174,7 +174,7 @@ path='/projects/id/'+project+'/settings'
 geometry=[]
 try:
  chrome.open(url+path)
- chrome.wait("document.querySelector('#project-name') && document.querySelector('[data-preview]').hidden === false")
+ chrome.wait("document.readyState === 'complete' && !!document.querySelector('#project-name')")
  def capture(name,width,theme):
   chrome.send('Emulation.setDeviceMetricsOverride',{'width':width,'height':1000,'deviceScaleFactor':1,'mobile':False})
   chrome.send('Emulation.setEmulatedMedia',{'features':[{'name':'prefers-color-scheme','value':theme}]})
@@ -194,11 +194,10 @@ try:
    for theme in ('light','dark'): capture(name,width,theme)
  def states(name):
   for theme in ('light','dark'): capture(name,390,theme)
- def apply(field,value,resource=''):
-  script="""(async()=>{const r=await fetch(location.pathname,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({field:%s,value:%s,resource:%s,expected_settings_rev:Number(document.querySelector('#settings-live').dataset.revision)})});return {status:r.status,text:await r.text()}})()"""%(json.dumps(field),json.dumps(value),json.dumps(resource))
-  result=chrome.eval(script)
-  assert result['status']==200,result
-  return result
+ # a section's Save as the owner makes it: its fields set, its form sent, its notice read
+ def save(form,fields,said='Saved.'):
+  chrome.eval("(f=>{for(const [k,v] of Object.entries(%s)) f.querySelector('[name=\"'+k+'\"]').value=v; f.requestSubmit()})(document.querySelector('#%s'))"%(json.dumps(fields),form))
+  chrome.wait("document.querySelector('#%s-said')?.textContent.includes(%s)"%(form,json.dumps(said)))
  matrix('settings')
  chrome.send('Page.navigate',{'url':url+'/'})
  chrome.wait("document.querySelector('#content') && document.title.includes('Projects')")
@@ -207,40 +206,39 @@ try:
  chrome.wait("document.querySelector('#content') && document.title.includes('Functions')")
  matrix('functions')
  chrome.send('Page.navigate',{'url':url+path})
- chrome.wait("document.querySelector('#project-name') && document.querySelector('[data-preview]').hidden === false")
+ chrome.wait("document.readyState === 'complete' && !!document.querySelector('#project-name')")
  chrome.eval("window.requests=[]; const realFetch=window.fetch; window.fetch=(input,opts)=>{requests.push(String(input));return realFetch(input,opts)}; window.errors=[];addEventListener('error',e=>errors.push(e.message));addEventListener('unhandledrejection',e=>errors.push(String(e.reason)))")
  assert chrome.eval("document.querySelector('#delete-button').getAttribute('aria-disabled')==='true'")
  assert chrome.eval("document.querySelector('#delete-explanation').textContent.includes('running steps')")
  assert chrome.eval("document.querySelector('#delete-explanation a').textContent==='Open the plan'")
  assert chrome.eval("!document.querySelector('#confirm-name')")
- # No keystroke writes; retain a focused unsaved description across rename.
- chrome.eval("document.querySelector('#project-description').focus();document.querySelector('#project-description').value='Unsaved draft';document.querySelector('#project-description').dispatchEvent(new Event('input',{bubbles:true}))")
+ # Typing writes nothing: the description's preview is drawn as it is typed, no Save sent
+ chrome.eval("document.querySelector('#project-description').focus();document.querySelector('#project-description').value='Draft words';document.querySelector('#project-description').dispatchEvent(new Event('input',{bubbles:true}))")
+ chrome.wait("document.querySelector('#description-preview').textContent.includes('Draft words')")
  assert not chrome.eval("requests.some(r=>r.endsWith('/settings'))")
- chrome.eval("document.querySelector('#project-name').value='browser-project-renamed';document.querySelector('form[data-setting=name]').requestSubmit()")
- chrome.wait("document.querySelector('#settings-live').dataset.name==='browser-project-renamed' && document.querySelector('#name-feedback').textContent==='Saved'")
+ # Save details: renamed (the page's head and switcher follow), the draft saved with it
+ save('details-form',{'name':'browser-project-renamed'})
  chrome.wait("document.title==='browser-project-renamed · Settings · sluice'")
  assert chrome.eval("document.querySelector('.sw-name').textContent==='browser-project-renamed'")
  assert chrome.eval("location.pathname")==path
- assert chrome.eval("document.querySelector('#project-description').value==='Unsaved draft'")
+ assert chrome.eval("document.querySelector('#project-description').value==='Draft words'")
  assert chrome.eval("(async()=> (await fetch('/projects/browser-project/settings')).status)()")==404
- # Duplicate label is a conflict with no partial change, and input stays available.
- chrome.eval("document.querySelector('#project-name').value='Invalid Name';document.querySelector('form[data-setting=name]').requestSubmit()")
- chrome.wait("document.querySelector('#name-feedback').textContent.includes('Lowercase') || document.querySelector('#name-feedback').textContent.includes('lowercase')")
+ # A name it refuses is said in the form's notice, the field as typed.
+ save('details-form',{'name':'Invalid Name'},'lowercase')
+ assert chrome.eval("document.querySelector('#details-form-said').getAttribute('role')==='alert'")
  assert chrome.eval("document.querySelector('#project-name').value==='Invalid Name'")
  states('name-error')
  long='a-project-with-a-name-that-is-long-enough-to-wrap-on-a-small-phone-'*3
- apply('name',long)
- chrome.wait('document.querySelector("#settings-live").dataset.name==='+json.dumps(long))
- chrome.eval('document.querySelector("#project-name").value='+json.dumps(long))
+ save('details-form',{'name':long})
+ chrome.wait('document.title.startsWith('+json.dumps(long)+')')
  states('long-name')
  markdown='# Long markdown\n\n'+('A paragraph with **bold text** and a [safe link](https://example.org).\n\n'*15)+'```\n'+'long_code_'*70+'\n```\n\n<script>throw new Error("unsafe")</script>'
- chrome.eval('document.querySelector("#project-description").value='+json.dumps(markdown))
- chrome.eval("document.querySelector('[data-preview]').click()")
+ chrome.eval('(t=>{t.value='+json.dumps(markdown)+';t.dispatchEvent(new Event("input",{bubbles:true}))})(document.querySelector("#project-description"))')
  chrome.wait("document.querySelector('#description-preview').textContent.includes('Long markdown')")
  assert chrome.eval("document.querySelector('#description-preview script')===null")
  states('long-markdown')
  # Restore compact content so later states expose controls.
- chrome.eval("document.querySelector('#project-description').value='A calm description';document.querySelector('[data-preview]').click()")
+ save('details-form',{'name':'browser-project-renamed','description':'A calm description'})
  chrome.wait("document.querySelector('#description-preview').textContent==='A calm description\\n'")
  # a capacity is a whole number of 0 or more: the field refuses -1 before anything is sent
  chrome.eval("window.requests=[]; document.querySelector('#resource-workers').value='-1';document.querySelector('#resource-workers').form.requestSubmit()")
@@ -248,11 +246,11 @@ try:
  assert not chrome.eval("requests.some(r=>r.endsWith('/settings'))")
  assert chrome.eval("document.querySelector('#resource-workers').value==='-1'")
  states('resource-error')
- apply('paused','true')
+ chrome.eval("document.querySelector('#activity-form button[name=paused]').click()")
  chrome.wait("document.querySelector('#settings-live .pill')?.textContent==='Paused'")
  states('paused')
  # Delete a live, unarchived project after its work finishes.
- chrome.wait("document.querySelector('#delete-button').getAttribute('aria-disabled')==='false'")
+ chrome.wait("document.querySelector('#delete-button').getAttribute('aria-disabled')!=='true'")
  assert chrome.eval("document.querySelector('#delete-button').getBoundingClientRect().height>=32")
  chrome.eval("document.querySelector('#delete-button').click()")
  chrome.wait("document.querySelector('#confirmation').open")
@@ -266,11 +264,16 @@ try:
  chrome.send('Input.dispatchKeyEvent',{'type':'keyUp','key':'Escape','code':'Escape','windowsVirtualKeyCode':27})
  chrome.wait("!document.querySelector('#confirmation').open")
  chrome.wait("document.activeElement.id==='delete-button'")
+ # A rename while the confirmation is open: its Delete is refused, the project kept, and the
+ # confirmation opened again names the project as it is now
  chrome.eval("document.querySelector('#delete-button').click()")
- # A concurrent rename closes the outdated confirmation.
- apply('name','final-name')
- chrome.wait("document.querySelector('#settings-live').dataset.name==='final-name' && !document.querySelector('#confirmation').open")
- assert chrome.eval("document.querySelector('#delete-button').getAttribute('aria-disabled')==='false'")
+ chrome.wait("document.querySelector('#confirmation').open")
+ chrome.eval("(async()=>{const f=document.querySelector('#details-form');const d=new FormData(f);d.set('name','final-name');const r=await fetch(f.getAttribute('action'),{method:'POST',body:d});return r.status})()")
+ chrome.wait("document.title==='final-name · Settings · sluice'")
+ chrome.eval("document.querySelector('#confirmation .danger').click()")
+ chrome.wait("document.querySelector('#confirmation .form-said[role=alert]')?.textContent.includes('changed')")
+ chrome.eval("document.querySelector('#confirmation [data-keep]').click()")
+ chrome.wait("!document.querySelector('#confirmation').open")
  assert chrome.eval("errors")==[],chrome.eval('errors')
  chrome.eval("document.querySelector('#delete-button').click()")
  chrome.wait("document.querySelector('#confirmation').open")
@@ -278,7 +281,7 @@ try:
  chrome.eval("document.querySelector('#confirmation .danger').click()")
  deadline=time.monotonic()+20
  while chrome.send('Page.getFrameTree')['frameTree']['frame']['url']!=url+'/':
-  assert time.monotonic()<deadline, 'delete did not navigate home'
+  assert time.monotonic()<deadline, ('delete did not navigate home', chrome.eval("[document.querySelector('#confirmation').open, document.querySelector('#confirmation').innerHTML.slice(0,2000), errors]"))
  chrome.wait("document.readyState==='complete' && !!document.querySelector('.switcher')")
  assert chrome.eval("location.pathname==='/'")
  assert not chrome.eval('document.querySelector(".switcher").textContent.includes("final-name")')

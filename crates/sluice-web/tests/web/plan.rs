@@ -1,7 +1,7 @@
 //! The project page's plan on the neutral fixture (DESIGN.md, The plan): its head's sentence,
 //! Needs you (a question, the stops, stops sharing a cause as one, a silence), what finished
 //! lately, At work (a group a recipe, no recipe and the long runs after, the longest silent
-//! first) and the steps each row opens to without script; what the owner sets aside comes back
+//! first) and the steps each row opens to; what the owner sets aside comes back
 //! when it changes; the read cursor is this browser's; in Chromium no sideways scroll from a
 //! phone to a wide screen, beside the board too.
 use crate::board_fixture;
@@ -122,6 +122,36 @@ async fn plan_units_and_loose_steps() {
             assert!(at(&html, pair[0]) < at(&html, pair[1]), "{pair:?}");
         }
         assert!(!html.contains("class=\"pl-idx\""), "{html}");
+        // At work says how to read its tracks behind its ⓘ
+        let roster = &html[at(&html, "<!--r:plan-roster-->")..at(&html, "<!--r:plan-finished-->")];
+        assert!(
+            roster.contains("<summary class=\"dm-b\" aria-label=\"How to read At work\""),
+            "{roster}"
+        );
+        assert!(
+            roster.contains("its last 12 hours on a log scale"),
+            "{roster}"
+        );
+        // a running step's Overview: Now, then its brief (its spec's first paragraph, the whole
+        // in Inputs) and what it has set so far (nothing yet, Outputs one click away)
+        let (_, step) = f
+            .get(&format!("/projects/id/{}/steps/survey", n.almanac))
+            .await;
+        let (now, brief, so_far) = (
+            at(&step, "id=\"ov-now-h\""),
+            at(&step, "id=\"ov-brief-h\""),
+            at(&step, "id=\"ov-sofar-h\""),
+        );
+        assert!(now < brief && brief < so_far, "{step}");
+        assert!(step.contains("<a class=\"meta\" href=\"#tp-inputs\" data-tab-to=\"inputs\">Whole brief</a></div><p class=\"brief-text\">Go through the archive&#39;s photographs a folder at a time"), "{step}");
+        assert!(
+            !step[brief..so_far].contains("Write the mismatches"),
+            "{step}"
+        );
+        assert!(
+            step[so_far..].contains("<p class=\"meta\">2 outputs not set yet.</p>"),
+            "{step}"
+        );
         // Needs you: the question, the failures (two at their wall-clock cap said once, with
         // what to try), the cancel, the silence; each one action and a ×
         let needs = plan_html::needs(&html);
@@ -140,7 +170,7 @@ async fn plan_units_and_loose_steps() {
         );
         let cause = needs[1];
         assert!(
-            cause.contains("Two units failed: they hit their wall-clock cap. <span class=\"nd-next\">Raise the agents&#39; time limit (SLUICE_AGENT_MAX_MIN in the project&#39;s .env), then Retry all.</span>")
+            cause.contains("Two units failed: they hit their wall-clock cap. <span class=\"nd-next\">Give the agents more time: set <code>SLUICE_AGENT_MAX_MIN</code>, their limit in minutes, in the project's <code>.env</code> file, then Retry all.</span>")
                 && cause.contains("<summary>Show the two</summary>")
                 && cause.contains(">Retry all</button>")
                 && cause.contains("value=\"stop:a-4-review stop:s-4-scan\""),
@@ -239,7 +269,7 @@ async fn plan_units_and_loose_steps() {
             "{index}"
         );
         assert!(s3.contains("<i class=\"tk-quiet\""), "{s3}");
-        // the drilldown, without script: a disclosure whose body is the unit's steps on its
+        // the drilldown: a disclosure whose body is the unit's steps on its
         // axis, the current one marked, each step what it runs on, then its latest and actions
         assert!(
             a6.starts_with("<details id=\"u-a-6\" class=\"ro-u\" data-unit=\"a-6\" data-said=\"a-6-draft running|a-6-review pending|a-6-publish pending\" data-preserve-attr=\"open\"><summary class=\"ro-r\">"),
@@ -338,7 +368,7 @@ impl CommandService for Marks {
         })
     }
 }
-/// A browser's request without script: its status, where it is sent, the cookie it is given
+/// A plain request for a page, as a link or a reload makes it: its status, where it is sent, the cookie it is given
 /// and the page.
 async fn browse(
     router: &Router,
@@ -394,25 +424,18 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
         .router()
         .layer(Extension(Commands(Arc::new(Marks(f.writer.clone())))));
     let plan = format!("/projects/id/{}", n.almanac);
-    // × on the two stops at their cap, without script: back to the plan at its Undo
-    let (status, location, _, _) = browse(
+    // × on the two stops at their cap
+    let (status, _, _, _) = browse(
         &router,
         &format!("{plan}/needs"),
         Some(&[
             ("action", "dismiss"),
             ("items", "stop:a-4-review stop:s-4-scan"),
-            ("next", &format!("{plan}#undo-n-cause-wallcap")),
         ]),
         "",
     )
     .await;
-    assert_eq!(
-        (status, location.as_str()),
-        (
-            StatusCode::SEE_OTHER,
-            format!("{plan}#undo-n-cause-wallcap").as_str()
-        )
-    );
+    assert_eq!(status, StatusCode::NO_CONTENT);
     let (_, _, _, html) = browse(&router, &plan, None, "").await;
     assert_eq!(plan_html::place(&html, "a-4"), "", "{html}");
     let well = plan_html::band(&html, "plan-needs");
@@ -457,11 +480,11 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
     let (status, _, _, _) = browse(
         &router,
         &format!("{plan}/needs"),
-        Some(&[("action", "dismiss"), ("items", &keys), ("next", &plan)]),
+        Some(&[("action", "dismiss"), ("items", &keys)]),
         "",
     )
     .await;
-    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(status, StatusCode::NO_CONTENT);
     let (_, _, _, html) = browse(&router, &plan, None, "").await;
     assert_eq!(plan_html::needs(&html).len(), 1, "{html}");
     // the tab still counts the open question, no longer the stops
@@ -475,7 +498,7 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
     browse(
         &router,
         &format!("{plan}/needs"),
-        Some(&[("action", "dismiss"), ("items", &ask), ("next", &plan)]),
+        Some(&[("action", "dismiss"), ("items", &ask)]),
         "",
     )
     .await;
@@ -502,18 +525,17 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
         Some(&[
             ("action", "undo"),
             ("items", "stop:a-4-review stop:s-4-scan"),
-            ("next", &plan),
         ]),
         "",
     )
     .await;
-    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(status, StatusCode::NO_CONTENT);
     let (_, _, _, html) = browse(&router, &plan, None, "").await;
     assert_eq!(plan_html::place(&html, "a-4"), "stopped", "{html}");
 }
 
 /// The bug this catches: Finished since you looked forgetting where this browser looked (or
-/// sharing it), and Mark as seen needing script.
+/// sharing it).
 #[tokio::test]
 async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
     let f = Fixture::new().await;
@@ -523,19 +545,17 @@ async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
     let (_, _, _, html) = browse(&router, &plan, None, "").await;
     let cards = plan_html::band(&html, "plan-finished");
     assert!(cards.contains("Finished lately"), "{cards}");
-    // Mark as seen, a plain form: the cookie, then back to the plan
+    // Mark as seen: the look kept in this browser's cookie (the page's stream draws it at once
+    // from its `seen` signal)
     let through = value(cards, "name=\"through\" value=\"").to_owned();
-    let (status, location, cookie, _) = browse(
+    let (status, _, cookie, _) = browse(
         &router,
         &format!("{plan}/seen"),
         Some(&[("through", &through)]),
         "",
     )
     .await;
-    assert_eq!(
-        (status, location.as_str()),
-        (StatusCode::SEE_OTHER, plan.as_str())
-    );
+    assert_eq!(status, StatusCode::NO_CONTENT);
     assert!(
         cookie.starts_with(&format!("sluice_seen_{}={through}; Path=/;", n.almanac)),
         "{cookie}"
@@ -578,7 +598,7 @@ async fn a_big_roster_folds_its_unremarkable_groups() {
     let (_, html) = f.get(&format!("/projects/id/{atlas}")).await;
     let roster = plan_html::band(&html, "plan-roster");
     // entry and article, healthy (article's failures are in Needs you, not on the roster),
-    // fold whole to their lines, their rows still drawn for a click (or no script)
+    // fold whole to their lines, their rows still drawn for a click
     assert!(
         roster.contains(">entry</a></b> · 25 running · each heard from in the last ")
             && roster.contains(">article</a></b> · 23 running · each heard from in the last ")

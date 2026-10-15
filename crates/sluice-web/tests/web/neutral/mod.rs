@@ -228,7 +228,9 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
     // a long run of no unit, reporting progress
     steps.insert(
         "survey".into(),
-        json!({"run": "custom.open", "doc": "Survey the archive's photographs against the checklist\n\nA folder at a time, for as long as the archive grows."}),
+        json!({"run": "custom.open", "doc": "Survey the archive's photographs against the checklist\n\nA folder at a time, for as long as the archive grows.",
+            "in": {"spec": {"default": "Go through the archive's photographs a folder at a time and check each bird against the checklist: its species, where it was taken and the season. Note every photograph filed under the wrong species, and every species on the checklist with no photograph at all.\n\nWrite the mismatches to a report, one line each, with the photograph's path and what it should be filed as."}},
+            "outputs": {"mismatches": "int", "report": "string"}}),
     );
     let cancelled = PublicError::Cancelled {
         message: "The editors set the owls aside for the next edition.".into(),

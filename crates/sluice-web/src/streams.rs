@@ -8,7 +8,7 @@ use axum::{
         sse::{Event, KeepAlive},
     },
 };
-use datastar::prelude::{PatchElements, PatchSignals};
+use datastar::prelude::{ExecuteScript, PatchElements, PatchSignals};
 use futures_util::{Stream, stream};
 use serde::Deserialize;
 use sluice_model::{error::PublicError, ids::ProjectId};
@@ -158,18 +158,22 @@ pub fn release() -> &'static str {
 pub enum StreamEvent {
     Elements(PatchElements),
     Signals(PatchSignals),
+    /// A write's answer only (`views::write`): a page's stream never runs script.
+    Script(ExecuteScript),
 }
 impl StreamEvent {
     pub fn axum_event(&self) -> Event {
         match self {
             Self::Elements(p) => p.write_as_axum_sse_event(),
             Self::Signals(p) => p.write_as_axum_sse_event(),
+            Self::Script(p) => p.write_as_axum_sse_event(),
         }
     }
     pub fn wire(&self) -> String {
         match self {
             Self::Elements(p) => p.as_datastar_event().to_string(),
             Self::Signals(p) => p.as_datastar_event().to_string(),
+            Self::Script(p) => p.as_datastar_event().to_string(),
         }
     }
 }
@@ -355,6 +359,13 @@ impl StreamQuery {
                     .and_then(|v| v.as_str().map(str::to_owned))
             })
             .unwrap_or_default()
+    }
+    /// A signal the page holds as a whole number, when it holds one: the plan's `seen`.
+    pub fn number(&self, name: &str) -> Option<u64> {
+        self.datastar
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.get(name).and_then(serde_json::Value::as_u64))
     }
     /// A signal the page holds, as text ("" when it holds none): the step's chosen `tab`.
     pub fn signal(&self, name: &str) -> String {

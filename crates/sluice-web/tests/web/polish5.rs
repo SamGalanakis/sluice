@@ -1,5 +1,5 @@
-//! The fifth critique's fixes, each through the pages it changed. A page without script reads
-//! its durations as the server read the clock; a retried step that has not run yet says so
+//! The fifth critique's fixes, each through the pages it changed. A page as drawn reads its
+//! durations as the server read the clock; a retried step that has not run yet says so
 //! under its header; a step is named one way on its page, its thread, its message boxes and the
 //! log; the asking step's tab leads with its question and the switcher counts a project's
 //! questions; an answered or closed question keeps its place and reads whole; the log folds a

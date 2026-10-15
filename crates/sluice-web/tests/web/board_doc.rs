@@ -394,11 +394,14 @@ async fn preview_save_warning_and_invalid_stored_program() {
         let response = f
         .router()
         .oneshot(
-            Request::post(format!("/projects/id/{}/settings/board/preview", f.id))
-                .body(Body::from(
+            super::forms::post(
+                format!("/projects/id/{}/settings/board/preview", f.id),
+                "board-program-form",
+                &[(
+                    "program",
                     "root = Stack([a, b, c, d, e])\na = Slot(\"phase\")\nb = LatestMessage(\"tests-main\", 0)\nc = Markdown(3)\nd = Doc()\ne = Doc()",
-                ))
-                .unwrap(),
+                )],
+            ),
         )
         .await
         .unwrap();
@@ -438,6 +441,7 @@ async fn preview_save_warning_and_invalid_stored_program() {
             .oneshot(
                 Request::post(format!("/projects/id/{}/settings/board", f.id))
                     .header("content-type", "application/x-www-form-urlencoded")
+                    .header("sluice-form", "board-program-form")
                     .body(Body::from(body))
                     .unwrap(),
             )
@@ -451,11 +455,12 @@ async fn preview_save_warning_and_invalid_stored_program() {
                 .to_vec(),
         )
         .unwrap();
-        let feedback = between(&html, "id=\"board-feedback\"", "</span>");
+        // its notice says it was saved, and what the program names that the plan lacks
+        let feedback = &html[html.rfind("id=\"board-program-form-said\"").unwrap()..];
         assert!(
-        feedback.contains("Saved (rev 2)\nWarning: line 2: StepStatus names step `tests-main`, which is not in the plan"),
-        "{feedback}"
-    );
+            feedback.contains("Saved (rev 2).\ndata: elements Warning: line 2: StepStatus names step `tests-main`, which is not in the plan"),
+            "{feedback}"
+        );
     }
     {
         let id = f.id;
@@ -505,11 +510,11 @@ async fn board_markdown_refuses_unsafe_urls() {
         let program = format!("root = Markdown({})", serde_json::to_string(&text).unwrap());
         let response = f
             .router()
-            .oneshot(
-                Request::post(format!("/projects/id/{}/settings/board/preview", f.id))
-                    .body(Body::from(program))
-                    .unwrap(),
-            )
+            .oneshot(super::forms::post(
+                format!("/projects/id/{}/settings/board/preview", f.id),
+                "board-program-form",
+                &[("program", &program)],
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -539,11 +544,11 @@ async fn board_markdown_refuses_unsafe_urls() {
         let program = format!("root = Markdown({})", serde_json::to_string(&text).unwrap());
         let response = f
             .router()
-            .oneshot(
-                Request::post(format!("/projects/id/{}/settings/board/preview", f.id))
-                    .body(Body::from(program))
-                    .unwrap(),
-            )
+            .oneshot(super::forms::post(
+                format!("/projects/id/{}/settings/board/preview", f.id),
+                "board-program-form",
+                &[("program", &program)],
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);

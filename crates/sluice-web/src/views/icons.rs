@@ -73,6 +73,7 @@ icons! {
     Copy => "copy",
     Grid3x3 => "grid-3x3",
     Timer => "timer",
+    Info => "info",
 }
 
 /// Each icon's shapes (what sits inside its `<svg>`), on one line, in `Icon` order.

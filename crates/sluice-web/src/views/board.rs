@@ -191,7 +191,7 @@ impl RelationKind {
     }
 }
 /// A prerequisite in another unit that a step still waits for, said in words on its card
-/// where no line shows it: on a phone, without script, in a lane matrix's row (a table draws no
+/// where no line shows it: on a phone, in a lane matrix's row (a table draws no
 /// lines), past a matrix, or when the view leaves its source out ("Waits for l-a1 (running) and
 /// l-d1").
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -997,6 +997,18 @@ impl ProjectView {
             "{} hidden by Show: {label}.",
             super::ui::count(self.hidden, "unit", "units")
         )
+    }
+    /// Its stream's address: its page's query but the find, which the stream reads from the
+    /// page's `q` signal, so the find reopens the same stream (Datastar's `'auto'`
+    /// cancellation, by URL) with what is typed.
+    pub fn stream_href(&self) -> String {
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        for (key, value) in url::form_urlencoded::parse(self.query.as_bytes()) {
+            if key != "q" {
+                query.append_pair(&key, &value);
+            }
+        }
+        format!("{}/stream?{}", self.href(), query.finish())
     }
     /// The board as it is, with Show: All (its order, tag and search kept).
     pub fn show_all_href(&self) -> String {
@@ -1961,7 +1973,7 @@ pub struct BoardQuery {
 }
 /// The ways a project with a board is seen: the plan alone, both side by side, the board alone.
 pub const VIEWS: [&str; 3] = ["plan", "both", "board"];
-/// The cookie that keeps a project's view without script.
+/// The cookie that keeps the view a project's page was last asked for (`?view=`).
 pub fn view_cookie(project: ProjectId) -> String {
     format!("sluice_view_{project}")
 }
@@ -2135,7 +2147,7 @@ pub async fn project_page(
         view.seen = super::plan::seen_of(&headers, project);
         let html = super::plan::render(&view, &shared, &Viewer::from_headers(&headers))?;
         let mut response = Html(html.0).into_response();
-        // a view chosen by its link (without script) is kept for the next visit
+        // a view asked for by its link is kept for the next visit
         if let Some(v) = query.view.as_deref().filter(|v| VIEWS.contains(v)) {
             let cookie = format!(
                 "{}={v}; Path=/; Max-Age=34560000; SameSite=Lax",
@@ -2165,6 +2177,17 @@ pub async fn project_stream(
         datastar: query.datastar.clone(),
     }
     .version(VersionSignal::Page);
+    // the page's find and its look at what finished are its signals (`q`, `seen`): the find
+    // reopens this stream as it is typed, Mark as seen with the new look
+    let signals = StreamQuery {
+        project: Some(project),
+        datastar: query.datastar.clone(),
+    };
+    let mut query = query;
+    if query.datastar.is_some() {
+        query.q = Some(signals.signal("q"));
+    }
+    let seen = signals.number("seen");
     let cache = super::panel::SharedCache::default();
     let watch = state.watch(Some(project));
     let loader = move || {
@@ -2188,7 +2211,11 @@ pub async fn project_stream(
             };
             query.apply(&mut view)?;
             view.view = chosen_view(&query, &headers, project);
-            view.seen = super::plan::seen_of(&headers, project);
+            view.seen = match seen {
+                Some(0) => None,
+                Some(seen) => Some(seen),
+                None => super::plan::seen_of(&headers, project),
+            };
             Ok(super::plan::draw(&view, &shared, &viewer)?.2)
         }
     };

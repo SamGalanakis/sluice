@@ -317,8 +317,11 @@ design, which also set their faces and materials (the deep tokens, below): Empir
 Williamsburg, Interstate, Ranger, Park Service, Kodachrome, Fiesta and Road Atlas, each Light and
 Dark. A theme's id is `<family>-light` or
 `<family>-dark` (`views::THEMES`): `data-theme` on `<html>` and the `sluice_theme` cookie,
-server-drawn, so a page without script is drawn in it; with script the picker (display
-preferences' Theme panel, The frame) applies at once (`sluice-toggle`). The picker shows each theme's swatch in its own tokens: its band over its
+server-drawn, so a page is drawn in it from its first paint; the picker (display preferences'
+Theme panel, The frame) applies a pick at once: its radios are bound to the page's `theme`
+signal (`data-bind:theme__root`), `<html>`'s `data-theme` follows it (`data-attr`), and a change
+posts the signals to `/settings`, which keeps the cookie
+([Attributes](https://data-star.dev/reference/attributes)). The picker shows each theme's swatch in its own tokens: its band over its
 paper, a square of its running colour and one of its question colour.
 
 **The picker at thirty themes** is still one flat list, in `THEMES`' order: Sluice, the six
@@ -332,10 +335,9 @@ its tick are the list's, and its swatches carry no text, so they never set a the
 opening the picker fetches no face.
 
 **The first open.** With no cookie the page names no theme and the stylesheet draws Sluice
-Light or Sluice Dark by the system's scheme. With script, that first page keeps what it drew as
-the choice (`nav.js` posts it to `/settings` once); from then on only a pick in the picker
-changes the theme, whatever the system's scheme does. Without script nothing is kept, and the
-system's scheme decides until a theme is picked.
+Light or Sluice Dark by the system's scheme, and keeps what it drew as the choice: `<html>`'s
+`data-init` sets `theme` from the system's scheme and posts it to `/settings` once; from then on
+only a pick in the picker changes the theme, whatever the system's scheme does.
 
 **Mapping by role, not hue.** A family's block (`[data-theme^="nord-"]`) maps every role as
 `light-dark()` of its light and dark theme, and the theme's suffix sets its `color-scheme`. The
@@ -643,7 +645,7 @@ subset), vendored under `crates/sluice-web/assets/fonts/` with each family's lic
 file's sha256, and served at `/static/fonts/<file>?v=<fingerprint>` to be kept for good. A page
 asks no host but the dashboard for anything. A browser fetches a face only when it
 sets text in it, so a page downloads its own theme's faces and no other, a switch needs no new
-link, and a page without script gets the cookie's theme's faces. A family's face has a fallback
+link, and a page's first paint asks for the cookie's theme's faces. A family's face has a fallback
 face (a local Arial or Courier New with `size-adjust` and ascent and descent overrides measured
 from the face) next in its stack, so the swap to it does not move the page. The picker's swatches
 carry no text, so opening it fetches nothing; `/_ui`'s theme cards set each theme's faces.
@@ -732,9 +734,9 @@ row under it and the page's head on the paper under the row.
   and Escape closes the whole menu, the focus back on the sliders; it opens again at the top.
   Each row's summary says `aria-expanded`. The panel is as wide as its level needs (264px at
   least, never past the window), so it widens to the left for the two columns of themes. Rows
-  and the back control are 40px, 44px on a phone. Without script each row opens its panel in
-  place under it (nested `<details>`), every theme and the value types are one form with Save,
-  and the keys (script's alone) are not offered.
+  and the back control are 40px, 44px on a phone. A pick applies at once, with no Save: the
+  theme radios and the value types switch are bound to the page's signals and a change posts
+  them to `/settings` (Writes).
 - **The page's head** (`Frame::head`, `ui::page_head` and `ui::page_head_with`): on the paper,
   its crumbs when it is one thing in a tab (a step's way back to its plan and its unit, the unit
   by its title or name cut to 40, never "Its unit"), its name in the title style with its Details' "⋯"
@@ -758,8 +760,8 @@ it within 220), about 260px on a phone.
 **The view switch** (Plan · Both · Board on a project with a board, Plan · Board below 1280px)
 is a bar of pill links in the row (`ui::switch`): the current view on `paper-2` at weight 600
 (`aria-current`), the others muted words. A link asks the server for its view (`?view=`, kept
-in the project's `sluice_view_<id>` cookie), so it works without script; with script
-`sluice-board` shows the view at once and keeps it per project. The messages' switch (For you,
+in the project's `sluice_view_<id>` cookie); `sluice-board` shows the chosen view at once and
+keeps it per project. The messages' switch (For you,
 Questions, History) and the log's presets are the same bar.
 
 ## Details
@@ -767,7 +769,7 @@ Questions, History) and the log's presets are the same bar.
 What identifies an item rather than explains it (its step, unit and run ids, its run number
 and earlier runs, its fn, engine and model, its tags, its recipe, its params, a message's id, a
 hash or a path) is kept behind one "⋯" at the item's end: `ui::Details`, drawn by its `menu`.
-It is a `<details>` (so it opens without script) inside a `sluice-menu` (Escape and a click
+It is a `<details>` inside a `sluice-menu` (Escape and a click
 elsewhere close it and give the focus back to its button, which says `aria-expanded`), 44px on
 a phone, where it opens as a sheet at the bottom of the window. Wider, its panel hangs from its
 button's right edge, and `sluice-menu` moves it back inside the window when that would cut it
@@ -950,7 +952,7 @@ It is the unit page's body, what a plan row opens in place, and a step's Runs ta
   earlier runs' marks before "run 2" left out, then its latest message (with none, "Last heard
   22:51 (6m ago)", or for a quiet unit "Not heard from since 19:14 (3h ago)"), Message and Unit
   page as quiet links and Open step. A run clipped at the left edge says "from 3d ago" in data
-  mono at 11.5px. It opens without script, and stays open
+  mono at 11.5px. It stays open
   through a patch (`data-preserve-attr="open"`), the unit moving between groups included.
 - **Narrow** (under 560px of its own width: a phone, a narrow drawer): one column, the rail
   and name, then state, progress and span, then the runs as a 4px bar; the head and the axis's
@@ -970,43 +972,113 @@ static line, the dot is still and nothing turns.
 
 ### The practices
 
-The dashboard is a Datastar app: the server draws every page, a stream patches it, and
-JavaScript only behaves. These are the practices it adopts from Datastar's own guidance, each
-with where it is written:
+The dashboard is built the way Datastar recommends: [the Tao of
+Datastar](https://data-star.dev/guide/the_tao_of_datastar) and its references
+([attributes](https://data-star.dev/reference/attributes),
+[actions](https://data-star.dev/reference/actions),
+[SSE events](https://data-star.dev/reference/sse_events),
+[Rocket](https://data-star.dev/reference/rocket)). There are no rules of our own beside them:
+each decision below names the page of the docs it follows. Script beyond Datastar is written
+only where Datastar can't do the job, as a Rocket component, and the component table says why
+for each.
 
-- **The backend is the source of truth** ([The Tao of Datastar](https://data-star.dev/guide/the_tao_of_datastar)).
-  Every page is HTML from Rust (Askama templates and `views::ui`), whole without script; state
+- **The backend is the source of truth** ([Tao](https://data-star.dev/guide/the_tao_of_datastar)).
+  Every page is HTML from Rust (Askama templates and `views::ui`), whole as it arrives; state
   lives in the store and the cookies, never in the browser. A component never draws content.
 - **Patch elements, fat morph** ([Tao: Patch Elements](https://data-star.dev/guide/the_tao_of_datastar),
-  [SSE events: datastar-patch-elements](https://data-star.dev/reference/sse_events)). A page's
-  stream (`streams::page_events`) renders the page again and sends each region that changed
-  (`#id`, mode `outer`, the default), so the morph keeps focus, scroll and open folds; it never
-  sends a fragment built for the patch. A quiet page sends nothing.
-- **CQRS** ([Tao: CQRS](https://data-star.dev/guide/the_tao_of_datastar)). One long-lived read
-  (`data-init="@get(stream)"` on `main`) and short writes (plain `<form>` posts, enhanced to
-  fetch by `components.js`'s one submit delegate) whose effect comes back on the stream.
-- **No optimistic updates** ([Tao: Loading Indicators / Optimistic Updates](https://data-star.dev/guide/the_tao_of_datastar)).
-  A press shows that it is in flight (the button disabled, a status line), and the page shows
-  the result only when the stream patches it.
+  [SSE events: datastar-patch-elements](https://data-star.dev/reference/sse_events)).
+  A page's stream (`streams::page_events`) renders the page again and sends each region that
+  changed (`#id`, mode `outer`, the default), so the morph keeps focus, scroll and open folds;
+  it never sends a fragment built for the patch. A quiet page sends nothing.
+- **CQRS: one read, short writes** ([Tao: CQRS](https://data-star.dev/guide/the_tao_of_datastar)).
+  The read is `data-init="@get(stream, …)"` on `main`
+  ([Attributes: data-init](https://data-star.dev/reference/attributes)). Every write is
+  a form posted by Datastar (Writes, below), and what it changed comes back on the read.
+- **No optimistic updates; say what is in flight**
+  ([Tao: Loading Indicators](https://data-star.dev/guide/the_tao_of_datastar),
+  [Attributes: data-indicator](https://data-star.dev/reference/attributes)).
+  While a form's request runs its indicator signal is true: the form is `aria-busy`, its
+  pressed button shows a quiet ring and the pointer waits. The page shows the result only
+  when the stream patches it.
 - **Signals sparingly** ([Tao: Signals](https://data-star.dev/guide/the_tao_of_datastar),
-  [Attributes: data-signals](https://data-star.dev/reference/attributes)). Only what the
-  stream's server needs from the page: `ver` and `stale` (the version the page holds), `tab`,
-  and the drawer's `step` and `sver`. Everything else a component keeps is its host's own
-  attributes.
-- **Keep what the owner holds through a morph** ([Attributes: data-preserve-attr, data-ignore-morph](https://data-star.dev/reference/attributes)).
+  [Attributes: data-signals](https://data-star.dev/reference/attributes)). The page's
+  signals are only what its server needs back or what a binding shows: `ver` and `stale` (the
+  version the page holds), `theme` and `types` (display preferences), `tab` (the chosen tab),
+  `q` (the plan's find), `seen` (the plan's read cursor), the drawer's `step` and `sver`, each
+  form's busy indicator (`_busy…`, local: Datastar sends no signal whose name starts with `_`)
+  and the icon field's chosen file name (`_iconfile`). Inside a Rocket host a page-wide signal is
+  bound with `__root` (`data-bind:theme__root`, `data-indicator__root`), which Rocket leaves
+  unscoped ([Rocket](https://data-star.dev/reference/rocket)).
+- **Stream addresses are fixed; signals carry the query**
+  ([Actions: @get](https://data-star.dev/reference/actions), which sends the page's
+  signals with every request). The plan's stream is one address (`stream_href`, its `?view=` and
+  `show=` as drawn); the find (`data-bind:q__root`, `data-on:input__debounce.200ms`) and Mark as
+  seen change their signal and open the stream again, the open one ended by Datastar's
+  `requestCancellation` ('auto': a newer request to the same address from the page cancels the
+  older). The page's own stream asks 'cleanup' too, so it ends with its element.
+- **History is navigation only.** Datastar has no router and leaves the address to the page. The
+  one thing in it beyond the server's own query is the drawer's step, `#step:<id>`: an open step
+  is something to link, reload and go Back from, so it is the address's fragment, set by plain
+  links (`<a data-step>`), and closing the drawer is going back to the plan's address. A tab is a
+  signal (`tab`), a find is a signal (`q`); neither writes history. The drawer's stream is its
+  own element (`#drawer-stream`): a new step's binding replaces the old, whose stream Datastar
+  ends ('cleanup'), because `requestCancellation` 'auto' only cancels a request to the same
+  address, and each step's stream has its own.
+- **Keep what the owner holds through a morph**
+  ([Attributes: data-preserve-attr, data-ignore-morph](https://data-star.dev/reference/attributes)).
   An open `<details>`, a host's chosen tab or width, a composer's text: `data-preserve-attr`
-  on the element that holds it (`Host::keep`); a component's own chrome `data-ignore-morph`.
+  on the element that holds it (`Host::keep`); the confirmation dialog `data-ignore-morph`.
+  Every Rocket host keeps `data-rocket-host` (Rocket's own mark, by which it finds the host an
+  element's actions run in); a morph would otherwise take it away.
 - **Reconnect, and rest while hidden** ([Actions: @get options](https://data-star.dev/reference/actions)).
-  Every stream asks `retry: 'always'` (ten tries, at most 30 s apart) and
-  `requestCancellation` (the drawer's step stream is ended by the next step's). A hidden tab's
-  stream closes (Datastar's default, `openWhenHidden: false`) and reopens on return; meanwhile
+  Every stream asks `retry: 'always'` (ten tries, at most 30 s apart); a hidden tab's stream
+  closes (Datastar's default, `openWhenHidden: false`) and reopens on return; meanwhile
   `nav.js` asks `/title` for the tab's title and favicon alone.
 - **Rocket components in light DOM** ([Rocket](https://data-star.dev/reference/rocket)). A part
-  with behaviour is a custom element whose host the server draws; `rocket(tag, {mode: "light",
-  renderOnPropChange: false, props, manifest, setup})` defines it. It has no `render`: `setup`
-  adds listeners (each removed by its `cleanup`, through one `AbortController`), observers
-  (disconnected) and frames (cancelled), and reads its typed props from the host's attributes.
-  So a host can leave the page and come back (a morph that moves it) with exactly one of each.
+  with behaviour Datastar's attributes can't give is a custom element whose host the server
+  draws; `rocket(tag, {mode: "light", renderOnPropChange: false, props, manifest, setup})`
+  defines it. It has no `render`: `setup` adds listeners (each removed by its `cleanup`, through
+  one `AbortController`), observers (disconnected) and frames (cancelled), and reads its typed
+  props from the host's attributes. So a host can leave the page and come back (a morph that
+  moves it) with exactly one of each.
+
+### Writes
+
+Every write on the dashboard is a form, drawn by `ui::post_form` (`views/ui/form.rs`) and
+answered by `views::write`:
+
+```html
+<form id="<id>" method="post" action="<route>"
+  data-on:submit="@post(el.getAttribute('action'), {contentType: 'form',
+    headers: {'sluice-form': el.id}, retry: 'never', retryMaxCount: 0}).catch(() => {})"
+  data-indicator__root="_busy<hash>" data-attr:aria-busy="$_busy<hash> && 'true'">
+  …its fields, its submit…
+  <p id="<id>-said" class="form-said" role="status"></p>
+</form>
+```
+
+- `@post` with `contentType: 'form'` sends the form's own fields as the browser would, and
+  Datastar prevents the page load
+  ([Actions: @post, contentType](https://data-star.dev/reference/actions)); a form with a
+  file is sent as multipart (`enctype`). `retry: 'never'` because a write is not repeated on its
+  own; the `.catch` keeps a write that could not be sent from being an unhandled rejection
+  (Datastar rejects the action then, after its `retries-failed` event).
+- `data-indicator` sets the busy signal while the request runs, and `data-attr:aria-busy`
+  draws it ([Attributes: data-indicator, data-attr](https://data-star.dev/reference/attributes));
+  the stylesheet gives `form[aria-busy=true]`'s pressed button a quiet ring.
+- The answer is SSE ([SSE events](https://data-star.dev/reference/sse_events)), and only to the
+  form that asked (its `sluice-form` header): a write taken empties the form's notice and closes
+  the confirmation it was sent from; one that says something ("Saved.", "Sent to @lead.") puts
+  it in the notice as a status; a refusal puts sluice's words there as an alert, what was typed
+  kept. A refusal to a form is a 200, because Datastar applies only a 200's events; any other
+  client gets 204, or the JSON error at its status. A notice is put in whole (mode `replace`),
+  because a confirmation's form sits in the dialog, which no morph enters.
+- When sluice does not answer at all, Datastar fires `datastar-fetch` `error` or
+  `retries-failed` and draws nothing; `components.js` puts "Sluice did not answer: is it
+  running? Try again in a moment." in that form's notice.
+- Display preferences are not a form: the theme radios and the types switch are bound
+  (`data-bind:theme__root`, `data-bind:types__root`) and a change posts the signals to
+  `/settings` (`@post('/settings')`, JSON), answered 204 with the cookies.
 
 ### Rocket components and `ui::` helpers
 
@@ -1018,9 +1090,10 @@ Every shared part is one of two things:
   helpers), enhanced by Rocket, listed in `ui::rocket::COMPONENTS` (its tag, its script, its
   props, its slots and events, which a Chromium test holds to the script's manifest), shown in
   `/_ui` in every state, and safe through a morph (its state in preserved attributes, its
-  listeners set up once). A control that needs script (`.needs-js`) is hidden until its
-  component is defined. A host around a part gives it no box (`display: contents`); a host that
-  is its part takes the part's. Datastar attributes stay outside a host.
+  listeners set up once). A host around a part gives it no box (`display: contents`); a host that
+  is its part takes the part's. Datastar attributes inside a host are Rocket's to scope: a
+  signal there is the component's own unless its attribute says `__root`, and an action there
+  runs in the host.
 
 The helpers (`crates/sluice-web/src/views/`):
 
@@ -1045,31 +1118,36 @@ The helpers (`crates/sluice-web/src/views/`):
 | Confirmation | `ui.rs` (`Confirm`) in a `sluice-confirm` | the one native `<dialog>` |
 | Conversation | `threads::Conversation` (`cards`, rows, the composer) | a thread's messages and its box |
 
-The Rocket components (`ui::rocket::COMPONENTS`; the hosts' helpers are in `ui/rocket.rs`):
+The Rocket components (`ui::rocket::COMPONENTS`; the hosts' helpers are in `ui/rocket.rs`), and
+why each is script rather than Datastar attributes:
 
-| Tag | Script | What it enhances |
-|---|---|---|
-| `sluice-tabs` | `components.js` | an ARIA tablist over its panels: arrows wrap, Home and End; the choice in `$$tab`, its `current`, with `url` in `?tab=`; without script every panel stands stacked |
-| `sluice-fold` | `components.js` | Show all and Show less over a long text, said only when it is cut, never over an open question the owner can answer; or a More fold kept open per project or opened on a wide screen |
-| `sluice-confirm` | `components.js` | the confirmation dialog (below) |
-| `sluice-conversation` | `components.js` | a conversation: Jump to latest, Mark read |
-| `sluice-composer` | `components.js` | the message box: sends as JSON, keeps its text through a patch |
-| `sluice-answer` | `components.js` | a question's Answer and Close in place |
-| `sluice-menu` | `components.js` | the project switcher, display preferences, the plan's More and every ⋯: a click elsewhere or Escape closes it and gives the focus back, its button says `aria-expanded`, the arrows, Home and End move through it; a sub-menu (`details.sub`) opens in the same menu, one level at a time |
-| `sluice-copy` | `components.js` | an id or a SHA in data mono with a copy button ("Copied") |
-| `sluice-toggle` | `components.js` | a display setting (the theme, value types) applied at once and kept by `/settings` |
-| `sluice-search` | `components.js` | the board's search, the functions' find, a form of filters |
-| `sluice-banner` | `components.js` | the stream line ("Updates paused. Reconnecting…", "Updates stopped at 14:02." with Reconnect) and the build line ("sluice was updated · Reload"); the stream's phase also as `html[data-stream]` |
-| `sluice-splitter` | `components.js` | the board's splitter: drag, arrows, its width kept |
-| `sluice-keys` | `components.js` | `/` finds, `[` and `]` move the drawer through the plan's steps, `g` then a letter goes to a page, `?` opens Keyboard shortcuts; never while typing or under a dialog |
-| `sluice-steps` | `components.js` | the step view: a row's click opens its step, the arrows move between rows, the selected row in `selected`; its now line and running bars move on the clock's tick |
-| `sluice-day` | `components.js` | the day line: its now rule and running bars move on the clock's tick |
-| `sluice-drawer` | `sluice.js` | the step drawer: `#step:<id>` opens it beside the plan (over it below 1200px, a modal dialog; a sheet on a phone) and streams the step into it |
-| `sluice-board` | `board.js` | a project's page: the view switch at once (kept per project), the board column's height and its "More below" cue, a board Button's say sent in place, a step's new state said once in `#announce` |
+| Tag | Script | What it does | Why Datastar can't |
+|---|---|---|---|
+| `sluice-tabs` | `components.js` | an ARIA tablist over its panels: arrows wrap, Home and End; the choice in `$$tab` and the page's `tab` signal, its `current` kept through a patch; an anchor in a panel opens its tab | a tablist's roving focus and an anchor's tab are imperative focus and hash work across many elements |
+| `sluice-fold` | `components.js` | Show all and Show less over a long text, said only when it is cut; or a More fold kept open per project or opened on a wide screen | whether a text is cut is a layout measurement, and the fold's memory is this browser's |
+| `sluice-confirm` | `components.js` | its summary opens the page's one dialog with its form; disabled while its summary is `aria-disabled` | moving a form into a modal `<dialog>` and back, and `showModal`, are DOM calls |
+| `sluice-dialog` | `components.js` | the page's one confirmation dialog: keep closes it, Tab stays in it, closing puts the form back and the focus on its opener; a form in it runs its `@post` in its host | a focus trap and focus return are imperative; and a form moved out of its own host needs a host to run its actions in |
+| `sluice-conversation` | `components.js` | Jump to latest, and a thread's page opening at its end | scrolling to and focusing a message is imperative |
+| `sluice-answer` | `components.js` | a question's Answer opens its box, drawn by `openui.js` from the question's OpenUI program; once answered the question gives way at once to the line that says so | the OpenUI program is parsed and drawn in the browser, and the answered line takes the focus |
+| `sluice-menu` | `components.js` | the project switcher, display preferences and every ⋯ and ⓘ: a click elsewhere or Escape closes it and gives the focus back, its button says `aria-expanded`, the arrows, Home and End move through it, a sub-menu opens one level at a time, the panel kept inside the window | a click elsewhere, focus return, a menu's keys and fitting the panel to the window are imperative |
+| `sluice-copy` | `components.js` | an id or a SHA in data mono with a copy button ("Copied") | the clipboard is a browser API |
+| `sluice-search` | `components.js` | the board's search and the functions' find: what does not match hides as one types, a status counts what is left | filtering hundreds of items as one types, with no request, would put an expression on every item |
+| `sluice-banner` | `components.js` | the stream line ("Updates paused. Reconnecting…", "Updates stopped at 14:02." with Reconnect) and the build line ("sluice was updated · Reload"); the stream's phase also as `html[data-stream]` | Datastar reports its stream's life as `datastar-fetch` events and draws nothing from them; the line, its time and the reopening on online or focus are the banner's |
+| `sluice-splitter` | `components.js` | the board's splitter: drag, arrows, its width kept per project | a pointer drag and a width kept in this browser |
+| `sluice-keys` | `components.js` | `/` finds, `[` and `]` move the drawer, `g` then a letter goes to a page, `?` opens Keyboard shortcuts; never while typing or under a dialog | a two-key sequence and its exceptions over the whole page |
+| `sluice-steps` | `components.js` | the step view: a row's click opens its step, the arrows move between rows, the selected row in `selected`; its now line and running bars move on the clock's tick | roving focus, and marks placed by time on each tick |
+| `sluice-day` | `components.js` | the day line: its now rule and running bars move on the clock's tick | marks placed by time on each tick, measured against the window |
+| `sluice-drawer` | `sluice.js` | the step drawer: `#step:<id>` opens it beside the plan (over it below 1200px, a modal dialog; a sheet on a phone) and binds the step's stream | the address's fragment, `inert` behind a modal, its focus trap and the stream binding it swaps per step |
+| `sluice-board` | `board.js` | a project's page: the view switch at once (kept per project), the board column's height and its "More below" cue, a board Button's say sent in place, a step's new state said once in `#announce`, and after a form with `data-focus-after` is taken the focus on that element once a patch draws it | switching views without a load, fitting a column to the window, announcing changes and moving the focus |
+
+Beside the components, two pieces of script belong to every page rather than a part:
+`nav.js`'s clock and title (below: a time that ticks in the reader's own words and zone is
+not something an attribute draws, and a hidden tab's title is fetched while its stream rests),
+and the network-failure notice (Writes, above: Datastar fires the event but draws nothing).
 
 **The clock is infrastructure, not a component.** `nav.js` ticks every `<time>` (`data-since`
 a two-unit duration, `data-ago` "12m ago", `data-clock` a time of day on the reader's own clock,
-which the server writes in UTC and names, "17:49 UTC", so it reads without script) every five
+which the server writes in UTC and names, "17:49 UTC", so it reads right before the clock first ticks) every five
 seconds and after a patch, then dispatches `sluice-tick` on `window` with the time; a component
 that draws against now (`sluice-steps`, `sluice-day`) moves its own marks on that event. The
 server writes each `<time>` as it read the clock, and its text is left out of the stream's
@@ -1098,19 +1176,22 @@ Where the frontend departed from the practices, and what was done:
 |---|---|
 | `board.js` was a page script: listeners on `document` added at load, never removed, and state in module variables, so a morph that replaced the project page left stale handlers. | It is `rocket("sluice-board")` on a `<sluice-board id="project-board">` host the template draws; every listener goes through one `AbortController`, observers are disconnected and frames cancelled in `cleanup`. In `COMPONENTS`. |
 | `nav.js` drew the day line's now rule and the step view's now line and running bars itself, reaching into components' markup on every tick. | `nav.js` only ticks `<time>` and dispatches `sluice-tick`; the day line is a `sluice-day` component and `sluice-steps` moves its own marks. Both in `COMPONENTS` and `/_ui`. |
-| The drawer published `window.sluiceStream` and `window.sluiceClose`, globals no page used. | Deleted: closing is the drawer's own function. `window.sluiceStepController` stays, because Datastar's `requestCancellation` reads its controller from the page's scope. |
+| The drawer published `window.sluiceStream`, `window.sluiceClose` and `window.sluiceStepController` (its stream's controller, built into a `data-init` string), and `sluice-search` rewrote the `@get('…'` in `main[data-init]` with a regex to add the find. | Deleted. The drawer's stream is an element of its own whose binding a new step replaces (Datastar ends the old: `requestCancellation: 'cleanup'`); the find is the `q` signal, sent with the plan's one stream address (Practices: stream addresses). |
 | The step view's head, Now and messages were drawn ad hoc per page (triple rule, counter tiles, an 850 title). | Built from helpers: `page_head`, `status_line`, `ui::tabs`, `calls`, `message_card`; Cancel and the log moved into the ⋯. |
 | Section heads, pills, buttons and wells each had two or three spellings (`.tag`, `.chip`, inline `font-weight: 850`, square boxes). | One helper each (`SectionHead`, `pill`, `button::submit`/`link`, `well_open`); the duplicates are deleted, and every corner reads a radius token. |
-| `components.js` keeps one `submit` listener on `document` for owner action forms. | Kept, documented: forms move into the shared confirmation dialog and arrive in patches, so the delegate on the document is what keeps one handler for each. It posts and leaves the result to the stream. |
+| `components.js` kept one `submit` listener on `document` that sent every owner form with `fetch`, disabling its buttons and drawing its errors by hand, beside a plain post and redirect for a page without script. | Deleted, with the redirects and the notices kept for them: every form is a Datastar `@post` (`contentType: 'form'`), its busy state `data-indicator`, its answer the form's notice patched by the server (Writes). |
+| History was written in five places (a tab's `?tab=`, the find, the drawer). | Only the drawer's `#step:<id>` is left, as navigation (Practices: history); a tab and the find are signals. |
+| A page was kept whole without script: a second way for each write, a theme form with Save, tests and screenshots of the scriptless page. | Retired: the dashboard follows Datastar's own recommendations instead (Practices); the scriptless twins, their tests and screenshots are deleted. |
 | `nav.js`'s clock and title. | Kept as infrastructure (above): they belong to every page, not to a part. |
 
 The confirmation dialogs (Cancel, a succeeded step's Retry, Delete project, Clear board, Remove a
-resource, Close all) use one native `<dialog>`, drawn by `ui::Confirm` in a `sluice-confirm`: on
+resource, Close all) use one native `<dialog>` (`ui::rocket::confirmation`, in a `sluice-dialog`), opened by `ui::Confirm` in a `sluice-confirm`: on
 `paper-raised` on `--radius-surface` with the lift and the scrim, its title naming what it acts
 on in words (a step by its stage and title, never its id). Focus starts on the keep button,
 stays in the dialog, Escape closes it and focus returns to the opener (or, when the opener sat
-in a menu that closed, to that menu's button). Without script a details fold shows the same form
-inline.
+in a menu that closed, to that menu's button). While it is in the dialog the form answers as
+`confirming` (its notice `confirming-said`), since a patch may draw its details a new form under
+its own id meanwhile; closing gives it its id back, or keeps the newer form.
 
 **Icons**: Lucide (lucide-static 1.52.0, ISC), the published SVG unmodified in `assets/icons/`,
 each a `<symbol>` in the page's one sprite and drawn as a `<use>` of it in `currentColor`,
@@ -1129,20 +1210,20 @@ the page's stream. A lane that redraws a page writes its notes here.
 |---|---|---|---|
 | Home | `/` (its stream `/stream`; `/title` the tab title alone) | `views::home` | page head and summary sentence, section heads, For you as Needs-you lines, Today, a card a project, pills, the index table |
 | A project's plan | `/projects/id/<p>` (`?view=plan`, `both`, `board`; `/stream`; posts `/needs`, `/seen`) | `views::board::project_page`, `views::plan`, `views::panel` (the board), `templates/project.html` | `sluice-board`, page head, pill tabs and the view switch, the Needs you well, Finished cards, At work rows with `sluice-steps`, pills, buttons, `sluice-search` (Find), `sluice-splitter`, `sluice-drawer`, `sluice-keys`, `sluice-menu`, `sluice-confirm` |
-| A step | `/projects/id/<p>/steps/<s>` (`/stream`; posts `/actions`), and in the drawer | `views::step`, `templates/step.html`, `step_band.html`, `activity.html` | the step head (page head, status line, stage strip, buttons, the ⋯ with its actions), `sluice-tabs`, Now's well with the tool calls fold, asking and stopped modules, message cards, `sluice-steps` (Runs), field tables, `sluice-fold`, `sluice-confirm`, `sluice-composer` |
+| A step | `/projects/id/<p>/steps/<s>` (`/stream`; posts `/actions`), and in the drawer | `views::step`, `templates/step.html`, `step_band.html`, `activity.html` | the step head (page head, status line, stage strip, buttons, the ⋯ with its actions), `sluice-tabs`, Now's well with the tool calls fold, asking and stopped modules, message cards, `sluice-steps` (Runs), field tables, `sluice-fold`, `sluice-confirm`, the message box (`ui::post_form`) |
 | A unit | `/projects/id/<p>/units/<u>` (`/stream`) | `views::unit_page`, `templates/unit_page.html` | page head, status line, `sluice-steps`, asking and stopped modules, `sluice-answer` |
 | A run's file | `/projects/id/<p>/runs/<r>/files/<name>` | `views::step::run_file_page` | page head, the file on a cell-radius card in data mono |
 | Day | `/day`, `/projects/id/<p>/day` (`/stream`) | `views::day` | page head and note, `sluice-day`, the timetable with its pills and folds |
 | Stats | `/projects/id/<p>/stats` (`/stream`) | `views::stats` | page head and note, the window switch (`ui::switch`), section heads, tables, the throughput chart |
 | For you, Questions, History | `/inbox`, `/questions`, `/history`, and each under `/projects/id/<p>/` (`/stream`; posts `/messages`, `/messages/read`, `/messages/close`, a reply) | `views::inbox`, `views::threads`, `templates/inbox.html`, `history.html`, `conversation.html`, `answer.html` | page head, the messages' switch, question cards (`sluice-answer`), section heads, cards, `sluice-conversation`, `sluice-confirm` (Close all) |
-| A thread | `/projects/id/<p>/thread?thread=<t>` | `views::inbox`, `templates/thread.html` | page head with Details, a conversation's rows, `sluice-conversation`, `sluice-composer`, `sluice-answer` |
+| A thread | `/projects/id/<p>/thread?thread=<t>` | `views::inbox`, `templates/thread.html` | page head with Details, a conversation's rows, `sluice-conversation`, the message box (`ui::post_form`), `sluice-answer` |
 | Log | `/log`, `/projects/id/<p>/log` (`/stream`) | `views::log`, `templates/log.html` | page head and note, the presets (`ui::switch`), `sluice-search` filters, a section head, the records table, `sluice-copy` |
 | Functions | `/fns` (`?project=`; `/fns/stream`) | `views::home`, `templates/functions.html` | page head and note, `sluice-search`, section heads, a card a fn |
 | Settings | `/projects/id/<p>/settings` (`/stream`; posts its fields, `/board`, `/icon`, `/delete`) | `crate::settings`, `views::project_settings`, `templates/settings.html` | page head, the sections' index, section heads, field rows, switches, the danger well, `sluice-confirm` |
 | States and parts | `/_ui` | `views::gallery`, `templates/gallery.html` | every part and component, light and dark |
 | Agent docs | `/docs`, `/docs/<topic>` | `views::gallery::agent_docs` | page head, a card a topic, the topic at the measure, the index sticky beside it |
 | A page that cannot be drawn | any address a browser asks for that answers 4xx | `views::missing`, `templates/missing.html` | page head and note, the ways on |
-| The frame, on every page | | `templates/layout.html`, `views::prefs` | the nav bar, the project switcher and display preferences (`sluice-menu`, `sluice-toggle`, `sluice-keys`), `sluice-banner` |
+| The frame, on every page | | `templates/layout.html`, `views::prefs` | the nav bar, the project switcher and display preferences (`sluice-menu`, `sluice-keys`), `sluice-banner`, the confirmation (`sluice-dialog`) |
 
 ### Per page
 
@@ -1184,14 +1265,17 @@ the page's stream. A lane that redraws a page writes its notes here.
     line reads as one sentence with its Undo after it, wrapping as text does at any width.
   - **At work**: the roster, under an axis row (12h, 4h, 1h, 15m, now, 12px over the tracks'
     column; it says its scale to a screen reader and on hover: "The last 12 hours on a log
-    scale, now at the right; a tick is a message."). A group a recipe (a `<details>`, its
+    scale, now at the right; a tick is a message."). Its head carries an ⓘ, a 32px round
+    button (44px on a phone) whose popover, the Details' look, says how to read a track: the
+    last 12 hours on a log scale, now at the right; blue the run going now, pale an earlier run,
+    sand a quiet one, dotted a wait; a tick a message. A group a recipe (a `<details>`, its
     triangle, its name at 15px/600 in ink, so a big plan scans by its groups, and its counts
     13px muted: "1 quiet, 7 running, 2 waiting"); the units of no recipe after ("Other
     units"), the long runs last. **Folding, by row**: in a roster of more than 12 rows a
     group shows its remarkable rows first (a silence, a wait of an hour or more since its last
     run, a unit with an open item in Needs you) and folds the rest, when more than 3, to one
     line under them, "+7 running · each heard from in the last 11m", a `<details>` that opens
-    in place without script; a group with nothing remarkable folds whole to its own line,
+    in place; a group with nothing remarkable folds whole to its own line,
     "article · 23 running · each heard from in the last 27m". A stop is in Needs you, not a
     row, so it keeps no healthy sibling in sight. A row (8px,
     `paper-2` on hover and open) is a grid: the badge (a 30px circle, an engine's name; drawn
@@ -1265,8 +1349,11 @@ the page's stream. A lane that redraws a page writes its notes here.
   answered in place; then why it failed in the sand well, or **Now**: the latest sentence
   the agent said at lead size (17px), then its calls in a quiet fold (`ui::calls`: "12 calls ·
   1 failed", opening to a line each, the tool, its key argument and how long it took, the latest
-  first); beside them, as titled modules, what it waits on (or when it starts), what it comes
-  after, its progress and its key output. The columns stand one over the other on a narrow
+  first); under Now on a running step, **Its brief** (its prompt's first paragraph, cut at about
+  280 characters, "Whole brief" opening Inputs) and **So far** (the outputs it has set, an earlier
+  run's said so and muted, or "2 outputs not set yet", "All outputs" opening Outputs); beside
+  them, as titled modules, what it waits on (or when it starts), what it comes after, its
+  progress and, once it has stopped running, its key output. The columns stand one over the other on a narrow
   sheet (the drawer, a phone, to 900px of sheet), and at seven and five twelfths from there.
   Activity is its turns as rows numbered in data mono; Messages its conversation as message
   cards (who to whom, when, the first words cut with the way to the whole; an answered question
@@ -1323,8 +1410,11 @@ the page's stream. A lane that redraws a page writes its notes here.
   480px, so its outcome stays by its name on a wide screen. Under 400px of frame the title takes
   a line of its own under the minute and outcome. A busy hour (more than six in a cell) lists
   only its notable runs (not a success, still running, or an hour or longer) and folds the successes behind a muted "+23 more succeeded, 1m to 12m" that opens
-  in place; a long list flows into columns as wide as the screen allows; four projects or more stack under each hour below
-  1100px of content, every project below 640px. The current hour ends on the now rule and
+  in place; four projects or more stack under each hour below
+  1100px of content, every project below 640px. Two or more hours in a row in which no run started are one
+  line, the hours in data mono and "· nothing ran" muted ("06–17 · nothing ran"). A cell's runs
+  flow into columns at least 400px wide, as many as the frame's width allows (a line still at
+  most 480px), so one project's day fills the frame. The current hour ends on the now rule and
   says what runs. `nav.js` keeps the reader's zone in a cookie and `sluice-day` moves the
   rule and the running bars on the clock's tick; the page's version is its runs, so it patches only when they
   change.
@@ -1332,7 +1422,7 @@ the page's stream. A lane that redraws a page writes its notes here.
   the one place a stage's usual time is said. The head: "Stats", its note how many runs ended
   and units finished in the window; in the row the window
   switch (24 hours, 7 days, the default, 30 days, All), the view-switch bar of links
-  (`?window=`), so it works without script. On the paper four sections, each under its section head: **Durations by stage**, a table a recipe in the project's recipe order (its
+  (`?window=`). On the paper four sections, each under its section head: **Durations by stage**, a table a recipe in the project's recipe order (its
   name, how many units and runs) with a row a stage in the recipe's order: how many of its runs
   succeeded ("Succeeded") and their median, p90 and longest in data mono, then, under "median ·
   p90", the median drawn as a sky-ink bar inside its p90 in pale sky with a sky-ink edge,
@@ -1366,9 +1456,19 @@ the page's stream. A lane that redraws a page writes its notes here.
   (active, paused or archived; its resources; when done units retire) heads its sections. The
   sections' index stands sticky in a quarter of the width, at most 300px (a scrolling row of
   tabs on a phone), each section beside it under its section head, each field a row (its
-  name, then its form at 78ch); pause and archive are rows with a square switch; Delete sits in a sand well. Details end with Fallback (a select of the project's sessions and
-  "none", applied in place as every field is) and, while any session is registered, Sessions:
-  one line, each its `@name` in ink and "seen 2m ago" muted. (`settings.css` is folded into `style.css`.)
+  name, then its field at 78ch, the board's program as wide as the rest); Delete sits in a sand
+  well. Each section is one form with one Save at its foot ("Save details", "Save resources",
+  "Save board", "Save retiring") and its notice under it, "Saved." or why not; Activity is
+  its Pause or Resume. Details: name, description (its preview drawn as it is typed, folded
+  under "Show how it reads"), icon (letters or an emoji, or an image chosen through a pill,
+  "Choose an image", that names the file chosen) and Fallback (a select of the project's
+  sessions and "none"); then, while any session is registered, Sessions: one line, each its
+  `@name` in ink and "seen 2m ago" muted. Resources: each resource's capacity (a number or the fn
+  that reports it), a new one, and Remove behind a confirmation. A Save never writes over
+  another author: it is refused when one of its section's fields changed after the page was
+  drawn, saying which and by whom, and what was typed stays. The stream redraws the sections'
+  standing (the live header, resources, the board's document, sessions, retiring, activity and
+  the delete guard), never a form being edited. (`settings.css` is folded into `style.css`.)
 - **History** (`/history`): the third of the message views, its head its name as For you
   and Questions; the threads with the owner, counted in their section's head, a module each on
   the grid, as many to a row as fit
@@ -1400,7 +1500,11 @@ region that updates says so politely; reduced motion honoured.
 - Do put what identifies an item behind its "⋯"; show what explains it.
 - Do put what needs the owner first, and let that one module swell.
 - Do show state with the glyph's shape and its word first, colour second.
-- Do keep every page a server-rendered picture that works without JavaScript.
+- Do build the way Datastar recommends ([the Tao](https://data-star.dev/guide/the_tao_of_datastar),
+  [attributes](https://data-star.dev/reference/attributes),
+  [actions](https://data-star.dev/reference/actions), [Rocket](https://data-star.dev/reference/rocket)),
+  naming the doc beside the decision; write script only where Datastar can't, and say why in
+  the component table.
 - Do build a part from `views::ui`; when it behaves, make it a Rocket component in
   `COMPONENTS`, shown in `/_ui` in every state, its state in preserved attributes.
 

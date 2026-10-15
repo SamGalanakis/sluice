@@ -226,10 +226,11 @@ async fn text_body(response: axum::response::Response) -> String {
     .unwrap()
 }
 
-/// A step action refused in a browser comes back as its step's page through the whole stack
-/// (the page as the handler drew it, never wrapped as a JSON error); a client's stays JSON.
+/// A step action refused from a page's form is said in that form's notice through the whole
+/// stack: a 200 answer, which Datastar applies (it applies none other), never wrapped as a JSON
+/// error; a client's refusal stays JSON with its status.
 #[tokio::test]
-async fn a_refused_step_action_sends_a_browser_back_to_its_step_and_a_client_json() {
+async fn a_refused_step_action_is_said_in_its_forms_notice_and_a_client_gets_json() {
     let fixture = Fixture::new().await;
     let id = fixture.id;
     fixture
@@ -286,60 +287,38 @@ async fn a_refused_step_action_sends_a_browser_back_to_its_step_and_a_client_jso
         .layer(axum::Extension(sluice_web::views::step::Commands(
             Arc::new(Owner),
         )));
-    let post = |accept: &'static str| {
-        let request = Request::builder()
+    let post = |form: Option<&'static str>| {
+        let mut request = Request::builder()
             .method("POST")
             .uri(format!("/projects/id/{id}/steps/work/actions"))
             .header(header::HOST, "localhost")
             .header(header::ORIGIN, "http://localhost")
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .header(header::ACCEPT, accept)
-            .body(Body::from("action=cancel&revision=1&message=Stop+here"))
-            .unwrap();
-        app.clone().oneshot(request)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+        if let Some(form) = form {
+            request = request
+                .header("datastar-request", "true")
+                .header("sluice-form", form);
+        } else {
+            request = request.header(header::ACCEPT, "application/json");
+        }
+        app.clone().oneshot(
+            request
+                .body(Body::from("action=cancel&revision=1&message=Stop+here"))
+                .unwrap(),
+        )
     };
-    // a browser goes back to the step's own address (303), so a reload never posts again;
-    // the notice waits there under a key the server made
-    let response = post("text/html,application/xhtml+xml,*/*;q=0.8")
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let location = response.headers()[header::LOCATION]
-        .to_str()
-        .unwrap()
-        .to_owned();
-    assert!(
-        location.starts_with(&format!("/projects/id/{id}/steps/work?notice=")),
-        "{location}"
+    let response = post(Some("cancel-work")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "text/event-stream"
     );
-    let get = |uri: String| {
-        let request = Request::builder()
-            .uri(uri)
-            .header(header::HOST, "localhost")
-            .header(header::ACCEPT, "text/html")
-            .body(Body::empty())
-            .unwrap();
-        app.clone().oneshot(request)
-    };
-    for _ in 0..2 {
-        let response = get(location.clone()).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let page = text_body(response).await;
-        assert!(page.starts_with("<!doctype html>"), "{page}");
-        assert!(
-            page.contains("<p>Nothing was done: Cancel does not apply to a succeeded step.</p>"),
-            "{page}"
-        );
-    }
-    // a key the server did not make draws the step as it is
-    let page = text_body(
-        get(format!("/projects/id/{id}/steps/work?notice=0190aaaa"))
-            .await
-            .unwrap(),
-    )
-    .await;
-    assert!(!page.contains("Nothing was done"), "{page}");
-    let response = post("application/json").await.unwrap();
+    let answer = text_body(response).await;
+    assert!(
+        answer.contains("data: elements <p id=\"cancel-work-said\" class=\"form-said\" role=\"alert\">Nothing was done: Cancel does not apply to a succeeded step.</p>"),
+        "{answer}"
+    );
+    let response = post(None).await.unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(json_body(response).await["error"], "conflict");
 }

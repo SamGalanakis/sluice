@@ -86,14 +86,12 @@ async fn slow_chromium_a_note_is_read_only_when_the_owner_asks_and_times_survive
         browser.wait("document.readyState === 'complete' && document.querySelectorAll('article.note').length === 2").unwrap();
         // its card's Mark read marks that thread, through what the page drew of it
         browser
-            .wait("[...document.querySelectorAll('article.note button.mark-read')].every(b => b.checkVisibility())")
+            .wait("[...document.querySelectorAll('article.note form.mark-read button')].every(b => b.checkVisibility())")
             .unwrap();
         browser
-            .eval("[...document.querySelectorAll('article.note')].find(a => a.textContent.includes('The lane landed')).querySelector('button.mark-read').click()")
+            .eval("window.marked=false; document.addEventListener('datastar-fetch', e => { if (e.detail.type === 'finished' && e.detail.el.matches?.('form.mark-read')) marked = true; }); [...document.querySelectorAll('article.note')].find(a => a.textContent.includes('The lane landed')).querySelector('form.mark-read button').click()")
             .unwrap();
-        browser
-            .wait("[...document.querySelectorAll('button.mark-read')].some(b => b.textContent === 'Marked read')")
-            .unwrap();
+        browser.wait("marked").unwrap();
         let marks = read_marks(&f);
         assert_eq!(marks.len(), 1, "{marks:?}");
         assert_eq!((marks[0].identity.as_str(), marks[0].thread.as_str()), ("owner", "notes"));
@@ -130,7 +128,7 @@ async fn slow_chromium_a_note_is_read_only_when_the_owner_asks_and_times_survive
         browser.eval("Promise.all(window.readRequests)").unwrap();
         assert_eq!(read_marks(&f).len(), 1, "opening a thread marks nothing");
         assert_eq!(
-            browser.eval("(b => b && b.checkVisibility() ? b.textContent : null)(document.querySelector('.thread-of button.mark-read'))").unwrap(),
+            browser.eval("(b => b && b.checkVisibility() ? b.textContent : null)(document.querySelector('.thread-of form.mark-read button'))").unwrap(),
             "Mark 1 note read"
         );
         drop(browser);

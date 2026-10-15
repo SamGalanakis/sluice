@@ -29,7 +29,7 @@ fn between<'a>(html: &'a str, from: &str, to: &str) -> &'a str {
 }
 
 /// The owner's marks as the coordinator takes them: Needs you's set-asides and a step's
-/// Dismiss, each in the store.
+/// Dismiss, each in the store. A Cancel is taken and changes nothing; anything else is refused.
 struct Marks(Writer);
 impl CommandService for Marks {
     fn execute(
@@ -37,6 +37,9 @@ impl CommandService for Marks {
         command: OwnerCommand,
     ) -> Pin<Box<dyn Future<Output = Result<(), PublicError>> + Send + '_>> {
         Box::pin(async move {
+            if command.action == Action::Cancel {
+                return Ok(());
+            }
             self.0
                 .write(RetrySafety::Idempotent, move |tx| match command.action {
                     Action::SetAside | Action::Restore => sluice_store::messages::needs_dismiss(
@@ -143,7 +146,7 @@ async fn slow_in_chromium_a_cancel_set_aside_and_undone_in_place() {
             .unwrap();
         assert_eq!(browser.eval("[window.dismissMarker, performance.getEntriesByType('navigation').length === window.dismissNavigations, Math.abs(scrollY - window.dismissScroll) <= 3]").unwrap(), json!(["same document", true, true]));
         browser.eval("window.realFetch = window.fetch; window.fetch = (...args) => /\\/(needs|actions)$/.test(String(args[0])) ? Promise.reject(new TypeError('Failed to fetch')) : realFetch(...args); document.querySelector('#n-stop-b button.icon').click()").unwrap();
-        browser.wait("document.querySelector('#n-stop-b .notice')?.textContent.includes('Sluice did not answer')").unwrap();
+        browser.wait("document.querySelector('#n-stop-b .form-said[role=alert]')?.textContent.includes('Sluice did not answer')").unwrap();
         assert_eq!(browser.eval("[window.dismissMarker, !document.querySelector('#n-stop-b button.icon').disabled]").unwrap(), json!(["same document", true]));
         assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
     })
@@ -152,8 +155,9 @@ async fn slow_in_chromium_a_cancel_set_aside_and_undone_in_place() {
     server.abort();
 }
 
-/// The plan's Retry and the drawer's action forms post in place: a refusal reads under the
-/// form that sent it, the page and a typed message kept.
+/// The plan's Retry and the drawer's action forms post in place: a refusal (sluice's answer to
+/// the form, its notice) reads under the form that sent it, the page and a typed message kept;
+/// one taken closes the confirmation it was sent from.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_plan_and_drawer_action_forms_submit_in_place() {
     let f = Fixture::new().await;
@@ -163,14 +167,14 @@ async fn slow_chromium_plan_and_drawer_action_forms_submit_in_place() {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
         browser.viewport(1440, "light").unwrap();
         browser.wait("customElements.get('sluice-confirm') && document.querySelector('#n-stop-b form[action$=\"/actions\"] button')").unwrap();
-        browser.eval("window.marker = true; window.posts = []; window.realFetch = fetch; window.fetch = (url, options) => { if (options?.method === 'POST' && /\\/(actions|needs)$/.test(String(url))) { posts.push({url:String(url), data:Object.fromEntries(options.body)}); return Promise.resolve(new Response('Fixture refusal', {status:409})); } return realFetch(url, options); }").unwrap();
+        browser.eval("window.marker = true; window.posts = []; window.realFetch = fetch; window.fetch = (url, options) => { if (options?.method === 'POST' && /\\/(actions|needs)$/.test(String(url))) { posts.push({url:String(url), data:Object.fromEntries(options.body)}); const form = options.headers['sluice-form']; return Promise.resolve(new Response(`event: datastar-patch-elements\\ndata: mode replace\\ndata: elements <p id=\"${form}-said\" class=\"form-said\" role=\"alert\">Fixture refusal</p>\\n\\n`, {headers: {'content-type': 'text/event-stream'}})); } return realFetch(url, options); }").unwrap();
         browser.eval("document.querySelector('#n-stop-b form[action$=\"/actions\"] button').click()").unwrap();
-        browser.wait("posts.length === 1 && document.querySelector('#n-stop-b .notice')?.textContent.includes('Fixture refusal')").unwrap();
+        browser.wait("posts.length === 1 && document.querySelector('#n-stop-b .form-said[role=alert]')?.textContent.includes('Fixture refusal')").unwrap();
         assert_eq!(browser.eval("[posts[0].data.action, !!posts[0].data.revision, !!posts[0].data.seen]").unwrap(), json!(["retry", true, true]));
         browser.eval("location.hash = 'step:b'").unwrap();
         browser.wait("document.querySelector('#drawer .sh-acts form > button[value=retry]')?.checkVisibility()").unwrap();
         browser.eval("document.querySelector('#drawer .sh-acts form > button[value=retry]').click()").unwrap();
-        browser.wait("posts.length === 2 && document.querySelector('#drawer .sh-acts .notice')").unwrap();
+        browser.wait("posts.length === 2 && document.querySelector('#drawer .sh-acts .form-said[role=alert]')").unwrap();
         browser.eval("document.querySelector('#drawer .sh-fb').open = true; document.querySelector('#drawer textarea[name=message]').value = 'Drawer feedback'; document.querySelector('#drawer .sh-fb button').click()").unwrap();
         browser.wait("posts.length === 3 && !document.querySelector('#drawer .sh-fb button').disabled").unwrap();
         assert_eq!(browser.eval("[posts[2].data.action, posts[2].data.message, document.querySelector('#drawer textarea[name=message]').value]").unwrap(), json!(["retry", "Drawer feedback", "Drawer feedback"]));
@@ -181,9 +185,9 @@ async fn slow_chromium_plan_and_drawer_action_forms_submit_in_place() {
         browser.eval("document.querySelector('#drawer sluice-confirm summary').click()").unwrap();
         browser.wait("document.querySelector('#confirmation').open").unwrap();
         browser.eval("document.querySelector('#confirmation textarea').value = 'Stop this work'; document.querySelector('#confirmation button.danger').click()").unwrap();
-        browser.wait("posts.length === 4 && document.querySelector('#confirmation .notice')").unwrap();
+        browser.wait("posts.length === 4 && document.querySelector('#confirmation .form-said[role=alert]')").unwrap();
         assert_eq!(browser.eval("[window.marker, document.querySelector('#confirmation').open, posts[3].data.action, posts[3].data.message, document.querySelector('#confirmation textarea').value]").unwrap(), json!([true, true, "cancel", "Stop this work", "Stop this work"]));
-        browser.eval("window.fetch = () => Promise.resolve(new Response(null, {status:204})); document.querySelector('#confirmation button.danger').click()").unwrap();
+        browser.eval("window.fetch = realFetch; document.querySelector('#confirmation button.danger').click()").unwrap();
         browser.wait("!document.querySelector('#confirmation').open").unwrap();
         assert_eq!(browser.eval("[window.marker, window.browserErrors]").unwrap(), json!([true, []]));
     }).await.unwrap();

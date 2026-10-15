@@ -80,7 +80,7 @@
    `sky` done, `sand` needs a look, `coral` an open question to the owner and nothing else.
    Each family's token is light-dark() of its light and dark value, and a theme is a family in
    one scheme: `data-theme` on <html> is `<family>-light` or `<family>-dark`, whose suffix sets
-   `color-scheme`. With no theme chosen yet (a first open without script) the page is Sluice's
+   `color-scheme`. With no theme chosen yet (a first open) the page is Sluice's
    palette in the system's scheme. A part of the gallery that carries `data-theme` draws itself
    in it, because the derived tokens are worked out again on every element that names one.
    Values adjusted from a theme's published ones for contrast are noted in DESIGN.md, Themes. */
@@ -574,7 +574,7 @@ details.settings .menu { -webkit-user-select: none; user-select: none; }  /* tog
 details.settings .menu, .gal-prefs { right: 10px; width: max-content; min-width: 264px;
   max-width: calc(100vw - 2 * var(--gutter)); padding: 8px;
   max-height: calc(100dvh - 64px); overscroll-behavior: contain; }
-.prefs label.check, .prefs .save, .prefs-guide { contain: inline-size; }
+.prefs label.check, .prefs-guide { contain: inline-size; }
 .prefs fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 /* a row: its name, what it holds now (or its key) at the right, and a "›" */
 .prefs-menu details.sub > summary { list-style: none; }
@@ -590,9 +590,6 @@ details.settings .menu, .gal-prefs { right: 10px; width: max-content; min-width:
 .sub-hint { margin-left: auto; }
 .sub-row > .sub-chev { transform: rotate(-90deg); }  /* "›" */
 .sub-back > .sub-chev { transform: rotate(90deg); }  /* "‹" */
-/* without script a row opens its panel in place, under it: its "›" turns down */
-details.sub[open] > .sub-row > .sub-chev { transform: none; }
-details.sub[open] > .sub-row { background: var(--paper-2); }
 .sub-panel { padding: 4px 0 6px; }
 /* the back control heads its panel: the panel's name, a "‹" before it. It stays at the top
    while the panel scrolls under it, right under the menu's navy edge, which it carries over
@@ -604,12 +601,12 @@ details.sub[open] > .sub-row { background: var(--paper-2); }
   font: var(--w-strong) 14px/20px var(--font-text); color: var(--ink); text-align: left; }
 .sub-back:hover { background: var(--paper-2); }
 .sub-back:focus-visible { outline-offset: -2px; }
-/* with script one level at a time (`sluice-menu`): an open sub-menu is the whole panel, the top
-   level and its own row out of sight; it opens at its head */
-:is(sluice-menu:defined > details > .prefs-menu, .gal-prefs):has(details.sub[open])
+/* one level at a time (`sluice-menu`): an open sub-menu is the whole panel, the top level and
+   its own row out of sight; it opens at its head */
+:is(.prefs-menu, .gal-prefs):has(details.sub[open])
   :is(.prefs-menu > *, .prefs > *):not(details.sub[open], :has(details.sub[open])) { display: none; }
-:is(sluice-menu:defined > details > .prefs-menu, .gal-prefs) details.sub[open] > summary { display: none; }
-:is(sluice-menu:defined > details > .prefs-menu, .gal-prefs) .sub-panel { padding-top: 0; }
+:is(.prefs-menu, .gal-prefs) details.sub[open] > summary { display: none; }
+:is(.prefs-menu, .gal-prefs) .sub-panel { padding-top: 0; }
 /* the page's keys (sluice-keys), in the Keyboard shortcuts panel: a measure of their own */
 .keys { width: min(340px, calc(100vw - 2 * var(--gutter) - 16px)); padding: 2px 4px 2px 10px; }
 .keys-list { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 0;
@@ -658,9 +655,6 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; box-shadow: inset 
   padding: 0 10px; cursor: pointer; font-size: 14px; font-weight: var(--w-regular); }
 .prefs label.check:hover { background: var(--paper-2); }
 .prefs label.check input { width: 16px; height: 16px; margin: 0; flex: none; accent-color: var(--navy); }
-.prefs .save { margin: 6px 0 2px 10px; }
-/* each setting applies as it changes once its component runs: no Save */
-form.prefs:has(sluice-toggle:defined) .save { display: none; }
 
 /* the first stop for a keyboard: past the band to the page */
 .skip { position: absolute; left: var(--gutter); top: 8px; z-index: 40; padding: 10px 14px;
@@ -737,8 +731,6 @@ form.prefs:has(sluice-toggle:defined) .save { display: none; }
     color: transparent; }
   .subnav-tools:not(:has(.view-switch)) .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) .q-icon {
     left: 14px; color: var(--ink); }
-  .subnav-tools:not(:has(.view-switch)) .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) .apply {
-    display: none; }
   .subnav-tools:not(:has(.view-switch)):has(.pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) {
     left: var(--gutter); right: var(--gutter); background: var(--paper); }
   .prefs .themes label, .prefs label.check, .sub-row, .sub-back { min-height: 44px; }
@@ -858,8 +850,8 @@ form.prefs:has(sluice-toggle:defined) .save { display: none; }
 
 /* ---- an item's Details (`ui::Details`, DESIGN.md, Details): what identifies an item rather
    than explains it, behind one "⋯" at its end (a row's last cell, a module's top right, beside a
-   page's or a step's name). A `<details>` in a `sluice-menu`: it opens without script, a click
-   elsewhere or Escape closes it. Each id whole in data mono with its copy button. On a phone
+   page's or a step's name). A `<details>` in a `sluice-menu`: a click elsewhere or Escape
+   closes it. Each id whole in data mono with its copy button. On a phone
    the button is 44px and the panel a sheet along the window's foot. ------------------------ */
 details.dm { position: relative; flex: none; }
 /* its button: the round icon button, its panel the one popover look */
@@ -994,17 +986,14 @@ details.about[open] > summary::after { content: "Show less"; }
 
 /* The components' hosts (views::ui::rocket; DESIGN.md, Components): a host that is its part
    (tabs, a long text's fold, a copyable id, the splitter, a banner) takes that part's box; a
-   host around a part (a menu, a confirmation, a conversation, a setting) gives it none, so the
-   part lays out as if the host were not there. A control that needs script waits for its
-   component (`.needs-js`), so a page without script never shows a button that does nothing. */
+   host around a part (a menu, a confirmation, a conversation, a list's find) gives it none, so
+   the part lays out as if the host were not there. */
 sluice-tabs, sluice-fold, sluice-banner { display: block; }
 sluice-banner[hidden] { display: none; }
 sluice-fold:has(> details) { display: contents; }
 sluice-fold[hidden] { display: none; }
-sluice-drawer, sluice-menu, sluice-confirm, sluice-conversation, sluice-composer, sluice-answer,
-sluice-toggle, sluice-search { display: contents; }
-:not(:defined) .needs-js, :not(:defined).needs-js { display: none !important; }
-@media (scripting: none) { .needs-js { display: none !important; } }
+sluice-drawer, sluice-menu, sluice-confirm, sluice-conversation, sluice-answer,
+sluice-search { display: contents; }
 sluice-copy { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%;
               vertical-align: baseline; }
 sluice-copy > code { min-width: 0; overflow-wrap: anywhere; }
@@ -1240,6 +1229,8 @@ article#step-detail { display: flow-root; }  /* its head's margins stay its own 
 .d-from { margin: -4px 0 8px; }
 /* outputs a run before the one going now set: said so, and set back in muted ink */
 .d-key.is-earlier dl.fields { color: var(--ink-muted); }
+/* a running step under Now: its brief (its prompt's opening; Inputs holds it whole) and what it has set so far */
+.brief-text { max-width: var(--measure); overflow-wrap: anywhere; }
 /* what it waits on and comes after: steps as links, each led by its glyph */
 .wait-list > p + p, .d-waits .d-ready + .wait-list { margin-top: 6px; }
 .d-waits p { overflow-wrap: anywhere; }
@@ -1262,6 +1253,27 @@ article#step-detail { display: flow-root; }  /* its head's margins stay its own 
           background: color-mix(in srgb, var(--sand-ink) 9%, var(--paper-raised)); }
 .notice p { margin: 0; max-width: var(--measure); overflow-wrap: anywhere; }
 .notice-i { flex: none; margin-top: 2px; color: var(--sand-ink); }
+/* what a form's write said (views::write), last in the form: nothing until it says something;
+   a refusal is a notice, a status quiet words */
+.form-said:empty { display: none; }
+.form-said { margin: 6px 0 0; color: var(--ink-muted); font-size: 13px; overflow-wrap: anywhere; white-space: pre-line; }
+.form-said[role=alert] { display: block; margin: 8px 0 0; padding: 8px 12px; color: var(--ink);
+  border-radius: var(--radius-cell);
+  border: 1px solid color-mix(in oklch, var(--sand-ink) 55%, transparent);
+  background: color-mix(in srgb, var(--sand-ink) 9%, var(--paper-raised)); max-width: var(--measure); }
+.form-said[role=alert]:empty { display: none; }
+/* a write in flight (Datastar's data-indicator, as aria-busy): its buttons wait, a quiet ring
+   turning on the one that sent it, never moving what is beside it */
+form[aria-busy=true] button { cursor: progress; }
+form[aria-busy=true] button[type=submit]:focus, form[aria-busy=true] button:not([type]):focus {
+  position: relative; color: transparent; }
+form[aria-busy=true] button[type=submit]:focus::after, form[aria-busy=true] button:not([type]):focus::after {
+  content: ""; position: absolute; inset: 0; margin: auto; width: 14px; height: 14px;
+  border: 2px solid var(--ink-muted); border-right-color: transparent; border-radius: 50%;
+  animation: spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  form[aria-busy=true] button:focus::after { animation: none; border-right-color: var(--ink-muted); opacity: .6; }
+}
 .a-id { font-size: 12px; color: var(--ink-muted); border: 0; background: none; padding: 0; }
 .d-sec-h { display: flex; align-items: baseline; gap: 12px;
            margin-bottom: 10px; }
@@ -1521,7 +1533,6 @@ details.m-many[open] > .m-all { display: flex; flex-wrap: wrap; gap: 2px 14px; m
 .composer-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
                 gap: 8px 14px; }
 .composer label.check { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; min-height: 44px; }
-.composer .ou-status:empty { display: none; }
 /* a question on the questions list: where it was asked, then the one-message conversation */
 .item.q > .q-where { margin: 0; }
 .item.q > .q-where a { color: inherit; text-underline-offset: var(--link-offset);
@@ -1654,7 +1665,6 @@ table.log .kind { font: 12px var(--font-mono); white-space: nowrap;
 .picker { font-size: 13.5px; color: var(--ink-muted); display: flex; gap: 8px; align-items: center; }
 .picker label { display: inline-flex; gap: 8px; align-items: center; }
 .picker select { min-height: 38px; max-width: 60vw; }
-.picker .apply { min-height: 38px; }
 .fn-find { position: relative; display: flex; align-items: center; flex: 1 1 240px; max-width: 420px; }
 .fn-find[hidden] { display: none; }
 .fn-find .q-icon { position: absolute; left: 10px; color: var(--ink-muted); pointer-events: none; }
@@ -1686,7 +1696,7 @@ p.fn-none { margin: 0 0 16px; }
 .fn-head .pill { margin-left: 8px; vertical-align: 1px; }
 .fn.problem .err { color: var(--ink); font-weight: var(--w-regular); }
 @container frame (max-width: 639.98px) {
-  .picker select, .picker .apply, #functions .fn-find input { min-height: 44px; height: 44px; }
+  .picker select, #functions .fn-find input { min-height: 44px; height: 44px; }
   .fn-index a { min-height: 44px; }
 }
 article.item { background: var(--paper-raised); border: 1px solid var(--rule-faint);
@@ -2075,12 +2085,12 @@ button.q-toggle.primary[aria-expanded="true"]:hover {
 .stopped-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
                 gap: 8px 16px; }
 .stopped-head h2 { margin: 0; }
-/* Shared confirmation, inline without script and modal with it. */
+/* Shared confirmation: its opener, and its form in the page's one dialog (`sluice-dialog`). */
 .confirm-flow > summary { display: inline-flex; align-items: center; min-height: 32px;
   padding: 5px 12px; border: 1px solid var(--rule); border-radius: var(--radius-control);
   background: var(--paper-raised); cursor: pointer; list-style: none; font-weight: var(--w-regular); }
 .confirm-flow > summary::-webkit-details-marker { display: none; }
-.confirm-flow > summary:is([data-disabled], [aria-disabled="true"]) { pointer-events: none; opacity: .5; }
+.confirm-flow > summary[aria-disabled="true"] { pointer-events: none; opacity: .5; }
 .confirm-flow > form { padding: 16px; background: var(--paper-raised); border: 1px solid var(--rule-faint);
   border-radius: var(--radius-cell); margin-top: 8px; }
 .confirmation { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px);
@@ -2233,6 +2243,11 @@ details.read-today .item { opacity: .85; }
 .pb-count { font-variant-numeric: tabular-nums; }
 .pb-grow { flex: 1; }
 .pb-note { margin: 0; }
+/* At work's ⓘ: how to read a track, the Details popover's look, opening rightward */
+.pb-info { position: relative; align-self: center; margin: -6px 0; }
+.pb-info .dm-p p { margin: 0; max-width: 46ch; }
+.pb-info .dm-p p + p { margin-top: 6px; }
+@media (min-width: 760.02px) { .pb-info .dm-p { left: 0; right: auto; } }
 .pb-sec > .pb-note a { color: inherit; }
 .plan-sheet .nd-form { display: contents; }
 
@@ -2452,8 +2467,7 @@ details.read-today .item { opacity: .85; }
    From 1280px a project page with a board sets, on the frame's fluid column: the plan (at least --plan-min) | the splitter | the
    board (--board-w; the splitter sets it per project, within 320px and the lesser of 65% of
    the page and what leaves the plan its least). The Plan · Both · Board switch shows one or
-   both; below 1280px it is Plan · Board, one at a time; without script both show, one after
-   the other below 1280px, and there is no switch and no splitter. With the step drawer open
+   both; below 1280px it is Plan · Board, one at a time. With the step drawer open
    the drawer takes the side. Each pane is a size container (`plan`, `board`): what is in
    them keys off the pane, never the window. =================================================== */
 :root {
@@ -2520,7 +2534,6 @@ sluice-board { display: block; }
 .board-tools .q-clear:hover { color: var(--ink); background: var(--paper-2); }
 .board-tools .q-field:has(input:placeholder-shown) .q-clear { display: none; }
 /* a form of filters applies as it changes while its sluice-search runs: no Apply then */
-sluice-search:defined .apply { display: none; }
 .match-note { margin: calc(-1 * var(--space-xs)) 0 var(--space-md); }
 .match-note:empty { display: none; }
 /* a focused board (a step's chain, a recipe's units): what it shows and the way back */
@@ -2709,8 +2722,6 @@ html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane { display: 
 .ou-error-box .eb-icon { flex: none; margin-top: 1px; color: var(--sand-ink); }
 .ou-error-box b { font-weight: var(--w-strong); }
 .ou-error-box p { margin: 2px 0 0; font-family: var(--font-mono); font-size: 12px; }
-.board-status { margin-top: 10px; }
-.board-status:empty { display: none; }
 
 /* ==== page shell, continued: the board's parts in a narrow board (after the parts' own rules,
    which these refine) ========================================================================= */
@@ -2770,11 +2781,6 @@ p.wait-runner .icon { flex: none; margin-top: 2px; }
 p.d-ready { display: flex; align-items: flex-start; gap: 6px; margin: 4px 0 12px; }
 p.d-ready .g { flex: none; }
 details.gates > summary { margin-top: 0; font-size: 14px; color: var(--ink); }
-/* a read mark that did not go through: one quiet line at the top of the notes */
-.read-status { margin: 4px 0 10px; }
-.read-status .link-button { padding: 0; border: 0; background: none; color: var(--ink);
-                            font: inherit; text-decoration: underline; text-underline-offset: var(--link-offset);
-                            cursor: pointer; }
 /* the inputs that are undocumented on/off switches: one quiet line under the fields */
 .f-switches { margin: 8px 0 0; max-width: var(--measure); }
 .f-switch { white-space: nowrap; }
@@ -2988,8 +2994,12 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: var(
 .tt-count { margin-top: 3px; font-size: 11.5px; color: var(--ink-muted); }
 .tt-c { min-width: 0; }
 .tt-pname { display: none; }
-.tt-runs { list-style: none; margin: 0; padding: 0; }
-.tt-many { columns: 300px; column-gap: var(--col-gap); }
+/* an hour's runs flow into columns as wide as the frame allows (a line is at most 480px) */
+.tt-runs { list-style: none; margin: 0; padding: 0; columns: 400px; column-gap: var(--col-gap); }
+/* hours in which nothing started: one line, "03–14 · nothing ran" */
+.tt-gap { align-items: baseline; }
+.tt-gap .tt-hour { white-space: nowrap; }
+.tt-none { grid-column: 2 / -1; font-size: 13px; color: var(--ink-muted); }
 /* a run's line: its minute, its name (two lines at most) and its outcome, each in a column of
    its own, so the outcome never drops under the name nor the minute over it */
 .tt-run { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline;
@@ -3031,6 +3041,8 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: var(
   .tt-wide .tt-head { display: none; }
   .tt-wide .tt-row { grid-template-columns: 52px minmax(0, 1fr); row-gap: 10px; }
   .tt-wide .tt-h { grid-row: span var(--n); }
+  .tt-wide .tt-gap { grid-template-columns: auto minmax(0, 1fr); }
+  .tt-wide .tt-gap .tt-h { grid-row: auto; }
   .tt-wide .tt-c { grid-column: 2; }
   .tt-wide .tt-c:not(:has(.tt-runs, .tt-quick)) { display: none; }
   .tt-wide .tt-pname { display: block; font-size: 12.5px; font-weight: var(--w-strong); }
@@ -3044,8 +3056,9 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: var(
   .tt-h { grid-row: span var(--n); }
   .tt-c { grid-column: 2; }
   .tt-c:not(:has(.tt-runs, .tt-quick)) { display: none; }
+  .tt-gap { grid-template-columns: auto minmax(0, 1fr); }
+  .tt-gap .tt-h { grid-row: auto; }
   .tt-pname { display: block; font-size: 12.5px; font-weight: var(--w-strong); }
-  .tt-many { columns: auto; }
   .tt-run { min-height: 44px; align-content: center; }
   .tt-more > summary { min-height: 44px; display: flex; align-items: center; }
 }
@@ -3248,7 +3261,6 @@ main { container: frame / inline-size; }
 .logpage sluice-search { flex: 1 1 520px; min-width: 0; }
 .logpage form.filters { margin: 0; gap: 10px 18px; font-size: 13.5px; }
 .logpage form.filters label.field input { height: 38px; width: 13rem; max-width: 100%; }
-.logpage form.filters .apply { min-height: 38px; }
 .logpage details.kinds > summary { min-height: 38px; border: 0; box-shadow: inset 0 0 0 1px var(--rule); }
 .logpage .log-note, .logpage .log-unit { margin: 0 0 18px; font-size: 13px; }
 .log-records .sec-h { margin-bottom: 4px; }
@@ -3267,7 +3279,7 @@ main { container: frame / inline-size; }
 @container frame (max-width: 639.98px) {
   .logpage form.filters label.field { flex: 1 1 100%; }
   .logpage form.filters label.field input { flex: 1; width: auto; height: 44px; }
-  .logpage form.filters .apply, .logpage details.kinds > summary { min-height: 44px; }
+  .logpage details.kinds > summary { min-height: 44px; }
   .logpage table.log td.kind { white-space: normal; overflow-wrap: anywhere; }
   .logpage .pager a { min-height: 44px; }
 }
@@ -3314,13 +3326,8 @@ main { container: frame / inline-size; }
 .setting-error { color: var(--ink); font-weight: var(--w-strong); font-size: 14px; margin: 8px 0; overflow-wrap: anywhere; }
 .setting-error::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px;
                          background: var(--sand-ink); vertical-align: 0; }
-.setting-saved { color: var(--sky-ink); font-size: 13px; font-weight: var(--w-strong); }
-.settings-feedback { min-height: 1.3em; min-width: 0; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
 .board-feedback { white-space: pre-line; }
 /* another author changed this field since the form was drawn: said beside it, on the sand */
-.setting-changed { margin: 8px 0 0; padding: 6px 10px; font-size: 13px; line-height: 18px;
-                   background: var(--sand-pale); color: var(--ink); }
-.setting-changed .link-button { min-height: 24px; color: inherit; }
 .settings-preview { padding: 12px 16px; margin-top: 12px; background: var(--paper-2); overflow-wrap: anywhere; }
 .settings-preview pre, .settings-preview table { max-width: 100%; overflow: auto; display: block; }
 .settings-preview table.ou-table { display: table; }
@@ -3334,28 +3341,27 @@ main { container: frame / inline-size; }
 .setting-unit { display: flex; align-items: center; gap: 8px; }
 .settings-page .setting-unit input:not([type=hidden]) { width: 9rem; flex: none; }
 .setting-unit span { font-size: 14px; color: var(--ink-muted); }
-/* the icon's file input: its button in the page's button look, its file name quiet beside it */
-.settings-page input[type=file] { padding: 0; border: 0; background: none; box-shadow: none; font-size: 13px;
-                                  color: var(--ink-muted); max-width: 100%; }
-.settings-page input[type=file]::file-selector-button { margin-right: 10px; min-height: 40px; padding: 0 14px;
-  border: 0; box-shadow: inset 0 0 0 1.5px var(--navy); background: none; color: var(--ink);
+/* the icon: its image, its letters and the image to upload in a pill, the file's name in it
+   once one is chosen (the input itself is read by the label, visually hidden) */
+.icon-field { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.settings-page .icon-field > input { flex: 1 1 12rem; width: auto; }
+.settings-page label.file-pill { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 40px;
+  padding: 0 14px; border-radius: 999px; box-shadow: inset 0 0 0 1.5px var(--navy); color: var(--ink);
   font: var(--w-strong) 14px var(--font-text); cursor: pointer; }
-.settings-page input[type=file]::file-selector-button:hover { background: color-mix(in oklch, var(--navy) 8%, transparent); }
+.file-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-pill:hover { background: color-mix(in oklch, var(--navy) 8%, transparent); }
+.file-pill:has(input:focus-visible) { outline: var(--focus-width) solid var(--focus); outline-offset: var(--focus-offset); }
 /* a capacity: a whole number, or the fn that reports it */
 .cap-choice { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; min-width: 0; }
 .cap-opt { display: grid; grid-template-columns: 8.5rem minmax(0, 16rem); align-items: center; gap: 6px 12px; }
 .settings-page .cap-opt label { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink); }
 .settings-page .cap-opt input[type=radio] { width: auto; min-height: 0; margin: 0; }
 .cap-opt select { min-height: 40px; min-width: 0; }
-.cap-remove { margin-top: 4px; display: flex; align-items: center; gap: 8px; }
+.cap-remove { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
 :is(.cap-remove, .board-clear) .confirm-flow > summary { min-height: 32px; padding: 0; border: 0; background: none;
   color: var(--ink-muted); text-decoration: underline; text-underline-offset: var(--link-offset); font-size: 13px; font-weight: 400; }
 :is(.cap-remove, .board-clear) .confirm-flow > summary:hover { color: var(--ink); }
 .board-clear { margin-top: 2px; }
-.settings-page .link-button { min-height: 32px; padding: 0; border: 0; background: none; box-shadow: none;
-                              color: var(--ink-muted); text-decoration: underline; text-underline-offset: var(--link-offset);
-                              font-size: 13px; font-weight: 400; }
-.settings-page .link-button:hover { color: var(--ink); }
 .resource-list { padding: 0; list-style: none; }
 /* the project's sessions, each its @name and when it was last seen, on one line while they fit */
 .sessions { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 0; padding: 0; list-style: none;
@@ -3370,7 +3376,7 @@ main { container: frame / inline-size; }
 .board-preview { background: var(--paper-raised); box-shadow: inset 0 0 0 1px var(--rule-faint);
                  max-width: calc(var(--board-w, 760px) + 34px); }
 .board-preview .board-ui { overflow-wrap: break-word; }
-.board-preview .board-status { display: none; }
+.board-preview .form-said { display: none; }
 #board-settings h3 { margin: 24px 0 0; font-size: 15px; line-height: 22px; }
 .doc-view { max-width: var(--measure); overflow-wrap: anywhere; }
 .doc-view :is(h4, h5, h6) { margin: 16px 0 4px; font-family: var(--font-text); font-weight: var(--w-strong); }
@@ -3381,7 +3387,6 @@ main { container: frame / inline-size; }
 .settings-switch { display: flex; justify-content: space-between; gap: 16px; align-items: center;
                    max-width: 78ch; border-top: 1px solid var(--rule); padding: 14px 0; }
 .settings-switch:last-of-type { border-bottom: 1px solid var(--rule); }
-.settings-switch .settings-feedback:empty { display: none; }
 .settings-switch p { margin: 0; }
 .settings-switch > div > p:first-child { font-weight: var(--w-strong); }
 .settings-switch button { display: flex; align-items: center; gap: 10px; flex: none; }
@@ -3404,13 +3409,12 @@ main { container: frame / inline-size; }
   .settings-index a { min-height: 44px; border: 0; white-space: nowrap; }
   .setting-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .setting-row dt, #sessions dd { padding: 0; }
-  .settings-page button, .settings-page input:not([type=hidden]), .settings-page .link-button,
-  :is(.cap-remove, .board-clear) .confirm-flow > summary { min-height: 44px; }
+  .settings-page button, .settings-page input:not([type=hidden]),
+  :is(.cap-remove, .board-clear) .confirm-flow > summary, .settings-page label.file-pill { min-height: 44px; }
   .settings-switch { flex-wrap: wrap; }
   .cap-opt { grid-template-columns: minmax(0, 1fr); }
   .settings-page .cap-opt input[type=radio] { min-height: 0; }
   .settings-page section.settings-danger { padding: 0 12px 16px; }
-  .setting-changed .link-button { min-height: 44px; }
 }
 
 /* ---- history (`templates/history.html`): every thread with the owner, a module each on the

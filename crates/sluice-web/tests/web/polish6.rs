@@ -161,7 +161,6 @@ async fn slow_chromium_a_code_block_keeps_its_lines_and_the_keys_find_and_move()
         browser
             .wait(&format!("location.pathname === '/projects/id/{id}' && document.activeElement?.matches('input[data-find]')"))
             .unwrap();
-        assert_eq!(browser.eval("location.hash").unwrap(), json!(""));
 
         // `]` and `[` move the drawer through the plan's steps, in its order as drawn
         browser.navigate(&format!("{base}#step:l1-work")).unwrap();
@@ -285,7 +284,7 @@ async fn ready_work_repeated_failure_and_answered_questions() {
         // reading why; the band keeps a plain Retry and no box of its own
         let why = between(&page, "<p class=\"err-next\">", "</form>");
         assert!(
-        why.contains("<form class=\"err-retry\" method=\"post\"")
+        why.contains("class=\"err-retry\" method=\"post\"")
             && why.contains("<label for=\"why-feedback\">Feedback for its next run</label>")
             && why.contains("<button name=\"action\" value=\"retry\" class=\"primary\">Retry with this feedback</button>"),
         "{why}"

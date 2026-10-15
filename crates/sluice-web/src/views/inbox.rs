@@ -329,75 +329,52 @@ async fn mutate(
         state.commands.command(command).await
     }
     .await;
-    match result {
-        Ok(reply) => {
-            if headers
-                .get(header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|v| v.starts_with("application/json"))
-            {
-                axum::Json(reply).into_response()
-            } else {
-                axum::response::Redirect::to(&back(&headers, project, reply_to)).into_response()
-            }
-        }
-        Err(error) => error_response(error),
-    }
-}
-/// Where a form's post goes back to without script: the page it was sent from (the
-/// `Referer`'s path, on this server), where the answer now shows: on the inbox in the question's
-/// place ("Answered 1m ago: …"), on a thread under its question. A page that does not say goes to
-/// the question's project history.
-fn back(headers: &HeaderMap, project: ProjectId, reply_to: Option<MessageId>) -> String {
-    let from = headers
-        .get(header::REFERER)
+    // a question's OpenUI form (`openui.js`) sends JSON and reads the reply; a page's form posts
+    // through Datastar (`views::write`), the stream then drawing the answer or the message
+    let json = headers
+        .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .and_then(|r| r.split_once("://"))
-        .and_then(|(_, rest)| rest.find('/').map(|i| &rest[i..]))
-        .map(|path| path.split('#').next().unwrap_or(path))
-        .filter(|p| p.starts_with('/') && !p.starts_with("//") && !p.contains('\\'));
-    match (from, reply_to) {
-        (Some(path), Some(id)) if path.split('?').next().is_some_and(|p| {
-            p.ends_with("/inbox") || p.ends_with("/questions")
-        }) =>
-        {
-            format!("{path}#item-{project}-{}", id.0)
-        }
-        (Some(path), _) => path.to_owned(),
-        (None, _) => format!("/projects/id/{project}/history"),
+        .is_some_and(|v| v.starts_with("application/json"));
+    match (result, json) {
+        (Ok(reply), true) => axum::Json(reply).into_response(),
+        (Err(error), true) => error_response(error),
+        (Ok(_), false) if reply_to.is_none() => super::write::sent(&headers, "Sent."),
+        (Ok(_), false) => super::write::done(&headers),
+        (Err(error), false) => super::write::failed(&headers, error),
     }
 }
 /// Close several questions at once (the inbox's "Close all n" for the questions nobody is
-/// waiting on): each `m` is `<project>/<message>`; then back to `next`. Each close is the
-/// owner's reply with the action `close`, as a question's own Close is.
-async fn close_many(State(state): State<MessageState>, body: Bytes) -> Response {
-    let mut next = "/inbox".to_owned();
+/// waiting on): each `m` is `<project>/<message>`. Each close is the owner's reply with the
+/// action `close`, as a question's own Close is.
+async fn close_many(
+    State(state): State<MessageState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let mut targets = vec![];
-    for (key, value) in url::form_urlencoded::parse(&body) {
-        match key.as_ref() {
-            "next" if value.starts_with('/') && !value.starts_with("//") && !value.contains('\\') => {
-                next = value.into_owned()
+    for (_, value) in url::form_urlencoded::parse(&body).filter(|(key, _)| key == "m") {
+        let parsed = value
+            .split_once('/')
+            .and_then(|(p, m)| Some((p.parse::<ProjectId>().ok()?, m.parse::<i64>().ok()?)));
+        match parsed {
+            Some(target) => targets.push(target),
+            None => {
+                return super::write::failed(
+                    &headers,
+                    PublicError::BadRequest {
+                        message: format!("not a question: {value}"),
+                    },
+                );
             }
-            "m" => {
-                let parsed = value.split_once('/').and_then(|(p, m)| {
-                    Some((p.parse::<ProjectId>().ok()?, m.parse::<i64>().ok()?))
-                });
-                match parsed {
-                    Some(target) => targets.push(target),
-                    None => {
-                        return error_response(PublicError::BadRequest {
-                            message: format!("not a question: {value}"),
-                        });
-                    }
-                }
-            }
-            _ => {}
         }
     }
     if targets.is_empty() || targets.len() > 500 {
-        return error_response(PublicError::BadRequest {
-            message: "name between 1 and 500 questions to close".into(),
-        });
+        return super::write::failed(
+            &headers,
+            PublicError::BadRequest {
+                message: "name between 1 and 500 questions to close".into(),
+            },
+        );
     }
     let mut failed = vec![];
     for (project, message) in targets {
@@ -423,12 +400,15 @@ async fn close_many(State(state): State<MessageState>, body: Bytes) -> Response 
         }
     }
     if failed.is_empty() {
-        axum::response::Redirect::to(&next).into_response()
+        super::write::done(&headers)
     } else {
-        error_response(PublicError::Conflict {
-            message: format!("could not close {}", failed.join("; ")),
-            current_rev: None,
-        })
+        super::write::failed(
+            &headers,
+            PublicError::Conflict {
+                message: format!("could not close {}", failed.join("; ")),
+                current_rev: None,
+            },
+        )
     }
 }
 #[derive(Deserialize)]
@@ -437,15 +417,20 @@ struct ReadBody {
     thread: String,
     through: i64,
 }
+/// A note's Mark read (`ui::mark_read`): its thread read through the watermark its page drew.
 async fn mark_read(
     State(state): State<MessageState>,
     Path(project): Path<ProjectId>,
-    axum::Json(body): axum::Json<ReadBody>,
+    headers: HeaderMap,
+    axum::Form(body): axum::Form<ReadBody>,
 ) -> Response {
     if body.through < 0 {
-        return error_response(PublicError::BadRequest {
-            message: "read watermark must be nonnegative".into(),
-        });
+        return super::write::failed(
+            &headers,
+            PublicError::BadRequest {
+                message: "read watermark must be nonnegative".into(),
+            },
+        );
     }
     match state
         .commands
@@ -457,8 +442,8 @@ async fn mark_read(
         }))
         .await
     {
-        Ok(reply) => axum::Json(reply).into_response(),
-        Err(error) => error_response(error),
+        Ok(_) => super::write::done(&headers),
+        Err(error) => super::write::failed(&headers, error),
     }
 }
 

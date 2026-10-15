@@ -2,9 +2,10 @@
 // in it (`views::ui::rocket`); each is a Rocket component in light DOM whose `setup` only
 // enhances what the server drew: listeners, observers, keyboard handling and state kept in the
 // host's own attributes, which a stream patch leaves as they are (`data-preserve-attr`). None
-// draws content of its own, so a page reads whole without script, a patch morphs server HTML
-// into server HTML, and a screen reader hears what the server wrote. The only text written here
-// is chrome with no meaning without script (a status after a send, "Copied").
+// draws content of its own: a patch morphs server HTML into server HTML, and a screen reader
+// hears what the server wrote. What Datastar does itself (writes, signals, folds and toggles,
+// the streams) is Datastar's, in the markup; what is here is what it does not (DESIGN.md,
+// Custom script).
 //
 // The board and the drawer are `sluice.js`'s; the clock and the tab title `nav.js`'s. Adapted,
 // not depended on: the tabs' keyboard model is github/tab-container-element's and basecoat's
@@ -23,9 +24,16 @@ function listening(cleanup) {
 const plainClick = (event) => event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
 const reduced = matchMedia("(prefers-reduced-motion: reduce)");
 const smooth = () => (reduced.matches ? "auto" : "smooth");
-// a request that never reached sluice reads in our words, not the browser's ("Failed to fetch")
-const unreached = (error) =>
-  error instanceof TypeError ? "Sluice did not answer: is it running? Try again in a moment." : error.message;
+// A write that never reached sluice says so in its form's notice (`views::write`): sluice
+// cannot, and Datastar ends the request without a word (its `datastar-fetch` events).
+document.addEventListener("datastar-fetch", (event) => {
+  const { type, el } = event.detail;
+  if ((type !== "error" && type !== "retries-failed") || !(el instanceof HTMLFormElement)) return;
+  const said = el.id && document.getElementById(`${el.id}-said`);
+  if (!said) return;
+  said.setAttribute("role", "alert");
+  said.textContent = "Sluice did not answer: is it running? Try again in a moment.";
+});
 const store = {
   get(key) { try { return localStorage.getItem(key); } catch { return null; } },
   set(key, value) {
@@ -33,74 +41,19 @@ const store = {
   },
 };
 
-// Owner action forms include ones moved into the shared confirmation dialog. Delegate on
-// the document so streamed replacements and moved forms keep the same enhancement.
-const postingActions = new WeakSet();
-document.addEventListener("submit", async (event) => {
-  const form = event.target;
-  if (!(form instanceof HTMLFormElement) || form.method !== "post") return;
-  const url = new URL(form.getAttribute("action"), location.href);
-  if (url.origin !== location.origin
-      || !/^\/projects\/id\/[^/]+\/(steps\/[^/]+\/actions|needs)$/.test(url.pathname)) return;
-  event.preventDefault();
-  if (postingActions.has(form)) return;
-  postingActions.add(form);
-  const data = new FormData(form, event.submitter);
-  const button = event.submitter ?? form.querySelector("button");
-  const dialog = form.closest("dialog");
-  const next = new URL(data.get("next") || location.href, location.href);
-  const focusId = next.pathname === location.pathname
-    && /^(undo-|s-|n-)/.test(next.hash.slice(1)) ? decodeURIComponent(next.hash.slice(1)) : "";
-  const scroll = { left: scrollX, top: scrollY };
-  let observer, timer;
-  const stop = () => { observer?.disconnect(); clearTimeout(timer); };
-  if (focusId) {
-    observer = new MutationObserver(() => {
-      const target = document.getElementById(focusId);
-      if (!target) return;
-      stop();
-      target.focus({ preventScroll: true });
-      window.scrollTo(scroll);
-    });
-    observer.observe(document.getElementById("project-board") ?? document.body, { childList: true, subtree: true });
-    timer = setTimeout(stop, 10000);
-  }
-  form.querySelector(".action-notice")?.remove();
-  if (button) button.disabled = true;
-  try {
-    const response = await fetch(url, { method: "POST", headers: { accept: "application/json" }, redirect: "manual", body: new URLSearchParams(data) });
-    if (!response.ok && response.type !== "opaqueredirect") {
-      const text = await response.text();
-      let message = text;
-      try { message = JSON.parse(text).message ?? text; } catch { /* a text refusal */ }
-      throw new Error(message || "Sluice did not take the action.");
-    }
-    if (dialog?.open) dialog.close();
-  } catch (error) {
-    stop();
-    const notice = Object.assign(document.createElement("div"), { className: "notice action-notice", role: "alert" });
-    notice.append(Object.assign(document.createElement("p"), { textContent: unreached(error) }));
-    form.append(notice);
-  } finally {
-    if (button) button.disabled = false;
-    postingActions.delete(form);
-  }
-});
-
 // ---- sluice-tabs -------------------------------------------------------------------------------
 // An ARIA tablist (`[role=tab][data-tab]` in its `.tabs`) over its `.tp[data-tab]` panels. The
 // choice is `$$tab`, reflected into the host's `current` (kept through a patch), the chosen
 // tab's aria-selected and tabindex and its panel's `data-chosen` (the stylesheet hides the rest
 // while script runs); also the page's `tab` signal, which the step's stream reads when it
-// connects, and with `url` the address's `?tab=` (replaceState: no history entry per click). A
-// patch that draws a new tab or panel is brought in line at once. An anchor to something in a
+// connects. A patch that draws a new tab or panel is brought in line at once. An anchor to something in a
 // panel (`#run-3`, a failing call, `#message-12`, `#activity`) opens its tab on it; in the
 // drawer, whose hash is the open step's (`#step:<id>`), such a link never changes the address.
 define("sluice-tabs", {
-  props: ({ string, bool }) => ({ current: string, url: bool }),
+  props: ({ string }) => ({ current: string }),
   manifest: {
     slots: [{ name: "tabs", description: "The server's .tabs[role=tablist] of [role=tab][data-tab] buttons." },
-            { name: "panels", description: "Its .tp[data-tab] sections, each under its own head (stacked without script)." }],
+            { name: "panels", description: "Its .tp[data-tab] sections, each under its own head." }],
     events: [{ name: "sluice-tab", description: "A tab was chosen; detail.key is its key." }],
   },
   setup({ host, props, $$, effect, observeProps, cleanup }) {
@@ -145,12 +98,6 @@ define("sluice-tabs", {
       tab?.scrollIntoView({ block: "nearest", inline: "nearest" });
       if (focus) tab?.focus();
       try { mergePatch({ tab: key }); } catch { /* no signals on this page */ }
-      if (props.url) {
-        const url = new URL(location.href);
-        if (key === tabs()[0]?.dataset.tab) url.searchParams.delete("tab");
-        else url.searchParams.set("tab", key);
-        if (url.href !== location.href) history.replaceState(history.state, "", url);
-      }
       host.dispatchEvent(new CustomEvent("sluice-tab", { bubbles: true, detail: { key } }));
     };
     on(host, "click", (event) => {
@@ -297,38 +244,32 @@ define("sluice-fold", {
 // straddles the patch. Its summary opens the page's one `<dialog id="confirmation">` instead,
 // titled `heading` (with `ref-id` after it in data mono), the form moved into it while it is
 // open; focus starts on the keep button, stays in the dialog and goes back to the opener. While
-// `disabled` it does nothing. Without script the details open the same form inline.
+// its summary is `aria-disabled="true"` (drawn by the server, so a patch keeps it current) it
+// does nothing.
 let confirming = null;
+// form `from` (and its notice, `<id>-said`) under id `to`
+const rename = (form, from, to) => {
+  const said = form.querySelector(`[id="${from}-said"]`);
+  if (said) said.id = `${to}-said`;
+  form.id = to;
+};
 define("sluice-confirm", {
-  props: ({ string, bool }) => ({ heading: string, refId: string, disabled: bool }),
+  props: ({ string }) => ({ heading: string, refId: string }),
   manifest: {
     slots: [{ name: "summary", description: "The opener: details.confirm-flow > summary." },
             { name: "form", description: "What is confirmed: its .confirm-copy, its fields, a primary or danger button and [data-keep]." }],
     events: [{ name: "sluice-confirm-open", description: "Its dialog opened." },
              { name: "sluice-confirm-close", description: "Its dialog closed; its form is back in its details." }],
   },
-  setup({ host, props, observeProps, cleanup }) {
+  setup({ host, props, cleanup }) {
     const on = listening(cleanup);
     const dialog = document.querySelector("#confirmation");
-    const summary = () => host.querySelector(":scope > details.confirm-flow > summary");
-    const mark = () => {
-      const s = summary();
-      const value = String(Boolean(props.disabled));
-      if (s && s.getAttribute("aria-disabled") !== value) s.setAttribute("aria-disabled", value);
-    };
-    observeProps(mark, "disabled");
-    mark();
     on(host, "click", (event) => {
       const s = event.target.closest?.("details.confirm-flow > summary");
-      if (s) {
-        if (!dialog) return;
-        event.preventDefault();
-        if (props.disabled || dialog.open) return;
-        open(s);
-        return;
-      }
-      // keep, inline (no dialog): fold the form away
-      if (event.target.closest?.("[data-keep]")) host.querySelector(":scope > details.confirm-flow").open = false;
+      if (!s || !dialog) return;
+      event.preventDefault();
+      if (s.getAttribute("aria-disabled") === "true" || dialog.open) return;
+      open(s);
     });
     const open = (opener) => {
       const flow = opener.parentElement;
@@ -336,7 +277,11 @@ define("sluice-confirm", {
       if (!form) return;
       const place = document.createComment("confirmation form");
       form.replaceWith(place);
-      confirming = { host, form, place, flow, opener, heading: props.heading };
+      // while it is in the dialog the form answers as `confirming`: a patch may draw the details
+      // a new form under its own id, and a write's answer finds its notice by id
+      const id = form.id;
+      rename(form, id, "confirming");
+      confirming = { host, form, id, place, flow, opener, heading: props.heading };
       const head = dialog.querySelector("#confirmation-title");
       head.textContent = props.heading;
       if (props.refId) {
@@ -353,93 +298,65 @@ define("sluice-confirm", {
     };
   },
 });
-// the one dialog's own behaviour: keep closes it, Tab stays in it, closing puts the form back
-{
-  const dialog = document.querySelector("#confirmation");
-  dialog?.addEventListener("close", () => {
-    if (!confirming) return;
-    const { host, form, place, flow, opener, heading } = confirming;
-    confirming = null;
-    form.querySelector(".confirm-copy")?.removeAttribute("id");
-    // a patch while it was open may have drawn the details a new form: keep that one
-    if (place.isConnected && !flow.querySelector(":scope > form")) place.replaceWith(form);
-    else { place.remove(); form.remove(); }
-    const back = opener.isConnected ? opener
-      : [...document.querySelectorAll("sluice-confirm")].find((c) => c.heading === heading)?.querySelector("details.confirm-flow > summary");
-    // an opener in a menu the dialog closed: back onto the menu's own summary
-    let to = back;
-    while (to && !(to.checkVisibility?.() ?? true)) {
-      to = to.closest("details")?.parentElement?.closest("details")?.querySelector(":scope > summary");
-    }
-    to?.focus();
-    host.dispatchEvent(new CustomEvent("sluice-confirm-close", { bubbles: true }));
-  });
-  dialog?.addEventListener("click", (event) => {
-    if (event.target.closest?.("[data-keep]")) dialog.close();
-  });
-  dialog?.addEventListener("keydown", (event) => {
-    if (event.key !== "Tab") return;
-    const controls = [...dialog.querySelectorAll("button:not(:disabled), textarea, input:not([type=hidden])")];
-    const first = controls[0], last = controls.at(-1);
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-  });
-}
+// ---- sluice-dialog -----------------------------------------------------------------------------
+// The page's one confirmation dialog: keep closes it, Tab stays in it, closing puts the form back
+// in its details and the focus on its opener. It is a component so that a form moved into it is
+// inside a Rocket host, where Rocket finds the action (`@post`) its submit calls.
+define("sluice-dialog", {
+  props: () => ({}),
+  manifest: {
+    slots: [{ name: "dialog", description: "dialog#confirmation: its #confirmation-title and #confirmation-body." }],
+    events: [],
+  },
+  setup({ host, cleanup }) {
+    const on = listening(cleanup);
+    const dialog = host.querySelector(":scope > dialog");
+    on(dialog, "close", () => {
+      if (!confirming) return;
+      const { host, form, id, place, flow, opener, heading } = confirming;
+      confirming = null;
+      rename(form, "confirming", id);
+      form.querySelector(".confirm-copy")?.removeAttribute("id");
+      // a patch while it was open may have drawn the details a new form: keep that one
+      if (place.isConnected && !flow.querySelector(":scope > form")) place.replaceWith(form);
+      else { place.remove(); form.remove(); }
+      const back = opener.isConnected ? opener
+        : [...document.querySelectorAll("sluice-confirm")].find((c) => c.heading === heading)?.querySelector("details.confirm-flow > summary");
+      // an opener in a menu the dialog closed: back onto the menu's own summary
+      let to = back;
+      while (to && !(to.checkVisibility?.() ?? true)) {
+        to = to.closest("details")?.parentElement?.closest("details")?.querySelector(":scope > summary");
+      }
+      to?.focus();
+      host.dispatchEvent(new CustomEvent("sluice-confirm-close", { bubbles: true }));
+    });
+    on(dialog, "click", (event) => {
+      if (event.target.closest?.("[data-keep]")) dialog.close();
+    });
+    on(dialog, "keydown", (event) => {
+      if (event.key !== "Tab") return;
+      const controls = [...dialog.querySelectorAll("button:not(:disabled), textarea, input:not([type=hidden])")];
+      const first = controls[0], last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    });
+  },
+});
 
 // ---- sluice-conversation -----------------------------------------------------------------------
 // One conversation and what its page draws before it (a note's head, a thread's line). "Jump to
 // latest" brings its newest message into view and gives it the focus; a thread's own page
-// (`start` "end") opens at its end when its address names no message. Mark read is the only way
-// a note is read: it sends the watermark of what the page drew of its thread, never more, and
-// the page's stream then moves it under "Read today"; "Mark all read" marks every conversation
-// in its section. A mark that did not go through is said once, at the top of the notes, with
-// Try again.
-const unsent = new Set();
-function readFailed(button) {
-  unsent.add(button);
-  const group = button.closest("section.notes, #messages-view, main") ?? document.body;
-  let status = group.querySelector(":scope .read-status");
-  if (!status) {
-    status = Object.assign(document.createElement("p"), { className: "meta read-status", role: "status" });
-    const retry = Object.assign(document.createElement("button"), { type: "button", className: "link-button", textContent: "Try again" });
-    retry.addEventListener("click", () => {
-      const again = [...unsent];
-      unsent.clear();
-      status.remove();
-      again.forEach(markRead);
-    });
-    status.append(document.createElement("span"), " ", retry);
-    const help = group.querySelector(".notes-help");
-    if (help) help.after(status); else group.prepend(status);
-  }
-  status.firstChild.textContent = `${unsent.size === 1 ? "A note was" : `${unsent.size} notes were`} not marked read: sluice did not take it.`;
-}
-async function markRead(button) {
-  if (!button.isConnected || button.disabled) return;
-  button.disabled = true;
-  try {
-    const response = await fetch(button.dataset.readUrl, { method: "POST", headers: { "content-type": "application/json" },
-                                                           body: JSON.stringify({ thread: button.dataset.thread, through: Number(button.dataset.through) }) });
-    if (!response.ok) throw new Error("Could not mark this note read.");
-    button.textContent = "Marked read";
-    button.dispatchEvent(new CustomEvent("sluice-read", { bubbles: true, detail: { thread: button.dataset.thread } }));
-  } catch {
-    button.disabled = false;
-    readFailed(button);
-  }
-}
+// (`start` "end") opens at its end when its address names no message.
 define("sluice-conversation", {
   props: ({ string }) => ({ start: string }),
   manifest: {
     slots: [{ name: "lead", description: "What its page draws before it: a note's head or a thread's line, with its Mark read." },
             { name: "list", description: "The .convo: its head, its groups of messages, its message box." }],
-    events: [{ name: "sluice-read", description: "A Mark read went through; detail.thread is its thread." }],
+    events: [],
   },
   setup({ host, props, cleanup }) {
     const on = listening(cleanup);
     on(host, "click", (event) => {
-      const mark = event.target.closest?.("button.mark-read");
-      if (mark) { markRead(mark); return; }
       const jump = event.target.closest?.("a.jump");
       if (!jump || !plainClick(event)) return;
       const last = [...host.querySelectorAll(".convo-list [id^='message-']")].at(-1);
@@ -449,11 +366,6 @@ define("sluice-conversation", {
       if (!last.hasAttribute("tabindex")) last.setAttribute("tabindex", "-1");
       last.focus({ preventScroll: true });
     });
-    on(document, "click", (event) => {
-      const all = event.target.closest?.("[data-mark-all]");
-      const section = all?.closest("section");
-      if (section?.contains(host)) host.querySelectorAll("button.mark-read").forEach(markRead);
-    });
     if (props.start === "end" && !location.hash) {
       const end = host.querySelector(".composer") ?? [...host.querySelectorAll(".convo-list > li")].at(-1);
       if (end) requestAnimationFrame(() => end.scrollIntoView({ block: "end" }));
@@ -461,56 +373,12 @@ define("sluice-conversation", {
   },
 });
 
-// ---- sluice-composer ---------------------------------------------------------------------------
-// The message box: a note or a question to its step or session, posted as JSON without
-// leaving the page (Ctrl or Cmd with Enter sends). The conversation's stream brings the message
-// in; the box keeps what is typed until then (`data-ignore-morph`). Without script it posts as a
-// form.
-define("sluice-composer", {
-  props: () => ({}),
-  manifest: {
-    slots: [{ name: "form", description: "form.composer: its recipient, its text, Ask a question, Send and its .ou-status." }],
-    events: [{ name: "sluice-sent", description: "The message was taken; detail.to is its recipient." }],
-  },
-  setup({ host, cleanup }) {
-    const on = listening(cleanup);
-    on(host, "keydown", (event) => {
-      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && event.target.matches?.("textarea")) {
-        event.preventDefault();
-        event.target.form?.requestSubmit();
-      }
-    });
-    on(host, "submit", async (event) => {
-      const form = event.target;
-      if (!form.matches?.("form.composer")) return;
-      event.preventDefault();
-      const status = form.querySelector(".ou-status");
-      const button = form.querySelector("button");
-      const data = new FormData(form);
-      button.disabled = true;
-      try {
-        const response = await fetch(form.getAttribute("action"), { method: "POST", headers: { "content-type": "application/json" },
-                                                     body: JSON.stringify({ body: data.get("body"), to: data.get("to"), ask: data.get("ask") === "true" }) });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(result.message ?? "Sluice did not take the message.");
-        status.textContent = "Sent.";
-        form.reset();
-        host.dispatchEvent(new CustomEvent("sluice-sent", { bubbles: true, detail: { to: data.get("to") } }));
-      } catch (error) {
-        status.textContent = unreached(error);
-      } finally {
-        button.disabled = false;
-      }
-    });
-  },
-});
-
 // ---- sluice-answer -----------------------------------------------------------------------------
 // A question's answer: Answer opens its box under the buttons, which keep their places (the
 // box holds the question's own form, which openui.js draws from its OpenUI program, loaded once
-// a page has one), and Close question closes it at once, without leaving the page, its line
-// then saying so and taking the focus as an answer's does. Without script the box stands open
-// with its words-only form.
+// a page has one). Its words and Close question are Datastar forms; once one is taken, the
+// question gives way at once to the line that says so, which takes the focus (openui.js's
+// `answered`), whether or not the page's stream is connected.
 let openui = null;
 define("sluice-answer", {
   props: () => ({}),
@@ -532,39 +400,32 @@ define("sluice-answer", {
       toggle.setAttribute("aria-expanded", String(open));
       if (open) box.querySelector("textarea, input, select, button")?.focus({ preventScroll: true });
     });
-    on(host, "submit", async (event) => {
-      const form = event.target;
-      if (!form.matches?.("form.q-close")) return;
-      event.preventDefault();
-      const button = form.querySelector("button");
-      button.disabled = true;
-      try {
-        // the attribute: its hidden input named "action" shadows `form.action`
-        const response = await fetch(form.getAttribute("action"), { method: "POST", headers: { "content-type": "application/json" },
-                                                    body: JSON.stringify({ body: "", answer: { action: "close" } }) });
-        if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message ?? "Sluice did not close it.");
-        // a question with an answer box becomes the server's "Closed just now: …" line, which
-        // takes the focus (openui.js); a stopped one's row says Closed, focused, in its place
-        const area = host.querySelector(".answer[data-url]");
-        const ui = area && openui ? await openui : null;
-        if (ui?.answered) return ui.answered(area, true);
-        form.closest("li, article.item")?.classList.add("closing");
-        const said = Object.assign(document.createElement("span"), { className: "meta", tabIndex: -1, textContent: "Closed." });
-        said.setAttribute("role", "status");
-        form.replaceChildren(said);
-        said.focus();
-      } catch (error) {
-        button.disabled = false;
-        form.querySelector(".ou-status")?.remove();
-        form.append(Object.assign(document.createElement("span"), { className: "ou-status", role: "status", textContent: ` ${unreached(error)}` }));
+    on(document, "datastar-fetch", async (event) => {
+      const form = event.detail.el;
+      if (event.detail.type !== "finished" || !(form instanceof HTMLFormElement) || !host.contains(form)) return;
+      if (!form.matches("form.q-close, .answer form")) return;
+      // refused, or never sent: its notice says so, and the question stays
+      if (form.querySelector(".form-said[role=alert]")?.textContent) return;
+      const closed = form.matches("form.q-close");
+      const area = host.querySelector(".answer[data-url]");
+      if (area) {
+        openui ??= import("/static/openui.js");
+        (await openui).answered(area, closed);
+        return;
       }
+      // a question with no answer box (its step stopped): its row says Closed, focused
+      form.closest("li, article.item")?.classList.add("closing");
+      const said = Object.assign(document.createElement("span"), { className: "meta", tabIndex: -1, textContent: "Closed." });
+      said.setAttribute("role", "status");
+      form.replaceChildren(said);
+      said.focus();
     });
   },
 });
 
 // ---- sluice-menu -------------------------------------------------------------------------------
 // A menu behind its summary (the project switcher, display preferences, an item's Details
-// behind its "⋯"): a `<details>` that opens and works without script. Its summary says
+// behind its "⋯"): a `<details>`. Its summary says
 // aria-expanded; a click elsewhere or Escape closes it, the focus back on its summary;
 // ArrowDown from the summary goes into it, and the arrows, Home and End move through its rows,
 // links and buttons (a radio keeps its own up and down).
@@ -710,11 +571,8 @@ define("sluice-keys", {
     const typing = (target) =>
       target instanceof Element && Boolean(target.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])"));
     const finder = () => [...document.querySelectorAll(":is(main, .subnav) [data-find]")].find((el) => el.checkVisibility?.() ?? true);
-    // arrived from `/` on a page with nothing to find: the find takes the focus, once
-    if (location.hash === "#find") {
-      history.replaceState(history.state, "", location.pathname + location.search);
-      requestAnimationFrame(() => finder()?.focus());
-    }
+    // arrived from `/` on a page with nothing to find: the find takes the focus
+    if (location.hash === "#find") requestAnimationFrame(() => finder()?.focus());
     on(document, "keydown", (event) => {
       if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
       if (typing(event.target) || document.querySelector("dialog[open]")) return;
@@ -795,157 +653,18 @@ define("sluice-copy", {
   },
 });
 
-// ---- sluice-toggle -----------------------------------------------------------------------------
-// A display setting applied at once and kept by posting it to /settings, which sets the cookie
-// every page is drawn from: `setting` "types" (a Types switch's aria-pressed, or the display
-// preferences' checkbox; every one on the page follows, and `show-types` on <html>) or "theme"
-// (its id as `data-theme` on <html>: a complete theme, its palette and its scheme; the Theme row
-// of display preferences names it).
-const keepSetting = (name, value) =>
-  fetch("/settings", { method: "POST", keepalive: true, body: new URLSearchParams({ [name]: value }) }).catch(() => {});
-define("sluice-toggle", {
-  props: ({ string }) => ({ setting: string }),
-  manifest: {
-    slots: [{ name: "control", description: "button.types-toggle[aria-pressed], a types checkbox, or the theme radios with the Theme row's .sub-theme." }],
-    events: [{ name: "sluice-setting", description: "A setting changed (on document); detail.setting and detail.value." }],
-  },
-  setup({ host, props, cleanup }) {
-    const on = listening(cleanup);
-    const sync = () => {
-      if (props.setting === "theme") return theme();
-      if (props.setting !== "types") return;
-      const shown = root.classList.contains("show-types");
-      for (const b of host.querySelectorAll(".types-toggle")) {
-        if (b.getAttribute("aria-pressed") !== String(shown)) b.setAttribute("aria-pressed", String(shown));
-      }
-      for (const box of host.querySelectorAll("input[type=checkbox][name=types]")) box.checked = shown;
-    };
-    // the theme the page wears is the one ticked and the one the Theme row names (its words
-    // the chosen radio's own): a stream patch drawn before the pick leaves both as they are
-    const theme = () => {
-      const id = root.dataset.theme;
-      const radio = id ? host.querySelector(`input[name=theme][value="${CSS.escape(id)}"]`) : null;
-      if (!radio) return;
-      if (!radio.checked) radio.checked = true;
-      const name = radio.closest("label")?.querySelector(":scope > span:not(.swatch)")?.textContent;
-      const row = host.querySelector(".sub-theme");
-      if (row && name && row.textContent !== name) row.textContent = name;
-    };
-    if (props.setting === "theme") {
-      const watch = new MutationObserver(theme);
-      watch.observe(host, { childList: true, subtree: true, characterData: true });
-      cleanup(() => watch.disconnect());
-    }
-    const say = (value) => document.dispatchEvent(new CustomEvent("sluice-setting", { detail: { setting: props.setting, value } }));
-    const types = (shown) => {
-      root.classList.toggle("show-types", shown);
-      keepSetting("types", shown ? "1" : "0");
-      say(shown);
-    };
-    on(host, "click", (event) => {
-      if (event.target.closest?.(".types-toggle")) types(!root.classList.contains("show-types"));
-    });
-    on(host, "change", (event) => {
-      const input = event.target;
-      if (input.name === "types" && input.type === "checkbox") types(input.checked);
-      if (input.name === "theme" && input.value) {
-        root.dataset.theme = input.value;
-        keepSetting("theme", input.value);
-        theme();
-        say(input.value);
-      }
-    });
-    on(document, "sluice-setting", sync);
-    sync();
-  },
-});
-
 // ---- sluice-search -----------------------------------------------------------------------------
-// `mode` "stream": the board's search and filters (its form) apply as they change, the search as
-// one types: the address follows (replaceState) and the page's stream restarts on the new
-// query under `base`, so its patches draw the board as filtered. Escape clears the search
-// first, and only that (not also the open step). `mode` "filter": its field hides the items it
-// holds (`[data-find]`, their words) that do not hold every word typed, a group
-// (`[data-find-group]`) with none left, and says how many match in its `[data-find-status]`.
-// `mode` "submit": a plain form of filters. In "filter" and "submit" a `form[data-applies]`
-// sends itself when any field in it changes (a select, a checkbox, or a text field left with
-// new words), so its Apply (`.apply`, kept as the form's default button for Enter in a text
-// field) hides while the component runs.
+// A list found as one types: its field hides the items it holds (`[data-find]`, their words)
+// that do not hold every word typed, a group (`[data-find-group]`) with none left, and says how
+// many match in its `[data-find-status]`; Escape clears it.
 define("sluice-search", {
-  props: ({ string, oneOf }) => ({ mode: oneOf("stream", "filter", "submit"), base: string }),
+  props: () => ({}),
   manifest: {
-    slots: [{ name: "form", description: "stream: form.board-tools with input[name=q], its selects and [data-clear-q]." },
-            { name: "list", description: "filter: its input[type=search], the [data-find] items, [data-find-group]s and [data-find-status]." }],
-    events: [{ name: "sluice-stream-restart", description: "On window: the page's stream is ended on purpose, to open on a new query." }],
+    slots: [{ name: "list", description: "Its input[type=search], the [data-find] items, [data-find-group]s and [data-find-status]." }],
+    events: [],
   },
-  setup({ host, props, cleanup }) {
-    const on = listening(cleanup);
-    if (props.mode !== "stream") {
-      on(host, "change", (event) => {
-        const form = event.target.closest?.("form[data-applies]");
-        // a text field's change fires when it is left with new words (or on Enter): it applies
-        // then too, so a filter typed and tabbed away from never silently waits
-        if (form && event.target.matches("select, input")) form.requestSubmit();
-      });
-    }
-    if (props.mode === "submit") return;
-    if (props.mode === "filter") return filter(host, on, cleanup);
-    const form = () => host.querySelector("form");
-    let typing = 0;
-    cleanup(() => clearTimeout(typing));
-    const restart = (url) => {
-      const main = document.querySelector("main[data-init]");
-      const init = main?.getAttribute("data-init");
-      if (!init) return;
-      const next = init.replace(/@get\('[^']*'/, `@get('${url}'`);
-      if (next === init) return;
-      window.dispatchEvent(new Event("sluice-stream-restart"));
-      main.setAttribute("data-init", next);
-    };
-    const apply = () => {
-      clearTimeout(typing);
-      const f = form();
-      if (!f) return;
-      const params = new URLSearchParams();
-      const here = new URLSearchParams(location.search);
-      for (const [name, value] of new FormData(f)) {
-        const v = String(value).trim();
-        if (name === "q" ? v : true) params.set(name, v);
-      }
-      if (here.get("tag")) params.set("tag", here.get("tag"));
-      // the address leaves out the defaults and keeps the open step's tab; the stream asks for
-      // exactly what the page shows
-      const shown = new URLSearchParams(params);
-      if (shown.get("order") === "live") shown.delete("order");
-      if (shown.get("show") === "all") shown.delete("show");
-      if (here.get("tab")) shown.set("tab", here.get("tab"));
-      const address = `${location.pathname}${shown.size ? `?${shown}` : ""}${location.hash}`;
-      if (address !== `${location.pathname}${location.search}${location.hash}`) history.replaceState(history.state, "", address);
-      restart(`${props.base}/stream?${params}`);
-    };
-    on(host, "input", (event) => {
-      if (!event.target.matches?.("input[name=q]")) return;
-      clearTimeout(typing);
-      typing = setTimeout(apply, 200);
-    });
-    on(host, "change", (event) => { if (event.target.matches?.("select")) apply(); });
-    on(host, "submit", (event) => { event.preventDefault(); apply(); });
-    const clear = (input) => { input.value = ""; apply(); };
-    on(host, "click", (event) => {
-      const button = event.target.closest?.("[data-clear-q]");
-      const input = form()?.querySelector("input[name=q]");
-      if (!button || !input || !plainClick(event)) return;
-      event.preventDefault();
-      input.focus();
-      clear(input);
-    });
-    on(host, "keydown", (event) => {
-      const input = event.target;
-      if (event.key !== "Escape" || !input.matches?.("input[name=q]") || !input.value) return;
-      event.preventDefault();
-      event.stopPropagation();
-      clear(input);
-    });
+  setup({ host, cleanup }) {
+    filter(host, listening(cleanup), cleanup);
   },
 });
 function filter(host, on, cleanup) {
@@ -1012,12 +731,11 @@ define("sluice-banner", {
       });
       return;
     }
-    const mainStream = () => document.querySelector("main[data-init]");
-    let phase = "live";
-    // a page that points its stream at a new query (the board's search), or reconnects it, ends
-    // the old request on purpose: its end is not a lost connection
-    let restarts = 0;
-    on(window, "sluice-stream-restart", () => { if (phase !== "stopped") restarts++; });
+    // the page's stream is what main opens and what reopens it on new signals (the plan's find,
+    // Mark as seen: `data-reopens-stream`); a reopening ends the request before it on purpose
+    // (Datastar's requestCancellation), so the stream stopped only when none is left open
+    const opens = (el) => el === document.querySelector("main#content") || el?.hasAttribute?.("data-reopens-stream");
+    let phase = "live", open = 0;
     const show = (next) => {
       phase = next;
       host.hidden = next === "live";
@@ -1027,23 +745,14 @@ define("sluice-banner", {
       if (next === "paused") words.textContent = "Updates paused. Reconnecting…";
       if (next === "stopped") words.textContent = `Updates stopped at ${clock(new Date())}.`;
     };
-    /** Open the page's stream again, now: Datastar ends the old request ('cleanup') and starts anew. */
-    const reconnect = () => {
-      const main = mainStream();
-      const init = main?.getAttribute("data-init");
-      if (!init) return;
-      window.dispatchEvent(new Event("sluice-stream-restart"));
-      show("paused");
-      main.removeAttribute("data-init");
-      setTimeout(() => main.setAttribute("data-init", init));
-    };
     on(document, "datastar-fetch", (event) => {
-      // the page's own stream (its attribute is briefly gone while it reconnects), never the drawer's
-      if (event.detail.el !== document.querySelector("main#content")) return;
+      if (!opens(event.detail.el)) return;
       const type = event.detail.type;
-      if (type === "finished") {
-        if (restarts) { restarts--; return; }
-        show("stopped");
+      if (type === "started") {
+        open++;
+      } else if (type === "finished") {
+        open = Math.max(0, open - 1);
+        setTimeout(() => { if (!open) show("stopped"); });
       } else if (type === "retries-failed") {
         show("stopped");
       } else if (type === "error" || type === "retrying") {
@@ -1055,11 +764,12 @@ define("sluice-banner", {
         if (stale === true && phase === "live") show("paused");
       }
     });
+    // Reconnect is the server's `@get` of the page's stream (`.stream-retry`)
+    const reconnect = () => { show("paused"); host.querySelector(".stream-retry")?.click(); };
     const revive = () => { if (phase === "stopped" && !document.hidden) reconnect(); };
     on(window, "online", revive);
     on(window, "focus", revive);
     on(document, "visibilitychange", revive);
-    on(host, "click", (event) => { if (event.target.closest?.(".stream-retry")) reconnect(); });
   },
 });
 

@@ -2,11 +2,12 @@
 //! end. Its top level is short, one row each: Theme (the current theme's name and swatch, a "›"),
 //! Show value types (a checkbox, toggled in place) and Keyboard shortcuts (a "›" and its `?`).
 //! Theme and Keyboard shortcuts are each a sub-menu, a `<details class="sub">` whose panel opens
-//! inside the same popover under a back control ("‹ Theme"); with script one level shows at a time
-//! (`sluice-menu`, style.css), without it a row opens its panel in place under it, so every theme
-//! and the value types stay a plain form with Save.
+//! inside the same popover under a back control ("‹ Theme"), one level at a time (`sluice-menu`,
+//! style.css). The theme and the value types are the page's `theme` and `types` signals
+//! (`data-bind`), which `<html>` wears at once; a change posts them to `/settings`, which keeps
+//! them in cookies for every page drawn after.
 use super::icons::{Icon, icon};
-use super::ui::{esc, keys_close, keys_open, setting_close, setting_open};
+use super::ui::{esc, keys_close, keys_open};
 use super::{THEMES, TrustedHtml, Viewer};
 
 /// Which level of the menu a gallery picture shows open (the page's own opens at the top).
@@ -17,13 +18,12 @@ pub enum Level {
     Keys,
 }
 
-/// The page's own menu panel (`.menu`), drawn from the viewer's cookies: `path` is where Save
-/// comes back to without script, `keys` the page's `g` keys (`NavView::keys`).
-pub fn menu(viewer: &Viewer, path: &str, keys: &[(char, String, String)]) -> TrustedHtml {
+/// The page's own menu panel (`.menu`), drawn from the viewer's cookies: `keys` the page's `g`
+/// keys (`NavView::keys`).
+pub fn menu(viewer: &Viewer, keys: &[(char, String, String)]) -> TrustedHtml {
     TrustedHtml::owned(draw(&Draw {
         theme: viewer.theme,
         types: viewer.types,
-        path,
         keys,
         open: Level::Top,
         page: true,
@@ -38,7 +38,6 @@ pub fn picture(prefix: &str, theme: &'static str, open: Level) -> TrustedHtml {
     TrustedHtml::owned(draw(&Draw {
         theme: Some(theme),
         types: false,
-        path: "",
         keys: &keys,
         open,
         page: false,
@@ -80,7 +79,6 @@ fn keys_list(keys: &[(char, String, String)]) -> String {
 struct Draw<'a> {
     theme: Option<&'static str>,
     types: bool,
-    path: &'a str,
     keys: &'a [(char, String, String)],
     open: Level,
     /// The page's own (a form with its components) or a gallery picture.
@@ -98,7 +96,7 @@ fn row(name: &str, rest: &str) -> String {
 }
 fn back(name: &str) -> String {
     format!(
-        "<button type=\"button\" class=\"sub-back needs-js\">{}{name}<span class=\"vh\">: back to display preferences</span></button>",
+        "<button type=\"button\" class=\"sub-back\">{}{name}<span class=\"vh\">: back to display preferences</span></button>",
         icon(Icon::ChevronDown, 16, "chev sub-chev")
     )
 }
@@ -115,9 +113,10 @@ fn draw(d: &Draw) -> String {
         .iter()
         .map(|t| {
             format!(
-                "<label><input type=\"radio\" name=\"{radio}\" value=\"{id}\"{checked}>{tick}<span>{name}</span><span class=\"swatch\" data-theme=\"{id}\" aria-hidden=\"true\"><i class=\"sw-run\"></i><i class=\"sw-ask\"></i></span></label>",
+                "<label><input type=\"radio\" name=\"{radio}\" value=\"{id}\"{checked}{bind}>{tick}<span>{name}</span><span class=\"swatch\" data-theme=\"{id}\" aria-hidden=\"true\"><i class=\"sw-run\"></i><i class=\"sw-ask\"></i></span></label>",
                 id = t.id,
                 checked = if d.theme == Some(t.id) { " checked" } else { "" },
+                bind = if d.page { " data-bind:theme__root" } else { "" },
                 tick = icon(Icon::Check, 16, "tick"),
                 name = esc(t.name),
             )
@@ -126,7 +125,23 @@ fn draw(d: &Draw) -> String {
     // the current theme by name, its swatch in the page's own tokens (so it is right whatever a
     // stale stream patch says); before the first choice "Sluice", in the system's scheme
     let now = format!(
-        "<span class=\"sub-now\"><span class=\"sub-theme\">{}</span><span class=\"swatch\"{} aria-hidden=\"true\"><i class=\"sw-run\"></i><i class=\"sw-ask\"></i></span></span>",
+        "<span class=\"sub-now\"><span class=\"sub-theme\"{}>{}</span><span class=\"swatch\"{} aria-hidden=\"true\"><i class=\"sw-run\"></i><i class=\"sw-ask\"></i></span></span>",
+        // the chosen theme's name, as the signal says it
+        if d.page {
+            let names: serde_json::Map<String, serde_json::Value> = THEMES
+                .iter()
+                .map(|t| (t.id.to_owned(), t.name.into()))
+                .collect();
+            format!(
+                " data-text=\"{}\"",
+                esc(&format!(
+                    "({})[$theme] ?? 'Sluice'",
+                    serde_json::Value::Object(names)
+                ))
+            )
+        } else {
+            String::new()
+        },
         esc(chosen.map_or("Sluice", |t| t.name)),
         if d.page {
             String::new()
@@ -141,17 +156,18 @@ fn draw(d: &Draw) -> String {
         back("Theme")
     );
     let types = format!(
-        "<label class=\"check\"><input type=\"checkbox\" name=\"{}\" value=\"1\"{}>Show value types</label>",
+        "<label class=\"check\"><input type=\"checkbox\" name=\"{}\" value=\"1\"{}{}>Show value types</label>",
         if d.page {
             "types".to_owned()
         } else {
             format!("{}{:?}-types", d.prefix, d.open).to_lowercase()
         },
-        if d.types { " checked" } else { "" }
+        if d.types { " checked" } else { "" },
+        if d.page { " data-bind:types__root" } else { "" },
     );
     let list = keys_list(d.keys);
     let keys = format!(
-        "<details class=\"sub sub-keys needs-js\" data-preserve-attr=\"open\"{}>{}<div class=\"sub-panel\">{}{}</div></details>",
+        "<details class=\"sub sub-keys\" data-preserve-attr=\"open\"{}>{}<div class=\"sub-panel\">{}{}</div></details>",
         open(Level::Keys),
         row("Keyboard shortcuts", "<kbd class=\"sub-hint\">?</kbd>"),
         back("Keyboard shortcuts"),
@@ -164,12 +180,7 @@ fn draw(d: &Draw) -> String {
     let guide = "<p class=\"prefs-guide\"><a href=\"/_ui#part-1\">States and parts</a><a href=\"/docs\">Agent docs</a></p>";
     if d.page {
         format!(
-            "<div class=\"menu prefs-menu\"><form class=\"prefs\" method=\"post\" action=\"/settings\" aria-label=\"Display preferences\"><input type=\"hidden\" name=\"next\" value=\"{}\">{}{theme}{}<input type=\"hidden\" name=\"types\" value=\"0\">{}{types}{}<button class=\"save\" type=\"submit\">Save</button></form>{keys}{guide}</div>",
-            esc(d.path),
-            setting_open("theme"),
-            setting_close(),
-            setting_open("types"),
-            setting_close(),
+            "<div class=\"menu prefs-menu\"><div class=\"prefs\" role=\"group\" aria-label=\"Display preferences\" data-on:change=\"@post('/settings')\">{theme}{types}</div>{keys}{guide}</div>"
         )
     } else {
         format!(

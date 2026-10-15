@@ -609,9 +609,13 @@ impl DayView {
             "<p class=\"dl-empty\">No run in the last 24 hours.</p>".to_owned()
         } else {
             format!(
-                "<sluice-day class=\"dl\" data-from=\"{from}\" data-to=\"{to}\" style=\"--now:{now_at:.3}%\"><div class=\"dl-ticks\" aria-hidden=\"true\">{ticks}<div class=\"dl-now\"><span>now, {clock}</span></div></div>{rows}</sluice-day>",
-                from = w.start,
-                to = w.end,
+                "{open}<div class=\"dl-ticks\" aria-hidden=\"true\">{ticks}<div class=\"dl-now\"><span>now, {clock}</span></div></div>{rows}</sluice-day>",
+                open = ui::Host::new("sluice-day")
+                    .attr("class", "dl")
+                    .attr("data-from", w.start.to_string())
+                    .attr("data-to", w.end.to_string())
+                    .attr("style", format!("--now:{now_at:.3}%"))
+                    .open(),
                 clock = ui::clock(&super::rfc3339(self.now)),
             )
         };
@@ -653,7 +657,8 @@ impl DayView {
         }
     }
     /// The timetable: a row an hour (the current one last), a column a project, each run by
-    /// its start minute.
+    /// its start minute. Two or more hours in a row in which nothing started are one line,
+    /// "03–14 · nothing ran".
     pub fn timetable(&self) -> TrustedHtml {
         let w = &self.window;
         let columns = self.columns();
@@ -669,11 +674,34 @@ impl DayView {
         head.push_str("</div>");
         let mut rows = String::new();
         let hours: Vec<u64> = w.hours().collect();
-        for (i, at) in hours.iter().enumerate() {
+        // how many runs started in each hour (the first holds those from before the window)
+        let started: Vec<usize> = hours
+            .iter()
+            .enumerate()
+            .map(|(i, at)| {
+                let from = if i == 0 { 0 } else { *at };
+                columns
+                    .iter()
+                    .flat_map(|c| c.runs.iter())
+                    .filter(|r| r.started >= from && r.started < at + 3600)
+                    .count()
+            })
+            .collect();
+        let mut i = 0;
+        while i < hours.len() {
+            // the empty hours from here, never the current one (it ends on the now rule)
+            let empty = (i..hours.len() - 1)
+                .take_while(|k| started[*k] == 0)
+                .count();
+            if empty >= 2 {
+                rows.push_str(&self.gap(i, &hours[i..i + empty]));
+                i += empty;
+                continue;
+            }
+            let at = &hours[i];
             let from = if i == 0 { 0 } else { *at };
             let to = at + 3600;
             let mut cells = String::new();
-            let mut started = 0;
             for c in &columns {
                 let here: Vec<&DayRun> = c
                     .runs
@@ -681,9 +709,9 @@ impl DayView {
                     .copied()
                     .filter(|r| r.started >= from && r.started < to)
                     .collect();
-                started += here.len();
                 cells.push_str(&self.cell(c.project, &here, i == 0, *at));
             }
+            let started = started[i];
             let (day, _) = w.day_name(*at);
             let first_of_day = i == 0 || w.hour(*at) == 0;
             let current = i + 1 == hours.len();
@@ -705,6 +733,7 @@ impl DayView {
                 },
                 now = if current { self.now_line() } else { String::new() },
             ));
+            i += 1;
         }
         TrustedHtml::owned(format!(
             "<section class=\"timetable\" aria-labelledby=\"timetable-h\">{}<div class=\"tt{}\" style=\"--n:{n}\">{head}{rows}</div></section>",
@@ -717,10 +746,31 @@ impl DayView {
             if n >= 4 { " tt-wide" } else { "" },
         ))
     }
+    /// Hours `hours` (the `i`th of the day on), in none of which a run started, as one line:
+    /// "03–14 · nothing ran", the day under it when one begins in them.
+    fn gap(&self, i: usize, hours: &[u64]) -> String {
+        let w = &self.window;
+        let (first, last) = (hours[0], hours[hours.len() - 1]);
+        let day = hours
+            .iter()
+            .enumerate()
+            .find(|(k, at)| i + k == 0 || w.hour(**at) == 0)
+            .map(|(_, at)| w.day_name(*at).0);
+        format!(
+            "<section class=\"tt-row tt-gap\" aria-labelledby=\"tt-{i}\"><div class=\"tt-h\"><h3 id=\"tt-{i}\"><span class=\"tt-hour\" aria-hidden=\"true\">{a:02}–{b:02}</span><span class=\"vh\">{a:02}:00 to {b:02}:59{dayw}</span></h3>{dayl}</div><p class=\"tt-none\"><span aria-hidden=\"true\">· </span>nothing ran</p></section>",
+            a = w.hour(first),
+            b = w.hour(last),
+            dayw = day.map_or(String::new(), |d| format!(", {d}")),
+            dayl = day.map_or(String::new(), |d| format!(
+                "<p class=\"tt-day\" aria-hidden=\"true\">{}</p>",
+                &d[..3]
+            )),
+        )
+    }
     /// One project's runs in one hour, by their minute; the quick ones counted. A busy hour
     /// (more than `CELL_RUNS` listed) lists its notable runs (`notable`; its longest when none
     /// is) and folds the rest, every one a success, behind "+N more" that opens in place
-    /// (a `details`, so it opens without script, its state kept through a patch).
+    /// (a `details`, its state kept through a patch).
     fn cell(
         &self,
         project: &DayProject,
@@ -747,12 +797,7 @@ impl DayView {
             esc(&project.name)
         );
         if !shown.is_empty() {
-            // a long hour flows into columns as wide as the screen allows
-            html.push_str(if shown.len() > 6 {
-                "<ol class=\"tt-runs tt-many\">"
-            } else {
-                "<ol class=\"tt-runs\">"
-            });
+            html.push_str("<ol class=\"tt-runs\">");
             for r in &shown {
                 html.push_str(&self.run_item(r, first));
             }
@@ -762,12 +807,11 @@ impl DayView {
             let longest = folded.iter().map(|r| r.seconds(self.now)).max().unwrap_or(0);
             let shortest = folded.iter().map(|r| r.seconds(self.now)).min().unwrap_or(0);
             html.push_str(&format!(
-                "<details class=\"tt-more\" id=\"tt-more-{hour}-{}\" data-preserve-attr=\"open\"><summary>+{} more succeeded, {} to {}</summary><ol class=\"tt-runs{}\">",
+                "<details class=\"tt-more\" id=\"tt-more-{hour}-{}\" data-preserve-attr=\"open\"><summary>+{} more succeeded, {} to {}</summary><ol class=\"tt-runs\">",
                 project.id,
                 folded.len(),
                 ui::duration_text(shortest as f64),
                 ui::duration_text(longest as f64),
-                if folded.len() > 6 { " tt-many" } else { "" }
             ));
             for r in &folded {
                 html.push_str(&self.run_item(r, first));

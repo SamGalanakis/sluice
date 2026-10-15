@@ -389,12 +389,16 @@ impl HomeView {
                 ),
                 "",
                 &format!("<a class=\"btn primary\" href=\"{}\">Answer</a>", esc(&place)),
-                &format!(
-                    "<form class=\"nd-form\" method=\"post\" action=\"{p}/needs\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"items\" value=\"ask:{m}\"><input type=\"hidden\" name=\"next\" value=\"/#for-you\"><button class=\"icon\" aria-label=\"Set aside {t}\" title=\"Set aside {t}\">×</button></form>",
-                    p = esc(&project),
-                    m = q.id(),
-                    t = esc(&q.title()),
-                ),
+                &{
+                    let form = format!("aside-{}-{}", q.project, q.id());
+                    format!(
+                        "{open}<input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"items\" value=\"ask:{m}\"><button class=\"icon\" aria-label=\"Set aside {t}\" title=\"Set aside {t}\">×</button>{said}</form>",
+                        open = ui::post_form(&form, "nd-form", &format!("{project}/needs")),
+                        said = ui::form_said(&form),
+                        m = q.id(),
+                        t = esc(&q.title()),
+                    )
+                },
             ));
         }
         html.push_str("</ul>");

@@ -3,7 +3,7 @@
 // unchanged embedded vocabulary and drawn here with plain DOM (text only, never HTML from
 // the program). A line the parser cannot use is dropped and counted in a visible note. A
 // Button posts a typed message reply with answer {action, params, values} to the same route
-// the no-JS text box posts to.
+// the answer's text box posts to.
 import { createParser, parseRules, validate } from
   "/static/lang-core-0.3.0.js";
 
@@ -264,12 +264,8 @@ function submit(ctx, p, form) {
 function render(area) {
   if (area.dataset.drawn) return;
   area.dataset.drawn = "1";
+  // its words-only form posts through Datastar (`ui::post_form`); `sluice-answer` confirms it
   const box = area.querySelector("form");
-  box?.addEventListener("submit", ev => {
-    ev.preventDefault();
-    const action = ev.submitter?.value === "close" ? "close" : "answer";
-    send(area, { body: new FormData(box).get("body") ?? "", answer: { action } });
-  });
   const src = area.dataset.ui;
   if (!src) return;
   const ctx = { area, key: area.dataset.key, form: undefined, fields: [], buttons: [], dropped: [] };

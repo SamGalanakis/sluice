@@ -301,7 +301,7 @@ fn screens(name: &str) -> Option<std::path::PathBuf> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_a_settings_form_refuses_an_apply_over_another_authors_change() {
+async fn slow_chromium_a_settings_save_refuses_to_write_over_another_authors_change() {
     let f = Fixture::new().await;
     let (base, server) = serve(f.router()).await;
     let id = f.id;
@@ -309,7 +309,7 @@ async fn slow_chromium_a_settings_form_refuses_an_apply_over_another_authors_cha
     let mut browser = tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&settings).unwrap();
         browser
-            .wait("document.querySelector('#project-description') && document.querySelector('[data-preview]').hidden === false")
+            .wait("document.readyState === 'complete' && document.querySelector('#project-description')")
             .unwrap();
         browser
             .eval("document.querySelector('#project-description').value='The owner\\'s words'")
@@ -335,25 +335,23 @@ async fn slow_chromium_a_settings_form_refuses_an_apply_over_another_authors_cha
         .await
         .unwrap();
     let mut browser = tokio::task::spawn_blocking(move || {
-        browser.wait("document.querySelector('form[data-setting=description] .setting-changed')?.textContent.startsWith('Changed by cli since you opened this · Reload this field')").unwrap();
-        // the other fields were not changed: no note, and their forms apply as before
-        assert_eq!(browser.eval("document.querySelectorAll('.setting-changed').length").unwrap(), 1);
+        // the owner saves anyway: refused, never written over the agent's, the owner's words
+        // kept in the box
+        browser.eval("document.querySelector('#details-form').requestSubmit()").unwrap();
+        browser.wait("document.querySelector('#details-form-said[role=alert]')?.textContent === 'Not saved: the description changed since this page was drawn (by cli). Reload to see it, then save again.'").unwrap();
+        assert_eq!(browser.eval("document.querySelector('#project-description').value").unwrap(), "The owner's words");
         if let Some(path) = screens("settings-changed.png") {
             browser.viewport(1440, "light").unwrap();
             browser.screenshot(&path).unwrap();
         }
-        // the owner applies anyway: refused, never written over the agent's
-        browser.eval("document.querySelector('form[data-setting=description]').requestSubmit()").unwrap();
-        browser.wait("document.querySelector('#description-feedback').textContent.startsWith('Not applied: it changed since you opened it.')").unwrap();
-        assert_eq!(browser.eval("document.querySelector('#project-description').value").unwrap(), "The owner's words");
-        // Reload this field: the agent's words, and the form applies again
-        browser.eval("document.querySelector('[data-reload-field]').click()").unwrap();
-        browser.wait("document.querySelector('#project-description').value==='The agent\\'s words' && !document.querySelector('.setting-changed')").unwrap();
-        browser.eval("document.querySelector('#project-description').value='Both, merged';document.querySelector('form[data-setting=description]').requestSubmit()").unwrap();
-        browser.wait("document.querySelector('#description-feedback').textContent==='Saved'").unwrap();
-        // an unrelated field still applies after another author's change elsewhere
-        browser.eval("document.querySelector('#prune-done-after').value='6';document.querySelector('form[data-setting=prune_done_after]').requestSubmit()").unwrap();
-        browser.wait("document.querySelector('#prune-done-after-feedback').textContent==='Saved'").unwrap();
+        // reloaded: the agent's words, and the form saves again
+        browser.eval("location.reload()").unwrap();
+        browser.wait("document.readyState === 'complete' && document.querySelector('#project-description')?.value === 'The agent\\'s words'").unwrap();
+        browser.eval("document.querySelector('#project-description').value='Both, merged';document.querySelector('#details-form').requestSubmit()").unwrap();
+        browser.wait("document.querySelector('#details-form-said[role=status]')?.textContent === 'Saved.'").unwrap();
+        // another section saves after another author's change to this one
+        browser.eval("document.querySelector('#prune-done-after').value='6';document.querySelector('#retiring-form').requestSubmit()").unwrap();
+        browser.wait("document.querySelector('#retiring-form-said[role=status]')?.textContent === 'Saved.'").unwrap();
         browser
     })
     .await

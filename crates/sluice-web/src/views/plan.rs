@@ -12,14 +12,14 @@ use super::board::{ProjectView, SAID_WINDOW, UnitView};
 use super::icons::{Icon, icon};
 use super::step::{self, Action, ActionForm, OwnerCommand, StepView};
 use super::ui::{self, Mark, Shown, esc};
-use super::{DashboardSnapshot, DashboardState, Frame, NavView, TrustedHtml, Viewer};
+use super::{DashboardSnapshot, DashboardState, Frame, NavView, TrustedHtml, Viewer, write};
 use crate::streams::{PatchRegion, RenderedBatch};
 use askama::Template;
 use axum::{
     Extension,
     extract::{Form, Path, State},
-    http::HeaderMap,
-    response::{IntoResponse, Redirect, Response},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use sluice_model::{
@@ -558,7 +558,7 @@ impl<'a> Plan<'a> {
                 // what to try next, as its page says it (`failure::Advice`)
                 let next = step.next_step();
                 if !next.is_empty() {
-                    let _ = write!(sentence, " <span class=\"nd-next\">{}</span>", esc(&next));
+                    let _ = write!(sentence, " <span class=\"nd-next\">{next}</span>");
                 }
             }
             (Shown::Stale, None) => sentence.push_str(" An input it read changed after it ran."),
@@ -661,7 +661,7 @@ impl<'a> Plan<'a> {
                     .and_then(|(_, s)| s.failure.as_ref())
                     .map(|f| f.next_step_all())
                     .filter(|next| !next.is_empty())
-                    .map(|next| format!(" <span class=\"nd-next\">{}</span>", esc(next)))
+                    .map(|next| format!(" <span class=\"nd-next\">{next}</span>"))
                     .unwrap_or_default()
             ),
             more: format!(
@@ -684,45 +684,52 @@ impl<'a> Plan<'a> {
     }
     /// Retry for `steps`: one step's own action form, or the plan's for several.
     fn retry_form(&self, steps: &[&StepView], word: &str) -> String {
-        let next = format!("{}#needs", self.view.href());
         match steps {
-            [step] => format!(
-                "<form class=\"nd-form\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"btn\">{word}</button></form>",
-                h = esc(&step.href()),
-                rev = step.revision,
-                seen = esc(&step.seen()),
-                next = esc(&next),
-            ),
-            steps => format!(
-                "<form class=\"nd-form\" method=\"post\" action=\"{h}/needs\"><input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"items\" value=\"{items}\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"btn\">{word}</button></form>",
-                h = esc(&self.view.href()),
-                items = esc(&steps
+            [step] => {
+                let id = format!("retry-{}", step.id);
+                format!(
+                    "{open}<input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><button class=\"btn\">{word}</button>{said}</form>",
+                    open = ui::post_form(&id, "nd-form", &format!("{}/actions", step.href())),
+                    rev = step.revision,
+                    seen = esc(&step.seen()),
+                    said = ui::form_said(&id),
+                )
+            }
+            steps => {
+                let items = steps
                     .iter()
                     .map(|s| format!("stop:{}@{}", s.id, s.seen()))
                     .collect::<Vec<_>>()
-                    .join(" ")),
-                rev = self.view.revision,
-                next = esc(&next),
-            ),
+                    .join(" ");
+                let id = ui::form_id(&format!("retry {items}"));
+                format!(
+                    "{open}<input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"items\" value=\"{items}\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><button class=\"btn\">{word}</button>{said}</form>",
+                    open = ui::post_form(&id, "nd-form", &format!("{}/needs", self.view.href())),
+                    items = esc(&items),
+                    rev = self.view.revision,
+                    said = ui::form_said(&id),
+                )
+            }
         }
     }
     /// Settle as done: a cancel's step's own Dismiss, so its unit counts as done (its step's page
     /// can undo it).
     fn settle_form(&self, unit: &UnitView, step: &StepView) -> String {
+        let id = format!("settle-{}", step.id);
         format!(
-            "<form class=\"nd-form\" method=\"post\" action=\"{h}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button class=\"btn\" title=\"{label}\" aria-label=\"{label}\">Settle as done</button></form>",
-            h = esc(&step.href()),
+            "{open}<input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><button class=\"btn\" title=\"{label}\" aria-label=\"{label}\">Settle as done</button>{said}</form>",
+            open = ui::post_form(&id, "nd-form", &format!("{}/actions", step.href())),
             rev = step.revision,
             seen = esc(&step.seen()),
-            next = esc(&format!("{}#needs", self.view.href())),
+            said = ui::form_said(&id),
             label = esc(&format!(
                 "Settle the cancel of {} as done: its unit counts as done",
                 ui::cut(title(unit), 60)
             )),
         )
     }
-    /// A form posting `action` for `keys` to the plan's Needs you, coming back to `#back` (with
-    /// script the focus goes there).
+    /// A form posting `action` for `keys` to the plan's Needs you; once the stream draws what it
+    /// changed, the focus goes to `#back` (`data-focus-after`, `sluice-board`).
     #[allow(clippy::too_many_arguments)]
     fn needs_form(
         &self,
@@ -734,11 +741,19 @@ impl<'a> Plan<'a> {
         id: &str,
         back: &str,
     ) -> String {
+        let items = keys.join(" ");
+        let form = ui::form_id(&format!("{action} {items} {class} {back}"));
         format!(
-            "<form class=\"nd-form\" method=\"post\" action=\"{h}/needs\"><input type=\"hidden\" name=\"action\" value=\"{action}\"><input type=\"hidden\" name=\"items\" value=\"{items}\"><input type=\"hidden\" name=\"next\" value=\"{next}\"><button{id} class=\"{class}\" aria-label=\"{label}\" title=\"{label}\">{words}</button></form>",
-            h = esc(&self.view.href()),
-            items = esc(&keys.join(" ")),
-            next = esc(&format!("{}#{back}", self.view.href())),
+            "{open}<input type=\"hidden\" name=\"action\" value=\"{action}\"><input type=\"hidden\" name=\"items\" value=\"{items}\"><button{id} class=\"{class}\" aria-label=\"{label}\" title=\"{label}\">{words}</button>{said}</form>",
+            open = ui::post_form_with(
+                &form,
+                "nd-form",
+                &format!("{}/needs", self.view.href()),
+                "",
+                &format!(" data-focus-after=\"{}\"", esc(back))
+            ),
+            items = esc(&items),
+            said = ui::form_said(&form),
             id = if id.is_empty() {
                 String::new()
             } else {
@@ -1062,10 +1077,14 @@ impl<'a> Plan<'a> {
         let href = view.href();
         let mut out = String::new();
         if !view.plan_empty() {
-            out.push_str(ui::search_open("stream", &href).as_str());
+            // the find is the page's `q` signal: typing reopens the stream on it, which draws the
+            // plan as found (Datastar's active search); Enter goes to the page of that find, an
+            // address like any other; Escape clears it
+            let reopen = ui::stream_reopen(&view.stream_href());
             out.push_str(&format!(
-                "<form class=\"board-tools pl-find\" method=\"get\" action=\"{h}\" role=\"search\" aria-label=\"Find units\"><div class=\"q-field\">{i}<input type=\"search\" name=\"q\" value=\"{q}\" data-find placeholder=\"Find\" aria-label=\"Find units by id or title, or by a step's id, title or description\" autocomplete=\"off\" spellcheck=\"false\" enterkeyhint=\"search\" data-preserve-attr=\"value\"><a class=\"q-clear\" data-clear-q href=\"{c}\" aria-label=\"Clear the find\" title=\"Clear the find\">{x}</a></div>{focus}{show}<button class=\"apply\">Find</button></form>",
+                "<form class=\"board-tools pl-find\" method=\"get\" action=\"{h}\" role=\"search\" aria-label=\"Find units\"><div class=\"q-field\">{i}<input type=\"search\" name=\"q\" value=\"{q}\" data-find placeholder=\"Find\" aria-label=\"Find units by id or title, or by a step's id, title or description\" autocomplete=\"off\" spellcheck=\"false\" enterkeyhint=\"search\" data-preserve-attr=\"value\" data-reopens-stream data-bind:q__root data-on:input__debounce.200ms=\"{get}\" data-on:keydown=\"evt.key === 'Escape' &amp;&amp; $q &amp;&amp; (evt.preventDefault(), evt.stopPropagation(), $q = '', {get})\"><a class=\"q-clear\" href=\"{c}\" aria-label=\"Clear the find\" title=\"Clear the find\">{x}</a></div>{focus}{show}</form>",
                 h = esc(&href),
+                get = esc(&reopen),
                 i = icon(Icon::Search, 16, "q-icon"),
                 q = esc(&view.q),
                 c = esc(&view.clear_href()),
@@ -1080,7 +1099,6 @@ impl<'a> Plan<'a> {
                     )
                 },
             ));
-            out.push_str(ui::search_close().as_str());
         }
         if view.panel.is_some() {
             out.push_str(&view_switch(&href, view.view));
@@ -1142,8 +1160,11 @@ impl<'a> Plan<'a> {
             .unwrap_or(0)
             .max(self.view.seen.unwrap_or(0));
         let mut out = format!(
-            "<section id=\"plan-finished\" class=\"pb-sec\" aria-labelledby=\"finished\"><div class=\"pb-label\"><h2 id=\"finished\">{head}</h2>{since}<span class=\"pb-grow\"></span><form class=\"nd-form\" method=\"post\" action=\"{h}/seen\"><input type=\"hidden\" name=\"through\" value=\"{through}\"><button class=\"quiet\">Mark as seen</button></form></div>{list}",
+            "<section id=\"plan-finished\" class=\"pb-sec\" aria-labelledby=\"finished\"><div class=\"pb-label\"><h2 id=\"finished\">{head}</h2>{since}<span class=\"pb-grow\"></span><form id=\"mark-seen\" class=\"nd-form\" method=\"post\" action=\"{h}/seen\" data-reopens-stream data-on:submit=\"$seen = {through}; @post(el.getAttribute('action'), {{contentType: 'form'}}); {reopen}\"><input type=\"hidden\" name=\"through\" value=\"{through}\"><button class=\"quiet\">Mark as seen</button></form></div>{list}",
             h = esc(&self.view.href()),
+            // the look is this browser's: its cookie keeps it for the next page, and the
+            // stream, reopened on the `seen` signal, draws the plan from it now
+            reopen = esc(&ui::stream_reopen(&self.view.stream_href())),
             list = finished_list(self.view, &self.finished),
         );
         if self.finished_more > 0 {
@@ -1164,12 +1185,17 @@ impl<'a> Plan<'a> {
     fn roster_html(&self) -> String {
         let rows: usize = self.groups.iter().map(|g| g.rows.len()).sum();
         let mut out = format!(
-            "<section id=\"plan-roster\" class=\"pb-sec\" aria-labelledby=\"at-work\"><div class=\"pb-label\"><h2 id=\"at-work\">At work</h2><span class=\"pb-note\">{}</span></div>",
+            "<section id=\"plan-roster\" class=\"pb-sec\" aria-labelledby=\"at-work\"><div class=\"pb-label\"><h2 id=\"at-work\">At work</h2><span class=\"pb-note\">{}</span>{}</div>",
             if rows == 0 {
                 "Nothing now".to_owned()
             } else {
                 ui::count(rows, "unit", "units")
-            }
+            },
+            if rows == 0 {
+                String::new()
+            } else {
+                track_help()
+            },
         );
         if rows > 0 {
             // a badge says what a row's steps run on only where that tells rows apart
@@ -1652,6 +1678,16 @@ pub fn finished_card(
 }
 /// What the axis says of its scale, to a screen reader and on hover.
 const SCALE: &str = "The last 12 hours on a log scale, now at the right; a tick is a message.";
+/// At work's ⓘ: how to read a row's track, behind a small round button by its head (the
+/// "⋯" Details menu's popover, so it closes on a click elsewhere or Escape).
+fn track_help() -> String {
+    format!(
+        "{}<details class=\"dm pb-info\" data-preserve-attr=\"open\"><summary class=\"dm-b\" aria-label=\"How to read At work\" title=\"How to read At work\" data-preserve-attr=\"aria-expanded\">{}</summary><div class=\"menu dm-p\" role=\"group\" aria-label=\"How to read At work\" data-preserve-attr=\"style\"><p class=\"dm-h\">How to read At work</p><p>Each unit's track is its last 12 hours on a log scale: the last hour takes most of the width, and now is at the right edge.</p><p>A blue bar is the run going now, a pale one an earlier run, a sand one a run gone quiet, and a dotted line time it spent waiting. Each tick is a message to or from it.</p></div></details>{}",
+        ui::menu_open(),
+        icon(Icon::Info, 16, ""),
+        ui::menu_close(),
+    )
+}
 /// The labels over At work's tracks: 12h, 4h, 1h, 15m and now, where the log scale puts them;
 /// `class` " ro-axis-g" for a group's own, which a narrow plan shows over its tracks.
 pub fn axis(class: &str) -> String {
@@ -1727,8 +1763,8 @@ pub struct RowParts<'a> {
     /// HTML: what it opens to.
     pub drill: &'a str,
 }
-/// A row of At work: a disclosure whose summary is the row and whose body is its steps, so it
-/// opens in place without script.
+/// A row of At work: a disclosure whose summary is the row and whose body is its steps, opening
+/// in place.
 pub fn roster_row(row: &RowParts<'_>) -> String {
     format!(
         "<details id=\"u-{id}\" class=\"ro-u{wait}\" data-unit=\"{id}\"{states} data-preserve-attr=\"open\"><summary class=\"ro-r\">{badge}<span class=\"ro-who\"><span class=\"ro-t\">{title}{own}</span><span class=\"ro-s\">{said}</span></span><span class=\"ro-meta\">{meta}</span>{track}<span class=\"ro-chev\" aria-hidden=\"true\">{chev}</span></summary><div class=\"ro-drill\">{drill}</div></details>",
@@ -1986,9 +2022,9 @@ pub fn finished_list(view: &ProjectView, units: &[&UnitView]) -> String {
     out
 }
 
-/// The Plan · Both · Board switch: a link each, so a choice works without script (the page
-/// drawn in it and the choice kept in a cookie); with script `board.js` takes the click, shows
-/// the view at once and keeps it per project, wide and narrow apart. The chosen one is filled.
+/// The Plan · Both · Board switch: a link each (the page drawn in its view and the choice kept
+/// in a cookie); `board.js` takes the click, shows the view at once and keeps it per project,
+/// wide and narrow apart. The chosen one is filled.
 fn view_switch(href: &str, chosen: Option<&str>) -> String {
     let links: String = [
         ("plan", "Plan", Icon::Workflow),
@@ -2075,10 +2111,16 @@ pub fn draw(
     let plan = Plan::new(view);
     let nav = NavView::new(shared, Some(view.project.id), "plan")?;
     let body = body(view, &plan, glance(view, shared)).map_err(render_error)?;
+    // the find and the read cursor are the page's signals: its stream reads them when it opens,
+    // and the find and Mark as seen reopen it on new ones
+    let mut signals = serde_json::Map::new();
+    signals.insert("q".into(), view.q.clone().into());
+    signals.insert("seen".into(), view.seen.unwrap_or(0).into());
     let frame = Frame {
         head: plan.band(),
         meta: plan.meta(),
         tools: plan.tools(),
+        signals,
     };
     let batch = RenderedBatch::new(vec![
         PatchRegion::new("project-board", board_region(&body)),
@@ -2105,7 +2147,7 @@ pub fn render(
         &body,
         &nav,
         viewer,
-        &format!("{}/stream?{}", view.href(), view.query),
+        &view.stream_href(),
         &batch.version,
         &view.href(),
         &frame,
@@ -2130,8 +2172,6 @@ pub struct NeedsForm {
     pub items: String,
     #[serde(default)]
     pub revision: u64,
-    #[serde(default)]
-    pub next: String,
 }
 /// `POST /projects/id/<p>/needs`: set items of Needs you aside or back (`NeedsDismiss`: about
 /// attention alone, nothing settled), or retry a group's steps. Retry all retries each step as
@@ -2144,16 +2184,14 @@ pub async fn needs(
     headers: HeaderMap,
     Form(form): Form<NeedsForm>,
 ) -> Response {
-    let next = if form.next.starts_with('/') && !form.next.starts_with("//") {
-        form.next.clone()
-    } else {
-        format!("/projects/id/{project}#needs")
-    };
     let items: Vec<&str> = form.items.split_whitespace().collect();
     if items.is_empty() || items.len() > 500 {
-        return crate::http::error_response(PublicError::BadRequest {
-            message: "name one to 500 items".into(),
-        });
+        return write::failed(
+            &headers,
+            PublicError::BadRequest {
+                message: "name one to 500 items".into(),
+            },
+        );
     }
     if form.action == "retry" {
         for item in &items {
@@ -2161,20 +2199,25 @@ pub async fn needs(
                 .strip_prefix("stop:")
                 .and_then(|rest| rest.split_once('@'))
             else {
-                return crate::http::error_response(PublicError::BadRequest {
-                    message: format!("{item} is not a stop to retry"),
-                });
+                return write::failed(
+                    &headers,
+                    PublicError::BadRequest {
+                        message: format!("{item} is not a stop to retry"),
+                    },
+                );
             };
             let Ok(id) = step.parse::<StepId>() else {
-                return crate::http::error_response(PublicError::BadRequest {
-                    message: format!("{step} is not a step"),
-                });
+                return write::failed(
+                    &headers,
+                    PublicError::BadRequest {
+                        message: format!("{step} is not a step"),
+                    },
+                );
             };
             let form = ActionForm {
                 action: Action::Retry,
                 revision: form.revision,
                 message: String::new(),
-                next: next.clone(),
                 seen: seen.to_owned(),
             };
             match step::try_action(
@@ -2187,31 +2230,35 @@ pub async fn needs(
             )
             .await
             {
-                Ok(_) => {}
-                Err(Ok(refusal)) => {
-                    return step::refused(project, &id, &headers, "", &Action::Retry, refusal);
-                }
-                Err(Err(e)) => return crate::http::error_response(e),
+                Ok(()) => {}
+                Err(Ok(refusal)) => return refusal.answer(&headers),
+                Err(Err(e)) => return write::failed(&headers, e),
             }
         }
-        return Redirect::to(&next).into_response();
+        return write::done(&headers);
     }
     let dismissed = match form.action.as_str() {
         "dismiss" => true,
         "undo" => false,
         other => {
-            return crate::http::error_response(PublicError::BadRequest {
-                message: format!("{other} is not an action on Needs you"),
-            });
+            return write::failed(
+                &headers,
+                PublicError::BadRequest {
+                    message: format!("{other} is not an action on Needs you"),
+                },
+            );
         }
     };
     let Some(Extension(commands)) = commands else {
-        return crate::http::error_response(PublicError::Busy {
-            message:
-                "Nothing was done: sluice's coordinator is not answering. Try again in a moment."
-                    .into(),
-            retryable: true,
-        });
+        return write::failed(
+            &headers,
+            PublicError::Busy {
+                message:
+                    "Nothing was done: sluice's coordinator is not answering. Try again in a moment."
+                        .into(),
+                retryable: true,
+            },
+        );
     };
     let mut marks = vec![];
     for item in items {
@@ -2219,9 +2266,12 @@ pub async fn needs(
             Some((key, stamp)) => match stamp.parse::<i64>() {
                 Ok(stamp) => (key, stamp),
                 Err(_) => {
-                    return crate::http::error_response(PublicError::BadRequest {
-                        message: format!("{item} has no stamp"),
-                    });
+                    return write::failed(
+                        &headers,
+                        PublicError::BadRequest {
+                            message: format!("{item} has no stamp"),
+                        },
+                    );
                 }
             },
             None => (item, 0),
@@ -2249,10 +2299,10 @@ pub async fn needs(
             })
             .await;
         if let Err(e) = sent {
-            return crate::http::error_response(e);
+            return write::failed(&headers, e);
         }
     }
-    Redirect::to(&next).into_response()
+    write::done(&headers)
 }
 #[derive(Deserialize)]
 pub struct SeenForm {
@@ -2260,9 +2310,10 @@ pub struct SeenForm {
     pub through: u64,
 }
 /// `POST /projects/id/<p>/seen`: Mark as seen. This browser's look at the project's finished
-/// units moves to `through`, kept in its cookie (`sluice_seen_<p>`), and the plan draws again.
+/// units moves to `through`, kept in its cookie (`sluice_seen_<p>`) for its next page; the page
+/// it was marked on already reopened its stream on the same look, its `seen` signal.
 pub async fn mark_seen(Path(project): Path<ProjectId>, Form(form): Form<SeenForm>) -> Response {
-    let mut response = Redirect::to(&format!("/projects/id/{project}")).into_response();
+    let mut response = StatusCode::NO_CONTENT.into_response();
     let cookie = format!(
         "{}={}; Path=/; Max-Age=34560000; SameSite=Lax",
         seen_cookie(project),

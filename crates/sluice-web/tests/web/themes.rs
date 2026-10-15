@@ -149,7 +149,7 @@ async fn slow_chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
         // ---- a pick: the picker applies at once, and the cookie keeps it
         browser.viewport(1440, "light").unwrap();
         browser.navigate(&home).unwrap();
-        browser.wait("document.readyState === 'complete' && !!customElements.get('sluice-toggle')").unwrap();
+        browser.wait("document.readyState === 'complete'").unwrap();
         let sluice = browser.eval(PAPER).unwrap();
         browser.eval("document.querySelector('details.settings').open = true").unwrap();
         browser.eval("document.querySelector('details.settings .sub-themes').open = true").unwrap();
@@ -214,8 +214,8 @@ async fn slow_chromium_every_width_fits_its_columns_and_a_theme_pick_applies() {
 }
 
 /// Which faces a page asked for: each `@font-face` family the stylesheet declares, with whether
-/// any of its faces has been asked to load (with script or without; a face that could not be
-/// fetched counts, so this holds offline).
+/// any of its faces has been asked to load (a face that could not be fetched counts, so this
+/// holds offline).
 const FACES: &str = "(() => { const asked = {}; for (const f of document.fonts) { const k = f.family.replace(/[\"']/g, ''); asked[k] = (asked[k] ?? false) || f.status !== 'unloaded'; } return asked; })()";
 /// Each face family the page has loaded, and every URL the page fetched that is not the
 /// dashboard's own.
@@ -223,8 +223,8 @@ const LOADED: &str = "(() => { const loaded = {}; for (const f of document.fonts
 
 /// A page fetches only its own theme's faces: Sluice's two in Sluice, Empire Builder's in
 /// Empire Builder, never another family's; opening the picker (whose swatches carry no text)
-/// fetches none; a page without script draws the cookie's theme in its own faces; and every face
-/// loads from the dashboard itself, the page asking no other host for anything.
+/// fetches none; and every face loads from the dashboard itself, the page asking no other host
+/// for anything.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_a_page_fetches_only_its_themes_faces() {
     let f = Fixture::new().await;
@@ -248,16 +248,8 @@ async fn slow_chromium_a_page_fetches_only_its_themes_faces() {
                 ["Schibsted Grotesk Variable", "JetBrains Mono Variable"],
             ),
         ] {
-            for script in [true, false] {
+            {
                 let mut browser = Chrome::open("about:blank").unwrap();
-                if !script {
-                    browser
-                        .send(
-                            "Emulation.setScriptExecutionDisabled",
-                            json!({"value": true}),
-                        )
-                        .unwrap();
-                }
                 browser
                     .send(
                         "Network.setCookie",
@@ -269,41 +261,39 @@ async fn slow_chromium_a_page_fetches_only_its_themes_faces() {
                 browser
                     .eval("document.fonts.ready.then(() => true)")
                     .unwrap();
-                if script {
-                    browser
-                        .eval("document.querySelector('details.settings').open = true; document.querySelector('details.settings .sub-themes').open = true")
-                        .unwrap();
-                    browser.eval(FRAMES).unwrap();
-                    browser
-                        .eval("document.fonts.ready.then(() => true)")
-                        .unwrap();
-                }
+                browser
+                    .eval("document.querySelector('details.settings').open = true; document.querySelector('details.settings .sub-themes').open = true")
+                    .unwrap();
+                browser.eval(FRAMES).unwrap();
+                browser
+                    .eval("document.fonts.ready.then(() => true)")
+                    .unwrap();
                 let faces = asked(&mut browser);
                 let (loaded, elsewhere): (BTreeMap<String, bool>, Vec<String>) =
                     serde_json::from_value(browser.eval(LOADED).unwrap()).unwrap();
                 assert!(
                     elsewhere.is_empty(),
-                    "{theme} (script {script}) asks another host: {elsewhere:?}"
+                    "{theme} asks another host: {elsewhere:?}"
                 );
                 for face in own {
                     assert_eq!(
                         loaded.get(face),
                         Some(&true),
-                        "{theme} (script {script}) loads {face} from the dashboard: {loaded:?}"
+                        "{theme} loads {face} from the dashboard: {loaded:?}"
                     );
                 }
                 for face in own {
                     assert_eq!(
                         faces.get(face),
                         Some(&true),
-                        "{theme} (script {script}) asks for {face}: {faces:?}"
+                        "{theme} asks for {face}: {faces:?}"
                     );
                 }
                 for face in others {
                     assert_eq!(
                         faces.get(face),
                         Some(&false),
-                        "{theme} (script {script}) never asks for {face}: {faces:?}"
+                        "{theme} never asks for {face}: {faces:?}"
                     );
                 }
             }
@@ -314,9 +304,8 @@ async fn slow_chromium_a_page_fetches_only_its_themes_faces() {
     server.abort();
 }
 
-/// The first open takes Sluice Light or Sluice Dark from the system's scheme, once: the page's
-/// script keeps it as the choice, so a later change of the system's scheme changes nothing;
-/// without script the stylesheet follows the system until a theme is picked.
+/// The first open takes Sluice Light or Sluice Dark from the system's scheme, once: the page
+/// keeps it as the choice, so a later change of the system's scheme changes nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_the_first_open_follows_the_system_once_and_then_keeps_its_theme() {
     let f = Fixture::new().await;
@@ -333,27 +322,24 @@ async fn slow_chromium_the_first_open_follows_the_system_once_and_then_keeps_its
                 )
                 .unwrap();
         };
-        // without script no frame callback runs: the page is read once it has loaded
-        let load = |browser: &mut Chrome, script: bool| {
+        let load = |browser: &mut Chrome| {
             browser.navigate(&home).unwrap();
             browser.wait("document.readyState === 'complete'").unwrap();
-            if script {
-                browser.eval(FRAMES).unwrap();
-            }
+            browser.eval(FRAMES).unwrap();
         };
         let checked = "document.querySelector('input[name=theme]:checked')?.value ?? null";
         for (system, other, first) in [("dark", "light", "sluice-dark"), ("light", "dark", "sluice-light")] {
             // a browser that has never chosen: a fresh profile, no cookie
             let mut browser = Chrome::open("about:blank").unwrap();
             scheme(&mut browser, system);
-            load(&mut browser, true);
+            load(&mut browser);
             assert_eq!(browser.eval("document.documentElement.dataset.theme").unwrap(), first, "{system}");
             assert_eq!(browser.eval(checked).unwrap(), first, "{system}");
             let paper = browser.eval(PAPER).unwrap();
             // kept: the server draws it from now on, whatever the system says
             wait_theme_cookie(&mut browser);
             scheme(&mut browser, other);
-            load(&mut browser, true);
+            load(&mut browser);
             assert_eq!(browser.eval(PAPER).unwrap(), paper, "{system} then {other}");
             assert_eq!(
                 browser.eval("document.documentElement.outerHTML.startsWith('<html lang=\"en\" data-theme=')").unwrap(),
@@ -364,23 +350,11 @@ async fn slow_chromium_the_first_open_follows_the_system_once_and_then_keeps_its
             browser.eval("document.querySelector('input[name=theme][value=gruvbox-light]').click()").unwrap();
             wait_theme_cookie(&mut browser);
             scheme(&mut browser, system);
-            load(&mut browser, true);
+            load(&mut browser);
             assert_eq!(browser.eval("document.documentElement.dataset.theme").unwrap(), "gruvbox-light");
             assert_eq!(browser.eval(checked).unwrap(), "gruvbox-light");
             assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), json!([]));
         }
-        // without script nothing is kept: the stylesheet draws Sluice by the system's scheme
-        let mut browser = Chrome::open("about:blank").unwrap();
-        browser.send("Emulation.setScriptExecutionDisabled", json!({"value": true})).unwrap();
-        let mut papers = vec![];
-        for system in ["light", "dark"] {
-            scheme(&mut browser, system);
-            load(&mut browser, false);
-            let drawn = browser.eval(PAPER).unwrap();
-            assert_eq!(drawn[0], Value::Null, "{system}: {drawn}");
-            papers.push(drawn[1].clone());
-        }
-        assert_ne!(papers[0], papers[1], "{papers:?}");
     })
     .await
     .unwrap();
@@ -441,7 +415,7 @@ async fn slow_chromium_display_preferences_open_theme_pick_back_shortcuts_and_es
         for width in [390, 1440] {
             browser.navigate(&home).unwrap();
             browser
-                .wait("document.readyState === 'complete' && !!customElements.get('sluice-menu') && !!customElements.get('sluice-toggle')")
+                .wait("document.readyState === 'complete' && !!customElements.get('sluice-menu')")
                 .unwrap();
             browser.viewport(width, "nord-light").unwrap();
             // ---- the keyboard: ArrowDown from the sliders opens the top level, on Theme's row

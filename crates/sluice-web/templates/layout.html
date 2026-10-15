@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="en"{% if viewer.theme.is_some() %} data-theme="{{ viewer.theme_id() }}"{% endif %}{% if viewer.types %} class="show-types"{% endif %}>
+<html lang="en"{% if viewer.theme.is_some() %} data-theme="{{ viewer.theme_id() }}"{% endif %}{% if viewer.types %} class="show-types"{% endif %} data-signals="{{ signals }}" data-attr:data-theme="$theme" data-class:show-types="$types" data-init="$theme || ($theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'sluice-dark' : 'sluice-light', @post('/settings'))">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{ title }} · sluice</title><link id="favicon" rel="icon" href="{{ crate::views::asset_url("favicon.svg") }}" type="image/svg+xml">
 <link rel="stylesheet" href="{{ style_url }}">
 <script type="importmap">{{ import_map|safe }}</script>
 <script type="module" data-datastar-runtime src="{{ datastar_url }}"></script>
-</head><body data-signals="{{ signals }}" data-release="{{ release }}">{{ crate::views::icons::sprite()|safe }}
+</head><body data-release="{{ release }}">{{ crate::views::icons::sprite()|safe }}
 <a class="skip" href="#content">Skip to content</a>
 <header class="site-head"><div class="band-in"><nav id="top-nav" class="top" aria-label="Main">
 <a class="brand" href="/" aria-label="sluice: all projects"><img class="mark" src="{{ crate::views::asset_url("logo.svg") }}" width="26" height="26" alt=""><span class="wordmark">sluice</span></a>
@@ -18,10 +18,10 @@
 <a id="nav-inbox" href="/inbox" aria-label="{{ nav.inbox_label() }}"{% if path == "/inbox" || path == "/questions" || path == "/history" %} aria-current="page"{% endif %}><span class="inbox-word">Inbox</span>{% if nav.inbox > 0 %}<span class="badge" aria-hidden="true">{{ nav.inbox }}</span>{% else if nav.notes > 0 %}<span class="notes-dot" aria-hidden="true" title="{{ nav.notes }} unread {% if nav.notes == 1 %}note{% else %}notes{% endif %}"></span>{% endif %}</a>
 {% if !stream.is_empty() %}<span class="live">Live</span>{% endif %}
 {{ crate::views::ui::menu_open()|safe }}<details class="settings" data-preserve-attr="open"><summary aria-label="Display preferences" title="Display preferences">{{ crate::views::icons::icon(crate::views::icons::Icon::SlidersHorizontal, 20, "")|safe }}</summary>
-{{ crate::views::prefs::menu(viewer, path, nav.keys().as_slice())|safe }}</details>{{ crate::views::ui::menu_close()|safe }}
+{{ crate::views::prefs::menu(viewer, nav.keys().as_slice())|safe }}</details>{{ crate::views::ui::menu_close()|safe }}
 </nav></div></header>
 {% if !frame.head.as_str().is_empty() || !nav.links.is_empty() || !frame.tools.as_str().is_empty() || !frame.meta.as_str().is_empty() %}<div class="page-top">{% if !nav.links.is_empty() || !frame.tools.as_str().is_empty() || !frame.meta.as_str().is_empty() %}<div class="subnav"><div class="subnav-in">{% if !nav.links.is_empty() %}<nav class="tabs lead" aria-label="{% if nav.selected.is_some() %}{{ nav.label }}{% else %}Sections{% endif %}">{% for link in nav.links %}<a href="{{ link.href }}"{% if link.current %} aria-current="page"{% endif %}>{{ link.label }}</a>{% endfor %}{% if !nav.settings_href.is_empty() %}<a class="project-settings" href="{{ nav.settings_href }}" aria-label="Project settings"{% if path == nav.settings_href %} aria-current="page"{% endif %}>Settings</a>{% endif %}</nav>{% endif %}{% if !frame.meta.as_str().is_empty() %}<p class="subnav-meta">{{ frame.meta|safe }}</p>{% endif %}{% if !frame.tools.as_str().is_empty() %}<div class="subnav-tools">{{ frame.tools|safe }}</div>{% endif %}</div></div>{% endif %}{{ frame.head|safe }}</div>{% endif %}
-<main id="content" tabindex="-1"{% if !stream.is_empty() %} data-init="@get('{{ stream }}', {retry: 'always', retryMaxCount: 10, retryMaxWait: 30000, requestCancellation: 'cleanup'})"{% endif %}>
-{{ crate::views::ui::banners()|safe }}
+<main id="content" tabindex="-1"{% if !stream.is_empty() %} data-init="{{ crate::views::ui::stream_get(stream) }}"{% endif %}>
+{{ crate::views::ui::banners(stream)|safe }}
 {{ body|safe }}
-</main><dialog id="confirmation" class="confirmation" aria-labelledby="confirmation-title" data-ignore-morph><h2 id="confirmation-title"></h2><div id="confirmation-body"></div></dialog><script type="module" src="{{ nav_url }}"></script><script type="module" src="{{ components_url }}"></script></body></html>
+</main>{{ crate::views::ui::confirmation()|safe }}<script type="module" src="{{ nav_url }}"></script><script type="module" src="{{ components_url }}"></script></body></html>

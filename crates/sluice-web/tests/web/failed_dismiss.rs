@@ -2,16 +2,12 @@
 //! you and the step's page give one advice, read from the step's last two runs (a repeated
 //! failure leads with Retry with feedback); an engine that exited partway is told apart from
 //! one that would not start; the step's head offers Cancel and Cancel and dismiss, whose forms
-//! post without script and in place with it, and the plan then offers its Undo.
+//! post in place, and the plan then offers its Undo.
 use crate::board_fixture;
 use crate::chrome;
 use crate::plan_html;
 use crate::seed;
-use axum::{
-    Extension, Router,
-    body::{Body, to_bytes},
-    http::{Request, StatusCode},
-};
+use axum::{Extension, Router, http::StatusCode};
 use board_fixture::Fixture;
 use chrome::Chrome;
 use serde_json::json;
@@ -269,30 +265,22 @@ fn router(f: &Fixture) -> Router {
     f.router()
         .layer(Extension(Commands(Arc::new(Store(f.writer.clone(), plan)))))
 }
-/// A browser's form post (no script): where it is sent back to.
-async fn post(router: &Router, path: &str, form: &[(&str, &str)]) -> (StatusCode, String) {
-    let body = url::form_urlencoded::Serializer::new(String::new())
-        .extend_pairs(form)
-        .finish();
+/// A page's form post (`ui::post_form`, from form `act`): what its notice says, "" when the
+/// write was taken.
+async fn post(router: &Router, path: &str, form: &[(&str, &str)]) -> String {
     let response = router
         .clone()
-        .oneshot(
-            Request::post(path)
-                .header("content-type", "application/x-www-form-urlencoded")
-                .header("accept", "text/html")
-                .body(Body::from(body))
-                .unwrap(),
-        )
+        .oneshot(super::forms::post(path, "act", form))
         .await
         .unwrap();
-    let status = response.status();
-    let location = response
-        .headers()
-        .get("location")
-        .map(|l| l.to_str().unwrap().to_owned())
-        .unwrap_or_default();
-    let _ = to_bytes(response.into_body(), usize::MAX).await;
-    (status, location)
+    assert_eq!(response.status(), StatusCode::OK);
+    let answer = super::forms::text(response).await;
+    answer
+        .split("<p id=\"act-said\" class=\"form-said\" role=\"alert\">")
+        .nth(1)
+        .map_or(String::new(), |rest| {
+            rest[..rest.find("</p>").unwrap()].to_owned()
+        })
 }
 /// The hidden fields of the form posting `action` inside `html`.
 fn form_fields(html: &str, action: &str) -> Vec<(String, String)> {
@@ -318,7 +306,7 @@ fn form_fields(html: &str, action: &str) -> Vec<(String, String)> {
 }
 
 #[tokio::test]
-async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_without_script() {
+async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_and_undo_brings_back_the_cancel() {
     let f = Fixture::new().await;
     let id = advice(&f).await;
     let router = router(&f);
@@ -341,30 +329,21 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
     let cancelled = plan_html::stopped(&plan, "cxl");
     assert!(
         cancelled.contains("value=\"stop:cxl\"")
-            && cancelled.contains(
-                "/steps/cxl/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\">"
-            )
+            && cancelled.contains("/steps/cxl/actions\"")
+            && cancelled.contains("<input type=\"hidden\" name=\"action\" value=\"dismiss\">")
             && cancelled.contains(">Settle as done</button>"),
         "{cancelled}"
     );
 
-    // Cancel and dismiss, posted without script, sent back to the plan
-    let mut fields: Vec<(String, String)> = form_fields(acts, "cancel_dismiss")
-        .into_iter()
-        .filter(|(n, _)| n != "next")
-        .collect();
-    fields.push(("next".into(), format!("{plan_href}#needs")));
+    // Cancel and dismiss, its form as drawn
+    let mut fields = form_fields(acts, "cancel_dismiss");
     fields.push(("message".into(), "superseded".into()));
     let pairs: Vec<(&str, &str)> = fields
         .iter()
         .map(|(n, v)| (n.as_str(), v.as_str()))
         .collect();
-    let (status, location) =
-        post(&router, &format!("{plan_href}/steps/first/actions"), &pairs).await;
-    assert_eq!(
-        (status, location.as_str()),
-        (StatusCode::SEE_OTHER, format!("{plan_href}#needs").as_str())
-    );
+    let said = post(&router, &format!("{plan_href}/steps/first/actions"), &pairs).await;
+    assert_eq!(said, "");
     // the plan: settled, its unit done, no longer an item (its step's page undoes it)
     let (_, plan) = f.get(&plan_href).await;
     let well = plan_html::band(&plan, "plan-needs");
@@ -388,14 +367,14 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
         "{runs}"
     );
 
-    // Undo, without script: the item is back as a cancel (not the failure), with its ×
-    let (status, _) = post(
+    // Undo: the item is back as a cancel (not the failure), with its ×
+    let said = post(
         &router,
         &format!("{plan_href}/steps/first/actions"),
-        &[("action", "undismiss"), ("next", &plan_href)],
+        &[("action", "undismiss")],
     )
     .await;
-    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(said, "");
     let (_, plan) = f.get(&plan_href).await;
     let card = plan_html::stopped(&plan, "first");
     assert!(
@@ -405,8 +384,7 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
             && card.contains(">Settle as done</button>"),
         "{card}"
     );
-    // Cancel alone, without script, on another failure from its head: it stays stopped, now
-    // a cancel
+    // Cancel alone on another failure from its head: it stays stopped, now a cancel
     let (_, page) = f.get(&format!("{plan_href}/steps/rep")).await;
     let fields = form_fields(
         between(&page, "<header id=\"step-band\"", "</header>"),
@@ -416,8 +394,8 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
         .iter()
         .map(|(n, v)| (n.as_str(), v.as_str()))
         .collect();
-    let (status, _) = post(&router, &format!("{plan_href}/steps/rep/actions"), &pairs).await;
-    assert_eq!(status, StatusCode::SEE_OTHER);
+    let said = post(&router, &format!("{plan_href}/steps/rep/actions"), &pairs).await;
+    assert_eq!(said, "");
     let (_, plan) = f.get(&plan_href).await;
     let card = plan_html::stopped(&plan, "rep");
     assert!(
@@ -426,15 +404,15 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_whose_forms_work_wit
             && !card.contains("Run 1 failed the same way"),
         "{card}"
     );
-    // Cancel and dismiss no longer applies to a cancel: refused, nothing done
-    let (status, location) = post(
+    // Cancel and dismiss no longer applies to a cancel: refused in its form's notice, nothing
+    // done
+    let said = post(
         &router,
         &format!("{plan_href}/steps/rep/actions"),
         &[("action", "cancel_dismiss"), ("revision", "1")],
     )
     .await;
-    assert_eq!(status, StatusCode::SEE_OTHER);
-    assert!(location.contains("/steps/rep?notice="), "{location}");
+    assert!(said.starts_with("Nothing was done"), "{said}");
 }
 
 async fn serve(router: Router) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {

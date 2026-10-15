@@ -22,6 +22,7 @@ pub mod ui;
 pub mod unit_page;
 pub mod unit_steps;
 pub mod unit_view;
+pub mod write;
 
 use askama::Template;
 use axum::{
@@ -755,6 +756,9 @@ pub struct Frame {
     pub head: TrustedHtml,
     pub meta: TrustedHtml,
     pub tools: TrustedHtml,
+    /// The page's own signals beside the frame's (`ver`, `stale`): what it sends its stream
+    /// when it opens it (the plan's find and read cursor).
+    pub signals: serde_json::Map<String, serde_json::Value>,
 }
 #[derive(Template)]
 #[template(path = "layout.html")]
@@ -814,7 +818,15 @@ pub fn render_framed(
         nav,
         viewer,
         stream,
-        signals: serde_json::json!({"ver":version,"stale":false}).to_string(),
+        signals: {
+            let mut signals = frame.signals.clone();
+            signals.insert("ver".into(), version.into());
+            signals.insert("stale".into(), false.into());
+            // the display preferences: what <html> wears, kept by posting them to /settings
+            signals.insert("theme".into(), viewer.theme_id().into());
+            signals.insert("types".into(), viewer.types.into());
+            serde_json::Value::Object(signals).to_string()
+        },
         path,
         style_url: asset_url("style.css"),
         nav_url: asset_url("nav.js"),
@@ -1080,38 +1092,34 @@ fn optional_project<'de, D: serde::Deserializer<'de>>(
     }
 }
 /// Cookie-only display preferences. Mount inside p6-02's Origin/Host guards.
+/// `POST /settings`: the display preferences, as the page's signals carry them (Datastar's
+/// `@post` sends them as JSON): `theme` (one of `THEMES`) and `types` (whether value types
+/// show), each kept in its cookie for every page drawn after.
 pub async fn display_preferences(body: axum::body::Bytes) -> Response {
-    if body.len() > 4096 {
+    if body.len() > 65_536 {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
-    let values: url::form_urlencoded::Parse<'_> = url::form_urlencoded::parse(&body);
-    let mut theme = None;
-    let mut types = None;
-    let mut next = "/".to_owned();
-    for (name, value) in values {
-        match name.as_ref() {
-            "theme" => theme = Some(value.into_owned()),
-            "types" => types = Some(value.into_owned()),
-            "next" => next = value.into_owned(),
-            _ => {}
-        }
-    }
+    let Ok(signals) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let theme = signals
+        .get("theme")
+        .and_then(serde_json::Value::as_str)
+        .filter(|t| !t.is_empty());
+    let types = signals.get("types").and_then(serde_json::Value::as_bool);
     // a theme is one of the list: there is no "follow the system" to choose, only the first
-    // open's default, which the page's script keeps as a choice
-    if theme.as_deref().is_some_and(|t| self::theme(t).is_none())
-        || types.as_deref().is_some_and(|t| t != "0" && t != "1")
-    {
+    // open's default, which the page keeps as a choice
+    if theme.is_some_and(|t| self::theme(t).is_none()) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    if !next.starts_with('/')
-        || next.starts_with("//")
-        || next.contains('\\')
-        || next.chars().any(char::is_control)
-    {
-        next = "/".into();
-    }
-    let mut response = axum::response::Redirect::to(&next).into_response();
-    for (name, value) in [("sluice_theme", theme), ("sluice_types", types)] {
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    for (name, value) in [
+        ("sluice_theme", theme.map(str::to_owned)),
+        (
+            "sluice_types",
+            types.map(|t| if t { "1" } else { "0" }.to_owned()),
+        ),
+    ] {
         if let Some(value) = value {
             let cookie =
                 format!("{name}={value}; Path=/; Max-Age=34560000; SameSite=Lax; HttpOnly");

@@ -244,11 +244,11 @@ impl Failure {
     /// What to try next, by its kind, under its sentence, only when it is more than the Retry
     /// beside it: "" where Retry is the whole move (a passing engine fault, a lost process, a
     /// transient failure), where only its own words can say (the work's own failure) and for a
-    /// cancel.
+    /// cancel. HTML: fixed words, a setting's name in code.
     pub fn next_step(&self) -> &'static str {
         match self.caption() {
             "cap" => {
-                "Raise its agent's time limit (SLUICE_AGENT_MAX_MIN in the project's .env), then Retry."
+                "Give its agent more time: set <code>SLUICE_AGENT_MAX_MIN</code>, its limit in minutes, in the project's <code>.env</code> file, then Retry."
             }
             "stalled" => "Its Activity shows where it went quiet.",
             "quota" => "Retry once its engine's usage cap resets.",
@@ -263,11 +263,11 @@ impl Failure {
         }
     }
     /// What to try next, said of several failures of its kind at once (the plan's group of
-    /// them, with its Retry all): `next_step` in the plural.
+    /// them, with its Retry all): `next_step` in the plural, as HTML.
     pub fn next_step_all(&self) -> &'static str {
         match self.caption() {
             "cap" => {
-                "Raise the agents' time limit (SLUICE_AGENT_MAX_MIN in the project's .env), then Retry all."
+                "Give the agents more time: set <code>SLUICE_AGENT_MAX_MIN</code>, their limit in minutes, in the project's <code>.env</code> file, then Retry all."
             }
             "stalled" => "Each one's Activity shows where it went quiet.",
             "quota" => "Retry all once their engines' usage caps reset.",
@@ -329,7 +329,7 @@ impl Advice {
     pub fn repeated(&self) -> bool {
         matches!(self, Advice::Repeated(_))
     }
-    /// What it says under why it failed ("" for none).
+    /// What it says under why it failed ("" for none), as HTML (`Failure::next_step`).
     pub fn text(&self) -> String {
         match self {
             Advice::None => String::new(),

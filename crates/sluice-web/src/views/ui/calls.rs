@@ -1,5 +1,5 @@
 //! Tool calls (DESIGN.md, Components: calls): a quiet fold, "5 tool calls", closed by default
-//! and opening without script to compact rows in data mono: the tool, its key argument clipped
+//! and opening to compact rows in data mono: the tool, its key argument clipped
 //! to one line, how long it took on the right (a failure says so in words).
 use super::{count, esc};
 use crate::views::TrustedHtml;

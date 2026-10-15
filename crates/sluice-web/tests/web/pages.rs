@@ -417,7 +417,7 @@ async fn home_attention_and_reader_day() {
             ask.contains(&format!("name=\"items\" value=\"ask:{}\"", n.question)),
             "{ask}"
         );
-        assert!(!ask.contains("<sluice-answer>"), "{ask}");
+        assert!(!ask.contains("<sluice-answer "), "{ask}");
         // the projects by what needs the owner: the question's, then the stopped, then the running
         let grid = between(&home, "<div class=\"proj-grid\">", "</section>");
         let at = |name: &str| {
@@ -470,22 +470,17 @@ async fn home_attention_and_reader_day() {
         for name in ["almanac", "chores", "lanes", "plain"] {
             assert!(index.contains(&format!(">{name}</a>")), "{name}: {index}");
         }
-        // without script, the answer posts as a form and comes back home
+        // the answer's words post from its form
         let response = f
             .router()
-            .oneshot(
-                Request::post(format!(
-                    "/projects/id/{}/messages/{}/reply",
-                    n.almanac, n.question
-                ))
-                .header("content-type", "application/x-www-form-urlencoded")
-                .header("referer", "http://localhost/")
-                .body(Body::from("body=Use+the+new+dates."))
-                .unwrap(),
-            )
+            .oneshot(super::forms::post(
+                format!("/projects/id/{}/messages/{}/reply", n.almanac, n.question),
+                "reply-form",
+                &[("body", "Use the new dates.")],
+            ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.status(), StatusCode::OK);
         assert!(matches!(
             f.commands.0.lock().unwrap().last(),
             Some(CommandRequest::Reply(r)) if r.body == "Use the new dates."
@@ -533,9 +528,22 @@ async fn home_attention_and_reader_day() {
             line.contains("<div class=\"dl-now\"><span>now, <time data-clock"),
             "{line}"
         );
-        // the timetable: a row an hour, the current one last with the rule at now
+        // the timetable: a row an hour, the current one last with the rule at now; two or more
+        // hours in which nothing started one line, "03–14 · nothing ran", all 24 hours told
+        let gaps: Vec<u64> = page
+            .split("<section class=\"tt-row tt-gap\"")
+            .skip(1)
+            .map(|gap| {
+                assert!(gap.contains("nothing ran</p>"), "{gap}");
+                let said = &between(gap, "<span class=\"vh\">", "</span>")[17..];
+                let hour = |at: usize| said[at..at + 2].parse::<u64>().unwrap();
+                (hour(9) + 24 - hour(0)) % 24 + 1
+            })
+            .collect();
+        assert!(!gaps.is_empty() && gaps.iter().all(|n| *n >= 2), "{gaps:?}");
         assert_eq!(
-            page.matches("<section class=\"tt-row").count(),
+            page.matches("<section class=\"tt-row").count() - gaps.len()
+                + gaps.iter().sum::<u64>() as usize,
             24,
             "{page}"
         );

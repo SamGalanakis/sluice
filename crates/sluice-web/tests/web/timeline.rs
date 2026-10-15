@@ -359,7 +359,7 @@ async fn the_board_shows_a_steps_chain_from_its_address_and_says_so() {
     // the form keeps the focus as it applies, and so does the stream
     assert!(html.contains("<input type=\"hidden\" name=\"root\" value=\"l2-land\"><input type=\"hidden\" name=\"down\" value=\"1\">"), "{html}");
     assert!(
-        html.contains("/stream?show=all&#38;root=l2-land&#38;down=1'"),
+        html.contains("/stream?show=all&#38;root=l2-land&#38;down=1&#39;"),
         "{html}"
     );
     // what it comes after, one step deep: l2 alone

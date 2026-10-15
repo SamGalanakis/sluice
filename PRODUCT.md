@@ -50,8 +50,14 @@ progress line and its typed outputs, with the one human decision point (the Inbo
 - Mostly read-only. The writes are answering and replying to messages, pausing, retrying (with
   feedback) and cancelling a step, and the project settings (name, description, icon,
   resources, pause, archive, delete); each goes through the same commands as the MCP tools.
-- Server-rendered HTML; every page works without JavaScript; Datastar SSE streams patch only the
-  parts that changed. Every script and font is served by sluice itself (vendored); a page asks
+- Server-rendered HTML, built the way Datastar recommends
+  ([the Tao of Datastar](https://data-star.dev/guide/the_tao_of_datastar), and its
+  [attribute](https://data-star.dev/reference/attributes),
+  [action](https://data-star.dev/reference/actions) and
+  [Rocket](https://data-star.dev/reference/rocket) references): the server draws every page and
+  its SSE streams patch only the parts that changed; every write is a Datastar `@post` whose
+  answer is the form's own notice; script beyond Datastar only where Datastar can't do the job,
+  in a Rocket component whose reason DESIGN.md gives. Every script and font is served by sluice itself (vendored); a page asks
   no other host for anything.
 - Every value is untrusted and HTML-escaped.
 - Statuses come from one status table (`sluice_model::shown`): stored pending, running,

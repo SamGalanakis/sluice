@@ -177,7 +177,7 @@ async fn clear_board_and_remove_ask_first_and_a_cleared_board_keeps_its_program_
         !page.contains("<button type=\"submit\" name=\"op\" value=\"clear\""),
         "no one-click Clear"
     );
-    // cleared (as the confirmation's form sends it, without script), the box keeps the program
+    // cleared from its confirmation's form, the box keeps the program
     let response = post_html(
         f.router(),
         &format!("{path}/board"),
@@ -200,25 +200,14 @@ async fn clear_board_and_remove_ask_first_and_a_cleared_board_keeps_its_program_
     );
 }
 
-/// A form posted as a page without script posts it, the page that comes back.
+/// Board clear's confirmation form posted, its answer.
 async fn post_html(router: axum::Router, path: &str, form: &[(&str, &str)]) -> String {
     use tower::ServiceExt;
-    let body = url::form_urlencoded::Serializer::new(String::new())
-        .extend_pairs(form)
-        .finish();
     let response = router
-        .oneshot(
-            axum::http::Request::post(path)
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(axum::body::Body::from(body))
-                .unwrap(),
-        )
+        .oneshot(super::forms::post(path, "board-clear-form", form))
         .await
         .unwrap();
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    String::from_utf8(body.to_vec()).unwrap()
+    super::forms::text(response).await
 }
 
 async fn serve(f: &Fixture) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
@@ -251,8 +240,10 @@ async fn slow_chromium_a_step_opened_from_another_opens_on_its_overview() {
         browser
             .eval("document.querySelector('#drawer [role=tab][data-tab=\"inputs\"]').click()")
             .unwrap();
-        browser.wait("new URLSearchParams(location.search).get('tab') === 'inputs'").unwrap();
-        // another step from this one: its Overview, the address's tab gone
+        browser
+            .wait("document.querySelector('#drawer [role=tab][aria-selected=true]')?.dataset.tab === 'inputs'")
+            .unwrap();
+        // another step from this one: its Overview
         browser.eval("location.hash = '#step:l2-work'").unwrap();
         browser
             .wait("document.querySelector('#drawer #step-detail[data-step=\"l2-work\"] [role=tab][aria-selected=true]')")
@@ -263,13 +254,6 @@ async fn slow_chromium_a_step_opened_from_another_opens_on_its_overview() {
         assert_eq!(g["tab"], "overview", "{g}");
         assert_eq!(g["query"], "", "{g}");
         assert_eq!(g["errors"], json!([]), "{g}");
-        // opened afresh with a tab in its address, it opens on that tab
-        browser
-            .navigate(&format!("http://{addr}/projects/id/{id}?tab=inputs#step:l2-work"))
-            .unwrap();
-        browser
-            .wait("document.querySelector('#drawer #step-detail[data-step=\"l2-work\"] [role=tab][aria-selected=true]')?.dataset.tab === 'inputs'")
-            .unwrap();
     })
     .await
     .unwrap();
@@ -336,11 +320,12 @@ async fn slow_chromium_a_form_of_filters_applies_as_it_changes_with_no_apply_but
     let id = f.id;
     tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}/log")).unwrap();
-        browser.wait("customElements.get('sluice-search') && document.querySelector('form.filters')").unwrap();
-        let shown = browser
-            .eval("document.querySelector('form.filters .apply').checkVisibility()")
-            .unwrap();
-        assert_eq!(shown, false, "Apply hides while the form applies itself");
+        browser.wait("document.readyState === 'complete' && document.querySelector('form.filters')").unwrap();
+        assert_eq!(
+            browser.eval("!!document.querySelector('form.filters button')").unwrap(),
+            false,
+            "the form applies itself: no Apply"
+        );
         browser
             // the click navigates: it runs after this evaluation has returned
             .eval("(() => { const box = document.querySelector('form.filters input[name=kind]'); box.closest('details').open = true; setTimeout(() => box.click(), 0); return box.value; })()")
@@ -348,7 +333,7 @@ async fn slow_chromium_a_form_of_filters_applies_as_it_changes_with_no_apply_but
         browser.wait("new URLSearchParams(location.search).has('kind')").unwrap();
         // a text field applies when it is left with new words, no Enter needed
         browser
-            .wait("customElements.get('sluice-search') && document.querySelector('form.filters input[name=step]')")
+            .wait("document.readyState === 'complete' && document.querySelector('form.filters input[name=step]')")
             .unwrap();
         browser
             .eval("document.querySelector('form.filters input[name=step]').focus()")
@@ -364,11 +349,13 @@ async fn slow_chromium_a_form_of_filters_applies_as_it_changes_with_no_apply_but
             .wait("new URLSearchParams(location.search).get('step') === 'beta-build' && new URLSearchParams(location.search).has('kind')")
             .unwrap();
         browser.navigate(&format!("http://{addr}/fns")).unwrap();
-        browser.wait("customElements.get('sluice-search') && document.querySelector('form.picker')").unwrap();
-        assert_eq!(
-            browser.eval("document.querySelector('form.picker .apply').checkVisibility()").unwrap(),
-            false
-        );
+        browser.wait("document.readyState === 'complete' && document.querySelector('form.picker')").unwrap();
+        assert_eq!(browser.eval("!!document.querySelector('form.picker button')").unwrap(), false);
+        // choosing applies it
+        browser
+            .eval("(s => { s.value = s.options[1]?.value ?? ''; setTimeout(() => s.dispatchEvent(new Event('change', {bubbles: true})), 0); })(document.querySelector('form.picker select'))")
+            .unwrap();
+        browser.wait("new URLSearchParams(location.search).has('project')").unwrap();
         assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
     })
     .await
@@ -404,7 +391,7 @@ async fn slow_chromium_clear_board_asks_first_and_keeps_the_program_to_restore()
             .eval("document.querySelector('#confirmation button.danger').click()")
             .unwrap();
         browser
-            .wait("document.querySelector('#board-feedback').textContent.includes('Save board restores it')")
+            .wait("document.querySelector('#board-program-form-said')?.textContent.includes('Save board restores it')")
             .unwrap();
         let g = browser
             .eval("({open: Boolean(document.querySelector('#confirmation[open]')), kept: document.querySelector('#board-program').value.startsWith('root = Stack('), off: document.querySelector('#board-clear').getAttribute('aria-disabled'), errors: window.browserErrors})")
@@ -438,7 +425,7 @@ async fn composing_waits_and_previous_outputs() {
         let (_, failed) = f
             .get(&format!("/projects/id/{id}/steps/l2-work?tab=thread"))
             .await;
-        let composer = between(&failed, "<form class=\"composer thread-reply\"", "</form>");
+        let composer = between(&failed, "class=\"composer thread-reply\"", "</form>");
         assert!(
         composer.contains("<p class=\"meta composer-note\" id=\"composer-note-l2-work\">Not running: it reads this only if it runs again.</p>"),
         "{composer}"

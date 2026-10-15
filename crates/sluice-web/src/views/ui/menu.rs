@@ -1,5 +1,5 @@
 //! The menu (DESIGN.md, Components: menu, Details): one "⋯" at an item's end, a `<details>`
-//! that opens without script inside a `sluice-menu`, holding what identifies the item and what
+//! inside a `sluice-menu`, holding what identifies the item and what
 //! can be done to it that is no next move.
 use super::esc;
 use crate::views::TrustedHtml;
@@ -9,7 +9,7 @@ use crate::views::icons::{Icon, icon};
 
 /// What identifies an item rather than explains it (its ids, run, fn, engine, tags, recipe,
 /// hashes and paths), kept behind one "⋯" control at the item's end (`Details::menu`): a
-/// `<details>` that opens without script, inside a `sluice-menu` (Escape and a click elsewhere
+/// `<details>` inside a `sluice-menu` (Escape and a click elsewhere
 /// close it, the focus back on its button). Each id is shown whole with a copy button.
 #[derive(Clone, Debug, Default)]
 pub struct Details {
@@ -77,7 +77,7 @@ impl Details {
         self.rows.is_empty() && self.actions.is_empty()
     }
     /// Its rows in place, under a quiet fold named by what they are (`summary`, "2 ids"),
-    /// opening without script: what identifies a list of values, kept out of the way but named.
+    /// opening in place: what identifies a list of values, kept out of the way but named.
     pub fn fold(&self, summary: &str) -> TrustedHtml {
         if self.rows.is_empty() {
             return TrustedHtml::default();

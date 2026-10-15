@@ -92,20 +92,29 @@ async fn every_data_component_is_filled_from_the_project_and_a_bad_query_is_an_e
 async fn a_button_says_to_the_fallback_session_and_a_stale_board_refuses_it() {
     let f = Fixture::new().await;
     let action = format!("/projects/id/{}/board/action", f.id);
-    let (status, reply) = f
-        .post(
-            &action,
-            &[
-                ("board_rev", "1"),
-                ("button", "0"),
-                ("field-0", "gamma"),
-                ("field-1", "go now"),
-            ],
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{reply}");
-    // The coordinator resolves who it reaches; the receipt names it.
-    assert_eq!(reply["message"], "Sent to @lash-f4.");
+    let reply = super::forms::text(
+        f.router()
+            .oneshot(super::forms::post(
+                &action,
+                "board-form",
+                &[
+                    ("board_rev", "1"),
+                    ("button", "0"),
+                    ("field-0", "gamma"),
+                    ("field-1", "go now"),
+                ],
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    // The coordinator resolves who it reaches; the receipt names it, in the form's notice.
+    assert!(
+        reply.contains(
+            "<p id=\"board-form-said\" class=\"form-said\" role=\"status\">Sent to @lash-f4.</p>"
+        ),
+        "{reply}"
+    );
     let sent = f.commands.0.lock().unwrap().clone();
     let [CommandRequest::Say(say)] = sent.as_slice() else {
         panic!("{sent:?}")
@@ -118,7 +127,29 @@ async fn a_button_says_to_the_fallback_session_and_a_stale_board_refuses_it() {
         json!({"board_rev": 1, "action": "retry_lane", "params": {"force": true},
                "values": {"lane": "gamma", "note": "go now"}})
     );
-    // A primary button checks its fields' rules first; a secondary one does not.
+    // A primary button checks its fields' rules first; a secondary one does not. A refused field
+    // says why under it, the form's notice the whole.
+    let refused = super::forms::text(
+        f.router()
+            .oneshot(super::forms::post(
+                &action,
+                "board-form",
+                &[
+                    ("board_rev", "1"),
+                    ("button", "0"),
+                    ("field-0", ""),
+                    ("field-1", "x"),
+                ],
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        refused.contains("<p id=\"board-form-said\" class=\"form-said\" role=\"alert\">Not sent: ")
+            && refused.contains("data: elements <span id=\"board-form-err-field-0\" class=\"ou-error\" data-error-for=\"field-0\" data-ignore-morph>"),
+        "{refused}"
+    );
     let (status, reply) = f
         .post(
             &action,
@@ -145,7 +176,7 @@ async fn a_button_says_to_the_fallback_session_and_a_stale_board_refuses_it() {
             &[("board_rev", "1"), ("button", "1"), ("field-0", "")],
         )
         .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::NO_CONTENT);
     // The board moves on: a press on the page drawn before is refused, visibly, and nothing is sent.
     f.writer
         .write(RetrySafety::NonIdempotent, {
@@ -189,7 +220,7 @@ async fn settings_save_clear_and_preview_the_board() {
     let settings = format!("/projects/id/{}/settings", f.id);
     let (_, page) = f.get(&settings).await;
     assert!(
-        page.contains("id=\"board-rev\" value=\"1\""),
+        page.contains("<input type=\"hidden\" name=\"expected_rev\" value=\"1\">"),
         "{}",
         between(&page, "board-settings", "</section>")
     );
@@ -208,6 +239,7 @@ async fn settings_save_clear_and_preview_the_board() {
                 .oneshot(
                     Request::post(path)
                         .header("content-type", "application/x-www-form-urlencoded")
+                        .header("sluice-form", "board-program-form")
                         .body(Body::from(body))
                         .unwrap(),
                 )
@@ -218,28 +250,29 @@ async fn settings_save_clear_and_preview_the_board() {
             (status, String::from_utf8(body.to_vec()).unwrap())
         }
     };
+    // a refusal is the form's notice alone: the draft stays in its box, untouched
     let (status, html) = send(form("save", "0", "root = Text(\"draft\")")).await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    let feedback = between(&html, "id=\"board-feedback\"", "</span>");
-    assert!(feedback.contains("the board changed"), "{feedback}");
+    assert_eq!(status, StatusCode::OK);
     assert!(
-        html.contains(">root = Text(&#34;draft&#34;)</textarea>"),
-        "{}",
-        between(&html, "board-program", "</textarea>")
+        html.contains("role=\"alert\">") && html.contains("the board changed"),
+        "{html}"
     );
+    assert!(!html.contains("<textarea"), "{html}");
     // A program that does not check lists its lines.
-    let (status, html) = send(form("save", "1", "root = Nope()")).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, html) = send(form("save", "1", "root = Nope()")).await;
     assert!(
         html.contains("line 1: Nope is not a board component"),
         "{html}"
     );
-    let (status, html) = send(form("save", "1", "root = Text(\"saved\")")).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(html.contains("Saved (rev 2)") && html.contains("id=\"board-rev\" value=\"2\""));
-    let (status, html) = send(form("clear", "2", "")).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(html.contains("Cleared (rev 3)"));
+    // saved: the section drawn anew at its new revision, its notice saying so
+    let (_, html) = send(form("save", "1", "root = Text(\"saved\")")).await;
+    assert!(
+        html.contains("Saved (rev 2).")
+            && html.contains("<input type=\"hidden\" name=\"expected_rev\" value=\"2\">"),
+        "{html}"
+    );
+    let (_, html) = send(form("clear", "2", "root = Text(\"saved\")")).await;
+    assert!(html.contains("Cleared (rev 3)"), "{html}");
     let (_, plan) = f.get(&format!("/projects/id/{}", f.id)).await;
     assert!(!plan.contains("board-pane"));
     // The preview draws a draft with the project's data, or its problems.
@@ -248,7 +281,11 @@ async fn settings_save_clear_and_preview_the_board() {
         let path = format!("{settings}/board/preview");
         async move {
             let response = router
-                .oneshot(Request::post(path).body(Body::from(program)).unwrap())
+                .oneshot(super::forms::post(
+                    path,
+                    "board-program-form",
+                    &[("program", program)],
+                ))
                 .await
                 .unwrap();
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -265,11 +302,11 @@ async fn settings_save_clear_and_preview_the_board() {
     let program = format!("root = Markdown({})", serde_json::to_string("## A\n#### B\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<script>alert(1)</script>\n\n**text** <b>raw</b>\n\n- one\n  - two\n\n```rust\n<thing>\n```").unwrap());
     let response = f
         .router()
-        .oneshot(
-            Request::post(format!("{settings}/board/preview"))
-                .body(Body::from(program))
-                .unwrap(),
-        )
+        .oneshot(super::forms::post(
+            format!("{settings}/board/preview"),
+            "board-program-form",
+            &[("program", &program)],
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -454,17 +491,18 @@ async fn filtered_units_progress_done_and_paused() {
         assert!(units(&none).is_empty(), "{none}");
         assert!(none.contains("No unit matches “build”."), "{none}");
         assert!(
-            none.contains(&format!(
-                "<a href=\"{base}?show=done\" data-clear-q>Clear the find</a>"
-            )),
+            none.contains(&format!("<a href=\"{base}?show=done\">Clear the find</a>")),
             "{none}"
         );
-        // The field keeps the find, escaped; the page's stream asks for the same view.
+        // The field keeps the find, escaped; the page's stream asks for the same view, the find
+        // in the page's `q` signal.
         let html = page("q=%3Cb%3E+x&show=active").await;
         assert!(html.contains("value=\"&lt;b&gt; x\""), "{html}");
         assert!(html.contains("“&#60;b&#62; x”"), "{html}");
         assert!(
-            html.contains(&format!("@get('{base}/stream?show=active&#38;q=%3Cb%3E+x'")),
+            html.contains(&format!(
+                "data-init=\"@get(&#39;{base}/stream?show=active&#39;"
+            )) && html.contains("&#34;q&#34;:&#34;&#60;b&#62; x&#34;"),
             "{html}"
         );
         // Without a find there is no count, and every unit shows.
@@ -477,7 +515,7 @@ async fn filtered_units_progress_done_and_paused() {
             .router()
             .oneshot(
                 Request::get(format!(
-                    "{base}/stream?q=parser&datastar=%7B%22ver%22%3A%22old%22%7D"
+                    "{base}/stream?datastar=%7B%22ver%22%3A%22old%22%2C%22q%22%3A%22parser%22%7D"
                 ))
                 .body(Body::empty())
                 .unwrap(),

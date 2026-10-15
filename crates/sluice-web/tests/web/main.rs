@@ -7,6 +7,7 @@ mod board_fixture;
 mod chrome;
 mod components;
 mod failed_dismiss;
+mod forms;
 mod http;
 mod inbox;
 mod layout;

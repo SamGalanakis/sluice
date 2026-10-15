@@ -1,20 +1,5 @@
-// Every page's clock and tab title (the dashboard's components are components.js's), and the
-// theme a first open keeps.
+// Every page's clock and tab title (the dashboard's components are components.js's).
 
-// ---- the theme on a first open -----------------------------------------------------------------
-// With no theme chosen yet (no `sluice_theme` cookie, so <html> carries no data-theme) the page
-// is Sluice in the system's scheme, by the stylesheet alone. The first open with script keeps
-// that as the choice (Sluice Light or Sluice Dark, by `prefers-color-scheme` now), so from then
-// on only the owner's own pick changes the theme, never a later change of the system's scheme.
-{
-  const root = document.documentElement;
-  if (!root.dataset.theme) {
-    const theme = matchMedia("(prefers-color-scheme: dark)").matches ? "sluice-dark" : "sluice-light";
-    root.dataset.theme = theme;
-    for (const radio of document.querySelectorAll("input[name=theme]")) radio.checked = radio.value === theme;
-    fetch("/settings", { method: "POST", keepalive: true, body: new URLSearchParams({ theme }) }).catch(() => {});
-  }
-}
 // a plan's glance: its tab's title and its favicon, as the page's stream patches them
 function favicon(href) {
   const link = document.getElementById("favicon");
@@ -47,7 +32,7 @@ document.addEventListener("visibilitychange", () => {
 });
 // ---- times: one vocabulary on every page ------------------------------------------------------
 // A <time> carries its instant in `datetime`; the server draws its text as it read the clock at
-// render (so a page without script says "running for 1h 25m"), its title the UTC day and minute.
+// render (so a page reads "running for 1h 25m" before this runs), its title the UTC day and minute.
 // This ticks it on in the same words. `data-since`: how long since, in two units ("45s", "12m",
 // "2h 14m", "3d 12h"); `data-ago`: "just now", "12m ago", "3d 12h ago". The text is the clock's:
 // a stream's version leaves it out, so ticking never patches.

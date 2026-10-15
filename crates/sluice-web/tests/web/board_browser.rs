@@ -98,12 +98,14 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         };
         let scroll = scroll_count(&mut browser);
         assert_eq!(scroll, 1);
-        // with a step open, taking the drawer out ends its step's stream
-        browser.eval("location.hash='#step:beta-build'").unwrap();
-        browser.wait("!!window.sluiceStepController").unwrap();
+        // with a step open, taking the drawer out ends its step's stream (Datastar's
+        // requestCancellation 'cleanup', its binding gone)
+        browser.eval("window.ended=new Set();document.addEventListener('datastar-fetch',e=>{if(e.detail.type==='finished')ended.add(e.detail.el)});location.hash='#step:beta-build'").unwrap();
+        browser.wait("!!document.querySelector('#drawer-stream > span')").unwrap();
         for _ in 0..3 {
-            browser.eval("(()=>{window.controller=window.sluiceStepController;const board=document.querySelector('sluice-splitter'),parent=board.parentNode,next=board.nextSibling;board.remove();parent.insertBefore(board,next);window.host=document.querySelector('sluice-drawer');window.drawerParent=host.parentNode;window.after=host.nextSibling;host.remove()})()").unwrap();
-            assert_eq!(browser.eval("controller.signal.aborted").unwrap(), true);
+            browser.wait("!!document.querySelector('#drawer-stream > span')").unwrap();
+            browser.eval("(()=>{window.binding=document.querySelector('#drawer-stream > span');const board=document.querySelector('sluice-splitter'),parent=board.parentNode,next=board.nextSibling;board.remove();parent.insertBefore(board,next);window.host=document.querySelector('sluice-drawer');window.drawerParent=host.parentNode;window.after=host.nextSibling;host.remove()})()").unwrap();
+            browser.wait("ended.has(binding)").unwrap();
             browser.eval("drawerParent.insertBefore(host,after)").unwrap();
             assert_eq!(listener_counts(&mut browser), expected);
             assert_eq!(scroll_count(&mut browser), scroll);
@@ -280,23 +282,6 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                 true
             );
         }
-        // Without script the switch is three links: the server draws the view each asks for
-        // and keeps it in a cookie for the next load.
-        browser.send("Emulation.setScriptExecutionDisabled", serde_json::json!({"value": true})).unwrap();
-        for (choice, plan, board) in [("plan", true, false), ("board", false, true), ("both", true, true)] {
-            browser
-                .navigate(&format!("{base}/projects/id/{lanes}?view={choice}"))
-                .unwrap();
-            browser.wait("document.readyState === 'complete'").unwrap();
-            let v = format!("(() => {{ const v = s => document.querySelector(s)?.checkVisibility() ?? false; return [document.querySelector('#project-board').dataset.view, v('#plan-pane'), v('#board-pane'), document.querySelector('[data-view-tab={choice}]').getAttribute('aria-current')]; }})()");
-            assert_eq!(browser.eval(&v).unwrap(), serde_json::json!([choice, plan, board, "true"]), "{choice} without script");
-            browser
-                .navigate(&format!("{base}/projects/id/{lanes}"))
-                .unwrap();
-            browser.wait("document.readyState === 'complete'").unwrap();
-            assert_eq!(browser.eval(&v).unwrap(), serde_json::json!([choice, plan, board, "true"]), "{choice} kept without script");
-        }
-        browser.send("Emulation.setScriptExecutionDisabled", serde_json::json!({"value": false})).unwrap();
         browser
             .navigate(&format!("{base}/projects/id/{lanes}"))
             .unwrap();
@@ -352,7 +337,7 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
             .eval("document.querySelector('#board-pane input[name=\"field-0\"]').value='gamma'; document.querySelector('#board-pane input[name=\"field-0\"]').closest('form').querySelector('[name=\"field-1\"]').value='go now'; document.querySelector('#board-pane button[name=button][value=\"0\"]').click()")
             .unwrap();
         browser
-            .wait("document.querySelector('#board-pane .board-status').textContent === 'Sent to @lash-f4.'")
+            .wait("document.querySelector('#board-form-said').textContent === 'Sent to @lash-f4.'")
             .unwrap();
         // The settings page's Board section, with its live preview.
         browser

@@ -1,6 +1,6 @@
 //! Tabs (DESIGN.md, Components: tabs): one bar of soft pills, a tablist of buttons over its
 //! panels (`sluice-tabs`, `tabs_open` … `tabs_close`) or links between views and pages
-//! (`switch`). Without script a tablist's panels stand stacked under their heads.
+//! (`switch`).
 use super::{Host, esc};
 use crate::views::TrustedHtml;
 
@@ -31,16 +31,9 @@ impl Tab {
 }
 /// A tab set's host (`sluice-tabs`) and its bar: an ARIA tablist, the tab `selected` chosen.
 /// Its panels follow (`panel_open` … `panel_close`), then `tabs_close`. `prefix` keeps two tab
-/// sets on one page apart; `url` mirrors the chosen tab into the address's `?tab=`. The chosen
-/// tab is the host's `current`, which a stream patch never resets: the script owns it once the
-/// page is drawn.
-pub fn tabs_open(
-    prefix: &str,
-    label: &str,
-    tabs: &[Tab],
-    selected: &str,
-    url: bool,
-) -> TrustedHtml {
+/// sets on one page apart. The chosen tab is the host's `current`, which a stream patch never
+/// resets: the script owns it once the page is drawn.
+pub fn tabs_open(prefix: &str, label: &str, tabs: &[Tab], selected: &str) -> TrustedHtml {
     let selected = tabs
         .iter()
         .find(|t| t.key == selected)
@@ -78,7 +71,6 @@ pub fn tabs_open(
     let host = Host::new("sluice-tabs")
         .attr("id", format!("{prefix}tabs"))
         .attr("current", selected)
-        .flag("url", url)
         .keep("current");
     TrustedHtml::owned(format!(
         "{}<div class=\"tabs\" role=\"tablist\" aria-label=\"{label}\">{bar}</div>",
@@ -89,8 +81,8 @@ pub fn tabs_open(
 pub fn tabs_close() -> TrustedHtml {
     Host::new("sluice-tabs").close()
 }
-/// A tab's panel: a section under its own head (at `level`), which stands alone without script
-/// (every panel stacked) and is the tab's words for a screen reader with it. With `region`, a
+/// A tab's panel: a section under its own head (at `level`), the tab's words for a screen
+/// reader. With `region`, a
 /// stream patches the panel on its own (`<!--r:…-->`).
 pub fn panel_open(
     prefix: &str,

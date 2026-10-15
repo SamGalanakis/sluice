@@ -1,265 +1,58 @@
-{% macro capacity(id, number, function, fns) %}<fieldset class="cap-choice"><legend class="vh">Capacity</legend><div class="cap-opt"><label><input type="radio" name="capacity" value="number"{% if function.is_empty() %} checked{% endif %}> A number</label><input id="{{ id }}" name="number" type="number" min="0" step="1" inputmode="numeric" value="{{ number }}" aria-label="Capacity as a number"></div><div class="cap-opt"><label><input type="radio" name="capacity" value="fn"{% if !function.is_empty() %} checked{% endif %}> From a fn</label><select name="capacity_fn" aria-label="The fn that gives the capacity">{% if fns.is_empty() %}<option value="">No fn returns a capacity</option>{% endif %}{% for f in fns %}<option{% if crate::settings::same(f, function) %} selected{% endif %}>{{ f }}</option>{% endfor %}</select></div></fieldset>{% endmacro -%}
+{% macro capacity(key, number, function, fns) %}<fieldset class="cap-choice"><legend class="vh">Capacity</legend><div class="cap-opt"><label><input type="radio" name="capacity.{{ key }}" value="number"{% if function.is_empty() %} checked{% endif %}> A number</label><input id="resource-{{ key }}" name="number.{{ key }}" type="number" min="0" step="1" inputmode="numeric" value="{{ number }}" aria-label="Capacity as a number"></div><div class="cap-opt"><label><input type="radio" name="capacity.{{ key }}" value="fn"{% if !function.is_empty() %} checked{% endif %}> From a fn</label><select name="capacity_fn.{{ key }}" aria-label="The fn that gives the capacity">{% if fns.is_empty() %}<option value="">No fn returns a capacity</option>{% endif %}{% for f in fns %}<option{% if crate::settings::same(f, function) %} selected{% endif %}>{{ f }}</option>{% endfor %}</select></div></fieldset>{% endmacro -%}
 <div class="settings-page">
-<!--settings-live--><header id="settings-live" data-revision="{{ view.project.settings_rev }}" data-name="{{ view.project.name }}" data-paused="{{ view.project.paused }}" data-archived="{{ view.project.archived }}" data-fields="{{ view.changes_json() }}" data-page-title="{{ view.project.name }} · Settings · sluice">
+<!--settings-live--><header id="settings-live" data-page-title="{{ view.project.name }} · Settings · sluice">
 <h2 class="vh">Project settings</h2><p class="settings-lead">Project settings{% if view.project.paused %} {{ crate::views::ui::pill("Paused", crate::views::ui::Tone::Plain, None)|safe }}{% endif %}{% if view.project.archived %} {{ crate::views::ui::pill("Archived", crate::views::ui::Tone::Muted, None)|safe }}{% endif %}</p></header><!--/settings-live-->
 <nav class="settings-index" aria-label="Settings sections"><a href="#details-heading">Details</a><a href="#resources-heading">Resources</a><a href="#board-heading">Board</a><a href="#retire-heading">Retiring</a><a href="#activity-heading">Activity</a><a href="#danger-heading">Delete</a></nav>
 <p class="setting-help"><a href="/projects/id/{{ view.project.project_id }}/log?kind=project">View authored changes</a></p>
 <section aria-labelledby="details-heading"><h2 id="details-heading">Details</h2>
+<!--edit:details--><div id="details-edit">{{ view.form_open("details", view.path().as_str(), " enctype='multipart/form-data'")|safe }}
 <dl class="settings-fields">
-<div class="setting-row"><dt><label for="project-name">Name</label></dt><dd>
-<form method="post" action="{{ view.path() }}" data-setting="name" data-seen="{{ view.seen("name") }}">
-<input type="hidden" name="field" value="name"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<input id="project-name" name="value" value="{{ feedback.value("name", view.project.name.as_str()) }}" required aria-describedby="name-feedback">
-<div class="setting-actions"><button type="submit">Apply name</button><span id="name-feedback" class="settings-feedback{% if feedback.error("name") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "name" %}{{ feedback.message }}{% endif %}</span></div>
-</form></dd></div>
-<div class="setting-row"><dt><label for="project-description">Description</label></dt><dd>
-<form method="post" action="{{ view.path() }}" data-setting="description" data-seen="{{ view.seen("description") }}">
-<input type="hidden" name="field" value="description"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<textarea id="project-description" name="value" aria-describedby="description-feedback">{{ feedback.value("description", view.project.description.as_str()) }}</textarea>
-<div class="setting-actions"><button type="submit">Apply description</button><button type="button" data-preview hidden>Preview</button><span id="description-feedback" class="settings-feedback{% if feedback.error("description") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "description" %}{{ feedback.message }}{% endif %}</span></div>
-</form>{{ crate::views::ui::more_open("preview-fold", "Show how it reads", "Hide how it reads", "", false)|safe }}<div id="description-preview" class="settings-preview" aria-label="Markdown preview">{{ preview|safe }}</div>{{ crate::views::ui::more_close("")|safe }}</dd></div>
-<div class="setting-row"><dt><label for="project-icon">Icon</label></dt><dd>
-{% if !icon_url.is_empty() %}<img class="settings-icon" id="icon-preview" src="{{ icon_url }}" alt="Current project icon">{% endif %}
-<form method="post" action="{{ view.path() }}" data-setting="icon" data-seen="{{ view.seen("icon") }}">
-<input type="hidden" name="field" value="icon"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<input id="project-icon" name="value" value="{{ feedback.value("icon", icon_text.as_str()) }}" aria-describedby="icon-feedback">
-<div class="setting-actions"><button type="submit">Apply icon</button><span id="icon-feedback" class="settings-feedback{% if feedback.error("icon") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "icon" %}{{ feedback.message }}{% endif %}</span></div>
-</form><div data-upload hidden><label for="icon-file">Or upload an image</label><input id="icon-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><button type="button" data-upload-button>Apply image</button></div></dd></div>
-<div class="setting-row"><dt><label for="project-fallback">Fallback</label></dt><dd>
-<form method="post" action="{{ view.path() }}" data-setting="fallback" data-seen="{{ view.seen("fallback") }}">
-<input type="hidden" name="field" value="fallback"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-{% let chosen = feedback.value("fallback", view.fallback.as_str()) %}<select id="project-fallback" name="value" aria-describedby="fallback-feedback">{% for (value, words) in view.fallback_choices() %}<option value="{{ value }}"{% if value.as_str() == chosen %} selected{% endif %}>{{ words }}</option>{% endfor %}</select>
-<div class="setting-actions"><button type="submit">Apply fallback</button><span id="fallback-feedback" class="settings-feedback{% if feedback.error("fallback") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "fallback" %}{{ feedback.message }}{% endif %}</span></div>
-</form></dd></div>
-<!--sessions--><div id="sessions" class="setting-row"{% if view.sessions.is_empty() %} hidden{% endif %}><dt>Sessions</dt><dd><ul class="sessions">{% for s in view.sessions %}<li><span class="own">{{ s.name }}</span>{% if !s.seen.is_empty() %} · seen {{ crate::views::ui::ago(s.seen)|safe }}{% endif %}</li>{% endfor %}</ul></dd></div><!--/sessions-->
-</dl></section>
+<div class="setting-row"><dt><label for="project-name">Name</label></dt><dd><input id="project-name" name="name" value="{{ view.project.name }}" required autocomplete="off" spellcheck="false"></dd></div>
+<div class="setting-row"><dt><label for="project-description">Description</label></dt><dd><textarea id="project-description" name="description" data-on:input__debounce.300ms="@post('{{ view.path() }}/preview', {contentType: 'form'})">{{ view.project.description }}</textarea>
+{{ crate::views::ui::more_open("preview-fold", "Show how it reads", "Hide how it reads", "", false)|safe }}<div id="description-preview" class="settings-preview md" aria-label="How the description reads">{{ preview|safe }}</div>{{ crate::views::ui::more_close("")|safe }}</dd></div>
+<div class="setting-row"><dt><label for="project-icon">Icon</label></dt><dd><div class="icon-field" data-signals:_iconfile="''">{% if !icon_url.is_empty() %}<img class="settings-icon" id="icon-preview" src="{{ icon_url }}" alt="The project's icon">{% endif %}<input id="project-icon" name="icon" value="{{ icon_text }}" placeholder="Letters or an emoji" autocomplete="off"><label class="file-pill"><input class="vh" type="file" name="icon_file" accept="image/png,image/jpeg,image/webp,image/gif" data-on:change="$_iconfile = el.files[0]?.name ?? ''">{{ crate::views::icons::icon(crate::views::icons::Icon::FolderOpen, 16, "")|safe }}<span data-text="$_iconfile || 'Upload an image'">Upload an image</span></label></div><p class="setting-help">An image (PNG, JPEG, WebP or GIF, at most 256 KiB) takes the place of the letters once saved.</p></dd></div>
+<div class="setting-row"><dt><label for="project-fallback">Fallback</label></dt><dd><select id="project-fallback" name="fallback">{% for (value, words) in view.fallback_choices() %}<option value="{{ value }}"{% if crate::settings::same(value, view.fallback) %} selected{% endif %}>{{ words }}</option>{% endfor %}</select><p class="setting-help">Who answers a unit no session owns.</p></dd></div>
+</dl>
+<div class="setting-actions"><button type="submit">Save details</button></div>{{ crate::views::ui::form_said("details-form")|safe }}</form></div><!--/edit:details-->
+<!--sessions--><dl id="sessions" class="settings-fields"{% if view.sessions.is_empty() %} hidden{% endif %}><div class="setting-row"><dt>Sessions</dt><dd><ul class="sessions">{% for s in view.sessions %}<li><span class="own">{{ s.name }}</span>{% if !s.seen.is_empty() %} · seen {{ crate::views::ui::ago(s.seen)|safe }}{% endif %}</li>{% endfor %}</ul></dd></div></dl><!--/sessions-->
+</section>
 <section aria-labelledby="resources-heading"><h2 id="resources-heading">Resources</h2>
 <!--resource-status--><div id="resource-status"><ul class="resource-list">
 {% for r in view.resources %}<li><code>{{ r.name }}</code> · {% if r.dynamic %}Dynamic{% else %}Static{% endif %} capacity {{ r.capacity }} · {{ r.held }} in use · {{ r.waiting }} waiting for capacity{% if let Some(queued) = r.queued %} · {{ queued }} steps queued{% else %} · <span title="Not known until the plan's fns have loaded">steps queued —</span>{% endif %}{% if !r.error.is_empty() %}<p class="setting-error">{{ r.error }}</p>{% endif %}</li>{% endfor %}
 {% if view.resources.is_empty() %}<li class="setting-help">No resources declared.</li>{% endif %}
 </ul></div><!--/resource-status-->
-<div id="resource-editors"><dl class="settings-fields">{% for r in view.resources %}<div class="setting-row"><dt><label for="resource-{{ r.name }}">{{ r.name }}</label></dt><dd><form method="post" action="{{ view.path() }}" data-setting="resources" data-seen="{{ view.seen("resources") }}">
-<input type="hidden" name="field" value="resources"><input type="hidden" name="resource" value="{{ r.name }}"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-{% call capacity(format!("resource-{}", r.name), crate::settings::shown_number(feedback, r), r.function, view.capacity_fns(r.function)) %}{% endcall %}
-<div class="setting-actions"><button type="submit">Apply capacity</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" && feedback.resource == r.name %}{{ feedback.message }}{% endif %}</span></div>
-</form><div class="cap-remove">{{ view.remove_confirm(r.name).html()|safe }}</div></dd></div>{% endfor %}</dl></div>
-<dl class="settings-fields"><div class="setting-row"><dt>New resource</dt><dd><form method="post" action="{{ view.path() }}" data-setting="resources" id="new-resource" data-seen="{{ view.seen("resources") }}">
-<input type="hidden" name="field" value="resources"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<div class="setting-pair"><label for="resource-name">Name</label><input id="resource-name" name="resource" value="{% if feedback.error("resources") %}{{ feedback.resource }}{% endif %}" required></div>
-{% call capacity("resource-value", "1", "", view.capacity_fns("")) %}{% endcall %}<div class="setting-actions"><button type="submit">Add resource</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" %}{{ feedback.message }}{% endif %}</span></div></form></dd></div></dl></section>
+<!--edit:resources--><div id="resources-edit">{{ view.form_open("resources", view.path().as_str(), "")|safe }}
+<dl class="settings-fields">{% for r in view.resources %}<div class="setting-row"><dt><label for="resource-{{ r.name }}">{{ r.name }}</label></dt><dd><input type="hidden" name="resource" value="{{ r.name }}">{% call capacity(r.name, r.number, r.function, view.capacity_fns(r.function)) %}{% endcall %}</dd></div>{% endfor %}
+<div class="setting-row"><dt>New resource</dt><dd><div class="setting-pair"><label for="resource-name">Name</label><input id="resource-name" name="new" autocomplete="off" spellcheck="false" placeholder="Leave empty to add none"></div>
+{% call capacity(":new", "1", "", view.capacity_fns("")) %}{% endcall %}</dd></div></dl>
+<div class="setting-actions"><button type="submit">Save resources</button></div>{{ crate::views::ui::form_said("resources-form")|safe }}</form>
+{% if !view.resources.is_empty() %}<div class="cap-remove">{% for r in view.resources %}{{ view.remove_confirm(r.name).html()|safe }}{% endfor %}</div>{% endif %}</div><!--/edit:resources--></section>
 <section aria-labelledby="board-heading" id="board-settings"><h2 id="board-heading">Board</h2>
-<form method="post" action="{{ view.path() }}/board" data-setting="board" id="board-form">
-<input type="hidden" name="expected_rev" id="board-rev" value="{{ view.project.board_rev }}">
-<label for="board-program">Program{% if view.project.board_rev.0 > 0 %} · rev {{ view.project.board_rev }}{% endif %}</label>
-<textarea id="board-program" name="program" class="board-program" spellcheck="false" aria-describedby="board-feedback">{{ feedback.value("board", view.project.board.as_deref().unwrap_or("")) }}</textarea>
-<div class="setting-actions"><button type="submit" name="op" value="save">Save board</button><span id="board-feedback" class="settings-feedback board-feedback{% if feedback.error("board") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "board" %}{{ feedback.message }}{% endif %}</span></div>
-</form><div class="board-clear">{{ view.clear_confirm().html()|safe }}</div>{{ crate::views::ui::more_open_hidden("preview-fold", "Show the preview", "Hide the preview", "board-preview-label")|safe }}<div id="board-preview" class="settings-preview board-preview" aria-label="Board preview" hidden></div>{{ crate::views::ui::more_close("")|safe }}
+<!--edit:board--><div id="board-edit">{{ view.board_form_open()|safe }}
+<input type="hidden" name="expected_rev" value="{{ view.project.board_rev }}">
+<dl class="settings-fields"><div class="setting-row"><dt><label for="board-program">Program</label></dt><dd>{% if view.project.board_rev.0 > 0 %}<p class="setting-help">Rev {{ view.project.board_rev }}</p>{% endif %}<textarea id="board-program" name="program" class="board-program" spellcheck="false" data-on:input__debounce.400ms="@post('{{ view.path() }}/board/preview', {contentType: 'form'})">{{ board_program }}</textarea></dd></div></dl>
+<div class="setting-actions"><button type="submit" name="op" value="save">Save board</button></div>{{ crate::views::ui::form_said("board-program-form")|safe }}</form>
+<div class="board-clear">{{ view.clear_confirm().html()|safe }}</div></div><!--/edit:board-->
+{{ crate::views::ui::more_open("preview-fold", "Show the preview", "Hide the preview", "", false)|safe }}<fieldset id="board-preview" class="settings-preview board-preview" aria-label="Board preview" disabled data-init="@post('{{ view.path() }}/board/preview', {contentType: 'form', selector: '#board-program-form'})"></fieldset>{{ crate::views::ui::more_close("")|safe }}
 <h3 id="doc-heading">Document</h3>
 <!--board-doc--><div id="board-doc"><p class="setting-help doc-status">{% if view.doc.rev.0 > 0 %}Rev {{ view.doc.rev }}{% if let Some(at) = view.doc.at %} · edited {{ crate::views::ui::ago(at)|safe }}{% endif %}{% if let Some(author) = view.doc.author %} by {{ author }}{% endif %}{% else %}Not written yet.{% endif %}{% if !view.doc_drawn() %} Not shown: the program has no <code>Doc()</code>.{% endif %}</p>
 {% if !view.doc.markdown.trim().is_empty() %}<div class="settings-preview doc-view md" aria-labelledby="doc-heading">{{ view.doc_html()|safe }}</div>{% endif %}
 </div><!--/board-doc--></section>
 <section aria-labelledby="retire-heading" id="retire-settings"><h2 id="retire-heading">Retiring</h2>
 <!--retire-status--><div id="retire-status"><p class="setting-help retire-status">{% if view.project.prune_done_after.is_some() %}{{ crate::views::ui::pill("On", crate::views::ui::Tone::Plain, None)|safe }} Done units retire after {{ retire_hours }}h{% if !view.project.prune_keep.is_empty() %}, except {{ crate::views::ui::count(view.project.prune_keep.len(), "pattern", "patterns") }}{% endif %}. {% else %}{{ crate::views::ui::pill("Off", crate::views::ui::Tone::Muted, None)|safe }} {% endif %}{% if let Some(r) = view.retired %}Last retired {{ crate::views::ui::ago(r.at)|safe }}: {{ crate::views::ui::count(r.steps, "step", "steps") }} (rev {{ r.rev }}).{% else %}Nothing retired yet.{% endif %}</p></div><!--/retire-status-->
+<!--edit:retiring--><div id="retiring-edit">{{ view.form_open("retiring", view.path().as_str(), "")|safe }}
 <dl class="settings-fields">
-<div class="setting-row"><dt><label for="prune-done-after">Retire done units after</label></dt><dd>
-<form method="post" action="{{ view.path() }}" data-setting="prune_done_after" data-seen="{{ view.seen("prune_done_after") }}">
-<input type="hidden" name="field" value="prune_done_after"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<div class="setting-unit"><input id="prune-done-after" name="value" inputmode="decimal" autocomplete="off" placeholder="Off" value="{{ feedback.value("prune_done_after", retire_hours.as_str()) }}" aria-describedby="prune-done-after-feedback"><span>hours</span></div>
-<div class="setting-actions"><button type="submit">Apply</button><span id="prune-done-after-feedback" class="settings-feedback{% if feedback.error("prune_done_after") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "prune_done_after" %}{{ feedback.message }}{% endif %}</span></div>
-</form></dd></div>
-<div class="setting-row"><dt><label for="prune-keep">Never retire</label></dt><dd>
-<form method="post" action="{{ view.path() }}" data-setting="prune_keep" data-seen="{{ view.seen("prune_keep") }}">
-<input type="hidden" name="field" value="prune_keep"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<input id="prune-keep" name="value" autocomplete="off" spellcheck="false" class="mono-field" value="{{ feedback.value("prune_keep", retire_keep.as_str()) }}" title="Unit-name patterns: * any characters, ? one" aria-describedby="prune-keep-feedback">
-<div class="setting-actions"><button type="submit">Apply patterns</button><span id="prune-keep-feedback" class="settings-feedback{% if feedback.error("prune_keep") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "prune_keep" %}{{ feedback.message }}{% endif %}</span></div>
-</form></dd></div>
-</dl></section>
+<div class="setting-row"><dt><label for="prune-done-after">Retire done units after</label></dt><dd><div class="setting-unit"><input id="prune-done-after" name="prune_done_after" inputmode="decimal" autocomplete="off" placeholder="Off" value="{{ retire_hours }}"><span>hours</span></div></dd></div>
+<div class="setting-row"><dt><label for="prune-keep">Never retire</label></dt><dd><input id="prune-keep" name="prune_keep" autocomplete="off" spellcheck="false" class="mono-field" value="{{ retire_keep }}" title="Unit-name patterns: * any characters, ? one"></dd></div>
+</dl>
+<div class="setting-actions"><button type="submit">Save retiring</button></div>{{ crate::views::ui::form_said("retiring-form")|safe }}</form></div><!--/edit:retiring--></section>
 <section aria-labelledby="activity-heading"><h2 id="activity-heading">Activity</h2>
-<form method="post" action="{{ view.path() }}" data-setting="paused" class="settings-switch" data-seen="{{ view.seen("paused") }}"><div><p>Pause project</p></div>
-<input type="hidden" name="field" value="paused"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><input type="hidden" name="value" value="{% if view.project.paused %}false{% else %}true{% endif %}">
-<button type="submit" role="switch" aria-checked="{{ view.project.paused }}" aria-label="Pause project">{% if view.project.paused %}Resume{% else %}Pause{% endif %}</button><span class="settings-feedback" role="status"></span></form>
-<form method="post" action="{{ view.path() }}" data-setting="archived" class="settings-switch" data-seen="{{ view.seen("archived") }}"><div><p>Archive project</p></div>
-<input type="hidden" name="field" value="archived"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><input type="hidden" name="value" value="{% if view.project.archived %}false{% else %}true{% endif %}">
-<button type="submit" role="switch" aria-checked="{{ view.project.archived }}" aria-label="Archive project">{% if view.project.archived %}Unarchive{% else %}Archive{% endif %}</button><span class="settings-feedback" role="status"></span></form>
+<!--activity--><div id="activity">{{ view.form_open("activity", view.path().as_str(), "")|safe }}
+<div class="settings-switch"><p>Pause project</p><button type="submit" name="paused" value="{% if view.project.paused %}false{% else %}true{% endif %}" role="switch" aria-checked="{{ view.project.paused }}" aria-label="Pause project">{% if view.project.paused %}Resume{% else %}Pause{% endif %}</button></div>
+<div class="settings-switch"><p>Archive project</p><button type="submit" name="archived" value="{% if view.project.archived %}false{% else %}true{% endif %}" role="switch" aria-checked="{{ view.project.archived }}" aria-label="Archive project">{% if view.project.archived %}Unarchive{% else %}Archive{% endif %}</button></div>
+{{ crate::views::ui::form_said("activity-form")|safe }}</form></div><!--/activity-->
 </section>
 <section class="settings-danger" aria-labelledby="danger-heading"><h2 id="danger-heading">Delete project</h2>
-<!--delete-guard--><div id="delete-guard" data-allowed="{{ view.blocker.is_none() }}"><p id="delete-explanation" class="setting-help">{% if let Some(reason) = view.blocker %}Cannot delete: {{ reason }}. <a href="/projects/id/{{ view.project.project_id }}">Open the plan</a>.{% endif %}</p></div><!--/delete-guard-->
-{{ view.delete_confirm().html()|safe }}</section>
+<!--delete-guard--><div id="delete-guard"><p id="delete-explanation" class="setting-help">{% if let Some(reason) = view.blocker %}Cannot delete: {{ reason }}. <a href="/projects/id/{{ view.project.project_id }}">Open the plan</a>.{% endif %}</p>
+{{ view.delete_confirm().html()|safe }}</div><!--/delete-guard--></section>
 </div>
-<script type="module">
-const base = location.pathname;
-
-let saving = false;
-let sending = null;  // the form being applied: its own change is not someone else's
-// "Changed by cli since you opened this · Reload this field", once, before the form's actions
-function changedSince(form, by) {
- let note = form.querySelector('.setting-changed');
- if (!note) {
-  note = document.createElement('p');
-  note.className = 'setting-changed';
-  note.setAttribute('role', 'status');
-  const button = Object.assign(document.createElement('button'), {type: 'button', className: 'link-button', textContent: 'Reload this field'});
-  button.dataset.reloadField = '';
-  note.append(document.createElement('span'), ' · ', button);
-  (form.querySelector('.setting-actions') ?? form.querySelector('button[type=submit]'))?.before(note);
- }
- note.firstChild.textContent = `Changed by ${by === 'owner' ? 'the owner' : by || 'someone'} since you opened this`;
-}
-// the form as the page draws it now: its value, revision and change seen, the note gone
-async function reloadField(form) {
- const response = await fetch(base, {headers: {accept: 'text/html'}});
- const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
- const resource = form.querySelector('[name=resource]')?.value || '';
- const fresh = [...doc.querySelectorAll('form[data-setting]')].find(f => f.dataset.setting === form.dataset.setting && f.className === form.className && (f.querySelector('[name=resource]')?.value || '') === resource);
- if (!fresh) { location.reload(); return; }
- form.replaceWith(fresh);
- if (fresh.dataset.setting === 'description') patch(doc, ['description-preview']);
- fresh.querySelector('input:not([type=hidden]), textarea, select, button')?.focus();
-}
-document.addEventListener('click', event => {
- const button = event.target.closest('[data-reload-field]');
- if (button) reloadField(button.closest('form')).catch(() => { button.textContent = 'Could not reload. Try again'; });
-});
-const refresh = () => {
- const live = document.querySelector('#settings-live');
- if (live.dataset.deleted === 'true') { location.assign('/'); return; }
- document.title = live.dataset.pageTitle;
- for (const field of ['paused','archived']) {
-  const form = document.querySelector('form[data-setting=' + field + ']');
-  const on = live.dataset[field] === 'true';
-  form.querySelector('[name=value]').value = String(!on);
-  form.querySelector('button').setAttribute('aria-checked',String(on));
-  form.querySelector('button').textContent = field === 'paused' ? (on ? 'Resume' : 'Pause') : (on ? 'Unarchive' : 'Archive');
- }
- const deletion = document.querySelector('#delete-form');
- if (deletion.closest('dialog[open]') && deletion.querySelector('[name=expected_settings_rev]').value !== live.dataset.revision) deletion.closest('dialog').close();
- document.querySelector('#delete-button').closest('sluice-confirm').heading = 'Delete ' + live.dataset.name + '?';
- deletion.querySelector('.confirm-copy').textContent = 'This permanently removes the plan, messages, history, functions, secrets and artifacts. This cannot be undone.';
- deletion.querySelector('.danger').textContent = 'Delete ' + live.dataset.name;
- deletion.querySelector('[name=expected_settings_rev]').value = live.dataset.revision;
- // A form keeps the revision it was drawn or last applied with while nobody else changes its
- // field (another field's change cannot clash with it). When someone does, the form says so and
- // keeps its revision: its Apply is refused as a conflict, never written over theirs.
- const changes = JSON.parse(live.dataset.fields || '{}');
- for (const form of document.querySelectorAll('form[data-seen]')) {
-  if (form === sending) continue;
-  const [seq, by] = changes[form.dataset.setting] || [0, ''];
-  const switched = ['paused','archived'].includes(form.dataset.setting);  // a switch reads the live state
-  if (switched || seq <= Number(form.dataset.seen)) {
-   form.querySelector('[name=expected_settings_rev]').value = live.dataset.revision;
-   if (switched) form.dataset.seen = String(seq);
-  } else changedSince(form, by);
- }
- const blocked = saving || document.querySelector('#delete-guard').dataset.allowed !== 'true';
- document.querySelector('#delete-button').closest('sluice-confirm').disabled = blocked;
-};
-document.addEventListener('datastar-signal-patch', refresh);
-document.querySelector('[data-preview]').hidden = false;
-document.querySelector('[data-upload]').hidden = false;
-function patch(doc, ids) {
- for (const id of ids) { const node = doc.getElementById(id); if (node) document.getElementById(id)?.replaceWith(node); }
- refresh();
-}
-// Clear board's confirmation drawn anew (its revision, whether there is a board to clear)
-function replaceClear(doc) {
- const here = document.querySelector('.board-clear'), there = doc.querySelector('.board-clear');
- if (here && there && !document.querySelector('#confirmation[open]')) here.replaceWith(there);
-}
-async function sendForm(form, submitter, extra) {
- if (saving) return;
- saving = true;
- sending = form;
- const feedback = form.querySelector('.settings-feedback');
- feedback.textContent = 'Saving…';
- try {
-  const body = new URLSearchParams(new FormData(form, submitter));
-  for (const [k, v] of Object.entries(extra || {})) body.set(k, v);
-  const response = await fetch(form.action, {method:'POST', body});
-  const text = await response.text();
-  const doc = new DOMParser().parseFromString(text, 'text/html');
-  if (doc.getElementById('settings-live')) {
-   patch(doc, ['settings-live','top-nav','resource-status','retire-status','delete-guard']);
-   const field = form.dataset.setting;
-   const source = [...doc.querySelectorAll('form[data-setting]')].find(f => f.dataset.setting === field && (f.querySelector('[name=resource]')?.value || '') === (form.querySelector('[name=resource]')?.value || ''));
-   feedback.textContent = source?.querySelector('.settings-feedback')?.textContent || (response.ok ? 'Saved' : 'Could not save.');
-   feedback.classList.toggle('setting-error', !response.ok);
-   feedback.classList.toggle('setting-saved', response.ok);
-   // applied: the form now stands on the revision it made, its own change seen
-   if (response.ok && source?.dataset.seen) {
-    form.dataset.seen = source.dataset.seen;
-    form.querySelector('[name=expected_settings_rev]').value = source.querySelector('[name=expected_settings_rev]').value;
-    form.querySelector('.setting-changed')?.remove();
-   }
-   if (response.ok && field === 'resources') patch(doc, ['resource-editors']);
-   if (response.ok && field === 'description') patch(doc, ['description-preview']);
-   if (response.ok && field === 'icon') { const image = doc.querySelector('#icon-preview'); document.querySelector('#icon-preview')?.remove(); if(image) form.before(image); }
-   if (response.ok && ['paused','archived'].includes(field)) form.replaceWith(source);
-   if (field === 'board' && source) {
-    document.querySelector('#board-rev').value = source.querySelector('#board-rev').value;
-    form.querySelector('label[for=board-program]').textContent = source.querySelector('label[for=board-program]').textContent;
-    replaceClear(doc);
-    if (response.ok) { document.querySelector('#board-program').value = source.querySelector('#board-program').value; previewBoard(); }
-   }
-  } else { feedback.textContent = JSON.parse(text).message || 'Could not save.'; }
- } catch { feedback.textContent = 'Could not save. Check the connection and try again.'; }
- finally { saving = false; sending = null; refresh(); }
-}
-document.addEventListener('submit', event => {
- const form = event.target;
- if (form.matches('form[data-setting]')) { event.preventDefault(); sendForm(form, event.submitter); }
- // a confirmed Clear board or Remove: the dialog closes and its field's form sends it
- if (form.id === 'board-clear-form') {
-  event.preventDefault(); document.querySelector('#confirmation').close();
-  sendForm(document.querySelector('#board-form'), null, {op: 'clear'});
- }
- if (form.id.startsWith('remove-')) {
-  event.preventDefault(); document.querySelector('#confirmation').close();
-  const resource = form.querySelector('[name=resource]').value;
-  const editor = [...document.querySelectorAll('#resource-editors form[data-setting=resources]')].find(f => f.querySelector('[name=resource]').value === resource);
-  if (editor) sendForm(editor, null, {capacity: 'remove'});
- }
- if (form.id === 'delete-form') {
-  event.preventDefault(); if (document.querySelector('#delete-button').closest('sluice-confirm').disabled) return;
-  saving = true; refresh();
-  fetch(form.action, {method:'POST', body:new URLSearchParams(new FormData(form))}).then(async response => {
-   if (response.ok && response.redirected) { location.assign('/'); return; }
-   const error = await response.json(); document.querySelector('#delete-feedback').textContent = error.message;
-  }).catch(() => { document.querySelector('#delete-feedback').textContent = 'Could not delete. Check the connection and try again.'; }).finally(() => { saving = false; refresh(); });
- }
-});
-document.querySelector('[data-preview]').addEventListener('click', async () => {
- const response = await fetch(base + '/preview', {method:'POST',body:document.querySelector('#project-description').value});
- if(response.ok) { const area = document.querySelector('#description-preview'); area.innerHTML = await response.text(); area.closest('details').open = true; }
-});
-document.querySelector('[data-upload-button]').addEventListener('click', async () => {
- const file = document.querySelector('#icon-file').files[0]; const feedback = document.querySelector('#icon-feedback');
- if (!file) { feedback.textContent = 'Choose an image first.'; return; }
- if (file.size > 262144) { feedback.textContent = 'Image must be at most 256 KiB.'; return; }
- const response = await fetch(base + '/icon?expected_settings_rev=' + document.querySelector('form[data-setting=icon] [name=expected_settings_rev]').value, {method:'POST',body:file});
- if (!response.ok) { feedback.textContent = (await response.json()).message; return; }
- const doc = new DOMParser().parseFromString(await response.text(),'text/html');
- const iconForm = document.querySelector('form[data-setting=icon]'), drawn = doc.querySelector('form[data-setting=icon]');
- if (drawn) { iconForm.dataset.seen = drawn.dataset.seen; iconForm.querySelector('[name=expected_settings_rev]').value = drawn.querySelector('[name=expected_settings_rev]').value; iconForm.querySelector('.setting-changed')?.remove(); }
- patch(doc,['settings-live','top-nav']);
- document.querySelector('#icon-preview')?.remove(); const image = doc.querySelector('#icon-preview'); if(image) document.querySelector('form[data-setting=icon]').before(image);
- feedback.textContent = 'Saved';
-});
-let previewTimer, previewSeq = 0;
-async function previewBoard() {
- const seq = ++previewSeq;
- const area = document.querySelector('#board-preview');
- try {
-  const response = await fetch(base + '/board/preview', {method:'POST', body:document.querySelector('#board-program').value});
-  const text = await response.text();
-  if (seq !== previewSeq) return;
-  area.innerHTML = response.ok ? text : '<p class="setting-error"></p>';
-  if (!response.ok) area.firstChild.textContent = (() => { try { return JSON.parse(text).message; } catch { return 'Could not draw the preview.'; } })();
- } catch { if (seq === previewSeq) area.textContent = 'Could not draw the preview. Check the connection.'; }
- area.hidden = false; document.querySelector('[data-board-preview-label]').hidden = false;
-}
-document.querySelector('#board-program').addEventListener('input', () => { clearTimeout(previewTimer); previewTimer = setTimeout(previewBoard, 400); });
-document.querySelector('#board-preview').addEventListener('submit', event => event.preventDefault());
-previewBoard();
-new MutationObserver(() => { if(document.querySelector('#settings-live')?.dataset.deleted === 'true') location.assign('/'); }).observe(document.querySelector('#content'),{childList:true,subtree:true});
-refresh();
-</script>

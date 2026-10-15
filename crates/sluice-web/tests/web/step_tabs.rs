@@ -1,7 +1,7 @@
 //! A step's page and drawer in tabs (Overview, Activity, Thread, Inputs, Outputs, Runs, each only
 //! when it has something to show), the one conversation every message page draws, and the
 //! kit's gallery: over HTTP, then in a real Chromium (the chosen tab through a stream patch, the
-//! keyboard, deep links, the fallback without script, the message box) with the gallery's
+//! keyboard, deep links, the message box) with the gallery's
 //! screenshots at every width in both themes.
 use crate::board_fixture;
 use crate::chrome;
@@ -164,10 +164,9 @@ async fn slow_chromium_tabs_keep_their_choice_through_a_patch_move_by_keyboard_a
             .wait("document.readyState === 'complete' && !!customElements.get('sluice-tabs') && !!document.querySelector('sluice-tabs')")
             .unwrap();
         assert_eq!(browser.eval(CHOSEN).unwrap(), json!(["overview", "overview", "overview"]));
-        // a click chooses Outputs: its panel alone shows, the address says so
+        // a click chooses Outputs: its panel alone shows
         browser.eval("document.querySelector('#tt-outputs').click()").unwrap();
         assert_eq!(browser.eval(CHOSEN).unwrap(), json!(["outputs", "outputs", "outputs"]));
-        assert_eq!(browser.eval("location.search").unwrap(), "?tab=outputs");
         // a message arrives: the stream patches the page (the Thread tab counts 6), the choice
         // stays
         rt.block_on(stored(
@@ -203,7 +202,6 @@ async fn slow_chromium_tabs_keep_their_choice_through_a_patch_move_by_keyboard_a
         assert_eq!(key(&mut browser, "ArrowLeft", 37), json!(["runs", "runs"]));
         assert_eq!(key(&mut browser, "Home", 36), json!(["overview", "overview"]));
         assert_eq!(key(&mut browser, "End", 35), json!(["runs", "runs"]));
-        assert_eq!(browser.eval("location.search").unwrap(), "?tab=runs");
         // a deep link to a message opens the Thread tab on it
         browser
             .navigate(&format!("{page}#message-{}", ask.0))
@@ -219,7 +217,7 @@ async fn slow_chromium_tabs_keep_their_choice_through_a_patch_move_by_keyboard_a
         browser.eval("document.querySelector('#tp-messages textarea').value = 'Ship it after the tag.'").unwrap();
         browser.eval("document.querySelector('#tp-messages form.composer button').click()").unwrap();
         browser
-            .wait("document.querySelector('#tp-messages .ou-status').textContent === 'Sent.'")
+            .wait("document.querySelector('#tp-messages .form-said').textContent === 'Sent.'")
             .unwrap();
         let sent: Vec<_> = f
             .commands
@@ -233,19 +231,6 @@ async fn slow_chromium_tabs_keep_their_choice_through_a_patch_move_by_keyboard_a
             })
             .collect();
         assert_eq!(sent, [("alpha-build".to_owned(), "Ship it after the tag.".to_owned(), true)]);
-        // without script every panel stands stacked under its head, and the bar is gone
-        browser
-            .send("Emulation.setScriptExecutionDisabled", json!({"value": true}))
-            .unwrap();
-        browser.navigate(&format!("{page}?tab=runs")).unwrap();
-        browser.wait("document.readyState === 'complete'").unwrap();
-        let stacked = browser
-            .eval("[[...document.querySelectorAll('.tp')].filter(p => p.checkVisibility()).map(p => p.dataset.tab).join(' '), document.querySelector('sluice-tabs > .tabs').checkVisibility(), [...document.querySelectorAll('.tp-h')].every(h => h.getBoundingClientRect().height > 10)]")
-            .unwrap();
-        assert_eq!(stacked, json!(["overview messages outputs runs", false, true]));
-        browser
-            .send("Emulation.setScriptExecutionDisabled", json!({"value": false}))
-            .unwrap();
         assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), json!([]));
     })
     .await
@@ -307,10 +292,10 @@ async fn tabs_values_and_owner_conversations() {
         );
         // the header no longer links the thread page once the Thread tab holds its messages
         assert!(!html.contains("class=\"d-thread\""), "{html}");
-        // Overview is chosen; its panel leads, every panel drawn (stacked without script)
+        // Overview is chosen; its panel leads, every panel drawn
         assert!(
             html.contains(
-                "<sluice-tabs id=\"tabs\" current=\"overview\" url data-preserve-attr=\"current\">"
+                "<sluice-tabs id=\"tabs\" current=\"overview\" data-preserve-attr=\"data-rocket-host current\">"
             ),
             "{html}"
         );
@@ -475,7 +460,7 @@ async fn tabs_values_and_owner_conversations() {
             assert!(
                 !html.contains("class=\"m-id\"")
                     && html.contains(&format!(
-                        "<dt>Message</dt><dd><sluice-copy value=\"#{}\">",
+                        "<dt>Message</dt><dd><sluice-copy value=\"#{}\" data-preserve-attr=\"data-rocket-host\">",
                         unread.0
                     )),
                 "{place}: {html}"
@@ -486,9 +471,7 @@ async fn tabs_values_and_owner_conversations() {
         // each with its message box to the step, pinned at its end
         for html in [&step, &page] {
             assert!(
-                html.contains(
-                    "<form class=\"composer thread-reply\" data-ignore-morph method=\"post\""
-                ),
+                html.contains("class=\"composer thread-reply\" method=\"post\""),
                 "{html}"
             );
             assert!(

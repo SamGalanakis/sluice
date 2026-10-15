@@ -98,9 +98,9 @@ async fn fixture() -> (tempfile::TempDir, Writer, views::DashboardState, Project
 }
 
 /// Dismiss and Undismiss edit no plan, so they need no revision; Dismiss applies only to a
-/// cancel, and `next` brings the index's Dismiss back to the index.
+/// cancel.
 #[tokio::test]
-async fn dismiss_sets_a_cancel_aside_with_no_revision_and_goes_back_where_it_was_asked() {
+async fn dismiss_sets_a_cancel_aside_with_no_revision() {
     let (_home, writer, state, project) = fixture().await;
     let fake = Arc::new(Fake::default());
     let app = views::dashboard_router(state.clone())
@@ -139,22 +139,17 @@ async fn dismiss_sets_a_cancel_aside_with_no_revision_and_goes_back_where_it_was
         })
         .await
         .unwrap();
-    let response = post("action=dismiss&next=/").await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert_eq!(response.headers()["location"], "/");
+    assert_eq!(
+        post("action=dismiss").await.status(),
+        StatusCode::NO_CONTENT
+    );
     // not dismissed yet (the fake records, the store is unchanged): nothing to undo
     assert_eq!(
         post("action=undismiss").await.status(),
         StatusCode::CONFLICT
     );
-    // a `next` off the site is not followed
-    let response = post("action=dismiss&next=//elsewhere.example").await;
-    assert_eq!(
-        response.headers()["location"],
-        format!("/projects/id/{project}/steps/work").as_str()
-    );
     let calls = fake.0.lock().unwrap();
-    assert_eq!(calls.len(), 2);
+    assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].action, Action::Dismiss);
     assert_eq!(calls[0].step.as_ref().map(|s| s.as_str()), Some("work"));
 }
@@ -279,7 +274,7 @@ async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawe
     );
     assert!(html.contains("datetime=\"2026-10-05T09:30:00Z\""), "{html}");
     assert!(
-        html.contains("release <sluice-copy value=\"0123456789ab\"><code>0123456789ab</code><button type=\"button\" class=\"copy needs-js\" aria-label=\"Copy release\""),
+        html.contains("release <sluice-copy value=\"0123456789ab\" data-preserve-attr=\"data-rocket-host\"><code>0123456789ab</code><button type=\"button\" class=\"copy\" aria-label=\"Copy release\""),
         "{html}"
     );
 }
@@ -636,7 +631,7 @@ async fn a_running_step_says_what_it_is_doing_now() {
         "{}",
         band.as_str()
     );
-    let page = step.page_body("p", "", None).unwrap();
+    let page = step.own_body("p", "").unwrap();
     let page = page.as_str();
     assert!(
         page.contains("<h2 class=\"tp-h\">Overview</h2>")
@@ -647,28 +642,18 @@ async fn a_running_step_says_what_it_is_doing_now() {
     );
 }
 
-/// A step action the page asked for and sluice did not take comes back to the step's own page
-/// with a notice saying why and the feedback typed with it kept in its box (a script gets the
-/// error as JSON); one posted after a plan edit that left the step as drawn simply applies, at
-/// the plan's new revision.
+/// A step action sluice did not take is said in its form's notice, the page left as it is (the
+/// feedback typed with it stays in its box); a script gets the error as JSON. One posted after a
+/// plan edit that left the step as drawn simply applies, at the plan's new revision.
 #[tokio::test]
-async fn a_refused_action_comes_back_to_its_step_saying_why_with_its_feedback_kept() {
+async fn a_refused_action_is_said_in_its_form_and_one_after_an_unrelated_edit_applies() {
     let (_home, writer, state, project) = fixture().await;
     let fake = Arc::new(Fake::default());
     let app = views::dashboard_router(state.clone())
         .layer(Extension(Registry(Arc::new(Exact))))
         .layer(Extension(Commands(fake.clone())));
     let path = format!("/projects/id/{project}/steps/work");
-    let body = |response: axum::response::Response| async move {
-        String::from_utf8(
-            to_bytes(response.into_body(), 1 << 22)
-                .await
-                .unwrap()
-                .to_vec(),
-        )
-        .unwrap()
-    };
-    let page = body(
+    let page = super::forms::text(
         app.clone()
             .oneshot(Request::builder().uri(&path).body(Body::empty()).unwrap())
             .await
@@ -682,39 +667,44 @@ async fn a_refused_action_comes_back_to_its_step_saying_why_with_its_feedback_ke
         .unwrap()
         .to_owned();
     assert_eq!(seen, "failed:false:0", "{page}");
-    let post = |form: String, accept: &'static str| {
+    // what the form `retry-work` says after posting `form`: "" when it was taken
+    let post = |form: Vec<(&'static str, String)>| {
         let app = app.clone();
         let path = format!("{path}/actions");
         async move {
-            app.oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(path)
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .header("accept", accept)
-                    .body(Body::from(form))
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
+            let pairs: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            let response = app
+                .oneshot(super::forms::post(path, "retry-work", &pairs))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let answer = super::forms::text(response).await;
+            answer
+                .split("<p id=\"retry-work-said\" class=\"form-said\" role=\"alert\">")
+                .nth(1)
+                .map_or(String::new(), |rest| {
+                    rest[..rest.find("</p>").unwrap()].to_owned()
+                })
         }
+    };
+    let retry = |message: &str| {
+        vec![
+            ("action", "retry".to_owned()),
+            ("revision", "0".to_owned()),
+            ("seen", seen.clone()),
+            ("message", message.to_owned()),
+        ]
     };
     // the plan moved on (revision 0 is behind) but the step is as drawn: it applies, at the
     // plan's revision now
-    let response = post(
-        format!("action=retry&revision=0&seen={seen}&message=Look+again"),
-        "text/html",
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(post(retry("Look again")).await, "");
     {
         let calls = fake.0.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].revision, 2);
         assert_eq!(calls[0].message, "Look again");
     }
-    // the step changed since: nothing is done, and its page says so over it, the feedback in
-    // its box and the box open
+    // the step changed since: nothing is done, and its form says so
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
             tx.sql().execute(
@@ -726,85 +716,31 @@ async fn a_refused_action_comes_back_to_its_step_saying_why_with_its_feedback_ke
         })
         .await
         .unwrap();
-    let response = post(
-        format!("action=retry&revision=0&seen={seen}&message=Look+again"),
-        "text/html,application/xhtml+xml",
-    )
-    .await;
-    // back to the step's own address (303), so a reload posts nothing again
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let location = response.headers()["location"].to_str().unwrap().to_owned();
-    assert!(
-        location.starts_with(&format!("{path}?notice=")),
-        "{location}"
-    );
-    let html = body(
-        app.clone()
-            .oneshot(
-                Request::builder()
-                    .uri(&location)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap(),
-    )
-    .await;
-    assert!(html.starts_with("<!doctype html>"), "{html}");
-    assert!(
-        html.contains("<div class=\"notice\" role=\"alert\">")
-            && html.contains("<p>Nothing was done: this step changed since the page drew it, and it is stale now. Look again, then retry. What you wrote is kept in its box: Retry sends it.</p>"),
-        "{html}"
-    );
-    assert!(
-        html.contains("<details class=\"sh-fb\" data-preserve-attr=\"open\" open><summary")
-            && html.contains("data-ignore-morph placeholder=\"What its next run should do differently\">Look again</textarea>"),
-        "{html}"
+    assert_eq!(
+        post(retry("Look again")).await,
+        "Nothing was done: this step changed since the page drew it, and it is stale now. Look again, then retry."
     );
     assert_eq!(fake.0.lock().unwrap().len(), 1, "nothing more was done");
     // an action that no longer applies says so; a script gets JSON with the matching code
-    let response = post("action=cancel&revision=2".into(), "application/json").await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("{path}/actions"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("accept", "application/json")
+                .body(Body::from("action=cancel&revision=2"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
-    let json: serde_json::Value = serde_json::from_str(&body(response).await).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&super::forms::text(response).await).unwrap();
     assert_eq!(json["error"], "conflict", "{json}");
     assert_eq!(
         json["message"],
         "Nothing was done: Cancel does not apply to a stale step."
-    );
-    // a succeeded step's Retry asks first: what was typed waits in the box its button opens
-    writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            tx.sql().execute(
-                "UPDATE steps SET status='succeeded' WHERE project_id=?1",
-                [project.to_string()],
-            )?;
-            tx.changed(Some(project), "status");
-            Ok(())
-        })
-        .await
-        .unwrap();
-    let response = post(
-        format!("action=retry&revision=0&seen={seen}&message=Use+the+12h+cap"),
-        "text/html",
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let location = response.headers()["location"].to_str().unwrap().to_owned();
-    let html = body(
-        app.clone()
-            .oneshot(
-                Request::builder()
-                    .uri(&location)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap(),
-    )
-    .await;
-    assert!(
-        html.contains("and it is succeeded now. Look again, then retry. What you wrote is kept: Retry opens it again.</p>")
-            && html.contains("data-ignore-morph>Use the 12h cap</textarea>"),
-        "{html}"
     );
 }

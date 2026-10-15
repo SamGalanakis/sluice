@@ -31,7 +31,7 @@ pub struct MessageItem {
     pub to_who: Who,
     /// A question to the owner the owner answered in the last ten minutes: when (RFC 3339).
     /// The inbox keeps it in its place as one line saying so, so an answer is confirmed where
-    /// it was given, through every patch and without script.
+    /// it was given, through every patch.
     pub answered_at: String,
 }
 impl MessageItem {
@@ -517,12 +517,10 @@ impl InboxView {
     }
     /// "Close all n": the questions nobody waits on, closed at once once confirmed.
     pub fn close_all(&self, stopped: &[&MessageItem]) -> super::ui::Confirm {
-        let mut hidden = vec![("next", self.path())];
-        hidden.extend(
-            stopped
-                .iter()
-                .map(|item| ("m", format!("{}/{}", item.project, item.id()))),
-        );
+        let hidden = stopped
+            .iter()
+            .map(|item| ("m", format!("{}/{}", item.project, item.id())))
+            .collect();
         super::ui::Confirm {
             opener: format!("Close all {}", stopped.len()),
             title: format!("Close all {} questions?", stopped.len()),

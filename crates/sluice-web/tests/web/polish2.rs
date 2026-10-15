@@ -430,10 +430,10 @@ async fn messages_retries_waits_and_run_files() {
         )),
         "{why}"
     );
-        // its output, from the run before this one, says so and stands back
+        // its output, from the run before this one, under Now: said so, and standing back
         let key = between(&page, "<article class=\"mod d-sec d-key", "</article>");
         assert!(
-            key.starts_with("<article class=\"mod d-sec d-key is-earlier\""),
+            key.starts_with("<article class=\"mod d-sec d-key d-sofar is-earlier\""),
             "{key}"
         );
         assert!(

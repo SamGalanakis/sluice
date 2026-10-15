@@ -2,6 +2,7 @@
 //! adapter and coordinator deletion guard, and mounts this router inside its
 //! Host/Origin policy. All mutations use the store's single writer transaction.
 use crate::clock::ClockRead;
+use crate::streams::StreamEvent;
 use crate::{
     markdown,
     streams::{self, PatchRegion, RenderedBatch, StreamQuery, VersionSignal},
@@ -16,6 +17,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response, Sse, sse::KeepAlive},
     routing::{get, post},
 };
+use datastar::prelude::{ElementPatchMode, ExecuteScript, PatchElements};
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use sluice_model::{
@@ -222,9 +224,8 @@ impl SettingsState {
     }
 }
 /// The settings a form edits, each with its last change: the seq of the record that made it and
-/// who did. A form keeps the settings revision it was drawn or last applied with while nobody
-/// else changes its field; when someone does, it says so and keeps that revision, so its Apply
-/// is refused as a conflict instead of writing over theirs.
+/// who did. A section's form carries the last change it was drawn with (`seen`); a Save after
+/// someone else changed one of its settings is refused, never written over theirs.
 pub const FIELDS: [&str; 9] = [
     "name",
     "description",
@@ -343,6 +344,12 @@ pub struct ResourceView {
     pub queued: Option<usize>,
     pub error: String,
 }
+/// The page's sections that are one form each, with the settings each edits.
+const SECTIONS: [(&str, &[&str]); 3] = [
+    ("details", &["name", "description", "icon", "fallback"]),
+    ("resources", &["resources"]),
+    ("retiring", &["prune_done_after", "prune_keep"]),
+];
 pub struct ProjectSettingsView {
     pub shared: DashboardSnapshot,
     pub project: Project,
@@ -402,7 +409,7 @@ impl ProjectSettingsView {
         format!("/projects/id/{}/settings", self.project.project_id)
     }
     /// Delete project's confirmation: one button and a dialog, no typed name; dimmed while
-    /// something blocks it (the page's script follows the live state).
+    /// something blocks it (drawn in the page's stream, so it follows the live state).
     pub fn delete_confirm(&self) -> crate::views::ui::Confirm {
         let name = &self.project.name;
         crate::views::ui::Confirm {
@@ -417,9 +424,6 @@ impl ProjectSettingsView {
             keep: "Keep it",
             danger: true,
             disabled: self.blocker.is_some(),
-            after: TrustedHtml::owned(
-                "<span id=\"delete-feedback\" class=\"settings-feedback setting-error\" role=\"status\"></span>".into(),
-            ),
             ..Default::default()
         }
     }
@@ -456,13 +460,8 @@ impl ProjectSettingsView {
             action: self.path(),
             form_id: format!("remove-{resource}"),
             hidden: vec![
-                ("field", "resources".into()),
+                ("section", "remove".into()),
                 ("resource", resource.to_owned()),
-                ("capacity", "remove".into()),
-                (
-                    "expected_settings_rev",
-                    self.project.settings_rev.to_string(),
-                ),
             ],
             copy: "Refused while a step still needs it.".into(),
             confirm: format!("Remove {resource}"),
@@ -471,13 +470,41 @@ impl ProjectSettingsView {
             ..Default::default()
         }
     }
-    /// The record a form's field was last changed by, as drawn: what it has seen.
-    pub fn seen(&self, field: &str) -> i64 {
-        self.changes.get(field).map_or(0, |c| c.0)
+    /// The last change to any setting `section` edits, as drawn: what its form has seen.
+    fn seen(&self, section: &str) -> i64 {
+        SECTIONS
+            .iter()
+            .find(|(s, _)| *s == section)
+            .map_or(0, |(_, fields)| {
+                fields
+                    .iter()
+                    .filter_map(|f| self.changes.get(f).map(|c| c.0))
+                    .max()
+                    .unwrap_or(0)
+            })
     }
-    /// Every setting's last change as the live header carries it: `{"name":[seq,"author"]}`.
-    pub fn changes_json(&self) -> String {
-        serde_json::to_string(&self.changes).expect("owned changes serialize")
+    /// The opening of the Board section's form, which posts to the board's own address.
+    pub fn board_form_open(&self) -> String {
+        views::ui::post_form(
+            "board-program-form",
+            "settings-form",
+            &format!("{}/board", self.path()),
+        )
+    }
+    /// The opening of `section`'s form (`<section>-form`, a `ui::post_form` posting to
+    /// `action`, with `extra` attributes), naming its section and what it has seen.
+    pub fn form_open(&self, section: &str, action: &str, extra: &str) -> String {
+        format!(
+            "{}<input type=\"hidden\" name=\"section\" value=\"{section}\"><input type=\"hidden\" name=\"seen\" value=\"{}\">",
+            views::ui::post_form_with(
+                &format!("{section}-form"),
+                "settings-form",
+                action,
+                "",
+                extra
+            ),
+            self.seen(section)
+        )
     }
     fn version(&self) -> String {
         sluice_store::artifacts::fingerprint(&serde_json::to_vec(&serde_json::json!({
@@ -503,8 +530,8 @@ impl ProjectSettingsView {
         }
         out
     }
-    pub fn render(&self, viewer: &Viewer, feedback: &Feedback) -> Result<TrustedHtml, PublicError> {
-        let body = self.body(feedback).map_err(render_error)?;
+    pub fn render(&self, viewer: &Viewer) -> Result<TrustedHtml, PublicError> {
+        let body = self.body(None).map_err(render_error)?;
         let nav = NavView::new(&self.shared, Some(self.project.project_id), "settings")?;
         views::render_framed(
             &format!("{} · Settings", self.project.name),
@@ -528,7 +555,9 @@ impl ProjectSettingsView {
             views::ui::page_head("Settings", &TrustedHtml::default())
         ))
     }
-    fn body(&self, feedback: &Feedback) -> Result<TrustedHtml, askama::Error> {
+    /// The page's body; `board` the program its box shows instead of the board's (a cleared
+    /// board's, so Save board puts it back).
+    fn body(&self, board: Option<&str>) -> Result<TrustedHtml, askama::Error> {
         let icon_text = match &self.project.icon {
             Some(projects::ProjectIcon::Text(t)) => t.clone(),
             _ => String::new(),
@@ -539,43 +568,34 @@ impl ProjectSettingsView {
             .as_ref()
             .and_then(|i| i.url(self.project.project_id))
             .unwrap_or_default();
-        let description = feedback.value("description", &self.project.description);
         TrustedHtml::from_template(&SettingsTemplate {
             view: self,
-            feedback,
             icon_text,
             icon_url,
-            preview: markdown::render(description),
+            preview: markdown::render(&self.project.description),
+            board_program: board
+                .or(self.project.board.as_deref())
+                .unwrap_or("")
+                .to_owned(),
             retire_hours: self.retire_hours(),
             retire_keep: self.retire_keep(),
         })
     }
     fn batch(&self, viewer: &Viewer) -> Result<RenderedBatch, PublicError> {
         let nav = NavView::new(&self.shared, Some(self.project.project_id), "settings")?;
-        let body = self.body(&Feedback::default()).map_err(render_error)?;
+        let body = self.body(None).map_err(render_error)?;
+        // the forms one edits are left out: what is typed stays until it is saved
         let regions = [
             "settings-live",
             "resource-status",
             "board-doc",
             "sessions",
             "retire-status",
+            "activity",
             "delete-guard",
         ]
         .into_iter()
-        .map(|id| {
-            // These owned template markers keep all editable forms out of stream patches.
-            let start = body
-                .as_str()
-                .find(&format!("<!--{id}-->"))
-                .expect("owned marker")
-                + id.len()
-                + 7;
-            let end = body.as_str()[start..]
-                .find(&format!("<!--/{id}-->"))
-                .expect("owned closing marker")
-                + start;
-            PatchRegion::new(id, TrustedHtml::owned(body.as_str()[start..end].into()))
-        });
+        .map(|id| PatchRegion::new(id, TrustedHtml::owned(marked(&body, id).into())));
         Ok(RenderedBatch {
             version: self.version(),
             regions: [
@@ -591,48 +611,123 @@ impl ProjectSettingsView {
         })
     }
 }
+/// What the page's body holds between `<!--{id}-->` and `<!--/{id}-->`.
+fn marked<'a>(body: &'a TrustedHtml, id: &str) -> &'a str {
+    let body = body.as_str();
+    let start = body.find(&format!("<!--{id}-->")).expect("owned marker") + id.len() + 7;
+    let end = body[start..]
+        .find(&format!("<!--/{id}-->"))
+        .expect("owned closing marker")
+        + start;
+    &body[start..end]
+}
 #[derive(Template)]
 #[template(path = "settings.html")]
 struct SettingsTemplate<'a> {
     view: &'a ProjectSettingsView,
-    feedback: &'a Feedback,
+    board_program: String,
     icon_text: String,
     icon_url: String,
     preview: TrustedHtml,
     retire_hours: String,
     retire_keep: String,
 }
-#[derive(Default)]
-pub struct Feedback {
-    pub field: String,
-    pub value: String,
-    pub resource: String,
-    pub message: String,
-    pub saved: bool,
-    /// Applied, and its box keeps what was sent: a cleared board's program stays in the box,
-    /// so Save board puts it back.
-    pub kept: bool,
+/// A form's fields as sent: url-encoded, or multipart (the Details form, for its image).
+struct Sent {
+    fields: Vec<(String, String)>,
+    /// The image chosen in a file field, when one was.
+    file: Option<Vec<u8>>,
 }
-impl Feedback {
-    pub fn value<'a>(&'a self, field: &str, fallback: &'a str) -> &'a str {
-        if self.field == field && (!self.saved || self.kept) {
-            &self.value
-        } else {
-            fallback
+impl Sent {
+    fn decode(headers: &HeaderMap, body: &[u8]) -> Result<Self, PublicError> {
+        let kind = headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if let Some(boundary) = kind.strip_prefix("multipart/form-data").and_then(|rest| {
+            rest.split(';')
+                .find_map(|p| p.trim().strip_prefix("boundary="))
+        }) {
+            let mut sent = Sent {
+                fields: Vec::new(),
+                file: None,
+            };
+            for part in multipart(boundary.trim_matches('"'), body)? {
+                match part.filename {
+                    Some(name) if !name.is_empty() && !part.content.is_empty() => {
+                        sent.file = Some(part.content)
+                    }
+                    Some(_) => {}
+                    None => sent.fields.push((
+                        part.name,
+                        String::from_utf8(part.content).map_err(|_| bad("fields must be UTF-8"))?,
+                    )),
+                }
+            }
+            return Ok(sent);
         }
+        Ok(Sent {
+            fields: url::form_urlencoded::parse(body).into_owned().collect(),
+            file: None,
+        })
     }
-    pub fn error(&self, field: &str) -> bool {
-        self.field == field && !self.saved && !self.message.is_empty()
+    fn one(&self, name: &str) -> &str {
+        self.fields
+            .iter()
+            .find(|(n, _)| n == name)
+            .map_or("", |(_, v)| v.as_str())
+    }
+    fn all<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+        self.fields
+            .iter()
+            .filter(move |(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+    /// A text field as typed: a browser sends a form's line breaks as CRLF.
+    fn text(&self, name: &str) -> String {
+        self.one(name).replace("\r\n", "\n")
     }
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FieldChange {
-    pub field: String,
-    pub value: String,
-    #[serde(default)]
-    pub resource: String,
-    pub expected_settings_rev: Revision,
+struct Part {
+    name: String,
+    filename: Option<String>,
+    content: Vec<u8>,
+}
+/// A `multipart/form-data` body's parts (RFC 7578), as a browser's form sends them.
+fn multipart(boundary: &str, body: &[u8]) -> Result<Vec<Part>, PublicError> {
+    let invalid = || bad("invalid multipart form");
+    let find = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).position(|w| w == needle);
+    let delimiter = format!("--{boundary}").into_bytes();
+    let between = [b"\r\n".as_slice(), &delimiter].concat();
+    let mut rest = &body[find(body, &delimiter).ok_or_else(invalid)? + delimiter.len()..];
+    let mut parts = Vec::new();
+    while !rest.starts_with(b"--") {
+        rest = rest.strip_prefix(b"\r\n").ok_or_else(invalid)?;
+        let head_end = find(rest, b"\r\n\r\n").ok_or_else(invalid)?;
+        let head = std::str::from_utf8(&rest[..head_end]).map_err(|_| invalid())?;
+        rest = &rest[head_end + 4..];
+        let end = find(rest, &between).ok_or_else(invalid)?;
+        let content = rest[..end].to_vec();
+        rest = &rest[end + between.len()..];
+        let disposition = head
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("content-disposition:"))
+            .ok_or_else(invalid)?;
+        let param = |key: &str| {
+            disposition.split(';').skip(1).find_map(|p| {
+                p.trim()
+                    .strip_prefix(key)
+                    .and_then(|v| v.strip_prefix('='))
+                    .map(|v| v.trim_matches('"').to_owned())
+            })
+        };
+        parts.push(Part {
+            name: param("name").ok_or_else(invalid)?,
+            filename: param("filename"),
+            content,
+        });
+    }
+    Ok(parts)
 }
 fn bad(message: impl Into<String>) -> PublicError {
     PublicError::BadRequest {
@@ -642,61 +737,6 @@ fn bad(message: impl Into<String>) -> PublicError {
 fn render_error(e: askama::Error) -> PublicError {
     PublicError::Storage {
         message: e.to_string(),
-    }
-}
-fn status(e: &PublicError) -> StatusCode {
-    match e {
-        PublicError::NotFound { .. } => StatusCode::NOT_FOUND,
-        PublicError::Conflict { .. } => StatusCode::CONFLICT,
-        PublicError::Invalid { .. } | PublicError::BadRequest { .. } => StatusCode::BAD_REQUEST,
-        PublicError::Busy { .. } => StatusCode::SERVICE_UNAVAILABLE,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    }
-}
-fn error_response(e: PublicError) -> Response {
-    (status(&e), axum::Json(e)).into_response()
-}
-fn decode(headers: &HeaderMap, body: &[u8]) -> Result<FieldChange, PublicError> {
-    if headers
-        .get(header::CONTENT_TYPE)
-        .is_some_and(|h| h.as_bytes().starts_with(b"application/json"))
-    {
-        serde_json::from_slice(body).map_err(|_| bad("invalid settings command"))
-    } else {
-        let mut fields = BTreeMap::new();
-        for (key, value) in url::form_urlencoded::parse(body) {
-            if fields
-                .insert(key.into_owned(), value.into_owned())
-                .is_some()
-            {
-                return Err(bad("duplicate settings field"));
-            }
-        }
-        let rev = fields
-            .remove("expected_settings_rev")
-            .ok_or_else(|| bad("settings revision required"))?
-            .parse()
-            .map_err(|_| bad("invalid settings revision"))?;
-        let request = FieldChange {
-            field: fields
-                .remove("field")
-                .ok_or_else(|| bad("field required"))?,
-            value: match fields.remove("capacity") {
-                // the form's capacity choice: a number, a fn, or none
-                Some(kind) => capacity_value(
-                    &kind,
-                    &fields.remove("number").unwrap_or_default(),
-                    &fields.remove("capacity_fn").unwrap_or_default(),
-                )?,
-                None => fields.remove("value").unwrap_or_default(),
-            },
-            resource: fields.remove("resource").unwrap_or_default(),
-            expected_settings_rev: Revision(rev),
-        };
-        if !fields.is_empty() {
-            return Err(bad("unknown settings field"));
-        }
-        Ok(request)
     }
 }
 /// A resource's capacity as the settings command takes it, from the form's choice: `number` a
@@ -745,61 +785,165 @@ fn keep_patterns(value: &str) -> Vec<String> {
         .map(str::to_owned)
         .collect()
 }
-fn update(request: &FieldChange) -> Result<UpdateProject, PublicError> {
+/// What a section's Save asks of the store: every setting the form holds, the store leaving
+/// alone what it already says. `remove` is a resource's Remove, `activity` a switch.
+fn command(
+    section: &str,
+    sent: &Sent,
+    view: &ProjectSettingsView,
+) -> Result<UpdateProject, PublicError> {
     let mut command = UpdateProject {
-        expected_settings_rev: Some(request.expected_settings_rev),
+        expected_settings_rev: Some(view.project.settings_rev),
         author: "owner".into(),
         ..Default::default()
     };
-    match request.field.as_str() {
-        "name" => {
-            command.new_name = Some(request.value.parse().map_err(|_| {
+    match section {
+        "details" => {
+            command.new_name = Some(sent.one("name").trim().parse().map_err(|_| {
                 bad("Use lowercase letters, numbers, underscores or hyphens for the name.")
-            })?)
-        }
-        "description" => command.description = Some(request.value.clone()),
-        "fallback" => {
-            let value = request.value.trim();
-            command.fallback = Some((!value.is_empty()).then(|| value.to_owned()));
-        }
-        "icon" => {
-            command.icon = Some(Icon::text(&request.value).map_err(|e| e.into_public(false))?)
+            })?);
+            command.description = Some(sent.text("description"));
+            command.fallback = Some(Some(sent.one("fallback").trim().to_owned()));
+            let text = sent.one("icon").trim();
+            let now = match &view.project.icon {
+                Some(projects::ProjectIcon::Text(t)) => t.as_str(),
+                _ => "",
+            };
+            command.icon = match &sent.file {
+                Some(image) => Some(Icon::image(image.clone()).map_err(|e| e.into_public(false))?),
+                None if text != now => Some(Icon::text(text).map_err(|e| e.into_public(false))?),
+                None => None,
+            };
         }
         "resources" => {
-            let value: serde_json::Value = serde_json::from_str(&request.value).map_err(|_| {
-                bad("Enter a nonnegative capacity, {\"capacity_fn\":\"fn\"}, or null to remove.")
-            })?;
-            command.resources = Some(serde_json::json!({ request.resource.clone():value }));
-        }
-        "prune_done_after" => {
-            command.prune_done_after = Some(retire_seconds(&request.value)?);
-        }
-        "prune_keep" => command.prune_keep = Some(keep_patterns(&request.value)),
-        "paused" | "archived" => {
-            let value = match request.value.as_str() {
-                "true" => true,
-                "false" => false,
-                _ => return Err(bad("switch value must be true or false")),
-            };
-            if request.field == "paused" {
-                command.paused = Some(value);
-            } else {
-                command.archived = Some(value);
+            let mut patch = serde_json::Map::new();
+            for resource in sent.all("resource") {
+                let value = capacity_value(
+                    sent.one(&format!("capacity.{resource}")),
+                    sent.one(&format!("number.{resource}")),
+                    sent.one(&format!("capacity_fn.{resource}")),
+                )
+                .map_err(|e| bad(format!("{resource}: {e}")))?;
+                if view
+                    .resources
+                    .iter()
+                    .any(|r| r.name == resource && r.value != value)
+                {
+                    patch.insert(
+                        resource.to_owned(),
+                        serde_json::from_str(&value).map_err(|_| bad("invalid capacity"))?,
+                    );
+                }
             }
+            let new = sent.one("new").trim();
+            if !new.is_empty() {
+                let value = capacity_value(
+                    sent.one("capacity.:new"),
+                    sent.one("number.:new"),
+                    sent.one("capacity_fn.:new"),
+                )?;
+                patch.insert(
+                    new.to_owned(),
+                    serde_json::from_str(&value).map_err(|_| bad("invalid capacity"))?,
+                );
+            }
+            if patch.is_empty() {
+                return Ok(command);
+            }
+            command.resources = Some(patch.into());
         }
-        _ => return Err(bad("unknown project setting")),
+        "remove" => {
+            command.resources = Some(serde_json::json!({ sent.one("resource"): null }));
+        }
+        "retiring" => {
+            command.prune_done_after = Some(retire_seconds(sent.one("prune_done_after"))?);
+            command.prune_keep = Some(keep_patterns(sent.one("prune_keep")));
+        }
+        "activity" => {
+            let switch = |name: &str| match sent.one(name) {
+                "" => Ok(None),
+                "true" => Ok(Some(true)),
+                "false" => Ok(Some(false)),
+                _ => Err(bad("a switch is true or false")),
+            };
+            command.paused = switch("paused")?;
+            command.archived = switch("archived")?;
+        }
+        _ => return Err(bad("unknown settings section")),
     }
     Ok(command)
 }
-/// One field per command. The store performs revision and uniqueness checks in
-/// the same transaction as authored records and resource validation.
-pub async fn apply(
+/// A setting as the page names it, in a sentence.
+fn setting_words(field: &str) -> &'static str {
+    match field {
+        "name" => "the name",
+        "description" => "the description",
+        "icon" => "the icon",
+        "fallback" => "the fallback",
+        "resources" => "the resources",
+        "prune_done_after" => "when done units retire",
+        "prune_keep" => "the units never retired",
+        _ => "a setting",
+    }
+}
+/// The answer to a section's write the store took: the section drawn anew from what it now
+/// says (its form, `<section>-edit`, or the switches), with `words` in its notice; a
+/// confirmation it came from closes. A client that is not a page's form gets 204.
+async fn saved(
     state: &SettingsState,
     id: ProjectId,
-    request: &FieldChange,
-) -> Result<Project, PublicError> {
-    let command = update(request)?;
-    state.commands.update(id, command).await
+    headers: &HeaderMap,
+    section: &str,
+    board: Option<&str>,
+    words: &str,
+) -> Response {
+    if views::write::form(headers).is_none() {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    let region = match section {
+        "activity" => "activity",
+        "remove" => "edit:resources",
+        "board" => "edit:board",
+        "details" => "edit:details",
+        "resources" => "edit:resources",
+        _ => "edit:retiring",
+    };
+    let form = match section {
+        "activity" => "activity-form",
+        "remove" | "resources" => "resources-form",
+        "board" => "board-program-form",
+        "details" => "details-form",
+        _ => "retiring-form",
+    };
+    let body = match state
+        .snapshot(id)
+        .await
+        .and_then(|v| v.body(board).map_err(render_error))
+    {
+        Ok(body) => body,
+        Err(e) => return views::write::failed(headers, e),
+    };
+    // the confirmation closes first, its form back in its place, so the section's patch
+    // finds it there
+    views::write::events([
+        views::write::close(headers),
+        StreamEvent::Elements(PatchElements::new(marked(&body, region))),
+        views::write::status(form, words),
+    ])
+}
+/// The answer to a write the store refused: what the form says, as an alert.
+fn refused(headers: &HeaderMap, error: PublicError) -> Response {
+    match &error {
+        // the store's revision check: a setting changed between the page's look and the write
+        PublicError::Conflict { message, .. } if message == "project settings changed" => {
+            views::write::refused(
+                headers,
+                "Not saved: a setting changed just now. Save again.",
+                error,
+            )
+        }
+        _ => views::write::failed(headers, error),
+    }
 }
 /// Merge with dashboard_router under the host's Host/Origin guard. This module
 /// neither starts a coordinator nor executes cleanup jobs; the host owns those.
@@ -813,7 +957,6 @@ pub fn router(state: SettingsState) -> Router {
             "/projects/id/{id}/settings/board/preview",
             post(board_preview),
         )
-        .route("/projects/id/{id}/settings/icon", post(upload))
         .route("/projects/id/{id}/settings/delete", post(delete))
         .route("/projects/id/{id}/settings/stream", get(settings_stream))
         .route("/projects/id/{id}/icon", get(image))
@@ -828,15 +971,15 @@ async fn page(
     match state
         .snapshot(id)
         .await
-        .and_then(|v| v.render(&Viewer::from_headers(&headers), &Feedback::default()))
+        .and_then(|v| v.render(&Viewer::from_headers(&headers)))
     {
         Ok(html) => Html(html.to_string()).into_response(),
-        Err(e) => error_response(e),
+        Err(e) => crate::http::error_response(e),
     }
 }
 async fn named_page(State(state): State<SettingsState>, Path(name): Path<String>) -> Response {
     let Ok(name) = name.parse() else {
-        return error_response(PublicError::NotFound {
+        return crate::http::error_response(PublicError::NotFound {
             message: "project not found".into(),
         });
     };
@@ -849,48 +992,63 @@ async fn named_page(State(state): State<SettingsState>, Path(name): Path<String>
         Ok(p) => {
             Redirect::permanent(&format!("/projects/id/{}/settings", p.project_id)).into_response()
         }
-        Err(e) => error_response(e.into_public(true)),
+        Err(e) => crate::http::error_response(e.into_public(true)),
     }
 }
+/// A section's Save (`section`: details, resources, retiring), a resource's Remove or an
+/// Activity switch. A Save whose section someone else changed since its form was drawn (`seen`)
+/// is refused: it would write over what they did.
 async fn change(
     State(state): State<SettingsState>,
     Path(id): Path<ProjectId>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let request = match decode(&headers, &body) {
-        Ok(r) => r,
-        Err(e) => return error_response(e),
+    let sent = match Sent::decode(&headers, &body) {
+        Ok(sent) => sent,
+        Err(e) => return views::write::failed(&headers, e),
     };
-    let result = apply(&state, id, &request).await;
-    let status = result.as_ref().err().map(status).unwrap_or(StatusCode::OK);
-    let feedback = Feedback {
-        field: request.field,
-        value: request.value,
-        resource: request.resource,
-        saved: result.is_ok(),
-        kept: false,
-        message: match result {
-            Ok(_) => "Saved".into(),
-            // the store's revision check: someone changed a setting since the form was drawn
-            Err(PublicError::Conflict { message, .. }) if message == "project settings changed" => {
-                "Not applied: it changed since you opened it. Reload this field to see the change."
-                    .into()
-            }
-            Err(e) => e.to_string(),
-        },
+    let view = match state.snapshot(id).await {
+        Ok(view) => view,
+        Err(e) => return views::write::failed(&headers, e),
     };
-    match state
-        .snapshot(id)
-        .await
-        .and_then(|v| v.render(&Viewer::from_headers(&headers), &feedback))
-    {
-        Ok(html) => (status, Html(html.to_string())).into_response(),
-        Err(e) => error_response(e),
+    let section = sent.one("section");
+    if let Some((_, fields)) = SECTIONS.iter().find(|(s, _)| *s == section) {
+        let seen: i64 = sent.one("seen").parse().unwrap_or(0);
+        if let Some((field, (_, by))) = fields
+            .iter()
+            .filter_map(|f| view.changes.get(f).map(|c| (*f, c)))
+            .find(|(_, (seq, _))| *seq > seen)
+        {
+            let by = match by.as_str() {
+                "" => "someone".to_owned(),
+                "owner" => "you, elsewhere".to_owned(),
+                by => by.to_owned(),
+            };
+            return views::write::refused(
+                &headers,
+                &format!(
+                    "Not saved: {} changed since this page was drawn (by {by}). Reload to see it, then save again.",
+                    setting_words(field)
+                ),
+                PublicError::Conflict {
+                    message: "project settings changed".into(),
+                    current_rev: Some(view.project.settings_rev),
+                },
+            );
+        }
+    }
+    let command = match command(section, &sent, &view) {
+        Ok(command) => command,
+        Err(e) => return views::write::failed(&headers, e),
+    };
+    match state.commands.update(id, command).await {
+        Ok(_) => saved(&state, id, &headers, section, None, "Saved.").await,
+        Err(e) => refused(&headers, e),
     }
 }
-/// The Board section's Save (`op=save`, `program`) and Clear (`op=clear`), each fenced by
-/// `expected_rev`; the page comes back with the outcome, as the other settings do.
+/// The Board section's Save (`op=save`, `program`) and Clear (`op=clear`, from its
+/// confirmation), each fenced by `expected_rev`; answered as the other sections are.
 async fn board_change(
     State(state): State<SettingsState>,
     Path(id): Path<ProjectId>,
@@ -901,7 +1059,10 @@ async fn board_change(
     for (key, value) in url::form_urlencoded::parse(&body) {
         fields.insert(key.into_owned(), value.into_owned());
     }
-    let program = fields.remove("program").unwrap_or_default();
+    let program = fields
+        .remove("program")
+        .unwrap_or_default()
+        .replace("\r\n", "\n");
     let request = (|| {
         let expected_rev = fields
             .get("expected_rev")
@@ -916,7 +1077,7 @@ async fn board_change(
                     "Write a program, or use Clear board to remove the board.",
                 ));
             }
-            Some("save") => Some(program.replace("\r\n", "\n")),
+            Some("save") => Some(program.clone()),
             _ => return Err(bad("op must be save or clear")),
         };
         Ok(projects::SetBoard {
@@ -931,109 +1092,88 @@ async fn board_change(
         Ok(request) => state.commands.board(id, request).await,
         Err(e) => Err(e),
     };
-    let status = result.as_ref().err().map(status).unwrap_or(StatusCode::OK);
-    let feedback = Feedback {
-        field: "board".into(),
-        kept: clear && result.is_ok() && !program.is_empty(),
-        value: program,
-        resource: String::new(),
-        saved: result.is_ok(),
-        message: match &result {
-            Ok(outcome) if clear => {
-                format!("Cleared (rev {}). Save board restores it.", outcome.rev)
-            }
-            Ok(outcome) => std::iter::once(format!("Saved (rev {})", outcome.rev))
+    match result {
+        Ok(outcome) if clear => {
+            // the box keeps the cleared program, so Save board puts it back
+            let words = format!("Cleared (rev {}). Save board restores it.", outcome.rev);
+            saved(&state, id, &headers, "board", Some(&program), &words).await
+        }
+        Ok(outcome) => {
+            let words = std::iter::once(format!("Saved (rev {}).", outcome.rev))
                 .chain(outcome.warnings.iter().map(|w| format!("Warning: {w}")))
                 .collect::<Vec<_>>()
-                .join("\n"),
-            Err(PublicError::Invalid { message, errors }) => std::iter::once(message.clone())
+                .join("\n");
+            saved(&state, id, &headers, "board", None, &words).await
+        }
+        Err(PublicError::Invalid { message, errors }) => {
+            let words = std::iter::once(format!("Not saved: {message}"))
                 .chain(errors.iter().cloned())
                 .collect::<Vec<_>>()
-                .join("\n"),
-            Err(e) => e.to_string(),
-        },
-    };
-    match state
-        .snapshot(id)
-        .await
-        .and_then(|v| v.render(&Viewer::from_headers(&headers), &feedback))
-    {
-        Ok(html) => (status, Html(html.to_string())).into_response(),
-        Err(e) => error_response(e),
+                .join("\n");
+            views::write::refused(&headers, &words, PublicError::Invalid { message, errors })
+        }
+        Err(e) => views::write::failed(&headers, e),
     }
 }
-/// The Board section's live preview: the draft drawn with the project's data, or its problems.
+/// The Board section's live preview: the board form's draft (`program`) drawn with the
+/// project's data, or its problems, patched into `#board-preview` as it is typed.
 async fn board_preview(
     State(state): State<SettingsState>,
     registry: Option<axum::Extension<views::board::Registry>>,
     Path(id): Path<ProjectId>,
-    body: Bytes,
-) -> Response {
-    let Ok(program) = std::str::from_utf8(&body) else {
-        return error_response(bad("the program must be UTF-8"));
-    };
-    if program.trim().is_empty() {
-        return Html("<p class=\"setting-help\">No board.</p>".to_owned()).into_response();
-    }
-    let registry = registry.map(|r| r.0);
-    let result = async {
-        let (_, view) = views::board::snapshot(&state.dashboard, id, registry.as_ref()).await?;
-        views::panel::load(
-            &state.dashboard,
-            id,
-            registry.as_ref(),
-            &view,
-            Some(program.to_owned()),
-            None,
-        )
-        .await
-    }
-    .await;
-    match result {
-        Ok(Some(panel)) => {
-            Html(format!("{}{}", panel.head(false).as_str(), panel.html)).into_response()
-        }
-        Ok(None) => Html(String::new()).into_response(),
-        Err(e) => error_response(e),
-    }
-}
-async fn preview(Path(_id): Path<ProjectId>, body: Bytes) -> Response {
-    match std::str::from_utf8(&body) {
-        Ok(text) => Html(markdown::render(text).to_string()).into_response(),
-        Err(_) => error_response(bad("description must be UTF-8")),
-    }
-}
-#[derive(Deserialize)]
-struct RevisionQuery {
-    expected_settings_rev: Revision,
-}
-async fn upload(
-    State(state): State<SettingsState>,
-    Path(id): Path<ProjectId>,
-    Query(query): Query<RevisionQuery>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let icon = match Icon::image(body.to_vec()) {
-        Ok(i) => i,
-        Err(e) => return error_response(e.into_public(false)),
+    let program = match Sent::decode(&headers, &body) {
+        Ok(sent) => sent.text("program"),
+        Err(e) => return crate::http::error_response(e),
     };
-    match state
-        .commands
-        .update(
-            id,
-            UpdateProject {
-                icon: Some(icon),
-                expected_settings_rev: Some(query.expected_settings_rev),
-                author: "owner".into(),
-                ..Default::default()
-            },
-        )
-        .await
-    {
-        Ok(_) => page(State(state), Path(id), headers).await,
-        Err(e) => error_response(e),
+    let html = if program.trim().is_empty() {
+        "<p class=\"setting-help\">No board.</p>".to_owned()
+    } else {
+        let registry = registry.map(|r| r.0);
+        let result = async {
+            let (_, view) = views::board::snapshot(&state.dashboard, id, registry.as_ref()).await?;
+            views::panel::load(
+                &state.dashboard,
+                id,
+                registry.as_ref(),
+                &view,
+                Some(program),
+                None,
+            )
+            .await
+        }
+        .await;
+        match result {
+            Ok(Some(panel)) => format!("{}{}", panel.head(false).as_str(), panel.html),
+            Ok(None) => String::new(),
+            Err(e) => format!(
+                "<p class=\"setting-error\">{}</p>",
+                views::ui::esc(&e.to_string())
+            ),
+        }
+    };
+    inner("#board-preview", html)
+}
+/// The description as it reads: the Details form's `description`, patched into
+/// `#description-preview` as it is typed.
+async fn preview(Path(_id): Path<ProjectId>, headers: HeaderMap, body: Bytes) -> Response {
+    match Sent::decode(&headers, &body) {
+        Ok(sent) => inner(
+            "#description-preview",
+            markdown::render(&sent.text("description")).to_string(),
+        ),
+        Err(e) => crate::http::error_response(e),
     }
+}
+/// A Datastar answer that draws `html` inside the element `selector` names.
+fn inner(selector: &str, html: String) -> Response {
+    views::write::events([StreamEvent::Elements(
+        PatchElements::new(html)
+            .selector(selector)
+            .mode(ElementPatchMode::Inner),
+    )])
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1061,23 +1201,26 @@ async fn delete(
     };
     let confirmation = match confirmation {
         Ok(c) => c,
-        Err(_) => return error_response(bad("settings revision required")),
+        Err(_) => return views::write::failed(&headers, bad("settings revision required")),
     };
     let view = match state.snapshot(id).await {
         Ok(view) => view,
-        Err(e) => return error_response(e),
+        Err(e) => return views::write::failed(&headers, e),
     };
     if view.project.settings_rev != confirmation.expected_settings_rev {
-        return error_response(PublicError::Conflict {
-            message: "project settings changed".into(),
-            current_rev: Some(view.project.settings_rev),
-        });
+        return views::write::failed(
+            &headers,
+            PublicError::Conflict {
+                message: "project settings changed".into(),
+                current_rev: Some(view.project.settings_rev),
+            },
+        );
     }
     if let Err(e) = state.deletion_guard.check(id) {
-        return error_response(e.into_public(true));
+        return views::write::failed(&headers, e.into_public(true));
     }
     if let Some(reason) = view.blocker {
-        return error_response(bad(reason));
+        return views::write::failed(&headers, bad(reason));
     }
     let project = if view.project.archived {
         view.project
@@ -1096,7 +1239,7 @@ async fn delete(
             .await
         {
             Ok(project) => project,
-            Err(e) => return error_response(e),
+            Err(e) => return views::write::failed(&headers, e),
         }
     };
     match state
@@ -1111,8 +1254,14 @@ async fn delete(
         )
         .await
     {
+        // the project is gone: its page goes home
+        Ok(_) if views::write::form(&headers).is_some() => {
+            views::write::events([StreamEvent::Script(ExecuteScript::new(
+                "window.location.assign('/')",
+            ))])
+        }
         Ok(_) => Redirect::to("/").into_response(),
-        Err(e) => error_response(e),
+        Err(e) => views::write::failed(&headers, e),
     }
 }
 #[derive(Deserialize)]
@@ -1144,7 +1293,7 @@ async fn image(
             bytes,
         )
             .into_response(),
-        Err(e) => error_response(e.into_public(true)),
+        Err(e) => crate::http::error_response(e.into_public(true)),
     }
 }
 async fn settings_stream(
@@ -1154,7 +1303,7 @@ async fn settings_stream(
     headers: HeaderMap,
 ) -> Response {
     if let Err(e) = state.snapshot(id).await {
-        return error_response(e);
+        return crate::http::error_response(e);
     }
     let viewer = Viewer::from_headers(&headers);
     let stop = state.dashboard.stop.clone();
@@ -1165,7 +1314,8 @@ async fn settings_stream(
         async move {
             match state.snapshot(id).await {
                 Ok(v) => v.batch(&viewer),
-                Err(PublicError::NotFound {..}) => Ok(RenderedBatch { version:"deleted".into(), regions:vec![PatchRegion::new("settings-live", TrustedHtml::owned("<header id=\"settings-live\" data-deleted=\"true\">Project deleted.</header>".into()))] }),
+                // deleted: its page goes home
+                Err(PublicError::NotFound {..}) => Ok(RenderedBatch { version:"deleted".into(), regions:vec![PatchRegion::new("settings-live", TrustedHtml::owned("<header id=\"settings-live\" data-init=\"window.location.assign('/')\">Project deleted.</header>".into()))] }),
                 Err(e) => Err(e),
             }
         }
@@ -1183,15 +1333,4 @@ async fn settings_stream(
 /// Two names the same: for the template, whose values arrive as `String` and `&str` alike.
 pub fn same(a: &str, b: &str) -> bool {
     a == b
-}
-/// A resource's number as its field shows it: what was just refused stays to be corrected.
-pub fn shown_number(feedback: &Feedback, resource: &ResourceView) -> String {
-    if feedback.error("resources")
-        && feedback.resource == resource.name
-        && !feedback.value.starts_with('{')
-    {
-        feedback.value.clone()
-    } else {
-        resource.number.clone()
-    }
 }

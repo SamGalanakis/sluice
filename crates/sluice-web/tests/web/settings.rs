@@ -104,15 +104,65 @@ impl Fixture {
             .await
             .unwrap()
     }
-    async fn post(&self, field: &str, value: &str, resource: &str, rev: u64) -> (u16, String) {
-        request(
-            self.router(),
-            "POST",
-            &self.path(),
-            json!({"field":field,"value":value,"resource":resource,"expected_settings_rev":rev})
-                .to_string(),
-        )
-        .await
+    /// What section `section`'s form has seen, as the page draws it now.
+    async fn seen(&self, section: &str) -> String {
+        let (_, page) = self.get_page().await;
+        page.split(&format!("id=\"{section}-form\""))
+            .nth(1)
+            .and_then(|form| form.split("name=\"seen\" value=\"").nth(1))
+            .and_then(|rest| rest.split('"').next())
+            .unwrap()
+            .to_owned()
+    }
+    /// Section `section`'s Save from its form as the page drew it now, with `fields`: its
+    /// answer, the section drawn anew and its notice (or the notice alone, refused).
+    async fn save(&self, section: &str, fields: &[(&str, &str)]) -> String {
+        let seen = self.seen(section).await;
+        self.save_seen(section, &seen, fields).await
+    }
+    async fn save_seen(&self, section: &str, seen: &str, fields: &[(&str, &str)]) -> String {
+        let mut pairs = vec![("section", section), ("seen", seen)];
+        pairs.extend_from_slice(fields);
+        let response = self
+            .router()
+            .oneshot(super::forms::post(
+                self.path(),
+                &format!("{section}-form"),
+                &pairs,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        super::forms::text(response).await
+    }
+    /// The Details form's Save, every field as the project has it but `changes`.
+    async fn details(&self, changes: &[(&str, &str)]) -> String {
+        let p = self.project().await;
+        let icon = match &p.icon {
+            Some(projects::ProjectIcon::Text(t)) => t.clone(),
+            _ => String::new(),
+        };
+        let id = self.id;
+        let fallback = self
+            .state
+            .dashboard
+            .reads
+            .snapshot(move |c| sluice_store::identities::fallback(c, id))
+            .await
+            .unwrap()
+            .unwrap_or_default();
+        let name = p.name.to_string();
+        let mut fields = vec![
+            ("name", name.as_str()),
+            ("description", p.description.as_str()),
+            ("icon", icon.as_str()),
+            ("fallback", fallback.as_str()),
+        ];
+        for (key, value) in changes {
+            fields.retain(|(k, _)| k != key);
+            fields.push((key, value));
+        }
+        self.save("details", &fields).await
     }
     async fn get_page(&self) -> (u16, String) {
         request(self.router(), "GET", &self.path(), String::new()).await
@@ -159,28 +209,56 @@ async fn request(router: Router, method: &str, path: &str, body: String) -> (u16
     (status, String::from_utf8(bytes.to_vec()).unwrap())
 }
 #[tokio::test]
-async fn fields_commit_separately_with_owner_records_safe_preview_and_resource_validation() {
+async fn a_section_saves_what_changed_with_owner_records_safe_preview_and_resource_validation() {
     let f = Fixture::new().await;
-    for (n, field, value, resource) in [
-        (1, "name", "renamed", ""),
-        (
-            2,
-            "description",
-            "# Title\n\n<script>alert(1)</script> [bad](javascript:alert)",
-            "",
-        ),
-        (3, "icon", "x", ""),
-        (4, "resources", "2", "workers"),
-        (5, "paused", "true", ""),
-        (6, "archived", "true", ""),
-    ] {
-        let (status, html) = f.post(field, value, resource, n).await;
-        assert_eq!(status, 200, "{html}");
-        assert!(html.contains("Saved"));
-        assert_eq!(f.project().await.settings_rev, Revision(n + 1));
+    // one Save of Details applies what changed in it, each change its own record
+    let html = f
+        .details(&[
+            ("name", "renamed"),
+            (
+                "description",
+                "# Title\r\n\r\n<script>alert(1)</script> [bad](javascript:alert)",
+            ),
+            ("icon", "x"),
+        ])
+        .await;
+    assert!(html.contains("role=\"status\">Saved.</p>"), "{html}");
+    // the form drawn anew, its fields as saved
+    assert!(
+        html.contains("data: elements <div id=\"details-edit\">")
+            && html.contains("id=\"project-name\" name=\"name\" value=\"renamed\""),
+        "{html}"
+    );
+    let p = f.project().await;
+    assert_eq!(
+        p.description, "# Title\n\n<script>alert(1)</script> [bad](javascript:alert)",
+        "a browser's line breaks are kept as one"
+    );
+    // a Save that changes nothing records nothing
+    let html = f.details(&[]).await;
+    assert!(html.contains("role=\"status\">Saved.</p>"), "{html}");
+    let html = f
+        .save(
+            "resources",
+            &[
+                ("new", "workers"),
+                ("capacity.:new", "number"),
+                ("number.:new", "2"),
+            ],
+        )
+        .await;
+    assert!(html.contains("role=\"status\">Saved.</p>"), "{html}");
+    assert!(
+        html.contains("<label for=\"resource-workers\">workers</label>"),
+        "{html}"
+    );
+    for switch in ["paused", "archived"] {
+        let html = f.save("activity", &[(switch, "true")]).await;
+        assert!(html.contains("role=\"status\">Saved.</p>"), "{html}");
     }
+    let p = f.project().await;
+    assert!(p.paused && p.archived);
     let records = f.records().await;
-    assert_eq!(records.len(), 6);
     assert!(records.iter().all(|r| r["author"] == "owner"));
     assert_eq!(
         records
@@ -191,25 +269,49 @@ async fn fields_commit_separately_with_owner_records_safe_preview_and_resource_v
             "project.rename",
             "project.update",
             "project.update",
-            "project.update",
             "project.pause",
             "project.archive"
         ]
     );
-    let (status, preview) = request(
-        f.router(),
-        "POST",
-        &format!("{}/preview", f.path()),
-        "<script>alert(1)</script> [bad](javascript:alert)".into(),
+    assert_eq!(records[1]["fields"], json!(["description", "icon"]));
+    // the description as it reads, drawn into its place as it is typed
+    let preview = super::forms::text(
+        f.router()
+            .oneshot(super::forms::post(
+                format!("{}/preview", f.path()),
+                "details-form",
+                &[(
+                    "description",
+                    "<script>alert(1)</script> [bad](javascript:alert)",
+                )],
+            ))
+            .await
+            .unwrap(),
     )
     .await;
-    assert_eq!(status, 200);
+    assert!(
+        preview.contains("data: selector #description-preview")
+            && preview.contains("data: mode inner"),
+        "{preview}"
+    );
     assert!(!preview.contains("<script>"));
     assert!(!preview.contains("href=\"javascript:"));
-    let (status, html) = f.post("resources", "-1", "workers", 7).await;
-    assert_eq!(status, 400);
-    assert!(html.contains("value=\"-1\""));
-    assert_eq!(f.project().await.settings_rev, Revision(7));
+    let rev = f.project().await.settings_rev;
+    let html = f
+        .save(
+            "resources",
+            &[
+                ("resource", "workers"),
+                ("capacity.workers", "number"),
+                ("number.workers", "-1"),
+            ],
+        )
+        .await;
+    assert!(
+        html.contains("role=\"alert\">workers: Enter a whole number of 0 or more.</p>"),
+        "{html}"
+    );
+    assert_eq!(f.project().await.settings_rev, rev);
     let id = f.id;
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
@@ -222,10 +324,23 @@ async fn fields_commit_separately_with_owner_records_safe_preview_and_resource_v
         })
         .await
         .unwrap();
-    let (status, html) = f.post("resources", "null", "workers", 7).await;
-    assert_eq!(status, 400);
-    assert!(html.contains("a step needs it"));
-    assert_eq!(f.project().await.settings_rev, Revision(7));
+    // a resource's Remove (its confirmation's form) is refused while a step needs it
+    let response = f
+        .router()
+        .oneshot(super::forms::post(
+            f.path(),
+            "remove-workers",
+            &[("section", "remove"), ("resource", "workers")],
+        ))
+        .await
+        .unwrap();
+    let html = super::forms::text(response).await;
+    assert!(
+        html.contains("<p id=\"remove-workers-said\" class=\"form-said\" role=\"alert\">")
+            && html.contains("a step needs it"),
+        "{html}"
+    );
+    assert_eq!(f.project().await.settings_rev, rev);
 }
 #[tokio::test]
 async fn duplicate_name_and_stale_revision_have_no_partial_effect_or_records() {
@@ -249,20 +364,70 @@ async fn duplicate_name_and_stale_revision_have_no_partial_effect_or_records() {
         .unwrap();
     let before = f.project().await;
     let records = f.records().await;
-    assert_eq!(f.post("name", "taken", "", 1).await.0, 409);
-    assert_eq!(f.post("description", "lost edit", "", 0).await.0, 409);
+    // a taken name refuses the whole Save: the description sent with it is not written either
+    let html = f
+        .details(&[("name", "taken"), ("description", "lost edit")])
+        .await;
+    assert!(html.contains("role=\"alert\">"), "{html}");
     assert_eq!(f.project().await, before);
     assert_eq!(f.records().await, records);
-    let (status, html) = f.post("name", "Invalid Name", "", 1).await;
-    assert_eq!(status, 400);
-    assert!(html.contains("value=\"Invalid Name\""));
+    let html = f.details(&[("name", "Invalid Name")]).await;
+    assert!(
+        html.contains("role=\"alert\">Use lowercase letters, numbers, underscores or hyphens for the name.</p>"),
+        "{html}"
+    );
+    // a Save over a change someone made to its section since the form was drawn is refused,
+    // never written over theirs; another section's change is not in its way
+    let seen = f.seen("details").await;
+    let retiring = f.seen("retiring").await;
+    let id = f.id;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            projects::project_update(
+                tx,
+                &ProjectSelector::Id(id),
+                projects::UpdateProject {
+                    description: Some("theirs".into()),
+                    author: "@lead".into(),
+                    ..Default::default()
+                },
+                &NoResourceSettings,
+            )
+        })
+        .await
+        .unwrap();
+    let html = f
+        .save_seen(
+            "details",
+            &seen,
+            &[
+                ("name", "first"),
+                ("description", "mine"),
+                ("icon", ""),
+                ("fallback", ""),
+            ],
+        )
+        .await;
+    assert!(
+        html.contains("role=\"alert\">Not saved: the description changed since this page was drawn (by @lead). Reload to see it, then save again.</p>"),
+        "{html}"
+    );
+    assert_eq!(f.project().await.description, "theirs");
+    let html = f
+        .save_seen(
+            "retiring",
+            &retiring,
+            &[("prune_done_after", "6"), ("prune_keep", "")],
+        )
+        .await;
+    assert!(html.contains("role=\"status\">Saved.</p>"), "{html}");
     assert_eq!(
         request(f.router(), "GET", "/projects/first/settings", String::new())
             .await
             .0,
         308
     );
-    assert_eq!(f.post("name", "second", "", 1).await.0, 200);
+    f.details(&[("name", "second")]).await;
     assert_eq!(
         request(f.router(), "GET", "/projects/first/settings", String::new())
             .await
@@ -350,7 +515,11 @@ async fn rename_preserves_live_callbacks_next_reader_and_id_stream() {
     })
     .await
     .unwrap();
-    assert_eq!(f.post("name", "second", "", 1).await.0, 200);
+    assert!(
+        f.details(&[("name", "second")])
+            .await
+            .contains("role=\"status\">Saved.</p>")
+    );
     f.writer.write(RetrySafety::NonIdempotent,move |tx| {
   assert_eq!(sluice_store::attempts::step_submit(tx,StepSubmit {project:id,step:"s".parse().unwrap(),run,outputs:serde_json::from_value(json!({"result":"still live"}))?,author:Some("worker".into())})?,Some(1));
   let message:sluice_model::commands::Ask=serde_json::from_value(json!({"project":{"kind":"id","value":id},"to":"orchestrator","body":"callback after rename","run":run}))?;
@@ -426,10 +595,9 @@ async fn dashboard_deletion_archives_first_and_requires_current_revision_and_no_
     assert!(!f.project().await.archived);
     let (_, blocked) = f.get_page().await;
     assert!(
-        blocked.contains("<sluice-confirm heading=\"Delete first?\" disabled>"),
+        blocked.contains("<summary id=\"delete-button\" aria-disabled=\"true\">"),
         "{blocked}"
     );
-    assert!(blocked.contains("<summary id=\"delete-button\" aria-disabled=\"true\">"));
     assert!(blocked.contains("Open the plan"));
     let view = f.state.snapshot(id).await.unwrap();
     assert_eq!(view.blocker.as_deref(), Some("project has running steps"));
@@ -444,7 +612,11 @@ async fn dashboard_deletion_archives_first_and_requires_current_revision_and_no_
         })
         .await
         .unwrap();
-    assert_eq!(f.post("name", "second", "", 1).await.0, 200);
+    assert!(
+        f.details(&[("name", "second")])
+            .await
+            .contains("role=\"status\">Saved.</p>")
+    );
     assert_eq!(f.delete(1).await.0, 409);
     assert!(!f.project().await.archived);
     let response = f
@@ -475,7 +647,8 @@ async fn dashboard_deletion_archives_first_and_requires_current_revision_and_no_
     );
     let mut wire = String::new();
     tokio::time::timeout(Duration::from_secs(3), async {
-        while !wire.contains("data-deleted") {
+        // the page goes home
+        while !wire.contains("data-init=\"window.location.assign('/')\"") {
             wire.push_str(&String::from_utf8_lossy(
                 &stream.next().await.unwrap().unwrap(),
             ));
@@ -502,7 +675,11 @@ async fn coordinator_guard_is_visible_and_rechecked_in_delete_command() {
         }
     }
     let mut f = Fixture::new().await;
-    assert_eq!(f.post("archived", "true", "", 1).await.0, 200);
+    assert!(
+        f.save("activity", &[("archived", "true")])
+            .await
+            .contains("role=\"status\">Saved.</p>")
+    );
     let guard = Arc::new(Guard);
     f.state.deletion_guard = guard.clone();
     f.state.commands = Arc::new(StoreCommands {
@@ -522,20 +699,51 @@ async fn coordinator_guard_is_visible_and_rechecked_in_delete_command() {
 async fn images_are_validated_and_served_by_id_and_generation() {
     let f = Fixture::new().await;
     let bytes = b"\x89PNG\r\n\x1a\nfixture".to_vec();
-    let response = f
-        .router()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("{}/icon?expected_settings_rev=1", f.path()))
-                .body(Body::from(bytes.clone()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
+    // the Details form with an image chosen: multipart, as a browser sends a file
+    let upload = |image: Vec<u8>, seen: String| {
+        let router = f.router();
+        let path = f.path();
+        async move {
+            let boundary = "----sluiceboundary";
+            let mut body = Vec::new();
+            for (name, value) in [
+                ("section", "details"),
+                ("seen", seen.as_str()),
+                ("name", "first"),
+                ("description", "# Safe description"),
+                ("icon", ""),
+                ("fallback", ""),
+            ] {
+                body.extend_from_slice(
+                    format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes(),
+                );
+            }
+            body.extend_from_slice(
+                format!("--{boundary}\r\nContent-Disposition: form-data; name=\"icon_file\"; filename=\"icon.png\"\r\nContent-Type: image/png\r\n\r\n").as_bytes(),
+            );
+            body.extend_from_slice(&image);
+            body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+            let response = router
+                .oneshot(
+                    Request::post(path)
+                        .header(
+                            "content-type",
+                            format!("multipart/form-data; boundary={boundary}"),
+                        )
+                        .header("sluice-form", "details-form")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            super::forms::text(response).await
+        }
+    };
+    let html = upload(bytes.clone(), f.seen("details").await).await;
+    assert!(html.contains("role=\"status\">Saved.</p>"), "{html}");
     let project = f.project().await;
     let url = project.icon.unwrap().url(f.id).unwrap();
+    assert!(html.contains("id=\"icon-preview\""), "{html}");
     let response = f
         .router()
         .oneshot(Request::builder().uri(&url).body(Body::empty()).unwrap())
@@ -547,20 +755,15 @@ async fn images_are_validated_and_served_by_id_and_generation() {
         to_bytes(response.into_body(), 1024).await.unwrap().to_vec(),
         bytes
     );
-    assert_eq!(f.post("icon", "text", "", 2).await.0, 200);
+    // letters take the image's place; the image is gone
+    assert!(
+        f.details(&[("icon", "text")])
+            .await
+            .contains("role=\"status\">Saved.</p>")
+    );
     assert_eq!(request(f.router(), "GET", &url, String::new()).await.0, 404);
-    let response = f
-        .router()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("{}/icon?expected_settings_rev=3", f.path()))
-                .body(Body::from("bad image"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 400);
+    let html = upload(b"bad image".to_vec(), f.seen("details").await).await;
+    assert!(html.contains("role=\"alert\">"), "{html}");
     assert_eq!(f.project().await.settings_rev, Revision(3));
 }
 
@@ -572,32 +775,52 @@ async fn retiring_is_set_in_hours_with_keep_patterns_and_turned_off_when_empty()
     assert!(html.contains("Retire done units after"));
     // off is the tag alone: no sentence explains it
     assert!(html.contains(">Off</span>") && !html.contains("Done units stay"));
-    let (status, html) = f.post("prune_done_after", "6", "", 1).await;
-    assert_eq!(status, 200, "{html}");
-    let p = f.project().await;
-    assert_eq!(p.prune_done_after, Some(21600));
-    assert!(html.contains("Done units retire after 6h"));
-    assert!(html.contains("id=\"prune-done-after\" name=\"value\""));
-    let (status, html) = f.post("prune_keep", "ta-*, fig-? release", "", 2).await;
-    assert_eq!(status, 200, "{html}");
+    let retire = |after: &'static str, keep: &'static str| {
+        let f = &f;
+        async move {
+            f.save(
+                "retiring",
+                &[("prune_done_after", after), ("prune_keep", keep)],
+            )
+            .await
+        }
+    };
+    let html = retire("6", "").await;
+    assert!(html.contains("role=\"status\">Saved.</p>"), "{html}");
+    assert_eq!(f.project().await.prune_done_after, Some(21600));
+    assert!(
+        html.contains("id=\"prune-done-after\" name=\"prune_done_after\""),
+        "{html}"
+    );
+    let (_, page) = f.get_page().await;
+    assert!(page.contains("Done units retire after 6h"));
+    let html = retire("6", "ta-*, fig-? release").await;
+    assert!(html.contains("role=\"status\">Saved.</p>"), "{html}");
     assert_eq!(f.project().await.prune_keep, ["ta-*", "fig-?", "release"]);
-    assert!(html.contains("value=\"ta-*, fig-?, release\""));
-    assert!(html.contains("except 3 patterns"));
-    let (status, _) = f.post("prune_done_after", "1.5", "", 3).await;
-    assert_eq!(status, 200);
+    assert!(html.contains("value=\"ta-*, fig-?, release\""), "{html}");
+    let (_, page) = f.get_page().await;
+    assert!(page.contains("except 3 patterns"));
+    assert!(
+        retire("1.5", "ta-*, fig-?, release")
+            .await
+            .contains("role=\"status\">Saved.</p>")
+    );
     assert_eq!(f.project().await.prune_done_after, Some(5400));
-    // Not a number, zero or negative is refused with the typed value kept.
+    // Not a number, zero or negative is refused, the form as typed
     for bad in ["soon", "0", "-2"] {
-        let (status, html) = f.post("prune_done_after", bad, "", 4).await;
-        assert_eq!(status, 400, "{bad}");
-        assert!(html.contains("Enter a number of hours"), "{html}");
-        assert!(html.contains(&format!("value=\"{bad}\"")));
+        let html = retire(bad, "ta-*, fig-?, release").await;
+        assert!(
+            html.contains("role=\"alert\">Enter a number of hours"),
+            "{html}"
+        );
     }
     // Empty turns retiring off; empty patterns clear them.
-    let (status, _) = f.post("prune_done_after", "", "", 4).await;
-    assert_eq!(status, 200);
-    let (status, _) = f.post("prune_keep", " ", "", 5).await;
-    assert_eq!(status, 200);
+    assert!(
+        retire("", "ta-*, fig-?, release")
+            .await
+            .contains("role=\"status\">Saved.</p>")
+    );
+    assert!(retire("", " ").await.contains("role=\"status\">Saved.</p>"));
     let p = f.project().await;
     assert_eq!((p.prune_done_after, p.prune_keep), (None, vec![]));
     let fields: Vec<_> = f
@@ -628,7 +851,7 @@ async fn the_fallback_is_chosen_from_the_projects_sessions_which_are_listed_with
     let f = Fixture::new().await;
     let (_, page) = f.get_page().await;
     assert!(
-        page.contains("<div id=\"sessions\" class=\"setting-row\" hidden>"),
+        page.contains("<dl id=\"sessions\" class=\"settings-fields\" hidden>"),
         "{page}"
     );
     let id = f.id;
@@ -691,9 +914,11 @@ async fn the_fallback_is_chosen_from_the_projects_sessions_which_are_listed_with
     );
     assert!(!sessions.contains("orchestrator"), "{sessions}");
 
-    let rev = f.project().await.settings_rev.0;
-    let (status, _) = f.post("fallback", "@lash-f4", "", rev).await;
-    assert_eq!(status, 200);
+    assert!(
+        f.details(&[("fallback", "@lash-f4")])
+            .await
+            .contains("role=\"status\">Saved.</p>")
+    );
     let fallback = |f: &Fixture| {
         let id = f.id;
         let reads = f.state.dashboard.reads.clone();
@@ -714,16 +939,18 @@ async fn the_fallback_is_chosen_from_the_projects_sessions_which_are_listed_with
     assert_eq!(record["fields"], json!(["fallback"]), "{record}");
     assert_eq!(record["author"], "owner", "{record}");
     // a name no session registered is refused, and nothing changes
-    let rev = f.project().await.settings_rev.0;
-    let (status, body) = f.post("fallback", "@laed", "", rev).await;
-    assert_eq!(status, 400, "{body}");
+    let body = f.details(&[("fallback", "@laed")]).await;
     assert!(
-        body.contains("@laed is not a session of project first"),
+        body.contains("role=\"alert\">")
+            && body.contains("@laed is not a session of project first"),
         "{body}"
     );
     assert_eq!(fallback(&f).await.as_deref(), Some("@lash-f4"));
     // none clears it
-    let (status, _) = f.post("fallback", "", "", rev).await;
-    assert_eq!(status, 200);
+    assert!(
+        f.details(&[("fallback", "")])
+            .await
+            .contains("role=\"status\">Saved.</p>")
+    );
     assert_eq!(fallback(&f).await, None);
 }

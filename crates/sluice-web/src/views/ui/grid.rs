@@ -501,8 +501,8 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
 /// How many units Finished lists when no look is kept (the plan's "Finished lately").
 pub const LATEST: usize = 4;
 
-/// A time of day: "17:49 UTC" on the server, so it says its zone without script; the reader's
-/// own clock once the page's script reads it (`data-clock`); the day and minute in UTC in its
+/// A time of day: "17:49 UTC" on the server, so it says its zone until the page's clock reads
+/// it; the reader's own clock then (`data-clock`); the day and minute in UTC in its
 /// title.
 pub fn clock(at: &str) -> TrustedHtml {
     let shown = match at.get(11..16) {

@@ -26,10 +26,9 @@ const shown = (n) => (n.checkVisibility ? n.checkVisibility() : n.getClientRects
 // The step open on the board: `#step:<id>` opens it beside the board (over it below 1200px, a
 // modal dialog then, a sheet on a phone), streams its page into `#step-detail` from `base`, and
 // closes on Escape, its close button, the scrim or a click on the page around the board. Its tab
-// is the page's `tab` signal (the step's stream draws it chosen) and, while a step is open and
-// its tab is not Overview, the address's `?tab=` (the board's own query is its filters, which
-// leave `tab` alone), so a reload or a shared link opens the step on the same tab; moving on to
-// another step opens that one on its Overview. `[` and `]` move to the step before or after.
+// is the page's `tab` signal (the step's stream draws it chosen); each step opens on its
+// Overview. `[` and `]` move to the step before or after. The open step is the address's hash, a
+// link like any other (DESIGN.md, The drawer).
 rocket("sluice-drawer", {
   mode: "light",
   renderOnPropChange: false,
@@ -41,7 +40,7 @@ rocket("sluice-drawer", {
   },
   setup({ host, props, cleanup }) {
     const drawer = $("#drawer", host);
-    let opener = null, stream = null, last = "";
+    let opener = null, last = "";
     let focusFrame = 0, scrollTimer = 0;
     let pinned = true;  // the log follows its newest line until the reader scrolls up
     const listeners = new AbortController();
@@ -52,13 +51,6 @@ rocket("sluice-drawer", {
       if (!location.hash.startsWith("#step:")) return;
       history.pushState(null, "", location.pathname + location.search);
       window.dispatchEvent(new HashChangeEvent("hashchange"));
-    };
-    // the open step's tab in the address: `?tab=` while a step is open on a tab past Overview
-    const tabInAddress = (key) => {
-      const url = new URL(location.href);
-      if (key && key !== "overview" && currentStep()) url.searchParams.set("tab", key);
-      else url.searchParams.delete("tab");
-      if (url.href !== location.href) history.replaceState(history.state, "", url);
     };
     // below 1200px, over the page (a sheet on a phone), it is a modal dialog: the page behind
     // it is inert; from 1200px it is a region beside the page
@@ -90,32 +82,25 @@ rocket("sluice-drawer", {
       $(".scrim", host).hidden = !sid;
       modal();
       if (!sid) {
-        stream?.abort();
+        // its binding gone, Datastar ends its stream (requestCancellation 'cleanup')
         $("#drawer-stream").replaceChildren();
         mergePatch({ step: "", sver: "" });
-        tabInAddress("");
         // back to what opened it
         opener?.focus({ preventScroll: true });
         opener = null;
         last = "";
         return;
       }
-      const changed = last !== sid, moved = changed && Boolean(last);
+      const changed = last !== sid;
       last = sid;
       if (changed) {
-        stream?.abort();
-        // the drawer's stream: a step's ends the one before (Datastar's requestCancellation,
-        // which reads its controller from the page's scope)
-        stream = new AbortController();
-        window.sluiceStepController = stream;
-        // a step opened from another opens on its Overview (a failure leads there): the tab
-        // the last one was on is that step's, not this one's. Opened afresh (a reload, a
-        // shared link), it opens on the address's tab.
-        if (moved) tabInAddress("");
-        const tab = moved ? "" : new URLSearchParams(location.search).get("tab") ?? "";
-        mergePatch({ step: sid, sver: "", tab });
+        // a step opens on its Overview (a failure leads there): the tab the last one was on is
+        // that step's, not this one's
+        mergePatch({ step: sid, sver: "", tab: "" });
+        // the drawer's stream: its binding replaced, the step's before it ends with it
+        // (https://data-star.dev/reference/actions#get, requestCancellation 'cleanup')
         const binding = document.createElement("span");
-        binding.dataset.init = `@get('${props.base}/steps/${encodeURIComponent(sid)}/stream', {retry: 'always', retryMaxCount: 10, retryMaxWait: 30000, requestCancellation: window.sluiceStepController})`;
+        binding.dataset.init = `@get('${props.base}/steps/${encodeURIComponent(sid)}/stream', {retry: 'always', retryMaxCount: 10, retryMaxWait: 30000, requestCancellation: 'cleanup'})`;
         $("#drawer-stream").replaceChildren(binding);
       }
       const detail = $("#step-detail", drawer);
@@ -202,13 +187,11 @@ rocket("sluice-drawer", {
     on(window, "hashchange", open);
     on(OVER, "change", modal);
     on(drawer, "scroll", scrolled, { capture: true });
-    on(drawer, "sluice-tab", (evt) => tabInAddress(evt.detail.key));
     open();
     cleanup(() => {
       listeners.abort();
-      delete window.sluiceStepController;
       follow.disconnect();
-      stream?.abort();
+      $("#drawer-stream")?.replaceChildren();
       cancelAnimationFrame(focusFrame);
       clearTimeout(scrollTimer);
       document.documentElement.classList.remove("drawer-open");

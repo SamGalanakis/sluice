@@ -8,6 +8,7 @@ mod button;
 mod calls;
 mod card;
 mod empty;
+mod form;
 mod grid;
 mod head;
 mod menu;
@@ -21,6 +22,7 @@ pub use button::*;
 pub use calls::*;
 pub use card::*;
 pub use empty::*;
+pub use form::*;
 pub use grid::*;
 pub use head::*;
 pub use menu::*;
@@ -667,9 +669,9 @@ pub struct Confirm {
     pub reason: Option<&'static str>,
     /// The reason field's label: "Reason (optional)" when empty.
     pub reason_label: &'static str,
-    /// What the reason field holds as drawn: text typed with an action that could not be
-    /// taken, kept for the next try.
-    pub reason_value: String,
+    /// Once its write is taken and the stream draws what it changed, the focus goes to the
+    /// element of this id (`data-focus-after`; "" leaves it).
+    pub focus_after: String,
     pub confirm: String,
     pub keep: &'static str,
     /// The confirm button in the ink-filled danger tone (Delete), else primary.

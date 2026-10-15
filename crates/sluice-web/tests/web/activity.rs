@@ -636,7 +636,7 @@ async fn a_message_turn_whose_file_is_gone_reads_back_from_its_message() {
 }
 
 /// In Chromium a running step's Now reads its live turn on the grid: its last words at
-/// reading size, its calls in a closed fold that opens without script to one-line rows, each
+/// reading size, its calls in a closed fold that opens to one-line rows, each
 /// a link into Activity; nothing scrolls sideways at a phone's width or a wide screen's.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_a_running_steps_now_reads_its_live_turn_on_the_grid() {

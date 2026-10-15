@@ -142,7 +142,7 @@ async fn p605_log_keyset_pages_preserve_filters_hide_successful_message_calls_an
             .render(&Viewer::default())
             .unwrap()
             .as_str()
-            .contains("data-init=")
+            .contains("data-init=\"@get(")
     );
     let router = log::router(DashboardState::new(reads, Arc::new(EmptyCatalog)));
     for (query, status) in [

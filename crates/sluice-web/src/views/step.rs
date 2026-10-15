@@ -8,7 +8,7 @@ use axum::{
     Extension,
     extract::{Form, Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::{Html, IntoResponse, Redirect, Response, Sse, sse::KeepAlive},
+    response::{Html, IntoResponse, Response, Sse, sse::KeepAlive},
 };
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
@@ -522,9 +522,6 @@ pub struct StepView {
     /// Its run going now is an agent's whose transcript cannot be read here (`activity::attach`):
     /// its Overview says so, so no activity shown is never read as an idle agent.
     pub transcript_unread: bool,
-    /// Feedback typed with an action that could not be taken, kept in its box (`execute_action`).
-    #[serde(skip)]
-    pub kept: String,
     /// How many steps come after it, near or far: a succeeded step's Retry says they may run
     /// again (`board::load_step`).
     pub downstream: usize,
@@ -1053,7 +1050,6 @@ impl StepView {
             transcript_unread: false,
             dismissed: false,
             dismissed_at: String::new(),
-            kept: String::new(),
             downstream: 0,
             whole_title: String::new(),
             lane: vec![],
@@ -1708,7 +1704,6 @@ impl StepView {
             copy: after,
             reason: Some("Optional feedback for the next attempt"),
             reason_label: "Feedback (optional)",
-            reason_value: self.kept.clone(),
             confirm: "Retry".into(),
             keep: "Keep its result",
             ..Default::default()
@@ -1730,7 +1725,6 @@ impl StepView {
             ],
             copy: self.cancel_prompt(),
             reason: Some("Why stop this run?"),
-            reason_value: self.kept.clone(),
             confirm: "Cancel the run".into(),
             keep: "Keep running",
             danger: true,
@@ -1749,9 +1743,9 @@ impl StepView {
         self.shown() == Shown::Failed
     }
     /// A failure's Cancel and its Cancel and dismiss, each a confirmation, for its ⋯ Details
-    /// (none for any other step). `next`: the page to come back to without script (the plan's
-    /// card, its Undo), which with script names what takes the focus.
-    pub fn set_aside_actions(&self, cancel_next: &str, dismiss_next: &str) -> Vec<TrustedHtml> {
+    /// (none for any other step). `focus`: what takes the focus once its write is drawn (the
+    /// plan's Undo of it, from the drawer), "" for none.
+    pub fn set_aside_actions(&self, focus: &str) -> Vec<TrustedHtml> {
         if !self.can_set_aside() {
             return vec![];
         }
@@ -1761,7 +1755,7 @@ impl StepView {
             self.id.to_string()
         };
         let confirm =
-            |opener: &str, action: &'static str, next: &str, copy: String, confirm: &str| {
+            |opener: &str, action: &'static str, focus: &str, copy: String, confirm: &str| {
                 super::ui::Confirm {
                     opener: opener.into(),
                     title: format!("{opener} {name}?"),
@@ -1770,22 +1764,21 @@ impl StepView {
                         ("revision", self.revision.to_string()),
                         ("seen", self.seen()),
                         ("action", action.into()),
-                        ("next", next.to_owned()),
                     ],
+                    focus_after: focus.to_owned(),
                     copy,
                     reason: Some("Why set it aside?"),
-                    reason_value: self.kept.clone(),
                     confirm: confirm.into(),
                     keep: "Keep it failed",
                     ..Default::default()
                 }
             };
         vec![
-            confirm("Cancel", "cancel", cancel_next, String::new(), "Cancel it").html(),
+            confirm("Cancel", "cancel", "", String::new(), "Cancel it").html(),
             confirm(
                 "Cancel and dismiss",
                 "cancel_dismiss",
-                dismiss_next,
+                focus,
                 "Undo brings back the cancel, not the failure.".into(),
                 "Cancel and dismiss",
             )
@@ -1907,21 +1900,22 @@ impl StepView {
     }
     /// Its head's one "⋯": what identifies it, then what can be done to it that is no next
     /// move: Pause or Unpause, Cancel (a confirmation), a failure's Cancel and Cancel and
-    /// dismiss, and its log. In the drawer (not its `page`) a set-aside comes back to the plan.
+    /// dismiss, and its log. In the drawer (not its `page`) a set-aside's focus goes to the
+    /// plan's Undo of it.
     pub fn head_menu(&self, page: bool) -> super::ui::Details {
-        let (cancel, dismiss) = if page {
-            (self.href(), self.href())
+        let focus = if page {
+            String::new()
         } else {
-            let plan = format!("/projects/id/{}", self.project);
-            (plan.clone(), format!("{plan}#undo-{}", self.id))
+            format!("undo-{}", self.id)
         };
         let mut actions = vec![];
         if self.pausable() {
             actions.push(TrustedHtml::owned(format!(
-                "<form method=\"post\" action=\"{}/actions\"><input type=\"hidden\" name=\"revision\" value=\"{}\"><input type=\"hidden\" name=\"seen\" value=\"{}\"><button name=\"action\" value=\"{v}\">{w}</button></form>",
-                self.href(),
+                "{open}<input type=\"hidden\" name=\"revision\" value=\"{}\"><input type=\"hidden\" name=\"seen\" value=\"{}\"><button name=\"action\" value=\"{v}\">{w}</button>{said}</form>",
                 self.revision,
                 super::ui::esc(&self.seen()),
+                open = self.post_form("pause", ""),
+                said = self.form_said("pause"),
                 v = if self.paused { "unpause" } else { "pause" },
                 w = if self.paused { "Unpause" } else { "Pause" },
             )));
@@ -1929,7 +1923,7 @@ impl StepView {
         if self.cancellable() {
             actions.push(self.cancel_confirm().html());
         }
-        actions.extend(self.set_aside_actions(&cancel, &dismiss));
+        actions.extend(self.set_aside_actions(&focus));
         actions.push(TrustedHtml::owned(format!(
             "<a href=\"{}\">Its log</a>",
             super::ui::esc(&self.log_href())
@@ -1941,6 +1935,19 @@ impl StepView {
             )));
         }
         self.details().actions("Actions", actions)
+    }
+    /// A form of its actions (`ui::post_form`), `slot` naming which ("sh-retry", "pause"): its
+    /// id is the slot and the step's, so the drawer's and the plan's never share one.
+    pub fn post_form(&self, slot: &str, class: &str) -> String {
+        super::ui::post_form(
+            &format!("{slot}-{}", self.id),
+            class,
+            &format!("{}/actions", self.href()),
+        )
+    }
+    /// The notice of its form in `slot` (`post_form`).
+    pub fn form_said(&self, slot: &str) -> String {
+        super::ui::form_said(&format!("{slot}-{}", self.id))
     }
     /// Cancel applies: running and not already stopping (a cancel asked for is not offered
     /// again), or pending work outside sluice (`step_cancel` takes no other).
@@ -2071,6 +2078,34 @@ impl StepView {
         } else {
             set.into_iter().take(1).collect()
         }
+    }
+    /// A running step's brief, as Overview says it under Now: the first paragraph of its
+    /// prompt (`naming::PROMPT_INPUTS`: `spec`, `prompt` or `task`, as text), cut to about 280 characters at a
+    /// word. Inputs holds it whole.
+    pub fn brief(&self) -> Option<String> {
+        let field = sluice_model::naming::PROMPT_INPUTS
+            .iter()
+            .find_map(|name| {
+                self.inputs
+                    .iter()
+                    .find(|f| f.available && f.name == *name && f.kind == "text")
+            })?;
+        let text = field.value.trim();
+        let first = text.split("\n\n").next().unwrap_or(text).trim();
+        let first = first.split_whitespace().collect::<Vec<_>>().join(" ");
+        if first.is_empty() {
+            return None;
+        }
+        if first.chars().count() <= 280 && first.len() == text.len() {
+            return Some(first);
+        }
+        let mut cut: String = first.chars().take(280).collect();
+        if cut.len() < first.len()
+            && let Some(at) = cut.rfind(' ')
+        {
+            cut.truncate(at);
+        }
+        Some(format!("{}…", cut.trim_end_matches(['.', ',', ';', ':'])))
     }
     /// Its outputs that identify (a commit hash), which Overview's preview keeps behind "⋯".
     pub fn overview_held(&self) -> TrustedHtml {
@@ -2243,19 +2278,6 @@ impl StepView {
             PatchRegion::new("step-band", self.band(project, unit)?),
             PatchRegion::new("step-detail", self.own_body(project, tab)?),
         ])
-    }
-    /// Its own page's body: a notice of what was not done, then the step.
-    pub fn page_body(
-        &self,
-        project: &str,
-        tab: &str,
-        notice: Option<&str>,
-    ) -> Result<TrustedHtml, askama::Error> {
-        let body = self.own_body(project, tab)?;
-        Ok(TrustedHtml::owned(match notice {
-            Some(words) => format!("{}{}", super::ui::notice(words).as_str(), body.as_str()),
-            None => body.0,
-        }))
     }
 }
 #[derive(Template)]
@@ -2906,10 +2928,6 @@ pub struct ActionForm {
     pub revision: u64,
     #[serde(default)]
     pub message: String,
-    /// Where to go once done, a path on this site (the index's Dismiss comes back to it); the
-    /// step's page by default.
-    #[serde(default)]
-    pub next: String,
     /// The step as its form was drawn (`StepView::seen`): an action posted after a plan edit
     /// that left the step as it was still applies.
     #[serde(default)]
@@ -2939,15 +2957,31 @@ impl Action {
         }
     }
 }
-/// An action the page asked for and sluice did not take: the HTTP status, and what its step's
-/// page says over it (the feedback typed with it kept in its box).
+/// An action the page asked for and sluice did not take: the HTTP status, and what its form
+/// says (`views::write`).
 pub(crate) struct Refusal {
     status: StatusCode,
     words: String,
-    /// The action still applies, so what was typed with it is kept in its box for another try.
-    keeps: bool,
-    /// Its box is in the confirmation its button opens (Cancel, a succeeded step's Retry).
-    dialog: bool,
+}
+impl Refusal {
+    /// The answer to the form that asked (`write::refused`), or the JSON error to any other
+    /// client.
+    pub(crate) fn answer(self, headers: &HeaderMap) -> Response {
+        let error = match self.status {
+            StatusCode::CONFLICT => PublicError::Conflict {
+                message: self.words.clone(),
+                current_rev: None,
+            },
+            StatusCode::SERVICE_UNAVAILABLE => PublicError::Busy {
+                message: self.words.clone(),
+                retryable: true,
+            },
+            _ => PublicError::BadRequest {
+                message: self.words.clone(),
+            },
+        };
+        super::write::refused(headers, &self.words, error)
+    }
 }
 async fn execute_action(
     state: DashboardState,
@@ -2958,119 +2992,14 @@ async fn execute_action(
     headers: HeaderMap,
     form: ActionForm,
 ) -> Response {
-    let kept = form.message.clone();
-    let action = form.action.clone();
-    let outcome = try_action(&state, commands, registry.as_ref(), project, &id, form).await;
-    let refusal = match outcome {
-        Ok(next) => return Redirect::to(&next).into_response(),
-        Err(Ok(refusal)) => refusal,
-        Err(Err(e)) => return board::error_response(e),
-    };
-    refused(project, &id, &headers, &kept, &action, refusal)
-}
-/// What a refused action answers: a browser goes back to its step's page, which says why with
-/// what was typed kept in its box; any other client gets the JSON error.
-pub(crate) fn refused(
-    project: ProjectId,
-    id: &StepId,
-    headers: &HeaderMap,
-    kept: &str,
-    action: &Action,
-    refusal: Refusal,
-) -> Response {
-    let kept = kept.to_owned();
-    // a browser's form comes back to its step's page, saying what happened over it, its
-    // feedback still in its box; a script or tool gets the error as JSON
-    if !super::missing::accepts_html(headers) {
-        let error = match refusal.status {
-            StatusCode::CONFLICT => PublicError::Conflict {
-                message: refusal.words,
-                current_rev: None,
-            },
-            StatusCode::SERVICE_UNAVAILABLE => PublicError::Busy {
-                message: refusal.words,
-                retryable: true,
-            },
-            _ => PublicError::BadRequest {
-                message: refusal.words,
-            },
-        };
-        return crate::http::error_response(error);
-    }
-    let words = if kept.trim().is_empty() || !refusal.keeps {
-        refusal.words
-    } else {
-        format!(
-            "{} What you wrote is kept{}",
-            refusal.words,
-            if refusal.dialog {
-                format!(": {} opens it again.", action.word())
-            } else {
-                format!(" in its box: {} sends it.", action.word())
-            }
-        )
-    };
-    // back to the step's own address (303), so a reload never posts the action again: the
-    // notice and the typed text wait under a key no one can guess, for a while only
-    let key = notices::keep(project, id, Notice { words, kept });
-    Redirect::to(&format!("/projects/id/{project}/steps/{id}?notice={key}")).into_response()
-}
-/// What a step's page says over it after an action it could not take, and the feedback typed
-/// with that action, kept in its box.
-#[derive(Clone, Debug)]
-pub struct Notice {
-    pub words: String,
-    pub kept: String,
-}
-/// The refusals a browser was sent back to its step with (`?notice=<key>`), each with what was
-/// typed: held in this process only, under a key the server made (a v7 UUID: its random bits
-/// are not guessable, so no address can put words over a step), for ten minutes, the latest
-/// 256. A reload within that draws the same notice; an unknown or expired key draws the step
-/// as it is. Nothing typed goes into an address, a history entry or a log line.
-pub mod notices {
-    use super::Notice;
-    use sluice_model::ids::{ProjectId, StepId};
-    use std::sync::{LazyLock, Mutex};
-    use std::time::{Duration, Instant};
-    const KEPT_FOR: Duration = Duration::from_secs(600);
-    const MOST: usize = 256;
-    struct Kept {
-        key: String,
-        at: Instant,
-        project: ProjectId,
-        step: StepId,
-        notice: Notice,
-    }
-    static KEPT: LazyLock<Mutex<Vec<Kept>>> = LazyLock::new(Default::default);
-    /// Holds `notice` for this step and returns its key.
-    pub fn keep(project: ProjectId, step: &StepId, notice: Notice) -> String {
-        let key = uuid::Uuid::now_v7().simple().to_string();
-        let mut kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
-        kept.retain(|k| k.at.elapsed() < KEPT_FOR);
-        if kept.len() >= MOST {
-            kept.remove(0);
-        }
-        kept.push(Kept {
-            key: key.clone(),
-            at: Instant::now(),
-            project,
-            step: step.clone(),
-            notice,
-        });
-        key
-    }
-    /// The notice kept under `key` for this step, while it is kept.
-    pub fn get(project: ProjectId, step: &StepId, key: &str) -> Option<Notice> {
-        let kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
-        kept.iter()
-            .find(|k| {
-                k.key == key && k.project == project && &k.step == step && k.at.elapsed() < KEPT_FOR
-            })
-            .map(|k| k.notice.clone())
+    match try_action(&state, commands, registry.as_ref(), project, &id, form).await {
+        Ok(()) => super::write::done(&headers),
+        Err(Ok(refusal)) => refusal.answer(&headers),
+        Err(Err(e)) => super::write::failed(&headers, e),
     }
 }
-/// The action, or why not: `Ok` where to go once done; `Err(Ok)` a refusal its step's page says;
-/// `Err(Err)` an error with no page to say it on (no such step, a broken read).
+/// The action, or why not: `Err(Ok)` a refusal its form says; `Err(Err)` an error (no such
+/// step, a broken read).
 pub(crate) async fn try_action(
     state: &DashboardState,
     commands: Option<Extension<Commands>>,
@@ -3078,15 +3007,8 @@ pub(crate) async fn try_action(
     project: ProjectId,
     id: &StepId,
     form: ActionForm,
-) -> Result<String, Result<Refusal, PublicError>> {
-    let refuse = |status, words: String| {
-        Err(Ok(Refusal {
-            status,
-            words,
-            keeps: true,
-            dialog: false,
-        }))
-    };
+) -> Result<(), Result<Refusal, PublicError>> {
+    let refuse = |status, words: String| Err(Ok(Refusal { status, words }));
     let Some(Extension(commands)) = commands else {
         return refuse(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -3126,30 +3048,14 @@ pub(crate) async fn try_action(
         Action::SetAside | Action::Restore => false,
     };
     if !valid {
-        return Err(Ok(Refusal {
-            status: StatusCode::CONFLICT,
-            words: format!(
+        return refuse(
+            StatusCode::CONFLICT,
+            format!(
                 "Nothing was done: {} does not apply to a {word} step.",
                 form.action.word()
             ),
-            keeps: false,
-            dialog: false,
-        }));
+        );
     }
-    // past here what was typed waits in the box its button opens
-    let dialog = match form.action {
-        Action::Cancel | Action::CancelDismiss => true,
-        Action::Retry => step.retry_asks(),
-        _ => false,
-    };
-    let refuse = |status, words: String| {
-        Err(Ok(Refusal {
-            status,
-            words,
-            keeps: true,
-            dialog,
-        }))
-    };
     // the plan moved since the page drew: an edit elsewhere leaves this step as it was, and
     // the action still means what it meant, so it applies at the plan's new revision
     let marks = matches!(form.action, Action::Dismiss | Action::Undismiss);
@@ -3165,11 +3071,6 @@ pub(crate) async fn try_action(
                 form.action.word().to_lowercase()
             ),
         );
-    };
-    let next = if form.next.starts_with('/') && !form.next.starts_with("//") {
-        form.next.clone()
-    } else {
-        format!("{}/steps/{id}", view.href())
     };
     // Cancel and dismiss is the cancel, then its dismissal: one confirmation for both
     let steps: &[Action] = match form.action {
@@ -3193,12 +3094,10 @@ pub(crate) async fn try_action(
             Ok(()) => {}
             // the cancel went through, its dismissal did not: say so, nothing typed to keep
             Err(e) if i > 0 => {
-                return Err(Ok(Refusal {
-                    status: crate::http::status_of(&e),
-                    words: format!("Cancelled, but not dismissed: {e} Dismiss sets it aside."),
-                    keeps: false,
-                    dialog: false,
-                }));
+                return refuse(
+                    crate::http::status_of(&e),
+                    format!("Cancelled, but not dismissed: {e} Dismiss sets it aside."),
+                );
             }
             Err(PublicError::Conflict { .. }) => {
                 return refuse(
@@ -3217,7 +3116,7 @@ pub(crate) async fn try_action(
             }
         }
     }
-    Ok(next)
+    Ok(())
 }
 /// `?activity=all` draws every turn and call of its activity outline, not only the latest;
 /// `?tab=` the tab its page opens on (Overview when it has no such tab).
@@ -3227,9 +3126,6 @@ pub struct ActivityQuery {
     activity: String,
     #[serde(default)]
     tab: String,
-    /// A refused action's notice, by its key (`notices`).
-    #[serde(default)]
-    notice: String,
 }
 impl ActivityQuery {
     fn all(&self) -> bool {
@@ -3243,9 +3139,6 @@ pub async fn step_page(
     Query(shown): Query<ActivityQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let notice = (!shown.notice.is_empty())
-        .then(|| notices::get(project, &id, &shown.notice))
-        .flatten();
     match page_html(
         &state,
         registry.as_ref().map(|r| &r.0),
@@ -3253,7 +3146,6 @@ pub async fn step_page(
         &id,
         &shown,
         &headers,
-        notice.as_ref(),
     )
     .await
     {
@@ -3261,7 +3153,7 @@ pub async fn step_page(
         Err(e) => board::error_response(e),
     }
 }
-/// A step's own page; `notice` what it says over the step after an action it did not take.
+/// A step's own page.
 async fn page_html(
     state: &DashboardState,
     registry: Option<&board::Registry>,
@@ -3269,7 +3161,6 @@ async fn page_html(
     id: &StepId,
     shown: &ActivityQuery,
     headers: &HeaderMap,
-    notice: Option<&Notice>,
 ) -> Result<TrustedHtml, PublicError> {
     let (shared, detail) = board::step_detail(state, project, registry, id, true).await?;
     let (Some(shared), Some(mut detail)) = (shared, detail) else {
@@ -3283,43 +3174,35 @@ async fn page_html(
         .unit
         .as_ref()
         .map(|(id, title)| (id.as_str(), title.as_str()));
-    // the version its stream's first batch has when it draws the same: nothing to patch. The
-    // kept feedback is the page's alone, in a box no patch empties (`data-ignore-morph`)
+    // the version its stream's first batch has when it draws the same: nothing to patch
     let drawn = detail
         .step
         .page_regions(&detail.project, unit, &shown.tab)
         .map(|regions| RenderedBatch::new(regions).version)
         .map_err(render_error)?;
-    let mut step = detail.step.clone();
-    if let Some(notice) = notice {
-        step.kept = notice.kept.clone();
-    }
+    let step = &detail.step;
     let frame = super::Frame {
         head: step.band(&detail.project, unit).map_err(render_error)?,
         ..Default::default()
     };
-    step.page_body(
-        &detail.project,
-        &shown.tab,
-        notice.map(|n| n.words.as_str()),
-    )
-    .and_then(|body| {
-        super::render_framed(
-            &format!("{} · {}", step.tab_title(), detail.project),
-            &body,
-            &nav,
-            &Viewer::from_headers(headers),
-            &format!(
-                "{}/stream?page=true{}",
-                step.href(),
-                if shown.all() { "&activity=all" } else { "" }
-            ),
-            &drawn,
-            &step.href(),
-            &frame,
-        )
-    })
-    .map_err(render_error)
+    step.own_body(&detail.project, &shown.tab)
+        .and_then(|body| {
+            super::render_framed(
+                &format!("{} · {}", step.tab_title(), detail.project),
+                &body,
+                &nav,
+                &Viewer::from_headers(headers),
+                &format!(
+                    "{}/stream?page=true{}",
+                    step.href(),
+                    if shown.all() { "&activity=all" } else { "" }
+                ),
+                &drawn,
+                &step.href(),
+                &frame,
+            )
+        })
+        .map_err(render_error)
 }
 #[derive(Deserialize)]
 pub struct StepStreamQuery {
