@@ -326,8 +326,10 @@ define("sluice-dialog", {
   setup({ host, cleanup }) {
     const on = listening(cleanup);
     const dialog = host.querySelector(":scope > dialog");
-    // Escape, or any other close the page did not make itself
-    on(dialog, "close", settle);
+    // Escape, or any other close the page did not make itself. The event is queued: one from a
+    // close `done` already settled can arrive after the next confirmation opened, and must
+    // leave that one be
+    on(dialog, "close", () => { if (!dialog.open) settle(); });
     const done = () => { dialog.close(); settle(); };
     on(dialog, "click", (event) => {
       if (event.target.closest?.("[data-keep]")) done();
