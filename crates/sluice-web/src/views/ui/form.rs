@@ -3,12 +3,13 @@
 //! closest form's fields and the button that sent it), naming itself in the `sluice-form`
 //! header so the answer (`views::write`) finds its notice. While the write is in flight its
 //! `data-indicator` signal (<https://data-star.dev/reference/attributes#data-indicator>) is true
-//! and `data-attr` says so as `aria-busy`, which the stylesheet draws as a quiet spinner on its
-//! buttons. `data-on:submit` keeps the browser's own submission from running
+//! and `data-attr` says so as `aria-busy`: the button that sent it (the submit event's
+//! `submitter`, marked `data-pressed` until the action settles) turns a quiet ring, and the
+//! form's other buttons wait. `data-on:submit` keeps the browser's own submission from running
 //! (<https://data-star.dev/reference/attributes#data-on>). A write is tried once (`retry:
-//! 'never'`, `retryMaxCount: 0`): one that never reached sluice is said in its notice at once
-//! (components.js), for the owner to send again; the action's rejection is that, so it is
-//! caught. Inside a Rocket component a signal is the
+//! 'never'`, `retryMaxCount: 0`): one that never reached sluice rejects the action, and the
+//! rejection is said in the form's notice at once, for the owner to send again. Inside a
+//! Rocket component a signal is the
 //! component's own unless its attribute says `__root`
 //! (<https://data-star.dev/reference/rocket>): the busy signal is the page's.
 use super::esc;
@@ -23,7 +24,7 @@ pub fn post_form(id: &str, class: &str, action: &str) -> String {
 pub fn post_form_with(id: &str, class: &str, action: &str, first: &str, extra: &str) -> String {
     let busy = busy_signal(id);
     format!(
-        "<form id=\"{id}\"{class} method=\"post\" action=\"{action}\" data-on:submit=\"{first}@post(el.getAttribute('action'), {{contentType: 'form', headers: {{'sluice-form': el.id}}, retry: 'never', retryMaxCount: 0}}).catch(() =&gt; {{}})\" data-indicator__root=\"{busy}\" data-attr:aria-busy=\"${busy} &amp;&amp; 'true'\"{extra}>",
+        "<form id=\"{id}\"{class} method=\"post\" action=\"{action}\" data-on:submit=\"{first}evt.submitter?.setAttribute('data-pressed', ''); @post(el.getAttribute('action'), {{contentType: 'form', headers: {{'sluice-form': el.id}}, retry: 'never', retryMaxCount: 0}}).catch(() =&gt; {UNSENT}).finally(() =&gt; evt.submitter?.removeAttribute('data-pressed'))\" data-indicator__root=\"{busy}\" data-attr:aria-busy=\"${busy} &amp;&amp; 'true'\"{extra}>",
         first = if first.is_empty() {
             String::new()
         } else {
@@ -38,6 +39,9 @@ pub fn post_form_with(id: &str, class: &str, action: &str, first: &str, extra: &
         action = esc(action),
     )
 }
+/// What a form's notice says when its write never reached sluice (sluice cannot say it): its
+/// action's rejection, as an alert.
+const UNSENT: &str = "{ const said = document.getElementById(el.id + '-said'); if (said) { said.setAttribute('role', 'alert'); said.textContent = 'Sluice did not answer: is it running? Try again in a moment.'; } }";
 /// The notice a form's answer fills (`views::write::notice`), empty until then: it goes last
 /// in the form.
 pub fn form_said(id: &str) -> String {
@@ -50,6 +54,14 @@ pub fn form_id(seed: &str) -> String {
     let mut hasher = DefaultHasher::new();
     seed.hash(&mut hasher);
     format!("w-{:012x}", hasher.finish() & 0xffff_ffff_ffff)
+}
+/// A message form's local signals (`_`, never sent: the form's fields are): its words and its
+/// "ask" box, bound to them so the answer to a message sent empties them (`write::sent`).
+pub fn draft_signals(id: &str) -> (String, String) {
+    let mut hasher = DefaultHasher::new();
+    id.hash(&mut hasher);
+    let h = hasher.finish() & 0xff_ffff_ffff;
+    (format!("_draft{h:010x}"), format!("_ask{h:010x}"))
 }
 /// The local signal (`_`, never sent) that says the form's write is in flight.
 fn busy_signal(id: &str) -> String {

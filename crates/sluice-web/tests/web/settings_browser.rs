@@ -277,7 +277,7 @@ try:
  assert chrome.eval("errors")==[],chrome.eval('errors')
  chrome.eval("document.querySelector('#delete-button').click()")
  chrome.wait("document.querySelector('#confirmation').open")
- assert chrome.eval("document.querySelector('#confirmation .danger').textContent==='Delete final-name'")
+ assert chrome.eval("document.querySelector('#confirmation .danger')?.textContent==='Delete final-name'"), chrome.eval("[document.querySelector('#confirmation').outerHTML.slice(0,3000), document.querySelector('#delete-guard')?.outerHTML.slice(0,3000)]")
  chrome.eval("document.querySelector('#confirmation .danger').click()")
  deadline=time.monotonic()+20
  while chrome.send('Page.getFrameTree')['frameTree']['frame']['url']!=url+'/':

@@ -343,8 +343,15 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         browser
             .navigate(&format!("{base}/projects/id/{lanes}/settings"))
             .unwrap();
+        // the preview is drawn when its fold is opened
         browser
-            .wait("document.querySelector('#board-preview') && !document.querySelector('#board-preview').hidden && document.querySelector('#board-preview .metric-v')")
+            .wait("document.readyState === 'complete' && !!document.querySelector('#board-preview')")
+            .unwrap();
+        browser
+            .eval("document.querySelector('#board-preview').closest('details').open = true")
+            .unwrap();
+        browser
+            .wait("document.querySelector('#board-preview .metric-v')")
             .unwrap();
         for width in [390, 1440, 2560] {
             for theme in ["light", "dark"] {

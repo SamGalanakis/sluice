@@ -31,7 +31,7 @@ pub struct QuestionCard<'a> {
 impl QuestionCard<'_> {
     pub fn html(&self) -> TrustedHtml {
         TrustedHtml::owned(format!(
-            "<article class=\"q-card\"{id} aria-label=\"Question for you: {label}\"><p class=\"q-k\"><span class=\"nk-ask\" aria-hidden=\"true\"></span><b>Question for you</b><span class=\"q-from\">{context}</span>{details}</p>{title}<div class=\"md q-body\">{body}</div>{answer}{way_on}</article>",
+            "<article class=\"q-card\"{id} aria-label=\"Question for you: {label}\"><div class=\"q-k\"><span class=\"nk-ask\" aria-hidden=\"true\"></span><b>Question for you</b><span class=\"q-from\">{context}</span>{details}</div>{title}<div class=\"md q-body\">{body}</div>{answer}{way_on}</article>",
             id = if self.id.is_empty() {
                 String::new()
             } else {
@@ -67,15 +67,17 @@ pub fn answer_link(answer_href: &str, reply_url: &str, title: &str) -> TrustedHt
             ""
         ),
         close_form(
+            "",
             reply_url,
             "Close question",
             &format!("Close question: {title}")
         ),
     ))
 }
-/// A question's Close (`words`, quiet), posted as its owner's reply with the action `close`.
-pub fn close_form(reply_url: &str, words: &str, label: &str) -> String {
-    let id = super::form_id(&format!("close {reply_url} {words}"));
+/// A question's Close (`words`, quiet), posted as its owner's reply with the action `close`;
+/// `slot` tells apart the cards one question has on a page (a step's Overview and Messages).
+pub fn close_form(slot: &str, reply_url: &str, words: &str, label: &str) -> String {
+    let id = super::form_id(&format!("close {slot}{reply_url} {words}"));
     format!(
         "{}<input type=\"hidden\" name=\"action\" value=\"close\"><button class=\"{}\" aria-label=\"{}\">{}</button>{}</form>",
         super::post_form(&id, "q-close", reply_url),

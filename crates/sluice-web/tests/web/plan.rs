@@ -149,7 +149,7 @@ async fn plan_units_and_loose_steps() {
             "{step}"
         );
         assert!(
-            step[so_far..].contains("<p class=\"meta\">2 outputs not set yet.</p>"),
+            step[so_far..].contains("<p class=\"meta d-unset\">Not set yet: <code>mismatches</code> <span class=\"ty\">int</span>, <code>report</code> <span class=\"ty\">string</span></p>"),
             "{step}"
         );
         // Needs you: the question, the failures (two at their wall-clock cap said once, with
@@ -256,10 +256,11 @@ async fn plan_units_and_loose_steps() {
             "{a6}"
         );
         assert_eq!(a6.matches("<i class=\"tk-m\"").count(), 3, "{a6}");
-        // quiet: the sand pill says how long, its stage pill no time of its own
+        // quiet: one sand pill, its stage and how long it has been silent
         let s3 = plan_html::row(&html, "s-3");
         assert!(
-            s3.contains("</span>scan</span><span class=\"pill quiet\">quiet "),
+            s3.contains("<span class=\"pill look\"><span class=\"g g-quiet\"")
+                && s3.contains("</span>scan · quiet <time"),
             "{s3}"
         );
         // nothing heard since its run began: said once
@@ -281,10 +282,10 @@ async fn plan_units_and_loose_steps() {
             plan_html::cell(drill, "a-6-draft").starts_with("<li class=\"sv-row sv-c-run is-cur\""),
             "{drill}"
         );
-        // every step runs on the one fn: no column says so
+        // its draft runs on an engine, its other steps on the fn: a column says which
         assert!(
-            drill.contains("<div class=\"sv-g sv-one-on sv-no-pr\"")
-                && !drill.contains("runs on ")
+            drill.contains("<div class=\"sv-g sv-no-pr\"")
+                && drill.contains("<span class=\"sv-h-on\" aria-hidden=\"true\">Runs on</span>")
                 && !drill.contains(">Progress<"),
             "{drill}"
         );
@@ -469,14 +470,14 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
         html.contains("<title>(1) ⚠3 · almanac · sluice</title>"),
         "{html}"
     );
-    // Set the rest aside sets every stop and silence aside, the question keeping its own ×;
+    // Set all aside sets every stop and silence aside, the question keeping its own ×;
     // Undo brings one back
     let keys = value(&html, "name=\"items\" value=\"").to_owned();
     assert!(
         keys.starts_with("stop:") && keys.contains("quiet:s-3-scan@") && !keys.contains("ask:"),
         "{keys}"
     );
-    assert!(html.contains(">Set the rest aside</button>"), "{html}");
+    assert!(html.contains(">Set all aside</button>"), "{html}");
     let (status, _, _, _) = browse(
         &router,
         &format!("{plan}/needs"),
@@ -561,12 +562,24 @@ async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
         "{cookie}"
     );
     let jar = cookie.split(';').next().unwrap().to_owned();
-    // with it, nothing has finished since; without it, another browser still sees the cards
+    // with it, nothing has finished since: the line says through when, with its Undo (the look
+    // taken back, `through` 0); without it, another browser still sees the cards
     let (_, _, _, html) = browse(&router, &plan, None, &jar).await;
+    let seen = plan_html::band(&html, "plan-finished");
     assert!(
-        html.contains("<!--r:plan-finished--><div id=\"plan-finished\" hidden></div>"),
-        "{html}"
+        seen.contains("Seen through <time data-clock")
+            && seen.contains("<input type=\"hidden\" name=\"through\" value=\"0\">Seen")
+            && seen.contains("<button class=\"quiet\">Undo</button>"),
+        "{seen}"
     );
+    let (_, _, _, undone) = browse(
+        &router,
+        &plan,
+        None,
+        &format!("sluice_seen_{}=0", n.almanac),
+    )
+    .await;
+    assert!(plan_html::band(&undone, "plan-finished").contains("Finished lately"));
     let (_, _, _, other) = browse(&router, &plan, None, "").await;
     assert!(plan_html::band(&other, "plan-finished").contains("Finished lately"));
     // a look kept earlier: what finished after it, said since when
@@ -582,8 +595,8 @@ async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
     assert!(
         cards.contains(
             "<h2 id=\"finished\">Finished since you looked</h2><span class=\"pb-note\">since "
-        ) && cards.matches("<li class=\"fin-i\"").count() == 1
-            && cards.contains("4 more finished with nothing to say")
+        ) && cards.matches("<li class=\"fin-i\"").count() == 2
+            && cards.contains("3 more finished with nothing to say")
             && cards.contains(&format!("/units/{a2}\"")),
         "{cards}"
     );

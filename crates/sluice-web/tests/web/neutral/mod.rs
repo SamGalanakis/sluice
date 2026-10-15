@@ -179,8 +179,13 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
     let mut steps = serde_json::Map::new();
     for (unit, topic) in topics {
         let tags = json!([format!("unit:{unit}")]);
-        let mut draft =
-            json!({"run": "custom.open", "tags": tags, "in": {"topic": {"default": topic}}});
+        // a draft says what it is asked for (its brief) and what it hands on (its outputs)
+        let mut draft = json!({"run": "custom.open", "tags": tags,
+            "in": {"topic": {"default": topic},
+                   "spec": {"default": format!("Draft the field guide's entries for {topic}: one entry a species, each with its range, its season and a photograph credited from the archive. Follow the regional checklist's names and dates.\n\nLeave a note for review on anything the checklist and the archive disagree about.")}},
+            "outputs": {"entries": "int", "notes": "string"}});
+        // the drafts run on two engines, so the plan's rows wear their badges
+        draft["in"]["engine"] = json!({"default": if unit == "a-7" { "codex" } else { "claude" }});
         // the wait chain: a-8 after a-6, a-9 after a-8
         match unit {
             "a-8" => draft["after"] = json!(["a-6-publish"]),
@@ -362,6 +367,19 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
                         .to_string(),
                 ),
             )?;
+            // the oldest finished draft handed on what it was asked for (the latest ones left
+            // nothing to say), and so did the draft before the failed review
+            for (unit, entries) in [("a-1", 12), ("a-4", 11)] {
+                tx.sql().execute(
+                    "UPDATE steps SET outputs=?2 WHERE project_id=?1 AND step_id=?3",
+                    (
+                        almanac.to_string(),
+                        json!({"entries": entries, "notes": "The checklist and the archive agree on every species."})
+                            .to_string(),
+                        format!("{unit}-draft"),
+                    ),
+                )?;
+            }
             tx.changed(Some(almanac), "steps");
             Ok(())
         })

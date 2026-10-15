@@ -2,8 +2,9 @@
 //! (`ui::post_form`: `@post` with `contentType: 'form'`), so a write is a short request beside
 //! the page's one long-lived stream (the Tao of Datastar's CQRS): the stream draws what the
 //! write changed, and the write's own answer says only what the stream cannot, its form's
-//! notice. A write that went through clears that notice (and closes the confirmation it was
-//! sent from); one sluice refused fills it. Datastar applies an answer only when its status is
+//! notice. A write that went through clears that notice (and the confirmation it was sent from,
+//! `sluice-dialog`, closes on it); one sluice refused fills it. An answer patches elements and
+//! signals only, never script. Datastar applies an answer only when its status is
 //! 200, so a refusal to a form is a 200 that says so; a client that is not a page's form (a
 //! script, a test) gets the JSON error with its status instead.
 use super::ui::esc;
@@ -12,7 +13,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response, Sse},
 };
-use datastar::prelude::{ElementPatchMode, ExecuteScript, PatchElements};
+use datastar::prelude::{ElementPatchMode, PatchElements, PatchSignals};
 use futures_util::stream;
 use sluice_model::error::PublicError;
 use std::convert::Infallible;
@@ -30,21 +31,14 @@ pub fn form(headers: &HeaderMap) -> Option<String> {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
     .then(|| id.to_owned())
 }
-/// The answer to a write sluice took: the form's notice emptied and its confirmation closed;
-/// what changed comes with the page's stream. A client that is not a page's form gets 204.
+/// The answer to a write sluice took: the form's notice emptied (a confirmation it was sent
+/// from closes on that); what changed comes with the page's stream. A client that is not a
+/// page's form gets 204.
 pub fn done(headers: &HeaderMap) -> Response {
     match form(headers) {
-        Some(id) => events([notice(&id, ""), close(headers)]),
+        Some(id) => events([notice(&id, "")]),
         None => StatusCode::NO_CONTENT.into_response(),
     }
-}
-/// The confirmation the request's form was sent from, closed: a confirmation's form sits in
-/// the page's one dialog while it is open. Nothing for a form that is not in one.
-pub fn close(headers: &HeaderMap) -> StreamEvent {
-    let id = form(headers).unwrap_or_default();
-    StreamEvent::Script(ExecuteScript::new(format!(
-        "document.getElementById('{id}')?.closest('dialog[open]')?.close()"
-    )))
 }
 /// Form `form`'s notice saying `words` as a status (a write it took).
 pub fn status(form: &str, words: &str) -> StreamEvent {
@@ -67,16 +61,19 @@ pub fn said(headers: &HeaderMap, words: &str) -> Response {
     }
 }
 /// The answer to a message sluice took from its form: the form says `words` (as a status) and
-/// is emptied for the next one, the message itself coming with the page's stream. A client that
-/// is not a page's form gets 204.
+/// its fields are emptied for the next one (their signals, `ui::draft_signals`), the message
+/// itself coming with the page's stream. A client that is not a page's form gets 204.
 pub fn sent(headers: &HeaderMap, words: &str) -> Response {
     match form(headers) {
-        Some(id) => events([
-            status(&id, words),
-            StreamEvent::Script(ExecuteScript::new(format!(
-                "document.getElementById('{id}')?.reset()"
-            ))),
-        ]),
+        Some(id) => {
+            let (body, ask) = super::ui::draft_signals(&id);
+            events([
+                status(&id, words),
+                StreamEvent::Signals(PatchSignals::new(
+                    serde_json::json!({ body: "", ask: false }).to_string(),
+                )),
+            ])
+        }
         None => StatusCode::NO_CONTENT.into_response(),
     }
 }

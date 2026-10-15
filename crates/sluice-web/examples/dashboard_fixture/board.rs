@@ -50,6 +50,14 @@ impl step::CommandService for FixtureCommands {
         })
     }
 }
+/// The board-fixture's board: a heading, its document and the failed build's last word.
+const BOARD: &str = r#"root = Stack([title, doc, latest])
+title = Heading("Release", 1)
+doc = Doc("Nothing written yet.")
+latest = LatestMessage("step-failed")
+"#;
+/// What the orchestrator wrote on that board.
+const BOARD_DOC: &str = "## Where the release stands\n\nThe build failed at the review gate, so **review** and **delivery** wait on it. Retry the build once the review gate's fixture is fixed.\n\n- review: blocked behind the build\n- delivery: blocked at the unit gate\n- the cached cpu run: queued for capacity\n\nThe patch itself is verified; only the gate stands between it and delivery.";
 struct BoardFixtureRegistry;
 impl sluice_model::plan::SignatureProvider for BoardFixtureRegistry {
     fn signature(&self, name: &str) -> Option<sluice_model::plan::FnSignature> {
@@ -106,6 +114,33 @@ pub async fn seed(writer: &Writer, _id: ProjectId) {
         tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,needs_reply,at) VALUES(90001,?1,'step-failed','failed','orchestrator','Please inspect the failed build.',1,'2026-10-03T12:10:00Z')",[project.to_string()])?;
         Ok(())
     }).await.unwrap();
+    // its board, with a document of its own, so ?view=board and ?view=both have one to show
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            let selector = sluice_model::ids::ProjectSelector::Id(project);
+            projects::board_set(
+                tx,
+                &selector,
+                projects::SetBoard {
+                    program: Some(BOARD.into()),
+                    expected_rev: None,
+                    reason: None,
+                    author: "orch".into(),
+                },
+            )?;
+            projects::board_doc_write(
+                tx,
+                &selector,
+                projects::WriteBoardDoc {
+                    markdown: BOARD_DOC.into(),
+                    expected_rev: None,
+                    reason: None,
+                    author: "orch".into(),
+                },
+            )
+        })
+        .await
+        .unwrap();
     println!("BOARD {project}");
     let paused = writer
         .write(RetrySafety::NonIdempotent, |tx| {

@@ -66,6 +66,8 @@ pub fn seen_of(headers: &HeaderMap, project: ProjectId) -> Option<u64> {
         .filter_map(|c| c.trim().split_once('='))
         .find(|(n, _)| *n == name)
         .and_then(|(_, v)| v.parse().ok())
+        // 0 is the look undone: everything finished lately again
+        .filter(|seen| *seen > 0)
 }
 
 fn now() -> f64 {
@@ -399,7 +401,7 @@ impl<'a> Plan<'a> {
                 sentence: format!("<b>{who}</b> asks: {}", esc(&ask.title)),
                 more: String::new(),
                 act: format!(
-                    "<a class=\"btn\" href=\"{}\"{}>Answer</a>",
+                    "<a class=\"btn primary\" href=\"{}\"{}>Answer</a>",
                     esc(&ask.href(&project)),
                     if ask.step.is_empty() {
                         String::new()
@@ -506,10 +508,12 @@ impl<'a> Plan<'a> {
         } else {
             unit.shown()
         };
-        let stage = if unit.steps.len() > 1 {
-            format!(" at {}", esc(&unit.step_name(step)))
-        } else {
-            String::new()
+        // its stage, unless its name only says its state again ("failed at failed")
+        let stage = match unit.step_name(step) {
+            name if unit.steps.len() > 1 && !name.eq_ignore_ascii_case(shown.word()) => {
+                format!(" at {}", esc(&name))
+            }
+            _ => String::new(),
         };
         let owner = unit.owner_words();
         // how long its last run took, when it ran
@@ -519,14 +523,17 @@ impl<'a> Plan<'a> {
             .filter(|t| t.finished.is_some() && t.seconds > 0.0)
             .map(|t| format!(" after {}", esc(&ui::duration_text(t.seconds))))
             .unwrap_or_default();
+        // a title that is a sentence of its own ends there: what happened is the next one
+        let whole = title(unit).trim_end().ends_with(['.', '!', '?']);
         let mut sentence = format!(
-            "<b>{}</b>{} {}{stage}{after}.",
+            "<b>{}</b>{} {}{}{stage}{after}.",
             self.step_link(unit, step),
             if owner.is_empty() {
                 String::new()
             } else {
                 format!(" <span class=\"own\">{}</span>", esc(&owner))
             },
+            if whole { "It " } else { "" },
             esc(shown.word())
         );
         match (shown, step.failure.as_ref()) {
@@ -546,7 +553,10 @@ impl<'a> Plan<'a> {
                 }
             }
             (_, Some(f)) => {
-                let _ = write!(sentence, " {}", esc(&f.headline));
+                // a failure of no known kind says only "It failed.": the sentence said that
+                if f.kind != "failed" {
+                    let _ = write!(sentence, " {}", esc(&f.headline));
+                }
                 let said = f.said.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
                 if !said.is_empty() {
                     let _ = write!(
@@ -788,18 +798,14 @@ impl<'a> Plan<'a> {
         let rest: Vec<&&Need> = live.iter().filter(|n| n.mark != Mark::Ask).collect();
         if rest.len() > 1 {
             let keys: Vec<String> = rest.iter().flat_map(|n| n.keys.clone()).collect();
-            let words = if rest.len() < live.len() {
-                "Set the rest aside"
-            } else {
-                "Set all aside"
-            };
+            // said one way in every project; a question is never in it
             out.push_str("<span class=\"pb-grow\"></span>");
             out.push_str(&self.needs_form(
                 "dismiss",
                 &keys,
                 "quiet",
-                &format!("{words}: each stop and silence comes back when it changes"),
-                words,
+                "Set all aside: each stop and silence comes back when it changes; a question stays",
+                "Set all aside",
                 "",
                 "needs",
             ));
@@ -819,14 +825,10 @@ impl<'a> Plan<'a> {
             );
         } else {
             out.push_str("<ul class=\"nd\">");
-            for (n, need) in live.iter().enumerate() {
-                // one filled action in the well: the first item's
-                let act = if n == 0 {
-                    need.act
-                        .replacen("class=\"btn\"", "class=\"btn primary\"", 1)
-                } else {
-                    need.act.clone()
-                };
+            for need in &live {
+                // a question's Answer is the well's one filled action; every other is outlined,
+                // in every project
+                let act = need.act.clone();
                 // a region each, so a change to one patches it alone
                 let attrs = match self.view.units.iter().find(|u| u.id.as_str() == need.unit) {
                     Some(unit) => format!(
@@ -1026,9 +1028,20 @@ impl<'a> Plan<'a> {
         }
         format!("<ul class=\"pm-groups\">{out}</ul>")
     }
-    /// The units that finished last, at most `n`, as the plan's Finished draws them.
-    pub fn finished_recent(&self, n: usize) -> String {
-        finished_list(self.view, &self.done[..self.done.len().min(n)])
+    /// The units that finished last, at most `n`, by name in one line, each its unit page's
+    /// link (a home card's Finished lately: the plan draws what they produced).
+    pub fn finished_names(&self, n: usize) -> String {
+        self.done[..self.done.len().min(n)]
+            .iter()
+            .map(|unit| {
+                format!(
+                    "<a href=\"{}\">{}</a>",
+                    esc(&unit_href(self.view, unit)),
+                    esc(title(unit))
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
     /// The page's head: the project's name, the sentence under it, and its Details (the
     /// project's id and its words), in one region its stream patches.
@@ -1117,10 +1130,11 @@ impl<'a> Plan<'a> {
         out.push_str(&region("plan-roster", &self.roster_html()));
         out.push_str(&region(
             "plan-finished",
-            &if self.finished.is_empty() {
-                "<div id=\"plan-finished\" hidden></div>".to_owned()
-            } else {
-                self.finished_html()
+            &match (self.finished.is_empty(), self.view.seen) {
+                // marked seen and nothing finished since: said once, with its Undo
+                (true, Some(seen)) => self.seen_html(seen),
+                (true, None) => "<div id=\"plan-finished\" hidden></div>".to_owned(),
+                (false, _) => self.finished_html(),
             },
         ));
         let index = self.view.show == "done"
@@ -1141,6 +1155,16 @@ impl<'a> Plan<'a> {
 
     // ---- Finished since you looked ------------------------------------------------------------
 
+    /// What Mark as seen leaves: "Seen through 04:21 · Undo", Undo taking the look back so
+    /// what finished lately is drawn again.
+    fn seen_html(&self, seen: u64) -> String {
+        format!(
+            "<section id=\"plan-finished\" class=\"pb-sec pb-seen\" aria-label=\"Finished lately\"><form id=\"mark-seen\" class=\"nd-form meta\" method=\"post\" action=\"{h}/seen\" data-reopens-stream data-on:submit=\"$seen = 0; @post(el.getAttribute('action'), {{contentType: 'form'}}); {reopen}\"><input type=\"hidden\" name=\"through\" value=\"0\">Seen through {at} · <button class=\"quiet\">Undo</button></form></section>",
+            h = esc(&self.view.href()),
+            reopen = esc(&ui::stream_reopen(&self.view.stream_href())),
+            at = ui::clock(&super::rfc3339(seen)),
+        )
+    }
     fn finished_html(&self) -> String {
         let (head, since) = match self.view.seen {
             Some(seen) => (
@@ -1184,12 +1208,20 @@ impl<'a> Plan<'a> {
     /// At work: the axis's labels, then each group's rows, then the line that counts the rest.
     fn roster_html(&self) -> String {
         let rows: usize = self.groups.iter().map(|g| g.rows.len()).sum();
+        // counted as the summary counts them: a blocked or queued unit waits, it is not at work
+        let waiting: usize = self
+            .groups
+            .iter()
+            .flat_map(|g| &g.rows)
+            .filter(|r| r.waiting)
+            .count();
         let mut out = format!(
             "<section id=\"plan-roster\" class=\"pb-sec\" aria-labelledby=\"at-work\"><div class=\"pb-label\"><h2 id=\"at-work\">At work</h2><span class=\"pb-note\">{}</span>{}</div>",
-            if rows == 0 {
-                "Nothing now".to_owned()
-            } else {
-                ui::count(rows, "unit", "units")
+            match (rows - waiting, waiting) {
+                (0, 0) => "Nothing now".to_owned(),
+                (0, w) => format!("Nothing at work · {w} waiting"),
+                (n, 0) => ui::count(n, "unit", "units"),
+                (n, w) => format!("{} · {w} waiting", ui::count(n, "unit", "units")),
             },
             if rows == 0 {
                 String::new()
@@ -1354,48 +1386,50 @@ impl<'a> Plan<'a> {
                 } else {
                     format!("{} {stage}", waiting_words(shown))
                 };
-                let _ = write!(
-                    meta,
-                    "<span class=\"pill\">{}{}</span>",
-                    ui::mark(shown),
-                    esc(&words)
-                );
+                meta.push_str(ui::status_pill(shown, &esc(&words)).as_str());
                 let why = why_waiting(unit);
                 if !why.is_empty() {
                     let _ = write!(meta, "<span class=\"ro-why\">{why}</span>");
                 }
             } else {
-                // how long it has run, unless it is quiet: then the sand pill says the time
-                let ran = step
-                    .timing
-                    .as_ref()
-                    .filter(|t| t.finished.is_none() && shown != Shown::Quiet)
-                    .map(|t| format!(" · {}", ui::since(&t.started).0))
-                    .unwrap_or_default();
-                let _ = write!(
-                    meta,
-                    "<span class=\"pill\">{}{}{}{ran}</span>",
-                    ui::mark(shown),
+                // how long it has run, or, quiet, how long since it was heard from
+                let quiet = unit
+                    .steps
+                    .iter()
+                    .find(|s| s.shown() == Shown::Quiet && !s.active_at.is_empty());
+                let ran = match quiet {
+                    Some(q) if stage == Shown::Quiet.word() => {
+                        format!(" {}", ui::since(&q.active_at).0)
+                    }
+                    Some(q) => format!(" · quiet {}", ui::since(&q.active_at).0),
+                    None => step
+                        .timing
+                        .as_ref()
+                        .filter(|t| t.finished.is_none())
+                        .map(|t| format!(" · {}", ui::since(&t.started).0))
+                        .unwrap_or_default(),
+                };
+                let words = format!(
+                    "{}{}{ran}",
                     // its state in words where its stage does not say it
-                    if stage == shown.word() {
+                    if stage == shown.word() || quiet.is_some() || stage == Shown::Quiet.word() {
                         String::new()
                     } else {
                         format!("<span class=\"vh\">{}, </span>", esc(shown.word()))
                     },
                     esc(&stage),
                 );
+                meta.push_str(
+                    ui::status_pill(if quiet.is_some() { Shown::Quiet } else { shown }, &words)
+                        .as_str(),
+                );
             }
         }
         if !row.waiting {
             let quiet_step = unit.steps.iter().find(|s| s.shown() == Shown::Quiet);
             match (quiet_step, row.heard) {
-                (Some(q), _) if !q.active_at.is_empty() => {
-                    let _ = write!(
-                        meta,
-                        "<span class=\"pill quiet\">quiet {}</span>",
-                        ui::since(&q.active_at)
-                    );
-                }
+                // quiet: its pill says for how long
+                (Some(q), _) if !q.active_at.is_empty() => {}
                 // heard from since its run began: when, the line taking the ink as it ages
                 (_, Some(heard)) if heard - started(unit).unwrap_or(heard) > 120.0 => {
                     let at = super::rfc3339(heard as u64);
@@ -1411,7 +1445,7 @@ impl<'a> Plan<'a> {
                             ""
                         },
                         if age < LIVE {
-                            "<span class=\"dot run pulse\" aria-hidden=\"true\"></span>"
+                            "<span class=\"dot run pulse\" aria-hidden=\"true\"></span> "
                         } else {
                             ""
                         },
@@ -1782,7 +1816,7 @@ pub fn roster_row(row: &RowParts<'_>) -> String {
             format!(
                 "<span class=\"ro-badge\" title=\"Runs on {}\">{}</span>",
                 esc(row.runs_on),
-                esc(&ui::cut(row.badge, 5))
+                esc(&ui::cut(row.badge, 8))
             )
         },
         title = esc(row.title),

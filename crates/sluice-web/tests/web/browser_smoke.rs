@@ -35,6 +35,19 @@ async fn check_pages(family: &str) {
             browser.wait("document.querySelector('h1')?.checkVisibility() && !!customElements.get('sluice-menu')").unwrap();
             assert_eq!(browser.eval("!!document.querySelector('#top-nav') && document.querySelector('h1').textContent.trim().length > 0").unwrap(), true, "{path}");
             assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), json!([]), "{path}");
+            // The gallery draws one component in several states, so only real pages
+            // promise each id once (a patch targets the first match and misses the rest).
+            if path != "/_ui" {
+                assert_eq!(browser.eval("[...document.querySelectorAll('[id]')].map(e => e.id).filter((id, i, all) => all.indexOf(id) !== i)").unwrap(), json!([]), "{path} repeats an id");
+            }
+            // A menu keeps its panel: a <details> inside a <p> is closed out of it by the parser.
+            assert_eq!(browser.eval("document.querySelectorAll('sluice-menu:empty').length").unwrap(), json!(0), "{path} has a menu the parser emptied");
+            // An idle page sends nothing. Streams stay open and never finish, so every
+            // fetch that completes while the page sits untouched is a request a patch or
+            // an init sent on its own (the settings preview once re-fired itself on every
+            // answer, hundreds of times a second).
+            let idle = browser.eval("(async () => { await new Promise(r => setTimeout(r, 100)); performance.clearResourceTimings(); await new Promise(r => setTimeout(r, 400)); return performance.getEntriesByType('resource').filter(e => e.initiatorType === 'fetch').map(e => e.name); })()").unwrap();
+            assert_eq!(idle, json!([]), "{path} sent requests while idle");
         }
     }).await.unwrap();
     server.abort();

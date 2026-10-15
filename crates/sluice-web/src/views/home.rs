@@ -32,11 +32,9 @@ pub struct HomeProject {
     pub read: bool,
     /// The plan's head sentence.
     pub sentence: String,
-    /// How many items of its Needs you stand.
-    pub needs: usize,
     /// At work's groups, a line each.
     pub groups: String,
-    /// What finished last, as the plan's Finished draws it.
+    /// What finished last, by name (`PlanView::finished_names`).
     pub finished: String,
 }
 impl HomeProject {
@@ -49,7 +47,6 @@ impl HomeProject {
                 units: vec![],
                 read: false,
                 sentence: String::new(),
-                needs: 0,
                 groups: String::new(),
                 finished: String::new(),
             };
@@ -70,9 +67,8 @@ impl HomeProject {
             steps: board.units.iter().map(|u| u.steps.len()).sum(),
             read: true,
             sentence: plan.sentence_html(),
-            needs: plan.needs_count(),
             groups: plan.group_lines(),
-            finished: plan.finished_recent(FINISHED),
+            finished: plan.finished_names(FINISHED),
             project,
         }
     }
@@ -98,19 +94,6 @@ impl HomeProject {
     pub fn unit_count(&self) -> usize {
         self.units.len()
     }
-    /// Its units counted by band: running, stopped, waiting, done.
-    pub fn bands(&self) -> [usize; 4] {
-        let mut n = [0; 4];
-        for unit in &self.units {
-            match unit.shown.map(|s| s.spec().band) {
-                Some(Band::Running) => n[0] += 1,
-                Some(Band::Stopped) => n[1] += 1,
-                Some(Band::Done) => n[3] += 1,
-                _ => n[2] += 1,
-            }
-        }
-        n
-    }
     /// Its plan's sentence, or its counts when its plan was not read.
     pub fn sentence(&self) -> TrustedHtml {
         if self.read {
@@ -123,8 +106,8 @@ impl HomeProject {
             format!("{}.", esc(&words))
         })
     }
-    /// Its card: its name and size, its words, its plan's sentence, what needs the owner
-    /// counted, At work's groups, what finished last, the way to its plan and its day.
+    /// Its card: its name and size, its words, its plan's sentence (which counts what needs the
+    /// owner), At work's groups, what finished last by name, the way to its plan and its day.
     pub fn module(&self) -> TrustedHtml {
         let p = &self.project;
         let size = if self.read {
@@ -149,26 +132,19 @@ impl HomeProject {
         } else {
             String::new()
         };
-        let needs = match self.needs {
-            0 => String::new(),
-            n => format!(
-                "<p class=\"pm-needs\"><a href=\"{}#needs\">{}</a></p>",
-                esc(&p.href()),
-                ui::count(n, "item needs you", "items need you")
-            ),
-        };
+        // what finished last by name: its plan says what each produced
         let finished = if self.finished.is_empty() {
             String::new()
         } else {
             format!(
-                "<div class=\"pm-done\"><p class=\"pm-done-h\">Finished lately</p>{}</div>",
+                "<p class=\"pm-done\"><span class=\"pm-done-h\">Finished lately:</span> {}</p>",
                 self.finished
             )
         };
         // a card, not a well: its sentence says what needs the owner, the coral only on its
         // questions
         TrustedHtml::owned(format!(
-            "<article class=\"pm card\" aria-label=\"{name}\"><div class=\"pm-head\"><h3 class=\"pm-name\"><a href=\"{href}\">{icon}{text}{name}</a></h3><p class=\"pm-size\">{state} {size}{paused}</p></div>{about}<p class=\"pm-summary\">{sentence}</p>{needs}{groups}{finished}<p class=\"pm-open\"><a href=\"{href}\">Open the {name} plan</a><a href=\"{href}/day\">Its day</a></p></article>",
+            "<article class=\"pm card\" aria-label=\"{name}\"><div class=\"pm-head\"><h3 class=\"pm-name\"><a href=\"{href}\">{icon}{text}{name}</a></h3><p class=\"pm-size\">{state} {size}{paused}</p></div>{about}<p class=\"pm-summary\">{sentence}</p>{groups}{finished}<p class=\"pm-open\"><a href=\"{href}\">Open the {name} plan</a><a href=\"{href}/day\">Its day</a></p></article>",
             href = esc(&p.href()),
             text = if p.icon_text.is_empty() {
                 String::new()
@@ -427,53 +403,38 @@ impl HomeView {
             wide = if self.questions.is_empty() { " td-wide" } else { "" },
         )
     }
-    /// The index: every project's units by band, then the archived ones.
-    fn index(&self) -> String {
-        let mut rows = String::new();
-        let mut total = [0usize; 4];
-        let mut units = 0;
-        for p in &self.projects {
-            let n = p.bands();
-            for (t, v) in total.iter_mut().zip(n) {
-                *t += v;
-            }
-            units += p.unit_count();
-            let word = if p.project.counts.total() == 0 {
-                " <span class=\"meta\">· no steps yet</span>"
-            } else if p.project.paused {
-                " <span class=\"meta\">· paused</span>"
-            } else {
-                ""
-            };
-            rows.push_str(&format!(
-                "<tr><th scope=\"row\"><a href=\"{}\">{}</a>{word}</th><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num ix-w\">{}</td><td class=\"num\">{}</td><td class=\"ix-at\">{}</td></tr>",
-                esc(&p.project.href()),
-                esc(&p.project.name),
-                if p.read { p.unit_count().to_string() } else { "–".into() },
-                n[0],
-                n[1],
-                n[2],
-                n[3],
-                ui::ago(&p.project.changed)
+    /// The projects with no card, a line each kind under the cards ("" for none): those with
+    /// no steps yet, then the archived. The cards count the rest.
+    fn others_line(&self) -> String {
+        let link = |p: &ProjectView| format!("<a href=\"{}\">{}</a>", esc(&p.href()), esc(&p.name));
+        let mut out = String::new();
+        let empty: Vec<String> = self
+            .projects
+            .iter()
+            .filter(|p| p.project.counts.total() == 0)
+            .map(|p| link(&p.project))
+            .collect();
+        if !empty.is_empty() {
+            out.push_str(&format!(
+                "<p class=\"home-others meta\">No steps yet: {}</p>",
+                empty.join(", ")
             ));
         }
-        for p in &self.archived {
-            rows.push_str(&format!(
-                "<tr class=\"ix-archived\"><th scope=\"row\"><a href=\"{}\">{}</a> <span class=\"meta\">· archived</span></th><td class=\"num\" colspan=\"3\">{}</td><td class=\"num ix-w\"></td><td class=\"num\"></td><td class=\"ix-at\">{}</td></tr>",
-                esc(&p.href()),
-                esc(&p.name),
-                esc(&ui::count(p.counts.total(), "step", "steps")),
-                ui::ago(&p.changed)
+        if !self.archived.is_empty() {
+            out.push_str(&format!(
+                "<p class=\"home-others meta\">Archived: {}</p>",
+                self.archived
+                    .iter()
+                    .map(|p| format!(
+                        "{} ({})",
+                        link(p),
+                        esc(&ui::count(p.counts.total(), "step", "steps"))
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
-        format!(
-            "{}<div class=\"scroll ix-wrap\" tabindex=\"0\" role=\"region\" aria-labelledby=\"index\"><table class=\"ix\"><thead><tr><th scope=\"col\">Project</th><th scope=\"col\" class=\"num\">Units</th><th scope=\"col\" class=\"num\">Running</th><th scope=\"col\" class=\"num\">Stopped</th><th scope=\"col\" class=\"num ix-w\">Waiting</th><th scope=\"col\" class=\"num\">Done</th><th scope=\"col\" class=\"ix-at\">Changed</th></tr></thead><tbody>{rows}</tbody><tfoot><tr><th scope=\"row\">All</th><td class=\"num\">{units}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num ix-w\">{}</td><td class=\"num\">{}</td><td class=\"ix-at\"></td></tr></tfoot></table></div>",
-            ui::section_head("index", "Index", ""),
-            total[0],
-            total[1],
-            total[2],
-            total[3],
-        )
+        out
     }
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
         let mut html = String::from("<div id=\"projects\" class=\"home\">");
@@ -505,10 +466,7 @@ impl HomeView {
                 }
                 html.push_str("</div></section>");
             }
-            html.push_str(&format!(
-                "<section class=\"home-index\" aria-labelledby=\"index\">{}</section>",
-                self.index()
-            ));
+            html.push_str(&self.others_line());
         }
         html.push_str(&format!(
             "<span class=\"page-title\" hidden data-page-title=\"{} · sluice\" data-title-src=\"/title\"></span></div>",
@@ -670,10 +628,7 @@ fn function_head(snapshot: &DashboardSnapshot, nav: &NavView) -> TrustedHtml {
         summary.push_str(&format!(" {retired} retired."));
     }
     if broken > 0 {
-        summary.push_str(&format!(
-            " {} cannot be loaded.",
-            ui::count(broken, "one", "of them")
-        ));
+        summary.push_str(&format!(" {broken} cannot be loaded."));
     }
     TrustedHtml::owned(format!(
         "<div id=\"fns-band\" class=\"band-wrap\">{}</div>",

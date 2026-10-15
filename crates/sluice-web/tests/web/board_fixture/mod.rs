@@ -240,8 +240,22 @@ impl Fixture {
             .await
             .unwrap();
         let status = response.status();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        (status, String::from_utf8(body.to_vec()).unwrap())
+        let body = String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        // a page names each element once: a patch or a link finds only the first
+        if path != "/_ui" {
+            let mut seen = std::collections::BTreeSet::new();
+            for id in body.split(" id=\"").skip(1) {
+                let id = &id[..id.find('"').unwrap_or(0)];
+                assert!(seen.insert(id), "{path} repeats the id {id:?}");
+            }
+        }
+        (status, body)
     }
     pub async fn post(&self, path: &str, form: &[(&str, &str)]) -> (StatusCode, Value) {
         let body = url::form_urlencoded::Serializer::new(String::new())

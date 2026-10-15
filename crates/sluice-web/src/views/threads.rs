@@ -614,16 +614,23 @@ impl InboxView {
                     )
                 }
             },
-            _ => page_head(self.title(), &TrustedHtml::default()),
+            // the page's one tab row, For you, Questions and History, under its name: the
+            // nav's row above it is the site's or the project's, never a second row of these
+            _ => super::ui::page_head_with(
+                &TrustedHtml::default(),
+                &TrustedHtml::owned(super::ui::esc(self.title())),
+                &TrustedHtml::default(),
+                &self.switch(),
+            ),
         };
         TrustedHtml::owned(format!(
             "<div id=\"messages-band\" class=\"messages-band\">{}</div>",
             head.as_str()
         ))
     }
-    /// The messages' switch on the tab row's right (For you, Questions, History), drawn as the
+    /// The messages' switch under the page's name (For you, Questions, History), drawn as the
     /// plan's view switch is: the page it is on filled. A thread has none.
-    pub fn switch(&self) -> TrustedHtml {
+    fn switch(&self) -> TrustedHtml {
         if self.view == MessageView::Thread {
             return TrustedHtml::default();
         }
@@ -660,7 +667,6 @@ impl InboxView {
             path,
             &super::Frame {
                 head: self.band(),
-                tools: self.switch(),
                 ..Default::default()
             },
         )
@@ -1237,10 +1243,15 @@ impl Conversation {
         for row in &self.rows {
             let Row::Group(g) = row else { continue };
             for e in &g.entries {
+                // the step's own word on its own page is its agent's latest, whoever it went to
                 let who = format!(
                     "<b>{}</b>{}{}",
-                    e.from.html(&self.project),
-                    if matches!(e.to, Who::Anyone) {
+                    if e.from == Who::This {
+                        TrustedHtml::owned("Latest from the agent".into())
+                    } else {
+                        e.from.html(&self.project)
+                    },
+                    if matches!(e.to, Who::Anyone) || e.from == Who::This {
                         String::new()
                     } else {
                         format!(

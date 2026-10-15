@@ -128,7 +128,8 @@ async fn slow_chromium_the_step_page_components_keep_their_state_through_a_patch
         // the message box keeps what is typed, the Types switch its state and the fold its
         // opening through a patch of their panels
         browser.eval("document.querySelector('#tt-messages').click()").unwrap();
-        browser.eval("document.querySelector('#tp-messages textarea').value = 'Half a thought'").unwrap();
+        // typed: its input event keeps the words in the box's signal (`ui::draft_signals`)
+        browser.eval("(t => { t.value = 'Half a thought'; t.dispatchEvent(new Event('input', {bubbles: true})); })(document.querySelector('#tp-messages textarea'))").unwrap();
         rt.block_on(note(&f, "alpha-build", "One more thing: tag the release."));
         rt.block_on(long_output(&f));
         browser.wait("document.querySelector('#tt-messages .n')?.textContent === '2'").unwrap();

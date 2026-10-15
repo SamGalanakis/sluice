@@ -1576,6 +1576,26 @@ impl StepView {
             super::ui::count(self.outputs_unset().len(), "output", "outputs")
         )
     }
+    /// So far's line for the outputs its run has not set: each by its name and type ("Not set
+    /// yet: entries int, notes string"), so a running step says what it will hand on.
+    pub fn unset_line(&self) -> TrustedHtml {
+        let unset = self.outputs_unset();
+        if unset.is_empty() {
+            return TrustedHtml::default();
+        }
+        TrustedHtml::owned(format!(
+            "<p class=\"meta d-unset\">Not set yet: {}</p>",
+            unset
+                .iter()
+                .map(|f| format!(
+                    "<code>{}</code> <span class=\"ty\">{}</span>",
+                    super::ui::esc(&f.name),
+                    super::ui::esc(f.ty.trim_matches('"'))
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
     /// A failed step's next move is Retry: the primary button. One the owner cancelled was
     /// stopped on purpose, so Retry stays a plain button.
     pub fn retry_first(&self) -> bool {
@@ -1823,13 +1843,12 @@ impl StepView {
                 )));
             }
             if self.is_quiet() {
-                parts.push(pill(
+                parts.push(super::ui::status_pill(
+                    Shown::Quiet,
                     &format!(
                         "quiet {}",
                         super::ui::duration_text(heard.unwrap_or(0) as f64)
                     ),
-                    Tone::Quiet,
-                    None,
                 ));
                 parts.push(own(format!(
                     "not heard from since {}",
@@ -2436,11 +2455,13 @@ fn load_conversation(
                 );
             }
         }
+        // and the latest word to it, unless that is the answer already quoted under it
         if step.running()
             && let Some(inbound) = items[own.map_or(0, |i| i + 1)..]
                 .iter()
                 .rev()
                 .find(|m| m.message.from != id)
+            && !quoted.iter().any(|q| q.id() == inbound.id())
         {
             quoted.push(inbound.clone());
         }

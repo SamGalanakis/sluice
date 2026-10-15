@@ -269,8 +269,11 @@ async fn the_day_patches_only_when_its_runs_change() {
             })..],
     );
     let listed = cell.split("<details").next().unwrap();
-    assert!(listed.contains("tt-failed\">"), "{cell}");
-    assert_eq!(listed.matches("tt-failed").count(), 2, "{cell}");
+    assert!(
+        listed.contains("<span class=\"pill look\"><span class=\"g g-failed\""),
+        "{cell}"
+    );
+    assert_eq!(listed.matches("g g-failed").count(), 2, "{cell}");
 }
 
 async fn serve(router: Router) -> (String, tokio::task::JoinHandle<()>) {
@@ -426,28 +429,24 @@ async fn home_attention_and_reader_day() {
         };
         assert!(at("almanac") < at("lanes"), "{grid}");
         assert!(at("lanes") < at("chores"), "{grid}");
-        // a project with no steps is in the index only
+        // a project with no steps has no card: a line under the cards names it
         assert!(!grid.contains("aria-label=\"plain\""), "{grid}");
         let almanac = between(grid, "aria-label=\"almanac\"", "</article>");
-        // its card is its plan in brief: the plan's sentence, what needs the owner counted and
-        // linked to the plan's Needs you, At work's groups a line each, what finished lately
+        // its card is its plan in brief: the plan's sentence (which counts what needs the
+        // owner, said once), At work's groups a line each, what finished lately by name
         assert!(
             almanac.contains("<p class=\"pm-summary\"><a class=\"ask\""),
             "{almanac}"
         );
-        assert!(
-            almanac.contains(&format!(
-                "<p class=\"pm-needs\"><a href=\"/projects/id/{}#needs\">4 items need you</a></p>",
-                n.almanac
-            )),
-            "{almanac}"
-        );
+        assert!(!almanac.contains("need you"), "{almanac}");
         assert!(
             almanac.contains("<ul class=\"pm-groups\"><li><b>"),
             "{almanac}"
         );
         assert!(
-            almanac.contains("<p class=\"pm-done-h\">Finished lately</p>"),
+            almanac.contains(
+                "<p class=\"pm-done\"><span class=\"pm-done-h\">Finished lately:</span> <a href="
+            ),
             "{almanac}"
         );
         // no step's own rows, no square a unit
@@ -465,11 +464,14 @@ async fn home_attention_and_reader_day() {
             "{today}"
         );
         assert!(today.contains("<a href=\"/day\">Timetable</a>"), "{today}");
-        // the index: every project, the one with no steps too
-        let index = between(&home, "<table class=\"ix\">", "</table>");
-        for name in ["almanac", "chores", "lanes", "plain"] {
-            assert!(index.contains(&format!(">{name}</a>")), "{name}: {index}");
-        }
+        // no index repeats the cards' counts; the project with no steps is named under them
+        assert!(!home.contains("class=\"ix\""), "{home}");
+        let others = between(&home, "<p class=\"home-others meta\">", "</p>");
+        assert!(
+            others.starts_with("<p class=\"home-others meta\">No steps yet: <a href=")
+                && others.contains(">plain</a>"),
+            "{others}"
+        );
         // the answer's words post from its form
         let response = f
             .router()
@@ -562,13 +564,12 @@ async fn home_attention_and_reader_day() {
         "{failed}"
     );
         assert!(
-            failed.contains("<span class=\"tt-out tt-look tt-failed\">"),
+            failed.contains(
+                "<span class=\"tt-out\"><span class=\"pill look\"><span class=\"g g-failed\""
+            ),
             "{failed}"
         );
-        assert!(
-            failed.contains("failed <span class=\"tt-took\">18m</span>"),
-            "{failed}"
-        );
+        assert!(failed.contains("</span>failed 18m</span>"), "{failed}");
         // a-6-draft runs: the blue, ticking
         let running = row(&page, &hour(70 * 60, 0));
         assert!(
@@ -578,10 +579,11 @@ async fn home_attention_and_reader_day() {
             "{running}"
         );
         assert!(
-            running.contains("<span class=\"tt-out tt-live\">"),
+            running.contains("<span class=\"tt-out\"><span class=\"pill run\">"),
             "{running}"
         );
-        // a succeeded run: its check and how long, said in words for a screen reader
+        // a succeeded run: its check and how long on the sky pill, said in words for a screen
+        // reader
         let done = row(&page, &hour(3 * 3600, 0));
         assert!(
             done.contains(

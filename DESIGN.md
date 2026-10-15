@@ -659,8 +659,8 @@ wordmark keeps its own weight.
 
 | Token | Size | Role |
 |---|---|---|
-| `--t-title` | 22px/28px (20px/26px on a phone) | a page's name, a step's name (two lines at most, the whole in its tooltip), the title face |
-| (section) | 18px/24px, 600 | a section's head (`ui::SectionHead`), a settings section, a tab panel's head |
+| `--t-title` | 26px/32px (22px/28px on a phone) | a page's name, a step's name (two lines at most, the whole in its tooltip), the title face |
+| `--t-section` | 20px/26px, 600 | a section's head (`ui::SectionHead`), a settings section, a tab panel's head: a clear step under the page's name and over a card's title (18px) and the body |
 | `--t-lead` | 17px/24px | the latest sentence that leads a step's Now |
 | `--t-body` | 15px/22px | body, a sentence in Needs you, a project's summary on home |
 | `--t-md` | 14px/20px | tabs, a module's body, a quiet link |
@@ -746,8 +746,9 @@ row under it and the page's head on the paper under the row.
   Day's date and clock, the Functions' counts). No page carries a description blurb.
 - **The row** (`.subnav`): its sections as pill tabs (`ui::tabs`: Plan, Day, Stats, Messages,
   Log, Functions, Settings; the current one on `paper-2` at weight 600), a count line (`Frame::meta`), and at the right its tools
-  (`Frame::tools`: a find field and the view switch on a plan, the messages' switch on For you,
-  Questions and History). A hairline closes it. On a phone the tabs stay one line (all seven fit
+  (`Frame::tools`: a find field and the view switch on a plan). A hairline closes it. A page
+  has one row of tabs: For you, Questions and History carry their switch under the page's name,
+  in the head, not in the row. On a phone the tabs stay one line (all seven fit
   at 390px; a narrower screen scrolls them sideways within themselves) and the tools take a
   line of their own.
 - **Where they stand**: the row comes first on every page, right under the nav bar, and the
@@ -762,7 +763,7 @@ is a bar of pill links in the row (`ui::switch`): the current view on `paper-2` 
 (`aria-current`), the others muted words. A link asks the server for its view (`?view=`, kept
 in the project's `sluice_view_<id>` cookie); `sluice-board` shows the chosen view at once and
 keeps it per project. The messages' switch (For you,
-Questions, History) and the log's presets are the same bar.
+Questions, History, under the page's name) and the log's presets are the same bar.
 
 ## Details
 
@@ -857,9 +858,13 @@ Each cell's state is said in words to a screen reader, and a cell with a page li
 ### Status ramp
 
 Each state, in the table's priority order, with its glyph's tone (`.g-<key>`) and the cell it
-draws:
+draws. A state said as a pill is `ui::status_pill` on every page (a plan row's stage, the
+Day's runs, the Stats' slowest runs, a step's quiet, a broken fn): its glyph and its words in
+its cell's tone, the blue running, the sand needing a look, the sky done, an outline waiting.
+A loose step's pill says its state once ("quiet 3h", never "quiet · quiet 3h").
 
-- **Failed**: Lucide `circle-x`, solid, in ink; a look cell on sand. Never coral.
+- **Failed**: Lucide `circle-x`, solid, in `sand-ink` everywhere (on the sand of a look cell or
+  pill, `sand-mark`); a look cell on sand. Never coral.
 - **Cancelled**: `circle-stop` in muted ink, a stop on purpose; a look cell.
 - **Stale**: `rotate-cw` in `sand-ink`; a look cell.
 - **Quiet**: `hourglass` in `sand-ink`; a look cell with running's blue edge.
@@ -926,7 +931,7 @@ It is the unit page's body, what a plan row opens in place, and a step's Runs ta
   hour-long run look alike and lie about the gaps. The one exception is the step view in the
   plan's drilldown (In the plan, below), which takes its row's log scale so the run under the
   row reads exactly as the row's track does; a unit's whole history stays linear everywhere
-  else. The labels (data mono, 11.5px) sit at a nice spacing
+  else. The labels (sans, 12px, as At work's axis) sit at a nice spacing
   of the scaled time, 17% apart at least, each with a hairline down the rows; "now" is a
   `run-ink` line with its word, which `sluice-steps` moves on the clock's tick (every five
   seconds and after every patch; `data-now`: the last stretch's start, place and rate), as it
@@ -1049,8 +1054,11 @@ answered by `views::write`:
 
 ```html
 <form id="<id>" method="post" action="<route>"
-  data-on:submit="@post(el.getAttribute('action'), {contentType: 'form',
-    headers: {'sluice-form': el.id}, retry: 'never', retryMaxCount: 0}).catch(() => {})"
+  data-on:submit="evt.submitter?.setAttribute('data-pressed', '');
+    @post(el.getAttribute('action'), {contentType: 'form',
+    headers: {'sluice-form': el.id}, retry: 'never', retryMaxCount: 0})
+    .catch(() => { …its notice says sluice did not answer… })
+    .finally(() => evt.submitter?.removeAttribute('data-pressed'))"
   data-indicator__root="_busy<hash>" data-attr:aria-busy="$_busy<hash> && 'true'">
   …its fields, its submit…
   <p id="<id>-said" class="form-said" role="status"></p>
@@ -1061,21 +1069,25 @@ answered by `views::write`:
   Datastar prevents the page load
   ([Actions: @post, contentType](https://data-star.dev/reference/actions)); a form with a
   file is sent as multipart (`enctype`). `retry: 'never'` because a write is not repeated on its
-  own; the `.catch` keeps a write that could not be sent from being an unhandled rejection
-  (Datastar rejects the action then, after its `retries-failed` event).
+  own. A write that could not be sent rejects the action (after Datastar's `retries-failed`
+  event, which draws nothing), and its `.catch` says so in the form's notice as an alert:
+  "Sluice did not answer: is it running? Try again in a moment." Nothing is swallowed.
 - `data-indicator` sets the busy signal while the request runs, and `data-attr:aria-busy`
-  draws it ([Attributes: data-indicator, data-attr](https://data-star.dev/reference/attributes));
-  the stylesheet gives `form[aria-busy=true]`'s pressed button a quiet ring.
+  draws it ([Attributes: data-indicator, data-attr](https://data-star.dev/reference/attributes)).
+  The submit event's `submitter` is marked `data-pressed` until the action settles: the
+  stylesheet turns a quiet ring on that button and dims the form's others, and none takes a
+  second press while the form is busy.
 - The answer is SSE ([SSE events](https://data-star.dev/reference/sse_events)), and only to the
-  form that asked (its `sluice-form` header): a write taken empties the form's notice and closes
-  the confirmation it was sent from; one that says something ("Saved.", "Sent to @lead.") puts
-  it in the notice as a status; a refusal puts sluice's words there as an alert, what was typed
-  kept. A refusal to a form is a 200, because Datastar applies only a 200's events; any other
+  form that asked (its `sluice-form` header). It patches elements and signals, never script: a
+  write taken empties the form's notice, and `sluice-dialog` closes the confirmation it was sent
+  from on that answer (a `datastar-fetch` `finished` with no alert in its notice); one that says
+  something ("Saved.", "Sent to @lead.") puts it in the notice as a status, and a message sent
+  also empties its box by patching the box's signals (`ui::draft_signals`, bound to its words
+  and its "ask" box); a refusal puts sluice's words there as an alert, what was typed kept. The
+  one exception is a deleted project's page, which the answer sends home with the Datastar
+  SDK's redirect (an `ExecuteScript` of `window.location`, the documented way). A refusal to a form is a 200, because Datastar applies only a 200's events; any other
   client gets 204, or the JSON error at its status. A notice is put in whole (mode `replace`),
   because a confirmation's form sits in the dialog, which no morph enters.
-- When sluice does not answer at all, Datastar fires `datastar-fetch` `error` or
-  `retries-failed` and draws nothing; `components.js` puts "Sluice did not answer: is it
-  running? Try again in a moment." in that form's notice.
 - Display preferences are not a form: the theme radios and the types switch are bound
   (`data-bind:theme__root`, `data-bind:types__root`) and a change posts the signals to
   `/settings` (`@post('/settings')`, JSON), answered 204 with the cookies.
@@ -1103,7 +1115,7 @@ The helpers (`crates/sluice-web/src/views/`):
 | Status line | `ui/head.rs` (`Dot`, `status_line`) | how a thing stands: its state's glyph (the coral dot when it asks the owner) and one muted sentence |
 | Section head | `ui/section.rs` (`SectionHead`, `section_head`) | a region's name at 18px/600, its count, a note, one action |
 | Tabs | `ui/tabs.rs` (`Tab`, `tabs_open`/`close`, `panel_open`/`close`, `switch`) | pill tabs over panels; the view switch and the messages' switch as pill links |
-| Buttons | `ui/button.rs` (`Btn`, `submit`, `link`) | Primary (the next move, filled navy), Outlined, Quiet, Danger, Icon (44px, a plain glyph) |
+| Buttons | `ui/button.rs` (`Btn`, `submit`, `link`) | Primary (the next move, filled navy), Outlined, Quiet, Danger, Icon (44px, a plain glyph); one height, 32px (44px on a phone), a quiet text button its line's on a desktop; the filled one is the page's next move, so a group's "Retry all" is filled and "Set all aside" (one wording everywhere) outlined |
 | Pills | `ui/pill.rs` (`Tone`, `pill`, `pill_link`, `ask_link`) | a fact set apart in its state's tone: plain, muted, run (soft blue), look, quiet (sand), done; `ask_link` the way to an open question, its coral dot and "Waiting on your answer" (never a coral pill) |
 | Needs you | `ui/need.rs` (`Mark`, `need_line`) | an item a line: its mark (the coral dot for a question, else its state's glyph from the status table), its sentence, its one action, its × |
 | Question | `ui/question.rs` (`QuestionCard`, `answer_link`, `way_on`); `threads::MessageItem::question_card`; `templates/answer.html` | a question to the owner, one way everywhere: as a line it is `need_line` with `Mark::Ask`; as a card, its coral dot and "Question for you", who asked and when, its title (when it has one of its own), its words whole, one filled Answer that unfolds its form and a quiet Close question |
@@ -1126,7 +1138,7 @@ why each is script rather than Datastar attributes:
 | `sluice-tabs` | `components.js` | an ARIA tablist over its panels: arrows wrap, Home and End; the choice in `$$tab` and the page's `tab` signal, its `current` kept through a patch; an anchor in a panel opens its tab | a tablist's roving focus and an anchor's tab are imperative focus and hash work across many elements |
 | `sluice-fold` | `components.js` | Show all and Show less over a long text, said only when it is cut; or a More fold kept open per project or opened on a wide screen | whether a text is cut is a layout measurement, and the fold's memory is this browser's |
 | `sluice-confirm` | `components.js` | its summary opens the page's one dialog with its form; disabled while its summary is `aria-disabled` | moving a form into a modal `<dialog>` and back, and `showModal`, are DOM calls |
-| `sluice-dialog` | `components.js` | the page's one confirmation dialog: keep closes it, Tab stays in it, closing puts the form back and the focus on its opener; a form in it runs its `@post` in its host | a focus trap and focus return are imperative; and a form moved out of its own host needs a host to run its actions in |
+| `sluice-dialog` | `components.js` | the page's one confirmation dialog: keep closes it, Tab stays in it, a write taken from its form (its answer leaving no alert) closes it, closing puts the form back and the focus on its opener; a form in it runs its `@post` in its host | a focus trap and focus return are imperative; closing a modal `<dialog>` is a method call no patch makes; and a form moved out of its own host needs a host to run its actions in |
 | `sluice-conversation` | `components.js` | Jump to latest, and a thread's page opening at its end | scrolling to and focusing a message is imperative |
 | `sluice-answer` | `components.js` | a question's Answer opens its box, drawn by `openui.js` from the question's OpenUI program; once answered the question gives way at once to the line that says so | the OpenUI program is parsed and drawn in the browser, and the answered line takes the focus |
 | `sluice-menu` | `components.js` | the project switcher, display preferences and every ⋯ and ⓘ: a click elsewhere or Escape closes it and gives the focus back, its button says `aria-expanded`, the arrows, Home and End move through it, a sub-menu opens one level at a time, the panel kept inside the window | a click elsewhere, focus return, a menu's keys and fitting the panel to the window are imperative |
@@ -1137,13 +1149,13 @@ why each is script rather than Datastar attributes:
 | `sluice-keys` | `components.js` | `/` finds, `[` and `]` move the drawer, `g` then a letter goes to a page, `?` opens Keyboard shortcuts; never while typing or under a dialog | a two-key sequence and its exceptions over the whole page |
 | `sluice-steps` | `components.js` | the step view: a row's click opens its step, the arrows move between rows, the selected row in `selected`; its now line and running bars move on the clock's tick | roving focus, and marks placed by time on each tick |
 | `sluice-day` | `components.js` | the day line: its now rule and running bars move on the clock's tick | marks placed by time on each tick, measured against the window |
-| `sluice-drawer` | `sluice.js` | the step drawer: `#step:<id>` opens it beside the plan (over it below 1200px, a modal dialog; a sheet on a phone) and binds the step's stream | the address's fragment, `inert` behind a modal, its focus trap and the stream binding it swaps per step |
+| `sluice-drawer` | `sluice.js` | the step drawer: `#step:<id>` opens it beside the plan (over it below 1200px, a modal dialog; a sheet on a phone) and binds the step's stream; it follows the browser's own `hashchange` (no `pushState`, no event of its own): its close is a plain link to `#`, the scrim and Escape set `location.hash` from `data-on` (`data-on:keydown__window`), and a step link's click sets the hash | `inert` behind a modal, its focus trap, `[` and `]` (the plan's order as drawn, read from its links) and the stream binding it swaps per step |
 | `sluice-board` | `board.js` | a project's page: the view switch at once (kept per project), the board column's height and its "More below" cue, a board Button's say sent in place, a step's new state said once in `#announce`, and after a form with `data-focus-after` is taken the focus on that element once a patch draws it | switching views without a load, fitting a column to the window, announcing changes and moving the focus |
 
-Beside the components, two pieces of script belong to every page rather than a part:
+Beside the components, one piece of script belongs to every page rather than a part:
 `nav.js`'s clock and title (below: a time that ticks in the reader's own words and zone is
 not something an attribute draws, and a hidden tab's title is fetched while its stream rests),
-and the network-failure notice (Writes, above: Datastar fires the event but draws nothing).
+and nothing else: a write sluice never answered is said by its own form's `.catch` (Writes).
 
 **The clock is infrastructure, not a component.** `nav.js` ticks every `<time>` (`data-since`
 a two-unit duration, `data-ago` "12m ago", `data-clock` a time of day on the reader's own clock,
@@ -1255,10 +1267,11 @@ the page's stream. A lane that redraws a page writes its notes here.
     in the project's .env), then Retry all."). A cancel stays here: a cancelled step leaves its
     unit unfinished and holds the steps after it, and the status table counts it as needing a
     look everywhere, so the owner still decides: Retry, or Settle as done. Setting aside (the ×,
-    Set the rest aside) is about attention only and never settles. A count and "Set all aside"
-    stand in the head; it takes the stops and silences only, and reads "Set the rest aside"
-    while a question is open: a question keeps its own ×, so the head and the well never
-    disagree about it. An item set aside leaves a line under the well for ten minutes,
+    Set all aside) is about attention only and never settles. A count and "Set all aside"
+    stand in the head, said the same in every project; it takes the stops and silences only: a
+    question keeps its own ×, so the head and the well never disagree about it. The well's one
+    filled action is a question's Answer; Retry all, Retry, Settle as done and Message it are
+    outlined everywhere. An item set aside leaves a line under the well for ten minutes,
     "Set aside: the silence of <title>" and Undo, and comes back by itself when it changes; with
     script the × and Undo post in place, the focus going to Undo and back to the item. With
     nothing to say, no well: one muted line, "Nothing needs you. 4 set aside.". Each Set aside
@@ -1278,18 +1291,21 @@ the page's stream. A lane that redraws a page writes its notes here.
     in place; a group with nothing remarkable folds whole to its own line,
     "article · 23 running · each heard from in the last 27m". A stop is in Needs you, not a
     row, so it keeps no healthy sibling in sight. A row (8px,
-    `paper-2` on hover and open) is a grid: the badge (a 30px circle, an engine's name; drawn
+    `paper-2` on hover and open) is a grid: the badge (a 52px chip, an engine's name; drawn
     only when rows run on more than one thing, never "fn"), its title in ink at weight 600 with
     its owner muted and under it its recipe's view or its last message on one line, muted (who
-    said it, never when); its meta one statement about time: the stage pill (the state's
-    glyph, the stage and how long it has run, on `paper-2`, 999px), then "heard 12m ago" when
+    said it, never when); its meta one statement about time, two lines at most: the stage pill
+    (`ui::status_pill`: the state's glyph, the stage and how long it has run, in the state's
+    tone), then "heard 12m ago" when
     it was heard from since its run began (in `ink` from 15 minutes, at weight 600 from 30, so
     a silence shows before the quiet pill says it; the sand stays for quiet), else "no word
-    yet" muted; once quiet, the stage pill drops its time and the quiet pill, solid sand with
-    its ink (`on-sand`) in both schemes, says it; its
+    yet" muted; once quiet, the one pill turns sand and says how long it has been silent
+    ("scan · quiet 3h"); its
     track (its last twelve hours on a log scale, `clamp(180px, 34cqi, 560px)` wide, so a wide
     screen gives its room to the time rather than to a gap after the title); the live dot. Waiting rows follow the running
-    ones. A line ends it: "4 waiting on earlier work · 25 done, the last 2h ago". Under 760px
+    ones. A line ends it: "4 waiting on earlier work · 25 done, the last 2h ago". The head
+    counts as the summary sentence does: a blocked, held or queued unit waits, so "At work · 2
+    units · 3 waiting", or "Nothing at work · 3 waiting". Under 760px
     of the pane the row stacks: badge and title, then the meta, then the track full width; the
     long axis gives way to "12h … now" over each group's first track.
     **The track's tones**, each at least 3:1 on the paper in both schemes: a run going
@@ -1313,7 +1329,9 @@ the page's stream. A lane that redraws a page writes its notes here.
     summary) or else its last message, cut to 160 characters. The units that left neither
     share one muted line after the cards: "3 more finished with nothing to say:" and their
     titles as links. "since 14:02" and "Mark as seen" sit in the head; with no look kept, the
-    head says "Finished lately" and the section holds the latest four.
+    head says "Finished lately" and the section holds the latest four. Marked seen with nothing
+    finished since, the section is one muted line, "Seen through 04:21 · Undo"; Undo takes the
+    look back.
   - **Done**, asked for (Show: Done, a find, a recipe's units): the index, a dense list newest
     first in columns: finish time, glyph, title, how long it took (in `ink-muted`, like every
     finished duration: the blue is for what runs).
@@ -1351,8 +1369,10 @@ the page's stream. A lane that redraws a page writes its notes here.
   1 failed", opening to a line each, the tool, its key argument and how long it took, the latest
   first); under Now on a running step, **Its brief** (its prompt's first paragraph, cut at about
   280 characters, "Whole brief" opening Inputs) and **So far** (the outputs it has set, an earlier
-  run's said so and muted, or "2 outputs not set yet", "All outputs" opening Outputs); beside
-  them, as titled modules, what it waits on (or when it starts), what it comes after, its
+  run's said so and muted, then "Not set yet:" and each unset output by name with its type,
+  "All outputs" opening Outputs); beside
+  them, as titled modules, what it waits on (or when it starts), "Runs after" (what it comes
+  after), its
   progress and, once it has stopped running, its key output. The columns stand one over the other on a narrow
   sheet (the drawer, a phone, to 900px of sheet), and at seven and five twelfths from there.
   Activity is its turns as rows numbered in data mono; Messages its conversation as message
@@ -1367,16 +1387,19 @@ the page's stream. A lane that redraws a page writes its notes here.
   step that needs the owner, in the view's order: the one asking as the question card (Answer the way to its
   step, Close question in place), a stop in the sand well with why it stopped, each headed by its stage with its Details.
 - **The inbox, Questions and a thread**: the head names the page (a thread its step's title,
-  its way back over it and its Details); the messages' switch is in the row. Questions to the
-  owner
-  come first as question cards, answered in place (Answer and Close 44px; on
-  a phone a whole-width card), one a row to 900px of sheet, two from there; then those between agents, the ones nobody waits on and the unread notes
+  its way back over it and its Details); the messages' switch is under the name. Questions to
+  the owner
+  come first as question cards, answered in place: the card's head is its kind and who asks,
+  its ⋯ in the head's corner; Answer filled and Close a quiet button beside it, at the
+  one button height (32px, 44px on a phone), an answer's choices never stretched to a bar (on
+  a phone a whole-width card); an answered or closed card is replaced whole by the one line
+  that says so ("Closed just now"), drawn once, one a row to 900px of sheet, two from there; then those between agents (a step's latest message titled "Latest from the agent"), the ones nobody waits on and the unread notes
   (each its thread's name and project, its notes, then Mark read after them). A thread's page
   keeps its thread name and project in its Details.
   A conversation's messages are rows apart by hairlines, each with its Details (its id, its
   thread, what it replies to), an open question to the owner as the question card with its reply
   under it, the message box under a hairline.
-- **Home** (`/`, `views::home`): the projects as cards and an index, built from the plan's
+- **Home** (`/`, `views::home`): the projects as cards, built from the plan's
   parts. The head is "All projects" and one sentence of counts alone: "3 questions for you,
   2 failed, 1 quiet; 63 running in 4 projects." Which project is each card's to say. "Runner
   stopped" sits under it on the sand, without a rule. For you (eight columns) is the Needs-you
@@ -1384,18 +1407,18 @@ the page's stream. A lane that redraws a page writes its notes here.
   where it is answered, Answer and the ×. An answered one becomes the line that says so. Today
   (four columns) is a project's last day in a line and the way to the day; with no question,
   For you is one line and Today a row across. Then Projects, ordered by what needs the owner:
-  a card a project (`.pm.card`, as many to a row as fit 460px each; a row's cards as tall as
-  its tallest, so the grid has no holes). A card holds:
+  a card a project (`.pm.card`, as many to a row as fit 460px each, each as tall as what it
+  says). A card holds:
   - its name and icon in the title face at 20px/26px, its state's glyph and size, its words muted;
-  - its plan's sentence at body size;
-  - "4 items need you", linking its plan's Needs you;
+  - its plan's sentence at body size, which counts what needs the owner once;
   - At work's groups, a line each, as the plan's group lines read, with its remarkable units
     named;
-  - "Finished lately", the plan's Finished component, three at most;
-  - the way to its plan and its day. Then the Index, a table of every
-  project's units by band on hairlines, archived ones muted, its counts 10ch each so on a wide
-  screen they stand together at the right; on a phone it drops Changed and Waiting so it fits
-  without a hidden scroll, and its links and Today's are 44px targets.
+  - "Finished lately:" and the last three by name, each its unit's link (the plan says what
+    they produced);
+  - the way to its plan and its day.
+  No table repeats the cards' counts: under them, a muted line names the projects with no
+  steps yet and another the archived ones (with their steps counted). Its links and Today's
+  are 44px targets on a phone.
 - **Day** (`/day`, `/projects/id/<p>/day`, `views::day`): the day as a timetable. The head:
   "Day", its note the date. The day line under the day's sentence: a
   row a project, its name in the first 132px, its runs as 5px
@@ -1404,13 +1427,15 @@ the page's stream. A lane that redraws a page writes its notes here.
   timetable: a 64px hour column (the hour in data mono at 18px/600, its day where it changes, its runs counted),
   then a column a project; each run a line, three columns: its minute in mono (never wrapped),
   its unit's title in ink and its stage muted (two lines at most; its step and run in the
-  link's title), then at the right its glyph and duration (sky-ink check), its word on a sand pill
-  when it needs a look, or "running 43m" on a soft blue pill, never wrapped. A run still going
+  link's title), then at the right its status pill (`ui::status_pill`): its duration on the
+  sky with the check, its word and time on the sand when it needs a look, or "running 43m" on
+  the soft blue, never wrapped. A run still going
   reads as its step does in the status table, so a quiet one says "quiet 3h" on the sand; a line is at most
   480px, so its outcome stays by its name on a wide screen. Under 400px of frame the title takes
   a line of its own under the minute and outcome. A busy hour (more than six in a cell) lists
   only its notable runs (not a success, still running, or an hour or longer) and folds the successes behind a muted "+23 more succeeded, 1m to 12m" that opens
-  in place; four projects or more stack under each hour below
+  in place; past eight listed, what still runs folds the same way behind "+14 more running",
+  every look kept in sight; four projects or more stack under each hour below
   1100px of content, every project below 640px. Two or more hours in a row in which no run started are one
   line, the hours in data mono and "· nothing ran" muted ("06–17 · nothing ran"). A cell's runs
   flow into columns at least 400px wide, as many as the frame's width allows (a line still at
@@ -1425,8 +1450,9 @@ the page's stream. A lane that redraws a page writes its notes here.
   (`?window=`). On the paper four sections, each under its section head: **Durations by stage**, a table a recipe in the project's recipe order (its
   name, how many units and runs) with a row a stage in the recipe's order: how many of its runs
   succeeded ("Succeeded") and their median, p90 and longest in data mono, then, under "median ·
-  p90", the median drawn as a sky-ink bar inside its p90 in pale sky with a sky-ink edge,
-  against the recipe's longest p90 (no section line explains it); the
+  p90", the median drawn as a sky-ink bar inside its p90 in pale sky with a sky-ink edge, on
+  one scale for every table (minutes on a log to the longest p90 of any stage, as the plan's
+  track reads time), so a bar is the same time in each; the
   units of no recipe and the loose steps last, "Without a recipe", a row a step (the busiest
   first). A unit the plan has retired goes with the recipe whose stages hold every stage it ran
   with the fewest left over. **Outcomes**, the same tables: succeeded, failed, cancelled,
@@ -1444,14 +1470,15 @@ the page's stream. A lane that redraws a page writes its notes here.
 - **Log** (`views::log`): the head says "Log" and, as its note, what the page shows ("42
   records on this page; the newest …"). The log is the records whole, so it keeps each record's
   seq and names its step by title with its id after it; under the head the presets as one
-  view-switch bar beside the filters, the note on what is left out, then Records under its
+  view-switch bar beside the filters (Kinds a closed fold whose list opens as a popover over
+  the records, in the flow on a phone), the note on what is left out, then Records under its
   section head, the table under a hairline with seq, time and kind in data mono. A
   message row is its sender and recipient as name links, then its words in plain muted text and
   one small "thread" link after them.
 - **Functions** (`/fns`): the head says "Functions" and counts them in its note; the picker and
   the
   find on one bar, the groups' index, then each group under its section head, its
-  entries on the grid as many to a row as fit 400px, each under a hairline (a broken one saying its problem first), its name in data mono.
+  entries on the grid as many to a row as fit 400px, each under a hairline (a broken one saying its problem first under a sand "cannot be loaded" status pill), its name in data mono; the note counts them ("1 cannot be loaded").
 - **Settings** (`/projects/id/<p>/settings`): the head says "Settings"; how the project stands
   (active, paused or archived; its resources; when done units retire) heads its sections. The
   sections' index stands sticky in a quarter of the width, at most 300px (a scrolling row of

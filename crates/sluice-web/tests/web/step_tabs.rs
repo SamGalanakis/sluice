@@ -478,7 +478,16 @@ async fn tabs_values_and_owner_conversations() {
                 html.contains("<input type=\"hidden\" name=\"to\" value=\"alpha-build\">"),
                 "{html}"
             );
-            assert!(html.contains("<input type=\"checkbox\" name=\"ask\" value=\"true\"> Ask a question that needs a reply"), "{html}");
+            assert!(
+                html.contains(
+                    "<input type=\"checkbox\" name=\"ask\" value=\"true\" data-bind__root=\"_ask"
+                ),
+                "{html}"
+            );
+            assert!(
+                html.contains("> Ask a question that needs a reply"),
+                "{html}"
+            );
         }
         // the inbox draws its unread notes the same way, flat in their card, no New line
         let (_, inbox) = f.get("/inbox").await;

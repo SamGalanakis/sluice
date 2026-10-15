@@ -147,11 +147,12 @@ async fn slow_chromium_a_code_block_keeps_its_lines_and_the_keys_find_and_move()
         let mut browser = Chrome::open(&format!("{base}/steps/l1-work?tab=messages")).unwrap();
         browser.viewport(390, "light").unwrap();
         browser.wait("document.querySelector('.m-body pre > code')").unwrap();
-        // one box: the code in it is no chip, its lines and indentation kept, scrolling inside
+        // one box: the code in it is no chip, its lines and indentation kept, a long line
+        // wrapping in a message (a path is read whole, never scrolled to)
         let code = browser
             .eval("(() => { const c = document.querySelector('.m-body pre > code'), p = c.parentElement, cs = getComputedStyle(c), ps = getComputedStyle(p); return [cs.borderTopWidth, cs.backgroundColor, ps.whiteSpace, p.scrollWidth > p.clientWidth, document.documentElement.scrollWidth <= innerWidth]; })()")
             .unwrap();
-        assert_eq!(code, json!(["0px", "rgba(0, 0, 0, 0)", "pre", true, true]));
+        assert_eq!(code, json!(["0px", "rgba(0, 0, 0, 0)", "pre-wrap", false, true]));
 
         // `/` on a step's page finds on its plan
         browser.viewport(1440, "light").unwrap();

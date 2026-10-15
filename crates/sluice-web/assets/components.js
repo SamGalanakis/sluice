@@ -24,16 +24,6 @@ function listening(cleanup) {
 const plainClick = (event) => event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
 const reduced = matchMedia("(prefers-reduced-motion: reduce)");
 const smooth = () => (reduced.matches ? "auto" : "smooth");
-// A write that never reached sluice says so in its form's notice (`views::write`): sluice
-// cannot, and Datastar ends the request without a word (its `datastar-fetch` events).
-document.addEventListener("datastar-fetch", (event) => {
-  const { type, el } = event.detail;
-  if ((type !== "error" && type !== "retries-failed") || !(el instanceof HTMLFormElement)) return;
-  const said = el.id && document.getElementById(`${el.id}-said`);
-  if (!said) return;
-  said.setAttribute("role", "alert");
-  said.textContent = "Sluice did not answer: is it running? Try again in a moment.";
-});
 const store = {
   get(key) { try { return localStorage.getItem(key); } catch { return null; } },
   set(key, value) {
@@ -332,6 +322,14 @@ define("sluice-dialog", {
     });
     on(dialog, "click", (event) => {
       if (event.target.closest?.("[data-keep]")) dialog.close();
+    });
+    // the write its form sent went through (its answer emptied its notice, never an alert): the
+    // confirmation is done (`views::write::done`)
+    on(document, "datastar-fetch", (event) => {
+      const { type, el } = event.detail;
+      if (type !== "finished" || !dialog.open || !(el instanceof HTMLFormElement) || !dialog.contains(el)) return;
+      if (el.querySelector(".form-said[role=alert]")?.textContent) return;
+      dialog.close();
     });
     on(dialog, "keydown", (event) => {
       if (event.key !== "Tab") return;

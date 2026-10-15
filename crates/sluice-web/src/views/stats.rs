@@ -674,15 +674,19 @@ impl StatsView {
         if self.groups.is_empty() {
             html.push_str(&self.empty());
         }
+        // one scale for every group, so a bar's length is the same time in each table; counted
+        // in minutes on a log, as the plan's track is, so a day-long survey leaves a two-minute
+        // publish a bar to see
+        let longest = self
+            .groups
+            .iter()
+            .flat_map(|g| g.stages.iter().filter_map(StageStats::p90))
+            .max()
+            .unwrap_or(0)
+            .max(1) as f64;
+        let at = |s: u64| (s as f64 / 60.0).ln_1p() / (longest / 60.0).ln_1p() * 100.0;
         for (g, group) in self.groups.iter().enumerate() {
             let id = format!("{p}st-dur-{g}");
-            let scale = group
-                .stages
-                .iter()
-                .filter_map(StageStats::p90)
-                .max()
-                .unwrap_or(0)
-                .max(1) as f64;
             let mut rows = String::new();
             for stage in &group.stages {
                 let cell = |k: &str, v: Option<u64>| match v {
@@ -695,8 +699,8 @@ impl StatsView {
                 let bar = match (stage.median(), stage.p90()) {
                     (Some(m), Some(p)) => format!(
                         "<span class=\"st-bar\" aria-hidden=\"true\"><span class=\"st-p90\" style=\"--w:{:.2}%\"></span><span class=\"st-med\" style=\"--w:{:.2}%\"></span></span>",
-                        p as f64 / scale * 100.0,
-                        m as f64 / scale * 100.0
+                        at(p),
+                        at(m)
                     ),
                     _ => String::new(),
                 };
@@ -895,12 +899,13 @@ impl StatsView {
                 Some(Shown::Succeeded) => String::new(),
                 Some(s) if s.spec().band == Band::Done => String::new(),
                 Some(s) => format!(
-                    "<span class=\"st-out st-{}\">{}{}</span>",
-                    s.key(),
-                    ui::mark(s),
-                    esc(s.word())
+                    "<span class=\"st-out\">{}</span>",
+                    ui::status_pill(s, &esc(s.word()))
                 ),
-                None => "<span class=\"st-out\">ended</span>".to_owned(),
+                None => format!(
+                    "<span class=\"st-out\">{}</span>",
+                    ui::pill("ended", ui::Tone::Plain, None)
+                ),
             };
             let ended = super::rfc3339(run.ended.unwrap_or(run.started));
             let mut details = ui::Details::new()

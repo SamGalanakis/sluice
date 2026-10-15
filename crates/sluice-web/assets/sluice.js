@@ -46,11 +46,10 @@ rocket("sluice-drawer", {
     const listeners = new AbortController();
     const on = (target, type, fn, options = {}) => target.addEventListener(type, fn, { ...options, signal: listeners.signal });
     mergePatch({ step: "", sver: "" });
-    // closing is going back to the plan's own address, as the browser's Back would
+    // closing is the address without its step, a hash change like any link's (its close is a
+    // link to "#"; the scrim and Escape are the page's `data-on`)
     const close = () => {
-      if (!location.hash.startsWith("#step:")) return;
-      history.pushState(null, "", location.pathname + location.search);
-      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      if (location.hash.startsWith("#step:")) location.hash = "";
     };
     // below 1200px, over the page (a sheet on a phone), it is a modal dialog: the page behind
     // it is inert; from 1200px it is a region beside the page
@@ -124,7 +123,8 @@ rocket("sluice-drawer", {
       if (!drawer.contains(a)) opener = a;
       location.hash = `step:${encodeURIComponent(a.dataset.step || a.dataset.opens)}`;
     };
-    const escape = (evt) => {
+    // over the page it is a modal dialog: Tab stays inside it
+    const trap = (evt) => {
       if (document.querySelector("dialog[open]")) return;
       if (evt.key === "Tab" && currentStep() && OVER.matches) {
         const items = $$("a[href], button, input, select, textarea, [tabindex='0']", drawer).filter(shown);
@@ -132,7 +132,6 @@ rocket("sluice-drawer", {
         if (evt.shiftKey && (document.activeElement === first || document.activeElement === drawer)) { evt.preventDefault(); end?.focus(); }
         else if (!evt.shiftKey && document.activeElement === end) { evt.preventDefault(); first?.focus(); }
       }
-      if (evt.key === "Escape" && location.hash.startsWith("#step:")) close();
     };
     // `[` and `]` open the step before or after this one in the plan's order as drawn (Needs
     // you, then each row's steps, folded or not): each step once, where it is first linked;
@@ -178,11 +177,9 @@ rocket("sluice-drawer", {
       if (pre && pinned) pre.scrollTop = pre.scrollHeight;
     });
     follow.observe(drawer, { childList: true, subtree: true, characterData: true });
-    on($(".close", drawer), "click", close);
-    on($(".scrim", host), "click", close);
     on(document, "click", click);
     on(document, "click", away);
-    on(document, "keydown", escape);
+    on(document, "keydown", trap);
     on(document, "keydown", step);
     on(window, "hashchange", open);
     on(OVER, "change", modal);

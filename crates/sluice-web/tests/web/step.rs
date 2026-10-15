@@ -361,7 +361,7 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
     run("2026-10-05T09:00:00Z", None).await;
     set("UPDATE steps SET status='running' WHERE project_id=?1").await;
     let html = card(&state, project).await;
-    let pill = &html[html.find("<span class=\"pill\">").expect("its pill")..];
+    let pill = &html[html.find("<span class=\"pill run\">").expect("its pill")..];
     assert!(
         pill.contains(
             "<time data-since=\"2026-10-05T09:00:00Z\" datetime=\"2026-10-05T09:00:00Z\""
@@ -388,7 +388,7 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
     run("2026-10-05T10:00:00Z", None).await;
     set("UPDATE steps SET status='running' WHERE project_id=?1").await;
     let html = card(&state, project).await;
-    let pill = &html[html.find("<span class=\"pill\">").expect("its pill")..];
+    let pill = &html[html.find("<span class=\"pill run\">").expect("its pill")..];
     let pill = &pill[..pill.find("</span><span class=\"ro").unwrap()];
     assert!(
         pill.contains("<time data-since=\"2026-10-05T10:00:00Z\""),
@@ -573,14 +573,13 @@ async fn a_running_step_says_what_it_is_doing_now() {
         now.contains("aria-labelledby=\"ov-now-h\"><h4 id=\"ov-now-h\">Now</h4>"),
         "{now}"
     );
-    // its latest exchange as message cards: its own latest (to the orchestrator), its first
-    // words cut with the whole a link away; then what was said to it since, identifiers whole
+    // its latest exchange as message cards: its own latest (its agent's latest word, whoever it
+    // went to), its first words cut with the whole a link away; then what was said to it since,
+    // identifiers whole
     let this = "<span class=\"who who-this\">This step</span>";
     let orchestrator = "<span class=\"who who-old\">orchestrator</span>";
     let own = now
-        .find(&format!(
-            "<p class=\"mc-h\"><b>{this}</b><span class=\"mc-to\"> to </span>{orchestrator}"
-        ))
+        .find("<p class=\"mc-h\"><b>Latest from the agent</b><span><time")
         .unwrap_or_else(|| panic!("{now}"));
     let to_it = now
         .find(&format!(
@@ -612,7 +611,8 @@ async fn a_running_step_says_what_it_is_doing_now() {
     let status = &status[..status.find("</p>").unwrap()];
     assert!(
         status.contains("<span class=\"g g-quiet\"")
-            && status.contains("<span class=\"pill quiet\">quiet ")
+            && status.contains("<span class=\"pill look\"><span class=\"g g-quiet\"")
+            && status.contains("</span>quiet ")
             && status.contains("not heard from since <time data-ago=\"2026-10-05T09:40:00Z\""),
         "{status}"
     );

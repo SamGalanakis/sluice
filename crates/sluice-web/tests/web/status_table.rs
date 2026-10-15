@@ -315,7 +315,7 @@ async fn states_priorities_cancellation_and_skipped_units() {
                 _ => {
                     if plan_html::has_region(plan, &format!("u-{step}")) {
                         let row = plan_html::row(plan, &step);
-                        let pill = between(row, "<span class=\"pill\">", "</span><span class=\"ro");
+                        let pill = between(row, "<span class=\"pill", "</span><span class=\"ro");
                         assert!(
                             pill.contains(&mark(state)) && pill.contains(state.word()),
                             "{state:?}: {pill}"
@@ -365,7 +365,7 @@ async fn states_priorities_cancellation_and_skipped_units() {
                     "<b>{}{}</b>",
                     word[..1].to_uppercase(),
                     &word[1..]
-                )) && (state != Shown::Quiet || line.contains("<span class=\"pill quiet\">quiet ")),
+                )) && (state != Shown::Quiet || line.contains("<span class=\"pill look\">")),
                 "{state:?}: {line}"
             );
             // a cancel asked for is not offered again

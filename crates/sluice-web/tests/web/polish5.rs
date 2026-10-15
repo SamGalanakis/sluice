@@ -146,7 +146,13 @@ async fn an_answered_or_closed_question_keeps_its_place_and_reads_whole() {
         !item.contains("m-text"),
         "never a run-together excerpt: {item}"
     );
-    // its answer the card after it, whole too
+    // its answer the card after it, whole too, and once: the answer to its question is
+    // also the latest word to it
+    assert_eq!(
+        page.matches(&format!("id=\"ov-message-{reply}\"")).count(),
+        1,
+        "{now}"
+    );
     assert!(
         now.contains(&format!(
             "<div class=\"msg-card\" id=\"ov-message-{reply}\">"

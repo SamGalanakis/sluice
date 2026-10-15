@@ -923,10 +923,9 @@ async fn saved(
         Ok(body) => body,
         Err(e) => return views::write::failed(headers, e),
     };
-    // the confirmation closes first, its form back in its place, so the section's patch
-    // finds it there
+    // the confirmation closes once the answer is in (`sluice-dialog`), its form back in place
+    // unless the section's patch drew a new one
     views::write::events([
-        views::write::close(headers),
         StreamEvent::Elements(PatchElements::new(marked(&body, region))),
         views::write::status(form, words),
     ])

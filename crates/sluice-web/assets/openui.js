@@ -206,8 +206,11 @@ export function answered(area, closed) {
   // an empty live region first, filled once in the page, so a reader hears it
   const note = h("p", { class: line.className, tabindex: "-1", role: "status", "aria-live": "polite" });
   if (line.dataset.q) note.dataset.q = line.dataset.q;
-  host.replaceChildren(note);
-  for (const held of [host.closest("li.m"), host.closest("article.q-card")]) held?.classList.add("q-done");
+  // a question card becomes the line alone, as the server draws it; a message in a thread
+  // keeps its words with the line under them
+  const card = host.closest("article.q-card");
+  for (const held of [host.closest("li.m"), card]) held?.classList.add("q-done");
+  (card ?? host).replaceChildren(note);
   requestAnimationFrame(() => {
     note.append(...line.childNodes);
     note.focus();

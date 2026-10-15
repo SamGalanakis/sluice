@@ -96,15 +96,18 @@ fn statuses() -> TrustedHtml {
 /// coral one for a question to the owner; one with a mark, one a link.
 fn pills() -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<p class=\"gal-row\">{}{}{}{}{}{}{}{}{}</p>",
+        "<p class=\"gal-row\">{}{}{}{}{}{}{}{}{}{}{}{}</p>",
         ui::pill("unit: a-7", ui::Tone::Plain, None),
         ui::pill("Answered", ui::Tone::Muted, None),
         ui::pill("live", ui::Tone::Run, Some(ui::mark(Shown::Running))),
         ui::pill("2 awaiting reply", ui::Tone::Look, None),
-        ui::pill("quiet 3h", ui::Tone::Quiet, None),
+        ui::status_pill(Shown::Running, "draft · 1h 11m"),
+        ui::status_pill(Shown::Quiet, "scan · quiet 3h"),
+        ui::status_pill(Shown::Failed, "failed 18m"),
+        ui::status_pill(Shown::Succeeded, "25m"),
+        ui::status_pill(Shown::Queued, "queued review"),
         ui::pill("done", ui::Tone::Done, None),
         ui::ask_link("#", "Use the new dates?"),
-        ui::pill("failed", ui::Tone::Plain, Some(ui::mark(Shown::Failed))),
         ui::pill_link("#", "Its unit", ui::Tone::Plain, None),
     ))
 }
@@ -122,19 +125,19 @@ fn buttons() -> TrustedHtml {
         submit(Btn::Icon, "action", "dismiss", &t("×"), "Set it aside"),
         link(Btn::Primary, "#", &t("Answer"), ""),
         link(Btn::Outlined, "#", &t("Message it"), ""),
-        link(Btn::Quiet, "#", &t("Set the rest aside"), ""),
+        link(Btn::Quiet, "#", &t("Set all aside"), ""),
     ))
 }
 /// A thing's status line in each state: running and heard lately (the dot breathing), running
 /// and heard a while ago, gone quiet, waiting on the owner's answer, failed, succeeded and
 /// waiting; a run of several and items done.
 fn status_lines() -> TrustedHtml {
-    use ui::{Dot, Shown, Tone, pill, status_line};
+    use ui::{Dot, Shown, status_line};
     let t = |s: &str| TrustedHtml::owned(s.into());
     let rows = [
         status_line(Dot::State(Shown::Running), &[t("<b>Running</b> 6h 34m"), t("heard 2m ago"), t("run 2, after 1 failed")]),
         status_line(Dot::State(Shown::Running), &[t("<b>Running</b> 6h 34m"), t("heard 1h 18m ago")]),
-        status_line(Dot::State(Shown::Quiet), &[t("<b>Running</b> 9h 2m"), pill("quiet 3h", Tone::Quiet, None), t("not heard from since 3h ago")]),
+        status_line(Dot::State(Shown::Quiet), &[t("<b>Running</b> 9h 2m"), ui::status_pill(Shown::Quiet, "quiet 3h"), t("not heard from since 3h ago")]),
         status_line(Dot::Ask, &[t("<b>Running</b> 20m"), t("<a href=\"#\">waiting on your answer</a>"), t("heard just now")]),
         status_line(Dot::State(Shown::Failed), &[t("<b>Failed</b> 1h 42m ago"), t("after 18m")]),
         status_line(Dot::State(Shown::Succeeded), &[t("<b>Succeeded</b> 57m ago"), t("after 1h 27m"), t("14 of 14 items done")]),
@@ -639,7 +642,7 @@ fn heads_part() -> TrustedHtml {
         "{}{}{}",
         ui::SectionHead::new("", "Needs you")
             .count(4)
-            .action(&TrustedHtml::owned("<a class=\"quiet\" href=\"#\">Set the rest aside</a>".into()))
+            .action(&TrustedHtml::owned("<a class=\"quiet\" href=\"#\">Set all aside</a>".into()))
             .html(),
         ui::section_head("", "Durations by stage", "2 recipes · 41 runs"),
         ui::SectionHead::new("", "Projects").level(3).count(7).html(),
@@ -720,10 +723,8 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             "Gannets: the spring guide's entries",
             "Two of the five range maps redrawn; checking the third.",
             format!(
-                "<span class=\"pill\">{}<span class=\"vh\">quiet, </span>review · {}</span><span class=\"pill quiet\">quiet {}</span>",
-                ui::mark(Shown::Quiet),
-                ui::since(&before(5 * 3_600)),
-                ui::since(&before(9_840))
+                "{}",
+                ui::status_pill(Shown::Quiet, &format!("review · quiet {}", ui::since(&before(9_840)).0))
             ),
             &[("tk-past", now - 9.0 * h, now - 5.2 * h), ("tk-run", now - 5.0 * h, now - 9_840.0), ("tk-quiet", now - 9_840.0, now)],
             &[now - 8.0 * h, now - 4.5 * h, now - 3.4 * h],
@@ -734,9 +735,8 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             "Terns: the spring guide's entries",
             "Entries 41 to 58 drafted; the maps moved under maps/coast/.",
             format!(
-                "<span class=\"pill\">{}<span class=\"vh\">running, </span>draft · {}</span><span class=\"ro-heard\"><span class=\"dot run pulse\" aria-hidden=\"true\"></span>heard {}</span>",
-                ui::mark(Shown::Running),
-                ui::since(&before(4_200)),
+                "{}<span class=\"ro-heard\"><span class=\"dot run pulse\" aria-hidden=\"true\"></span> heard {}</span>",
+                ui::status_pill(Shown::Running, &format!("<span class=\"vh\">running, </span>draft · {}", ui::since(&before(4_200)).0)),
                 ui::ago(&before(120))
             ),
             &[("tk-run", now - 4_200.0, now)],

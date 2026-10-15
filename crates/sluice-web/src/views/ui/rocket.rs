@@ -477,7 +477,9 @@ pub fn drawer(base: &str) -> TrustedHtml {
             .attr("id", "step-drawer")
             .attr("base", base)
             .wrap(&TrustedHtml::owned(format!(
-                "<div class=\"scrim\" hidden></div><aside id=\"drawer\" class=\"drawer\" hidden tabindex=\"-1\" aria-labelledby=\"d-title\"><div class=\"d-top\"><button type=\"button\" class=\"icon big close\" aria-label=\"Close\" title=\"Close\">{}</button></div><div id=\"step-detail\"></div></aside>",
+                // closing is the address without its step: the close a plain link to "#", the
+                // scrim and Escape the same move (`sluice-drawer` follows the hash)
+                "<div class=\"scrim\" hidden data-on:click=\"location.hash = ''\"></div><aside id=\"drawer\" class=\"drawer\" hidden tabindex=\"-1\" aria-labelledby=\"d-title\" data-on:keydown__window=\"evt.key === 'Escape' &amp;&amp; location.hash.startsWith('#step:') &amp;&amp; !document.querySelector('dialog[open]') &amp;&amp; (location.hash = '')\"><div class=\"d-top\"><a class=\"btn icon big close\" href=\"#\" aria-label=\"Close\" title=\"Close\">{}</a></div><div id=\"step-detail\"></div></aside>",
                 icon(Icon::X, 20, "")
             )))
     ))

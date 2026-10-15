@@ -29,6 +29,8 @@ pub const QUICK: u64 = 60;
 /// How many runs an hour's cell lists before it is busy: a busy cell lists its notable runs
 /// (`DayView::notable`) and folds the rest, which all succeeded, behind "+N more".
 pub const CELL_RUNS: usize = 6;
+/// The most runs a busy hour lists; the running ones past it fold behind "+N more running".
+pub const CELL_MOST: usize = 8;
 /// A run that took at least this long (seconds) is notable however it ended.
 pub const LONG: u64 = 60 * 60;
 /// How many tracks a project's day line stacks before its last holds the rest.
@@ -770,7 +772,8 @@ impl DayView {
     /// One project's runs in one hour, by their minute; the quick ones counted. A busy hour
     /// (more than `CELL_RUNS` listed) lists its notable runs (`notable`; its longest when none
     /// is) and folds the rest, every one a success, behind "+N more" that opens in place
-    /// (a `details`, its state kept through a patch).
+    /// (a `details`, its state kept through a patch). Past `CELL_MOST` listed, what still runs
+    /// folds the same way behind "+N more running", every look kept in sight.
     fn cell(
         &self,
         project: &DayProject,
@@ -792,6 +795,24 @@ impl DayView {
                 .iter()
                 .partition(|r| self.notable(r) || (!any && r.run_id == longest));
         }
+        let mut running: Vec<&DayRun> = vec![];
+        if shown.len() > CELL_MOST {
+            let live = |r: &&DayRun| {
+                r.outcome.is_some_and(|s| {
+                    s.spec().band == sluice_model::shown::Band::Running && !s.spec().attention
+                })
+            };
+            let looks = shown.iter().filter(|r| !live(r)).count();
+            let room = CELL_MOST.saturating_sub(looks);
+            let mut kept = 0;
+            (shown, running) = shown.into_iter().partition(|r| {
+                if !live(r) {
+                    return true;
+                }
+                kept += 1;
+                kept <= room
+            });
+        }
         let mut html = format!(
             "<div class=\"tt-c\"><p class=\"tt-pname\">{}</p>",
             esc(&project.name)
@@ -802,6 +823,17 @@ impl DayView {
                 html.push_str(&self.run_item(r, first));
             }
             html.push_str("</ol>");
+        }
+        if !running.is_empty() {
+            html.push_str(&format!(
+                "<details class=\"tt-more\" id=\"tt-run-{hour}-{}\" data-preserve-attr=\"open\"><summary>+{} more running</summary><ol class=\"tt-runs\">",
+                project.id,
+                running.len(),
+            ));
+            for r in &running {
+                html.push_str(&self.run_item(r, first));
+            }
+            html.push_str("</ol></details>");
         }
         if !folded.is_empty() {
             let longest = folded.iter().map(|r| r.seconds(self.now)).max().unwrap_or(0);
@@ -844,36 +876,20 @@ impl DayView {
             format!(":{:02}", w.minute(r.started))
         };
         let took = ui::duration_text(r.seconds(self.now) as f64);
+        // how it stands or ended, as every page's status pill says it
         let outcome = match r.outcome {
-            Some(s) if s.spec().band == sluice_model::shown::Band::Running => format!(
-                "<span class=\"tt-out tt-live{}\">{}{} {}</span>",
-                if s.spec().attention {
-                    format!(" tt-look tt-{}", s.key())
-                } else {
-                    String::new()
-                },
-                ui::mark(s),
-                esc(s.word()),
-                ui::since(&r.started_at)
+            Some(s) if s.spec().band == sluice_model::shown::Band::Running => ui::status_pill(
+                s,
+                &format!("{} {}", esc(s.word()), ui::since(&r.started_at)),
             ),
-            Some(s) if s.spec().band == sluice_model::shown::Band::Done => format!(
-                "<span class=\"tt-out\">{}<span class=\"vh\">{} after </span>{}</span>",
-                ui::mark(s),
-                esc(s.word()),
-                esc(&took)
+            Some(s) if s.spec().band == sluice_model::shown::Band::Done => ui::status_pill(
+                s,
+                &format!("<span class=\"vh\">{} after </span>{}", esc(s.word()), esc(&took)),
             ),
-            Some(s) => format!(
-                "<span class=\"tt-out tt-look tt-{}\">{}{} <span class=\"tt-took\">{}</span></span>",
-                s.key(),
-                ui::mark(s),
-                esc(s.word()),
-                esc(&took)
-            ),
-            None => format!(
-                "<span class=\"tt-out tt-ended\">ended {}</span>",
-                esc(&took)
-            ),
+            Some(s) => ui::status_pill(s, &format!("{} {}", esc(s.word()), esc(&took))),
+            None => ui::pill(&format!("ended {took}"), ui::Tone::Plain, None),
         };
+        let outcome = format!("<span class=\"tt-out\">{outcome}</span>");
         format!(
             "<li class=\"tt-run\"><span class=\"tt-m\">{at}</span><a class=\"tt-name\" href=\"{href}\" title=\"{ids}\"><b>{name}</b>{rest}</a>{outcome}</li>",
             href = esc(&r.href()),
