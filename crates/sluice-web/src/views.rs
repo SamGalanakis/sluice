@@ -745,18 +745,16 @@ impl NavView {
         keys
     }
 }
-/// What a page puts in the frame around it (DESIGN.md, The page head): its head on the paper
-/// under the slim nav bar (`ui::page_head`: its name, and on the plan and home the summary
-/// sentence), then its row (after its sections, a count line such as "12 units · 40 steps" and
-/// its tools, a find and the view switch). A page with none of it draws the nav bar alone.
-/// A page that is one thing inside a tab (a step, a unit, a thread) is `inner`: the tab row
-/// comes first and its head under it, so the row stays where the plan has it.
+/// What a page puts in the frame around it (DESIGN.md, The page head): its row under the slim
+/// nav bar (its sections, a count line such as "12 units · 40 steps" and its tools, a find and
+/// the view switch), then its head on the paper (`ui::page_head`: its name, and on the plan and
+/// home the summary sentence). The row comes first on every page, so it never moves with a
+/// head's height. A page with none of it draws the nav bar alone.
 #[derive(Clone, Debug, Default)]
 pub struct Frame {
     pub head: TrustedHtml,
     pub meta: TrustedHtml,
     pub tools: TrustedHtml,
-    pub inner: bool,
 }
 #[derive(Template)]
 #[template(path = "layout.html")]

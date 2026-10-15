@@ -223,8 +223,9 @@ The owner opens the dashboard between other work, often on a second screen or a 
 answer one question within seconds: does anything need me, and is the work moving? A plan
 answers in its order, a briefing over a roster. Its head says it in one sentence; under it
 **Needs you** (questions, stops and silences, each a sentence with one action and a ×) →
-**Finished since you looked** (what this browser has not seen finish) → **At work** (a row a
-unit, the longest silent first, its last twelve hours as a track). A running step shows how long
+**At work** (a row a unit, the longest silent first, its last twelve hours as a track) →
+**Finished since you looked** (what this browser has not seen finish), in that order at every
+width: what is moving matters more than what is done. A running step shows how long
 it has run; how long a stage usually takes is the project's Stats page's to say, never a
 row's. A row opens in place to its steps.
 
@@ -704,8 +705,8 @@ frame keeps it to 1440px, so a wide screen gets the same sheet as a laptop, cent
 
 ## The frame
 
-The page's frame (`templates/layout.html`, `render_framed`) is a slim nav bar and the page's
-head on the paper under it.
+The page's frame (`templates/layout.html`, `render_framed`) is a slim nav bar, the page's
+row under it and the page's head on the paper under the row.
 
 - **The nav bar** (`nav#top-nav`, 52px; 48px on a phone): the mark and "sluice", "Projects",
   the project switcher (its button the current project's icon and name in a box of the band's
@@ -747,8 +748,9 @@ head on the paper under it.
   Questions and History). A hairline closes it. On a phone the tabs stay one line (all seven fit
   at 390px; a narrower screen scrolls them sideways within themselves) and the tools take a
   line of their own.
-- **One thing inside a tab** (a step, a unit, a thread: `Frame::inner`): the row comes first
-  and the head under it, so the row stays where the plan has it.
+- **Where they stand**: the row comes first on every page, right under the nav bar, and the
+  head under it, so the row never moves with a head's height: a plan's, a step's, a unit's and
+  a thread's tabs are in the same place.
 
 The budget: at 1440px the plan's first section starts within 200px of the top (a test holds
 it within 220), about 260px on a phone.
@@ -1180,17 +1182,6 @@ the page's stream. A lane that redraws a page writes its notes here.
     script the × and Undo post in place, the focus going to Undo and back to the item. With
     nothing to say, no well: one muted line, "Nothing needs you. 4 set aside.". Each Set aside
     line reads as one sentence with its Undo after it, wrapping as text does at any width.
-  - **Finished since you looked**: a card a unit that produced something (10px, a hairline
-    inset, filling their row, one under 760px, each as tall as its own content). A card shows
-    when it finished and how long it took, then the title in weight 600 linking the unit. Next
-    comes what it produced, led by the values `ui::ValueSet` picks out: a value that
-    identifies it (a sha, as code) or says it in a word (a count of files, in ink), each named
-    small and muted, at most three on one line. Under them is the output that explains it (its
-    summary) or else its last message, cut to 160 characters. The units that left neither
-    share one muted line after the cards: "3 more finished with nothing to say:" and their
-    titles as links. "since 14:02" and "Mark as seen" sit in the head; with no look kept, the
-    head says "Finished lately" and the section holds the latest four. Under 760px the section
-    follows At work: what is at work comes before what finished.
   - **At work**: the roster, under an axis row (12h, 4h, 1h, 15m, now, 12px over the tracks'
     column; it says its scale to a screen reader and on hover: "The last 12 hours on a log
     scale, now at the right; a tick is a message."). A group a recipe (a `<details>`, its
@@ -1229,6 +1220,16 @@ the page's stream. A lane that redraws a page writes its notes here.
     Progress only when one reports any. Its foot: "Last heard 22:51 (6m ago)" ("Not heard from
     since 19:14 (3h ago)" for a quiet unit; the row already says what it said last), then
     Message and Unit page as quiet links and Open step, its one outlined move.
+  - **Finished since you looked**: a card a unit that produced something (10px, a hairline
+    inset, filling their row, one under 760px, each as tall as its own content). A card shows
+    when it finished and how long it took, then the title in weight 600 linking the unit. Next
+    comes what it produced, led by the values `ui::ValueSet` picks out: a value that
+    identifies it (a sha, as code) or says it in a word (a count of files, in ink), each named
+    small and muted, at most three on one line. Under them is the output that explains it (its
+    summary) or else its last message, cut to 160 characters. The units that left neither
+    share one muted line after the cards: "3 more finished with nothing to say:" and their
+    titles as links. "since 14:02" and "Mark as seen" sit in the head; with no look kept, the
+    head says "Finished lately" and the section holds the latest four.
   - **Done**, asked for (Show: Done, a find, a recipe's units): the index, a dense list newest
     first in columns: finish time, glyph, title, how long it took (in `ink-muted`, like every
     finished duration: the blue is for what runs).

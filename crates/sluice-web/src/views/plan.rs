@@ -1090,11 +1090,13 @@ impl<'a> Plan<'a> {
 
     // ---- the sheet -----------------------------------------------------------------------------
 
-    /// The plan's sheet: Needs you, Finished since you looked, At work, each a region of its
-    /// own; the done index when it is asked for.
+    /// The plan's sheet: Needs you, At work, Finished since you looked, each a region of its
+    /// own, in that order at every width (what is moving matters more than what is done); the
+    /// done index when it is asked for.
     pub fn sheet(&self) -> TrustedHtml {
         let mut out = String::from("<div class=\"plan-sheet\">");
         out.push_str(&region("plan-needs", &self.needs_html()));
+        out.push_str(&region("plan-roster", &self.roster_html()));
         out.push_str(&region(
             "plan-finished",
             &if self.finished.is_empty() {
@@ -1103,7 +1105,6 @@ impl<'a> Plan<'a> {
                 self.finished_html()
             },
         ));
-        out.push_str(&region("plan-roster", &self.roster_html()));
         let index = self.view.show == "done"
             || !self.view.q.is_empty()
             || !self.view.recipe.is_empty()
@@ -2078,7 +2079,6 @@ pub fn draw(
         head: plan.band(),
         meta: plan.meta(),
         tools: plan.tools(),
-        inner: false,
     };
     let batch = RenderedBatch::new(vec![
         PatchRegion::new("project-board", board_region(&body)),

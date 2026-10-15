@@ -2000,8 +2000,8 @@ fingerprint of the HTML its stream patches (a ticking `<time data-since>`'s or
 `<time data-ago>`'s text left out: every time that ticks is one, the board's Units ages too), so
 a stream opened at it sends nothing until something shown changes. A page marks parts of what
 it patches as regions of their own (`<!--r:id-->…<!--/r:id-->` around the element of that id):
-the plan's head, its count line, each section of the sheet (Needs you, Finished since you
-looked, At work, Done; one with nothing in it a hidden placeholder, so it keeps its place), each
+the plan's head, its count line, each section of the sheet (Needs you, At work, Finished
+since you looked, Done; one with nothing in it a hidden placeholder, so it keeps its place), each
 item of Needs you and each row of At work, a step's page's head (`#step-band`)
 and detail apart, a unit's page's head and detail, the message views' head, the plan's facts
 and the board's pane.
@@ -2141,17 +2141,6 @@ work). The head's Details, the plan's one ⋯, holds Export (the plan as Mermaid
   question keeps its own × ("Set the rest aside" while one is open), so the head never counts
   a question the well hides. With nothing to say the well is one muted line, "Nothing needs
   you. 4 set aside.".
-- **Finished since you looked**: the units finished since this browser last marked the
-  project seen (its `sluice_seen_<p>` cookie), at most eight and how many more, newest first,
-  "since 14:02"; with no mark kept, "Finished lately", the latest four. A unit that produced
-  something is a card: when it finished and how long it took, its title linking its page, then
-  what it produced. That is first the values that identify it or say it in a word (a commit, a
-  count of files), each named, at most three, then the output that explains it (its summary) or
-  else its last message, cut to 160 characters. The units that left neither share one line,
-  "3 more finished with nothing to say:" and their titles as links. Home draws each project's
-  Finished the same way. "Mark as seen"
-  (`POST …/seen`) moves the mark to the latest drawn; it works without script. The cards fill
-  their row, each as tall as what it says.
 - **At work**: a row a unit at work or waiting once begun, grouped by recipe (its name linking
   `?recipe=<name>&show=all`, its rows counted quiet, running and waiting), then the units of
   no recipe ("Other units"),
@@ -2187,6 +2176,17 @@ work). The head's Details, the plan's one ⋯, holds Export (the plan as Mermaid
   never the message its row already says),
   Open step, and Message and Unit page as quiet links; it stays open through a patch. A failed, cancelled or stale unit is
   a stop in Needs you, not a row.
+- **Finished since you looked**: the units finished since this browser last marked the
+  project seen (its `sluice_seen_<p>` cookie), at most eight and how many more, newest first,
+  "since 14:02"; with no mark kept, "Finished lately", the latest four. A unit that produced
+  something is a card: when it finished and how long it took, its title linking its page, then
+  what it produced. That is first the values that identify it or say it in a word (a commit, a
+  count of files), each named, at most three, then the output that explains it (its summary) or
+  else its last message, cut to 160 characters. The units that left neither share one line,
+  "3 more finished with nothing to say:" and their titles as links. Home draws each project's
+  Finished the same way. "Mark as seen"
+  (`POST …/seen`) moves the mark to the latest drawn; it works without script. The cards fill
+  their row, each as tall as what it says.
 
 A view whose program does not check says so once over its group ("This recipe's view does not
 check, so its summary is left out: …"). The find, `show`, `tag`, `recipe` and `root` keep or

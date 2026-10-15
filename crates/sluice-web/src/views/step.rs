@@ -3296,7 +3296,6 @@ async fn page_html(
     }
     let frame = super::Frame {
         head: step.band(&detail.project, unit).map_err(render_error)?,
-        inner: true,
         ..Default::default()
     };
     step.page_body(

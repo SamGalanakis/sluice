@@ -111,11 +111,11 @@ async fn plan_units_and_loose_steps() {
         for (unit, place) in want {
             assert_eq!(plan_html::place(&html, unit), place, "{unit}");
         }
-        // the sections in order: Needs you, Finished lately, At work; no Done index unasked
+        // the sections in order: Needs you, At work, Finished lately; no Done index unasked
         let order = [
             "<!--r:plan-needs-->",
-            "<!--r:plan-finished-->",
             "<!--r:plan-roster-->",
+            "<!--r:plan-finished-->",
             "<!--r:plan-done-->",
         ];
         for pair in order.windows(2) {

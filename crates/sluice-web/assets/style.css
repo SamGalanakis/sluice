@@ -713,7 +713,7 @@ form.prefs:has(sluice-toggle:defined) .save { display: none; }
   .sw-name { min-width: 0; max-width: none; }
   .live { font-size: 0; gap: 0; }
   details.settings { margin-right: 0; }
-  .subnav-in { gap: 0 18px; min-height: 0; }
+  .subnav-in { gap: 0 18px; min-height: 44px; }
   /* a project's sections all in a phone's width: tighter pills, a size down */
   .tabs.lead { gap: 0; margin-left: -5px; }
   .tabs.lead > a { padding: 0 4px; font-size: 13.5px; }
@@ -723,11 +723,11 @@ form.prefs:has(sluice-toggle:defined) .save { display: none; }
   .subnav .subnav-tools :is(sluice-search, .pl-find) { flex: 1 1 auto; min-width: 0; }
   .subnav .subnav-tools .q-field { flex: 1 1 auto; min-width: 0; max-width: none; }
   .subnav-tools :is(button, input, select, a) { min-height: 44px; }
-  /* the plan's Find alone: a 44px icon by the head's Details, opening across the head as it
-     takes the focus (or holds a find) */
+  /* the plan's Find alone: a 44px icon by the head's Details (the head under the row's 44px
+     and its hairline), opening across the head as it takes the focus (or holds a find) */
   .page-top { position: relative; }
   .subnav-tools:not(:has(.view-switch)):has(.pl-find) { position: absolute; z-index: 5;
-    top: calc(12px * var(--density)); right: calc(var(--gutter) + 48px); margin: 0; }
+    top: calc(45px + 12px * var(--density)); right: calc(var(--gutter) + 48px); margin: 0; }
   .subnav-tools:not(:has(.view-switch)) .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) .q-field {
     flex: none; width: 44px; }
   .subnav-tools:not(:has(.view-switch)) .pl-find:not(:focus-within, :has(input:not(:placeholder-shown))) input[type=search] {
@@ -2395,9 +2395,6 @@ details.read-today .item { opacity: .85; }
 /* a narrow plan: a row is its badge and who, then where it is, then its track, the axis gone */
 @container plan (max-width: 759.98px) {
   .plan-sheet { gap: 30px; }
-  /* what is at work before what finished */
-  .plan-sheet > #plan-finished { order: 2; }
-  .plan-sheet > #plan-done { order: 3; }
   .nd { padding: 2px 14px; }
   .nd-i { grid-template-columns: 14px minmax(0, 1fr); }
   .nd-acts { grid-column: 2; justify-self: start; }

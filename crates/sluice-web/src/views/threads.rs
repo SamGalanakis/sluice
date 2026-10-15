@@ -663,7 +663,6 @@ impl InboxView {
             &super::Frame {
                 head: self.band(),
                 tools: self.switch(),
-                inner: self.view == MessageView::Thread,
                 ..Default::default()
             },
         )

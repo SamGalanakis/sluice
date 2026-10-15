@@ -140,12 +140,12 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                     let plan = &g["plan"];
                     match (slug, width) {
                         // a phone opens on the plan while something needs attention (beta-build
-                        // failed), the switch under the summary line
+                        // failed), the switch in the row over the project's title
                         ("board", 390) => {
                             assert!(g["tabs"].is_object() && g["board"].is_null() && plan.is_object(), "{label}: {g}");
                             assert_eq!(g["view"], "plan", "{label}: {g}");
                             assert!(g["h1"].is_object(), "{label}: the project's title stays over its board {g}");
-                            assert!(g["tabs"]["top"].as_f64().unwrap() > g["sum"]["top"].as_f64().unwrap(), "{label}: the switch after the summary {g}");
+                            assert!(g["tabs"]["top"].as_f64().unwrap() < g["h1"]["top"].as_f64().unwrap(), "{label}: the switch in the row, over the title {g}");
                             assert!(g["board"].is_null(), "{label}: {g}");
                         }
                         ("board", _) => {
@@ -200,8 +200,8 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
             let gutter = (10.0 + 0.015 * width as f64).clamp(16.0, 64.0);
             assert!(near(&g["left"], gutter) && near(&g["right"], g["width"].as_f64().unwrap() - gutter), "{label}: {g}");
             assert!(near(&g["left"], g["navLeft"].as_f64().unwrap()) && near(&g["right"], g["navRight"].as_f64().unwrap()), "{label}: {g}");
-            let (tabs, sum) = (&g["tabs"], &g["sum"]);
-            assert!(tabs["top"].as_f64().unwrap() > sum["top"].as_f64().unwrap(), "{label}: {g}");
+            // the switch in the row, over the title
+            assert!(g["tabs"]["top"].as_f64().unwrap() < g["h1"]["top"].as_f64().unwrap(), "{label}: {g}");
         }
         // Every page's times are nav.js's, in one vocabulary: a running time is a two-unit
         // duration, never "… ago".

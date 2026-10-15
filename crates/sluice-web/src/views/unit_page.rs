@@ -227,7 +227,6 @@ pub async fn unit_page(
         let nav = NavView::new(&shared, Some(project), "plan")?;
         let frame = super::Frame {
             head: drawn.regions[0].html.clone(),
-            inner: true,
             ..Default::default()
         };
         super::render_framed(
