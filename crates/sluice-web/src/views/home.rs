@@ -18,176 +18,62 @@ use sluice_model::shown::Band;
 use std::collections::BTreeMap;
 use ui::{Shown, esc};
 
-/// One project as home draws it: its summary, its board (none when its plan cannot be read)
-/// and what home reads from it.
+/// One project as home draws it: its summary and, when its plan was read, the plan in brief
+/// (`plan::Plan`): its sentence, what needs the owner counted, At work's groups in a line each,
+/// what finished last.
 #[derive(Clone, Debug)]
 pub struct HomeProject {
     pub project: ProjectView,
-    /// Each unit as the summary counts it, and as a square.
+    /// Each unit's state, as the index counts them.
     pub units: Vec<ui::UnitFact>,
-    /// Its running steps: their unit (or step), its page, since when, quiet.
-    pub running: Vec<Running>,
-    /// Its units (or steps of no unit) that finished last, newest first.
-    pub finished: Vec<ui::Finished>,
     /// How many steps it has.
     pub steps: usize,
     /// Its board was read: a project whose plan cannot be read says only its counts.
     pub read: bool,
-}
-/// A running step as a project's module lists it.
-#[derive(Clone, Debug)]
-pub struct Running {
-    pub step: String,
-    pub unit: String,
-    pub href: String,
-    pub since: String,
-    pub seconds: f64,
-    pub quiet: bool,
-    pub shown: Shown,
+    /// The plan's head sentence.
+    pub sentence: String,
+    /// How many items of its Needs you stand.
+    pub needs: usize,
+    /// At work's groups, a line each.
+    pub groups: String,
+    /// What finished last, as the plan's Finished draws it.
+    pub finished: String,
 }
 impl HomeProject {
     /// What its board says, as home reads it.
-    pub fn new(project: ProjectView, board: Option<&board::ProjectView>, now: u64) -> Self {
+    pub fn new(project: ProjectView, board: Option<&board::ProjectView>) -> Self {
         let Some(board) = board else {
-            // its plan not read: its running steps as the summary has them
-            let running = project
-                .running
-                .iter()
-                .map(|r| Running {
-                    step: r.step.clone(),
-                    unit: String::new(),
-                    href: format!("{}/steps/{}", project.href(), r.step),
-                    since: r.started.clone(),
-                    seconds: timestamp(&r.started).map_or(0.0, |t| now.saturating_sub(t) as f64),
-                    quiet: r.quiet,
-                    shown: r.shown(),
-                })
-                .collect();
             return Self {
                 steps: project.counts.total(),
                 project,
                 units: vec![],
-                running,
-                finished: vec![],
                 read: false,
+                sentence: String::new(),
+                needs: 0,
+                groups: String::new(),
+                finished: String::new(),
             };
         };
-        let mut units = vec![];
-        let mut finished = vec![];
-        let mut steps = 0;
-        // every running step as the summary has it, with what its board knows: when its run
-        // started, its unit
-        let mut known = BTreeMap::new();
-        for unit in &board.units {
-            for step in unit.steps.iter().filter(|s| s.running()) {
-                known.insert(step.id.to_string(), (unit, step));
-            }
-        }
-        let running: Vec<Running> = project
-            .running
-            .iter()
-            .map(|r| {
-                let found = known.get(&r.step);
-                let since = found
-                    .and_then(|(_, s)| s.timing.as_ref().map(|t| t.started.clone()))
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| r.started.clone());
-                Running {
-                    step: r.step.clone(),
-                    unit: found
-                        .filter(|(u, _)| u.tagged)
-                        .map(|(u, _)| u.id.to_string())
-                        .unwrap_or_default(),
-                    href: format!("{}/steps/{}", project.href(), r.step),
-                    seconds: timestamp(&since).map_or(0.0, |t| now.saturating_sub(t) as f64),
-                    since,
-                    quiet: r.quiet,
-                    shown: r.shown(),
-                }
-            })
-            .collect();
-        for unit in &board.units {
-            steps += unit.steps.len();
-            let mut quiet: Option<f64> = None;
-            let mut quiet_since = String::new();
-            for run in running
-                .iter()
-                .filter(|r| unit.steps.iter().any(|s| s.id.as_str() == r.step))
-            {
-                if run.quiet {
-                    let active = unit
-                        .steps
-                        .iter()
-                        .find(|s| s.id.as_str() == run.step)
-                        .map(|s| s.active_at.as_str())
-                        .unwrap_or("");
-                    quiet = Some(
-                        timestamp(active).map_or(run.seconds, |t| now.saturating_sub(t) as f64),
-                    );
-                    quiet_since = active.to_owned();
-                }
-            }
-            units.push(ui::UnitFact {
-                name: unit.id.to_string(),
-                recipe: unit.recipe.clone(),
-                shown: Some(unit.shown()),
-                quiet,
-                quiet_since,
-            });
-            let shown = unit.shown();
-            let at = unit.finished();
-            if !at.is_empty() && (unit.done || shown.spec().band == Band::Stopped) {
-                let took: f64 = unit
-                    .steps
-                    .iter()
-                    .filter_map(|s| s.timing.as_ref().map(|t| t.seconds))
-                    .sum();
-                let runs = unit
-                    .steps
-                    .iter()
-                    .filter_map(|s| s.timing.as_ref().map(|t| t.runs))
-                    .max()
-                    .unwrap_or(1);
-                finished.push(ui::Finished {
-                    name: unit.id.to_string(),
-                    title: if unit.titled() {
-                        unit.heading().to_owned()
-                    } else {
-                        String::new()
-                    },
-                    href: if unit.tagged {
-                        unit.href(&project.id)
-                    } else {
-                        format!(
-                            "{}/steps/{}",
-                            project.href(),
-                            unit.steps.first().map(|s| s.id.as_str()).unwrap_or("")
-                        )
-                    },
-                    at: at.to_owned(),
-                    took,
-                    runs,
-                    shown: Some(shown),
-                    place: String::new(),
-                });
-            }
-        }
-        finished.sort_by(|a, b| b.at.cmp(&a.at));
-        finished.truncate(5);
-        let mut running = running;
-        // quiet first, then the longest running
-        running.sort_by(|a, b| {
-            b.quiet
-                .cmp(&a.quiet)
-                .then(b.seconds.total_cmp(&a.seconds))
-        });
+        let plan = super::plan::Plan::new(board);
         Self {
-            project,
-            units,
-            running,
-            finished,
-            steps,
+            units: board
+                .units
+                .iter()
+                .map(|u| ui::UnitFact {
+                    name: u.id.to_string(),
+                    recipe: u.recipe.clone(),
+                    shown: Some(u.shown()),
+                    quiet: None,
+                    quiet_since: String::new(),
+                })
+                .collect(),
+            steps: board.units.iter().map(|u| u.steps.len()).sum(),
             read: true,
+            sentence: plan.sentence_html(),
+            needs: plan.needs_count(),
+            groups: plan.group_lines(),
+            finished: plan.finished_recent(FINISHED),
+            project,
         }
     }
     /// What it needs, as home orders the projects: a question to the owner, then something
@@ -225,191 +111,20 @@ impl HomeProject {
         }
         n
     }
-    /// Its summary sentence (`ui::summary_sentence`), or its counts when its plan was not read.
+    /// Its plan's sentence, or its counts when its plan was not read.
     pub fn sentence(&self) -> TrustedHtml {
-        let p = &self.project;
-        if !self.read {
-            let words = ui::states_words(&p.standing());
-            return TrustedHtml::owned(if words.is_empty() {
-                "No steps yet.".into()
-            } else {
-                format!("{}.", esc(&words))
-            });
+        if self.read {
+            return TrustedHtml::owned(self.sentence.clone());
         }
-        let ask = p
-            .asks
-            .first()
-            .map(|a| a.href(&p.id))
-            .unwrap_or_default();
-        let last = self
-            .finished
-            .iter()
-            .find(|f| f.shown.is_some_and(|s| s.spec().band == Band::Done))
-            .map(|f| f.at.as_str())
-            .unwrap_or("");
-        ui::summary_sentence(&ui::Summary {
-            asks: p.asks.len(),
-            ask_href: &ask,
-            units: &self.units,
-            last_done: last,
-            noun: ("unit", "units"),
+        let words = ui::states_words(&self.project.standing());
+        TrustedHtml::owned(if words.is_empty() {
+            "No steps yet.".into()
+        } else {
+            format!("{}.", esc(&words))
         })
     }
-    /// A square a unit, by band (asking, stopped, running, waiting, done), its counts said.
-    pub fn squares(&self) -> TrustedHtml {
-        if self.units.is_empty() {
-            return TrustedHtml::default();
-        }
-        let asking: Vec<&str> = self
-            .project
-            .asks
-            .iter()
-            .map(|a| a.step.as_str())
-            .collect();
-        let asks_in = |unit: &str| {
-            asking
-                .iter()
-                .any(|s| *s == unit || s.starts_with(&format!("{unit}-")))
-        };
-        let mut squares: Vec<(u8, &'static str)> = self
-            .units
-            .iter()
-            .map(|u| {
-                if asks_in(&u.name) {
-                    return (0, "ask");
-                }
-                match ui::Cell::of(u.shown) {
-                    ui::Cell::Look => (1, "look"),
-                    ui::Cell::Run => (2, "run"),
-                    ui::Cell::Empty => (3, "empty"),
-                    ui::Cell::Done => (4, "done"),
-                }
-            })
-            .collect();
-        squares.sort();
-        let tally: ui::Tally = self.units.iter().filter_map(|u| u.shown).collect();
-        let said = format!(
-            "{}: {}",
-            ui::count(self.units.len(), "unit", "units"),
-            ui::states_words(&tally)
-        );
-        TrustedHtml::owned(format!(
-            "<p class=\"pm-squares\" role=\"img\" aria-label=\"{}\">{}</p>",
-            esc(&said),
-            squares
-                .iter()
-                .map(|(_, k)| format!("<i class=\"mk mk-{k}\"></i>"))
-                .collect::<String>()
-        ))
-    }
-    /// Its rows: each question to the owner, each stopped step, then its running steps (five at
-    /// most, the rest counted).
-    pub fn rows(&self) -> TrustedHtml {
-        let p = &self.project;
-        let mut html = String::new();
-        for ask in &p.asks {
-            let who = if ask.step.is_empty() {
-                format!("<span class=\"pm-who\">{}</span>", ask.sender_html())
-            } else {
-                format!(
-                    "<span class=\"pm-who\">{}</span>",
-                    p.step_ref(&ask.step).html(40)
-                )
-            };
-            html.push_str(&format!(
-                "<li class=\"pm-row pm-ask\"><i class=\"mk mk-ask\" aria-hidden=\"true\"></i><span class=\"pm-line\">{who} <span class=\"pm-what\">asks you: <a href=\"{}\">{}</a></span></span></li>",
-                esc(&ask.href(&p.id)),
-                esc(&ask.title)
-            ));
-        }
-        for s in p.stopped_rows() {
-            let sref = p.step_ref(&s.step);
-            let href = format!("{}/steps/{}", p.href(), s.step);
-            let dismiss = if s.cancelled {
-                format!(
-                    "<form class=\"sr-dismiss\" method=\"post\" action=\"{}/steps/{}/actions\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"next\" value=\"/\"><button class=\"quiet\" aria-label=\"Dismiss the cancel of {}\">Dismiss</button></form>",
-                    p.href(),
-                    esc(&s.step),
-                    esc(&sref.link_name(72))
-                )
-            } else {
-                String::new()
-            };
-            html.push_str(&format!(
-                "<li class=\"pm-row pm-stopped sr-{key}\">{glyph}<span class=\"pm-line\"><span class=\"pm-who\">{name}</span> <span class=\"pm-what\"><span class=\"pm-word\">{word}</span>{why}</span></span>{dismiss}</li>",
-                key = s.shown().key(),
-                glyph = ui::glyph(s.shown()),
-                name = step_link(&sref, &href),
-                word = esc(s.shown().word()),
-                // "cancelled: pivot …", the word said once
-                why = match s.headline.strip_prefix("Cancelled: ").unwrap_or(&s.headline) {
-                    "" => String::new(),
-                    headline => format!(
-                        ": <a class=\"sr-why\" href=\"{}\" title=\"{t}\">{t}</a>",
-                        esc(&s.log_href(&p.id)),
-                        t = esc(headline)
-                    ),
-                },
-            ));
-        }
-        if p.stopped_more() > 0 {
-            html.push_str(&format!(
-                "<li class=\"pm-row pm-more\"><a href=\"{}?show=attention\">and {} more stopped</a></li>",
-                p.href(),
-                p.stopped_more()
-            ));
-        }
-        const RUNNING: usize = 5;
-        for run in self.running.iter().take(RUNNING) {
-            let sref = p.step_ref(&run.step);
-            let (shown, word) = if run.quiet {
-                (Shown::Quiet, "quiet")
-            } else {
-                (run.shown, run.shown.word())
-            };
-            html.push_str(&format!(
-                "<li class=\"pm-row pm-running{q}\">{glyph}<span class=\"pm-line\"><span class=\"pm-who\">{name}</span> <span class=\"pm-what\">{word}running for <span class=\"pm-for\">{since}</span></span></span></li>",
-                q = if run.quiet { " pm-quiet" } else { "" },
-                glyph = ui::glyph(shown),
-                name = step_link(&sref, &run.href),
-                // a run that is not plainly running says how first: "quiet · running for 9d"
-                word = if shown == Shown::Running {
-                    String::new()
-                } else {
-                    format!("<span class=\"pm-word\">{}</span> · ", esc(word))
-                },
-                since = ui::since(&run.since),
-            ));
-        }
-        if self.running.len() > RUNNING {
-            html.push_str(&format!(
-                "<li class=\"pm-row pm-more\"><a href=\"{}\">and {} more running</a></li>",
-                p.href(),
-                self.running.len() - RUNNING
-            ));
-        }
-        if html.is_empty() {
-            return TrustedHtml::default();
-        }
-        TrustedHtml::owned(format!(
-            "<ul class=\"pm-rows\" aria-label=\"What needs a look and what runs\">{html}</ul>"
-        ))
-    }
-    /// "Finished last: a-3 at 17:49, took 1h 27m · …", three at most.
-    pub fn finished_line(&self) -> TrustedHtml {
-        if self.finished.is_empty() {
-            return TrustedHtml::default();
-        }
-        TrustedHtml::owned(format!(
-            "<div class=\"pm-done\"><p class=\"pm-done-h\">Finished last</p>{}</div>",
-            ui::latest_list(
-                &format!("Finished last in {}", self.project.name),
-                &self.finished[..self.finished.len().min(3)]
-            )
-        ))
-    }
-    /// Its module: its name and size, its words, its sentence and squares, its rows, what
-    /// finished last and the way to its plan and its day.
+    /// Its card: its name and size, its words, its plan's sentence, what needs the owner
+    /// counted, At work's groups, what finished last, the way to its plan and its day.
     pub fn module(&self) -> TrustedHtml {
         let p = &self.project;
         let size = if self.read {
@@ -434,10 +149,26 @@ impl HomeProject {
         } else {
             String::new()
         };
-        // a card, not a well: a project is no question; its sentence says what needs the owner,
-        // the coral only on its questions
+        let needs = match self.needs {
+            0 => String::new(),
+            n => format!(
+                "<p class=\"pm-needs\"><a href=\"{}#needs\">{}</a></p>",
+                esc(&p.href()),
+                ui::count(n, "item needs you", "items need you")
+            ),
+        };
+        let finished = if self.finished.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "<div class=\"pm-done\"><p class=\"pm-done-h\">Finished lately</p>{}</div>",
+                self.finished
+            )
+        };
+        // a card, not a well: its sentence says what needs the owner, the coral only on its
+        // questions
         TrustedHtml::owned(format!(
-            "<article class=\"mod pm card\" style=\"--span:6\" data-span=\"6\" aria-label=\"{name}\"><div class=\"pm-head\"><h3 class=\"pm-name\"><a href=\"{href}\">{icon}{text}{name}</a></h3><p class=\"pm-size\">{state}{size}{paused}</p></div>{about}<p class=\"pm-summary\">{sentence}</p>{squares}{rows}{finished}<p class=\"pm-open\"><a href=\"{href}\">Open the {name} plan</a><a href=\"{href}/day\">Its day</a></p>{close}",
+            "<article class=\"pm card\" aria-label=\"{name}\"><div class=\"pm-head\"><h3 class=\"pm-name\"><a href=\"{href}\">{icon}{text}{name}</a></h3><p class=\"pm-size\">{state} {size}{paused}</p></div>{about}<p class=\"pm-summary\">{sentence}</p>{needs}{groups}{finished}<p class=\"pm-open\"><a href=\"{href}\">Open the {name} plan</a><a href=\"{href}/day\">Its day</a></p></article>",
             href = esc(&p.href()),
             text = if p.icon_text.is_empty() {
                 String::new()
@@ -453,18 +184,12 @@ impl HomeProject {
                 format!("<p class=\"pm-about\">{}</p>", esc(p.summary()))
             },
             sentence = self.sentence(),
-            squares = self.squares(),
-            rows = self.rows(),
-            finished = self.finished_line(),
-            close = ui::module_close(),
+            groups = self.groups,
         ))
     }
 }
-
-/// A step named by its stage and title, linked (its id is on its page and in its Details).
-fn step_link(sref: &ui::StepRef, href: &str) -> String {
-    sref.link(href, 56, false).0
-}
+/// How many of what finished last a project's card shows.
+const FINISHED: usize = 3;
 /// The page: every project, the open questions to the owner and the day, from what was read.
 #[derive(Clone, Debug)]
 pub struct HomeView {
@@ -502,7 +227,7 @@ impl HomeView {
             .projects
             .iter()
             .filter(|p| !p.archived)
-            .map(|p| HomeProject::new(p.clone(), boards.get(&p.id), now))
+            .map(|p| HomeProject::new(p.clone(), boards.get(&p.id)))
             .collect();
         projects.sort_by(|a, b| {
             a.rank()
@@ -544,84 +269,52 @@ impl HomeView {
     fn live(&self) -> impl Iterator<Item = &HomeProject> {
         self.projects.iter().filter(|p| p.project.counts.total() > 0)
     }
-    /// The band's sentence across the projects: its questions and where, what runs and where
-    /// (the quiet ones said), what stopped and where, and otherwise that all is
-    /// done or waiting.
+    /// The band's sentence across the projects, from counts alone: the questions for the owner
+    /// (linked to For you), each state that needs a look by its word, what runs and in how many
+    /// projects: "3 questions for you, 2 failed, 1 quiet; 63 running in 4 projects." Which
+    /// project is each card's to say.
     pub fn summary(&self) -> TrustedHtml {
-        let mut parts: Vec<String> = vec![];
-        let asking: Vec<&HomeProject> = self
-            .projects
-            .iter()
-            .filter(|p| !p.project.asks.is_empty())
-            .collect();
-        let asks: usize = asking.iter().map(|p| p.project.asks.len()).sum();
+        let asks: usize = self.projects.iter().map(|p| p.project.asks.len()).sum();
+        let mut first: Vec<String> = vec![];
         if asks > 0 {
-            let names: Vec<String> = asking.iter().map(|p| p.project.name.clone()).collect();
-            parts.push(format!(
-                "<a class=\"ask\" href=\"#for-you\">{} for you</a>, in {}.",
-                esc(&ui::count(asks, "question", "questions")),
-                esc(&day::join(&names))
+            first.push(format!(
+                "<a class=\"ask\" href=\"#for-you\">{}</a>",
+                esc(&ui::count(asks, "question for you", "questions for you"))
             ));
         }
+        let mut all = ui::Tally::default();
+        for project in self.live() {
+            all += &project.project.standing();
+        }
+        first.extend(
+            all.iter()
+                .filter(|(s, _)| s.spec().attention)
+                .map(|(s, n)| format!("{n} {}", esc(s.word()))),
+        );
         let running: Vec<&HomeProject> = self
             .live()
-            .filter(|p| !p.running.is_empty() || !p.project.running.is_empty())
+            .filter(|p| !p.project.running.is_empty())
             .collect();
-        let n_running: usize = running
-            .iter()
-            .map(|p| p.project.running.len().max(p.running.len()))
-            .sum();
-        if n_running > 0 {
-            let names: Vec<String> = running.iter().map(|p| p.project.name.clone()).collect();
-            let quiet: usize = running
-                .iter()
-                .map(|p| p.project.running.iter().filter(|r| r.quiet).count())
-                .sum();
-            parts.push(format!(
-                "{} running {}{}.",
-                n_running,
-                if names.len() == 1 {
-                    format!("in {}", esc(&names[0]))
-                } else {
-                    format!("across {}", esc(&day::join(&names)))
-                },
-                if quiet > 0 {
-                    format!(", {quiet} quiet")
-                } else {
-                    String::new()
-                }
-            ));
-        }
-        let stopped: Vec<String> = self
-            .live()
-            .filter(|p| !p.project.stopped.is_empty())
-            .map(|p| {
-                let tally: ui::Tally = p.project.stopped.iter().map(|s| s.shown()).collect();
-                let words: Vec<String> = tally
-                    .iter()
-                    .map(|(s, n)| format!("{n} {}", s.word()))
-                    .collect();
-                format!("{} in {}", day::join(&words), p.project.name)
-            })
-            .collect();
-        if !stopped.is_empty() {
-            parts.push(format!("Stopped: {}.", esc(&day::join(&stopped))));
-        }
-        if parts.is_empty() {
-            parts.push(match self.live().count() {
+        let n_running: usize = running.iter().map(|p| p.project.running.len()).sum();
+        let work = match (n_running, running.len()) {
+            (0, _) => String::new(),
+            (n, 1) => format!("{n} running in 1 project"),
+            (n, k) => format!("{n} running in {k} projects"),
+        };
+        let sentence = match (first.is_empty(), work.is_empty()) {
+            (false, false) => format!("{}; {work}.", first.join(", ")),
+            (false, true) => format!("{}.", first.join(", ")),
+            (true, false) => format!("{work}."),
+            (true, true) => match self.live().count() {
                 0 if self.projects.is_empty() => "No projects yet.".to_owned(),
                 0 => "No project has any steps yet.".to_owned(),
-                _ => {
-                    let waiting = self.live().any(|p| p.project.shown().spec().band == Band::Waiting);
-                    if waiting {
-                        "Nothing is running; the rest waits.".to_owned()
-                    } else {
-                        "Every project's work is done.".to_owned()
-                    }
+                _ if self.live().any(|p| p.project.shown().spec().band == Band::Waiting) => {
+                    "Nothing is running; the rest waits.".to_owned()
                 }
-            });
-        }
-        TrustedHtml::owned(parts.join(" "))
+                _ => "Every project's work is done.".to_owned(),
+            },
+        };
+        TrustedHtml::owned(sentence)
     }
     /// The page's head: "All projects", the sentence across them under it, and the runner
     /// stopped when it is. What each project finished last is on its module.
@@ -688,7 +381,7 @@ impl HomeView {
                 &id,
                 "",
                 &format!(
-                    "<span class=\"fy-where\">{} · {}</span> <b><a href=\"{}\">{}</a></b>",
+                    "<span class=\"fy-where\">{} ·</span> {} asks: <b><a href=\"{}\">{}</a></b>",
                     esc(&q.project_name),
                     q.from_who.html(&q.project),
                     esc(&place),

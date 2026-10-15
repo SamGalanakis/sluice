@@ -401,9 +401,9 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
     );
     assert!(html.contains(">run 2<"), "{html}");
 
-    // it succeeds: done, how long its last run took, static
+    // it succeeds, saying it is ready: done, how long its last run took, static
     set("UPDATE runs SET finished_at='2026-10-05T12:14:30Z' WHERE project_id=?1 AND finished_at IS NULL").await;
-    set("UPDATE steps SET status='succeeded' WHERE project_id=?1").await;
+    set("UPDATE steps SET status='succeeded',outputs='{\"ready\":true}' WHERE project_id=?1").await;
     let html = card(&state, project).await;
     assert!(html.contains(" · took 2h 14m</p>"), "{html}");
     assert!(!html.contains("data-since"), "{html}");
@@ -413,12 +413,10 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
     assert!(!card(&state, project).await.contains("took"));
 }
 
-/// The index and the project's counts tell a cancel from a failure, counted apart, and a
-/// project whose only stop is a cancel is not marked failed. Each stopped step is a row: its
-/// glyph, its name and its failure's one sentence, failures before cancels, four rows at most
-/// and "and n more" after them.
+/// The index and the project's counts tell a cancel from a failure, counted apart, failures
+/// before cancels, and a project whose only stop is a cancel is not marked failed.
 #[tokio::test]
-async fn the_index_lists_each_stopped_step_as_a_row_with_its_failure() {
+async fn the_index_counts_a_cancel_apart_from_a_failure() {
     let home = tempfile::tempdir().unwrap();
     let writer = Writer::open(home.path()).unwrap();
     let id = writer
@@ -491,29 +489,7 @@ async fn the_index_lists_each_stopped_step_as_a_row_with_its_failure() {
             ("pivoted", true)
         ]
     );
-    assert_eq!(project.stopped[0].headline, "Its fn failed: exit code 1.");
     assert_eq!(project.shown(), sluice_web::views::ui::Shown::Failed);
-    let html = views::home::HomeView::new(&snapshot).body().unwrap();
-    let rows = html.as_str().split("<ul class=\"pm-rows\"").nth(1).unwrap();
-    let rows = &rows[..rows.find("</ul>").unwrap()];
-    assert_eq!(
-        rows.matches("<li class=\"pm-row pm-stopped").count(),
-        4,
-        "{rows}"
-    );
-    // with no record kept, the reason still links: its step's records on the log
-    assert!(
-        rows.contains("log?step=")
-            && rows
-                .contains("title=\"Its fn failed: exit code 1.\">Its fn failed: exit code 1.</a>"),
-        "{rows}"
-    );
-    assert!(rows.contains("Stopped at its wall-clock cap"), "{rows}");
-    assert!(rows.contains("and 2 more stopped</a>"), "{rows}");
-    assert!(
-        !rows.contains("pivoted"),
-        "past four rows a stop is counted: {rows}"
-    );
     for step in ["b2", "b3", "b4", "dropped"] {
         writer
             .write(RetrySafety::NonIdempotent, move |tx| {
@@ -534,11 +510,10 @@ async fn the_index_lists_each_stopped_step_as_a_row_with_its_failure() {
     let html = views::home::HomeView::new(&snapshot).body().unwrap();
     assert!(
         html.as_str()
-            .contains("<li class=\"pm-row pm-stopped sr-cancelled\"><span class=\"g g-cancelled\""),
-        "a cancel's row: {}",
+            .contains("<p class=\"pm-summary\">1 failed · 1 cancelled.</p>"),
+        "{}",
         html.as_str()
     );
-    assert!(!html.as_str().contains("more</a>"));
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
             tx.sql().execute(

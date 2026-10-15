@@ -484,69 +484,8 @@ pub fn summary_sentence(s: &Summary<'_>) -> TrustedHtml {
     TrustedHtml::owned(parts.join(" "))
 }
 
-/// One unit (or a step of no unit) whose run ended: when, its name and title, how long.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Finished {
-    pub name: String,
-    pub title: String,
-    pub href: String,
-    /// When its last run ended.
-    pub at: String,
-    /// How long its work took, seconds, and in how many runs.
-    pub took: f64,
-    pub runs: usize,
-    /// How it ended: done, or a state that needs a look.
-    pub shown: Option<Shown>,
-    /// Where it belongs, when the list spans several (home's project name), said muted first.
-    pub place: String,
-}
-/// How many of what finished last a list shows.
+/// How many units Finished lists when no look is kept (the plan's "Finished lately").
 pub const LATEST: usize = 4;
-/// What finished last, newest first (the plan's Done head, home's Today): a line each, its clock
-/// time, its title (its name when it has none) and how long it took, linking to it. The name
-/// is not shown: it identifies, and its page has it. Nothing when nothing has finished.
-pub fn latest_list(label: &str, items: &[Finished]) -> TrustedHtml {
-    if items.is_empty() {
-        return TrustedHtml::default();
-    }
-    let rows: String = items
-        .iter()
-        .take(LATEST)
-        .map(|f| {
-            let took = format!(
-                "took {}{}",
-                duration_text(f.took),
-                if f.runs > 1 {
-                    format!(", {} runs", f.runs)
-                } else {
-                    String::new()
-                }
-            );
-            let ended = match f.shown {
-                Some(s) if s.spec().band != Band::Done => {
-                    format!("<span class=\"lt-how\">{}{}</span> ", mark(s), esc(word(s)))
-                }
-                _ => String::new(),
-            };
-            format!(
-                "<li><a href=\"{}\"><span class=\"lt-at\">{}</span><span class=\"lt-t\">{}{}</span><span class=\"lt-took\">{ended}{}</span></a></li>",
-                esc(&f.href),
-                clock(&f.at),
-                if f.place.is_empty() {
-                    String::new()
-                } else {
-                    format!("<span class=\"lt-place\">{}</span> ", esc(&f.place))
-                },
-                esc(if f.title.is_empty() { &f.name } else { &f.title }),
-                esc(&took)
-            )
-        })
-        .collect();
-    TrustedHtml::owned(format!(
-        "<ol class=\"latest\" aria-label=\"{}\">{rows}</ol>",
-        esc(label)
-    ))
-}
 
 /// A time of day: "17:49 UTC" on the server, so it says its zone without script; the reader's
 /// own clock once the page's script reads it (`data-clock`); the day and minute in UTC in its

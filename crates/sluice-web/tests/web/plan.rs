@@ -179,18 +179,17 @@ async fn plan_units_and_loose_steps() {
             "{html}"
         );
         assert!(html.contains("href=\"/static/favicon-ask.svg?v="), "{html}");
-        // Finished lately, with no look kept: the latest four, newest first, by title
+        // Finished lately, with no look kept: the latest four, newest first, by title; a card
+        // for the one that said what it produced, the three that left nothing in one line
         let cards = plan_html::band(&html, "plan-finished");
         assert!(
             cards.contains("<h2 id=\"finished\">Finished lately</h2>"),
             "{cards}"
         );
-        assert_eq!(cards.matches("<li class=\"fin-i\"").count(), 4, "{cards}");
-        // each says what it produced, its label over its value, or that it left nothing
+        assert_eq!(cards.matches("<li class=\"fin-i\"").count(), 1, "{cards}");
         assert!(
-            cards.contains("<p class=\"fin-o\"><span class=\"fin-n\">summary</span><span class=\"fin-v\">Fourteen entries")
-                && cards.matches("<p class=\"fin-o").count() == 4
-                && cards.contains("<p class=\"fin-o fin-none\">No output, and nothing said.</p>"),
+            cards.contains("<p class=\"fin-v\">Fourteen entries")
+                && cards.contains("<p class=\"fin-quiet\">3 more finished with nothing to say: <a"),
             "{cards}"
         );
         assert!(
@@ -563,7 +562,8 @@ async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
     assert!(
         cards.contains(
             "<h2 id=\"finished\">Finished since you looked</h2><span class=\"pb-note\">since "
-        ) && cards.matches("<li class=\"fin-i\"").count() == 5
+        ) && cards.matches("<li class=\"fin-i\"").count() == 1
+            && cards.contains("4 more finished with nothing to say")
             && cards.contains(&format!("/units/{a2}\"")),
         "{cards}"
     );
@@ -604,7 +604,7 @@ async fn a_big_roster_folds_its_unremarkable_groups() {
     // a finished card with no output says the unit's last message
     let cards = plan_html::band(&html, "plan-finished");
     assert!(
-        cards.contains("<span class=\"fin-n\">its last message</span>"),
+        cards.contains("<p class=\"fin-v\">Checked against the regional list"),
         "{cards}"
     );
     // a small plan leaves every group open

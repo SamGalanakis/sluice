@@ -941,6 +941,80 @@ impl<'a> Plan<'a> {
             format!("{}. {work}; {done}", first.join(", "))
         }
     }
+    // ---- the plan in brief, as home's card draws it ----------------------------------------------
+
+    /// The head's sentence, as its card says it.
+    pub fn sentence_html(&self) -> String {
+        self.sentence()
+    }
+    /// How many items of Needs you stand (what the owner set aside not counted).
+    pub fn needs_count(&self) -> usize {
+        self.needs.iter().filter(|n| n.aside.is_none()).count()
+    }
+    /// At work in brief: a line a group, its name, its rows counted and, when none of them is
+    /// remarkable, how lately each was heard from; its remarkable rows named under it.
+    pub fn group_lines(&self) -> String {
+        let mut out = String::new();
+        for group in &self.groups {
+            let rows: Vec<&Row<'_>> = group.rows.iter().collect();
+            let marked: Vec<&Row<'_>> = rows
+                .iter()
+                .copied()
+                .filter(|r| self.remarkable(r))
+                .collect();
+            let heard = if marked.is_empty() {
+                rows.iter()
+                    .filter_map(|r| r.heard)
+                    .reduce(f64::min)
+                    .map(|t| {
+                        format!(
+                            " · each heard from in the last {}",
+                            esc(&ui::duration_text((self.now - t).max(60.0)))
+                        )
+                    })
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let named: Vec<String> = marked
+                .iter()
+                .take(3)
+                .map(|r| {
+                    format!(
+                        "<a href=\"{}\">{}</a>",
+                        esc(&unit_href(self.view, r.unit)),
+                        esc(title(r.unit))
+                    )
+                })
+                .collect();
+            let _ = write!(
+                out,
+                "<li><b>{}</b> · {}{heard}{}</li>",
+                esc(&group.name),
+                row_counts(&rows),
+                if named.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "<span class=\"pm-g-said\">{}{}</span>",
+                        named.join(", "),
+                        match marked.len().saturating_sub(3) {
+                            0 => String::new(),
+                            n => format!(" and {n} more"),
+                        }
+                    )
+                }
+            );
+        }
+        if out.is_empty() {
+            return String::new();
+        }
+        format!("<ul class=\"pm-groups\">{out}</ul>")
+    }
+    /// The units that finished last, at most `n`, as the plan's Finished draws them.
+    pub fn finished_recent(&self, n: usize) -> String {
+        finished_list(self.view, &self.done[..self.done.len().min(n)])
+    }
     /// The page's head: the project's name, the sentence under it, and its Details (the
     /// project's id and its words), in one region its stream patches.
     pub fn band(&self) -> TrustedHtml {
@@ -1067,20 +1141,10 @@ impl<'a> Plan<'a> {
             .unwrap_or(0)
             .max(self.view.seen.unwrap_or(0));
         let mut out = format!(
-            "<section id=\"plan-finished\" class=\"pb-sec\" aria-labelledby=\"finished\"><div class=\"pb-label\"><h2 id=\"finished\">{head}</h2>{since}<span class=\"pb-grow\"></span><form class=\"nd-form\" method=\"post\" action=\"{h}/seen\"><input type=\"hidden\" name=\"through\" value=\"{through}\"><button class=\"quiet\">Mark as seen</button></form></div><ul class=\"fin\">",
+            "<section id=\"plan-finished\" class=\"pb-sec\" aria-labelledby=\"finished\"><div class=\"pb-label\"><h2 id=\"finished\">{head}</h2>{since}<span class=\"pb-grow\"></span><form class=\"nd-form\" method=\"post\" action=\"{h}/seen\"><input type=\"hidden\" name=\"through\" value=\"{through}\"><button class=\"quiet\">Mark as seen</button></form></div>{list}",
             h = esc(&self.view.href()),
+            list = finished_list(self.view, &self.finished),
         );
-        for unit in &self.finished {
-            out.push_str(&finished_card(
-                unit.finished(),
-                took(unit),
-                &unit_href(self.view, unit),
-                title(unit),
-                &produced(unit),
-                &said_states(unit),
-            ));
-        }
-        out.push_str("</ul>");
         if self.finished_more > 0 {
             let _ = write!(
                 out,
@@ -1825,40 +1889,100 @@ fn why_waiting(unit: &UnitView) -> String {
         _ => step.waits.first().cloned().unwrap_or_default(),
     })
 }
-/// What a done unit produced, its label on a line of its own over it: its last step's first
-/// output that explains (as its Overview reads them); else the first that identifies, in data
-/// mono; else its last message; else that it left neither.
-fn produced(unit: &UnitView) -> String {
-    let said = |label: &str, value: String| {
-        format!(
-            "<p class=\"fin-o\"><span class=\"fin-n\">{}</span><span class=\"fin-v\">{value}</span></p>",
-            esc(label)
-        )
-    };
+/// What a done unit produced, led by the values that identify it or say it in a word (as
+/// `ui::ValueSet` sorts them: a commit, a count of files), each named, then the output that
+/// explains it (its summary) or else its last message; `None` when it left neither.
+fn produced(unit: &UnitView) -> Option<String> {
+    let name = |n: &str| esc(&n.replace(['_', '-'], " "));
+    let mut facts: Vec<String> = vec![];
     for step in unit.steps.iter().rev() {
-        if let Some(field) = step.overview_outputs().first() {
-            let value = crate::markdown::cut(&crate::markdown::plain(&field.value), 160);
-            return said(&field.name.replace(['_', '-'], " "), esc(&value));
+        for field in step.outputs.iter().filter(|f| f.available) {
+            if facts.len() == 3 || facts.iter().any(|f| f.starts_with(&name(&field.name))) {
+                continue;
+            }
+            match ui::ValueSet::of_text(&field.value) {
+                ui::ValueSet::Detail if field.identifies() => facts.push(format!(
+                    "{} <code>{}</code>",
+                    name(&field.name),
+                    esc(&ui::cut(&field.value, 12))
+                )),
+                ui::ValueSet::Show if !field.value.trim().is_empty() => facts.push(format!(
+                    "{} <b>{}</b>",
+                    name(&field.name),
+                    esc(field.value.trim())
+                )),
+                _ => {}
+            }
         }
     }
-    for step in unit.steps.iter().rev() {
-        if let Some(field) = step.outputs.iter().find(|f| f.available && f.identifies()) {
-            return said(
-                &field.name.replace(['_', '-'], " "),
-                format!("<code>{}</code>", esc(&ui::cut(&field.value, 24))),
-            );
-        }
+    let said = unit
+        .steps
+        .iter()
+        .rev()
+        .find_map(|step| step.overview_outputs().first().map(|f| f.value.clone()))
+        .filter(|v| ui::ValueSet::of_text(v) == ui::ValueSet::Prose)
+        .or_else(|| {
+            let m = unit.last_message.trim();
+            (!m.is_empty()).then(|| m.to_owned())
+        });
+    if facts.is_empty() && said.is_none() {
+        return None;
     }
-    if !unit.last_message.trim().is_empty() {
-        return said(
-            "its last message",
-            esc(&crate::markdown::cut(
-                &crate::markdown::plain(&unit.last_message),
-                160,
+    let mut out = String::new();
+    if !facts.is_empty() {
+        out.push_str(&format!("<p class=\"fin-facts\">{}</p>", facts.join(" · ")));
+    }
+    if let Some(said) = said {
+        out.push_str(&format!(
+            "<p class=\"fin-v\">{}</p>",
+            esc(&crate::markdown::cut(&crate::markdown::plain(&said), 160))
+        ));
+    }
+    Some(out)
+}
+/// Finished, drawn one way on the plan and on home: a card a unit that produced something,
+/// then the rest, which finished with nothing to say, in one line naming them.
+pub fn finished_list(view: &ProjectView, units: &[&UnitView]) -> String {
+    let mut cards = String::new();
+    let mut quiet: Vec<String> = vec![];
+    for unit in units {
+        match produced(unit) {
+            Some(output) => cards.push_str(&finished_card(
+                unit.finished(),
+                took(unit),
+                &unit_href(view, unit),
+                title(unit),
+                &output,
+                &said_states(unit),
             )),
+            None => quiet.push(format!(
+                "<a{} href=\"{}\">{}</a>",
+                match said_states(unit) {
+                    s if s.is_empty() => String::new(),
+                    s => format!(" data-said=\"{}\"", esc(&s)),
+                },
+                esc(&unit_href(view, unit)),
+                esc(title(unit))
+            )),
+        }
+    }
+    let mut out = String::new();
+    if !cards.is_empty() {
+        let _ = write!(out, "<ul class=\"fin\">{cards}</ul>");
+    }
+    if !quiet.is_empty() {
+        let _ = write!(
+            out,
+            "<p class=\"fin-quiet\">{} finished with nothing to say: {}</p>",
+            if cards.is_empty() {
+                ui::count(quiet.len(), "unit", "units")
+            } else {
+                format!("{} more", quiet.len())
+            },
+            quiet.join(", ")
         );
     }
-    "<p class=\"fin-o fin-none\">No output, and nothing said.</p>".to_owned()
+    out
 }
 
 /// The Plan · Both · Board switch: a link each, so a choice works without script (the page

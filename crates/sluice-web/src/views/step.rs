@@ -2347,21 +2347,9 @@ pub fn load_progress(
         });
     Ok(())
 }
-/// Run history is current-generation only; a reused step id never inherits an
-/// old declaration's runs. Frozen attempted inputs come from durable results.
-/// Each step's latest failure as its project's log records it: the seq of its latest
-/// `step.status` record to failed, by step id.
-pub fn failure_records(
-    c: &rusqlite::Connection,
-    project: ProjectId,
-) -> sluice_store::Result<std::collections::BTreeMap<String, i64>> {
-    let mut q = c.prepare_cached("SELECT step_id,max(seq) FROM records WHERE project_id=?1 AND kind='step.status' AND step_id IS NOT NULL AND json_extract(payload,'$.to')='failed' GROUP BY step_id")?;
-    let rows = q.query_map([project.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))?;
-    Ok(rows.collect::<Result<_, _>>()?)
-}
 /// A failure's own record on its project's log: the step's records up to it, it first and
 /// marked (`#r<seq>`, the log's `:target`).
-pub fn failure_log_href(project: &ProjectId, step: &str, seq: i64) -> String {
+fn failure_log_href(project: &ProjectId, step: &str, seq: i64) -> String {
     let query = url::form_urlencoded::Serializer::new(String::new())
         .append_pair("step", step)
         .append_pair("before", &(seq + 1).to_string())

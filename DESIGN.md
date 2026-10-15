@@ -242,8 +242,10 @@ outputs and the project's board document. Nothing in view code assumes a project
 - **Stages** come from a unit's recipe's own steps, in recipe order. A project with several
   recipes gets a group a recipe in At work; a unit's row names its current stage, and its step
   view draws them all.
-- **"Finished last"** is the units (or steps of no unit) whose run ended most recently, by
-  title, with when and how long they took.
+- **Finished** has one component and one name: "Finished since you looked", or "Finished
+  lately" while no look is kept. It is the units (or steps of no unit) whose run ended most
+  recently, newest first. The plan and each project's card on home draw it the same way
+  (`plan::finished_list`).
 - **A long run** (a step of no recipe running six hours or more, or reporting `step_progress`)
   goes with the long runs, last in At work; its progress fields show as it reported them:
   sluice never reads or names them.
@@ -1175,13 +1177,16 @@ the page's stream. A lane that redraws a page writes its notes here.
     script the × and Undo post in place, the focus going to Undo and back to the item. With
     nothing to say, no well: one muted line, "Nothing needs you. 4 set aside.". Each Set aside
     line reads as one sentence with its Undo after it, wrapping as text does at any width.
-  - **Finished since you looked**: cards (10px, a hairline inset, filling their row, one
-    under 760px, each as tall as its own content): when it finished and how long it took, the
-    title in weight 600 linking the unit, what it produced, always: its output's name small and
-    muted on a line of its own, the value in ink under it; with no output that explains or
-    identifies, "its last message" and that message cut to 160 characters; with neither, "No
-    output, and nothing said." muted. "since 14:02" and "Mark as seen" (a plain form) in the
-    head; with no look kept, "Finished lately", the latest four. Under 760px the section
+  - **Finished since you looked**: a card a unit that produced something (10px, a hairline
+    inset, filling their row, one under 760px, each as tall as its own content). A card shows
+    when it finished and how long it took, then the title in weight 600 linking the unit. Next
+    comes what it produced, led by the values `ui::ValueSet` picks out: a value that
+    identifies it (a sha, as code) or says it in a word (a count of files, in ink), each named
+    small and muted, at most three on one line. Under them is the output that explains it (its
+    summary) or else its last message, cut to 160 characters. The units that left neither
+    share one muted line after the cards: "3 more finished with nothing to say:" and their
+    titles as links. "since 14:02" and "Mark as seen" sit in the head; with no look kept, the
+    head says "Finished lately" and the section holds the latest four. Under 760px the section
     follows At work: what is at work comes before what finished.
   - **At work**: the roster, under an axis row (12h, 4h, 1h, 15m, now, 12px over the tracks'
     column; it says its scale to a screen reader and on hover: "The last 12 hours on a log
@@ -1278,18 +1283,23 @@ the page's stream. A lane that redraws a page writes its notes here.
   A conversation's messages are rows apart by hairlines, each with its Details (its id, its
   thread, what it replies to), an open question to the owner as the question card with its reply
   under it, the message box under a hairline.
-- **Home** (`/`, `views::home`): the projects as cards and an index. The head: "All projects"
-  and one sentence across them (the questions first, in coral, then what runs and where, then
-  what stopped where), "Runner stopped" on the sand when it is. For you (eight columns: each
-  open question to the owner as an asking module, its title at 18px, its words, Answer and
-  Close in place, the way to its step; an answered one the line that says so) beside Today (four:
-  a project's last day in a line, the way to the day); with no question For you is one line and
-  Today a row across. Then Projects, ordered by what needs the owner: a card a project
-  (`.pm.card`, as many to a row as fit 460px each): its name and icon in the title face at
-  20px/26px, its state's glyph and size, its words muted, its summary sentence at body size, a
-  9px square a unit (coral asks, sand needs a look, blue runs, an outline waits, sky done), its
-  rows (questions, stopped steps, running steps by title, "running for 1h 10m"), what it
-  finished last by title, and the way to its plan and its day. Then the Index, a table of every
+- **Home** (`/`, `views::home`): the projects as cards and an index, built from the plan's
+  parts. The head is "All projects" and one sentence of counts alone: "3 questions for you,
+  2 failed, 1 quiet; 63 running in 4 projects." Which project is each card's to say. "Runner
+  stopped" sits under it on the sand, without a rule. For you (eight columns) is the Needs-you
+  list, a line an open question: its coral dot, its project and who asked, its title linking
+  where it is answered, Answer and the ×. An answered one becomes the line that says so. Today
+  (four columns) is a project's last day in a line and the way to the day; with no question,
+  For you is one line and Today a row across. Then Projects, ordered by what needs the owner:
+  a card a project (`.pm.card`, as many to a row as fit 460px each; a row's cards as tall as
+  its tallest, so the grid has no holes). A card holds:
+  - its name and icon in the title face at 20px/26px, its state's glyph and size, its words muted;
+  - its plan's sentence at body size;
+  - "4 items need you", linking its plan's Needs you;
+  - At work's groups, a line each, as the plan's group lines read, with its remarkable units
+    named;
+  - "Finished lately", the plan's Finished component, three at most;
+  - the way to its plan and its day. Then the Index, a table of every
   project's units by band on hairlines, archived ones muted, its counts 10ch each so on a wide
   screen they stand together at the right; on a phone it drops Changed and Waiting so it fits
   without a hidden scroll, and its links and Today's are 44px targets.

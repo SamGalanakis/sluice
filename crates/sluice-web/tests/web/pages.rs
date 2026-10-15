@@ -373,8 +373,8 @@ async fn home_attention_and_reader_day() {
     {
         let (status, home) = f.get("/").await;
         assert_eq!(status, 200);
-        // the head: "All projects", the sentence across the projects under it, the question first,
-        // linked to For you; what finished last is on each project's module, not here
+        // the head: "All projects", the sentence across the projects under it, counts alone:
+        // the question first, linked to For you; what finished is on each project's card
         let band = between(
             &home,
             "<div id=\"home-band\" class=\"band-wrap\">",
@@ -382,10 +382,9 @@ async fn home_attention_and_reader_day() {
         );
         assert!(band.contains("<h1>All projects</h1>"), "{band}");
         assert!(
-        band.contains("<p class=\"page-line\"><a class=\"ask\" href=\"#for-you\">1 question for you</a>, in almanac."),
-        "{band}"
-    );
-        assert!(band.contains("Stopped: "), "{band}");
+            band.contains("<p class=\"page-line\"><a class=\"ask\" href=\"#for-you\">1 question for you</a>, 3 failed, 1 cancelled, 1 quiet; 6 running in 2 projects.</p>"),
+            "{band}"
+        );
         assert!(!band.contains("Recently finished"), "{band}");
         // nothing holds the runner in a test home: said under the sentence
         assert!(
@@ -430,31 +429,30 @@ async fn home_attention_and_reader_day() {
         // a project with no steps is in the index only
         assert!(!grid.contains("aria-label=\"plain\""), "{grid}");
         let almanac = between(grid, "aria-label=\"almanac\"", "</article>");
-        // its own sentence counts its units (its plan groups them by recipe); a square a unit; its rows
+        // its card is its plan in brief: the plan's sentence, what needs the owner counted and
+        // linked to the plan's Needs you, At work's groups a line each, what finished lately
         assert!(
             almanac.contains("<p class=\"pm-summary\"><a class=\"ask\""),
             "{almanac}"
         );
-        assert!(almanac.contains("<i class=\"mk mk-ask\"></i>"), "{almanac}");
-        assert!(almanac.contains("asks you: <a href="), "{almanac}");
         assert!(
-            almanac.contains("<li class=\"pm-row pm-stopped sr-failed\">"),
+            almanac.contains(&format!(
+                "<p class=\"pm-needs\"><a href=\"/projects/id/{}#needs\">4 items need you</a></p>",
+                n.almanac
+            )),
             "{almanac}"
         );
         assert!(
-            almanac.contains("<li class=\"pm-row pm-running pm-quiet\">"),
+            almanac.contains("<ul class=\"pm-groups\"><li><b>"),
             "{almanac}"
         );
-        // a running row says how long it has run and nothing of a usual time
         assert!(
-            almanac.contains("running for <span class=\"pm-for\">"),
+            almanac.contains("<p class=\"pm-done-h\">Finished lately</p>"),
             "{almanac}"
         );
-        assert!(!almanac.contains("usual"), "{almanac}");
-        assert!(almanac.contains("Finished last"), "{almanac}");
-        // the stopped cancel is dismissed from here and comes back here
+        // no step's own rows, no square a unit
         assert!(
-            almanac.contains("<input type=\"hidden\" name=\"next\" value=\"/\">"),
+            !almanac.contains("pm-row") && !almanac.contains("pm-squares"),
             "{almanac}"
         );
         // Today: a line a project, and the way to the timetable

@@ -24,21 +24,6 @@ fn between<'a>(html: &'a str, from: &str, to: &str) -> &'a str {
     &html[start..end]
 }
 
-/// Home's stopped row for `step`, in its project's module.
-fn stopped_row<'a>(home: &'a str, step: &str) -> &'a str {
-    let row = home
-        .split("<li class=\"pm-row pm-stopped")
-        .skip(1)
-        .find(|r| {
-            r.split("</li>")
-                .next()
-                .unwrap()
-                .contains(&format!("/steps/{step}\""))
-        })
-        .unwrap_or_else(|| panic!("no stopped row for {step} in {home}"));
-    &row[..row.find("</li>").unwrap()]
-}
-
 fn agent(kind: &str) -> PublicError {
     PublicError::AgentFailure {
         kind: kind.into(),
@@ -284,13 +269,6 @@ async fn a_stopped_card_names_its_failures_kind_and_says_why_under_it() {
 async fn a_failure_links_its_own_log_record_which_the_log_marks() {
     let f = Fixture::new().await;
     let id = retried(&f).await;
-    // no record kept: the sentence links the step's records on the log, as every reason does
-    let (_, home) = f.get("/").await;
-    let row = stopped_row(&home, "l2-work");
-    assert!(
-        row.contains(&format!("<a class=\"sr-why\" href=\"/projects/id/{id}/log?step=l2-work\" title=\"Its engine hit a usage cap.\">")),
-        "{row}"
-    );
     let seq = f
         .writer
         .write(RetrySafety::NonIdempotent, move |tx| {
@@ -337,16 +315,6 @@ async fn a_failure_links_its_own_log_record_which_the_log_marks() {
             "<p class=\"meta err-log\"><a href=\"{href}\">Its log record {seq}</a></p>"
         )),
         "{why}"
-    );
-    // the index's stopped row
-    let (_, home) = f.get("/").await;
-    let row = stopped_row(&home, "l2-work");
-    assert!(
-        row.contains(&format!(
-            "<a class=\"sr-why\" href=\"{}\"",
-            href.replace("&#38;", "&amp;")
-        )),
-        "{row}"
     );
     // the page it opens: the failure first, its row the target
     let log = sluice_web::views::log::load(

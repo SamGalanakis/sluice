@@ -311,28 +311,13 @@ impl RunningView {
     }
 }
 
-/// A step that stopped: failed, or cancelled by the owner, with its failure's one sentence
-/// (`failure::Failure`'s headline: "Stopped at its wall-clock cap after 10h 0m.").
+/// A step that stopped: failed, or cancelled by the owner.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StoppedView {
     pub step: String,
     pub cancelled: bool,
-    pub headline: String,
-    /// The log record that says it failed (its latest `step.status` to failed), when kept.
-    #[serde(default)]
-    pub record: Option<i64>,
 }
 impl StoppedView {
-    /// Its failure's own record on its project's log, that record in view and marked
-    /// (`step::failure_log_href`); "" when the log no longer keeps it.
-    /// Where its reason leads: its failure's own log record, else its step's records on the
-    /// log, so every reason on the index is a link.
-    pub fn log_href(&self, project: &ProjectId) -> String {
-        self.record.map_or_else(
-            || format!("/projects/id/{project}/log?step={}", self.step),
-            |seq| step::failure_log_href(project, &self.step, seq),
-        )
-    }
     pub fn shown(&self) -> ui::Shown {
         if self.cancelled {
             ui::Shown::Cancelled
@@ -357,9 +342,6 @@ pub struct ProjectView {
     pub running: Vec<RunningView>,
     /// Its failed steps, then the ones the owner cancelled, in plan order.
     pub stopped: Vec<StoppedView>,
-    /// How the index names its running, failed and cancelled steps (`ui::StepRef`), by id.
-    #[serde(default)]
-    pub names: std::collections::BTreeMap<String, ui::StepRef>,
     /// Its cancelled steps the owner dismissed (`StepDismiss`): each stays on its unit, but no
     /// longer marks the project, its tab or its index row.
     #[serde(default)]
@@ -429,25 +411,8 @@ impl ProjectView {
     pub fn ask_of(&self, step: &str) -> Option<&AskView> {
         self.asks.iter().find(|a| a.step == step)
     }
-    /// How a page names one of its listed steps: its title and id, or its id alone.
-    pub fn step_ref(&self, id: &str) -> ui::StepRef {
-        self.names.get(id).cloned().unwrap_or_else(|| ui::StepRef {
-            id: id.to_owned(),
-            ..Default::default()
-        })
-    }
     pub fn href(&self) -> String {
         format!("/projects/id/{}", self.id)
-    }
-    /// How many stopped steps the index lists by name; the rest it counts.
-    pub const STOPPED_ROWS: usize = 4;
-    /// The stopped steps the index lists, failures first.
-    pub fn stopped_rows(&self) -> &[StoppedView] {
-        &self.stopped[..self.stopped.len().min(Self::STOPPED_ROWS)]
-    }
-    /// The stopped steps past `STOPPED_ROWS`.
-    pub fn stopped_more(&self) -> usize {
-        self.stopped.len().saturating_sub(Self::STOPPED_ROWS)
     }
     /// Its counts as they mark the project: without the cancels the owner dismissed.
     pub fn standing(&self) -> ui::Tally {
@@ -1319,7 +1284,6 @@ pub fn load_snapshot(
             counts: ui::Tally::default(),
             running: vec![],
             stopped: vec![],
-            names: Default::default(),
             dismissed: Default::default(),
             asks: vec![],
             looks: 0,
@@ -1339,8 +1303,6 @@ pub fn load_snapshot(
                 let stopped = StoppedView {
                     step,
                     cancelled: failure.cancelled,
-                    headline: failure.headline,
-                    record: None,
                 };
                 if stopped.cancelled {
                     cancels.push(stopped);
@@ -1359,13 +1321,6 @@ pub fn load_snapshot(
         view.dismissed = sluice_store::messages::dismissed(c, id)?;
         cancels.retain(|s| !view.dismissed.contains(&s.step));
         view.stopped.extend(cancels);
-        // each stopped step's failure as its log records it, so its row links that record
-        if !view.stopped.is_empty() {
-            let records = step::failure_records(c, id)?;
-            for stopped in &mut view.stopped {
-                stopped.record = records.get(&stopped.step).copied();
-            }
-        }
         // its runs' activity, read once: whether each is quiet
         observe_activity(&home_of(c), &mut view.running);
         // every step by how it reads from what the store says (the board evaluates the plan
@@ -1408,20 +1363,6 @@ pub fn load_snapshot(
                 view.looks += 1;
             }
             view.counts.add(shown);
-        }
-        // the steps the index lists, named (`sluice_model::naming`)
-        if !(view.running.is_empty() && view.stopped.is_empty()) {
-            let names = sluice_runtime::naming::for_project(c, &home_of(c), id)?;
-            for step in view
-                .running
-                .iter()
-                .map(|r| r.step.clone())
-                .chain(view.stopped.iter().map(|s| s.step.clone()))
-                .collect::<Vec<_>>()
-            {
-                let named = ui::StepRef::new(&step, names.naming.step(&step));
-                view.names.insert(step, named);
-            }
         }
         // The project's last record, by its index: records are appended in time order.
         let last: Option<String> = c

@@ -396,26 +396,15 @@ async fn states_priorities_cancellation_and_skipped_units() {
         // the index: the same counts from the store (the plan's blocked, held, queued and outside
         // steps there are pending), the running steps by how each reads
         let (_, home) = f.get("/").await;
-        // home's module: its squares say every state that needs a look, its rows each running one
-        let row = between(&home, "aria-label=\"states\"", "</article>");
-        let squares = between(row, "<p class=\"pm-squares\"", ">");
-        for state in [Shown::Failed, Shown::Cancelled, Shown::Stale, Shown::Quiet] {
-            assert!(
-                squares.contains(&format!(" {}", state.word())),
-                "{state:?}: {squares}"
-            );
-        }
-        for state in [
-            Shown::Quiet,
-            Shown::Stopping,
-            Shown::Finishing,
-            Shown::Running,
-        ] {
-            assert!(row.contains(&glyph(state)), "{state:?}: {row}");
-        }
+        // home's card: its plan's sentence says every state that needs a look, its groups
+        // what runs, the quiet one named
+        let card = between(&home, "aria-label=\"states\"", "</article>");
         assert!(
-            row.contains("<span class=\"pm-word\">stopping</span> · running for"),
-            "{row}"
+            card.contains(
+                "<p class=\"pm-summary\">1 failed, 1 cancelled, 1 stale, 1 quiet. 5 at work;"
+            ) && card.contains("<li><b>Long runs</b> · 1 quiet<span class=\"pm-g-said\"><a href=")
+                && card.contains("/steps/s-quiet\">s-quiet</a>"),
+            "{card}"
         );
         // the tab title counts what needs attention (the fixture's lanes has a failure too)
         assert!(

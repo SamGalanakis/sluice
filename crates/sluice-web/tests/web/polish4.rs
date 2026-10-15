@@ -155,33 +155,28 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     let (_, page) = f.get("/").await;
     assert!(page.contains("<title>3 questions · "), "{page}");
 
-    // home: each question leads its project's module, a row of its own under the coral mark:
-    // a step's names the step and leads to its Overview, the orchestrator's to the inbox; the
-    // asking step's running row says nothing of it again
-    let module = between(&page, "aria-label=\"titled\"", "</article>");
-    let asks = between(
-        module,
-        "<li class=\"pm-row pm-ask\">",
-        "<li class=\"pm-row pm-running",
-    );
-    assert!(
-        asks.contains(&format!(
-            "asks you: <a href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\">Land l1 first?</a>"
-        )) && asks.contains("<span class=\"sref-t\">FIG-1: Fix the cron driver</span>")
-            && !asks.contains("sref-id"),
+    // home: For you lists each question under the coral dot, a step's leading to its step,
+    // the old shared address's to its thread; the project's card counts them
+    let asks = between(&page, "<ul class=\"nd-list fy-list\">", "</ul>");
+    assert_eq!(
+        asks.matches("<span class=\"nk nk-ask\"").count(),
+        3,
         "{asks}"
     );
     assert!(
         asks.contains(&format!(
-            "<span class=\"pm-who\"><span class=\"who-old\">orchestrator</span></span> <span class=\"pm-what\">asks you: <a href=\"/projects/id/{id}/inbox#item-{id}-{orchestrator}\">Accept revision 3?</a>"
+            "<b><a href=\"/projects/id/{id}/steps/l1-work\">Land l1 first?</a></b>"
         )),
         "{asks}"
     );
-    let row = between(module, "<li class=\"pm-row pm-running", "</li>");
+    let old = between(asks, &format!("id=\"item-{id}-{orchestrator}\""), "</li>");
     assert!(
-        !row.contains("pill ask") && !row.contains("mk-ask"),
-        "{row}"
+        old.contains("<span class=\"who who-old\">orchestrator</span>")
+            && old.contains(">Accept revision 3?</a></b>"),
+        "{old}"
     );
+    let card = between(&page, "aria-label=\"titled\"", "</article>");
+    assert!(card.contains("3 questions for you</a>"), "{card}");
 
     // the plan: its sentence counts them, linked to Needs you, where each is an item of its own
     // under the coral dot, its Answer leading to where it was asked

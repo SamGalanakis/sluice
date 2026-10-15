@@ -146,22 +146,6 @@ async fn recipe_titles_and_search() {
             unit.contains("<title>FIG-2: Stop the parser leak · titled · sluice</title>"),
             "{unit}"
         );
-        // home: a running step by its stage and title, never its id
-        let (_, home) = f.get("/").await;
-        assert!(
-        home.contains("<span class=\"sref\"><span class=\"sref-stage\">work ·</span> <span class=\"sref-t\">FIG-1: Fix the cron driver</span></span>"),
-        "{home}"
-    );
-        assert!(
-            home.contains("<span class=\"sref-t\">Watches main for red</span>"),
-            "{home}"
-        );
-        // a failed step in the stopped rows too
-        assert!(
-            home.contains("<span class=\"sref-t\">FIG-2: Stop the parser leak</span>"),
-            "{home}"
-        );
-        assert!(!home.contains("sref-id"), "{home}");
         // the plan: a loose step's row is its title
         let (_, board) = f.get(&format!("/projects/id/{id}")).await;
         let watch = match plan_html::place(&board, "watch") {

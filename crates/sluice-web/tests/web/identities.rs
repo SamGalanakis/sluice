@@ -208,7 +208,7 @@ async fn messages_name_their_identities_and_the_old_shared_address_stays_as_stor
     never(&plan);
     let (_, home) = f.get("/").await;
     assert!(
-        home.contains("<span class=\"pm-who\"><span class=\"who-old\">orchestrator</span></span>"),
+        home.contains("<span class=\"who who-old\">orchestrator</span> asks: <b><a href="),
         "{home}"
     );
     never(&home);

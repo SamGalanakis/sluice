@@ -633,26 +633,6 @@ fn details_part(prefix: &str) -> TrustedHtml {
         details.menu("Terns: the spring guide's entries")
     ))
 }
-/// What finished last, as the plan's Done head and a project's module on home list it.
-fn latest_part() -> TrustedHtml {
-    let finished = [
-        ("a-5", "Plovers: the spring guide's entries", 3_420, 3_840.0, 2),
-        ("s-2", "Scan the photograph archive for credits", 3_900, 312.0, 1),
-        ("a-4", "Herons: the autumn guide's entries", 6_100, 2_520.0, 1),
-        ("a-3", "", 8_800, 1_980.0, 1),
-    ]
-    .map(|(name, title, ago, took, runs)| ui::Finished {
-        name: name.into(),
-        title: title.into(),
-        href: "#".into(),
-        at: before(ago),
-        took,
-        runs,
-        shown: Some(Shown::Succeeded),
-        place: String::new(),
-    });
-    ui::latest_list("Finished last", &finished)
-}
 /// A band section's head, as the other pages' sections wear it.
 fn heads_part() -> TrustedHtml {
     TrustedHtml::owned(format!(
@@ -713,13 +693,9 @@ fn plan_part(prefix: &str) -> TrustedHtml {
         ),
     ]
     .concat();
-    let output = |name: &str, value: &str| {
-        format!("<p class=\"fin-o\"><span class=\"fin-n\">{name}</span> {value}</p>")
-    };
     let finished = [
-        finished_card(&before(1_500), 15_300.0, "#", "Plovers: the spring guide's entries", &output("summary", "Fourteen entries, each with its photograph credited."), ""),
-        finished_card(&before(8_040), 14_160.0, "#", "Herons: the autumn guide's entries", &output("commit", "<code>9e1c0a4</code>"), ""),
-        finished_card(&before(9_840), 312.0, "#", "Scan the photograph archive for credits", "", ""),
+        finished_card(&before(1_500), 15_300.0, "#", "Plovers: the spring guide's entries", "<p class=\"fin-facts\">commit <code>3f2b9d1</code> · entries <b>14</b></p><p class=\"fin-v\">Fourteen entries, each with its photograph credited.</p>", ""),
+        finished_card(&before(8_040), 14_160.0, "#", "Herons: the autumn guide's entries", "<p class=\"fin-facts\">commit <code>9e1c0a4</code></p>", ""),
     ]
     .concat();
     let row = |id: &str, badge: &str, title: &str, said: &str, meta: String, segs: &[(&str, f64, f64)], ticks: &[f64]| {
@@ -769,11 +745,11 @@ fn plan_part(prefix: &str) -> TrustedHtml {
     ]
     .concat();
     TrustedHtml::owned(format!(
-        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\"><div class=\"pb-label\"><h2>Needs you</h2><span class=\"pb-count\">3</span></div><ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>Finished since you looked</h2><span class=\"pb-note\">since {}</span><span class=\"pb-grow\"></span><button type=\"button\" class=\"quiet\">Mark as seen</button></div><ul class=\"fin\">{finished}</ul></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>At work</h2><span class=\"pb-note\">2 units</span></div><div class=\"ro\">{}<details class=\"ro-g\" open><summary class=\"ro-group\"><h3><b>article</b> · 2 running</h3></summary>{}{rows}</details></div><p class=\"ro-more\"><b>2 waiting</b> on earlier work · <a href=\"#\"><b>5 done</b></a>, the last {}</p></section></div></div>",
-        ui::clock(&before(14_400)),
+        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\"><div class=\"pb-label\"><h2>Needs you</h2><span class=\"pb-count\">3</span></div><ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>At work</h2><span class=\"pb-note\">2 units</span></div><div class=\"ro\">{}<details class=\"ro-g\" open><summary class=\"ro-group\"><h3><b>article</b> · 2 running</h3></summary>{}{rows}</details></div><p class=\"ro-more\"><b>2 waiting</b> on earlier work · <a href=\"#\"><b>5 done</b></a>, the last {}</p></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>Finished since you looked</h2><span class=\"pb-note\">since {}</span><span class=\"pb-grow\"></span><button type=\"button\" class=\"quiet\">Mark as seen</button></div><ul class=\"fin\">{finished}</ul><p class=\"fin-quiet\">1 more finished with nothing to say: <a href=\"#\">Scan the photograph archive for credits</a></p></section></div></div>",
         axis(""),
         axis(" ro-axis-g"),
         ui::ago(&before(1_500)),
+        ui::clock(&before(14_400)),
     ))
 }
 fn strips_part() -> TrustedHtml {
@@ -1304,7 +1280,6 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Page head", "The page's name and, on a plan and home, the summary sentence; what identifies the page sits behind its ⋯.", "`ui::page_head`, `ui::page_head_with` in `Frame::head` (`render_framed`); `ui::summary_sentence` from `ui::UnitFact`s.", both(&|_| Ok(head_part()))?);
     add("Step head", "A step's way back, name, state, words, its unit's stages and its actions.", "`StepView::band` (`templates/step_band.html`) in `Frame::head`, the region a step's stream patches as `step-band`; `ui::stage_strip_at`.", both(&|p| step_band_part(p))?);
     add("Details", "What identifies an item, behind one ⋯ at its end; a failure's ⋯ also holds Set it aside.", "`ui::Details`, its `actions` and its `menu` (`sluice-menu`).", both(&|p| Ok(details_part(p)))?);
-    add("Finished last", "What finished most recently, newest first.", "`ui::latest_list` from `ui::Finished`s.", both(&|_| Ok(latest_part()))?);
     add("Summary sentence", "One sentence from the counts alone, the question for you first.", "`ui::summary_sentence`.", both(&|_| Ok(summary_part()))?);
     add("Module grid", "Twelve columns every module spans, half or whole on a medium sheet.", "`ui::grid_open`, `ui::module_open`.", both(&|p| Ok(grid_part(p)))?);
     add("Modules", "A unit, a question or a step on the grid; the one that needs you swells.", "`ui::module_open` with `ui::Swell`, `.mod-k`, `.mod-t`, `.mod-meta`, `.mod-body`, `.mod-actions`.", both(&|_| Ok(modules_part()))?);

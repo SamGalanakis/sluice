@@ -172,7 +172,7 @@ async fn a_step_with_messages_has_a_messages_tab() {
 }
 
 #[tokio::test]
-async fn a_failure_says_what_to_try_and_the_index_says_a_runs_time_as_running() {
+async fn a_failure_says_what_to_try() {
     let f = Fixture::new().await;
     let id = f
         .project(
@@ -210,14 +210,6 @@ async fn a_failure_says_what_to_try_and_the_index_says_a_runs_time_as_running() 
                     "<p class=\"err-next\">Retry once its engine&#x27;s usage cap resets.</p>"
                 )),
         "{page}"
-    );
-    run(&f, id, "r", "2026-10-01T00:00:00Z", None, None).await;
-    let (_, home) = f.get("/").await;
-    assert!(
-        home.contains(
-            "running for <span class=\"pm-for\"><time data-since=\"2026-10-01T00:00:00Z\""
-        ),
-        "{home}"
     );
 }
 

@@ -636,17 +636,21 @@ async fn filtered_units_progress_done_and_paused() {
         })
         .await
         .unwrap();
-        // the plan: what finished lately, the latest four, newest first; the rest counted
+        // the plan: what finished lately, the latest four, newest first, in one line, for
+        // none said what it produced; the rest counted
         let (status, html) = f.get(&format!("/projects/id/{id}")).await;
         assert_eq!(status, StatusCode::OK, "{html}");
         let recent = plan_html::band(&html, "plan-finished");
-        assert_eq!(recent.matches("<li class=\"fin-i\"").count(), 4, "{recent}");
+        assert!(
+            recent.contains("<p class=\"fin-quiet\">4 units finished with nothing to say: ")
+                && !recent.contains("<li class=\"fin-i\""),
+            "{recent}"
+        );
         assert!(
             recent.find("/u24\"").unwrap() < recent.find("/u21\"").unwrap(),
             "{recent}"
         );
         assert!(!recent.contains("/u20\""), "{recent}");
-        assert!(recent.contains(" · took 1h 24m</p>"), "{recent}");
         assert!(
             plan_html::band(&html, "plan-roster").contains("<b>25 done</b></a>, the last"),
             "{html}"
@@ -720,16 +724,16 @@ async fn filtered_units_progress_done_and_paused() {
             ),
             (1, 1, 3)
         );
-        // home's module counts it paused: its squares say each unit's state
+        // home's card says it paused, as its plan does
         let (_, home) = f.get("/").await;
-        let module = home
-            .split("<article class=\"mod")
+        let card = home
+            .split("<article class=\"pm card\"")
             .find(|m| m.contains("aria-label=\"held\""))
-            .unwrap_or_else(|| panic!("no module for held: {home}"));
-        let squares = module.split("<p class=\"pm-squares\"").nth(1).unwrap();
+            .unwrap_or_else(|| panic!("no card for held: {home}"));
         assert!(
-            squares.contains("aria-label=\"3 units: ") && squares.contains("1 paused"),
-            "{squares}"
+            card.contains("<p class=\"pm-size\"><span class=\"g g-paused\" role=\"img\" aria-label=\"paused\">")
+                && card.contains("<p class=\"pm-summary\">Nothing at work; 1 of 3 done.</p>"),
+            "{card}"
         );
         let (_, step) = f.get(&format!("/projects/id/{held}/steps/hold")).await;
         let hold = between(&step, "<p class=\"d-hold\">", "</p>");

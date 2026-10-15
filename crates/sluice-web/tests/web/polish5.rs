@@ -230,13 +230,6 @@ async fn elapsed_time_retry_feedback_and_settled_log() {
             !badge.contains("UTC</time>"),
             "no date where a duration goes: {badge}"
         );
-        // the index says the same before any script
-        let (_, home) = f.get("/").await;
-        assert!(
-            home.contains("running for <span class=\"pm-for\"><time data-since=\"")
-                && home.contains(" UTC\">1h 25m</time></span>"),
-            "{home}"
-        );
     }
     {
         let id = f

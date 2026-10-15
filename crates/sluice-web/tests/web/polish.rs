@@ -87,19 +87,6 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     let id = aside(&f).await;
     let (_, home) = f.get("/").await;
     assert!(title(&home).contains("1 cancelled"), "{}", title(&home));
-    let row = between(
-        &home,
-        "<li class=\"pm-row pm-stopped sr-cancelled\">",
-        "</li>",
-    );
-    assert!(
-        row.contains("<form class=\"sr-dismiss\" method=\"post\" action=\"/projects/id/"),
-        "{row}"
-    );
-    assert!(
-        row.contains("<input type=\"hidden\" name=\"next\" value=\"/\">"),
-        "{row}"
-    );
     let (_, page) = f.get(&format!("/projects/id/{id}")).await;
     assert!(title(&page).contains(">⚠1 · aside"), "{}", title(&page));
     let (_, step) = f.get(&format!("/projects/id/{id}/steps/b")).await;
@@ -115,7 +102,6 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     dismiss(&f, id, "b", true).await.unwrap();
     let (_, home) = f.get("/").await;
     assert!(!title(&home).contains("cancelled"), "{}", title(&home));
-    assert!(!home.contains("sr-dismiss"), "the index lists it no more");
     let (_, page) = f.get(&format!("/projects/id/{id}")).await;
     assert!(!title(&page).contains('⚠'), "{}", title(&page));
     // no longer stopped: its unit is done, a line of the Done index that still reads cancelled
