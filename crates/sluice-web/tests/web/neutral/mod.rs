@@ -423,7 +423,7 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
         almanac,
         stored_messages::Stored {
             thread: "step-a-6-draft",
-            from: "orchestrator",
+            from: "@lead",
             to: Some("a-6-draft"),
             body: "The tern maps moved under maps/coast/; point the entries there.",
             ..Default::default()
@@ -465,7 +465,7 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
         almanac,
         stored_messages::Stored {
             thread: "step-index-places",
-            from: "orchestrator",
+            from: "@lead",
             to: Some("index-places"),
             body: "Use the checklist's own spellings for every name, even where the guide's sections disagree: `checklist/2024/species.csv` is the source of truth, and its `alt_names` column lists the older names to fold in.\n\nKeep the list in the order the sections first mention each bird, and end with a line naming any bird a section mentions that the checklist lacks, with the section's path (`sections/spring/coast/terns-and-skimmers.md`) so review can find it.",
             ..Default::default()
@@ -527,7 +527,7 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
             stored_messages::Stored {
                 thread: "step-a-6-draft",
                 from: "a-6-draft",
-                to: Some("orchestrator"),
+                to: Some("@lead"),
                 body,
                 ..Default::default()
             },
@@ -746,7 +746,7 @@ pub async fn seed_big(writer: &Writer, home: &Path) -> ProjectId {
             stored_messages::Stored {
                 thread,
                 from: step,
-                to: Some("orchestrator"),
+                to: Some("@lead"),
                 body: "Checked against the regional list: range, season and photograph credit all match.",
                 ..Default::default()
             },

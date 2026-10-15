@@ -56,7 +56,7 @@ title = Heading("Release", 1)
 doc = Doc("Nothing written yet.")
 latest = LatestMessage("step-failed")
 "#;
-/// What the orchestrator wrote on that board.
+/// What @lead wrote on that board.
 const BOARD_DOC: &str = "## Where the release stands\n\nThe build failed at the review gate, so **review** and **delivery** wait on it. Retry the build once the review gate's fixture is fixed.\n\n- review: blocked behind the build\n- delivery: blocked at the unit gate\n- the cached cpu run: queued for capacity\n\nThe patch itself is verified; only the gate stands between it and delivery.";
 struct BoardFixtureRegistry;
 impl sluice_model::plan::SignatureProvider for BoardFixtureRegistry {
@@ -111,7 +111,7 @@ pub async fn seed(writer: &Writer, _id: ProjectId) {
         tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,phase,request,inputs_hash,created_at,finished_at) VALUES(?1,?2,'failed','terminal',?3,'fixture','2026-10-03T12:00:00Z','2026-10-03T12:10:00Z')",(attempt.to_string(),project.to_string(),json!({"inputs":{"prompt":"Frozen prompt for this failed attempt. The drawer should use this value."}}).to_string()))?;
         tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,created_at,started_at,finished_at,result) VALUES(?1,?2,?3,'failed','2026-10-03T12:00:00Z','2026-10-03T12:00:00Z','2026-10-03T12:10:00Z',?4)",(run.to_string(),project.to_string(),attempt.to_string(),json!({"status":"failed"}).to_string()))?;
         tx.sql().execute("INSERT INTO sessions(run_id,project_id,engine,cwd,session_id,recorded_at) VALUES(?1,?2,'codex','/scratch','fixture-session','2026-10-03T12:00:00Z')",(run.to_string(),project.to_string()))?;
-        tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,needs_reply,at) VALUES(90001,?1,'step-failed','failed','orchestrator','Please inspect the failed build.',1,'2026-10-03T12:10:00Z')",[project.to_string()])?;
+        tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,needs_reply,at) VALUES(90001,?1,'step-failed','failed','@lead','Please inspect the failed build.',1,'2026-10-03T12:10:00Z')",[project.to_string()])?;
         Ok(())
     }).await.unwrap();
     // its board, with a document of its own, so ?view=board and ?view=both have one to show
