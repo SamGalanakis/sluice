@@ -169,6 +169,18 @@ async fn a_step_with_messages_has_a_messages_tab() {
         )),
         "{other}"
     );
+    // and that page is no dead end before anyone wrote in it: the step's crumbs and title,
+    // and the box the first message is written in
+    let (_, empty) = f
+        .get(&format!("/projects/id/{id}/thread?thread=step-l2-work"))
+        .await;
+    assert!(
+        empty.contains(&format!("<a href=\"/projects/id/{id}/steps/l2-work\">"))
+            && empty.contains("<textarea")
+            && empty.contains("Message to ")
+            && !empty.contains("No messages in this thread."),
+        "{empty}"
+    );
 }
 
 #[tokio::test]

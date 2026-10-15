@@ -1355,7 +1355,23 @@ fn group(
 ) -> Result<(), sluice_store::StoreError> {
     let key = (p.id.to_string(), item.message.thread.clone());
     if !groups.contains_key(&key) {
-        let step = item.message.thread.strip_prefix("step-");
+        groups.insert(key.clone(), thread_view(sql, p, &item.message.thread)?);
+    }
+    let group = groups.get_mut(&key).expect("thread group");
+    group.through = group.through.max(item.id());
+    group.messages.push(item);
+    Ok(())
+}
+/// A thread as its page draws it before any message: whom it is written to (a step's thread to
+/// its step, a session's to the session, any other to the project's fallback session) and its
+/// step's name, so a thread nobody has written in yet still has its head and its message box.
+fn thread_view(
+    sql: &rusqlite::Connection,
+    p: &super::ProjectView,
+    thread: &str,
+) -> Result<ThreadView, sluice_store::StoreError> {
+    {
+        let step = thread.strip_prefix("step-");
         let status: Option<String> = sql
             .query_row(
                 "SELECT status FROM steps WHERE project_id=?1 AND step_id=?2",
@@ -1364,47 +1380,40 @@ fn group(
             )
             .optional()?;
         let in_plan = status.is_some();
-        groups.insert(
-            key.clone(),
-            ThreadView {
-                project: p.id,
-                project_name: p.name.clone(),
-                thread: item.message.thread.clone(),
-                // a step's thread is written to its step, a session's to the session, any
-                // other (the `owner` thread from before sessions named themselves, a named
-                // one) to the project's fallback session; with none, nobody
-                recipient: match step {
-                    Some(step) if in_plan => step.into(),
-                    _ if item.message.thread.starts_with('@') => item.message.thread.clone(),
-                    _ => sluice_store::identities::fallback(sql, p.id)?
-                        .filter(|f| sluice_model::identity::is_session(f))
-                        .unwrap_or_default(),
-                },
-                messages: vec![],
-                through: 0,
-                unread: 0,
-                step_name: match step {
-                    Some(step) if in_plan => {
-                        let names =
-                            sluice_runtime::naming::for_project(sql, &super::home_of(sql), p.id)?;
-                        let mut name = StepRef::new(step, names.naming.step(step));
-                        if let Some(n) = names.naming.step(step) {
-                            name.title = n.whole.clone();
-                        }
-                        Some(name)
-                    }
-                    Some(step) => Some(StepRef::new(step, None)),
-                    None => None,
-                },
-                step_status: status.and_then(|s| s.parse().ok()),
-                conversation: Conversation::default(),
+        Ok(ThreadView {
+            project: p.id,
+            project_name: p.name.clone(),
+            thread: thread.to_owned(),
+            // a step's thread is written to its step, a session's to the session, any
+            // other (the `owner` thread from before sessions named themselves, a named
+            // one) to the project's fallback session; with none, nobody
+            recipient: match step {
+                Some(step) if in_plan => step.into(),
+                _ if thread.starts_with('@') => thread.to_owned(),
+                _ => sluice_store::identities::fallback(sql, p.id)?
+                    .filter(|f| sluice_model::identity::is_session(f))
+                    .unwrap_or_default(),
             },
-        );
+            messages: vec![],
+            through: 0,
+            unread: 0,
+            step_name: match step {
+                Some(step) if in_plan => {
+                    let names =
+                        sluice_runtime::naming::for_project(sql, &super::home_of(sql), p.id)?;
+                    let mut name = StepRef::new(step, names.naming.step(step));
+                    if let Some(n) = names.naming.step(step) {
+                        name.title = n.whole.clone();
+                    }
+                    Some(name)
+                }
+                Some(step) => Some(StepRef::new(step, None)),
+                None => None,
+            },
+            step_status: status.and_then(|s| s.parse().ok()),
+            conversation: Conversation::default(),
+        })
     }
-    let group = groups.get_mut(&key).expect("thread group");
-    group.through = group.through.max(item.id());
-    group.messages.push(item);
-    Ok(())
 }
 /// Each thread's messages drawn as a conversation: on a thread's own page about its step (while
 /// the plan has it), with the first unread note marked, its head and its message box; in the
@@ -1563,6 +1572,14 @@ pub async fn load(
                 }
             }
             questions.sort_by_key(MessageItem::id);
+            // a thread's page before anyone wrote in it ("Message it" on a quiet step): its
+            // head and its message box, so the first message has somewhere to be written
+            if let (MessageView::Thread, Some(id), Some(name)) = (&view, project, thread.as_deref())
+                && groups.is_empty()
+                && let Some(p) = nav.projects.iter().find(|p| p.id == id)
+            {
+                groups.insert((id.to_string(), name.to_owned()), thread_view(sql, p, name)?);
+            }
             let mut threads = threads_of(groups);
             let mut read = threads_of(read);
             match view {

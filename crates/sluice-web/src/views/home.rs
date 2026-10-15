@@ -338,13 +338,11 @@ impl HomeView {
             return Ok(html);
         }
         html.push_str("<ul class=\"nd-list fy-list\">");
+        let mut first = true;
         for q in &self.questions {
             let id = format!("item-{}-{}", q.project, q.id());
             if !q.answered_at.is_empty() {
-                html.push_str(&format!(
-                    "<li class=\"nd-i fy-done\" id=\"{id}\">{}</li>",
-                    q.answered_html()
-                ));
+                html.push_str(&ui::need_said(&id, q.answered_html().as_str()));
                 continue;
             }
             let place = match &q.from_who {
@@ -364,7 +362,18 @@ impl HomeView {
                     esc(&q.title())
                 ),
                 "",
-                &format!("<a class=\"btn primary\" href=\"{}\">Answer</a>", esc(&place)),
+                // only the first open question's Answer is filled: the page's next move
+                ui::link(
+                    if std::mem::take(&mut first) {
+                        ui::Btn::Primary
+                    } else {
+                        ui::Btn::Outlined
+                    },
+                    &place,
+                    &TrustedHtml::owned("Answer".into()),
+                    "",
+                )
+                .as_str(),
                 &{
                     let form = format!("aside-{}-{}", q.project, q.id());
                     format!(

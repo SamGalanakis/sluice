@@ -2250,12 +2250,12 @@ details.read-today .item { opacity: .85; }
 }
 .plan-sheet { display: grid; gap: 36px; min-width: 0; padding-top: 14px; }
 .pb-sec { display: grid; gap: 8px; min-width: 0; align-content: start; }
-.pb-label { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0;
-            font-size: 13px; line-height: 20px; color: var(--ink-muted); }
-.pb-label h2 { margin: 0; font: var(--w-strong) var(--t-section)/26px var(--font-text); letter-spacing: -0.005em; text-transform: none;
-               color: var(--ink); }
-.pb-count { font-variant-numeric: tabular-nums; }
-.pb-grow { flex: 1; }
+/* a section's head in the sheet: the section's own gap sets it off */
+.pb-sec > .sec-h { margin: 0; }
+.pb-sec > .sec-h .nd-form { display: contents; }
+/* what Mark as seen leaves: one muted line under the head, its Undo inline */
+.seen-line { margin: 0; color: var(--ink-muted); }
+.seen-line > button.quiet { display: inline; min-height: 0; padding: 0; vertical-align: baseline; }
 .pb-note { margin: 0; }
 /* At work's ⓘ: how to read a track, the Details popover's look, opening rightward */
 .pb-info { position: relative; align-self: center; margin: -6px 0; }
@@ -2271,6 +2271,9 @@ details.read-today .item { opacity: .85; }
 .nd-i { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: center;
         gap: 6px 12px; padding: 12px 0; border-top: 1px solid var(--rule-faint); }
 .nd-i:first-child { border-top: 0; }
+/* an item settled in place: its one line across the row, never in the mark's column */
+.nd-i.nd-said { display: block; }
+.nd-said > .q-answered { margin: 0; }
 .nd-i:focus { outline: none; }
 .nd-i:focus-visible { outline: var(--focus-width) solid var(--navy); outline-offset: 2px; }
 .nk { justify-self: center; display: grid; place-items: center; }
@@ -3178,7 +3181,6 @@ main { container: frame / inline-size; }
 .fy-list { margin: 0; padding: 0; list-style: none; }
 .fy-q .q-close { margin: 0; }
 .fy-more { margin-top: 10px; font-size: 13px; }
-.fy-done { padding: 14px 0; border-top: 1px solid var(--rule); }
 .mk-ask { background: var(--coral); }
 .mod-k .mk { flex: none; }
 /* today: a line a project on the sky, the way to the timetable last */

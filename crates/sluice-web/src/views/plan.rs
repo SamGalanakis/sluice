@@ -787,20 +787,14 @@ impl<'a> Plan<'a> {
                     .is_some_and(|at| at >= self.now - UNDO_MINUTES * 60.0)
             })
             .collect();
-        let mut out = String::from(
-            "<section id=\"plan-needs\" class=\"pb-sec\" aria-labelledby=\"needs\"><div class=\"pb-label\"><h2 id=\"needs\">Needs you</h2>",
-        );
-        if !live.is_empty() {
-            let _ = write!(out, "<span class=\"pb-count\">{}</span>", live.len());
-        }
+        let mut head = ui::SectionHead::new("needs", "Needs you").count(live.len());
         // the stops and silences, at once; a question keeps its own ×, so the head and the well
         // never disagree about it
         let rest: Vec<&&Need> = live.iter().filter(|n| n.mark != Mark::Ask).collect();
         if rest.len() > 1 {
             let keys: Vec<String> = rest.iter().flat_map(|n| n.keys.clone()).collect();
             // said one way in every project; a question is never in it
-            out.push_str("<span class=\"pb-grow\"></span>");
-            out.push_str(&self.needs_form(
+            head = head.action(&TrustedHtml::owned(self.needs_form(
                 "dismiss",
                 &keys,
                 "quiet",
@@ -808,9 +802,12 @@ impl<'a> Plan<'a> {
                 "Set all aside",
                 "",
                 "needs",
-            ));
+            )));
         }
-        out.push_str("</div>");
+        let mut out = format!(
+            "<section id=\"plan-needs\" class=\"pb-sec\" aria-labelledby=\"needs\">{}",
+            head.html()
+        );
         if live.is_empty() {
             // one muted line, not an empty well
             let aside = self.needs.iter().filter(|n| n.aside.is_some()).count();
@@ -1155,24 +1152,36 @@ impl<'a> Plan<'a> {
 
     // ---- Finished since you looked ------------------------------------------------------------
 
-    /// What Mark as seen leaves: "Seen through 04:21 · Undo", Undo taking the look back so
-    /// what finished lately is drawn again.
+    /// What Mark as seen leaves under the section's head: "Seen through 04:21 · Undo", one
+    /// line, Undo taking the look back so what finished lately is drawn again.
     fn seen_html(&self, seen: u64) -> String {
         format!(
-            "<section id=\"plan-finished\" class=\"pb-sec pb-seen\" aria-label=\"Finished lately\"><form id=\"mark-seen\" class=\"nd-form meta\" method=\"post\" action=\"{h}/seen\" data-reopens-stream data-on:submit=\"$seen = 0; @post(el.getAttribute('action'), {{contentType: 'form'}}); {reopen}\"><input type=\"hidden\" name=\"through\" value=\"0\">Seen through {at} · <button class=\"quiet\">Undo</button></form></section>",
-            h = esc(&self.view.href()),
-            reopen = esc(&ui::stream_reopen(&self.view.stream_href())),
+            "<section id=\"plan-finished\" class=\"pb-sec pb-seen\" aria-labelledby=\"finished\"{watch}>{head}{form}<p class=\"seen-line\">Seen through {at} · <button class=\"quiet\">Undo</button></p><input type=\"hidden\" name=\"through\" value=\"0\">{said}</form></section>",
+            watch = self.seen_watch(),
+            head = ui::SectionHead::new("finished", "Finished lately").html(),
+            form = ui::post_form(
+                "mark-seen",
+                "seen-form",
+                &format!("{}/seen", self.view.href())
+            ),
+            said = ui::form_said("mark-seen"),
             at = ui::clock(&super::rfc3339(seen)),
+        )
+    }
+    /// The look is this browser's: Mark as seen's answer sets the page's `seen` signal (and
+    /// its cookie, for its next page), and the change reopens the stream on it, which draws
+    /// the plan from that look (Datastar's `data-on-signal-patch`, filtered to `seen`).
+    fn seen_watch(&self) -> String {
+        format!(
+            " data-reopens-stream data-on-signal-patch=\"{}\" data-on-signal-patch-filter=\"{{include: /^seen$/}}\"",
+            esc(&ui::stream_reopen(&self.view.stream_href()))
         )
     }
     fn finished_html(&self) -> String {
         let (head, since) = match self.view.seen {
             Some(seen) => (
                 "Finished since you looked",
-                format!(
-                    "<span class=\"pb-note\">since {}</span>",
-                    ui::clock(&super::rfc3339(seen))
-                ),
+                format!("since {}", ui::clock(&super::rfc3339(seen))),
             ),
             None => ("Finished lately", String::new()),
         };
@@ -1183,12 +1192,22 @@ impl<'a> Plan<'a> {
             .max()
             .unwrap_or(0)
             .max(self.view.seen.unwrap_or(0));
+        let mark = format!(
+            "{form}<input type=\"hidden\" name=\"through\" value=\"{through}\"><button class=\"quiet\">Mark as seen</button>{said}</form>",
+            form = ui::post_form(
+                "mark-seen",
+                "seen-form",
+                &format!("{}/seen", self.view.href())
+            ),
+            said = ui::form_said("mark-seen"),
+        );
         let mut out = format!(
-            "<section id=\"plan-finished\" class=\"pb-sec\" aria-labelledby=\"finished\"><div class=\"pb-label\"><h2 id=\"finished\">{head}</h2>{since}<span class=\"pb-grow\"></span><form id=\"mark-seen\" class=\"nd-form\" method=\"post\" action=\"{h}/seen\" data-reopens-stream data-on:submit=\"$seen = {through}; @post(el.getAttribute('action'), {{contentType: 'form'}}); {reopen}\"><input type=\"hidden\" name=\"through\" value=\"{through}\"><button class=\"quiet\">Mark as seen</button></form></div>{list}",
-            h = esc(&self.view.href()),
-            // the look is this browser's: its cookie keeps it for the next page, and the
-            // stream, reopened on the `seen` signal, draws the plan from it now
-            reopen = esc(&ui::stream_reopen(&self.view.stream_href())),
+            "<section id=\"plan-finished\" class=\"pb-sec\" aria-labelledby=\"finished\"{watch}>{head}{list}",
+            watch = self.seen_watch(),
+            head = ui::SectionHead::new("finished", head)
+                .note(&TrustedHtml::owned(since))
+                .action(&TrustedHtml::owned(mark))
+                .html(),
             list = finished_list(self.view, &self.finished),
         );
         if self.finished_more > 0 {
@@ -1215,19 +1234,23 @@ impl<'a> Plan<'a> {
             .flat_map(|g| &g.rows)
             .filter(|r| r.waiting)
             .count();
+        let note = match (rows - waiting, waiting) {
+            (0, 0) => "Nothing now".to_owned(),
+            (0, w) => format!("Nothing at work · {w} waiting"),
+            (n, 0) => ui::count(n, "unit", "units"),
+            (n, w) => format!("{} · {w} waiting", ui::count(n, "unit", "units")),
+        };
+        // the ⓘ that says how to read a track sits by the note, not at the far end
+        let note = if rows == 0 {
+            esc(&note)
+        } else {
+            format!("{}{}", esc(&note), track_help())
+        };
         let mut out = format!(
-            "<section id=\"plan-roster\" class=\"pb-sec\" aria-labelledby=\"at-work\"><div class=\"pb-label\"><h2 id=\"at-work\">At work</h2><span class=\"pb-note\">{}</span>{}</div>",
-            match (rows - waiting, waiting) {
-                (0, 0) => "Nothing now".to_owned(),
-                (0, w) => format!("Nothing at work · {w} waiting"),
-                (n, 0) => ui::count(n, "unit", "units"),
-                (n, w) => format!("{} · {w} waiting", ui::count(n, "unit", "units")),
-            },
-            if rows == 0 {
-                String::new()
-            } else {
-                track_help()
-            },
+            "<section id=\"plan-roster\" class=\"pb-sec\" aria-labelledby=\"at-work\">{}",
+            ui::SectionHead::new("at-work", "At work")
+                .note(&TrustedHtml::owned(note))
+                .html()
         );
         if rows > 0 {
             // a badge says what a row's steps run on only where that tells rows apart
@@ -1640,8 +1663,8 @@ impl<'a> Plan<'a> {
             );
         }
         format!(
-            "<section id=\"plan-done\" class=\"pb-sec\" aria-labelledby=\"done\"><div class=\"pb-label\"><h2 id=\"done\">Done</h2><span class=\"pb-note\">{}</span></div><ol class=\"pl-idx\">{items}</ol></section>",
-            esc(&line)
+            "<section id=\"plan-done\" class=\"pb-sec\" aria-labelledby=\"done\">{}<ol class=\"pl-idx\">{items}</ol></section>",
+            ui::section_head("done", "Done", &line)
         )
     }
 }
@@ -2343,11 +2366,24 @@ pub struct SeenForm {
     /// The finish time (seconds since the epoch) of the last finished unit the page drew.
     pub through: u64,
 }
-/// `POST /projects/id/<p>/seen`: Mark as seen. This browser's look at the project's finished
-/// units moves to `through`, kept in its cookie (`sluice_seen_<p>`) for its next page; the page
-/// it was marked on already reopened its stream on the same look, its `seen` signal.
-pub async fn mark_seen(Path(project): Path<ProjectId>, Form(form): Form<SeenForm>) -> Response {
-    let mut response = StatusCode::NO_CONTENT.into_response();
+/// `POST /projects/id/<p>/seen`: Mark as seen (or its Undo, `through=0`). This browser's look
+/// at the project's finished units moves to `through`, kept in its cookie (`sluice_seen_<p>`)
+/// for its next page. To the page's form the answer empties its notice and sets the page's
+/// `seen` signal, whose change reopens the stream on the new look (`seen_watch`).
+pub async fn mark_seen(
+    Path(project): Path<ProjectId>,
+    headers: axum::http::HeaderMap,
+    Form(form): Form<SeenForm>,
+) -> Response {
+    let mut response = match super::write::form(&headers) {
+        Some(id) => super::write::events([
+            super::write::notice(&id, ""),
+            crate::streams::StreamEvent::Signals(datastar::prelude::PatchSignals::new(
+                serde_json::json!({ "seen": form.through }).to_string(),
+            )),
+        ]),
+        None => StatusCode::NO_CONTENT.into_response(),
+    };
     let cookie = format!(
         "{}={}; Path=/; Max-Age=34560000; SameSite=Lax",
         seen_cookie(project),

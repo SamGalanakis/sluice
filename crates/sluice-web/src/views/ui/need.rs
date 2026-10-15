@@ -44,3 +44,12 @@ pub fn need_line(
         mk = mark.html(),
     )
 }
+/// An item settled where it stood (a question answered or closed in the last ten minutes): its
+/// one line across the whole row in the item's place, so the list keeps its order and the line
+/// its width.
+pub fn need_said(id: &str, line: &str) -> String {
+    format!(
+        "<li id=\"{id}\" class=\"nd-i nd-said\">{line}</li>",
+        id = esc(id)
+    )
+}

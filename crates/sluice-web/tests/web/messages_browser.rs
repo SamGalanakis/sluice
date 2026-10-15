@@ -369,3 +369,85 @@ async fn slow_chromium_closing_a_question_confirms_it_in_place_and_keeps_the_foc
     .unwrap();
     server.abort();
 }
+
+/// The bug this catches: home's For you drew an answered question's line inside the need
+/// list's grid, in the mark's 14px column, one character a line. Answered in the last ten
+/// minutes, it stays in its place as one line across the row, on a phone and a desktop.
+#[tokio::test(flavor = "multi_thread")]
+async fn slow_chromium_home_keeps_an_answered_question_on_one_line() {
+    let f = Fixture::new().await;
+    for (title, answered) in [
+        ("Land it before the rename?", true),
+        ("Publish it now?", false),
+    ] {
+        let asked = stored_messages::stored(
+            &f.writer,
+            f.id,
+            stored_messages::Stored {
+                thread: "owner",
+                from: "orchestrator",
+                to: Some("owner"),
+                body: title,
+                title: Some(title),
+                question: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        if answered {
+            stored_messages::stored(
+                &f.writer,
+                f.id,
+                stored_messages::Stored {
+                    thread: "owner",
+                    from: "owner",
+                    to: Some("orchestrator"),
+                    body: "Land it now.",
+                    reply: Some(asked.id),
+                    ..Default::default()
+                },
+            )
+            .await;
+        }
+    }
+    let router = f.router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    tokio::task::spawn_blocking(move || {
+        let mut browser = Chrome::open(&format!("http://{addr}/")).unwrap();
+        for width in [390, 1440] {
+            browser.viewport(width, "light").unwrap();
+            browser
+                .wait("document.readyState === 'complete' && !!document.querySelector('.fy-list .q-answered')")
+                .unwrap();
+            let line = browser
+                .eval("(() => { const l = document.querySelector('.fy-list .q-answered'), list = document.querySelector('.fy-list'); const r = l.getBoundingClientRect(); return {width: r.width, list: list.getBoundingClientRect().width, height: r.height, text: l.textContent}; })()")
+                .unwrap();
+            let (w, list, h) = (
+                line["width"].as_f64().unwrap(),
+                line["list"].as_f64().unwrap(),
+                line["height"].as_f64().unwrap(),
+            );
+            assert!(w > list * 0.9 && h < 80.0, "{width}px: {line}");
+            assert!(
+                line["text"].as_str().unwrap().starts_with("Answered "),
+                "{line}"
+            );
+            // the open one is still a need line, its Answer the list's one filled move
+            assert_eq!(
+                browser
+                    .eval("document.querySelectorAll('.fy-list a.btn.primary').length")
+                    .unwrap(),
+                1
+            );
+        }
+        assert_eq!(
+            browser.eval("window.browserErrors ?? []").unwrap(),
+            serde_json::json!([])
+        );
+    })
+    .await
+    .unwrap();
+    server.abort();
+}

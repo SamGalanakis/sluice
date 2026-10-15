@@ -567,9 +567,11 @@ async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
     let (_, _, _, html) = browse(&router, &plan, None, &jar).await;
     let seen = plan_html::band(&html, "plan-finished");
     assert!(
-        seen.contains("Seen through <time data-clock")
-            && seen.contains("<input type=\"hidden\" name=\"through\" value=\"0\">Seen")
-            && seen.contains("<button class=\"quiet\">Undo</button>"),
+        seen.contains("<h2 id=\"finished\">Finished lately</h2>")
+            && seen.contains("<p class=\"seen-line\">Seen through <time data-clock")
+            && seen.contains("· <button class=\"quiet\">Undo</button></p>")
+            && seen.contains("<input type=\"hidden\" name=\"through\" value=\"0\">")
+            && !seen.contains("class=\"fin-i\""),
         "{seen}"
     );
     let (_, _, _, undone) = browse(
@@ -579,9 +581,9 @@ async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
         &format!("sluice_seen_{}=0", n.almanac),
     )
     .await;
-    assert!(plan_html::band(&undone, "plan-finished").contains("Finished lately"));
+    assert!(plan_html::band(&undone, "plan-finished").contains("class=\"fin-i\""));
     let (_, _, _, other) = browse(&router, &plan, None, "").await;
-    assert!(plan_html::band(&other, "plan-finished").contains("Finished lately"));
+    assert!(plan_html::band(&other, "plan-finished").contains("class=\"fin-i\""));
     // a look kept earlier: what finished after it, said since when
     let a2 = "a-2";
     let (_, _, _, html) = browse(
@@ -594,7 +596,7 @@ async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
     let cards = plan_html::band(&html, "plan-finished");
     assert!(
         cards.contains(
-            "<h2 id=\"finished\">Finished since you looked</h2><span class=\"pb-note\">since "
+            "<h2 id=\"finished\">Finished since you looked</h2><span class=\"sec-note\">since "
         ) && cards.matches("<li class=\"fin-i\"").count() == 2
             && cards.contains("3 more finished with nothing to say")
             && cards.contains(&format!("/units/{a2}\"")),
@@ -647,4 +649,57 @@ async fn a_big_roster_folds_its_unremarkable_groups() {
         !roster.contains("<details class=\"ro-g\"><summary"),
         "{roster}"
     );
+}
+
+/// The bug this catches: Mark as seen set the page's look before sluice took it, so a mark that
+/// never arrived still emptied Finished; and what it left stacked a word a line on a phone.
+/// Now the answer sets the `seen` signal, the stream reopens on it, the section keeps its head
+/// and says "Seen through … · Undo" on one line, and Undo brings the cards back.
+#[tokio::test(flavor = "multi_thread")]
+async fn slow_chromium_mark_as_seen_and_its_undo_go_through_the_answer() {
+    let f = Fixture::new().await;
+    let n = neutral::seed(&f.writer, f._home.path()).await;
+    let router = f.router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    tokio::task::spawn_blocking(move || {
+        let mut browser =
+            Chrome::open(&format!("http://{addr}/projects/id/{}", n.almanac)).unwrap();
+        browser.viewport(390, "light").unwrap();
+        browser
+            .wait("document.readyState === 'complete' && !!document.querySelector('#plan-finished .fin-i')")
+            .unwrap();
+        browser
+            .eval("document.querySelector('#mark-seen button').click()")
+            .unwrap();
+        browser
+            .wait("!!document.querySelector('#plan-finished .seen-line')")
+            .unwrap();
+        let line = browser
+            .eval("(() => { const l = document.querySelector('#plan-finished .seen-line'); return {h: l.getBoundingClientRect().height, text: l.textContent, head: document.querySelector('#plan-finished h2').textContent, said: document.querySelector('#mark-seen-said').textContent}; })()")
+            .unwrap();
+        assert!(line["h"].as_f64().unwrap() < 30.0, "{line}");
+        assert!(
+            line["text"].as_str().unwrap().starts_with("Seen through ")
+                && line["text"].as_str().unwrap().ends_with(" · Undo"),
+            "{line}"
+        );
+        assert_eq!(line["head"], "Finished lately", "{line}");
+        assert_eq!(line["said"], "", "{line}");
+        browser
+            .eval("document.querySelector('#plan-finished .seen-line button').click()")
+            .unwrap();
+        browser
+            .wait("!!document.querySelector('#plan-finished .fin-i')")
+            .unwrap();
+        assert_eq!(
+            browser.eval("window.browserErrors ?? []").unwrap(),
+            serde_json::json!([])
+        );
+    })
+    .await
+    .unwrap();
+    server.abort();
+    let _ = server.await;
 }
