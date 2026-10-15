@@ -216,6 +216,14 @@ pub const COMPONENTS: &[Component] = &[
         slots: &["rows"],
     },
     Component {
+        tag: "sluice-pulse",
+        script: "components.js",
+        does: "A pulse strip (At work's rows, a running step's in a drilldown): pointing at a mark (its minute the target, the strip's full height), tapping it or moving the arrows to it shows what its agent did that minute in the page's popover, asked of the server (sluice-pulse, the roster's debounced @get); its left edge fades while its run began before the window and says when it began. Escape or a tap elsewhere closes it.",
+        props: &[("unit", "string"), ("step", "string"), ("from", "number")],
+        events: &["sluice-pulse"],
+        slots: &["marks"],
+    },
+    Component {
         tag: "sluice-drawer",
         script: "sluice.js",
         does: "Opens a step beside the plan (over it below 1200px, a sheet on a phone) from #step:<id>, a stage's cell or any link with data-step, streams it and closes on Escape or a click away; [ and ] open the step before or after it in the plan's order.",

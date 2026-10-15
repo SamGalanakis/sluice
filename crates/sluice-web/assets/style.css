@@ -2139,8 +2139,6 @@ sluice-steps.sv { display: block; container: sv / inline-size; min-width: 0; }
         background: var(--ink-muted); opacity: .75; pointer-events: none; }
 .sv-b.is-old { opacity: 0.35; }
 .sv-b.is-clip { border-start-start-radius: 0; border-end-start-radius: 0; }
-.sv-clip { position: absolute; left: 0; top: 0; font: var(--w-regular) 11.5px/12px var(--font-mono);
-           color: var(--ink-muted); white-space: nowrap; pointer-events: none; }
 .sv-sp { justify-content: flex-end; color: var(--ink-muted); white-space: nowrap; }
 .sv-row > .sv-sp { padding-right: 8px; }
 .sv-c-run .sv-sp { color: var(--run-ink); font-weight: var(--w-strong); }
@@ -2517,6 +2515,37 @@ details.read-today .item { opacity: .85; }
             border-radius: 2px 0 0 2px; }
 .pk-tail { top: 10px; width: var(--w); height: 0; border-top: 2px dotted var(--ink-muted); }
 .pk-tail.is-quiet { top: 9px; border-top: 4px dotted var(--track-quiet-edge); }
+/* a strip is one stop (sluice-pulse): pointed at, tapped or moved through with the arrows, a
+   mark says what happened that minute; its left edge fades while its run began before the hour
+   and says when it began */
+sluice-pulse { cursor: default; -webkit-tap-highlight-color: transparent; }
+sluice-pulse:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+sluice-pulse[data-before] { mask-image: linear-gradient(to right, transparent, #000 28px); }
+.pk[data-pulse-anchor] { box-shadow: 0 0 0 2px color-mix(in oklch, var(--track-run) 35%, transparent); }
+/* what it did, in the Details popover's look, on the top layer by its mark (CSS anchor
+   positioning), above it and turning to fit the window; on a phone the popover's sheet */
+.pulse-pop { inset: auto; margin: 6px 0; border: 0; overflow: visible; position: fixed;
+  position-anchor: --pulse; position-area: block-start span-inline-end;
+  position-try-fallbacks: flip-inline, flip-block, flip-block flip-inline;
+  min-width: 220px; max-width: min(400px, calc(100vw - 16px)); }
+.pulse-pop:not(:popover-open) { display: none; }
+.pulse-pop[aria-busy="true"] > .pp-b { opacity: .45; }
+.pp-b:empty::before { content: "…"; color: var(--ink-muted); }
+.pp-h { margin: 0 0 6px; font-size: var(--t-xs); font-weight: var(--w-strong); color: var(--ink-muted); }
+.pp-b > .pp-h:only-child { margin: 0; color: var(--ink); font-weight: var(--w-regular); font-size: var(--t-sm); }
+.pp-l { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.pp-l > li { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.pp-k { flex: none; font-weight: var(--w-strong); }
+.pp-s { flex: none; font-size: var(--t-xs); color: var(--ink-muted); }
+.pp-w { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+code.pp-w { padding: 0; background: none; font: var(--w-regular) 12.5px/18px var(--font-mono); }
+span.pp-w { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+            white-space: normal; overflow-wrap: anywhere; }
+.pp-more { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0 0; font-size: var(--t-xs); color: var(--ink-muted); }
+.pp-none { margin: 0; color: var(--ink-muted); }
+@media (max-width: 760px) {
+  .pulse-pop { position-area: none; inset: auto var(--gutter) 16px; margin: 0; max-width: none; }
+}
 .ro-chev { grid-area: chev; display: grid; place-items: center; height: 30px; color: var(--ink-muted); }
 .ro-chev svg { transition: transform .15s ease-out; }
 .ro-u[open] .ro-chev svg { transform: rotate(180deg); }
@@ -2537,9 +2566,6 @@ details.read-today .item { opacity: .85; }
 }
 @container sv (max-width: 559.98px) {
   .ro-drill .sv-row > .sv-tr { grid-column: 1 / -1; margin-left: calc(var(--track-in) - 10px) !important; }
-  /* a clipped run's words under its bar, inside the card */
-  .ro-drill .sv-row > .sv-tr:has(.sv-clip) { margin-bottom: 24px !important; }
-  .ro-drill .sv-clip { top: 8px; left: calc(10px + var(--rail) + 10px - var(--track-in)); }
 }
 .ro-drill .tries-m { display: none; }
 .ro-drill .sv-b-done { background: var(--track-past); box-shadow: inset 0 0 0 1px var(--sky-ink); }

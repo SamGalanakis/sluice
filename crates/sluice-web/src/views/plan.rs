@@ -1265,8 +1265,11 @@ impl<'a> Plan<'a> {
         let head = ui::SectionHead::new("at-work", "At work")
             .note(&TrustedHtml::owned(note))
             .html();
-        let mut out =
-            "<section id=\"plan-roster\" class=\"pb-sec\" aria-labelledby=\"at-work\">".to_owned();
+        // a strip's pick asks for its details (`pulse`), drawn into the page's popover
+        let mut out = format!(
+            "<section id=\"plan-roster\" class=\"pb-sec\" aria-labelledby=\"at-work\"{}>",
+            super::pulse::listen(&format!("{}/pulse", self.view.href()), "pulse-pop")
+        );
         if rows == 0 {
             out.push_str(head.as_str());
         } else {
@@ -1553,6 +1556,7 @@ impl<'a> Plan<'a> {
         let said: Vec<f64> = unit.said.iter().map(|(_, t)| *t).collect();
         let live = !row.waiting && !running.is_empty();
         track(
+            unit.id.as_str(),
             &super::unit_steps::Pulse {
                 live,
                 start: started(unit).filter(|_| live),
@@ -1780,17 +1784,22 @@ fn axis_with(class: &str, lead: &str) -> String {
         "<div class=\"ro-axis{class}\">{lead}<span class=\"vh\">{SCALE}</span><span class=\"ro-ticks\" aria-hidden=\"true\" title=\"{SCALE}\"><span style=\"left:0%\">1h ago</span><span style=\"left:100%\">now</span></span></div>"
     )
 }
-/// A unit's strip over the last hour to `now` (`unit_steps::Pulse`): its places are the
+/// `unit`'s strip over the last hour to `now` (`unit_steps::Pulse`): its places are the
 /// clock's (`unit_steps::bar`, `mark`), drawn here to `now`, kept at the reader's now by
 /// `nav.js` and left out of a stream's version, so it changes only when the unit does
-/// something.
-pub fn track(pulse: &super::unit_steps::Pulse<'_>, now: f64) -> String {
+/// something. A `sluice-pulse`: pointed at, a mark says what it did that minute, and its left
+/// edge, faded while its run began before the window, when it began (`pulse`).
+pub fn track(unit: &str, pulse: &super::unit_steps::Pulse<'_>, now: f64) -> String {
     let (marks, said) = pulse.html(now);
-    format!(
-        "<span class=\"ro-track\" {} role=\"img\" aria-label=\"{}\">{marks}</span>",
-        super::unit_steps::PULSE_SCALE,
-        esc(&format!("Its pulse: {said}"))
+    super::pulse::host(
+        "ro-track",
+        unit,
+        "",
+        pulse.start,
+        &format!("Its pulse: {said}"),
     )
+    .wrap(&TrustedHtml::owned(marks))
+    .to_string()
 }
 /// What a row of At work is drawn from (HTML where it says so).
 pub struct RowParts<'a> {

@@ -2185,7 +2185,15 @@ its edges the bar's (at most 1440px; on a phone Finished follows At work). The h
   head's line over the strips ("1h ago", "now"; on a phone over each group's first strip) says
   the window to a screen reader ("The last hour, now at the right: …"), and each strip says
   what it shows ("Its pulse: acted in 14 minutes of its run, 3 messages lately, then quiet"; it counts
-  since the run began, so the clock alone never changes it). A
+  since the run began, so the clock alone never changes it). Pointed at, tapped or reached
+  with the arrows (the strip is one tab stop; Escape closes), a mark's minute opens a popover
+  of what happened then, asked for only then (`GET /projects/id/<p>/pulse?unit=<u>[&step=<s>]&at=<minute>`,
+  a Datastar patch of the popover's body; never in the page or its stream): the time on the
+  reader's clock, then in order each tool call (its tool and first argument, one line), turn
+  (what opened it and its first sentence) and message (who and an excerpt), read from the
+  run's transcript and the store; eight at most, then "+N more" and a link to the first in its
+  step's Activity tab. A strip whose run began before the hour fades at its left edge, which
+  says "Started 1h 42m ago, at 14:05" (`&from=<start>`). A
   unit that has not begun and waits on earlier work is counted, not drawn ("4 waiting on earlier
   work · 25 done, the last 2h ago"), unless a find, `root=` or `recipe=` asks for it. A row is
   a `<details>`: opening it asks for its body (`GET /projects/id/<p>/units/<u>/drill`, which
@@ -2196,9 +2204,10 @@ its edges the bar's (at most 1440px; on a phone Finished follows At work). The h
   row's own window, the
   same hour, linear, across exactly the row's strip (its timeline as wide as the strip and
   ending where it does, how long each took before it), its current step's row tinted, the run
-  going now drawn as the row's pulse strip again (a run that began earlier starts at the left
-  edge, saying "from 1h 10m ago"; one over before the hour is said, not drawn; a pending step
-  draws nothing), then when it was last heard from ("Last heard 22:51 (6m
+  going now drawn as the row's pulse strip again, its marks saying what happened the same way
+  (a run that began earlier starts at the left edge, which fades and says when it began when
+  pointed at, never in words on the strip; one over before the hour is said, not drawn; a
+  pending step draws nothing), then when it was last heard from ("Last heard 22:51 (6m
   ago)"; for a quiet unit "Not heard from since 19:14 (3h ago)"; never the message the card
   above says),
   Open step, and Message and Unit page as quiet links; it stays open through a patch. A failed, cancelled or stale unit is

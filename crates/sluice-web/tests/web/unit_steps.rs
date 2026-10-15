@@ -54,6 +54,114 @@ fn click(browser: &mut Chrome, selector: &str) {
     }
 }
 const FRAMES: &str = "new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))";
+/// The page's pulse popover as it stands: open, still asking, its minute (its time's datetime)
+/// and its words.
+const POP: &str = "(() => { const p = document.getElementById('pulse-pop'); return {open: p.matches(':popover-open'), busy: p.getAttribute('aria-busy'), at: p.querySelector('time[data-clock]')?.getAttribute('datetime') ?? null, text: p.innerText, link: p.querySelector('.pp-more a')?.getAttribute('href') ?? null}; })()";
+/// The pointer moved to `x`, `y`.
+fn point(browser: &mut Chrome, x: f64, y: f64) {
+    browser
+        .send(
+            "Input.dispatchMouseEvent",
+            json!({"type": "mouseMoved", "x": x, "y": y}),
+        )
+        .unwrap();
+}
+/// Where a strip (`host`, a selector) is, and its element `mark` (a selector inside it, the
+/// last that matches): the mark's middle, its minute (as the popover dates it), and the strip's
+/// left edge and middle.
+fn aim(browser: &mut Chrome, host: &str, mark: &str) -> (f64, f64, String, f64) {
+    let at = browser
+        .eval(&format!(
+            "(() => {{ const h = document.querySelector({}); h.scrollIntoView({{block: 'center'}}); const b = h.getBoundingClientRect(); const m = [...h.querySelectorAll({})].at(-1); const r = m.getBoundingClientRect(); const minute = Math.floor(Number(m.dataset.a) / 60) * 60; return [r.left + r.width / 2, b.top + b.height / 2, new Date(minute * 1000).toISOString().replace('.000Z', 'Z'), b.left]; }})()",
+            json!(host),
+            json!(mark)
+        ))
+        .unwrap();
+    (
+        at[0].as_f64().unwrap(),
+        at[1].as_f64().unwrap(),
+        at[2].as_str().unwrap().to_owned(),
+        at[3].as_f64().unwrap(),
+    )
+}
+/// The popover once it has its answer.
+fn answered(browser: &mut Chrome) -> Value {
+    browser
+        .wait("(() => { const p = document.getElementById('pulse-pop'); return p.matches(':popover-open') && !p.hasAttribute('aria-busy') && p.innerText.trim() !== ''; })()")
+        .unwrap();
+    browser.eval(POP).unwrap()
+}
+
+/// The bug this catches: a strip's marks say nothing of what happened, or the wrong minute's
+/// (a pick answered by an earlier one, the minute misread from the pointer), or its details
+/// leak into the page and its stream. Pointing at a row's tall mark shows that minute's message
+/// on the reader's clock; the arrows move the popover to the minute before, Escape closes it;
+/// a drilldown's strip says its calls with a link into its step's Activity, and its faded left
+/// edge says when its run began.
+#[tokio::test(flavor = "multi_thread")]
+async fn slow_chromium_a_strips_marks_say_what_its_agent_did_that_minute() {
+    let f = Fixture::new().await;
+    let n = neutral::seed(&f.writer, f._home.path()).await;
+    let id = n.almanac;
+    let (addr, server) = serve(&f);
+    tokio::task::spawn_blocking(move || {
+        let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
+        browser.viewport(1440, "light").unwrap();
+        browser.wait("document.querySelector('#u-a-6 sluice-pulse[data-rocket-host]')").unwrap();
+        // the page carries the strip's marks, not what they were
+        assert_eq!(browser.eval("document.getElementById('pulse-pop-body').innerHTML").unwrap(), json!(""));
+        // a-6's tall mark: the minute it said its entries were drafted
+        let row = "#u-a-6 > summary sluice-pulse";
+        let (x, y, minute, _) = aim(&mut browser, row, "i.pk-m");
+        point(&mut browser, x + 1.0, y + 8.0);
+        let pop = answered(&mut browser);
+        assert_eq!(pop["at"], json!(minute), "{pop}");
+        assert!(
+            pop["text"].as_str().unwrap().contains("Entries 41 to 58 drafted; the maps moved under maps/coast/."),
+            "{pop}"
+        );
+        // the strip is one stop: the arrow goes to the minute before, Escape closes it
+        browser.eval(&format!("document.querySelector({}).focus()", json!(row))).unwrap();
+        press(&mut browser, "ArrowLeft", 37);
+        browser
+            .wait(&format!("(() => {{ const p = document.getElementById('pulse-pop'); const t = p.querySelector('time[data-clock]'); return !p.hasAttribute('aria-busy') && t && t.getAttribute('datetime') < {}; }})()", json!(minute)))
+            .unwrap();
+        press(&mut browser, "Escape", 27);
+        browser.wait("!document.getElementById('pulse-pop').matches(':popover-open')").unwrap();
+        // pointing never opened the row
+        assert_eq!(browser.eval("document.querySelector('#u-a-6').open").unwrap(), json!(false));
+        // its drilldown: the running step's latest minute, its calls and where Activity has them
+        browser.eval("document.querySelector('#u-a-6 .ro-t').click()").unwrap();
+        browser.wait("document.querySelector('#drill-a-6 sluice-pulse[data-rocket-host]')").unwrap();
+        browser.eval(FRAMES).unwrap();
+        let drill = "#drill-a-6 sluice-pulse";
+        let (x, y, minute, _) = aim(&mut browser, drill, "i.pk:not(.pk-m):not(.pk-start)");
+        point(&mut browser, x + 1.0, y);
+        let pop = answered(&mut browser);
+        assert_eq!(pop["at"], json!(minute), "{pop}");
+        assert!(pop["text"].as_str().unwrap().contains("rg -n 'range' sections/"), "{pop}");
+        let link = pop["link"].as_str().unwrap();
+        assert!(
+            link.starts_with(&format!("/projects/id/{id}/steps/a-6-draft?activity=all&tab=activity#act-r1-t1-c")),
+            "{pop}"
+        );
+        // its run began before the hour: its left edge fades and says when
+        assert_eq!(
+            browser.eval(&format!("[document.querySelector({}).hasAttribute('data-before'), document.querySelector({}).hasAttribute('data-before')]", json!(drill), json!(row))).unwrap(),
+            json!([true, true])
+        );
+        let (_, y, _, left) = aim(&mut browser, drill, "i.pk");
+        point(&mut browser, left + 3.0, y);
+        browser.wait("document.getElementById('pulse-pop').innerText.startsWith('Started 1h')").unwrap();
+        let pop = answered(&mut browser);
+        assert!(pop["text"].as_str().unwrap().contains(", at "), "{pop}");
+        assert!(pop["at"].is_string(), "{pop}");
+        assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), json!([]));
+    })
+    .await
+    .unwrap();
+    server.abort();
+}
 /// The open step view of l1 as the page reads it: each row's step and state word, and whether
 /// the row is selected.
 const ROWS: &str = "[...document.querySelectorAll('#u-l1[open] li.sv-row')].map(r => [r.dataset.sv, r.querySelector('.st-w').textContent, r.classList.contains('is-sel')])";

@@ -2368,6 +2368,10 @@ pub fn registration() -> super::PageRegistration {
                     get(super::plan::drill),
                 )
                 .route(
+                    "/projects/id/{project}/pulse",
+                    get(super::pulse::details),
+                )
+                .route(
                     "/projects/id/{project}/seen",
                     axum::routing::post(super::plan::mark_seen),
                 )

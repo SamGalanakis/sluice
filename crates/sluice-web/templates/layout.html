@@ -12,4 +12,4 @@
 <main id="content" tabindex="-1"{% if !stream.is_empty() %} data-init="{{ crate::views::ui::stream_get(stream) }}"{% endif %}>
 {{ crate::views::ui::banners(stream)|safe }}
 {{ body|safe }}
-</main>{{ crate::views::ui::confirmation()|safe }}<script type="module" src="{{ nav_url }}"></script><script type="module" src="{{ components_url }}"></script></body></html>
+</main>{{ crate::views::ui::confirmation()|safe }}{{ crate::views::pulse::popover("pulse-pop")|safe }}<script type="module" src="{{ nav_url }}"></script><script type="module" src="{{ components_url }}"></script></body></html>

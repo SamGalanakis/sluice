@@ -168,6 +168,10 @@ tick();
 setInterval(tick, 5000);
 new MutationObserver(tick).observe(document.querySelector("main") ?? document.body,
   { childList: true, subtree: true, characterData: true });
+// the strips' popover, drawn after main (`pulse::popover`): an answer's times read at once too
+for (const pop of document.querySelectorAll("body > .pulse-pop")) {
+  new MutationObserver(tick).observe(pop, { childList: true, subtree: true, characterData: true });
+}
 
 // An action that comes back to a place on its page (Dismiss to its Undo, Undo to the card it
 // restored) names it in the address's fragment: the focus goes there, not to the page's top.

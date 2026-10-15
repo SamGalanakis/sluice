@@ -19,7 +19,8 @@
 //! **On the plan** a row opens to its steps on the row's own time instead (`View::recent`): the
 //! last hour to now, linear (`pulse_at`), the window At work's pulse strips draw, so a step's
 //! run lines up with its row: a finished run a bar, the running one its pulse (`pulse`); a run
-//! that began earlier starts at the left edge, saying "from 37m ago".
+//! that began earlier starts at the left edge, which fades (`sluice-pulse`, its `from`) and
+//! says when it began when pointed at.
 use super::TrustedHtml;
 use super::board::{Endpoint, Relation, RelationKind, UnitView};
 use super::step::StepView;
@@ -179,6 +180,8 @@ pub struct Latest {
 pub struct View<'a> {
     /// What it is named for a screen reader: "Steps of Terns".
     pub label: String,
+    /// Its unit's id, which a strip's details are asked of (`pulse`).
+    pub unit: String,
     /// Its unit's owner in words (`@lead`, "you"), small and muted in its head; "" when
     /// unowned or already named by its plan row or unit page.
     pub owner: String,
@@ -976,7 +979,7 @@ impl View<'_> {
                 }
             }
             if let Some(axis) = &axis {
-                out.push_str(&track(axis, step));
+                out.push_str(&track(axis, &self.unit, step));
             }
             out.push_str("<span class=\"sv-sp\">");
             match &step.span {
@@ -1075,10 +1078,14 @@ fn rail_svg(r: &Rail, width: usize, cell: Cell, shown: Shown) -> String {
     out
 }
 /// A row's timeline: a bar a run on the shared axis, its current run whole and the earlier
-/// faint, a run still going open to now; read as its runs in words.
-fn track(axis: &Axis, step: &Step<'_>) -> String {
+/// faint, a run still going open to now; read as its runs in words. On the plan's window its
+/// running run is its pulse, and a strip whose run began before the window is a `sluice-pulse`
+/// (`unit`'s, this step's): its marks' details and its faded edge's start, pointed at.
+fn track(axis: &Axis, unit: &str, step: &Step<'_>) -> String {
     let mut bars = String::new();
     let mut said = vec![];
+    // the start its strip's faded left edge says
+    let mut edge = None;
     let last = step.spans.len().saturating_sub(1);
     for (n, span) in step.spans.iter().enumerate() {
         let open = span.to.is_none();
@@ -1116,13 +1123,7 @@ fn track(axis: &Axis, step: &Step<'_>) -> String {
             }
             .html(axis.t1);
             bars.push_str(&marks);
-            if earlier {
-                let _ = write!(
-                    bars,
-                    "<span class=\"sv-clip\">from {}</span>",
-                    ui::ago(&super::rfc3339(span.from as u64))
-                );
-            }
+            edge = Some(span.from);
             continue;
         }
         // a run gone quiet: running until it fell silent, then on the sand
@@ -1171,12 +1172,8 @@ fn track(axis: &Axis, step: &Step<'_>) -> String {
             piece(span.from, end, outcome, open);
         }
         if earlier {
-            // where it began, said at the left edge
-            let _ = write!(
-                bars,
-                "<span class=\"sv-clip\">from {}</span>",
-                ui::ago(&super::rfc3339(span.from as u64))
-            );
+            // where it began, said by its faded left edge
+            edge = Some(span.from);
         }
     }
     // a tick for each message it sent, over its bars (the running run's pulse drew its own)
@@ -1199,13 +1196,24 @@ fn track(axis: &Axis, step: &Step<'_>) -> String {
     if !step.ticks.is_empty() {
         said.push(ui::count(step.ticks.len(), "message", "messages"));
     }
+    let words = if said.is_empty() {
+        "No run yet".to_owned()
+    } else {
+        said.join(". ")
+    };
+    if axis.recent && (pulsed || edge.is_some()) {
+        let host = super::pulse::host(
+            "sv-tr",
+            unit,
+            if pulsed { &step.id } else { "" },
+            edge,
+            &words,
+        );
+        return host.wrap(&TrustedHtml::owned(bars)).to_string();
+    }
     format!(
         "<span class=\"sv-tr\" role=\"img\" aria-label=\"{}\">{bars}</span>",
-        esc(&if said.is_empty() {
-            "No run yet".to_owned()
-        } else {
-            said.join(". ")
-        })
+        esc(&words)
     )
 }
 
@@ -1317,6 +1325,7 @@ pub fn of_unit<'a>(
         .flatten();
     View {
         label: format!("Steps of {}", unit.heading()),
+        unit: unit.id.to_string(),
         owner: unit.owner_words(),
         steps: views,
         edges,

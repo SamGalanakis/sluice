@@ -978,7 +978,7 @@ It is the unit page's body, what a plan row opens in place, and a step's Runs ta
   (the host's `selected`, kept through a patch). Hover is `paper-2` alone.
 - **In the plan.** On the row's own time (`View::recent`): the last hour to now, linear, At
   work's window, so a run reads the same in the row and under it (a run that began earlier
-  starts at the left edge, saying how long ago; the run going now is drawn as its row's pulse
+  starts at the left edge, which fades and says when it began when pointed at; the run going now is drawn as its row's pulse
   strip, its marks and tail, never as a bar; a pending step draws nothing). A row of At work is a `<details>`:
   open, its step view stands under it on `paper-2`, its timeline exactly the row's track (as
   wide, ending at the same x: Took moves before it and the view ends where the row's chevron
@@ -986,8 +986,9 @@ It is the unit page's body, what a plan row opens in place, and a step's Runs ta
   step's row tinted (`run` at 7%; `sand-pale` for a look, a full tint and no side stripe), the
   earlier runs' marks before "run 2" left out, then its latest message (with none, "Last heard
   22:51 (6m ago)", or for a quiet unit "Not heard from since 19:14 (3h ago)"), Message and Unit
-  page as quiet links and Open step. A run clipped at the left edge says "from 3d ago" in data
-  mono at 11.5px. It stays open
+  page as quiet links and Open step. A run that began before the hour fades at the strip's left
+  edge (no words on the strip: Took already says how long), and that edge, pointed at, says
+  when it began (The pulse strip's popover). It stays open
   through a patch (`data-preserve-attr="open"`), the unit moving between groups included.
 - **Narrow** (under 560px of its own width: a phone, a narrow drawer): one column, the rail
   and name, then state, progress and span, then the runs as a 4px bar; the head and the axis's
@@ -1184,6 +1185,7 @@ why each is script rather than Datastar attributes:
 | `sluice-keys` | `components.js` | `/` finds, `[` and `]` move the drawer, `g` then a letter goes to a page, `?` opens Keyboard shortcuts; never while typing or under a dialog | a two-key sequence and its exceptions over the whole page |
 | `sluice-steps` | `components.js` | the step view: a row's click opens its step, the arrows move between rows, the selected row in `selected`; its now line and running bars move on the clock's tick | roving focus, and marks placed by time on each tick |
 | `sluice-day` | `components.js` | the day line: its now rule and running bars move on the clock's tick | marks placed by time on each tick, measured against the window |
+| `sluice-pulse` | `components.js` | a pulse strip (At work's rows, a running step's in a drilldown): pointing, a tap or the arrows pick a minute (or the faded edge), anchor the page's popover to it and ask for what happened (`sluice-pulse`, the holder's debounced `@get`); its left edge fades while its run began before the hour | hit-testing a minute-wide target around a 2px mark and the strip's keys are not an attribute's; the words are the server's |
 | `sluice-drawer` | `sluice.js` | the step drawer: `#step:<id>` opens it beside the plan (over it below 1200px, a modal dialog; a sheet on a phone) and binds the step's stream; it follows the browser's own `hashchange` (no `pushState`, no event of its own): its close is a plain link to `#`, the scrim and Escape set `location.hash` from `data-on` (`data-on:keydown__window`), and a step link's click sets the hash | `inert` behind a modal, its focus trap, `[` and `]` (the plan's order as drawn, read from its links) and the stream binding it swaps per step |
 | `sluice-board` | `board.js` | a project's page: the board column's height and its "More below" cue, a board Button's say sent in place, a step's new state said once in `#announce`, and after a form with `data-focus-after` is taken the focus on that element once a patch draws it (the view is the server's: the switch is links) | fitting a column to the window, announcing changes and moving the focus |
 
@@ -1376,15 +1378,35 @@ the page's stream. A lane that redraws a page writes its notes here.
     blue light, `run-ink` dark, where the blue would be 2.7:1); in the drilldown a done run
     `sky-ink` at 45% on the paper edged in `sky-ink`, a look the sand edged in `sand-mark`.
     `/_ui` draws its five states: busy, slow, quiet, just started, started earlier.
+    **What a mark was** (`sluice-pulse`, `views::pulse`): pointed at, a mark opens a small
+    popover of what happened that minute: its time on the reader's clock, then each thing in
+    order, a tool call its tool and its first argument on one line in data mono ("Bash git
+    fetch -q origin", clipped with an ellipsis), a turn what opened it and its first sentence
+    ("Task Your task is in task.md…", "From @lead …"), a message who sent it and an excerpt;
+    eight at most, then "+3 more" and "See it in Activity", the first one's place in its step's
+    Activity tab. The target is the minute, not the 2px line: the nearest mark within half a
+    minute's width (10px at least) across the strip's whole height. A run that began before the
+    hour fades over the strip's first 28px (a mask, the marks and tail under it), and pointing
+    at that edge says "Started 1h 42m ago, at 14:05". On a phone a tap opens it (a tap
+    elsewhere closes it); the strip is one tab stop whose arrows, Home and End move between its
+    minutes (the edge first), Escape closes; the popover's body is a polite live region, so a
+    screen reader hears what the eye reads. Its details are asked for, never in the page or its
+    stream: the pick sends `sluice-pulse` and the roster's `data-on` (debounced 120ms, a newer
+    pick cancelling the one in flight) `@get`s `/projects/id/<p>/pulse`, whose answer patches
+    the popover's body. The popover is the native one (`popover=auto`, its light dismiss),
+    placed by CSS anchor positioning above its mark and flipping to stay in the window, in the
+    Details popover's look (`dm-p`); under 760px it is that popover's sheet at the bottom. It
+    is drawn once after the page's main, outside every region a stream patches.
     **The drilldown**: asked for as the row opens (`data-on:toggle`'s `@get`, a patch that
     replaces the row's empty body, `data-ignore-morph` so the row's own patches leave it be;
     open, a new stamp on the row asks again): first its last message whole as a message card
     (`ui::message_card` on the paper, unclamped: who and when, its markdown, code wrapped), then
     a row's step view (The step view) on the row's own window, the
     last hour, linear, across exactly the row's strip (the same x-range, measured, at every
-    width): the run going now is its row's pulse strip again (its marks and tail, "from 1h 10m
-    ago" when it began before the hour), a finished run a span in the strip's tones clipped at
-    the left edge with "from 37m ago" when it began earlier, a pending step nothing. Its "Runs on" column only when its steps differ, its
+    width): the run going now is its row's pulse strip again (its marks and tail, the same
+    popover on each mark), a finished run a span in the strip's tones, a run that began before
+    the hour faded at the left edge, which says when it began when pointed at (no "from …"
+    words: Took beside it says how long), a pending step nothing. Its "Runs on" column only when its steps differ, its
     Progress only when one reports any. Its foot: "Last heard 22:51 (6m ago)" ("Not heard from
     since 19:14 (3h ago)" for a quiet unit; the card above says what it said last), then
     Message and Unit page as quiet links and Open step, its one outlined move.

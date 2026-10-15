@@ -719,7 +719,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             owner: "",
             said,
             meta: &meta,
-            track: &track(&pulse, now),
+            track: &track(id, &pulse, now),
             drill: None,
         })
     };
@@ -791,11 +791,13 @@ fn plan_part(prefix: &str) -> TrustedHtml {
     ]
     .concat();
     TrustedHtml::owned(format!(
-        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\">{nh}<ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\"><div class=\"ro\">{}<details class=\"ro-g\" open><summary class=\"ro-group\"><h3><b>article</b> · 1 quiet, 4 running</h3></summary>{}{rows}</details></div><p class=\"ro-more\"><b>2 waiting</b> on earlier work · <a href=\"#\"><b>5 done</b></a>, the last {}</p></section><section class=\"pb-sec\">{fh}<ul class=\"fin\">{finished}</ul><p class=\"fin-quiet\">1 more finished with nothing to say: <a href=\"#\">Scan the photograph archive for credits</a></p></section></div></div>",
+        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\">{nh}<ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\"{listen}><div class=\"ro\">{}<details class=\"ro-g\" open><summary class=\"ro-group\"><h3><b>article</b> · 1 quiet, 4 running</h3></summary>{}{rows}</details></div><p class=\"ro-more\"><b>2 waiting</b> on earlier work · <a href=\"#\"><b>5 done</b></a>, the last {}</p>{pop}</section><section class=\"pb-sec\">{fh}<ul class=\"fin\">{finished}</ul><p class=\"fin-quiet\">1 more finished with nothing to say: <a href=\"#\">Scan the photograph archive for credits</a></p></section></div></div>",
         roster_head(ui::section_head("", "At work", "5 units").as_str()),
         axis(" ro-axis-g"),
         ui::ago(&before(1_500)),
         nh = ui::SectionHead::new("", "Needs you").count(3).html(),
+        listen = super::pulse::listen("/_ui/pulse", &format!("{prefix}pulse-pop")),
+        pop = super::pulse::popover(&format!("{prefix}pulse-pop")),
         fh = ui::SectionHead::new("", "Finished since you looked")
             .note(&TrustedHtml::owned(format!("since {}", ui::clock(&before(14_400)))))
             .action(&TrustedHtml::owned(ui::button(
@@ -1338,6 +1340,7 @@ fn steps_part() -> TrustedHtml {
             .collect();
         let view = View {
             label: format!("Steps of {}", case.name),
+            unit: String::new(),
             owner: case.owner.to_owned(),
             steps,
             edges: case
@@ -1412,7 +1415,7 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Module grid", "Twelve columns every module spans, half or whole on a medium sheet.", "`ui::grid_open`, `ui::module_open`.", both(&|p| Ok(grid_part(p)))?);
     add("Modules", "A unit, a question or a step on the grid; the one that needs you swells.", "`ui::module_open` with `ui::Swell`, `.mod-k`, `.mod-t`, `.mod-meta`, `.mod-body`, `.mod-actions`.", both(&|_| Ok(modules_part()))?);
     add("Section heads", "A section's name, its count muted, a note and its one action at the right.", "`ui::SectionHead`, `ui::section_head`.", both(&|_| Ok(heads_part()))?);
-    add("Plan briefing", "A plan's Needs you (each item a sentence, one action and a ×; what was set aside, with Undo), what finished since you looked, and At work: a row a unit, its pulse strip over the last hour (busy, slow, quiet, just started, started earlier).", "`plan::need_item`, `plan::finished_card`, `plan::roster_head`, `plan::axis`, `plan::track` and `plan::roster_row`, drawn by `views::plan::Plan`.", both(&|p| Ok(plan_part(p)))?);
+    add("Plan briefing", "A plan's Needs you (each item a sentence, one action and a ×; what was set aside, with Undo), what finished since you looked, and At work: a row a unit, its pulse strip over the last hour (busy, slow, quiet, just started, started earlier); point at a mark, or the faded left edge of one that started earlier, to see what happened then.", "`plan::need_item`, `plan::finished_card`, `plan::roster_head`, `plan::axis`, `plan::track` (a `sluice-pulse`, its popover `pulse::popover`, its details `pulse::details`) and `plan::roster_row`, drawn by `views::plan::Plan`.", both(&|p| Ok(plan_part(p)))?);
     add("Stage strip", "A unit's stages in recipe order, one cell each.", "`ui::stage_strip` from `ui::Stage`s (`ui::Cell::of` reads the status table).", both(&|_| Ok(strips_part()))?);
     add("Stats", "A project's numbers over a window.", "`views::stats::StatsView` (`durations`, `outcomes`, `throughput`, `slowest_html`), from `StatsData`.", both(&|p| Ok(stats_part(p)))?);
     add("Step view", "A unit step by step: its gates, what each step runs on, its state, progress, runs on one time axis with a tick a message, how long it took, and its last message.", "`unit_steps::View` (`unit_steps::of_unit` from a unit) in `sluice-steps`; a plan row opens to it (`plan::roster_row`).", both(&|_| Ok(steps_part()))?);
@@ -1574,6 +1577,7 @@ pub fn registration() -> PageRegistration {
         routes: |state| {
             Router::new()
                 .route("/_ui", get(gallery))
+                .route("/_ui/pulse", get(super::pulse::gallery))
                 .route("/docs", get(agent_docs))
                 .route("/docs/{topic}", get(agent_docs))
                 .with_state(state.dashboard.clone())

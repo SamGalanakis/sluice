@@ -16,6 +16,7 @@ pub mod icons;
 pub mod missing;
 pub mod plan;
 pub mod prefs;
+pub mod pulse;
 pub mod step;
 pub mod threads;
 pub mod ui;

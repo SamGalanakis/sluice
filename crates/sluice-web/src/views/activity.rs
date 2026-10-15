@@ -393,27 +393,7 @@ pub fn view(
             }
         }
         let open = running || failing_at.is_some_and(|(ft, _)| ft == t) || count == 1;
-        // a turn is headed by what opened it: its task, who sent the message (however it was
-        // delivered), sluice's own nudge, or sluice carrying it on
-        let (sent_kind, sent_words) = match turn.sent.kind {
-            SentKind::Task => ("Task".to_owned(), turn.sent.text.clone()),
-            SentKind::Carried => (
-                "Carried on".to_owned(),
-                "Its session went on from an earlier run.".to_owned(),
-            ),
-            SentKind::Compacted => (
-                "Compacted".to_owned(),
-                "Its engine compacted its context; its task and progress went back in.".to_owned(),
-            ),
-            SentKind::Message | SentKind::Text => match unwrapped(&turn.sent.text) {
-                Some(split) => split,
-                // a message file no longer kept: "#165159", named from its row (`name_messages`)
-                None if turn.sent.kind == SentKind::Message => {
-                    ("Message".to_owned(), turn.sent.text.clone())
-                }
-                None => ("From sluice".to_owned(), turn.sent.text.clone()),
-            },
-        };
+        let (sent_kind, sent_words) = opened(&turn.sent);
         turns.push(TurnView {
             n: t + 1,
             anchor,
@@ -463,6 +443,27 @@ pub fn view(
         step_href,
         failing,
         raw: None,
+    }
+}
+/// What opened a turn, as it is headed and its words: its task, who sent the message (however
+/// it was delivered), sluice's own nudge, or sluice carrying it on.
+pub fn opened(sent: &act::Sent) -> (String, String) {
+    match sent.kind {
+        SentKind::Task => ("Task".to_owned(), sent.text.clone()),
+        SentKind::Carried => (
+            "Carried on".to_owned(),
+            "Its session went on from an earlier run.".to_owned(),
+        ),
+        SentKind::Compacted => (
+            "Compacted".to_owned(),
+            "Its engine compacted its context; its task and progress went back in.".to_owned(),
+        ),
+        SentKind::Message | SentKind::Text => match unwrapped(&sent.text) {
+            Some(split) => split,
+            // a message file no longer kept: "#165159", named from its row (`name_messages`)
+            None if sent.kind == SentKind::Message => ("Message".to_owned(), sent.text.clone()),
+            None => ("From sluice".to_owned(), sent.text.clone()),
+        },
     }
 }
 /// Two or more reads, searches or listings in a row fold into one row ("3 reads, 2 searches");

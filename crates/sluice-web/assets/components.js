@@ -969,3 +969,176 @@ define("sluice-steps", {
     mark();
   },
 });
+
+// ---- sluice-pulse ------------------------------------------------------------------------------
+// A pulse strip (`pulse::host`: At work's rows, a running step's in a drilldown): its marks are
+// 2px lines (`i.pk` a minute its agent acted, `i.pk-m` a message), kept at the reader's now by
+// `nav.js`. Pointing at the strip picks the nearest mark within half a minute's width (10px at
+// least), across the strip's whole height; a tap picks the same way; with the strip focused the
+// arrows, Home and End move between them, and its left edge comes first while it is faded
+// (`data-before`: its run, `from`, began before the window). A pick anchors the page's popover
+// (the `[data-pulse-pop]` around it names it) to the mark and asks for what happened then: it
+// sends `sluice-pulse` with the query, which the holder's `data-on` turns into Datastar's
+// debounced `@get`, whose answer patches the popover's body (`data-for` its key). The popover is
+// native (`popover=auto`: Escape and a tap elsewhere close it), placed by CSS anchor positioning.
+// Its words are the server's; the script only picks, anchors, opens and closes.
+const pulsePops = new WeakMap();
+const unanchor = () => {
+  for (const el of document.querySelectorAll("[data-pulse-anchor]")) {
+    el.style.removeProperty("anchor-name");
+    el.removeAttribute("data-pulse-anchor");
+  }
+};
+define("sluice-pulse", {
+  props: ({ string, number }) => ({ unit: string, step: string, from: number }),
+  manifest: {
+    slots: [{ name: "marks", description: "Its i[data-a] marks on the window: .pk a minute its agent acted, .pk-m a message, .pk-start its run's start, .pk-tail the time since." }],
+    events: [{ name: "sluice-pulse", description: "A minute or the faded left edge was picked; detail.q is the query its details are asked with (unit, step, at or from, and k, the key the answer carries)." }],
+  },
+  setup({ host, cleanup }) {
+    const on = listening(cleanup);
+    const span = Number(host.dataset.pulse) || 3600;
+    const EDGE = 18;
+    const pop = () => document.getElementById(host.closest("[data-pulse-pop]")?.dataset.pulsePop ?? "");
+    const begun = () => Number(host.getAttribute("from"));
+    // its left edge fades while its run began before the window
+    const fade = (now = Date.now()) => {
+      const before = begun() > 0 && begun() < now / 1000 - span;
+      if (host.hasAttribute("data-before") !== before) host.toggleAttribute("data-before", before);
+    };
+    on(window, "sluice-tick", (event) => fade(event.detail));
+    fade();
+    // what can be picked, left to right: the faded edge, then each minute a mark is drawn in
+    const targets = () => {
+      const box = host.getBoundingClientRect();
+      const list = host.hasAttribute("data-before") ? [{ edge: true, x: box.left, el: host }] : [];
+      const minutes = new Map();
+      for (const el of host.querySelectorAll("i.pk[data-a]")) {
+        const r = el.getBoundingClientRect(), x = r.left + r.width / 2;
+        if (x < box.left || x > box.right) continue;
+        const minute = Math.floor(Number(el.dataset.a) / 60) * 60;
+        if (!minutes.has(minute) || el.classList.contains("pk-m")) minutes.set(minute, { minute, x, el });
+      }
+      return list.concat([...minutes.values()].sort((a, b) => a.minute - b.minute));
+    };
+    const near = (clientX) => {
+      const list = targets(), box = host.getBoundingClientRect();
+      if (list[0]?.edge && clientX - box.left <= EDGE) return list[0];
+      const reach = Math.max(box.width / (span / 60) / 2, 10);
+      let best = null;
+      for (const t of list) {
+        const d = Math.abs(t.x - clientX);
+        if (!t.edge && d <= reach && (!best || d < best.d)) best = { ...t, d };
+      }
+      return best;
+    };
+    const same = (a, b) => !!a && !!b && (a.edge ? !!b.edge : a.minute === b.minute);
+    // the popover's own state: who holds it, what it was asked, its pointer
+    const state = (p) => {
+      if (!pulsePops.has(p)) {
+        const s = { owner: null, picked: null, want: "", hiding: 0 };
+        pulsePops.set(p, s);
+        const settle = () => {
+          const body = p.firstElementChild;
+          if (body && body.dataset.for === s.want && p.getAttribute("aria-busy") === "true") p.removeAttribute("aria-busy");
+        };
+        new MutationObserver(settle).observe(p, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-for"] });
+        p.addEventListener("pointerenter", () => clearTimeout(s.hiding));
+        p.addEventListener("pointerleave", () => s.owner?.later());
+        p.addEventListener("toggle", (event) => {
+          if (event.newState !== "closed") return;
+          unanchor();
+          s.owner = null;
+          s.picked = null;
+        });
+      }
+      return pulsePops.get(p);
+    };
+    const query = (t) => {
+      const parts = [`unit=${encodeURIComponent(host.getAttribute("unit") ?? "")}`];
+      const step = host.getAttribute("step");
+      if (step) parts.push(`step=${encodeURIComponent(step)}`);
+      parts.push(t.edge ? `from=${Math.round(begun())}` : `at=${t.minute}`);
+      return parts.join("&");
+    };
+    let count = 0;
+    const me = {
+      later() {
+        const p = pop();
+        if (!p) return;
+        const s = state(p);
+        clearTimeout(s.hiding);
+        s.hiding = setTimeout(() => {
+          if (s.owner !== me || p.matches(":hover") || host.matches(":hover") || p.contains(document.activeElement)) return;
+          if (p.matches(":popover-open")) p.hidePopover();
+        }, 300);
+      },
+    };
+    const hide = () => {
+      const p = pop();
+      if (p && state(p).owner === me && p.matches(":popover-open")) p.hidePopover();
+    };
+    const pick = (t) => {
+      const p = pop();
+      if (!p || !t) return;
+      const s = state(p);
+      clearTimeout(s.hiding);
+      if (s.owner === me && same(s.picked, t) && p.matches(":popover-open")) return;
+      unanchor();
+      t.el.style.setProperty("anchor-name", "--pulse");
+      t.el.setAttribute("data-pulse-anchor", "");
+      s.owner = me;
+      s.picked = t;
+      s.want = `${Date.now().toString(36)}-${(count += 1)}`;
+      p.setAttribute("aria-busy", "true");
+      if (!p.matches(":popover-open")) p.showPopover();
+      host.dispatchEvent(new CustomEvent("sluice-pulse", { bubbles: true, detail: { q: `${query(t)}&k=${s.want}` } }));
+    };
+    on(host, "pointermove", (event) => {
+      if (event.pointerType === "touch") return;
+      const t = near(event.clientX);
+      if (t) pick(t); else me.later();
+    });
+    on(host, "pointerleave", () => me.later());
+    // a tap or a click picks too, and opens neither its row (the strip is in its summary) nor
+    // its step
+    on(host, "click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const t = near(event.clientX);
+      if (t) pick(t); else hide();
+    });
+    on(host, "keydown", (event) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      const p = pop();
+      if (event.key === "Escape") {
+        if (p?.matches(":popover-open")) {
+          event.preventDefault();
+          event.stopPropagation();
+          hide();
+        }
+        return;
+      }
+      const list = targets();
+      if (!list.length || !p) return;
+      const s = state(p);
+      const at = s.owner === me && p.matches(":popover-open") ? list.findIndex((t) => same(t, s.picked)) : -1;
+      const last = list.length - 1;
+      const next = {
+        ArrowRight: at < 0 ? last : Math.min(last, at + 1),
+        ArrowLeft: at < 0 ? last : Math.max(0, at - 1),
+        Home: 0,
+        End: last,
+        Enter: at < 0 ? last : at,
+      }[event.key];
+      if (next === undefined) return;
+      event.preventDefault();
+      event.stopPropagation();
+      pick(list[next]);
+    });
+    on(host, "focusout", (event) => {
+      if (!pop()?.contains(event.relatedTarget)) me.later();
+    });
+    cleanup(hide);
+  },
+});

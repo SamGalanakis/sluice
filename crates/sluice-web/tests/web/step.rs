@@ -390,7 +390,7 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
     set("UPDATE steps SET status='running' WHERE project_id=?1").await;
     let html = card(&state, project).await;
     let pill = &html[html.find("<span class=\"pill run\">").expect("its pill")..];
-    let pill = &pill[..pill.find("</span><span class=\"ro").unwrap()];
+    let pill = &pill[..pill.find("</span><sluice-pulse class=\"ro-track").unwrap()];
     assert!(
         pill.contains("<time data-since=\"2026-10-05T10:00:00Z\""),
         "{pill}"
