@@ -569,9 +569,15 @@ async fn slow_chromium_says_a_steps_new_state_to_a_screen_reader() {
         .await
         .unwrap();
     let said = tokio::task::spawn_blocking(move || {
-        browser
+        let said = browser
             .wait("!document.querySelector('[data-said*=\"alpha-review pending\"]') && document.getElementById('announce').textContent")
-            .unwrap()
+            .unwrap();
+        // the stream's patches redraw the nav and keep its live line
+        assert_eq!(
+            browser.eval("document.querySelectorAll('#top-nav .live').length").unwrap(),
+            1
+        );
+        said
     })
     .await
     .unwrap();

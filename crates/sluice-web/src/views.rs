@@ -880,7 +880,8 @@ fn import_map() -> &'static str {
             .replace("</", "<\\/")
     })
 }
-/// Render the shared stable nav target for a sibling page's patch batch.
+/// Render the shared stable nav target for a sibling page's patch batch. Only a streamed page
+/// patches its nav, so it is drawn as a streamed page's is: with its live line.
 pub fn render_nav(
     nav: &NavView,
     viewer: &Viewer,
@@ -891,7 +892,7 @@ pub fn render_nav(
         &TrustedHtml::owned(String::new()),
         nav,
         viewer,
-        "",
+        "streamed",
         "",
         path,
     )?;
