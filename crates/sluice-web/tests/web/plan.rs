@@ -306,11 +306,18 @@ async fn plan_units_and_loose_steps() {
                 && !drill.contains(">Progress<"),
             "{drill}"
         );
-        // its foot: when it was last heard from (its row says what), Open step the one move,
-        // the rest quiet links
+        // what it said last leads it whole, a message card over its steps (its row cuts it)
         assert!(
-            drill.contains("<p class=\"ro-ev\">Last heard ")
-                && !drill.contains("Entries 41 to 58")
+            drill.starts_with("<div id=\"drill-a-6\" class=\"ro-drill\" data-ignore-morph><div class=\"msg-card\"><p class=\"mc-h\"><b>draft</b>")
+                && drill.contains("<div class=\"md\"><p>Entries 41 to 58 drafted; the maps moved under maps/coast/.</p>"),
+            "{drill}"
+        );
+        // its foot: when it was last heard from (the card says what), Open step the one move,
+        // the rest quiet links
+        let foot = &drill[at(drill, "<div class=\"ro-foot\">")..];
+        assert!(
+            foot.contains("<p class=\"ro-ev\">Last heard ")
+                && !foot.contains("Entries 41 to 58")
                 && drill.contains("<span class=\"ro-links\"><a href=")
                 && drill.contains(">Message</a>")
                 && drill.contains(" data-step=\"a-6-draft\">Open step</a>"),

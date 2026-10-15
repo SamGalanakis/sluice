@@ -633,6 +633,21 @@ html[data-stream="live"] .live { display: flex; }
   .site-bar:has(> .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) > .bar-tools {
     margin-left: 0; }
 }
+/* on a phone the sections take their row whole (all seven fit from 390px): Find steps up to the
+   nav row, an icon before Inbox, and opens into a row of its own over the sections; the view
+   switch stays at the sections' end */
+@container bar (max-width: 520px) {
+  .site-bar:is(:has(.view-switch), :has(.project-settings), .site-bar) > .bar-tools { display: contents; }
+  .site-bar:is(:has(.view-switch), :has(.project-settings), .site-bar) .pl-find { order: 4; margin-left: auto; }
+  .site-bar:is(:has(.view-switch), :has(.project-settings), .site-bar):has(> .bar-tools) #nav-inbox { margin-left: 0; }
+  .site-bar:is(:has(.view-switch), :has(.project-settings), .site-bar) .view-switch { order: 10; }
+  .site-bar:is(:has(.view-switch), :has(.project-settings), .site-bar):has(> .bar-tools .pl-find:is(:focus-within, :has(input:not(:placeholder-shown)))) > nav > .bar-tabs {
+    display: flex; }
+  .site-bar:is(:has(.view-switch), :has(.project-settings), .site-bar) .pl-find:is(:focus-within, :has(input:not(:placeholder-shown))) {
+    order: 8; flex: 1 1 100%; margin: 0 0 8px; }
+  .site-bar:is(:has(.view-switch), :has(.project-settings), .site-bar) .pl-find:is(:focus-within, :has(input:not(:placeholder-shown))) .q-field {
+    flex: 1 1 auto; width: auto; max-width: none; }
+}
 
 /* on the narrowest phones the mark alone says sluice, leaving the switcher its name */
 @container bar (max-width: 360px) {
@@ -833,7 +848,7 @@ main#content:focus { outline: none; }
   .sw-name { min-width: 0; max-width: none; }
   .live { font-size: 0; gap: 0; }
   details.settings { margin-right: 0; }
-  .bar-tabs > a { padding: 0 7px; font-size: 13.5px; }
+  .bar-tabs > a { padding: 0 5px; font-size: 13.5px; }
   .bar-tools .pl-find input[type=search], .view-switch > a { height: 40px; }
   .view-switch > a { width: 40px; }
   .prefs .themes label, .prefs label.check, .sub-row, .sub-back { min-height: 44px; }
@@ -2457,10 +2472,15 @@ details.read-today .item { opacity: .85; }
             white-space: nowrap; }
 .ro-r:hover .ro-badge, .ro-u[open] .ro-badge { background: var(--paper); }
 .ro-who { grid-area: who; display: grid; min-width: 0; }
-.ro-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--w-strong);
-        color: var(--ink); }
-.ro-s { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px;
-        line-height: 20px; color: var(--ink-muted); }
+/* a row's title and its last word, each at most two lines (code and paths break anywhere);
+   the row open, its title whole and the message whole in the drilldown's card */
+.ro-t, .ro-s { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+               min-width: 0; overflow: hidden; overflow-wrap: anywhere; }
+.ro-t { font-weight: var(--w-strong); color: var(--ink); }
+.ro-s { font-size: 14px; line-height: 20px; color: var(--ink-muted); }
+.ro-u[open] > .ro-r .ro-t { display: block; -webkit-line-clamp: unset; line-clamp: none; }
+.ro-drill > .msg-card { margin: 0 0 10px; background: var(--paper); }
+.ro-drill > .msg-card .mc-b { display: block; -webkit-line-clamp: unset; line-clamp: none; }
 .ro-s b { color: var(--ink); font-weight: var(--w-strong); }
 .ro-s .uv-in-row { display: inline; }
 .ro-s .uv-in-row :is(.uv-stack, .uv-msg, .uv-md, .uv-msg p, .uv-md p) { display: inline; }
@@ -2544,9 +2564,6 @@ details.read-today .item { opacity: .85; }
   .ro-axis-g .ro-ticks > span:not(:first-child, :last-child) { display: none; }
   .ro-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
   .ro-track { margin-top: 0; }
-  .ro-t { white-space: normal; }
-  .ro-s { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-          line-clamp: 2; }
 }
 @media (max-width: 760px) {
   /* an Undo in its line keeps its 44px target without opening the line up */

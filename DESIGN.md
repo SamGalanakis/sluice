@@ -729,6 +729,10 @@ page's head on the paper under it.
   carries the bar wraps to two: the nav row (mark, switcher, Inbox, Live, preferences), then
   the sections row (44px tabs, scrolling sideways within themselves with a chevron over a fade
   at their end while there is more, `data-more` from `nav.js`) with the tools at its right.
+  Under 520px of band (a phone) the sections take their row whole, 5px apart, so all seven fit
+  from 390px (at 360px and under they scroll): Find steps up to the nav row, an icon before
+  Inbox, and opens into a row of its own over the sections; the view switch stays at the
+  sections' end, where the sections then scroll.
   The widths come from the items measured (the mark 26px, a switcher 134px and at most 22ch,
   seven sections 445px, Find 40px, the view switch 116px, Inbox, Live and preferences 155px,
   and the gaps): a plan with a board wraps under 1180px of band, any other project's page under
@@ -1329,9 +1333,14 @@ the page's stream. A lane that redraws a page writes its notes here.
     "article · 23 running · each heard from in the last 27m". A stop is in Needs you, not a
     row, so it keeps no healthy sibling in sight. A row (8px,
     `paper-2` on hover and open) is a grid: the badge (a 60px chip, an engine's name at 12px; drawn
-    only when rows run on more than one thing, never "fn"), its title in ink at weight 600 with
-    its owner muted and under it its recipe's view or its last message on one line, muted (who
-    said it, never when); its meta one statement about time, two lines at most: the stage pill
+    only when rows run on more than one thing, never "fn"), its title whole (an outcome
+    sentence, often long) in ink at weight 600 with its owner muted, and under it its recipe's
+    view or its last message, muted (who said it, never when). Each wraps to two lines at most
+    (`line-clamp`, breaking anywhere so a path or a code span never overflows), the title's
+    `title` the whole of it; the row open shows its title whole. Two and two, because the rows
+    exist to be read and a roster of more than 12 rows already folds to its remarkable ones, so
+    a long row costs height only where it says something; the meta and the track stay on the
+    first line. Its meta one statement about time, two lines at most: the stage pill
     (`ui::status_pill`: the state's glyph, the stage and how long it has run, in the state's
     tone), then "heard 12m ago" when
     it was heard from since its run began (in `ink` from 15 minutes, at weight 600 from 30, so
@@ -1352,13 +1361,15 @@ the page's stream. A lane that redraws a page writes its notes here.
     (light) or filled sand (dark); a wait dotted; a message a 1px tick.
     **The drilldown**: asked for as the row opens (`data-on:toggle`'s `@get`, a patch that
     replaces the row's empty body, `data-ignore-morph` so the row's own patches leave it be;
-    open, a new stamp on the row asks again), a row's step view (The step view) on the row's own scale, the
+    open, a new stamp on the row asks again): first its last message whole as a message card
+    (`ui::message_card` on the paper, unclamped: who and when, its markdown, code wrapped), then
+    a row's step view (The step view) on the row's own scale, the
     last twelve hours on the same log scale across exactly the row's track (the same x-range,
     measured, at every width), in the track's tones: a run still going reads as its step does
     now (a quiet one on the sand from when it fell silent), one that began earlier starts at the
     left edge, saying "from 3d ago". Its "Runs on" column only when its steps differ, its
     Progress only when one reports any. Its foot: "Last heard 22:51 (6m ago)" ("Not heard from
-    since 19:14 (3h ago)" for a quiet unit; the row already says what it said last), then
+    since 19:14 (3h ago)" for a quiet unit; the card above says what it said last), then
     Message and Unit page as quiet links and Open step, its one outlined move.
   - **Finished since you looked**: a card a unit that produced something (10px, a hairline
     inset, filling their row, one under 760px, each as tall as its own content). A card shows

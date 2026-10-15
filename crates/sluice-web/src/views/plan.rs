@@ -1503,7 +1503,8 @@ impl<'a> Plan<'a> {
             said_states: &said_states(unit),
             badge: &badge,
             runs_on: &runs_on,
-            title: title(unit),
+            // whole: the row clamps it to two lines, and open shows it all
+            title: unit.whole_heading(),
             owner: &unit.owner_words(),
             said: &self.said(unit),
             meta: &meta,
@@ -1854,14 +1855,33 @@ pub struct Drill {
     /// so `[` and `]` step through a closed row's steps as through an open one's.
     pub steps: String,
 }
-/// What a row of At work opens to: its unit's steps, its rows opening in the drawer, and its
-/// foot.
+/// What a row of At work opens to: what it said last, whole (its row cuts it to two lines),
+/// its unit's steps, its rows opening in the drawer, and its foot.
 fn drill_html(view: &ProjectView, unit: &UnitView) -> String {
     format!(
-        "{}{}",
+        "{}{}{}",
+        latest_html(unit),
         Plan::steps_html(view, unit),
         Plan::foot_html(view, unit)
     )
+}
+/// A unit's last message whole, as a message card (who said it and when, its markdown drawn);
+/// "" when it has said nothing.
+fn latest_html(unit: &UnitView) -> String {
+    if unit.last_message.trim().is_empty() {
+        return String::new();
+    }
+    ui::message_card(
+        "",
+        &TrustedHtml::owned(format!("<b>{}</b>", unit.sender_html())),
+        &ui::ago(&unit.changed),
+        &TrustedHtml::owned(format!(
+            "<div class=\"md\">{}</div>",
+            crate::markdown::render(&unit.last_message)
+        )),
+        "",
+    )
+    .0
 }
 /// A row of At work: a disclosure whose summary is the row and whose body is its steps, opening
 /// in place. Its body is asked for when it opens (`drill`): the stream sends the row, never
@@ -1884,7 +1904,7 @@ pub fn roster_row(row: &RowParts<'_>) -> String {
         None => (String::new(), "<div class=\"ro-drill\"></div>".to_owned()),
     };
     format!(
-        "<details id=\"u-{id}\" class=\"ro-u{wait}\" data-unit=\"{id}\"{states} data-preserve-attr=\"open\"{on_open}><summary class=\"ro-r\">{badge}<span class=\"ro-who\"><span class=\"ro-t\">{title}{own}</span><span class=\"ro-s\">{said}</span></span><span class=\"ro-meta\">{meta}</span>{track}<span class=\"ro-chev\" aria-hidden=\"true\">{chev}</span></summary>{drill}</details>",
+        "<details id=\"u-{id}\" class=\"ro-u{wait}\" data-unit=\"{id}\"{states} data-preserve-attr=\"open\"{on_open}><summary class=\"ro-r\">{badge}<span class=\"ro-who\"><span class=\"ro-t\" title=\"{title}\">{title}{own}</span><span class=\"ro-s\">{said}</span></span><span class=\"ro-meta\">{meta}</span>{track}<span class=\"ro-chev\" aria-hidden=\"true\">{chev}</span></summary>{drill}</details>",
         id = esc(row.id),
         wait = if row.waiting { " is-wait" } else { "" },
         states = if row.said_states.is_empty() {

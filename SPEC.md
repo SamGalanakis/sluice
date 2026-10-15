@@ -2163,7 +2163,8 @@ its edges the bar's (at most 1440px; on a phone Finished follows At work). The h
   with nothing remarkable folds whole to its line ("article · 23 running · each heard from in
   the last 27m"). A stop is in Needs you, not a row, so it keeps no row in sight. A row: what
   its steps run on as a badge, only where that tells rows apart and never for a fn (an
-  engine's name), its title with its owner small and muted, under it its recipe's view or its
+  engine's name), its title whole (two lines at most, whole when the row is open, its `title`
+  the whole) with its owner small and muted, under it (two lines at most) its recipe's view or its
   last message and who sent it (when, its meta says); its stage (its
   step's name in a unit of several or of a recipe; a loose step's state alone), its state and
   how long it has run or waited; "heard 12m ago" when it was heard from since its run began
@@ -2180,14 +2181,15 @@ its edges the bar's (at most 1440px; on a phone Finished follows At work). The h
   a `<details>`: opening it asks for its body (`GET /projects/id/<p>/units/<u>/drill`, which
   answers a Datastar patch that replaces the row's empty body; while it is open the row's stream
   carries a stamp of that body, and a new stamp asks for it again), so the page and its stream
-  carry rows, never the steps of rows nobody opened. It opens to its step view (below) on the
+  carry rows, never the steps of rows nobody opened. It opens to its last message whole (a
+  message card: who, when, its markdown), then its step view (below) on the
   row's own scale, the
   same twelve hours on the same log scale across exactly the row's track (its timeline as wide
   as the track and ending where it does, how long each took before it), its current step's
   row tinted (a run that began earlier starts at the left edge, saying "from 3d ago"; one over
-  before it is said, not drawn), then its latest message, or with none when it was last heard
-  from ("Last heard 22:51 (6m ago)"; for a quiet unit "Not heard from since 19:14 (3h ago)";
-  never the message its row already says),
+  before it is said, not drawn), then when it was last heard from ("Last heard 22:51 (6m
+  ago)"; for a quiet unit "Not heard from since 19:14 (3h ago)"; never the message the card
+  above says),
   Open step, and Message and Unit page as quiet links; it stays open through a patch. A failed, cancelled or stale unit is
   a stop in Needs you, not a row.
 - **Finished since you looked**: the units finished since this browser last marked the

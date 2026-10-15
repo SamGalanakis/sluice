@@ -211,9 +211,14 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
         }
         steps.insert(format!("{unit}-scan"), scan);
     }
-    // a unit of no recipe: two gathers fanning in to a merge
+    // a unit of no recipe: two gathers fanning in to a merge; its title (its first step's) is
+    // long, as an outcome sentence is
     for (id, doc, after) in [
-        ("index-birds", "Gather every bird entry's names", json!([])),
+        (
+            "index-birds",
+            "Gather every bird entry's names from the spring and autumn sections into one list, each with the section it appears in, its checklist code and every older name the checklist folds into it",
+            json!([]),
+        ),
         (
             "index-places",
             "Gather every place the entries name",
@@ -381,6 +386,31 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
                 )?;
             }
             tx.changed(Some(almanac), "steps");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    // the index's gather was told something long just as it began (so it has said nothing
+    // since): its row cuts it, its drilldown shows it whole
+    let id = stored_messages::stored(
+        writer,
+        almanac,
+        stored_messages::Stored {
+            thread: "step-index-places",
+            from: "orchestrator",
+            to: Some("index-places"),
+            body: "Use the checklist's own spellings for every name, even where the guide's sections disagree: `checklist/2024/species.csv` is the source of truth, and its `alt_names` column lists the older names to fold in.\n\nKeep the list in the order the sections first mention each bird, and end with a line naming any bird a section mentions that the checklist lacks, with the section's path (`sections/spring/coast/terns-and-skimmers.md`) so review can find it.",
+            ..Default::default()
+        },
+    )
+    .await
+    .id
+    .0;
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql()
+                .execute("UPDATE messages SET at=?2 WHERE id=?1", (id, ago(29 * M)))?;
+            tx.changed(Some(almanac), "messages");
             Ok(())
         })
         .await

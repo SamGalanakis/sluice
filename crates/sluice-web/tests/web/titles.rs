@@ -36,7 +36,7 @@ async fn recipe_titles_and_search() {
         // a way to its unit's page
         let l1 = plan_html::row(&html, "l1");
         assert!(
-            l1.contains("<span class=\"ro-t\">FIG-1: Fix the cron driver</span>")
+            l1.contains("<span class=\"ro-t\" title=\"FIG-1: Fix the cron driver\">FIG-1: Fix the cron driver</span>")
                 && l1.contains("<span class=\"vh\">running, </span>work</span>"),
             "{l1}"
         );
