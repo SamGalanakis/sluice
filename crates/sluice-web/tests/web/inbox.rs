@@ -594,11 +594,9 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
         .unwrap();
     let html = html.as_str();
     assert!(!html.contains("<h3>Question</h3>"));
-    // a question is a one-message conversation, as a step's Thread tab draws it: with no title
-    // of its own its body is said once, whole, never cut into a heading over itself
-    let card = &html[html
-        .find("class=\"mod swell-ask item q\"")
-        .expect("its card")..];
+    // a question is the question card, as a step draws it: with no title of its own its body
+    // is said once, whole, never cut into a heading over itself
+    let card = &html[html.find("<article class=\"q-card\"").expect("its card")..];
     let card = &card[..card.find("</article>").unwrap()];
     assert!(!card.contains("<h3>"), "{card}");
     assert!(!card.contains("class=\"m-title\""), "{card}");
@@ -609,7 +607,7 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
         "{card}"
     );
     assert!(card.contains("<p>More detail.</p>"), "{card}");
-    assert!(card.contains("<span class=\"m-q\">"), "{card}");
+    assert!(card.contains("<b>Question for you</b>"), "{card}");
     // its answer box is still named by its title
     assert!(
         html.contains("Your answer to Ship the lane today? The tests pass."),

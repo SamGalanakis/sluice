@@ -237,12 +237,8 @@ async fn a_steps_overview_draws_its_open_question_whole_to_answer_and_its_header
     assert!(!status.contains("awaiting reply"), "{status}");
     // Overview: first, above Now, whole, its list kept, with Answer and Close in the shared
     // component
-    let asked = between(
-        &page,
-        "<article class=\"mod swell-ask d-sec d-ask\"",
-        "</article>",
-    );
-    assert!(asked.contains("Its question for you</h3>"), "{asked}");
+    let asked = between(&page, "<div class=\"mod d-sec d-ask\"", "</article>");
+    assert!(asked.contains("<b>Question for you</b>"), "{asked}");
     // a step that is only waiting on the answer has no Now to say besides it
     assert!(
         page.contains("d-sec d-ask") && !page.contains("d-sec d-now"),
@@ -303,7 +299,7 @@ async fn an_answer_is_confirmed_in_its_place_with_or_without_script() {
     // the answered question keeps its place as one line; the open one is still a card
     let line = between(
         &inbox,
-        &format!("<article id=\"item-{id}-{answered}\" class=\"mod item q q-done\""),
+        &format!("<article class=\"q-card q-done\" id=\"item-{id}-{answered}\""),
         "</article>",
     );
     assert!(
@@ -325,16 +321,25 @@ async fn an_answer_is_confirmed_in_its_place_with_or_without_script() {
         "{line}"
     );
     assert!(inbox.contains(&format!(
-        "<article id=\"item-{id}-{waiting}\" class=\"mod swell-ask item q\""
+        "<article class=\"q-card\" id=\"item-{id}-{waiting}\""
     )));
     // the count says what waits, the answered one not among them
     assert!(
         inbox.contains("<title>1 question · Inbox · sluice</title>"),
         "{inbox}"
     );
-    // the card's first line is its project, not its thread's internal name
+    // the card names its project, not its thread's internal name, and leads to its thread
     let card = between(&inbox, &format!("id=\"item-{id}-{waiting}\""), "</article>");
-    assert!(card.contains(&format!("<p class=\"meta q-where\"><a href=\"/projects/id/{id}/thread?thread=owner\">titled</a></p>")), "{card}");
+    assert!(
+        card.contains("<span class=\"q-from\">titled · from "),
+        "{card}"
+    );
+    assert!(
+        card.contains(&format!(
+            "<a href=\"/projects/id/{id}/thread?thread=owner\">Open its thread</a>"
+        )),
+        "{card}"
+    );
 
     // without script the words-only form goes back where it was sent from, to its place
     for (referer, to) in [
@@ -659,7 +664,7 @@ async fn retry_causes_dependencies_and_log_filters() {
         .await;
         let (_, history) = f.get("/history").await;
         let card = between(&history, "You and orchestrator", "</article>");
-        assert!(card.contains("<p class=\"t-ask\"><span class=\"t-ask-title\">Accept revision 3?</span><a class=\"pill ask\""), "{card}");
+        assert!(card.contains("<p class=\"t-ask\"><span class=\"t-ask-title\">Accept revision 3?</span><a class=\"q-wait\""), "{card}");
         assert!(card.contains(&format!("#message-{q}\"")), "{card}");
     }
 }

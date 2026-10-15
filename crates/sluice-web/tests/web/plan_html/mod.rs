@@ -60,12 +60,15 @@ pub fn needs(html: &str) -> Vec<&str> {
     }
     out
 }
+/// An item's mark when it is a state's glyph (a stop or a silence), and a silence's.
+pub const STATE: &str = "<span class=\"nk\"><span class=\"g g-";
+pub const QUIET: &str = "<span class=\"nk\"><span class=\"g g-quiet\"";
 /// The item of Needs you about `unit`: its own, or the group that lists it.
 pub fn stopped<'a>(html: &'a str, unit: &str) -> &'a str {
     let mark = format!("data-unit=\"{unit}\"");
     needs(html)
         .into_iter()
-        .find(|item| item.contains(&mark) && !item.contains("nk-quiet"))
+        .find(|item| item.contains(&mark) && !item.contains(QUIET))
         .unwrap_or_else(|| panic!("an item of Needs you for {unit} in {html}"))
 }
 /// A question's item of Needs you, by its message.
@@ -94,7 +97,7 @@ pub fn place(html: &str, unit: &str) -> &'static str {
             if item.contains("nk-ask") {
                 return "asks";
             }
-            if item.contains("nk-stop") {
+            if item.contains(STATE) && !item.contains(QUIET) {
                 return "stopped";
             }
         }

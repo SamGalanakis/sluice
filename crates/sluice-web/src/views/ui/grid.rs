@@ -40,16 +40,14 @@ pub fn grid_close() -> TrustedHtml {
 pub enum Swell {
     /// A module like any other: a hairline over it.
     Plain,
-    /// It needs the owner: a question to them. The coral rule over it, its title a size up.
-    Ask,
-    /// It needs a look (stopped: failed, cancelled, stale): on the sand, a navy rule over it.
+    /// It needs a look (stopped: failed, cancelled, stale): a well on the pale sand. A
+    /// question to the owner is no module but `ui::QuestionCard`.
     Look,
 }
 impl Swell {
     fn class(self) -> &'static str {
         match self {
             Swell::Plain => "mod",
-            Swell::Ask => "mod swell-ask",
             Swell::Look => "mod swell-look",
         }
     }

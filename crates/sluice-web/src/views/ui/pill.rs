@@ -1,7 +1,7 @@
 //! A pill (DESIGN.md, Components: pill): a small fact set apart, its state, a count. Round,
 //! on the second paper; its tone a palette role: `Run` the blue (running), `Look` and `Quiet`
-//! the sand (needs a look), `Ask` the coral (a question to the owner, coral's one place besides
-//! the logo), `Done` the sky, `Muted` a hairline.
+//! the sand (needs a look), `Done` the sky, `Muted` a hairline. A question to the owner is no
+//! pill: its coral dot (`ask_link`, `ui::QuestionCard`).
 use super::esc;
 use crate::views::TrustedHtml;
 
@@ -12,7 +12,6 @@ pub enum Tone {
     Run,
     Look,
     Quiet,
-    Ask,
     Done,
     Muted,
 }
@@ -23,7 +22,6 @@ impl Tone {
             Tone::Run => "pill run",
             Tone::Look => "pill look",
             Tone::Quiet => "pill quiet",
-            Tone::Ask => "pill ask",
             Tone::Done => "pill done",
             Tone::Muted => "pill muted",
         }
@@ -48,11 +46,11 @@ pub fn pill_link(href: &str, text: &str, tone: Tone, mark: Option<TrustedHtml>) 
         esc(text)
     ))
 }
-/// The coral "Awaiting your reply" that leads to an open question to the owner, where it is
-/// answered. Its question is its title.
+/// The way to an open question to the owner, where it is answered: its coral dot and "Waiting
+/// on your answer". Its question is its title.
 pub fn ask_link(href: &str, question: &str) -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<a class=\"pill ask\" href=\"{}\" title=\"{}\" aria-label=\"Awaiting your reply: {}\">Awaiting your reply</a>",
+        "<a class=\"q-wait\" href=\"{}\" title=\"{}\" aria-label=\"Waiting on your answer: {}\"><span class=\"nk-ask\" aria-hidden=\"true\"></span>Waiting on your answer</a>",
         esc(href),
         esc(question),
         esc(question)

@@ -192,7 +192,7 @@ async fn slow_chromium_an_answer_is_confirmed_where_it_was_given() {
             .unwrap();
         // the Overview's copy: whole, its list kept, Answer opens its own box
         assert_eq!(
-            browser.eval("document.querySelector('#tp-overview li.m-yours .m-body li strong')?.textContent").unwrap(),
+            browser.eval("document.querySelector('#tp-overview .q-card .q-body li strong')?.textContent").unwrap(),
             "Now:"
         );
         browser
@@ -230,10 +230,10 @@ async fn slow_chromium_an_answer_is_confirmed_where_it_was_given() {
         );
         // a patch that replaces the exchange hands the focus to the question as now drawn
         let question = browser
-            .eval("document.querySelector('#tp-overview .q-answered').closest('li.m').id")
+            .eval("document.querySelector('#tp-overview .q-answered').closest('article.q-card').id")
             .unwrap();
         browser
-            .eval("(li => { const fresh = li.cloneNode(false); fresh.innerHTML = '<div class=\"md m-body\">Land it before the rename?</div><ol class=\"m-replies\"><li class=\"m-reply\" id=\"ov-message-999\">Land it now.</li></ol>'; li.replaceWith(fresh); })(document.querySelector('#tp-overview .q-answered').closest('li.m'))")
+            .eval("(li => { const fresh = li.cloneNode(false); fresh.innerHTML = '<div class=\"md m-body\">Land it before the rename?</div><ol class=\"m-replies\"><li class=\"m-reply\" id=\"ov-message-999\">Land it now.</li></ol>'; li.replaceWith(fresh); })(document.querySelector('#tp-overview .q-answered').closest('article.q-card'))")
             .unwrap();
         browser.wait("document.activeElement?.id === 'ov-message-999'").unwrap();
         assert!(question.as_str().unwrap().starts_with("ov-message-"), "{question}");
@@ -252,20 +252,20 @@ async fn slow_chromium_an_answer_is_confirmed_where_it_was_given() {
         // on the inbox the card stays where it was, as the line that says so
         browser.navigate(&format!("{base}/inbox")).unwrap();
         browser
-            .wait("document.readyState === 'complete' && document.querySelectorAll('#inbox-items article.item.q').length === 2 && [...document.querySelectorAll('#inbox-items .answer')].every(a => a.dataset.drawn)")
+            .wait("document.readyState === 'complete' && document.querySelectorAll('#inbox-items article.q-card').length === 2 && [...document.querySelectorAll('#inbox-items .answer')].every(a => a.dataset.drawn)")
             .unwrap();
         let badge = browser.eval("document.querySelector('#nav-inbox .badge').textContent").unwrap();
         browser
-            .eval("(a => { a.querySelector('button.q-toggle').click(); const t = a.querySelector('textarea'); t.value = 'Accept it.'; t.form.requestSubmit(); })([...document.querySelectorAll('#inbox-items article.item.q')].at(-1))")
+            .eval("(a => { a.querySelector('button.q-toggle').click(); const t = a.querySelector('textarea'); t.value = 'Accept it.'; t.form.requestSubmit(); })([...document.querySelectorAll('#inbox-items article.q-card')].at(-1))")
             .unwrap();
         browser
-            .wait("!!document.querySelector('#inbox-items article.item.q.q-done .q-answered a')")
+            .wait("!!document.querySelector('#inbox-items article.q-card.q-done .q-answered a')")
             .unwrap();
         browser
-            .wait("document.activeElement?.matches('#inbox-items article.item.q-done .q-answered')")
+            .wait("document.activeElement?.matches('#inbox-items article.q-card.q-done .q-answered')")
             .unwrap();
         assert_eq!(
-            browser.eval("document.querySelectorAll('#inbox-items article.item.q').length").unwrap(),
+            browser.eval("document.querySelectorAll('#inbox-items article.q-card').length").unwrap(),
             2
         );
         assert_eq!(
@@ -353,10 +353,10 @@ async fn slow_chromium_closing_a_question_confirms_it_in_place_and_keeps_the_foc
             .unwrap();
         let badge = browser.eval("document.querySelector('#nav-inbox .badge').textContent").unwrap();
         browser
-            .eval("[...document.querySelectorAll('#inbox-items article.item.q')].at(-1).querySelector('form.q-close button').click()")
+            .eval("[...document.querySelectorAll('#inbox-items article.q-card')].at(-1).querySelector('form.q-close button').click()")
             .unwrap();
         browser
-            .wait("document.activeElement?.matches('#inbox-items article.item.q-done .q-answered')")
+            .wait("document.activeElement?.matches('#inbox-items article.q-card.q-done .q-answered')")
             .unwrap();
         let said = browser.eval("document.activeElement.textContent").unwrap();
         assert!(said.as_str().unwrap().starts_with("Closed just now: "), "{said}");

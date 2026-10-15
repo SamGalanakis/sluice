@@ -307,7 +307,6 @@ button:disabled, .btn[aria-disabled=true] { opacity: .5; cursor: default; }
 .pill.run { background: color-mix(in oklch, var(--run) 14%, transparent); color: var(--run-ink); }
 .pill.run .g { color: inherit; }
 .pill.look, .pill.quiet { background: var(--sand); color: var(--on-sand); font-weight: var(--w-strong); }
-.pill.ask { background: var(--coral); color: var(--on-coral); font-weight: var(--w-strong); }
 .pill.done { background: var(--sky); color: var(--sky-ink); }
 .pill.muted { background: none; box-shadow: inset 0 0 0 1px var(--rule-faint); color: var(--ink-muted); }
 a.pill:hover { filter: brightness(.96); color: inherit; }
@@ -392,8 +391,26 @@ sluice-tabs > .tabs { position: sticky; top: 0; z-index: 4; margin: 0 0 20px -12
 .well { margin: 0; padding: 2px 18px; border-radius: var(--radius-surface); background: var(--paper-2);
   box-shadow: inset 0 0 0 1px var(--rule-faint); }
 .well.padded { padding: 14px 18px; }
-.well.look { box-shadow: inset 3px 0 0 var(--sand-mark), inset 0 0 0 1px var(--rule-faint); }
-.well.ask { box-shadow: inset 3px 0 0 var(--coral), inset 0 0 0 1px var(--rule-faint); }
+/* ---- a question to the owner (DESIGN.md, Components: Question): a card, marked by its coral
+   dot alone; its title, its words, one filled Answer and a quiet Close question ---- */
+.q-card { position: relative; display: grid; gap: 6px; min-width: 0; padding: 16px 18px;
+          border-radius: var(--radius-module); background: var(--paper); box-shadow: inset 0 0 0 1px var(--rule);
+          overflow-wrap: anywhere; }
+.q-k { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; padding-right: 40px;
+       font-size: var(--t-sm); color: var(--ink-muted); }
+.q-k b { color: var(--ink); font-weight: var(--w-strong); }
+.q-k > sluice-menu { position: absolute; top: 10px; right: 10px; }
+.q-from a { color: inherit; }
+.q-t { margin: 2px 0 0; font: var(--w-strong) 18px/24px var(--font-text); max-width: 40em; }
+.q-body { max-width: var(--measure); font-size: var(--t-body); line-height: 22px; }
+.q-card .q-actions { margin-top: 8px; }
+.q-on { margin: 4px 0 0; font-size: var(--t-sm); }
+.q-on a { color: var(--ink-muted); }
+.q-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); gap: var(--col-gap); }
+.q-wait { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); }
+.q-wait .nk-ask { width: 8px; height: 8px; }
+/* what needs a look stands on the pale sand; no stripe at its edge */
+.well.look { background: var(--sand-pale); }
 .row { display: block; margin: 0 -12px; padding: 10px 12px; border-radius: var(--radius-row); color: var(--ink);
   text-decoration: none; transition: background-color .15s ease-out; }
 a.row:hover, .row:is(:hover, [open] > *) { background: var(--paper-2); color: var(--ink); }
@@ -768,11 +785,9 @@ form.prefs:has(sluice-toggle:defined) .save { display: none; }
 .mod-body > * + * { margin-top: 6px; }
 .mod-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 14px; }
 .mod > .strip { margin-top: 12px; }
-.swell-ask, .swell-look, .swell-margin { padding: 16px 18px; border-radius: var(--radius-surface);
+.swell-look, .swell-margin { padding: 16px 18px; border-radius: var(--radius-surface);
   background: var(--paper-2); box-shadow: inset 0 0 0 1px var(--rule-faint); }
-.swell-ask { box-shadow: inset 3px 0 0 var(--coral), inset 0 0 0 1px var(--rule-faint); }
-.swell-ask .mod-t { font-size: 18px; line-height: 1.3; max-width: 34em; }
-.swell-look { box-shadow: inset 3px 0 0 var(--sand-mark), inset 0 0 0 1px var(--rule-faint); }
+.swell-look { background: var(--sand-pale); }
 .swell-look .mod-k .g { color: var(--sand-ink); }
 .swell-margin { gap: 12px; }
 
@@ -900,7 +915,6 @@ details.dm > summary:hover, details.dm[open] > summary { color: var(--ink); back
 .dm-acts form { display: contents; }
 /* in a module, at its top right; its kind's line keeps clear of it */
 .mod > sluice-menu > details.dm { position: absolute; top: 8px; right: 8px; }
-.swell-ask > sluice-menu > details.dm { top: 14px; right: 0; }
 .mod:has(> sluice-menu > details.dm) .mod-k { padding-right: 40px; }
 @media (max-width: 760px) {
   details.dm > summary { width: 44px; height: 44px; }
@@ -1142,7 +1156,7 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--ink) 86%, var(--pa
    ringed; only its next moves. ------------------------------------------------------------- */
 .step-head { display: grid; gap: 6px; padding: 14px 0 12px; }
 .step-head > * { min-width: 0; }
-.swell-look { --glyph-cut: var(--paper-2); }
+.swell-look { --glyph-cut: var(--sand-pale); }
 .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; color: var(--ink-muted); }
 .crumbs a { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-muted);
             text-decoration: none; }
@@ -1476,9 +1490,6 @@ code.v { border: 0; background: none; padding: 0; }
 .mg-you .m { padding-inline: 12px; border-radius: var(--radius-row); background: var(--paper-2); border-top: 0; }
 /* an open question to the owner: a coral mark at its edge, its title a size up (coral's one
    place besides the logo) */
-.m.m-yours { padding-left: 12px; border-top: 0; box-shadow: inset 3px 0 0 var(--coral); }
-.swell-ask .m.m-yours { padding-left: 0; box-shadow: none; }
-.m.m-yours .m-title, .swell-ask .m-title { font: var(--w-strong) 18px/1.3 var(--font-text); margin-top: 6px; }
 .m-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin: 0;
           font-size: 12.5px; line-height: 20px; color: var(--ink-muted); }
 .m-meta > sluice-menu > details.dm { margin-left: auto; }
@@ -1560,9 +1571,7 @@ li.m.q-done > .md, li.m.q-done > .m-body { opacity: 0.7; }
 .q-sheet > .sheet { row-gap: calc(26px * var(--density)); }
 @container sheet (min-width: 640px) and (max-width: 899.98px) { .q-sheet > .sheet > .mod { --take: 12; } }
 .q-sheet article.item { margin: 0; }
-.q-sheet article.item:not(.swell-ask) { padding: 12px 0 0; border-top: 1px solid var(--rule-faint); }
-.swell-ask .q-where { font-size: var(--t-sm); }
-.swell-ask .m-body { font-size: 15.5px; line-height: 1.5; }
+.q-sheet article.item { padding: 12px 0 0; border-top: 1px solid var(--rule-faint); }
 .q-sheet .note-h a, .q-sheet .item > h3 a { text-decoration: none; }
 .q-sheet .note-h, .q-sheet .item > h3 { font-size: 16px; line-height: 1.3; font-weight: var(--w-strong); }
 
@@ -1907,7 +1916,7 @@ h1.unit-h .g, h1.unit-h .g svg { width: 22px; height: 22px; }
 .u-sheet > .sheet { row-gap: calc(22px * var(--density)); }
 .u-sheet .sec-h + .u-view { margin-top: calc(-10px * var(--density)); }
 .u-step { padding: calc(12px * var(--density)) 0 calc(14px * var(--density)); border-top: 1px solid var(--rule-faint); }
-.u-step:is(.swell-ask, .swell-look) { padding: 12px 14px 14px; border-top: 0; }
+.u-step.swell-look { padding: 12px 14px 14px; border-top: 0; }
 .u-step .mod-k { gap: 4px 8px; }
 .u-step .mod-k .g { margin: 0; }
 .u-step .mod-k .took { font-size: 13px; color: var(--ink-muted); }
@@ -2061,10 +2070,9 @@ sluice-steps.sv { display: block; container: sv / inline-size; min-width: 0; }
 /* ---- messages: questions, the ones nobody waits on, notes read on sight ---------------------- */
 /* Answer and Close keep their places; the answer box opens under them */
 .q-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 14px; }
-.q-actions button, .q-close button { min-height: 44px; padding: 0 18px; }
+.q-actions .q-toggle { min-height: 44px; padding: 0 18px; }
+.q-actions .q-close button { min-height: 44px; }
 @media (max-width: 760px) {
-  .swell-ask .q-actions > :is(button, form) { flex: 1 1 0; }
-  .swell-ask .q-actions .q-close button { width: 100%; }
 }
 .answer form button { min-height: 44px; padding: 0 20px; }
 .stopped-head > .sec-h { flex: 1 1 auto; }
@@ -2253,11 +2261,10 @@ details.read-today .item { opacity: .85; }
 .nd-i:first-child { border-top: 0; }
 .nd-i:focus { outline: none; }
 .nd-i:focus-visible { outline: var(--focus-width) solid var(--navy); outline-offset: 2px; }
-.nk { justify-self: center; width: 8px; height: 8px; }
+.nk { justify-self: center; display: grid; place-items: center; }
 /* a question outranks a stop: the larger mark */
-.nk-ask { width: 12px; height: 12px; border-radius: 50%; background: var(--coral); }
-.nk-stop { border-radius: 2px; background: var(--sand); box-shadow: inset 0 0 0 1px var(--sand-mark); }
-.nk-quiet { border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--sand-ink); }
+/* a question to the owner: the coral dot, the one place coral is spent on a mark */
+.nk-ask { display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--coral); }
 .nd-say { min-width: 0; max-width: 90ch; overflow-wrap: anywhere; }
 .nd-say > p { margin: 0; }
 .nd-say b { font-weight: var(--w-strong); }
@@ -3173,7 +3180,8 @@ main { container: frame / inline-size; }
 /* the question whole, as everywhere it is answered: its last line is usually the ask */
 .fy-body { color: var(--ink); }
 .fy-body > :first-child { margin-top: 0; }
-.fy-q sluice-answer .q-actions { margin-top: 14px; gap: 10px; }
+.fy-where { color: var(--ink-muted); }
+.fy-list { margin: 0; padding: 0; list-style: none; }
 .fy-q .q-close { margin: 0; }
 .fy-more { margin-top: 10px; font-size: 13px; }
 .fy-done { padding: 14px 0; border-top: 1px solid var(--rule); }
@@ -3412,7 +3420,7 @@ main { container: frame / inline-size; }
   background: var(--navy) linear-gradient(var(--on-navy), var(--on-navy)) 15px 3px / 8px 8px no-repeat; }
 /* delete: in the sand's well, as anything that needs a look */
 .settings-page section.settings-danger { padding: 14px 18px 18px; border-radius: var(--radius-surface);
-                                         background: var(--sand-pale); box-shadow: inset 3px 0 0 var(--sand-mark);
+                                         background: var(--sand-pale);
                                          max-width: calc(78ch + 32px); }
 .settings-danger button:disabled { opacity: 1; cursor: not-allowed; color: var(--ink-muted);
                                    box-shadow: inset 0 0 0 1px var(--rule); background: var(--paper-2); }
@@ -3441,7 +3449,6 @@ main { container: frame / inline-size; }
                        grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); }
 .histpage article.item.hist { margin: 0; padding: 12px 0 0; background: none; border: 0; border-radius: 0;
                               border-top: 1px solid var(--rule-faint); }
-.histpage article.item.hist.swell-ask { padding: 12px 14px 14px; border-top: 0; }
 #messages-view.histpage .item > h2.t-name { font: var(--w-strong) 17px/23px var(--font-text); }
 .histpage .hist .m-body { margin-top: 4px; font-size: 14px; line-height: 20px; color: var(--ink);
                           display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
@@ -3452,4 +3459,4 @@ main { container: frame / inline-size; }
 /* a step's own question on its Overview: the module's coral rule, its heading and the step's
    head chip already say it is the owner's to answer, so the conversation's route, its kind and
    its state tag are not said again there */
-.d-ask .mg-head, .d-ask .m-meta :is(.m-q, .pill.ask) { display: none; }
+.d-ask .mg-head { display: none; }

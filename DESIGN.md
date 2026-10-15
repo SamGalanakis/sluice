@@ -146,10 +146,10 @@ components:
     textColor: "{colors.ink}"
     rounded: "{rounded.surface}"
     padding: "2px 18px"
-  well-ask:
-    backgroundColor: "{colors.paper-2}"
+  question-card:
+    backgroundColor: "{colors.paper}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.surface}"
+    rounded: "{rounded.module}"
     padding: "16px 18px"
   well-look:
     backgroundColor: "{colors.paper-2}"
@@ -168,11 +168,6 @@ components:
   pill:
     backgroundColor: "{colors.paper-2}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.chip}"
-    height: "20px"
-  pill-ask:
-    backgroundColor: "{colors.coral}"
-    textColor: "{colors.on-coral}"
     rounded: "{rounded.chip}"
     height: "20px"
   inbox-count:
@@ -293,7 +288,7 @@ chosen the system's. These are Sluice's (Sluice Light and Sluice Dark); every ot
   stale, quiet. A look cell is sand with navy on it; a
   stopped module sits on `sand-pale`.
 - **Coral** (`coral`, `on-coral`): only an open question to the owner (the Inbox count, the
-  question module's rule, "Awaiting your reply", the summary's link to it) and the logo. A
+  question's dot, the summary's link to it) and the logo. A
   failure is never coral.
 
 **The One Coral Rule.** Coral marks a question waiting on the owner, nothing else.
@@ -802,15 +797,15 @@ Four surfaces carry every page, each from its radius token and nothing heavier t
   `rule` hairline: a project on home, a finished unit, a message, a fn, a docs topic.
 - **A well** (`ui::well_open` / `well_close`, `--radius-surface`): the raised second paper
   (`paper-2`), where rows that belong together stand: Needs you, a step's Now. A well that
-  needs a look has a 3px `sand-mark` edge at its left; one asking the owner a 3px `coral` edge.
+  needs a look stands on `sand-pale`. No surface carries a stripe at its edge.
 - **A row** (`.row`, `--radius-row`): an item in a list, `paper-2` on hover and while open.
 - **A module** (`ui::module_open`, `.mod` on the grid, `--span` twelfths): a step's or a
   unit's part on the sheet (Now, Progress, what it waits on, a stopped step, a question). Its
   parts: `.mod-k` (its kind's line: a glyph, a word, who and when), `.mod-t` (its title, 16px at
   600), `.mod-meta`, a stage strip, `.mod-body` (prose at the measure), `.mod-actions`. The one
-  that needs the owner swells (`Swell::Ask`, `Swell::Look`): a well with the coral or the sand
-  edge, its title at 18px, its next move first (Answer; Retry with feedback). Anything else
-  (`Swell::Plain`) stands on the paper. The plan draws no modules (The briefing).
+  that needs a look swells (`Swell::Look`): a well on `sand-pale`, its next move first (Retry
+  with feedback). Anything else (`Swell::Plain`) stands on the paper. A question to the owner
+  is no module but the question card (Components). The plan draws no modules (The briefing).
 
 A section's head (`ui::SectionHead`, `ui::section_head`) names a region at 18px/600, its count
 muted after it, a note or its one action at the right; no rule over it. Pages never nest a card
@@ -1029,7 +1024,9 @@ The helpers (`crates/sluice-web/src/views/`):
 | Section head | `ui/section.rs` (`SectionHead`, `section_head`) | a region's name at 18px/600, its count, a note, one action |
 | Tabs | `ui/tabs.rs` (`Tab`, `tabs_open`/`close`, `panel_open`/`close`, `switch`) | pill tabs over panels; the view switch and the messages' switch as pill links |
 | Buttons | `ui/button.rs` (`Btn`, `submit`, `link`) | Primary (the next move, filled navy), Outlined, Quiet, Danger, Icon (44px, a plain glyph) |
-| Pills | `ui/pill.rs` (`Tone`, `pill`, `pill_link`, `ask_link`) | a fact set apart in its state's tone: plain, muted, run (soft blue), look, quiet (sand), done, ask (coral) |
+| Pills | `ui/pill.rs` (`Tone`, `pill`, `pill_link`, `ask_link`) | a fact set apart in its state's tone: plain, muted, run (soft blue), look, quiet (sand), done; `ask_link` the way to an open question, its coral dot and "Waiting on your answer" (never a coral pill) |
+| Needs you | `ui/need.rs` (`Mark`, `need_line`) | an item a line: its mark (the coral dot for a question, else its state's glyph from the status table), its sentence, its one action, its × |
+| Question | `ui/question.rs` (`QuestionCard`, `answer_link`, `way_on`); `threads::MessageItem::question_card`; `templates/answer.html` | a question to the owner, one way everywhere: as a line it is `need_line` with `Mark::Ask`; as a card, its coral dot and "Question for you", who asked and when, its title (when it has one of its own), its words whole, one filled Answer that unfolds its form and a quiet Close question |
 | Cards and wells | `ui/card.rs` (`well_open`, `well_close`, `message_card`) | a well (plain, look, ask); a message as a card: who to whom, when, its words, the way to the whole |
 | Tool calls | `ui/calls.rs` (`Call`, `calls`) | a turn's calls in a quiet `<details>`: the tool, its key argument on one line, how long or that it failed |
 | Menus and Details | `ui/menu.rs` (`Details`); `ui.rs` (`fold`) | the ⋯ with what identifies a thing, then its actions; a plain fold |
@@ -1123,14 +1120,14 @@ the page's stream. A lane that redraws a page writes its notes here.
 
 | Page | Route | Drawn by | Components and helpers |
 |---|---|---|---|
-| Home | `/` (its stream `/stream`; `/title` the tab title alone) | `views::home` | page head and summary sentence, section heads, For you's asking modules (`sluice-answer`), Today, a card a project, pills, the index table |
+| Home | `/` (its stream `/stream`; `/title` the tab title alone) | `views::home` | page head and summary sentence, section heads, For you as Needs-you lines, Today, a card a project, pills, the index table |
 | A project's plan | `/projects/id/<p>` (`?view=plan`, `both`, `board`; `/stream`; posts `/needs`, `/seen`) | `views::board::project_page`, `views::plan`, `views::panel` (the board), `templates/project.html` | `sluice-board`, page head, pill tabs and the view switch, the Needs you well, Finished cards, At work rows with `sluice-steps`, pills, buttons, `sluice-search` (Find), `sluice-splitter`, `sluice-drawer`, `sluice-keys`, `sluice-menu`, `sluice-confirm` |
 | A step | `/projects/id/<p>/steps/<s>` (`/stream`; posts `/actions`), and in the drawer | `views::step`, `templates/step.html`, `step_band.html`, `activity.html` | the step head (page head, status line, stage strip, buttons, the ⋯ with its actions), `sluice-tabs`, Now's well with the tool calls fold, asking and stopped modules, message cards, `sluice-steps` (Runs), field tables, `sluice-fold`, `sluice-confirm`, `sluice-composer` |
 | A unit | `/projects/id/<p>/units/<u>` (`/stream`) | `views::unit_page`, `templates/unit_page.html` | page head, status line, `sluice-steps`, asking and stopped modules, `sluice-answer` |
 | A run's file | `/projects/id/<p>/runs/<r>/files/<name>` | `views::step::run_file_page` | page head, the file on a cell-radius card in data mono |
 | Day | `/day`, `/projects/id/<p>/day` (`/stream`) | `views::day` | page head and note, `sluice-day`, the timetable with its pills and folds |
 | Stats | `/projects/id/<p>/stats` (`/stream`) | `views::stats` | page head and note, the window switch (`ui::switch`), section heads, tables, the throughput chart |
-| For you, Questions, History | `/inbox`, `/questions`, `/history`, and each under `/projects/id/<p>/` (`/stream`; posts `/messages`, `/messages/read`, `/messages/close`, a reply) | `views::inbox`, `views::threads`, `templates/inbox.html`, `history.html`, `conversation.html`, `answer.html` | page head, the messages' switch, asking modules (`sluice-answer`), section heads, cards, `sluice-conversation`, `sluice-confirm` (Close all) |
+| For you, Questions, History | `/inbox`, `/questions`, `/history`, and each under `/projects/id/<p>/` (`/stream`; posts `/messages`, `/messages/read`, `/messages/close`, a reply) | `views::inbox`, `views::threads`, `templates/inbox.html`, `history.html`, `conversation.html`, `answer.html` | page head, the messages' switch, question cards (`sluice-answer`), section heads, cards, `sluice-conversation`, `sluice-confirm` (Close all) |
 | A thread | `/projects/id/<p>/thread?thread=<t>` | `views::inbox`, `templates/thread.html` | page head with Details, a conversation's rows, `sluice-conversation`, `sluice-composer`, `sluice-answer` |
 | Log | `/log`, `/projects/id/<p>/log` (`/stream`) | `views::log`, `templates/log.html` | page head and note, the presets (`ui::switch`), `sluice-search` filters, a section head, the records table, `sluice-copy` |
 | Functions | `/fns` (`?project=`; `/fns/stream`) | `views::home`, `templates/functions.html` | page head and note, `sluice-search`, section heads, a card a fn |
@@ -1253,8 +1250,8 @@ the page's stream. A lane that redraws a page writes its notes here.
   box standing open and the bare Retry is quiet), a cancel's quiet Dismiss. Why it failed reads
   in order: its headline, the words its run said and its last failed call, then the advice, then
   the feedback box when a failure repeated. Its tabs follow as pill tabs (`sluice-tabs`).
-  Overview is modules on the sheet: the question to the owner first in the coral-edged well,
-  answered in place; then why it failed in the sand-edged well, or **Now**: the latest sentence
+  Overview is modules on the sheet: the question to the owner first as the question card,
+  answered in place; then why it failed in the sand well, or **Now**: the latest sentence
   the agent said at lead size (17px), then its calls in a quiet fold (`ui::calls`: "12 calls ·
   1 failed", opening to a line each, the tool, its key argument and how long it took, the latest
   first); beside them, as titled modules, what it waits on (or when it starts), what it comes
@@ -1269,17 +1266,17 @@ the page's stream. A lane that redraws a page writes its notes here.
   its glyph and title with its Details (its id, recipe and params), how its steps stand, a short
   recipe view on that line, its owner. On the sheet its recipe's view whole when it says more than a line,
   then Steps: its step view across the sheet (The step view), and under it a module for each
-  step that needs the owner, in the view's order: the one asking in the coral-edged well, answered in
-  place, a stop in the sand-edged well with why it stopped, each headed by its stage with its Details.
+  step that needs the owner, in the view's order: the one asking as the question card (Answer the way to its
+  step, Close question in place), a stop in the sand well with why it stopped, each headed by its stage with its Details.
 - **The inbox, Questions and a thread**: the head names the page (a thread its step's title,
   its way back over it and its Details); the messages' switch is in the row. Questions to the
   owner
-  come first as asking modules (the coral-edged well), answered in place (Answer and Close 44px; on
+  come first as question cards, answered in place (Answer and Close 44px; on
   a phone a whole-width card), one a row to 900px of sheet, two from there; then those between agents, the ones nobody waits on and the unread notes
   (each its thread's name and project, its notes, then Mark read after them). A thread's page
   keeps its thread name and project in its Details.
   A conversation's messages are rows apart by hairlines, each with its Details (its id, its
-  thread, what it replies to), an open question to the owner in the coral-edged well with its reply
+  thread, what it replies to), an open question to the owner as the question card with its reply
   under it, the message box under a hairline.
 - **Home** (`/`, `views::home`): the projects as cards and an index. The head: "All projects"
   and one sentence across them (the questions first, in coral, then what runs and where, then
@@ -1358,7 +1355,7 @@ the page's stream. A lane that redraws a page writes its notes here.
 - **History** (`/history`): the third of the message views, its head its name as For you
   and Questions; the threads with the owner, counted in their section's head, a module each on
   the grid, as many to a row as fit
-  360px; one with an open question in the coral-edged well.
+  360px; one with an open question says "Waiting on your answer" after the coral dot.
 - **A page that cannot be drawn** (`views::missing`): the head says what is missing and, as
   its note, why; the paper lists the ways on, each a 48px link at 17px/600 with its arrow.
 - **Agent docs** (`/docs`): the head names them; the index a row of topic modules; a topic

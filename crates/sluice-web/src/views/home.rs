@@ -486,10 +486,18 @@ impl HomeView {
     pub fn from_parts(
         snapshot: &DashboardSnapshot,
         boards: &BTreeMap<ProjectId, board::ProjectView>,
-        questions: Vec<threads::MessageItem>,
+        mut questions: Vec<threads::MessageItem>,
         day: Option<day::DayView>,
         now: u64,
     ) -> Self {
+        // a question the owner set aside in its plan's Needs you is set aside here too
+        questions.retain(|q| {
+            boards.get(&q.project).is_none_or(|b| {
+                !b.set_aside
+                    .iter()
+                    .any(|s| s.key == format!("ask:{}", q.id()))
+            })
+        });
         let mut projects: Vec<HomeProject> = snapshot
             .projects
             .iter()
@@ -639,8 +647,9 @@ impl HomeView {
             )
         ))
     }
-    /// For you: each question to the owner swollen, answerable here; one answered in the last
-    /// ten minutes as the line that says so.
+    /// For you: each open question to the owner as a line of the Needs-you list (its project
+    /// and who asked, the question, Answer the way to it and × to set it aside); one answered
+    /// in the last ten minutes as the line that says so.
     fn for_you(&self) -> Result<String, askama::Error> {
         let mut html = String::new();
         let open = self.questions.iter().filter(|q| q.answered_at.is_empty()).count();
@@ -657,45 +666,45 @@ impl HomeView {
         );
         if self.questions.is_empty() {
             html.push_str("<p class=\"fy-none\">Nothing waiting on you.</p>");
+            return Ok(html);
         }
+        html.push_str("<ul class=\"nd-list fy-list\">");
         for q in &self.questions {
             let id = format!("item-{}-{}", q.project, q.id());
             if !q.answered_at.is_empty() {
                 html.push_str(&format!(
-                    "<article class=\"mod fy-done q-done\" id=\"{id}\">{}</article>",
+                    "<li class=\"nd-i fy-done\" id=\"{id}\">{}</li>",
                     q.answered_html()
                 ));
                 continue;
             }
-            let step = match &q.from_who {
-                threads::Who::Step(s) => Some(s.clone()),
-                _ => None,
+            let place = match &q.from_who {
+                threads::Who::Step(s) => format!("/projects/id/{}/steps/{}", q.project, s.id),
+                _ => q.thread_url(),
             };
-            let place = match &step {
-                Some(s) => format!("/projects/id/{}/steps/{}", q.project, s.id),
-                None => q.thread_url(),
-            };
-            html.push_str(&format!(
-                "<article class=\"mod swell-ask fy-q item\" id=\"{id}\" aria-label=\"Question for you: {label}\"><p class=\"mod-k\"><i class=\"mk mk-ask\" aria-hidden=\"true\"></i><b>Question for you</b><span class=\"meta\">{project} · from {from} · {when}</span></p><h3 class=\"mod-t\">{title}</h3><div class=\"mod-body md fy-body\">{body}</div>{answer}<p class=\"fy-more\"><a href=\"{place}\">{open}</a></p></article>",
-                label = esc(&q.title()),
-                project = esc(&q.project_name),
-                from = q.from_who.html(&q.project),
-                when = ui::ago(&q.message.at),
-                title = esc(&q.title()),
-                body = q.shown_body(),
-                answer = TrustedHtml::from_template(&Ask {
-                    item: q,
-                    c: Slot {
-                        slot: "home-".into(),
-                    },
-                })?,
-                place = esc(&place),
-                open = match &step {
-                    Some(_) => "Open its step".to_owned(),
-                    None => "Open its thread".into(),
-                },
+            let project = format!("/projects/id/{}", q.project);
+            html.push_str(&ui::need_line(
+                ui::Mark::Ask,
+                &id,
+                "",
+                &format!(
+                    "<span class=\"fy-where\">{} · {}</span> <b><a href=\"{}\">{}</a></b>",
+                    esc(&q.project_name),
+                    q.from_who.html(&q.project),
+                    esc(&place),
+                    esc(&q.title())
+                ),
+                "",
+                &format!("<a class=\"btn primary\" href=\"{}\">Answer</a>", esc(&place)),
+                &format!(
+                    "<form class=\"nd-form\" method=\"post\" action=\"{p}/needs\"><input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"items\" value=\"ask:{m}\"><input type=\"hidden\" name=\"next\" value=\"/#for-you\"><button class=\"icon\" aria-label=\"Set aside {t}\" title=\"Set aside {t}\">×</button></form>",
+                    p = esc(&project),
+                    m = q.id(),
+                    t = esc(&q.title()),
+                ),
             ));
         }
+        html.push_str("</ul>");
         Ok(html)
     }
     /// Today: each project's day in a line, and the way to the timetable.
@@ -811,17 +820,6 @@ impl HomeView {
         Ok(TrustedHtml::owned(html))
     }
 }
-/// A question's answer area as a conversation draws it (`answer.html`), its ids under `c.slot`.
-#[derive(Template)]
-#[template(source = "{% include \"answer.html\" %}", ext = "html")]
-struct Ask<'a> {
-    item: &'a threads::MessageItem,
-    c: Slot,
-}
-struct Slot {
-    slot: String,
-}
-
 /// Everything home reads: the questions (with the nav's snapshot), then each live project's
 /// board and the day, in one snapshot.
 pub async fn load(

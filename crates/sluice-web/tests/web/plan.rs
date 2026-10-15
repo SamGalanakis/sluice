@@ -158,7 +158,11 @@ async fn plan_units_and_loose_steps() {
             needs[0].contains("<span class=\"nk nk-ask\" role=\"img\" aria-label=\"Question\">")
         );
         assert!(
-            needs[3].contains("<span class=\"nk nk-quiet\" role=\"img\" aria-label=\"Quiet\">")
+            needs[3].contains(
+                "<span class=\"nk\"><span class=\"g g-quiet\" role=\"img\" aria-label=\"quiet\">"
+            ),
+            "{}",
+            needs[3]
         );
         assert!(needs[3].contains(">Message it</a>"), "{}", needs[3]);
         // the head's sentence, from the counts alone

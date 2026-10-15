@@ -207,7 +207,7 @@ export function answered(area, closed) {
   const note = h("p", { class: line.className, tabindex: "-1", role: "status", "aria-live": "polite" });
   if (line.dataset.q) note.dataset.q = line.dataset.q;
   host.replaceChildren(note);
-  for (const held of [host.closest("li.m"), host.closest("article.item")]) held?.classList.add("q-done");
+  for (const held of [host.closest("li.m"), host.closest("article.q-card")]) held?.classList.add("q-done");
   requestAnimationFrame(() => {
     note.append(...line.childNodes);
     note.focus();
@@ -240,7 +240,7 @@ function keepFocus() {
   target.focus({ preventScroll: true });
 }
 document.addEventListener("focusin", ev => {
-  if (held && !ev.target.matches?.(".q-answered, li.m, .m-reply")) held = null;
+  if (held && !ev.target.matches?.(".q-answered, li.m, .q-card, .m-reply")) held = null;
 });
 
 function submit(ctx, p, form) {

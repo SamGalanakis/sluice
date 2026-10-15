@@ -284,43 +284,6 @@ async fn serve(router: Router) -> (String, tokio::task::JoinHandle<()>) {
 const FRAMES: &str = "new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))";
 
 #[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_a_question_answered_on_home_says_so_where_it_was_asked() {
-    let f = Fixture::new().await;
-    let n = neutral::seed(&f.writer, f._home.path()).await;
-    let (base, server) = serve(f.router()).await;
-    let commands = f.commands.clone();
-    tokio::task::spawn_blocking(move || {
-        let mut browser = Chrome::open(&format!("{base}/")).unwrap();
-        browser.viewport(1440, "light").unwrap();
-        browser.navigate(&format!("{base}/")).unwrap();
-        browser.wait("document.readyState === 'complete' && !!customElements.get('sluice-answer')").unwrap();
-        browser.eval(FRAMES).unwrap();
-        let module = format!("document.querySelector('#item-{}-{}')", n.almanac, n.question);
-        // its answer area drawn by its script, then Answer opens the box under the buttons
-        browser.wait(&format!("!!{module}.querySelector('.answer[data-drawn]')")).unwrap();
-        browser.eval(&format!("{module}.querySelector('.q-toggle').click()")).unwrap();
-        browser.wait(&format!("{module}.querySelector('textarea').checkVisibility()")).unwrap();
-        browser.eval(&format!("(t => {{ t.value = 'Use the new dates.'; t.form.requestSubmit(); }})({module}.querySelector('textarea'))")).unwrap();
-        browser.wait(&format!("!!{module}.querySelector('.q-answered')")).unwrap();
-        let said = browser.eval(&format!("{module}.querySelector('.q-answered').textContent")).unwrap();
-        assert!(said.as_str().unwrap().starts_with("Answered just now: Use the checklist"), "{said}");
-        assert_eq!(browser.eval(&format!("document.activeElement === {module}.querySelector('.q-answered')")).unwrap(), true);
-        assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), json!([]));
-    })
-    .await
-    .unwrap();
-    assert!(
-        commands
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|c| matches!(c, CommandRequest::Reply(r) if r.body == "Use the new dates."))
-    );
-    server.abort();
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_no_page_scrolls_sideways_from_a_small_phone_to_a_wide_screen() {
     let f = Fixture::new().await;
     let n = neutral::seed(&f.writer, f._home.path()).await;
@@ -429,37 +392,33 @@ async fn home_attention_and_reader_day() {
             band.contains("<div class=\"page-alert runner-off\" role=\"status\">"),
             "{band}"
         );
-        // For you: the question swollen, answerable here, and the way to its step
+        // For you: the question as a line of the Needs-you list, its coral dot, Answer the
+        // way to its step (where it is answered) and × to set it aside
         let ask = between(
             &home,
-            "<article class=\"mod swell-ask fy-q item\"",
-            "</article>",
-        );
-        assert!(
-            ask.contains(
-                "<h3 class=\"mod-t\">Use the checklist&#39;s new spring dates in this draft?</h3>"
-            ),
-            "{ask}"
-        );
-        assert!(ask.contains("<sluice-answer>"), "{ask}");
-        assert!(
-            ask.contains(&format!(
-                "<form method=\"post\" action=\"/projects/id/{}/messages/{}/reply\">",
+            &format!(
+                "<li id=\"item-{}-{}\" class=\"nd-i\"",
                 n.almanac, n.question
-            )),
-            "{ask}"
+            ),
+            "</li>",
         );
+        assert!(ask.contains("<span class=\"nk nk-ask\""), "{ask}");
         assert!(
-            ask.contains(&format!("id=\"home-reply-{}-{}\"", n.almanac, n.question)),
+            ask.contains("Use the checklist&#39;s new spring dates in this draft?"),
             "{ask}"
         );
         assert!(
             ask.contains(&format!(
-                "<a href=\"/projects/id/{}/steps/a-7-draft\">Open its step</a>",
+                "<a class=\"btn primary\" href=\"/projects/id/{}/steps/a-7-draft\">Answer</a>",
                 n.almanac
             )),
             "{ask}"
         );
+        assert!(
+            ask.contains(&format!("name=\"items\" value=\"ask:{}\"", n.question)),
+            "{ask}"
+        );
+        assert!(!ask.contains("<sluice-answer>"), "{ask}");
         // the projects by what needs the owner: the question's, then the stopped, then the running
         let grid = between(&home, "<div class=\"proj-grid\">", "</section>");
         let at = |name: &str| {

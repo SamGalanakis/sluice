@@ -269,7 +269,8 @@ async fn a_unit_with_a_failed_and_a_quiet_step_counts_once() {
         .collect();
     assert_eq!(stops.len(), 2, "{stops:?}");
     assert!(
-        stops[0].contains("nk-stop") && stops[1].contains("nk-quiet"),
+        stops[0].contains("<span class=\"nk\"><span class=\"g g-failed\"")
+            && stops[1].contains(plan_html::QUIET),
         "{stops:?}"
     );
     assert!(

@@ -1960,7 +1960,7 @@ page, the inbox's notes) draws them one way, in one column: a run of messages fr
 a group under who sent it and to whom (a step by its title and id, the page's own step "This
 step", a session by its name (`@lead`), "orchestrator", muted, on older messages, the owner "You"); a line at each day's start (UTC) and at the first note
 to the owner not read yet ("New", by the owner's read mark on its thread; nothing is marked read
-by being drawn); a question with its state ("Awaiting your reply" when it waits on the owner,
+by being drawn); a question with its state ("Waiting on your answer", after the coral dot, when it waits on the owner,
 "Awaiting reply", "Answered", "Closed") and the replies to it directly under it; each message's
 id and its time (relative, the absolute time in its title); a body past 700 characters or 14
 lines folded behind "Show all", but never an open question the owner can answer, which is

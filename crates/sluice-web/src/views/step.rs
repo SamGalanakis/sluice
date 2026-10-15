@@ -844,6 +844,23 @@ impl StepView {
             .as_ref()
             .is_some_and(|p| p.live && own.is_none_or(|at| p.at.as_str() > at))
     }
+    /// Its open question to the owner as the question card, answered in place ("" for none).
+    pub fn asking_card(&self) -> Result<TrustedHtml, askama::Error> {
+        let item = self.exchange.rows.iter().find_map(|row| match row {
+            super::threads::Row::Group(g) => g
+                .entries
+                .iter()
+                .find(|e| e.item.asks_owner() && e.item.answerable())
+                .map(|e| &e.item),
+            _ => None,
+        });
+        match item {
+            Some(item) => {
+                item.question_card("ov-", &format!("ov-message-{}", item.id()), 3, false, false)
+            }
+            None => Ok(TrustedHtml::default()),
+        }
+    }
     /// Now has something to say while it runs: its agent's turns, an unread transcript, its
     /// live progress, a message, or that none came yet. A step that only waits on the owner's
     /// answer says so in its status line and its question, and draws no Now.
@@ -1286,7 +1303,7 @@ impl StepView {
         }
         details.text("Tags", &tags.join(", "))
     }
-    /// Under its card on the board and its unit's matrix row: the coral "Awaiting your reply",
+    /// Under its card on the board and its unit's matrix row: its coral dot and "Waiting on your answer",
     /// leading to its page, where its Overview draws the question whole to answer.
     pub fn ask_html(&self) -> TrustedHtml {
         match &self.asking {

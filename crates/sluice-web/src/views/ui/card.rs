@@ -5,7 +5,7 @@ use super::esc;
 use crate::views::TrustedHtml;
 
 /// A well: the raised second paper, the place what needs the owner stands, as `tag`. `tone` ""
-/// (plain), "ask" (a coral mark at its edge) or "look" (a sand one); `padded` for one block of
+/// (plain) or "look" (on the pale sand: what needs a look); `padded` for one block of
 /// content rather than a list of items.
 pub fn well_open(tag: &str, class: &str, tone: &str, padded: bool) -> TrustedHtml {
     let mut classes = vec!["well"];

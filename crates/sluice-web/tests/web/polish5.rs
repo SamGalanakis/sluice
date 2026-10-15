@@ -184,7 +184,7 @@ async fn an_answered_or_closed_question_keeps_its_place_and_reads_whole() {
     let card = between(&inbox, &format!("id=\"item-{id}-{c}\""), "</article>");
     assert!(
         inbox.contains(&format!(
-            "<article id=\"item-{id}-{c}\" class=\"mod item q q-done\""
+            "<article class=\"q-card q-done\" id=\"item-{id}-{c}\""
         )),
         "{card}"
     );

@@ -103,7 +103,7 @@ fn pills() -> TrustedHtml {
         ui::pill("2 awaiting reply", ui::Tone::Look, None),
         ui::pill("quiet 3h", ui::Tone::Quiet, None),
         ui::pill("done", ui::Tone::Done, None),
-        ui::pill("Awaiting your reply", ui::Tone::Ask, None),
+        ui::ask_link("#", "Use the new dates?"),
         ui::pill("failed", ui::Tone::Plain, Some(ui::mark(Shown::Failed))),
         ui::pill_link("#", "Its unit", ui::Tone::Plain, None),
     ))
@@ -220,16 +220,13 @@ fn tabs(prefix: &str) -> TrustedHtml {
     html.push_str(ui::tabs_close().as_str());
     TrustedHtml::owned(html)
 }
-/// A card around a region, and the wells: plain, the sand's for what needs a look, the coral
-/// mark's for a question to the owner.
+/// A card around a region, and the wells: plain, and the pale sand's for what needs a look.
 fn sections() -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<div class=\"gal-stack\"><div class=\"card gal-card\"><p class=\"card-k\">00:12 · took 1h 29m</p><p class=\"card-t\">A card</p><p class=\"meta\">A region of its own.</p></div>{}<p>A well's rows.</p>{}{}<p>Something stopped: why, and its next move.</p>{}{}<p>A question to you, answered here.</p>{}</div>",
+        "<div class=\"gal-stack\"><div class=\"card gal-card\"><p class=\"card-k\">00:12 · took 1h 29m</p><p class=\"card-t\">A card</p><p class=\"meta\">A region of its own.</p></div>{}<p>A well's rows.</p>{}{}<p>Something stopped: why, and its next move.</p>{}</div>",
         ui::well_open("div", "", "", true),
         ui::well_close("div"),
         ui::well_open("div", "", "look", true),
-        ui::well_close("div"),
-        ui::well_open("div", "", "ask", true),
         ui::well_close("div"),
     ))
 }
@@ -570,12 +567,8 @@ fn unit_details(unit: &str, step: &str) -> ui::Details {
 }
 fn modules_part() -> TrustedHtml {
     let ask = format!(
-        "{open}<p class=\"mod-k\">{q}<b>Question for you</b><span class=\"quiet\">from draft, 25m ago</span></p><p class=\"mod-t\">Shorebirds: the spring guide's entries</p>{menu}<p class=\"mod-meta\"><b>Shorebirds: the spring guide</b> · running 41m</p>{strip}<div class=\"mod-body\"><p>The checklist's spring dates changed under me. Use the new dates in this draft, or wait for the revised checklist first?</p></div><div class=\"mod-actions\"><a class=\"primary\" href=\"#\">Answer</a><a href=\"#\">Open step</a></div>{close}",
-        open = ui::module_open(6, ui::Swell::Ask, "Question for you: Shorebirds"),
-        q = super::icons::icon(super::icons::Icon::MessageSquare, 16, "ask-i"),
-        menu = unit_details("a-7", "a-7-draft").menu("Shorebirds: the spring guide's entries"),
-        strip = ui::stage_strip("Stages of Shorebirds", &article(Some(Shown::Running), None, None)),
-        close = ui::module_close(),
+        "<div class=\"mod\" style=\"--span:6\" data-span=\"6\">{}</div>",
+        question_card("")
     );
     let look = format!(
         "{open}<p class=\"mod-k\">{g}<b>failed</b><span class=\"quiet\">review, after 18m</span></p><p class=\"mod-t\">Waders: the autumn guide's entries</p>{menu}<div class=\"mod-body\"><p>The style check found two entries without a photograph credit.</p></div><div class=\"mod-actions\"><button class=\"primary\" type=\"button\">Retry with feedback</button><button type=\"button\">Retry</button></div>{close}",
@@ -588,6 +581,43 @@ fn modules_part() -> TrustedHtml {
         "{}{ask}{look}{}",
         ui::grid_open("", 10),
         ui::grid_close()
+    ))
+}
+/// A question to the owner as a card, answered in place: Answer opens its folded form, Close
+/// question is quiet.
+fn question_card(prefix: &str) -> TrustedHtml {
+    ui::QuestionCard {
+        id: &format!("{prefix}q-card"),
+        level: 3,
+        title: "Use the checklist's new spring dates in this draft?",
+        titled: true,
+        context: TrustedHtml::owned(
+            "almanac · from <a href=\"#\">draft · Shorebirds: the spring guide's entries</a> · <time>25m ago</time>".into(),
+        ),
+        details: unit_details("a-7", "a-7-draft").menu("Use the checklist's new spring dates in this draft?"),
+        body: TrustedHtml::owned(
+            "<p>The regional checklist moved the spring dates a week earlier.</p><ul><li><strong>Now:</strong> use the new dates and say so in each entry.</li><li><strong>Later:</strong> wait for s-5 to finish the index first.</li></ul>".into(),
+        ),
+        answer: ui::answer_link("#", "#", "Use the checklist's new spring dates in this draft?"),
+        way_on: ui::way_on("#", "Open its step"),
+    }
+    .html()
+}
+/// A question to the owner in both its densities: a line in Needs you or For you, and the
+/// card where it is answered.
+fn questions(prefix: &str) -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<div class=\"gal-stack\"><ul class=\"nd-list\">{}</ul>{}</div>",
+        ui::need_line(
+            ui::Mark::Ask,
+            &format!("{prefix}q-line"),
+            "",
+            "<b><a href=\"#\">Shorebirds: the spring guide's entries</a></b> asks: Use the checklist's new spring dates in this draft?",
+            "",
+            "<a class=\"btn primary\" href=\"#\">Answer</a>",
+            "<button type=\"button\" class=\"icon\" aria-label=\"Set aside\" title=\"Set aside\">×</button>",
+        ),
+        question_card(prefix)
     ))
 }
 /// An item's Details: its "⋯" closed, as every row, module and head carries it, and open.
@@ -639,7 +669,8 @@ fn heads_part() -> TrustedHtml {
 /// silence, one item set aside; what finished since the owner looked; At work's axis and two
 /// rows, one quiet.
 fn plan_part(prefix: &str) -> TrustedHtml {
-    use super::plan::{Mark, RowParts, axis, finished_card, need_item, roster_row, track};
+    use super::plan::{RowParts, axis, finished_card, roster_row, track};
+    use ui::{Mark, need_line as need_item};
     let now = (crate::clock::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
@@ -659,7 +690,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             x,
         ),
         need_item(
-            Mark::Stop,
+            Mark::State(Shown::Failed),
             &format!("{prefix}n-cause"),
             "",
             "Three units failed: they hit their wall-clock cap.",
@@ -668,7 +699,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             x,
         ),
         need_item(
-            Mark::Quiet,
+            Mark::State(Shown::Quiet),
             &format!("{prefix}n-quiet"),
             " data-unit=\"s-3\"",
             &format!(
@@ -1251,7 +1282,7 @@ fn themes_part() -> TrustedHtml {
                     "Stages of a-12",
                     &article(Some(Shown::Succeeded), Some(Shown::Running), Some(Shown::Failed))
                 ),
-                ask = ui::pill("Awaiting your reply", ui::Tone::Ask, None),
+                ask = ui::ask_link("#", "Use the new dates?"),
                 attn = ui::pill("quiet 42m", ui::Tone::Look, None),
                 live = ui::pill("live", ui::Tone::Run, Some(ui::mark(Shown::Running))),
             )
@@ -1282,13 +1313,14 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Stage strip", "A unit's stages in recipe order, one cell each.", "`ui::stage_strip` from `ui::Stage`s (`ui::Cell::of` reads the status table).", both(&|_| Ok(strips_part()))?);
     add("Stats", "A project's numbers over a window.", "`views::stats::StatsView` (`durations`, `outcomes`, `throughput`, `slowest_html`), from `StatsData`.", both(&|p| Ok(stats_part(p)))?);
     add("Step view", "A unit step by step: its gates, what each step runs on, its state, progress, runs on one time axis with a tick a message, how long it took, and its last message.", "`unit_steps::View` (`unit_steps::of_unit` from a unit) in `sluice-steps`; a plan row opens to it (`plan::roster_row`).", both(&|_| Ok(steps_part()))?);
-    add("Pills", "A small fact set apart, in its state's tone; coral only for a question to you.", "`ui::pill`, `ui::pill_link`, `ui::ask_link` with `ui::Tone`.", both(&|_| Ok(pills()))?);
+    add("Question", "A question to you, the one way it is drawn: a line in Needs you and For you, and the card where it is answered. The coral dot alone marks it; one filled Answer, a quiet Close question, the form folded until Answer.", "`ui::need_line` with `ui::Mark::Ask`; `ui::QuestionCard` (`MessageItem::question_card` with `answer.html` in `sluice-answer`).", both(&|p| Ok(questions(p)))?);
+    add("Pills", "A small fact set apart, in its state's tone; a question to you is its coral dot, never a pill.", "`ui::pill`, `ui::pill_link`, `ui::ask_link` with `ui::Tone`.", both(&|_| Ok(pills()))?);
     add("Buttons", "The filled button is the next move; the others outlined, quiet or an icon.", "`ui::submit`, `ui::link` with `ui::Btn` (`ui/button.rs`).", both(&|_| Ok(buttons()))?);
     add("Status line", "How a thing stands in one muted sentence after its dot: running (breathing while heard lately), quiet, waiting on you, failed, done, waiting.", "`ui::status_line` with `ui::Dot`.", both(&|_| Ok(status_lines()))?);
     add("Tool calls", "A turn's calls in a quiet fold, shut and open: the tool, its key argument on one line, how long it took or that it failed.", "`ui::calls` from `ui::Call`s.", both(&|_| Ok(tool_calls()))?);
     add("Message cards", "A message as a card: who to whom, when, its first words and the way to the whole.", "`ui::message_card`; `threads::Conversation::cards`.", both(&|_| Ok(message_cards()))?);
     add("Tabs", "A step's parts, one at a time.", "`ui::tabs_open`, `panel_open`, `panel_close`, `tabs_close` (`sluice-tabs`).", both(&|p| Ok(tabs(&format!("{p}tabs-"))))?);
-    add("Cards and wells", "A card around a region; a well for rows that belong together, the sand's for what needs a look, the coral mark's for a question to you.", "`.card`; `ui::well_open`, `ui::well_close`.", both(&|_| Ok(sections()))?);
+    add("Cards and wells", "A card around a region; a well for rows that belong together, the pale sand's for what needs a look.", "`.card`; `ui::well_open`, `ui::well_close`.", both(&|_| Ok(sections()))?);
     add("Fields", "Inputs, outputs and progress, one row each.", "`kit.html`'s `field`.", both(&|p| fields(p, &project))?);
     add("Folds", "A long value cut to its first lines, and More and Less.", "`ui::fold`, `ui::more_open` (`sluice-fold`).", both(&|_| Ok(folds()))?);
     add("Conversation", "Messages in one column, the message box at the end.", "`threads::Conversation` in `sluice-conversation`, `sluice-composer`, `sluice-answer`.", both(&|p| conversation(p, &project))?);

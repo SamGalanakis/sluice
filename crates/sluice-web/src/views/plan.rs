@@ -11,7 +11,7 @@
 use super::board::{ProjectView, SAID_WINDOW, UnitView};
 use super::icons::{Icon, icon};
 use super::step::{self, Action, ActionForm, OwnerCommand, StepView};
-use super::ui::{self, Shown, esc};
+use super::ui::{self, Mark, Shown, esc};
 use super::{DashboardSnapshot, DashboardState, Frame, NavView, TrustedHtml, Viewer};
 use crate::streams::{PatchRegion, RenderedBatch};
 use askama::Template;
@@ -148,30 +148,6 @@ fn shared_cause(kind: &str) -> Option<&'static str> {
     })
 }
 
-/// How an item of Needs you is marked: a coral dot for a question to the owner, a sand square
-/// for a stop, a sand ring for a silence.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mark {
-    Ask,
-    Stop,
-    Quiet,
-}
-impl Mark {
-    fn class(self) -> &'static str {
-        match self {
-            Mark::Ask => "nk-ask",
-            Mark::Stop => "nk-stop",
-            Mark::Quiet => "nk-quiet",
-        }
-    }
-    fn word(self) -> &'static str {
-        match self {
-            Mark::Ask => "Question",
-            Mark::Stop => "Stopped",
-            Mark::Quiet => "Quiet",
-        }
-    }
-}
 /// One item of Needs you: a sentence, its one action and what its dismissal sets aside.
 struct Need {
     mark: Mark,
@@ -493,7 +469,7 @@ impl<'a> Plan<'a> {
         for (unit, step, at) in quiet {
             let key = format!("quiet:{}@{}", step.id, at as i64);
             out.push(Need {
-                mark: Mark::Quiet,
+                mark: Mark::State(Shown::Quiet),
                 unit: unit.id.to_string(),
                 id: format!("n-quiet-{}", step.id),
                 sentence: format!(
@@ -613,7 +589,7 @@ impl<'a> Plan<'a> {
         // set aside against its step's generations: a retry or a new cancel brings it back
         let key = format!("stop:{}", step.id);
         Need {
-            mark: Mark::Stop,
+            mark: Mark::State(shown),
             unit: unit.id.to_string(),
             id: format!("n-stop-{}", step.id),
             sentence,
@@ -672,7 +648,7 @@ impl<'a> Plan<'a> {
             String::new()
         };
         Need {
-            mark: Mark::Stop,
+            mark: Mark::State(Shown::Failed),
             unit: String::new(),
             id: format!("n-cause-{}", kind.to_lowercase().replace('_', "-")),
             sentence: format!(
@@ -845,7 +821,7 @@ impl<'a> Plan<'a> {
                     ),
                     None => String::new(),
                 };
-                let item = need_item(
+                let item = ui::need_line(
                     need.mark,
                     &need.id,
                     &attrs,
@@ -919,8 +895,8 @@ impl<'a> Plan<'a> {
                 });
                 let shown = match need.mark {
                     Mark::Ask => continue,
-                    Mark::Quiet => Shown::Quiet,
-                    Mark::Stop => self
+                    Mark::State(Shown::Quiet) => Shown::Quiet,
+                    Mark::State(_) => self
                         .view
                         .units
                         .iter()
@@ -1580,25 +1556,6 @@ fn row_counts(rows: &[&Row<'_>]) -> String {
 
 // ---- the plan's parts, drawn here and on `/_ui` -------------------------------------------------
 
-/// An item of Needs you: its mark (said in words to a screen reader), its attributes (`attrs`,
-/// HTML: the unit it is about and its steps' states), its sentence and what opens under it, its
-/// one action and its ×.
-pub fn need_item(
-    mark: Mark,
-    id: &str,
-    attrs: &str,
-    sentence: &str,
-    more: &str,
-    act: &str,
-    x: &str,
-) -> String {
-    format!(
-        "<li id=\"{id}\" class=\"nd-i\"{attrs} tabindex=\"-1\"><span class=\"nk {mk}\" role=\"img\" aria-label=\"{word}\"></span><div class=\"nd-say\"><p>{sentence}</p>{more}</div><span class=\"nd-acts\">{act}{x}</span></li>",
-        id = esc(id),
-        mk = mark.class(),
-        word = mark.word(),
-    )
-}
 /// A card of Finished since you looked: when it finished and how long it took (nothing for no
 /// time), its title linking its page, what it produced (`output`, HTML), its steps' states
 /// (`said`, as `data-said` carries them; "" for none).

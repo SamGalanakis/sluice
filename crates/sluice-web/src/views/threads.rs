@@ -114,13 +114,14 @@ impl MessageItem {
     pub fn awaits_owner(&self) -> bool {
         self.state == "open" && self.stopped.is_empty() && self.recipient() == "owner"
     }
-    /// Its state as a tag: an open question to the owner "Awaiting your reply" in coral, to
+    /// Its state as a tag: an open question to the owner "Waiting on your answer" after the
+    /// coral dot, to
     /// anyone else "Awaiting reply" in gold, else "Answered" or "Closed", muted; a note none.
     pub fn state_tag(&self) -> TrustedHtml {
         match self.state.as_str() {
-            "open" if self.awaits_owner() => {
-                super::ui::pill("Awaiting your reply", super::ui::Tone::Ask, None)
-            }
+            "open" if self.awaits_owner() => TrustedHtml::owned(
+                "<span class=\"q-wait\"><span class=\"nk-ask\" aria-hidden=\"true\"></span>Waiting on your answer</span>".into(),
+            ),
             "open" => super::ui::pill("Awaiting reply", super::ui::Tone::Look, None),
             "answered" => super::ui::pill("Answered", super::ui::Tone::Muted, None),
             "closed" => super::ui::pill("Closed", super::ui::Tone::Muted, None),
@@ -172,6 +173,64 @@ impl MessageItem {
             self.answered_line(false, None),
             self.answered_line(true, None)
         ))
+    }
+    /// Itself as the question card (`ui::QuestionCard`), answered in place: `slot` keeps its
+    /// answer box's ids apart from another drawing of it on the page, `id` is the card's own
+    /// ("" for none); `project` names its project in its context (a list across projects);
+    /// `way_on` adds the way to its step or thread.
+    pub fn question_card(
+        &self,
+        slot: &str,
+        id: &str,
+        level: u8,
+        project: bool,
+        way_on: bool,
+    ) -> Result<TrustedHtml, askama::Error> {
+        use super::ui;
+        let mut context = String::new();
+        if project {
+            context.push_str(&ui::esc(&self.project_name));
+            context.push_str(" · ");
+        }
+        context.push_str(&format!(
+            "from {} · {}",
+            self.from_who.html(&self.project),
+            ui::ago(&self.message.at)
+        ));
+        let (href, words) = match &self.from_who {
+            Who::Step(s) => (
+                format!("/projects/id/{}/steps/{}", self.project, s.id),
+                "Open its step",
+            ),
+            _ => (self.thread_url(), "Open its thread"),
+        };
+        Ok(ui::QuestionCard {
+            id,
+            level,
+            title: &self.title(),
+            titled: self.message.title.is_some(),
+            context: TrustedHtml::owned(context),
+            details: ui::Details::new()
+                .id("Message", format!("#{}", self.id()).as_str())
+                .id("Thread", self.message.thread.as_str())
+                .menu(self.title().as_str()),
+            // titled, its words under the title; untitled, its words whole, said once
+            body: if self.message.title.is_some() {
+                self.shown_body()
+            } else {
+                self.body.clone()
+            },
+            answer: TrustedHtml::from_template(&AnswerArea {
+                item: self,
+                c: AnswerSlot { slot: slot.into() },
+            })?,
+            way_on: if way_on {
+                ui::way_on(&href, words)
+            } else {
+                TrustedHtml::default()
+            },
+        }
+        .html())
     }
     /// Itself as a one-item list: a template binds `item` to it to draw its answer form.
     pub fn one(&self) -> &[MessageItem] {
@@ -1517,4 +1576,15 @@ pub async fn load(
         })
         .await
         .map_err(|e| e.into_public(true))
+}
+/// A question's answer area (`answer.html`): Answer, Close question and the folded form, its
+/// ids under `c.slot`.
+#[derive(Template)]
+#[template(source = "{% include \"answer.html\" %}", ext = "html")]
+struct AnswerArea<'a> {
+    item: &'a MessageItem,
+    c: AnswerSlot,
+}
+struct AnswerSlot {
+    slot: String,
 }

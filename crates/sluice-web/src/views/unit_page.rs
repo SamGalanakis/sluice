@@ -106,33 +106,51 @@ impl UnitPage<'_> {
     fn stopped(step: &StepView) -> bool {
         step.shown().spec().attention && step.shown() != Shown::Quiet
     }
-    /// A step's question to the owner whole, its title over its words, Answer under them;
-    /// nothing when it asks none.
+    /// A step's question to the owner as the question card: Answer the way to its step,
+    /// where its form is, and Close question here; nothing when it asks none.
     fn question(&self, step: &StepView) -> TrustedHtml {
         let Some(ask) = step.asking.as_ref() else {
             return TrustedHtml::default();
         };
-        let body = self
-            .questions
-            .iter()
-            .find(|q| q.message == ask.message)
+        let asked = self.questions.iter().find(|q| q.message == ask.message);
+        let body = asked
             .map(|q| crate::markdown::render(&q.body).0)
             .unwrap_or_default();
-        TrustedHtml::owned(format!(
-            "<p class=\"mod-body u-ask\">{}</p><div class=\"mod-body md\">{body}</div><div class=\"mod-actions\"><a class=\"primary\" href=\"{}\">Answer{}</a></div>",
-            ui::esc(&ask.title),
-            ui::esc(&ask.href(&step.project)),
-            super::icons::icon(super::icons::Icon::ArrowRight, 16, "")
-        ))
+        let when = asked
+            .map(|q| ui::ago(&q.at).to_string())
+            .unwrap_or_default();
+        ui::QuestionCard {
+            id: &format!("us-{}", step.id),
+            level: 3,
+            title: &ask.title,
+            titled: true,
+            context: TrustedHtml::owned(format!(
+                "from <a href=\"{}\">{}</a>{}",
+                ui::esc(&step.href()),
+                ui::esc(&self.unit.step_name(step)),
+                if when.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {when}")
+                }
+            )),
+            details: TrustedHtml::default(),
+            body: TrustedHtml::owned(body),
+            answer: ui::answer_link(
+                &ask.href(&step.project),
+                &format!(
+                    "/projects/id/{}/messages/{}/reply",
+                    step.project, ask.message
+                ),
+                &ask.title,
+            ),
+            way_on: TrustedHtml::default(),
+        }
+        .html()
     }
-    /// A step's module: the question to the owner swells on the coral rule, a stop on the sand.
+    /// A step's module: a stop in the sand well.
     fn module(&self, step: &StepView) -> TrustedHtml {
-        let swell = if step.asking.is_some() {
-            Swell::Ask
-        } else {
-            Swell::Look
-        };
-        ui::module_open_as(6, swell, &format!("us-{}", step.id), "u-step")
+        ui::module_open_as(6, Swell::Look, &format!("us-{}", step.id), "u-step")
     }
 }
 fn draw(view: &board::ProjectView, unit: &UnitView) -> Result<Drawn, askama::Error> {

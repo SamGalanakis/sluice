@@ -108,11 +108,11 @@ async fn slow_chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_
             browser.viewport(390, "light").unwrap();
             browser.navigate(url).unwrap();
             browser
-                .wait("document.readyState === 'complete' && !!document.querySelector('.swell-ask sluice-answer')")
+                .wait("document.readyState === 'complete' && !!document.querySelector('.q-card sluice-answer')")
                 .unwrap();
             browser.eval(FRAMES).unwrap();
             let card: Value = browser
-                .eval("(() => { const q = document.querySelector('.swell-ask'), s = q.closest('.sheet').getBoundingClientRect(), r = q.getBoundingClientRect(); const buttons = [...q.querySelectorAll('sluice-answer button.q-toggle, form.q-close button')].map(b => b.getBoundingClientRect().height); return [Math.round(r.width) === Math.round(s.width), buttons.length >= 2, buttons.every(h => h >= 44)]; })()")
+                .eval("(() => { const q = document.querySelector('.q-card'), s = (q.closest('.sheet') ?? q.parentElement).getBoundingClientRect(), r = q.getBoundingClientRect(); const buttons = [...q.querySelectorAll('sluice-answer button.q-toggle, form.q-close button')].map(b => b.getBoundingClientRect().height); return [Math.round(r.width) === Math.round(s.width), buttons.length >= 2, buttons.every(h => h >= 44)]; })()")
                 .unwrap();
             assert_eq!(card, json!([true, true, true]), "{url}");
         }
@@ -121,17 +121,17 @@ async fn slow_chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_
         browser.viewport(1440, "light").unwrap();
         browser.navigate(&asking).unwrap();
         browser
-            .wait("document.readyState === 'complete' && !!document.querySelector('#tp-overview .swell-ask sluice-answer .answer[data-drawn]')")
+            .wait("document.readyState === 'complete' && !!document.querySelector('#tp-overview .q-card sluice-answer .answer[data-drawn]')")
             .unwrap();
         // it swells first: Overview's first module
         assert_eq!(
             browser
-                .eval("(() => { const a = document.querySelector('#tp-overview .d-ask'); return a.classList.contains('swell-ask') && a === document.querySelector('#tp-overview .mod'); })()")
+                .eval("(() => { const a = document.querySelector('#tp-overview .d-ask'); return !!a.querySelector(':scope > .q-card') && a === document.querySelector('#tp-overview .mod'); })()")
                 .unwrap(),
             json!(true)
         );
         browser
-            .eval("document.querySelector('#tp-overview .swell-ask sluice-answer button.q-toggle').click()")
+            .eval("document.querySelector('#tp-overview .q-card sluice-answer button.q-toggle').click()")
             .unwrap();
         browser
             .wait("document.activeElement?.id?.startsWith('ov-reply-')")
