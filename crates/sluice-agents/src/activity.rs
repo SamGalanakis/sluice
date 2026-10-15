@@ -38,6 +38,9 @@ const RESULT_TAIL: usize = 1200;
 const KEY_MOST: usize = 300;
 /// Transcripts the cache follows at once.
 const CACHED: usize = 48;
+/// Transcripts the pulse cache follows at once: every running row of a big plan, each kept as
+/// its times alone.
+const PULSED: usize = 512;
 
 /// The engine a transcript is from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
@@ -227,6 +230,28 @@ impl Window {
     fn holds(&self, at: Option<u64>) -> bool {
         at.is_none_or(|at| at >= self.since_ms && self.until_ms.is_none_or(|u| at < u))
     }
+}
+
+/// When a run's agent did something: each turn's start (something sent to it) and each tool
+/// call's, Unix milliseconds, oldest first; `None` when it has no transcript sluice can read.
+/// Read as `outline` is (only what was appended since the last read), but each transcript is
+/// kept as its times alone, so a page can ask it of every running row.
+pub fn pulse(homes: &Homes, run: &str, window: Window) -> Option<Vec<u64>> {
+    let sources = locate(homes, run)?;
+    let mut times = vec![];
+    let mut read = false;
+    for source in &sources {
+        if let Some(part) = follow_in(&PULSE, PULSED, source, window, true) {
+            read = true;
+            times.extend(part.times.iter().copied());
+        }
+    }
+    if !read {
+        return None;
+    }
+    times.sort_unstable();
+    times.dedup();
+    Some(times)
 }
 
 /// A run's outline, read from its engine's transcripts; `None` when it has none (no agent ran,
@@ -460,6 +485,10 @@ struct Follow {
     skipping: bool,
     builder: Builder,
     snapshot: Arc<Outline>,
+    /// Kept as its times alone (`pulse`): its texts dropped after each read, no outline drawn.
+    lean: bool,
+    /// Its turns' and calls' start times, while lean.
+    times: Arc<Vec<u64>>,
 }
 #[derive(Default)]
 struct Cache {
@@ -467,22 +496,38 @@ struct Cache {
     tick: u64,
 }
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(Mutex::default);
+static PULSE: LazyLock<Mutex<Cache>> = LazyLock::new(Mutex::default);
 
+/// What a follow read last, as its cache keeps it.
+struct Followed {
+    outline: Arc<Outline>,
+    times: Arc<Vec<u64>>,
+}
 fn follow(source: &Source, window: Window) -> Option<Arc<Outline>> {
+    follow_in(&CACHE, CACHED, source, window, false).map(|r| r.outline)
+}
+/// `source` followed in `cache` (at most `most` transcripts, the least lately read dropped).
+fn follow_in(
+    cache: &Mutex<Cache>,
+    most: usize,
+    source: &Source,
+    window: Window,
+    lean: bool,
+) -> Option<Followed> {
     let key = (source.clone(), window);
     let entry = {
-        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
         cache.tick += 1;
         let tick = cache.tick;
         let entry = cache.entries.entry(key).or_insert_with(|| {
             (
                 tick,
-                Arc::new(Mutex::new(Follow::new(source.clone(), window))),
+                Arc::new(Mutex::new(Follow::new(source.clone(), window, lean))),
             )
         });
         entry.0 = tick;
         let entry = entry.1.clone();
-        if cache.entries.len() > CACHED
+        if cache.entries.len() > most
             && let Some(oldest) = cache
                 .entries
                 .iter()
@@ -497,7 +542,7 @@ fn follow(source: &Source, window: Window) -> Option<Arc<Outline>> {
     follow.refresh(&source.path)
 }
 impl Follow {
-    fn new(source: Source, window: Window) -> Self {
+    fn new(source: Source, window: Window, lean: bool) -> Self {
         let builder = Builder::new(source.engine, source.run_dir, window);
         Self {
             len: 0,
@@ -507,7 +552,33 @@ impl Follow {
             skipping: false,
             snapshot: Arc::new(builder.outline()),
             builder,
+            lean,
+            times: Arc::default(),
         }
+    }
+    /// What was read, as it stands.
+    fn read(&self) -> Followed {
+        Followed {
+            outline: self.snapshot.clone(),
+            times: self.times.clone(),
+        }
+    }
+    /// After a lean read: its times, and its texts dropped (only times are asked of it).
+    fn thin(&mut self) {
+        let mut times = vec![];
+        for turn in &mut self.builder.turns {
+            turn.said = String::new();
+            turn.sent.text = String::new();
+            times.extend(turn.started_ms);
+            for call in &mut turn.calls {
+                call.key = String::new();
+                call.args = vec![];
+                call.result = String::new();
+                times.extend(call.started_ms);
+            }
+        }
+        times.sort_unstable();
+        self.times = Arc::new(times);
     }
     fn reset(&mut self) {
         self.builder = Builder::new(
@@ -519,8 +590,9 @@ impl Follow {
         self.carry.clear();
         self.skipping = false;
     }
-    /// Read what was appended since the last read; the outline as it stands.
-    fn refresh(&mut self, path: &Path) -> Option<Arc<Outline>> {
+    /// Read what was appended since the last read; the outline (or, lean, the times) as it
+    /// stands.
+    fn refresh(&mut self, path: &Path) -> Option<Followed> {
         let meta = fs::symlink_metadata(path).ok()?;
         if !meta.file_type().is_file() {
             return None;
@@ -530,7 +602,7 @@ impl Follow {
             self.reset();
         }
         if len == self.offset && modified == self.modified && self.len == len {
-            return Some(self.snapshot.clone());
+            return Some(self.read());
         }
         let mut file = fs::File::open(path).ok()?;
         file.seek(SeekFrom::Start(self.offset)).ok()?;
@@ -549,10 +621,12 @@ impl Follow {
         }
         self.len = len;
         self.modified = modified;
-        if fed {
+        if fed && self.lean {
+            self.thin();
+        } else if fed {
             self.snapshot = Arc::new(self.builder.outline());
         }
-        Some(self.snapshot.clone())
+        Some(self.read())
     }
     fn lines(&mut self, mut bytes: &[u8]) {
         while let Some(end) = bytes.iter().position(|b| *b == b'\n') {

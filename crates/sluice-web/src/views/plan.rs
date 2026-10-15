@@ -3,12 +3,12 @@
 //! raised well, says each question, stop and silence in a sentence with one action and a quick
 //! dismissal; **Finished since you looked** lists what finished since this browser last looked
 //! with what it produced; **At work** is a roster of the live units, a row each, grouped by
-//! recipe and ordered by how long since each was heard from, with its activity over the last
-//! twelve hours on a log scale. A row opens in place to its steps (`unit_steps`).
+//! recipe and ordered by how long since each was heard from, with a pulse strip of its last
+//! hour (a mark each minute its agent acted, a dotted tail since). A row opens in place to its steps (`unit_steps`).
 //!
 //! Generic by rule: every word comes from the status table, the recipe, the failure's own
 //! reading or what the project's steps said and reported; the badge from what a step runs on.
-use super::board::{ProjectView, SAID_WINDOW, UnitView};
+use super::board::{ProjectView, UnitView};
 use super::icons::{Icon, icon};
 use super::step::{self, Action, ActionForm, OwnerCommand, StepView};
 use super::ui::{self, Mark, Shown, esc};
@@ -1283,8 +1283,9 @@ impl<'a> Plan<'a> {
                 "<div class=\"ro{}\">",
                 if badged { "" } else { " no-badge" }
             );
-            // the head on one line with the axis's labels, which stand over the tracks
-            out.push_str(&axis_with(" ro-head", head.as_str()));
+            // the head on one line with the strips' labels, which stand over them, and under
+            // it how to read them, in a line
+            out.push_str(&roster_head(head.as_str()));
             for group in &self.groups {
                 // a big roster shows a group's remarkable rows first and folds the rest to one
                 // line ("+21 running · each heard from in the last 28m"), opening in place; a
@@ -1537,47 +1538,34 @@ impl<'a> Plan<'a> {
         // nothing said leaves the line empty: its meta says when it was last heard from
         said_html(unit)
     }
-    /// A unit's activity over the last twelve hours on a log scale: its earlier runs faint, the
-    /// one going now blue, sand once it went quiet, a tick a message, dotted while it waits.
+    /// A unit's pulse strip: what its running steps did in the last hour (their agents' turns
+    /// and calls, what they said, when they last wrote), and since when they have been silent;
+    /// a waiting unit's only what it said.
     fn track_html(&self, row: &Row<'_>) -> String {
         let unit = row.unit;
-        let now = (self.now / 60.0).floor() * 60.0;
-        let from = now - SAID_WINDOW;
-        let mut segs: Vec<(&'static str, f64, f64)> = vec![];
-        let mut last_end: Option<f64> = None;
-        for step in &unit.steps {
-            let Some(timing) = step.timing.as_ref() else {
-                continue;
-            };
-            let quiet = (step.shown() == Shown::Quiet)
-                .then(|| epoch(&step.active_at))
-                .flatten();
-            for span in &timing.spans {
-                let end = span.to.unwrap_or(now);
-                last_end = Some(last_end.map_or(end, |e: f64| e.max(end)));
-                if end < from {
-                    continue;
-                }
-                let a = span.from;
-                let open = span.to.is_none() && step.running();
-                match (open, quiet) {
-                    (true, Some(q)) if q > a => {
-                        segs.push(("tk-run", a, q));
-                        segs.push(("tk-quiet", q, now));
-                    }
-                    (true, Some(_)) => segs.push(("tk-quiet", a, now)),
-                    (true, None) => segs.push(("tk-run", a, now)),
-                    (false, _) => segs.push(("tk-past", a, end)),
-                }
-            }
-        }
-        if row.waiting
-            && let Some(end) = last_end.filter(|e| *e < now)
-        {
-            segs.push(("tk-wait", end, now));
-        }
-        let ticks: Vec<f64> = unit.said.iter().map(|(_, t)| *t).collect();
-        track(&segs, &ticks, now)
+        let running: Vec<&super::step::StepView> =
+            unit.steps.iter().filter(|s| s.running()).collect();
+        let mut acts: Vec<f64> = running
+            .iter()
+            .flat_map(|s| s.pulse.iter().copied())
+            .collect();
+        acts.sort_by(f64::total_cmp);
+        let said: Vec<f64> = unit.said.iter().map(|(_, t)| *t).collect();
+        let live = !row.waiting && !running.is_empty();
+        track(
+            &super::unit_steps::Pulse {
+                live,
+                start: started(unit).filter(|_| live),
+                acts: &acts,
+                said: &said,
+                active: running
+                    .iter()
+                    .filter_map(|s| epoch(&s.active_at))
+                    .reduce(f64::max),
+                quiet: running.iter().any(|s| s.quiet || s.shown() == Shown::Quiet),
+            },
+            self.now,
+        )
     }
     /// A unit's steps, open under its row: its step view (`unit_steps`), its rows opening in
     /// the drawer, its foot the plan's own.
@@ -1759,75 +1747,55 @@ pub fn finished_card(
         },
     )
 }
-/// What the axis says of its scale, to a screen reader and on hover.
-const SCALE: &str = "The last 12 hours on a log scale, now at the right; a tick is a message.";
-/// At work's ⓘ: how to read a row's track, behind a small round button by its head (the
-/// "⋯" Details menu's popover, so it closes on a click elsewhere or Escape).
+/// What the strips' labels say of them, to a screen reader and on hover.
+const SCALE: &str = "The last hour, now at the right: a mark each minute the agent did something, a taller one each message, a dotted line since it last did anything.";
+/// How to read a strip, in a line under At work's head.
+const LEGEND: &str = "Each mark is something the agent did; a message is a taller mark. The dotted line is time since its last action.";
+/// At work's ⓘ: how to read a row's strip, behind a small round button by its head (the "⋯"
+/// Details menu's popover, so it closes on a click elsewhere or Escape).
 fn track_help() -> String {
     format!(
-        "{}<details class=\"dm pb-info\" data-preserve-attr=\"open\"><summary class=\"dm-b\" aria-label=\"How to read At work\" title=\"How to read At work\" data-preserve-attr=\"aria-expanded\">{}</summary><div class=\"menu dm-p\" role=\"group\" aria-label=\"How to read At work\" data-preserve-attr=\"style\"><p class=\"dm-h\">How to read At work</p><p>Each unit's track is its last 12 hours on a log scale: the last hour takes most of the width, and now is at the right edge.</p><p>A blue bar is the run going now, a pale one an earlier run, a sand one a run gone quiet, and a dotted line time it spent waiting. Each tick is a message to or from it.</p></div></details>{}",
+        "{}<details class=\"dm pb-info\" data-preserve-attr=\"open\"><summary class=\"dm-b\" aria-label=\"How to read At work\" title=\"How to read At work\" data-preserve-attr=\"aria-expanded\">{}</summary><div class=\"menu dm-p\" role=\"group\" aria-label=\"How to read At work\" data-preserve-attr=\"style\"><p class=\"dm-h\">How to read At work</p><p>Each unit's strip is its last hour, now at the right edge. A blue mark is a minute in which its agent did something: it was sent a turn or ran a tool. A taller mark is a message. A notch is where its run began.</p><p>The dotted line after the last mark is the time since it last did anything: grey while that is recent, sand once it has been quiet long enough to need a look. A busy agent reads as a dense comb, a slow one as a few marks.</p></div></details>{}",
         ui::menu_open(),
         icon(Icon::Info, 16, ""),
         ui::menu_close(),
     )
 }
-/// The labels over At work's tracks: 12h, 4h, 1h, 15m and now, where the log scale puts them;
-/// `class` " ro-axis-g" for a group's own, which a narrow plan shows over its tracks.
+/// The labels over At work's strips, "1h ago" at their left and "now" at their right; `class`
+/// " ro-axis-g" for a group's own, which a narrow plan shows over its strips.
 pub fn axis(class: &str) -> String {
     axis_with(class, "")
 }
-/// The axis with `lead` (HTML: At work's head) at its left, over the rows' own columns.
-fn axis_with(class: &str, lead: &str) -> String {
-    let mut out = format!(
-        "<div class=\"ro-axis{class}\">{lead}<span class=\"vh\">{SCALE}</span><span class=\"ro-ticks\" aria-hidden=\"true\" title=\"{SCALE}\">"
-    );
-    for (ago, words) in super::unit_steps::RECENT {
-        let _ = write!(
-            out,
-            "<span style=\"left:{:.2}%\">{words}</span>",
-            super::unit_steps::recent_at(ago)
-        );
-    }
-    out.push_str("</span></div>");
-    out
+/// At work's head (`head`, HTML) on one line with the strips' labels, which stand over them,
+/// and under the labels how to read a strip, in a muted line.
+pub fn roster_head(head: &str) -> String {
+    axis_with(
+        " ro-head",
+        &format!("{head}<p class=\"ro-legend\">{LEGEND}</p>"),
+    )
 }
-/// A unit's track over the last twelve hours to `now` on the log scale: each `(class, from,
-/// to)` a bar (`tk-past` an earlier run, `tk-run` the one going, `tk-quiet` its silence,
-/// `tk-wait` dotted while it waits; `to` at `now` open), a tick for each message in `ticks`.
-/// Its places are the clock's (`unit_steps::bar`): drawn here to `now`, kept at the reader's
-/// now by `nav.js`, and left out of a stream's version.
-pub fn track(segs: &[(&str, f64, f64)], ticks: &[f64], now: f64) -> String {
-    let from = now - SAID_WINDOW;
-    let mut bars = String::new();
-    for (class, a, b) in segs {
-        if *b < from {
-            continue;
-        }
-        bars.push_str(&super::unit_steps::bar(
-            class,
-            *a,
-            (*b < now).then_some(*b),
-            now,
-        ));
-    }
-    let mut said = 0;
-    for t in ticks.iter().filter(|t| **t >= from && **t <= now + 60.0) {
-        said += 1;
-        bars.push_str(&super::unit_steps::mark("tk-m", *t, now));
-    }
+/// The labels with `lead` (HTML: At work's head) at their left, over the rows' own columns.
+fn axis_with(class: &str, lead: &str) -> String {
     format!(
-        "<span class=\"ro-track\" {} role=\"img\" aria-label=\"{}\">{bars}</span>",
-        super::unit_steps::LOG_SCALE,
-        esc(&format!(
-            "Its last twelve hours, on a log scale: {}",
-            ui::count(said, "message", "messages")
-        ))
+        "<div class=\"ro-axis{class}\">{lead}<span class=\"vh\">{SCALE}</span><span class=\"ro-ticks\" aria-hidden=\"true\" title=\"{SCALE}\"><span style=\"left:0%\">1h ago</span><span style=\"left:100%\">now</span></span></div>"
+    )
+}
+/// A unit's strip over the last hour to `now` (`unit_steps::Pulse`): its places are the
+/// clock's (`unit_steps::bar`, `mark`), drawn here to `now`, kept at the reader's now by
+/// `nav.js` and left out of a stream's version, so it changes only when the unit does
+/// something.
+pub fn track(pulse: &super::unit_steps::Pulse<'_>, now: f64) -> String {
+    let (marks, said) = pulse.html(now);
+    format!(
+        "<span class=\"ro-track\" {} role=\"img\" aria-label=\"{}\">{marks}</span>",
+        super::unit_steps::PULSE_SCALE,
+        esc(&format!("Its pulse: {said}"))
     )
 }
 /// What a row of At work is drawn from (HTML where it says so).
 pub struct RowParts<'a> {
     pub id: &'a str,
-    /// It waits (its track dotted since its last run); else it is at work.
+    /// It waits (nothing runs, its strip only what it said); else it is at work.
     pub waiting: bool,
     /// Its steps' states, as `data-said` carries them ("" for none).
     pub said_states: &'a str,
@@ -1841,7 +1809,7 @@ pub struct RowParts<'a> {
     pub said: &'a str,
     /// HTML: its stage pill and when it was heard from.
     pub meta: &'a str,
-    /// HTML: its `track`.
+    /// HTML: its pulse strip (`track`).
     pub track: &'a str,
     /// Where what it opens to is asked for when it opens, None for nothing.
     pub drill: Option<Drill>,

@@ -1995,12 +1995,14 @@ script is served from `/static/` (Datastar 1.0.4, OpenUI lang-core 0.3.0, zod 4.
 sluice's own), and every face from `/static/fonts/` (`font/woff2`, vendored fontsource 5.3.0
 files), each fetched only for a face the page's theme sets text in (their `@font-face` rules are
 in the one stylesheet). A page and each stream batch are drawn from one store
-snapshot, with each running run's activity (its run files' modification times) read once;
+snapshot, with each running run's activity (its run files' modification times, and when its
+agent was sent each turn and made each tool call, from its transcript, cached by the bytes
+already read so a page reads only what was appended) read once;
 nothing that changes meanwhile fails the page. The version a page carries (`ver`) is a
 fingerprint of the HTML its stream patches with what the page's clock keeps left out: a ticking
 `<time data-since>`'s or `<time data-ago>`'s text (every time that ticks is one, the board's
-Units ages too), the place of each bar and tick on At work's log scale (`<i data-a>`'s style,
-kept by `nav.js` from its times) and a row's heard line's ink (`data-heard`'s class). So a
+Units ages too), the place of each mark and span on At work's pulse strips (`<i data-a>`'s
+style, kept by `nav.js` from its times) and a row's heard line's ink (`data-heard`'s class). So a
 stream opened at it sends nothing until something shown changes, however long the page stays
 open. A page marks parts of what
 it patches as regions of their own (`<!--r:id-->…<!--/r:id-->` around the element of that id):
@@ -2148,9 +2150,12 @@ its edges the bar's (at most 1440px; on a phone Finished follows At work). The h
   question keeps its own × (the head's words are the same while one is open), so the head never
   counts a question the well hides. With nothing to say there is no section (the head says
   "Nothing needs you"), only the "Set aside" lines while there are some.
-- **At work**: its head's ⓘ (a small round button, the Details popover) says how to read a
-  track: the last 12 hours on a log scale, now at the right; the run going now blue, an earlier
-  run pale, a quiet run sand, a wait dotted; a tick a message. A row a unit at work or waiting once begun, grouped by recipe (its name linking
+- **At work**: its head says how to read a strip in one muted line ("Each mark is something
+  the agent did; a message is a taller mark. The dotted line is time since its last action."),
+  and its ⓘ (a small round button, the Details popover) at length: a blue mark a minute its
+  agent did something (was sent a turn or ran a tool), a taller one a message, a notch where
+  its run began; the dotted line after the last mark the time since it last did anything, grey
+  while recent, sand once quiet. A row a unit at work or waiting once begun, grouped by recipe (its name linking
   `?recipe=<name>&show=all`, its rows counted quiet, running and waiting), then the units of
   no recipe ("Other units"),
   then the long runs (a unit of one step and no recipe reporting progress, or running six hours
@@ -2170,12 +2175,17 @@ its edges the bar's (at most 1440px; on a phone Finished follows At work). The h
   how long it has run or waited; "heard 12m ago" when it was heard from since its run began
   (inked from 15 minutes, bold from 30, the page's clock moving it on), else "no word yet"; once quiet, "quiet 2h 3m" on the
   sand in place of the stage's time; a breathing dot
-  while it was heard from in the last five minutes; and its last twelve hours as a track on a
-  log scale (its runs, a quiet stretch on the sand, a wait dotted, a tick a message), under one
-  axis on the head's line over the tracks (12h, 4h, 1h, 15m, now; on a phone, "12h" and "now"
-  over each group's first track),
-  which says its scale to a screen reader ("The last 12 hours on a log scale, now at the right;
-  a tick is a message."). A
+  while it was heard from in the last five minutes; and its pulse strip: the last hour,
+  linear, now at the right, a mark each minute its agent acted (each turn it was sent and each
+  tool call it made, as its transcript says; the latest 90 such minutes, so the strip changes
+  only when the agent acts), a taller mark each message, a start notch where its run began
+  when that is inside the hour, and a dotted tail from its last action, message or write to
+  now, muted while recent and sand once the unit is quiet (a strip whose last mark is over an
+  hour old is all sand dots); a waiting row draws only what it said. One pair of labels on the
+  head's line over the strips ("1h ago", "now"; on a phone over each group's first strip) says
+  the window to a screen reader ("The last hour, now at the right: …"), and each strip says
+  what it shows ("Its pulse: acted in 14 minutes of its run, 3 messages lately, then quiet"; it counts
+  since the run began, so the clock alone never changes it). A
   unit that has not begun and waits on earlier work is counted, not drawn ("4 waiting on earlier
   work · 25 done, the last 2h ago"), unless a find, `root=` or `recipe=` asks for it. A row is
   a `<details>`: opening it asks for its body (`GET /projects/id/<p>/units/<u>/drill`, which
@@ -2183,11 +2193,12 @@ its edges the bar's (at most 1440px; on a phone Finished follows At work). The h
   carries a stamp of that body, and a new stamp asks for it again), so the page and its stream
   carry rows, never the steps of rows nobody opened. It opens to its last message whole (a
   message card: who, when, its markdown), then its step view (below) on the
-  row's own scale, the
-  same twelve hours on the same log scale across exactly the row's track (its timeline as wide
-  as the track and ending where it does, how long each took before it), its current step's
-  row tinted (a run that began earlier starts at the left edge, saying "from 3d ago"; one over
-  before it is said, not drawn), then when it was last heard from ("Last heard 22:51 (6m
+  row's own window, the
+  same hour, linear, across exactly the row's strip (its timeline as wide as the strip and
+  ending where it does, how long each took before it), its current step's row tinted, the run
+  going now drawn as the row's pulse strip again (a run that began earlier starts at the left
+  edge, saying "from 1h 10m ago"; one over before the hour is said, not drawn; a pending step
+  draws nothing), then when it was last heard from ("Last heard 22:51 (6m
   ago)"; for a quiet unit "Not heard from since 19:14 (3h ago)"; never the message the card
   above says),
   Open step, and Message and Unit page as quiet links; it stays open through a patch. A failed, cancelled or stale unit is
@@ -2237,8 +2248,8 @@ break of 4% of the width, marked and labelled with its length ("+1d 2h"). Labels
 spacing of the time drawn to scale ("0s", "15m", "1h 30m"), at least 17% apart. Under 560 px of
 its width a row is its rail and name, then its state, progress and time, then its runs as a thin
 bar, and the head (but its owner) and the axis give way. The plan's rows open it in place (the current step's row tinted) on
-the row's own scale instead, the one log axis it draws: the last twelve hours to now across
-exactly the row's track, how long each took before it, earlier runs' marks left out. The unit page is it, and
+the row's own window instead: the last hour to now, linear, across exactly the row's strip,
+the run going now as the row's pulse strip, how long each took before it, earlier runs' marks left out. The unit page is it, and
 a step's Runs tab draws its unit's with its own row ringed; a row in it opens its step (in the
 drawer, where there is one), and the arrows move between its rows.
 

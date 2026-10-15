@@ -95,16 +95,18 @@ function tick() {
     }
   }
   if (wider) window.dispatchEvent(new Event("sluice-resized"));
-  // the last twelve hours on the log scale (At work's tracks, a row's steps): `data-log` its
-  // knee and span, seconds; each bar in it from data-a to data-b (empty: now), a mark at data-a
-  for (const box of document.querySelectorAll("[data-log]")) {
-    const [knee, span] = box.dataset.log.split(" ").map(Number);
-    const at = (t) => 100 * (1 - Math.log1p(Math.min(span, Math.max(0, now / 1000 - t)) / knee)
-      / Math.log1p(span / knee));
+  // the pulse window (At work's strips, a row's steps): the last `data-pulse` seconds, linear,
+  // now at the right; a mark at data-a (older ones left of it, clipped), a bar from data-a to
+  // data-b (empty: now) starting at the window's left edge when it began earlier
+  for (const box of document.querySelectorAll("[data-pulse]")) {
+    const span = Number(box.dataset.pulse);
+    const at = (t) => 100 * (1 - Math.max(0, now / 1000 - t) / span);
     for (const bar of box.querySelectorAll("i[data-a]")) {
-      const l = at(Number(bar.dataset.a)), left = `${l.toFixed(2)}%`;
+      const open = bar.dataset.b !== undefined;
+      const l = open ? Math.max(0, at(Number(bar.dataset.a))) : at(Number(bar.dataset.a));
+      const left = `${l.toFixed(2)}%`;
       if (bar.style.getPropertyValue("--l") !== left) bar.style.setProperty("--l", left);
-      if (bar.dataset.b === undefined) continue;
+      if (!open) continue;
       const b = bar.dataset.b ? Number(bar.dataset.b) : now / 1000;
       const width = `${Math.max(0, at(b) - l).toFixed(2)}%`;
       if (bar.style.getPropertyValue("--w") !== width) bar.style.setProperty("--w", width);

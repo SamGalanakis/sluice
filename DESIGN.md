@@ -223,7 +223,7 @@ The owner opens the dashboard between other work, often on a second screen or a 
 answer one question within seconds: does anything need me, and is the work moving? A plan
 answers in its order, a briefing over a roster. Its head says it in one sentence; under it
 **Needs you** (questions, stops and silences, each a sentence with one action and a ×) →
-**At work** (a row a unit, the longest silent first, its last twelve hours as a track) →
+**At work** (a row a unit, the longest silent first, a pulse strip of its last hour) →
 **Finished since you looked** (what this browser has not seen finish), in that order at every
 width: what is moving matters more than what is done. A running step shows how long
 it has run; how long a stage usually takes is the project's Stats page's to say, never a
@@ -958,10 +958,9 @@ It is the unit page's body, what a plan row opens in place, and a step's Runs ta
   still a mark in its row, and a stretch where nothing ran that is a tenth or more of the time
   drawn to scale collapses to a break, 4% of the width on `paper-2` between dashed `rule` edges,
   labelled with its length ("+1d 2h"). A log axis was refused here: it would make every
-  hour-long run look alike and lie about the gaps. The one exception is the step view in the
-  plan's drilldown (In the plan, below), which takes its row's log scale so the run under the
-  row reads exactly as the row's track does; a unit's whole history stays linear everywhere
-  else. The labels (sans, 12px, as At work's axis) sit at a nice spacing
+  hour-long run look alike and lie about the gaps. The step view in the plan's drilldown (In
+  the plan, below) takes its row's window instead, the last hour, linear too, so the run under
+  the row reads exactly as the row's strip does. The labels (sans, 12px, as At work's axis) sit at a nice spacing
   of the scaled time, 17% apart at least, each with a hairline down the rows; "now" is a
   `run-ink` line with its word, which `sluice-steps` moves on the clock's tick (every five
   seconds and after every patch; `data-now`: the last stretch's start, place and rate), as it
@@ -977,9 +976,10 @@ It is the unit page's body, what a plan row opens in place, and a step's Runs ta
   on the plan and in the drawer, its page elsewhere); the arrows, Home and End move between rows;
   the row in focus, clicked or open in the drawer is selected: `paper-2` under a 2px navy ring
   (the host's `selected`, kept through a patch). Hover is `paper-2` alone.
-- **In the plan.** On the row's own time (`View::recent`): the last twelve hours to now on
-  At work's log scale, so a run reads the same in the row and under it (a run that began
-  earlier starts at the left edge, saying how long ago). A row of At work is a `<details>`:
+- **In the plan.** On the row's own time (`View::recent`): the last hour to now, linear, At
+  work's window, so a run reads the same in the row and under it (a run that began earlier
+  starts at the left edge, saying how long ago; the run going now is drawn as its row's pulse
+  strip, its marks and tail, never as a bar; a pending step draws nothing). A row of At work is a `<details>`:
   open, its step view stands under it on `paper-2`, its timeline exactly the row's track (as
   wide, ending at the same x: Took moves before it and the view ends where the row's chevron
   column begins; on a phone each run's bar starts where the row's track does), the current
@@ -1197,8 +1197,10 @@ a two-unit duration, `data-ago` "12m ago", `data-clock` a time of day on the rea
 which the server writes in UTC and names, "17:49 UTC", so it reads right before the clock first ticks) every five
 seconds and after a patch, then dispatches `sluice-tick` on `window` with the time; a component
 that draws against now (`sluice-steps`, `sluice-day`) moves its own marks on that event. On the
-same tick it keeps At work's log scale (a box with `data-log`, its knee and span: each bar's
-`--l` and `--w` from its `data-a` and `data-b`, empty while open; a tick's `--l`) and each heard
+same tick it keeps At work's pulse strips (a box with `data-pulse`, the window's seconds: each
+mark's `--l` from its `data-a`, sliding left off the strip as it ages; a span's `--l` and `--w`
+from its `data-a` and `data-b`, held at the strip's left edge and open to now while it has no
+end) and each heard
 line's ink (`data-heard`: its dot from 0 to 5 minutes, ink from 15, bold from 30). The server
 writes each as it read the clock, and the stream's version leaves all of it out (SPEC §13), so a
 quiet page sends nothing. `nav.js` also keeps the tab's title and favicon (the
@@ -1317,12 +1319,17 @@ the page's stream. A lane that redraws a page writes its notes here.
     aside" holds the Undo lines while there are some). Each Set aside
     line reads as one sentence with its Undo after it, wrapping as text does at any width.
   - **At work**: the roster, its head one line: the name, its counts and its ⓘ over the
-    roster's first columns, the axis (12h, 4h, 1h, 15m, now, 12px) on the same line over the
-    tracks' column; the axis says its scale to a screen reader and on hover: "The last 12 hours
-    on a log scale, now at the right; a tick is a message." The ⓘ is a 32px round
-    button (44px on a phone) whose popover, the Details' look, says how to read a track: the
-    last 12 hours on a log scale, now at the right; blue the run going now, pale an earlier run,
-    sand a quiet one, dotted a wait; a tick a message. A group a recipe (a `<details>`, its
+    roster's first columns, the strips' labels ("1h ago" at their left, "now" at their right,
+    12px) on the same line over the strips' column, and under the labels one muted 12px line
+    that says how to read a strip: "Each mark is something the agent did; a message is a taller
+    mark. The dotted line is time since its last action." The labels say the window to a screen
+    reader and on hover ("The last hour, now at the right: a mark each minute the agent did
+    something, a taller one each message, a dotted line since it last did anything."). The ⓘ is
+    a 32px round button (44px on a phone) whose popover, the Details' look, says it at length: a
+    blue mark a minute its agent did something (was sent a turn or ran a tool), a taller one a
+    message, a notch where its run began; the dotted line after the last mark the time since it
+    last did anything, grey while recent, sand once quiet; a busy agent a dense comb, a slow one
+    a few marks. A group a recipe (a `<details>`, its
     triangle, its name at 15px/600 in ink, so a big plan scans by its groups, and its counts
     13px muted: "1 quiet, 7 running, 2 waiting"); the units of no recipe after ("Other
     units"), the long runs last. **Folding, by row**: in a roster of more than 12 rows a
@@ -1347,27 +1354,37 @@ the page's stream. A lane that redraws a page writes its notes here.
     a silence shows before the quiet pill says it; the sand stays for quiet), else "no word
     yet" muted; once quiet, the one pill turns sand and says how long it has been silent
     ("scan · quiet 3h"); its
-    track (its last twelve hours on a log scale, `clamp(180px, 34cqi, 560px)` wide, so a wide
-    screen gives its room to the time rather than to a gap after the title); the live dot. Waiting rows follow the running
+    pulse strip (`clamp(180px, 34cqi, 560px)` wide, so a wide screen gives its room to the time
+    rather than to a gap after the title); the live dot. Waiting rows follow the running
     ones. A line ends it: "4 waiting on earlier work · 25 done, the last 2h ago". The head
     counts as the summary sentence does: a blocked, held or queued unit waits, so "At work · 2
     units · 3 waiting", or "Nothing at work · 3 waiting". Under 760px
     of the pane the row stacks: badge and title, then the meta, then the track full width; the
-    long axis leaves the head's line and gives way to "12h … now" over each group's first
-    track.
-    **The track's tones**, each at least 3:1 on the paper in both schemes: a run going
-    `--track-run` (the blue light, `run-ink` dark, where the blue would be 2.7:1); a done run
-    `sky-ink` at 45% on the paper edged in `sky-ink`; a silence the sand edged in `sand-mark`
-    (light) or filled sand (dark); a wait dotted; a message a 1px tick.
+    labels leave the head's line for "1h ago … now" over each group's first strip, the legend
+    line full width under the head.
+    **The pulse strip** answers "is it moving, has it gone quiet": the last hour, linear, now at
+    the right, built from what its agent actually did (each turn it was sent and each tool call
+    it made, read from its transcript, `sluice_agents::activity::pulse`), never from guesses.
+    A mark (2×12px, `--track-run`) for each minute it acted, the latest 90 minutes of them, so
+    the strip's HTML changes only when the agent does something and the clock alone never
+    changes it; a message a taller mark (3×22px). From its last action, message or write to now
+    a dotted tail: 2px `ink-muted` while recent, 4px `--track-quiet-edge` (sand) once the unit
+    counts as quiet (the quiet pill's own threshold), so a strip whose last mark is over an hour
+    old is sand dots edge to edge. A run that began inside the hour has a start notch (a 5×14px
+    bracket in `ink-muted`); one that began earlier draws nothing extra. A waiting row draws
+    only what it said. Tones, each at least 3:1 on the paper in both schemes: `--track-run` (the
+    blue light, `run-ink` dark, where the blue would be 2.7:1); in the drilldown a done run
+    `sky-ink` at 45% on the paper edged in `sky-ink`, a look the sand edged in `sand-mark`.
+    `/_ui` draws its five states: busy, slow, quiet, just started, started earlier.
     **The drilldown**: asked for as the row opens (`data-on:toggle`'s `@get`, a patch that
     replaces the row's empty body, `data-ignore-morph` so the row's own patches leave it be;
     open, a new stamp on the row asks again): first its last message whole as a message card
     (`ui::message_card` on the paper, unclamped: who and when, its markdown, code wrapped), then
-    a row's step view (The step view) on the row's own scale, the
-    last twelve hours on the same log scale across exactly the row's track (the same x-range,
-    measured, at every width), in the track's tones: a run still going reads as its step does
-    now (a quiet one on the sand from when it fell silent), one that began earlier starts at the
-    left edge, saying "from 3d ago". Its "Runs on" column only when its steps differ, its
+    a row's step view (The step view) on the row's own window, the
+    last hour, linear, across exactly the row's strip (the same x-range, measured, at every
+    width): the run going now is its row's pulse strip again (its marks and tail, "from 1h 10m
+    ago" when it began before the hour), a finished run a span in the strip's tones clipped at
+    the left edge with "from 37m ago" when it began earlier, a pending step nothing. Its "Runs on" column only when its steps differ, its
     Progress only when one reports any. Its foot: "Last heard 22:51 (6m ago)" ("Not heard from
     since 19:14 (3h ago)" for a quiet unit; the card above says what it said last), then
     Message and Unit page as quiet links and Open step, its one outlined move.

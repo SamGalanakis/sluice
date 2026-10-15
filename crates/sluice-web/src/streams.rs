@@ -94,7 +94,7 @@ impl RenderedBatch {
 }
 /// What the page's clock keeps, so the clock alone never changes a version: each tag that opens
 /// with one of these, and what of it is the clock's: the text of a ticking time, the `style` of
-/// a bar or mark on the log scale (`unit_steps::bar`), the `class` of a row's heard line.
+/// a mark or span on a pulse strip (`unit_steps::bar`, `mark`), the `class` of a row's heard line.
 const CLOCK: [(&str, Clocked); 4] = [
     ("<time data-since=", Clocked::Text),
     ("<time data-ago=", Clocked::Text),

@@ -2345,7 +2345,7 @@ details.read-today .item { opacity: .85; }
 
 /* ==== the plan (views::plan; DESIGN.md, The plan): a briefing, then a roster. Its head (the
    project's name and one sentence), Needs you (the one raised well), Finished since you looked
-   (small cards), At work (a row a unit, its last twelve hours on a log scale) opening in place
+   (small cards), At work (a row a unit, a pulse strip of its last hour) opening in place
    to its steps; Done an index when it is asked for. Hairlines and space instead of boxes, two
    weights (600 for names, 400 for the rest), its own fixed radii (14px the well, 10px a card,
    8px a row, pills round) whatever the theme's corners. =================================== */
@@ -2441,6 +2441,16 @@ details.read-today .item { opacity: .85; }
    labels over the tracks */
 .ro > .ro-axis.ro-head { align-items: end; padding: 0 0 6px; }
 .ro-head > .sec-h { grid-column: 1 / track-start; margin: 0; font-size: var(--t-body); line-height: 22px; color: var(--ink-muted); }
+/* how to read a strip, a muted line under the labels, over the strips */
+.ro-legend { grid-column: track-start / -1; grid-row: 2; margin: 2px 0 0; font-size: 12px; line-height: 16px;
+             color: var(--ink-muted); text-wrap: pretty; }
+/* a step's run in a row's drilldown, its pulse as the row draws it */
+.ro-drill .sv-tr:has(> .pk-tail, > .pk) { min-height: 22px; overflow: hidden; }
+.sv-tr > .pk { top: calc(50% - 6px); }
+.sv-tr > .pk.pk-m { top: calc(50% - 11px); }
+.sv-tr > .pk-start { top: calc(50% - 7px); }
+.sv-tr > .pk-tail { top: calc(50% - 1px); }
+.sv-tr > .pk-tail.is-quiet { top: calc(50% - 2px); }
 .ro-ticks { grid-area: track; position: relative; height: 16px; }
 .ro-ticks > span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
 .ro-ticks > span:first-child { transform: none; }
@@ -2495,19 +2505,18 @@ details.read-today .item { opacity: .85; }
 .ro-heard.is-old { color: var(--ink); font-weight: var(--w-strong); }
 .ro-why { font-size: 12.5px; line-height: 18px; }
 .ro-why a { color: inherit; }
-/* the track: a hairline across, a bar a run (earlier ones faint, the one going blue, sand once
-   it went quiet), dotted while it waits, a tick a message */
-.ro-track { grid-area: track; position: relative; display: block; height: 22px; margin-top: 4px; }
-.ro-track::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px;
-                    background: var(--rule); }
-.ro-track > i { position: absolute; top: 5px; left: var(--l); width: var(--w); height: 12px; min-width: 2px;
-                border-radius: 3px; }
-.ro-track > .tk-past { background: var(--track-past); box-shadow: inset 0 0 0 1px var(--sky-ink); }
-.ro-track > .tk-run { background: var(--track-run); }
-.ro-track > .tk-quiet { background: var(--sand); box-shadow: inset 0 0 0 1.5px var(--track-quiet-edge); }
-.ro-track > .tk-wait { top: 10px; height: 0; border-radius: 0; border-top: 2px dotted var(--ink-muted); }
-.ro-track > .tk-m { top: 1px; height: 20px; width: 1px; min-width: 0; border-radius: 0;
-                    background: var(--ink-muted); opacity: .75; }
+/* the pulse strip: the last hour, now at the right (`unit_steps::Pulse`): a run-blue mark each
+   minute the agent acted, a taller one each message, a notch where its run began, and a dotted
+   tail from its last action to now, muted while recent and sand once it is quiet; what is
+   older than the hour is clipped */
+.ro-track { grid-area: track; position: relative; display: block; height: 22px; margin-top: 4px; overflow: hidden; }
+.pk, .pk-start, .pk-tail { position: absolute; left: var(--l); }
+.pk { top: 5px; width: 2px; height: 12px; margin-left: -1px; border-radius: 1px; background: var(--track-run); }
+.pk.pk-m { top: 0; height: 22px; width: 3px; margin-left: -1.5px; }
+.pk-start { top: 4px; width: 5px; height: 14px; border: 2px solid var(--ink-muted); border-right: 0;
+            border-radius: 2px 0 0 2px; }
+.pk-tail { top: 10px; width: var(--w); height: 0; border-top: 2px dotted var(--ink-muted); }
+.pk-tail.is-quiet { top: 9px; border-top: 4px dotted var(--track-quiet-edge); }
 .ro-chev { grid-area: chev; display: grid; place-items: center; height: 30px; color: var(--ink-muted); }
 .ro-chev svg { transition: transform .15s ease-out; }
 .ro-u[open] .ro-chev svg { transform: rotate(180deg); }
@@ -2556,12 +2565,11 @@ details.read-today .item { opacity: .85; }
         --track-end: 28px; --track-in: 42px; }
   .ro.no-badge { --ro-cols: minmax(0, 1fr) 16px; --ro-areas: "who chev" "meta ." "track ."; --track-in: 0px; }
   .ro-axis, .ro-r { column-gap: 12px; }
-  /* the scale over each group's first track, its ends alone */
+  /* the labels over each group's first strip */
   .ro > .ro-axis:not(.ro-head) { display: none; }
-  .ro-head > .sec-h { grid-column: 1 / -1; }
+  .ro-head > .sec-h, .ro-legend { grid-column: 1 / -1; }
   .ro-head > .ro-ticks { display: none; }
   .ro-axis-g { display: grid; padding-top: 6px; }
-  .ro-axis-g .ro-ticks > span:not(:first-child, :last-child) { display: none; }
   .ro-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
   .ro-track { margin-top: 0; }
 }

@@ -566,7 +566,7 @@ async fn touch(f: &Fixture, step: &'static str) {
 }
 
 /// The bug this catches: a plan at scale resent its rows as the clock moved (a running time
-/// "46m" turning "47m", a track's bars shifting along the log scale), hundreds of kilobytes a
+/// "46m" turning "47m", a strip's marks sliding left), hundreds of kilobytes a
 /// minute with nothing changed. The clock is the page's to move (`nav.js`'s tick): an idle
 /// atlas-sized plan's stream sends nothing while minutes pass.
 #[tokio::test]

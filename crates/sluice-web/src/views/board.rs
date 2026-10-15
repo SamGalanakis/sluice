@@ -1795,7 +1795,9 @@ fn last_messages(
     }
     Ok(own)
 }
-/// How far back the plan's activity tracks reach, seconds: twelve hours.
+/// How far back the plan reads what its units said, seconds: twelve hours. A row's strip shows
+/// the last hour of it; an older message sits left of the strip, clipped, so a message leaving
+/// the hour changes nothing a stream sends.
 pub const SAID_WINDOW: f64 = 12.0 * 3600.0;
 /// What each unit's steps said in the last `SAID_WINDOW`: by unit, each message's step and when
 /// (seconds since the epoch), oldest first. One pass over the project's messages, newest first,
@@ -1927,7 +1929,7 @@ async fn load(
     let exact = registry.map(|r| r.0.signatures(project)).transpose()?;
     let catalog = state.catalog.catalog(Some(project))?;
     let plans = state.plans.clone();
-    let (shared, board, loaded) = state
+    let (shared, mut board, loaded) = state
         .reads
         .clock_snapshot(move |c| {
             let shared = super::load_snapshot(c, catalog)?;
@@ -1954,7 +1956,64 @@ async fn load(
         })
         .await
         .map_err(|e| e.into_public(true))?;
+    attach_pulses(state, &shared, project, &mut board).await;
     Ok((shared, board, loaded))
+}
+/// Each running step's pulse (`StepView::pulse`), read from its run's transcript after the
+/// store's snapshot and off the runtime. The transcripts' cache keeps each as its times alone
+/// and reads only what was appended since, so a plan asks it of every running row at once.
+async fn attach_pulses(
+    state: &DashboardState,
+    shared: &DashboardSnapshot,
+    project: ProjectId,
+    board: &mut ProjectView,
+) {
+    use sluice_agents::activity::{Homes, Window, pulse};
+    let Some(summary) = shared.projects.iter().find(|p| p.id == project) else {
+        return;
+    };
+    let runs: Vec<(String, String, u64)> = summary
+        .running
+        .iter()
+        .filter_map(|r| {
+            Some((
+                r.step.clone(),
+                r.run_id.clone(),
+                super::timestamp(&r.started)? * 1000,
+            ))
+        })
+        .collect();
+    if runs.is_empty() {
+        return;
+    }
+    let homes = Homes {
+        sluice: state.reads.home().to_owned(),
+        claude: state.claude_home.clone(),
+    };
+    let read = tokio::task::spawn_blocking(move || {
+        runs.into_iter()
+            .filter_map(|(step, run, since_ms)| {
+                let times = pulse(
+                    &homes,
+                    &run,
+                    Window {
+                        since_ms,
+                        until_ms: None,
+                    },
+                )?;
+                Some((step, times.into_iter().map(|t| t as f64 / 1000.0).collect()))
+            })
+            .collect::<BTreeMap<String, Vec<f64>>>()
+    })
+    .await
+    .unwrap_or_default();
+    for unit in &mut board.units {
+        for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
+            if let Some(times) = read.get(step.id.as_str()) {
+                step.pulse = times.clone();
+            }
+        }
+    }
 }
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct BoardQuery {

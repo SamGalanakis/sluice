@@ -3,6 +3,7 @@
 //! real-looking data, each in the house pair's light and dark side by side: the component
 //! system's documentation (DESIGN.md, Components). Nothing on it is read from the store.
 use super::step::FieldView;
+use super::unit_steps::Pulse;
 use super::threads::{Build, Composer, Conversation, MessageItem, Who};
 use super::ui::{self, Confirm, Shown, StepRef, Tab};
 use super::{DashboardState, NavView, PageRegistration, TrustedHtml, Viewer};
@@ -658,7 +659,7 @@ fn heads_part() -> TrustedHtml {
 /// silence, one item set aside; what finished since the owner looked; At work's axis and two
 /// rows, one quiet.
 fn plan_part(prefix: &str) -> TrustedHtml {
-    use super::plan::{RowParts, axis, finished_card, roster_row, track};
+    use super::plan::{RowParts, axis, finished_card, roster_head, roster_row, track};
     use ui::{Mark, need_line as need_item};
     let now = (crate::clock::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -666,7 +667,6 @@ fn plan_part(prefix: &str) -> TrustedHtml {
         / 60.0)
         .floor()
         * 60.0;
-    let h = 3_600.0;
     let x = "<button type=\"button\" class=\"icon\" aria-label=\"Dismiss\" title=\"Dismiss\">×</button>";
     let needs = [
         need_item(
@@ -707,7 +707,8 @@ fn plan_part(prefix: &str) -> TrustedHtml {
         finished_card(&before(8_040), 14_160.0, "#", "Herons: the autumn guide's entries", "<p class=\"fin-facts\">commit <code>9e1c0a4</code></p>", ""),
     ]
     .concat();
-    let row = |id: &str, badge: &str, title: &str, said: &str, meta: String, segs: &[(&str, f64, f64)], ticks: &[f64]| {
+    // a strip's states: busy, slow, quiet, just started, started before the window
+    let row = |id: &str, badge: &str, title: &str, said: &str, meta: String, pulse: Pulse<'_>| {
         roster_row(&RowParts {
             id: &format!("{prefix}{id}"),
             waiting: false,
@@ -718,45 +719,83 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             owner: "",
             said,
             meta: &meta,
-            track: &track(segs, ticks, now),
+            track: &track(&pulse, now),
             drill: None,
         })
     };
+    // seconds ago, every `step`, from `from` to `to`
+    let every = |from: f64, to: f64, step: f64| -> Vec<f64> {
+        let mut out = vec![];
+        let mut t = from;
+        while t >= to {
+            out.push(now - t);
+            t -= step;
+        }
+        out
+    };
+    let busy = [every(2_400.0, 1_500.0, 45.0), every(1_320.0, 30.0, 35.0)].concat();
+    let slow = vec![now - 2_880.0, now - 2_460.0, now - 1_800.0, now - 1_080.0, now - 380.0];
+    let quiet = vec![now - 10_200.0, now - 9_960.0];
+    let fresh = every(230.0, 20.0, 40.0);
+    let earlier = every(3_500.0, 400.0, 140.0);
+    let pill = |shown: Shown, words: &str, since: u64| {
+        ui::status_pill(shown, &format!("{words}{}", ui::since(&before(since)).0)).0
+    };
+    let heard = |ago: u64| {
+        format!(
+            "<span class=\"ro-heard\">heard {}</span>",
+            ui::ago(&before(ago))
+        )
+    };
     let rows = [
-        row(
-            "a-9",
-            "codex",
-            "Gannets: the spring guide's entries",
-            "Two of the five range maps redrawn; checking the third.",
-            format!(
-                "{}",
-                ui::status_pill(Shown::Quiet, &format!("review · quiet {}", ui::since(&before(9_840)).0))
-            ),
-            &[("tk-past", now - 9.0 * h, now - 5.2 * h), ("tk-run", now - 5.0 * h, now - 9_840.0), ("tk-quiet", now - 9_840.0, now)],
-            &[now - 8.0 * h, now - 4.5 * h, now - 3.4 * h],
-        ),
         row(
             "a-12",
             "claude",
             "Terns: the spring guide's entries",
             "Entries 41 to 58 drafted; the maps moved under maps/coast/.",
-            format!(
-                "{}<span class=\"ro-heard\"><span class=\"dot run pulse\" aria-hidden=\"true\"></span> heard {}</span>",
-                ui::status_pill(Shown::Running, &format!("<span class=\"vh\">running, </span>draft · {}", ui::since(&before(4_200)).0)),
-                ui::ago(&before(120))
-            ),
-            &[("tk-run", now - 4_200.0, now)],
-            &[now - 3_000.0, now - 1_500.0, now - 600.0, now - 120.0],
+            format!("{}{}", pill(Shown::Running, "<span class=\"vh\">running, </span>draft · ", 2_400), heard(30)),
+            Pulse { live: true, start: Some(now - 2_400.0), acts: &busy, said: &[now - 1_500.0, now - 480.0], active: Some(now - 30.0), quiet: false },
+        ),
+        row(
+            "a-13",
+            "codex",
+            "Shorebirds: the spring guide's entries",
+            "Checking each entry's dates against the checklist.",
+            format!("{}{}", pill(Shown::Running, "<span class=\"vh\">running, </span>draft · ", 3_000), heard(380)),
+            Pulse { live: true, start: Some(now - 3_000.0), acts: &slow, said: &[], active: Some(now - 380.0), quiet: false },
+        ),
+        row(
+            "a-9",
+            "codex",
+            "Gannets: the spring guide's entries",
+            "Two of the five range maps redrawn; checking the third.",
+            pill(Shown::Quiet, "review · quiet ", 9_960),
+            Pulse { live: true, start: Some(now - 10_800.0), acts: &quiet, said: &[], active: Some(now - 9_960.0), quiet: true },
+        ),
+        row(
+            "a-14",
+            "claude",
+            "Skuas: the spring guide's entries",
+            "",
+            format!("{}{}", pill(Shown::Running, "<span class=\"vh\">running, </span>draft · ", 240), heard(20)),
+            Pulse { live: true, start: Some(now - 240.0), acts: &fresh, said: &[], active: Some(now - 20.0), quiet: false },
+        ),
+        row(
+            "a-15",
+            "claude",
+            "Auks: the spring guide's entries",
+            "Entries 1 to 9 drafted.",
+            format!("{}{}", pill(Shown::Running, "<span class=\"vh\">running, </span>draft · ", 18_000), heard(400)),
+            Pulse { live: true, start: Some(now - 18_000.0), acts: &earlier, said: &[now - 2_100.0], active: Some(now - 400.0), quiet: false },
         ),
     ]
     .concat();
     TrustedHtml::owned(format!(
-        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\">{nh}<ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\">{ah}<div class=\"ro\">{}<details class=\"ro-g\" open><summary class=\"ro-group\"><h3><b>article</b> · 2 running</h3></summary>{}{rows}</details></div><p class=\"ro-more\"><b>2 waiting</b> on earlier work · <a href=\"#\"><b>5 done</b></a>, the last {}</p></section><section class=\"pb-sec\">{fh}<ul class=\"fin\">{finished}</ul><p class=\"fin-quiet\">1 more finished with nothing to say: <a href=\"#\">Scan the photograph archive for credits</a></p></section></div></div>",
-        axis(""),
+        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\">{nh}<ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\"><div class=\"ro\">{}<details class=\"ro-g\" open><summary class=\"ro-group\"><h3><b>article</b> · 1 quiet, 4 running</h3></summary>{}{rows}</details></div><p class=\"ro-more\"><b>2 waiting</b> on earlier work · <a href=\"#\"><b>5 done</b></a>, the last {}</p></section><section class=\"pb-sec\">{fh}<ul class=\"fin\">{finished}</ul><p class=\"fin-quiet\">1 more finished with nothing to say: <a href=\"#\">Scan the photograph archive for credits</a></p></section></div></div>",
+        roster_head(ui::section_head("", "At work", "5 units").as_str()),
         axis(" ro-axis-g"),
         ui::ago(&before(1_500)),
         nh = ui::SectionHead::new("", "Needs you").count(3).html(),
-        ah = ui::section_head("", "At work", "2 units"),
         fh = ui::SectionHead::new("", "Finished since you looked")
             .note(&TrustedHtml::owned(format!("since {}", ui::clock(&before(14_400)))))
             .action(&TrustedHtml::owned(ui::button(
@@ -1291,6 +1330,8 @@ fn steps_part() -> TrustedHtml {
                     Some(r) if r.to.is_none() => vec![r.from + 0.3 * h, r.from + 0.6 * h],
                     _ => vec![],
                 },
+                acts: &[],
+                active: None,
                 current: spans.last().is_some_and(|r| r.to.is_none()),
                 quiet_since: None,
             })
@@ -1371,7 +1412,7 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Module grid", "Twelve columns every module spans, half or whole on a medium sheet.", "`ui::grid_open`, `ui::module_open`.", both(&|p| Ok(grid_part(p)))?);
     add("Modules", "A unit, a question or a step on the grid; the one that needs you swells.", "`ui::module_open` with `ui::Swell`, `.mod-k`, `.mod-t`, `.mod-meta`, `.mod-body`, `.mod-actions`.", both(&|_| Ok(modules_part()))?);
     add("Section heads", "A section's name, its count muted, a note and its one action at the right.", "`ui::SectionHead`, `ui::section_head`.", both(&|_| Ok(heads_part()))?);
-    add("Plan briefing", "A plan's Needs you (each item a sentence, one action and a ×; what was set aside, with Undo), what finished since you looked, and At work: a row a unit, its activity over twelve hours.", "`plan::need_item`, `plan::finished_card`, `plan::axis`, `plan::track` and `plan::roster_row`, drawn by `views::plan::Plan`.", both(&|p| Ok(plan_part(p)))?);
+    add("Plan briefing", "A plan's Needs you (each item a sentence, one action and a ×; what was set aside, with Undo), what finished since you looked, and At work: a row a unit, its pulse strip over the last hour (busy, slow, quiet, just started, started earlier).", "`plan::need_item`, `plan::finished_card`, `plan::roster_head`, `plan::axis`, `plan::track` and `plan::roster_row`, drawn by `views::plan::Plan`.", both(&|p| Ok(plan_part(p)))?);
     add("Stage strip", "A unit's stages in recipe order, one cell each.", "`ui::stage_strip` from `ui::Stage`s (`ui::Cell::of` reads the status table).", both(&|_| Ok(strips_part()))?);
     add("Stats", "A project's numbers over a window.", "`views::stats::StatsView` (`durations`, `outcomes`, `throughput`, `slowest_html`), from `StatsData`.", both(&|p| Ok(stats_part(p)))?);
     add("Step view", "A unit step by step: its gates, what each step runs on, its state, progress, runs on one time axis with a tick a message, how long it took, and its last message.", "`unit_steps::View` (`unit_steps::of_unit` from a unit) in `sluice-steps`; a plan row opens to it (`plan::roster_row`).", both(&|_| Ok(steps_part()))?);

@@ -17,11 +17,11 @@
 //! last stretch's start, place and rate (`data-now`) without the server drawing again.
 //!
 //! **On the plan** a row opens to its steps on the row's own time instead (`View::recent`): the
-//! last twelve hours to now on a log scale (`recent_at`), the scale At work's tracks use, so a
-//! run reads the same in both places; a run that began earlier starts at the left edge, which
-//! says how long ago it began.
+//! last hour to now, linear (`pulse_at`), the window At work's pulse strips draw, so a step's
+//! run lines up with its row: a finished run a bar, the running one its pulse (`pulse`); a run
+//! that began earlier starts at the left edge, saying "from 37m ago".
 use super::TrustedHtml;
-use super::board::{Endpoint, Relation, RelationKind, SAID_WINDOW, UnitView};
+use super::board::{Endpoint, Relation, RelationKind, UnitView};
 use super::step::StepView;
 use super::ui::{self, Cell, Shown, esc};
 use serde::Serialize;
@@ -146,6 +146,10 @@ pub struct Step<'a> {
     /// When it said something (each message it sent), seconds since the epoch: a tick on its
     /// track.
     pub ticks: Vec<f64>,
+    /// While it runs, when its agent did something (`StepView::pulse`), seconds.
+    pub acts: &'a [f64],
+    /// While it runs, when its run last wrote anything, seconds.
+    pub active: Option<f64>,
     /// It is the step that says how its live unit stands now: its row is tinted.
     pub current: bool,
     /// Since when its run has been quiet (seconds since the epoch), while it is.
@@ -189,48 +193,127 @@ pub struct View<'a> {
     pub live: bool,
     /// Seconds since the epoch, as the page read the clock.
     pub now: f64,
-    /// Drawn on the last twelve hours' log scale (the plan's), not its own linear axis.
+    /// Drawn on the last hour (the plan's pulse window), not its own axis.
     pub recent: bool,
 }
 
-/// The log scale's knee, seconds: the last few minutes get as much room as hours.
-const KNEE: f64 = 360.0;
-/// The labels over the last twelve hours: how long ago, and their words.
-pub const RECENT: [(f64, &str); 5] = [
-    (SAID_WINDOW, "12h"),
-    (4.0 * 3600.0, "4h"),
-    (3600.0, "1h"),
-    (900.0, "15m"),
-    (0.0, "now"),
-];
-/// The log scale's knee and span, for the page's clock (`nav.js`): a box with it keeps each
-/// `i[data-a]` in it at the reader's now.
-pub const LOG_SCALE: &str = "data-log=\"360 43200\"";
-const _: () = assert!(KNEE == 360.0 && SAID_WINDOW == 43_200.0);
-/// A bar `class` on the log scale from `a` to `b` (None: to now), drawn to `now`. Its place is
-/// the clock's: it carries its times (`data-a`, `data-b`, empty while open) for `nav.js` to keep
-/// it at the reader's now, its `style` first after them, and a stream's version leaves the
-/// style out (`streams::without_clock`).
+/// The pulse window, seconds: At work's strips and a row's steps draw the last hour, linear.
+pub const PULSE: f64 = 3600.0;
+/// The window's labels over a row's steps: how long ago, and their words ("now" is the now
+/// line's own).
+const PULSE_LABELS: [(f64, &str); 2] = [(PULSE, "1h ago"), (1800.0, "30m ago")];
+/// The window for the page's clock (`nav.js`): a box with it keeps each `i[data-a]` in it at
+/// the reader's now.
+pub const PULSE_SCALE: &str = "data-pulse=\"3600\"";
+/// A run's marks drawn at most: its latest active minutes, so what is drawn changes only when
+/// it acts, never as the clock moves.
+const PULSE_MARKS: usize = 90;
+/// A bar `class` in the window from `a` to `b` (None: to now), drawn to `now`, starting at the
+/// window's left edge when it began earlier. Its place is the clock's: it carries its times
+/// (`data-a`, `data-b`, empty while open) for `nav.js` to keep it at the reader's now, its
+/// `style` first after them, and a stream's version leaves the style out
+/// (`streams::without_clock`).
 pub fn bar(class: &str, a: f64, b: Option<f64>, now: f64) -> String {
-    let l = recent_at(now - a);
+    let l = pulse_at(now - a).max(0.0);
     format!(
         "<i data-a=\"{a:.0}\" data-b=\"{}\" style=\"--l:{l:.2}%;--w:{:.2}%\" class=\"{class}\"></i>",
         b.map_or(String::new(), |b| format!("{b:.0}")),
-        (recent_at(now - b.unwrap_or(now)) - l).max(0.0)
+        (pulse_at(now - b.unwrap_or(now)) - l).max(0.0)
     )
 }
-/// A mark `class` at `t` on the log scale, drawn to `now`, kept by the page's clock as a bar is.
+/// A mark `class` at `t` in the window, drawn to `now`, kept by the page's clock as a bar is;
+/// one older than the window sits left of it, clipped.
 pub fn mark(class: &str, t: f64, now: f64) -> String {
     format!(
         "<i data-a=\"{t:.0}\" style=\"--l:{:.2}%\" class=\"{class}\"></i>",
-        recent_at(now - t)
+        pulse_at(now - t)
     )
 }
-/// A moment `ago` seconds before now on the last twelve hours' log scale, percent from its
-/// left; anything older at its left edge.
-pub fn recent_at(ago: f64) -> f64 {
-    let ago = ago.clamp(0.0, SAID_WINDOW);
-    100.0 * (1.0 - (1.0 + ago / KNEE).ln() / (1.0 + SAID_WINDOW / KNEE).ln())
+/// A moment `ago` seconds before now in the window, percent from its left (below 0 before it).
+pub fn pulse_at(ago: f64) -> f64 {
+    100.0 * (1.0 - ago.max(0.0) / PULSE)
+}
+/// A run's pulse: when it started, when its agent acted (`acts`), what it said, and when it
+/// last wrote anything, quiet or not. `live` while it runs: else only what it said is drawn.
+pub struct Pulse<'a> {
+    pub live: bool,
+    pub start: Option<f64>,
+    pub acts: &'a [f64],
+    pub said: &'a [f64],
+    pub active: Option<f64>,
+    pub quiet: bool,
+}
+impl Pulse<'_> {
+    /// Its strip's marks, as `<i>`s on the window: the silence since it last acted a dotted
+    /// tail to now (sand once it is quiet), a notch where its run began, a mark each minute it
+    /// acted (its latest `PULSE_MARKS`), a taller one each message. With its words for a screen
+    /// reader: how many actions and messages it shows, and whether it has gone quiet.
+    pub fn html(&self, now: f64) -> (String, String) {
+        let mut minutes: Vec<f64> = self
+            .acts
+            .iter()
+            .filter(|t| self.start.is_none_or(|s| **t >= s - 60.0))
+            .map(|t| (t / 60.0).floor() * 60.0)
+            .collect();
+        minutes.dedup();
+        let last_act = self.acts.last().copied();
+        // a write after its last action it can read (its files, its progress): a mark too
+        if let Some(active) = self.active.filter(|_| self.live)
+            && last_act.is_none_or(|a| active > a + 60.0)
+            && self.start.is_none_or(|s| active > s + 60.0)
+        {
+            minutes.push((active / 60.0).floor() * 60.0);
+        }
+        let minutes = &minutes[minutes.len().saturating_sub(PULSE_MARKS)..];
+        let last = [last_act, self.said.last().copied(), self.active, self.start]
+            .into_iter()
+            .flatten()
+            .reduce(f64::max);
+        let mut out = String::new();
+        if let Some(last) = last.filter(|_| self.live) {
+            out.push_str(&bar(
+                if self.quiet {
+                    "pk-tail is-quiet"
+                } else {
+                    "pk-tail"
+                },
+                last,
+                None,
+                now,
+            ));
+        }
+        if let Some(start) = self.start {
+            out.push_str(&mark("pk-start", start, now));
+        }
+        for t in minutes {
+            out.push_str(&mark("pk", *t, now));
+        }
+        for t in self.said {
+            out.push_str(&mark("pk pk-m", *t, now));
+        }
+        let mut words = vec![];
+        if !minutes.is_empty() {
+            words.push(format!(
+                "acted in {} of its run",
+                ui::count(minutes.len(), "minute", "minutes")
+            ));
+        }
+        if !self.said.is_empty() {
+            words.push(format!(
+                "{} lately",
+                ui::count(self.said.len(), "message", "messages")
+            ));
+        }
+        let mut said = if words.is_empty() {
+            "nothing yet".to_owned()
+        } else {
+            words.join(", ")
+        };
+        if self.live && self.quiet {
+            said.push_str(", then quiet");
+        }
+        (out, said)
+    }
 }
 
 /// A collapsed wait's share of the axis, percent.
@@ -311,17 +394,17 @@ struct Axis {
     breaks: usize,
     /// It runs to now.
     live: bool,
-    /// The last twelve hours to now on the log scale (`recent_at`).
+    /// The last hour to now (`pulse_at`).
     recent: bool,
 }
 impl Axis {
-    /// The last twelve hours to `now`, on the log scale.
+    /// The last hour to `now` (the pulse window).
     fn recent(now: f64) -> Self {
         Self {
-            t0: now - SAID_WINDOW,
+            t0: now - PULSE,
             t1: now,
             pieces: vec![],
-            scaled: SAID_WINDOW,
+            scaled: PULSE,
             breaks: 0,
             live: true,
             recent: true,
@@ -431,7 +514,7 @@ impl Axis {
     /// A moment's place, percent of the width.
     fn at(&self, t: f64) -> f64 {
         if self.recent {
-            return recent_at(self.t1 - t);
+            return pulse_at(self.t1 - t).max(0.0);
         }
         let mut at = 0.0;
         for p in &self.pieces {
@@ -466,10 +549,9 @@ impl Axis {
     fn labels(&self) -> Vec<(f64, String)> {
         if self.recent {
             // "now" is the now line's own label
-            return RECENT
+            return PULSE_LABELS
                 .iter()
-                .filter(|(ago, _)| *ago > 0.0)
-                .map(|(ago, words)| (recent_at(*ago), (*words).to_owned()))
+                .map(|(ago, words)| (pulse_at(*ago), (*words).to_owned()))
                 .collect();
         }
         let mut out: Vec<(f64, String)> = vec![];
@@ -727,9 +809,9 @@ impl View<'_> {
             if axis.is_some() { "" } else { " sv-untimed" },
             if on { "" } else { " sv-one-on" },
             if pr { "" } else { " sv-no-pr" },
-            // the page's clock moves a linear axis's now; the log scale's stays at its end
+            // the page's clock moves a linear axis's now; the window's stays at its end
             match &axis {
-                Some(axis) if axis.recent => format!(" {LOG_SCALE}"),
+                Some(axis) if axis.recent => format!(" {PULSE_SCALE}"),
                 Some(axis) if axis.live => format!(" data-now=\"{}\"", axis.now_data()),
                 _ => String::new(),
             },
@@ -1019,7 +1101,28 @@ fn track(axis: &Axis, step: &Step<'_>) -> String {
             None => format!("Run {} {what} since {}", n + 1, ui::at_text(&span.started)),
         });
         if axis.recent && end < axis.t0 {
-            // over before the last twelve hours: said, not drawn
+            // over before the window: said, not drawn
+            continue;
+        }
+        if axis.recent && open && matches!(step.shown, Shown::Running | Shown::Quiet) {
+            // the run going now: its pulse, as its row draws it
+            let (marks, _) = Pulse {
+                live: true,
+                start: Some(span.from),
+                acts: step.acts,
+                said: &step.ticks,
+                active: step.active,
+                quiet: step.quiet_since.is_some(),
+            }
+            .html(axis.t1);
+            bars.push_str(&marks);
+            if earlier {
+                let _ = write!(
+                    bars,
+                    "<span class=\"sv-clip\">from {}</span>",
+                    ui::ago(&super::rfc3339(span.from as u64))
+                );
+            }
             continue;
         }
         // a run gone quiet: running until it fell silent, then on the sand
@@ -1076,8 +1179,11 @@ fn track(axis: &Axis, step: &Step<'_>) -> String {
             );
         }
     }
-    // a tick for each message it sent, over its bars
-    for t in &step.ticks {
+    // a tick for each message it sent, over its bars (the running run's pulse drew its own)
+    let pulsed = axis.recent
+        && step.spans.last().is_some_and(|s| s.to.is_none())
+        && matches!(step.shown, Shown::Running | Shown::Quiet);
+    for t in step.ticks.iter().filter(|_| !pulsed) {
         if *t >= axis.t0 && *t <= axis.t1 + 60.0 {
             if axis.recent {
                 bars.push_str(&mark("sv-m", *t, axis.t1));
@@ -1190,6 +1296,8 @@ pub fn of_unit<'a>(
                 .filter(|(from, _)| from == s.id.as_str())
                 .map(|(_, at)| *at)
                 .collect(),
+            acts: &s.pulse,
+            active: super::timestamp(&s.active_at).map(|t| t as f64),
             current: current.as_ref() == Some(&s.id),
             quiet_since: (s.shown() == Shown::Quiet)
                 .then(|| super::timestamp(&s.active_at))

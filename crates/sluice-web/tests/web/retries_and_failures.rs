@@ -156,7 +156,7 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
         "{row}"
     );
     // its step view says the run beside its state, and its runs in words, the earlier ones
-    // too (on the plan's twelve hours, those before them are said, not drawn)
+    // too (in the plan's last hour, those before it are said, not drawn)
     let view = &row[row.find("<sluice-steps").expect("its step view")..];
     assert!(view.contains(">run 6<"), "{view}");
     assert!(

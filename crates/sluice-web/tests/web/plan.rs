@@ -72,14 +72,14 @@ async fn slow_chromium_the_plan_fits_every_width_from_a_phone_to_a_wide_screen()
             browser
                 .wait("!document.querySelector('.ro-u') || document.querySelector('.ro-u .ro-drill sluice-steps')")
                 .unwrap();
-            // the tracks' places are the page's clock's (the server's version leaves them
+            // the strips' places are the page's clock's (the server's version leaves them
             // out): each moved off, the next tick puts it back
             let moved = browser
-                .eval("(() => { const bars = [...document.querySelectorAll('[data-log] i[data-a]')]; for (const b of bars) b.style.setProperty('--l', '-1%'); document.querySelector('main').append(document.createElement('i')); return bars.length; })()")
+                .eval("(() => { const bars = [...document.querySelectorAll('[data-pulse] i[data-a]')]; for (const b of bars) b.style.setProperty('--l', '-1%'); document.querySelector('main').append(document.createElement('i')); return bars.length; })()")
                 .unwrap();
             assert!(slug != "almanac" || moved.as_u64().unwrap() > 0, "{slug}: {moved}");
             browser
-                .wait("[...document.querySelectorAll('[data-log] i[data-a]')].every(b => b.style.getPropertyValue('--l') !== '-1%')")
+                .wait("[...document.querySelectorAll('[data-pulse] i[data-a]')].every(b => b.style.getPropertyValue('--l') !== '-1%')")
                 .unwrap();
             for width in [390, 1440, 2560] {
                 for theme in ["light", "dark"] {
@@ -136,14 +136,15 @@ async fn plan_units_and_loose_steps() {
             assert!(at(&html, pair[0]) < at(&html, pair[1]), "{pair:?}");
         }
         assert!(!html.contains("class=\"pl-idx\""), "{html}");
-        // At work says how to read its tracks behind its ⓘ
+        // At work says how to read its strips in a line and behind its ⓘ
         let roster = &html[at(&html, "<!--r:plan-roster-->")..at(&html, "<!--r:plan-finished-->")];
         assert!(
             roster.contains("<summary class=\"dm-b\" aria-label=\"How to read At work\""),
             "{roster}"
         );
         assert!(
-            roster.contains("its last 12 hours on a log scale"),
+            roster.contains("Each unit's strip is its last hour, now at the right edge.")
+                && roster.contains("<p class=\"ro-legend\">Each mark is something the agent did;"),
             "{roster}"
         );
         // a running step's Overview: Now, then its brief (its spec's first paragraph, the whole
@@ -241,7 +242,7 @@ async fn plan_units_and_loose_steps() {
             "{cards}"
         );
         // At work: a group a recipe, then no recipe, the long runs last; the longest silent
-        // first; the axis's labels over the tracks
+        // first; the window's labels over the strips
         let roster = plan_html::band(&html, "plan-roster");
         assert!(
             at(roster, ">article</a></b>") < at(roster, ">scan</a></b>")
@@ -251,7 +252,7 @@ async fn plan_units_and_loose_steps() {
         );
         assert!(at(roster, "<!--r:u-a-6-->") < at(roster, "<!--r:u-a-7-->"));
         assert!(
-            roster.contains(">12h</span>") && roster.contains(">now</span>"),
+            roster.contains(">1h ago</span>") && roster.contains(">now</span>"),
             "{roster}"
         );
         assert!(
@@ -260,16 +261,22 @@ async fn plan_units_and_loose_steps() {
             "{roster}"
         );
         // a row: its state in words beside its mark, how long it has run, when it was heard
-        // from (its line says what it said, not again when), its track a tick a message
+        // from (its line says what it said, not again when), its strip a tall mark a message
         let a6 = plan_html::row(&html, "a-6");
         assert!(
             a6.contains("<span class=\"vh\">running, </span>draft · ")
                 && a6.contains("class=\"ro-heard\"><span class=\"dot run pulse\" aria-hidden=\"true\"></span>heard <time data-ago=")
                 && a6.contains("<b class=\"uv-from\">draft</b>: Entries 41 to 58")
-                && a6.contains("aria-label=\"Its last twelve hours, on a log scale: 3 messages\""),
+                && a6.contains("aria-label=\"Its pulse: acted in ")
+                && a6.contains(" minutes of its run, 3 messages lately\""),
             "{a6}"
         );
-        assert_eq!(a6.matches(" class=\"tk-m\"></i>").count(), 3, "{a6}");
+        let strip = &a6[at(a6, "class=\"ro-track\"")..at(a6, "<div id=\"drill-a-6\"")];
+        assert_eq!(
+            strip.matches(" class=\"pk pk-m\"></i>").count(),
+            3,
+            "{strip}"
+        );
         // quiet: one sand pill, its stage and how long it has been silent
         let s3 = plan_html::row(&html, "s-3");
         assert!(
@@ -283,7 +290,7 @@ async fn plan_units_and_loose_steps() {
             index.contains("<span class=\"ro-heard\">no word yet</span>"),
             "{index}"
         );
-        assert!(s3.contains(" class=\"tk-quiet\"></i>"), "{s3}");
+        assert!(s3.contains(" class=\"pk-tail is-quiet\"></i>"), "{s3}");
         // the drilldown: a disclosure whose body is the unit's steps on its
         // axis, the current one marked, each step what it runs on, then its latest and actions
         assert!(

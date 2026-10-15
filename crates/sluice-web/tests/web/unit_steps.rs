@@ -63,13 +63,17 @@ async fn slow_chromium_the_drawers_strip_and_step_view_say_quiet_like_the_plan()
     let f = Fixture::new().await;
     let n = neutral::seed(&f.writer, f._home.path()).await;
     let id = n.almanac;
-    // a-6's draft has run three hours and said nothing for as long: quiet
-    f.writer.write(RetrySafety::NonIdempotent, move |tx| {
+    // a-6's draft has run three hours and said or written nothing for as long: quiet
+    let run: String = f.writer.write(RetrySafety::NonIdempotent, move |tx| {
         tx.sql().execute("UPDATE runs SET started_at=strftime('%Y-%m-%dT%H:%M:%SZ','now','-3 hours'),created_at=strftime('%Y-%m-%dT%H:%M:%SZ','now','-3 hours') WHERE project_id=?1 AND step_id='a-6-draft'", [id.to_string()])?;
         tx.sql().execute("UPDATE messages SET at=strftime('%Y-%m-%dT%H:%M:%SZ','now','-3 hours') WHERE project_id=?1 AND \"from\"='a-6-draft'", [id.to_string()])?;
         tx.changed(Some(id), "runs");
-        Ok(())
+        Ok(tx.sql().query_row("SELECT run_id FROM runs WHERE project_id=?1 AND step_id='a-6-draft' AND finished_at IS NULL", [id.to_string()], |r| r.get(0))?)
     }).await.unwrap();
+    std::fs::File::open(f._home.path().join("runs").join(run))
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 3600))
+        .unwrap();
     let (addr, server) = serve(&f);
     tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}#step:a-6-draft")).unwrap();

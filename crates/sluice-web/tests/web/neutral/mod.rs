@@ -102,6 +102,74 @@ async fn project(writer: &Writer, name: &'static str, description: &'static str)
         .project_id
 }
 
+/// Lays a Codex session rollout for `step`'s running run under `home`, as its engine leaves one:
+/// a turn as the run began, then a command at each of `acts` seconds ago, so its row's pulse
+/// strip has its agent's actions to draw.
+pub async fn lay_pulse(writer: &Writer, home: &Path, project: ProjectId, step: &str, acts: &[u64]) {
+    let id = step.to_owned();
+    let (run, started): (String, u64) = writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            Ok(tx.sql().query_row(
+                "SELECT run_id,CAST(strftime('%s',started_at) AS INTEGER) FROM runs WHERE project_id=?1 AND step_id=?2 AND finished_at IS NULL",
+                (project.to_string(), id),
+                |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u64)),
+            )?)
+        })
+        .await
+        .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        * 1000;
+    let started_ms = started * 1000;
+    let session = format!("{}", sluice_model::ids::RunId::new());
+    let run_dir = home.join("runs").join(&run);
+    std::fs::create_dir_all(&run_dir).unwrap();
+    std::fs::write(
+        run_dir.join("native.json"),
+        json!({"engine": "codex", "session": session, "state": "Running"}).to_string(),
+    )
+    .unwrap();
+    let sessions = home
+        .join("codex-native-homes")
+        .join(&session)
+        .join("sessions/2026/10/15");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let at = |ms: u64| sluice_web::views::rfc3339(ms / 1000);
+    let mut lines = vec![
+        json!({"timestamp": at(started_ms), "type": "session_meta", "payload": {"id": session}}),
+        json!({"timestamp": at(started_ms), "type": "event_msg", "payload": {"type": "item_completed",
+            "item": {"type": "UserMessage", "id": "task", "content": [{"type": "text", "text": "Your task is in task.md; read it fully, then do it."}]},
+            "started_at_ms": started_ms, "completed_at_ms": started_ms}}),
+    ];
+    let mut acts = acts.to_vec();
+    acts.sort_unstable_by(|a, b| b.cmp(a));
+    for (n, ago) in acts.iter().enumerate() {
+        let t = now - ago * 1000;
+        lines.push(json!({"timestamp": at(t + 1500), "type": "event_msg", "payload": {"type": "item_completed",
+            "item": {"type": "CommandExecution", "id": format!("exec-{n}"), "command": ["/bin/bash", "-lc", "rg -n 'range' sections/"],
+                     "exit_code": 0, "aggregated_output": ""},
+            "started_at_ms": t, "completed_at_ms": t + 1500}}));
+    }
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(
+        sessions.join(format!("rollout-2026-10-15T00-00-00-{session}.jsonl")),
+        text,
+    )
+    .unwrap();
+    // its run's own directory last written as it began, as a run whose agent keeps its
+    // transcript elsewhere leaves it (so a quiet run stays quiet)
+    std::fs::File::open(&run_dir)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(started))
+        .unwrap();
+}
+/// Seconds ago, every `step`, from `from` down to `to`.
+fn every(from: u64, to: u64, step: u64) -> Vec<u64> {
+    (to..=from).rev().step_by(step as usize).collect()
+}
+
 /// Write `doc` as `project`'s plan and each step's status, runs and error.
 async fn plan(writer: &Writer, project: ProjectId, doc: Value, steps: Vec<Step>) {
     writer
@@ -415,6 +483,35 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
         })
         .await
         .unwrap();
+    // what the agents did, as their transcripts say: a-6 busy all along, a-7 busy until it
+    // asked its question, the index's places a few times an hour, the quiet scan last nearly
+    // three hours ago
+    let busy = [every(68 * M, 24 * M, 45), every(20 * M, 40, 30)].concat();
+    lay_pulse(writer, home, almanac, "a-6-draft", &busy).await;
+    lay_pulse(
+        writer,
+        home,
+        almanac,
+        "a-7-draft",
+        &every(19 * M, 12 * M, 40),
+    )
+    .await;
+    lay_pulse(
+        writer,
+        home,
+        almanac,
+        "index-places",
+        &[27 * M, 21 * M, 14 * M, 9 * M, 4 * M],
+    )
+    .await;
+    lay_pulse(
+        writer,
+        home,
+        almanac,
+        "s-3-scan",
+        &every(3 * H - 2 * M, 2 * H + 50 * M, 50),
+    )
+    .await;
     // a-6 has said something three times lately: a tick each on its track
     for (body, at) in [
         ("Entries 1 to 20 drafted.", 60 * M),
@@ -616,6 +713,29 @@ pub async fn seed_big(writer: &Writer, home: &Path) -> ProjectId {
         });
     }
     plan(writer, atlas, json!({"steps": steps}), states).await;
+    // every running agent's actions, some busy and some slow, as their transcripts say
+    for n in 96..=120u64 {
+        let gap = [25, 40, 90, 240][n as usize % 4];
+        lay_pulse(
+            writer,
+            home,
+            atlas,
+            &format!("e-{n:03}-check"),
+            &every((n % 30 + 3) * M, (n % 7) * 20 + 10, gap),
+        )
+        .await;
+    }
+    for n in 56..=77u64 {
+        let gap = [35, 70, 180][n as usize % 3];
+        lay_pulse(
+            writer,
+            home,
+            atlas,
+            &format!("b-{n:02}-draft"),
+            &every((n % 25 + 2) * M, (n % 5) * 60 + 20, gap),
+        )
+        .await;
+    }
     // the latest entries to finish each said what they did
     for n in 1..=4u64 {
         let step: &'static str = Box::leak(format!("e-{n:03}-check").into_boxed_str());

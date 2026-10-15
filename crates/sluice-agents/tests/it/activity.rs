@@ -4,7 +4,7 @@
 //! growing transcript read where it left off.
 #[path = "../fixtures/activity/lay.rs"]
 mod lay;
-use sluice_agents::activity::{Homes, Kind, Outcome, SentKind, Window, outline};
+use sluice_agents::activity::{Homes, Kind, Outcome, SentKind, Window, outline, pulse};
 use std::path::Path;
 
 fn laid(engine: &str) -> (tempfile::TempDir, Homes, String, lay::Laid) {
@@ -110,9 +110,12 @@ fn native_activity_preserves_turns_results_windows_and_incremental_reads() {
             let window = ALL;
             laid2.write(0);
             assert!(outline(&homes2, &run2, window).unwrap().turns.is_empty());
+            // its pulse (its times alone, kept lean) is followed part by part beside it
+            assert_eq!(pulse(&homes2, &run2, window), Some(vec![]));
             let half = laid2.lines.len() / 2;
             laid2.write(half);
             let part = outline(&homes2, &run2, window).unwrap();
+            pulse(&homes2, &run2, window).unwrap();
             assert!(part.turns.len() <= whole.turns.len());
             let mut text: String = laid2.lines[..half]
                 .iter()
@@ -122,8 +125,22 @@ fn native_activity_preserves_turns_results_windows_and_incremental_reads() {
             text.push_str(&next[..next.len() / 2]);
             std::fs::write(&laid2.transcript, &text).unwrap();
             outline(&homes2, &run2, window).unwrap();
+            pulse(&homes2, &run2, window).unwrap();
             laid2.write(usize::MAX);
             let grown = outline(&homes2, &run2, window).unwrap();
+            // the pulse read as it grew: every turn's and call's start in the whole outline
+            let mut starts: Vec<u64> = whole
+                .turns
+                .iter()
+                .flat_map(|t| {
+                    t.started_ms
+                        .into_iter()
+                        .chain(t.calls.iter().filter_map(|c| c.started_ms))
+                })
+                .collect();
+            starts.sort_unstable();
+            starts.dedup();
+            assert_eq!(pulse(&homes2, &run2, window), Some(starts), "{engine}");
             // the same outline as one read of the whole, but for where the run's files live
             let strip = |o: &sluice_agents::activity::Outline, dir: &Path| {
                 format!("{o:?}").replace(&dir.to_string_lossy().into_owned(), "")

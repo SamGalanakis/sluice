@@ -493,6 +493,11 @@ pub struct StepView {
     /// run files. Read with `quiet`; it moves with every write, so no part of the version.
     #[serde(skip)]
     pub active_at: String,
+    /// While it runs: when its agent did something (each turn and tool call its transcript
+    /// holds, `sluice_agents::activity::pulse`), seconds since the epoch, oldest first; read
+    /// after the store's snapshot (`board::attach_pulses`).
+    #[serde(skip)]
+    pub pulse: Vec<f64>,
     /// When its current result (its outputs, or its failure) was recorded; "" without one.
     pub result_at: String,
     /// Every message of its conversation, its Messages tab's count (the tab draws the latest).
@@ -1032,6 +1037,7 @@ impl StepView {
             thread: Default::default(),
             exchange: Default::default(),
             active_at: String::new(),
+            pulse: vec![],
             result_at: String::new(),
             messages_total: 0,
             failure_record: None,
