@@ -10,6 +10,7 @@ mod failed_dismiss;
 mod forms;
 mod http;
 mod inbox;
+mod kit;
 mod layout;
 mod live_path;
 mod log;

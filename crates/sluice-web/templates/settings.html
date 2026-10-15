@@ -1,10 +1,10 @@
 {% macro capacity(key, number, function, fns) %}<fieldset class="cap-choice"><legend class="vh">Capacity</legend><div class="cap-opt"><label><input type="radio" name="capacity.{{ key }}" value="number"{% if function.is_empty() %} checked{% endif %}> A number</label><input id="resource-{{ key }}" name="number.{{ key }}" type="number" min="0" step="1" inputmode="numeric" value="{{ number }}" aria-label="Capacity as a number"></div><div class="cap-opt"><label><input type="radio" name="capacity.{{ key }}" value="fn"{% if !function.is_empty() %} checked{% endif %}> From a fn</label><select name="capacity_fn.{{ key }}" aria-label="The fn that gives the capacity">{% if fns.is_empty() %}<option value="">No fn returns a capacity</option>{% endif %}{% for f in fns %}<option{% if crate::settings::same(f, function) %} selected{% endif %}>{{ f }}</option>{% endfor %}</select></div></fieldset>{% endmacro -%}
 <div class="settings-page">
 <!--settings-live--><header id="settings-live" data-page-title="{{ view.project.name }} · Settings · sluice">
-<h2 class="vh">Project settings</h2><p class="settings-lead">Project settings{% if view.project.paused %} {{ crate::views::ui::pill("Paused", crate::views::ui::Tone::Plain, None)|safe }}{% endif %}{% if view.project.archived %} {{ crate::views::ui::pill("Archived", crate::views::ui::Tone::Muted, None)|safe }}{% endif %}</p></header><!--/settings-live-->
+<p class="settings-lead">Project settings{% if view.project.paused %} {{ crate::views::ui::pill("Paused", crate::views::ui::Tone::Plain, None)|safe }}{% endif %}{% if view.project.archived %} {{ crate::views::ui::pill("Archived", crate::views::ui::Tone::Muted, None)|safe }}{% endif %}</p></header><!--/settings-live-->
 <nav class="settings-index" aria-label="Settings sections"><a href="#details-heading">Details</a><a href="#resources-heading">Resources</a><a href="#board-heading">Board</a><a href="#retire-heading">Retiring</a><a href="#activity-heading">Activity</a><a href="#danger-heading">Delete</a></nav>
 <p class="setting-help"><a href="/projects/id/{{ view.project.project_id }}/log?kind=project">View authored changes</a></p>
-<section aria-labelledby="details-heading"><h2 id="details-heading">Details</h2>
+<section aria-labelledby="details-heading">{{ crate::views::ui::SectionHead::new("details-heading", "Details").html()|safe }}
 <!--edit:details--><div id="details-edit">{{ view.form_open("details", view.path().as_str(), " enctype='multipart/form-data'")|safe }}
 <dl class="settings-fields">
 <div class="setting-row"><dt><label for="project-name">Name</label></dt><dd><input id="project-name" name="name" value="{{ view.project.name }}" required autocomplete="off" spellcheck="false"></dd></div>
@@ -16,18 +16,17 @@
 <div class="setting-actions"><button type="submit">Save details</button></div>{{ crate::views::ui::form_said("details-form")|safe }}</form></div><!--/edit:details-->
 <!--sessions--><dl id="sessions" class="settings-fields"{% if view.sessions.is_empty() %} hidden{% endif %}><div class="setting-row"><dt>Sessions</dt><dd><ul class="sessions">{% for s in view.sessions %}<li><span class="own">{{ s.name }}</span>{% if !s.seen.is_empty() %} · seen {{ crate::views::ui::ago(s.seen)|safe }}{% endif %}</li>{% endfor %}</ul></dd></div></dl><!--/sessions-->
 </section>
-<section aria-labelledby="resources-heading"><h2 id="resources-heading">Resources</h2>
-<!--resource-status--><div id="resource-status"><ul class="resource-list">
+<section aria-labelledby="resources-heading">{{ crate::views::ui::SectionHead::new("resources-heading", "Resources").html()|safe }}
+<!--resource-status--><div id="resource-status">{% if view.resources.is_empty() %}<p class="setting-help">No resources declared.</p>{% else %}<ul class="resource-list">
 {% for r in view.resources %}<li><code>{{ r.name }}</code> · {% if r.dynamic %}Dynamic{% else %}Static{% endif %} capacity {{ r.capacity }} · {{ r.held }} in use · {{ r.waiting }} waiting for capacity{% if let Some(queued) = r.queued %} · {{ queued }} steps queued{% else %} · <span title="Not known until the plan's fns have loaded">steps queued —</span>{% endif %}{% if !r.error.is_empty() %}<p class="setting-error">{{ r.error }}</p>{% endif %}</li>{% endfor %}
-{% if view.resources.is_empty() %}<li class="setting-help">No resources declared.</li>{% endif %}
-</ul></div><!--/resource-status-->
+</ul>{% endif %}</div><!--/resource-status-->
 <!--edit:resources--><div id="resources-edit">{{ view.form_open("resources", view.path().as_str(), "")|safe }}
 <dl class="settings-fields">{% for r in view.resources %}<div class="setting-row"><dt><label for="resource-{{ r.name }}">{{ r.name }}</label></dt><dd><input type="hidden" name="resource" value="{{ r.name }}">{% call capacity(r.name, r.number, r.function, view.capacity_fns(r.function)) %}{% endcall %}</dd></div>{% endfor %}
 <div class="setting-row"><dt>New resource</dt><dd><div class="setting-pair"><label for="resource-name">Name</label><input id="resource-name" name="new" autocomplete="off" spellcheck="false" placeholder="Leave empty to add none"></div>
 {% call capacity(":new", "1", "", view.capacity_fns("")) %}{% endcall %}</dd></div></dl>
 <div class="setting-actions"><button type="submit">Save resources</button></div>{{ crate::views::ui::form_said("resources-form")|safe }}</form>
 {% if !view.resources.is_empty() %}<div class="cap-remove">{% for r in view.resources %}{{ view.remove_confirm(r.name).html()|safe }}{% endfor %}</div>{% endif %}</div><!--/edit:resources--></section>
-<section aria-labelledby="board-heading" id="board-settings"><h2 id="board-heading">Board</h2>
+<section aria-labelledby="board-heading" id="board-settings">{{ crate::views::ui::SectionHead::new("board-heading", "Board").html()|safe }}
 <!--edit:board--><div id="board-edit">{{ view.board_form_open()|safe }}
 <input type="hidden" name="expected_rev" value="{{ view.project.board_rev }}">
 <dl class="settings-fields"><div class="setting-row"><dt><label for="board-program">Program</label></dt><dd>{% if view.project.board_rev.0 > 0 %}<p class="setting-help">Rev {{ view.project.board_rev }}</p>{% endif %}<textarea id="board-program" name="program" class="board-program" spellcheck="false" data-on:input__debounce.400ms="@post('{{ view.path() }}/board/preview', {contentType: 'form'})">{{ board_program }}</textarea></dd></div></dl>
@@ -38,7 +37,7 @@
 <!--board-doc--><div id="board-doc"><p class="setting-help doc-status">{% if view.doc.rev.0 > 0 %}Rev {{ view.doc.rev }}{% if let Some(at) = view.doc.at %} · edited {{ crate::views::ui::ago(at)|safe }}{% endif %}{% if let Some(author) = view.doc.author %} by {{ author }}{% endif %}{% else %}Not written yet.{% endif %}{% if !view.doc_drawn() %} Not shown: the program has no <code>Doc()</code>.{% endif %}</p>
 {% if !view.doc.markdown.trim().is_empty() %}<div class="settings-preview doc-view md" aria-labelledby="doc-heading">{{ view.doc_html()|safe }}</div>{% endif %}
 </div><!--/board-doc--></section>
-<section aria-labelledby="retire-heading" id="retire-settings"><h2 id="retire-heading">Retiring</h2>
+<section aria-labelledby="retire-heading" id="retire-settings">{{ crate::views::ui::SectionHead::new("retire-heading", "Retiring").html()|safe }}
 <!--retire-status--><div id="retire-status"><p class="setting-help retire-status">{% if view.project.prune_done_after.is_some() %}{{ crate::views::ui::pill("On", crate::views::ui::Tone::Plain, None)|safe }} Done units retire after {{ retire_hours }}h{% if !view.project.prune_keep.is_empty() %}, except {{ crate::views::ui::count(view.project.prune_keep.len(), "pattern", "patterns") }}{% endif %}. {% else %}{{ crate::views::ui::pill("Off", crate::views::ui::Tone::Muted, None)|safe }} {% endif %}{% if let Some(r) = view.retired %}Last retired {{ crate::views::ui::ago(r.at)|safe }}: {{ crate::views::ui::count(r.steps, "step", "steps") }} (rev {{ r.rev }}).{% else %}Nothing retired yet.{% endif %}</p></div><!--/retire-status-->
 <!--edit:retiring--><div id="retiring-edit">{{ view.form_open("retiring", view.path().as_str(), "")|safe }}
 <dl class="settings-fields">
@@ -46,13 +45,13 @@
 <div class="setting-row"><dt><label for="prune-keep">Never retire</label></dt><dd><input id="prune-keep" name="prune_keep" autocomplete="off" spellcheck="false" class="mono-field" value="{{ retire_keep }}" title="Unit-name patterns: * any characters, ? one"></dd></div>
 </dl>
 <div class="setting-actions"><button type="submit">Save retiring</button></div>{{ crate::views::ui::form_said("retiring-form")|safe }}</form></div><!--/edit:retiring--></section>
-<section aria-labelledby="activity-heading"><h2 id="activity-heading">Activity</h2>
+<section aria-labelledby="activity-heading">{{ crate::views::ui::SectionHead::new("activity-heading", "Activity").html()|safe }}
 <!--activity--><div id="activity">{{ view.form_open("activity", view.path().as_str(), "")|safe }}
 <div class="settings-switch"><p>Pause project</p><button type="submit" name="paused" value="{% if view.project.paused %}false{% else %}true{% endif %}" role="switch" aria-checked="{{ view.project.paused }}" aria-label="Pause project">{% if view.project.paused %}Resume{% else %}Pause{% endif %}</button></div>
 <div class="settings-switch"><p>Archive project</p><button type="submit" name="archived" value="{% if view.project.archived %}false{% else %}true{% endif %}" role="switch" aria-checked="{{ view.project.archived }}" aria-label="Archive project">{% if view.project.archived %}Unarchive{% else %}Archive{% endif %}</button></div>
 {{ crate::views::ui::form_said("activity-form")|safe }}</form></div><!--/activity-->
 </section>
-<section class="settings-danger" aria-labelledby="danger-heading"><h2 id="danger-heading">Delete project</h2>
+<section class="settings-danger" aria-labelledby="danger-heading">{{ crate::views::ui::SectionHead::new("danger-heading", "Delete project").html()|safe }}
 <!--delete-guard--><div id="delete-guard"><p id="delete-explanation" class="setting-help">{% if let Some(reason) = view.blocker %}Cannot delete: {{ reason }}. <a href="/projects/id/{{ view.project.project_id }}">Open the plan</a>.{% endif %}</p>
 {{ view.delete_confirm().html()|safe }}</div><!--/delete-guard--></section>
 </div>

@@ -1722,7 +1722,7 @@ article.item { background: var(--paper-raised); border: 1px solid var(--rule-fai
                border-radius: var(--radius-module); padding: 14px 16px; margin: 12px 0; }
 .item > h3 { font: var(--w-strong) 17px/23px var(--font-text); }
 /* a history card's name: a quiet link at body weight, never a display heading */
-#messages-view .item > h2.t-name { margin: 0; font: var(--w-strong) 15.5px/22px var(--font-text); color: var(--ink); }
+#messages-view .item > h3.t-name { margin: 0; font: var(--w-strong) 15.5px/22px var(--font-text); color: var(--ink); }
 .t-name a { color: inherit; text-decoration: none; }
 .t-name a:hover { text-decoration: underline; text-underline-offset: var(--link-offset); }
 /* a history card whose thread holds an open question to the owner leads with it */
@@ -3293,7 +3293,7 @@ main { container: frame / inline-size; }
 .settings-index a:hover { color: var(--run-ink); }
 .settings-page > .setting-help { margin: 0 0 8px; }
 .settings-page section { margin: 0 0 calc(44px * var(--density)); }
-.settings-page section > h2 { margin: 0 0 6px; font: var(--w-strong) var(--t-section)/26px var(--font-text); }
+.settings-page section > .sec-h { margin: 0 0 6px; }
 .settings-page h2[id] { scroll-margin-top: 16px; }
 .settings-page .setting-help, .settings-page section > p { max-width: var(--measure); }
 .settings-fields { margin: 0; }

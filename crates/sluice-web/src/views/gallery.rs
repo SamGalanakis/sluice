@@ -35,6 +35,12 @@ pub struct Part {
     pub light: TrustedHtml,
     pub dark: TrustedHtml,
 }
+impl Part {
+    /// Its head, the `n`th part's (`part-<n>-h`, what its section is labelled by).
+    pub fn head(&self, n: usize) -> TrustedHtml {
+        ui::SectionHead::new(&format!("part-{n}-h"), self.name).html()
+    }
+}
 #[derive(Template)]
 #[template(path = "gallery.html")]
 struct GalleryTemplate<'a> {
@@ -617,7 +623,7 @@ fn questions(prefix: &str) -> TrustedHtml {
             "",
             "<b><a href=\"#\">Shorebirds: the spring guide's entries</a></b> asks: Use the checklist's new spring dates in this draft?",
             "",
-            "<a class=\"btn primary\" href=\"#\">Answer</a>",
+            &ui::link_with(ui::Btn::Primary, "#", "Answer", ""),
             "<button type=\"button\" class=\"icon\" aria-label=\"Set aside\" title=\"Set aside\">×</button>",
         ),
         question_card(prefix)
@@ -669,7 +675,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             " data-unit=\"a-7\"",
             "<b><a href=\"#\">Shorebirds: the spring guide's entries</a></b> asks: Use the checklist's new spring dates in this draft?",
             "",
-            "<a class=\"btn primary\" href=\"#\">Answer</a>",
+            &ui::link_with(ui::Btn::Primary, "#", "Answer", ""),
             x,
         ),
         need_item(
@@ -678,7 +684,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
             "",
             "Three units failed: they hit their wall-clock cap.",
             "<details class=\"qf nd-more\"><summary>Show the three</summary><ul><li><a href=\"#\">Waders: the autumn guide's entries</a> <span>· “Two of five maps redrawn”</span></li><li><a href=\"#\">Gannets: the spring guide's entries</a></li><li><a href=\"#\">Scan the range maps for broken links</a></li></ul></details>",
-            "<button type=\"button\" class=\"btn\">Retry all</button>",
+            &ui::button(ui::Btn::Outlined, "Retry all", " type=\"button\""),
             x,
         ),
         need_item(
@@ -691,7 +697,7 @@ fn plan_part(prefix: &str) -> TrustedHtml {
                 ui::ago(&before(9_840))
             ),
             "",
-            "<a class=\"btn\" href=\"#\">Message it</a>",
+            &ui::link_with(ui::Btn::Outlined, "#", "Message it", ""),
             x,
         ),
     ]
@@ -745,11 +751,20 @@ fn plan_part(prefix: &str) -> TrustedHtml {
     ]
     .concat();
     TrustedHtml::owned(format!(
-        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\"><div class=\"sec-h\"><h2>Needs you</h2><span class=\"n\">3</span></div><ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>At work</h2><span class=\"pb-note\">2 units</span></div><div class=\"ro\">{}<details class=\"ro-g\" open><summary class=\"ro-group\"><h3><b>article</b> · 2 running</h3></summary>{}{rows}</details></div><p class=\"ro-more\"><b>2 waiting</b> on earlier work · <a href=\"#\"><b>5 done</b></a>, the last {}</p></section><section class=\"pb-sec\"><div class=\"pb-label\"><h2>Finished since you looked</h2><span class=\"pb-note\">since {}</span><span class=\"pb-grow\"></span><button type=\"button\" class=\"quiet\">Mark as seen</button></div><ul class=\"fin\">{finished}</ul><p class=\"fin-quiet\">1 more finished with nothing to say: <a href=\"#\">Scan the photograph archive for credits</a></p></section></div></div>",
+        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\">{nh}<ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\">{ah}<div class=\"ro\">{}<details class=\"ro-g\" open><summary class=\"ro-group\"><h3><b>article</b> · 2 running</h3></summary>{}{rows}</details></div><p class=\"ro-more\"><b>2 waiting</b> on earlier work · <a href=\"#\"><b>5 done</b></a>, the last {}</p></section><section class=\"pb-sec\">{fh}<ul class=\"fin\">{finished}</ul><p class=\"fin-quiet\">1 more finished with nothing to say: <a href=\"#\">Scan the photograph archive for credits</a></p></section></div></div>",
         axis(""),
         axis(" ro-axis-g"),
         ui::ago(&before(1_500)),
-        ui::clock(&before(14_400)),
+        nh = ui::SectionHead::new("", "Needs you").count(3).html(),
+        ah = ui::section_head("", "At work", "2 units"),
+        fh = ui::SectionHead::new("", "Finished since you looked")
+            .note(&TrustedHtml::owned(format!("since {}", ui::clock(&before(14_400)))))
+            .action(&TrustedHtml::owned(ui::button(
+                ui::Btn::Quiet,
+                "Mark as seen",
+                " type=\"button\"",
+            )))
+            .html(),
     ))
 }
 fn strips_part() -> TrustedHtml {

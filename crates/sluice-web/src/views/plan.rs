@@ -400,10 +400,11 @@ impl<'a> Plan<'a> {
                 id: format!("n-ask-{}", ask.message),
                 sentence: format!("<b>{who}</b> asks: {}", esc(&ask.title)),
                 more: String::new(),
-                act: format!(
-                    "<a class=\"btn primary\" href=\"{}\"{}>Answer</a>",
-                    esc(&ask.href(&project)),
-                    if ask.step.is_empty() {
+                act: ui::link_with(
+                    ui::Btn::Primary,
+                    &ask.href(&project),
+                    "Answer",
+                    &if ask.step.is_empty() {
                         String::new()
                     } else {
                         format!(" data-opens=\"{}\"", esc(&ask.step))
@@ -481,10 +482,7 @@ impl<'a> Plan<'a> {
                     ui::ago(&step.active_at)
                 ),
                 more: String::new(),
-                act: format!(
-                    "<a class=\"btn\" href=\"{}\">Message it</a>",
-                    esc(&step.thread_href())
-                ),
+                act: ui::link_with(ui::Btn::Outlined, &step.thread_href(), "Message it", ""),
                 short: format!("the silence of {}", ui::cut(title(unit), 60)),
                 aside: self.aside(&key),
                 keys: vec![key],
@@ -576,10 +574,11 @@ impl<'a> Plan<'a> {
         }
         let act = if step.feedback_in_why() && shown == Shown::Failed {
             // a failure that repeated: its feedback first, on its page
-            format!(
-                "<a class=\"btn\" href=\"{}#why-feedback\" data-step=\"{}\">Retry with feedback</a>",
-                esc(&step.href()),
-                esc(step.id.as_str())
+            ui::link_with(
+                ui::Btn::Outlined,
+                &format!("{}#why-feedback", step.href()),
+                "Retry with feedback",
+                &format!(" data-step=\"{}\"", esc(step.id.as_str())),
             )
         } else if step.retryable() && !step.retry_asks() {
             let retry = self.retry_form(&[step], "Retry");
@@ -590,10 +589,11 @@ impl<'a> Plan<'a> {
                 retry
             }
         } else {
-            format!(
-                "<a class=\"btn\" href=\"{}\" data-step=\"{}\">Open step</a>",
-                esc(&step.href()),
-                esc(step.id.as_str())
+            ui::link_with(
+                ui::Btn::Outlined,
+                &step.href(),
+                "Open step",
+                &format!(" data-step=\"{}\"", esc(step.id.as_str())),
             )
         };
         // set aside against its step's generations: a retry or a new cancel brings it back
@@ -698,8 +698,9 @@ impl<'a> Plan<'a> {
             [step] => {
                 let id = format!("retry-{}", step.id);
                 format!(
-                    "{open}<input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><button class=\"btn\">{word}</button>{said}</form>",
+                    "{open}<input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\">{button}{said}</form>",
                     open = ui::post_form(&id, "nd-form", &format!("{}/actions", step.href())),
+                    button = ui::button(ui::Btn::Outlined, &esc(word), ""),
                     rev = step.revision,
                     seen = esc(&step.seen()),
                     said = ui::form_said(&id),
@@ -713,8 +714,9 @@ impl<'a> Plan<'a> {
                     .join(" ");
                 let id = ui::form_id(&format!("retry {items}"));
                 format!(
-                    "{open}<input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"items\" value=\"{items}\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><button class=\"btn\">{word}</button>{said}</form>",
+                    "{open}<input type=\"hidden\" name=\"action\" value=\"retry\"><input type=\"hidden\" name=\"items\" value=\"{items}\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\">{button}{said}</form>",
                     open = ui::post_form(&id, "nd-form", &format!("{}/needs", self.view.href())),
+                    button = ui::button(ui::Btn::Outlined, &esc(word), ""),
                     items = esc(&items),
                     rev = self.view.revision,
                     said = ui::form_said(&id),
@@ -727,15 +729,18 @@ impl<'a> Plan<'a> {
     fn settle_form(&self, unit: &UnitView, step: &StepView) -> String {
         let id = format!("settle-{}", step.id);
         format!(
-            "{open}<input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\"><button class=\"btn\" title=\"{label}\" aria-label=\"{label}\">Settle as done</button>{said}</form>",
+            "{open}<input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"revision\" value=\"{rev}\"><input type=\"hidden\" name=\"seen\" value=\"{seen}\">{button}{said}</form>",
             open = ui::post_form(&id, "nd-form", &format!("{}/actions", step.href())),
             rev = step.revision,
             seen = esc(&step.seen()),
             said = ui::form_said(&id),
-            label = esc(&format!(
-                "Settle the cancel of {} as done: its unit counts as done",
-                ui::cut(title(unit), 60)
-            )),
+            button = ui::button(ui::Btn::Outlined, "Settle as done", &{
+                let label = esc(&format!(
+                    "Settle the cancel of {} as done: its unit counts as done",
+                    ui::cut(title(unit), 60)
+                ));
+                format!(" title=\"{label}\" aria-label=\"{label}\"")
+            }),
         )
     }
     /// A form posting `action` for `keys` to the plan's Needs you; once the stream draws what it
@@ -1595,12 +1600,12 @@ impl<'a> Plan<'a> {
             esc(&unit_href(self.view, unit))
         );
         if let Some(step) = current(unit) {
-            let _ = write!(
-                out,
-                "<a class=\"btn\" href=\"{}\" data-step=\"{}\">Open step</a>",
-                esc(&step.href()),
-                esc(step.id.as_str()),
-            );
+            out.push_str(&ui::link_with(
+                ui::Btn::Outlined,
+                &step.href(),
+                "Open step",
+                &format!(" data-step=\"{}\"", esc(step.id.as_str())),
+            ));
         }
         out.push_str("</div>");
         out

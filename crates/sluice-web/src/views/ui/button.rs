@@ -56,6 +56,23 @@ pub fn link(kind: Btn, href: &str, words: &TrustedHtml, label: &str) -> TrustedH
         label_attr(label)
     ))
 }
+/// A button of `kind` (a form's submit unless `attrs` says `type="button"`): `words` HTML and
+/// `attrs` more attributes, each with its leading space, already escaped.
+pub fn button(kind: Btn, words: &str, attrs: &str) -> String {
+    format!(
+        "<button{}{attrs}>{words}</button>",
+        class_attr(kind.class())
+    )
+}
+/// A link of `kind` to `href` that reads as a button, with more attributes (`attrs`, each with
+/// its leading space, already escaped).
+pub fn link_with(kind: Btn, href: &str, words: &str, attrs: &str) -> String {
+    format!(
+        "<a class=\"{}\" href=\"{}\"{attrs}>{words}</a>",
+        kind.link_class(),
+        esc(href)
+    )
+}
 fn class_attr(class: &str) -> String {
     if class.is_empty() {
         String::new()
