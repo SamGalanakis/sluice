@@ -502,11 +502,7 @@ pub fn project_create(
 fn validate_limits(limits: Option<&sluice_model::limits::LimitsOverride>) -> Result<()> {
     if let Some(limits) = limits {
         limits
-            .apply(sluice_model::limits::RunLimits {
-                memory_bytes: 1,
-                cpu_millis: 1,
-                tasks: 1,
-            })
+            .apply(sluice_model::limits::Limits::UNLIMITED)
             .map_err(invalid)?;
     }
     Ok(())

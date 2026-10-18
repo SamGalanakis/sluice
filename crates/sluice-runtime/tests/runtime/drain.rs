@@ -257,7 +257,7 @@ async fn zero_capacity_drain_growth_grants_admitted_section_then_completion_stop
     w.write(RetrySafety::NonIdempotent,move|tx|{
         tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status,unit,run,paused,priority) VALUES (?1,'work',0,'{\"run\":\"test.fn\"}','running','work','test.fn','false',0)",[p.to_string()])?;
         tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,phase,request,inputs_hash,created_at) VALUES (?1,?2,'work','reserved','{}','hash','now')",(attempt.to_string(),p.to_string()))?;
-        sluice_store::resources::reserve_budget(tx,attempt,policy.defaults,&policy)?;
+        sluice_store::resources::reserve_budget(tx,attempt,policy.resolve(None,None).unwrap(),&policy)?;
         tx.sql().execute("UPDATE attempts SET phase='executing' WHERE attempt_id=?1",[attempt.to_string()])?;
         tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,created_at) VALUES (?1,?2,?3,'work','now')",(run.to_string(),p.to_string(),attempt.to_string()))?;
         tx.sql().execute("INSERT INTO resources(scope,project_id,name,declaration,observed_capacity) VALUES (?1,?1,'lane',?2,0)",(p.to_string(),json!({"capacity_fn":"test.capacity"}).to_string()))?;

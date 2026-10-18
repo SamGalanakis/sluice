@@ -195,9 +195,10 @@ async fn direct_calls_share_home_budget_and_unbounded_live_attempts_block_admiss
     assert_eq!(status.unbounded_attempts.len(), 1);
     assert!(status.reason.contains("drain old runs"));
     let limits = RunLimits {
-        memory_bytes: 1024,
-        cpu_millis: 100,
-        tasks: 2,
+        memory_bytes: Some(1024),
+        memory_max_bytes: Some(1024),
+        cpu_millis: Some(100),
+        tasks: Some(2),
     };
     let p = policy.clone();
     assert!(
@@ -224,22 +225,59 @@ async fn direct_calls_share_home_budget_and_unbounded_live_attempts_block_admiss
     assert!(status.unbounded_attempts.is_empty());
     assert_eq!(
         status.held.memory_bytes,
-        limits.memory_bytes + policy.guardian_memory_bytes
+        limits.memory_bytes.unwrap() + policy.guardian_memory_bytes
     );
-    let p = ResourcePolicy {
-        total: RunLimits {
-            memory_bytes: policy.total.memory_bytes + 1,
+    // Bug: any change to the home total stalled admission until every live run drained.
+    // Raising it admits at once; lowering it under the live reservations waits and says so.
+    let raised = ResourcePolicy {
+        total: sluice_model::Limits {
+            memory_bytes: policy.total.memory_bytes.map(|n| n + 1),
             ..policy.total
         },
         ..policy.clone()
     };
+    let p = raised.clone();
     let changed = f
         .reads
         .snapshot(move |sql| r::budget_fit(sql, &limits, &p))
         .await
         .unwrap();
-    assert!(!changed.fits());
-    assert!(changed.reason.contains("draining active attempts"));
+    assert!(changed.fits(), "{changed:?}");
+    let lowered = ResourcePolicy {
+        total: sluice_model::Limits {
+            memory_bytes: Some(status.held.memory_bytes - 1),
+            ..policy.total
+        },
+        ceilings: sluice_model::Limits {
+            memory_bytes: Some(512),
+            ..policy.ceilings
+        },
+        defaults: sluice_model::Limits {
+            memory_bytes: Some(512),
+            ..policy.defaults
+        },
+        guardian_memory_bytes: 1024,
+    }
+    .validate()
+    .unwrap();
+    let small = RunLimits {
+        memory_bytes: Some(1),
+        memory_max_bytes: Some(512),
+        ..limits
+    };
+    let waiting = f
+        .reads
+        .snapshot(move |sql| r::budget_fit(sql, &small, &lowered))
+        .await
+        .unwrap();
+    assert!(!waiting.fits());
+    assert!(
+        waiting
+            .reason
+            .contains("exceed the home budget after it was lowered"),
+        "{}",
+        waiting.reason
+    );
     let changed_policy = ResourcePolicy {
         guardian_memory_bytes: policy.guardian_memory_bytes / 2,
         ..policy.clone()
@@ -263,9 +301,10 @@ async fn terminal_attempt_capacity_releases_only_after_service_proof() {
     let policy = ResourcePolicy::for_host(1 << 30, 8000).unwrap();
     let p = policy.clone();
     let limits = RunLimits {
-        memory_bytes: 1024,
-        cpu_millis: 100,
-        tasks: 2,
+        memory_bytes: Some(1024),
+        memory_max_bytes: Some(1024),
+        cpu_millis: Some(100),
+        tasks: Some(2),
     };
     f.writer.write(RetrySafety::NonIdempotent, move |tx| {
         tx.sql().execute("INSERT INTO attempts(attempt_id,phase,request,inputs_hash,created_at) VALUES (?1,'reserved','{}','x','now')", [attempt.to_string()])?;
@@ -282,7 +321,7 @@ async fn terminal_attempt_capacity_releases_only_after_service_proof() {
         .unwrap();
     assert_eq!(
         held.held.memory_bytes,
-        limits.memory_bytes + policy.guardian_memory_bytes
+        limits.memory_bytes.unwrap() + policy.guardian_memory_bytes
     );
     f.writer
         .write(RetrySafety::Idempotent, move |tx| {

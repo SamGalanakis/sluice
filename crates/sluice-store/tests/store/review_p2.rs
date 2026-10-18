@@ -198,7 +198,8 @@ pub mod support {
                 protocol_major: 1,
                 limits: sluice_model::limits::ResourcePolicy::for_host(1 << 40, 64000)
                     .unwrap()
-                    .defaults,
+                    .resolve(None, None)
+                    .unwrap(),
                 admission: sluice_model::limits::ResourcePolicy::for_host(1 << 40, 64000).unwrap(),
             }
         }

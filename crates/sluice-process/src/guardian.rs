@@ -391,6 +391,8 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
     let mut started = Vec::new();
     let mut reported = Reported::default();
     let mut legacy = false;
+    // Leaves go with their invocations; keep the most failed forks any sample saw.
+    let mut seen_pids_hits = 0u64;
     'invocations: loop {
         // Before spawning, an unavailable coordinator delays admission. Once a
         // payload exists, outages only delay notifications, never its execution.
@@ -514,7 +516,7 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
                         }
                     }
                     match host.resource_usage() {
-                        Ok(usage) => if let Some(error) = exhausted(args.limits, usage) {
+                        Ok(usage) => if let Some(error) = { seen_pids_hits = seen_pids_hits.max(usage.pids_limit_hits); exhausted(args.limits, usage) } {
                             result = PayloadResult::Failed(error);
                             break;
                         },
@@ -582,7 +584,8 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
         }
         break;
     }
-    let usage = host.resource_usage()?;
+    let mut usage = host.resource_usage()?;
+    usage.pids_limit_hits = usage.pids_limit_hits.max(seen_pids_hits);
     if !matches!(result, PayloadResult::Cancelled(_))
         && let Some(error) = exhausted(args.limits, usage)
     {
@@ -1517,28 +1520,21 @@ async fn historical_start<L: CoordinatorLink>(
     }
 }
 
+/// A payload OOM is fatal: `memory.oom.group` already stopped the whole payload. A task-limit
+/// hit is not: the fork failed with EAGAIN, the payload keeps running and the coordinator tells
+/// the step's owner and the step itself (SPEC §2.5).
 fn exhausted(limits: RunLimits, usage: RunUsage) -> Option<PublicError> {
-    if usage.oom_kills > 0 {
-        Some(PublicError::ResourceExhausted {
-            resource: ExhaustedResource::Memory,
-            limit: limits.memory_bytes,
-            peak: Some(usage.memory_peak_bytes),
-            message: format!(
-                "Memory limit exceeded: {} byte budget; payload stopped",
-                limits.memory_bytes
-            ),
-        })
-    } else if usage.pids_limit_hits > 0 {
-        Some(PublicError::ResourceExhausted {
-            resource: ExhaustedResource::Tasks,
-            limit: u64::from(limits.tasks),
-            peak: None,
-            message: format!(
-                "Task limit exceeded: {} tasks; payload stopped",
-                limits.tasks
-            ),
-        })
-    } else {
-        None
+    if usage.oom_kills == 0 {
+        return None;
     }
+    let message = match limits.memory_max_bytes {
+        Some(cap) => format!("Memory limit exceeded: {cap} byte cap; payload stopped"),
+        None => "Out of memory: the run has no memory cap and the home's memory total ran out; payload stopped".into(),
+    };
+    Some(PublicError::ResourceExhausted {
+        resource: ExhaustedResource::Memory,
+        limit: limits.memory_max_bytes.or(limits.memory_bytes).unwrap_or(0),
+        peak: Some(usage.memory_peak_bytes),
+        message,
+    })
 }

@@ -31,4 +31,6 @@ pub use gates::{CachedResources, DryRun, Gate, GateDecision, StateSnapshot, Step
 pub use plan::{Binding, Declaration, FnSignature, Pause, Plan, SignatureProvider, Step};
 pub use units::{PruneSet, RetryWalk, Unit};
 
-pub use limits::{ExhaustedResource, LimitsOverride, ResourcePolicy, RunLimits, RunUsage};
+pub use limits::{
+    ExhaustedResource, Limits, LimitsOverride, Reserved, ResourcePolicy, RunLimits, RunUsage,
+};

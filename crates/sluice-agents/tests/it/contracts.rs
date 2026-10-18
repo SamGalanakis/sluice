@@ -265,7 +265,8 @@ async fn authenticated_guardian_hook_roundtrip_returns_synchronous_cli_decision(
     let args = GuardianArgs {
         limits: sluice_model::ResourcePolicy::for_host(64 << 30, 32000)
             .unwrap()
-            .defaults,
+            .resolve(None, None)
+            .unwrap(),
         guardian_memory_bytes: 256 << 20,
         home_dir: scratch.0.clone(),
         run_dir: scratch.0.join("run"),

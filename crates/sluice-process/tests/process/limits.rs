@@ -1,6 +1,6 @@
 //! Real kernel failures must preserve the guardian and a neighboring run.
 use sluice_model::{
-    RunLimits, RunUsage,
+    Limits, RunLimits, RunUsage,
     ids::{HomeId, InvocationId, RunId},
 };
 use sluice_process::{
@@ -38,18 +38,40 @@ async fn wait_file(path: &Path) {
     .expect("worker did not publish evidence");
 }
 
+fn capped() -> RunLimits {
+    RunLimits {
+        memory_bytes: Some(64 << 20),
+        memory_max_bytes: Some(64 << 20),
+        cpu_millis: Some(250),
+        tasks: Some(32),
+    }
+}
+/// What a build run gets by default: a memory reservation and cap, no CPU or task cap.
+fn build() -> RunLimits {
+    RunLimits {
+        memory_bytes: Some(128 << 20),
+        memory_max_bytes: Some(256 << 20),
+        cpu_millis: None,
+        tasks: None,
+    }
+}
+
+/// Bugs: a run's pids.max of 512 made a Buck2 sync fail with EAGAIN (an unlimited-tasks run
+/// must get `max` and start more than 512 threads); a task-limit hit went unseen (it must show
+/// in the run's counters from pids.events); and raising the home total refused to apply while
+/// runs were live.
 #[tokio::test]
 async fn resource_limits_share_sibling_budget_and_isolate_neighboring_run() {
     let home = tempfile::tempdir().unwrap();
-    let totals = RunLimits {
-        memory_bytes: 1 << 30,
-        cpu_millis: 2000,
-        tasks: 256,
+    let totals = Limits {
+        memory_bytes: Some(1 << 30),
+        cpu_millis: Some(2000),
+        tasks: Some(2048),
     };
     let home_id = HomeId::new();
     let slice = WorkloadSlice::new(home_id, totals).unwrap();
     let mut units = Units(Vec::new(), slice.name().to_owned());
-    for mode in ["survivor", "victim"] {
+    for mode in ["survivor", "victim", "threads"] {
         let dir = home.path().join(mode);
         fs::create_dir(&dir).unwrap();
         let mut spec = ServiceCommand::new(std::env::current_exe().unwrap());
@@ -68,11 +90,7 @@ async fn resource_limits_share_sibling_budget_and_isolate_neighboring_run() {
             .insert("SLUICE_TEST_RESOURCE_MODE".into(), mode.into());
         spec.workload_slice = Some(slice.clone());
         spec.run_budget = Some((
-            RunLimits {
-                memory_bytes: 64 << 20,
-                cpu_millis: 250,
-                tasks: 32,
-            },
+            if mode == "threads" { build() } else { capped() },
             256 << 20,
         ));
         units.0.push(TransientService::for_test(RunId::new()));
@@ -99,19 +117,63 @@ async fn resource_limits_share_sibling_budget_and_isolate_neighboring_run() {
         usage.cpu_throttled_usec > 0,
         "busy payload must be throttled: {usage:?}"
     );
+    assert!(
+        usage.pids_limit_hits > 0,
+        "a fork past pids.max must count in pids.events: {usage:?}"
+    );
+    wait_file(&home.path().join("threads/evidence.json")).await;
+    let threads: serde_json::Value =
+        serde_json::from_slice(&fs::read(home.path().join("threads/evidence.json")).unwrap())
+            .unwrap();
+    assert_eq!(threads["pids_max"], "max", "{threads}");
+    assert_eq!(threads["service_pids_max"], "max", "{threads}");
+    assert!(
+        threads["cpu_max"].as_str().unwrap().starts_with("max "),
+        "{threads}"
+    );
+    assert_eq!(
+        threads["memory_max"],
+        (256u64 << 20).to_string(),
+        "{threads}"
+    );
+    assert!(threads["threads"].as_u64().unwrap() > 512, "{threads}");
+    assert_eq!(threads["usage"]["pids_limit_hits"], 0, "{threads}");
     assert!(units.0[0].query().await.unwrap().main_pid.is_some());
     slice.ensure().await.unwrap();
+    // A changed total applies to the populated slice; live runs keep their own caps.
     let changed = WorkloadSlice::new(
         home_id,
-        RunLimits {
-            memory_bytes: 512 << 20,
+        Limits {
+            memory_bytes: Some(2 << 30),
+            cpu_millis: None,
             ..totals
         },
     )
     .unwrap();
+    changed.ensure().await.unwrap();
+    let group = String::from_utf8(
+        Command::new("/usr/bin/systemctl")
+            .args([
+                "--user",
+                "show",
+                "--property=ControlGroup",
+                "--value",
+                slice.name(),
+            ])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let group = Path::new("/sys/fs/cgroup").join(group.trim().trim_start_matches('/'));
     assert_eq!(
-        changed.ensure().await.unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock
+        fs::read_to_string(group.join("memory.max")).unwrap().trim(),
+        (2u64 << 30).to_string()
+    );
+    assert!(
+        fs::read_to_string(group.join("cpu.max"))
+            .unwrap()
+            .starts_with("max ")
     );
     fs::write(home.path().join("survivor/finish"), b"done").unwrap();
     wait_file(&home.path().join("survivor/evidence.json")).await;
@@ -128,9 +190,23 @@ fn resource_worker() {
         let timeout = std::env::var_os("SLUICE_TEST_RESOURCE_TIMEOUT").unwrap();
         let marker = std::env::var_os("SLUICE_TEST_RESOURCE_MARKER").unwrap();
         sluice_process::launcher::payload_exec_main(vec![nonce, timeout, marker], |args| {
+            let script = match std::env::var("SLUICE_TEST_RESOURCE_MODE").as_deref() {
+                // Start more threads than the old 512-task default allowed, then exit.
+                Ok("threads") => {
+                    "import os, pathlib, sys, threading\nos.setsid()\np=pathlib.Path(sys.argv[1])\nev=threading.Event()\nts=[threading.Thread(target=ev.wait) for _ in range(600)]\nfor t in ts: t.start()\n(p.parent/'threads').write_text(str(len(ts)))\nev.set()\nfor t in ts: t.join()\np.write_text(str(os.getpid()))\nwhile not (p.parent/'finish').exists(): pass"
+                }
+                // A victim first forks past its task limit (EAGAIN), then frees those tasks.
+                Ok("victim") => {
+                    "import os, pathlib, sys, threading\nos.setsid()\np=pathlib.Path(sys.argv[1])\nev=threading.Event()\nts=[]\ntry:\n  for _ in range(64):\n    t=threading.Thread(target=ev.wait); t.start(); ts.append(t)\nexcept RuntimeError: pass\nev.set()\nfor t in ts: t.join()\np.write_text(str(os.getpid()))\nwhile not (p.parent/'allocate').exists(): pass\nx=bytearray(40*1024*1024)\nwhile True: pass"
+                }
+                _ => {
+                    "import os, pathlib, sys\nos.setsid()\np=pathlib.Path(sys.argv[1])\np.write_text(str(os.getpid()))\nwhile not (p.parent/'allocate').exists(): pass\nx=bytearray(40*1024*1024)\nwhile True: pass"
+                }
+            };
             let status = Command::new("/usr/bin/python3")
-                .args(["-c", "import os, pathlib, sys\nos.setsid()\np=pathlib.Path(sys.argv[1])\np.write_text(str(os.getpid()))\nwhile not (p.parent/'allocate').exists(): pass\nx=bytearray(40*1024*1024)\nwhile True: pass"])
-                .arg(&args[0]).status()?;
+                .args(["-c", script])
+                .arg(&args[0])
+                .status()?;
             Ok(status.code().unwrap_or(1))
         });
     }
@@ -138,7 +214,8 @@ fn resource_worker() {
     else {
         return;
     };
-    let victim = std::env::var("SLUICE_TEST_RESOURCE_MODE").unwrap() == "victim";
+    let mode = std::env::var("SLUICE_TEST_RESOURCE_MODE").unwrap();
+    let victim = mode == "victim";
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -146,7 +223,8 @@ fn resource_worker() {
     runtime.block_on(async {
         let mut guardian = OwnedProcess::capture(std::process::id()).unwrap();
         let service = Cgroup::open_service(&guardian.identity().cgroup).unwrap();
-        let limits = RunLimits { memory_bytes: 64 << 20, cpu_millis: 250, tasks: 32 };
+        let limits = if mode == "threads" { build() } else { capped() };
+        let service_path = service.filesystem_path();
         let groups = RunCgroups::create(service, &mut guardian, limits, 256 << 20).unwrap();
         let launcher = dir.join("launcher.sh");
         fs::write(&launcher, "#!/bin/sh\nexport SLUICE_TEST_RESOURCE_NONCE=\"$2\" SLUICE_TEST_RESOURCE_TIMEOUT=\"$3\" SLUICE_TEST_RESOURCE_MARKER=\"$4\"\nexec \"$SLUICE_TEST_RESOURCE_BINARY\" --exact limits::resource_worker --ignored --nocapture\n").unwrap();
@@ -165,6 +243,23 @@ fn resource_worker() {
             let detached = OwnedProcess::capture(pid).unwrap();
             assert_eq!(detached.identity().cgroup, leaf.path());
             payloads.push(payload);
+        }
+        if mode == "threads" {
+            let payload_dir = groups.payload().filesystem_path();
+            let read = |path: std::path::PathBuf| fs::read_to_string(path).unwrap().trim().to_owned();
+            fs::write(dir.join("finish"), b"done").unwrap();
+            groups.payload().wait_populated(false, Duration::from_secs(3)).await.unwrap();
+            for mut payload in payloads { payload.wait().unwrap(); }
+            let evidence = serde_json::json!({
+                "pids_max": read(payload_dir.join("pids.max")),
+                "cpu_max": read(payload_dir.join("cpu.max")),
+                "memory_max": read(payload_dir.join("memory.max")),
+                "service_pids_max": read(service_path.join("pids.max")),
+                "threads": read(dir.join("threads")).parse::<u64>().unwrap(),
+                "usage": groups.payload().resource_usage().unwrap(),
+            });
+            fs::write(dir.join("evidence.json"), serde_json::to_vec(&evidence).unwrap()).unwrap();
+            return;
         }
         if victim {
             tokio::time::timeout(Duration::from_secs(3), async {

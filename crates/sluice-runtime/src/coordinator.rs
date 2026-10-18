@@ -2020,6 +2020,71 @@ impl<H: ExecutionHost> Coordinator<H> {
     /// Terminal payloads can leave guardians waiting for an acknowledgement. Keep
     /// their reservation until the entire service exits. The adoption pass may
     /// stop them because their result is already durable.
+    /// Read each executing run's payload counters and tell its owner, and the step itself, about
+    /// a limit it is meeting (SPEC §2.5). Each run and limit is told once.
+    pub async fn sample_limits(&self) -> Result<usize, PublicError> {
+        let live: Vec<LiveRun> = self
+            .reads()
+            .snapshot(|sql| {
+                let mut statement = sql.prepare(
+                    "SELECT r.run_id,r.project_id,r.step_id,r.cgroup,a.limits FROM runs r JOIN attempts a USING(attempt_id)
+                     WHERE r.finished_at IS NULL AND a.phase='executing' AND r.cgroup IS NOT NULL AND a.limits IS NOT NULL AND r.project_id IS NOT NULL",
+                )?;
+                let rows = statement
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .map_err(|e| e.into_public(true))?;
+        let mut notices = Vec::new();
+        for (run, project, step, cgroup, limits) in live {
+            let (Ok(run), Some(Ok(project))) = (
+                run.parse::<RunId>(),
+                project.map(|p| p.parse::<ProjectId>()),
+            ) else {
+                continue;
+            };
+            let step = step
+                .map(|s| s.parse::<StepId>())
+                .transpose()
+                .map_err(|e| storage(format!("{e}")))?;
+            let limits: sluice_model::RunLimits = serde_json::from_str(&limits).map_err(storage)?;
+            let service = cgroup
+                .strip_suffix("/control")
+                .unwrap_or(&cgroup)
+                .to_owned();
+            let Some(usage) = self.host().usage(run, &service).await else {
+                continue;
+            };
+            for (notice, body) in
+                crate::budget::run_notices(run, step.as_ref(), &limits, &usage, false)
+            {
+                notices.push((project, notice, body));
+            }
+        }
+        if notices.is_empty() {
+            return Ok(0);
+        }
+        self.writer()
+            .write(RetrySafety::Idempotent, move |tx| {
+                let mut posted = 0;
+                for (project, notice, body) in &notices {
+                    // A run that finished meanwhile is told at its completion instead.
+                    let live: bool = tx.sql().query_row(
+                        "SELECT EXISTS(SELECT 1 FROM runs WHERE run_id=?1 AND finished_at IS NULL)",
+                        [notice.run.map(|r| r.to_string())],
+                        |r| r.get(0),
+                    )?;
+                    if live && resources::notify_limit(tx, *project, notice, body.clone(), true)? {
+                        posted += 1;
+                    }
+                }
+                Ok(posted)
+            })
+            .await
+    }
+
     pub async fn reap_terminal(&self, stop_services: bool) -> Result<(), PublicError> {
         let pending = self
             .reads()
@@ -2096,7 +2161,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 let run:RunId=calls::parse_id(row.get(0)?)?;let id=AttemptKey{home:home_id,run,attempt:calls::parse_id(row.get(1)?)?,project:row.get::<_,Option<String>>(2)?.map(calls::parse_id).transpose()?,step:row.get::<_,Option<String>>(3)?.map(calls::parse_id).transpose()?,generation:StepGeneration(row.get::<_,i64>(4)? as u64),work:WorkGeneration(row.get::<_,i64>(5)? as u64)};
                 let raw:String=row.get(6)?;let frozen:Value=serde_json::from_str(&raw)?;let capability=serde_json::from_value(if id.step.is_some(){frozen["provenance"]["runtime"]["capability"].clone()}else{frozen["function"]["bundle"]["capability"].clone()})?;
                 let guardian=stored_guardian(sql,&id,home_id)?;let cgroup:Option<String>=row.get(8)?;
-                out.push(AdoptionAttempt{limits:serde_json::from_value(frozen["limits"].clone())?,guardian_memory_bytes:serde_json::from_value(frozen["policy"]["guardian_memory_bytes"].clone())?,identity:id.clone(),guardian,run_dir:home.join("runs").join(run.to_string()),unit:row.get::<_,Option<String>>(7)?.unwrap_or_else(||sluice_process::systemd::TransientService::for_launch(run).name().into()),service_cgroup:cgroup.map(|c|c.strip_suffix("/control").unwrap_or(&c).to_string()),capability});
+                out.push(AdoptionAttempt{limits:serde_json::from_value(frozen["limits"].clone())?,guardian_memory_bytes:serde_json::from_value(frozen.get("execution_policy").unwrap_or(&frozen["policy"])["guardian_memory_bytes"].clone())?,identity:id.clone(),guardian,run_dir:home.join("runs").join(run.to_string()),unit:row.get::<_,Option<String>>(7)?.unwrap_or_else(||sluice_process::systemd::TransientService::for_launch(run).name().into()),service_cgroup:cgroup.map(|c|c.strip_suffix("/control").unwrap_or(&c).to_string()),capability});
             }Ok(out)
         }).await.map_err(|e|e.into_public(true))?;
         let mut running = JoinSet::new();
@@ -3131,6 +3196,9 @@ impl EditLog {
     }
 }
 
+/// A live run as `sample_limits` reads it: run, project, step, guardian cgroup, frozen limits.
+type LiveRun = (String, Option<String>, Option<String>, String, String);
+
 fn record_resource_usage(
     tx: &mut sluice_store::WriteTransaction<'_>,
     evidence: &CompletionJournal,
@@ -3141,9 +3209,11 @@ fn record_resource_usage(
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     let limits: sluice_model::RunLimits = serde_json::from_str(&limits)?;
-    let reservation: sluice_model::RunLimits = serde_json::from_str(&reservation)?;
+    let reservation: sluice_model::Reserved = serde_json::from_str(&reservation)?;
     if limits != evidence.limits
-        || reservation.memory_bytes.checked_sub(limits.memory_bytes)
+        || reservation
+            .memory_bytes
+            .checked_sub(limits.memory_bytes.unwrap_or(0))
             != Some(evidence.guardian_memory_bytes)
     {
         return Err(conflict("completion resource budget differs from reservation").into());
@@ -3153,6 +3223,18 @@ fn record_resource_usage(
         (evidence.identity.attempt.to_string(), serde_json::to_string(&evidence.usage)?),
     )?;
     tx.changed(evidence.identity.project, "status");
+    // A limit the run met and the live sample missed is told now, once per run and limit.
+    if let (Some(project), Some(usage)) = (evidence.identity.project, &evidence.usage) {
+        for (notice, body) in crate::budget::run_notices(
+            evidence.identity.run,
+            evidence.identity.step.as_ref(),
+            &limits,
+            usage,
+            true,
+        ) {
+            resources::notify_limit(tx, project, &notice, body, false)?;
+        }
+    }
     Ok(())
 }
 

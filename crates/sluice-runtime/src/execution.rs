@@ -55,6 +55,15 @@ pub trait ExecutionHost: FnHost + guardian::AdoptionHost + Send + Sync + 'static
     fn composition_enabled(&self) -> bool {
         false
     }
+    /// A live run's payload limit counters, read from its cgroup's event files
+    /// (`memory.events`, `pids.events`, `cpu.stat`); `None` when the host cannot see them.
+    fn usage(
+        &self,
+        _run: RunId,
+        _service_cgroup: &str,
+    ) -> impl Future<Output = Option<sluice_model::RunUsage>> + Send {
+        std::future::ready(None)
+    }
     fn launch(
         &self,
         launch: Launch,
@@ -108,6 +117,15 @@ impl guardian::AdoptionHost for OsHost {
     }
 }
 impl ExecutionHost for OsHost {
+    async fn usage(&self, _run: RunId, service_cgroup: &str) -> Option<sluice_model::RunUsage> {
+        let service = service_cgroup.to_owned();
+        tokio::task::spawn_blocking(move || {
+            sluice_process::cgroup::Cgroup::service_usage(&service).ok()
+        })
+        .await
+        .ok()
+        .flatten()
+    }
     async fn terminal_gone(&self, run: RunId, stop: bool) -> Result<bool, PublicError> {
         if !self.start_settled(run).await? {
             return Ok(false);

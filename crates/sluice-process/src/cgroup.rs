@@ -6,7 +6,7 @@ use rustix::{
 };
 use sluice_model::{
     ids::InvocationId,
-    limits::{GUARDIAN_CPU_MILLIS, GUARDIAN_TASKS, RunLimits, RunUsage},
+    limits::{GUARDIAN_CPU_MILLIS, GUARDIAN_TASKS, Limits, RunLimits, RunUsage},
 };
 use std::{
     collections::BTreeSet,
@@ -36,14 +36,10 @@ impl RunCgroups {
         limits: RunLimits,
         guardian_memory_bytes: u64,
     ) -> io::Result<Self> {
-        if guardian_memory_bytes == 0
-            || limits.memory_bytes == 0
-            || limits.cpu_millis == 0
-            || limits.tasks == 0
-        {
+        if guardian_memory_bytes == 0 || limits.validate().is_err() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "run limits must be positive",
+                "run limits must be positive or unlimited",
             ));
         }
         if guardian.identity().cgroup != service.path() {
@@ -56,13 +52,13 @@ impl RunCgroups {
         let control = service.child("control")?;
         control.move_process(guardian)?;
         service.write("cgroup.subtree_control", b"+cpu +memory +pids")?;
-        control.configure_limits(RunLimits {
-            memory_bytes: guardian_memory_bytes,
-            cpu_millis: GUARDIAN_CPU_MILLIS,
-            tasks: GUARDIAN_TASKS,
+        control.configure_limits(Limits {
+            memory_bytes: Some(guardian_memory_bytes),
+            cpu_millis: Some(GUARDIAN_CPU_MILLIS),
+            tasks: Some(GUARDIAN_TASKS),
         })?;
         let payload = service.child("payload")?;
-        payload.configure_limits(limits)?;
+        payload.configure_limits(limits.caps())?;
         payload.write("memory.oom.group", b"1")?;
         if payload.read("memory.oom.group")?.trim() != "1" {
             return Err(io::Error::other("payload OOM grouping was not applied"));
@@ -86,10 +82,8 @@ impl RunCgroups {
         self.service.payload_invocation(id, true)
     }
 }
-pub(crate) fn service_limits(
-    limits: RunLimits,
-    guardian_memory_bytes: u64,
-) -> io::Result<RunLimits> {
+/// The service's caps: the payload's plus the guardian's share; unlimited stays unlimited.
+pub(crate) fn service_limits(limits: RunLimits, guardian_memory_bytes: u64) -> io::Result<Limits> {
     let overflow = || {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -102,47 +96,62 @@ pub(crate) fn service_limits(
     if guardian_memory_bytes == 0 {
         return Err(overflow());
     }
-    Ok(RunLimits {
-        memory_bytes: limits
+    let caps = limits.caps();
+    Ok(Limits {
+        memory_bytes: caps
             .memory_bytes
-            .checked_add(guardian_memory_bytes)
-            .ok_or_else(overflow)?,
-        cpu_millis: limits
+            .map(|n| n.checked_add(guardian_memory_bytes).ok_or_else(overflow))
+            .transpose()?,
+        cpu_millis: caps
             .cpu_millis
-            .checked_add(GUARDIAN_CPU_MILLIS)
-            .ok_or_else(overflow)?,
-        tasks: limits
+            .map(|n| n.checked_add(GUARDIAN_CPU_MILLIS).ok_or_else(overflow))
+            .transpose()?,
+        tasks: caps
             .tasks
-            .checked_add(GUARDIAN_TASKS)
-            .ok_or_else(overflow)?,
+            .map(|n| n.checked_add(GUARDIAN_TASKS).ok_or_else(overflow))
+            .transpose()?,
     })
 }
 impl Cgroup {
-    fn configure_limits(&self, limits: RunLimits) -> io::Result<()> {
-        let period = if limits.cpu_millis < 10 {
-            1_000_000
-        } else {
-            100_000
+    /// Unlimited dimensions are written as `max`, and read back the same way.
+    fn configure_limits(&self, limits: Limits) -> io::Result<()> {
+        let cpu = match limits.cpu_millis {
+            None => "max 100000".to_owned(),
+            Some(millis) => {
+                let period = if millis < 10 { 1_000_000 } else { 100_000 };
+                format!("{} {period}", u64::from(millis) * period / 1000)
+            }
         };
-        let cpu = format!("{} {period}", u64::from(limits.cpu_millis) * period / 1000);
-        self.write("memory.max", limits.memory_bytes.to_string().as_bytes())?;
+        let text = |n: Option<String>| n.unwrap_or_else(|| "max".into());
+        let memory = text(limits.memory_bytes.map(|n| n.to_string()));
+        let tasks = text(limits.tasks.map(|n| n.to_string()));
+        self.write("memory.max", memory.as_bytes())?;
         self.write("memory.swap.max", b"0")?;
         self.write("cpu.max", cpu.as_bytes())?;
-        self.write("pids.max", limits.tasks.to_string().as_bytes())?;
-        let memory: u64 = self
-            .read("memory.max")?
-            .trim()
-            .parse()
-            .map_err(|_| io::Error::other("unbounded memory.max"))?;
-        if memory == 0
-            || memory > limits.memory_bytes
+        self.write("pids.max", tasks.as_bytes())?;
+        let retained = match limits.memory_bytes {
+            None => self.read("memory.max")?.trim() == "max",
+            Some(limit) => self
+                .read("memory.max")?
+                .trim()
+                .parse::<u64>()
+                .is_ok_and(|n| n != 0 && n <= limit),
+        };
+        if !retained
             || self.read("memory.swap.max")?.trim() != "0"
             || self.read("cpu.max")?.trim() != cpu
-            || self.read("pids.max")?.trim() != limits.tasks.to_string()
+            || self.read("pids.max")?.trim() != tasks
         {
             return Err(io::Error::other("kernel did not retain resource limits"));
         }
         Ok(())
+    }
+    /// The payload's limit counters of a service this process does not own (the coordinator
+    /// sampling a live run). Only Sluice service roots are opened.
+    pub fn service_usage(service: &str) -> io::Result<RunUsage> {
+        Self::open_service(service)?
+            .open_child("payload")?
+            .resource_usage()
     }
 
     /// Open or create a leaf in the already admitted service payload subtree.
@@ -213,8 +222,9 @@ impl Cgroup {
                 .parse()
                 .map_err(|_| io::Error::other("invalid memory.peak"))?,
             oom_kills: counter(&self.read("memory.events")?, "oom_kill")?,
-            pids_limit_hits: counter(&self.read("pids.events")?, "max")?,
+            pids_limit_hits: self.pids_limit_hits()?,
             cpu_throttled_usec: counter(&self.read("cpu.stat")?, "throttled_usec")?,
+            memory_max_hits: counter(&self.read("memory.events")?, "max")?,
         })
     }
     pub fn path(&self) -> &str {
@@ -319,6 +329,33 @@ impl Cgroup {
         let mut pids = BTreeSet::new();
         self.members(&mut pids)?;
         Ok(pids.into_iter().collect())
+    }
+    /// Failed forks in this subtree. Before kernels with `pids.events.local`, `pids.events`
+    /// counts only in the cgroup whose task forked, so the leaves are summed.
+    fn pids_limit_hits(&self) -> io::Result<u64> {
+        let own = counter(&self.read("pids.events")?, "max")?;
+        if self.read("pids.events.local").is_ok() {
+            return Ok(own);
+        }
+        let mut total = own;
+        for entry in fs::read_dir(format!("/proc/self/fd/{}", self.dir.as_raw_fd()))? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                let name = entry.file_name();
+                let name = name
+                    .to_str()
+                    .ok_or_else(|| io::Error::other("invalid cgroup name"))?;
+                match self
+                    .open_child(name)
+                    .and_then(|child| child.pids_limit_hits())
+                {
+                    Ok(n) => total = total.saturating_add(n),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        Ok(total)
     }
     fn members(&self, pids: &mut BTreeSet<u32>) -> io::Result<()> {
         let text = match self.read("cgroup.procs") {

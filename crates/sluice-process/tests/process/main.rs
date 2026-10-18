@@ -8,8 +8,9 @@ mod tmux;
 
 fn test_limits() -> sluice_model::RunLimits {
     sluice_model::RunLimits {
-        memory_bytes: 1 << 30,
-        cpu_millis: 2000,
-        tasks: 512,
+        memory_bytes: Some(1 << 30),
+        memory_max_bytes: Some(1 << 30),
+        cpu_millis: Some(2000),
+        tasks: Some(512),
     }
 }

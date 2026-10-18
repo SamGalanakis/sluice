@@ -704,39 +704,57 @@ start with a letter or digit. Thread names use the same alphabet.
 
 ## Execution limits
 
-Every executable run has finite memory, CPU and task limits. A task is a process or thread.
-The agent, its local commands and any composed sidecar share one payload budget. This is
-separate from `needs`: naming a logical resource `lane` or `cpu` does not set a kernel limit.
+Every executable run has memory, CPU and task limits; any of them may be unlimited. A task is
+a process or thread. The agent, its local commands and any composed sidecar share one payload
+budget. This is separate from `needs`: naming a logical resource `lane` or `cpu` does not set
+a kernel limit. Limits exist so the machine cannot deadlock or run out of memory, not to
+throttle a build: by default a run has no CPU quota and no task cap, and reserves 8 GiB of the
+home's memory for admission while it may grow to the per-run memory ceiling.
 
 ```json
 {"run": "inline.bash", "needs": {"lane": 1},
- "limits": {"memory": "4GiB", "cpus": 1.5, "tasks": 256},
+ "limits": {"memory": "4GiB", "cpus": null, "tasks": 256},
  "in": {"code": {"default": "./check-one-case"}}}
 ```
 
 The installation provides defaults and ceilings. `project_create(limits={...})` or
 `project_update(project, limits={...})` sets project defaults; null on update clears them.
-A step's `limits` overrides individual fields. Recipes use the same declaration. Memory is
-integer bytes or an integer with `KiB`, `MiB`, `GiB` or `TiB`; `cpus` is a positive number
-with at most three decimal places; `tasks` is a positive integer. There is no unlimited value.
-An override above the installation ceiling is refused.
+A step's `limits` overrides individual fields; a field left out inherits. Recipes use the
+same declaration. Memory is integer bytes or an integer with `KiB`, `MiB`, `GiB` or `TiB`;
+`cpus` is a positive number with at most three decimal places; `tasks` is a positive integer.
+`null` (or the string `"unlimited"`) makes that field unlimited: no `cpu.max` quota, no
+`pids.max` cap, or for memory no reservation and `memory.max` `max`. Status shows unlimited as
+`"unlimited"`. An override above the installation ceiling, or unlimited under a finite ceiling,
+is refused.
 
-The coordinator reserves each run's budget plus guardian overhead across all projects and
-calls. The reservation remains held until the whole service, including the guardian, has
-exited. `status` reports home-wide `execution` totals and held reservations, and queued steps
-explain their shortfall. An invalid configuration appears as `execution.error` while status
-stays readable. Pending steps show their current `limits` or a `budget_error`. A step's
-`run_resources` lists each stored run with its frozen limits and recorded usage; unavailable
-historical evidence is null. The latest run's limits remain the step's displayed budget once
-it is no longer pending. Defaults changed later never rewrite that evidence. Each scattered item reserves independently and waits for space. A
-running attempt keeps its frozen limits across retries and coordinator restarts. Changing
-project defaults changes future runs; changing a running step's limits is refused.
+`memory` is what the run reserves against the home total at admission; the run's cgroup
+`memory.max` is the per-run memory ceiling, so a run can use more than it reserved. An
+unlimited CPU or task limit reserves nothing in that dimension; the guardian's small share
+is always reserved. The coordinator reserves each run's budget plus guardian overhead across
+all projects and calls. The reservation remains held until the whole service, including the
+guardian, has exited. `status` reports home-wide `execution` totals and held reservations, and
+queued steps explain their shortfall. An invalid configuration appears as `execution.error`
+while status stays readable. Pending steps show their current `limits` or a `budget_error`. A
+step's `run_resources` lists each stored run with its frozen limits and recorded usage;
+unavailable historical evidence is null. The latest run's limits remain the step's displayed
+budget once it is no longer pending. Defaults changed later never rewrite that evidence. Each
+scattered item reserves independently and waits for space. A running attempt keeps its frozen
+limits across retries and coordinator restarts. Changing project defaults or the home's
+policy changes future runs; changing a running step's limits is refused. A raised home total
+admits waiting work at once; a total lowered below what live runs hold makes new runs wait,
+and `execution.reason` says so, until enough of them finish.
 
-A memory or task-limit failure is `resource_exhausted`, with `resource`, `limit`, optional
-`peak`, and a message. It stops the payload and does not automatically retry. Read the
-failure and the run's Budget and Usage in the dashboard before choosing a smaller workload
-or an explicit retry. CPU quota throttles a run instead of failing it. Do not treat a bare
-`SIGKILL` as proof of a memory-limit failure.
+A memory OOM is `resource_exhausted`, with `resource`, `limit`, optional `peak`, and a message.
+It stops the payload and does not automatically retry. Hitting a task limit does not stop the
+run: the process or thread start fails with `EAGAIN` and the run goes on. CPU quota throttles
+a run instead of failing it. Do not treat a bare `SIGKILL` as proof of a memory-limit failure.
+
+Whenever a run meets a limit, Sluice tells whoever answers its unit, and the running step
+itself, in a `say` from `sluice` whose `data.execution_limit` is `{run, step, limit, value,
+observed, outcome, since?}`: `limit` is `memory`, `tasks`, `cpus` or `capacity`; `outcome` is
+`killed`, `running`, `throttled`, `finished` or `waiting`. It wakes the owner's `next`
+(`docs("threads")`). Read it as a cue to retry with less parallelism, raise the
+step's `limits`, or report; each run and limit is told once.
 
 The cap follows local descendants. Work handed to an existing daemon, a remote build worker
 or another user service belongs to that executor. Keep nested local wrappers inside the

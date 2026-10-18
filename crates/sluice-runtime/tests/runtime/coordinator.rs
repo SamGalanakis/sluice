@@ -29,6 +29,8 @@ struct Fake(
     Arc<Mutex<Vec<Launch>>>,
     Arc<tokio::sync::Notify>,
     Arc<std::sync::atomic::AtomicBool>,
+    /// Each live run's cgroup counters, as the OS host reads them from the event files.
+    Arc<Mutex<std::collections::BTreeMap<RunId, sluice_model::RunUsage>>>,
 );
 impl Fake {
     async fn launched(&self, count: usize) -> Vec<Launch> {
@@ -76,6 +78,9 @@ impl ExecutionHost for Fake {
     }
     async fn cleanup_valid(&self, j: &CompletionJournal) -> Result<bool, PublicError> {
         Ok(j.cleanup.iter().all(|p| p.empty))
+    }
+    async fn usage(&self, run: RunId, _: &str) -> Option<sluice_model::RunUsage> {
+        self.3.lock().unwrap().get(&run).copied()
     }
 }
 fn request(v: Value) -> CommandRequest {
@@ -1016,7 +1021,7 @@ async fn complete_with_immutable_usage(b: &Coordinator<Fake>, journal: &Completi
     assert!(b.complete(wrong_identity).await.is_err());
     assert_eq!(reported_usage(b, journal).await, Value::Null);
     let mut wrong_budget = journal.clone();
-    wrong_budget.limits.memory_bytes += 1;
+    wrong_budget.limits.memory_bytes = wrong_budget.limits.memory_bytes.map(|n| n + 1);
     assert!(b.complete(wrong_budget).await.is_err());
     assert_eq!(reported_usage(b, journal).await, Value::Null);
     b.complete(journal.clone()).await.unwrap();
@@ -2346,7 +2351,7 @@ async fn execution_status_preserves_frozen_limits_when_configuration_breaks() {
     let launch = fake.launched(1).await.remove(0);
     std::fs::write(home.path().join("config.json"), "{broken").unwrap();
     let status = data_of(&broker, json!({"command":"status","args":{"project":{"kind":"id","value":project},"all":true,"selection":{"steps":null,"tags":null}}})).await;
-    assert_eq!(status["steps"]["work"]["limits"], json!(launch.limits));
+    assert_eq!(status["steps"]["work"]["limits"], launch.limits.shown());
     assert_eq!(
         status["steps"]["work"]["run_resources"][0]["run"],
         json!(launch.identity.run)
@@ -2407,7 +2412,7 @@ async fn terminal_guardian_retains_budget_until_service_cleanup_is_proven() {
         .unwrap();
     assert_eq!(
         held.held.memory_bytes,
-        launch.limits.memory_bytes + launch.policy.guardian_memory_bytes
+        launch.limits.memory_bytes.unwrap() + launch.policy.guardian_memory_bytes
     );
     let drain = sluice_runtime::drain::status(broker.reads()).await.unwrap();
     assert!(
@@ -2552,5 +2557,129 @@ async fn delayed_os_launch_cannot_start_after_adoption_finishes_attempt() {
             .held
             .memory_bytes,
         0
+    );
+}
+
+/// Bugs: raising `execution.total` in config.json stopped every admission until all live runs
+/// drained ("execution policy change requires draining"); a total lowered below the live
+/// reservations held work with no reason given; and a run's task-limit hit (EAGAIN in its
+/// build) reached nobody.
+#[tokio::test]
+async fn home_budget_changes_apply_live_and_a_limit_hit_reaches_the_owner_once() {
+    let home = home::ScratchHome::new().unwrap();
+    let policy = |total: &str, ceiling: &str| {
+        json!({"execution":{
+            "defaults":{"memory":ceiling,"cpus":null,"tasks":"unlimited"},
+            "ceilings":{"memory":ceiling,"cpus":null,"tasks":null},
+            "total":{"memory":total,"cpus":null,"tasks":4096},
+            "guardian_memory":"16MiB"
+        }})
+        .to_string()
+    };
+    let config = home.path().join("config.json");
+    std::fs::write(&config, policy("64MiB", "48MiB")).unwrap();
+    let fake = Fake::default();
+    let b = Coordinator::open(home.path().into(), Catalog::fixtures(), fake.clone())
+        .await
+        .unwrap();
+    let CommandReply::Project(p)=b.command(request(json!({"command":"project_create","args":{"name":"p","description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap()else{panic!("project")};
+    let p = p.project_id;
+    let selector = json!({"kind":"id","value":p});
+    let submit = |limits: Value| json!({"run":"fixture.submit","in":{"value":{"default":1}},"outputs":{"submitted":"boolean"},"limits":limits});
+    b.command(request(
+        json!({"command":"plan_edit","args":{"project":selector,"rev":1,"ops":[
+        {"op":"step.add","step":"a","spec":submit(json!({"tasks":32}))},
+        {"op":"step.add","step":"b","spec":submit(json!({}))}
+    ],"start":true,"dry_run":false,"reason":"test","author":"@lead","me":"@lead"}}),
+    ))
+    .await
+    .unwrap();
+    b.acquire_scheduler("limits".into()).await.unwrap();
+    assert_eq!(reconcile_project(&b, p, "limits").await.unwrap(), 1);
+    let a = fake.launched(1).await.remove(0);
+    assert_eq!(a.identity.step.as_ref().unwrap().as_str(), "a");
+    assert_eq!((a.limits.tasks, a.limits.cpu_millis), (Some(32), None));
+    let status = data_of(&b, json!({"command":"status","args":{"project":selector,"all":true,"selection":{"steps":null,"tags":null}}})).await;
+    assert_eq!(status["execution"]["total"]["cpu_millis"], "unlimited");
+    assert_eq!(status["steps"]["a"]["limits"]["cpu_millis"], "unlimited");
+    assert!(
+        status["steps"]["b"]["waiting"]
+            .to_string()
+            .contains("execution capacity"),
+        "{status}"
+    );
+
+    // (b) A raised total admits the waiting step while `a` still runs: no drain.
+    std::fs::write(&config, policy("128MiB", "48MiB")).unwrap();
+    assert_eq!(reconcile_project(&b, p, "limits").await.unwrap(), 1);
+    let launched = fake.launched(2).await;
+    assert_eq!(launched[1].identity.step.as_ref().unwrap().as_str(), "b");
+
+    // (c) A total lowered below what live runs reserve holds new work and says why.
+    std::fs::write(&config, policy("32MiB", "16MiB")).unwrap();
+    b.command(request(
+        json!({"command":"plan_edit","args":{"project":selector,"ops":[
+        {"op":"step.add","step":"c","spec":submit(json!({"memory":"8MiB"}))}
+    ],"start":true,"dry_run":false,"reason":"test","author":"@lead","me":"@lead"}}),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(reconcile_project(&b, p, "limits").await.unwrap(), 0);
+    let status = data_of(&b, json!({"command":"status","args":{"project":selector,"all":true,"selection":{"steps":null,"tags":null}}})).await;
+    let lowered = "exceed the home budget after it was lowered";
+    assert!(
+        status["execution"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains(lowered),
+        "{status}"
+    );
+    assert!(
+        status["steps"]["c"]["waiting"]
+            .to_string()
+            .contains(lowered),
+        "{status}"
+    );
+
+    // A live run's failed forks (pids.events) reach its unit's owner and the step itself,
+    // once, however often it is sampled and when it then finishes.
+    run_started(&b, &a).await;
+    let hit = sluice_model::RunUsage {
+        pids_limit_hits: 3,
+        ..Default::default()
+    };
+    fake.3.lock().unwrap().insert(a.identity.run, hit);
+    assert_eq!(b.sample_limits().await.unwrap(), 1);
+    assert_eq!(b.sample_limits().await.unwrap(), 0);
+    let mut done = journal(&b, &a, PayloadResult::Succeeded(JsonMap::default())).await;
+    done.usage = Some(hit);
+    b.complete(done).await.unwrap();
+    let notices: Vec<(String, Value)> = b
+        .reads()
+        .snapshot(move |sql| {
+            let mut statement = sql.prepare("SELECT \"to\",data FROM messages WHERE project_id=?1 AND \"from\"='sluice' AND json_extract(data,'$.execution_limit') IS NOT NULL ORDER BY id")?;
+            let rows = statement
+                .query_map([p.to_string()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows.into_iter().map(|(to, data)| (to, serde_json::from_str(&data).unwrap())).collect())
+        })
+        .await
+        .unwrap();
+    let to: Vec<&str> = notices.iter().map(|(to, _)| to.as_str()).collect();
+    assert_eq!(to, ["@lead", "a"], "{notices:?}");
+    let notice = &notices[0].1["execution_limit"];
+    assert_eq!(notice["limit"], "tasks");
+    assert_eq!(notice["value"], 32);
+    assert_eq!(notice["observed"]["failed_forks"], 3);
+    assert_eq!(notice["outcome"], "running");
+    assert_eq!(notice["run"], json!(a.identity.run));
+    assert_eq!(notice["step"], "a");
+    // The owner's `next` wakes on it.
+    let CommandReply::Next(next) = b.command(request(json!({"command":"next","args":{"projects":[selector],"since_seq":0,"me":"@lead","timeout_seconds":0,"all":false,"settle_seconds":0,"settle_max_seconds":0,"settles":"none"}}))).await.unwrap() else { panic!("next") };
+    assert!(
+        next.records.iter().any(
+            |r| serde_json::to_value(r).unwrap()["data"]["execution_limit"]["limit"] == "tasks"
+        ),
+        "{next:?}"
     );
 }

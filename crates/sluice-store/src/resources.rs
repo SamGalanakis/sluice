@@ -13,7 +13,7 @@ use sluice_model::{
     events::Event,
     gates::{GateDecision, StateSnapshot, StepState, readiness},
     ids::{AttemptId, LeaseId, ProjectId, Revision, RunId, StepId},
-    limits::{GUARDIAN_CPU_MILLIS, GUARDIAN_TASKS, ResourcePolicy, RunLimits},
+    limits::{Limits, Reserved, ResourcePolicy, RunLimits, shown},
     plan::{Pause, Plan, SignatureProvider},
     types::Type,
 };
@@ -75,17 +75,36 @@ impl Fit {
 /// Physical capacity reserved by every live attempt, across all projects and direct calls.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct BudgetStatus {
-    pub total: RunLimits,
+    /// `None` dimensions are unlimited: admission does not gate on them.
+    pub total: Limits,
     /// Memory includes the guardian reservation; tasks include its process slot.
-    pub held: RunLimits,
+    pub held: Reserved,
     pub unbounded_attempts: Vec<AttemptId>,
     pub reason: String,
+}
+impl BudgetStatus {
+    /// The status form: unlimited dimensions read `"unlimited"`.
+    pub fn shown(&self) -> Value {
+        json!({
+            "total": {
+                "memory_bytes": shown(self.total.memory_bytes),
+                "cpu_millis": shown(self.total.cpu_millis),
+                "tasks": shown(self.total.tasks),
+            },
+            "held": self.held,
+            "unbounded_attempts": self.unbounded_attempts,
+            "reason": self.reason,
+        })
+    }
 }
 
 pub fn budget_status(conn: &Connection, policy: &ResourcePolicy) -> Result<BudgetStatus> {
     budget_status_except(conn, policy, None)
 }
 
+/// Reservations are summed against today's total. A changed policy needs no drain: raising
+/// a total or a ceiling, or making a dimension unlimited, admits at once; only reservations
+/// that exceed a lowered total hold new admission until enough live runs finish.
 fn budget_status_except(
     conn: &Connection,
     policy: &ResourcePolicy,
@@ -94,16 +113,12 @@ fn budget_status_except(
     policy.clone().validate().map_err(bad)?;
     let mut status = BudgetStatus {
         total: policy.total,
-        held: RunLimits {
-            memory_bytes: 0,
-            cpu_millis: 0,
-            tasks: 0,
-        },
+        held: Reserved::default(),
         unbounded_attempts: Vec::new(),
         reason: String::new(),
     };
     let mut statement = conn.prepare(
-        "SELECT attempt_id,limits,reservation,json_extract(request,'$.policy') FROM attempts
+        "SELECT attempt_id,limits,reservation FROM attempts
          WHERE (phase<>'terminal' OR (reservation IS NOT NULL AND COALESCE(json_extract(request,'$.resource_released'),0)=0))
          AND (?1 IS NULL OR attempt_id<>?1) ORDER BY attempt_id",
     )?;
@@ -112,27 +127,29 @@ fn budget_status_except(
             row.get::<_, String>(0)?,
             row.get::<_, Option<String>>(1)?,
             row.get::<_, Option<String>>(2)?,
-            row.get::<_, Option<String>>(3)?,
         ))
     })?;
-    let mut policy_changed = false;
     for row in rows {
-        let (attempt, limits, reserved, frozen_policy) = row?;
-        let (Some(limits), Some(reserved), Some(frozen_policy)) = (limits, reserved, frozen_policy)
-        else {
+        let (attempt, limits, reserved) = row?;
+        let (Some(limits), Some(reserved)) = (limits, reserved) else {
             status.unbounded_attempts.push(id(attempt)?);
             continue;
         };
-        let frozen_policy: ResourcePolicy = serde_json::from_str(&frozen_policy)?;
-        policy_changed |= frozen_policy.total != policy.total;
         let limits: RunLimits = serde_json::from_str(&limits)?;
         limits
             .validate()
             .map_err(|e| StoreError::InvalidDatabase(format!("attempt {attempt}: {e}")))?;
-        let reserved: RunLimits = serde_json::from_str(&reserved)?;
-        if reserved.memory_bytes <= limits.memory_bytes
-            || reserved.cpu_millis <= limits.cpu_millis
-            || reserved.tasks <= limits.tasks
+        let reserved: Reserved = serde_json::from_str(&reserved)?;
+        let guarded = |limit: Option<u64>, reserved: u64| limit.is_none_or(|n| reserved > n);
+        if !guarded(limits.memory_bytes, reserved.memory_bytes)
+            || !guarded(
+                limits.cpu_millis.map(u64::from),
+                u64::from(reserved.cpu_millis),
+            )
+            || !guarded(limits.tasks.map(u64::from), u64::from(reserved.tasks))
+            || reserved.cpu_millis == 0
+            || reserved.tasks == 0
+            || reserved.memory_bytes == 0
         {
             return Err(StoreError::InvalidDatabase(format!(
                 "attempt {attempt}: missing guardian reservation"
@@ -161,12 +178,32 @@ fn budget_status_except(
             "execution admission blocked: {} live attempts have no frozen resource budget; drain old runs before admitting work",
             status.unbounded_attempts.len(),
         );
-    } else if policy_changed {
-        status.reason = "execution policy change requires draining active attempts before changing the home budget".into();
     } else if !status.held.fits(status.total) {
-        status.reason = "execution reservations exceed the configured home budget; wait for live runs to finish".into();
+        status.reason = format!(
+            "execution reservations exceed the home budget after it was lowered ({}); new runs wait until live runs release enough",
+            over_total(&status.held, &status.total).join(", "),
+        );
     }
     Ok(status)
+}
+
+fn over_total(held: &Reserved, total: &Limits) -> Vec<String> {
+    [
+        ("memory bytes", held.memory_bytes, total.memory_bytes),
+        (
+            "CPU millis",
+            u64::from(held.cpu_millis),
+            total.cpu_millis.map(u64::from),
+        ),
+        ("tasks", u64::from(held.tasks), total.tasks.map(u64::from)),
+    ]
+    .into_iter()
+    .filter_map(|(name, held, total)| {
+        total
+            .filter(|total| held > *total)
+            .map(|total| format!("{name} {held}/{total} reserved"))
+    })
+    .collect()
 }
 
 pub fn budget_fit(conn: &Connection, limits: &RunLimits, policy: &ResourcePolicy) -> Result<Fit> {
@@ -186,34 +223,32 @@ fn fit_budget(status: &BudgetStatus, limits: &RunLimits, policy: &ResourcePolicy
             reason: status.reason.clone(),
         });
     }
-    let memory = limits
-        .memory_bytes
-        .checked_add(policy.guardian_memory_bytes)
-        .ok_or_else(|| bad("memory reservation overflows"))?;
-    integer(memory)?;
+    let requested = Reserved::of(*limits, policy.guardian_memory_bytes).map_err(bad)?;
+    integer(requested.memory_bytes)?;
     let dimensions = [
         (
             "memory bytes",
-            memory,
+            requested.memory_bytes,
             status.held.memory_bytes,
             status.total.memory_bytes,
         ),
         (
             "CPU millis",
-            u64::from(limits.cpu_millis) + u64::from(GUARDIAN_CPU_MILLIS),
+            u64::from(requested.cpu_millis),
             u64::from(status.held.cpu_millis),
-            u64::from(status.total.cpu_millis),
+            status.total.cpu_millis.map(u64::from),
         ),
         (
             "tasks",
-            u64::from(limits.tasks) + u64::from(GUARDIAN_TASKS),
+            u64::from(requested.tasks),
             u64::from(status.held.tasks),
-            u64::from(status.total.tasks),
+            status.total.tasks.map(u64::from),
         ),
     ];
     let mut blocked = Vec::new();
     let mut reasons = Vec::new();
     for (name, requested, held, total) in dimensions {
+        let Some(total) = total else { continue };
         if held.checked_add(requested).is_none_or(|sum| sum > total) {
             blocked.push(name.into());
             reasons.push(format!("{name} {requested} ({held}/{total} reserved)"));
@@ -231,6 +266,8 @@ fn fit_budget(status: &BudgetStatus, limits: &RunLimits, policy: &ResourcePolicy
 
 /// Freeze admission in the same writer transaction that inserts the attempt. The
 /// reservation remains held through terminalization until the entire service is gone.
+/// The frozen policy is `request.execution_policy`: releases pinned before unlimited limits
+/// read `request.policy` and count an attempt without it as unbudgeted instead of failing.
 pub fn reserve_budget(
     tx: &mut WriteTransaction<'_>,
     attempt: AttemptId,
@@ -242,24 +279,10 @@ pub fn reserve_budget(
         [attempt.to_string()],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
-    let memory = limits
-        .memory_bytes
-        .checked_add(policy.guardian_memory_bytes)
-        .ok_or_else(|| bad("memory reservation overflows"))?;
-    let reservation = RunLimits {
-        memory_bytes: memory,
-        cpu_millis: limits
-            .cpu_millis
-            .checked_add(GUARDIAN_CPU_MILLIS)
-            .ok_or_else(|| bad("CPU reservation overflows"))?,
-        tasks: limits
-            .tasks
-            .checked_add(GUARDIAN_TASKS)
-            .ok_or_else(|| bad("task reservation overflows"))?,
-    };
+    let reservation = Reserved::of(limits, policy.guardian_memory_bytes).map_err(bad)?;
     if let (Some(stored), Some(reserved)) = (&stored, &reserved) {
         if serde_json::from_str::<RunLimits>(stored)? == limits
-            && serde_json::from_str::<RunLimits>(reserved)? == reservation
+            && serde_json::from_str::<Reserved>(reserved)? == reservation
         {
             return Ok(());
         }
@@ -279,7 +302,7 @@ pub fn reserve_budget(
         return Err(conflict(fit.reason));
     }
     tx.sql().execute(
-        "UPDATE attempts SET limits=?2,reservation=?3,request=json_set(request,'$.limits',json(?2),'$.policy',json(?4)) WHERE attempt_id=?1",
+        "UPDATE attempts SET limits=?2,reservation=?3,request=json_set(request,'$.limits',json(?2),'$.execution_policy',json(?4)) WHERE attempt_id=?1",
         params![
             attempt.to_string(),
             serde_json::to_string(&limits)?,
@@ -1098,4 +1121,95 @@ pub fn release_budget(tx: &mut WriteTransaction<'_>, attempt: AttemptId) -> Resu
         tx.changed(None, "status");
     }
     Ok(changed > 0)
+}
+
+/// What a run (or a queued step) met at an execution limit. Posted by Sluice as a `say` whose
+/// `data.execution_limit` holds these fields: a message, not a new record kind, so releases
+/// pinned before it read the log unchanged.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct LimitNotice {
+    /// `None` for a step still waiting for admission.
+    pub run: Option<RunId>,
+    pub step: Option<StepId>,
+    /// `memory`, `tasks`, `cpus`, or `capacity` (the home total, for a queued step).
+    pub limit: &'static str,
+    /// The limit's value (`"unlimited"` when it has none), or the home total for `capacity`.
+    pub value: Value,
+    /// Peak bytes, failed forks, throttled microseconds, or the queue reason.
+    pub observed: Value,
+    /// `killed`, `running`, `throttled`, `finished` or `waiting`.
+    pub outcome: &'static str,
+    /// When a queued step began waiting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+}
+
+/// Tell whoever answers the run (its unit's owner, a call's session, else the fallback, else
+/// the person) once per run and limit, or once per waiting episode; with `tell_step`, the
+/// running step hears it too. Returns whether anything was posted.
+pub fn notify_limit(
+    tx: &mut WriteTransaction<'_>,
+    project: ProjectId,
+    notice: &LimitNotice,
+    body: String,
+    tell_step: bool,
+) -> Result<bool> {
+    let seen: bool = match notice.run {
+        Some(run) => tx.sql().query_row(
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE project_id=?1 AND \"from\"='sluice' AND json_extract(data,'$.execution_limit.run')=?2 AND json_extract(data,'$.execution_limit.limit')=?3)",
+            params![project.to_string(), run.to_string(), notice.limit],
+            |r| r.get(0),
+        )?,
+        None => tx.sql().query_row(
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE project_id=?1 AND \"from\"='sluice' AND json_extract(data,'$.execution_limit.step')=?2 AND json_extract(data,'$.execution_limit.since') IS ?3)",
+            params![
+                project.to_string(),
+                notice.step.as_ref().map(StepId::as_str),
+                notice.since
+            ],
+            |r| r.get(0),
+        )?,
+    };
+    if seen {
+        return Ok(false);
+    }
+    let data = sluice_model::rpc::JsonValue::try_from(json!({ "execution_limit": notice }))?;
+    let caller: Option<String> = match (notice.run, &notice.step) {
+        (Some(run), None) => tx
+            .sql()
+            .query_row(
+                "SELECT author FROM calls WHERE run_id=?1",
+                [run.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten(),
+        _ => None,
+    };
+    let owner = crate::identities::route_run(
+        tx.sql(),
+        project,
+        notice.step.as_ref().map(StepId::as_str),
+        caller.as_deref(),
+    )?;
+    let mut parties = vec![owner];
+    if tell_step && let Some(step) = &notice.step {
+        parties.push(step.to_string());
+    }
+    for to in parties {
+        crate::messages::post(
+            tx,
+            crate::messages::Post {
+                project: sluice_model::ids::ProjectSelector::Id(project),
+                speaker: crate::messages::Speaker::Sluice,
+                body: body.clone(),
+                verb: crate::messages::Verb::Say {
+                    to,
+                    data: Some(data.clone()),
+                },
+            },
+            &crate::messages::NoPlanInputs,
+        )?;
+    }
+    Ok(true)
 }

@@ -2629,12 +2629,21 @@ pub fn load_detail(
             .get("limits")
             .and_then(|v| serde_json::from_value::<sluice_model::limits::RunLimits>(v.clone()).ok())
             .map(|limits| {
-                format!(
-                    "{} MiB memory · {} CPUs · {} tasks",
-                    limits.memory_bytes / (1 << 20),
-                    f64::from(limits.cpu_millis) / 1000.0,
-                    limits.tasks
-                )
+                let mib = |n: u64| format!("{} MiB", n / (1 << 20));
+                let memory = match (limits.memory_bytes, limits.memory_max_bytes) {
+                    (None, _) => "unlimited memory".to_owned(),
+                    (Some(m), Some(cap)) if cap == m => format!("{} memory", mib(m)),
+                    (Some(m), Some(cap)) => format!("{} memory, up to {}", mib(m), mib(cap)),
+                    (Some(m), None) => format!("{} memory, no cap", mib(m)),
+                };
+                let cpus = limits.cpu_millis.map_or_else(
+                    || "unlimited CPUs".to_owned(),
+                    |n| format!("{} CPUs", f64::from(n) / 1000.0),
+                );
+                let tasks = limits
+                    .tasks
+                    .map_or_else(|| "unlimited tasks".to_owned(), |n| format!("{n} tasks"));
+                format!("{memory} · {cpus} · {tasks}")
             })
             .unwrap_or_default();
         let usage = request

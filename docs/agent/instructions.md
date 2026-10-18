@@ -85,9 +85,11 @@ value` (or `--field-file PATH`, `-` for stdin) takes them as flags instead of JS
 Read `docs()` for the index, `docs("composing")` and `docs("plans")` before writing your first
 plan.
 
-Every executable run has a finite physical budget, separate from logical `needs`. Use step
-or `fn_call` `limits: {memory, cpus, tasks}` only within installation ceilings; project defaults
-inherit from the home. Scatter starts items as capacity permits. A `resource_exhausted`
-failure names memory or tasks and requires judgment before retrying; inspect its recorded
-budget and peak usage. Local descendants share the cap; external services and remote
+Every executable run has a physical budget, separate from logical `needs`; by default it has
+no CPU or task cap. Use step or `fn_call` `limits: {memory, cpus, tasks}` (null is unlimited)
+only within installation ceilings; project defaults inherit from the home. Scatter starts
+items as capacity permits. A `resource_exhausted` failure is a memory OOM and requires
+judgment before retrying; inspect its recorded budget and peak usage. A `say` from `sluice`
+with `data.execution_limit` tells you a run met a limit (failed forks, memory pressure,
+throttling, or a long wait for home capacity): adjust parallelism or limits. Local descendants share the cap; external services and remote
 executors need their own limits. See `docs("plans")`, Execution limits.

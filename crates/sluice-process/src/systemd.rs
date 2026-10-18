@@ -3,7 +3,7 @@ use crate::host::test_mode;
 use serde::{Deserialize, Serialize};
 use sluice_model::{
     ids::{HomeId, RunId},
-    limits::RunLimits,
+    limits::{Limits, RunLimits},
 };
 use std::{
     collections::BTreeMap,
@@ -215,14 +215,9 @@ impl TransientService {
             command.arg(format!("--slice={}", slice.name));
         }
         if let Some(budget) = budget {
-            command.arg(format!("--property=MemoryMax={}", budget.memory_bytes));
-            command.arg("--property=MemorySwapMax=0");
-            command.arg(format!(
-                "--property=CPUQuota={}.{}%",
-                budget.cpu_millis / 10,
-                budget.cpu_millis % 10
-            ));
-            command.arg(format!("--property=TasksMax={}", budget.tasks));
+            for property in properties(budget) {
+                command.arg(format!("--property={property}"));
+            }
         }
         if let Some(cwd) = &spec.cwd {
             command.arg("--working-directory").arg(cwd);
@@ -372,14 +367,31 @@ async fn manager_output(command: Command) -> io::Result<Output> {
 #[derive(Debug, Clone)]
 pub struct WorkloadSlice {
     name: String,
-    totals: RunLimits,
+    totals: Limits,
+}
+/// systemd properties for caps: unlimited memory and tasks are `infinity`, unlimited CPU an
+/// empty quota (none).
+fn properties(caps: Limits) -> Vec<String> {
+    let infinity = |n: Option<String>| n.unwrap_or_else(|| "infinity".into());
+    vec![
+        format!(
+            "MemoryMax={}",
+            infinity(caps.memory_bytes.map(|n| n.to_string()))
+        ),
+        "MemorySwapMax=0".into(),
+        match caps.cpu_millis {
+            Some(millis) => format!("CPUQuota={}.{}%", millis / 10, millis % 10),
+            None => "CPUQuota=".into(),
+        },
+        format!("TasksMax={}", infinity(caps.tasks.map(|n| n.to_string()))),
+    ]
 }
 impl WorkloadSlice {
-    pub fn new(home: HomeId, totals: RunLimits) -> io::Result<Self> {
-        if totals.memory_bytes == 0 || totals.cpu_millis == 0 || totals.tasks == 0 {
+    pub fn new(home: HomeId, totals: Limits) -> io::Result<Self> {
+        if totals.validate().is_err() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "slice limits must be positive",
+                "slice limits must be positive or unlimited",
             ));
         }
         Ok(Self {
@@ -441,41 +453,43 @@ impl WorkloadSlice {
                 "systemd could not load the workload slice",
             ));
         }
-        let memory_matches = field("MemoryMax=").and_then(|v| v.parse::<u64>().ok())
-            == Some(self.totals.memory_bytes);
-        let tasks_matches =
-            field("TasksMax=").and_then(|v| v.parse::<u32>().ok()) == Some(self.totals.tasks);
+        let memory_matches = match self.totals.memory_bytes {
+            Some(n) => field("MemoryMax=").and_then(|v| v.parse::<u64>().ok()) == Some(n),
+            None => field("MemoryMax=") == Some("infinity"),
+        };
+        let tasks_matches = match self.totals.tasks {
+            Some(n) => field("TasksMax=").and_then(|v| v.parse::<u32>().ok()) == Some(n),
+            None => field("TasksMax=") == Some("infinity"),
+        };
         // systemctl formats CPUQuotaPerSecUSec as a duration. Read the kernel's
         // quota instead, which also proves the active slice received the limits.
         let group = field("ControlGroup=").filter(|g| g.starts_with('/'));
-        let cpu_matches = group.and_then(|g| std::fs::read_to_string(format!("/sys/fs/cgroup{g}/cpu.max")).ok()).is_some_and(|v| {
-            let mut parts = v.split_whitespace();
-            let quota = parts.next().and_then(|v| v.parse::<u64>().ok());
-            let period = parts.next().and_then(|v| v.parse::<u64>().ok());
-            matches!((quota, period), (Some(q), Some(p)) if u128::from(q) * 1000 == u128::from(p) * u128::from(self.totals.cpu_millis))
-        });
+        let cpu_matches = group
+            .and_then(|g| std::fs::read_to_string(format!("/sys/fs/cgroup{g}/cpu.max")).ok())
+            .is_some_and(|v| {
+                let mut parts = v.split_whitespace();
+                let quota = parts.next();
+                let period = parts.next().and_then(|v| v.parse::<u64>().ok());
+                match (
+                    self.totals.cpu_millis,
+                    quota.and_then(|q| q.parse::<u64>().ok()),
+                    period,
+                ) {
+                    (None, _, _) => quota == Some("max"),
+                    (Some(millis), Some(q), Some(p)) => {
+                        u128::from(q) * 1000 == u128::from(p) * u128::from(millis)
+                    }
+                    _ => false,
+                }
+            });
         if memory_matches && tasks_matches && cpu_matches && field("MemorySwapMax=") == Some("0") {
             return Ok(());
         }
-        if let Some(group) = group {
-            let events = std::fs::read_to_string(format!("/sys/fs/cgroup{group}/cgroup.events"))?;
-            if events.lines().any(|line| line == "populated 1") {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "workload budget changed while runs are live; drain this home before changing aggregate limits",
-                ));
-            }
-        }
+        // Admission already proved that the live reservations fit these totals, so a changed
+        // total applies to a populated slice: existing runs keep their own frozen caps.
         let mut update = Command::new("/usr/bin/systemctl");
         update.args(["--user", "set-property", "--runtime", &self.name]);
-        update.arg(format!("MemoryMax={}", self.totals.memory_bytes));
-        update.arg("MemorySwapMax=0");
-        update.arg(format!(
-            "CPUQuota={}.{}%",
-            self.totals.cpu_millis / 10,
-            self.totals.cpu_millis % 10
-        ));
-        update.arg(format!("TasksMax={}", self.totals.tasks));
+        update.args(properties(self.totals));
         manager_output(update).await?;
         Ok(())
     }

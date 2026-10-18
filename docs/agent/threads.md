@@ -222,8 +222,12 @@ needed a reply, else a note).
 - `next(projects, since_seq?)` waits on your behalf across projects (all live projects when
   `projects` is empty), in your scope (above): it wakes on a question to you, on a reply that
   answers a question, not written by you, on a step that failed, turned stale or was skipped,
-  on a unit that settled, on a project paused or archived by someone else, and on a new
-  fallback. A unit settles when every one
+  on a unit that settled, on a project paused or archived by someone else, on a new
+  fallback, and on an execution-limit notice to you: a `say` from `sluice` whose
+  `data.execution_limit` is `{run, step, limit, value, observed, outcome, since?}` (a run's
+  failed forks, memory at its cap or killed, CPU throttling, or a step waiting long for home
+  capacity; `docs("plans")`, Execution limits). The step's own run gets the same note in its
+  inbox. A unit settles when every one
   of its steps is settled as `step_wait`'s `"settled"` means: one whose next step waits on
   work still running, in it or in another unit, has not. It settles again each time it comes
   to rest differently (retried, its pause or a value acted on, then finished). Notes ride

@@ -95,5 +95,6 @@ sluice tool fn_call '{"name":"inline.bash","inputs":{"code":"./check-one-case","
 
 The limits must fit the installation ceilings and the home must have capacity for the run
 plus its guardian. A direct call refuses when it cannot reserve that capacity. Without
-`direct`, the call queues. Its descendants share the budget; a memory or task-limit hit is
-reported as `resource_exhausted` and is not automatically retried.
+`direct`, the call queues. Its descendants share the budget; a memory OOM is reported as
+`resource_exhausted` and is not automatically retried, and a task-limit hit is told to the
+caller in a `say` with `data.execution_limit`.

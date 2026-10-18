@@ -1470,7 +1470,8 @@ the page's stream. A lane that redraws a page writes its notes here.
   cards (who to whom, when, the first words cut with the way to the whole; an answered question
   whole); Inputs and Outputs field tables with where each came from; Runs its unit's step view,
   its own row ringed, over its runs. Each run's facts include Budget, showing its frozen
-  memory allowance, CPU count and task limit, and Usage, showing recorded peak memory when
+  memory reservation (with its cap when that is larger: "8192 MiB memory, up to 73472 MiB", or
+  "no cap"), CPU count and task limit, each reading "unlimited" when it has none, and Usage, showing recorded peak memory when
   completion evidence exists. These are plain rows in the existing facts list, wrapping on
   narrow sheets; they never imply that a running run's usage is a live sample. A resource
   failure leads with "Stopped: its memory budget was exhausted." or "Stopped: its task

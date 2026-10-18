@@ -1633,6 +1633,20 @@ pub fn message_wakes(
     {
         return Ok(message(sql, project, id)?.is_question());
     }
+    // An execution-limit notice from Sluice wakes the session it is addressed to.
+    if msg.verb == MessageVerb::Say
+        && msg.from == identity::SLUICE
+        && msg
+            .data
+            .as_ref()
+            .is_some_and(|data| data.as_value().get("execution_limit").is_some())
+        && msg.to.as_deref().is_some_and(|to| match me {
+            Some(me) => to == me,
+            None => identity::is_session(to),
+        })
+    {
+        return Ok(true);
+    }
     Ok(false)
 }
 

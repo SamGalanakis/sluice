@@ -838,7 +838,8 @@ async fn helper_rejection_applies_or_conflicts_in_real_store_and_duplicate_compl
                     Reserve {
                         limits: sluice_model::ResourcePolicy::for_host(64 << 30, 32000)
                             .unwrap()
-                            .defaults,
+                            .resolve(None, None)
+                            .unwrap(),
                         admission: sluice_model::ResourcePolicy::for_host(64 << 30, 32000).unwrap(),
                         step,
                         attempt: AttemptId::new(),

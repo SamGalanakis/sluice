@@ -959,7 +959,8 @@ mod tests {
         Launch {
             limits: sluice_model::ResourcePolicy::for_host(64 << 30, 32000)
                 .unwrap()
-                .defaults,
+                .resolve(None, None)
+                .unwrap(),
             policy: sluice_model::ResourcePolicy::for_host(64 << 30, 32000).unwrap(),
             identity: AttemptKey {
                 home: HomeId::new(),

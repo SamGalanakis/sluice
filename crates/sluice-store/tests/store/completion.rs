@@ -203,7 +203,8 @@ mod support {
                 protocol_major: 1,
                 limits: sluice_model::limits::ResourcePolicy::for_host(1 << 40, 64000)
                     .unwrap()
-                    .defaults,
+                    .resolve(None, None)
+                    .unwrap(),
                 admission: sluice_model::limits::ResourcePolicy::for_host(1 << 40, 64000).unwrap(),
             }
         }
@@ -1062,24 +1063,26 @@ async fn progress_validates_current_runs_and_never_replaces_final_outputs() {
 /// never both consume the final slot.
 #[tokio::test]
 async fn execution_budget_is_atomic_survives_restart_and_waits_for_cleanup() {
-    use sluice_model::limits::{GUARDIAN_CPU_MILLIS, GUARDIAN_TASKS, ResourcePolicy, RunLimits};
+    use sluice_model::limits::{
+        GUARDIAN_CPU_MILLIS, GUARDIAN_TASKS, Limits, Reserved, ResourcePolicy,
+    };
     use sluice_store::resources;
     let mut f = Fixture::new(json!({"steps":{
         "a":{"run":"empty"}, "b":{"run":"empty"}
     }}))
     .await;
-    let limits = RunLimits {
-        memory_bytes: 4096,
-        cpu_millis: 1000,
-        tasks: 8,
+    let limits = Limits {
+        memory_bytes: Some(4096),
+        cpu_millis: Some(1000),
+        tasks: Some(8),
     };
     let policy = ResourcePolicy {
         defaults: limits,
         ceilings: limits,
-        total: RunLimits {
-            memory_bytes: 5120,
-            cpu_millis: 1000 + GUARDIAN_CPU_MILLIS,
-            tasks: 8 + GUARDIAN_TASKS,
+        total: Limits {
+            memory_bytes: Some(5120),
+            cpu_millis: Some(1000 + GUARDIAN_CPU_MILLIS),
+            tasks: Some(8 + GUARDIAN_TASKS),
         },
         guardian_memory_bytes: 1024,
     }
@@ -1088,7 +1091,7 @@ async fn execution_budget_is_atomic_survives_restart_and_waits_for_cleanup() {
     let mut a = f.request("a", json!({}), -1, None).await;
     let mut b = f.request("b", json!({}), -1, None).await;
     for request in [&mut a, &mut b] {
-        request.limits = limits;
+        request.limits = policy.resolve(None, None).unwrap();
         request.admission = policy.clone();
     }
     let reserve_one = |request: Reserve| {
@@ -1147,7 +1150,12 @@ async fn execution_budget_is_atomic_survives_restart_and_waits_for_cleanup() {
         .snapshot(move |sql| resources::budget_status(sql, &budget))
         .await
         .unwrap();
-    assert_eq!(status.held, policy.total);
+    let full = Reserved {
+        memory_bytes: 5120,
+        cpu_millis: 1000 + GUARDIAN_CPU_MILLIS,
+        tasks: 8 + GUARDIAN_TASKS,
+    };
+    assert_eq!(status.held, full);
     assert!(status.unbounded_attempts.is_empty());
     f.finish(&winner, CompletionKind::Succeeded, json!({}))
         .await;
@@ -1158,7 +1166,7 @@ async fn execution_budget_is_atomic_survives_restart_and_waits_for_cleanup() {
             .await
             .unwrap()
             .held,
-        policy.total
+        full
     );
     assert_eq!(
         f.reads
@@ -1206,6 +1214,6 @@ async fn execution_budget_is_atomic_survives_restart_and_waits_for_cleanup() {
             .await
             .unwrap()
             .held,
-        policy.total
+        full
     );
 }

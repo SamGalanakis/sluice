@@ -30,6 +30,8 @@ use tokio_util::sync::CancellationToken;
 
 pub const CAPACITY_INTERVAL: Duration = Duration::from_secs(10);
 pub const FULL_INTERVAL: Duration = Duration::from_secs(30);
+/// How often live runs' cgroup limit counters are read.
+pub const LIMIT_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 const RECONCILE_TRIES: usize = 3;
 
 #[cfg(test)]
@@ -588,14 +590,16 @@ async fn record_queues<H: ExecutionHost>(
             let needs = step.needs.iter().map(|(n,a)|(n.clone(),*a)).collect();
             let mut fit = if continuing { resources::Fit { blocked: vec![], reason: String::new() } }
                 else { resources::fits(tx.sql(), context.project, &needs)? };
+            let mut physical = false;
             if fit.fits() {
                 fit = match crate::budget::resolve(tx.sql(), Some(context.project), step.limits.as_ref(), &policy) {
-                    Ok(limits) => resources::budget_fit(tx.sql(), &limits, &policy)?,
+                    Ok(limits) => { physical = true; resources::budget_fit(tx.sql(), &limits, &policy)? },
                     Err(sluice_store::StoreError::Public(PublicError::Invalid { message, .. })) => resources::Fit { blocked: vec!["limits".into()], reason: message },
                     Err(error) => return Err(error),
                 };
             }
             if fit.fits() { continue; }
+            let waiting_on_home = physical.then(|| fit.reason.clone());
             let event = Event::StepQueued {
                 step: step.id.clone(),
                 needs: serde_json::from_value(json!(needs))?,
@@ -605,6 +609,29 @@ async fn record_queues<H: ExecutionHost>(
             let previous: Option<String> = tx.sql().query_row("SELECT payload FROM records WHERE project_id=?1 AND step_id=?2 AND kind IN ('step.queued','step.status') ORDER BY seq DESC LIMIT 1", (context.project.to_string(), step.id.as_str()), |r| r.get(0)).optional()?;
             if previous.map(|s| serde_json::from_str::<Value>(&s)).transpose()?.as_ref() != Some(&serde_json::to_value(&event)?) {
                 tx.append_record(Some(context.project), event)?;
+            }
+            // A step that has waited long on the home's execution total is told to its owner once.
+            if let Some(reason) = waiting_on_home {
+                let (since, minutes): (Option<String>, Option<f64>) = tx.sql().query_row(
+                    "SELECT min(at),(julianday('now')-julianday(min(at)))*1440 FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.queued'
+                     AND seq > coalesce((SELECT max(seq) FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.status'),0)",
+                    (context.project.to_string(), step.id.as_str()), |r| Ok((r.get(0)?, r.get(1)?)))?;
+                if let (Some(since), Some(minutes)) = (since, minutes)
+                    && minutes >= crate::budget::QUEUE_NOTICE_MINUTES as f64
+                {
+                    let total = policy.total;
+                    let notice = resources::LimitNotice {
+                        run: None,
+                        step: Some(step.id.clone()),
+                        limit: "capacity",
+                        value: json!({"memory_bytes": sluice_model::limits::shown(total.memory_bytes), "cpu_millis": sluice_model::limits::shown(total.cpu_millis), "tasks": sluice_model::limits::shown(total.tasks)}),
+                        observed: json!(reason),
+                        outcome: "waiting",
+                        since: Some(since.clone()),
+                    };
+                    let body = format!("Step {} has waited since {since} for the home's execution capacity ({reason}). It starts when live runs release enough; raise execution.total in config.json or lower the step's limits to start it sooner.", step.id);
+                    resources::notify_limit(tx, context.project, &notice, body, false)?;
+                }
             }
         }
         Ok(())
@@ -675,6 +702,11 @@ pub async fn run<H: ExecutionHost>(
     let mut full = tokio::time::interval(FULL_INTERVAL);
     let mut capacity = tokio::time::interval(CAPACITY_INTERVAL);
     let mut terminal_reaper = tokio::time::interval(Duration::from_millis(500));
+    let mut limit_sampler = tokio::time::interval(LIMIT_SAMPLE_INTERVAL);
+    let config_path = broker.home().join("config.json");
+    let config_stamp =
+        |path: &std::path::Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    let mut config_seen = config_stamp(&config_path);
     let mut dirty = BTreeSet::new();
     let mut notifier = crate::notify::Notifier::new(
         broker.home().to_owned(),
@@ -719,7 +751,20 @@ pub async fn run<H: ExecutionHost>(
             _=terminal_reaper.tick()=>{
                 if let Err(error) = broker.reap_terminal(false).await { tracing::warn!(%error,"terminal guardian cleanup deferred"); }
             },
-            _=registry_tick.tick()=>{ if watcher.is_some() { registry_changed(&broker, &mut registry_seen, &mut dirty).await?; } },
+            _=registry_tick.tick()=>{
+                if watcher.is_some() { registry_changed(&broker, &mut registry_seen, &mut dirty).await?; }
+                // A changed execution policy applies at the next admission, without a drain.
+                let stamp = config_stamp(&config_path);
+                if stamp != config_seen {
+                    config_seen = stamp;
+                    dirty.extend(broker.projects().await?);
+                }
+            },
+            _=limit_sampler.tick()=>{
+                if broker.scheduler_owner().await?.is_some() && let Err(error) = broker.sample_limits().await {
+                    tracing::warn!(%error,"execution limit sampling deferred");
+                }
+            },
             _=full.tick()=>{
                 let projects = broker.projects().await?;
                 dirty.extend(projects.iter().copied());

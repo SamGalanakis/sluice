@@ -140,7 +140,7 @@ pub(crate) fn status(
     let names = crate::naming::for_project(sql, &home, id)?;
     let execution_policy = crate::budget::policy(&home);
     let execution = match &execution_policy {
-        Ok(policy) => json!(resources::budget_status(sql, policy)?),
+        Ok(policy) => resources::budget_status(sql, policy)?.shown(),
         Err(error) => json!({"error":error}),
     };
     if query.view == StatusView::Units {
@@ -249,7 +249,7 @@ pub(crate) fn status(
                             policy,
                         ) {
                             Ok(limits) => {
-                                row.insert("limits".into(), json!(limits));
+                                row.insert("limits".into(), limits.shown());
                             }
                             Err(error) => {
                                 row.insert("budget_error".into(), json!(error.to_string()));

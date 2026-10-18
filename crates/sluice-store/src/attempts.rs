@@ -213,7 +213,7 @@ fn stored_reservation(
         || hash != request.inputs_hash.to_string()
         || frozen["inputs"] != serde_json::to_value(&request.inputs)?
         || frozen["provenance"] != serde_json::to_value(&request.provenance)?
-        || frozen["policy"] != serde_json::to_value(&request.admission)?
+        || frozen["execution_policy"] != serde_json::to_value(&request.admission)?
         || index != request.item_index
         || count != request.item_count.map(plans::sql_counter).transpose()?
         || release != request.release_id

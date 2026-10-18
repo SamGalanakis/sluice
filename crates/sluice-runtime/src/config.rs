@@ -180,37 +180,56 @@ pub fn resource_policy_from_value(
     };
     let mut policy = ResourcePolicy::for_host(memory_bytes, cpu_millis)?;
     policy.total = config.total.apply(policy.total)?;
-    if policy.total.memory_bytes > memory_bytes || policy.total.cpu_millis > cpu_millis {
+    if policy.total.memory_bytes.is_some_and(|n| n > memory_bytes)
+        || policy.total.cpu_millis.is_some_and(|n| n > cpu_millis)
+    {
         return Err("execution total exceeds the host's effective memory or CPU capacity".into());
     }
     if let Some(memory) = config.guardian_memory {
         policy.guardian_memory_bytes = memory.0;
     }
-    policy.ceilings.memory_bytes = policy.ceilings.memory_bytes.min(
-        policy
-            .total
-            .memory_bytes
-            .saturating_sub(policy.guardian_memory_bytes),
+    // Inherited ceilings shrink to fit a smaller finite total; explicit ones are checked.
+    let room = |total: Option<u64>, guardian: u64| total.map(|n| n.saturating_sub(guardian));
+    let clamp = |inherited: Option<u64>, bound: Option<u64>| match (inherited, bound) {
+        (Some(n), Some(bound)) => Some(n.min(bound)),
+        (n, _) => n,
+    };
+    let narrow = |n: Option<u64>| n.map(|n| u32::try_from(n).unwrap_or(u32::MAX));
+    policy.ceilings.memory_bytes = clamp(
+        policy.ceilings.memory_bytes,
+        room(policy.total.memory_bytes, policy.guardian_memory_bytes),
     );
-    policy.ceilings.cpu_millis = policy.ceilings.cpu_millis.min(
-        policy
-            .total
-            .cpu_millis
-            .saturating_sub(sluice_model::limits::GUARDIAN_CPU_MILLIS),
-    );
-    policy.ceilings.tasks = policy.ceilings.tasks.min(
-        policy
-            .total
-            .tasks
-            .saturating_sub(sluice_model::limits::GUARDIAN_TASKS),
-    );
+    policy.ceilings.cpu_millis = narrow(clamp(
+        policy.ceilings.cpu_millis.map(u64::from),
+        room(
+            policy.total.cpu_millis.map(u64::from),
+            u64::from(sluice_model::limits::GUARDIAN_CPU_MILLIS),
+        ),
+    ));
+    policy.ceilings.tasks = narrow(clamp(
+        policy.ceilings.tasks.map(u64::from),
+        room(
+            policy.total.tasks.map(u64::from),
+            u64::from(sluice_model::limits::GUARDIAN_TASKS),
+        ),
+    ));
     policy.ceilings = config.ceilings.apply(policy.ceilings)?;
-    policy.defaults.memory_bytes = policy
-        .defaults
-        .memory_bytes
-        .min(policy.ceilings.memory_bytes);
-    policy.defaults.cpu_millis = policy.defaults.cpu_millis.min(policy.ceilings.cpu_millis);
-    policy.defaults.tasks = policy.defaults.tasks.min(policy.ceilings.tasks);
+    // Inherited defaults shrink to the ceilings; an unlimited default under a finite
+    // ceiling becomes that ceiling.
+    let fit = |default: Option<u64>, ceiling: Option<u64>| match (default, ceiling) {
+        (_, None) => default,
+        (None, ceiling) => ceiling,
+        (Some(n), Some(ceiling)) => Some(n.min(ceiling)),
+    };
+    policy.defaults.memory_bytes = fit(policy.defaults.memory_bytes, policy.ceilings.memory_bytes);
+    policy.defaults.cpu_millis = narrow(fit(
+        policy.defaults.cpu_millis.map(u64::from),
+        policy.ceilings.cpu_millis.map(u64::from),
+    ));
+    policy.defaults.tasks = narrow(fit(
+        policy.defaults.tasks.map(u64::from),
+        policy.ceilings.tasks.map(u64::from),
+    ));
     policy.defaults = config.defaults.apply(policy.defaults)?;
     policy.validate()
 }
