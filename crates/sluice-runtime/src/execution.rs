@@ -26,6 +26,8 @@ use std::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Launch {
     pub identity: AttemptKey,
+    pub limits: sluice_model::limits::RunLimits,
+    pub policy: sluice_model::limits::ResourcePolicy,
     pub invocation: FnInvocation,
     pub assigned: AssignedRange,
     pub prev_run: Option<RunId>,
@@ -42,6 +44,14 @@ pub enum LaunchOutcome {
     Uncertain(String),
 }
 pub trait ExecutionHost: FnHost + guardian::AdoptionHost + Send + Sync + 'static {
+    /// Retain capacity until the entire service is gone. `stop` is authorized
+    /// only after the result is durably terminal.
+    fn terminal_gone(
+        &self,
+        run: RunId,
+        stop: bool,
+    ) -> impl Future<Output = Result<bool, PublicError>> + Send;
+
     fn composition_enabled(&self) -> bool {
         false
     }
@@ -59,11 +69,37 @@ pub struct OsHost {
     pub home: PathBuf,
     pub program: PathBuf,
 }
+impl OsHost {
+    async fn start_settled(&self, run: RunId) -> Result<bool, PublicError> {
+        if !sluice_process::locks::RunFence::start_pending(&self.home, run).map_err(storage)? {
+            return Ok(true);
+        }
+        for name in TransientService::names(run) {
+            let service = TransientService::adopt(run, &name).map_err(storage)?;
+            if service.query().await.map_err(storage)?.load_state != "not-found" {
+                sluice_process::locks::RunFence::acknowledge_start(&self.home, run)
+                    .map_err(storage)?;
+                return Ok(true);
+            }
+        }
+        tracing::warn!(%run, "guardian start outcome unresolved; capacity retained until the service is observed or the host reboots");
+        Ok(false)
+    }
+}
 impl guardian::AdoptionHost for OsHost {
     async fn reconcile(
         &self,
         attempt: &guardian::AdoptionAttempt,
     ) -> io::Result<guardian::GuardianPresence> {
+        if !self
+            .start_settled(attempt.identity.run)
+            .await
+            .map_err(io::Error::other)?
+        {
+            return Ok(guardian::GuardianPresence::Ambiguous(
+                "guardian start outcome unresolved; capacity retained until the service is observed or the host reboots".into(),
+            ));
+        }
         guardian::OsAdoptionHost {
             timeout: Duration::from_secs(5),
         }
@@ -72,6 +108,51 @@ impl guardian::AdoptionHost for OsHost {
     }
 }
 impl ExecutionHost for OsHost {
+    async fn terminal_gone(&self, run: RunId, stop: bool) -> Result<bool, PublicError> {
+        if !self.start_settled(run).await? {
+            return Ok(false);
+        }
+        for name in TransientService::names(run) {
+            let service = TransientService::adopt(run, &name).map_err(storage)?;
+            let state = service.query().await.map_err(storage)?;
+            if state.load_state == "not-found" {
+                continue;
+            }
+            let group = match state
+                .cgroup
+                .as_deref()
+                .map(sluice_process::cgroup::Cgroup::open_service)
+                .transpose()
+            {
+                Ok(group) => group,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(storage(error)),
+            };
+            if stop {
+                if let Some(group) = group {
+                    sluice_process::signals::stop_run(&service, &group, Duration::from_secs(5))
+                        .await
+                        .map_err(storage)?;
+                } else {
+                    service.stop().await.map_err(storage)?;
+                }
+            } else {
+                if !state.stopped() {
+                    return Ok(false);
+                }
+                if let Some(group) = group
+                    && group.populated().map_err(storage)?
+                {
+                    return Ok(false);
+                }
+            }
+            if !service.query().await.map_err(storage)?.stopped() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     fn composition_enabled(&self) -> bool {
         true
     }
@@ -115,8 +196,33 @@ impl ExecutionHost for OsHost {
         }
     }
     async fn launch(&self, launch: Launch) -> Result<LaunchOutcome, PublicError> {
+        let fence = sluice_process::locks::RunFence::acquire(&self.home, launch.identity.run)
+            .await
+            .map_err(storage)?;
+        let live: bool = {
+            let database = rusqlite::Connection::open_with_flags(
+                self.home.join("sluice.db"),
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .map_err(storage)?;
+            database.query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempts a JOIN runs r USING(attempt_id) WHERE r.run_id=?1 AND a.attempt_id=?2 AND a.phase<>'terminal')",
+            (launch.identity.run.to_string(), launch.identity.attempt.to_string()),
+            |row| row.get(0),
+        ).map_err(storage)?
+        };
+        if !live {
+            return Ok(LaunchOutcome::Refused(PublicError::Conflict {
+                message: "attempt ended before guardian launch".into(),
+                current_rev: None,
+            }));
+        }
         let home = self.home.clone();
         let run = launch.identity.run;
+        let run_budget = (launch.limits, launch.policy.guardian_memory_bytes);
+        let slice =
+            sluice_process::systemd::WorkloadSlice::new(launch.identity.home, launch.policy.total)
+                .map_err(storage)?;
         match tokio::task::spawn_blocking(move || write_launch(&home, &launch)).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => return Ok(LaunchOutcome::Refused(storage(e))),
@@ -124,6 +230,9 @@ impl ExecutionHost for OsHost {
         }
         let mut unit = TransientService::for_launch(run);
         let mut command = ServiceCommand::new(&self.program);
+        command.workload_slice = Some(slice);
+        command.run_budget = Some(run_budget);
+        command.start_fence = Some(fence);
         command.args = vec![
             "guardian".into(),
             "--run".into(),
@@ -199,6 +308,8 @@ impl<H> CallLauncher<H> {
 impl<H: ExecutionHost> CallGuardian for CallLauncher<H> {
     async fn launch(&self, call: AdmittedCall) -> Result<(), PublicError> {
         let launch = Launch {
+            limits: call.limits,
+            policy: call.policy.clone(),
             identity: AttemptKey {
                 home: self.home,
                 project: call.project,
@@ -370,6 +481,8 @@ pub async fn guardian_entry(
         std::env::current_exe().map_err(storage)?,
         vec!["runtime".into()],
         home.clone(),
+        launch.limits,
+        launch.policy.guardian_memory_bytes,
     )
     .map_err(storage)?
     .with_admission_guard(|home| {
@@ -379,6 +492,8 @@ pub async fn guardian_entry(
             .map_err(io::Error::other)
     });
     let args = GuardianArgs {
+        limits: launch.limits,
+        guardian_memory_bytes: launch.policy.guardian_memory_bytes,
         home_dir: home.clone(),
         run_dir: home.join("runs").join(run.to_string()),
         guardian: GuardianIdentity {

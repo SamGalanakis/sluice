@@ -794,7 +794,7 @@ fn project_board_file_and_pinned_submission() {
     mark(99);
     for (selector, expected) in [
         (format!("id:{id}"), "stale submission"),
-        ("demo".into(), "unsupported schema version 99; expected 3"),
+        ("demo".into(), "unsupported schema version 99; expected 4"),
     ] {
         let submit = tool(
             path,

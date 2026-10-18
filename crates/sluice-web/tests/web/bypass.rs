@@ -106,6 +106,7 @@ async fn a_bypassed_step_reads_bypassed_and_a_waiting_one_carries_its_tag() {
             projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name: "lanes".parse().unwrap(),
                     description: String::new(),
                     icon: None,

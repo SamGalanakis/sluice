@@ -1,4 +1,4 @@
-//! The schema-3 converter (`docs/design/plan-rows.md` §10.2–§10.6) on schema-1 and schema-2
+//! The legacy-home converter (`docs/design/plan-rows.md` §10.2–§10.6) on schema-1 and schema-2
 //! fixture homes: well-formed histories convert with round-trip equality at every revision,
 //! gapped and malformed ones are blocked by name and leave the file untouched, a converted
 //! home is schema-equivalent to a fresh one, and a schema-changing restore of a backup with
@@ -433,7 +433,7 @@ async fn slow_a_schema_1_home_converts_with_every_revision_round_tripped() {
         let (result, attempt) = runtime(&c, project);
         (project, other, result, attempt)
     };
-    // Readers and writers of schema 3 refuse it and never convert it on open.
+    // Readers and writers of the current schema refuse it and never convert it on open.
     let before = bytes(&database);
     for refusal in [
         Writer::open(home.path()).map(|_| ()).unwrap_err(),
@@ -445,7 +445,7 @@ async fn slow_a_schema_1_home_converts_with_every_revision_round_tripped() {
         ));
         assert_eq!(
             refusal.to_string(),
-            "this home is at schema 1; run \"sluice home migrate\" to bring it to schema 3"
+            "this home is at schema 1; run \"sluice home migrate\" to bring it to schema 4"
         );
     }
     assert_eq!(bytes(&database), before);
@@ -479,14 +479,20 @@ async fn slow_a_schema_1_home_converts_with_every_revision_round_tripped() {
     assert_eq!(report.to_json()["projects"].as_array().unwrap().len(), 2);
 
     let c = Connection::open(&database).unwrap();
-    // The home is schema 3 and schema-equivalent to a fresh one.
+    // The home is schema 4 and schema-equivalent to a fresh one.
     let versions: (i64, i64) = (
         c.query_row("SELECT schema_version FROM home_meta", [], |r| r.get(0))
             .unwrap(),
         c.pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap(),
     );
-    assert_eq!(versions, (3, 3));
+    assert_eq!(
+        versions,
+        (
+            sluice_store::schema::SCHEMA_VERSION,
+            sluice_store::schema::SCHEMA_VERSION
+        )
+    );
     assert_eq!(schema_fingerprint(&c).unwrap(), fresh_fingerprint());
     // The plan is its rows: the export is the stored plan, byte for byte.
     let exported = plans::export_plan(&c, project).unwrap();
@@ -1284,14 +1290,14 @@ fn slow_a_schema_changing_restore_converts_and_refuses_live_work() {
     )
     .unwrap();
     assert_eq!(compact(&exported.document), compact(&stored));
-    // A schema-3 backup restores without converting.
+    // A current-schema backup restores without converting.
     let again = scratch.root().join("again");
     backup::restore_into_fresh_home(&destination.join("sluice.db"), &again).unwrap();
     ReadPool::open(&again, 1).unwrap();
-    // Converting a schema-3 home is refused as already done.
+    // Converting a current-schema home is refused as already done.
     assert!(matches!(
         convert_home(&again.join("sluice.db")),
-        Err(StoreError::ConversionBlocked(b)) if b == ["home: already at schema 3"]
+        Err(StoreError::ConversionBlocked(b)) if b == ["home: already at schema 4"]
     ));
     let _ = convert::live_work;
 }

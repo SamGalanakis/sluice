@@ -163,7 +163,7 @@ pub async fn status(reads: &ReadPool) -> Result<DrainStatus, PublicError> {
     reads.snapshot(|sql|{
         let (mode,owner,paused):(String,Option<String>,String)=sql.query_row("SELECT mode,owner,paused_projects FROM maintenance WHERE singleton=1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
         let mut blockers=vec![];
-        let mut stmt=sql.prepare("SELECT a.attempt_id,a.project_id,r.run_id,json_extract(a.request,'$.capacity.resource') FROM attempts a LEFT JOIN runs r USING(attempt_id) WHERE a.phase<>'terminal' OR (r.run_id IS NOT NULL AND r.finished_at IS NULL)")?;
+        let mut stmt=sql.prepare("SELECT a.attempt_id,a.project_id,r.run_id,json_extract(a.request,'$.capacity.resource') FROM attempts a LEFT JOIN runs r USING(attempt_id) WHERE a.phase<>'terminal' OR (r.run_id IS NOT NULL AND r.finished_at IS NULL) OR (a.reservation IS NOT NULL AND COALESCE(json_extract(a.request,'$.resource_released'),0)=0)")?;
         for row in stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,Option<String>>(3)?)))?{
             let (attempt,p,run,resource)=row?;
             blockers.push(DrainBlocker{kind:if resource.is_some(){"observation"}else{"guardian"}.into(),identity:run.unwrap_or(attempt),project_id:p.map(parse_id).transpose()?,resource});
@@ -209,6 +209,7 @@ pub async fn wait(
             writer,
             vec![
                 ChangeKey::new(None, "maintenance"),
+                ChangeKey::new(None, "execution"),
                 ChangeKey::new(None, "log"),
             ],
         )

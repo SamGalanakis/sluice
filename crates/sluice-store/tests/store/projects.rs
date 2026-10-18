@@ -29,6 +29,7 @@ async fn create(writer: &Writer, name: &str) -> Project {
         description: "description".into(),
         icon: None,
         resources: None,
+        limits: None,
         author: "sam".into(),
     };
     writer
@@ -113,6 +114,7 @@ async fn resource_adapter_failure_rolls_back_rename_and_creation() {
                     description: "".into(),
                     icon: None,
                     resources: Some(json!({"cpu":2})),
+                    limits: None,
                     author: "sam".into(),
                 },
                 &EmptyPlanInitializer,

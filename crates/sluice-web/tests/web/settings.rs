@@ -60,6 +60,7 @@ impl Fixture {
                 projects::project_create(
                     tx,
                     CreateProject {
+                        limits: None,
                         name: "first".parse().unwrap(),
                         description: "# Safe description".into(),
                         icon: None,
@@ -350,6 +351,7 @@ async fn duplicate_name_and_stale_revision_have_no_partial_effect_or_records() {
             projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name: "taken".parse().unwrap(),
                     description: String::new(),
                     icon: None,

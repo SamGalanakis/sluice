@@ -84,3 +84,10 @@ value` (or `--field-file PATH`, `-` for stdin) takes them as flags instead of JS
 
 Read `docs()` for the index, `docs("composing")` and `docs("plans")` before writing your first
 plan.
+
+Every executable run has a finite physical budget, separate from logical `needs`. Use step
+or `fn_call` `limits: {memory, cpus, tasks}` only within installation ceilings; project defaults
+inherit from the home. Scatter starts items as capacity permits. A `resource_exhausted`
+failure names memory or tasks and requires judgment before retrying; inspect its recorded
+budget and peak usage. Local descendants share the cap; external services and remote
+executors need their own limits. See `docs("plans")`, Execution limits.

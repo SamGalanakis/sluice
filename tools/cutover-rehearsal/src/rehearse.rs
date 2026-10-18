@@ -28,12 +28,14 @@ use std::{
 pub const AUTHOR: &str = "cutover";
 
 /// The cancel's reason, naming the cutover and its deadline.
-pub fn reason(deadline: &str) -> String {
-    format!("schema-3 cutover at {deadline}: stopped at the deadline; retry it after the cutover")
+pub fn reason(schema: u32, deadline: &str) -> String {
+    format!("schema-{schema} cutover at {deadline}: stopped at the deadline; retry it after the cutover")
 }
 
 #[derive(Debug, Clone)]
 pub struct Options {
+    /// The candidate schema, not the old release schema the harness is built against.
+    pub schema: u32,
     /// The cutover deadline, as the notice gives it (RFC 3339).
     pub deadline: String,
     /// The candidate release's commit, for the report.
@@ -381,7 +383,7 @@ pub async fn rehearse(
     let home = guard(home)?;
     let host = RehearsalHost::new();
     let broker = Coordinator::open(home, catalog, host.clone()).await?;
-    let reason = reason(&options.deadline);
+    let reason = reason(options.schema, &options.deadline);
     let (projects, revisions) = broker
         .reads()
         .snapshot(|sql| {
@@ -441,7 +443,7 @@ pub async fn rehearse(
 
     let mut report = CutoverReport {
         sha: options.sha.clone(),
-        schema: 3,
+        schema: options.schema,
         deadline: options.deadline.clone(),
         reason,
         projects: projects as u64,

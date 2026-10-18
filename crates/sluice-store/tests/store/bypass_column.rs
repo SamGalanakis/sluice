@@ -1,6 +1,4 @@
-//! `steps.bypass` is an added schema-3 column (`ADDED_COLUMNS`): a home from before it gains
-//! it when its writer opens it, a restore of a backup from before it gains it on its private
-//! copy, and the schema version stays 3.
+//! Schema-3 homes require a drained conversion before execution budgets are enabled.
 
 use super::home;
 use home::ScratchHome;
@@ -37,7 +35,7 @@ fn has_column(dir: &Path) -> bool {
 }
 
 #[tokio::test]
-async fn slow_a_home_from_before_the_bypass_column_gains_it_at_schema_3() {
+async fn slow_schema_3_requires_drained_conversion_and_preserves_project_metadata() {
     let scratch = ScratchHome::new().unwrap();
     let home = scratch.path();
     before_the_column(home);
@@ -46,15 +44,55 @@ async fn slow_a_home_from_before_the_bypass_column_gains_it_at_schema_3() {
         .err()
         .expect("a reader waits for the writer");
     assert!(
-        refused
-            .to_string()
-            .contains("is missing until the home's writer opens it"),
+        refused.to_string().contains("run \"sluice home migrate\""),
         "{refused}"
+    );
+    assert!(Writer::open(home).is_err());
+    let sql = Connection::open(home.join("sluice.db")).unwrap();
+    let project = sluice_model::ids::ProjectId::new().to_string();
+    sql.execute("INSERT INTO projects(project_id,name,description,created_at) VALUES (?1,'preserved','original description','now')", [&project]).unwrap();
+    sql.execute_batch("ALTER TABLE projects ADD COLUMN fallback TEXT")
+        .unwrap();
+    sql.execute(
+        "UPDATE projects SET fallback='@owner' WHERE project_id=?1",
+        [&project],
+    )
+    .unwrap();
+    let attempt = sluice_model::ids::AttemptId::new().to_string();
+    sql.execute("INSERT INTO attempts(attempt_id,phase,request,inputs_hash,created_at) VALUES (?1,'reserved','{}','x','now')", [&attempt]).unwrap();
+    let refusal = sluice_store::convert::convert_home(&home.join("sluice.db")).unwrap_err();
+    assert!(refusal.to_string().contains("live work"), "{refusal}");
+    assert_eq!(
+        sql.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+    assert!(!has_column(home));
+    sql.execute(
+        "UPDATE attempts SET phase='terminal',finished_at='now' WHERE attempt_id=?1",
+        [&attempt],
+    )
+    .unwrap();
+    let report = sluice_store::convert::convert_home(&home.join("sluice.db")).unwrap();
+    assert_eq!(report.from_schema, 3);
+    assert_eq!(report.projects.len(), 1);
+    assert_eq!(
+        sql.query_row(
+            "SELECT description,fallback,limits FROM projects WHERE project_id=?1",
+            [&project],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?
+            ))
+        )
+        .unwrap(),
+        ("original description".into(), "@owner".into(), None)
     );
     drop(Writer::open(home).unwrap());
     assert!(has_column(home));
     ReadPool::open(home, 1).unwrap();
-    assert_eq!(SCHEMA_VERSION, 3);
+    assert_eq!(SCHEMA_VERSION, 4);
     // A fresh home has it from the start.
     let fresh = ScratchHome::new().unwrap();
     drop(Writer::open(fresh.path()).unwrap());

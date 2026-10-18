@@ -196,6 +196,10 @@ pub mod support {
                 provenance: JsonMap::default(),
                 release_id: "fixture".into(),
                 protocol_major: 1,
+                limits: sluice_model::limits::ResourcePolicy::for_host(1 << 40, 64000)
+                    .unwrap()
+                    .defaults,
+                admission: sluice_model::limits::ResourcePolicy::for_host(1 << 40, 64000).unwrap(),
             }
         }
         pub async fn start(&self, reservation: &Reservation) {
@@ -1227,6 +1231,7 @@ async fn project_resources_rename_and_deletion_invalidate_all_public_views() {
                     description: String::new(),
                     icon: None,
                     resources: Some(json!({"lane":2})),
+                    limits: None,
                     author: "sam".into(),
                 },
                 &projects::EmptyPlanInitializer,
@@ -1329,4 +1334,117 @@ async fn project_resources_rename_and_deletion_invalidate_all_public_views() {
         );
     }
     f.writer.shutdown().await.unwrap();
+}
+
+/// A bounded scatter retains its logical lane and original input batch between
+/// admissions; cancelling it must also stop items that never acquired a payload.
+#[tokio::test]
+async fn bounded_scatter_keeps_frozen_inputs_and_cancels_unadmitted_items() {
+    for cancel_during_payload in [false, true] {
+        let f = Fixture::new(json!({"inputs":{"items":"int[]"},"steps":{
+            "batch":{"run":"int","needs":{"lane":1},"scatter":"value","in":{"value":{"source":"items"}}}
+        }})).await;
+        let project = f.context.project;
+        let context = f.context.clone();
+        f.writer
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                resources::patch_resources(tx, project, &json!({"lane":1}), &Signatures)?;
+                plans::set_input(
+                    tx,
+                    &context,
+                    "items",
+                    json!([1, 2, 3]).try_into()?,
+                    "owner".into(),
+                    "initial".into(),
+                )
+            })
+            .await
+            .unwrap();
+        let first_request = f.request("batch", json!({"value":1}), 0, Some(3)).await;
+        let frozen_hash = first_request.inputs_hash;
+        let first = real_reserve(&f, first_request, RealHooks::default()).await;
+        f.start(&first).await;
+        real_finish(&f, &first, CompletionKind::Succeeded, json!({"value":1})).await;
+        assert_eq!(f.state().await.status(&id("batch")), StepStatus::Running);
+        assert_eq!(
+            f.reads
+                .snapshot(move |sql| resources::held(sql, project))
+                .await
+                .unwrap()
+                .get("lane"),
+            Some(&1)
+        );
+        let context = f.context.clone();
+        f.writer
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                plans::set_input(
+                    tx,
+                    &context,
+                    "items",
+                    json!([10, 20]).try_into()?,
+                    "owner".into(),
+                    "future batch".into(),
+                )
+            })
+            .await
+            .unwrap();
+        let mut second_request = f.request("batch", json!({"value":2}), 1, Some(3)).await;
+        second_request.inputs_hash = frozen_hash;
+        let second = real_reserve(&f, second_request, RealHooks::default()).await;
+        f.start(&second).await;
+        if !cancel_during_payload {
+            real_finish(&f, &second, CompletionKind::Succeeded, json!({"value":2})).await;
+        }
+        let context = f.context.clone();
+        f.writer
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                plans::step_cancel(
+                    tx,
+                    &context,
+                    StepCancel {
+                        expected_rev: None,
+                        project: ProjectSelector::Id(project),
+                        selection: StepSelection {
+                            steps: Some(vec![id("batch")]),
+                            tags: None,
+                        },
+                        reason: "stop remaining work".into(),
+                        author: Some("owner".into()),
+                    },
+                )
+            })
+            .await
+            .unwrap();
+        if cancel_during_payload {
+            assert_eq!(f.state().await.status(&id("batch")), StepStatus::Running);
+            assert_eq!(
+                f.reads
+                    .snapshot(move |sql| resources::held(sql, project))
+                    .await
+                    .unwrap()
+                    .get("lane"),
+                Some(&1)
+            );
+            real_finish(
+                &f,
+                &second,
+                CompletionKind::Cancelled {
+                    message: "stopped".into(),
+                },
+                json!({}),
+            )
+            .await;
+        }
+        assert_eq!(f.state().await.status(&id("batch")), StepStatus::Failed);
+        assert_eq!(
+            f.reads
+                .snapshot(move |sql| resources::held(sql, project))
+                .await
+                .unwrap()
+                .get("lane")
+                .copied()
+                .unwrap_or(0),
+            0
+        );
+    }
 }

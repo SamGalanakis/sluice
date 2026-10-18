@@ -113,6 +113,17 @@ impl Failure {
                 "exited_without_submit".into(),
                 "Its agent stopped without submitting its outputs.".into(),
             ),
+            PublicError::ResourceExhausted { resource, .. } => (
+                "resource_exhausted".into(),
+                match resource {
+                    sluice_model::limits::ExhaustedResource::Memory => {
+                        "Stopped: its memory budget was exhausted.".into()
+                    }
+                    sluice_model::limits::ExhaustedResource::Tasks => {
+                        "Stopped: its task budget was exhausted.".into()
+                    }
+                },
+            ),
             PublicError::FnFailure { message } => match cancel_reason(message) {
                 Some("") => ("cancelled".into(), "Cancelled while it ran.".into()),
                 Some(reason) => (

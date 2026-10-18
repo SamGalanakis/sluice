@@ -77,6 +77,7 @@ async fn fixture(engine: &str, status: &str) -> Fixture {
             projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name: "outline".parse().unwrap(),
                     description: String::new(),
                     icon: None,

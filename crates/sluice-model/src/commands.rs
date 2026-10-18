@@ -39,6 +39,8 @@ pub struct ProjectSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<JsonMap>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<crate::limits::LimitsOverride>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<ProjectIconSummary>,
 }
 
@@ -79,6 +81,12 @@ pub struct ProjectUpdate {
     pub description: Option<String>,
     pub icon: Option<IconUpload>,
     pub resources: Option<JsonMap>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub limits: Option<Option<crate::limits::LimitsOverride>>,
     pub paused: Option<bool>,
     pub archived: Option<bool>,
     /// Retire done units automatically once their last step finished this many seconds ago
@@ -674,6 +682,8 @@ pub struct MarkRead {
 pub struct FnCall {
     pub name: String,
     pub inputs: JsonMap,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<crate::limits::LimitsOverride>,
     pub project: Option<ProjectSelector>,
     pub wait_seconds: Option<u64>,
     pub direct: bool,
@@ -1267,6 +1277,8 @@ pub enum CommandRequest {
         description: String,
         icon: Option<IconUpload>,
         resources: JsonMap,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limits: Option<crate::limits::LimitsOverride>,
         author: Option<String>,
     },
     PlanGet {

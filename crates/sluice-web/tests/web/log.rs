@@ -39,6 +39,7 @@ async fn p605_log_keyset_pages_preserve_filters_hide_successful_message_calls_an
             projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name: "log".parse().unwrap(),
                     description: String::new(),
                     icon: None,
@@ -172,6 +173,7 @@ async fn p605_thread_filter_uses_message_records_and_log_retention_cannot_erase_
             projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name: "messages".parse().unwrap(),
                     description: String::new(),
                     icon: None,
@@ -251,6 +253,7 @@ async fn log_hides_call_noise_and_offers_presets_and_a_step_field() {
             projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name: "noisy".parse().unwrap(),
                     description: String::new(),
                     icon: None,
@@ -416,6 +419,7 @@ async fn the_log_says_each_record_in_a_sentence_and_the_global_log_spans_project
             projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name: "said".parse().unwrap(),
                     description: String::new(),
                     icon: None,

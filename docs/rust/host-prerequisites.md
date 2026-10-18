@@ -12,9 +12,11 @@ a missing engine is a warning), and the selected release's manifest check.
 The delegation check creates a unique `sluice-test-doctor-*.service` through
 argument-safe `systemd-run --user` argv with `Delegate=yes` and
 `KillMode=control-group`. It opens `cgroup.subtree_control` for writing,
-creates a control child, moves its own probe process there, enables `pids`,
-creates a payload child and checks inherited controllers and writable child
-control. It stops its service even on failure or cancellation. A degraded
+creates a control child, moves its own probe process there, enables `cpu`, `memory`
+and `pids`, then creates a payload child. It writes and reads back finite
+`memory.max`, `cpu.max`, and `pids.max`, disables swap, enables grouped OOM
+termination, and checks the peak-memory and resource-event files. The service uses
+`OOMPolicy=continue` so a payload OOM leaves the guardian alive. It stops its service even on failure or cancellation. A degraded
 manager can still pass if it supports these operations. No live services are
 changed.
 
@@ -120,7 +122,10 @@ Open the reconciled service cgroup while it exists and retain the `Cgroup`
 handle. Operations resolve against its pinned directory descriptor, so a
 removed service can be proven empty without reopening a replacement at the
 same path. `RunCgroups::create` creates `control`, moves the guardian there,
-and enables delegated `pids` before creating `payload`. `invocation` creates
+and enables delegated `cpu`, `memory` and `pids` before creating `payload`. It sets
+and verifies the shared payload budget and separate guardian budget before a launcher
+can continue. The service starts inside its home workload slice with its combined
+limit already applied, covering pages charged before the guardian moves. `invocation` creates
 an exclusive `payload/<InvocationId>` leaf; duplicate IDs fail.
 The caller must own the service it supplies. Sluice service name validation
 prevents using an unrelated root, but is not an admission capability.
@@ -181,3 +186,16 @@ all identities for at least 3.2 seconds and require recursive emptiness and
 pidfd exit after cleanup. Every disposable service has a stop/reset drop
 guard. Build the fixture with the workspace/all-target test recipe before
 running these gates. JSON evidence is under `target/p3-01-evidence`.
+
+## Interrupted starts
+
+A run's launch, adoption and final capacity release use the same filesystem lock. The start
+helper inherits the lock and keeps it until `systemd-run` returns, including when its caller
+is cancelled. Before launch, Sluice rechecks that the admitted attempt is still live.
+
+If the helper itself is interrupted before confirming the start and no unit is visible,
+Sluice reports `guardian start outcome unresolved; capacity retained until the service is
+observed or the host reboots`. Its reservation remains held. Observing the service allows
+normal adoption; a later host boot proves the old start request cannot still execute. Do not
+remove the pending-start evidence to force admission: an absent unit is not proof that an
+in-flight manager request cannot create it later.

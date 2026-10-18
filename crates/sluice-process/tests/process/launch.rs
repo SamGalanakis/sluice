@@ -185,11 +185,16 @@ fn launch_worker() {
     let Some(home) = std::env::var_os("SLUICE_TEST_LAUNCH_DIR").map(PathBuf::from) else {
         return;
     };
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
     runtime.block_on(async {
         let mut guardian = OwnedProcess::capture(std::process::id()).unwrap();
         let service = Cgroup::open_service(&guardian.identity().cgroup).unwrap();
-        let groups = RunCgroups::create(service, &mut guardian).unwrap();
+        let groups =
+            RunCgroups::create(service, &mut guardian, super::test_limits(), 256 << 20).unwrap();
         assert_eq!(guardian.identity().cgroup, groups.control.path());
         let duplicate = InvocationId::new();
         let empty = groups.invocation(duplicate).unwrap();

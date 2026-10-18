@@ -279,7 +279,7 @@ fn slow_legacy_refusals_and_crash_atomicity() {
                     );
                     interrupted += 1;
                 }
-                3 => {
+                sluice_store::schema::SCHEMA_VERSION => {
                     let rev: i64 = sql
                     .query_row(
                         "SELECT rev FROM plans JOIN projects USING(project_id) WHERE name='bulk'",

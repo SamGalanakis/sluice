@@ -4,7 +4,10 @@ use rustix::{
     fd::{AsRawFd, OwnedFd},
     fs::{CWD, Mode, OFlags, mkdirat, openat, statfs},
 };
-use sluice_model::ids::InvocationId;
+use sluice_model::{
+    ids::InvocationId,
+    limits::{GUARDIAN_CPU_MILLIS, GUARDIAN_TASKS, RunLimits, RunUsage},
+};
 use std::{
     collections::BTreeSet,
     fs::{self, File},
@@ -27,18 +30,45 @@ pub struct RunCgroups {
 impl RunCgroups {
     /// Call only inside the admitted delegated service. Move the guardian before
     /// enabling controllers; payload launchers then inherit control membership.
-    pub fn create(service: Cgroup, guardian: &mut OwnedProcess) -> io::Result<Self> {
+    pub fn create(
+        service: Cgroup,
+        guardian: &mut OwnedProcess,
+        limits: RunLimits,
+        guardian_memory_bytes: u64,
+    ) -> io::Result<Self> {
+        if guardian_memory_bytes == 0
+            || limits.memory_bytes == 0
+            || limits.cpu_millis == 0
+            || limits.tasks == 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "run limits must be positive",
+            ));
+        }
         if guardian.identity().cgroup != service.path() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "guardian is outside service cgroup",
             ));
         }
+        service.configure_limits(service_limits(limits, guardian_memory_bytes)?)?;
         let control = service.child("control")?;
         control.move_process(guardian)?;
-        service.write("cgroup.subtree_control", b"+pids")?;
+        service.write("cgroup.subtree_control", b"+cpu +memory +pids")?;
+        control.configure_limits(RunLimits {
+            memory_bytes: guardian_memory_bytes,
+            cpu_millis: GUARDIAN_CPU_MILLIS,
+            tasks: GUARDIAN_TASKS,
+        })?;
         let payload = service.child("payload")?;
-        payload.write("cgroup.subtree_control", b"+pids")?;
+        payload.configure_limits(limits)?;
+        payload.write("memory.oom.group", b"1")?;
+        if payload.read("memory.oom.group")?.trim() != "1" {
+            return Err(io::Error::other("payload OOM grouping was not applied"));
+        }
+        payload.write("cgroup.subtree_control", b"+cpu +memory +pids")?;
+        payload.resource_usage()?;
         Ok(Self {
             service,
             control,
@@ -56,7 +86,65 @@ impl RunCgroups {
         self.service.payload_invocation(id, true)
     }
 }
+pub(crate) fn service_limits(
+    limits: RunLimits,
+    guardian_memory_bytes: u64,
+) -> io::Result<RunLimits> {
+    let overflow = || {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "run and guardian budget overflow",
+        )
+    };
+    limits
+        .validate()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    if guardian_memory_bytes == 0 {
+        return Err(overflow());
+    }
+    Ok(RunLimits {
+        memory_bytes: limits
+            .memory_bytes
+            .checked_add(guardian_memory_bytes)
+            .ok_or_else(overflow)?,
+        cpu_millis: limits
+            .cpu_millis
+            .checked_add(GUARDIAN_CPU_MILLIS)
+            .ok_or_else(overflow)?,
+        tasks: limits
+            .tasks
+            .checked_add(GUARDIAN_TASKS)
+            .ok_or_else(overflow)?,
+    })
+}
 impl Cgroup {
+    fn configure_limits(&self, limits: RunLimits) -> io::Result<()> {
+        let period = if limits.cpu_millis < 10 {
+            1_000_000
+        } else {
+            100_000
+        };
+        let cpu = format!("{} {period}", u64::from(limits.cpu_millis) * period / 1000);
+        self.write("memory.max", limits.memory_bytes.to_string().as_bytes())?;
+        self.write("memory.swap.max", b"0")?;
+        self.write("cpu.max", cpu.as_bytes())?;
+        self.write("pids.max", limits.tasks.to_string().as_bytes())?;
+        let memory: u64 = self
+            .read("memory.max")?
+            .trim()
+            .parse()
+            .map_err(|_| io::Error::other("unbounded memory.max"))?;
+        if memory == 0
+            || memory > limits.memory_bytes
+            || self.read("memory.swap.max")?.trim() != "0"
+            || self.read("cpu.max")?.trim() != cpu
+            || self.read("pids.max")?.trim() != limits.tasks.to_string()
+        {
+            return Err(io::Error::other("kernel did not retain resource limits"));
+        }
+        Ok(())
+    }
+
     /// Open or create a leaf in the already admitted service payload subtree.
     pub fn payload_invocation(&self, id: InvocationId, create: bool) -> io::Result<Self> {
         let payload = self.open_child("payload")?;
@@ -115,6 +203,19 @@ impl Cgroup {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(e),
         }
+    }
+    /// Read counters from the retained payload parent, including all sibling leaves.
+    pub fn resource_usage(&self) -> io::Result<RunUsage> {
+        Ok(RunUsage {
+            memory_peak_bytes: self
+                .read("memory.peak")?
+                .trim()
+                .parse()
+                .map_err(|_| io::Error::other("invalid memory.peak"))?,
+            oom_kills: counter(&self.read("memory.events")?, "oom_kill")?,
+            pids_limit_hits: counter(&self.read("pids.events")?, "max")?,
+            cpu_throttled_usec: counter(&self.read("cpu.stat")?, "throttled_usec")?,
+        })
     }
     pub fn path(&self) -> &str {
         &self.path
@@ -275,6 +376,18 @@ fn parse_populated(text: &str) -> io::Result<bool> {
     }
     found.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing populated"))
 }
+fn counter(text: &str, name: &str) -> io::Result<u64> {
+    text.lines()
+        .find_map(|line| {
+            let (key, value) = line.split_once(' ')?;
+            (key == name).then_some(value)
+        })
+        .ok_or_else(|| io::Error::other(format!("missing cgroup counter {name}")))?
+        .trim()
+        .parse()
+        .map_err(|_| io::Error::other(format!("invalid cgroup counter {name}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

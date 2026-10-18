@@ -4,7 +4,22 @@
 definition. `fn_call(name, inputs, project, wait)` runs a single function without touching the
 plan; poll `call_status(call, project)` if it outlives `wait`, or wait for its `call` records
 with `log_wait(project, since_seq, kinds=["call"])`. Each status change of a call is a record
-in the project's log (the home log without a project).
+in the project's log (the home log without a project). Once admitted, call replies include
+`limits` with frozen `memory_bytes`, `cpu_millis` and `tasks`. Completion adds recorded `usage`
+with `memory_peak_bytes`, `oom_kills`, `pids_limit_hits` and `cpu_throttled_usec`; these are not
+live readings. Pending calls and historical runs without this evidence omit those fields.
+
+`fn_call` also accepts `limits: {memory?, cpus?, tasks?}`. It inherits project and home
+defaults, and refuses overrides above the installation ceilings. Memory accepts integer
+bytes or a size such as `"4GiB"`; CPUs may be fractional; tasks count processes and threads.
+Direct calls use the same finite budget and home capacity accounting as queued calls. A
+direct call that cannot reserve capacity is refused; a queued call waits. Capacity functions
+also run under budgets. See `docs("plans")`, Execution limits.
+
+A memory or task-limit failure returns `resource_exhausted` with `resource`, `limit`, optional
+`peak`, and `message`. The guardian stops the local payload before freeing its reservation.
+It does not retry that exhaustion automatically; CPU quota instead throttles execution.
+Work delegated to a separate daemon or remote executor needs that executor's own limits.
 
 ## Inline code: `inline.bash` and `inline.python`
 For a check or a small transform no function exists for, put the code in the step. Bind any

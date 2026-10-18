@@ -47,7 +47,16 @@ fn dispatch() -> Result<(), PublicError> {
     };
     let mode = cli.mode.name();
     let logged = sluice::logging::init(mode, &home);
-    let runtime = sluice_runtime::coordinator::executor().map_err(|e| PublicError::Storage {
+    let runtime = if mode == "guardian" {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .max_blocking_threads(16)
+            .enable_all()
+            .build()
+    } else {
+        sluice_runtime::coordinator::executor()
+    }
+    .map_err(|e| PublicError::Storage {
         message: e.to_string(),
     })?;
     let result = runtime.block_on(modes::run(cli.mode, home));

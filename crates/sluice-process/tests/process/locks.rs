@@ -130,3 +130,73 @@ fn file_locks_refuse_symlinks_and_stale_metadata_and_release_on_crash() {
         assert_eq!(holder.project.as_deref(), Some("new"));
     }
 }
+
+#[tokio::test]
+async fn start_fence_survives_cancelled_caller_and_retains_ambiguous_failure() {
+    use sluice_process::locks::RunFence;
+    use tokio::io::AsyncReadExt;
+    let home = tempfile::tempdir().unwrap();
+    let run = sluice_model::ids::RunId::new();
+    let release = home.path().join("release");
+    rustix::fs::mkfifoat(rustix::fs::CWD, &release, rustix::fs::Mode::RWXU).unwrap();
+    let fence = RunFence::acquire(home.path(), run).await.unwrap();
+    let mut command = Command::new("/usr/bin/timeout");
+    command.args([
+        "2",
+        "/bin/sh",
+        "-c",
+        "printf ready; read released < \"$1\"",
+        "fixture",
+    ]);
+    command.arg(&release);
+    let mut child = fence.spawn_start_helper(command).unwrap();
+    let mut output = child.stdout.take().unwrap();
+    let mut ready = [0; 5];
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        output.read_exact(&mut ready),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(&ready, b"ready");
+    drop(child);
+    drop(fence);
+    assert!(RunFence::try_acquire(home.path(), run).unwrap().is_none());
+    assert!(RunFence::start_pending(home.path(), run).unwrap());
+    fs::OpenOptions::new()
+        .write(true)
+        .open(release)
+        .unwrap()
+        .write_all(b"release\n")
+        .unwrap();
+    let fence = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        RunFence::acquire(home.path(), run),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!RunFence::start_pending(home.path(), run).unwrap());
+    let mut failure = Command::new("/bin/sh");
+    failure.args(["-c", "exit 7"]);
+    let status = fence
+        .spawn_start_helper(failure)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert_eq!(status.code(), Some(7));
+    drop(fence);
+    let _fence = RunFence::try_acquire(home.path(), run).unwrap().unwrap();
+    assert!(RunFence::start_pending(home.path(), run).unwrap());
+    fs::write(
+        home.path()
+            .join("runs")
+            .join(run.to_string())
+            .join("launch.pending"),
+        "\"previous-boot\"",
+    )
+    .unwrap();
+    assert!(!RunFence::start_pending(home.path(), run).unwrap());
+}

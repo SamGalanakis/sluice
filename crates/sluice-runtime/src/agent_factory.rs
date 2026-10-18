@@ -957,6 +957,10 @@ mod tests {
     fn launch() -> Launch {
         let (project, run, attempt) = (ProjectId::new(), RunId::new(), AttemptId::new());
         Launch {
+            limits: sluice_model::ResourcePolicy::for_host(64 << 30, 32000)
+                .unwrap()
+                .defaults,
+            policy: sluice_model::ResourcePolicy::for_host(64 << 30, 32000).unwrap(),
             identity: AttemptKey {
                 home: HomeId::new(),
                 project: Some(project),

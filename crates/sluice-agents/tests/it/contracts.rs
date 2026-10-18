@@ -180,6 +180,9 @@ fn empty() -> CleanupEvidence {
     }
 }
 impl PayloadHost for HookHost {
+    fn resource_usage(&self) -> std::io::Result<sluice_model::RunUsage> {
+        Ok(Default::default())
+    }
     type Invocation = HookPayload;
     async fn start(
         &self,
@@ -260,6 +263,10 @@ async fn authenticated_guardian_hook_roundtrip_returns_synchronous_cli_decision(
     link.reserve(identity.clone(), range, vec![]);
     let capability = RunCapability::new("test-hook-capability");
     let args = GuardianArgs {
+        limits: sluice_model::ResourcePolicy::for_host(64 << 30, 32000)
+            .unwrap()
+            .defaults,
+        guardian_memory_bytes: 256 << 20,
         home_dir: scratch.0.clone(),
         run_dir: scratch.0.join("run"),
         guardian: GuardianIdentity {

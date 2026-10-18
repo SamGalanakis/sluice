@@ -1,7 +1,10 @@
 //! Argument-safe transient user services. An attempted start is never retried.
 use crate::host::test_mode;
 use serde::{Deserialize, Serialize};
-use sluice_model::ids::RunId;
+use sluice_model::{
+    ids::{HomeId, RunId},
+    limits::RunLimits,
+};
 use std::{
     collections::BTreeMap,
     ffi::OsString,
@@ -45,6 +48,9 @@ pub struct ServiceCommand {
     pub args: Vec<OsString>,
     pub cwd: Option<PathBuf>,
     pub env: BTreeMap<OsString, OsString>,
+    pub workload_slice: Option<WorkloadSlice>,
+    pub run_budget: Option<(RunLimits, u64)>,
+    pub start_fence: Option<crate::locks::RunFence>,
 }
 impl ServiceCommand {
     pub fn new(program: impl Into<PathBuf>) -> Self {
@@ -53,6 +59,9 @@ impl ServiceCommand {
             args: Vec::new(),
             cwd: None,
             env: BTreeMap::new(),
+            workload_slice: None,
+            run_budget: None,
+            start_fence: None,
         }
     }
 }
@@ -164,7 +173,18 @@ impl TransientService {
                 ));
             }
         }
-        // Reserve before any await, including the preflight lookup.
+        let budget = spec
+            .run_budget
+            .map(|(limits, guardian)| crate::cgroup::service_limits(limits, guardian))
+            .transpose()?;
+        let _slice_guard = if let Some(slice) = &spec.workload_slice {
+            let guard = slice.lock().await?;
+            slice.ensure_locked().await?;
+            Some(guard)
+        } else {
+            None
+        };
+        // Reserve the launch attempt before querying or starting its unit.
         self.attempted = true;
         let existing = self.query().await?;
         if existing.load_state != "not-found" {
@@ -185,11 +205,25 @@ impl TransientService {
             .arg(&self.name)
             .args([
                 "--property=Delegate=yes",
+                "--property=OOMPolicy=continue",
                 "--property=KillMode=control-group",
                 "--property=Restart=no",
                 "--property=TimeoutStopSec=5s",
             ])
             .arg(format!("--description=Sluice run {}", self.name));
+        if let Some(slice) = &spec.workload_slice {
+            command.arg(format!("--slice={}", slice.name));
+        }
+        if let Some(budget) = budget {
+            command.arg(format!("--property=MemoryMax={}", budget.memory_bytes));
+            command.arg("--property=MemorySwapMax=0");
+            command.arg(format!(
+                "--property=CPUQuota={}.{}%",
+                budget.cpu_millis / 10,
+                budget.cpu_millis % 10
+            ));
+            command.arg(format!("--property=TasksMax={}", budget.tasks));
+        }
         if let Some(cwd) = &spec.cwd {
             command.arg("--working-directory").arg(cwd);
         }
@@ -201,7 +235,7 @@ impl TransientService {
             command.arg(assignment);
         }
         command.arg("--").arg(&spec.program).args(&spec.args);
-        let result = manager_output(command).await;
+        let result = manager_start(command, spec.start_fence.as_ref()).await;
         match result {
             Ok(_) => match self.query().await {
                 Ok(state) if state.load_state != "not-found" => Ok(StartOutcome::Confirmed {
@@ -297,6 +331,26 @@ fn parse_state(name: &str, text: &str) -> io::Result<UnitState> {
         main_pid: (pid != 0).then_some(pid),
     })
 }
+async fn manager_start(
+    command: Command,
+    fence: Option<&crate::locks::RunFence>,
+) -> io::Result<Output> {
+    let Some(fence) = fence else {
+        return manager_output(command).await;
+    };
+    let child = fence.spawn_start_helper(command)?;
+    let output = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "systemd start still pending"))??;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "systemd-run: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(output)
+}
+
 async fn manager_output(command: Command) -> io::Result<Output> {
     // Environment assignments can contain credentials. Never format full argv.
     let program = command.get_program().to_string_lossy().into_owned();
@@ -312,4 +366,117 @@ async fn manager_output(command: Command) -> io::Result<Output> {
         )));
     }
     Ok(output)
+}
+
+/// One home's workload budget. Services that coordinate runs do not join it.
+#[derive(Debug, Clone)]
+pub struct WorkloadSlice {
+    name: String,
+    totals: RunLimits,
+}
+impl WorkloadSlice {
+    pub fn new(home: HomeId, totals: RunLimits) -> io::Result<Self> {
+        if totals.memory_bytes == 0 || totals.cpu_millis == 0 || totals.tasks == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "slice limits must be positive",
+            ));
+        }
+        Ok(Self {
+            name: format!(
+                "{}workloads-{}.slice",
+                unit_prefix(),
+                home.to_string().replace('-', "_")
+            ),
+            totals,
+        })
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub async fn ensure(&self) -> io::Result<()> {
+        let _guard = self.lock().await?;
+        self.ensure_locked().await
+    }
+    async fn lock(&self) -> io::Result<std::fs::File> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let path = format!(
+            "/run/user/{}/{}.lock",
+            rustix::process::getuid().as_raw(),
+            self.name
+        );
+        tokio::task::spawn_blocking(move || {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+                .open(path)?;
+            file.lock()?;
+            Ok(file)
+        })
+        .await
+        .map_err(io::Error::other)?
+    }
+    async fn ensure_locked(&self) -> io::Result<()> {
+        let mut show = Command::new("/usr/bin/systemctl");
+        show.args([
+            "--user",
+            "show",
+            "--property=LoadState",
+            "--property=MemoryMax",
+            "--property=MemorySwapMax",
+            "--property=CPUQuotaPerSecUSec",
+            "--property=TasksMax",
+            "--property=ControlGroup",
+            &self.name,
+        ]);
+        let output = manager_output(show).await?;
+        let state = String::from_utf8_lossy(&output.stdout);
+        let field = |key: &str| state.lines().find_map(|line| line.strip_prefix(key));
+        if field("LoadState=") != Some("loaded") {
+            return Err(io::Error::other(
+                "systemd could not load the workload slice",
+            ));
+        }
+        let memory_matches = field("MemoryMax=").and_then(|v| v.parse::<u64>().ok())
+            == Some(self.totals.memory_bytes);
+        let tasks_matches =
+            field("TasksMax=").and_then(|v| v.parse::<u32>().ok()) == Some(self.totals.tasks);
+        // systemctl formats CPUQuotaPerSecUSec as a duration. Read the kernel's
+        // quota instead, which also proves the active slice received the limits.
+        let group = field("ControlGroup=").filter(|g| g.starts_with('/'));
+        let cpu_matches = group.and_then(|g| std::fs::read_to_string(format!("/sys/fs/cgroup{g}/cpu.max")).ok()).is_some_and(|v| {
+            let mut parts = v.split_whitespace();
+            let quota = parts.next().and_then(|v| v.parse::<u64>().ok());
+            let period = parts.next().and_then(|v| v.parse::<u64>().ok());
+            matches!((quota, period), (Some(q), Some(p)) if u128::from(q) * 1000 == u128::from(p) * u128::from(self.totals.cpu_millis))
+        });
+        if memory_matches && tasks_matches && cpu_matches && field("MemorySwapMax=") == Some("0") {
+            return Ok(());
+        }
+        if let Some(group) = group {
+            let events = std::fs::read_to_string(format!("/sys/fs/cgroup{group}/cgroup.events"))?;
+            if events.lines().any(|line| line == "populated 1") {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "workload budget changed while runs are live; drain this home before changing aggregate limits",
+                ));
+            }
+        }
+        let mut update = Command::new("/usr/bin/systemctl");
+        update.args(["--user", "set-property", "--runtime", &self.name]);
+        update.arg(format!("MemoryMax={}", self.totals.memory_bytes));
+        update.arg("MemorySwapMax=0");
+        update.arg(format!(
+            "CPUQuota={}.{}%",
+            self.totals.cpu_millis / 10,
+            self.totals.cpu_millis % 10
+        ));
+        update.arg(format!("TasksMax={}", self.totals.tasks));
+        manager_output(update).await?;
+        Ok(())
+    }
 }

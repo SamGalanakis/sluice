@@ -21,6 +21,7 @@ use sluice_model::{
     gates::{GateDecision, evaluate_step},
     hash::InputsHash,
     ids::{AttemptId, ProjectId, ResultId, RunId, StepGeneration, StepId, WorkGeneration},
+    limits::{ResourcePolicy, RunLimits},
     rpc::JsonMap,
     types::{Type, check_value_at},
 };
@@ -48,6 +49,8 @@ pub struct Reserve {
     pub provenance: JsonMap,
     pub release_id: String,
     pub protocol_major: u16,
+    pub limits: RunLimits,
+    pub admission: ResourcePolicy,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssignedRange {
@@ -204,11 +207,13 @@ fn stored_reservation(
         return Ok(None);
     };
     let frozen: Value = serde_json::from_str(&frozen)?;
-    if step != request.step.as_str()
+    if crate::resources::run_limits(tx.sql(), request.run)? != Some(request.limits)
+        || step != request.step.as_str()
         || attempt != request.attempt.to_string()
         || hash != request.inputs_hash.to_string()
         || frozen["inputs"] != serde_json::to_value(&request.inputs)?
         || frozen["provenance"] != serde_json::to_value(&request.provenance)?
+        || frozen["policy"] != serde_json::to_value(&request.admission)?
         || index != request.item_index
         || count != request.item_count.map(plans::sql_counter).transpose()?
         || release != request.release_id
@@ -275,15 +280,50 @@ pub fn reserve(
     {
         return Err(plans::invalid("step is not pending"));
     }
-    if !matches!(
-        evaluate_step(&context.plan, &state, step),
-        GateDecision::Ready
-    ) {
-        return Err(plans::invalid("step is not ready"));
-    }
-    let effective = plans::effective_map(&context.plan, &state, step)?
-        .ok_or_else(|| plans::invalid("inputs unavailable"))?;
-    if sluice_model::plan::inputs_hash(&context.plan, &state, step) != Some(request.inputs_hash) {
+    let (generation,work,cursor,old_hash,old_total,instances): (i64,i64,i64,Option<String>,Option<i64>,String) = tx.sql().query_row("SELECT generation,work_generation,delivery_cursor,inputs_hash,total,instances FROM steps WHERE project_id=?1 AND step_id=?2",params![context.project.to_string(),request.step.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)))?;
+    let running_batch = scatter && state.status(&request.step) == StepStatus::Running;
+    let batch: Option<(String, String)> = if running_batch {
+        tx.sql()
+            .query_row(
+                "SELECT a.request,a.inputs_hash FROM attempts a
+             WHERE a.project_id=?1 AND a.step_id=?2 AND a.generation=?3 AND a.work_generation=?4
+             ORDER BY a.created_at,a.attempt_id LIMIT 1",
+                params![
+                    context.project.to_string(),
+                    request.step.as_str(),
+                    generation,
+                    work
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+    } else {
+        None
+    };
+    let (effective, expected_hash, prior_batch) = if let Some((raw, hash)) = batch {
+        if state.paused.is_paused() || step.paused.is_paused() {
+            return Err(plans::invalid("step is paused"));
+        }
+        let frozen: Value = serde_json::from_str(&raw)?;
+        let effective: JsonMap = serde_json::from_value(frozen["effective_inputs"].clone())?;
+        (effective, hash, Some(frozen))
+    } else {
+        if running_batch {
+            return Err(plans::invalid("running scatter has no frozen batch"));
+        }
+        if !matches!(
+            evaluate_step(&context.plan, &state, step),
+            GateDecision::Ready
+        ) {
+            return Err(plans::invalid("step is not ready"));
+        }
+        let effective = plans::effective_map(&context.plan, &state, step)?
+            .ok_or_else(|| plans::invalid("inputs unavailable"))?;
+        let hash = sluice_model::plan::inputs_hash(&context.plan, &state, step)
+            .ok_or_else(|| plans::invalid("inputs unavailable"))?;
+        (effective, hash.to_string(), None)
+    };
+    if expected_hash != request.inputs_hash.to_string() {
         return Err(plans::conflict(
             "effective inputs changed before reservation",
         ));
@@ -291,7 +331,6 @@ pub fn reserve(
     if request.protocol_major == 0 || request.release_id.is_empty() {
         return Err(plans::invalid("release and protocol are required"));
     }
-    let (generation,work,cursor,old_hash,old_total,instances): (i64,i64,i64,Option<String>,Option<i64>,String) = tx.sql().query_row("SELECT generation,work_generation,delivery_cursor,inputs_hash,total,instances FROM steps WHERE project_id=?1 AND step_id=?2",params![context.project.to_string(),request.step.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)))?;
     if scatter {
         let name = step.scatter.as_ref().expect("scatter checked");
         let count = effective
@@ -329,6 +368,13 @@ pub fn reserve(
             step.bindings.get(name),
             Some(sluice_model::plan::Binding::File(_))
         ) {
+            if let Some(batch) = &prior_batch
+                && request.inputs.0.get(name).map(|v| v.as_value()) != batch["inputs"].get(name)
+            {
+                return Err(plans::conflict(format!(
+                    "frozen file input {name} differs from scatter batch"
+                )));
+            }
             continue;
         }
         let expected = if step.scatter.as_ref() == Some(name) {
@@ -352,7 +398,7 @@ pub fn reserve(
     // takes messages on its live feed unless this run's frozen inputs turn it off.
     let listens = step.signature.inputs.contains_key("listen")
         && request.inputs.0.get("listen").map(|v| v.as_value()) != Some(&Value::Bool(false));
-    let frozen = json!({"declaration":plans::step_declaration(tx.sql(),context.project,&step.id)?,"inputs":request.inputs,"effective_inputs":effective,"returns":returns,"declared":declared,"item_count":request.item_count,"provenance":request.provenance,"listens":listens});
+    let frozen = json!({"declaration":plans::step_declaration(tx.sql(),context.project,&step.id)?,"inputs":request.inputs,"effective_inputs":effective,"returns":returns,"declared":declared,"item_count":request.item_count,"provenance":request.provenance,"listens":listens,"limits":request.limits,"policy":request.admission});
     let compatible = !scatter
         || old_hash.as_deref() == Some(&request.inputs_hash.to_string())
             && old_total == request.item_count.map(plans::sql_counter).transpose()?;
@@ -364,9 +410,11 @@ pub fn reserve(
     let index = request.item_index.to_string();
     if instances
         .get(&index)
-        .is_some_and(|v| v["status"] == "succeeded")
+        .is_some_and(|v| v["status"] == "succeeded" || v["status"] == "failed")
     {
-        return Err(plans::invalid("successful scatter item is retained"));
+        return Err(plans::invalid(
+            "terminal scatter item is retained until explicit retry",
+        ));
     }
     let predecessor: Option<(String,Option<String>,i64,i64,String)> = tx.sql().query_row(
         "SELECT r.run_id,r.started_at,r.assigned_after,r.assigned_through,a.request FROM runs r JOIN attempts a USING(attempt_id)
@@ -422,6 +470,7 @@ pub fn reserve(
     let at = plans::now()?;
     tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,generation,work_generation,item_index,phase,request,inputs_hash,provenance,unit,created_at) VALUES (?1,?2,?3,?4,?5,?6,'reserved',?7,?8,?9,?10,?11)",
         params![id.attempt.to_string(),id.project.to_string(),id.step.as_str(),generation,work,request.item_index,frozen.to_string(),request.inputs_hash.to_string(),serde_json::to_string(&request.provenance)?,step.unit_name().to_string(),at])?;
+    crate::resources::reserve_budget(tx, id.attempt, request.limits, &request.admission)?;
     tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,generation,work_generation,item_index,prev_run,unit,release_id,protocol_major,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         params![id.run.to_string(),id.project.to_string(),id.attempt.to_string(),id.step.as_str(),generation,work,request.item_index,prev_run.map(|r|r.to_string()),step.unit_name().to_string(),request.release_id,request.protocol_major,at])?;
     let range = hooks.assign(tx, &id, cursor, exact.as_ref())?;
@@ -1211,6 +1260,7 @@ pub fn complete_frozen(
         "UPDATE attempts SET phase='terminal',finished_at=?2 WHERE attempt_id=?1",
         params![id.attempt.to_string(), at],
     )?;
+    tx.changed(None, "execution");
     tx.sql().execute(
         "UPDATE runs SET completion_id=?2,finished_at=?3,completion_ack=1 WHERE run_id=?1",
         params![id.run.to_string(), request.completion_id, at],

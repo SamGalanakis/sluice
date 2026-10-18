@@ -28,6 +28,8 @@ fn setup(dir: &Path) -> (AdoptionAttempt, MemoryCoordinator) {
         socket_challenge: "challenge".into(),
     };
     let attempt = AdoptionAttempt {
+        limits: super::test_limits(),
+        guardian_memory_bytes: 256 << 20,
         identity: identity.clone(),
         guardian: Some(guardian),
         run_dir: dir.into(),
@@ -55,6 +57,9 @@ fn proof(empty: bool) -> CleanupEvidence {
 }
 fn journal(a: &AdoptionAttempt) -> CompletionJournal {
     CompletionJournal {
+        limits: a.limits,
+        guardian_memory_bytes: a.guardian_memory_bytes,
+        usage: Some(sluice_model::RunUsage::default()),
         protocol: PROTOCOL_VERSION,
         identity: a.identity.clone(),
         completion_id: "completion".into(),

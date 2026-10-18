@@ -836,6 +836,10 @@ async fn helper_rejection_applies_or_conflicts_in_real_store_and_duplicate_compl
                     tx,
                     &copy,
                     Reserve {
+                        limits: sluice_model::ResourcePolicy::for_host(64 << 30, 32000)
+                            .unwrap()
+                            .defaults,
+                        admission: sluice_model::ResourcePolicy::for_host(64 << 30, 32000).unwrap(),
                         step,
                         attempt: AttemptId::new(),
                         run: RunId::new(),

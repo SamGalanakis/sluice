@@ -47,6 +47,14 @@ impl sluice_process::guardian::AdoptionHost for Fake {
     }
 }
 impl ExecutionHost for Fake {
+    async fn terminal_gone(
+        &self,
+        _: sluice_model::ids::RunId,
+        _: bool,
+    ) -> Result<bool, sluice_model::error::PublicError> {
+        Ok(true)
+    }
+
     async fn launch(&self, launch: Launch) -> Result<LaunchOutcome, PublicError> {
         let fail = launch
             .invocation
@@ -88,6 +96,15 @@ impl Fixture {
         let home = ScratchHome::new().unwrap();
         assert!(home.root().exists());
         ScratchHome::validate(home.path()).unwrap();
+        std::fs::write(
+            home.path().join("config.json"),
+            json!({"execution":{
+                "defaults":{"memory":"64MiB","cpus":0.1,"tasks":64},
+                "guardian_memory":"64MiB"
+            }})
+            .to_string(),
+        )
+        .unwrap();
         let host = Fake::default();
         let broker = Coordinator::open(home.path().into(), Catalog::fixtures(), host.clone())
             .await
@@ -159,6 +176,9 @@ fn map(v: Value) -> JsonMap {
 fn journal(l: &Launch, result: PayloadResult) -> CompletionJournal {
     CompletionJournal {
         protocol: 1,
+        limits: l.limits,
+        guardian_memory_bytes: l.policy.guardian_memory_bytes,
+        usage: Some(Default::default()),
         identity: l.identity.clone(),
         completion_id: format!("complete-{}", l.identity.run),
         result,
@@ -209,7 +229,7 @@ async fn failed_outputs_and_spawn_failure_block_only_their_dependents(f: &mut Fi
     .await;
     assert_eq!(f.status().await["steps"]["other"]["status"], "failed");
 }
-async fn scatter_reserves_all_items_holds_once_and_retries_only_failed_item(f: &mut Fixture) {
+async fn scatter_with_available_capacity_holds_once_and_retries_only_failed_item(f: &mut Fixture) {
     f.seed(json!({"steps":{"each":{"run":"fixture.echo","scatter":"value","in":{"value":{"default":[1,2,3]}},"needs":{"cpu":1}},"waiter":{"run":"fixture.echo","in":{"value":{"default":9}},"needs":{"cpu":1}}}}),json!({"cpu":1})).await;
     assert_eq!(f.tick().await, 3);
     let batch = f.launches();
@@ -644,7 +664,7 @@ async fn readiness_inline_and_independent_failures() {
 #[tokio::test]
 async fn scatter_retry_and_changed_inputs() {
     let mut f = Fixture::new(json!({"steps":{}}), json!({})).await;
-    scatter_reserves_all_items_holds_once_and_retries_only_failed_item(&mut f).await;
+    scatter_with_available_capacity_holds_once_and_retries_only_failed_item(&mut f).await;
     changed_scatter_hash_replaces_every_item_and_predecessor(&mut f).await;
 }
 
@@ -656,4 +676,123 @@ async fn capacity_ordering_pauses_and_queue_records() {
     section_waiter_grants_before_plan_admission_even_without_new_ready_work(&mut f).await;
     supervised_capacity_failure_keeps_last_good_observation(&mut f).await;
     queue_events_are_durable_deduplicated_and_disappear_after_admission(&mut f).await;
+}
+
+fn bounded_policy(ceiling: &str) -> Value {
+    json!({"execution":{
+        "defaults":{"memory":"16MiB","cpus":0.2,"tasks":8},
+        "ceilings":{"memory":ceiling,"cpus":0.2,"tasks":8},
+        "total":{"memory":"128MiB","cpus":1,"tasks":128},
+        "guardian_memory":"16MiB"
+    }})
+}
+
+#[tokio::test]
+async fn bounded_scatter_keeps_original_inputs_gates_and_files_between_admissions() {
+    let mut f = Fixture::new(json!({"steps":{}}), json!({})).await;
+    let brief = f.home.root().join("brief.txt");
+    std::fs::write(&brief, "original brief").unwrap();
+    let mut policy = bounded_policy("96MiB");
+    policy["execution"]["defaults"]["memory"] = json!("96MiB");
+    std::fs::write(f.home.path().join("config.json"), policy.to_string()).unwrap();
+    f.seed(
+        json!({"inputs":{"items":"int[]","go":"boolean"},"steps":{
+            "each":{"run":"fixture.submit","scatter":"value","after":["go"],"needs":{"lane":1},
+            "in":{"value":{"source":"items"},"brief":{"file":brief}}}
+        }}),
+        json!({"lane":1}),
+    )
+    .await;
+    for (name, value) in [("items", json!([1, 2, 3])), ("go", json!(true))] {
+        command(&f.broker,json!({"command":"plan_set_input","args":{"project":{"kind":"id","value":f.project},"name":name,"value":value,"edit":{"expected":2,"dry_run":false,"reason":"initial","author":"test"}}})).await;
+    }
+    assert_eq!(f.tick().await, 1);
+    let first = f.launches()[0].clone();
+    assert_eq!(first.invocation.inputs.0["value"].as_value(), 1);
+    assert_eq!(
+        first.invocation.inputs.0["brief"].as_value(),
+        "original brief"
+    );
+    for (name, value) in [("items", json!([9])), ("go", json!(false))] {
+        command(&f.broker,json!({"command":"plan_set_input","args":{"project":{"kind":"id","value":f.project},"name":name,"value":value,"edit":{"expected":2,"dry_run":false,"reason":"next batch","author":"test"}}})).await;
+    }
+    std::fs::remove_file(&brief).unwrap();
+    assert_eq!(f.tick().await, 0);
+    f.finish(&first, PayloadResult::Succeeded(map(json!({"value":1}))))
+        .await;
+    f.patch(
+        2,
+        json!([{"op":"step.update","step":"each","changes":{"paused":true}}]),
+    )
+    .await;
+    assert_eq!(f.tick().await, 0);
+    f.patch(
+        3,
+        json!([{"op":"step.update","step":"each","changes":{"paused":false}}]),
+    )
+    .await;
+    assert_eq!(f.tick().await, 1);
+    let second = f.launches()[1].clone();
+    assert_eq!(second.invocation.inputs.0["value"].as_value(), 2);
+    assert_eq!(
+        second.invocation.inputs.0["brief"].as_value(),
+        "original brief"
+    );
+    assert_eq!(f.status().await["resources"]["lane"]["held"], 1);
+    f.finish(&second, PayloadResult::Succeeded(map(json!({"value":2}))))
+        .await;
+    assert_eq!(f.tick().await, 1);
+    let third = f.launches()[2].clone();
+    assert_eq!(third.invocation.inputs.0["value"].as_value(), 3);
+    assert_eq!(
+        third.invocation.inputs.0["brief"].as_value(),
+        "original brief"
+    );
+    f.finish(&third, PayloadResult::Succeeded(map(json!({"value":3}))))
+        .await;
+    assert_eq!(
+        f.status().await["steps"]["each"]["outputs"]["value"],
+        json!([1, 2, 3])
+    );
+    assert_eq!(f.status().await["resources"]["lane"]["held"], 0);
+}
+
+#[tokio::test]
+async fn lowering_a_run_ceiling_queues_that_step_without_blocking_other_work() {
+    let mut f = Fixture::new(json!({"steps":{}}), json!({})).await;
+    std::fs::write(
+        f.home.path().join("config.json"),
+        bounded_policy("64MiB").to_string(),
+    )
+    .unwrap();
+    f.seed(
+        json!({"steps":{
+            "a":{"run":"fixture.echo","limits":{"memory":"48MiB"},"in":{"value":{"default":1}}},
+            "b":{"run":"fixture.echo","in":{"value":{"default":2}}}
+        }}),
+        json!({}),
+    )
+    .await;
+    std::fs::write(
+        f.home.path().join("config.json"),
+        bounded_policy("32MiB").to_string(),
+    )
+    .unwrap();
+    assert_eq!(f.tick().await, 1);
+    assert_eq!(
+        f.launches()[0].identity.step.as_ref().unwrap().as_str(),
+        "b"
+    );
+    let status = f.status().await;
+    assert_eq!(status["steps"]["a"]["status"], "pending");
+    assert!(
+        status["steps"]["a"]["waiting"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason
+                .as_str()
+                .is_some_and(|reason| reason.contains("per-run ceilings"))),
+        "{status}"
+    );
 }

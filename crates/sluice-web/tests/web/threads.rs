@@ -14,6 +14,7 @@ async fn p605_history_includes_full_owner_conversations_without_marking_unrender
             projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name: "history".parse().unwrap(),
                     description: String::new(),
                     icon: None,

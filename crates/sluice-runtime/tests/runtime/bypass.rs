@@ -50,6 +50,14 @@ impl sluice_process::guardian::AdoptionHost for Fake {
     }
 }
 impl ExecutionHost for Fake {
+    async fn terminal_gone(
+        &self,
+        _: sluice_model::ids::RunId,
+        _: bool,
+    ) -> Result<bool, sluice_model::error::PublicError> {
+        Ok(true)
+    }
+
     async fn launch(&self, launch: Launch) -> Result<LaunchOutcome, PublicError> {
         self.launches.lock().unwrap().push(launch);
         Ok(LaunchOutcome::Accepted)
@@ -67,7 +75,7 @@ struct Fixture {
 }
 impl Fixture {
     async fn new(steps: Value) -> Self {
-        let home = ScratchHome::new().unwrap();
+        let home = finite_home();
         assert!(home.root().exists());
         ScratchHome::validate(home.path()).unwrap();
         let host = Fake::default();
@@ -239,6 +247,9 @@ fn map(v: Value) -> JsonMap {
 fn journal(l: &Launch, result: PayloadResult) -> CompletionJournal {
     CompletionJournal {
         protocol: 1,
+        limits: l.limits,
+        guardian_memory_bytes: l.policy.guardian_memory_bytes,
+        usage: Some(Default::default()),
         identity: l.identity.clone(),
         completion_id: format!("complete-{}", l.identity.run),
         result,
@@ -740,4 +751,18 @@ async fn bypass_notes_are_says_from_sluice_that_pinned_releases_decode() {
             serde_json::from_value(wire.clone()).unwrap_or_else(|e| panic!("{kind}: {e}"));
         assert_eq!(serde_json::to_value(&event).unwrap(), wire);
     }
+}
+
+fn finite_home() -> home::ScratchHome {
+    let home = home::ScratchHome::new().unwrap();
+    std::fs::write(
+        home.path().join("config.json"),
+        json!({"execution":{
+            "defaults":{"memory":"64MiB","cpus":0.1,"tasks":64},
+            "guardian_memory":"64MiB"
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    home
 }

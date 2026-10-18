@@ -363,6 +363,8 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
 - **Scatter:** `"scatter": "<input>"` runs the step once per item of that input's array; each
   output becomes an array in item order. Use it when the number of items is only known at run
   time. An extra input can be the scattered one; each run's agent submits its own outputs.
+  Each item needs its own physical execution budget, so a large scatter starts in bounded
+  groups as the home has capacity. Its logical `needs` is held once for the whole step.
 
 A step starts once every plan input and step it reads has a value / has succeeded and every
 `after` entry is satisfied. A failed step blocks everything downstream until you act.
@@ -594,7 +596,7 @@ An unknown operation or field, empty `ops`, changes, removal steps or edge entri
 validation errors use plan paths.
 
 Small edits use `step_add`, `step_update` or `step_remove`. `changes` accepts only `run`,
-`in`, `scatter`, `doc`, `outputs`, `paused`, `after`, `tags`, `needs` and `priority`; null
+`in`, `scatter`, `doc`, `outputs`, `paused`, `after`, `tags`, `needs`, `priority` and `limits`; null
 removes a key and `in` replaces the whole map. `unit_update(project, unit, changes, reason)`
 changes listed members by exact id without regenerating the recipe; its `steps` report the
 changed members. `unit_remove(project, unit, reason)` removes every member; its `steps`
@@ -648,7 +650,8 @@ own results. A step already failed as a cancel is left as it is.
 its submission (agent steps, above).
 
 ## Resources: limiting what runs at once
-Every ready step starts at once, unless it asks for a project's **resources**. Declare them on
+A ready step starts when the home has physical execution capacity and any project
+**resources** it asks for are available. Declare them on
 the project, each with a fixed capacity or a function that reports one:
 
 ```json
@@ -678,7 +681,8 @@ that is not about to start has `waiting`: its pause, `project paused`, each hand
 not ready (`step a is running`, `plan input n has no value`, `after b (failed)`), the resource
 shortfall, or for `core.external` the external wait. `status` also
 returns `resources`: each one's `capacity`, `held` and how many steps are `queued` on it.
-Pausing is still the hold you put on by hand; a step without `needs` is never held back. An
+Pausing is still the hold you put on by hand. A step without `needs` still waits for the
+home's physical execution capacity. An
 edit naming a resource the project does not declare, or asking for more than a fixed capacity,
 is refused. In a recipe, a whole-string `{param}` keeps its type: `"needs": {"lane":
 "{lanes}"}`, `"priority": "{prio}"`.
@@ -697,6 +701,46 @@ If the inputs change back to what the step was computed from, it is `succeeded` 
 ## Names
 Project names, step ids, plan input and output names: lowercase letters, digits, `-`, `_`;
 start with a letter or digit. Thread names use the same alphabet.
+
+## Execution limits
+
+Every executable run has finite memory, CPU and task limits. A task is a process or thread.
+The agent, its local commands and any composed sidecar share one payload budget. This is
+separate from `needs`: naming a logical resource `lane` or `cpu` does not set a kernel limit.
+
+```json
+{"run": "inline.bash", "needs": {"lane": 1},
+ "limits": {"memory": "4GiB", "cpus": 1.5, "tasks": 256},
+ "in": {"code": {"default": "./check-one-case"}}}
+```
+
+The installation provides defaults and ceilings. `project_create(limits={...})` or
+`project_update(project, limits={...})` sets project defaults; null on update clears them.
+A step's `limits` overrides individual fields. Recipes use the same declaration. Memory is
+integer bytes or an integer with `KiB`, `MiB`, `GiB` or `TiB`; `cpus` is a positive number
+with at most three decimal places; `tasks` is a positive integer. There is no unlimited value.
+An override above the installation ceiling is refused.
+
+The coordinator reserves each run's budget plus guardian overhead across all projects and
+calls. The reservation remains held until the whole service, including the guardian, has
+exited. `status` reports home-wide `execution` totals and held reservations, and queued steps
+explain their shortfall. An invalid configuration appears as `execution.error` while status
+stays readable. Pending steps show their current `limits` or a `budget_error`. A step's
+`run_resources` lists each stored run with its frozen limits and recorded usage; unavailable
+historical evidence is null. The latest run's limits remain the step's displayed budget once
+it is no longer pending. Defaults changed later never rewrite that evidence. Each scattered item reserves independently and waits for space. A
+running attempt keeps its frozen limits across retries and coordinator restarts. Changing
+project defaults changes future runs; changing a running step's limits is refused.
+
+A memory or task-limit failure is `resource_exhausted`, with `resource`, `limit`, optional
+`peak`, and a message. It stops the payload and does not automatically retry. Read the
+failure and the run's Budget and Usage in the dashboard before choosing a smaller workload
+or an explicit retry. CPU quota throttles a run instead of failing it. Do not treat a bare
+`SIGKILL` as proof of a memory-limit failure.
+
+The cap follows local descendants. Work handed to an existing daemon, a remote build worker
+or another user service belongs to that executor. Keep nested local wrappers inside the
+run's cgroup; starting a separate scope does not extend Sluice's containment to it.
 
 ## Validation errors
 Every edit is checked: functions exist (as the project sees them), required inputs are bound,

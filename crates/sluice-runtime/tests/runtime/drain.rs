@@ -31,6 +31,15 @@ impl Drop for Home {
 }
 async fn setup() -> (Home, Writer, ReadPool) {
     let h = Home::new();
+    std::fs::write(
+        h.0.join("config.json"),
+        json!({"execution":{
+            "defaults":{"memory":"64MiB","cpus":0.1,"tasks":64},
+            "guardian_memory":"64MiB"
+        }})
+        .to_string(),
+    )
+    .unwrap();
     let w = Writer::open(&h.0).unwrap();
     let r = ReadPool::open(&h.0, 2).unwrap();
     (h, w, r)
@@ -54,6 +63,7 @@ fn inputs(v: Value) -> JsonMap {
 }
 fn request(project: Option<ProjectId>, direct: bool) -> FnCall {
     FnCall {
+        limits: None,
         name: "test.echo".into(),
         inputs: inputs(json!({"value":"hello"})),
         project: project.map(ProjectSelector::Id),
@@ -133,6 +143,21 @@ impl Guardian {
 fn service(w: &Writer, r: &ReadPool, g: Arc<Guardian>) -> Calls<Registry, Guardian> {
     Calls::new(w.clone(), r.clone(), Arc::new(Registry::default()), g)
 }
+// This guardian only records launches: an accepted completion also proves its
+// service gone. Mirror the coordinator's separate release after terminalization.
+async fn complete(writer: &Writer, completion: CallCompletion) -> Result<bool, PublicError> {
+    let attempt = completion.attempt;
+    let accepted = sluice_runtime::calls::complete(writer, completion).await?;
+    if accepted {
+        writer
+            .write(RetrySafety::Idempotent, move |tx| {
+                sluice_store::resources::release_budget(tx, attempt)
+            })
+            .await?;
+    }
+    Ok(accepted)
+}
+
 fn completion(a: &AdmittedCall) -> CallCompletion {
     CallCompletion {
         call: a.call,
@@ -223,14 +248,17 @@ async fn drain_survives_writer_restart_and_home_calls_hold_it() {
 }
 #[tokio::test]
 async fn zero_capacity_drain_growth_grants_admitted_section_then_completion_stops_observations() {
-    let (_h, w, r) = setup().await;
+    let (h, w, r) = setup().await;
     let p = project(&w).await;
+    let policy = sluice_runtime::config::load_resource_policy(&h.0).unwrap();
     // Real project step reservation projection, so store lease functions enforce its identity.
     let run = RunId::new();
     let attempt = AttemptId::new();
     w.write(RetrySafety::NonIdempotent,move|tx|{
         tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status,unit,run,paused,priority) VALUES (?1,'work',0,'{\"run\":\"test.fn\"}','running','work','test.fn','false',0)",[p.to_string()])?;
-        tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,phase,request,inputs_hash,created_at) VALUES (?1,?2,'work','executing','{}','hash','now')",(attempt.to_string(),p.to_string()))?;
+        tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,phase,request,inputs_hash,created_at) VALUES (?1,?2,'work','reserved','{}','hash','now')",(attempt.to_string(),p.to_string()))?;
+        sluice_store::resources::reserve_budget(tx,attempt,policy.defaults,&policy)?;
+        tx.sql().execute("UPDATE attempts SET phase='executing' WHERE attempt_id=?1",[attempt.to_string()])?;
         tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,created_at) VALUES (?1,?2,?3,'work','now')",(run.to_string(),p.to_string(),attempt.to_string()))?;
         tx.sql().execute("INSERT INTO resources(scope,project_id,name,declaration,observed_capacity) VALUES (?1,?1,'lane',?2,0)",(p.to_string(),json!({"capacity_fn":"test.capacity"}).to_string()))?;
         tx.changed(Some(p),"status");Ok(())
@@ -287,6 +315,7 @@ async fn zero_capacity_drain_growth_grants_admitted_section_then_completion_stop
             "UPDATE runs SET finished_at='now' WHERE run_id=?1",
             [run.to_string()],
         )?;
+        sluice_store::resources::release_budget(tx, attempt)?;
         tx.changed(Some(p), "status");
         Ok(())
     })

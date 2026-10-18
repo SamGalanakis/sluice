@@ -21,6 +21,7 @@ struct FixtureState {
     done: AtomicBool,
     delivered: Mutex<Vec<MessageId>>,
     checkpoints: Mutex<Vec<JsonMap>>,
+    usage: Mutex<sluice_model::RunUsage>,
 }
 impl FnHost for FixtureHost {
     async fn invoke(&self, _: FnInvocation) -> Result<JsonMap, PublicError> {
@@ -55,6 +56,9 @@ impl PayloadHost for FixtureHost {
             host: self.clone(),
             identity: ProcessIdentity::read(std::process::id())?,
         })
+    }
+    fn resource_usage(&self) -> io::Result<sluice_model::RunUsage> {
+        Ok(*self.state.usage.lock().unwrap())
     }
     fn empty_without_payload(&self) -> io::Result<CleanupEvidence> {
         Ok(proof())
@@ -136,6 +140,8 @@ fn setup(home: &Path) -> (GuardianArgs, MemoryCoordinator, FixtureHost) {
         through: MessageId(2),
     };
     let args = GuardianArgs {
+        limits: super::test_limits(),
+        guardian_memory_bytes: 256 << 20,
         home_dir: home.into(),
         run_dir: home.join("run"),
         guardian: GuardianIdentity {
@@ -290,6 +296,8 @@ async fn real_guardian_survives_socket_coordinator_restart_and_busy_completion()
     let guardian = link.with_state(|s| s.attempts[&args.invocation.run].claimed.clone().unwrap());
     assert!(guardian.process.matches_current().unwrap());
     let adoption = AdoptionAttempt {
+        limits: super::test_limits(),
+        guardian_memory_bytes: 256 << 20,
         identity: args.guardian.identity.clone(),
         guardian: Some(guardian),
         run_dir: args.run_dir.clone(),
@@ -383,6 +391,8 @@ async fn real_guardian_death_is_lost_only_after_service_emptiness() {
         .unwrap();
     assert!(owned.exited().unwrap());
     let a = AdoptionAttempt {
+        limits: super::test_limits(),
+        guardian_memory_bytes: 256 << 20,
         identity: args.guardian.identity.clone(),
         guardian: Some(guardian),
         run_dir: args.run_dir.clone(),
@@ -434,6 +444,8 @@ async fn real_guardian_worker() {
         fixture_binary(),
         vec!["fn-result".into()],
         home.clone(),
+        args.limits,
+        args.guardian_memory_bytes,
     )
     .unwrap();
     args.guardian.process = host.control_identity().unwrap();
@@ -598,4 +610,47 @@ async fn wire_and_result_decoders_refuse_ambiguous_or_oversized_frames() {
         tx.write_u32(MAX_FRAME_BYTES as u32 + 1).await.unwrap();
         assert!(read_frame::<ControlCommand>(&mut rx).await.is_err());
     }
+}
+
+#[tokio::test]
+async fn exhaustion_settles_once_and_suppresses_requested_retry() {
+    let home = tempfile::tempdir().unwrap();
+    let (args, link, host) = setup(home.path());
+    let task = {
+        let (args, link, host) = (args.clone(), link.clone(), host.clone());
+        tokio::spawn(async move { guardian_main(args, &link, &host).await })
+    };
+    until(|| host.state.starts.load(Ordering::SeqCst) == 1).await;
+    assert!(matches!(
+        control(
+            &args,
+            ControlCommand::Retry {
+                checkpoint: JsonMap::default(),
+                backoff_ms: 0,
+            }
+        )
+        .await
+        .unwrap(),
+        ControlReply::Ack
+    ));
+    *host.state.usage.lock().unwrap() = sluice_model::RunUsage {
+        memory_peak_bytes: args.limits.memory_bytes,
+        oom_kills: 1,
+        pids_limit_hits: 0,
+        cpu_throttled_usec: 400,
+    };
+    task.await.unwrap().unwrap();
+    assert_eq!(host.state.starts.load(Ordering::SeqCst), 1);
+    link.with_state(|state| {
+        let attempt = &state.attempts[&args.invocation.run];
+        assert_eq!(attempt.releases, 1);
+        let completion = attempt.completion.as_ref().unwrap();
+        assert_eq!(completion.limits, args.limits);
+        assert_eq!(completion.usage.unwrap().oom_kills, 1);
+        assert!(
+            matches!(completion.result, PayloadResult::Failed(PublicError::ResourceExhausted {
+            resource: sluice_model::ExhaustedResource::Memory, limit, peak: Some(peak), ..
+        }) if limit == args.limits.memory_bytes && peak == limit)
+        );
+    });
 }

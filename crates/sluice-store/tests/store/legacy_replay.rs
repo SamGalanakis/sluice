@@ -1,6 +1,6 @@
-//! Lane H2's replay gates for the schema-3 converter (`docs/design/plan-rows.md` §10.2 to
+//! Lane H2's replay gates for the legacy-home converter (`docs/design/plan-rows.md` §10.2 to
 //! §10.6), driven through the store's own entry points: a schema-changing restore converts a
-//! legacy backup into its private destination, and a schema-3 store refuses a legacy home on
+//! legacy backup into its private destination, and a current store refuses a legacy home on
 //! open. The legacy homes are `tests/fixtures/legacy/` (SQL text the old release built; see
 //! `tools/cutover-rehearsal`), and every check is lane H's independent reading of the rows
 //! (`tests/support/plan_rows.rs`), never the converter's own code.
@@ -63,9 +63,12 @@ fn check_converted(source: &Path, converted: &Path, expected: &Value) {
     let before = open(source);
     assert_eq!(
         scalar::<i64>(&sql, "SELECT schema_version FROM home_meta"),
-        3
+        sluice_store::schema::SCHEMA_VERSION
     );
-    assert_eq!(scalar::<i64>(&sql, "PRAGMA user_version"), 3);
+    assert_eq!(
+        scalar::<i64>(&sql, "PRAGMA user_version"),
+        sluice_store::schema::SCHEMA_VERSION
+    );
     assert_eq!(
         scalar::<i64>(
             &sql,
@@ -291,7 +294,7 @@ fn slow_every_legacy_home_converts_with_round_trip_equality_at_every_revision() 
         // §2.1: a converted home and a fresh one are schema-equivalent.
         let differences = schema_differences(&fresh, &schema_shape(&open(&converted)).unwrap());
         assert!(differences.is_empty(), "{name}: {differences:#?}");
-        // And it is a home the schema-3 store opens.
+        // And it is a home the current store opens.
         drop(ReadPool::open(&destination, 1).unwrap_or_else(|e| panic!("{name}: {e}")));
         drop(Writer::open(&destination).unwrap_or_else(|e| panic!("{name}: {e}")));
     }
@@ -319,7 +322,9 @@ fn slow_each_defect_blocks_the_conversion_naming_its_project_and_rev_and_writes_
         assert_eq!(logical_dump(&open(&source)).unwrap(), unchanged, "{case}");
         let converted = destination.join("sluice.db");
         assert!(
-            !converted.exists() || scalar::<i64>(&open(&converted), "PRAGMA user_version") != 3,
+            !converted.exists()
+                || scalar::<i64>(&open(&converted), "PRAGMA user_version")
+                    != sluice_store::schema::SCHEMA_VERSION,
             "{case}: no converted home is left behind"
         );
     }
@@ -353,14 +358,14 @@ fn slow_a_backup_holding_live_work_is_refused_with_its_counts_and_nothing_is_wri
 }
 
 #[test]
-fn a_schema_3_store_refuses_a_legacy_home_on_open_without_touching_it() {
+fn a_current_store_refuses_a_legacy_home_on_open_without_touching_it() {
     for (name, schema) in [("schema1", 1), ("schema1_old", 1), ("schema2", 2)] {
         let home = ScratchHome::new().unwrap();
         let database = home.path().join("sluice.db");
         load_dump(&database, &read(&format!("{name}.sql"))).unwrap();
         let bytes = std::fs::read(&database).unwrap();
         let expected = format!(
-            "this home is at schema {schema}; run \"sluice home migrate\" to bring it to schema 3"
+            "this home is at schema {schema}; run \"sluice home migrate\" to bring it to schema 4"
         );
         let writer = match Writer::open(home.path()) {
             Ok(_) => panic!("{name}: the writer refuses"),
@@ -381,13 +386,13 @@ fn a_schema_3_store_refuses_a_legacy_home_on_open_without_touching_it() {
 }
 
 #[test]
-fn a_fresh_home_is_schema_3_and_its_compact_reads_use_the_covering_indexes() {
+fn a_fresh_home_is_schema_4_and_its_compact_reads_use_the_covering_indexes() {
     let home = ScratchHome::new().unwrap();
     drop(Writer::open(home.path()).unwrap());
     let sql = open(&home.path().join("sluice.db"));
     assert_eq!(
         scalar::<i64>(&sql, "SELECT schema_version FROM home_meta"),
-        3
+        sluice_store::schema::SCHEMA_VERSION
     );
     for (query, index) in [
         (

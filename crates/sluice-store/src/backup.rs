@@ -215,7 +215,7 @@ fn check_paused(connection: &Connection, paused: &AdmissionPaused) -> Result<()>
 /// database uses the online backup API even on restore, then verifies the Rust
 /// schema and integrity. No coordinator, guardian or fn is started.
 ///
-/// A backup at schema 1 or 2 is converted to schema 3 on its private destination
+/// A backup at schema 1, 2 or 3 is converted to the current schema on its private destination
 /// (`convert::convert_home`, with its unweakened preconditions). Such a schema-changing
 /// restore refuses a backup holding live work before anything is written
 /// (`LiveWorkInBackup`): a restore keeps every run's unit name and cgroup, so the restored
@@ -243,7 +243,7 @@ pub fn restore_into_fresh_home(src: &Path, dst: &Path) -> Result<BackupInfo> {
     source.pragma_update(None, "query_only", true)?;
     integrity(&source)?;
     pin_snapshot(&source)?;
-    let converts = matches!(source_schema(&source)?, Some(1 | 2));
+    let converts = matches!(source_schema(&source)?, Some(1..=3));
     if converts {
         let live = convert::live_work(&source)?;
         if !live.is_empty() {
@@ -260,7 +260,7 @@ pub fn restore_into_fresh_home(src: &Path, dst: &Path) -> Result<BackupInfo> {
     if converts {
         convert::convert_home(&dst.join(DATABASE_FILE))?;
     } else {
-        // A backup from before a column schema 3 added gains it on its private copy.
+        // A backup from before a current-schema column was added gains it on its private copy.
         let mut copy = Connection::open_with_flags(
             dst.join(DATABASE_FILE),
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,

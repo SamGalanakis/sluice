@@ -195,6 +195,7 @@ pub struct StepShape {
     pub tags: Vec<String>,
     pub needs: Vec<(String, u64)>,
     pub priority: i64,
+    pub limits: Option<sluice_model::limits::LimitsOverride>,
     pub dependencies: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -252,6 +253,7 @@ macro_rules! plan_shape {
                     tags: s.tags.iter().map(ToString::to_string).collect(),
                     needs: s.needs.iter().map(|(n, a)| (n.to_string(), *a)).collect(),
                     priority: s.priority,
+                    limits: s.limits.clone(),
                     dependencies: plan
                         .dependencies(id)
                         .iter()

@@ -21,7 +21,7 @@ use std::{
 
 const SCHEMA: i64 = sluice_store::schema::SCHEMA_VERSION;
 // The schema the cutover moves to.
-const TARGET: u32 = 3;
+const TARGET: u32 = SCHEMA as u32;
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -93,9 +93,8 @@ fn old_revision() -> &'static str {
     })
 }
 
-fn old_binary() -> PathBuf {
+fn old_binary_at(sha: &str) -> PathBuf {
     let repo = repo();
-    let sha = old_revision();
     let cache = target().join("cutover-old").join(sha);
     std::fs::create_dir_all(&cache).unwrap();
     // One build per schema-1 revision, whichever test asks first.
@@ -165,33 +164,52 @@ fn old_binary() -> PathBuf {
     binary
 }
 
-fn old_harness() -> PathBuf {
-    let _ = old_binary();
-    let cache = target().join("cutover-old").join(old_revision());
+fn old_harness_at(sha: &str, schema: u32) -> PathBuf {
+    let _ = old_binary_at(sha);
+    let cache = target().join("cutover-old").join(sha);
     let lock = std::fs::File::create(cache.join("harness.lock")).unwrap();
     lock.lock().unwrap();
     let binary = cache.join("target/debug/cutover-rehearsal");
-    if binary.is_file() {
+    let mut digests = BTreeMap::new();
+    let current = repo().join("tools/cutover-rehearsal");
+    files(&current, &current, &mut digests);
+    let fingerprint = sluice_store::artifacts::fingerprint(&serde_json::to_vec(&digests).unwrap());
+    let marker = cache.join("harness-source");
+    if binary.is_file() && std::fs::read_to_string(&marker).ok().as_deref() == Some(&fingerprint) {
         return binary;
     }
     let source = cache.join("src");
     let harness = source.join("tools/cutover-rehearsal");
     copy_tree(&repo().join("tools/cutover-rehearsal"), &harness);
     std::fs::copy(source.join("Cargo.lock"), harness.join("Cargo.lock")).unwrap();
-    let built = Command::new("cargo")
+    let mut command = Command::new("cargo");
+    command
         .current_dir(&source)
-        .args(["build", "-j", "4", "--manifest-path"])
+        .args([
+            "build",
+            "-j",
+            "4",
+            "--bin",
+            "cutover-rehearsal",
+            "--manifest-path",
+        ])
         .arg(harness.join("Cargo.toml"))
         .arg("--target-dir")
-        .arg(cache.join("target"))
-        .output()
-        .unwrap();
+        .arg(cache.join("target"));
+    if schema >= 3 {
+        command.arg("--no-default-features");
+    }
+    if schema >= 4 {
+        command.args(["--features", "bounded-execution"]);
+    }
+    let built = command.output().unwrap();
     assert!(
         built.status.success(),
         "historical rehearsal harness: {}",
         text(&built)
     );
     assert!(binary.is_file());
+    std::fs::write(marker, fingerprint).unwrap();
     binary
 }
 
@@ -258,7 +276,11 @@ fn release(root: &Path, binary: &Path, git_sha: &str, schema: u32) -> PathBuf {
     let manifest = Manifest {
         release_id: release_id.clone(),
         git_sha: git_sha.into(),
-        guardian_protocol_major: 1,
+        guardian_protocol_major: if schema == TARGET {
+            sluice_model::rpc::PROTOCOL_VERSION
+        } else {
+            1
+        },
         guardian_protocol_minor: 0,
         files: digests,
         private_tmux: serde_json::from_slice(
@@ -268,6 +290,10 @@ fn release(root: &Path, binary: &Path, git_sha: &str, schema: u32) -> PathBuf {
         build_toolchain: BTreeMap::from([("rustc".into(), "fixture".into())]),
         schema,
     };
+    let mut manifest = serde_json::to_value(manifest).unwrap();
+    if schema == 1 {
+        manifest.as_object_mut().unwrap().remove("schema");
+    }
     std::fs::write(
         stage.join("manifest.json"),
         serde_json::to_vec_pretty(&manifest).unwrap(),
@@ -285,10 +311,13 @@ struct Releases {
 }
 impl Releases {
     fn new() -> Self {
+        Self::from_old(old_revision(), 1)
+    }
+    fn from_old(old_sha: &str, old_schema: u32) -> Self {
         let root = tempfile::tempdir_in(target().join("tmp")).unwrap();
         let repo = repo();
         let head = git(&repo, &["rev-parse", "HEAD"]);
-        let old = release(root.path(), &old_binary(), old_revision(), 1);
+        let old = release(root.path(), &old_binary_at(old_sha), old_sha, old_schema);
         let candidate = release(
             root.path(),
             Path::new(env!("CARGO_BIN_EXE_sluice")),
@@ -318,12 +347,24 @@ impl Scratch {
         Self::with_env(|_| Vec::new())
     }
     fn with_env(env: impl FnOnce(&Path) -> Vec<(String, String)>) -> Self {
+        Self::with_releases(env, Releases::new())
+    }
+    fn with_releases(env: impl FnOnce(&Path) -> Vec<(String, String)>, releases: Releases) -> Self {
         let gate = support::Gate::new();
         let env = env(gate.root.path());
-        let releases = Releases::new();
         let install = Installation::at(gate.install.clone()).unwrap();
         install.fence("first install".into()).unwrap();
-        install.select(&releases.old, &gate.home).unwrap();
+        let selected = gate
+            .command(&releases.old.join("bin/sluice"), &["install", "select"])
+            .arg(&releases.old)
+            .arg(&gate.home)
+            .output()
+            .unwrap();
+        assert!(
+            selected.status.success(),
+            "select old release: {}",
+            text(&selected)
+        );
         install.unfence().unwrap();
         let prefix = gate.root.path().join("prefix");
         std::fs::create_dir_all(&prefix).unwrap();
@@ -878,7 +919,7 @@ if [ "$1" = tool ] && [ "$2" = plan_get ] && [ -f "$SLUICE_HOME/fail-plan-check"
 fi
 # Reproduce the live loop's fenced activation refusal deterministically.
 if [ "$1" = loop ] && [ -f "$SLUICE_INSTALL_DIR/fence.json" ]; then
-  echo 'busy: maintenance: schema-3 cutover' >&2
+  echo 'busy: maintenance: __CUTOVER_FENCE__' >&2
   exit 1
 fi
 if [ "$1" = loop ] && [ -f "$SLUICE_HOME/loop-without-lease" ]; then
@@ -936,7 +977,7 @@ path.write_text(json.dumps(services))
 PY
 fi
 exec "$(dirname "$0")/sluice-real" "$@"
-"#,
+"#.replace("__CUTOVER_FENCE__", &format!("schema-{TARGET} cutover")),
     );
     let mut manifest: Manifest =
         serde_json::from_slice(&std::fs::read(candidate.join("manifest.json")).unwrap()).unwrap();
@@ -970,9 +1011,12 @@ exec "$(dirname "$0")/sluice-real" "$@"
         scratch
             .value("SELECT schema_version FROM home_meta")
             .as_deref(),
-        Some("3")
+        Some(TARGET.to_string().as_str())
     );
-    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
+    assert_eq!(
+        scratch.fence().as_deref(),
+        Some(format!("schema-{TARGET} cutover").as_str())
+    );
     assert_eq!(
         scratch.value("SELECT mode FROM maintenance").as_deref(),
         Some("drain")
@@ -1000,28 +1044,33 @@ fn slow_cutover_resumes_failed_checks_after_repair_and_refuses_the_wrong_fence_o
     let output = scratch.cutover(&["--resume-checks"]);
     assert!(
         !output.status.success()
-            && String::from_utf8_lossy(&output.stderr).contains("fence reason schema-3 cutover"),
+            && String::from_utf8_lossy(&output.stderr)
+                .contains(&format!("fence reason schema-{TARGET} cutover")),
         "{}",
         text(&output)
     );
-    install.fence("schema-3 cutover".into()).unwrap();
+    install.fence(format!("schema-{TARGET} cutover")).unwrap();
     let db = rusqlite::Connection::open(scratch.gate.home.join("sluice.db")).unwrap();
     db.execute("UPDATE home_meta SET schema_version=1", [])
         .unwrap();
     let output = scratch.cutover(&["--resume-checks"]);
     assert!(
         !output.status.success()
-            && String::from_utf8_lossy(&output.stderr).contains("home and candidate at schema 3"),
+            && String::from_utf8_lossy(&output.stderr)
+                .contains(&format!("home and candidate at schema {TARGET}")),
         "{}",
         text(&output)
     );
-    db.execute("UPDATE home_meta SET schema_version=3", [])
+    db.execute("UPDATE home_meta SET schema_version=?1", [TARGET])
         .unwrap();
     drop(db);
     // An unrepaired check failure must leave the installation fenced and drained again.
     let output = scratch.cutover(&["--resume-checks"]);
     assert!(!output.status.success(), "{}", text(&output));
-    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
+    assert_eq!(
+        scratch.fence().as_deref(),
+        Some(format!("schema-{TARGET} cutover").as_str())
+    );
     std::fs::remove_file(marker).unwrap();
     // Recovery must re-create a maintenance coordinator through the restored
     // installation fence before it can restore the released drain.
@@ -1036,7 +1085,10 @@ fn slow_cutover_resumes_failed_checks_after_repair_and_refuses_the_wrong_fence_o
         "{}",
         text(&output)
     );
-    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
+    assert_eq!(
+        scratch.fence().as_deref(),
+        Some(format!("schema-{TARGET} cutover").as_str())
+    );
     assert_eq!(
         scratch.value("SELECT mode FROM maintenance").as_deref(),
         Some("drain")
@@ -1134,7 +1186,10 @@ fn slow_cutover_lease_timeout_refences_and_restores_the_drain() {
         "{}",
         text(&output)
     );
-    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
+    assert_eq!(
+        scratch.fence().as_deref(),
+        Some(format!("schema-{TARGET} cutover").as_str())
+    );
     assert_eq!(
         scratch.value("SELECT mode FROM maintenance").as_deref(),
         Some("drain")
@@ -1168,7 +1223,10 @@ fn slow_cutover_lost_release_reply_restores_the_drain() {
         "{}",
         text(&output)
     );
-    assert_eq!(scratch.fence().as_deref(), Some("schema-3 cutover"));
+    assert_eq!(
+        scratch.fence().as_deref(),
+        Some(format!("schema-{TARGET} cutover").as_str())
+    );
     assert_eq!(
         scratch.value("SELECT mode FROM maintenance").as_deref(),
         Some("drain")
@@ -1229,7 +1287,14 @@ impl Scratch {
         let harness = match harness {
             Some(harness) => harness,
             None => {
-                built = old_harness();
+                let manifest: Value = serde_json::from_slice(
+                    &std::fs::read(self.releases.old.join("manifest.json")).unwrap(),
+                )
+                .unwrap();
+                built = old_harness_at(
+                    manifest["git_sha"].as_str().unwrap(),
+                    manifest["schema"].as_u64().unwrap_or(1).try_into().unwrap(),
+                );
                 &built
             }
         };
@@ -1511,7 +1576,7 @@ fn slow_live_cutover_preflight_compatibility_and_rehearsal() {
     }
     {
         let run = scratch.live_run("step_id='w'");
-        // Chosen by itself: the candidate's manifest says schema 3, the home is schema 1.
+        // Chosen by itself: the candidate's manifest says the current schema, the home is schema 1.
         let home = scratch.gate.home.to_str().unwrap().to_owned();
         let release = scratch.releases.candidate.to_str().unwrap().to_owned();
         let output = scratch.compat_check(&["--release", &release, "--home", &home]);
@@ -1914,4 +1979,55 @@ fn slow_ship_and_deploy_refuse_schema_changes_before_build_or_push() {
             text(&output)
         );
     }
+}
+
+#[test]
+fn slow_cutover_preserves_normalized_plans_and_rehearses_the_current_schema() {
+    let old_sha = git(&repo(), &["rev-list", "--first-parent", "HEAD"])
+        .lines()
+        .find(|sha| {
+            git(
+                &repo(),
+                &["show", &format!("{sha}:crates/sluice-store/src/schema.rs")],
+            )
+            .contains("pub const SCHEMA_VERSION: i64 = 3;")
+        })
+        .expect("a schema-3 ancestor")
+        .to_owned();
+    let mut scratch = Scratch::with_releases(|_| Vec::new(), Releases::from_old(&old_sha, 3));
+    scratch.tool("project_create", json!({"name":"p"}));
+    scratch.tool("plan_edit", json!({"project":"p","rev":1,"reason":"ordered normalized plan","ops":[
+        {"op":"input.put","name":"n","declaration":{"type":"int","doc":"preserved input"}},
+        {"op":"step.add","step":"later","spec":{"run":"core.external","outputs":{"value":"int"},"paused":true}},
+        {"op":"step.add","step":"earlier","spec":{"run":"core.external","outputs":{"value":"string"},"paused":true}},
+        {"op":"output.put","name":"answer","source":"later/value"}
+    ]}));
+    let before = scratch.tool("plan_get", json!({"project":"p"}));
+    let (output, rehearsal) = scratch.rehearse(None);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(rehearsal["report"]["schema"], TARGET);
+    assert!(
+        rehearsal["report"]["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("schema-{TARGET} cutover"))
+    );
+    let output = scratch.cutover(&["--deadline", "+0s"]);
+    assert!(output.status.success(), "{}", text(&output));
+    let after = scratch
+        .gate
+        .command(
+            &scratch.releases.candidate.join("bin/sluice"),
+            &["tool", "plan_get", r#"{"project":"p"}"#],
+        )
+        .output()
+        .unwrap();
+    assert!(after.status.success(), "{}", text(&after));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&after.stdout).unwrap(),
+        before
+    );
+    assert_eq!(scratch.report().schema, TARGET);
+    assert!(scratch.fence().is_none());
+    scratch.stop_services();
 }

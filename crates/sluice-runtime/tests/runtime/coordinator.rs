@@ -25,7 +25,11 @@ use std::{
     time::Duration,
 };
 #[derive(Clone, Default)]
-struct Fake(Arc<Mutex<Vec<Launch>>>, Arc<tokio::sync::Notify>);
+struct Fake(
+    Arc<Mutex<Vec<Launch>>>,
+    Arc<tokio::sync::Notify>,
+    Arc<std::sync::atomic::AtomicBool>,
+);
 impl Fake {
     async fn launched(&self, count: usize) -> Vec<Launch> {
         loop {
@@ -58,6 +62,13 @@ impl sluice_process::guardian::AdoptionHost for Fake {
     }
 }
 impl ExecutionHost for Fake {
+    async fn terminal_gone(&self, _: RunId, stop: bool) -> Result<bool, PublicError> {
+        if stop {
+            self.2.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        Ok(!self.2.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
     async fn launch(&self, l: Launch) -> Result<LaunchOutcome, PublicError> {
         self.0.lock().unwrap().push(l);
         self.1.notify_waiters();
@@ -71,7 +82,7 @@ fn request(v: Value) -> CommandRequest {
     decode_json(&serde_json::to_vec(&v).unwrap()).unwrap()
 }
 async fn setup() -> (home::ScratchHome, Coordinator<Fake>, Fake, ProjectId) {
-    let home = home::ScratchHome::new().unwrap();
+    let home = finite_home();
     assert!(home.root().exists());
     home::ScratchHome::validate(home.path()).unwrap();
     let fake = Fake::default();
@@ -193,6 +204,9 @@ async fn claim_replay_is_same_identity_only_and_start_consumes_backlog_once(
     .unwrap();
     b.complete(CompletionJournal {
         protocol: 1,
+        limits: l.limits,
+        guardian_memory_bytes: l.policy.guardian_memory_bytes,
+        usage: Some(Default::default()),
         identity: l.identity.clone(),
         completion_id: "delivery-terminal".into(),
         result: PayloadResult::Succeeded(decode_json(br#"{"value":1,"submitted":true}"#).unwrap()),
@@ -557,7 +571,7 @@ async fn receipts_follow_the_step_from_pending_through_its_run_to_done(
 async fn receipts_follow_durable_listening_whether_the_guardian_polls_or_watches() {
     use sluice_model::{plan::FnSignature, types::Type};
     use sluice_process::socket::{CoordinatorLink, UnixCoordinatorLink};
-    let home = home::ScratchHome::new().unwrap();
+    let home = finite_home();
     home::ScratchHome::validate(home.path()).unwrap();
     let f = Fake::default();
     let mut catalog = Catalog::fixtures();
@@ -708,6 +722,9 @@ async fn receipts_follow_durable_listening_whether_the_guardian_polls_or_watches
     assert_eq!((r.delivery, r.run), (Delivery::NoLiveRun, None));
     b.complete(CompletionJournal {
         protocol: 1,
+        limits: polled.limits,
+        guardian_memory_bytes: polled.policy.guardian_memory_bytes,
+        usage: Some(Default::default()),
         identity: polled.identity.clone(),
         completion_id: "polled-done".into(),
         result: PayloadResult::Succeeded(decode_json(br#"{"value":1}"#).unwrap()),
@@ -881,6 +898,9 @@ async fn current_reserved_run_accepts_submissions_before_claim_and_after_feedbac
             .unwrap();
         b.complete(CompletionJournal {
             protocol: 1,
+            limits: l.limits,
+            guardian_memory_bytes: l.policy.guardian_memory_bytes,
+            usage: Some(Default::default()),
             identity: l.identity.clone(),
             completion_id: format!("reserved-submit-{round}"),
             result: PayloadResult::Succeeded(decode_json(br#"{"value":1}"#).unwrap()),
@@ -969,6 +989,48 @@ async fn superseded_nonterminal_run_refuses_new_submissions() {
     }
 }
 
+async fn reported_usage(b: &Coordinator<Fake>, journal: &CompletionJournal) -> Value {
+    let id = &journal.identity;
+    if let Some(step) = &id.step {
+        let CommandReply::Data(status) = b.command(request(json!({"command":"status","args":{"project":{"kind":"id","value":id.project.unwrap()},"selection":{"steps":null,"tags":null},"all":true}}))).await.unwrap() else { panic!("status") };
+        status.as_value()["steps"][step.as_str()]["run_resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["run"] == id.run.to_string())
+            .unwrap()["usage"]
+            .clone()
+    } else {
+        serde_json::to_value(
+            sluice_runtime::calls::call_status(b.reads(), id.run, id.project)
+                .await
+                .unwrap()
+                .usage,
+        )
+        .unwrap()
+    }
+}
+async fn complete_with_immutable_usage(b: &Coordinator<Fake>, journal: &CompletionJournal) {
+    let mut wrong_identity = journal.clone();
+    wrong_identity.identity.project = Some(ProjectId::new());
+    assert!(b.complete(wrong_identity).await.is_err());
+    assert_eq!(reported_usage(b, journal).await, Value::Null);
+    let mut wrong_budget = journal.clone();
+    wrong_budget.limits.memory_bytes += 1;
+    assert!(b.complete(wrong_budget).await.is_err());
+    assert_eq!(reported_usage(b, journal).await, Value::Null);
+    b.complete(journal.clone()).await.unwrap();
+    let original = serde_json::to_value(journal.usage).unwrap();
+    assert_eq!(reported_usage(b, journal).await, original);
+    let mut changed = journal.clone();
+    changed.usage.as_mut().unwrap().memory_peak_bytes += 1024;
+    b.complete(changed.clone()).await.unwrap();
+    assert_eq!(reported_usage(b, journal).await, original);
+    changed.completion_id.push_str("-stale");
+    assert!(b.complete(changed).await.is_err());
+    assert_eq!(reported_usage(b, journal).await, original);
+}
+
 async fn callbacks_deduplicate_atomically_and_completion_replay_does_not_release_replacement(
     b: Coordinator<Fake>,
     f: Fake,
@@ -1018,6 +1080,9 @@ async fn callbacks_deduplicate_atomically_and_completion_replay_does_not_release
     );
     let journal = CompletionJournal {
         protocol: 1,
+        limits: l.limits,
+        guardian_memory_bytes: l.policy.guardian_memory_bytes,
+        usage: Some(Default::default()),
         identity: l.identity.clone(),
         completion_id: "one".into(),
         result: PayloadResult::Succeeded(decode_json(br#"{"value":1}"#).unwrap()),
@@ -1032,7 +1097,7 @@ async fn callbacks_deduplicate_atomically_and_completion_replay_does_not_release
         submission_version: submitted.version,
         delivery_acks: vec![],
     };
-    b.complete(journal.clone()).await.unwrap();
+    complete_with_immutable_usage(&b, &journal).await;
     b.complete(journal.clone()).await.unwrap();
     assert!(matches!(
         b.guardian(C::Claim(guardian(&l)), Some(&l.capability))
@@ -1134,8 +1199,11 @@ async fn direct_call_handoff_survives_cancelled_waiter_and_queued_call_stays_pen
     let _ = waiter.await;
     let l = f.0.lock().unwrap()[0].clone();
     assert!(l.identity.step.is_none());
-    b.complete(CompletionJournal {
+    let journal = CompletionJournal {
         protocol: 1,
+        limits: l.limits,
+        guardian_memory_bytes: l.policy.guardian_memory_bytes,
+        usage: Some(Default::default()),
         identity: l.identity.clone(),
         completion_id: "direct".into(),
         result: PayloadResult::Succeeded(decode_json(br#"{"value":2}"#).unwrap()),
@@ -1149,9 +1217,8 @@ async fn direct_call_handoff_survives_cancelled_waiter_and_queued_call_stays_pen
         submissions: JsonMap::default(),
         submission_version: None,
         delivery_acks: vec![],
-    })
-    .await
-    .unwrap();
+    };
+    complete_with_immutable_usage(&b, &journal).await;
     assert_eq!(
         sluice_runtime::calls::call_status(b.reads(), l.identity.run, Some(p))
             .await
@@ -1174,6 +1241,9 @@ async fn cancel_after_payload_grant_before_started_must_settle() {
     b.command(request(json!({"command":"step_cancel","args":{"project":{"kind":"id","value":p},"selection":{"steps":["work"],"tags":null},"reason":"cancel at grant boundary","author":"test"}}))).await.unwrap();
     let journal = CompletionJournal {
         protocol: 1,
+        limits: l.limits,
+        guardian_memory_bytes: l.policy.guardian_memory_bytes,
+        usage: Some(Default::default()),
         identity: l.identity.clone(),
         completion_id: "cancel-race".into(),
         result: PayloadResult::Cancelled("cancel intent".into()),
@@ -1246,6 +1316,9 @@ async fn cancelled_start_records_history_without_dispatch_and_adoption_settles()
     }
     let journal = CompletionJournal {
         protocol: 1,
+        limits: l.limits,
+        guardian_memory_bytes: l.policy.guardian_memory_bytes,
+        usage: Some(Default::default()),
         identity: l.identity.clone(),
         completion_id: "import-cancel".into(),
         result: PayloadResult::Cancelled("intent".into()),
@@ -1309,6 +1382,9 @@ async fn terminal_callbacks_replay_exact_replies_and_refuse_new_mutations(
         .unwrap();
     b.complete(CompletionJournal {
         protocol: 1,
+        limits: l.limits,
+        guardian_memory_bytes: l.policy.guardian_memory_bytes,
+        usage: Some(Default::default()),
         identity: l.identity.clone(),
         completion_id: "callback-terminal".into(),
         result: PayloadResult::Succeeded(decode_json(br#"{"value":1,"submitted":true}"#).unwrap()),
@@ -1632,6 +1708,9 @@ async fn journal(b: &Coordinator<Fake>, l: &Launch, result: PayloadResult) -> Co
     let submitted = b.submissions(l.identity.run).await.unwrap();
     CompletionJournal {
         protocol: 1,
+        limits: l.limits,
+        guardian_memory_bytes: l.policy.guardian_memory_bytes,
+        usage: Some(Default::default()),
         identity: l.identity.clone(),
         completion_id: format!("done-{}", l.identity.run),
         result,
@@ -1754,6 +1833,25 @@ async fn a_running_step_that_has_submitted_is_finishing_in_status_step_context_a
         data_of(&b, call_status).await["finishing"],
         json!({"since":"2026-10-05T10:00:00Z","submission_seq":null,"release":"0123456789ab"})
     );
+    b.writer()
+        .write(sluice_store::RetrySafety::Idempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE attempts SET phase='terminal' WHERE attempt_id=?1",
+                [attempt.to_string()],
+            )?;
+            tx.sql().execute(
+                "UPDATE runs SET finished_at='now',result=json_object('status','succeeded') WHERE run_id=?1",
+                [call.to_string()],
+            )?;
+            tx.sql().execute(
+                "UPDATE calls SET status='succeeded' WHERE call_id=?1",
+                [call.to_string()],
+            )?;
+            tx.changed(Some(p), "calls");
+            Ok(())
+        })
+        .await
+        .unwrap();
 }
 
 /// A coordinator whose plan's `work` runs `agent.run` (codex) in a fresh git repository.
@@ -1764,7 +1862,7 @@ async fn agent_setup() -> (
     ProjectId,
     std::path::PathBuf,
 ) {
-    let home = home::ScratchHome::new().unwrap();
+    let home = finite_home();
     let repo = home.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
@@ -2230,4 +2328,229 @@ async fn submissions_completion_and_settlement() {
     a_run_completes_from_its_attempt_after_the_plan_moved_on(b.clone(), f.clone(), p).await;
     b.release_scheduler("s".into()).await.unwrap();
     f.0.lock().unwrap().clear();
+}
+
+#[tokio::test]
+async fn execution_status_preserves_frozen_limits_when_configuration_breaks() {
+    let (home, broker, fake, project) = setup().await;
+    broker
+        .acquire_scheduler("budget-status".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        reconcile_project(&broker, project, "budget-status")
+            .await
+            .unwrap(),
+        1
+    );
+    let launch = fake.launched(1).await.remove(0);
+    std::fs::write(home.path().join("config.json"), "{broken").unwrap();
+    let status = data_of(&broker, json!({"command":"status","args":{"project":{"kind":"id","value":project},"all":true,"selection":{"steps":null,"tags":null}}})).await;
+    assert_eq!(status["steps"]["work"]["limits"], json!(launch.limits));
+    assert_eq!(
+        status["steps"]["work"]["run_resources"][0]["run"],
+        json!(launch.identity.run)
+    );
+    assert!(status["execution"]["error"].is_object());
+    let rejected = broker.command(request(json!({"command":"plan_edit","args":{"project":{"kind":"id","value":project},"ops":[{"op":"step.add","step":"over","spec":{"run":"fixture.submit","in":{"value":{"default":1}},"limits":{"memory":"1TiB"}}}],"reason":"invalid budget"}}))).await;
+    assert!(rejected.is_err());
+    std::fs::write(home.path().join("config.json"), "{}").unwrap();
+    let rejected = broker.command(request(json!({"command":"plan_edit","args":{"project":{"kind":"id","value":project},"ops":[{"op":"step.add","step":"over","spec":{"run":"fixture.submit","in":{"value":{"default":1}},"limits":{"memory":"1024TiB"}}}],"reason":"over ceiling"}}))).await;
+    assert!(
+        matches!(rejected, Err(PublicError::Invalid { .. })),
+        "{rejected:?}"
+    );
+}
+
+#[tokio::test]
+async fn terminal_guardian_retains_budget_until_service_cleanup_is_proven() {
+    let (_home, broker, fake, project) = setup().await;
+    fake.2.store(true, std::sync::atomic::Ordering::SeqCst);
+    broker.acquire_scheduler("resources".into()).await.unwrap();
+    reconcile_project(&broker, project, "resources")
+        .await
+        .unwrap();
+    let launch = fake.0.lock().unwrap()[0].clone();
+    broker
+        .guardian(C::Claim(guardian(&launch)), Some(&launch.capability))
+        .await
+        .unwrap();
+    broker
+        .complete(CompletionJournal {
+            protocol: 1,
+            limits: launch.limits,
+            guardian_memory_bytes: launch.policy.guardian_memory_bytes,
+            usage: Some(Default::default()),
+            identity: launch.identity.clone(),
+            completion_id: "terminal-payload".into(),
+            result: PayloadResult::Failed(PublicError::FnFailure {
+                message: "fixture complete".into(),
+            }),
+            starts: vec![],
+            exits: vec![],
+            cleanup: vec![CleanupEvidence {
+                cgroup: "fake/payload".into(),
+                empty: true,
+                escalated: false,
+            }],
+            submissions: JsonMap::default(),
+            submission_version: None,
+            delivery_acks: vec![],
+        })
+        .await
+        .unwrap();
+    let policy = launch.policy.clone();
+    let held = broker
+        .reads()
+        .snapshot(move |sql| sluice_store::resources::budget_status(sql, &policy))
+        .await
+        .unwrap();
+    assert_eq!(
+        held.held.memory_bytes,
+        launch.limits.memory_bytes + launch.policy.guardian_memory_bytes
+    );
+    let drain = sluice_runtime::drain::status(broker.reads()).await.unwrap();
+    assert!(
+        drain
+            .blockers
+            .iter()
+            .any(|blocker| blocker.identity == launch.identity.run.to_string())
+    );
+    broker.reap_terminal(false).await.unwrap();
+    let policy = launch.policy.clone();
+    assert_eq!(
+        broker
+            .reads()
+            .snapshot(move |sql| sluice_store::resources::budget_status(sql, &policy))
+            .await
+            .unwrap()
+            .held,
+        held.held
+    );
+    broker.adopt().await.unwrap();
+    let policy = launch.policy;
+    let released = broker
+        .reads()
+        .snapshot(move |sql| sluice_store::resources::budget_status(sql, &policy))
+        .await
+        .unwrap();
+    assert_eq!(released.held.memory_bytes, 0);
+    assert_eq!(released.held.cpu_millis, 0);
+    assert_eq!(released.held.tasks, 0);
+    assert!(
+        sluice_runtime::drain::status(broker.reads())
+            .await
+            .unwrap()
+            .blockers
+            .is_empty()
+    );
+    broker.writer().shutdown().await.unwrap();
+}
+
+fn finite_home() -> home::ScratchHome {
+    let home = home::ScratchHome::new().unwrap();
+    std::fs::write(
+        home.path().join("config.json"),
+        json!({"execution":{
+            "defaults":{"memory":"64MiB","cpus":0.1,"tasks":64},
+            "guardian_memory":"64MiB"
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    home
+}
+
+#[tokio::test]
+async fn delayed_os_launch_cannot_start_after_adoption_finishes_attempt() {
+    use sluice_process::locks::RunFence;
+    use sluice_runtime::execution::OsHost;
+    let (home, broker, fake, project) = setup().await;
+    fake.2.store(true, std::sync::atomic::Ordering::SeqCst);
+    broker
+        .acquire_scheduler("launch-fence".into())
+        .await
+        .unwrap();
+    reconcile_project(&broker, project, "launch-fence")
+        .await
+        .unwrap();
+    let launch = fake.0.lock().unwrap()[0].clone();
+    let fence = RunFence::acquire(home.path(), launch.identity.run)
+        .await
+        .unwrap();
+    let host = OsHost {
+        home: home.path().into(),
+        program: std::env::current_exe().unwrap(),
+    };
+    let pending = host.launch(launch.clone());
+    tokio::pin!(pending);
+    std::future::poll_fn(|cx| {
+        assert!(std::future::Future::poll(pending.as_mut(), cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    broker
+        .complete(CompletionJournal {
+            protocol: 1,
+            limits: launch.limits,
+            guardian_memory_bytes: launch.policy.guardian_memory_bytes,
+            usage: None,
+            identity: launch.identity.clone(),
+            completion_id: "adopted-before-delayed-launch".into(),
+            result: PayloadResult::Lost("start not observed".into()),
+            starts: vec![],
+            exits: vec![],
+            cleanup: vec![CleanupEvidence {
+                cgroup: "fake/payload".into(),
+                empty: true,
+                escalated: false,
+            }],
+            submissions: JsonMap::default(),
+            submission_version: None,
+            delivery_acks: vec![],
+        })
+        .await
+        .unwrap();
+    // Even a terminal run cannot release its reservation while a start helper owns the fence.
+    broker.adopt().await.unwrap();
+    let policy = launch.policy.clone();
+    assert!(
+        broker
+            .reads()
+            .snapshot(move |sql| sluice_store::resources::budget_status(sql, &policy))
+            .await
+            .unwrap()
+            .held
+            .memory_bytes
+            > 0
+    );
+    drop(fence);
+    let outcome = tokio::time::timeout(Duration::from_secs(2), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        LaunchOutcome::Refused(PublicError::Conflict { .. })
+    ));
+    assert!(
+        !home
+            .path()
+            .join("runs")
+            .join(launch.identity.run.to_string())
+            .join("runtime.json")
+            .exists()
+    );
+    broker.adopt().await.unwrap();
+    let policy = launch.policy;
+    assert_eq!(
+        broker
+            .reads()
+            .snapshot(move |sql| sluice_store::resources::budget_status(sql, &policy))
+            .await
+            .unwrap()
+            .held
+            .memory_bytes,
+        0
+    );
 }

@@ -45,6 +45,15 @@ impl AdoptionHost for Launcher {
     }
 }
 impl ExecutionHost for Launcher {
+    #[cfg(feature = "bounded-execution")]
+    async fn terminal_gone(
+        &self,
+        _: sluice_model::ids::RunId,
+        _: bool,
+    ) -> Result<bool, PublicError> {
+        Ok(true)
+    }
+
     async fn launch(&self, launch: Launch) -> Result<LaunchOutcome, PublicError> {
         self.launches
             .lock()
@@ -82,6 +91,12 @@ pub fn map(value: Value) -> JsonMap {
 /// The completion journal a guardian would write for `launch`.
 pub fn journal(launch: &Launch, result: PayloadResult) -> CompletionJournal {
     CompletionJournal {
+        #[cfg(feature = "bounded-execution")]
+        limits: launch.limits,
+        #[cfg(feature = "bounded-execution")]
+        guardian_memory_bytes: launch.policy.guardian_memory_bytes,
+        #[cfg(feature = "bounded-execution")]
+        usage: Some(Default::default()),
         protocol: 1,
         identity: launch.identity.clone(),
         completion_id: format!("complete-{}", launch.identity.run),

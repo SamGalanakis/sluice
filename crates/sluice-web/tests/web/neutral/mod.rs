@@ -87,6 +87,7 @@ async fn project(writer: &Writer, name: &'static str, description: &'static str)
             projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name: name.parse().unwrap(),
                     description: description.into(),
                     icon: None,

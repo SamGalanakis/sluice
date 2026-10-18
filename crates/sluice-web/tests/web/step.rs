@@ -63,6 +63,7 @@ async fn fixture() -> (tempfile::TempDir, Writer, views::DashboardState, Project
             projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name: "drawer".parse().unwrap(),
                     description: String::new(),
                     icon: None,
@@ -420,6 +421,7 @@ async fn the_index_counts_a_cancel_apart_from_a_failure() {
             projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name: "stops".parse().unwrap(),
                     description: String::new(),
                     icon: None,

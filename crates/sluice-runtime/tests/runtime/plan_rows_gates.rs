@@ -68,6 +68,14 @@ impl AdoptionHost for Fake {
     }
 }
 impl ExecutionHost for Fake {
+    async fn terminal_gone(
+        &self,
+        _: sluice_model::ids::RunId,
+        _: bool,
+    ) -> Result<bool, sluice_model::error::PublicError> {
+        Ok(true)
+    }
+
     async fn launch(&self, launch: Launch) -> Result<LaunchOutcome, PublicError> {
         self.0.lock().unwrap().push(launch);
         Ok(LaunchOutcome::Accepted)
@@ -100,7 +108,7 @@ fn step(value: Value) -> Value {
 }
 impl Plan {
     async fn new(resources: Value) -> Self {
-        let home = home::ScratchHome::new().unwrap();
+        let home = finite_home();
         let host = Fake::default();
         let broker = Coordinator::open(home.path().into(), Catalog::fixtures(), host.clone())
             .await
@@ -179,6 +187,9 @@ impl Plan {
             self.broker
                 .complete(CompletionJournal {
                     protocol: 1,
+                    limits: launch.limits,
+                    guardian_memory_bytes: launch.policy.guardian_memory_bytes,
+                    usage: Some(Default::default()),
                     identity: launch.identity.clone(),
                     completion_id: format!("c-{}", launch.identity.run),
                     result: PayloadResult::Succeeded(decode_json(br#"{"value":1}"#).unwrap()),
@@ -734,4 +745,18 @@ async fn a_reader_of_an_edits_revision_before_the_cache_holds_it_compiles_nothin
         (0, 0),
         "{costs:?}"
     );
+}
+
+fn finite_home() -> home::ScratchHome {
+    let home = home::ScratchHome::new().unwrap();
+    std::fs::write(
+        home.path().join("config.json"),
+        json!({"execution":{
+            "defaults":{"memory":"64MiB","cpus":0.1,"tasks":64},
+            "guardian_memory":"64MiB"
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    home
 }

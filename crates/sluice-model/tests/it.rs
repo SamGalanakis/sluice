@@ -12,6 +12,8 @@ mod hash;
 mod identity;
 #[path = "it/incremental.rs"]
 mod incremental;
+#[path = "it/limits.rs"]
+mod limits;
 #[path = "it/plan_rows.rs"]
 mod plan_rows;
 #[path = "it/plan_rows_document.rs"]

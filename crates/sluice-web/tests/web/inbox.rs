@@ -100,6 +100,7 @@ async fn fixture() -> (
             projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name: "fixture".parse().unwrap(),
                     description: String::new(),
                     icon: None,

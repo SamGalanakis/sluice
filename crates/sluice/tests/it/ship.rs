@@ -70,7 +70,14 @@ fn ship_cleans_temporary_targets_and_preserves_repository_and_unsafe_targets() {
     )
     .unwrap();
     let db = rusqlite::Connection::open(home.join("sluice.db")).unwrap();
-    db.execute_batch("CREATE TABLE home_meta(singleton INTEGER, schema_version INTEGER); CREATE TABLE runs(run_id TEXT,finished_at TEXT,project_id TEXT); CREATE TABLE projects(project_id TEXT,archived INTEGER);").unwrap();
+    db.execute_batch(
+        "CREATE TABLE home_meta(singleton INTEGER, schema_version INTEGER);
+         CREATE TABLE attempts(attempt_id TEXT PRIMARY KEY, phase TEXT NOT NULL, request TEXT NOT NULL);
+         CREATE TABLE runs(run_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id),
+                           finished_at TEXT, project_id TEXT, result TEXT, unit_name TEXT);
+         CREATE TABLE projects(project_id TEXT, archived INTEGER);",
+    )
+    .unwrap();
     db.execute(
         "INSERT INTO home_meta VALUES(1,?1)",
         [sluice_store::schema::SCHEMA_VERSION],
@@ -240,7 +247,14 @@ fn ship_dry_run_gates_the_requested_branch_and_preserves_the_checkout() {
     )
     .unwrap();
     let db = rusqlite::Connection::open(home.join("sluice.db")).unwrap();
-    db.execute_batch("CREATE TABLE home_meta(singleton INTEGER, schema_version INTEGER); CREATE TABLE runs(run_id TEXT,finished_at TEXT,project_id TEXT); CREATE TABLE projects(project_id TEXT,archived INTEGER);").unwrap();
+    db.execute_batch(
+        "CREATE TABLE home_meta(singleton INTEGER, schema_version INTEGER);
+         CREATE TABLE attempts(attempt_id TEXT PRIMARY KEY, phase TEXT NOT NULL, request TEXT NOT NULL);
+         CREATE TABLE runs(run_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id),
+                           finished_at TEXT, project_id TEXT, result TEXT, unit_name TEXT);
+         CREATE TABLE projects(project_id TEXT, archived INTEGER);",
+    )
+    .unwrap();
     db.execute(
         "INSERT INTO home_meta VALUES(1,?1)",
         [sluice_store::schema::SCHEMA_VERSION],

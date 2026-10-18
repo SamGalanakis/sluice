@@ -433,7 +433,7 @@ impl<H: ExecutionHost> Coordinator<H> {
         self.reads().snapshot(|sql|{let mut stmt=sql.prepare("SELECT project_id FROM projects WHERE deleted_at IS NULL ORDER BY created_at,project_id")?;let rows=stmt.query_map([],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;rows.into_iter().map(calls::parse_id).collect()}).await.map_err(|e|e.into_public(true))
     }
     pub async fn project_versions(&self) -> Result<BTreeMap<ProjectId, i64>, PublicError> {
-        self.reads().snapshot(|sql|{let mut stmt=sql.prepare("SELECT p.project_id,coalesce(sum(v.version),0) FROM projects p LEFT JOIN change_versions v ON v.project_id=p.project_id AND v.view<>'progress' WHERE p.deleted_at IS NULL GROUP BY p.project_id")?;let rows=stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?)))?.collect::<Result<Vec<_>,_>>()?;rows.into_iter().map(|(id,n)|Ok((calls::parse_id(id)?,n))).collect()}).await.map_err(|e|e.into_public(true))
+        self.reads().snapshot(|sql|{let mut stmt=sql.prepare("SELECT p.project_id,coalesce(sum(v.version),0) FROM projects p LEFT JOIN change_versions v ON (v.project_id=p.project_id AND v.view<>'progress') OR (v.project_id IS NULL AND v.view='execution') WHERE p.deleted_at IS NULL GROUP BY p.project_id")?;let rows=stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?)))?.collect::<Result<Vec<_>,_>>()?;rows.into_iter().map(|(id,n)|Ok((calls::parse_id(id)?,n))).collect()}).await.map_err(|e|e.into_public(true))
     }
     pub async fn capacity_resources(&self, project: ProjectId) -> Result<Vec<String>, PublicError> {
         self.reads()
@@ -551,8 +551,13 @@ impl<H: ExecutionHost> Coordinator<H> {
                 description,
                 icon,
                 resources,
+                limits,
                 author,
             } => {
+                let policy = crate::budget::policy(self.home())?;
+                policy
+                    .resolve(limits.as_ref(), None)
+                    .map_err(crate::budget::invalid)?;
                 let icon = icon.map(read_icon).transpose()?;
                 let project = self
                     .writer()
@@ -564,6 +569,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                                 description,
                                 icon,
                                 resources: Some(serde_json::to_value(resources)?),
+                                limits,
                                 author: author.unwrap_or_else(|| "cli".into()),
                             },
                             &projects::EmptyPlanInitializer,
@@ -1900,8 +1906,10 @@ impl<H: ExecutionHost> Coordinator<H> {
         {
             return Err(conflict("completion submissions changed"));
         }
+        let evidence = journal.clone();
         let completion_id = journal.completion_id.clone();
         let run = id.run;
+        let resource_attempt = id.attempt;
         if id.step.is_some() {
             let (catalog, plans) = (self.inner.catalog.clone(), self.inner.plans.clone());
             self.writer()
@@ -1963,6 +1971,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                     {
                         return Err(conflict("stale completion").into());
                     }
+                    record_resource_usage(tx, &evidence)?;
                     Ok(())
                 })
                 .await?;
@@ -1977,24 +1986,84 @@ impl<H: ExecutionHost> Coordinator<H> {
                     Some(PublicError::ProcessLost { message })
                 }
             };
-            if !calls::complete(
-                self.writer(),
-                calls::CallCompletion {
-                    call: run,
-                    attempt: id.attempt,
-                    project: id.project,
-                    completion_id: completion_id.clone(),
-                    outputs,
-                    error,
-                    processes_gone: true,
-                },
-            )
-            .await?
-            {
-                return Err(conflict("stale call completion"));
-            }
+            let request = calls::CallCompletion {
+                call: run,
+                attempt: id.attempt,
+                project: id.project,
+                completion_id: completion_id.clone(),
+                outputs,
+                error,
+                processes_gone: true,
+            };
+            self.writer().write(RetrySafety::Idempotent, move |tx| {
+                let completed: bool = tx.sql().query_row(
+                    "SELECT EXISTS(SELECT 1 FROM runs WHERE run_id=?1 AND attempt_id=?2 AND completion_id IS NOT NULL)",
+                    (request.call.to_string(), request.attempt.to_string()), |row| row.get(0),
+                )?;
+                if !calls::complete_in(tx, request)? {
+                    return Err(conflict("stale call completion").into());
+                }
+                if !completed { record_resource_usage(tx, &evidence)?; }
+                Ok(())
+            }).await?;
+        }
+        if self.host().terminal_gone(run, false).await.unwrap_or(false) {
+            let attempt = resource_attempt;
+            self.writer()
+                .write(RetrySafety::Idempotent, move |tx| {
+                    resources::release_budget(tx, attempt).map(|_| ())
+                })
+                .await?;
         }
         Ok(DurableAck { run, completion_id })
+    }
+    /// Terminal payloads can leave guardians waiting for an acknowledgement. Keep
+    /// their reservation until the entire service exits. The adoption pass may
+    /// stop them because their result is already durable.
+    pub async fn reap_terminal(&self, stop_services: bool) -> Result<(), PublicError> {
+        let pending = self
+            .reads()
+            .snapshot(|sql| {
+                let mut query = sql.prepare(
+                    "SELECT r.run_id,a.attempt_id FROM attempts a JOIN runs r USING(attempt_id)
+                WHERE a.phase='terminal' AND a.reservation IS NOT NULL
+                AND r.finished_at IS NOT NULL AND r.completion_ack=1
+                AND COALESCE(json_extract(a.request,'$.resource_released'),0)=0",
+                )?;
+                query
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .map(|row| {
+                        let (run, attempt) = row?;
+                        Ok((calls::parse_id(run)?, calls::parse_id(attempt)?))
+                    })
+                    .collect::<sluice_store::Result<Vec<(RunId, AttemptId)>>>()
+            })
+            .await
+            .map_err(|e| e.into_public(true))?;
+        for (run, attempt) in pending {
+            let Some(_claim) = AdoptionClaim::take(&self.inner.adopting, run) else {
+                continue;
+            };
+            let Some(_fence) =
+                sluice_process::locks::RunFence::try_acquire(self.home(), run).map_err(storage)?
+            else {
+                continue;
+            };
+            match self.host().terminal_gone(run, stop_services).await {
+                Ok(true) => {
+                    self.writer()
+                        .write(RetrySafety::Idempotent, move |tx| {
+                            resources::release_budget(tx, attempt).map(|_| ())
+                        })
+                        .await?;
+                }
+                Ok(false) => {}
+                Err(error) => tracing::warn!(%run, %error, "terminal resource release deferred"),
+            }
+        }
+        Ok(())
     }
     /// One adoption pass over every nonterminal attempt, at most
     /// [`ADOPTION_PARALLELISM`] runs at a time.
@@ -2017,6 +2086,7 @@ impl<H: ExecutionHost> Coordinator<H> {
         parallelism: usize,
         stop: &CancellationToken,
     ) -> Result<AdoptionPass, PublicError> {
+        self.reap_terminal(true).await?;
         let home = self.home().to_path_buf();
         let home_id = self.home_id();
         let attempts=self.reads().snapshot(move|sql|{
@@ -2026,7 +2096,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 let run:RunId=calls::parse_id(row.get(0)?)?;let id=AttemptKey{home:home_id,run,attempt:calls::parse_id(row.get(1)?)?,project:row.get::<_,Option<String>>(2)?.map(calls::parse_id).transpose()?,step:row.get::<_,Option<String>>(3)?.map(calls::parse_id).transpose()?,generation:StepGeneration(row.get::<_,i64>(4)? as u64),work:WorkGeneration(row.get::<_,i64>(5)? as u64)};
                 let raw:String=row.get(6)?;let frozen:Value=serde_json::from_str(&raw)?;let capability=serde_json::from_value(if id.step.is_some(){frozen["provenance"]["runtime"]["capability"].clone()}else{frozen["function"]["bundle"]["capability"].clone()})?;
                 let guardian=stored_guardian(sql,&id,home_id)?;let cgroup:Option<String>=row.get(8)?;
-                out.push(AdoptionAttempt{identity:id.clone(),guardian,run_dir:home.join("runs").join(run.to_string()),unit:row.get::<_,Option<String>>(7)?.unwrap_or_else(||sluice_process::systemd::TransientService::for_launch(run).name().into()),service_cgroup:cgroup.map(|c|c.strip_suffix("/control").unwrap_or(&c).to_string()),capability});
+                out.push(AdoptionAttempt{limits:serde_json::from_value(frozen["limits"].clone())?,guardian_memory_bytes:serde_json::from_value(frozen["policy"]["guardian_memory_bytes"].clone())?,identity:id.clone(),guardian,run_dir:home.join("runs").join(run.to_string()),unit:row.get::<_,Option<String>>(7)?.unwrap_or_else(||sluice_process::systemd::TransientService::for_launch(run).name().into()),service_cgroup:cgroup.map(|c|c.strip_suffix("/control").unwrap_or(&c).to_string()),capability});
             }Ok(out)
         }).await.map_err(|e|e.into_public(true))?;
         let mut running = JoinSet::new();
@@ -2051,6 +2121,20 @@ impl<H: ExecutionHost> Coordinator<H> {
             pass.adopted += 1;
             running.spawn(async move {
                 let _claim = claim;
+                let _fence = match sluice_process::locks::RunFence::try_acquire(
+                    broker.home(), attempt.identity.run,
+                ) {
+                    Ok(Some(fence)) => fence,
+                    Ok(None) => {
+                        deferred.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        return;
+                    }
+                    Err(error) => {
+                        deferred.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        tracing::warn!(run=%attempt.identity.run, %error, "adoption launch fence deferred");
+                        return;
+                    }
+                };
                 let link = LocalLink {
                     broker: broker.clone(),
                     capability: attempt.capability.clone(),
@@ -3047,6 +3131,31 @@ impl EditLog {
     }
 }
 
+fn record_resource_usage(
+    tx: &mut sluice_store::WriteTransaction<'_>,
+    evidence: &CompletionJournal,
+) -> sluice_store::Result<()> {
+    let (limits, reservation): (String, String) = tx.sql().query_row(
+        "SELECT a.limits,a.reservation FROM attempts a JOIN runs r USING(attempt_id) WHERE r.run_id=?1 AND a.attempt_id=?2",
+        (evidence.identity.run.to_string(), evidence.identity.attempt.to_string()),
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let limits: sluice_model::RunLimits = serde_json::from_str(&limits)?;
+    let reservation: sluice_model::RunLimits = serde_json::from_str(&reservation)?;
+    if limits != evidence.limits
+        || reservation.memory_bytes.checked_sub(limits.memory_bytes)
+            != Some(evidence.guardian_memory_bytes)
+    {
+        return Err(conflict("completion resource budget differs from reservation").into());
+    }
+    tx.sql().execute(
+        "UPDATE attempts SET request=json_set(request,'$.resource_usage',json(?2)) WHERE attempt_id=?1",
+        (evidence.identity.attempt.to_string(), serde_json::to_string(&evidence.usage)?),
+    )?;
+    tx.changed(evidence.identity.project, "status");
+    Ok(())
+}
+
 fn project_mutation(command: &CommandRequest) -> bool {
     matches!(
         command,
@@ -3070,6 +3179,16 @@ fn mutate_project(
 ) -> sluice_store::Result<CommandReply> {
     match command {
         CommandRequest::ProjectUpdate(update) => {
+            if let Some(Some(limits)) = &update.limits {
+                let home = tx
+                    .sql()
+                    .path()
+                    .and_then(|p| std::path::Path::new(p).parent())
+                    .unwrap_or_else(|| std::path::Path::new(""));
+                crate::budget::policy(home)?
+                    .resolve(Some(limits), None)
+                    .map_err(crate::budget::invalid)?;
+            }
             let project = projects::project_update(
                 tx,
                 &update.project,
@@ -3078,6 +3197,7 @@ fn mutate_project(
                     description: update.description,
                     icon: update.icon.map(projects::Icon::try_from).transpose()?,
                     resources: update.resources.map(serde_json::to_value).transpose()?,
+                    limits: update.limits,
                     paused: update.paused,
                     archived: update.archived,
                     prune_done_after: update.prune_done_after,

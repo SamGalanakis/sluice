@@ -71,6 +71,12 @@ impl AdoptionHost for RehearsalHost {
     }
 }
 impl ExecutionHost for RehearsalHost {
+    #[cfg(feature = "bounded-execution")]
+    async fn terminal_gone(&self, _: RunId, _: bool) -> Result<bool, PublicError> {
+        // The private copy has no services; copied identities grant no authority over them.
+        Ok(true)
+    }
+
     /// The catalog the old coordinator builds for the home: its configured fn registry.
     fn composition_enabled(&self) -> bool {
         true

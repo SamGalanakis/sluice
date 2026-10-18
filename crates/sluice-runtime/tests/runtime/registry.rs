@@ -558,6 +558,7 @@ async fn project(writer: &Writer, name: &str) -> ProjectId {
             Ok(projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name,
                     description: "".into(),
                     icon: None,

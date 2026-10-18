@@ -11,36 +11,20 @@ pub const FORMAT_MAJOR: i64 = 1;
 /// Changes only for a change that older binaries cannot read: a run's pinned `sluice` reads
 /// this database itself and refuses any other version, so a new version needs a drained,
 /// fenced migration with no live consumers of the old one (`convert::convert_home`). Schema 2
-/// stays reserved for the historical interim board layout; normalized plans are schema 3.
+/// stays reserved for the historical interim board layout; schema 3 introduced normalized
+/// plans, and schema 4 requires bounded execution and understands resource exhaustion.
 /// Additive changes keep this version (`ADDED_COLUMNS`, `ADDED_VIEWS`).
-pub const SCHEMA_VERSION: i64 = 3;
-/// One record payload version per home: every record of a schema-3 home is written at 2.
+pub const SCHEMA_VERSION: i64 = 4;
+/// One record payload version per home: every current record is written at version 2.
 pub const RECORD_PAYLOAD_VERSION: i64 = 2;
 pub(crate) const APPLICATION_ID: i64 = 0x534c5543;
-/// The complete schema-3 DDL a fresh home is created from.
-pub(crate) const SCHEMA: &str = include_str!("../migrations/0003.sql");
-/// The tables a schema-3 home has (`sqlite_%` excluded).
+/// The complete schema-4 DDL a fresh home is created from.
+pub(crate) const SCHEMA: &str = include_str!("../migrations/0004.sql");
+/// The tables a schema-4 home has (`sqlite_%` excluded).
 pub(crate) const TABLES: i64 = 27;
-/// Columns added to schema 3 after homes existed, as `(table, column, definition)`. The writer
-/// adds the missing ones when it opens a home, before anything else touches it. Every
-/// schema-1 addition is folded into `0003.sql`. Each is nullable runtime metadata that a
-/// release pinned before it never reads, so a home carrying it serves them unchanged:
-/// - `steps.owner`: who answers the step's unit (`@session` or `owner`; NULL unowned), equal
-///   across a unit's rows (`identities`); never part of a declaration.
-/// - `projects.fallback`: who answers the project's unowned units (`@session` or `owner`).
-/// - `steps.bypass`: a pending step's bypass preset `{outputs, author, reason, at}`, and once
-///   the runner applies it `applied {at, result}` (`step_bypass`); never part of a declaration.
-const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
-    ("steps", "owner", "TEXT"),
-    ("projects", "fallback", "TEXT"),
-    (
-        "steps",
-        "bypass",
-        "TEXT CHECK (bypass IS NULL OR json_type(bypass) = 'object')",
-    ),
-];
-/// Views added to schema 3 after homes existed, as `(name, definition)`: the writer creates the
-/// missing ones with the columns. Empty in schema 3.
+/// Columns added after schema 4 homes exist. Earlier additions are folded into its DDL.
+const ADDED_COLUMNS: &[(&str, &str, &str)] = &[];
+/// Views added after schema 4 homes exist, as `(name, definition)`.
 const ADDED_VIEWS: &[(&str, &str)] = &[];
 
 #[derive(Debug, thiserror::Error)]
@@ -53,9 +37,11 @@ pub enum StoreError {
     UnsupportedFormat { found: i64 },
     #[error("unsupported schema version {found}; expected {SCHEMA_VERSION}")]
     UnsupportedSchema { found: i64 },
-    /// A home (or backup) at schema 1 or 2: only `sluice home migrate` (or a restore's private
+    /// A home (or backup) at schema 1, 2 or 3: only `sluice home migrate` (or a restore's private
     /// copy) converts it; opening never does.
-    #[error("this home is at schema {found}; run \"sluice home migrate\" to bring it to schema 3")]
+    #[error(
+        "this home is at schema {found}; run \"sluice home migrate\" to bring it to schema {SCHEMA_VERSION}"
+    )]
     MigrationRequired { found: i64 },
     /// A schema-changing restore of a backup that holds live work, refused before anything is
     /// written: the restored home's adoption would reach the original home's units.
@@ -70,7 +56,7 @@ pub enum StoreError {
     },
     /// The conversion's preconditions failed; nothing was written. Each blocker names the
     /// project, the check and the revision.
-    #[error("conversion to schema 3 is blocked: {}", .0.join("; "))]
+    #[error("conversion to schema {SCHEMA_VERSION} is blocked: {}", .0.join("; "))]
     ConversionBlocked(Vec<String>),
     #[error("unrecognized or incomplete sluice database: {0}")]
     InvalidDatabase(String),
@@ -111,7 +97,7 @@ impl StoreError {
             }
             .into(),
             Self::ConversionBlocked(blockers) => PublicError::Invalid {
-                message: "conversion to schema 3 is blocked".into(),
+                message: format!("conversion to schema {SCHEMA_VERSION} is blocked"),
                 errors: blockers,
             },
             Self::WriterLocked => PublicError::Busy {
@@ -293,7 +279,7 @@ fn verify(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// The home's identity and version: format 1, schema 3 (a schema-1 or -2 home is
+/// The home's identity and version: format 1, schema 4 (a schema-1, -2 or -3 home is
 /// `MigrationRequired`), its user_version equal, sluice's application_id and the 27 tables.
 pub(crate) fn verify_schema(connection: &Connection) -> Result<()> {
     let has_meta: bool = connection.query_row(
@@ -322,7 +308,7 @@ pub(crate) fn verify_schema(connection: &Connection) -> Result<()> {
     if major != FORMAT_MAJOR {
         return Err(StoreError::UnsupportedFormat { found: major });
     }
-    if matches!(schema, 1 | 2) {
+    if matches!(schema, 1..=3) {
         return Err(StoreError::MigrationRequired { found: schema });
     }
     if schema != SCHEMA_VERSION {

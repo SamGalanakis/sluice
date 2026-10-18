@@ -34,3 +34,5 @@ pub mod dispatch_ext;
 pub mod docs;
 pub mod dotenv;
 pub mod install;
+
+pub mod budget;

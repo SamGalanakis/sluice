@@ -31,6 +31,14 @@ impl AdoptionHost for Fake {
     }
 }
 impl ExecutionHost for Fake {
+    async fn terminal_gone(
+        &self,
+        _: sluice_model::ids::RunId,
+        _: bool,
+    ) -> Result<bool, sluice_model::error::PublicError> {
+        Ok(true)
+    }
+
     async fn launch(&self, _: Launch) -> Result<LaunchOutcome, PublicError> {
         Ok(LaunchOutcome::Accepted)
     }

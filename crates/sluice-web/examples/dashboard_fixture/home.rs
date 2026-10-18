@@ -96,7 +96,7 @@ pub async fn create(writer: &Writer) -> ProjectId {
             .write(RetrySafety::NonIdempotent, move |tx| {
                 projects::project_create(
                     tx,
-                    CreateProject {
+                    CreateProject { limits: None,
                         name: name.parse().unwrap(),
                         description: description.into(),
                         icon: None,

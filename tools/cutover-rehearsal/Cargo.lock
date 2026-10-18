@@ -1623,6 +1623,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "sluice-agents",
  "sluice-model",
  "sluice-process",
@@ -1639,7 +1640,9 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "fs4",
+ "json-patch",
  "rusqlite",
+ "serde",
  "serde_json",
  "sluice-model",
  "thiserror",

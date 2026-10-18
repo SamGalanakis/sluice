@@ -112,6 +112,7 @@ impl Fixture {
                         projects::project_create(
                             tx,
                             CreateProject {
+                                limits: None,
                                 name: name.parse().unwrap(),
                                 description: description.into(),
                                 icon: None,
@@ -193,6 +194,7 @@ impl Fixture {
                 let id = projects::project_create(
                     tx,
                     CreateProject {
+                        limits: None,
                         name: name.parse().unwrap(),
                         description: String::new(),
                         icon: None,

@@ -46,6 +46,39 @@ fn queued(
             );
         }
     }
+    let home = sql
+        .path()
+        .and_then(|p| std::path::Path::new(p).parent())
+        .unwrap_or_else(|| std::path::Path::new(""));
+    let policy = crate::budget::policy(home);
+    let state = plans::read_state(sql, id)?;
+    for step in plan.steps().values() {
+        if step.is_external()
+            || state.status(&step.id) != StepStatus::Pending
+            || !matches!(
+                sluice_model::gates::evaluate_step(plan, &state, step),
+                sluice_model::gates::GateDecision::Ready
+            )
+        {
+            continue;
+        }
+        let fit = match &policy {
+            Ok(policy) => crate::budget::resolve(sql, Some(id), step.limits.as_ref(), policy)
+                .and_then(|limits| resources::budget_fit(sql, &limits, policy)),
+            Err(error) => Err(error.clone().into()),
+        };
+        match fit {
+            Ok(fit) if !fit.fits() => {
+                out.entry(step.id.clone())
+                    .or_insert((fit.blocked, format!("queued: {}", fit.reason)));
+            }
+            Err(error) => {
+                out.entry(step.id.clone())
+                    .or_insert((vec!["execution".into()], format!("queued: {error}")));
+            }
+            _ => {}
+        }
+    }
     Ok(out)
 }
 
@@ -105,6 +138,11 @@ pub(crate) fn status(
         .map(std::path::Path::to_path_buf)
         .unwrap_or_default();
     let names = crate::naming::for_project(sql, &home, id)?;
+    let execution_policy = crate::budget::policy(&home);
+    let execution = match &execution_policy {
+        Ok(policy) => json!(resources::budget_status(sql, policy)?),
+        Err(error) => json!({"error":error}),
+    };
     if query.view == StatusView::Units {
         let facts = facts(sql, id, &queued, finishing)?;
         let last = last_messages(sql, id)?;
@@ -148,6 +186,7 @@ pub(crate) fn status(
             }
         }
         out["units"] = rows;
+        out["execution"] = json!(execution);
         if let Some((units, steps)) = view.done {
             out["done_units"] = json!({"units":units,"steps":steps});
         }
@@ -183,6 +222,47 @@ pub(crate) fn status(
             *outputs = status::brief(outputs);
         }
         if let (Some(spec), Value::Object(row)) = (plan.steps().get(&step), &mut row) {
+            if !spec.is_external() {
+                let runs = row
+                    .get("run_ids")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut evidence = Vec::new();
+                for run in runs {
+                    if let Some(run) = run.as_str() {
+                        let run = run.parse().map_err(|e| {
+                            sluice_store::StoreError::InvalidDatabase(format!("{e}"))
+                        })?;
+                        evidence.push(crate::budget::run_resources(sql, run)?);
+                    }
+                }
+                if !evidence.is_empty() {
+                    row.insert("run_resources".into(), json!(evidence));
+                }
+                if state.status(&step) == StepStatus::Pending {
+                    match &execution_policy {
+                        Ok(policy) => match crate::budget::resolve(
+                            sql,
+                            Some(id),
+                            spec.limits.as_ref(),
+                            policy,
+                        ) {
+                            Ok(limits) => {
+                                row.insert("limits".into(), json!(limits));
+                            }
+                            Err(error) => {
+                                row.insert("budget_error".into(), json!(error.to_string()));
+                            }
+                        },
+                        Err(error) => {
+                            row.insert("budget_error".into(), json!(error));
+                        }
+                    }
+                } else if let Some(limits) = evidence.last().and_then(|e| e.get("limits")) {
+                    row.insert("limits".into(), limits.clone());
+                }
+            }
             row.insert(
                 "title".into(),
                 json!(names.naming.step_title(step.as_str())),
@@ -240,7 +320,7 @@ pub(crate) fn status(
         inputs = status::brief(&inputs);
         outputs = status::brief(&outputs);
     }
-    let mut out = json!({"project":project,"rev":ctx.revision,"board_rev":board_rev,"paused":paused,"inputs":inputs,"steps":steps,"outputs":outputs,"resources":resources});
+    let mut out = json!({"project":project,"rev":ctx.revision,"board_rev":board_rev,"paused":paused,"inputs":inputs,"steps":steps,"outputs":outputs,"resources":resources,"execution":execution});
     if !done.is_empty() {
         out["done_units"] = json!({"units":done.len(),"steps":left_out.len()});
     }

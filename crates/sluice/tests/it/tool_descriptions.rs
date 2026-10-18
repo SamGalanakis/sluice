@@ -33,6 +33,14 @@ impl AdoptionHost for Fake {
     }
 }
 impl ExecutionHost for Fake {
+    async fn terminal_gone(
+        &self,
+        _: sluice_model::ids::RunId,
+        _: bool,
+    ) -> Result<bool, sluice_model::error::PublicError> {
+        Ok(true)
+    }
+
     fn composition_enabled(&self) -> bool {
         true
     }

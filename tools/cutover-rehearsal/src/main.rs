@@ -1,4 +1,4 @@
-//! `cutover-rehearsal rehearse --home <copy> --deadline <time> [--sha <sha>] [--report <file>]`
+//! `cutover-rehearsal rehearse --home <copy> --deadline <time> --schema <schema> [--sha <sha>] [--report <file>]`
 //! plays the cutover's deadline on a private copy with this (old) release's code and prints
 //! the cutover report as JSON, one `stopped …` line per run on stderr; it exits 0 at zero
 //! blockers with no refused cancel, 1 otherwise, 2 on an error.
@@ -7,12 +7,14 @@
 //! revision by revision, replayed with this release's patch semantics, and what would block
 //! converting each (`{"projects": [...]}`).
 
-use cutover_rehearsal::{legacy, rehearse, report};
+#[cfg(feature = "legacy-oracle")]
+use cutover_rehearsal::legacy;
+use cutover_rehearsal::{rehearse, report};
 use std::{path::PathBuf, process::ExitCode};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: cutover-rehearsal rehearse --home <copy> --deadline <time> [--sha <sha>] [--report <file>]\n       cutover-rehearsal oracle --home <copy> [--out <file>]"
+        "usage: cutover-rehearsal rehearse --home <copy> --deadline <time> --schema <schema> [--sha <sha>] [--report <file>]\n       cutover-rehearsal oracle --home <copy> [--out <file>]"
     );
     ExitCode::from(2)
 }
@@ -52,7 +54,11 @@ fn main() -> ExitCode {
             let Some(deadline) = flags.get("deadline").cloned() else {
                 return usage();
             };
+            let Some(schema) = flags.get("schema").and_then(|s| s.parse::<u32>().ok()) else {
+                return usage();
+            };
             let options = rehearse::Options {
+                schema,
                 deadline,
                 sha: flags.get("sha").cloned().unwrap_or_default(),
             };
@@ -111,6 +117,7 @@ fn main() -> ExitCode {
                 }
             }
         }
+        #[cfg(feature = "legacy-oracle")]
         "oracle" => {
             let database = home.join("sluice.db");
             let replayed = rusqlite::Connection::open_with_flags(

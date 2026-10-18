@@ -34,6 +34,15 @@ impl Drop for Home {
 }
 async fn setup() -> (Home, Writer, ReadPool) {
     let h = Home::new();
+    std::fs::write(
+        h.0.join("config.json"),
+        json!({"execution":{
+            "defaults":{"memory":"64MiB","cpus":0.1,"tasks":64},
+            "guardian_memory":"64MiB"
+        }})
+        .to_string(),
+    )
+    .unwrap();
     let w = Writer::open(&h.0).unwrap();
     let r = ReadPool::open(&h.0, 2).unwrap();
     (h, w, r)
@@ -57,6 +66,7 @@ fn inputs(v: Value) -> JsonMap {
 }
 fn request(project: Option<ProjectId>, direct: bool) -> FnCall {
     FnCall {
+        limits: None,
         name: "test.echo".into(),
         inputs: inputs(json!({"value":"hello"})),
         project: project.map(ProjectSelector::Id),
@@ -136,6 +146,21 @@ impl Guardian {
 fn service(w: &Writer, r: &ReadPool, g: Arc<Guardian>) -> Calls<Registry, Guardian> {
     Calls::new(w.clone(), r.clone(), Arc::new(Registry::default()), g)
 }
+// This guardian only records launches: an accepted completion also proves its
+// service gone. Mirror the coordinator's separate release after terminalization.
+async fn complete(writer: &Writer, completion: CallCompletion) -> Result<bool, PublicError> {
+    let attempt = completion.attempt;
+    let accepted = sluice_runtime::calls::complete(writer, completion).await?;
+    if accepted {
+        writer
+            .write(RetrySafety::Idempotent, move |tx| {
+                sluice_store::resources::release_budget(tx, attempt)
+            })
+            .await?;
+    }
+    Ok(accepted)
+}
+
 fn completion(a: &AdmittedCall) -> CallCompletion {
     CallCompletion {
         call: a.call,

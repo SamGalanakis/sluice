@@ -54,6 +54,7 @@ impl Fixture {
                 projects::project_create(
                     tx,
                     CreateProject {
+                        limits: None,
                         name: "web".parse().unwrap(),
                         description: "scratch HTTP project".into(),
                         icon: None,

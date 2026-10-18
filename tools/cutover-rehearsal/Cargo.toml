@@ -12,6 +12,28 @@ publish = false
 
 [workspace]
 
+[features]
+default = ["legacy-oracle"]
+legacy-oracle = []
+bounded-execution = []
+
+[[bin]]
+name = "legacy-fixtures"
+path = "src/bin/legacy-fixtures.rs"
+required-features = ["legacy-oracle"]
+
+[[test]]
+name = "fixtures"
+required-features = ["legacy-oracle"]
+
+[[test]]
+name = "rehearsal"
+required-features = ["legacy-oracle"]
+
+[[test]]
+name = "bounded"
+required-features = ["bounded-execution"]
+
 [dependencies]
 sluice-model = { path = "../../crates/sluice-model" }
 sluice-store = { path = "../../crates/sluice-store" }

@@ -964,6 +964,9 @@ pub fn step_cancel(
             snapshot_result(tx, context.project, id, None, None)?;
         } else if status == StepStatus::Running {
             tx.sql().execute("UPDATE attempts SET cancel_requested=1 WHERE project_id=?1 AND step_id=?2 AND phase<>'terminal'",params![context.project.to_string(),id.as_str()])?;
+            if context.plan.steps()[id].scatter.is_some() {
+                cancel_unadmitted_items(tx, context.project, id, &reason)?;
+            }
         } else {
             let error = PublicError::Cancelled {
                 message: request.reason.clone(),
@@ -984,6 +987,73 @@ pub fn step_cancel(
         tx.changed(Some(context.project), "status");
     }
     Ok(selected)
+}
+
+/// Bounded scatter can be between payloads when cancelled. Never-admitted items
+/// have no process to stop, but must become terminal before the batch can finish.
+fn cancel_unadmitted_items(
+    tx: &mut WriteTransaction<'_>,
+    project: ProjectId,
+    step: &StepId,
+    reason: &str,
+) -> Result<()> {
+    let (raw, total): (String, i64) = tx.sql().query_row(
+        "SELECT instances,total FROM steps WHERE project_id=?1 AND step_id=?2",
+        params![project.to_string(), step.as_str()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let mut instances: serde_json::Map<String, Value> = serde_json::from_str(&raw)?;
+    let error = PublicError::Cancelled {
+        message: reason.into(),
+    };
+    for index in 0..total {
+        instances
+            .entry(index.to_string())
+            .or_insert_with(|| json!({"status":"failed","error":error,"outputs":{}}));
+    }
+    let done = instances
+        .values()
+        .filter(|item| item["status"] == "succeeded" || item["status"] == "failed")
+        .count();
+    tx.sql().execute(
+        "UPDATE steps SET instances=?3,done=?4 WHERE project_id=?1 AND step_id=?2",
+        params![
+            project.to_string(),
+            step.as_str(),
+            serde_json::to_string(&instances)?,
+            done as i64
+        ],
+    )?;
+    let live: bool = tx.sql().query_row(
+        "SELECT EXISTS(SELECT 1 FROM attempts WHERE project_id=?1 AND step_id=?2 AND phase<>'terminal')",
+        params![project.to_string(), step.as_str()], |row| row.get(0),
+    )?;
+    if !live {
+        tx.sql().execute(
+            "UPDATE steps SET status='failed',error=?3,outputs=NULL,result_id=NULL WHERE project_id=?1 AND step_id=?2",
+            params![project.to_string(), step.as_str(), serde_json::to_string(&error)?],
+        )?;
+        snapshot_result(tx, project, step, None, None)?;
+        status_record(
+            tx,
+            project,
+            step,
+            StepStatus::Running,
+            StepStatus::Failed,
+            Some(error),
+        )?;
+        let runs = tx.sql().prepare(
+            "SELECT run_id FROM runs WHERE project_id=?1 AND step_id=?2 AND finished_at IS NOT NULL",
+        )?.query_map(params![project.to_string(),step.as_str()], |row| row.get::<_,String>(0))?
+          .collect::<rusqlite::Result<Vec<_>>>()?;
+        for run in runs {
+            crate::resources::release_needs(
+                tx,
+                run.parse().map_err(|_| invalid("invalid run id"))?,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq)]

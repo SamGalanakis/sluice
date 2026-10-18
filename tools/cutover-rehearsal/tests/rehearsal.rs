@@ -214,6 +214,7 @@ async fn a_copy_with_live_work_reaches_zero_blockers_through_the_old_cancel_and_
     assert!(before.contains("ActiveState=active"), "{before}");
 
     let options = Options {
+        schema: 3,
         deadline: DEADLINE.into(),
         sha: "4f1c2d3e".into(),
     };
@@ -239,7 +240,7 @@ async fn a_copy_with_live_work_reaches_zero_blockers_through_the_old_cancel_and_
     }
 
     let report = &rehearsal.report;
-    assert_eq!(report.reason, rehearse::reason(DEADLINE));
+    assert_eq!(report.reason, rehearse::reason(3, DEADLINE));
     assert_eq!(
         (report.projects, report.revisions, report.schema),
         (1, 2, 3)
@@ -300,7 +301,7 @@ async fn a_copy_with_live_work_reaches_zero_blockers_through_the_old_cancel_and_
         .query_row(
             "SELECT count(*) FROM records WHERE kind='step.cancel'
              AND json_extract(payload,'$.author')='cutover' AND json_extract(payload,'$.reason')=?1",
-            [rehearse::reason(DEADLINE)],
+            [rehearse::reason(3, DEADLINE)],
             |r| r.get(0),
         )
         .unwrap();
@@ -318,6 +319,7 @@ async fn a_cancel_the_old_catalog_refuses_stops_the_rehearsal_with_each_run_name
         &copy,
         Catalog::core(),
         &Options {
+        schema: 3,
             deadline: DEADLINE.into(),
             sha: String::new(),
         },
@@ -353,6 +355,7 @@ async fn the_rehearsal_refuses_a_served_home_and_a_copy_holding_a_dotenv() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("coordinator.sock"), "").unwrap();
     let options = Options {
+        schema: 3,
         deadline: DEADLINE.into(),
         sha: String::new(),
     };

@@ -198,6 +198,7 @@ pub fn create_project(
             description: String::new(),
             icon: None,
             resources: None,
+            limits: None,
             author: "sam".into(),
         },
         &EmptyPlanInitializer,

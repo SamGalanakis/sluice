@@ -8,6 +8,7 @@
 
 pub mod dump;
 pub mod host;
+#[cfg(feature = "legacy-oracle")]
 pub mod legacy;
 pub mod rehearse;
 pub mod report;

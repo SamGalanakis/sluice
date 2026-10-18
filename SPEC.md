@@ -165,22 +165,22 @@ the old schema may outlive it. `scripts/deploy --schema-cutover --deadline <time
 <s>] [--settle-timeout <s>] [--dry-run] [--candidate DIR] [--rehearsal FILE] [REF]` (`<time>` is
 RFC 3339 or `+<n>m`; grace and timeout default to 300 s; `--candidate` takes an already built
 release instead of building REF, and `--skip-compat` is refused) runs from the release the
-installation selects:
+installation selects. `<N>` is the candidate manifest's schema, currently 4:
 
 1. **Verify** the candidate with its own binary (`install verify`, as step 2 above); a refusal
    stops the cutover before anything is drained or fenced. **Rehearse** on a private copy of
    the home (`scripts/cutover-rehearse`, below), or take
    `--rehearsal FILE`, a passed rehearsal report of this candidate over the selected release.
-2. Print the **notice** the orchestrator sends every session: `sluice cutover to schema 3 at
+2. Print the **notice** the orchestrator sends every session: `sluice cutover to schema <N> at
    <deadline>: new work is refused from now; runs still live at <deadline> get a cancel request
    ("<reason>") — check how each ended in the cutover report and retry it after the cutover.`
-   The reason is `schema-3 cutover at <deadline>: stopped at the deadline; retry it after the
+   The reason is `schema-<N> cutover at <deadline>: stopped at the deadline; retry it after the
    cutover`. `--dry-run` stops here, after listing each live run (project, step or `call:<id>`,
    run, start, pinned release, settle intent and what the deadline would do to it); it changes
    nothing.
 3. **Drain** with the old release (`sluice drain --no-wait`, author `cutover`, §2.6) and wait
    until nothing is live or the deadline comes.
-4. **Fence** (`install fence "schema-3 cutover"`), starting the old coordinator with
+4. **Fence** (`install fence "schema-<N> cutover"`), starting the old coordinator with
    `--maintenance` if none answers, then request **one `step_cancel` per live (project, step)**
    with the old release (author `cutover`, the reason above) and **verify the intent**: every
    live attempt of each step carries `cancel_requested` (a step whose attempts all ended
@@ -197,18 +197,19 @@ installation selects:
    ended.
 6. **Stop** the services and prove nothing of the home is left: no active unit of the home's
    coordinator or of any of its runs, and no process holding its database or writer lock.
-7. **Back up** the database (backup API) to `<install>/backups/pre-schema3-<time>.db`, then
+7. **Back up** the database (backup API) to `<install>/backups/pre-schema<N>-<time>.db`, then
    **migrate** with the candidate's `sluice home migrate`. A failed migration leaves the home
    unchanged and stops fenced.
 8. **Select and start** the candidate's coordinator and serve, deferring loop until step 9.
    Check integrity, every project's `plan_get` equal to the backup's plan at its revision
-   (compact serialization, `docs/design/plan-rows.md` §10.5), the first plan edit in `plan_history`
+   (compact serialization, `docs/design/plan-rows.md` §10.5; normalized backups are exported
+   from their ordered input, step and output rows), the first plan edit in `plan_history`
    at each project's baseline revision from the conversion report, or its first logged revision
    in the backup for an unanchored project, and the dashboard answering (`/` with 200, a project
    page without a server error). A failure stays fenced: recover forward, or
    restore the backup together with the old release. To recover forward after repairing a
    post-migration failure, run `scripts/deploy --schema-cutover --resume-checks`. It requires
-   the `schema-3 cutover` fence, the home and recorded candidate at schema 3, and the recorded
+   the `schema-<N> cutover` fence, the home and recorded candidate at schema <N>, and the recorded
    successful migration checkpoint at `<install>/schema-cutover-checkpoint.json`. It re-creates
    coordinator and serve and repeats these checks against the recorded backup. It then
    performs step 9, preserving the original deadline and run outcomes. No deadline or rehearsal
@@ -219,7 +220,7 @@ installation selects:
    held (`maintenance.scheduler_owner` set) within 60 s, or fail fenced and restore the drain.
    This also applies to
    `--resume-checks`. Then **report**: one line `cutover
-   <sha> · schema 3 · <n> projects · <m> revisions converted · cancel requested for <k> runs ·
+   <sha> · schema <N> · <n> projects · <m> revisions converted · cancel requested for <k> runs ·
    <c> calls stopped`, then a line per run, `stopped <project> <step or call:<id>> <run>
    requested=<cancel|stop> outcome=<succeeded|failed:<kind>> advice=<none|retry|read-then-retry|call-again>`,
    printed and appended to `<install>/deploy.log` (each as a JSON line's `cutover` field), and
@@ -256,7 +257,8 @@ copy instead of copying the home, and never removes it.
 ```
 config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 3065},
                             "log_max": 10000}; written when missing, read on each use; a key
-                            of the wrong shape is ignored (with a warning) for its default:
+                            of the wrong shape is ignored (with a warning) for its default,
+                            except execution policy, which fails closed (§2.5):
                             fn_dirs    directories (relative to the home) whose fn dirs join
                                        the global scope
                             http       serve's host and port when the command line gives none
@@ -266,6 +268,8 @@ config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port"
                                        question (§8)
                             notify     {command: [argv…], timeout_s: 30}: owner notification
                                        (§8)
+                            execution  finite run defaults, ceilings and home-wide capacity
+                                       (§2.5); malformed or unreadable policy blocks admission
 .env                        secrets for every run in the home (§5.4)
 sluice.db                   the database (§3)
 coordinator.sock            the coordinator's Unix socket (owner only)
@@ -309,7 +313,7 @@ and, while some client holds the **scheduler lease**, admits and launches work.
 ### 2.5 Runs and the guardian
 
 Each run is a transient systemd user unit, `sluice-run-<run id>.service`, started with
-`Delegate=yes`, `KillMode=control-group` and `Restart=no`. Inside it the **guardian**
+`Delegate=yes`, `OOMPolicy=continue`, `KillMode=control-group` and `Restart=no`. Inside it the **guardian**
 (`sluice guardian --run --attempt --socket`) proves its identity to the coordinator, splits the
 unit's cgroup into `control` (itself) and `payload/<invocation>` leaves, starts the payload
 through the `payload-exec` launcher, serves the run's control socket (callbacks, engine hooks,
@@ -336,6 +340,95 @@ coordinator, owns the payload: a coordinator restart or a deploy leaves running 
 Host prerequisites (cgroup v2, a systemd user manager with delegation, `pidfd_open`, a boot id)
 are checked by `sluice doctor`; see `docs/rust/host-prerequisites.md`.
 
+#### Execution budgets
+
+Every run that starts a local executable has a finite, frozen `RunLimits` budget:
+`{memory_bytes, cpu_millis, tasks}`. One CPU is 1000 milli-CPUs; tasks include threads.
+This covers steps, each scattered item, direct and queued calls, and capacity-function calls.
+Pure `core.*` transformations and an empty scatter settle in the coordinator without a
+payload executable. `core.external` starts no run.
+
+The human-facing override is `limits: {memory?, cpus?, tasks?}`. Memory accepts positive
+integer bytes or a positive integer with `KiB`, `MiB`, `GiB` or `TiB`; CPUs are a positive
+number with at most three decimal places; tasks are a positive integer. Unknown keys, zero,
+overflow and unlimited spellings are refused. Resolve each field from home defaults, then
+project defaults, then the step or call override, always within the installation's per-run
+ceilings. `project_create(limits=...)` sets project defaults; `project_update(limits=...)`
+replaces them and null clears them. Steps and recipes declare `limits`; `step_update` or
+`plan_edit` can replace that field or remove it with null. `fn_call(limits=...)` applies an
+override to that call. A running step cannot change its work, including `limits`.
+
+`config.json` owns the policy under `execution`:
+
+```json
+{"execution": {
+  "defaults": {"memory": "1GiB", "cpus": 0.5, "tasks": 256}
+}}
+```
+
+`defaults`, `ceilings` and `total` each accept the same three optional fields;
+`guardian_memory` accepts the memory syntax. Omitted fields use the defaults below. Explicit
+values must fit the host and each other; smaller totals clamp inherited defaults and ceilings.
+A malformed policy, invalid JSON or an unreadable configuration blocks new admission. A
+missing file or missing `execution` section selects finite defaults, never unlimited execution.
+Host memory and CPU capacity account for the effective ancestor cgroup limits and available CPUs.
+
+| Setting | Default |
+|---|---|
+| Home total | 75% of effective host memory, 75% of effective CPU capacity, 8192 tasks |
+| Payload default per run | 8 GiB, 2 CPUs, 512 tasks, clamped to the ceilings |
+| Payload ceiling per run | Home memory minus guardian memory; home CPU minus 0.1 CPU; 4096 tasks, clamped when the home total is lowered |
+| Guardian reservation per run | 256 MiB or one eighth of total home memory, whichever is smaller; 0.1 CPU; 64 tasks |
+
+The coordinator reserves payload plus guardian capacity atomically with the attempt, across
+all projects and calls in the home. Live attempts retain their durable reservations across a
+coordinator restart. Admission refuses unknown budgets and overcommitted totals. A ready step
+waits when capacity is unavailable; scatter admits only the items that fit and continues as
+capacity becomes available. Each item reserves separately while the step holds its logical
+`needs` once. Direct calls use the same admission transaction and return a capacity refusal
+when they cannot start; queued calls remain pending. Capacity-function calls are bounded too.
+Physical accounting is independent of logical resources: `lane` is an ordinary resource name,
+and omitting `needs` never bypasses the home budget.
+
+The effective limits and policy are frozen with the attempt before any payload is launched.
+A retry inside that run shares its existing budget. New runs, including later scatter items,
+resolve the policy at their own admission. Physical reservations remain held until the entire
+service, including its guardian, is proven empty. Logical leases can settle after payload
+cleanup. The coordinator reaps a terminal guardian left waiting for an acknowledgement before
+releasing its reservation; a durable result never allows unaccounted guardian processes. Change aggregate `execution.total` only after draining the home's live attempts;
+Sluice refuses to reconfigure a populated workload slice. Changes to run defaults and ceilings
+affect future admission, not an existing run's frozen limits.
+
+Launch, adoption and terminal cleanup share a per-run process fence. A launcher rechecks the
+attempt under that fence; an attempt already ended cannot start a late service. The start
+helper retains the fence after caller cancellation or coordinator death. An interrupted start
+with no confirmed manager outcome keeps its reservation and reports that capacity is retained.
+An absent unit alone does not clear it: observing the service or a changed host boot ID resolves
+the pending start. No timeout turns uncertain launch evidence into free capacity.
+
+The run's cgroup has `control` for the guardian and `payload` for its combined workload.
+`memory.max`, `memory.swap.max=0`, `cpu.max` and `pids.max` are set before the launch barrier
+opens. Invocation and composed-agent sidecar leaves share the payload parent's allowance.
+The guardian has its own reserved control budget. A per-home workload slice bounds the
+aggregate; coordinator, serve and scheduler services stay outside that slice. `doctor` checks
+that the required memory, CPU and task controllers can enforce the settings. Missing
+controllers or failed setup refuse execution.
+
+A payload memory OOM stops the workload as a group (`memory.oom.group=1`), and a task-limit
+hit stops the run. The guardian survives in `control`, stops and reaps the remaining payload,
+and reports `resource_exhausted` with `resource: "memory" | "tasks"`, the numeric `limit`,
+optional `peak`, and a message. CPU quota throttles execution; it is not a fatal condition.
+Exhaustion is established by kernel counters, never by `SIGKILL` or an exit code alone, and
+is not automatically retried. Completion keeps `RunUsage` with `memory_peak_bytes`,
+`oom_kills`, `pids_limit_hits` and `cpu_throttled_usec`; ordinary cancellation and settlement
+rules still decide an already accepted cancel or settlement.
+
+Containment covers the payload and its local descendants. A request sent to an existing
+build daemon, a remote executor or a separate user service runs in that executor's resource
+domain. These limits are not a security boundary against code with the owner's permissions
+moving work to another service or cgroup. Nested local wrappers must preserve the run's
+payload ancestry; independent executors need their own limits.
+
 ### 2.6 Maintenance modes
 
 The home has one maintenance mode: `normal` or `drain`.
@@ -357,19 +450,23 @@ use a pool of read-only connections and one snapshot per answer. Every logical c
 and its records, a status change and its records, a message and its record) commits in one
 transaction.
 
-Everything below describes schema 3. A schema-1 home (the releases before the plan-rows
-cutover) has 23 tables, the plan stored whole as a document in `plans` and edits as RFC 6902
-`ops` in `plan_edits`; `sluice home migrate` converts it, and no schema-3 release opens it
+Everything below describes schema 4. Execution budgets require a drained schema cutover
+from schema 3; an old guardian cannot acquire the new contract by changing its metadata.
+A schema-1 home (the releases before the plan-rows cutover) has 23 tables, the plan stored whole as a document in `plans` and edits as RFC 6902
+`ops` in `plan_edits`; `sluice home migrate` converts it, and no schema-4 release opens it
 before then.
 
-**Schema 3.** A fresh home is created from `migrations/0003.sql` (27 STRICT tables).
-A binary refuses a home at any other schema: a schema-3 binary refuses a schema-1 or schema-2
-home with `migration required` (run `sluice home migrate`), and an older binary refuses a
-schema-3 home. Incompatible storage changes take a new schema version and a drained, fenced
-migration with no live consumer of the old schema (§2.2); schema 2 is reserved for the
+**Schema 4.** A fresh home is created from `migrations/0004.sql`, which extends the
+normalized plan layout with execution-budget columns. Projects and queued calls keep
+optional limit overrides; attempts keep frozen payload limits and their reservation.
+A binary refuses a home at any other schema: a schema-4 binary requires migration of an
+older home (`sluice home migrate`), and an older binary refuses a schema-4 home. Incompatible storage changes take a new schema
+version and a drained, fenced migration with no live consumer of the old schema (§2.2); schema 2 is reserved for the
 historical interim board layout. Additive changes use version-scoped migrations. `sluice home
-migrate` converts a schema-1 or schema-2 database in one transaction (nothing changes on any
-failure): it refuses while an attempt, run, lease or call is live, replays every project's whole
+migrate` upgrades a drained schema-3 database without changing its normalized plans, history
+or completed work. It adds the budget columns and advances the schema in one transaction.
+It also converts a schema-1 or schema-2 database directly to schema 4 in one transaction
+(nothing changes on any failure): it refuses while an attempt, run, lease or call is live, replays every project's whole
 edit history into row changes and checks each revision's rows against the replayed document,
 checks the final rows against the stored document, rewrites retained `plan.edit` records and
 removes the plan snapshots stored in attempts. A project whose history is incomplete (a
@@ -380,11 +477,11 @@ whose completion snapshot replays through the later logged revisions to the stor
 with one logged revision and no such snapshot, at the stored plan. That revision becomes an
 imported baseline (author `sluice`), the revisions at or below it are folded into it, and the
 report lists each anchor with its folded edits. A table whose columns a home gained in
-another order is rebuilt in schema 3's order with the same rows. It holds the home's
+another order is rebuilt in the normalized layout's order with the same rows. It holds the home's
 `coordinator.lock` while it runs (§14), and its report (`--json`) is `{from_schema, projects:
 [{project_id, name, revisions, steps, inputs, outputs, records_rewritten,
 attempt_snapshots_removed, anchor}], anchored: [{project_id, name, rev, folded_edits, source}],
-warnings}`. A restore of a schema-1 or schema-2 backup
+warnings}`. A restore of a schema-1, schema-2 or schema-3 backup
 converts its private destination the same way, with the same refusal: a backup holding live
 work is refused (`invalid`, `this backup holds live work (…); a schema-changing restore needs a
 backup taken with nothing live`), because the restored home's adoption would reach the original
@@ -635,7 +732,7 @@ input and output names match `^[a-z0-9][a-z0-9_-]*$`; a project name may not loo
 
 Step keys: `run` (the fn), `in` (bindings), `scatter`, `doc`, `outputs` (declared, open fns
 only), `paused` (`true` or a reason string), `after` (gate entries), `tags`, `needs`,
-`priority`. Plan outputs are `{"source": "<ref>"}`.
+`priority` and `limits` (§2.5). Plan outputs are `{"source": "<ref>"}`.
 
 ### 6.2 Bindings
 
@@ -655,7 +752,10 @@ sources to succeed and is skipped when a source step is skipped.
 `"scatter": "<input>"` runs the step once per item of that input's array (each item must fit
 the input's type); every output becomes an array in item order. The step succeeds when every
 item does and fails if any fails, keeping the per-item results so a retry with unchanged inputs
-and item count re-runs only the failed items. A scattered step holds its `needs` once.
+and item count preserves successful items and retries failed or not-yet-admitted items.
+A scattered step holds its `needs` once, but every item reserves its own physical budget
+(§2.5). Items start only as the home budget permits; a large scatter does not start every
+local process at once.
 
 ### 6.4 Open fns: extra inputs, declared outputs, submission
 
@@ -1013,6 +1113,9 @@ payload as for a cancel) and writes a `step.settle` record; a second `step_settl
 Reply `{project, step, run, outputs}`.
 
 ### 7.6 Resources and leases
+
+These are project-local logical scheduling resources. Every executable run also needs its
+physical home-wide execution reservation (§2.5), whether it declares `needs` or not.
 
 A project declares resources: `{"lane": 4}` or `{"lane": {"capacity": 4}}` (a fixed integer
 ≥ 0), or `{"cpu": {"capacity_fn": "<fn>"}}`, a fn the project sees that takes no required input
@@ -1558,6 +1661,7 @@ Errors are `{"error": kind, "message", …}`:
 | `storage` | | database or I/O failure |
 | `cursor_expired` | | `since_seq` outside the log |
 | `process_lost` | | a run's process vanished without a result |
+| `resource_exhausted` | `resource, limit, peak?` | the run exceeded its memory or task budget; the guardian stops its payload and records kernel evidence (§2.5) |
 | `cancelled` | | cancelled work |
 | `fn_failure` | | a fn failed |
 | `transient` | | a retryable failure that exhausted its retries |
@@ -1587,9 +1691,9 @@ step `not_found`.
 | tool | arguments | result |
 |---|---|---|
 | `docs` | `topic?` | the topic's markdown, or the index |
-| `projects_list` | | `[{project_id, name, description, rev, settings_rev, counts, paused, archived, board_rev, resources?, icon?}]` (live projects, by name); `counts` maps step status to the plan's steps in it, `resources` each declared resource to `{capacity}` or `{capacity_fn}`, `icon` is `{kind: "image", type}` or `{kind: "text", text}` |
-| `project_create` | `name`, `description=""`, `icon?`, `resources={}`, `author?` | `{project_id, name}` |
-| `project_update` | `project`, `new_name?`, `description?`, `icon?` (`""` removes), `resources?` (each key set, null removes), `paused?`, `archived?`, `prune_done_after?` (seconds, null turns it off, §6.11), `prune_keep?` (patterns, `[]` or null clears), `fallback?` (`owner` or a registered `@session` that answers unowned units, null clears, §8.1), `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
+| `projects_list` | | `[{project_id, name, description, rev, settings_rev, counts, paused, archived, board_rev, resources?, limits?, icon?}]` (live projects, by name); `counts` maps step status to the plan's steps in it, `resources` each declared resource to `{capacity}` or `{capacity_fn}`, `icon` is `{kind: "image", type}` or `{kind: "text", text}` |
+| `project_create` | `name`, `description=""`, `icon?`, `resources={}`, `limits?` (§2.5), `author?` | `{project_id, name}` |
+| `project_update` | `project`, `new_name?`, `description?`, `icon?` (`""` removes), `resources?` (each key set, null removes), `limits?` (replaces the project defaults; null clears), `paused?`, `archived?`, `prune_done_after?` (seconds, null turns it off, §6.11), `prune_keep?` (patterns, `[]` or null clears), `fallback?` (`owner` or a registered `@session` that answers unowned units, null clears, §8.1), `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
 | `board_set` | `project`, `program` (null clears), `expected_rev?`, `reason?`, `author?` | `{rev, warnings}`; a stale `expected_rev` is `conflict`, a program that does not check `invalid` with each problem as `line N: …` (a `Slot` is told it was replaced by `Doc`); the same program again changes nothing; writes `project.board`. `warnings` lists each step the program names that the plan cannot give it (`docs("board")`), as `line N: <Component> names step `x`, which is not in the plan` or `… selects `tag:x`, which no plan step carries`, and each Metric, Query or Chart whose SQL compares `status` with `'failed'` and never reads `error` (it counts the owner's cancels as failures: `Count` counts as the dashboard does); it never refuses |
 | `board_get` | `project` | `{project, rev, program}` (`rev` 0 and `program` null before any board) |
 | `board_doc_read` | `project` | `{rev, updated_at, author, markdown, numbered}`: the board's document (`rev` 0 and `markdown` "" before the first write), `numbered` its lines with right-aligned numbers and a tab, as `cat -n` |
@@ -1599,7 +1703,7 @@ step `not_found`.
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, submits?, icon?, open?}]` |
 | `fn_get` | `name`, `project?` | the fn.json plus `scope` and `path` (null for a builtin) |
 | `fn_save` | `fn`, `main_py`, `project?` | `{name, scope, path, generation}` |
-| `fn_call` | `name`, `inputs={}`, `project?`, `wait?` (seconds, default 0), `direct=false`, `author?` | `{call, project_id, status, inputs, outputs, error, direct}`; `direct` runs it now through a guardian and ignores `wait` |
+| `fn_call` | `name`, `inputs={}`, `project?`, `limits?` (§2.5), `wait?` (seconds, default 0), `direct=false`, `author?` | `{call, project_id, status, inputs, outputs, error, direct, limits?, usage?}`; `direct` runs it now through a guardian and ignores `wait` |
 | `call_status` | `call`, `project?` | as `fn_call`, plus `finishing?` (§6.4) |
 | `recipe_list` | `project` | `[{name, doc, params, scope, stages, title?, view?, title_error?, view_error?}]`, a broken file as `{name, scope, error}`; a view that does not check is `view_error`, the recipe still usable |
 
@@ -1679,17 +1783,28 @@ removed steps.
 | `plan_view` | `project`, `format="mermaid"`, `all=false`, `units?`, `steps?`, `status?`, `recipe?` | text |
 | `verify` | `project?` | `[{where, message}]` |
 
-`status`, steps view: `{project, rev, board_rev, paused, inputs, outputs, resources, steps: {id: {status,
-outputs, error, run_ids, done, total, instances, manual, paused?, queued?, waiting?,
+`status`, steps view: `{project, rev, board_rev, paused, inputs, outputs, resources, execution, steps: {id: {status,
+outputs, error, run_ids, done, total, instances, manual, limits?, run_resources?, budget_error?, paused?, queued?, waiting?,
 finishing?}}, done_units?}`; a finishing step (§6.4) stays `running` and carries `finishing`.
 Without a selection, done units are left out and counted in `done_units: {units, steps}` unless
 `all`. `brief` cuts strings over 200 characters (`… [n more characters]`). `resources` maps
-each to `{capacity, held, queued, error}`. `paused` is `true` or the pause's reason. Every
+each to `{capacity, held, queued, error}`. `execution` reports the home-wide physical
+`total`, `held`, `unbounded_attempts` and capacity `reason`, with memory bytes, milli-CPUs
+and tasks. When policy configuration is invalid, `execution.error` reports the diagnostic;
+status remains readable. A pending step's `limits` describes the currently resolved admission
+budget, or `budget_error` explains why it cannot resolve. `run_resources` is an array of
+`{run, limits, usage}` from the step's stored runs: limits are frozen, usage is completion
+evidence, and unavailable historical evidence is null. For a step that is no longer pending,
+`limits` comes from its latest run. Neither that field nor `run_resources` changes when home
+or project defaults change. Call replies expose the same frozen `limits` and recorded `usage`
+when present; usage fields are `memory_peak_bytes`, `oom_kills`, `pids_limit_hits` and
+`cpu_throttled_usec`. These are recorded observations, not a live usage feed.
+`paused` is `true` or the pause's reason. Every
 pending step that is not about to start has `waiting`, the reasons in order: `paused` or
 `paused: <reason>`, `project paused`, each handoff not ready (`step <id> is <status>`, `plan
 input <name> has no value`), each gate not satisfied (`after <entry> (<why>)`), the resource
 shortfall (`queued: needs lane 1 (4/4 held)`, with `queued` listing the resources), and for a
-`core.external` step with nothing else, `external: set its outputs with step_set_output`. Units view (`view: "units"`, `brief` refused): `{project, rev, board_rev, paused, resources?,
+`core.external` step with nothing else, `external: set its outputs with step_set_output`. Units view (`view: "units"`, `brief` refused): `{project, rev, board_rev, paused, resources?, execution,
 units: [{unit, title, recipe, state, age, engine, steps, blocked, last, line, finishing?}], done_units?}`
 (`recipe` the matched recipe's name or empty; the steps view gives each step `title` and, in a
 unit of more than one step, `stage`);

@@ -587,11 +587,18 @@ pub struct StepChanges {
         skip_serializing_if = "Option::is_none"
     )]
     pub priority: Option<Option<JsonValue>>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub limits: Option<Option<JsonValue>>,
 }
 impl StepChanges {
     /// The step keys in declaration-key spelling, in this order.
-    pub const KEYS: [&'static str; 10] = [
+    pub const KEYS: [&'static str; 11] = [
         "run", "in", "scatter", "doc", "outputs", "paused", "after", "tags", "needs", "priority",
+        "limits",
     ];
     /// Each given field by its declaration key: `Some(value)` replaces, `None` removes.
     pub fn fields(&self) -> Vec<(&'static str, Option<&JsonValue>)> {
@@ -606,6 +613,7 @@ impl StepChanges {
             &self.tags,
             &self.needs,
             &self.priority,
+            &self.limits,
         ]
         .into_iter()
         .zip(Self::KEYS)

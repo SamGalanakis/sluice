@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use sluice_model::{
     error::PublicError,
     ids::*,
+    limits::{ExhaustedResource, RunLimits, RunUsage},
     rpc::{FnInvocation, JsonMap, MAX_FRAME_BYTES, PROTOCOL_VERSION, RunCapability, decode_json},
 };
 use std::{
@@ -53,6 +54,7 @@ pub trait PayloadHost: FnHost {
         cancel: CancellationToken,
     ) -> impl Future<Output = io::Result<Self::Invocation>> + Send;
     fn empty_without_payload(&self) -> io::Result<CleanupEvidence>;
+    fn resource_usage(&self) -> io::Result<RunUsage>;
 }
 pub trait PayloadInvocation: Send {
     fn engine_hook(
@@ -86,6 +88,8 @@ pub struct LaunchRequest {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GuardianArgs {
+    pub limits: RunLimits,
+    pub guardian_memory_bytes: u64,
     pub home_dir: PathBuf,
     pub run_dir: PathBuf,
     pub guardian: GuardianIdentity,
@@ -509,6 +513,13 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
                             reporting = Some(Box::pin(report(link, id, starts, acks)));
                         }
                     }
+                    match host.resource_usage() {
+                        Ok(usage) => if let Some(error) = exhausted(args.limits, usage) {
+                            result = PayloadResult::Failed(error);
+                            break;
+                        },
+                        Err(error) => { result = PayloadResult::Unknown(format!("resource accounting failed: {error}")); break; }
+                    }
                     match payload.poll().await {
                         Ok(Some((r, exit))) => { result = r; exits.push(exit); break; },
                         Ok(None) => {},
@@ -520,6 +531,11 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
             // prior invocation has exited. It is never inferred from an error.
         }
         cleanup.push(payload.cleanup().await?);
+        if !matches!(result, PayloadResult::Cancelled(_))
+            && let Some(error) = exhausted(args.limits, host.resource_usage()?)
+        {
+            result = PayloadResult::Failed(error);
+        }
         if let Some(exit) = payload.exit_evidence()
             && !exits.iter().any(|old| old.executor == exit.executor)
         {
@@ -528,7 +544,10 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
         if let Some((next, backoff_ms)) = retry {
             if matches!(
                 result,
-                PayloadResult::Unknown(_) | PayloadResult::Cancelled(_) | PayloadResult::Lost(_)
+                PayloadResult::Unknown(_)
+                    | PayloadResult::Cancelled(_)
+                    | PayloadResult::Lost(_)
+                    | PayloadResult::Failed(PublicError::ResourceExhausted { .. })
             ) {
                 break;
             }
@@ -563,8 +582,17 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
         }
         break;
     }
+    let usage = host.resource_usage()?;
+    if !matches!(result, PayloadResult::Cancelled(_))
+        && let Some(error) = exhausted(args.limits, usage)
+    {
+        result = PayloadResult::Failed(error);
+    }
     let mut journal = CompletionJournal {
         protocol: PROTOCOL_VERSION,
+        limits: args.limits,
+        guardian_memory_bytes: args.guardian_memory_bytes,
+        usage: Some(usage),
         identity: id.clone(),
         completion_id: InvocationId::new().to_string(),
         result,
@@ -810,9 +838,16 @@ impl<H: FnHost> OsFnHost<H> {
         program: PathBuf,
         payload_args: Vec<OsString>,
         home: PathBuf,
+        limits: RunLimits,
+        guardian_memory_bytes: u64,
     ) -> io::Result<Self> {
         let mut guardian = OwnedProcess::capture(std::process::id())?;
-        let groups = Arc::new(RunCgroups::create(service_group, &mut guardian)?);
+        let groups = Arc::new(RunCgroups::create(
+            service_group,
+            &mut guardian,
+            limits,
+            guardian_memory_bytes,
+        )?);
         Ok(Self {
             dispatcher,
             groups,
@@ -957,6 +992,9 @@ impl<H: FnHost> PayloadHost for OsFnHost<H> {
             cleanup_evidence: None,
             run_dir: request.run_dir,
         })
+    }
+    fn resource_usage(&self) -> io::Result<RunUsage> {
+        self.groups.payload().resource_usage()
     }
     fn empty_without_payload(&self) -> io::Result<CleanupEvidence> {
         if !self.groups.payload_empty()? {
@@ -1176,6 +1214,8 @@ impl PayloadInvocation for OsInvocation {
 
 #[derive(Debug, Clone)]
 pub struct AdoptionAttempt {
+    pub limits: RunLimits,
+    pub guardian_memory_bytes: u64,
     pub identity: AttemptKey,
     pub guardian: Option<GuardianIdentity>,
     pub run_dir: PathBuf,
@@ -1231,6 +1271,9 @@ pub async fn adopt_attempt<L: CoordinatorLink, H: AdoptionHost>(
             fs::create_dir_all(&attempt.run_dir)?;
             let journal = CompletionJournal {
                 protocol: PROTOCOL_VERSION,
+                limits: attempt.limits,
+                guardian_memory_bytes: attempt.guardian_memory_bytes,
+                usage: None,
                 identity: attempt.identity.clone(),
                 completion_id: format!("lost-{}", attempt.identity.attempt),
                 result: PayloadResult::Lost(
@@ -1471,5 +1514,31 @@ async fn historical_start<L: CoordinatorLink>(
                 )));
             }
         }
+    }
+}
+
+fn exhausted(limits: RunLimits, usage: RunUsage) -> Option<PublicError> {
+    if usage.oom_kills > 0 {
+        Some(PublicError::ResourceExhausted {
+            resource: ExhaustedResource::Memory,
+            limit: limits.memory_bytes,
+            peak: Some(usage.memory_peak_bytes),
+            message: format!(
+                "Memory limit exceeded: {} byte budget; payload stopped",
+                limits.memory_bytes
+            ),
+        })
+    } else if usage.pids_limit_hits > 0 {
+        Some(PublicError::ResourceExhausted {
+            resource: ExhaustedResource::Tasks,
+            limit: u64::from(limits.tasks),
+            peak: None,
+            message: format!(
+                "Task limit exceeded: {} tasks; payload stopped",
+                limits.tasks
+            ),
+        })
+    } else {
+        None
     }
 }

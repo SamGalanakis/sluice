@@ -1,5 +1,6 @@
-//! The schema-3 converter (`docs/design/plan-rows.md` §10.2–§10.6): a home at schema 1 or 2
-//! becomes a schema-3 home in one transaction, or is left untouched.
+//! Drained conversion to the current schema. Schema 1 and 2 use the normalized-plan
+//! conversion (`docs/design/plan-rows.md` §10.2–§10.6); schema 3 retains its plan rows
+//! and gains execution-budget metadata. Every conversion is one transaction.
 //!
 //! The legacy plan history lives only here: each project's RFC 6902 edits are replayed from
 //! `{"steps":{}}` with the old patch semantics (one operation at a time, restoring the key
@@ -10,9 +11,9 @@
 //! database is read: no fn manifest, recipe file or `.env`.
 //!
 //! Preconditions are the same wherever it runs (`sluice home migrate`, a restore's private
-//! copy) and have no switch: format 1, schema 1 or 2, sluice's identity, 23 tables, integrity
+//! copy) and have no switch: format 1, a known historical schema and table count, integrity
 //! and foreign keys clean, **no live work** (no attempt not terminal, run not finished, lease
-//! waiting or held, or call running), and every project's history complete and replayable.
+//! waiting or held, or call running). Legacy plan histories must be complete and replayable.
 //! A blocker is reported, never deleted or rewritten to pass.
 //!
 //! A project whose logged history starts above rev 1 (one the Python importer brought in) is
@@ -90,7 +91,7 @@ const ADDED: [&str; 4] = ["plan_outputs", "plan_refs", "plan_edges", "step_tags"
 /// Live work in a home: what the drain counts as blockers.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LiveWork {
-    /// Attempts not terminal.
+    /// Attempts not terminal, or terminal guardians whose physical reservation remains held.
     pub attempts: u64,
     /// Runs not finished.
     pub runs: u64,
@@ -110,7 +111,9 @@ pub fn live_work(sql: &Connection) -> Result<LiveWork> {
         Ok(sql.query_row(query, [], |r| r.get::<_, i64>(0))?.max(0) as u64)
     };
     Ok(LiveWork {
-        attempts: count("SELECT count(*) FROM attempts WHERE phase<>'terminal'")?,
+        attempts: count(
+            "SELECT count(*) FROM attempts WHERE phase<>'terminal' OR (json_type(request,'$.policy')='object' AND COALESCE(json_extract(request,'$.resource_released'),0)=0)",
+        )?,
         runs: count("SELECT count(*) FROM runs WHERE finished_at IS NULL")?,
         leases: count("SELECT count(*) FROM leases WHERE state IN ('waiting','held')")?,
         calls: count("SELECT count(*) FROM calls WHERE status='running'")?,
@@ -218,7 +221,7 @@ struct RevisionRow {
     changes: Vec<PlanChange>,
 }
 
-/// Convert the database at `database` (schema 1 or 2) to schema 3 in one transaction, then
+/// Convert the database at `database` to the current schema in one transaction, then
 /// check its integrity and foreign keys. Any failed precondition (`ConversionBlocked`, each
 /// blocker naming the project, the check and the revision) or error leaves the file as it was.
 pub fn convert_home(database: &Path) -> Result<ConversionReport> {
@@ -232,6 +235,12 @@ pub fn convert_home(database: &Path) -> Result<ConversionReport> {
     connection.pragma_update(None, "foreign_keys", false)?;
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let from_schema = preconditions(&tx)?;
+    if from_schema == 3 {
+        let report = upgrade_execution_budgets(&tx)?;
+        tx.commit()?;
+        clean(&connection)?;
+        return Ok(report);
+    }
     add_legacy_columns(&tx)?;
     let (converted, plan_records, blocked, mut blockers) = replay_projects(&tx)?;
     let edits: HashMap<(String, i64), &RevisionRow> = converted
@@ -295,7 +304,7 @@ pub fn convert_home(database: &Path) -> Result<ConversionReport> {
         return Err(StoreError::ConversionBlocked(blockers));
     }
     let fresh = fresh_schema()?;
-    // Views and triggers name tables by text: they go first and come back from schema 3.
+    // Views and triggers name tables by text: rebuild them from the current schema.
     for view in names_of(&tx, "view")? {
         tx.execute_batch(&format!("DROP VIEW \"{view}\""))?;
     }
@@ -432,8 +441,101 @@ pub fn convert_home(database: &Path) -> Result<ConversionReport> {
     Ok(report)
 }
 
-/// A table whose columns differ from schema 3's (`projects` keeps a retired column, or a
-/// home gained its added columns in another order) is replaced by schema 3's definition
+/// Schema 3 already has normalized plans. Preserve every row and its history;
+/// only add execution metadata after the same drained-home preconditions.
+fn upgrade_execution_budgets(sql: &Connection) -> Result<ConversionReport> {
+    let columns = [
+        ("steps", "owner", "TEXT"),
+        ("projects", "fallback", "TEXT"),
+        (
+            "steps",
+            "bypass",
+            "TEXT CHECK (bypass IS NULL OR json_type(bypass) = 'object')",
+        ),
+        (
+            "projects",
+            "limits",
+            "TEXT CHECK (limits IS NULL OR json_type(limits) = 'object')",
+        ),
+        (
+            "attempts",
+            "limits",
+            "TEXT CHECK (limits IS NULL OR json_type(limits) = 'object')",
+        ),
+        (
+            "attempts",
+            "reservation",
+            "TEXT CHECK (reservation IS NULL OR json_type(reservation) = 'object')",
+        ),
+        (
+            "calls",
+            "limits",
+            "TEXT CHECK (limits IS NULL OR json_type(limits) = 'object')",
+        ),
+    ];
+    for (table, column, definition) in columns {
+        let exists: bool = sql.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
+            [table, column],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            sql.execute_batch(&format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            ))?;
+        }
+    }
+    let projects = sql
+        .prepare(
+            "SELECT p.project_id,p.name,
+         (SELECT count(*) FROM plan_edits e WHERE e.project_id=p.project_id),
+         (SELECT count(*) FROM steps s WHERE s.project_id=p.project_id),
+         (SELECT count(*) FROM inputs i WHERE i.project_id=p.project_id),
+         (SELECT count(*) FROM plan_outputs o WHERE o.project_id=p.project_id)
+         FROM projects p ORDER BY p.created_at,p.project_id",
+        )?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?.max(0) as u64,
+                row.get::<_, i64>(3)?.max(0) as u64,
+                row.get::<_, i64>(4)?.max(0) as u64,
+                row.get::<_, i64>(5)?.max(0) as u64,
+            ))
+        })?
+        .map(|row| {
+            let (project, name, revisions, steps, inputs, outputs) = row?;
+            Ok(ProjectConversion {
+                project_id: project
+                    .parse()
+                    .map_err(|_| StoreError::InvalidDatabase("invalid project id".into()))?,
+                name,
+                revisions,
+                steps,
+                inputs,
+                outputs,
+                records_rewritten: 0,
+                attempt_snapshots_removed: 0,
+                anchor: None,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    sql.execute(
+        "UPDATE home_meta SET schema_version=?1 WHERE singleton=1",
+        [SCHEMA_VERSION],
+    )?;
+    sql.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    clean(sql)?;
+    Ok(ConversionReport {
+        from_schema: 3,
+        projects,
+        warnings: Vec::new(),
+    })
+}
+
+/// A table whose columns differ from the current schema (`projects` keeps a retired column,
+/// or a home gained added columns in another order) is replaced by its current definition
 /// holding the same rows: the columns both have are copied, and an AUTOINCREMENT counter
 /// keeps its value.
 fn rebuild_if_drifted(
@@ -514,11 +616,11 @@ fn preconditions(sql: &Connection) -> Result<i64> {
         return Err(StoreError::UnsupportedFormat { found: major });
     }
     if schema == SCHEMA_VERSION {
-        return Err(StoreError::ConversionBlocked(vec![
-            "home: already at schema 3".into(),
-        ]));
+        return Err(StoreError::ConversionBlocked(vec![format!(
+            "home: already at schema {SCHEMA_VERSION}"
+        )]));
     }
-    if !matches!(schema, 1 | 2) {
+    if !matches!(schema, 1..=3) {
         return Err(StoreError::UnsupportedSchema { found: schema });
     }
     let user_version: i64 = sql.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -538,9 +640,14 @@ fn preconditions(sql: &Connection) -> Result<i64> {
         [],
         |r| r.get(0),
     )?;
-    if tables != 23 {
+    let expected_tables = if schema == 3 {
+        crate::schema::TABLES
+    } else {
+        23
+    };
+    if tables != expected_tables {
         return Err(StoreError::InvalidDatabase(format!(
-            "expected 23 tables, found {tables}"
+            "expected {expected_tables} tables, found {tables}"
         )));
     }
     clean(sql)?;
@@ -610,7 +717,7 @@ fn object_exists(sql: &Connection, kind: &str, name: &str) -> Result<bool> {
     )?)
 }
 
-/// A fresh schema-3 database in memory: the objects a converted home must end up with.
+/// A fresh current-schema database: the objects a converted home must end up with.
 struct Fresh {
     connection: Connection,
     /// `((type, name), sql)` of every object with SQL, in creation order.
@@ -622,7 +729,9 @@ impl Fresh {
             .iter()
             .find(|((k, n), _)| k == kind && n == name)
             .map(|(_, sql)| sql.as_str())
-            .ok_or_else(|| StoreError::InvalidDatabase(format!("schema 3 has no {kind} {name}")))
+            .ok_or_else(|| {
+                StoreError::InvalidDatabase(format!("schema {SCHEMA_VERSION} has no {kind} {name}"))
+            })
     }
 }
 fn fresh_schema() -> Result<Fresh> {

@@ -56,6 +56,10 @@ pub trait CallRegistry: Send + Sync + 'static {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<sluice_model::limits::RunLimits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<sluice_model::limits::RunUsage>,
     pub call: RunId,
     pub project_id: Option<ProjectId>,
     pub status: StepStatus,
@@ -74,6 +78,8 @@ pub struct AdmittedCall {
     pub project: Option<ProjectId>,
     pub function: FrozenFunction,
     pub inputs: JsonMap,
+    pub limits: sluice_model::limits::RunLimits,
+    pub policy: sluice_model::limits::ResourcePolicy,
 }
 /// `launch` uses the common systemd guardian pipeline, including claim/start barriers.
 /// An uncertain launch error must be reconciled against this identity, never relaunched.
@@ -146,16 +152,18 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
         let writer = self.writer.clone();
         let guardian = Arc::clone(&self.guardian);
         let direct = request.direct;
+        let policy = crate::budget::policy(self.writer.home())?;
         let (accepted, admission) = tokio::sync::oneshot::channel();
         self.spawn(async move {
             let admitted = crate::install::admission_write(&writer,RetrySafety::NonIdempotent, move |tx| {
                 guard_admission(tx)?;
                 if let Some(project)=project {messages::resolve_project(tx.sql(),&sluice_model::ids::ProjectSelector::Id(project))?;}
+                crate::budget::resolve(tx.sql(), project, request.limits.as_ref(), &policy)?;
                 let at = timestamp(tx)?;
-                tx.sql().execute("INSERT INTO calls(call_id,project_id,fn,status,inputs,direct,author,created_at) VALUES (?1,?2,?3,'pending',?4,?5,?6,?7)", (call.to_string(), project.map(|p| p.to_string()), &function.name, serde_json::to_string(&request.inputs)?, direct, &request.author, at))?;
+                tx.sql().execute("INSERT INTO calls(call_id,project_id,fn,status,inputs,direct,author,created_at,limits) VALUES (?1,?2,?3,'pending',?4,?5,?6,?7,?8)", (call.to_string(), project.map(|p| p.to_string()), &function.name, serde_json::to_string(&request.inputs)?, direct, &request.author, at, request.limits.as_ref().map(serde_json::to_string).transpose()?))?;
                 tx.append_record(project, Event::Call { call, name: function.name.clone(), status: StepStatus::Pending, inputs: Some(request.inputs.clone()), outputs: None, error: None, direct, author: request.author })?;
                 tx.changed(project, "calls");
-                if direct { admit_tx(tx, call, project, function, request.inputs).map(Some) } else { Ok(None) }
+                if direct { admit_tx(tx, call, project, function, request.inputs, &policy).map(Some) } else { Ok(None) }
             }).await;
             match admitted {
                 Err(e) => { let _ = accepted.send(Err(e)); },
@@ -207,12 +215,13 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
         let guardian = Arc::clone(&self.guardian);
         let writer = self.writer.clone();
 
+        let policy = crate::budget::policy(self.writer.home())?;
         self.spawn(async move {
             let admitted = crate::install::admission_write(&writer,RetrySafety::NonIdempotent, move |tx| {
                 guard_admission(tx)?;
                 let pending: bool = tx.sql().query_row("SELECT EXISTS(SELECT 1 FROM calls WHERE call_id=?1 AND project_id IS ?2 AND status='pending' AND direct=0)", (call.to_string(), project.map(|p| p.to_string())), |r| r.get(0))?;
                 if !pending { return Ok(None); }
-                admit_tx(tx, call, project, function, status.inputs).map(Some)
+                admit_tx(tx, call, project, function, status.inputs, &policy).map(Some)
             }).await?;
             if let Some(admitted) = admitted { handoff_guardian(&writer, guardian.as_ref(), admitted).await?; Ok(true) } else { Ok(false) }
         })?.await.map_err(|e| PublicError::Storage { message: e.to_string() })?
@@ -250,6 +259,7 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
             });
         }
         function.timeout_seconds = Some(10);
+        let policy = crate::budget::policy(self.writer.home())?;
         let call = RunId::new();
         let writer = self.writer.clone();
         let guardian = Arc::clone(&self.guardian);
@@ -261,7 +271,7 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
                 let at = timestamp(tx)?;
                 tx.sql().execute("INSERT INTO calls(call_id,project_id,fn,status,inputs,direct,author,created_at) VALUES (?1,?2,?3,'pending','{}',1,'capacity',?4)", (call.to_string(), project.to_string(), &function.name, at))?;
                 tx.append_record(Some(project), Event::Call { call, name: function.name.clone(), status: StepStatus::Pending, inputs: Some(JsonMap::default()), outputs: None, error: None, direct: true, author: Some("capacity".into()) })?;
-                let admitted = admit_tx(tx, call, Some(project), function, JsonMap::default())?;
+                let admitted = admit_tx(tx, call, Some(project), function, JsonMap::default(), &policy)?;
                 tx.sql().execute("UPDATE attempts SET request=json_set(request,'$.capacity',json(?2)) WHERE attempt_id=?1", (admitted.attempt.to_string(), serde_json::json!({"resource":resource,"revision":declaration.revision}).to_string()))?;
                 Ok(Some(admitted))
             }).await?;
@@ -378,7 +388,17 @@ fn admit_tx(
     project: Option<ProjectId>,
     function: FrozenFunction,
     inputs: JsonMap,
+    policy: &sluice_model::limits::ResourcePolicy,
 ) -> sluice_store::Result<AdmittedCall> {
+    let overrides: Option<String> = tx.sql().query_row(
+        "SELECT limits FROM calls WHERE call_id=?1",
+        [call.to_string()],
+        |r| r.get(0),
+    )?;
+    let overrides = overrides
+        .map(|text| serde_json::from_str::<sluice_model::limits::LimitsOverride>(&text))
+        .transpose()?;
+    let limits = crate::budget::resolve(tx.sql(), project, overrides.as_ref(), policy)?;
     if let Some(project) = project {
         let fit = resources::fits(tx.sql(), project, &function.needs)?;
         if !fit.fits() {
@@ -393,8 +413,10 @@ fn admit_tx(
     let attempt = AttemptId::new();
     let at = timestamp(tx)?;
     let hash = InputsHash::of(&inputs)?;
-    let frozen = serde_json::json!({"function":function,"inputs":inputs});
+    let frozen =
+        serde_json::json!({"function":function,"inputs":inputs,"limits":limits,"policy":policy});
     tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,phase,request,inputs_hash,created_at) VALUES (?1,?2,'reserved',?3,?4,?5)", (attempt.to_string(), project.map(|p|p.to_string()), frozen.to_string(), hash.to_string(), &at))?;
+    resources::reserve_budget(tx, attempt, limits, policy)?;
     tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,release_id,created_at) VALUES (?1,?2,?3,?4,?5)", (call.to_string(), project.map(|p|p.to_string()), attempt.to_string(), &crate::install::release_id(&function.release_id), &at))?;
     if let Some(job) = function
         .bundle
@@ -443,6 +465,8 @@ fn admit_tx(
         project,
         function,
         inputs,
+        limits,
+        policy: policy.clone(),
     })
 }
 /// Guardian-only CAS. Identity and cleanup evidence are authenticated by the coordinator.
@@ -480,38 +504,141 @@ pub struct CallCompletion {
     pub processes_gone: bool,
 }
 pub async fn complete(writer: &Writer, request: CallCompletion) -> Result<bool, PublicError> {
-    writer.write(RetrySafety::Idempotent, move |tx| {
-        if !request.processes_gone { return Err(PublicError::Invalid { message: "cleanup must be proven before call completion".into(), errors: vec![] }.into()); }
-        if request.completion_id.is_empty() || request.completion_id.len()>256 { return Err(PublicError::BadRequest { message:"invalid completion identity".into() }.into()); }
-        let mut stmt=tx.sql().prepare("SELECT a.request,a.phase,a.cancel_requested,r.completion_id FROM attempts a JOIN runs r USING(attempt_id) JOIN calls c ON c.run_id=r.run_id WHERE r.run_id=?1 AND r.attempt_id=?2 AND r.project_id IS ?3")?;
-        let mut rows=stmt.query((request.call.to_string(),request.attempt.to_string(),request.project.map(|p|p.to_string())))?;
-        let row=rows.next()?.map(|r| Ok::<_,StoreError>((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,bool>(2)?,r.get::<_,Option<String>>(3)?))).transpose()?;
-        drop(rows);drop(stmt);
-        let Some((frozen,phase,cancelled,completion))=row else { return Ok(false); };
-        if phase=="terminal" { return Ok(completion.as_deref()==Some(&request.completion_id)); }
-        let frozen:serde_json::Value=serde_json::from_str(&frozen)?;
-        let function:FrozenFunction=serde_json::from_value(frozen["function"].clone())?;
-        let error=if cancelled {Some(PublicError::Cancelled{message:"cancel requested".into()})}else{request.error.or_else(||validate_fields(&function.outputs,&request.outputs,"outputs").err())};
-        let status=if error.is_some(){StepStatus::Failed}else{StepStatus::Succeeded};
-        let result=serde_json::json!({"status":status,"outputs":request.outputs,"error":error});
-        let at=timestamp(tx)?;
-        tx.sql().execute("UPDATE attempts SET phase='terminal',finished_at=?2 WHERE attempt_id=?1",(request.attempt.to_string(),&at))?;
-        tx.sql().execute("UPDATE runs SET result=?2,completion_id=?3,completion_ack=1,finished_at=?4 WHERE run_id=?1",(request.call.to_string(),result.to_string(),request.completion_id,&at))?;
-        tx.sql().execute("UPDATE calls SET status=?2,outputs=?3,error=?4,finished_at=?5 WHERE call_id=?1",(request.call.to_string(),if error.is_some(){"failed"}else{"succeeded"},serde_json::to_string(&request.outputs)?,error.as_ref().map(serde_json::to_string).transpose()?,&at))?;
-        if request.project.is_some() { resources::release_stopped_run(tx, request.call)?; }
-        let (direct,author):(bool,Option<String>)=tx.sql().query_row("SELECT direct,author FROM calls WHERE call_id=?1",[request.call.to_string()],|r|Ok((r.get(0)?,r.get(1)?)))?;
-        tx.append_record(request.project,Event::Call{call:request.call,name:function.name,status,inputs:None,outputs:Some(request.outputs.clone()),error:error.clone(),direct,author})?;
-        if let (Some(project), Some(capacity)) = (request.project, frozen.get("capacity")) {
-            let name = capacity["resource"].as_str().ok_or_else(|| PublicError::BadRequest { message: "capacity resource missing".into() })?;
-            let revision = capacity["revision"].as_i64().ok_or_else(|| PublicError::BadRequest { message: "capacity revision missing".into() })?;
-            let observation = if let Some(e) = error.clone() { Err(e) } else {
-                request.outputs.0.get("capacity").and_then(|v| v.as_value().as_u64()).ok_or_else(|| PublicError::FnFailure { message: "capacity must be a nonnegative integer".into() })
-            };
-            resources::observe_capacity(tx, project, name, revision, observation)?;
-        }
-        tx.changed(request.project,"calls");tx.changed(request.project,"resources"); Ok(true)
-    }).await
+    writer
+        .write(RetrySafety::Idempotent, move |tx| complete_in(tx, request))
+        .await
 }
+pub(crate) fn complete_in(
+    tx: &mut WriteTransaction<'_>,
+    request: CallCompletion,
+) -> sluice_store::Result<bool> {
+    if !request.processes_gone {
+        return Err(PublicError::Invalid {
+            message: "cleanup must be proven before call completion".into(),
+            errors: vec![],
+        }
+        .into());
+    }
+    if request.completion_id.is_empty() || request.completion_id.len() > 256 {
+        return Err(PublicError::BadRequest {
+            message: "invalid completion identity".into(),
+        }
+        .into());
+    }
+    let mut stmt=tx.sql().prepare("SELECT a.request,a.phase,a.cancel_requested,r.completion_id FROM attempts a JOIN runs r USING(attempt_id) JOIN calls c ON c.run_id=r.run_id WHERE r.run_id=?1 AND r.attempt_id=?2 AND r.project_id IS ?3")?;
+    let mut rows = stmt.query((
+        request.call.to_string(),
+        request.attempt.to_string(),
+        request.project.map(|p| p.to_string()),
+    ))?;
+    let row = rows
+        .next()?
+        .map(|r| {
+            Ok::<_, StoreError>((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, bool>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .transpose()?;
+    drop(rows);
+    drop(stmt);
+    let Some((frozen, phase, cancelled, completion)) = row else {
+        return Ok(false);
+    };
+    if phase == "terminal" {
+        return Ok(completion.as_deref() == Some(&request.completion_id));
+    }
+    let frozen: serde_json::Value = serde_json::from_str(&frozen)?;
+    let function: FrozenFunction = serde_json::from_value(frozen["function"].clone())?;
+    let error = if cancelled {
+        Some(PublicError::Cancelled {
+            message: "cancel requested".into(),
+        })
+    } else {
+        request
+            .error
+            .or_else(|| validate_fields(&function.outputs, &request.outputs, "outputs").err())
+    };
+    let status = if error.is_some() {
+        StepStatus::Failed
+    } else {
+        StepStatus::Succeeded
+    };
+    let result = serde_json::json!({"status":status,"outputs":request.outputs,"error":error});
+    let at = timestamp(tx)?;
+    tx.sql().execute(
+        "UPDATE attempts SET phase='terminal',finished_at=?2 WHERE attempt_id=?1",
+        (request.attempt.to_string(), &at),
+    )?;
+    tx.sql().execute("UPDATE runs SET result=?2,completion_id=?3,completion_ack=1,finished_at=?4 WHERE run_id=?1",(request.call.to_string(),result.to_string(),request.completion_id,&at))?;
+    tx.sql().execute(
+        "UPDATE calls SET status=?2,outputs=?3,error=?4,finished_at=?5 WHERE call_id=?1",
+        (
+            request.call.to_string(),
+            if error.is_some() {
+                "failed"
+            } else {
+                "succeeded"
+            },
+            serde_json::to_string(&request.outputs)?,
+            error.as_ref().map(serde_json::to_string).transpose()?,
+            &at,
+        ),
+    )?;
+    if request.project.is_some() {
+        resources::release_stopped_run(tx, request.call)?;
+    }
+    let (direct, author): (bool, Option<String>) = tx.sql().query_row(
+        "SELECT direct,author FROM calls WHERE call_id=?1",
+        [request.call.to_string()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    tx.append_record(
+        request.project,
+        Event::Call {
+            call: request.call,
+            name: function.name,
+            status,
+            inputs: None,
+            outputs: Some(request.outputs.clone()),
+            error: error.clone(),
+            direct,
+            author,
+        },
+    )?;
+    if let (Some(project), Some(capacity)) = (request.project, frozen.get("capacity")) {
+        let name = capacity["resource"]
+            .as_str()
+            .ok_or_else(|| PublicError::BadRequest {
+                message: "capacity resource missing".into(),
+            })?;
+        let revision = capacity["revision"]
+            .as_i64()
+            .ok_or_else(|| PublicError::BadRequest {
+                message: "capacity revision missing".into(),
+            })?;
+        let observation = if let Some(e) = error.clone() {
+            Err(e)
+        } else {
+            request
+                .outputs
+                .0
+                .get("capacity")
+                .and_then(|v| v.as_value().as_u64())
+                .ok_or_else(|| PublicError::FnFailure {
+                    message: "capacity must be a nonnegative integer".into(),
+                })
+        };
+        resources::observe_capacity(tx, project, name, revision, observation)?;
+    }
+    tx.changed(request.project, "calls");
+    tx.changed(request.project, "resources");
+    tx.changed(None, "execution");
+    Ok(true)
+}
+
 pub async fn call_status(
     reads: &ReadPool,
     call: RunId,
@@ -521,13 +648,14 @@ pub async fn call_status(
         let mut stmt=sql.prepare("SELECT status,inputs,outputs,error,direct FROM calls WHERE call_id=?1 AND project_id IS ?2")?;
         let mut rows=stmt.query((call.to_string(),project.map(|p|p.to_string())))?;
         let r=rows.next()?.ok_or_else(||PublicError::NotFound{message:format!("no call {call} in this scope")})?;
-        Ok(CallStatus{call,project_id:project,status:serde_json::from_value(serde_json::Value::String(r.get(0)?))?,inputs:serde_json::from_str(&r.get::<_,String>(1)?)?,outputs:r.get::<_,Option<String>>(2)?.map(|s|serde_json::from_str(&s)).transpose()?,error:r.get::<_,Option<String>>(3)?.map(|s|serde_json::from_str(&s)).transpose()?,direct:r.get(4)?,finishing:sluice_store::attempts::call_finishing(sql,call)?})
+        let evidence = crate::budget::run_resources(sql,call)?;
+        Ok(CallStatus{limits:serde_json::from_value(evidence["limits"].clone())?,usage:serde_json::from_value(evidence["usage"].clone())?,call,project_id:project,status:serde_json::from_value(serde_json::Value::String(r.get(0)?))?,inputs:serde_json::from_str(&r.get::<_,String>(1)?)?,outputs:r.get::<_,Option<String>>(2)?.map(|s|serde_json::from_str(&s)).transpose()?,error:r.get::<_,Option<String>>(3)?.map(|s|serde_json::from_str(&s)).transpose()?,direct:r.get(4)?,finishing:sluice_store::attempts::call_finishing(sql,call)?})
     }).await.map_err(public)
 }
 /// Explicit 30-day terminal-row cleanup. Feed retention cannot delete calls.
 pub async fn retain_calls(writer: &Writer) -> Result<usize, PublicError> {
     writer.write(RetrySafety::Idempotent,|tx|{
-        let n=tx.sql().execute("DELETE FROM calls WHERE finished_at IS NOT NULL AND julianday(finished_at)<julianday('now','-30 days') AND NOT EXISTS(SELECT 1 FROM records WHERE call_id=calls.call_id) AND (run_id IS NULL OR EXISTS(SELECT 1 FROM runs WHERE run_id=calls.run_id AND finished_at IS NOT NULL AND completion_ack=1))",[])?;
+        let n=tx.sql().execute("DELETE FROM calls WHERE finished_at IS NOT NULL AND julianday(finished_at)<julianday('now','-30 days') AND NOT EXISTS(SELECT 1 FROM records WHERE call_id=calls.call_id) AND (run_id IS NULL OR EXISTS(SELECT 1 FROM runs r JOIN attempts a USING(attempt_id) WHERE r.run_id=calls.run_id AND r.finished_at IS NOT NULL AND r.completion_ack=1 AND (a.reservation IS NULL OR COALESCE(json_extract(a.request,'$.resource_released'),0)=1)))",[])?;
         if n>0{tx.changed(None,"calls");}Ok(n)
     }).await
 }

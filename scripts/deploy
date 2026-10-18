@@ -13,7 +13,7 @@ cutover_args = parser.add_argument_group('schema cutover (docs/design/plan-rows.
 cutover_args.add_argument('--schema-cutover', action='store_true', help=
     'rehearse on a copy, print the notice, drain, and at the deadline fence, request the cancel of '
     'every step still running, settle, migrate the home and start the new release')
-cutover_args.add_argument('--resume-checks', action='store_true', help='retry the recorded post-migration checks on a fenced schema-3 home, then unfence and release the drain')
+cutover_args.add_argument('--resume-checks', action='store_true', help='retry the recorded post-migration checks on the fenced migrated home, then unfence and release the drain')
 cutover_args.add_argument('--deadline', metavar='TIME', help='RFC 3339 time, or +<n>m (also +<n>s, +<n>h)')
 cutover_args.add_argument('--cancel-grace', type=float, default=300, metavar='S', help='seconds cancelled runs get to end before their units are stopped (default 300)')
 cutover_args.add_argument('--settle-timeout', type=float, default=300, metavar='S', help='seconds to wait for nothing to be live after the stops (default 300)')
@@ -84,11 +84,12 @@ if args.resume_checks:
         fence = json.loads((install / 'fence.json').read_text())
         checkpoint = json.loads(checkpoint_path.read_text())
     except (FileNotFoundError, json.JSONDecodeError) as error:
-        sys.exit('deploy: --resume-checks needs the schema-3 cutover fence and recorded checkpoint: %s' % error)
+        sys.exit('deploy: --resume-checks needs the cutover fence and recorded checkpoint: %s' % error)
     if checkpoint.get('completed'):
         sys.exit('deploy: the recorded cutover already completed')
-    if fence.get('reason') != 'schema-3 cutover':
-        sys.exit('deploy: --resume-checks requires fence reason schema-3 cutover')
+    expected_fence = 'schema-%d cutover' % release_schema(pathlib.Path(checkpoint['release']))
+    if fence.get('reason') != expected_fence:
+        sys.exit('deploy: --resume-checks requires fence reason ' + expected_fence)
     if pathlib.Path(checkpoint['home']).resolve() != home:
         sys.exit('deploy: the recorded cutover belongs to a different home')
     if args.candidate and pathlib.Path(args.candidate).resolve() != pathlib.Path(checkpoint['release']).resolve():
@@ -103,8 +104,8 @@ if args.candidate:
     if args.resume_checks:
         if testing or fixture:
             if any(release == p or p in release.parents for p in live): sys.exit('Tests refuse live installation paths')
-        if home_schema() != release_schema(release) or home_schema() != 3:
-            sys.exit('deploy: --resume-checks requires the home and candidate at schema 3')
+        if home_schema() != release_schema(release):
+            sys.exit('deploy: --resume-checks requires the home and candidate at schema %d' % release_schema(release))
         if checkpoint.get('conversion') is None:
             sys.exit('deploy: --resume-checks needs a recorded successful migration')
 else:
@@ -281,11 +282,13 @@ def ensure_cutover_services(binary, release_dir):
         time.sleep(.2)
 def prune_releases(keep):
     # A live guardian's /proc executable is the strongest pin. Retain all release
-    # identities recorded in nonterminal home rows too, including uncertain launch.
+    # identities recorded in live home rows too, including uncertain launch and
+    # completed runs whose guardian has not released its resources.
     pinned = {str(keep)}
     if (home / 'sluice.db').exists():
         with sqlite3.connect('file:' + str(home / 'sluice.db') + '?mode=ro', uri=True) as db:
-            for (release_id,) in db.execute("SELECT release_id FROM runs r JOIN attempts a USING(attempt_id) WHERE a.phase<>'terminal' OR r.finished_at IS NULL"):
+            for (release_id,) in db.execute("SELECT release_id FROM runs r JOIN attempts a USING(attempt_id) WHERE "
+                    "r.finished_at IS NULL OR a.phase <> 'terminal' OR (json_type(a.request, '$.policy')='object' AND COALESCE(json_extract(a.request, '$.resource_released'), 0)=0)"):
                 candidate = prefix / 'releases' / release_id
                 if candidate.is_dir(): pinned.add(str(candidate))
         db.close()
@@ -428,7 +431,8 @@ def blockers():
     db = ro()
     try:
         return {kind: db.execute(sql).fetchone()[0] for kind, sql in [
-            ('attempts', "SELECT count(*) FROM attempts WHERE phase<>'terminal'"),
+            ('attempts', "SELECT count(*) FROM attempts a WHERE a.phase<>'terminal' "
+                         "OR (json_type(a.request, '$.policy')='object' AND COALESCE(json_extract(a.request, '$.resource_released'), 0)=0)"),
             ('runs', 'SELECT count(*) FROM runs WHERE finished_at IS NULL'),
             ('leases', "SELECT count(*) FROM leases WHERE state IN ('waiting','held')"),
             ('calls', "SELECT count(*) FROM calls WHERE status='running'")]}
@@ -437,10 +441,12 @@ def describe(counts): return ', '.join('%d %s' % (n, kind) for kind, n in counts
 def live_runs():
     """Every live run: a step's (with its settle intent) or a call's, oldest first."""
     return query("""SELECT r.run_id, r.project_id, p.name, r.step_id, c.call_id, coalesce(r.started_at, r.created_at),
-                           r.release_id, json_type(a.request, '$.settle') IS NOT NULL, a.attempt_id
+                           r.release_id, json_type(a.request, '$.settle') IS NOT NULL, a.attempt_id, a.phase='terminal'
                     FROM runs r JOIN attempts a USING(attempt_id) LEFT JOIN projects p ON p.project_id = r.project_id
                     LEFT JOIN calls c ON c.run_id = r.run_id
-                    WHERE r.finished_at IS NULL OR a.phase <> 'terminal' ORDER BY r.created_at, r.run_id""")
+                    WHERE r.finished_at IS NULL OR a.phase <> 'terminal'
+                       OR (json_type(a.request, '$.policy')='object' AND COALESCE(json_extract(a.request, '$.resource_released'), 0)=0)
+                    ORDER BY r.created_at, r.run_id""")
 def live_step_attempts():
     """The live step attempts grouped by distinct (project, step), with their runs."""
     groups = {}
@@ -602,9 +608,11 @@ def cutover():
     if args.dry_run:
         runs = live_runs()
         print('cutover: dry run: %d run(s) live now; at the deadline:' % len(runs), flush=True)
-        for run, _, project, step, call, started, pinned, settle, attempt in runs:
+        for run, _, project, step, call, started, pinned, settle, attempt, terminal in runs:
             what = ('call:' + call) if call else step
-            action = 'stop its unit' if call or not step else 'step_cancel, then stop its unit after %gs' % args.cancel_grace
+            action = ('wait for completed guardian cleanup' if terminal else
+                      'stop its unit' if call or not step else
+                      'step_cancel, then stop its unit after %gs' % args.cancel_grace)
             print('  %s %s %s started %s release %s settle=%s: %s' % (project or '-', what, run, started, (pinned or '-')[:12], 'yes' if settle else 'no', action), flush=True)
         print('cutover: dry run: changed nothing', flush=True)
         return
@@ -680,7 +688,7 @@ def cutover():
     stopped = [outcome_of(run) for run in affected if not unfinished([run])]
     report = write_report(stopped, [])
     if any(counts.values()):
-        for run, _, project, step, call, started, pinned, _, attempt in live_runs():
+        for run, _, project, step, call, started, pinned, _, attempt, _ in live_runs():
             say('still live: %s %s run %s attempt %s' % (project or '-', ('call:' + call) if call else (step or '-'), run, attempt))
         stop_fenced('cutover stopped fenced: %s after the settle timeout' % describe(counts))
 
@@ -740,7 +748,24 @@ def finish_cutover(checkpoint):
         start_services(program, release, include_loop=False)
         if query('PRAGMA integrity_check')[0][0] != 'ok': raise RuntimeError('integrity_check failed on the migrated home')
         with sqlite3.connect('file:%s?mode=ro' % backup, uri=True) as before:
-            plans = before.execute('SELECT p.project_id, p.name, d.rev, d.doc, (SELECT min(rev) FROM plan_edits WHERE project_id=p.project_id) FROM plans d JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL ORDER BY p.name').fetchall()
+            columns = {row[1] for row in before.execute('PRAGMA table_info(plans)')}
+            document_column = 'd.doc' if 'doc' in columns else 'd.root_order'
+            saved = before.execute('SELECT p.project_id, p.name, d.rev, %s, (SELECT min(rev) FROM plan_edits WHERE project_id=p.project_id) FROM plans d JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL ORDER BY p.name' % document_column).fetchall()
+            plans = []
+            for project_id, name, rev, document, first_rev in saved:
+                if 'doc' not in columns:
+                    sections = {
+                        'inputs': ('inputs', 'name', 'declaration', 'position'),
+                        'outputs': ('plan_outputs', 'name', 'binding', 'position'),
+                        'steps': ('steps', 'step_id', 'declaration', 'position,step_id'),
+                    }
+                    plan = {}
+                    for section in json.loads(document):
+                        table, key, value, ordering = sections[section]
+                        plan[section] = {key: json.loads(value) for key, value in before.execute(
+                            'SELECT %s,%s FROM %s WHERE project_id=? ORDER BY %s' % (key, value, table, ordering), (project_id,))}
+                    document = json.dumps(plan, separators=(',', ':'))
+                plans.append((project_id, name, rev, document, first_rev))
         before.close()
         anchors = {p['project_id']: p['anchor']['rev'] for p in conversion['projects'] if p.get('anchor')}
         for project_id, name, rev, doc, first_rev in plans:
@@ -785,7 +810,7 @@ def finish_cutover(checkpoint):
         if released.returncode: raise RuntimeError('release: %s' % reply_error(released).get('message'))
         ensure_cutover_services(program, release)
     except Exception as error:
-        control(program, 'fence', 'schema-3 cutover')
+        control(program, 'fence', 'schema-%d cutover' % schema)
         if release_attempted:
             try:
                 # Ordinary activation cannot pass the restored fence. If the

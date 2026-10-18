@@ -140,6 +140,14 @@ impl AdoptionHost for Fake {
     }
 }
 impl ExecutionHost for Fake {
+    async fn terminal_gone(
+        &self,
+        _: sluice_model::ids::RunId,
+        _: bool,
+    ) -> Result<bool, sluice_model::error::PublicError> {
+        Ok(true)
+    }
+
     fn composition_enabled(&self) -> bool {
         self.0.composition
     }
@@ -193,7 +201,7 @@ async fn home_with_runs(
     Coordinator<Fake>,
     Vec<(ProjectId, Launch)>,
 ) {
-    let home = home::ScratchHome::new().unwrap();
+    let home = finite_home();
     let broker = Coordinator::open(home.path().into(), Catalog::fixtures(), host.clone())
         .await
         .unwrap();
@@ -511,6 +519,9 @@ async fn a_runs_guardian_is_served_during_the_pass_and_wins_the_race_with_its_ad
     ));
     let journal = CompletionJournal {
         protocol: 1,
+        limits: l.limits,
+        guardian_memory_bytes: l.policy.guardian_memory_bytes,
+        usage: Some(Default::default()),
         identity: l.identity.clone(),
         completion_id: "guardian".into(),
         result: PayloadResult::Succeeded(decode_json(br#"{"value":1,"submitted":true}"#).unwrap()),
@@ -554,7 +565,7 @@ async fn a_runs_guardian_is_served_during_the_pass_and_wins_the_race_with_its_ad
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_lost_runs_in_one_project_release_every_hold() {
     let host = Fake::gated();
-    let home = home::ScratchHome::new().unwrap();
+    let home = finite_home();
     let broker = Coordinator::open(home.path().into(), Catalog::fixtures(), host.clone())
         .await
         .unwrap();
@@ -762,7 +773,7 @@ async fn a_failed_startup_pass_refuses_waiting_requests_and_serve_returns_its_er
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn held_watches_leave_the_connection_pool_two_per_run() {
     let host = Fake::open();
-    let home = home::ScratchHome::new().unwrap();
+    let home = finite_home();
     let broker = Coordinator::open(home.path().into(), Catalog::fixtures(), host.clone())
         .await
         .unwrap();
@@ -874,4 +885,18 @@ async fn runs_adopt_concurrently_within_the_bound_and_one_adopter_per_run() {
     within(pass).await.unwrap().unwrap().unwrap();
     assert_eq!(host.entered(), 4);
     assert_eq!(host.0.max_in_flight.load(Ordering::SeqCst), 2);
+}
+
+fn finite_home() -> home::ScratchHome {
+    let home = home::ScratchHome::new().unwrap();
+    std::fs::write(
+        home.path().join("config.json"),
+        json!({"execution":{
+            "defaults":{"memory":"64MiB","cpus":0.05,"tasks":64},
+            "guardian_memory":"64MiB"
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    home
 }

@@ -126,6 +126,7 @@ pub struct Step {
     pub after: Vec<Gate>,
     pub tags: Vec<String>,
     pub needs: IndexMap<String, u64>,
+    pub limits: Option<crate::limits::LimitsOverride>,
     pub priority: i64,
     /// The declaration exactly as written (the `steps` row's `declaration`).
     pub declaration: JsonMap,
@@ -177,6 +178,7 @@ impl Step {
             && self.doc == other.doc
             && self.after == other.after
             && self.needs == other.needs
+            && self.limits == other.limits
             && self.priority == other.priority
     }
 }
@@ -618,7 +620,7 @@ pub(crate) fn parse_step(
         raw,
         &[
             "run", "in", "scatter", "doc", "outputs", "paused", "after", "tags", "needs",
-            "priority",
+            "priority", "limits",
         ],
         &path,
         errors,
@@ -683,6 +685,15 @@ pub(crate) fn parse_step(
             "a step carries at most one unit: tag",
         ));
     }
+    let limits = raw.get("limits").and_then(|value| {
+        match serde_json::from_value::<crate::limits::LimitsOverride>(value.clone()) {
+            Ok(limits) => Some(limits),
+            Err(error) => {
+                errors.push(diagnostic(&format!("{path}.limits"), error.to_string()));
+                None
+            }
+        }
+    });
     let mut needs = IndexMap::new();
     if let Some(value) = raw.get("needs")
         && let Some(map) = object(value, &format!("{path}.needs"), errors)
@@ -793,6 +804,7 @@ pub(crate) fn parse_step(
         after: vec![],
         tags,
         needs,
+        limits,
         priority,
         declaration: declaration.clone(),
     })

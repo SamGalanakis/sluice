@@ -108,6 +108,7 @@ async fn reconcile_pass<H: ExecutionHost>(
     #[cfg(test)] after_reconcile: &mut impl AsyncFnMut(plans::PlanContext),
 ) -> Result<(), PublicError> {
     loop {
+        let policy = crate::budget::policy(broker.home())?;
         let context = broker.context(project).await?;
         let copy = context.clone();
         let lease_owner = owner.to_owned();
@@ -140,6 +141,14 @@ async fn reconcile_pass<H: ExecutionHost>(
                         .into_iter()
                         .map(|a| a.step),
                 );
+                for id in copy.plan.topological_order() {
+                    if state.status(id) == StepStatus::Running
+                        && copy.plan.steps()[id].scatter.is_some()
+                        && !order.contains(id)
+                    {
+                        order.push(id.clone());
+                    }
+                }
                 Ok((state, order))
             })
             .await
@@ -147,48 +156,64 @@ async fn reconcile_pass<H: ExecutionHost>(
         let mut progressed = false;
         for id in order {
             let step = &context.plan.steps()[&id];
-            if state.status(&id) != StepStatus::Pending
-                || !matches!(
-                    evaluate_step(&context.plan, &state, step),
-                    GateDecision::Ready
+            let continuing = state.status(&id) == StepStatus::Running && step.scatter.is_some();
+            if step.is_external()
+                || if continuing {
+                    state.paused.is_paused() || step.paused.is_paused()
+                } else {
+                    state.status(&id) != StepStatus::Pending
+                        || !matches!(
+                            evaluate_step(&context.plan, &state, step),
+                            GateDecision::Ready
+                        )
+                }
+            {
+                continue;
+            }
+            let (hash, frozen) = if continuing {
+                let batch = continued_batch(broker, project, id.clone()).await?;
+                (
+                    batch.hash,
+                    Ok((batch.inputs, batch.fingerprints, Some(batch.count))),
                 )
-                || step.is_external()
-            {
-                continue;
-            }
-            let Some(effective) = effective_inputs(&context.plan, &state, step) else {
-                continue;
-            };
-            let hash =
-                inputs_hash(&context.plan, &state, step).ok_or_else(|| PublicError::Storage {
-                    message: "ready inputs lack hash".into(),
+            } else {
+                let Some(effective) = effective_inputs(&context.plan, &state, step) else {
+                    continue;
+                };
+                let hash = inputs_hash(&context.plan, &state, step).ok_or_else(|| {
+                    PublicError::Storage {
+                        message: "ready inputs lack hash".into(),
+                    }
                 })?;
+                let frozen = freeze_inputs(effective).and_then(|(inputs, fingerprints)| {
+                    let count = step
+                        .scatter
+                        .as_ref()
+                        .map(|name| {
+                            inputs.0[name]
+                                .as_value()
+                                .as_array()
+                                .map(Vec::len)
+                                .ok_or_else(|| PublicError::FnFailure {
+                                    message: "scatter must be an array".into(),
+                                })
+                        })
+                        .transpose()?;
+                    Ok((inputs, fingerprints, count))
+                });
+                (hash, frozen)
+            };
             let needs = step.needs.iter().map(|(n, a)| (n.clone(), *a)).collect();
-            if !broker
-                .reads()
-                .snapshot(move |sql| resources::fits(sql, project, &needs))
-                .await
-                .map_err(|e| e.into_public(true))?
-                .fits()
+            if !continuing
+                && !broker
+                    .reads()
+                    .snapshot(move |sql| resources::fits(sql, project, &needs))
+                    .await
+                    .map_err(|e| e.into_public(true))?
+                    .fits()
             {
                 continue;
             }
-            let frozen = freeze_inputs(effective).and_then(|(inputs, fingerprints)| {
-                let count = step
-                    .scatter
-                    .as_ref()
-                    .map(|name| {
-                        inputs.0[name]
-                            .as_value()
-                            .as_array()
-                            .map(Vec::len)
-                            .ok_or_else(|| PublicError::FnFailure {
-                                message: "scatter must be an array".into(),
-                            })
-                    })
-                    .transpose()?;
-                Ok((inputs, fingerprints, count))
-            });
             let (inputs, fingerprints, count) = match frozen {
                 Ok(frozen) => frozen,
                 Err(error) => {
@@ -328,9 +353,10 @@ async fn reconcile_pass<H: ExecutionHost>(
             let step = step.clone();
             let owner = owner.to_string();
             let home = broker.home_id();
-            // Re-read file fingerprints immediately before enqueue. The transaction
-            // independently rechecks the graph and effective bindings.
-            for entry in fingerprints.0.values() {
+            let policy = policy.clone();
+            // A new batch rereads file fingerprints immediately before enqueue.
+            // Continued scatter uses the original frozen contents even after a file changes.
+            for entry in fingerprints.0.values().filter(|_| !continuing) {
                 let entry = entry.as_value();
                 let path = entry["path"].as_str().ok_or_else(|| PublicError::Storage {
                     message: "file provenance path".into(),
@@ -348,27 +374,35 @@ async fn reconcile_pass<H: ExecutionHost>(
             let launches=crate::install::admission_write(broker.writer(),RetrySafety::NonIdempotent,move|tx|{
                 lease(tx,&owner)?;
                 resources::grant_leases(tx,project)?;
-                if !resources::fits(tx.sql(),project,&step.needs.iter().map(|(n,a)|(n.clone(),*a)).collect())?.fits(){return Ok(vec![]);}
+                if !continuing && !resources::fits(tx.sql(),project,&step.needs.iter().map(|(n,a)|(n.clone(),*a)).collect())?.fits(){return Ok(vec![]);}
+                let limits = match crate::budget::resolve(tx.sql(), Some(project), step.limits.as_ref(), &policy) {
+                    Ok(limits) => limits,
+                    Err(sluice_store::StoreError::Public(PublicError::Invalid { .. })) => return Ok(vec![]),
+                    Err(error) => return Err(error),
+                };
                 let (old_hash,total,instances):(Option<String>,Option<i64>,String)=tx.sql().query_row("SELECT inputs_hash,total,instances FROM steps WHERE project_id=?1 AND step_id=?2",(project.to_string(),step.id.as_str()),|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
                 let instances:Value=serde_json::from_str(&instances)?;
                 let keep=old_hash.as_deref()==Some(&hash.to_string()) && total==count.map(|n|n as i64);
                 let mut launches=vec![];
                 for index in 0..count.unwrap_or(1){
-                    if count.is_some() && keep && instances.get(index.to_string()).is_some_and(|v|v["status"]=="succeeded"){continue;}
+                    if count.is_some() && keep && instances.get(index.to_string()).is_some_and(|v|v["status"]=="succeeded" || continuing && matches!(v["status"].as_str(),Some("running"|"failed"))){continue;}
+                    if !resources::budget_fit(tx.sql(), &limits, &policy)?.fits() { break; }
                     let mut inputs=inputs.clone();if let Some(name)=&step.scatter {inputs.0.insert(name.clone(),inputs.0[name].as_value().as_array().expect("checked scatter")[index].clone().try_into()?);}
                     let capability=new_capability();let attempt=AttemptId::new();let run=RunId::new();
                     let provenance:JsonMap=serde_json::from_value(json!({"runtime":{"capability":capability,"execution":execution,"admitted_rev":copy.revision},"files":fingerprints}))?;
-                    let reservation=attempts::reserve(tx,&copy,Reserve{step:step.id.clone(),attempt,run,item_index:if count.is_some(){index as i64}else{-1},item_count:count.map(|n|n as u64),inputs:inputs.clone(),inputs_hash:hash,provenance,release_id:crate::install::release_id("runtime-v1"),protocol_major:1},&mut Hooks)?;
+                    let reservation=attempts::reserve(tx,&copy,Reserve{step:step.id.clone(),attempt,run,item_index:if count.is_some(){index as i64}else{-1},item_count:count.map(|n|n as u64),inputs:inputs.clone(),inputs_hash:hash,provenance,release_id:crate::install::release_id("runtime-v1"),protocol_major:1,limits,admission:policy.clone()},&mut Hooks)?;
                     if let Some(job) = execution.as_ref().and_then(|e| e.job) { crate::registry::pin_run(tx,job,run)?; }
                     let id=&reservation.identity;
                     if attempts::spawn_attempted(tx,id)? {
-                        launches.push(Launch{identity:AttemptKey{home,project:Some(project),step:Some(id.step.clone()),generation:id.generation,work:id.work,run,attempt},invocation:FnInvocation{project,step:Some(id.step.clone()),run,attempt,invocation:InvocationId::new(),name:step.run.clone(),inputs},assigned:AssignedRange{after:MessageId(reservation.messages.after),through:MessageId(reservation.messages.through)},prev_run:reservation.prev_run,capability,timeout_seconds:None,context:execution.clone().map(|execution| crate::compose::ReservationContext { execution, project_name:project_name.clone(), extra_inputs:JsonMap(step.extra_inputs.iter().map(|(n,t)| (n.clone(),json!({"type":t.form()}).try_into().expect("input declaration"))).collect()), outputs:JsonMap(step.declared_outputs.iter().map(|(n,d)| (n.clone(),json!({"type":d.ty.form(),"doc":d.doc}).try_into().expect("output declaration"))).collect()) })});
+                        launches.push(Launch{identity:AttemptKey{home,project:Some(project),step:Some(id.step.clone()),generation:id.generation,work:id.work,run,attempt},invocation:FnInvocation{project,step:Some(id.step.clone()),run,attempt,invocation:InvocationId::new(),name:step.run.clone(),inputs},assigned:AssignedRange{after:MessageId(reservation.messages.after),through:MessageId(reservation.messages.through)},prev_run:reservation.prev_run,capability,limits,policy:policy.clone(),timeout_seconds:None,context:execution.clone().map(|execution| crate::compose::ReservationContext { execution, project_name:project_name.clone(), extra_inputs:JsonMap(step.extra_inputs.iter().map(|(n,t)| (n.clone(),json!({"type":t.form()}).try_into().expect("input declaration"))).collect()), outputs:JsonMap(step.declared_outputs.iter().map(|(n,d)| (n.clone(),json!({"type":d.ty.form(),"doc":d.doc}).try_into().expect("output declaration"))).collect()) })});
                     }
                 }
                 Ok(launches)
             }).await?;
             for launch in launches {
                 let identity = launch.identity.clone();
+                let limits = launch.limits;
+                let guardian_memory_bytes = launch.policy.guardian_memory_bytes;
                 match broker
                     .host()
                     .launch(launch)
@@ -383,6 +417,9 @@ async fn reconcile_pass<H: ExecutionHost>(
                         broker
                             .complete(CompletionJournal {
                                 protocol: 1,
+                                limits,
+                                guardian_memory_bytes,
+                                usage: Some(Default::default()),
                                 identity: identity.clone(),
                                 completion_id: format!("spawn-{}", identity.attempt),
                                 result: PayloadResult::Failed(error),
@@ -415,6 +452,64 @@ async fn reconcile_pass<H: ExecutionHost>(
             return Ok(());
         }
     }
+}
+
+struct ContinuedBatch {
+    inputs: JsonMap,
+    fingerprints: JsonMap,
+    count: usize,
+    hash: sluice_model::hash::InputsHash,
+}
+
+async fn continued_batch<H: ExecutionHost>(
+    broker: &Coordinator<H>,
+    project: ProjectId,
+    step: StepId,
+) -> Result<ContinuedBatch, PublicError> {
+    broker
+        .reads()
+        .snapshot(move |sql| {
+            let (request, hash): (String, String) = sql.query_row(
+                "SELECT a.request,a.inputs_hash FROM attempts a JOIN steps s
+             ON s.project_id=a.project_id AND s.step_id=a.step_id
+             AND s.generation=a.generation AND s.work_generation=a.work_generation
+             WHERE s.project_id=?1 AND s.step_id=?2 ORDER BY a.created_at,a.attempt_id LIMIT 1",
+                (project.to_string(), step.as_str()),
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            let request: Value = serde_json::from_str(&request)?;
+            let bad = || {
+                sluice_store::StoreError::InvalidDatabase(
+                    "running scatter has an invalid frozen batch".into(),
+                )
+            };
+            let name = request["declaration"]["scatter"].as_str().ok_or_else(bad)?;
+            let array = request["effective_inputs"][name]
+                .as_array()
+                .ok_or_else(bad)?;
+            let count = usize::try_from(request["item_count"].as_u64().ok_or_else(bad)?)
+                .map_err(|_| bad())?;
+            if array.len() != count {
+                return Err(bad());
+            }
+            let mut inputs: JsonMap = serde_json::from_value(request["inputs"].clone())?;
+            inputs.0.insert(
+                name.into(),
+                Value::Array(array.clone())
+                    .try_into()
+                    .map_err(sluice_store::StoreError::from)?,
+            );
+            let fingerprints = serde_json::from_value(request["provenance"]["files"].clone())?;
+            let hash = hash.parse().map_err(|_| bad())?;
+            Ok(ContinuedBatch {
+                inputs,
+                fingerprints,
+                count,
+                hash,
+            })
+        })
+        .await
+        .map_err(|error| error.into_public(true))
 }
 
 fn freeze_inputs(
@@ -472,18 +567,42 @@ async fn record_queues<H: ExecutionHost>(
     owner: &str,
 ) -> Result<(), PublicError> {
     let owner = owner.to_owned();
+    let policy = crate::budget::policy(broker.home())?;
     broker.writer().write(RetrySafety::Idempotent, move |tx| {
         lease(tx, &owner)?;
-        for candidate in resources::admit_order(tx.sql(), context.project, context.revision, &context.plan)? {
-            let fit = resources::fits(tx.sql(), context.project, &candidate.needs)?;
+        let state = plans::read_state(tx.sql(), context.project)?;
+        for step in context.plan.steps().values() {
+            let continuing = state.status(&step.id) == StepStatus::Running && step.scatter.is_some();
+            if step.is_external() || if continuing {
+                state.paused.is_paused() || step.paused.is_paused()
+            } else {
+                state.status(&step.id) != StepStatus::Pending || !matches!(evaluate_step(&context.plan,&state,step),GateDecision::Ready)
+            } { continue; }
+            if continuing {
+                let waiting: bool = tx.sql().query_row(
+                    "SELECT total > (SELECT count(*) FROM json_each(instances)) FROM steps WHERE project_id=?1 AND step_id=?2",
+                    (context.project.to_string(),step.id.as_str()), |row| row.get(0),
+                )?;
+                if !waiting { continue; }
+            }
+            let needs = step.needs.iter().map(|(n,a)|(n.clone(),*a)).collect();
+            let mut fit = if continuing { resources::Fit { blocked: vec![], reason: String::new() } }
+                else { resources::fits(tx.sql(), context.project, &needs)? };
+            if fit.fits() {
+                fit = match crate::budget::resolve(tx.sql(), Some(context.project), step.limits.as_ref(), &policy) {
+                    Ok(limits) => resources::budget_fit(tx.sql(), &limits, &policy)?,
+                    Err(sluice_store::StoreError::Public(PublicError::Invalid { message, .. })) => resources::Fit { blocked: vec!["limits".into()], reason: message },
+                    Err(error) => return Err(error),
+                };
+            }
             if fit.fits() { continue; }
             let event = Event::StepQueued {
-                step: candidate.step.clone(),
-                needs: serde_json::from_value(json!(candidate.needs))?,
+                step: step.id.clone(),
+                needs: serde_json::from_value(json!(needs))?,
                 resources: JsonMap(fit.blocked.into_iter().map(|name| Ok((name, json!(true).try_into()?))).collect::<Result<_,PublicError>>()?),
                 reason: fit.reason,
             };
-            let previous: Option<String> = tx.sql().query_row("SELECT payload FROM records WHERE project_id=?1 AND step_id=?2 AND kind IN ('step.queued','step.status') ORDER BY seq DESC LIMIT 1", (context.project.to_string(), candidate.step.as_str()), |r| r.get(0)).optional()?;
+            let previous: Option<String> = tx.sql().query_row("SELECT payload FROM records WHERE project_id=?1 AND step_id=?2 AND kind IN ('step.queued','step.status') ORDER BY seq DESC LIMIT 1", (context.project.to_string(), step.id.as_str()), |r| r.get(0)).optional()?;
             if previous.map(|s| serde_json::from_str::<Value>(&s)).transpose()?.as_ref() != Some(&serde_json::to_value(&event)?) {
                 tx.append_record(Some(context.project), event)?;
             }
@@ -555,6 +674,7 @@ pub async fn run<H: ExecutionHost>(
     let mut versions = std::collections::BTreeMap::new();
     let mut full = tokio::time::interval(FULL_INTERVAL);
     let mut capacity = tokio::time::interval(CAPACITY_INTERVAL);
+    let mut terminal_reaper = tokio::time::interval(Duration::from_millis(500));
     let mut dirty = BTreeSet::new();
     let mut notifier = crate::notify::Notifier::new(
         broker.home().to_owned(),
@@ -596,6 +716,9 @@ pub async fn run<H: ExecutionHost>(
             _=stop.cancelled()=>return Ok(()),
             result=notify.changed()=>{if result.is_err(){return Ok(());}},
             _=async { match watcher.as_mut() { Some(w) => { let _ = w.changed().await; }, None => std::future::pending::<()>().await } }=>{ registry_changed(&broker, &mut registry_seen, &mut dirty).await?; },
+            _=terminal_reaper.tick()=>{
+                if let Err(error) = broker.reap_terminal(false).await { tracing::warn!(%error,"terminal guardian cleanup deferred"); }
+            },
             _=registry_tick.tick()=>{ if watcher.is_some() { registry_changed(&broker, &mut registry_seen, &mut dirty).await?; } },
             _=full.tick()=>{
                 let projects = broker.projects().await?;

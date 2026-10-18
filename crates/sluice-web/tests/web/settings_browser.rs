@@ -44,6 +44,7 @@ async fn slow_chromium_settings_commands_streams_geometry_and_screenshots() {
             projects::project_create(
                 tx,
                 CreateProject {
+                    limits: None,
                     name: "browser-project".parse().unwrap(),
                     description: "# Project description\n\nA calm board for supervising agents."
                         .into(),

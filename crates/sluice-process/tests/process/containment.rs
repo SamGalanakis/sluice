@@ -409,7 +409,11 @@ fn service_worker() {
     );
     fs::write(dir.join("worker.pid"), std::process::id().to_string()).unwrap();
     let binary = PathBuf::from(std::env::var_os("SLUICE_TEST_TMUX_BINARY").unwrap());
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
     let approved = runtime
         .block_on(ApprovedTmux::load(&PathBuf::from(
             std::env::var_os("SLUICE_PRIVATE_TMUX_PREFIX").unwrap(),
@@ -606,13 +610,17 @@ fn ownership_worker() {
     let Some(home) = std::env::var_os("SLUICE_TEST_OWNERSHIP_DIR").map(PathBuf::from) else {
         return;
     };
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
     runtime.block_on(async {
         let prefix = PathBuf::from(std::env::var_os("SLUICE_PRIVATE_TMUX_PREFIX").unwrap());
         let tmux = ApprovedTmux::load(&prefix).await.unwrap();
         let mut guardian = OwnedProcess::capture(std::process::id()).unwrap();
         let service = Cgroup::open_service(&guardian.identity().cgroup).unwrap();
-        let groups = RunCgroups::create(service, &mut guardian).unwrap();
+        let groups = RunCgroups::create(service, &mut guardian, super::test_limits(), 256 << 20).unwrap();
         let leaf = groups.invocation(InvocationId::new()).unwrap();
         fs::write(home.join("pane.sh"), "#!/bin/sh\necho $$ > pane.pid\n/usr/bin/sleep 120 &\necho $! > sleep.pid\n/usr/bin/setsid /usr/bin/sleep 120 &\necho $! > setsid.pid\nwait\n").unwrap();
         // Fixed fixture script. No shell-generated names, paths or payload argv.

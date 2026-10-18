@@ -30,6 +30,14 @@ pub enum PublicError {
     #[error("{message}")]
     ProcessLost { message: String },
     #[error("{message}")]
+    ResourceExhausted {
+        resource: crate::limits::ExhaustedResource,
+        limit: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        peak: Option<u64>,
+        message: String,
+    },
+    #[error("{message}")]
     Cancelled { message: String },
     #[error("{message}")]
     FnFailure { message: String },

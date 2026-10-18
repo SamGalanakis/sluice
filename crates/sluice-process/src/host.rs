@@ -94,7 +94,7 @@ impl HostCheck {
             }
             Err(error) => {
                 checks.push(outcome(Prerequisite::Delegation, Err(error),
-                    "Enable user-service cgroup delegation of the pids controller; check user@UID.service Delegate and cgroup permissions."));
+                    "Enable user-service cgroup delegation of the cpu, memory and pids controllers; check user@UID.service Delegate and cgroup permissions."));
                 None
             }
         };
@@ -192,6 +192,7 @@ async fn check_delegation() -> io::Result<DelegationProof> {
             .arg(&unit.name)
             .args([
                 "--property=Delegate=yes",
+                "--property=OOMPolicy=continue",
                 "--property=KillMode=control-group",
                 "--property=Restart=no",
                 "--property=RuntimeMaxSec=30s",
@@ -236,33 +237,42 @@ async fn check_delegation() -> io::Result<DelegationProof> {
             .write(true)
             .open(root.join("cgroup.subtree_control"))?;
         let controllers = fs::read_to_string(root.join("cgroup.controllers"))?;
-        if !controllers.split_whitespace().any(|s| s == "pids") {
-            return Err(invalid(
-                "pids controller is not delegated to the user service",
-            ));
+        for required in ["cpu", "memory", "pids"] {
+            if !controllers.split_whitespace().any(|s| s == required) {
+                return Err(invalid(format!(
+                    "{required} controller is not delegated to the user service"
+                )));
+            }
         }
         let control = root.join("control");
         fs::create_dir(&control)?;
         fs::write(control.join("cgroup.procs"), pid.to_string())?;
-        subtree.write_all(b"+pids")?;
+        subtree.write_all(b"+cpu +memory +pids")?;
         let payload = root.join("payload");
         fs::create_dir(&payload)?;
-        if !fs::read_to_string(payload.join("cgroup.controllers"))?
-            .split_whitespace()
-            .any(|s| s == "pids")
-        {
-            return Err(invalid(
-                "child group did not inherit the enabled pids controller",
-            ));
+        fs::write(
+            payload.join("cgroup.subtree_control"),
+            b"+cpu +memory +pids",
+        )?;
+        for (setting, value) in [
+            ("memory.max", "67108864"),
+            ("memory.swap.max", "0"),
+            ("memory.oom.group", "1"),
+            ("cpu.max", "10000 100000"),
+            ("pids.max", "32"),
+        ] {
+            fs::write(payload.join(setting), value)?;
+            if fs::read_to_string(payload.join(setting))?.trim() != value {
+                return Err(invalid(format!("{setting} did not retain its limit")));
+            }
         }
-        // Open the child control too: directory creation alone is insufficient.
-        OpenOptions::new()
-            .write(true)
-            .open(payload.join("cgroup.subtree_control"))?;
+        for evidence in ["memory.peak", "memory.events", "pids.events", "cpu.stat"] {
+            fs::read_to_string(payload.join(evidence))?;
+        }
         Ok(DelegationProof {
             unit: unit.name.clone(),
             cgroup: group.into(),
-            enabled_controller: "pids".into(),
+            enabled_controller: "cpu memory pids".into(),
             child_group_created: true,
         })
     }

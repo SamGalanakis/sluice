@@ -402,6 +402,7 @@ impl settings::SettingsCommands for SocketSettings {
                 .command(CommandRequest::ProjectUpdate(ProjectUpdate {
                     project: ProjectSelector::Id(id),
                     new_name: request.new_name,
+                    limits: request.limits,
                     description: request.description,
                     icon: request.icon.map(Into::into),
                     resources: request

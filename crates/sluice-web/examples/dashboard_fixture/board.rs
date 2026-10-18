@@ -84,7 +84,7 @@ impl board::RegistrySource for BoardFixtureRegistry {
 }
 pub async fn seed(writer: &Writer, _id: ProjectId) {
     use serde_json::json;
-    let project = writer.write(RetrySafety::NonIdempotent, |tx| projects::project_create(tx, CreateProject { name: "board-fixture".parse().unwrap(), description: "A plan of tagged units, with queued work and every v2 relation.\n\nOpen a card to inspect inputs, outputs, its thread and runs.".into(), icon: None, resources: None, author: "owner".into() }, &EmptyPlanInitializer, &NoResourceSettings)).await.unwrap().project_id;
+    let project = writer.write(RetrySafety::NonIdempotent, |tx| projects::project_create(tx, CreateProject { limits: None, name: "board-fixture".parse().unwrap(), description: "A plan of tagged units, with queued work and every v2 relation.\n\nOpen a card to inspect inputs, outputs, its thread and runs.".into(), icon: None, resources: None, author: "owner".into() }, &EmptyPlanInitializer, &NoResourceSettings)).await.unwrap().project_id;
     writer.write(RetrySafety::NonIdempotent, move |tx| {
         let doc = json!({"inputs":{"enabled":{"type":"boolean","doc":"Allow the final review."}},"steps":{
             "source":{"run":"custom.open","outputs":{"ok":"boolean","text":"string"},"tags":["unit:build"]},
@@ -146,7 +146,7 @@ pub async fn seed(writer: &Writer, _id: ProjectId) {
         .write(RetrySafety::NonIdempotent, |tx| {
             projects::project_create(
                 tx,
-                CreateProject {
+                CreateProject { limits: None,
                     name: "board-paused".parse().unwrap(),
                     description: "Work is held for review.".into(),
                     icon: None,

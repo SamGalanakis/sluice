@@ -190,8 +190,12 @@ try:
     home = selected()
     install = pathlib.Path(os.environ.get('SLUICE_INSTALL_DIR', str(pathlib.Path(args.prefix) / 'install')))
     with live_db(home) as db:
-        before = [r[0] for r in db.execute('SELECT run_id FROM runs WHERE finished_at IS NULL')]
-        project = db.execute('SELECT project_id FROM runs WHERE finished_at IS NULL AND project_id IS NOT NULL LIMIT 1').fetchone() \
+        before = [r[0] for r in db.execute("SELECT r.run_id FROM runs r JOIN attempts a USING(attempt_id) "
+                                         "WHERE r.finished_at IS NULL OR a.phase <> 'terminal' OR (json_type(a.request, '$.policy')='object' AND COALESCE(json_extract(a.request, '$.resource_released'), 0)=0)")]
+        project = db.execute("SELECT r.project_id FROM runs r JOIN attempts a USING(attempt_id) "
+                             "WHERE (r.finished_at IS NULL OR a.phase <> 'terminal' "
+                             "OR (json_type(a.request, '$.policy')='object' AND COALESCE(json_extract(a.request, '$.resource_released'), 0)=0)) "
+                             "AND r.project_id IS NOT NULL LIMIT 1").fetchone() \
             or db.execute('SELECT project_id FROM projects WHERE archived=0 LIMIT 1').fetchone()
     db.close()
     port = os.environ.get('SLUICE_DEPLOY_PORT', '3065')
@@ -239,10 +243,13 @@ try:
         problems = []
         with live_db(home) as db:
             for run_id in before:
-                row = db.execute('SELECT finished_at, result IS NOT NULL, unit_name FROM runs WHERE run_id=?', (run_id,)).fetchone()
+                row = db.execute("SELECT r.finished_at, r.result IS NOT NULL, r.unit_name, "
+                                 "(json_type(a.request, '$.policy')='object' AND COALESCE(json_extract(a.request, '$.resource_released'), 0)=0) "
+                                 "FROM runs r JOIN attempts a USING(attempt_id) WHERE r.run_id=?", (run_id,)).fetchone()
                 if row is None: problems.append('run %s is gone from the store' % run_id)
                 elif row[0] is None and not active(row[2] or 'sluice-run-%s.service' % run_id): problems.append('run %s is unfinished but its unit is not active' % run_id)
                 elif row[0] is not None and not row[1]: problems.append('run %s finished without a recorded result' % run_id)
+                elif row[0] is not None and row[3]: problems.append('run %s finished but guardian cleanup is still pending' % run_id)
         db.close()
         problems += ['unit %s is not active' % unit for unit in units if not active(unit)]
         problems += ['%s answered %s' % (url, code) for url in urls for code in [status(url)] if code != 200]

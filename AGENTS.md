@@ -124,7 +124,8 @@ Never `systemctl restart` a deploy-started transient unit; re-create it with `sy
 - Incompatible storage changes require a new schema version and a drained, fenced migration
   with no live consumers of the old schema: a run's pinned `sluice` reads the database itself
   and refuses any other version. Schema 2 remains reserved for the historical interim board
-  layout; normalized plans use schema 3 (`docs/design/plan-rows.md`). Additive changes use
+  layout; schema 3 introduced normalized plans (`docs/design/plan-rows.md`), and schema 4
+  requires bounded execution. Additive changes use
   version-scoped migrations (`ADDED_COLUMNS` and `ADDED_VIEWS` for the current version). Never
   re-pin a running executable by changing database metadata.
 - `scripts/ship` ships compatible changes only: it refuses a ref whose `SCHEMA_VERSION` differs
@@ -137,7 +138,7 @@ Never `systemctl restart` a deploy-started transient unit; re-create it with `sy
   migration; `<install>/cutover-<time>.json` says how each run actually ended. `--dry-run`
   rehearses and lists what the deadline would stop. After a post-migration failure, repair the
   cause and run `scripts/deploy --schema-cutover --resume-checks` with the same scratch or live
-  installation selection. It requires the `schema-3 cutover` fence and a home at the recorded
+  installation selection. It requires the `schema-<candidate schema> cutover` fence and a home at the recorded
   candidate's schema. It checks the recorded backup and each project's baseline, then unfences,
   releases the drain, re-creates inactive services and waits up to 60 s for the loop's scheduler
   lease before printing the original cutover report. Fenced checks start only coordinator and

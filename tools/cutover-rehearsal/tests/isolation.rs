@@ -109,7 +109,13 @@ async fn reconciling_a_unit_that_exists_touches_nothing_and_reports_the_guardian
     );
     let scratch = tempfile::tempdir().unwrap();
     let host = RehearsalHost::new();
+    #[cfg(feature = "bounded-execution")]
+    let policy = sluice_model::ResourcePolicy::for_host(16 << 30, 4000).unwrap();
     let attempt = AdoptionAttempt {
+        #[cfg(feature = "bounded-execution")]
+        limits: policy.defaults,
+        #[cfg(feature = "bounded-execution")]
+        guardian_memory_bytes: policy.guardian_memory_bytes,
         identity: key(run),
         guardian: None,
         run_dir: scratch.path().join("runs").join(run.to_string()),
@@ -148,6 +154,10 @@ async fn reconciling_a_unit_that_exists_touches_nothing_and_reports_the_guardian
         inputs: JsonMap::default(),
     };
     let launch = Launch {
+        #[cfg(feature = "bounded-execution")]
+        limits: policy.defaults,
+        #[cfg(feature = "bounded-execution")]
+        policy: policy.clone(),
         identity: key(run),
         invocation: invocation.clone(),
         assigned: AssignedRange {
@@ -166,6 +176,12 @@ async fn reconciling_a_unit_that_exists_touches_nothing_and_reports_the_guardian
     );
     assert!(host.invoke(invocation).await.is_err());
     let journal = CompletionJournal {
+        #[cfg(feature = "bounded-execution")]
+        limits: policy.defaults,
+        #[cfg(feature = "bounded-execution")]
+        guardian_memory_bytes: policy.guardian_memory_bytes,
+        #[cfg(feature = "bounded-execution")]
+        usage: None,
         protocol: 1,
         identity: key(run),
         completion_id: "c".into(),
@@ -182,6 +198,10 @@ async fn reconciling_a_unit_that_exists_touches_nothing_and_reports_the_guardian
         delivery_acks: vec![],
     };
     assert!(host.cleanup_valid(&journal).await.unwrap());
+    #[cfg(feature = "bounded-execution")]
+    for stop in [false, true] {
+        assert!(host.terminal_gone(run, stop).await.unwrap());
+    }
     assert_eq!(unit.evidence(), before);
     let asked = host.asked();
     assert_eq!(asked.reconciled, [run, run]);

@@ -196,6 +196,10 @@ mod support {
                 provenance: JsonMap::default(),
                 release_id: "fixture".into(),
                 protocol_major: 1,
+                limits: sluice_model::limits::ResourcePolicy::for_host(1 << 40, 64000)
+                    .unwrap()
+                    .defaults,
+                admission: sluice_model::limits::ResourcePolicy::for_host(1 << 40, 64000).unwrap(),
             }
         }
         pub async fn start(&self, reservation: &Reservation) {

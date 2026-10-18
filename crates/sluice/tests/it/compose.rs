@@ -82,7 +82,7 @@ impl Gate {
         };
         configure(&mut gate);
         gate.boot();
-        let CommandReply::Project(p)=gate.rpc(json!({"command":"project_create","args":{"name":"compose","description":"composition fixture","icon":null,"resources":{"section":1},"author":"test"}})) else {panic!("project")};
+        let CommandReply::Project(p)=gate.rpc(json!({"command":"project_create","args":{"name":"compose","description":"composition fixture","icon":null,"resources":{"section":1},"limits":{"memory":"512MiB","cpus":0.5,"tasks":128},"author":"test"}})) else {panic!("project")};
         gate.project = p.project_id;
         gate
     }
@@ -90,7 +90,7 @@ impl Gate {
         let _ = std::fs::remove_file(self.home.join("fake-events.jsonl"));
         let name = format!("compose-{}", sluice_model::ids::ProjectId::new());
         let CommandReply::Project(project) = self.rpc(json!({"command":"project_create","args":{
-            "name":name,"description":"composition phase","resources":{},"author":"test"
+            "name":name,"description":"composition phase","resources":{},"limits":{"memory":"512MiB","cpus":0.5,"tasks":128},"author":"test"
         }})) else {
             panic!("project")
         };

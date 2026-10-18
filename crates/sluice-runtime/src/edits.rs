@@ -753,6 +753,21 @@ pub(crate) fn prepare(
             _ => None,
         })
         .collect();
+    let home = sql
+        .path()
+        .and_then(|p| Path::new(p).parent())
+        .unwrap_or_else(|| Path::new(""));
+    let executable: Vec<_> = written
+        .iter()
+        .map(|id| &prepared.compiled.plan.steps()[*id])
+        .filter(|step| !step.is_external())
+        .collect();
+    if !executable.is_empty() {
+        let policy = crate::budget::policy(home)?;
+        for step in executable {
+            crate::budget::resolve(sql, Some(project), step.limits.as_ref(), &policy)?;
+        }
+    }
     crate::models::check_edit(&base, &prepared.compiled.plan, written, &state.state.inputs)?;
     let bypass = Bypass {
         presets: resolve_bypass(&prepared.compiled.plan, asked)?,

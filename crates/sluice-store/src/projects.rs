@@ -4,7 +4,7 @@ use crate::{
     Result, StoreError, WriteTransaction,
     artifacts::{self, Bundle, enqueue, invalid, now},
 };
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use sluice_model::{
     commands::{IconUpload, ProjectIconSummary, ProjectSummary},
@@ -192,6 +192,7 @@ pub struct Project {
     pub prune_done_after: Option<u64>,
     /// Unit-name patterns automatic retiring never removes.
     pub prune_keep: Vec<String>,
+    pub limits: Option<sluice_model::limits::LimitsOverride>,
 }
 /// Resolve on admission; all subsequent state and callbacks carry the immutable id.
 pub fn resolve(c: &Connection, selector: &ProjectSelector) -> Result<Project> {
@@ -199,7 +200,7 @@ pub fn resolve(c: &Connection, selector: &ProjectSelector) -> Result<Project> {
         ProjectSelector::Id(id) => ("project_id", id.to_string()),
         ProjectSelector::Name(name) => ("name", name.to_string()),
     };
-    let row=c.query_row(&format!("SELECT project_id,name,description,icon_text,icon_type,icon_hash,icon_generation,paused,archived,settings_rev,resources_rev,board,board_rev,prune_done_after,prune_keep FROM projects WHERE {column}=?1 AND deleted_at IS NULL"),[value],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?,r.get::<_,bool>(7)?,r.get::<_,bool>(8)?,r.get::<_,i64>(9)?,r.get::<_,i64>(10)?,r.get::<_,Option<String>>(11)?,r.get::<_,i64>(12)?,r.get::<_,Option<i64>>(13)?,r.get::<_,Option<String>>(14)?))).optional()?.ok_or_else(|| StoreError::from(PublicError::NotFound{message:format!("project {selector} not found")}))?;
+    let row=c.query_row(&format!("SELECT project_id,name,description,icon_text,icon_type,icon_hash,icon_generation,paused,archived,settings_rev,resources_rev,board,board_rev,prune_done_after,prune_keep,limits FROM projects WHERE {column}=?1 AND deleted_at IS NULL"),[value],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?,r.get::<_,bool>(7)?,r.get::<_,bool>(8)?,r.get::<_,i64>(9)?,r.get::<_,i64>(10)?,r.get::<_,Option<String>>(11)?,r.get::<_,i64>(12)?,r.get::<_,Option<i64>>(13)?,r.get::<_,Option<String>>(14)?,r.get::<_,Option<String>>(15)?))).optional()?.ok_or_else(|| StoreError::from(PublicError::NotFound{message:format!("project {selector} not found")}))?;
     let icon = match (row.3, row.4, row.5) {
         (Some(t), None, None) => Some(ProjectIcon::Text(t)),
         (None, Some(media_type), Some(hash)) => Some(ProjectIcon::Image {
@@ -244,6 +245,7 @@ pub fn resolve(c: &Connection, selector: &ProjectSelector) -> Result<Project> {
             .map(u64::try_from)
             .transpose()
             .map_err(|_| invalid("invalid prune_done_after"))?,
+        limits: row.15.map(|raw| serde_json::from_str(&raw)).transpose()?,
         prune_keep: row
             .14
             .map(|keep| serde_json::from_str(&keep))
@@ -366,6 +368,7 @@ pub fn list(c: &Connection) -> Result<Vec<ProjectSummary>> {
             paused: project.paused,
             archived: project.archived,
             board_rev: project.board_rev,
+            limits: project.limits,
             resources: (!resources.0.is_empty()).then_some(resources),
             icon: project.icon.map(|icon| match icon {
                 ProjectIcon::Text(text) => ProjectIconSummary::Text { text },
@@ -455,6 +458,7 @@ pub struct CreateProject {
     pub description: String,
     pub icon: Option<Icon>,
     pub resources: Option<Value>,
+    pub limits: Option<sluice_model::limits::LimitsOverride>,
     pub author: String,
 }
 pub fn project_create(
@@ -464,14 +468,16 @@ pub fn project_create(
     resources: &dyn ResourceSettings,
 ) -> Result<Project> {
     check_name(&request.name)?;
+    validate_limits(request.limits.as_ref())?;
     let id = ProjectId::new();
     tx.sql().execute(
-        "INSERT INTO projects(project_id,name,description,created_at) VALUES (?1,?2,?3,?4)",
+        "INSERT INTO projects(project_id,name,description,created_at,limits) VALUES (?1,?2,?3,?4,?5)",
         rusqlite::params![
             id.to_string(),
             request.name.to_string(),
             request.description,
-            now()?
+            now()?,
+            request.limits.as_ref().map(serde_json::to_string).transpose()?
         ],
     )?;
     enqueue(
@@ -493,6 +499,18 @@ pub fn project_create(
     changed(tx, id);
     resolve(tx.sql(), &ProjectSelector::Id(id))
 }
+fn validate_limits(limits: Option<&sluice_model::limits::LimitsOverride>) -> Result<()> {
+    if let Some(limits) = limits {
+        limits
+            .apply(sluice_model::limits::RunLimits {
+                memory_bytes: 1,
+                cpu_millis: 1,
+                tasks: 1,
+            })
+            .map_err(invalid)?;
+    }
+    Ok(())
+}
 /// A bare project id selects by id, so a name may not look like one.
 fn check_name(name: &ProjectName) -> Result<()> {
     if name.looks_like_id() {
@@ -508,6 +526,8 @@ pub struct UpdateProject {
     pub description: Option<String>,
     pub icon: Option<Icon>,
     pub resources: Option<Value>,
+    /// Some(None) clears the project default; None leaves it unchanged.
+    pub limits: Option<Option<sluice_model::limits::LimitsOverride>>,
     pub paused: Option<bool>,
     pub archived: Option<bool>,
     /// `Some(None)` turns automatic retiring off; `None` leaves it.
@@ -615,6 +635,19 @@ pub fn project_update(
         && set_icon(tx, id, icon)?
     {
         fields.push("icon".into());
+    }
+    if let Some(limits) = request.limits {
+        validate_limits(limits.as_ref())?;
+        if limits != project.limits {
+            tx.sql().execute(
+                "UPDATE projects SET limits=?2 WHERE project_id=?1",
+                params![
+                    project.project_id.to_string(),
+                    limits.as_ref().map(serde_json::to_string).transpose()?
+                ],
+            )?;
+            fields.push("limits".into());
+        }
     }
     if let Some(after) = request.prune_done_after {
         if after.is_some_and(|after| !(1..=PRUNE_DONE_AFTER_MAX).contains(&after)) {
@@ -1079,8 +1112,8 @@ pub fn live_work_blocker(c: &Connection, project: ProjectId) -> Result<Option<St
             "project has pending or running calls, including direct calls",
         ),
         (
-            "SELECT EXISTS(SELECT 1 FROM attempts WHERE project_id=?1 AND phase<>'terminal')",
-            "project has active attempts",
+            "SELECT EXISTS(SELECT 1 FROM attempts WHERE project_id=?1 AND (phase<>'terminal' OR (reservation IS NOT NULL AND COALESCE(json_extract(request,'$.resource_released'),0)=0)))",
+            "project has active attempts or guardians awaiting cleanup",
         ),
         (
             "SELECT EXISTS(SELECT 1 FROM runs WHERE project_id=?1 AND finished_at IS NULL)",

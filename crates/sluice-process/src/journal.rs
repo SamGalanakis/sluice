@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sluice_model::{
     error::PublicError,
     ids::*,
+    limits::{RunLimits, RunUsage},
     rpc::{JsonMap, MAX_FRAME_BYTES, PROTOCOL_VERSION, decode_json},
 };
 use std::{
@@ -77,6 +78,9 @@ pub struct DeliveryAck {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompletionJournal {
+    pub limits: RunLimits,
+    pub guardian_memory_bytes: u64,
+    pub usage: Option<RunUsage>,
     pub protocol: u16,
     pub identity: AttemptKey,
     pub completion_id: String,
@@ -90,7 +94,10 @@ pub struct CompletionJournal {
 }
 impl CompletionJournal {
     pub fn validate(&self, expected: &AttemptKey) -> io::Result<()> {
-        if self.protocol != PROTOCOL_VERSION
+        if self.limits.validate().is_err()
+            || self.guardian_memory_bytes == 0
+            || (self.usage.is_none() && !matches!(self.result, PayloadResult::Lost(_)))
+            || self.protocol != PROTOCOL_VERSION
             || &self.identity != expected
             || self.completion_id.is_empty()
             || self.cleanup.is_empty()

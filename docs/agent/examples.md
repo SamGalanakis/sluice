@@ -86,3 +86,14 @@ someone calls `plan_set_input(project, "approved", true)` — or answers a quest
 `verify("fixes")` → `[{"where": "projects/<id>/fns/message.ask/fn.json", "message": "fn
 message.ask collides with the builtin fn ..."}]`, one entry per problem (empty when all is
 well): rename or remove that function.
+
+## A bounded direct check
+
+```sh
+sluice tool fn_call '{"name":"inline.bash","inputs":{"code":"./check-one-case","cwd":"/repo"},"limits":{"memory":"2GiB","cpus":1,"tasks":128},"direct":true}'
+```
+
+The limits must fit the installation ceilings and the home must have capacity for the run
+plus its guardian. A direct call refuses when it cannot reserve that capacity. Without
+`direct`, the call queues. Its descendants share the budget; a memory or task-limit hit is
+reported as `resource_exhausted` and is not automatically retried.

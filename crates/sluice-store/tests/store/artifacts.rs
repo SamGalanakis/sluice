@@ -22,6 +22,7 @@ async fn setup() -> (ScratchHome, Writer, ReadPool, ProjectId) {
                     description: "".into(),
                     icon: None,
                     resources: None,
+                    limits: None,
                     author: "test".into(),
                 },
                 &EmptyPlanInitializer,

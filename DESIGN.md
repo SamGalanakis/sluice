@@ -1469,7 +1469,14 @@ the page's stream. A lane that redraws a page writes its notes here.
   Activity is its turns as rows numbered in data mono; Messages its conversation as message
   cards (who to whom, when, the first words cut with the way to the whole; an answered question
   whole); Inputs and Outputs field tables with where each came from; Runs its unit's step view,
-  its own row ringed, over its runs. In the drawer the same head tops the step. No counter
+  its own row ringed, over its runs. Each run's facts include Budget, showing its frozen
+  memory allowance, CPU count and task limit, and Usage, showing recorded peak memory when
+  completion evidence exists. These are plain rows in the existing facts list, wrapping on
+  narrow sheets; they never imply that a running run's usage is a live sample. A resource
+  failure leads with "Stopped: its memory budget was exhausted." or "Stopped: its task
+  budget was exhausted." The same headline appears in the stopped module, with the typed
+  failure's details available in the run. Historical runs without budget evidence omit those
+  facts. In the drawer the same head tops the step. No counter
   tiles, no rules between the head's parts.
 - **A unit's page** (`/projects/id/<p>/units/<u>`): under the row, its head: its way back,
   its glyph and title with its Details (its id, recipe and params), how its steps stand, a short

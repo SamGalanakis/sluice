@@ -103,6 +103,16 @@ async fn slow_chromium_a_strips_marks_say_what_its_agent_did_that_minute() {
     let f = Fixture::new().await;
     let n = neutral::seed(&f.writer, f._home.path()).await;
     let id = n.almanac;
+    // Isolate the command minutes: the dense showcase fixture can put adjacent marks
+    // less than a pixel apart on the drilldown's strip.
+    neutral::lay_pulse(
+        &f.writer,
+        f._home.path(),
+        id,
+        "a-6-draft",
+        &[15 * 60, 5 * 60, 2 * 60],
+    )
+    .await;
     let (addr, server) = serve(&f);
     tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
@@ -136,7 +146,7 @@ async fn slow_chromium_a_strips_marks_say_what_its_agent_did_that_minute() {
         browser.eval(FRAMES).unwrap();
         let drill = "#drill-a-6 sluice-pulse";
         let (x, y, minute, _) = aim(&mut browser, drill, "i.pk:not(.pk-m):not(.pk-start)");
-        point(&mut browser, x + 1.0, y);
+        point(&mut browser, x, y);
         let pop = answered(&mut browser);
         assert_eq!(pop["at"], json!(minute), "{pop}");
         assert!(pop["text"].as_str().unwrap().contains("rg -n 'range' sections/"), "{pop}");

@@ -11,6 +11,7 @@ pub mod gates;
 pub mod hash;
 pub mod identity;
 pub mod ids;
+pub mod limits;
 pub mod naming;
 pub mod openui;
 pub mod persistent;
@@ -29,3 +30,5 @@ pub use commands::RuntimeApi;
 pub use gates::{CachedResources, DryRun, Gate, GateDecision, StateSnapshot, StepState, ValueRef};
 pub use plan::{Binding, Declaration, FnSignature, Pause, Plan, SignatureProvider, Step};
 pub use units::{PruneSet, RetryWalk, Unit};
+
+pub use limits::{ExhaustedResource, LimitsOverride, ResourcePolicy, RunLimits, RunUsage};

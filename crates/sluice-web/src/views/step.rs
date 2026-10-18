@@ -214,6 +214,8 @@ fn file_path(value: &serde_json::Value) -> Option<&str> {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct RunView {
+    pub budget: String,
+    pub usage: String,
     pub id: RunId,
     pub started: String,
     pub finished: String,
@@ -2623,7 +2625,31 @@ pub fn load_detail(
         };
         let files = found.iter().map(|(n, _)| *n).collect();
         let empty_files = found.iter().filter(|(_, e)| *e).map(|(n, _)| *n).collect();
+        let budget = request
+            .get("limits")
+            .and_then(|v| serde_json::from_value::<sluice_model::limits::RunLimits>(v.clone()).ok())
+            .map(|limits| {
+                format!(
+                    "{} MiB memory · {} CPUs · {} tasks",
+                    limits.memory_bytes / (1 << 20),
+                    f64::from(limits.cpu_millis) / 1000.0,
+                    limits.tasks
+                )
+            })
+            .unwrap_or_default();
+        let usage = request
+            .get("resource_usage")
+            .and_then(|v| serde_json::from_value::<sluice_model::limits::RunUsage>(v.clone()).ok())
+            .map(|usage| {
+                format!(
+                    "{} MiB peak memory",
+                    usage.memory_peak_bytes.div_ceil(1 << 20)
+                )
+            })
+            .unwrap_or_default();
         step.runs.push(RunView {
+            budget,
+            usage,
             id,
             started: r.get(1)?,
             finished,

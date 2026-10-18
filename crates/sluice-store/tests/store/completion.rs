@@ -201,6 +201,10 @@ mod support {
                 provenance: JsonMap::default(),
                 release_id: "fixture".into(),
                 protocol_major: 1,
+                limits: sluice_model::limits::ResourcePolicy::for_host(1 << 40, 64000)
+                    .unwrap()
+                    .defaults,
+                admission: sluice_model::limits::ResourcePolicy::for_host(1 << 40, 64000).unwrap(),
             }
         }
         pub async fn start(&self, reservation: &Reservation) {
@@ -1051,4 +1055,157 @@ async fn progress_validates_current_runs_and_never_replaces_final_outputs() {
     assert!(!failed.live && !failed.superseded);
     assert_eq!(failed.fresher("green"), Some(&json!(false)));
     f.writer.shutdown().await.unwrap();
+}
+
+/// A cancellation or coordinator restart must not free an admitted run's physical
+/// capacity before its payload is proven stopped, and competing reservations must
+/// never both consume the final slot.
+#[tokio::test]
+async fn execution_budget_is_atomic_survives_restart_and_waits_for_cleanup() {
+    use sluice_model::limits::{GUARDIAN_CPU_MILLIS, GUARDIAN_TASKS, ResourcePolicy, RunLimits};
+    use sluice_store::resources;
+    let mut f = Fixture::new(json!({"steps":{
+        "a":{"run":"empty"}, "b":{"run":"empty"}
+    }}))
+    .await;
+    let limits = RunLimits {
+        memory_bytes: 4096,
+        cpu_millis: 1000,
+        tasks: 8,
+    };
+    let policy = ResourcePolicy {
+        defaults: limits,
+        ceilings: limits,
+        total: RunLimits {
+            memory_bytes: 5120,
+            cpu_millis: 1000 + GUARDIAN_CPU_MILLIS,
+            tasks: 8 + GUARDIAN_TASKS,
+        },
+        guardian_memory_bytes: 1024,
+    }
+    .validate()
+    .unwrap();
+    let mut a = f.request("a", json!({}), -1, None).await;
+    let mut b = f.request("b", json!({}), -1, None).await;
+    for request in [&mut a, &mut b] {
+        request.limits = limits;
+        request.admission = policy.clone();
+    }
+    let reserve_one = |request: Reserve| {
+        let context = f.context.clone();
+        f.writer.write(RetrySafety::Idempotent, move |tx| {
+            reserve(tx, &context, request, &mut Hooks::default())
+        })
+    };
+    let (first, second) = tokio::join!(reserve_one(a.clone()), reserve_one(b.clone()));
+    assert_ne!(first.is_ok(), second.is_ok());
+    let (winner, waiting) = match (first, second) {
+        (Ok(winner), Err(error)) => {
+            assert!(error.to_string().contains("execution capacity"));
+            (winner, b)
+        }
+        (Err(error), Ok(winner)) => {
+            assert!(error.to_string().contains("execution capacity"));
+            (winner, a)
+        }
+        _ => unreachable!(),
+    };
+    f.start(&winner).await;
+    let context = f.context.clone();
+    let identity = winner.identity.clone();
+    let failure = f
+        .writer
+        .write(RetrySafety::Idempotent, move |tx| {
+            complete(
+                tx,
+                &context,
+                Complete {
+                    identity,
+                    completion_id: "unproven".into(),
+                    kind: CompletionKind::Cancelled {
+                        message: "cancel requested".into(),
+                    },
+                    outputs: JsonMap::default(),
+                    processes_gone: false,
+                    submission_version: None,
+                },
+                &mut Hooks::default(),
+            )
+        })
+        .await;
+    assert!(
+        failure
+            .unwrap_err()
+            .to_string()
+            .contains("cleanup must be proven")
+    );
+    f.writer.shutdown().await.unwrap();
+    f.writer = sluice_store::Writer::open(f.home.path()).unwrap();
+    let budget = policy.clone();
+    let status = f
+        .reads
+        .snapshot(move |sql| resources::budget_status(sql, &budget))
+        .await
+        .unwrap();
+    assert_eq!(status.held, policy.total);
+    assert!(status.unbounded_attempts.is_empty());
+    f.finish(&winner, CompletionKind::Succeeded, json!({}))
+        .await;
+    let budget = policy.clone();
+    assert_eq!(
+        f.reads
+            .snapshot(move |sql| resources::budget_status(sql, &budget))
+            .await
+            .unwrap()
+            .held,
+        policy.total
+    );
+    assert_eq!(
+        f.reads
+            .snapshot(sluice_store::convert::live_work)
+            .await
+            .unwrap()
+            .attempts,
+        1
+    );
+    let project = winner.identity.project;
+    assert!(
+        f.reads
+            .snapshot(move |sql| sluice_store::projects::live_work_blocker(sql, project))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let attempt = winner.identity.attempt;
+    f.writer
+        .write(RetrySafety::Idempotent, move |tx| {
+            resources::release_budget(tx, attempt).map(|_| ())
+        })
+        .await
+        .unwrap();
+    assert!(
+        f.reads
+            .snapshot(sluice_store::convert::live_work)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let context = f.context.clone();
+    let admitted = f
+        .writer
+        .write(RetrySafety::Idempotent, move |tx| {
+            reserve(tx, &context, waiting, &mut Hooks::default())
+        })
+        .await
+        .unwrap();
+    assert_ne!(admitted.identity.run, winner.identity.run);
+    let budget = policy.clone();
+    assert_eq!(
+        f.reads
+            .snapshot(move |sql| resources::budget_status(sql, &budget))
+            .await
+            .unwrap()
+            .held,
+        policy.total
+    );
 }

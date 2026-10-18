@@ -161,3 +161,123 @@ fn try_exclusive(file: &File) -> io::Result<bool> {
         Err(fs4::TryLockError::Error(error)) => Err(error),
     }
 }
+
+/// Serializes run launch against adoption and final capacity release. This lock
+/// is inherited by the start helper so dropping an async caller cannot make a
+/// still-pending systemd start look absent.
+#[derive(Debug)]
+pub struct RunFence {
+    file: File,
+    directory: std::path::PathBuf,
+}
+impl RunFence {
+    pub async fn acquire(home: &Path, run: RunId) -> io::Result<Self> {
+        loop {
+            if let Some(fence) = Self::try_acquire(home, run)? {
+                return Ok(fence);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+    pub fn try_acquire(home: &Path, run: RunId) -> io::Result<Option<Self>> {
+        let directory = home.join("runs").join(run.to_string());
+        fs::create_dir_all(&directory)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .open(directory.join("launch.lock"))?;
+        if !try_exclusive(&file)? {
+            return Ok(None);
+        }
+        Ok(Some(Self { file, directory }))
+    }
+    pub fn file(&self) -> &File {
+        &self.file
+    }
+    pub(crate) fn prepare_start(&self) -> io::Result<std::path::PathBuf> {
+        crate::journal::atomic_json(&self.directory, "launch.pending", &boot_id()?)?;
+        Ok(self.directory.join("launch.pending"))
+    }
+    /// Start a manager-request helper that retains this fence until its child
+    /// exits. Dropping the returned child detaches it; failure leaves durable
+    /// pending evidence, while success records the manager acknowledgement.
+    pub fn spawn_start_helper(
+        &self,
+        command: std::process::Command,
+    ) -> io::Result<tokio::process::Child> {
+        use std::process::Stdio;
+        let marker = self.prepare_start()?;
+        let inherited = match self.file.try_clone() {
+            Ok(file) => file,
+            Err(error) => {
+                self.clear_pending()?;
+                return Err(error);
+            }
+        };
+        let mut helper = tokio::process::Command::new("/bin/sh");
+        helper
+            .args(["-c", "marker=$1; shift; \"$@\" </dev/null; status=$?; if [ \"$status\" -eq 0 ]; then /bin/rm -f -- \"$marker\"; fi; exit \"$status\"", "sluice-start"])
+            .arg(&marker)
+            .arg(command.get_program())
+            .args(command.get_args())
+            .stdin(Stdio::from(inherited))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(false);
+        for (key, value) in command.get_envs() {
+            if let Some(value) = value {
+                helper.env(key, value);
+            } else {
+                helper.env_remove(key);
+            }
+        }
+        if let Some(directory) = command.get_current_dir() {
+            helper.current_dir(directory);
+        }
+        match helper.spawn() {
+            Ok(child) => Ok(child),
+            Err(error) => {
+                self.clear_pending()?;
+                Err(error)
+            }
+        }
+    }
+    fn clear_pending(&self) -> io::Result<()> {
+        match fs::remove_file(self.directory.join("launch.pending")) {
+            Ok(()) => File::open(&self.directory)?.sync_all(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+    /// A previous boot cannot retain a request in this boot's user manager.
+    pub fn start_pending(home: &Path, run: RunId) -> io::Result<bool> {
+        let path = home
+            .join("runs")
+            .join(run.to_string())
+            .join("launch.pending");
+        let contents = match fs::read(&path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let launched_boot: String = serde_json::from_slice(&contents).map_err(io::Error::other)?;
+        if launched_boot == boot_id()? {
+            return Ok(true);
+        }
+        Self::acknowledge_start(home, run)?;
+        Ok(false)
+    }
+    /// Call only after observing the service, or proving no helper was spawned.
+    pub fn acknowledge_start(home: &Path, run: RunId) -> io::Result<()> {
+        let directory = home.join("runs").join(run.to_string());
+        match fs::remove_file(directory.join("launch.pending")) {
+            Ok(()) => File::open(directory)?.sync_all(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+}
