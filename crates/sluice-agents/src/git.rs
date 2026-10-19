@@ -19,19 +19,32 @@ pub struct GitSample {
     pub tracked: String,
 }
 async fn git(cwd: &Path, args: &[&str]) -> io::Result<std::process::Output> {
-    let mut cmd = tokio::process::Command::new("git");
-    cmd.current_dir(cwd)
-        .args(args)
-        .stdin(Stdio::null())
-        // Observation must never take index.lock from under an agent's own git commands.
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_EDITOR", "true")
-        .env("GIT_MERGE_AUTOEDIT", "no")
-        .kill_on_drop(true);
-    tokio::time::timeout(Duration::from_secs(10), cmd.output())
-        .await
-        .map_err(|_| io::Error::other("git probe timed out"))?
+    sluice_process::probe::retry(|| async {
+        let mut cmd = tokio::process::Command::new("git");
+        cmd.current_dir(cwd)
+            .args(args)
+            .stdin(Stdio::null())
+            // Observation must never take index.lock from an agent's git commands.
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_EDITOR", "true")
+            .env("GIT_MERGE_AUTOEDIT", "no")
+            .kill_on_drop(true);
+        let output = cmd.output().await?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !output.status.success()
+            && !stderr.contains("not a git repository")
+            && !(args.first() == Some(&"rev-parse") && stderr.contains("Needed a single revision"))
+        {
+            return Err(io::Error::other(format!(
+                "git {} failed: {}",
+                args[0],
+                stderr.chars().take(300).collect::<String>()
+            )));
+        }
+        Ok(output)
+    })
+    .await
 }
 pub async fn head(cwd: &Path) -> io::Result<Option<String>> {
     let out = git(cwd, &["rev-parse", "--verify", "HEAD"]).await?;

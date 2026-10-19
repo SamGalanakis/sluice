@@ -515,19 +515,54 @@ impl AgentFactory for Factory {
             _ => return Err(invalid("unknown engine")),
         };
         let engine = FixtureFaultEngine::new(engine, &self.home)?;
+        let link = UnixCoordinatorLink {
+            path: self.home.join("coordinator.sock"),
+            capability: self.launch.capability.clone(),
+        };
         let tmux = if request.engine == "fake" {
             None
         } else {
             let prefix = std::env::var_os("SLUICE_TMUX_PREFIX")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| bin.parent().unwrap_or(Path::new(".")).join("private-tmux"));
-            Some(Arc::new(
-                ApprovedTmux::load(&prefix).await.map_err(invalid)?,
-            ))
-        };
-        let link = UnixCoordinatorLink {
-            path: self.home.join("coordinator.sock"),
-            capability: self.launch.capability.clone(),
+            let mut warned = false;
+            let mut delay = std::time::Duration::from_millis(100);
+            Some(Arc::new(loop {
+                let result = tokio::select! {
+                    _ = self.cancel.cancelled() => return Err(AgentFailure { kind: FailureKind::Cancelled, message: "cancelled during host preflight".into(), session: None, retry_at: None }),
+                    result = ApprovedTmux::load(&prefix) => result,
+                };
+                match result {
+                    Ok(tmux) => break tmux,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::TimedOut
+                                | io::ErrorKind::WouldBlock
+                                | io::ErrorKind::Interrupted
+                        ) =>
+                    {
+                        if !warned {
+                            warned = true;
+                            let note = format!(
+                                "tmux verification observation unavailable; start is queued: {error}"
+                            );
+                            eprintln!("warning: {note}");
+                            let _ = tokio::time::timeout(
+                                std::time::Duration::from_secs(2),
+                                say_to_owner(&link, &self.launch, &note, &self.cancel, PATIENCE),
+                            )
+                            .await;
+                        }
+                        tokio::select! {
+                            _ = self.cancel.cancelled() => return Err(AgentFailure { kind: FailureKind::Cancelled, message: "cancelled during host preflight".into(), session: None, retry_at: None }),
+                            _ = tokio::time::sleep(delay) => {},
+                        }
+                        delay = (delay * 2).min(std::time::Duration::from_secs(30));
+                    }
+                    Err(error) => return Err(invalid(error)),
+                }
+            }))
         };
         let mut messages: Vec<socket::DeliveryMessage> =
             decode_json(&std::fs::read(outer_dir.join("messages.json")).map_err(invalid)?)

@@ -331,11 +331,15 @@ fn launch_barrier_never_dispatches_before_a_valid_continuation() {
             rustix::event::PollFlags::IN,
         )];
         let deadline = rustix::event::Timespec {
-            tv_sec: 2,
-            tv_nsec: 0,
+            tv_sec: 0,
+            tv_nsec: 250_000_000,
         };
-        assert_eq!(rustix::event::poll(&mut ready, Some(&deadline)).unwrap(), 1);
-        assert!(prepared.process().exited().unwrap());
+        // Host preflight can outlast the handshake budget. The launcher must remain
+        // blocked for its grant, rather than expire and fail a healthy run.
+        assert_eq!(rustix::event::poll(&mut ready, Some(&deadline)).unwrap(), 0);
+        assert!(!prepared.process().exited().unwrap());
+        drop(prepared);
+        assert!(!home.path().join("marker").exists());
         assert!(!home.path().join("marker").exists());
     }
     {
@@ -432,4 +436,27 @@ fn process_identity_authority_and_unit_names_refuse_stale_or_foreign_owners() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+// Regression: preflight used to consume start_once before any start was sent, so retry
+// could only reconcile a nonexistent unit and the run was later declared lost.
+#[tokio::test]
+async fn slow_preflight_timeout_does_not_consume_the_guardian_start() {
+    let mut guard = UnitGuard(TransientService::for_test(RunId::new()));
+    let mut spec = ServiceCommand::new("/usr/bin/sleep");
+    spec.args = vec!["60".into()];
+    let error = sluice_process::probe::ProbeTiming {
+        timeout: Duration::ZERO,
+        backoff: Duration::ZERO,
+    }
+    .scope(guard.0.start_once(&spec))
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    let StartOutcome::Confirmed { state, .. } = guard.0.start_once(&spec).await.unwrap() else {
+        panic!("a preflight timeout must leave the same start retryable");
+    };
+    assert!(state.main_pid.is_some());
+    assert!(!state.stopped());
+    guard.0.stop().await.unwrap();
 }

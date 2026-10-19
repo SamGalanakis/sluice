@@ -221,7 +221,15 @@ impl ProbeReport {
         }
         let engine = verdict.policy.engine;
         Err(EngineError {
-            kind: EngineErrorKind::CapabilityMismatch,
+            kind: if self
+                .missing
+                .iter()
+                .any(|missing| missing.contains("probe unavailable:"))
+            {
+                EngineErrorKind::ObservationUnavailable
+            } else {
+                EngineErrorKind::CapabilityMismatch
+            },
             message: format!(
                 "{engine} {} lacks {} that sluice needs (tested {}; {})",
                 verdict.version,
@@ -269,6 +277,25 @@ pub async fn run(
     args: &[&str],
     env: &BTreeMap<String, String>,
 ) -> Result<String, String> {
+    sluice_process::probe::retry(|| async {
+        run_once(binary, args, env)
+            .await
+            .map_err(std::io::Error::other)
+    })
+    .await
+    .map_err(|error| {
+        if error.kind() == std::io::ErrorKind::TimedOut {
+            format!("probe unavailable: {error}")
+        } else {
+            error.to_string()
+        }
+    })
+}
+async fn run_once(
+    binary: &Path,
+    args: &[&str],
+    env: &BTreeMap<String, String>,
+) -> Result<String, String> {
     let mut child = Command::new(binary)
         .args(args)
         .env_clear()
@@ -279,8 +306,19 @@ pub async fn run(
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| {
+            let unavailable = if matches!(
+                e.kind(),
+                std::io::ErrorKind::TimedOut
+                    | std::io::ErrorKind::WouldBlock
+                    | std::io::ErrorKind::Interrupted
+            ) || e.raw_os_error() == Some(26)
+            {
+                "probe unavailable: "
+            } else {
+                ""
+            };
             format!(
-                "cannot start `{} {}`: {e}",
+                "{unavailable}cannot start `{} {}`: {e}",
                 binary.display(),
                 args.join(" ")
             )
@@ -306,7 +344,7 @@ pub async fn run(
     let _ = child.kill().await;
     let _ = child.wait().await;
     result
-        .map_err(|_| "timed out".to_owned())?
+        .map_err(|_| "probe unavailable: timed out".to_owned())?
         .map_err(|e| format!("`{} {}` {e}", binary.display(), args.join(" ")))
 }
 

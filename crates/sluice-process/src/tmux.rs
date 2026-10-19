@@ -76,7 +76,7 @@ impl ApprovedTmux {
         }
         let mut hash = Command::new("/usr/bin/sha256sum");
         hash.arg("--").arg(&binary);
-        let output = checked_output(hash).await?;
+        let output = read_output(hash).await?;
         let digest = String::from_utf8_lossy(&output.stdout);
         if digest.split_whitespace().next() != Some(&manifest.binary_sha256) {
             return Err(invalid(
@@ -85,14 +85,14 @@ impl ApprovedTmux {
         }
         let mut version = Command::new(&binary);
         version.arg("-V");
-        let output = checked_output(version).await?;
+        let output = read_output(version).await?;
         if output.stdout != b"tmux 3.7c\n" {
             return Err(invalid("approved tmux must report exactly tmux 3.7c"));
         }
         // ldd also checks the dynamic ncurses/tinfo runtime dependencies.
         let mut linkage = Command::new("/usr/bin/ldd");
         linkage.arg(&binary);
-        let output = checked_output(linkage).await?;
+        let output = read_output(linkage).await?;
         let libraries = String::from_utf8_lossy(&output.stdout);
         if libraries.contains("libevent")
             || libraries.contains("libsystemd")
@@ -267,6 +267,15 @@ pub(crate) async fn checked_output(command: Command) -> io::Result<Output> {
             "{description}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
+    }
+    Ok(output)
+}
+
+async fn read_output(command: Command) -> io::Result<Output> {
+    let mut command = tokio::process::Command::from(command);
+    let output = crate::probe::output(&mut command).await?;
+    if !output.status.success() {
+        return Err(invalid(String::from_utf8_lossy(&output.stderr).trim()));
     }
     Ok(output)
 }

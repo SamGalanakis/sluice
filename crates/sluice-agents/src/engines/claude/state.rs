@@ -804,10 +804,37 @@ impl Claude {
     }
     async fn output(mut command: Command) -> Result<Vec<u8>, EngineError> {
         command.kill_on_drop(true).stdin(Stdio::null());
-        let output = tokio::time::timeout(Duration::from_secs(10), command.output())
-            .await
-            .map_err(|_| failure(EngineErrorKind::Fatal, "claude: command probe timed out"))?
-            .map_err(io_error)?;
+        let observation = command.as_std().get_args().any(|arg| {
+            arg == "--version"
+                || arg == "capture-pane"
+                || arg == "list-panes"
+                || arg == "has-session"
+                || arg == "display-message"
+        });
+        let output = if observation {
+            sluice_process::probe::output(&mut command)
+                .await
+                .map_err(|error| {
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut
+                            | io::ErrorKind::WouldBlock
+                            | io::ErrorKind::Interrupted
+                    ) {
+                        failure(
+                            EngineErrorKind::ObservationUnavailable,
+                            format!("claude probe unavailable: {error}"),
+                        )
+                    } else {
+                        io_error(error)
+                    }
+                })?
+        } else {
+            tokio::time::timeout(Duration::from_secs(10), command.output())
+                .await
+                .map_err(|_| failure(EngineErrorKind::Fatal, "claude: command probe timed out"))?
+                .map_err(io_error)?
+        };
         if !output.status.success() {
             return Err(classify(&String::from_utf8_lossy(&output.stderr)));
         }

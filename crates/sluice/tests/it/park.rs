@@ -170,7 +170,8 @@ fn a_parked_run_frees_its_lane_and_wakes_in_its_session_with_its_lease() {
     let parker = p.g.terminal("parker");
     assert_eq!(parker["status"], "succeeded", "{parker}");
     for step in ["holder", "queued"] {
-        assert_eq!(p.step(step)["status"], "succeeded", "{}", p.step(step));
+        let peer = p.g.terminal(step);
+        assert_eq!(peer["status"], "succeeded", "{peer}");
     }
     let park = p.reply("parker", &["park"]);
     assert_eq!(park["parked"], true, "{park}");

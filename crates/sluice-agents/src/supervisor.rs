@@ -230,7 +230,9 @@ impl From<EngineError> for AgentFailure {
         let retry_at = e.retry_at;
         let failure = failure(
             match e.kind {
-                EngineErrorKind::Transient => FailureKind::Transient,
+                EngineErrorKind::Transient | EngineErrorKind::ObservationUnavailable => {
+                    FailureKind::Transient
+                }
                 EngineErrorKind::MissingSession => FailureKind::MissingSession,
                 EngineErrorKind::CapabilityMismatch => FailureKind::CapabilityMismatch,
                 EngineErrorKind::UnknownAcceptance => FailureKind::UnknownAcceptance,
@@ -956,16 +958,78 @@ fn clock_ms() -> io::Result<u64> {
     .map_err(io::Error::other)
 }
 async fn persist<H: SupervisorHost>(
-    machine: &Machine,
+    machine: &mut Machine,
     config: &SupervisorConfig,
     host: &mut H,
 ) -> Result<(), AgentFailure> {
     machine.checkpoint.save(&config.run_dir).map_err(invalid)?;
-    tokio::time::timeout(Duration::from_secs(2), host.checkpoint(&machine.checkpoint))
+    // The local checkpoint is authoritative. A mirror notification is bookkeeping.
+    let timing = sluice_process::probe::ProbeTiming::current();
+    let mut delay = timing.backoff;
+    for attempt in 0..3 {
+        let result = tokio::time::timeout(
+            timing.timeout.min(Duration::from_secs(2)),
+            host.checkpoint(&machine.checkpoint),
+        )
         .await
-        .map_err(|_| invalid("checkpoint notification timed out"))?
-        .map_err(invalid)
+        .unwrap_or_else(|_| {
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "checkpoint notification timed out",
+            ))
+        });
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt == 2 => {
+                observation_warning(&mut machine.checkpoint.notes, host, "checkpoint", &error)
+                    .await;
+            }
+            Err(_) => {
+                tokio::time::sleep(delay).await;
+                delay *= 2;
+            }
+        }
+    }
+    Ok(())
 }
+async fn observation_warning<H: SupervisorHost>(
+    notes: &mut Vec<String>,
+    host: &mut H,
+    name: &str,
+    error: &io::Error,
+) {
+    let prefix = format!("{name} observation unavailable");
+    if notes.iter().any(|note| note.starts_with(&prefix)) {
+        return;
+    }
+    let note = format!("{prefix}; fact is unknown, run continues: {error}");
+    eprintln!("warning: {note}");
+    notes.push(note.clone());
+    if !matches!(
+        tokio::time::timeout(Duration::from_secs(2), host.note(&note)).await,
+        Ok(Ok(()))
+    ) {
+        eprintln!("observation warning could not reach the owner: {name}");
+    }
+}
+async fn startup_host<T, H: SupervisorHost>(
+    cancel: &CancellationToken,
+    deadline: tokio::time::Instant,
+    host: &mut H,
+    notes: &mut Vec<String>,
+    operation: impl Future<Output = io::Result<T>>,
+) -> Result<T, AgentFailure> {
+    let waiting = bounded_host(cancel, deadline, operation);
+    tokio::pin!(waiting);
+    tokio::select! {
+        result = &mut waiting => result,
+        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+            observation_warning(notes, host, "private tmux start", &io::Error::new(io::ErrorKind::TimedOut, "still queued; waiting for the same start")).await;
+            waiting.await
+        }
+    }
+}
+
 async fn bounded<T>(
     cancel: &CancellationToken,
     deadline: tokio::time::Instant,
@@ -1045,8 +1109,20 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             "adapter engine differs from request",
         ));
     }
-    let model = launch_model(engine, &profile, config.model.as_ref()).await?;
     let existing = Checkpoint::read(&config.run_dir).map_err(invalid)?;
+    let mut preflight_notes = existing
+        .as_ref()
+        .map(|checkpoint| checkpoint.notes.clone())
+        .unwrap_or_default();
+    let model = launch_model(
+        engine,
+        &profile,
+        config.model.as_ref(),
+        host,
+        &mut preflight_notes,
+        cancel,
+    )
+    .await?;
     let mut checkpoint = if let Some(mut previous) = existing {
         if previous.version != 1
             || previous.run != config.run
@@ -1089,6 +1165,14 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             .map(|seed| (seed.delivery, seed.live_after.max(config.assigned.through)))
             .unwrap_or_else(|| (DeliveryLedger::default(), config.assigned.through));
         delivery.recover();
+        let mut notes = vec![];
+        let head_before = match git::baseline(&config.cwd, config.workspace.as_deref()).await {
+            Ok(head) => head,
+            Err(error) => {
+                observation_warning(&mut notes, host, "git", &error).await;
+                None
+            }
+        };
         Checkpoint {
             version: 1,
             run: config.run,
@@ -1104,9 +1188,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                 &config.cwd,
                 config.assigned,
             ),
-            head_before: git::baseline(&config.cwd, config.workspace.as_deref())
-                .await
-                .map_err(invalid)?,
+            head_before,
             started_ms: clock_ms().map_err(invalid)?,
             state: State::Boot,
             delivery,
@@ -1116,10 +1198,15 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             compactions: 0,
             live_after,
             final_text: String::new(),
-            notes: vec![],
+            notes,
             parked_ms: 0,
         }
     };
+    for note in preflight_notes {
+        if !checkpoint.notes.contains(&note) {
+            checkpoint.notes.push(note);
+        }
+    }
     fs::write(config.run_dir.join("task.md"), &config.task).map_err(invalid)?;
     let task_text = prompt::hand_over(&config.task, &config.run_dir.join("task.md"), "Your task")
         .map_err(invalid)?;
@@ -1159,14 +1246,25 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             if cancel.is_cancelled() { return Err(failure(FailureKind::Cancelled, "agent cancelled")); }
             if machine.checkpoint.delivery.uncertain() { return Err(failure(FailureKind::UnknownAcceptance, "checkpoint has uncertain delivery; refusing replay")); }
             if let Some(session) = machine.checkpoint.session.clone() {
-                let metadata = match bounded(cancel, deadline, engine.session(&session)).await {
+                let mut delay = Duration::from_millis(100);
+                let metadata_result = loop {
+                    match bounded(cancel, deadline, async { Ok(engine.session(&session).await) }).await? {
+                        Err(error) if error.kind == EngineErrorKind::ObservationUnavailable => {
+                            observation_warning(&mut machine.checkpoint.notes, host, "session metadata", &io::Error::other(error.message)).await;
+                            bounded(cancel, deadline, async { tokio::time::sleep(delay).await; Ok(()) }).await?;
+                            delay = (delay * 2).min(Duration::from_secs(30));
+                        }
+                        result => break result.map_err(AgentFailure::from),
+                    }
+                };
+                let metadata = match metadata_result {
                     Ok(metadata) => metadata,
                     Err(error) if error.kind == FailureKind::MissingSession && machine.checkpoint.delivery.entries.iter().all(|entry| entry.tries == 0) => {
                         clean(engine, host, &mut server, tmux, &context).await?;
                         machine.checkpoint.notes.push(format!("{}; starting fresh", error.message));
                         eprintln!("{}; starting fresh", error.message);
                         machine.checkpoint.session = None;
-                        persist(&machine, &config, host).await?;
+                        persist(&mut machine, &config, host).await?;
                         continue;
                     }
                     Err(error) => return Err(error),
@@ -1179,25 +1277,54 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                 }
                 sessions.acquire(&config.home, &config.engine, machine.checkpoint.session.as_deref().expect("session"), &config.project, config.run)?;
             }
-            persist(&machine, &config, host).await?;
+            persist(&mut machine, &config, host).await?;
             refresh_me(host, &config.run_dir).await;
-            let ready_deadline = deadline.min(tokio::time::Instant::now() + config.limits.ready);
-            let startup = async {
+            let mut ready_deadline = deadline;
+            let startup: Result<(), AgentFailure> = async {
                 while pending_hooks(&context.run_dir).map_err(invalid)? {
                     process_hooks_inner(engine, None, &context.run_dir).map_err(invalid)?;
                 }
-                let launch = bounded(cancel, ready_deadline, engine.prepare(&context, machine.checkpoint.session.as_deref())).await?;
+                let mut probe_delay = Duration::from_millis(100);
+                let launch = loop {
+                    match bounded(cancel, deadline, async { Ok(engine.prepare(&context, machine.checkpoint.session.as_deref()).await) }).await? {
+                        Ok(launch) => break launch,
+                        Err(error) if error.kind == EngineErrorKind::ObservationUnavailable => {
+                            observation_warning(&mut machine.checkpoint.notes, host, "engine probe", &io::Error::other(error.message)).await;
+                            bounded(cancel, deadline, async { tokio::time::sleep(probe_delay).await; Ok(()) }).await?;
+                            probe_delay = (probe_delay * 2).min(Duration::from_secs(30));
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                };
+                // Host preflight delay is not time spent waiting for an engine to become ready.
+                machine.boot_at = Duration::from_millis(clock_ms().map_err(invalid)?.saturating_sub(machine.checkpoint.started_ms));
+                ready_deadline = deadline.min(tokio::time::Instant::now() + config.limits.ready);
                 if let Some(mut launch) = launch {
                     launch.env.insert("SLUICE_RUN_DIR".into(), context.run_dir.to_string_lossy().into_owned());
                     launch.env.insert("SLUICE_RUN_ID".into(), config.run.to_string());
                     let artifact = tmux.ok_or_else(|| failure(FailureKind::CapabilityMismatch, "pane launch requires approved private tmux"))?;
-                    let mut private = PrivateTmux::spawn(artifact, &context.run_dir).await.map_err(invalid)?;
+                    let private = startup_host(cancel, deadline, host, &mut machine.checkpoint.notes, PrivateTmux::spawn(artifact, &context.run_dir)).await?;
                     // Store ownership before awaiting pane creation.
-                    private.create_pane(artifact, &context, launch).await.map_err(invalid)?;
                     server = Some(private);
+                    startup_host(cancel, deadline, host, &mut machine.checkpoint.notes, server.as_mut().expect("private server").create_pane(artifact, &context, launch)).await?;
+                    ready_deadline = deadline.min(tokio::time::Instant::now() + config.limits.ready);
+                    machine.boot_at = Duration::from_millis(clock_ms().map_err(invalid)?.saturating_sub(machine.checkpoint.started_ms));
                 }
                 let command = machine.checkpoint.session.clone().map(|session| EngineCommand::Resume { session }).unwrap_or(EngineCommand::StartFresh);
-                bounded(cancel, ready_deadline, engine.execute(&context, command)).await.map(|_| ())
+                let mut probe_delay = Duration::from_millis(100);
+                loop {
+                    match bounded(cancel, ready_deadline, async { Ok(engine.execute(&context, command.clone()).await) }).await? {
+                        Ok(_) => break Ok(()),
+                        Err(error) if error.kind == EngineErrorKind::ObservationUnavailable => {
+                            observation_warning(&mut machine.checkpoint.notes, host, "engine probe", &io::Error::other(error.message)).await;
+                            bounded(cancel, deadline, async { tokio::time::sleep(probe_delay).await; Ok(()) }).await?;
+                            probe_delay = (probe_delay * 2).min(Duration::from_secs(30));
+                            ready_deadline = deadline.min(tokio::time::Instant::now() + config.limits.ready);
+                            machine.boot_at = Duration::from_millis(clock_ms().map_err(invalid)?.saturating_sub(machine.checkpoint.started_ms));
+                        }
+                        Err(error) => break Err(error.into()),
+                    }
+                }
             }.await;
             // An untested engine version runs, with a warning in the log and a note in the run.
             if let Some(note) = engine.version().and_then(|v| v.note())
@@ -1218,7 +1345,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                     machine.checkpoint.notes.push(format!("{missing}; starting fresh"));
                     eprintln!("{missing}; starting fresh");
                     machine.checkpoint.session = None;
-                    persist(&machine, &config, host).await?;
+                    persist(&mut machine, &config, host).await?;
                     continue;
                 }
                 startup_failure = Some(error);
@@ -1237,7 +1364,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                 Err(mut error) if error.kind == FailureKind::Transient => {
                     machine.checkpoint.state = State::Backoff;
                     machine.checkpoint.delivery.recover();
-                    persist(&machine, &config, host).await?;
+                    persist(&mut machine, &config, host).await?;
                     let last = matches!(config.retry.owner, RetryOwner::OuterHelper) || machine.checkpoint.internal_attempt > config.retry.additional_tries;
                     if last && keeps_pane(error.kind, machine.turns_completed()) {
                         keep_pane(&mut error, server.is_some(), tmux, &context.run_dir).await;
@@ -1293,21 +1420,19 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
     }
     let before = machine.checkpoint.head_before.clone();
     let before = before.as_deref();
-    let git = match &config.workspace {
-        // A workspace that is gone or holds no baseline leaves the facts out, never the result.
-        Some(workspace) => match git::workspace_facts(workspace, before).await {
-            Ok(facts) => facts,
-            Err(error) => {
-                let note = format!("git facts of {} left out: {error}", workspace.display());
-                eprintln!("{note}");
-                machine.checkpoint.notes.push(note);
-                None
-            }
-        },
-        None => git::facts(&config.cwd, before).await.map_err(invalid)?,
+    let facts = match &config.workspace {
+        Some(workspace) => git::workspace_facts(workspace, before).await,
+        None => git::facts(&config.cwd, before).await,
+    };
+    let git = match facts {
+        Ok(facts) => facts,
+        Err(error) => {
+            observation_warning(&mut machine.checkpoint.notes, host, "git", &error).await;
+            None
+        }
     };
     machine.checkpoint.state = State::Done;
-    persist(&machine, &config, host).await?;
+    persist(&mut machine, &config, host).await?;
     Ok(AgentResult {
         final_text: machine.checkpoint.final_text,
         report: None,
@@ -1405,15 +1530,42 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 /// The model this launch runs: the requested object or the engine's default, composed and
 /// checked against the engine's listing. An unknown id fails here, before anything starts.
-async fn launch_model<E: EngineAdapter>(
+async fn launch_model<E: EngineAdapter, H: SupervisorHost>(
     engine: &mut E,
     profile: &EngineProfile,
     requested: Option<&crate::model::ModelChoice>,
+    host: &mut H,
+    notes: &mut Vec<String>,
+    cancel: &CancellationToken,
 ) -> Result<Option<crate::model::ResolvedModel>, AgentFailure> {
     let Some(choice) = requested.or(profile.default_model.as_ref()) else {
         return Ok(None);
     };
-    let catalog = engine.models().await.map_err(AgentFailure::from)?;
+    let mut delay = Duration::from_millis(100);
+    let catalog = loop {
+        let result = tokio::select! {
+            _ = cancel.cancelled() => return Err(failure(FailureKind::Cancelled, "cancelled during model observation")),
+            result = engine.models() => result,
+        };
+        match result {
+            Ok(models) => break models,
+            Err(error) if error.kind == EngineErrorKind::ObservationUnavailable => {
+                observation_warning(
+                    notes,
+                    host,
+                    "model listing",
+                    &io::Error::other(error.message),
+                )
+                .await;
+                tokio::select! {
+                    _ = cancel.cancelled() => return Err(failure(FailureKind::Cancelled, "cancelled during model observation")),
+                    _ = tokio::time::sleep(delay) => {},
+                }
+                delay = (delay * 2).min(Duration::from_secs(30));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
     crate::model::resolve(&profile.engine, choice, &catalog)
         .map(Some)
         .map_err(invalid)
@@ -1482,6 +1634,7 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
     wall: &mut tokio::time::Instant,
     quiet: &mut QuietMonitor,
 ) -> Result<(), AgentFailure> {
+    let mut probe_delay = Duration::from_millis(100);
     loop {
         // A park moves the wall deadline by its parked time.
         let deadline = *wall;
@@ -1502,7 +1655,46 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
         .await?;
         // Host reads can answer engine hooks while they wait. Observe afterward so a
         // submission is judged with the acknowledgements and errors those hooks produced.
-        let o = bounded(cancel, deadline, engine.observe(context)).await?;
+        let o = match bounded(cancel, deadline, async {
+            Ok(engine.observe(context).await)
+        })
+        .await?
+        {
+            Ok(observation) => {
+                probe_delay = Duration::from_millis(100);
+                observation
+            }
+            Err(error) if error.kind == EngineErrorKind::ObservationUnavailable => {
+                observation_warning(
+                    &mut machine.checkpoint.notes,
+                    host,
+                    "engine probe",
+                    &io::Error::other(error.message),
+                )
+                .await;
+                bounded(cancel, deadline, async {
+                    tokio::time::sleep(probe_delay).await;
+                    Ok(())
+                })
+                .await?;
+                probe_delay = (probe_delay * 2).min(Duration::from_secs(30));
+                // A missing observation is no evidence of a stalled or unstarted turn.
+                let now = machine.checkpoint.elapsed().map_err(invalid)?;
+                machine.moved = now;
+                machine.boot_at = now;
+                for since in [
+                    &mut machine.awaiting,
+                    &mut machine.idle_since,
+                    &mut machine.dialog_since,
+                ] {
+                    if since.is_some() {
+                        *since = Some(now);
+                    }
+                }
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
         if engine
             .profile()
             .required_capabilities
@@ -1532,8 +1724,31 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
             && !snapshot.leases_active
         {
             if quiet.due(now, quiet_period) {
-                let mark = bounded_host(cancel, deadline, git::sample(&config.cwd)).await?;
-                let cpu = crate::quiet::descendant_cpu(&snapshot.roots).map_err(invalid)?;
+                let mark = answering_hooks(engine, config, async {
+                    match git::sample(&config.cwd).await {
+                        Ok(mark) => Ok(mark),
+                        Err(error) => {
+                            observation_warning(&mut machine.checkpoint.notes, host, "git", &error)
+                                .await;
+                            Ok(None)
+                        }
+                    }
+                })
+                .await?;
+                let cpu = match sluice_process::probe::retry(|| {
+                    std::future::ready(crate::quiet::descendant_cpu(&snapshot.roots))
+                })
+                .await
+                {
+                    Ok(cpu) => cpu,
+                    Err(error) => {
+                        observation_warning(&mut machine.checkpoint.notes, host, "CPU", &error)
+                            .await;
+                        // Unknown CPU activity cannot justify a quiet warning.
+                        quiet.reset();
+                        Default::default()
+                    }
+                };
                 if let Some(note) = quiet.observe(now, quiet_period, mark, cpu) {
                     machine.checkpoint.notes.push(note.clone());
                     // A note is advice: one its peer never took is logged, never fatal.
@@ -1982,13 +2197,23 @@ impl PrivateTmux {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        let mut delay = Duration::from_millis(100);
+        let server = loop {
+            match command.spawn() {
+                Ok(child) => break child,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(Duration::from_secs(30));
+                }
+                Err(error) => return Err(error),
+            }
+        };
         let mut owned = Self {
-            server: command.spawn()?,
+            server,
             control: None,
         };
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         while !directory.join("tmux.sock").exists() {
-            if owned.server.try_wait()?.is_some() || tokio::time::Instant::now() >= deadline {
+            if owned.server.try_wait()?.is_some() {
                 return Err(io::Error::other("private foreground tmux did not start"));
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -2053,7 +2278,17 @@ impl PrivateTmux {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true);
-        self.control = Some(control.spawn()?);
+        let mut delay = Duration::from_millis(100);
+        self.control = Some(loop {
+            match control.spawn() {
+                Ok(child) => break child,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(Duration::from_secs(30));
+                }
+                Err(error) => return Err(error),
+            }
+        });
         eprintln!(
             "attach: cd {} && {} -S tmux.sock attach",
             prompt::shell_quote(&context.run_dir.to_string_lossy()),
@@ -2083,9 +2318,29 @@ impl PrivateTmux {
 async fn command_output(command: std::process::Command) -> io::Result<std::process::Output> {
     let mut command = tokio::process::Command::from(command);
     command.stdin(Stdio::null()).kill_on_drop(true);
-    let out = tokio::time::timeout(Duration::from_secs(10), command.output())
-        .await
-        .map_err(|_| io::Error::other("private tmux client timed out"))??;
+    let starts_pane = command
+        .as_std()
+        .get_args()
+        .any(|arg| arg == "new-session" || arg == "set-option");
+    let out = if starts_pane {
+        // Retry only a failed fork. Once spawned, wait for this same command:
+        // repeating new-session after uncertain acceptance could dispatch twice.
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut delay = Duration::from_millis(100);
+        let child = loop {
+            match command.spawn() {
+                Ok(child) => break child,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(Duration::from_secs(30));
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        child.wait_with_output().await?
+    } else {
+        sluice_process::probe::output(&mut command).await?
+    };
     if !out.status.success() {
         return Err(io::Error::other(format!(
             "private tmux client: {}",

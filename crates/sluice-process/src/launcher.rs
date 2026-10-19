@@ -74,6 +74,54 @@ pub(crate) fn receive<T: DeserializeOwned>(
     read(socket, &mut data, deadline)?;
     serde_json::from_slice(&data).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
+/// Once the launcher has identified itself, scheduler delay is not a refusal. The child
+/// waits for a grant or EOF; the guardian waits for its acknowledgement or cancellation.
+pub(crate) fn receive_waiting<T: DeserializeOwned>(
+    socket: &mut UnixStream,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> io::Result<T> {
+    fn read_waiting(
+        socket: &mut UnixStream,
+        mut bytes: &mut [u8],
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) -> io::Result<()> {
+        socket.set_read_timeout(cancel.map(|_| Duration::from_millis(100)))?;
+        while !bytes.is_empty() {
+            if cancel.is_some_and(|cancel| cancel.is_cancelled()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "launch cancelled",
+                ));
+            }
+            match socket.read(bytes) {
+                Ok(0) => return Err(io::Error::from(io::ErrorKind::UnexpectedEof)),
+                Ok(count) => bytes = &mut bytes[count..],
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::Interrupted
+                            | io::ErrorKind::TimedOut
+                            | io::ErrorKind::WouldBlock
+                    ) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+    let mut length = [0; 4];
+    read_waiting(socket, &mut length, cancel)?;
+    let length = u32::from_be_bytes(length) as usize;
+    if length > MAX_FRAME {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "barrier frame too large",
+        ));
+    }
+    let mut bytes = vec![0; length];
+    read_waiting(socket, &mut bytes, cancel)?;
+    serde_json::from_slice(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
 fn read(socket: &mut UnixStream, mut buffer: &mut [u8], deadline: Instant) -> io::Result<()> {
     while !buffer.is_empty() {
         socket.set_read_timeout(Some(remaining(deadline)?))?;
@@ -100,7 +148,8 @@ fn remaining(deadline: Instant) -> io::Result<Duration> {
 /// acknowledgement. Dispatch must configure payload stdin explicitly.
 ///
 /// The binary supplies a closure that execs uv or invokes its Rust dispatcher.
-/// EOF, timeout, a wrong nonce or changed identity exits without calling it.
+/// EOF, cancellation, a wrong nonce or changed identity exits without calling it.
+/// After Hello, host scheduling delay never expires the continuation grant.
 pub fn payload_exec_main<F>(args: Vec<OsString>, dispatch: F) -> !
 where
     F: FnOnce(&[OsString]) -> io::Result<i32>,
@@ -141,7 +190,7 @@ fn barrier(args: &[OsString]) -> io::Result<()> {
         },
         deadline,
     )?;
-    let grant: Grant = receive(&mut socket, deadline)?;
+    let grant: Grant = receive_waiting(&mut socket, None)?;
     let current = ProcessIdentity::read(identity.pid)?;
     if grant.nonce != nonce || !identity.same_process(&current) || grant.identity != current {
         return Err(io::Error::new(
@@ -156,7 +205,7 @@ fn barrier(args: &[OsString]) -> io::Result<()> {
             nonce: nonce.into(),
             identity: current,
         },
-        deadline,
+        Instant::now() + Duration::from_millis(timeout),
     )?;
     Ok(())
 }

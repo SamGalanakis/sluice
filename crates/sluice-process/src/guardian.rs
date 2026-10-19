@@ -13,7 +13,10 @@ use sluice_model::{
     error::PublicError,
     ids::*,
     limits::{ExhaustedResource, RunLimits, RunUsage},
-    rpc::{FnInvocation, JsonMap, MAX_FRAME_BYTES, PROTOCOL_VERSION, RunCapability, decode_json},
+    rpc::{
+        FnInvocation, JsonMap, MAX_FRAME_BYTES, PROTOCOL_VERSION, RequestId, RpcRequest,
+        RunCapability, decode_json,
+    },
 };
 use std::{
     ffi::OsString,
@@ -48,6 +51,8 @@ impl FnHost for UnimplementedFnHost {
 /// same lifetime contract without requiring delegation in every unit test.
 pub trait PayloadHost: FnHost {
     type Invocation: PayloadInvocation;
+    /// Record launch.json before granting dispatch. On error, prove any prepared leaf
+    /// empty; without that record the guardian may safely queue another start.
     fn start(
         &self,
         request: LaunchRequest,
@@ -57,8 +62,9 @@ pub trait PayloadHost: FnHost {
     fn resource_usage(&self) -> io::Result<RunUsage>;
     /// Read back the limits the run's service has in force, apply them again on a mismatch,
     /// and fail when they still do not hold. The guardian asks once, after its claim and
-    /// before the first payload starts; an error fails the run with no payload started.
-    fn verify_limits(&self) -> impl Future<Output = Result<(), String>> + Send {
+    /// before the first payload starts. InvalidData/InvalidInput refuse dispatch; unavailable
+    /// observations queue verification without starting a payload.
+    fn verify_limits(&self) -> impl Future<Output = io::Result<()>> + Send {
         async { Ok(()) }
     }
 }
@@ -197,6 +203,97 @@ pub async fn guardian_main<L: CoordinatorLink, H: PayloadHost>(
     server.close().await;
     result
 }
+/// Diagnostics use the existing authenticated, idempotent callback; no wire shape changes.
+async fn probe_warning<L: CoordinatorLink>(
+    args: &GuardianArgs,
+    link: &L,
+    warnings: &mut std::collections::BTreeSet<&'static str>,
+    name: &'static str,
+    body: &str,
+    outbox: Option<&mut Vec<CoordinatorCommand>>,
+) {
+    if !warnings.insert(name) {
+        return;
+    }
+    eprintln!("warning: {body}");
+    if let Err(error) = atomic_json(
+        &args.run_dir,
+        &format!("probe-{name}.json"),
+        &serde_json::json!({"fact": "unknown", "warning": body}),
+    ) {
+        eprintln!("cannot record probe warning: {error}");
+    }
+    let command = CoordinatorCommand::Callback {
+        identity: args.guardian.identity.clone(),
+        request: Box::new(RpcRequest {
+            protocol: PROTOCOL_VERSION,
+            request_id: RequestId(format!("probe-{}-{name}", args.invocation.run)),
+            run_capability: Some(args.capability.clone()),
+            command: sluice_model::commands::CommandRequest::Say(sluice_model::commands::Say {
+                project: ProjectSelector::Id(args.invocation.project),
+                to: String::new(),
+                body: body.into(),
+                data: None,
+                run: Some(args.invocation.run),
+                me: None,
+                owner: false,
+            }),
+        }),
+    };
+    if let Some(outbox) = outbox {
+        outbox.push(command);
+        return;
+    }
+    if let Err(error) = crate::probe::retry(|| async {
+        link.request(command.clone())
+            .await
+            .map(|_| ())
+            .map_err(io::Error::other)
+    })
+    .await
+    {
+        eprintln!("observation warning could not reach the owner: {error}");
+    }
+}
+#[derive(Default)]
+struct UsageProbe {
+    next: Option<tokio::time::Instant>,
+    failures: u32,
+}
+impl UsageProbe {
+    async fn observe<H: PayloadHost, L: CoordinatorLink>(
+        &mut self,
+        host: &H,
+        args: &GuardianArgs,
+        link: &L,
+        warnings: &mut std::collections::BTreeSet<&'static str>,
+        outbox: &mut Vec<CoordinatorCommand>,
+        force: bool,
+    ) -> Option<RunUsage> {
+        if !force
+            && self
+                .next
+                .is_some_and(|next| tokio::time::Instant::now() < next)
+        {
+            return None;
+        }
+        match crate::probe::retry(|| std::future::ready(host.resource_usage())).await {
+            Ok(usage) => {
+                self.next = None;
+                self.failures = 0;
+                Some(usage)
+            }
+            Err(error) => {
+                self.failures = (self.failures + 1).min(6);
+                self.next =
+                    Some(tokio::time::Instant::now() + Duration::from_secs(1 << self.failures));
+                probe_warning(args, link, warnings, "usage", &format!("resource accounting observation unavailable; usage is unknown, run continues: {error}"), Some(outbox)).await;
+                None
+            }
+        }
+    }
+}
+
 async fn retry_request<L: CoordinatorLink>(
     link: &L,
     command: CoordinatorCommand,
@@ -279,6 +376,7 @@ async fn watch_once<L: CoordinatorLink>(
 struct Reported {
     starts: std::collections::BTreeSet<InvocationId>,
     acks: Vec<DeliveryAck>,
+    notices: std::collections::BTreeSet<String>,
 }
 fn taken(reply: Result<CoordinatorReply, PublicError>) -> bool {
     !matches!(reply, Err(PublicError::Busy { .. }))
@@ -289,6 +387,7 @@ async fn report<L: CoordinatorLink>(
     id: &AttemptKey,
     starts: Vec<(InvocationId, ProcessIdentity)>,
     acks: Vec<DeliveryAck>,
+    notices: Vec<CoordinatorCommand>,
 ) -> Reported {
     let mut reported = Reported::default();
     for (invocation, executor) in starts {
@@ -312,6 +411,14 @@ async fn report<L: CoordinatorLink>(
             .await,
         ) {
             reported.acks.push(ack);
+        }
+    }
+    for notice in notices {
+        if let CoordinatorCommand::Callback { request, .. } = &notice {
+            let key = request.request_id.0.clone();
+            if taken(link.request(notice).await) {
+                reported.notices.insert(key);
+            }
         }
     }
     reported
@@ -374,6 +481,29 @@ fn validate_messages(
     }
     Ok(())
 }
+async fn wait_before_start<L: CoordinatorLink, I: PayloadInvocation>(
+    args: &GuardianArgs,
+    link: &L,
+    control: &mut mpsc::Receiver<ControlEvent>,
+    cancel: &CancellationToken,
+    delivery: &mut DeliveryState,
+    invocation: InvocationId,
+    delay: Duration,
+) {
+    let until = tokio::time::Instant::now() + delay;
+    while tokio::time::Instant::now() < until {
+        if matches!(cancelled(link, &args.guardian.identity).await, Ok(true)) {
+            cancel.cancel();
+        }
+        if cancel.is_cancelled() {
+            break;
+        }
+        tokio::select! {
+            event = control.recv() => { if let Some(event) = event { handle_control::<L, I>(event, args, link, cancel, delivery, invocation, None, None).await; } },
+            _ = tokio::time::sleep(args.poll_interval.min(until.saturating_duration_since(tokio::time::Instant::now()))) => {},
+        }
+    }
+}
 async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
     args: &GuardianArgs,
     link: &L,
@@ -399,6 +529,10 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
     let mut legacy = false;
     // Leaves go with their invocations; keep the most failed forks any sample saw.
     let mut seen_pids_hits = 0u64;
+    let mut warnings = std::collections::BTreeSet::new();
+    let mut notices = Vec::new();
+    let mut usage_probe = UsageProbe::default();
+    let mut start_backoff = Duration::from_millis(100);
     'invocations: loop {
         // Before spawning, an unavailable coordinator delays admission. Once a
         // payload exists, outages only delay notifications, never its execution.
@@ -420,18 +554,66 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
             }
             break;
         }
-        if started.is_empty()
-            && let Err(message) = host.verify_limits().await
-        {
-            result = PayloadResult::Failed(PublicError::FnFailure {
-                message: format!(
-                    "the run's execution limits are not in force, so its payload never started: {message}"
-                ),
-            });
-            if cleanup.is_empty() {
-                cleanup.push(host.empty_without_payload()?);
+        if started.is_empty() {
+            let verification = host.verify_limits();
+            tokio::pin!(verification);
+            let verified = loop {
+                tokio::select! {
+                    result = &mut verification => break result,
+                    event = control.recv() => { if let Some(event) = event { handle_control::<L, H::Invocation>(event, args, link, &cancel, &mut delivery, invocation.invocation, None, None).await; } },
+                    _ = tokio::time::sleep(args.poll_interval) => {
+                        if matches!(cancelled(link, id).await, Ok(true)) { cancel.cancel(); }
+                    },
+                }
+                if cancel.is_cancelled() {
+                    break Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "cancelled during limit verification",
+                    ));
+                }
+            };
+            if let Err(error) = verified {
+                if cancel.is_cancelled() {
+                    continue 'invocations;
+                }
+                if !matches!(
+                    error.kind(),
+                    io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput
+                ) {
+                    probe_warning(
+                        args,
+                        link,
+                        &mut warnings,
+                        "limits",
+                        &format!(
+                            "execution limit observation unavailable; start is queued: {error}"
+                        ),
+                        None,
+                    )
+                    .await;
+                    wait_before_start::<L, H::Invocation>(
+                        args,
+                        link,
+                        control,
+                        &cancel,
+                        &mut delivery,
+                        invocation.invocation,
+                        start_backoff,
+                    )
+                    .await;
+                    start_backoff = start_backoff.saturating_mul(2).min(Duration::from_secs(30));
+                    continue 'invocations;
+                }
+                result = PayloadResult::Failed(PublicError::FnFailure {
+                    message: format!(
+                        "the run's execution limits are not in force, so its payload never started: {error}"
+                    ),
+                });
+                if cleanup.is_empty() {
+                    cleanup.push(host.empty_without_payload()?);
+                }
+                break;
             }
-            break;
         }
         atomic_json(
             &args.run_dir,
@@ -463,7 +645,33 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
             Ok(p) => p,
             Err(e) => {
                 // Host::start guarantees cleanup of any prepared leaf on error.
-                cleanup.push(host.empty_without_payload()?);
+                let proof = host.empty_without_payload()?;
+                // The host records launch.json before granting dispatch. Its absence and
+                // an empty subtree prove retrying cannot replay an accepted invocation.
+                if !cancel.is_cancelled() && !args.run_dir.join("launch.json").exists() {
+                    probe_warning(
+                        args,
+                        link,
+                        &mut warnings,
+                        "start",
+                        &format!("fn start deferred; queued for retry: {e}"),
+                        None,
+                    )
+                    .await;
+                    wait_before_start::<L, H::Invocation>(
+                        args,
+                        link,
+                        control,
+                        &cancel,
+                        &mut delivery,
+                        invocation.invocation,
+                        start_backoff,
+                    )
+                    .await;
+                    start_backoff = start_backoff.saturating_mul(2).min(Duration::from_secs(30));
+                    continue 'invocations;
+                }
+                cleanup.push(proof);
                 result = if cancel.is_cancelled() {
                     PayloadResult::Cancelled(e.to_string())
                 } else {
@@ -525,21 +733,23 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
                     reporting = None;
                     reported.starts.extend(taken.starts);
                     reported.acks.extend(taken.acks);
+                    reported.notices.extend(taken.notices);
                 },
                 _ = tokio::time::sleep(args.poll_interval) => {
                     if reporting.is_none() {
                         let starts: Vec<_> = started.iter().filter(|(invocation, _)| !reported.starts.contains(invocation)).cloned().collect();
                         let acks: Vec<_> = delivery.acks.iter().filter(|ack| !reported.acks.contains(ack)).cloned().collect();
-                        if !starts.is_empty() || !acks.is_empty() {
-                            reporting = Some(Box::pin(report(link, id, starts, acks)));
+                        let pending_notices: Vec<_> = notices.iter().filter(|notice| match notice { CoordinatorCommand::Callback { request, .. } => !reported.notices.contains(&request.request_id.0), _ => false }).cloned().collect();
+                        if !starts.is_empty() || !acks.is_empty() || !pending_notices.is_empty() {
+                            reporting = Some(Box::pin(report(link, id, starts, acks, pending_notices)));
                         }
                     }
-                    match host.resource_usage() {
-                        Ok(usage) => if let Some(error) = { seen_pids_hits = seen_pids_hits.max(usage.pids_limit_hits); exhausted(args.limits, usage) } {
+                    if let Some(usage) = usage_probe.observe(host, args, link, &mut warnings, &mut notices, false).await {
+                        seen_pids_hits = seen_pids_hits.max(usage.pids_limit_hits);
+                        if let Some(error) = exhausted(args.limits, usage) {
                             result = PayloadResult::Failed(error);
                             break;
-                        },
-                        Err(error) => { result = PayloadResult::Unknown(format!("resource accounting failed: {error}")); break; }
+                        }
                     }
                     match payload.poll().await {
                         Ok(Some((r, exit))) => { result = r; exits.push(exit); break; },
@@ -553,7 +763,10 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
         }
         cleanup.push(payload.cleanup().await?);
         if !matches!(result, PayloadResult::Cancelled(_))
-            && let Some(error) = exhausted(args.limits, host.resource_usage()?)
+            && let Some(usage) = usage_probe
+                .observe(host, args, link, &mut warnings, &mut notices, true)
+                .await
+            && let Some(error) = exhausted(args.limits, usage)
         {
             result = PayloadResult::Failed(error);
         }
@@ -603,18 +816,33 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
         }
         break;
     }
-    let mut usage = host.resource_usage()?;
-    usage.pids_limit_hits = usage.pids_limit_hits.max(seen_pids_hits);
+    let mut usage = usage_probe
+        .observe(host, args, link, &mut warnings, &mut notices, true)
+        .await;
+    if let Some(usage) = &mut usage {
+        usage.pids_limit_hits = usage.pids_limit_hits.max(seen_pids_hits);
+    }
     if !matches!(result, PayloadResult::Cancelled(_))
+        && let Some(usage) = usage
         && let Some(error) = exhausted(args.limits, usage)
     {
         result = PayloadResult::Failed(error);
+    }
+    // No live payload remains. Flush any warning that did not get through beside the
+    // control loop; stable request IDs make an interrupted report safe to repeat.
+    for notice in notices {
+        if let CoordinatorCommand::Callback { request, .. } = &notice
+            && !reported.notices.contains(&request.request_id.0)
+            && let Err(error) = retry_request(link, notice, args.poll_interval).await
+        {
+            eprintln!("observation warning could not reach the owner: {error}");
+        }
     }
     let mut journal = CompletionJournal {
         protocol: PROTOCOL_VERSION,
         limits: args.limits,
         guardian_memory_bytes: args.guardian_memory_bytes,
-        usage: Some(usage),
+        usage,
         identity: id.clone(),
         completion_id: InvocationId::new().to_string(),
         result,
@@ -1019,30 +1247,29 @@ impl<H: FnHost> PayloadHost for OsFnHost<H> {
             run_dir: request.run_dir,
         })
     }
-    async fn verify_limits(&self) -> Result<(), String> {
+    async fn verify_limits(&self) -> io::Result<()> {
         // The guardian runs at its service's root, so that cgroup names its unit.
         let unit = Path::new(self.groups.service.path())
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or("the guardian is outside a service")?
+            .ok_or_else(|| invalid("the guardian is outside a service"))?
             .to_owned();
         let applied =
             crate::systemd::enforce_run_limits(&unit, self.limits, self.guardian_memory_bytes)
-                .await
-                .map_err(|error| error.to_string())?;
+                .await?;
         let payload = self.groups.payload();
         let read = |name: &str| payload.read(name).map(|v| v.trim().to_owned());
         let caps = self.limits.caps();
-        let memory = read("memory.max").map_err(|e| e.to_string())?;
+        let memory = read("memory.max")?;
         let held = match caps.memory_bytes {
             None => memory == "max",
             Some(cap) => memory.parse::<u64>().is_ok_and(|n| n != 0 && n <= cap),
         };
         if !held {
-            return Err(format!(
+            return Err(invalid(&format!(
                 "payload memory.max is {memory}, expected {}",
                 caps.memory_bytes.map_or("max".into(), |n| n.to_string())
-            ));
+            )));
         }
         tracing::info!(%unit, ?applied, payload_memory_max = %memory, "run limits in force");
         Ok(())

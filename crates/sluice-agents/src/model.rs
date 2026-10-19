@@ -553,8 +553,8 @@ pub async fn cached(
     Ok(list.to_vec())
 }
 
-/// Runs an engine's model-listing command (bounded to a minute and 8 MiB) and returns its
-/// stdout. Any failure is fatal to the launch: an unlisted model never runs.
+/// Reads the engine's model listing with bounded retries and an 8 MiB result bound.
+/// An unavailable observation queues launch; a definite invalid listing still refuses it.
 pub(crate) async fn listing(
     mut command: tokio::process::Command,
     what: &str,
@@ -569,10 +569,24 @@ pub(crate) async fn listing(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let out = tokio::time::timeout(Duration::from_secs(60), command.output())
+    let out = sluice_process::probe::output(&mut command)
         .await
-        .map_err(|_| fail("timed out after 60 s".into()))?
-        .map_err(|e| fail(e.to_string()))?;
+        .map_err(|error| {
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut
+                    | std::io::ErrorKind::WouldBlock
+                    | std::io::ErrorKind::Interrupted
+            ) {
+                EngineError {
+                    kind: EngineErrorKind::ObservationUnavailable,
+                    message: format!("could not observe {what}: {error}"),
+                    retry_at: None,
+                }
+            } else {
+                fail(error.to_string())
+            }
+        })?;
     if !out.status.success() {
         return Err(fail(format!(
             "{}: {}",

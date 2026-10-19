@@ -8,6 +8,7 @@ pub mod identity;
 pub mod journal;
 pub mod launcher;
 pub mod locks;
+pub mod probe;
 pub mod proc;
 pub mod signals;
 pub mod socket;

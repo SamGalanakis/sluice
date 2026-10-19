@@ -701,27 +701,28 @@ impl Codex {
         {
             return Err(local("Codex private home overlaps owner home"));
         }
-        let probe_deadline = Instant::now() + self.options.request_timeout;
-        let version = loop {
-            let result = tokio::time::timeout_at(
-                probe_deadline,
-                Command::new(&self.options.binary)
-                    .arg("--version")
-                    .env_clear()
-                    .envs(&self.options.environment)
-                    .kill_on_drop(true)
-                    .output(),
-            )
-            .await
-            .map_err(|_| local("Codex version probe timed out"))?;
-            match result {
-                // A concurrent fork may temporarily retain a just-written executable descriptor.
-                Err(e) if e.raw_os_error() == Some(26) && Instant::now() < probe_deadline => {
-                    sleep(Duration::from_millis(10)).await
+        let version = sluice_process::probe::output(
+            Command::new(&self.options.binary)
+                .arg("--version")
+                .env_clear()
+                .envs(&self.options.environment),
+        )
+        .await
+        .map_err(|error| {
+            if matches!(
+                error.kind(),
+                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+            ) || error.raw_os_error() == Some(26)
+            {
+                EngineError {
+                    kind: EngineErrorKind::ObservationUnavailable,
+                    message: format!("Codex version probe unavailable: {error}"),
+                    retry_at: None,
                 }
-                result => break result.map_err(local)?,
+            } else {
+                local(error)
             }
-        };
+        })?;
         let verdict = profile::check_version(&String::from_utf8_lossy(&version.stdout))?;
         self.version = Some(verdict.clone());
         let report = version::cached(

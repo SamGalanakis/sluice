@@ -18,12 +18,15 @@ struct FixtureHost {
 #[derive(Default)]
 struct FixtureState {
     starts: AtomicUsize,
+    start_failures: AtomicUsize,
+    usage_unavailable: AtomicBool,
     done: AtomicBool,
     delivered: Mutex<Vec<MessageId>>,
     checkpoints: Mutex<Vec<JsonMap>>,
     usage: Mutex<sluice_model::RunUsage>,
     /// What the readback of the service's limits finds wrong, if anything.
     limits_wrong: Mutex<Option<String>>,
+    limits_unavailable: AtomicUsize,
 }
 impl FnHost for FixtureHost {
     async fn invoke(&self, _: FnInvocation) -> Result<JsonMap, PublicError> {
@@ -41,6 +44,17 @@ impl PayloadHost for FixtureHost {
             return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
         }
         self.state.starts.fetch_add(1, Ordering::SeqCst);
+        if self
+            .state
+            .start_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "launcher barrier timed out",
+            ));
+        }
         self.state
             .checkpoints
             .lock()
@@ -60,18 +74,34 @@ impl PayloadHost for FixtureHost {
         })
     }
     fn resource_usage(&self) -> io::Result<sluice_model::RunUsage> {
+        if self.state.usage_unavailable.load(Ordering::SeqCst) {
+            return Err(io::Error::other("cgroup observation unavailable"));
+        }
         Ok(*self.state.usage.lock().unwrap())
     }
     fn empty_without_payload(&self) -> io::Result<CleanupEvidence> {
         Ok(proof())
     }
-    async fn verify_limits(&self) -> Result<(), String> {
+    async fn verify_limits(&self) -> io::Result<()> {
+        if self
+            .state
+            .limits_unavailable
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "limit readback timed out",
+            ));
+        }
         self.state
             .limits_wrong
             .lock()
             .unwrap()
             .clone()
-            .map_or(Ok(()), Err)
+            .map_or(Ok(()), |message| {
+                Err(io::Error::new(io::ErrorKind::InvalidData, message))
+            })
     }
 }
 struct FixtureInvocation {
@@ -692,4 +722,122 @@ async fn limits_not_in_force_fail_the_run_before_its_payload_starts() {
             completion.result
         );
     });
+}
+
+// Regression: a slow launcher or an unreadable accounting file used to end a healthy run.
+#[tokio::test]
+async fn deferred_start_and_unknown_accounting_preserve_the_run() {
+    let home = tempfile::tempdir().unwrap();
+    let (args, link, host) = setup(home.path());
+    host.state.start_failures.store(1, Ordering::SeqCst);
+    host.state.limits_unavailable.store(1, Ordering::SeqCst);
+    host.state.usage_unavailable.store(true, Ordering::SeqCst);
+    let notices = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
+    let usage_pending = Arc::new(AtomicBool::new(false));
+    let usage_allowed = Arc::new(AtomicBool::new(false));
+    let usage_ready = Arc::new(tokio::sync::Notify::new());
+    let worker_args = args.clone();
+    let worker_link = NoticeLink {
+        link: link.clone(),
+        notices: notices.clone(),
+        usage_pending: usage_pending.clone(),
+        usage_allowed: usage_allowed.clone(),
+        usage_ready: usage_ready.clone(),
+    };
+    let worker_host = host.clone();
+    let worker = tokio::spawn(async move {
+        sluice_process::probe::ProbeTiming {
+            timeout: Duration::from_millis(20),
+            backoff: Duration::from_millis(1),
+        }
+        .scope(guardian_main(worker_args, &worker_link, &worker_host))
+        .await
+    });
+    until(|| host.state.starts.load(Ordering::SeqCst) >= 2 || worker.is_finished()).await;
+    assert!(
+        !worker.is_finished(),
+        "transient start failure ended the run"
+    );
+    assert!(link.with_state(|s| s.attempts[&args.invocation.run].completion.is_none()));
+    until(|| usage_pending.load(Ordering::SeqCst)).await;
+    assert!(
+        matches!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                control(
+                    &args,
+                    ControlCommand::Challenge(args.guardian.socket_challenge.clone())
+                )
+            )
+            .await
+            .unwrap()
+            .unwrap(),
+            ControlReply::Identity(_)
+        ),
+        "a pending owner warning must not block the guardian"
+    );
+    usage_allowed.store(true, Ordering::SeqCst);
+    usage_ready.notify_one();
+    host.state.done.store(true, Ordering::SeqCst);
+    worker.await.unwrap().unwrap();
+    let journal = link.with_state(|s| s.attempts[&args.invocation.run].completion.clone().unwrap());
+    assert!(
+        matches!(journal.result, PayloadResult::Succeeded(_)),
+        "{:?}",
+        journal.result
+    );
+    assert_eq!(
+        journal.usage, None,
+        "unobserved counters must not become zero"
+    );
+    let notices = notices.lock().unwrap();
+    assert_eq!(
+        notices.len(),
+        3,
+        "one notice each for unavailable limits, queued start and unknown usage"
+    );
+    assert!(
+        notices
+            .values()
+            .any(|body| body.contains("fn start deferred"))
+    );
+    assert!(
+        notices
+            .values()
+            .any(|body| body.contains("usage is unknown"))
+    );
+}
+struct NoticeLink {
+    link: MemoryCoordinator,
+    notices: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
+    usage_pending: Arc<AtomicBool>,
+    usage_allowed: Arc<AtomicBool>,
+    usage_ready: Arc<tokio::sync::Notify>,
+}
+impl CoordinatorLink for NoticeLink {
+    async fn request(&self, command: CoordinatorCommand) -> Result<CoordinatorReply, PublicError> {
+        if let CoordinatorCommand::Callback { request, .. } = &command
+            && let sluice_model::commands::CommandRequest::Say(say) = &request.command
+        {
+            if say.body.contains("usage is unknown") && !self.usage_allowed.load(Ordering::SeqCst) {
+                self.usage_pending.store(true, Ordering::SeqCst);
+                self.usage_ready.notified().await;
+            }
+            let mut notices = self.notices.lock().unwrap();
+            if notices
+                .insert(request.request_id.0.clone(), say.body.clone())
+                .is_none()
+            {
+                // A committed note's lost response must not cause a second message.
+                return Err(PublicError::Busy {
+                    message: "reply lost".into(),
+                    retryable: true,
+                });
+            }
+            return Ok(CoordinatorReply::Callback(Box::new(
+                sluice_model::commands::CommandReply::Posted { id: MessageId(1) },
+            )));
+        }
+        self.link.request(command).await
+    }
 }

@@ -152,7 +152,7 @@ impl PreparedLaunch {
             },
             deadline,
         )?;
-        let started: RunStarted = launcher::receive(&mut self.socket, deadline)?;
+        let started: RunStarted = launcher::receive_waiting(&mut self.socket, Some(cancel))?;
         if started.nonce != self.nonce || started.identity != identity {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,

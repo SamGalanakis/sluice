@@ -754,10 +754,38 @@ fn fatal(e: impl std::fmt::Display) -> EngineError {
 }
 async fn output(mut command: Command) -> Result<String, EngineError> {
     command.kill_on_drop(true).stdin(Stdio::null());
-    let out = timeout(Duration::from_secs(10), command.output())
-        .await
-        .map_err(fatal)?
-        .map_err(fatal)?;
+    let observation = command.as_std().get_args().any(|arg| {
+        arg == "--version"
+            || arg == "capture-pane"
+            || arg == "list-panes"
+            || arg == "has-session"
+            || arg == "display-message"
+            || arg == "-readonly"
+    });
+    let out = if observation {
+        sluice_process::probe::output(&mut command)
+            .await
+            .map_err(|e| {
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::TimedOut
+                        | io::ErrorKind::WouldBlock
+                        | io::ErrorKind::Interrupted
+                ) {
+                    error(
+                        EngineErrorKind::ObservationUnavailable,
+                        format!("Devin probe unavailable: {e}"),
+                    )
+                } else {
+                    fatal(e)
+                }
+            })?
+    } else {
+        timeout(Duration::from_secs(10), command.output())
+            .await
+            .map_err(fatal)?
+            .map_err(fatal)?
+    };
     if !out.status.success() {
         return Err(fatal(format!(
             "Devin probe/client exited {}: {}",

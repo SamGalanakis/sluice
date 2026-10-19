@@ -94,10 +94,11 @@ async fn resource_limits_share_sibling_budget_and_isolate_neighboring_run() {
             256 << 20,
         ));
         units.0.push(TransientService::for_test(RunId::new()));
-        assert!(matches!(
-            units.0.last_mut().unwrap().start_once(&spec).await.unwrap(),
-            StartOutcome::Confirmed { .. }
-        ));
+        let outcome = units.0.last_mut().unwrap().start_once(&spec).await.unwrap();
+        assert!(
+            matches!(outcome, StartOutcome::Confirmed { .. }),
+            "{mode}: {outcome:?}"
+        );
     }
     wait_file(&home.path().join("survivor/ready")).await;
     wait_file(&home.path().join("victim/evidence.json")).await;

@@ -40,6 +40,7 @@ struct Host {
     submitted: bool,
     cleanup: u32,
     fail_cleanup: bool,
+    fail_checkpoint: bool,
     acks: Vec<MessageId>,
     notes: Vec<String>,
     messages: Vec<DeliveryMessage>,
@@ -57,6 +58,7 @@ impl Host {
             submitted: false,
             cleanup: 0,
             fail_cleanup: false,
+            fail_checkpoint: false,
             acks: vec![],
             notes: vec![],
             messages: vec![],
@@ -103,6 +105,9 @@ impl SupervisorHost for Host {
     async fn checkpoint(&mut self, checkpoint: &Checkpoint) -> io::Result<()> {
         self.has_nudged = checkpoint.nudges > 0;
         self.submitted |= self.submit_at == Some(checkpoint.state);
+        if self.fail_checkpoint {
+            return Err(io::Error::other("checkpoint mirror unavailable"));
+        }
         Ok(())
     }
     async fn cleanup(&mut self) -> io::Result<()> {
@@ -753,4 +758,194 @@ async fn a_parked_run_outlasts_its_wall_cap_and_resumes_in_the_same_session() {
     );
     let checkpoint = Checkpoint::read(&run_dir).unwrap().unwrap();
     assert!(checkpoint.parked_ms >= 10_000, "{}", checkpoint.parked_ms);
+}
+
+// Regression: git bookkeeping used to tear down a busy session after a single timeout.
+#[test]
+fn git_probe_timeouts_never_end_a_live_session() {
+    if std::env::var_os("SLUICE_SLOW_GIT_CHILD").is_none() {
+        use std::os::unix::fs::PermissionsExt;
+        let shim = tempfile::tempdir().unwrap();
+        fs::write(shim.path().join("git"), "#!/bin/sh\nif test -f block-git; then exec /bin/sleep 60; fi\nexec /usr/bin/git \"$@\"\n").unwrap();
+        fs::set_permissions(shim.path().join("git"), fs::Permissions::from_mode(0o755)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "supervisor::git_probe_timeouts_never_end_a_live_session",
+                "--nocapture",
+            ])
+            .env("SLUICE_SLOW_GIT_CHILD", "1")
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    shim.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            for block_after in [0, 1, 2] {
+                let scratch = Scratch::new();
+                let mut cfg = config(&scratch);
+                cfg.limits.quiet = Duration::from_millis(10);
+                cfg.limits.reminder = Duration::from_millis(10);
+                let git = std::process::Command::new("/usr/bin/git")
+                    .args(["init", "-q"])
+                    .current_dir(&cfg.cwd)
+                    .status()
+                    .unwrap();
+                assert!(git.success());
+                assert!(
+                    std::process::Command::new("/usr/bin/git")
+                        .args([
+                            "-c",
+                            "user.name=Test",
+                            "-c",
+                            "user.email=test@example.invalid",
+                            "commit",
+                            "-qm",
+                            "baseline",
+                            "--allow-empty"
+                        ])
+                        .current_dir(&cfg.cwd)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+                if block_after == 0 {
+                    fs::write(cfg.cwd.join("block-git"), "").unwrap();
+                }
+                let mut host = SlowGitHost {
+                    host: Host::new(),
+                    cwd: cfg.cwd.clone(),
+                    block_after,
+                };
+                let mut engine = ScriptedEngine::new(happy());
+                let result = sluice_process::probe::ProbeTiming {
+                    timeout: Duration::from_millis(30),
+                    backoff: Duration::from_millis(1),
+                }
+                .scope(supervise(
+                    cfg,
+                    &mut engine,
+                    &mut host,
+                    &mut SessionGuard::default(),
+                    None,
+                    &CancellationToken::new(),
+                ))
+                .await
+                .expect("a git observation cannot fail the run");
+                assert!(result.git.is_none());
+                assert_eq!(
+                    host.host
+                        .notes
+                        .iter()
+                        .filter(|note| note.contains("git observation unavailable"))
+                        .count(),
+                    1,
+                    "one owner warning per run"
+                );
+            }
+        });
+}
+struct SlowGitHost {
+    host: Host,
+    cwd: PathBuf,
+    block_after: u32,
+}
+impl SupervisorHost for SlowGitHost {
+    async fn snapshot(&mut self, after: MessageId) -> io::Result<HostSnapshot> {
+        let snapshot = self.host.snapshot(after).await?;
+        if self.host.snapshots >= self.block_after {
+            fs::write(self.cwd.join("block-git"), "")?;
+        }
+        Ok(snapshot)
+    }
+    async fn acknowledge(&mut self, ids: &[MessageId]) -> io::Result<()> {
+        self.host.acknowledge(ids).await
+    }
+    async fn me(&mut self) -> io::Result<String> {
+        self.host.me().await
+    }
+    async fn note(&mut self, body: &str) -> io::Result<()> {
+        self.host.note(body).await
+    }
+    async fn checkpoint(&mut self, checkpoint: &Checkpoint) -> io::Result<()> {
+        self.host.checkpoint(checkpoint).await
+    }
+    async fn cleanup(&mut self) -> io::Result<()> {
+        self.host.cleanup().await
+    }
+}
+
+// Regression: an observation timeout and a failed checkpoint mirror both used to stop the session.
+#[tokio::test]
+async fn unavailable_pane_and_checkpoint_mirror_keep_the_same_session() {
+    let scratch = Scratch::new();
+    let cfg = config(&scratch);
+    let mut frames = happy()[..2].to_vec();
+    for _ in 0..2 {
+        let mut unavailable = frame(None, observation(EngineStatus::Busy, 1, 0));
+        unavailable.error = Some(EngineError {
+            kind: EngineErrorKind::ObservationUnavailable,
+            message: "pane observation timed out".into(),
+            retry_at: None,
+        });
+        frames.push(unavailable);
+    }
+    frames.push(frame(None, observation(EngineStatus::Idle, 1, 1)));
+    let mut engine = ScriptedEngine::new(frames);
+    let mut host = Host::new();
+    host.fail_checkpoint = true;
+    let result = sluice_process::probe::ProbeTiming {
+        timeout: Duration::from_millis(20),
+        backoff: Duration::from_millis(1),
+    }
+    .scope(supervise(
+        cfg,
+        &mut engine,
+        &mut host,
+        &mut SessionGuard::default(),
+        None,
+        &CancellationToken::new(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(result.session, "s-1");
+    assert_eq!(
+        host.notes
+            .iter()
+            .filter(|note| note.contains("engine probe observation unavailable"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        host.notes
+            .iter()
+            .filter(|note| note.contains("checkpoint observation unavailable"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        engine
+            .commands
+            .iter()
+            .filter(|command| matches!(command, EngineCommand::StartFresh))
+            .count(),
+        1
+    );
 }

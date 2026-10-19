@@ -73,6 +73,8 @@ pub enum EngineStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EngineErrorKind {
+    /// A read-only host probe could not answer; keep execution and acceptance intact.
+    ObservationUnavailable,
     Transient,
     MissingSession,
     CapabilityMismatch,

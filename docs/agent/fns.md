@@ -169,3 +169,9 @@ if __name__ == "__main__":
   and agent sessions) at launch; the run's own `SLUICE_*` variables win over both. `verify`
   checks their syntax. Never put secrets in plans.
 - Output types are checked after the function exits; a mismatch fails the step.
+
+Git facts and resource counters are observations. If host load prevents a probe from
+answering after its backoff retries, the fact is unknown (`git` is omitted, resource usage
+is `null`); the run keeps working. Sluice logs the warning and tells the unit's owner once per
+category. A fn start that has not granted dispatch stays queued and retries; cancelling the
+run also cancels that wait. An uncertain accepted start is reconciled before any retry.

@@ -285,6 +285,9 @@ impl ExecutionHost for OsHost {
             }));
         }
         let home = self.home.clone();
+        let queued_identity = launch.identity.clone();
+        let queued_capability = launch.capability.clone();
+        let queued_project = launch.invocation.project;
         let run = launch.identity.run;
         let run_budget = (launch.limits, launch.policy.guardian_memory_bytes);
         let slice =
@@ -315,11 +318,80 @@ impl ExecutionHost for OsHost {
         command
             .env
             .insert("SLUICE_HOME".into(), self.home.clone().into_os_string());
-        match unit.start_once(&command).await {
-            Ok(StartOutcome::Confirmed { .. }) => Ok(LaunchOutcome::Accepted),
-            Ok(StartOutcome::Uncertain { message, .. }) => Ok(LaunchOutcome::Uncertain(message)),
-            Err(e) => Ok(LaunchOutcome::Uncertain(e.to_string())),
-        }
+        // The task retains the start fence while preflight is queued, so adoption cannot
+        // mistake an unstarted service for a lost run. Other ready work can still launch.
+        let home = self.home.clone();
+        tokio::spawn(async move {
+            let link = UnixCoordinatorLink {
+                path: home.join("coordinator.sock"),
+                capability: queued_capability.clone(),
+            };
+            let mut warned = false;
+            let mut delay = Duration::from_millis(100);
+            loop {
+                let live = rusqlite::Connection::open_with_flags(home.join("sluice.db"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .and_then(|sql| sql.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE attempt_id=?1 AND phase<>'terminal' AND cancel_requested=0)", [queued_identity.attempt.to_string()], |row| row.get::<_, bool>(0)));
+                if matches!(live, Ok(false)) {
+                    return;
+                }
+                match unit.start_once(&command).await {
+                    Ok(StartOutcome::Confirmed { .. }) => return,
+                    Ok(StartOutcome::Uncertain { message, .. }) => {
+                        tracing::warn!(%run, %message, "guardian start requires adoption");
+                        return;
+                    }
+                    Err(error) => {
+                        if !warned {
+                            warned = true;
+                            let body = format!(
+                                "guardian start preflight unavailable; start is queued: {error}"
+                            );
+                            let dir = home.join("runs").join(run.to_string());
+                            if let Ok(mut log) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(dir.join("stderr.log"))
+                            {
+                                use std::io::Write;
+                                let _ = writeln!(log, "warning: {body}");
+                            }
+                            let request = CoordinatorCommand::Callback {
+                                identity: queued_identity.clone(),
+                                request: Box::new(sluice_model::rpc::RpcRequest {
+                                    protocol: 1,
+                                    request_id: sluice_model::rpc::RequestId(format!(
+                                        "probe-{run}-guardian-start"
+                                    )),
+                                    run_capability: Some(queued_capability.clone()),
+                                    command: sluice_model::commands::CommandRequest::Say(
+                                        sluice_model::commands::Say {
+                                            project: ProjectSelector::Id(queued_project),
+                                            to: String::new(),
+                                            body,
+                                            data: None,
+                                            run: Some(run),
+                                            me: None,
+                                            owner: false,
+                                        },
+                                    ),
+                                }),
+                            };
+                            let _ = sluice_process::probe::retry(|| async {
+                                link.request(request.clone())
+                                    .await
+                                    .map(|_| ())
+                                    .map_err(io::Error::other)
+                            })
+                            .await;
+                        }
+                        tracing::warn!(%run, %error, "guardian start queued");
+                        tokio::time::sleep(delay).await;
+                        delay = (delay * 2).min(Duration::from_secs(30));
+                    }
+                }
+            }
+        });
+        Ok(LaunchOutcome::Accepted)
     }
 }
 fn launch_attempt(home: &Path, run: RunId) -> Result<AttemptId, PublicError> {

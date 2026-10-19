@@ -80,6 +80,7 @@ pub struct DeliveryAck {
 pub struct CompletionJournal {
     pub limits: RunLimits,
     pub guardian_memory_bytes: u64,
+    /// None when accounting could not be observed, independently of the payload result.
     pub usage: Option<RunUsage>,
     pub protocol: u16,
     pub identity: AttemptKey,
@@ -96,7 +97,6 @@ impl CompletionJournal {
     pub fn validate(&self, expected: &AttemptKey) -> io::Result<()> {
         if self.limits.validate().is_err()
             || self.guardian_memory_bytes == 0
-            || (self.usage.is_none() && !matches!(self.result, PayloadResult::Lost(_)))
             || self.protocol != PROTOCOL_VERSION
             || &self.identity != expected
             || self.completion_id.is_empty()

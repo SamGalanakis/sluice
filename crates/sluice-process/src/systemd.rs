@@ -184,8 +184,7 @@ impl TransientService {
         } else {
             None
         };
-        // Reserve the launch attempt before querying or starting its unit.
-        self.attempted = true;
+        // A failed preflight query has not attempted a launch and is safe to retry.
         let existing = self.query().await?;
         if existing.load_state != "not-found" {
             return Ok(StartOutcome::Confirmed {
@@ -232,6 +231,9 @@ impl TransientService {
             command.arg(assignment);
         }
         command.arg("--").arg(&spec.program).args(&spec.args);
+        // Reserve before the helper can send a start to the manager. From here onward,
+        // a timeout is ambiguous and may only be reconciled, never replayed.
+        self.attempted = true;
         let result = manager_start(command, spec.start_fence.as_ref()).await;
         match result {
             Ok(_) => match self.query().await {
@@ -272,7 +274,7 @@ impl TransientService {
                 "--property=LoadState,ActiveState,SubState,ControlGroup,MainPID",
             ])
             .arg(&self.name);
-        let output = manager_output(command).await?;
+        let output = manager_probe(command).await?;
         parse_state(
             &self.name,
             &String::from_utf8(output.stdout).map_err(io::Error::other)?,
@@ -348,9 +350,7 @@ async fn manager_start(
     Ok(output)
 }
 
-async fn manager_output(command: Command) -> io::Result<Output> {
-    // Environment assignments can contain credentials. Never format full argv.
-    let program = command.get_program().to_string_lossy().into_owned();
+fn manager_command(command: Command) -> tokio::process::Command {
     let mut command = tokio::process::Command::from(command);
     // `systemctl --user` finds the manager through XDG_RUNTIME_DIR, which a scrubbed
     // environment may lack.
@@ -360,6 +360,22 @@ async fn manager_output(command: Command) -> io::Result<Output> {
             format!("/run/user/{}", rustix::process::getuid().as_raw()),
         );
     }
+    command
+}
+async fn manager_probe(command: Command) -> io::Result<Output> {
+    let output = crate::probe::output(&mut manager_command(command)).await?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "systemd observation failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(output)
+}
+async fn manager_output(command: Command) -> io::Result<Output> {
+    // Environment assignments can contain credentials. Never format full argv.
+    let program = command.get_program().to_string_lossy().into_owned();
+    let mut command = manager_command(command);
     command.stdin(Stdio::null()).kill_on_drop(true);
     let output = tokio::time::timeout(Duration::from_secs(10), command.output())
         .await
@@ -397,7 +413,7 @@ impl AppliedLimits {
             "--property=ControlGroup",
             unit,
         ]);
-        let output = manager_output(show).await?;
+        let output = manager_probe(show).await?;
         let state = String::from_utf8_lossy(&output.stdout);
         let field = |key: &str| {
             state
@@ -509,14 +525,17 @@ pub async fn enforce_run_limits(
     if wrong.is_empty() {
         return Ok(applied);
     }
-    Err(io::Error::other(format!(
-        "{unit} does not hold its execution limits after set-property ({}): {}",
-        match repaired {
-            Ok(_) => "accepted".to_owned(),
-            Err(error) => error.to_string(),
-        },
-        wrong.join("; ")
-    )))
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "{unit} does not hold its execution limits after set-property ({}): {}",
+            match repaired {
+                Ok(_) => "accepted".to_owned(),
+                Err(error) => error.to_string(),
+            },
+            wrong.join("; ")
+        ),
+    ))
 }
 
 /// One home's workload budget. Services that coordinate runs do not join it.
@@ -572,7 +591,7 @@ impl WorkloadSlice {
             "--value",
             &self.name,
         ]);
-        let output = manager_output(show).await?;
+        let output = manager_probe(show).await?;
         let group = String::from_utf8_lossy(&output.stdout).trim().to_owned();
         Ok(group
             .starts_with('/')
@@ -617,7 +636,7 @@ impl WorkloadSlice {
             "--property=ControlGroup",
             &self.name,
         ]);
-        let output = manager_output(show).await?;
+        let output = manager_probe(show).await?;
         let state = String::from_utf8_lossy(&output.stdout);
         let field = |key: &str| state.lines().find_map(|line| line.strip_prefix(key));
         if field("LoadState=") != Some("loaded") {

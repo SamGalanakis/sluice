@@ -490,7 +490,20 @@ code alone, and is not automatically retried. Completion keeps `RunUsage` with
 `memory_peak_bytes`, `oom_kills`, `pids_limit_hits` (failed forks summed over the payload's
 leaves, the most any sample saw), `memory_max_hits` (`memory.events` `max`) and
 `cpu_throttled_usec`; ordinary cancellation and settlement rules still decide an already
-accepted cancel or settlement.
+accepted cancel or settlement. Resource accounting is an observation: read failures retry
+three times with exponential backoff, then record usage as unknown (`null`) and leave the
+payload running. Subsequent samples back off up to 64 s and recover when reads work again.
+A missing final sample never changes a successful payload result. The guardian warns in the
+run log and says once to its unit's owner per observation category. Limit enforcement and
+cleanup still require their own kernel evidence; unknown counters do not imply exhaustion.
+
+Before dispatch is granted, a failed fn start stays queued with exponential backoff (100 ms
+to 30 s), while cancellation remains responsive. Retrying requires both an empty payload
+subtree and no recorded continuation grant. After the launcher's Hello, waiting for the
+grant or its acknowledgement has no scheduling deadline: EOF or cancellation ends that
+wait, so delayed host setup never invalidates an otherwise healthy launch. A limit-readback timeout also queues dispatch until verification can complete; a definite
+limit mismatch still refuses dispatch. An uncertain
+accepted start is reconciled, never replayed. A deferred start is logged and told to its owner once.
 
 **Limit notices.** Hitting a limit is told to whoever must act on it. Every 5 s the scheduler
 reads each executing run's payload counters from its cgroup's event files (`memory.events`
@@ -2687,7 +2700,19 @@ workspace does not exist yet (a worktree added from the same repository shares i
 workspace that is gone or lacks the baseline when the run ends leaves `git` out and says so
 in the run's notes, never failing the run. sluice does not guess the workspace from where
 commits landed: an agent may commit in several trees, so only the input says which is the
-lane's. A failed session is an `agent_failure` error with its `kind` and `session`. Agent fns
+lane's. `git` is omitted when the baseline or final facts could not be observed. Git baseline,
+quiet-worktree and final-fact probes retry three times with exponential backoff (10 s per
+attempt, waits of 100 and 200 ms). A persistent observation failure leaves the fact unknown,
+warns in the run log and says once to the unit's owner for that category; it never fails or
+stops the session. Quiet CPU observations behave the same, and unknown activity cannot
+justify a quiet warning. Quiet notes are suppressed during observed background work.
+Engine version/help and read-only pane probes also retry. An unavailable startup probe
+queues preflight; an unavailable live pane observation leaves the same session running and
+backs off to 30 s. Unknown observation time does not count as evidence of a stall, missed
+turn start or idle session. A definite missing capability still refuses startup.
+Checkpoint mirror notifications also retry and degrade to a warning; the local durable
+checkpoint remains required for safe delivery. A failed session is an `agent_failure` error
+with its `kind` and `session`. Agent fns
 retry a transient failure up to 3 times, 600 s apart, resuming the session; a rate limit whose
 reset the engine reported waits until just after that reset instead.
 After resuming, the supervisor sends `Your session was interrupted (<cause>). Continue your
