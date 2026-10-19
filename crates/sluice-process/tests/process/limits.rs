@@ -99,6 +99,9 @@ async fn resource_limits_share_sibling_budget_and_isolate_neighboring_run() {
             matches!(outcome, StartOutcome::Confirmed { .. }),
             "{mode}: {outcome:?}"
         );
+        if mode == "threads" {
+            fs::write(home.path().join("threads/confirmed"), b"confirmed").unwrap();
+        }
     }
     wait_file(&home.path().join("survivor/ready")).await;
     wait_file(&home.path().join("victim/evidence.json")).await;
@@ -319,6 +322,8 @@ fn resource_worker() {
                 "usage": groups.payload().resource_usage().unwrap(),
             });
             fs::write(dir.join("evidence.json"), serde_json::to_vec(&evidence).unwrap()).unwrap();
+            // Stay live until the parent has observed the transient service's start.
+            wait_file(&dir.join("confirmed")).await;
             return;
         }
         if victim {
