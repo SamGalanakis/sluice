@@ -125,6 +125,7 @@ fn config(scratch: &Scratch) -> SupervisorConfig {
         home: scratch.0.clone(),
         run_dir: scratch.0.join("run"),
         cwd,
+        workspace: None,
         engine: "fake".into(),
         task: "the task".into(),
         required: vec!["word".into()],

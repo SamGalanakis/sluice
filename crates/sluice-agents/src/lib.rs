@@ -130,6 +130,7 @@ impl<F: AgentFactory> AgentFnHost<F> {
         }
         environment.config.task.clone_from(&request.task);
         environment.config.cwd.clone_from(&request.cwd);
+        environment.config.workspace.clone_from(&request.workspace);
         environment.config.session.clone_from(&request.session);
         environment.config.model.clone_from(&request.model);
         environment.config.required = request.required.clone();
@@ -260,9 +261,14 @@ pub async fn settled_outputs(
         .as_str()
         .unwrap_or_default()
         .to_owned();
-    let git = git::facts(&request.cwd, checkpoint["head_before"].as_str())
-        .await
-        .map_err(|e| format!("git facts of {}: {e}", request.cwd.display()))?;
+    let git = match &request.workspace {
+        Some(workspace) => git::workspace_facts(workspace, checkpoint["head_before"].as_str())
+            .await
+            .unwrap_or(None),
+        None => git::facts(&request.cwd, checkpoint["head_before"].as_str())
+            .await
+            .map_err(|e| format!("git facts of {}: {e}", request.cwd.display()))?,
+    };
     let model = request
         .model
         .clone()
@@ -310,6 +316,8 @@ pub struct AgentBuiltinRequest {
     pub name: String,
     pub engine: String,
     pub cwd: PathBuf,
+    /// The `workspace` input: the git worktree the work lands in when it is not `cwd`.
+    pub workspace: Option<PathBuf>,
     pub task: String,
     pub session: Option<String>,
     /// The `model` input; `None` runs the engine default.
@@ -426,14 +434,19 @@ impl AgentBuiltinRequest {
             retry.backoff = std::time::Duration::try_from_secs_f64(seconds)
                 .map_err(|_| bad("invalid SLUICE_BACKOFF"))?;
         }
+        let cwd = PathBuf::from(if name == "decide.llm" {
+            string("cwd")?.unwrap_or_else(|| ".".into())
+        } else {
+            required("cwd")?
+        });
+        let workspace = string("workspace")?
+            .filter(|w| !w.trim().is_empty())
+            .map(|w| cwd.join(w));
         Ok(Self {
             name: name.into(),
             engine,
-            cwd: PathBuf::from(if name == "decide.llm" {
-                string("cwd")?.unwrap_or_else(|| ".".into())
-            } else {
-                required("cwd")?
-            }),
+            cwd,
+            workspace,
             task: prompt::build(&text, &values, &ctx),
             session: string("session")?,
             model,

@@ -9,8 +9,8 @@ use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 use sluice_model::{
     attempt::{
-        AttemptNote, Ended, Finishing, GitSeen, PreviousAttempt, VALUE_CUT, cut_strings,
-        short_release,
+        AttemptNote, Ended, Finishing, GitSeen, Memo, MemoKind, PreviousAttempt, VALUE_CUT,
+        cut_strings, short_release,
     },
     commands::{
         CompletionActionConflict, CompletionActionOutcome, CompletionActionTarget,
@@ -398,7 +398,20 @@ pub fn reserve(
     // takes messages on its live feed unless this run's frozen inputs turn it off.
     let listens = step.signature.inputs.contains_key("listen")
         && request.inputs.0.get("listen").map(|v| v.as_value()) != Some(&Value::Bool(false));
-    let frozen = json!({"declaration":plans::step_declaration(tx.sql(),context.project,&step.id)?,"inputs":request.inputs,"effective_inputs":effective,"returns":returns,"declared":declared,"item_count":request.item_count,"provenance":request.provenance,"listens":listens,"limits":request.limits,"policy":request.admission});
+    let mut frozen = json!({"declaration":plans::step_declaration(tx.sql(),context.project,&step.id)?,"inputs":request.inputs,"effective_inputs":effective,"returns":returns,"declared":declared,"item_count":request.item_count,"provenance":request.provenance,"listens":listens,"limits":request.limits,"policy":request.admission});
+    // Reserving clears the step's progress; the run keeps it for its note (SPEC §7.4).
+    if !scatter
+        && let Some((progress, at, run)) = tx
+            .sql()
+            .query_row(
+                "SELECT progress,progress_at,progress_run FROM steps WHERE project_id=?1 AND step_id=?2 AND progress IS NOT NULL AND progress_run IS NOT NULL",
+                params![context.project.to_string(), request.step.as_str()],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?)),
+            )
+            .optional()?
+    {
+        frozen["previous_progress"] = json!({"progress": serde_json::from_str::<Value>(&progress)?, "at": at, "run": run});
+    }
     let compatible = !scatter
         || old_hash.as_deref() == Some(&request.inputs_hash.to_string())
             && old_total == request.item_count.map(plans::sql_counter).transpose()?;
@@ -1656,14 +1669,80 @@ pub fn attempt_note(
             (latest, count + 1)
         }
     };
-    let previous = previous
+    let mut previous = previous
         .map(|run| previous_attempt(sql, project, step, &run))
         .transpose()?
         .flatten();
+    if let Some(previous) = &mut previous {
+        previous.memo = memo(sql, project, step, current)?;
+    }
     Ok(AttemptNote {
         number: attempt as u64,
         previous,
         worktree: None,
+    })
+}
+
+/// Where the step's agent was before `current` (or before its next run): the later of the
+/// last say or ask an earlier run of the step sent to a session or the owner, and the step's
+/// last progress (which `current`'s reservation cleared and froze).
+fn memo(
+    sql: &rusqlite::Connection,
+    project: ProjectId,
+    step: &StepId,
+    current: Option<RunId>,
+) -> Result<Option<Memo>> {
+    let current = current.map(|r| r.to_string());
+    let message: Option<Memo> = sql
+        .query_row(
+            "SELECT run_id,at,\"to\",body FROM messages WHERE project_id=?1 AND thread='step-'||?2 AND \"from\"=?2 AND run_id IS NOT NULL
+             AND run_id IS NOT ?3 AND reply_to IS NULL AND (\"to\"='owner' OR substr(\"to\",1,1)='@')
+             ORDER BY id DESC LIMIT 1",
+            params![project.to_string(), step.as_str(), current],
+            |r| {
+                Ok(Memo::new(
+                    MemoKind::Message,
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    &r.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+    let progress: Option<(String, Option<String>, String)> = match &current {
+        Some(run) => sql
+            .query_row(
+                "SELECT json_extract(a.request,'$.previous_progress.progress'),json_extract(a.request,'$.previous_progress.at'),json_extract(a.request,'$.previous_progress.run')
+                 FROM runs r JOIN attempts a USING(attempt_id) WHERE r.run_id=?1 AND json_type(a.request,'$.previous_progress') IS NOT NULL",
+                [run],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?,
+        None => sql
+            .query_row(
+                "SELECT progress,progress_at,progress_run FROM steps WHERE project_id=?1 AND step_id=?2 AND progress IS NOT NULL AND progress_run IS NOT NULL",
+                params![project.to_string(), step.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?,
+    };
+    let progress = progress.map(|(progress, at, run)| {
+        Memo::new(
+            MemoKind::Progress,
+            run,
+            at.unwrap_or_default(),
+            None,
+            &progress,
+        )
+    });
+    Ok(match (message, progress) {
+        (Some(message), Some(progress)) => Some(if progress.at > message.at {
+            progress
+        } else {
+            message
+        }),
+        (message, progress) => message.or(progress),
     })
 }
 
@@ -1773,6 +1852,7 @@ fn previous_attempt(
             .then(|| cut_strings(&Value::Object(shown), VALUE_CUT)),
         submitted: submitted.map(|s| cut_strings(&s, VALUE_CUT)),
         git,
+        memo: None,
     }))
 }
 

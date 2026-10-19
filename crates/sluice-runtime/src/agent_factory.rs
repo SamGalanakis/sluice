@@ -582,6 +582,7 @@ impl AgentFactory for Factory {
             .map_err(invalid)?
             .flatten()
             .map(|c| PreviousSession {
+                messaged: !c.delivery.acknowledged_messages().is_empty(),
                 engine: c.engine,
                 cwd: c.cwd,
                 session: c.session,
@@ -637,6 +638,7 @@ impl AgentFactory for Factory {
                 home: self.home.clone(),
                 run_dir: directory,
                 cwd: request.cwd,
+                workspace: request.workspace,
                 engine: request.engine,
                 task: request.task,
                 required: request.required,
@@ -956,8 +958,8 @@ async fn launch_note(
             return None;
         }
     };
-    let cwd = inputs.0.get("cwd").and_then(|v| v.as_value().as_str());
-    note.worktree = sluice_agents::git::worktree_of(cwd).await;
+    let input = |name: &str| inputs.0.get(name).and_then(|v| v.as_value().as_str());
+    note.worktree = sluice_agents::git::worktree_of(input("cwd"), input("workspace")).await;
     Some(note.text())
 }
 fn callback_header(this: &std::path::Path) -> String {

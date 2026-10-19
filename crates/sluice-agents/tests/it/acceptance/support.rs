@@ -137,6 +137,7 @@ pub fn config(root: &Path, engine: &str) -> SupervisorConfig {
         home: root.into(),
         run_dir: root.join("run"),
         cwd,
+        workspace: None,
         engine: engine.into(),
         task: "Labelled scratch acceptance task".into(),
         required: vec!["word".into()],
@@ -282,6 +283,7 @@ pub async fn scenario(name: &str, engine_name: &str) {
         }
         "feedback_resume" => {
             cfg.previous = Some(PreviousSession {
+                messaged: false,
                 engine: engine_name.into(),
                 cwd: cfg.cwd.clone(),
                 session: Some("acceptance-session".into()),
@@ -334,6 +336,7 @@ pub async fn scenario(name: &str, engine_name: &str) {
         "session_cwd_mismatch" => cfg.session = Some("acceptance-session".into()),
         "engine_mismatch" | "predecessor_cwd_mismatch" => {
             cfg.previous = Some(PreviousSession {
+                messaged: false,
                 engine: if name == "engine_mismatch" {
                     "other"
                 } else {

@@ -101,6 +101,39 @@ pub struct PreviousAttempt {
     pub outputs: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<GitSeen>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memo: Option<Memo>,
+}
+
+/// Where the step's agent was: the later of the last `say` or `ask` an earlier run of the step
+/// sent its owner and the step's last progress (`step_progress`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Memo {
+    pub kind: MemoKind,
+    pub run: String,
+    pub at: String,
+    /// The message's recipient.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// The message's body, or the progress as JSON, cut to LINE_CUT characters.
+    pub text: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoKind {
+    Message,
+    Progress,
+}
+impl Memo {
+    pub fn new(kind: MemoKind, run: String, at: String, to: Option<String>, text: &str) -> Self {
+        Self {
+            kind,
+            run,
+            at,
+            to,
+            text: cut_line(text.trim(), LINE_CUT),
+        }
+    }
 }
 
 /// The step's `cwd` as git sees it now.
@@ -247,6 +280,17 @@ impl AttemptNote {
                         None => {}
                     }
                     lines.push(format!("{text}."));
+                }
+                if let Some(memo) = &previous.memo {
+                    let what = match (memo.kind, &memo.to) {
+                        (MemoKind::Message, Some(to)) => format!("your last message to {to}"),
+                        (MemoKind::Message, None) => "your last message".to_owned(),
+                        (MemoKind::Progress, _) => "your last progress".to_owned(),
+                    };
+                    lines.push(format!(
+                        "Where you were ({what}, run {}, {}): {}",
+                        memo.run, memo.at, memo.text
+                    ));
                 }
             }
         }

@@ -165,7 +165,11 @@ pub async fn context(
         .map_err(|e| e.into_public(true))?;
     // The work tree needs git, outside the read snapshot; git absent or slow only says so.
     if let Some(mut note) = note {
-        note.worktree = sluice_agents::git::worktree_of(context["inputs"]["cwd"].as_str()).await;
+        note.worktree = sluice_agents::git::worktree_of(
+            context["inputs"]["cwd"].as_str(),
+            context["inputs"]["workspace"].as_str(),
+        )
+        .await;
         let mut value = serde_json::to_value(&note).map_err(storage)?;
         value["note"] = json!(note.text());
         context["attempt"] = value;

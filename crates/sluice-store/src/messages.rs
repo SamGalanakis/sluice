@@ -1349,6 +1349,62 @@ pub fn advance_cursor(
     Ok(MessageId(through))
 }
 
+/// A message a run of `step` acknowledged is in that session, so no later run is assigned it
+/// again: the step's cursor moves over each message after it that some run of the step's
+/// generation has acknowledged, and stops at the first one none has (it is assigned again).
+/// A stale run of an older work generation never moves it. Scattered items each have their
+/// own session and keep the step's batch window instead.
+fn delivered_through(
+    tx: &mut WriteTransaction<'_>,
+    project: ProjectId,
+    step: &str,
+    info: &RunInfo,
+) -> Result<()> {
+    let p = project.to_string();
+    let Some(cursor) = tx
+        .sql()
+        .query_row(
+            "SELECT delivery_cursor FROM steps WHERE project_id=?1 AND step_id=?2 AND generation=?3 AND work_generation=?4",
+            params![p, step, info.generation, info.work],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+    else {
+        return Ok(());
+    };
+    let runs: Vec<String> = tx
+        .sql()
+        .prepare("SELECT run_id FROM runs WHERE project_id=?1 AND step_id=?2 AND generation=?3")?
+        .query_map(params![p, step, info.generation], |r| r.get(0))?
+        .collect::<std::result::Result<_, _>>()?;
+    let messages: Vec<i64> = tx
+        .sql()
+        .prepare("SELECT id FROM messages WHERE project_id=?1 AND \"to\"=?2 AND id>?3 ORDER BY id")?
+        .query_map(params![p, step, cursor], |r| r.get(0))?
+        .collect::<std::result::Result<_, _>>()?;
+    let mut acknowledged = tx.sql().prepare(
+        "SELECT EXISTS(SELECT 1 FROM message_deliveries WHERE project_id=?1 AND run_id=?2 AND message_id=?3 AND acknowledged_at IS NOT NULL)",
+    )?;
+    let mut through = cursor;
+    'messages: for id in messages {
+        for run in &runs {
+            if acknowledged.query_row(params![p, run, id], |r| r.get::<_, bool>(0))? {
+                through = id;
+                continue 'messages;
+            }
+        }
+        break;
+    }
+    drop(acknowledged);
+    if through > cursor {
+        tx.sql().execute(
+            "UPDATE steps SET delivery_cursor=max(delivery_cursor,?1) WHERE project_id=?2 AND step_id=?3 AND generation=?4 AND work_generation=?5",
+            params![through, p, step, info.generation, info.work],
+        )?;
+    }
+    Ok(())
+}
+
 /// Dispatch acknowledgements are independent of RunStarted's batch cursor.
 pub fn acknowledge_delivery(
     tx: &mut WriteTransaction<'_>,
@@ -1356,8 +1412,13 @@ pub fn acknowledge_delivery(
     run: RunId,
     id: MessageId,
 ) -> Result<()> {
-    run_info(tx.sql(), project, run)?;
+    let info = run_info(tx.sql(), project, run)?;
     if tx.sql().execute("UPDATE message_deliveries SET acknowledged_at=coalesce(acknowledged_at,?1) WHERE project_id=?2 AND run_id=?3 AND message_id=?4",params![now()?,project.to_string(),run.to_string(),id.0])?==0 { return Err(missing("message was not assigned to this run")); }
+    if let Some(step) = &info.step
+        && info.item < 0
+    {
+        delivered_through(tx, project, step, &info)?;
+    }
     let owns_answer:Option<i64>=tx.sql().query_row(
         "SELECT q.message_id FROM question_attachments q JOIN messages m ON m.project_id=q.project_id AND m.id=q.message_id WHERE q.project_id=?1 AND q.run_id=?2 AND q.detached_at IS NULL AND m.resolved_by=?3 AND m.closed_at IS NULL",
         params![project.to_string(),run.to_string(),id.0],|r|r.get(0)).optional()?;

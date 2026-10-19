@@ -667,6 +667,7 @@ async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
     cfg.invocation = sluice_model::ids::InvocationId::new();
     cfg.run_dir = h.scratch.0.join("resumed");
     cfg.previous = Some(sluice_agents::supervisor::PreviousSession {
+        messaged: false,
         engine: "claude".into(),
         cwd: cfg.cwd.clone(),
         session: Some(result.session.clone()),

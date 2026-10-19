@@ -276,6 +276,10 @@ pub struct PreviousSession {
     pub engine: String,
     pub cwd: PathBuf,
     pub session: Option<String>,
+    /// The session was given messages. They are in it and are never assigned again, so a
+    /// fresh session would never see them.
+    #[serde(default)]
+    pub messaged: bool,
 }
 #[derive(Debug, Clone)]
 pub struct SupervisorConfig {
@@ -286,6 +290,8 @@ pub struct SupervisorConfig {
     pub home: PathBuf,
     pub run_dir: PathBuf,
     pub cwd: PathBuf,
+    /// The `workspace` input: where git facts are read when the work lands outside `cwd`.
+    pub workspace: Option<PathBuf>,
     pub engine: String,
     pub task: String,
     pub required: Vec<String>,
@@ -518,7 +524,11 @@ pub fn select_session(
         Some("") => None,
         Some(s) => Some(s.into()),
         None => previous
-            .filter(|p| p.engine == engine && p.cwd == cwd && assigned.through > assigned.after)
+            .filter(|p| {
+                p.engine == engine
+                    && p.cwd == cwd
+                    && (assigned.through > assigned.after || p.messaged)
+            })
             .and_then(|p| p.session.clone())
             .filter(|s| !s.is_empty()),
     }
@@ -1054,7 +1064,9 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                 &config.cwd,
                 config.assigned,
             ),
-            head_before: git::head(&config.cwd).await.map_err(invalid)?,
+            head_before: git::baseline(&config.cwd, config.workspace.as_deref())
+                .await
+                .map_err(invalid)?,
             started_ms: clock_ms().map_err(invalid)?,
             state: State::Boot,
             delivery,
@@ -1242,15 +1254,28 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
         }
         return Err(error);
     }
+    let before = machine.checkpoint.head_before.clone();
+    let before = before.as_deref();
+    let git = match &config.workspace {
+        // A workspace that is gone or holds no baseline leaves the facts out, never the result.
+        Some(workspace) => match git::workspace_facts(workspace, before).await {
+            Ok(facts) => facts,
+            Err(error) => {
+                let note = format!("git facts of {} left out: {error}", workspace.display());
+                eprintln!("{note}");
+                machine.checkpoint.notes.push(note);
+                None
+            }
+        },
+        None => git::facts(&config.cwd, before).await.map_err(invalid)?,
+    };
     machine.checkpoint.state = State::Done;
     persist(&machine, &config, host).await?;
     Ok(AgentResult {
         final_text: machine.checkpoint.final_text,
         report: None,
         session: machine.checkpoint.session.unwrap_or_default(),
-        git: git::facts(&config.cwd, machine.checkpoint.head_before.as_deref())
-            .await
-            .map_err(invalid)?,
+        git,
         notes: machine.checkpoint.notes,
         model: model.map(|m| m.id),
     })

@@ -195,13 +195,20 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
 - Each agent's task starts with `## Previous attempt`: "None: this is the first attempt at
   this step.", or which attempt it is, how the one before ended (failed with its error,
   cancelled by whom and why, settled), what it submitted (or output), the git head it left and
-  whether it left changes, and the `git status` of its `cwd` now (count and up to 20 paths).
+  whether it left changes, where it was ("Where you were": its last `say` or `ask` to you,
+  or its last `step_progress`, whichever is later), and the `git status` of its `cwd` (or
+  `workspace`) now (count and up to 20 paths).
   `step_context` (`sluice me`) carries the same as `attempt: {number, previous?, worktree?,
   note}`. Look at what an earlier attempt left before redoing or undoing it.
 - Every agent function takes `session` and returns `session`: bind a later step's `session` to
   an earlier step's `session` output to continue that same agent (or `fn_call` it with the
   session to follow up by hand). An unbound `session` may still resume the previous attempt's
-  session after a retry — the agent fns decide from the assigned messages and `prev_run`.
+  session after a retry — the agent fns decide from the assigned messages and `prev_run`: a
+  run resumes when it was assigned messages or the previous session was given any. A message
+  a session acknowledged is never given to the step's later runs again.
+- An agent that works in its own worktree while `cwd` is the repository root: bind
+  `workspace` to that worktree's path. Its `git` facts and the note's `git status` then come
+  from the workspace, not `cwd`.
 
 ## Choosing a model
 `agent.codex` and `agent.devin` return `log`, the path to a readable run record of

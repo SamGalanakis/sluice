@@ -204,8 +204,11 @@ pub async fn dispatch_ext<H: ExecutionHost>(
                 .await
                 .map_err(public)?;
             if let Some(mut note) = note {
-                note.worktree =
-                    sluice_agents::git::worktree_of(out["inputs"]["cwd"].as_str()).await;
+                note.worktree = sluice_agents::git::worktree_of(
+                    out["inputs"]["cwd"].as_str(),
+                    out["inputs"]["workspace"].as_str(),
+                )
+                .await;
                 out["attempt"] = attempt_value(&note).map_err(storage)?;
             }
             data(out)?

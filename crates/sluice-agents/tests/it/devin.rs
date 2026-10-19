@@ -549,6 +549,7 @@ fn supervisor_config(root: &Scratch) -> SupervisorConfig {
         home: root.0.clone(),
         run_dir: root.join("run"),
         cwd,
+        workspace: None,
         engine: "devin".into(),
         task: "Submit the declared word blue and finish.".into(),
         required: vec!["word".into()],
@@ -1322,6 +1323,7 @@ async fn supervisor_devin_inline_hooks_submit_live_compact_and_resume() {
     cfg.invocation = sluice_model::ids::InvocationId::new();
     cfg.run_dir = root.join("resumed");
     cfg.previous = Some(sluice_agents::supervisor::PreviousSession {
+        messaged: false,
         engine: "devin".into(),
         cwd: cfg.cwd.clone(),
         session: Some(result.session.clone()),

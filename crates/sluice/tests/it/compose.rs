@@ -936,12 +936,13 @@ run(main)
 }
 
 const FAKE: &str = r#"#!/usr/bin/python3
-import os, sys, json, socket, struct, pathlib
+import os, sys, json, socket, struct, pathlib, subprocess
 home = pathlib.Path(os.environ['SLUICE_HOME'])
 config = json.loads(pathlib.Path(sys.argv[2]).read_text())
 run = os.environ['SLUICE_RUN_ID']
 state = {'status':'starting','turns_started':0,'turns_completed':0,'waiting':None,'background_work':[],'compactions':0,'final_text':'fake done','session_id':'fake-session','acknowledged':[],'not_accepted':[],'progress':0,'error':None}
 messages = 0
+spoke = False
 submitted = False
 transient = False
 sessions = home / 'fake-sessions.json'
@@ -949,7 +950,7 @@ data = json.loads(sessions.read_text()) if sessions.exists() else {}
 data['fake-session'] = os.getcwd()
 sessions.write_text(json.dumps(data))
 def rpc(command):
-    raw = json.dumps({'protocol':1,'request_id':str(state['progress']),'run_capability':os.environ['SLUICE_RUN_CAPABILITY'],'command':command}).encode()
+    raw = json.dumps({'protocol':1,'request_id':str(state['progress'])+command['command'],'run_capability':os.environ['SLUICE_RUN_CAPABILITY'],'command':command}).encode()
     with socket.socket(socket.AF_UNIX) as s:
         s.connect(os.environ['SLUICE_CONTROL_SOCKET']); s.sendall(struct.pack('>I',len(raw))+raw)
         def read(n):
@@ -974,6 +975,14 @@ for line in sys.stdin:
             state['acknowledged'].append(cmd['id']);state['turns_started']+=1;state['status']='busy';state['progress']+=1
         if cmd['command']=='request_exit': state['status']='exited'
     if req['operation']=='observe' and state['turns_started']:
+        if not spoke:
+            spoke=True
+            if config.get('say'):
+                rpc({'command':'say','args':{'project':{'kind':'id','value':os.environ['SLUICE_PROJECT_ID']},'run':run,'body':config['say']}})
+            if config.get('progress'):
+                rpc({'command':'step_progress','args':{'project':{'kind':'id','value':os.environ['SLUICE_PROJECT_ID']},'step':os.environ['SLUICE_STEP'],'run':run,'outputs':config['progress']}})
+            if config.get('commit_in'):
+                subprocess.run(['/usr/bin/git','-C',config['commit_in'],'-c','user.name=t','-c','user.email=t@t','commit','-q','--allow-empty','-m','work'],check=True)
         if config.get('fatal'):
             state['error']={'kind':'fatal','message':'fixture terminal error'}
         elif config.get('marker_transient_once') and not (home/'turn-committed.injected').exists():
@@ -1889,9 +1898,20 @@ fn agent_attempt_context_live_delivery_and_feedback() {
                     .success()
             );
         }
-        std::fs::write(repo.join("left.txt"), "left by hand").unwrap();
-        g.script(json!({"fatal":true}));
-        g.plan(json!({"work":{"run":"agent.run","in":bindings(json!({"engine":"fake","cwd":repo,"spec":"Submit summary and finish"})),"outputs":{"summary":"string"}}}));
+        // The lane works in its own worktree of the repository: git facts come from there.
+        let wt = g.temp.path().join("wt");
+        assert!(
+            Command::new("/usr/bin/git")
+                .current_dir(&repo)
+                .args(["worktree", "add", "-q", "--detach"])
+                .arg(&wt)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(wt.join("left.txt"), "left by hand").unwrap();
+        g.script(json!({"fatal":true,"progress":{"summary":"half way: gate queued"}}));
+        g.plan(json!({"work":{"run":"agent.run","in":bindings(json!({"engine":"fake","cwd":repo,"workspace":wt,"spec":"Submit summary and finish"})),"outputs":{"summary":"string"}}}));
         let _lease = g.lease();
         let failed = g.terminal("work");
         assert_eq!(failed["status"], "failed", "{failed}");
@@ -1912,16 +1932,35 @@ fn agent_attempt_context_live_delivery_and_feedback() {
         assert!(
             text.contains(&format!(
                 "The working directory {} has 1 uncommitted path now: ?? left.txt.",
-                repo.display()
+                wt.display()
             )),
             "{text}"
         );
-        g.script(json!({"outputs":{"summary":"done"}}));
+        g.script(json!({"outputs":{"summary":"done"},"commit_in":wt}));
         g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":null,"reason":"again","author":"test"}}));
         g.wait(|g| g.status()["steps"]["work"]["run_ids"][0] != first.as_str());
         let second = g.run("work");
-        assert_eq!(g.terminal("work")["status"], "succeeded");
+        let done = g.terminal("work");
+        assert_eq!(done["status"], "succeeded", "{done}");
+        let head = |dir: &Path| {
+            let out = Command::new("/usr/bin/git")
+                .current_dir(dir)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap();
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        assert_eq!(done["outputs"]["git"]["head_after"], head(&wt).as_str());
+        assert_eq!(done["outputs"]["git"]["head_before"], head(&repo).as_str());
+        assert_eq!(done["outputs"]["git"]["commits"], 1, "{done}");
         let text = task(&second);
+        // The progress its reservation cleared is where the agent was.
+        assert!(
+            text.contains(&format!(
+                "Where you were (your last progress, run {first}, "
+            )) && text.contains(r#"{"summary":"half way: gate queued"}"#),
+            "{text}"
+        );
         assert!(
             text.contains(&format!(
                 "This is attempt 2 at this step. The previous one (run {first}, "
@@ -1933,7 +1972,7 @@ fn agent_attempt_context_live_delivery_and_feedback() {
     }
     g.next_project();
     {
-        g.script(json!({"outputs":{"summary":"fake output"},"wait_message":true,"marker_transient_once":true}));
+        g.script(json!({"outputs":{"summary":"fake output"},"wait_message":true,"marker_transient_once":true,"say":"gate queued, landing next"}));
         g.plan(json!({"work":agent(&g),"after":{"run":"core.external","after":["work"],"outputs":{"ok":"boolean"}}}));
         // A step that will run once `work` is done: its next run is assigned the message.
         let queued = g.say("after", "for the next run");
@@ -1958,34 +1997,63 @@ fn agent_attempt_context_live_delivery_and_feedback() {
             matches!(&refused, Err(sluice_model::error::PublicError::Conflict { message, .. }) if message.contains("settled")),
             "{refused:?}"
         );
-        let delivered = g
-            .events()
-            .into_iter()
-            .filter(|e| {
-                (e["command"]["command"] == "deliver_text" || e["command"]["command"] == "steer")
-                    && e["command"]["id"]["kind"] == "message"
-                    && e["command"]["id"]["id"] == id
-            })
-            .count();
-        assert_eq!(delivered, 1, "events: {:?}", g.events());
-        g.script(json!({"outputs":{"summary":"resumed output"}}));
+        let delivered = |g: &Gate| {
+            let mut ids: Vec<i64> = g
+                .events()
+                .into_iter()
+                .filter(|e| {
+                    (e["command"]["command"] == "deliver_text"
+                        || e["command"]["command"] == "steer")
+                        && e["command"]["id"]["kind"] == "message"
+                })
+                .filter_map(|e| e["command"]["id"]["id"].as_i64())
+                .collect();
+            ids.sort();
+            ids
+        };
+        let resumes = |g: &Gate| {
+            g.events()
+                .iter()
+                .filter(|e| e["command"]["command"] == "resume")
+                .count()
+        };
+        assert_eq!(delivered(&g), [id], "events: {:?}", g.events());
+        let resumed = resumes(&g);
+        g.script(json!({"outputs":{"summary":"resumed output"},"wait_message":true}));
         g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":"Continue the existing session","reason":"feedback","author":"@test"}}));
         g.wait(|g| g.status()["steps"]["work"]["run_ids"][0] != first);
         let second = g.terminal("work");
         assert_eq!(second["status"], "succeeded", "{second}");
         assert_eq!(second["outputs"]["summary"], "resumed output");
         assert_eq!(second["outputs"]["session"], value["outputs"]["session"]);
-        assert!(
-            g.events()
-                .iter()
-                .any(|e| e["command"]["command"] == "resume")
-        );
+        assert_eq!(resumes(&g), resumed + 1);
         let run = g.run("work");
         let launch: Value = serde_json::from_slice(
-            &std::fs::read(g.home.join("runs").join(run).join("runtime.json")).unwrap(),
+            &std::fs::read(g.home.join("runs").join(&run).join("runtime.json")).unwrap(),
         )
         .unwrap();
         assert_eq!(launch["prev_run"], first);
+        // The resumed session already has the live message: only the retry's is new.
+        let feedback = delivered(&g);
+        assert!(
+            feedback.len() == 2 && feedback[0] == id && feedback[1] > id,
+            "{feedback:?}"
+        );
+        // Its own last say heads the resumed task as where it was.
+        let text = std::fs::read_to_string(g.home.join("runs").join(&run).join("task.md")).unwrap();
+        assert!(
+            text.contains(&format!("run {first}, "))
+                && text.contains("): gate queued, landing next"),
+            "{text}"
+        );
+        // A retry with nothing new resumes the session that has its messages and gives
+        // it none of them again.
+        g.script(json!({"outputs":{"summary":"resumed output"}}));
+        g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":null,"reason":"cap","author":"@test"}}));
+        g.wait(|g| g.status()["steps"]["work"]["run_ids"][0] != run.as_str());
+        assert_eq!(g.terminal("work")["status"], "succeeded");
+        assert_eq!(resumes(&g), resumed + 2);
+        assert_eq!(delivered(&g), feedback, "events: {:?}", g.events());
     }
 }
 

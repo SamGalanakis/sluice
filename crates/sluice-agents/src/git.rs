@@ -112,6 +112,29 @@ pub async fn facts(cwd: &Path, before: Option<&str>) -> io::Result<Option<GitFac
     }))
 }
 
+/// The baseline of a run whose work lands in `workspace` (the agent fns' `workspace` input):
+/// its HEAD when it is already a git work tree, else `cwd`'s, which a worktree the agent adds
+/// from the same repository shares.
+pub async fn baseline(cwd: &Path, workspace: Option<&Path>) -> io::Result<Option<String>> {
+    if let Some(workspace) = workspace.filter(|w| w.is_dir())
+        && let Some(head) = head(workspace).await?
+    {
+        return Ok(Some(head));
+    }
+    head(cwd).await
+}
+
+/// `facts` of `workspace`, which may not be a git work tree yet (or any more): None then.
+pub async fn workspace_facts(
+    workspace: &Path,
+    before: Option<&str>,
+) -> io::Result<Option<GitFacts>> {
+    if !workspace.is_dir() || head(workspace).await?.is_none() {
+        return Ok(None);
+    }
+    facts(workspace, before).await
+}
+
 /// How long the work-tree summary may take before the launch goes on without it.
 pub const WORKTREE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -187,13 +210,23 @@ pub async fn worktree(
     })
 }
 
-/// The note's work tree for a step whose `cwd` input is `cwd`: `git` from PATH, bounded by
-/// WORKTREE_TIMEOUT. None when there is no cwd or it is not a git work tree.
-pub async fn worktree_of(cwd: Option<&str>) -> Option<sluice_model::attempt::WorkTree> {
+/// The note's work tree for a step whose `cwd` input is `cwd` and `workspace` input is
+/// `workspace`: the workspace (relative to `cwd`) when it is a directory, else `cwd`; `git`
+/// from PATH, bounded by WORKTREE_TIMEOUT. None when there is no cwd or it is not a git work
+/// tree.
+pub async fn worktree_of(
+    cwd: Option<&str>,
+    workspace: Option<&str>,
+) -> Option<sluice_model::attempt::WorkTree> {
     let cwd = cwd.filter(|c| !c.trim().is_empty())?;
-    let state = worktree(Path::new("git"), Path::new(cwd), WORKTREE_TIMEOUT).await?;
+    let dir = workspace
+        .filter(|w| !w.trim().is_empty())
+        .map(|w| Path::new(cwd).join(w))
+        .filter(|w| w.is_dir())
+        .unwrap_or_else(|| cwd.into());
+    let state = worktree(Path::new("git"), &dir, WORKTREE_TIMEOUT).await?;
     Some(sluice_model::attempt::WorkTree {
-        cwd: cwd.to_owned(),
+        cwd: dir.to_string_lossy().into_owned(),
         state,
     })
 }

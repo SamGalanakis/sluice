@@ -335,6 +335,7 @@ Choosing a model).",
                     ("model", "Any?"),
                     ("session", "string?"),
                     ("listen", "boolean?"),
+                    ("workspace", "string?"),
                 ]),
                 outputs: vec![
                     ("result", ty("string")),
@@ -365,6 +366,7 @@ readable run record, copied to the log input when given, or null if no log exist
                     ("session", ty("string?")),
                     ("report_path", ty("string?")),
                     ("listen", ty("boolean?")),
+                    ("workspace", ty("string?")),
                 ],
                 outputs: vec![
                     ("log", ty("string?")),
@@ -399,6 +401,7 @@ readable run record, copied to the log input when given, or null if no log exist
                     ("session", "string?"),
                     ("report_path", "string?"),
                     ("listen", "boolean?"),
+                    ("workspace", "string?"),
                 ]),
                 outputs: vec![
                     ("log", ty("string?")),
@@ -425,6 +428,7 @@ directory.",
                     ("notes", "string?"),
                     ("session", "string?"),
                     ("listen", "boolean?"),
+                    ("workspace", "string?"),
                 ]),
                 outputs: vec![
                     ("summary", ty("string")),
@@ -457,6 +461,7 @@ the engine's models before the session starts; the result's model names what ran
                     ("session", ty("string?")),
                     ("report_path", ty("string?")),
                     ("listen", ty("boolean?")),
+                    ("workspace", ty("string?")),
                 ],
                 outputs: vec![
                     ("final", ty("string")),

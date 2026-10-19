@@ -1117,14 +1117,20 @@ that previous attempt from what it keeps anyway (the run, its result, its submis
   characters and the line to 1,200;
 - when its outputs include a `git` value (the agent fns' result), the head it ended at, the
   commits since its baseline and whether it left uncommitted changes;
+- where the agent was ("Where you were (…): …"): the later of the last `say` or `ask` a run of
+  the step sent to a session or the owner (its body) and the step's last `step_progress` (as
+  JSON), cut to 1,200 characters, with its run and time. Reserving a run clears the step's
+  progress (§6.4), so the attempt freezes it (`previous_progress` in its request) for this;
 - when the step's inputs bind a `cwd` that is a git work tree, `git status --porcelain` of it
-  now: how many entries and the first 20 (`M path`, `?? path`). git runs with a 3-second limit;
+  now: how many entries and the first 20 (`M path`, `?? path`); of `workspace` instead when the
+  step binds one and it is a directory (relative to `cwd`). git runs with a 3-second limit;
   git absent, failing or too slow is said in the note (`unavailable: <why>`) and never fails
   the launch or the call.
 
 `step_context` carries it as `attempt: {number, previous?, worktree?, note}` (`previous`:
-`{run, started, finished, ended, error?, by?, reason?, submitted?, outputs?, git?}`;
-`worktree`: `{cwd, git: "clean" | "dirty" | "unavailable", count?, paths?, reason?}`; `note`:
+`{run, started, finished, ended, error?, by?, reason?, submitted?, outputs?, git?, memo?}`,
+`memo`: `{kind: "message" | "progress", run, at, to?, text}`; `worktree`: `{cwd, git: "clean" |
+"dirty" | "unavailable", count?, paths?, reason?}`, `cwd` the directory it checked; `note`:
 the text), for a running step about its current run, otherwise about the attempt its next run
 would follow; a scattered step has none. Every agent's task starts with `note` (§15), computed
 at launch.
@@ -1153,7 +1159,7 @@ submission, and unless the step runs an agent fn itself (`agent.run`, `agent.cod
 signal would have given: the submission plus the agent fn's own, derived from what the run's
 supervisor checkpointed (`runs/<run>/native.json`: the session, the agent's last message, the
 git baseline, read by field so an older release's checkpoint reads too), the git facts of its
-`cwd` now, the model its `model` input composes (a retired string `model` leaves `model` out,
+`cwd` (or `workspace`, §15) now, the model its `model` input composes (a retired string `model` leaves `model` out,
 as the run's frozen outputs then lack it) and, for `agent.codex` and `agent.devin`, the engine
 log as their `log` output. They are checked against the run's frozen outputs before anything
 is written; when they cannot be derived or do not fit, the call is refused (`invalid`) with
@@ -1239,11 +1245,17 @@ the same totals as `needs`. A run that ends releases its leases. Grants and rele
 Each step keeps a delivery cursor: the last message id addressed to it that a run of it was
 given. Reserving a run assigns it every message to the step after the cursor and records the
 range on the run; the live feed continues from the end of that range, and the cursor advances
-once the run has started. Every run of a scattered step gets the step's messages.
+once the run has started. It also advances over messages the live feed hands a run once the
+run acknowledges them (its session has them): over each message after the cursor that a run
+of the step has acknowledged, up to the first that none has, which the next run is assigned
+again. So a resumed or retried run is never given a message its step's session already has.
+Every run of a scattered step gets the step's messages: its items' acknowledgements leave the
+cursor alone.
 `runs/<run>/messages.json` shows the assigned range. Each run records `prev_run`, the step's (or
 item's) previous run, seen as `SLUICE_PREV_RUN` and `ctx.prev_run`. Agent fns resume the
 previous session when a bound `session` says so, or when `session` is unbound, the run was
-assigned messages, `prev_run` recorded a session, and the engine and cwd are unchanged;
+assigned messages or the previous session was given any (they are in it, and no later run is
+given them again), `prev_run` recorded a session, and the engine and cwd are unchanged;
 `session: ""` always starts fresh.
 
 ### 7.9 Adoption and completion
@@ -2577,7 +2589,14 @@ owner answers, §8.1; `to` a step, an `@session` or `owner` reaches someone else
 with the run's id, and their flag form, §14), watches the session through the
 engine's hooks, nudges a stalled session, and ends it when the agent is done. The result carries
 `session` (pass it back to resume) and `git` facts `{head_before, head_after, commits, dirty}`
-of `cwd`. A failed session is an `agent_failure` error with its `kind` and `session`. Agent fns
+of `cwd`, or of `workspace` when it is bound: the git work tree the work lands in when it is
+not `cwd` (a lane that runs in the repository and works in its own worktree), relative to
+`cwd`. Its baseline is the workspace's HEAD when the run starts, or `cwd`'s while the
+workspace does not exist yet (a worktree added from the same repository shares it); a
+workspace that is gone or lacks the baseline when the run ends leaves `git` out and says so
+in the run's notes, never failing the run. sluice does not guess the workspace from where
+commits landed: an agent may commit in several trees, so only the input says which is the
+lane's. A failed session is an `agent_failure` error with its `kind` and `session`. Agent fns
 retry a transient failure up to 3 times, 600 s apart, resuming the session; a rate limit whose
 reset the engine reported waits until just after that reset instead.
 After resuming, the supervisor sends `Your session was interrupted (<cause>). Continue your
@@ -2927,11 +2946,11 @@ run Claude's default.
 | `message.reply` | `to_message: int`, `body?`, `answer?` | `id: int`, `receipt: Any` | §8 |
 | `message.wait` | `thread`, `since: int?`, `to?`, `timeout: int?` (300), `wake?` | `messages: Any[]`, `last_seq: int` | waits for messages on a thread after `since`; `wake: "questions"` holds the rest |
 | `message.post` | `body`, `thread?`, `to?`, `needs_reply?`, `reply_to?`, `answer?`, `title?`, `ui?`, `input?`, `data?`, `from?`, `wait?` | `id: int`, `reply: Any?` | retired; plans that name it run through the `message_post` translation (§8), only in a run |
-| `agent.claude` | `cwd`, `prompt`, `model: Any?` (Opus, default `{"type":"normal","model":"opus","effort":"high"}`), `session?`, `listen?` | `result`, `model`, `session`, `git` | open |
-| `agent.codex` | `cwd`, `spec`, `model: Any?` (default `{"type":"normal","model":"sol","effort":"high"}`), `log?`, `session?`, `report_path?`, `listen?` | `log: string?`, `final`, `model`, `report?`, `session`, `git` | open |
-| `agent.devin` | `cwd`, `spec`, `model: Any?` (default `{"type":"normal","model":"swe-2","effort":"high"}`; or a fusion), `log?`, `session?`, `report_path?`, `listen?` | `log: string?`, `final`, `model`, `report?`, `session`, `git` | open |
-| `agent.review` | `cwd`, `base`, `standards`, `notes?`, `session?`, `listen?` | `summary`, `sha`, `commits: int`, `session`, `git` | open; reviews and fixes a branch diff with Claude |
-| `agent.run` | `engine` (`devin`, `codex`, `claude`), `cwd`, `spec`, `model: Any?`, `session?`, `report_path?`, `listen?` | `final`, `model`, `report?`, `session`, `git` | open |
+| `agent.claude` | `cwd`, `prompt`, `model: Any?` (Opus, default `{"type":"normal","model":"opus","effort":"high"}`), `session?`, `listen?`, `workspace?` | `result`, `model`, `session`, `git` | open |
+| `agent.codex` | `cwd`, `spec`, `model: Any?` (default `{"type":"normal","model":"sol","effort":"high"}`), `log?`, `session?`, `report_path?`, `listen?`, `workspace?` | `log: string?`, `final`, `model`, `report?`, `session`, `git` | open |
+| `agent.devin` | `cwd`, `spec`, `model: Any?` (default `{"type":"normal","model":"swe-2","effort":"high"}`; or a fusion), `log?`, `session?`, `report_path?`, `listen?`, `workspace?` | `log: string?`, `final`, `model`, `report?`, `session`, `git` | open |
+| `agent.review` | `cwd`, `base`, `standards`, `notes?`, `session?`, `listen?`, `workspace?` | `summary`, `sha`, `commits: int`, `session`, `git` | open; reviews and fixes a branch diff with Claude |
+| `agent.run` | `engine` (`devin`, `codex`, `claude`), `cwd`, `spec`, `model: Any?`, `session?`, `report_path?`, `listen?`, `workspace?` | `final`, `model`, `report?`, `session`, `git` | open |
 | `decide.llm` | `question`, `context: Any?`, `options: string[]`, `threshold: float?` | `choice`, `p: float`, `confident: boolean` | 2 retries, 30 s apart |
 | `git.head` | `path` | `branch`, `sha` | |
 | `git.merge` | `repo`, `source`, `target`, `message?`, `push: boolean?` | `merged: boolean`, `sha?`, `conflicts: string[]` | in a temporary worktree; conflicts are data |
