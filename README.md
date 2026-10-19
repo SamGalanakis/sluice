@@ -52,6 +52,18 @@ The launcher runs the selected release with its home. Every command uses `SLUICE
 is set, else the installation's selected home (`SLUICE_INSTALL_DIR`, default
 `~/.local/share/sluice/install`), and stops with an error when there is neither.
 
+### Memory
+
+Runs share the host with your agents, editor and services, so sluice caps them. By default all
+runs together may use min(70 GiB, 55% of the host's memory) (`execution.total.memory` in the
+home's `config.json`), each run reserves 6 GiB at admission (`defaults.memory`) and is capped at
+10 GiB (`ceilings.memory`). A run also starts only while the host's MemAvailable stays at least
+`execution.host_reserve` (default max(16 GiB, 15% of memory)) above its reservation and memory
+pressure (PSI `some avg10`) is below `execution.memory_pressure_max` (10); otherwise it waits and
+`status` says `held: host memory headroom (…)`. Memory can be made unlimited (`null`) only with
+`"allow_unlimited_memory": true` under `execution`; without it such a config is refused. SPEC.md
+§2.5 has the details.
+
 ## Use
 
 - Dashboard: <http://127.0.0.1:3065/>.

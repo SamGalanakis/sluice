@@ -31,6 +31,8 @@ struct Fake(
     Arc<std::sync::atomic::AtomicBool>,
     /// Each live run's cgroup counters, as the OS host reads them from the event files.
     Arc<Mutex<std::collections::BTreeMap<RunId, sluice_model::RunUsage>>>,
+    /// The host's memory as the OS host reads it from /proc; `None` measures nothing.
+    Arc<Mutex<Option<sluice_runtime::headroom::HostMemory>>>,
 );
 impl Fake {
     async fn launched(&self, count: usize) -> Vec<Launch> {
@@ -81,6 +83,12 @@ impl ExecutionHost for Fake {
     }
     async fn usage(&self, run: RunId, _: &str) -> Option<sluice_model::RunUsage> {
         self.3.lock().unwrap().get(&run).copied()
+    }
+    async fn host_memory(
+        &self,
+        _: HomeId,
+    ) -> Option<std::io::Result<sluice_runtime::headroom::HostMemory>> {
+        self.4.lock().unwrap().map(Ok)
     }
 }
 fn request(v: Value) -> CommandRequest {
@@ -2682,4 +2690,106 @@ async fn home_budget_changes_apply_live_and_a_limit_hit_reaches_the_owner_once()
         ),
         "{next:?}"
     );
+}
+
+/// Bugs (incident 2026-10-19): with about 1 GB of RAM free and 64% of CPU in memory reclaim,
+/// admission kept starting runs because their reservations fit the home total. A run now waits
+/// while MemAvailable less the host reserve cannot hold its reservation, while memory pressure
+/// is high, or while the workload's memory in use leaves no room in the total; status says
+/// why, the owner is told once, and it starts when the host recovers.
+#[tokio::test]
+async fn admission_holds_for_host_memory_and_admits_when_it_recovers() {
+    let home = home::ScratchHome::new().unwrap();
+    std::fs::write(
+        home.path().join("config.json"),
+        json!({"execution":{
+            "defaults":{"memory":"64MiB"},
+            "ceilings":{"memory":"128MiB"},
+            "total":{"memory":"1GiB"},
+            "guardian_memory":"16MiB",
+            "host_reserve":"1GiB",
+            "memory_pressure_max":10
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    let fake = Fake::default();
+    let host = |available: u64, pressure: f64, workload: u64| {
+        *fake.4.lock().unwrap() = Some(sluice_runtime::headroom::HostMemory {
+            available_bytes: available,
+            pressure_some_avg10: Some(pressure),
+            workload_bytes: workload,
+        });
+    };
+    // 50 MiB above the reserve; a run needs 64 MiB plus its guardian's 16 MiB.
+    host((1 << 30) + (50 << 20), 0.0, 0);
+    let b = Coordinator::open(home.path().into(), Catalog::fixtures(), fake.clone())
+        .await
+        .unwrap();
+    let CommandReply::Project(p)=b.command(request(json!({"command":"project_create","args":{"name":"p","description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap()else{panic!("project")};
+    let p = p.project_id;
+    let selector = json!({"kind":"id","value":p});
+    let add = |step: &str| {
+        request(
+            json!({"command":"plan_edit","args":{"project":selector,"ops":[
+        {"op":"step.add","step":step,"spec":{"run":"fixture.submit","in":{"value":{"default":1}},"outputs":{"submitted":"boolean"}}}
+    ],"start":true,"dry_run":false,"reason":"test","author":"@lead","me":"@lead"}}),
+        )
+    };
+    let waiting = async |step: &str| {
+        let status = data_of(&b, json!({"command":"status","args":{"project":selector,"all":true,"selection":{"steps":null,"tags":null}}})).await;
+        status["steps"][step]["waiting"].to_string()
+    };
+    b.command(add("first")).await.unwrap();
+    b.acquire_scheduler("memory".into()).await.unwrap();
+    for _ in 0..2 {
+        assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 0);
+    }
+    let held = waiting("first").await;
+    assert!(
+        held.contains("held: host memory headroom (available 50 MiB, need 80 MiB)"),
+        "{held}"
+    );
+    let notices = b
+        .reads()
+        .snapshot(move |sql| {
+            let mut statement = sql.prepare("SELECT \"to\",data FROM messages WHERE project_id=?1 AND \"from\"='sluice' AND json_extract(data,'$.execution_limit.limit')='host_memory'")?;
+            let rows = statement
+                .query_map([p.to_string()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].0, "@lead");
+    assert!(notices[0].1.contains("available 50 MiB"), "{notices:?}");
+
+    // The host recovers: the run starts at the next check.
+    host(3 << 30, 0.0, 0);
+    assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 1);
+    assert_eq!(fake.launched(1).await.len(), 1);
+
+    // High memory pressure holds the next run however much is available.
+    b.command(add("second")).await.unwrap();
+    host(3 << 30, 25.0, 0);
+    assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 0);
+    let held = waiting("second").await;
+    assert!(
+        held.contains("held: host memory pressure (some avg10 25.0%, limit 10%)"),
+        "{held}"
+    );
+    host(3 << 30, 1.0, 0);
+    assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 1);
+    assert_eq!(fake.launched(2).await.len(), 2);
+
+    // Runs that grew past their reservations leave no room in the total: hold.
+    b.command(add("third")).await.unwrap();
+    host(3 << 30, 1.0, 1 << 30);
+    assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 0);
+    let held = waiting("third").await;
+    assert!(held.contains("held: workload memory"), "{held}");
+    host(3 << 30, 1.0, 64 << 20);
+    assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 1);
+    assert_eq!(fake.launched(3).await.len(), 3);
 }

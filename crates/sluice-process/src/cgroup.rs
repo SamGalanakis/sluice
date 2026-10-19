@@ -83,7 +83,7 @@ impl RunCgroups {
     }
 }
 /// The service's caps: the payload's plus the guardian's share; unlimited stays unlimited.
-pub(crate) fn service_limits(limits: RunLimits, guardian_memory_bytes: u64) -> io::Result<Limits> {
+pub fn service_limits(limits: RunLimits, guardian_memory_bytes: u64) -> io::Result<Limits> {
     let overflow = || {
         io::Error::new(
             io::ErrorKind::InvalidInput,

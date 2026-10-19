@@ -215,7 +215,9 @@ impl TransientService {
             command.arg(format!("--slice={}", slice.name));
         }
         if let Some(budget) = budget {
-            for property in properties(budget) {
+            let properties = properties(budget);
+            tracing::info!(unit = %self.name, ?properties, "starting a run's service with its limits");
+            for property in properties {
                 command.arg(format!("--property={property}"));
             }
         }
@@ -350,6 +352,14 @@ async fn manager_output(command: Command) -> io::Result<Output> {
     // Environment assignments can contain credentials. Never format full argv.
     let program = command.get_program().to_string_lossy().into_owned();
     let mut command = tokio::process::Command::from(command);
+    // `systemctl --user` finds the manager through XDG_RUNTIME_DIR, which a scrubbed
+    // environment may lack.
+    if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
+        command.env(
+            "XDG_RUNTIME_DIR",
+            format!("/run/user/{}", rustix::process::getuid().as_raw()),
+        );
+    }
     command.stdin(Stdio::null()).kill_on_drop(true);
     let output = tokio::time::timeout(Duration::from_secs(10), command.output())
         .await
@@ -361,6 +371,152 @@ async fn manager_output(command: Command) -> io::Result<Output> {
         )));
     }
     Ok(output)
+}
+
+/// A run service's limits as they are in force: systemd's properties and the kernel's files in
+/// its cgroup. Unlimited reads `infinity` (systemd) or `max` (kernel).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppliedLimits {
+    pub memory_max: String,
+    pub memory_swap_max: String,
+    pub tasks_max: String,
+    pub cgroup_memory_max: String,
+    pub cgroup_memory_swap_max: String,
+    pub cgroup_pids_max: String,
+    pub cgroup_cpu_max: String,
+}
+impl AppliedLimits {
+    async fn read(unit: &str) -> io::Result<Self> {
+        let mut show = Command::new("/usr/bin/systemctl");
+        show.args([
+            "--user",
+            "show",
+            "--property=MemoryMax",
+            "--property=MemorySwapMax",
+            "--property=TasksMax",
+            "--property=ControlGroup",
+            unit,
+        ]);
+        let output = manager_output(show).await?;
+        let state = String::from_utf8_lossy(&output.stdout);
+        let field = |key: &str| {
+            state
+                .lines()
+                .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let group = field("ControlGroup");
+        if !group.starts_with('/') {
+            return Err(io::Error::other(format!("{unit} has no cgroup")));
+        }
+        let dir = PathBuf::from("/sys/fs/cgroup").join(group.trim_start_matches('/'));
+        let file = |name: &str| -> io::Result<String> {
+            Ok(std::fs::read_to_string(dir.join(name))?.trim().to_owned())
+        };
+        Ok(Self {
+            memory_max: field("MemoryMax"),
+            memory_swap_max: field("MemorySwapMax"),
+            tasks_max: field("TasksMax"),
+            cgroup_memory_max: file("memory.max")?,
+            cgroup_memory_swap_max: file("memory.swap.max")?,
+            cgroup_pids_max: file("pids.max")?,
+            cgroup_cpu_max: file("cpu.max")?,
+        })
+    }
+    /// Every way these differ from `caps`, empty when they match. The kernel keeps memory.max
+    /// rounded down to a whole page.
+    pub fn mismatches(&self, caps: Limits) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut differ = |name: &str, actual: &str, expected: String| {
+            out.push(format!("{name} is {actual}, expected {expected}"));
+        };
+        let number =
+            |n: Option<u64>, unlimited: &str| n.map_or(unlimited.into(), |n| n.to_string());
+        let memory = caps.memory_bytes;
+        if self.memory_max != number(memory, "infinity") {
+            differ("MemoryMax", &self.memory_max, number(memory, "infinity"));
+        }
+        let page = rustix::param::page_size() as u64;
+        let kernel_memory = match memory {
+            None => self.cgroup_memory_max == "max",
+            Some(cap) => self
+                .cgroup_memory_max
+                .parse::<u64>()
+                .is_ok_and(|n| n <= cap && cap - n < page),
+        };
+        if !kernel_memory {
+            differ("memory.max", &self.cgroup_memory_max, number(memory, "max"));
+        }
+        if self.memory_swap_max != "0" {
+            differ("MemorySwapMax", &self.memory_swap_max, "0".into());
+        }
+        if self.cgroup_memory_swap_max != "0" {
+            differ("memory.swap.max", &self.cgroup_memory_swap_max, "0".into());
+        }
+        let tasks = caps.tasks.map(u64::from);
+        if self.tasks_max != number(tasks, "infinity") {
+            differ("TasksMax", &self.tasks_max, number(tasks, "infinity"));
+        }
+        if self.cgroup_pids_max != number(tasks, "max") {
+            differ("pids.max", &self.cgroup_pids_max, number(tasks, "max"));
+        }
+        if !cpu_matches(&self.cgroup_cpu_max, caps.cpu_millis) {
+            let expected = caps
+                .cpu_millis
+                .map_or("max".into(), |n| format!("{n} milli-CPUs"));
+            differ("cpu.max", &self.cgroup_cpu_max, expected);
+        }
+        out
+    }
+}
+/// Whether a kernel `cpu.max` ("quota period" or "max period") grants `millis` (unlimited:
+/// `None`).
+fn cpu_matches(raw: &str, millis: Option<u32>) -> bool {
+    let mut parts = raw.split_whitespace();
+    let quota = parts.next();
+    let period = parts.next().and_then(|v| v.parse::<u64>().ok());
+    match (millis, quota.and_then(|q| q.parse::<u64>().ok()), period) {
+        (None, _, _) => quota == Some("max"),
+        (Some(millis), Some(q), Some(p)) => {
+            u128::from(q) * 1000 == u128::from(p) * u128::from(millis)
+        }
+        _ => false,
+    }
+}
+/// Read back what a run's service has in force and compare it with its frozen budget (the
+/// payload's caps plus the guardian's share). A mismatch is applied again with
+/// `systemctl set-property` and read back once more; one that persists is an error, and the
+/// caller must not start a payload.
+pub async fn enforce_run_limits(
+    unit: &str,
+    limits: RunLimits,
+    guardian_memory_bytes: u64,
+) -> io::Result<AppliedLimits> {
+    let caps = crate::cgroup::service_limits(limits, guardian_memory_bytes)?;
+    let applied = AppliedLimits::read(unit).await?;
+    let wrong = applied.mismatches(caps);
+    if wrong.is_empty() {
+        return Ok(applied);
+    }
+    tracing::warn!(%unit, mismatches = ?wrong, "run limits not in force; applying them again");
+    let mut update = Command::new("/usr/bin/systemctl");
+    update.args(["--user", "set-property", "--runtime", unit]);
+    update.args(properties(caps));
+    let repaired = manager_output(update).await;
+    let applied = AppliedLimits::read(unit).await?;
+    let wrong = applied.mismatches(caps);
+    if wrong.is_empty() {
+        return Ok(applied);
+    }
+    Err(io::Error::other(format!(
+        "{unit} does not hold its execution limits after set-property ({}): {}",
+        match repaired {
+            Ok(_) => "accepted".to_owned(),
+            Err(error) => error.to_string(),
+        },
+        wrong.join("; ")
+    )))
 }
 
 /// One home's workload budget. Services that coordinate runs do not join it.
@@ -405,6 +561,22 @@ impl WorkloadSlice {
     }
     pub fn name(&self) -> &str {
         &self.name
+    }
+    /// The slice's cgroup directory, or `None` while systemd has not created it.
+    pub async fn control_group(&self) -> io::Result<Option<PathBuf>> {
+        let mut show = Command::new("/usr/bin/systemctl");
+        show.args([
+            "--user",
+            "show",
+            "--property=ControlGroup",
+            "--value",
+            &self.name,
+        ]);
+        let output = manager_output(show).await?;
+        let group = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        Ok(group
+            .starts_with('/')
+            .then(|| PathBuf::from("/sys/fs/cgroup").join(group.trim_start_matches('/'))))
     }
     pub async fn ensure(&self) -> io::Result<()> {
         let _guard = self.lock().await?;
@@ -466,22 +638,7 @@ impl WorkloadSlice {
         let group = field("ControlGroup=").filter(|g| g.starts_with('/'));
         let cpu_matches = group
             .and_then(|g| std::fs::read_to_string(format!("/sys/fs/cgroup{g}/cpu.max")).ok())
-            .is_some_and(|v| {
-                let mut parts = v.split_whitespace();
-                let quota = parts.next();
-                let period = parts.next().and_then(|v| v.parse::<u64>().ok());
-                match (
-                    self.totals.cpu_millis,
-                    quota.and_then(|q| q.parse::<u64>().ok()),
-                    period,
-                ) {
-                    (None, _, _) => quota == Some("max"),
-                    (Some(millis), Some(q), Some(p)) => {
-                        u128::from(q) * 1000 == u128::from(p) * u128::from(millis)
-                    }
-                    _ => false,
-                }
-            });
+            .is_some_and(|v| cpu_matches(&v, self.totals.cpu_millis));
         if memory_matches && tasks_matches && cpu_matches && field("MemorySwapMax=") == Some("0") {
             return Ok(());
         }

@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 pub const GUARDIAN_TASKS: u32 = 64;
 pub const GUARDIAN_CPU_MILLIS: u32 = 100;
+/// What a run with no memory reservation of its own reserves at admission: an opted-in
+/// unlimited run still holds this much of the home total, never only the guardian's share.
+pub const UNLIMITED_MEMORY_RESERVATION: u64 = 4 << 30;
 
 /// One budget level (home total, per-run ceilings or per-run defaults). `None` is unlimited:
 /// it serializes as `null` and is never gated or capped.
@@ -44,7 +47,9 @@ fn within<T: PartialOrd>(value: Option<T>, ceiling: Option<T>) -> bool {
 
 /// A run's frozen budget. `memory_bytes` is what admission reserves; `memory_max_bytes` is the
 /// payload's `memory.max` (the per-run ceiling when the run was admitted). `None` is unlimited:
-/// nothing reserved and the cgroup controller set to `max`.
+/// the cgroup controller set to `max`. A run resolved today always has a memory reservation;
+/// an unlimited one is frozen only by releases before it, and reserves
+/// [`UNLIMITED_MEMORY_RESERVATION`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(from = "RunLimitsWire")]
 pub struct RunLimits {
@@ -122,7 +127,8 @@ impl RunLimits {
 }
 
 /// Capacity a live attempt holds against the home total: its payload's finite limits plus the
-/// guardian's share. An unlimited payload dimension reserves only the guardian's share.
+/// guardian's share. Unlimited CPU and tasks reserve only the guardian's share; unlimited
+/// memory reserves [`UNLIMITED_MEMORY_RESERVATION`] besides it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Reserved {
@@ -136,7 +142,7 @@ impl Reserved {
         Ok(Self {
             memory_bytes: limits
                 .memory_bytes
-                .unwrap_or(0)
+                .unwrap_or(UNLIMITED_MEMORY_RESERVATION)
                 .checked_add(guardian_memory_bytes)
                 .ok_or_else(overflow)?,
             cpu_millis: limits
@@ -327,17 +333,30 @@ pub struct ResourcePolicy {
 /// The shipped home total of tasks: a fork storm stops inside the home's slice, well before the
 /// user's own session runs out of process IDs.
 pub const DEFAULT_TOTAL_TASKS: u32 = 65536;
+/// The shipped home memory total is the smaller of this and [`DEFAULT_TOTAL_MEMORY_PERCENT`] of
+/// the host's memory: the rest is the agents', the editor's and the services' own.
+pub const DEFAULT_TOTAL_MEMORY: u64 = 70 << 30;
+pub const DEFAULT_TOTAL_MEMORY_PERCENT: u64 = 55;
+/// The shipped per-run memory cap (`memory.max`) and reservation.
+pub const DEFAULT_RUN_MEMORY_MAX: u64 = 10 << 30;
+pub const DEFAULT_RUN_MEMORY: u64 = 6 << 30;
 impl ResourcePolicy {
-    /// The shipped policy: the home total is the machine's safety margin (75% of memory, a task
-    /// cap, no CPU quota); a run reserves 8 GiB for admission and may grow to the per-run
-    /// memory ceiling; CPU and tasks are unlimited per run.
+    /// The shipped policy: the home total is min(70 GiB, 55% of memory) with a task cap and no
+    /// CPU quota; a run reserves 6 GiB for admission and is capped at 10 GiB; CPU and tasks
+    /// are unlimited per run. Every value shrinks to fit a small host.
     pub fn for_host(memory_bytes: u64, _cpu_millis: u32) -> Result<Self, String> {
-        let total_memory = memory_bytes / 4 * 3;
+        let total_memory = DEFAULT_TOTAL_MEMORY.min(
+            u64::try_from(
+                u128::from(memory_bytes) * u128::from(DEFAULT_TOTAL_MEMORY_PERCENT) / 100,
+            )
+            .unwrap_or(u64::MAX),
+        );
         let guardian_memory_bytes = (256 << 20).min(total_memory / 8);
-        let ceiling_memory = total_memory.saturating_sub(guardian_memory_bytes);
+        let ceiling_memory =
+            DEFAULT_RUN_MEMORY_MAX.min(total_memory.saturating_sub(guardian_memory_bytes));
         Self {
             defaults: Limits {
-                memory_bytes: Some((8 << 30).min(ceiling_memory)),
+                memory_bytes: Some(DEFAULT_RUN_MEMORY.min(ceiling_memory)),
                 cpu_millis: None,
                 tasks: None,
             },
@@ -394,7 +413,9 @@ impl ResourcePolicy {
         Ok(self)
     }
     /// Home defaults, then project defaults, then the step's or call's override, within the
-    /// per-run ceilings. The run's memory cap is the memory ceiling.
+    /// per-run ceilings. The run's memory cap is the memory ceiling. A run whose memory came
+    /// out unlimited (only under an unlimited ceiling) reserves the home default, or
+    /// [`UNLIMITED_MEMORY_RESERVATION`] when that is unlimited too, within the total's room.
     pub fn resolve(
         &self,
         project: Option<&LimitsOverride>,
@@ -407,8 +428,16 @@ impl ResourcePolicy {
                 return Err("execution limits exceed the installation's per-run ceilings".into());
             }
         }
+        let floor = self
+            .defaults
+            .memory_bytes
+            .unwrap_or(UNLIMITED_MEMORY_RESERVATION.min(
+                self.total.memory_bytes.map_or(u64::MAX, |n| {
+                    n.saturating_sub(self.guardian_memory_bytes).max(1)
+                }),
+            ));
         RunLimits {
-            memory_bytes: limits.memory_bytes,
+            memory_bytes: Some(limits.memory_bytes.unwrap_or(floor)),
             memory_max_bytes: self.ceilings.memory_bytes,
             cpu_millis: limits.cpu_millis,
             tasks: limits.tasks,

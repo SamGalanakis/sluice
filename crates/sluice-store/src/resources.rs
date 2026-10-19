@@ -1509,11 +1509,12 @@ pub fn notify_limit(
             |r| r.get(0),
         )?,
         None => tx.sql().query_row(
-            "SELECT EXISTS(SELECT 1 FROM messages WHERE project_id=?1 AND \"from\"='sluice' AND json_extract(data,'$.execution_limit.step')=?2 AND json_extract(data,'$.execution_limit.since') IS ?3)",
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE project_id=?1 AND \"from\"='sluice' AND json_extract(data,'$.execution_limit.step')=?2 AND json_extract(data,'$.execution_limit.since') IS ?3 AND json_extract(data,'$.execution_limit.limit')=?4)",
             params![
                 project.to_string(),
                 notice.step.as_ref().map(StepId::as_str),
-                notice.since
+                notice.since,
+                notice.limit
             ],
             |r| r.get(0),
         )?,

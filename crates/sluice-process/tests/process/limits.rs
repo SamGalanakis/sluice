@@ -8,7 +8,7 @@ use sluice_process::{
     identity::OwnedProcess,
     signals::{StopPolicy, stop_invocation},
     spawn::PreparedLaunch,
-    systemd::{ServiceCommand, StartOutcome, TransientService, WorkloadSlice},
+    systemd::{ServiceCommand, StartOutcome, TransientService, WorkloadSlice, enforce_run_limits},
 };
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command, time::Duration};
 use tokio_util::sync::CancellationToken;
@@ -181,6 +181,65 @@ async fn resource_limits_share_sibling_budget_and_isolate_neighboring_run() {
         serde_json::from_slice(&fs::read(home.path().join("survivor/evidence.json")).unwrap())
             .unwrap();
     assert_eq!(survivor.oom_kills, 0);
+}
+
+/// Bug: runs started with memory.max=max and nobody noticed until the host was reclaiming
+/// memory (incident 2026-10-19). A run's limits are read back from systemd and the kernel and
+/// must match its frozen budget; a cap lost after start is applied again.
+#[tokio::test]
+async fn a_runs_limits_are_read_back_and_a_lost_cap_is_applied_again() {
+    let slice = WorkloadSlice::new(HomeId::new(), Limits::UNLIMITED).unwrap();
+    let mut units = Units(
+        vec![TransientService::for_test(RunId::new())],
+        slice.name().to_owned(),
+    );
+    let mut spec = ServiceCommand::new("/usr/bin/sleep");
+    spec.args = vec!["30".into()];
+    spec.workload_slice = Some(slice);
+    spec.run_budget = Some((build(), 256 << 20));
+    assert!(matches!(
+        units.0[0].start_once(&spec).await.unwrap(),
+        StartOutcome::Confirmed { .. }
+    ));
+    let unit = units.0[0].name().to_owned();
+    let cap = ((256u64 << 20) + (256 << 20)).to_string();
+    let applied = enforce_run_limits(&unit, build(), 256 << 20).await.unwrap();
+    assert_eq!(
+        (
+            applied.memory_max.as_str(),
+            applied.cgroup_memory_max.as_str()
+        ),
+        (cap.as_str(), cap.as_str())
+    );
+    assert_eq!(
+        (applied.tasks_max.as_str(), applied.cgroup_pids_max.as_str()),
+        ("infinity", "max")
+    );
+    assert!(applied.cgroup_cpu_max.starts_with("max "), "{applied:?}");
+    // A frozen budget the service does not have is a mismatch, named.
+    assert!(
+        applied
+            .mismatches(sluice_process::cgroup::service_limits(capped(), 256 << 20).unwrap())
+            .iter()
+            .any(|m| m.starts_with("MemoryMax is")),
+        "{applied:?}"
+    );
+    // The cap is lost at runtime, as by hand: it is put back and read back again.
+    assert!(
+        Command::new("/usr/bin/systemctl")
+            .args([
+                "--user",
+                "set-property",
+                "--runtime",
+                &unit,
+                "MemoryMax=infinity"
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let repaired = enforce_run_limits(&unit, build(), 256 << 20).await.unwrap();
+    assert_eq!(repaired.cgroup_memory_max, cap);
 }
 
 #[test]

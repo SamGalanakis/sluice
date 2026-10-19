@@ -110,7 +110,12 @@ async fn reconcile_pass<H: ExecutionHost>(
     #[cfg(test)] after_reconcile: &mut impl AsyncFnMut(plans::PlanContext),
 ) -> Result<(), PublicError> {
     loop {
-        let policy = crate::budget::policy(broker.home())?;
+        let (policy, headroom) = crate::budget::execution(broker.home())?;
+        let gate = crate::headroom::Gate::new(
+            broker.host().host_memory(broker.home_id()).await,
+            broker.home(),
+            headroom,
+        );
         let context = broker.context(project).await?;
         let copy = context.clone();
         let lease_owner = owner.to_owned();
@@ -356,6 +361,7 @@ async fn reconcile_pass<H: ExecutionHost>(
             let owner = owner.to_string();
             let home = broker.home_id();
             let policy = policy.clone();
+            let gate = gate.clone();
             // A new batch rereads file fingerprints immediately before enqueue.
             // Continued scatter uses the original frozen contents even after a file changes.
             for entry in fingerprints.0.values().filter(|_| !continuing) {
@@ -389,6 +395,8 @@ async fn reconcile_pass<H: ExecutionHost>(
                 for index in 0..count.unwrap_or(1){
                     if count.is_some() && keep && instances.get(index.to_string()).is_some_and(|v|v["status"]=="succeeded" || continuing && matches!(v["status"].as_str(),Some("running"|"failed"))){continue;}
                     if !resources::budget_fit(tx.sql(), &limits, &policy)?.fits() { break; }
+                    // The host's measured memory, counting the runs this batch already admitted.
+                    if let Some(gate) = &gate && gate.hold(tx.sql(), &limits, &policy)?.is_some() { break; }
                     let mut inputs=inputs.clone();if let Some(name)=&step.scatter {inputs.0.insert(name.clone(),inputs.0[name].as_value().as_array().expect("checked scatter")[index].clone().try_into()?);}
                     let capability=new_capability();let attempt=AttemptId::new();let run=RunId::new();
                     let provenance:JsonMap=serde_json::from_value(json!({"runtime":{"capability":capability,"execution":execution,"admitted_rev":copy.revision},"files":fingerprints}))?;
@@ -450,7 +458,8 @@ async fn reconcile_pass<H: ExecutionHost>(
             }
         }
         if !progressed {
-            record_queues(broker, context, owner).await?;
+            let held = record_queues(broker, context, owner, policy, gate).await?;
+            broker.note_memory_hold(project, held);
             return Ok(());
         }
     }
@@ -563,14 +572,17 @@ async fn fail_ready<H: ExecutionHost>(
         .await
 }
 
+/// Record why each ready step waits; returns whether any waits on the host's memory.
 async fn record_queues<H: ExecutionHost>(
     broker: &Coordinator<H>,
     context: plans::PlanContext,
     owner: &str,
-) -> Result<(), PublicError> {
+    policy: sluice_model::ResourcePolicy,
+    gate: Option<crate::headroom::Gate>,
+) -> Result<bool, PublicError> {
     let owner = owner.to_owned();
-    let policy = crate::budget::policy(broker.home())?;
     broker.writer().write(RetrySafety::Idempotent, move |tx| {
+        let mut memory_held = false;
         lease(tx, &owner)?;
         let state = plans::read_state(tx.sql(), context.project)?;
         for step in context.plan.steps().values() {
@@ -591,15 +603,32 @@ async fn record_queues<H: ExecutionHost>(
             let mut fit = if continuing { resources::Fit { blocked: vec![], reason: String::new() } }
                 else { resources::fits(tx.sql(), context.project, &needs)? };
             let mut physical = false;
+            let mut memory_hold = None;
             if fit.fits() {
                 fit = match crate::budget::resolve(tx.sql(), Some(context.project), step.limits.as_ref(), &policy) {
-                    Ok(limits) => { physical = true; resources::budget_fit(tx.sql(), &limits, &policy)? },
+                    Ok(limits) => {
+                        physical = true;
+                        let fit = resources::budget_fit(tx.sql(), &limits, &policy)?;
+                        match &gate {
+                            Some(gate) if fit.fits() => match gate.hold(tx.sql(), &limits, &policy)? {
+                                // The record keeps the hold's kind; the numbers change every tick
+                                // and go to status and the owner's say instead.
+                                Some(reason) => {
+                                    let kind = reason.split(" (").next().unwrap_or(&reason).to_owned();
+                                    memory_hold = Some(reason);
+                                    resources::Fit { blocked: vec!["host memory".into()], reason: kind }
+                                }
+                                None => fit,
+                            },
+                            _ => fit,
+                        }
+                    },
                     Err(sluice_store::StoreError::Public(PublicError::Invalid { message, .. })) => resources::Fit { blocked: vec!["limits".into()], reason: message },
                     Err(error) => return Err(error),
                 };
             }
             if fit.fits() { continue; }
-            let waiting_on_home = physical.then(|| fit.reason.clone());
+            let waiting_on_home = (physical && memory_hold.is_none()).then(|| fit.reason.clone());
             let event = Event::StepQueued {
                 step: step.id.clone(),
                 needs: serde_json::from_value(json!(needs))?,
@@ -609,6 +638,26 @@ async fn record_queues<H: ExecutionHost>(
             let previous: Option<String> = tx.sql().query_row("SELECT payload FROM records WHERE project_id=?1 AND step_id=?2 AND kind IN ('step.queued','step.status') ORDER BY seq DESC LIMIT 1", (context.project.to_string(), step.id.as_str()), |r| r.get(0)).optional()?;
             if previous.map(|s| serde_json::from_str::<Value>(&s)).transpose()?.as_ref() != Some(&serde_json::to_value(&event)?) {
                 tx.append_record(Some(context.project), event)?;
+            }
+            // A step held for the host's memory is told to its owner once per hold.
+            if let Some(reason) = memory_hold {
+                memory_held = true;
+                let since: String = tx.sql().query_row(
+                    "SELECT min(at) FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.queued'
+                     AND seq > coalesce((SELECT max(seq) FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.status'),0)",
+                    (context.project.to_string(), step.id.as_str()), |r| r.get(0))?;
+                let headroom = gate.as_ref().map(crate::headroom::Gate::headroom).copied();
+                let notice = resources::LimitNotice {
+                    run: None,
+                    step: Some(step.id.clone()),
+                    limit: "host_memory",
+                    value: json!({"host_reserve_bytes": headroom.map(|h| h.host_reserve_bytes), "memory_pressure_max": headroom.map(|h| h.pressure_max)}),
+                    observed: json!(reason),
+                    outcome: "held",
+                    since: Some(since),
+                };
+                let body = format!("Step {} is {reason}. Sluice checks again every {} s and starts it once the host has the room; nothing needs doing unless the host stays short of memory.", step.id, crate::headroom::RECHECK_INTERVAL.as_secs());
+                resources::notify_limit(tx, context.project, &notice, body, false)?;
             }
             // A step that has waited long on the home's execution total is told to its owner once.
             if let Some(reason) = waiting_on_home {
@@ -634,7 +683,7 @@ async fn record_queues<H: ExecutionHost>(
                 }
             }
         }
-        Ok(())
+        Ok(memory_held)
     }).await
 }
 
@@ -703,6 +752,7 @@ pub async fn run<H: ExecutionHost>(
     let mut capacity = tokio::time::interval(CAPACITY_INTERVAL);
     let mut terminal_reaper = tokio::time::interval(Duration::from_millis(500));
     let mut limit_sampler = tokio::time::interval(LIMIT_SAMPLE_INTERVAL);
+    let mut memory_recheck = tokio::time::interval(crate::headroom::RECHECK_INTERVAL);
     let config_path = broker.home().join("config.json");
     let config_stamp =
         |path: &std::path::Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
@@ -760,6 +810,8 @@ pub async fn run<H: ExecutionHost>(
                     dirty.extend(broker.projects().await?);
                 }
             },
+            // A run held for the host's memory waits on no write; check it again.
+            _=memory_recheck.tick()=>{ dirty.extend(broker.memory_holds()); },
             _=limit_sampler.tick()=>{
                 if broker.scheduler_owner().await?.is_some() && let Err(error) = broker.sample_limits().await {
                     tracing::warn!(%error,"execution limit sampling deferred");

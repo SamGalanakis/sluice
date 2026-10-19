@@ -22,6 +22,8 @@ struct FixtureState {
     delivered: Mutex<Vec<MessageId>>,
     checkpoints: Mutex<Vec<JsonMap>>,
     usage: Mutex<sluice_model::RunUsage>,
+    /// What the readback of the service's limits finds wrong, if anything.
+    limits_wrong: Mutex<Option<String>>,
 }
 impl FnHost for FixtureHost {
     async fn invoke(&self, _: FnInvocation) -> Result<JsonMap, PublicError> {
@@ -62,6 +64,14 @@ impl PayloadHost for FixtureHost {
     }
     fn empty_without_payload(&self) -> io::Result<CleanupEvidence> {
         Ok(proof())
+    }
+    async fn verify_limits(&self) -> Result<(), String> {
+        self.state
+            .limits_wrong
+            .lock()
+            .unwrap()
+            .clone()
+            .map_or(Ok(()), Err)
     }
 }
 struct FixtureInvocation {
@@ -652,6 +662,34 @@ async fn exhaustion_settles_once_and_suppresses_requested_retry() {
             matches!(completion.result, PayloadResult::Failed(PublicError::ResourceExhausted {
             resource: sluice_model::ExhaustedResource::Memory, limit, peak: Some(peak), ..
         }) if Some(limit) == args.limits.memory_max_bytes && peak == limit)
+        );
+    });
+}
+
+/// Bug: runs started with memory.max=max and their payloads ran uncapped (incident
+/// 2026-10-19). A service whose limits do not hold after the repair must fail the run before
+/// any payload starts, saying why.
+#[tokio::test]
+async fn limits_not_in_force_fail_the_run_before_its_payload_starts() {
+    let home = tempfile::tempdir().unwrap();
+    let (args, link, host) = setup(home.path());
+    *host.state.limits_wrong.lock().unwrap() =
+        Some("memory.max is max, expected 1342177280".into());
+    let outcome = guardian_main(args.clone(), &link, &host).await.unwrap();
+    assert!(matches!(outcome, GuardianOutcome::Completed(_)));
+    assert_eq!(host.state.starts.load(Ordering::SeqCst), 0);
+    link.with_state(|state| {
+        let completion = state.attempts[&args.invocation.run]
+            .completion
+            .as_ref()
+            .unwrap();
+        assert!(completion.starts.is_empty());
+        assert!(completion.cleanup.iter().all(|c| c.empty));
+        assert!(
+            matches!(&completion.result, PayloadResult::Failed(PublicError::FnFailure { message })
+                if message.contains("payload never started") && message.contains("memory.max is max")),
+            "{:?}",
+            completion.result
         );
     });
 }

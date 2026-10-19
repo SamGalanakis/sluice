@@ -55,6 +55,12 @@ pub trait PayloadHost: FnHost {
     ) -> impl Future<Output = io::Result<Self::Invocation>> + Send;
     fn empty_without_payload(&self) -> io::Result<CleanupEvidence>;
     fn resource_usage(&self) -> io::Result<RunUsage>;
+    /// Read back the limits the run's service has in force, apply them again on a mismatch,
+    /// and fail when they still do not hold. The guardian asks once, after its claim and
+    /// before the first payload starts; an error fails the run with no payload started.
+    fn verify_limits(&self) -> impl Future<Output = Result<(), String>> + Send {
+        async { Ok(()) }
+    }
 }
 pub trait PayloadInvocation: Send {
     fn engine_hook(
@@ -409,6 +415,19 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
         }
         if cancel.is_cancelled() {
             result = PayloadResult::Cancelled("cancel intent before spawn".into());
+            if cleanup.is_empty() {
+                cleanup.push(host.empty_without_payload()?);
+            }
+            break;
+        }
+        if started.is_empty()
+            && let Err(message) = host.verify_limits().await
+        {
+            result = PayloadResult::Failed(PublicError::FnFailure {
+                message: format!(
+                    "the run's execution limits are not in force, so its payload never started: {message}"
+                ),
+            });
             if cleanup.is_empty() {
                 cleanup.push(host.empty_without_payload()?);
             }
@@ -833,6 +852,8 @@ pub struct OsFnHost<H> {
     payload_args: Vec<OsString>,
     admission_guard: AdmissionGuard,
     home: PathBuf,
+    limits: RunLimits,
+    guardian_memory_bytes: u64,
 }
 impl<H: FnHost> OsFnHost<H> {
     pub fn attach(
@@ -858,6 +879,8 @@ impl<H: FnHost> OsFnHost<H> {
             payload_args,
             admission_guard: Arc::new(|_| Ok(Box::new(()))),
             home,
+            limits,
+            guardian_memory_bytes,
         })
     }
     /// Hold an installation guard only through the launcher's continuation barrier.
@@ -995,6 +1018,34 @@ impl<H: FnHost> PayloadHost for OsFnHost<H> {
             cleanup_evidence: None,
             run_dir: request.run_dir,
         })
+    }
+    async fn verify_limits(&self) -> Result<(), String> {
+        // The guardian runs at its service's root, so that cgroup names its unit.
+        let unit = Path::new(self.groups.service.path())
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("the guardian is outside a service")?
+            .to_owned();
+        let applied =
+            crate::systemd::enforce_run_limits(&unit, self.limits, self.guardian_memory_bytes)
+                .await
+                .map_err(|error| error.to_string())?;
+        let payload = self.groups.payload();
+        let read = |name: &str| payload.read(name).map(|v| v.trim().to_owned());
+        let caps = self.limits.caps();
+        let memory = read("memory.max").map_err(|e| e.to_string())?;
+        let held = match caps.memory_bytes {
+            None => memory == "max",
+            Some(cap) => memory.parse::<u64>().is_ok_and(|n| n != 0 && n <= cap),
+        };
+        if !held {
+            return Err(format!(
+                "payload memory.max is {memory}, expected {}",
+                caps.memory_bytes.map_or("max".into(), |n| n.to_string())
+            ));
+        }
+        tracing::info!(%unit, ?applied, payload_memory_max = %memory, "run limits in force");
+        Ok(())
     }
     fn resource_usage(&self) -> io::Result<RunUsage> {
         self.groups.payload().resource_usage()

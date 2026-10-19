@@ -9,6 +9,12 @@ use sluice_model::{
 pub fn policy(home: &std::path::Path) -> Result<ResourcePolicy, PublicError> {
     crate::config::load_resource_policy(home).map_err(invalid)
 }
+/// The policy with the measured-headroom settings, from one read of config.json.
+pub fn execution(
+    home: &std::path::Path,
+) -> Result<(ResourcePolicy, crate::config::Headroom), PublicError> {
+    crate::config::load_execution(home).map_err(invalid)
+}
 pub fn invalid(message: impl Into<String>) -> PublicError {
     PublicError::Invalid {
         message: message.into(),
@@ -49,7 +55,7 @@ pub const CPU_THROTTLE_NOTICE_USEC: u64 = 60_000_000;
 /// A ready step waiting this long on the home's execution total is reported once.
 pub const QUEUE_NOTICE_MINUTES: i64 = 10;
 
-fn bytes(n: u64) -> String {
+pub(crate) fn bytes(n: u64) -> String {
     if n >= 1 << 30 {
         format!("{:.1} GiB", n as f64 / f64::from(1u32 << 30))
     } else {

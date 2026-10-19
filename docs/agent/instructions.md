@@ -94,5 +94,6 @@ only within installation ceilings; project defaults inherit from the home. Scatt
 items as capacity permits. A `resource_exhausted` failure is a memory OOM and requires
 judgment before retrying; inspect its recorded budget and peak usage. A `say` from `sluice`
 with `data.execution_limit` tells you a run met a limit (failed forks, memory pressure,
-throttling, or a long wait for home capacity): adjust parallelism or limits. Local descendants share the cap; external services and remote
+throttling, a long wait for home capacity, or a hold until the host has memory free): adjust
+parallelism or limits; a host-memory hold clears by itself. Local descendants share the cap; external services and remote
 executors need their own limits. See `docs("plans")`, Execution limits.

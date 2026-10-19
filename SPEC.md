@@ -345,7 +345,8 @@ are checked by `sluice doctor`; see `docs/rust/host-prerequisites.md`.
 
 Every run that starts a local executable has a frozen `RunLimits` budget:
 `{memory_bytes, memory_max_bytes, cpu_millis, tasks}`. One CPU is 1000 milli-CPUs; tasks
-include threads. Any dimension may be unlimited, stored and passed as `null`. This covers
+include threads. Any dimension may be unlimited, stored and passed as `null`; memory only
+by an explicit opt-in (below). This covers
 steps, each scattered item, direct and queued calls, and capacity-function calls. Pure `core.*`
 transformations and an empty scatter settle in the coordinator without a payload executable.
 `core.external` starts no run.
@@ -376,15 +377,21 @@ override as inherited.
 
 ```json
 {"execution": {
-  "total": {"memory": "80GiB", "cpus": null, "tasks": 65536},
-  "ceilings": {"memory": null, "cpus": null, "tasks": null},
-  "defaults": {"memory": "8GiB", "cpus": null, "tasks": null}
+  "total": {"memory": "70GiB", "cpus": null, "tasks": 65536},
+  "ceilings": {"memory": "10GiB", "cpus": null, "tasks": null},
+  "defaults": {"memory": "6GiB", "cpus": null, "tasks": null},
+  "host_reserve": "18GiB",
+  "memory_pressure_max": 10
 }}
 ```
 
 `defaults`, `ceilings` and `total` each accept the same three optional fields, each a value
-or unlimited; `guardian_memory` accepts the memory syntax. Omitted fields use the defaults
-below. Explicit values must fit the host and each other; a smaller finite total clamps
+or unlimited; `guardian_memory` and `host_reserve` accept the memory syntax;
+`memory_pressure_max` is a percentage above 0 and at most 100. Memory is unlimited at a level
+only with `"allow_unlimited_memory": true`: without it, a `null` (or `"unlimited"`) memory in
+`defaults`, `ceilings` or `total` is refused at load with an error naming the key, the size to
+set instead and the opt-in, so no run is ever uncapped by accident. Omitted fields use the
+defaults below. Explicit values must fit the host and each other; a smaller finite total clamps
 inherited ceilings, a finite ceiling clamps inherited defaults (an inherited unlimited default
 becomes that ceiling), and an explicit value that does not fit is refused. A malformed policy,
 invalid JSON or an unreadable configuration blocks new admission. A missing file or missing
@@ -393,22 +400,40 @@ effective ancestor cgroup limits and available CPUs.
 
 | Setting | Default |
 |---|---|
-| Home total | 75% of effective host memory; CPU unlimited; 65536 tasks |
-| Payload default per run | 8 GiB memory reserved, clamped to the ceiling; CPU and tasks unlimited |
-| Payload ceiling per run | Home memory minus guardian memory (also each run's memory cap), clamped when the home total is lowered; CPU and tasks unlimited |
+| Home total | min(70 GiB, 55% of effective host memory), the rest left to agents, editors and services; CPU unlimited; 65536 tasks |
+| Payload default per run | 6 GiB memory reserved, clamped to the ceiling; CPU and tasks unlimited |
+| Payload ceiling per run | 10 GiB memory (each run's memory cap), clamped to the home total minus guardian memory; CPU and tasks unlimited |
 | Guardian reservation per run | 256 MiB or one eighth of total home memory, whichever is smaller; 0.1 CPU; 64 tasks |
+| Host reserve | max(16 GiB, 15% of effective host memory), at most a quarter of it |
+| Memory pressure limit | PSI `some avg10` 10% |
 
 The coordinator reserves payload plus guardian capacity atomically with the attempt, across
 all projects and calls in the home. A run's reservation is its finite payload limits plus the
-guardian's share; a dimension the run leaves unlimited reserves only the guardian's share, so
-against a finite total an unlimited dimension reserves nothing of its own (the host's choice:
-the total still caps it on the slice). An unlimited home total does not gate admission in
-that dimension. Live attempts retain their durable reservations across a coordinator restart.
+guardian's share. Unlimited CPU and tasks reserve only the guardian's share. Memory is never
+reserved as nothing: a run whose memory resolves unlimited (only under an opted-in unlimited
+ceiling) is frozen with the home default reservation, or 4 GiB (within the total's room) when
+that is unlimited too, and a budget frozen with no reservation by an earlier release counts
+4 GiB. An unlimited home total does not gate admission in that dimension. Live attempts retain their durable reservations across a coordinator restart.
 Admission refuses unknown budgets and overcommitted totals. A ready step waits when capacity
 is unavailable; scatter admits only the items that fit and continues as capacity becomes
 available. Each item reserves separately while the step holds its logical `needs` once.
 Direct calls use the same admission transaction and return a capacity refusal when they
-cannot start; queued calls remain pending. Capacity-function calls are bounded too. Physical
+cannot start; queued calls remain pending.
+
+Reservations alone do not admit a run: the host must have the memory now. Before each
+admission the coordinator reads `/proc/meminfo` MemAvailable, `/proc/pressure/memory`
+`some avg10` (absent on a kernel without PSI) and the workload slice's `memory.current`, and
+requires all three: MemAvailable less `host_reserve` covers the run's reservation (payload plus
+guardian); the pressure is below `memory_pressure_max`; and the slice's `memory.current` plus
+the reservation stays within the memory total. Runs admitted in the last 60 s count with their
+whole reservation in the first and third checks, since the readings cannot show them yet; a
+batch counts the runs it has already admitted. A run that fails a check is held, not refused:
+`status` shows the step `held: host memory headroom (available X, need Y)` (or `held: host
+memory pressure (some avg10 P%, limit L%)`, or `held: workload memory (in use X, need Y, total
+Z)`, from the coordinator's last reading), its unit's owner is told once per hold (a limit
+notice with `limit: "host_memory"`), and the scheduler checks again every 5 s and starts it
+when the host recovers. A queued call stays pending and a direct call is refused with a
+retryable `busy` naming the hold. An unreadable `/proc/meminfo` holds admission. Capacity-function calls are bounded too. Physical
 accounting is independent of logical resources: `lane` is an ordinary resource name, and
 omitting `needs` never bypasses the home budget.
 
@@ -441,7 +466,14 @@ the pending start. No timeout turns uncertain launch evidence into free capacity
 The run's cgroup has `control` for the guardian and `payload` for its combined workload.
 `memory.max`, `memory.swap.max=0`, `cpu.max` and `pids.max` are set before the launch barrier
 opens; an unlimited dimension is written `max` (and the service's systemd property
-`infinity`, or no `CPUQuota`). Invocation and composed-agent sidecar leaves share the payload parent's allowance.
+`infinity`, or no `CPUQuota`). The service is started with `MemoryMax`, `MemorySwapMax=0`,
+`CPUQuota` and `TasksMax` from the frozen budget plus the guardian's share, and the properties
+are logged. After its claim and before its first payload, the guardian reads them back, from
+systemd (`MemoryMax`, `MemorySwapMax`, `TasksMax`) and from the kernel's files in the service
+cgroup (`memory.max`, `memory.swap.max`, `pids.max`, `cpu.max`) and the payload's
+`memory.max`, and compares them with the frozen budget. On a mismatch it applies them again
+with `systemctl --user set-property --runtime` and reads them back once more; if they still
+differ, the run fails with `fn_failure` naming each mismatch and no payload ever starts. Invocation and composed-agent sidecar leaves share the payload parent's allowance.
 The guardian has its own reserved control budget. A per-home workload slice bounds the
 aggregate; coordinator, serve and scheduler services stay outside that slice. `doctor` checks
 that the required memory, CPU and task controllers can enforce the settings. Missing
@@ -464,16 +496,20 @@ accepted cancel or settlement.
 reads each executing run's payload counters from its cgroup's event files (`memory.events`
 `oom_kill` and `max`, `pids.events` `max`, `cpu.stat` `throttled_usec`); completion carries the
 final counters. When a run has failed forks, has reached its memory cap, was OOM-killed, or
-has lost at least 60 s to its CPU quota, and when a ready step has waited at least 10 minutes on
-the home's execution capacity, Sluice posts a `say` from `sluice` (§8) to whoever answers the
+has lost at least 60 s to its CPU quota, when a ready step has waited at least 10 minutes on
+the home's execution capacity, and when one is held for the host's memory, Sluice posts a `say` from `sluice` (§8) to whoever answers the
 run (its unit's owner, a call's session, else the project's fallback, else the person) and,
 while the run is live, the same `say` to the step itself, so its agent reads it in its inbox.
 Its `data.execution_limit` is `{run, step, limit, value, observed, outcome, since?}`: `run` is
-null for a waiting step; `limit` is `memory`, `tasks`, `cpus` or `capacity`; `value` is the
-limit (`"unlimited"` when none) or, for `capacity`, the home total; `observed` is the counters
+null for a waiting step; `limit` is `memory`, `tasks`, `cpus`, `capacity` or `host_memory`;
+`value` is the limit (`"unlimited"` when none), for `capacity` the home total, and for
+`host_memory` `{host_reserve_bytes, memory_pressure_max}`; `observed` is the counters
 (`peak_bytes`, `oom_kills`, `max_events`, `failed_forks`, `throttled_usec`) or the queue
-reason; `outcome` is `killed`, `running`, `throttled`, `finished` or `waiting`; `since` is when
-a waiting step began to wait. Each run and limit is told once, and each waiting episode once.
+reason (for `host_memory`, the hold as status says it); `outcome` is `killed`, `running`,
+`throttled`, `finished`, `waiting` or `held`; `since` is when
+a waiting step began to wait. Each run and limit is told once, and each waiting episode once
+per limit. A step held for host memory is told at once; one waiting on capacity after 10
+minutes.
 It is a message, not a new record kind, so releases pinned before it read the log unchanged;
 the notice wakes its addressee's `next` (§10).
 

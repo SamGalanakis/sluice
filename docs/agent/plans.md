@@ -757,12 +757,13 @@ start with a letter or digit. Thread names use the same alphabet.
 
 ## Execution limits
 
-Every executable run has memory, CPU and task limits; any of them may be unlimited. A task is
-a process or thread. The agent, its local commands and any composed sidecar share one payload
+Every executable run has memory, CPU and task limits; CPU and tasks may be unlimited, and
+memory only where the installation opts in. A task is a process or thread. The agent, its local commands and any composed sidecar share one payload
 budget. This is separate from `needs`: naming a logical resource `lane` or `cpu` does not set
 a kernel limit. Limits exist so the machine cannot deadlock or run out of memory, not to
-throttle a build: by default a run has no CPU quota and no task cap, and reserves 8 GiB of the
-home's memory for admission while it may grow to the per-run memory ceiling.
+throttle a build: by default a run has no CPU quota and no task cap, reserves 6 GiB of the
+home's memory for admission and may grow to the per-run memory cap of 10 GiB; all runs
+together are capped at min(70 GiB, 55% of the host's memory).
 
 ```json
 {"run": "inline.bash", "needs": {"lane": 1},
@@ -775,15 +776,18 @@ The installation provides defaults and ceilings. `project_create(limits={...})` 
 A step's `limits` overrides individual fields; a field left out inherits. Recipes use the
 same declaration. Memory is integer bytes or an integer with `KiB`, `MiB`, `GiB` or `TiB`;
 `cpus` is a positive number with at most three decimal places; `tasks` is a positive integer.
-`null` (or the string `"unlimited"`) makes that field unlimited: no `cpu.max` quota, no
-`pids.max` cap, or for memory no reservation and `memory.max` `max`. Status shows unlimited as
-`"unlimited"`. An override above the installation ceiling, or unlimited under a finite ceiling,
-is refused.
+`null` (or the string `"unlimited"`) makes that field unlimited: no `cpu.max` quota or no
+`pids.max` cap. Unlimited memory (`memory.max` `max`) exists only where the installation's
+`config.json` sets `execution.allow_unlimited_memory`; even then the run reserves the home
+default, or 4 GiB. Status shows unlimited as `"unlimited"`. An override above the installation
+ceiling, or unlimited under a finite ceiling, is refused.
 
 `memory` is what the run reserves against the home total at admission; the run's cgroup
 `memory.max` is the per-run memory ceiling, so a run can use more than it reserved. An
 unlimited CPU or task limit reserves nothing in that dimension; the guardian's small share
-is always reserved. The coordinator reserves each run's budget plus guardian overhead across
+is always reserved. Before a run starts, its guardian reads its limits back from systemd and
+the kernel; limits that are not in force, even after being applied again, fail the run before
+its payload starts, naming what differs. The coordinator reserves each run's budget plus guardian overhead across
 all projects and calls. The reservation remains held until the whole service, including the
 guardian, has exited. `status` reports home-wide `execution` totals and held reservations, and
 queued steps explain their shortfall. An invalid configuration appears as `execution.error`
@@ -797,6 +801,15 @@ policy changes future runs; changing a running step's limits is refused. A raise
 admits waiting work at once; a total lowered below what live runs hold makes new runs wait,
 and `execution.reason` says so, until enough of them finish.
 
+Admission also needs the host's memory now, not only room in the reservations: the host's
+MemAvailable less its reserve (`execution.host_reserve`, by default max(16 GiB, 15% of
+memory)) must cover the run's reservation, memory pressure (PSI `some avg10`) must be below
+`execution.memory_pressure_max` (10), and the runs' memory in use plus the reservation must
+fit the total. Otherwise the step is held: status shows `held: host memory headroom
+(available X, need Y)` (or `held: host memory pressure (…)`, `held: workload memory (…)`),
+its owner is told once, and Sluice checks again every 5 s. Nothing needs doing; it starts when
+the host recovers. A direct `fn_call` held this way is refused with a retryable `busy`.
+
 A memory OOM is `resource_exhausted`, with `resource`, `limit`, optional `peak`, and a message.
 It stops the payload and does not automatically retry. Hitting a task limit does not stop the
 run: the process or thread start fails with `EAGAIN` and the run goes on. CPU quota throttles
@@ -804,8 +817,8 @@ a run instead of failing it. Do not treat a bare `SIGKILL` as proof of a memory-
 
 Whenever a run meets a limit, Sluice tells whoever answers its unit, and the running step
 itself, in a `say` from `sluice` whose `data.execution_limit` is `{run, step, limit, value,
-observed, outcome, since?}`: `limit` is `memory`, `tasks`, `cpus` or `capacity`; `outcome` is
-`killed`, `running`, `throttled`, `finished` or `waiting`. It wakes the owner's `next`
+observed, outcome, since?}`: `limit` is `memory`, `tasks`, `cpus`, `capacity` or
+`host_memory`; `outcome` is `killed`, `running`, `throttled`, `finished`, `waiting` or `held`. It wakes the owner's `next`
 (`docs("threads")`). Read it as a cue to retry with less parallelism, raise the
 step's `limits`, or report; each run and limit is told once.
 

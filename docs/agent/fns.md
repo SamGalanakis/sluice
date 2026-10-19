@@ -15,7 +15,8 @@ defaults, and refuses overrides above the installation ceilings. Memory accepts 
 bytes or a size such as `"4GiB"`; CPUs may be fractional; tasks count processes and threads;
 `null` (or `"unlimited"`) makes a field unlimited. Direct calls use the same budget and home
 capacity accounting as queued calls. A
-direct call that cannot reserve capacity is refused; a queued call waits. Capacity functions
+direct call that cannot reserve capacity, or that the host has no memory free for now, is
+refused (the latter with a retryable `busy` saying `held: host memory …`); a queued call waits. Capacity functions
 also run under budgets. See `docs("plans")`, Execution limits.
 
 A memory OOM returns `resource_exhausted` with `resource`, `limit`, optional `peak`, and

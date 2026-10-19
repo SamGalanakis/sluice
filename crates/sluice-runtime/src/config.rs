@@ -140,9 +140,38 @@ impl HomeConfig {
     }
 }
 
+/// Admission by measured host memory (SPEC §2.5): what must stay free for everything that is
+/// not a run, and the memory pressure above which no run starts.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Headroom {
+    /// `execution.host_reserve`: MemAvailable must keep this much after a new run's reservation.
+    pub host_reserve_bytes: u64,
+    /// `execution.memory_pressure_max`: the PSI `some avg10` percentage at or above which runs
+    /// are held.
+    pub pressure_max: f64,
+}
+/// The shipped `memory_pressure_max`.
+pub const DEFAULT_MEMORY_PRESSURE_MAX: f64 = 10.0;
+impl Headroom {
+    /// The shipped host reserve is max(16 GiB, 15% of memory), never more than a quarter of it.
+    pub fn for_host(memory_bytes: u64) -> Self {
+        let share = |percent: u128| {
+            u64::try_from(u128::from(memory_bytes) * percent / 100).unwrap_or(u64::MAX)
+        };
+        Self {
+            host_reserve_bytes: (16u64 << 30).max(share(15)).min(share(25)),
+            pressure_max: DEFAULT_MEMORY_PRESSURE_MAX,
+        }
+    }
+}
+
 /// Load execution policy separately from display preferences: malformed policy or an
 /// unreadable configuration must stop admission, never disable resource enforcement.
 pub fn load_resource_policy(home: &Path) -> Result<sluice_model::ResourcePolicy, String> {
+    load_execution(home).map(|(policy, _)| policy)
+}
+/// The execution policy and the measured-headroom settings, from one read of config.json.
+pub fn load_execution(home: &Path) -> Result<(sluice_model::ResourcePolicy, Headroom), String> {
     let value = match std::fs::read(home.join("config.json")) {
         Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
             .map_err(|error| format!("cannot parse config.json: {error}"))?,
@@ -150,7 +179,7 @@ pub fn load_resource_policy(home: &Path) -> Result<sluice_model::ResourcePolicy,
         Err(error) => return Err(format!("cannot read config.json: {error}")),
     };
     let (memory, cpus) = effective_host_capacity()?;
-    resource_policy_from_value(&value, memory, cpus)
+    execution_from_value(&value, memory, cpus)
 }
 
 pub fn resource_policy_from_value(
@@ -158,6 +187,14 @@ pub fn resource_policy_from_value(
     memory_bytes: u64,
     cpu_millis: u32,
 ) -> Result<sluice_model::ResourcePolicy, String> {
+    execution_from_value(value, memory_bytes, cpu_millis).map(|(policy, _)| policy)
+}
+
+pub fn execution_from_value(
+    value: &Value,
+    memory_bytes: u64,
+    cpu_millis: u32,
+) -> Result<(sluice_model::ResourcePolicy, Headroom), String> {
     use sluice_model::{LimitsOverride, ResourcePolicy};
     #[derive(serde::Deserialize, Default)]
     #[serde(deny_unknown_fields)]
@@ -169,6 +206,10 @@ pub fn resource_policy_from_value(
         #[serde(default)]
         total: LimitsOverride,
         guardian_memory: Option<sluice_model::limits::MemoryBytes>,
+        #[serde(default)]
+        allow_unlimited_memory: bool,
+        host_reserve: Option<sluice_model::limits::MemoryBytes>,
+        memory_pressure_max: Option<f64>,
     }
     if !value.is_object() {
         return Err("config.json must contain an object".into());
@@ -178,6 +219,37 @@ pub fn resource_policy_from_value(
         Some(value) => serde_json::from_value(value.clone())
             .map_err(|error| format!("invalid execution policy: {error}"))?,
     };
+    // Unlimited memory is never an accident: a null at any level needs the opt-in.
+    if !config.allow_unlimited_memory {
+        for (level, layer) in [
+            ("defaults", &config.defaults),
+            ("ceilings", &config.ceilings),
+            ("total", &config.total),
+        ] {
+            if layer.memory == Some(None) {
+                return Err(format!(
+                    "execution.{level}.memory is unlimited (null), so runs would have no memory cap or reservation; set it to a size such as \"{}\", or set execution.allow_unlimited_memory to true to accept that",
+                    match level {
+                        "defaults" => "6GiB",
+                        "ceilings" => "10GiB",
+                        _ => "70GiB",
+                    }
+                ));
+            }
+        }
+    }
+    let mut headroom = Headroom::for_host(memory_bytes);
+    if let Some(reserve) = config.host_reserve {
+        headroom.host_reserve_bytes = reserve.0;
+    }
+    if let Some(pressure) = config.memory_pressure_max {
+        if !(pressure.is_finite() && pressure > 0.0 && pressure <= 100.0) {
+            return Err(
+                "execution.memory_pressure_max must be a percentage above 0 and at most 100".into(),
+            );
+        }
+        headroom.pressure_max = pressure;
+    }
     let mut policy = ResourcePolicy::for_host(memory_bytes, cpu_millis)?;
     policy.total = config.total.apply(policy.total)?;
     if policy.total.memory_bytes.is_some_and(|n| n > memory_bytes)
@@ -231,7 +303,7 @@ pub fn resource_policy_from_value(
         policy.ceilings.tasks.map(u64::from),
     ));
     policy.defaults = config.defaults.apply(policy.defaults)?;
-    policy.validate()
+    Ok((policy.validate()?, headroom))
 }
 
 fn effective_host_capacity() -> Result<(u64, u32), String> {

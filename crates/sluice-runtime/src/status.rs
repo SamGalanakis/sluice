@@ -50,7 +50,9 @@ fn queued(
         .path()
         .and_then(|p| std::path::Path::new(p).parent())
         .unwrap_or_else(|| std::path::Path::new(""));
-    let policy = crate::budget::policy(home);
+    let execution = crate::budget::execution(home);
+    // Admission's own last reading of the host, so status says what the scheduler decides.
+    let sample = crate::headroom::published(home);
     let state = plans::read_state(sql, id)?;
     for step in plan.steps().values() {
         if step.is_external()
@@ -62,12 +64,43 @@ fn queued(
         {
             continue;
         }
-        let fit = match &policy {
-            Ok(policy) => crate::budget::resolve(sql, Some(id), step.limits.as_ref(), policy)
-                .and_then(|limits| resources::budget_fit(sql, &limits, policy)),
+        let fit = match &execution {
+            Ok((policy, headroom)) => {
+                crate::budget::resolve(sql, Some(id), step.limits.as_ref(), policy).and_then(
+                    |limits| {
+                        let fit = resources::budget_fit(sql, &limits, policy)?;
+                        let held = match &sample {
+                            Some(sample) if fit.fits() => {
+                                let need = sluice_model::limits::Reserved::of(
+                                    limits,
+                                    policy.guardian_memory_bytes,
+                                )
+                                .map_err(bad)?
+                                .memory_bytes;
+                                crate::headroom::hold(
+                                    sample,
+                                    headroom,
+                                    policy.total.memory_bytes,
+                                    crate::headroom::pending(sql)?,
+                                    need,
+                                )
+                            }
+                            _ => None,
+                        };
+                        Ok(held.map_or(fit, |reason| resources::Fit {
+                            blocked: vec!["host memory".into()],
+                            reason,
+                        }))
+                    },
+                )
+            }
             Err(error) => Err(error.clone().into()),
         };
         match fit {
+            Ok(fit) if fit.blocked == ["host memory"] => {
+                out.entry(step.id.clone())
+                    .or_insert((fit.blocked, fit.reason));
+            }
             Ok(fit) if !fit.fits() => {
                 out.entry(step.id.clone())
                     .or_insert((fit.blocked, format!("queued: {}", fit.reason)));

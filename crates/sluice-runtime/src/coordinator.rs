@@ -118,6 +118,8 @@ struct Inner<H: ExecutionHost> {
     watches: Arc<std::sync::Mutex<std::collections::HashMap<RunId, usize>>>,
     /// Each project's plan as last compiled, by revision and catalog generation.
     plans: Arc<PlanCache>,
+    /// Projects with a ready step held for the host's memory, checked again on a short tick.
+    memory_holds: std::sync::Mutex<std::collections::BTreeSet<ProjectId>>,
 }
 /// Where the startup adoption pass stands, for requests that wait on it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -303,6 +305,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 connections: Arc::new(tokio::sync::Semaphore::new(CONNECTIONS)),
                 watches: Default::default(),
                 plans: Default::default(),
+                memory_holds: Default::default(),
             }),
         };
         artifacts::recover(broker.writer(), broker.home())
@@ -405,6 +408,26 @@ impl<H: ExecutionHost> Coordinator<H> {
     }
     pub fn catalog(&self) -> &Catalog {
         &self.inner.catalog
+    }
+    pub(crate) fn note_memory_hold(&self, project: ProjectId, held: bool) {
+        let mut holds = self
+            .inner
+            .memory_holds
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if held {
+            holds.insert(project);
+        } else {
+            holds.remove(&project);
+        }
+    }
+    pub(crate) fn memory_holds(&self) -> Vec<ProjectId> {
+        let holds = self
+            .inner
+            .memory_holds
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        holds.iter().copied().collect()
     }
     pub(crate) fn plan_cache(&self) -> Arc<PlanCache> {
         self.inner.plans.clone()

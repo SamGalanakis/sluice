@@ -200,7 +200,16 @@ mod support {
                     .unwrap()
                     .resolve(None, None)
                     .unwrap(),
-                admission: sluice_model::limits::ResourcePolicy::for_host(1 << 40, 64000).unwrap(),
+                // Room for every scatter item: the shipped total is at most 70 GiB.
+                admission: sluice_model::limits::ResourcePolicy {
+                    total: sluice_model::limits::Limits {
+                        memory_bytes: Some(1 << 40),
+                        ..sluice_model::limits::ResourcePolicy::for_host(1 << 40, 64000)
+                            .unwrap()
+                            .total
+                    },
+                    ..sluice_model::limits::ResourcePolicy::for_host(1 << 40, 64000).unwrap()
+                },
             }
         }
         pub async fn start(&self, reservation: &Reservation) {

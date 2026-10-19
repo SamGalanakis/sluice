@@ -7,6 +7,7 @@ mod contain;
 pub mod coordinator;
 pub mod drain;
 pub mod edits;
+pub mod headroom;
 pub mod inline;
 mod models;
 pub mod naming;
