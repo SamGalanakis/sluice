@@ -610,3 +610,147 @@ fn background_job_worker() {
     agent.kill().unwrap();
     agent.wait().unwrap();
 }
+
+/// The coordinator's side of a park, in memory: the agent asked to park from its first turn.
+struct ParkHost {
+    host: Host,
+    park: Option<sluice_model::park::ParkRequest>,
+    entered: u32,
+    woke: Vec<String>,
+}
+impl SupervisorHost for ParkHost {
+    async fn snapshot(&mut self, after: MessageId) -> io::Result<HostSnapshot> {
+        let mut snapshot = self.host.snapshot(after).await?;
+        snapshot.park = self.park.clone();
+        Ok(snapshot)
+    }
+    async fn acknowledge(&mut self, ids: &[MessageId]) -> io::Result<()> {
+        self.host.acknowledge(ids).await
+    }
+    async fn me(&mut self) -> io::Result<String> {
+        self.host.me().await
+    }
+    async fn note(&mut self, body: &str) -> io::Result<()> {
+        self.host.note(body).await
+    }
+    async fn checkpoint(&mut self, checkpoint: &Checkpoint) -> io::Result<()> {
+        // The agent submits in the turn its wake starts.
+        self.host.submitted |= checkpoint.delivery.entries.iter().any(|entry| {
+            matches!(entry.id, InputId::Wake { .. })
+                && entry.state == sluice_agents::delivery::DeliveryState::Acknowledged
+        });
+        self.host.checkpoint(checkpoint).await
+    }
+    async fn cleanup(&mut self) -> io::Result<()> {
+        self.host.cleanup().await
+    }
+    async fn park(
+        &mut self,
+        op: sluice_model::park::ParkOp,
+    ) -> io::Result<sluice_model::park::ParkView> {
+        use sluice_model::park::{ParkOp, ParkPhase, ParkView};
+        let woke = match op {
+            ParkOp::Read => false,
+            ParkOp::Enter => {
+                // Only the parked stretch runs on a paused clock, which skips its waits.
+                tokio::time::pause();
+                self.entered += 1;
+                if let Some(park) = &mut self.park {
+                    park.phase = ParkPhase::Parked;
+                }
+                false
+            }
+            ParkOp::Wake { reason } => {
+                tokio::time::resume();
+                self.woke.push(reason);
+                true
+            }
+        };
+        let view = ParkView {
+            park: self.park.clone(),
+            woke,
+            ..ParkView::default()
+        };
+        if woke {
+            self.park = None;
+        }
+        Ok(view)
+    }
+}
+
+/// Parked time is left out of the wall cap: a run parked well past its cap still finishes,
+/// in the session it parked in, after one "woke:" message. Tokio's clock is paused while it
+/// is parked, so the park's ten-second timeout passes at once.
+#[tokio::test]
+async fn a_parked_run_outlasts_its_wall_cap_and_resumes_in_the_same_session() {
+    use sluice_model::park::{ParkCondition, ParkPhase, ParkRequest};
+    let scratch = Scratch::new();
+    let mut config = config(&scratch);
+    config.limits.poll = Duration::from_millis(500);
+    let wall = config.limits.wall;
+    let never = scratch.0.join("never");
+    let mut frames = happy();
+    frames.push(frame(
+        Some(input(InputId::Wake { ordinal: 1 })),
+        observation(EngineStatus::Busy, 2, 1),
+    ));
+    frames.push(frame(None, observation(EngineStatus::Idle, 2, 2)));
+    let mut engine = ScriptedEngine::new(frames);
+    let mut host = ParkHost {
+        host: Host::new(),
+        park: Some(ParkRequest {
+            condition: ParkCondition::File {
+                path: never.display().to_string(),
+                marker: None,
+            },
+            timeout_seconds: Some(10),
+            lease: None,
+            phase: ParkPhase::Requested,
+            requested_at: "now".into(),
+            parked_at: None,
+            woke: None,
+        }),
+        entered: 0,
+        woke: vec![],
+    };
+    host.host.submit_at = Some(State::Done);
+    let run_dir = config.run_dir.clone();
+    let started = tokio::time::Instant::now();
+    supervise(
+        config,
+        &mut engine,
+        &mut host,
+        &mut SessionGuard::default(),
+        None,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert!(started.elapsed() > wall + Duration::from_secs(5));
+    assert_eq!(host.entered, 1);
+    let reason = format!("timeout after 10s waiting for file:{}", never.display());
+    assert_eq!(host.woke, vec![reason.clone()]);
+    let woke: Vec<_> = engine
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            EngineCommand::DeliverText {
+                id: InputId::Wake { .. },
+                text,
+            } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(woke, vec![format!("woke: {reason}")]);
+    // The same session carried on: started once, never resumed or restarted.
+    assert_eq!(
+        engine
+            .commands
+            .iter()
+            .filter(|c| matches!(c, EngineCommand::StartFresh | EngineCommand::Resume { .. }))
+            .count(),
+        1
+    );
+    let checkpoint = Checkpoint::read(&run_dir).unwrap().unwrap();
+    assert!(checkpoint.parked_ms >= 10_000, "{}", checkpoint.parked_ms);
+}

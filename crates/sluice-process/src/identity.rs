@@ -56,6 +56,31 @@ impl ProcessIdentity {
     }
 }
 
+/// The start time (clock ticks after boot) of a live process; `None` once it is gone.
+pub fn start_time(pid: u32) -> io::Result<Option<u64>> {
+    let stat = match process(pid).and_then(|p| p.stat().map_err(proc_error)) {
+        Ok(stat) => stat,
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::InvalidInput
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    };
+    // An exited child its parent has not reaped yet is gone too.
+    Ok((stat.state != 'Z' && stat.state != 'X').then_some(stat.starttime))
+}
+/// Whether the process `pid` (that started at `start`, when known) has exited.
+pub fn process_gone(pid: u32, start: Option<u64>) -> io::Result<bool> {
+    Ok(match start_time(pid)? {
+        None => true,
+        Some(now) => start.is_some_and(|start| start != now),
+    })
+}
+
 #[derive(Debug)]
 pub struct OwnedProcess {
     identity: ProcessIdentity,

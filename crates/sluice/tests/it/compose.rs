@@ -15,18 +15,18 @@ use std::{
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
-struct Gate {
-    temp: tempfile::TempDir,
-    home: PathBuf,
+pub(super) struct Gate {
+    pub(super) temp: tempfile::TempDir,
+    pub(super) home: PathBuf,
     broker: Option<Child>,
-    env: BTreeMap<String, String>,
-    project: ProjectId,
+    pub(super) env: BTreeMap<String, String>,
+    pub(super) project: ProjectId,
 }
 impl Gate {
     fn new() -> Self {
         Self::configured(|_| {})
     }
-    fn configured(configure: impl FnOnce(&mut Self)) -> Self {
+    pub(super) fn configured(configure: impl FnOnce(&mut Self)) -> Self {
         let temp = tempfile::Builder::new()
             .prefix("sluice-test-compose-")
             .tempdir_in("/tmp")
@@ -114,7 +114,7 @@ impl Gate {
         );
         self.wait(|g| UnixStream::connect(g.home.join("coordinator.sock")).is_ok());
     }
-    fn wait(&self, mut condition: impl FnMut(&Self) -> bool) {
+    pub(super) fn wait(&self, mut condition: impl FnMut(&Self) -> bool) {
         let deadline = Instant::now() + Duration::from_secs(30);
         while !condition(self) {
             assert!(
@@ -130,10 +130,10 @@ impl Gate {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-    fn selector(&self) -> Value {
+    pub(super) fn selector(&self) -> Value {
         json!({"kind":"id","value":self.project})
     }
-    fn rpc(&self, command: Value) -> CommandReply {
+    pub(super) fn rpc(&self, command: Value) -> CommandReply {
         match self.try_rpc(command) {
             Ok(reply) => reply,
             Err(e) => panic!("command failed: {e:?}"),
@@ -157,16 +157,16 @@ impl Gate {
             RpcResult::Error(e) => Err(e),
         }
     }
-    fn data(&self, command: Value) -> Value {
+    pub(super) fn data(&self, command: Value) -> Value {
         let CommandReply::Data(v) = self.rpc(command) else {
             panic!("data")
         };
         v.into_value()
     }
-    fn status(&self) -> Value {
+    pub(super) fn status(&self) -> Value {
         self.data(json!({"command":"status","args":{"project":self.selector(),"selection":{"steps":null,"tags":null},"all":true}}))
     }
-    fn plan(&self, steps: Value) {
+    pub(super) fn plan(&self, steps: Value) {
         let ops: Vec<Value> = steps
             .as_object()
             .unwrap()
@@ -175,7 +175,7 @@ impl Gate {
             .collect();
         self.rpc(json!({"command":"plan_edit","args":{"project":self.selector(),"rev":1,"ops":ops,"start":true,"dry_run":false,"reason":"fixture","author":"test"}}));
     }
-    fn lease(&self) -> UnixStream {
+    pub(super) fn lease(&self) -> UnixStream {
         let mut stream = UnixStream::connect(self.home.join("coordinator.sock")).unwrap();
         stream.write_all(&encode_frame(&json!({"protocol":1,"request_id":"scheduler","run_capability":null,"command":{"runtime":"acquire_scheduler","args":{"owner":"compose"}}})).unwrap()).unwrap();
         let reply: Value = decode_json(&read(&mut stream)).unwrap();
@@ -203,7 +203,7 @@ impl Gate {
         )
         .unwrap();
     }
-    fn script(&self, value: Value) {
+    pub(super) fn script(&self, value: Value) {
         std::fs::write(self.home.join("fake-script.json"), value.to_string()).unwrap();
     }
     fn run(&self, step: &str) -> String {
@@ -212,7 +212,7 @@ impl Gate {
             .unwrap()
             .into()
     }
-    fn terminal(&self, step: &str) -> Value {
+    pub(super) fn terminal(&self, step: &str) -> Value {
         self.wait(|g| {
             matches!(
                 g.status()["steps"][step]["status"].as_str(),
@@ -292,7 +292,7 @@ fn read(stream: &mut UnixStream) -> Vec<u8> {
     stream.read_exact(&mut body).unwrap();
     body
 }
-fn bindings(values: Value) -> Value {
+pub(super) fn bindings(values: Value) -> Value {
     Value::Object(
         values
             .as_object()

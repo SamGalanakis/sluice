@@ -160,7 +160,9 @@ if __name__ == "__main__":
   exits; a run that ends (crash, kill, cancel) lets go of it too. It counts against the same
   capacity as steps' `needs`. An undeclared resource or an amount over a fixed capacity raises
   `CallbackError` (`bad_request`) at once; `timeout=` seconds raises `TimeoutError` instead of
-  waiting on. It needs a run in a project.
+  waiting on. It needs a run in a project. An agent takes the same lease with
+  `sluice tool lease acquire` and waits with `sluice tool park` (`docs("plans")`, Waiting
+  inside a step).
 - Secrets come from `.env` files: `$SLUICE_HOME/.env`, then the project's
   `$SLUICE_HOME/projects/<id>/.env` (project values win), loaded into every run (fns, built-ins
   and agent sessions) at launch; the run's own `SLUICE_*` variables win over both. `verify`

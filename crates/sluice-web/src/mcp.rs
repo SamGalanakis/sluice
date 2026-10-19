@@ -93,6 +93,7 @@ impl McpServer {
                 CommandRequest::LogWait(r) => r.timeout_seconds,
                 CommandRequest::StepWait(r) => r.timeout_seconds,
                 CommandRequest::Next(r) => r.timeout_seconds.saturating_add(r.settle_max_seconds),
+                CommandRequest::LeaseAcquire(r) if r.wait => r.timeout_seconds.unwrap_or(600),
                 _ => 0,
             };
             let reply = tokio::time::timeout(
@@ -435,7 +436,7 @@ pub fn renames(name: &str) -> &'static [(&'static str, &'static str)] {
         "fn_call" => &[("wait", "wait_seconds")],
         "fn_save" => &[("fn", "manifest")],
         "log_wait" => &[("timeout", "timeout_seconds"), ("wake", "questions_only")],
-        "step_wait" => &[("timeout", "timeout_seconds")],
+        "step_wait" | "lease_acquire" | "park" => &[("timeout", "timeout_seconds")],
         "next" => &[
             ("timeout", "timeout_seconds"),
             ("settle", "settle_seconds"),
@@ -474,7 +475,7 @@ fn default_value(name: &str, key: &str) -> Option<Value> {
         "compact" if name == "plan_read" => Some(json!(true)),
         "compact" if matches!(name, "step_get" | "unit_get") => Some(json!(false)),
         "limit" => Some(json!(200)),
-        "timeout_seconds" => Some(json!(300)),
+        "timeout_seconds" if !matches!(name, "lease_acquire" | "park") => Some(json!(300)),
         "older_than_seconds" if name == "plan_prune" => Some(json!(0)),
         "settle_seconds" => Some(json!(20)),
         "settle_max_seconds" => Some(json!(120)),
@@ -957,6 +958,22 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     (
         "step_progress",
         "Publish a running step's latest values without finishing it, from its current run: a\nstep that never ends (a rolling test run, say) shows its latest result this way. Each\nfield is one of the step's outputs (its function's or declared) and must fit its type;\nthe fields merge over the run's earlier progress. Progress is never final: it feeds no\ninput, handoff or gate, never finishes the step and is not a submission. It writes no\nlog record, so it wakes no next or log_wait. It stays, with its time, until the step's\nnext run starts; the dashboard shows it (live while the step runs) and the query tool\nreads it as steps.progress and steps.progress_at. Refused (conflict) unless the step is\nrunning and run is its current run; invalid for an unknown field, a value that does\nnot fit or a scattered step. Returns {project, step, run, progress, at}: the merged\nprogress and when it was set.\n\nArgs:\n    project: the project.\n    step: the running step.\n    run: the run id (SLUICE_RUN_ID).\n    outputs: an object keyed by output name: the fields to set now.",
+    ),
+    (
+        "lease_acquire",
+        "Take a section lease on one of the project's resources from inside a run: a slot of a\nshared gate, land queue or capped pool. Requests are granted first-in-first-out within\npriority (higher first); a lease counts against the resource's capacity like a step's\nneeds. The lease is the run's: lease_release gives it back, and it is released when the\nrun ends or dies, so a dead holder never blocks the queue. Returns {lease, resource,\namount, priority, state, position}: state is held or waiting, and position is the\nrequest's place in the resource's queue while it waits. With wait, the call returns once\nthe lease is held or `timeout` seconds pass (then with timed_out true; the request keeps\nits place). To wait longer than a minute, end your turn with `park` instead.\n\nArgs:\n    project: the project.\n    run: the run id (SLUICE_RUN_ID).\n    resource: the resource, one the project declares.\n    amount: how much of it (default 1).\n    wait: wait for the grant (default false).\n    timeout: seconds to wait at most (default and cap 600).\n    priority: queue priority, higher first (default the step's priority).",
+    ),
+    (
+        "lease_release",
+        "Give back a run's own section lease, or leave the queue with a waiting one. The next\nrequest in line is granted at once. Returns {lease, state}.\n\nArgs:\n    project: the project.\n    run: the run id (SLUICE_RUN_ID).\n    lease: the lease id lease_acquire returned.",
+    ),
+    (
+        "lease_status",
+        "Each resource's capacity, holders and queue. Returns {resources: {<name>: {capacity,\nheld, holders, queue, waking}}, parked}: holders are [{kind, lease?, run, step, amount,\nsince}] (kind lease for a section lease, needs for a running step's needs), queue is\n[{position, lease, run, step, amount, priority, since}] in grant order, waking lists\nparked runs taking their needs back, and parked is [{run, step, until, phase, lease,\nsince}].\n\nArgs:\n    project: the project.\n    resource: one resource (default every one).",
+    ),
+    (
+        "park",
+        "Park the agent until an event instead of polling for it: ends its turn, releases its\nstep's needs (its lane) while it waits, and resumes the same session with one message,\n\"woke: <until>, lease <id>\", once `until` fires and the needs are taken back (queued by\nthe step's priority). Parked time does not count toward the agent's wall cap. Messages\nto the step wait until it wakes. Returns {parked, until, lease, position, message}: with\nparked true, end your turn at once; with parked false the condition held already (a\nlease granted at once is yours: release it when done) and you carry on. Only an agent\nrun on the claude or codex engine parks; devin is refused, and so is a scattered step.\n\nArgs:\n    project: the project.\n    run: the run id (SLUICE_RUN_ID).\n    until: lease:<resource>[:<amount>] (granted; adopts the run's own waiting request\n        of that resource and amount, keeping its place, else asks for one), pid:<n> (the\n        process exits) or file:<path>[:<marker>] (the file exists and contains marker).\n    timeout: wake after this many seconds even if until has not fired (\"woke: timeout\n        after Ns waiting for <until>\").",
     ),
     (
         "log_read",

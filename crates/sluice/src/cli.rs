@@ -400,6 +400,22 @@ const TOOLS: &[(&str, &str)] = &[
     ),
     ("step_settle", "settle a finishing step on its submission"),
     (
+        "lease_acquire",
+        "a run's own lease on a project resource (sluice tool lease acquire <resource>)",
+    ),
+    (
+        "lease_release",
+        "give back a run's lease (sluice tool lease release <id>)",
+    ),
+    (
+        "lease_status",
+        "each resource's holders and queue (sluice tool lease status [<resource>])",
+    ),
+    (
+        "park",
+        "end the agent's turn and wait, lane released, until an event",
+    ),
+    (
         "step_bypass",
         "settle a pending step with given outputs instead of running it",
     ),
@@ -677,6 +693,24 @@ async fn normalize_args(
             }
             if let Some(project) = args.get_mut("project") {
                 to_selector(project)?;
+            }
+        }
+        "park" => {
+            // A relative file is the caller's; a pid's start time pins the process waited on.
+            if let Some(Value::String(until)) = args.get_mut("until") {
+                if let Some(path) = until.strip_prefix("file:")
+                    && !path.starts_with('/')
+                {
+                    let cwd = std::env::current_dir().map_err(storage)?;
+                    *until = format!("file:{}", cwd.join(path).display());
+                }
+                if let Some(pid) = until.strip_prefix("pid:")
+                    && let Ok(pid) = pid.parse::<u32>()
+                    && let Some(start) =
+                        sluice_process::identity::start_time(pid).map_err(storage)?
+                {
+                    args.insert("pid_start".into(), json!(start));
+                }
             }
         }
         "board_set" if !args.contains_key("program") => {
@@ -1164,6 +1198,44 @@ fn run_defaults(tool: &str, fields: &CliFields, args: &mut serde_json::Map<Strin
     }
 }
 
+/// `sluice tool lease <acquire|release|status> [<resource or lease id>] ...` is the
+/// `lease_<verb>` tool, a leading bare word its resource (acquire, status) or lease (release).
+fn lease_verb(name: String, rest: Vec<String>) -> Result<(String, Vec<String>), PublicError> {
+    if name != "lease" {
+        return Ok((name, rest));
+    }
+    let mut rest = rest.into_iter().peekable();
+    let verb = match rest.next().as_deref() {
+        Some(verb @ ("acquire" | "release" | "status")) => verb.to_owned(),
+        Some("--help" | "-h") | None => {
+            return Err(bad_request(
+                "usage: sluice tool lease acquire <resource> [--amount N] [--wait] [--timeout S] [--priority P] | release <id> | status [<resource>]",
+            ));
+        }
+        Some(other) => {
+            return Err(bad_request(format!(
+                "sluice tool lease: unknown verb {other:?}; expected acquire, release or status"
+            )));
+        }
+    };
+    let mut args = Vec::new();
+    if let Some(word) = rest.next_if(|word| {
+        !word.starts_with("--") && !word.starts_with('{') && word != "-" && word != "-h"
+    }) {
+        args.push(
+            if verb == "release" {
+                "--lease"
+            } else {
+                "--resource"
+            }
+            .into(),
+        );
+        args.push(word);
+    }
+    args.extend(rest);
+    Ok((format!("lease_{verb}"), args))
+}
+
 async fn tool(home: &Path, argv: Vec<String>) -> Result<(), PublicError> {
     ensure_home(home)?;
     let mut argv = argv.into_iter();
@@ -1185,6 +1257,7 @@ async fn tool(home: &Path, argv: Vec<String>) -> Result<(), PublicError> {
         return Ok(());
     };
     let rest: Vec<String> = argv.collect();
+    let (name, rest) = lease_verb(name, rest)?;
     if name == "rpc" {
         return rpc(home, rest.into_iter().next()).await;
     }

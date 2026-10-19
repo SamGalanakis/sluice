@@ -52,7 +52,10 @@ a matching record (`log_wait(project, since_seq, kinds=["step.status", "message"
 statuses=["failed", "stale"], recipients=["@lash-f4"])` wakes only on failures, stale steps
 and messages to you, `@lash-f4`); `next` blocks across projects, waking on your units' settles
 and failures and the questions to you, and without `since_seq` resumes where your last batch
-ended. See `docs("threads")`.
+ended. See `docs("threads")`. An agent inside a step waits the same way: it parks
+(`sluice tool park --until lease:<resource> | pid:<n> | file:<path>`), which ends its turn,
+frees its lane and resumes its session when the event fires, and takes shared slots with
+`sluice tool lease acquire` (`docs("plans")`, Waiting inside a step).
 
 Refs: a plan input is `name`; a step output is `step/output` (add `.field` or `.0` to reach
 inside). Every edit is type-checked; errors name the exact path to fix.

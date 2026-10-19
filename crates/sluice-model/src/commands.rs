@@ -930,6 +930,66 @@ pub struct ReleaseLease {
     pub run: RunId,
 }
 
+/// `lease_acquire`: a running step's own section lease on a project resource, the lease
+/// `ctx.acquire` takes in a fn. Granted first-in-first-out within priority; released by
+/// `lease_release` or when the run ends.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LeaseAcquire {
+    pub project: ProjectSelector,
+    pub run: RunId,
+    pub resource: String,
+    /// How much of the resource (default 1).
+    #[serde(default)]
+    pub amount: Option<u64>,
+    /// Wait for the grant, up to `timeout_seconds` (default 600, at most 600). A wait that
+    /// times out keeps the request in the queue.
+    #[serde(default)]
+    pub wait: bool,
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
+    /// The queue priority (higher first); default the step's priority.
+    #[serde(default)]
+    pub priority: Option<i64>,
+}
+
+/// `lease_release`: give back a run's own section lease, or leave its queue.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LeaseRelease {
+    pub project: ProjectSelector,
+    pub run: RunId,
+    pub lease: LeaseId,
+}
+
+/// `lease_status`: each resource's holders and queue.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LeaseStatus {
+    pub project: ProjectSelector,
+    /// One resource; default every resource of the project.
+    #[serde(default)]
+    pub resource: Option<String>,
+}
+
+/// `park`: end the agent's turn and wait, without its lane, until `until` fires.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Park {
+    pub project: ProjectSelector,
+    pub run: RunId,
+    /// `lease:<resource>[:<amount>]`, `pid:<n>` or `file:<absolute path>[:<marker>]`.
+    pub until: String,
+    /// Wake after this long even when `until` has not fired.
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
+    /// Set by `sluice tool park` for a `pid:` condition: the process's start time, so a
+    /// reused pid never holds the wait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub pid_start: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CompletionActionTarget {
@@ -1268,6 +1328,10 @@ pub enum CommandRequest {
     Query(Query),
     AcquireLease(AcquireLease),
     ReleaseLease(ReleaseLease),
+    LeaseAcquire(LeaseAcquire),
+    LeaseRelease(LeaseRelease),
+    LeaseStatus(LeaseStatus),
+    Park(Park),
     RegisterCompletionAction(RegisterCompletionAction),
     EdgeAdd(EdgeEdit),
     EdgeRemove(EdgeEdit),

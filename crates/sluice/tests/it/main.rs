@@ -7,6 +7,7 @@ mod g1a;
 mod identities;
 mod install;
 mod me;
+mod park;
 mod record_reader;
 mod release;
 mod schema_migrate;

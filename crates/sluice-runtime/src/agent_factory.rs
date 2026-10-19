@@ -814,13 +814,41 @@ impl SupervisorHost for RunHost {
                 vec![format!("process observation unavailable: {error}")],
             ),
         };
+        // A coordinator from before parks answers no park and no leases.
+        let park = match self
+            .read(C::Park {
+                identity: self.launch.identity.clone(),
+                op: sluice_model::park::ParkOp::Read,
+            })
+            .await
+        {
+            Ok(R::Park(view)) => view,
+            _ => sluice_model::park::ParkView::default(),
+        };
         Ok(HostSnapshot {
             submissions,
             messages,
             roots,
             background_work,
-            ..Default::default()
+            park: park.park,
+            leases_active: park.leases_active,
         })
+    }
+    async fn park(
+        &mut self,
+        op: sluice_model::park::ParkOp,
+    ) -> io::Result<sluice_model::park::ParkView> {
+        match patiently(&self.cancel, Some(self.patience.total), || {
+            self.link.request(C::Park {
+                identity: self.launch.identity.clone(),
+                op: op.clone(),
+            })
+        })
+        .await?
+        {
+            R::Park(view) => Ok(view),
+            _ => Err(io::Error::other("park reply")),
+        }
     }
     async fn acknowledge(&mut self, ids: &[MessageId]) -> io::Result<()> {
         for message in ids {

@@ -490,6 +490,9 @@ impl<H: ExecutionHost> Coordinator<H> {
         if let Some(reply) = crate::dispatch_ext::dispatch_ext(self, request.clone()).await? {
             return Ok(reply);
         }
+        if let Some(reply) = crate::park::dispatch(self, &request).await? {
+            return Ok(reply);
+        }
         let catalog = self.inner.catalog.clone();
         match request {
             CommandRequest::FnList { project } => {
@@ -1147,6 +1150,9 @@ impl<H: ExecutionHost> Coordinator<H> {
             CoordinatorCommand::Complete(journal) => {
                 Ok(CoordinatorReply::Completed(self.complete(*journal).await?))
             }
+            CoordinatorCommand::Park { op, .. } => crate::park::supervise(self, id, op)
+                .await
+                .map(CoordinatorReply::Park),
             CoordinatorCommand::Callback { request, .. } => {
                 if request.protocol != rpc::PROTOCOL_VERSION
                     || request.run_capability.as_ref() != capability
@@ -2906,7 +2912,8 @@ fn guardian_key(command: &CoordinatorCommand) -> &AttemptKey {
         | CoordinatorCommand::Messages { identity, .. }
         | CoordinatorCommand::Watch { identity, .. }
         | CoordinatorCommand::DeliverAck { identity, .. }
-        | CoordinatorCommand::Callback { identity, .. } => identity,
+        | CoordinatorCommand::Callback { identity, .. }
+        | CoordinatorCommand::Park { identity, .. } => identity,
         CoordinatorCommand::CancelIntent(id) | CoordinatorCommand::Submissions(id) => id,
         CoordinatorCommand::Complete(j) => &j.identity,
     }

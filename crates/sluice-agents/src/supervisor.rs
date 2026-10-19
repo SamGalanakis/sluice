@@ -12,6 +12,7 @@ use serde_json::Value;
 use sluice_model::{
     hash::ExecutionProvenance,
     ids::{AttemptId, InvocationId, MessageId, RunId},
+    park::{ParkCondition, ParkOp, ParkRequest, ParkView},
     rpc::decode_json,
 };
 use sluice_process::{
@@ -157,6 +158,9 @@ pub enum State {
     Idle,
     Finishing,
     Backoff,
+    /// Parked (`sluice tool park`): the session idles, its lane released, until the
+    /// condition fires.
+    Parked,
     Exiting,
     Done,
 }
@@ -330,8 +334,22 @@ pub struct Checkpoint {
     pub live_after: MessageId,
     pub final_text: String,
     pub notes: Vec<String>,
+    /// Time spent parked, which the wall cap leaves out.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub parked_ms: u64,
+}
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 impl Checkpoint {
+    /// Run time so far, parked time left out.
+    fn elapsed(&self) -> io::Result<Duration> {
+        Ok(Duration::from_millis(
+            clock_ms()?
+                .saturating_sub(self.started_ms)
+                .saturating_sub(self.parked_ms),
+        ))
+    }
     pub fn save(&self, directory: &Path) -> io::Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
@@ -377,6 +395,8 @@ pub struct HostSnapshot {
     /// A held or waiting section lease protects work just as a live child does.
     pub leases_active: bool,
     pub roots: Vec<ProcessIdentity>,
+    /// The run's park (`sluice tool park`), once asked for.
+    pub park: Option<ParkRequest>,
 }
 /// How long a host call keeps retrying a peer (the coordinator or the run's guardian) that
 /// answers `busy` (retryable) or does not answer in time, before the run fails `Transient`.
@@ -459,6 +479,11 @@ pub trait SupervisorHost: Send {
         checkpoint: &Checkpoint,
     ) -> impl Future<Output = io::Result<()>> + Send;
     fn cleanup(&mut self) -> impl Future<Output = io::Result<()>> + Send;
+    /// Reads or moves the run's park (see [`ParkOp`]). A host without parks has none.
+    fn park(&mut self, op: ParkOp) -> impl Future<Output = io::Result<ParkView>> + Send {
+        let _ = op;
+        async { Ok(ParkView::default()) }
+    }
 }
 /// Held by the guardian across outer-helper retries. Never unlink flock inodes.
 #[derive(Default)]
@@ -553,6 +578,8 @@ pub struct Machine {
     boot_at: Duration,
     /// The most turns this invocation's engine has reported completed.
     completed: u64,
+    /// The agent asked to park; its turn's end parks the run.
+    pub park: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -566,6 +593,8 @@ pub enum Action {
     },
     Finish,
     Retry,
+    /// The agent asked to park and its turn is over.
+    Park,
     None,
 }
 impl Machine {
@@ -595,6 +624,7 @@ impl Machine {
             progress: None,
             boot_at: now,
             completed: 0,
+            park: false,
         }
     }
     /// The turns this invocation's engine has completed, as last observed.
@@ -755,6 +785,16 @@ impl Machine {
             return Ok(Action::Reprime {
                 ordinal: o.compactions,
             });
+        }
+        // A park waits out its condition in place of any nudge or wait, background work and
+        // its own queued lease included: they are often what it waits for.
+        if self.park
+            && new_turn
+            && o.status == EngineStatus::Idle
+            && !self.pending()
+            && self.awaiting.is_none()
+        {
+            return Ok(Action::Park);
         }
         if !has_work
             && o.status != EngineStatus::Idle
@@ -1077,6 +1117,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             live_after,
             final_text: String::new(),
             notes: vec![],
+            parked_ms: 0,
         }
     };
     fs::write(config.run_dir.join("task.md"), &config.task).map_err(invalid)?;
@@ -1094,12 +1135,8 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
         }
         enqueue_message(&mut checkpoint, &message, &config.run_dir)?;
     }
-    let now = Duration::from_millis(
-        clock_ms()
-            .map_err(invalid)?
-            .saturating_sub(checkpoint.started_ms),
-    );
-    let deadline = tokio::time::Instant::now() + config.limits.wall.saturating_sub(now);
+    let now = checkpoint.elapsed().map_err(invalid)?;
+    let mut deadline = tokio::time::Instant::now() + config.limits.wall.saturating_sub(now);
     let mut machine = Machine::new(
         checkpoint,
         config.limits.clone(),
@@ -1193,7 +1230,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                 Err(error)
             } else {
                 machine.checkpoint.state = State::Delivering;
-                run_invocation(&mut machine, &config, engine, host, sessions, &context, cancel, deadline, &mut quiet).await
+                run_invocation(&mut machine, &config, engine, host, sessions, &context, cancel, &mut deadline, &mut quiet).await
             };
             match result {
                 Ok(()) => return Ok(()),
@@ -1219,7 +1256,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                     machine.checkpoint.internal_attempt += 1;
                     previous_failure = Some(error);
                     machine.checkpoint.compactions = 0;
-                    let now = Duration::from_millis(clock_ms().map_err(invalid)?.saturating_sub(machine.checkpoint.started_ms));
+                    let now = machine.checkpoint.elapsed().map_err(invalid)?;
                     machine = Machine::new(machine.checkpoint.clone(), config.limits.clone(), config.required.clone(), profile.reports_waiting, now);
                     quiet.reset();
                 }
@@ -1442,10 +1479,12 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
     sessions: &mut SessionGuard,
     context: &EngineContext,
     cancel: &CancellationToken,
-    deadline: tokio::time::Instant,
+    wall: &mut tokio::time::Instant,
     quiet: &mut QuietMonitor,
 ) -> Result<(), AgentFailure> {
     loop {
+        // A park moves the wall deadline by its parked time.
+        let deadline = *wall;
         if hooks_need_context(&config.run_dir).map_err(invalid)? {
             refresh_me(host, &config.run_dir).await;
         }
@@ -1475,6 +1514,7 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
 
         // Snapshot is authoritative; removing a field cannot leave an earlier submission complete.
         machine.checkpoint.submissions = snapshot.submissions;
+        machine.park = snapshot.park.is_some();
         let mut messages = snapshot.messages;
         messages.sort_by_key(|m| m.id);
         for message in messages {
@@ -1483,11 +1523,7 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
                 machine.checkpoint.live_after = message.id;
             }
         }
-        let now = Duration::from_millis(
-            clock_ms()
-                .map_err(invalid)?
-                .saturating_sub(machine.checkpoint.started_ms),
-        );
+        let now = machine.checkpoint.elapsed().map_err(invalid)?;
         let quiet_period = config.limits.quiet.max(config.limits.reminder);
         if o.status == EngineStatus::Busy
             && o.waiting.as_ref().is_none_or(String::is_empty)
@@ -1641,6 +1677,11 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
                     None => failure(FailureKind::Transient, "engine transient"),
                 });
             }
+            Action::Park => {
+                park(machine, config, engine, host, context, cancel, wall).await?;
+                quiet.reset();
+                continue;
+            }
             Action::Finish => {
                 let _ = bounded(
                     cancel,
@@ -1696,11 +1737,7 @@ async fn continue_in_place<E: EngineAdapter, H: SupervisorHost>(
                 .into(),
         )
         .map_err(invalid)?;
-    let now = Duration::from_millis(
-        clock_ms()
-            .map_err(invalid)?
-            .saturating_sub(machine.checkpoint.started_ms),
-    );
+    let now = machine.checkpoint.elapsed().map_err(invalid)?;
     *machine = Machine::new(
         machine.checkpoint.clone(),
         config.limits.clone(),
@@ -1710,6 +1747,177 @@ async fn continue_in_place<E: EngineAdapter, H: SupervisorHost>(
     );
     machine.checkpoint.state = State::Delivering;
     persist(machine, config, host).await
+}
+/// The agent asked to park (`sluice tool park`) and its turn is over. The session stays up,
+/// idle; the coordinator releases the step's needs while the run waits for the condition (or
+/// its timeout), then takes them back in the queue by priority, and the same session resumes
+/// with one "woke:" message. Parked time moves the wall deadline: the wall cap leaves it out.
+async fn park<E: EngineAdapter, H: SupervisorHost>(
+    machine: &mut Machine,
+    config: &SupervisorConfig,
+    engine: &mut E,
+    host: &mut H,
+    context: &EngineContext,
+    cancel: &CancellationToken,
+    wall: &mut tokio::time::Instant,
+) -> Result<(), AgentFailure> {
+    machine.checkpoint.state = State::Parked;
+    persist(machine, config, host).await?;
+    let started = tokio::time::Instant::now();
+    let Some(park) = parked_call(engine, config, host, cancel, ParkOp::Enter)
+        .await?
+        .park
+    else {
+        machine.park = false;
+        return Ok(());
+    };
+    eprintln!("agent parked until {}", park.condition);
+    let timeout = park.timeout_seconds.map(Duration::from_secs);
+    let reason = loop {
+        let o = bounded(
+            cancel,
+            tokio::time::Instant::now() + config.limits.ready,
+            engine.observe(context),
+        )
+        .await?;
+        if o.status == EngineStatus::Exited {
+            return Err(failure(
+                FailureKind::EngineExited,
+                "engine exited while parked",
+            ));
+        }
+        if let Some(error) = o.error {
+            return Err(error.into());
+        }
+        let view = parked_call(engine, config, host, cancel, ParkOp::Read).await?;
+        if view.cancelled {
+            cancel.cancel();
+            return Err(failure(FailureKind::Cancelled, "cancelled while parked"));
+        }
+        let fired = match &park.condition {
+            ParkCondition::Lease { .. } => view.lease_held,
+            condition => condition_holds(condition).map_err(invalid)?,
+        };
+        if fired {
+            break park.condition.to_string();
+        }
+        if let Some(timeout) = timeout
+            && started.elapsed() >= timeout
+        {
+            break format!(
+                "timeout after {}s waiting for {}",
+                timeout.as_secs(),
+                park.condition
+            );
+        }
+        wait_parked(engine, config, cancel).await?;
+    };
+    let view = loop {
+        let view = parked_call(
+            engine,
+            config,
+            host,
+            cancel,
+            ParkOp::Wake {
+                reason: reason.clone(),
+            },
+        )
+        .await?;
+        if view.cancelled {
+            cancel.cancel();
+            return Err(failure(FailureKind::Cancelled, "cancelled while parked"));
+        }
+        if view.woke {
+            break view;
+        }
+        wait_parked(engine, config, cancel).await?;
+    };
+    let parked = started.elapsed();
+    machine.checkpoint.parked_ms = machine
+        .checkpoint
+        .parked_ms
+        .saturating_add(u64::try_from(parked.as_millis()).unwrap_or(u64::MAX));
+    *wall += parked;
+    let text = match park.lease {
+        Some(lease) if view.lease_held => format!("woke: {reason}, lease {lease}"),
+        Some(lease) => format!("woke: {reason}; lease {lease} is still queued"),
+        None => format!("woke: {reason}"),
+    };
+    eprintln!("agent {text}");
+    let ordinal = machine
+        .checkpoint
+        .delivery
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry.id, InputId::Wake { .. }))
+        .count();
+    machine
+        .checkpoint
+        .delivery
+        .enqueue(
+            InputId::Wake {
+                ordinal: u32::try_from(ordinal + 1).map_err(invalid)?,
+            },
+            text,
+        )
+        .map_err(invalid)?;
+    let now = machine.checkpoint.elapsed().map_err(invalid)?;
+    *machine = Machine::new(
+        machine.checkpoint.clone(),
+        config.limits.clone(),
+        config.required.clone(),
+        engine.profile().reports_waiting,
+        now,
+    );
+    machine.checkpoint.state = State::Delivering;
+    persist(machine, config, host).await
+}
+/// A park call to the host, answering the engine's hooks meanwhile.
+async fn parked_call<E: EngineAdapter, H: SupervisorHost>(
+    engine: &mut E,
+    config: &SupervisorConfig,
+    host: &mut H,
+    cancel: &CancellationToken,
+    op: ParkOp,
+) -> Result<ParkView, AgentFailure> {
+    answering_hooks(engine, config, async {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(failure(FailureKind::Cancelled, "cancelled while parked")),
+            result = host.park(op) => result.map_err(host_failure),
+        }
+    })
+    .await
+}
+async fn wait_parked<E: EngineAdapter>(
+    engine: &mut E,
+    config: &SupervisorConfig,
+    cancel: &CancellationToken,
+) -> Result<(), AgentFailure> {
+    answering_hooks(engine, config, async {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(failure(FailureKind::Cancelled, "cancelled while parked")),
+            _ = tokio::time::sleep(config.limits.poll) => Ok(()),
+        }
+    })
+    .await
+}
+/// Whether a `pid:` or `file:` park condition holds; a `lease:` one is the coordinator's.
+pub fn condition_holds(condition: &ParkCondition) -> io::Result<bool> {
+    match condition {
+        ParkCondition::Lease { .. } => Ok(false),
+        ParkCondition::Pid { pid, start } => sluice_process::identity::process_gone(*pid, *start),
+        ParkCondition::File { path, marker } => match fs::read(path) {
+            Ok(bytes) => Ok(marker.as_ref().is_none_or(|marker| {
+                bytes
+                    .windows(marker.len().max(1))
+                    .any(|window| window == marker.as_bytes())
+            })),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        },
+    }
 }
 async fn clean<E: EngineAdapter, H: SupervisorHost>(
     engine: &mut E,

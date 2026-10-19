@@ -14,6 +14,7 @@ use sluice_model::{
     gates::{GateDecision, StateSnapshot, StepState, readiness},
     ids::{AttemptId, LeaseId, ProjectId, Revision, RunId, StepId},
     limits::{Limits, Reserved, ResourcePolicy, RunLimits, shown},
+    park::{ParkCondition, ParkPhase, ParkRequest},
     plan::{Pause, Plan, SignatureProvider},
     types::Type,
 };
@@ -21,6 +22,8 @@ use sluice_model::{
 use crate::{Result, StoreError, WriteTransaction};
 
 pub type Needs = BTreeMap<String, u64>;
+/// The request id prefix of a section lease asked for with an explicit priority.
+const EXPLICIT_PRIORITY: &str = "priority/";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Capacity {
@@ -720,7 +723,7 @@ pub fn hold_needs(
     Ok(ids)
 }
 fn need_rows(conn: &Connection, group: &str) -> Result<Vec<(LeaseId, String, u64)>> {
-    let mut stmt = conn.prepare("SELECT lease_id,resource,amount FROM leases WHERE kind='needs' AND group_id=? ORDER BY lease_id")?;
+    let mut stmt = conn.prepare("SELECT lease_id,resource,amount FROM leases WHERE kind='needs' AND group_id=? AND request_id NOT LIKE '%/wake/%' ORDER BY lease_id")?;
     Ok(stmt
         .query_map([group], |r| {
             Ok((LeaseId(r.get(0)?), r.get(1)?, r.get::<_, i64>(2)? as u64))
@@ -752,7 +755,8 @@ pub fn release_needs(tx: &mut WriteTransaction<'_>, run_id: RunId) -> Result<boo
             return Ok(false);
         }
     }
-    let n = tx.sql().execute("UPDATE leases SET state='released',released_at=?2,release_id='needs/'||lease_id WHERE kind='needs' AND group_id=?1 AND state='held'", params![run.group, now()?])?;
+    let n = tx.sql().execute("UPDATE leases SET state='released',released_at=?2,release_id='needs/'||lease_id WHERE kind='needs' AND group_id=?1 AND state='held'", params![run.group, now()?])?
+        + tx.sql().execute("UPDATE leases SET state='cancelled',released_at=?2 WHERE kind='needs' AND group_id=?1 AND state='waiting'", params![run.group, now()?])?;
     if n > 0 {
         changed(tx, run.project);
     }
@@ -776,7 +780,24 @@ pub fn request_lease_keyed(
     amount: u64,
     request_id: &str,
 ) -> Result<LeaseId> {
+    request_lease_ranked(tx, run_id, resource, amount, request_id, None)
+}
+/// A request with an explicit queue priority keeps it; without one, its place follows its
+/// step's current priority. The explicit kind is marked by its request id's `priority/`
+/// prefix, so the order needs no column of its own.
+pub fn request_lease_ranked(
+    tx: &mut WriteTransaction<'_>,
+    run_id: RunId,
+    resource: &str,
+    amount: u64,
+    request_id: &str,
+    priority: Option<i64>,
+) -> Result<LeaseId> {
     integer(amount)?;
+    let request_id = &match priority {
+        Some(_) => format!("{EXPLICIT_PRIORITY}{request_id}"),
+        None => request_id.to_owned(),
+    };
     if request_id.is_empty() {
         return Err(bad("lease request id is empty"));
     }
@@ -817,14 +838,14 @@ pub fn request_lease_keyed(
             "{amount} of {resource} is more than its capacity {cap}"
         )));
     }
-    tx.sql().execute("INSERT INTO leases(project_id,run_id,request_id,scope,resource,amount,priority,state,created_at) VALUES (?1,?2,?3,?1,?4,?5,?6,'waiting',?7)", params![run.project.to_string(), run_id.to_string(), request_id, resource, integer(amount)?, run.priority, now()?])?;
+    tx.sql().execute("INSERT INTO leases(project_id,run_id,request_id,scope,resource,amount,priority,state,created_at) VALUES (?1,?2,?3,?1,?4,?5,?6,'waiting',?7)", params![run.project.to_string(), run_id.to_string(), request_id, resource, integer(amount)?, priority.unwrap_or(run.priority), now()?])?;
     let lease = LeaseId(tx.sql().last_insert_rowid());
     changed(tx, run.project);
     Ok(lease)
 }
 
 pub fn leases(conn: &Connection, project: ProjectId) -> Result<Vec<Lease>> {
-    let mut stmt = conn.prepare("SELECT l.lease_id,l.run_id,r.step_id,l.resource,l.amount,coalesce(json_extract(s.declaration,'$.priority'),l.priority) AS current_priority,l.state,CASE WHEN l.state='held' THEN l.granted_at ELSE l.created_at END FROM leases l JOIN runs r ON r.run_id=l.run_id LEFT JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.step_id AND s.generation=r.generation AND s.work_generation=r.work_generation WHERE l.project_id=? AND l.kind='section' AND l.state IN ('waiting','held') ORDER BY current_priority DESC,l.lease_id")?;
+    let mut stmt = conn.prepare("SELECT l.lease_id,l.run_id,r.step_id,l.resource,l.amount,CASE WHEN l.request_id LIKE 'priority/%' THEN l.priority ELSE coalesce(json_extract(s.declaration,'$.priority'),l.priority) END AS current_priority,l.state,CASE WHEN l.state='held' THEN l.granted_at ELSE l.created_at END FROM leases l JOIN runs r ON r.run_id=l.run_id LEFT JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.step_id AND s.generation=r.generation AND s.work_generation=r.work_generation WHERE l.project_id=? AND l.kind='section' AND l.state IN ('waiting','held') ORDER BY current_priority DESC,l.lease_id")?;
     let rows = stmt.query_map([project.to_string()], |r| {
         Ok((
             r.get::<_, i64>(0)?,
@@ -879,32 +900,94 @@ fn lease_record(
     Ok(())
 }
 /// Run before new step admission. Each grant becomes visible to the next fit.
-/// Drain permits existing sections.
+/// Drain permits existing sections. A parked run waking takes its needs back in the same
+/// queue, by its step's current priority, before any new step is admitted.
 pub fn grant_leases(tx: &mut WriteTransaction<'_>, project: ProjectId) -> Result<Vec<LeaseId>> {
+    enum Waiter {
+        Section(Lease),
+        Wake {
+            run: RunId,
+            group: String,
+            needs: Needs,
+        },
+    }
+    let mut waiters: Vec<(i64, i64, Waiter)> = leases(tx.sql(), project)?
+        .into_iter()
+        .filter(|l| l.state == LeaseState::Waiting)
+        .map(|l| (l.priority, l.id.0, Waiter::Section(l)))
+        .collect();
+    for (run, group, needs, priority, first) in waking(tx.sql(), project)? {
+        waiters.push((priority, first, Waiter::Wake { run, group, needs }));
+    }
+    waiters.sort_by_key(|(priority, first, _)| (std::cmp::Reverse(*priority), *first));
     let mut granted = vec![];
-    for lease in leases(tx.sql(), project)? {
-        if lease.state != LeaseState::Waiting {
-            continue;
-        }
-        let run = run(tx.sql(), lease.run)?;
+    for (_, first, waiter) in waiters {
+        let owner = match &waiter {
+            Waiter::Section(lease) => lease.run,
+            Waiter::Wake { run, .. } => *run,
+        };
+        let run = run(tx.sql(), owner)?;
         if run.cancelled || run.finished || !run.current || run.phase == "terminal" {
-            cancel_waiting(tx, lease.run)?;
+            cancel_waiting(tx, owner)?;
             continue;
         }
-        if fits(
-            tx.sql(),
-            project,
-            &Needs::from([(lease.resource.clone(), lease.amount)]),
-        )?
-        .fits()
-        {
-            tx.sql().execute("UPDATE leases SET state='held',granted_at=?2,grant_id='section/'||lease_id WHERE lease_id=?1 AND state='waiting'", params![lease.id.0,now()?])?;
-            lease_record(tx, project, &lease, LeaseState::Held, None)?;
-            changed(tx, project);
-            granted.push(lease.id);
+        match waiter {
+            Waiter::Section(lease) => {
+                if fits(
+                    tx.sql(),
+                    project,
+                    &Needs::from([(lease.resource.clone(), lease.amount)]),
+                )?
+                .fits()
+                {
+                    tx.sql().execute("UPDATE leases SET state='held',granted_at=?2,grant_id='section/'||lease_id WHERE lease_id=?1 AND state='waiting'", params![lease.id.0,now()?])?;
+                    lease_record(tx, project, &lease, LeaseState::Held, None)?;
+                    changed(tx, project);
+                    granted.push(lease.id);
+                }
+            }
+            Waiter::Wake { group, needs, .. } => {
+                if fits(tx.sql(), project, &needs)?.fits() {
+                    tx.sql().execute("UPDATE leases SET state='held',granted_at=?2,grant_id='wake/'||lease_id WHERE kind='needs' AND group_id=?1 AND state='waiting'", params![group, now()?])?;
+                    changed(tx, project);
+                    granted.push(LeaseId(first));
+                }
+            }
         }
     }
     Ok(granted)
+}
+/// Each waking run's queued needs: its run, group, bundle, current priority and first row.
+#[allow(clippy::type_complexity)]
+fn waking(conn: &Connection, project: ProjectId) -> Result<Vec<(RunId, String, Needs, i64, i64)>> {
+    let mut stmt = conn.prepare("SELECT l.lease_id,l.run_id,l.group_id,l.resource,l.amount,coalesce(json_extract(s.declaration,'$.priority'),l.priority) FROM leases l JOIN runs r ON r.run_id=l.run_id LEFT JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.step_id AND s.generation=r.generation AND s.work_generation=r.work_generation WHERE l.project_id=? AND l.kind='needs' AND l.state='waiting' ORDER BY l.lease_id")?;
+    let rows = stmt.query_map([project.to_string()], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, i64>(4)? as u64,
+            r.get::<_, i64>(5)?,
+        ))
+    })?;
+    let mut out: Vec<(RunId, String, Needs, i64, i64)> = vec![];
+    for row in rows {
+        let (lease, run, group, resource, amount, priority) = row?;
+        match out.iter_mut().find(|w| w.1 == group) {
+            Some(waiter) => {
+                waiter.2.insert(resource, amount);
+            }
+            None => out.push((
+                id(run)?,
+                group,
+                Needs::from([(resource, amount)]),
+                priority,
+                lease,
+            )),
+        }
+    }
+    Ok(out)
 }
 /// Explicit voluntary release while alive; both identities must match. A section
 /// release cannot touch automatic needs or any later acquisition.
@@ -948,7 +1031,10 @@ fn finish_lease(
 /// Cancellation removes requests but retains granted leases until proven stop.
 pub fn cancel_waiting(tx: &mut WriteTransaction<'_>, run_id: RunId) -> Result<usize> {
     let run = run(tx.sql(), run_id)?;
-    let n = tx.sql().execute("UPDATE leases SET state='cancelled',released_at=?2 WHERE run_id=?1 AND kind='section' AND state='waiting'", params![run_id.to_string(),now()?])?;
+    let n = tx.sql().execute(
+        "UPDATE leases SET state='cancelled',released_at=?2 WHERE run_id=?1 AND state='waiting'",
+        params![run_id.to_string(), now()?],
+    )?;
     if n > 0 {
         changed(tx, run.project);
     }
@@ -969,6 +1055,268 @@ pub fn release_stopped_run(tx: &mut WriteTransaction<'_>, run_id: RunId) -> Resu
         released = true;
     }
     Ok(released)
+}
+
+/// A run's own section leases, waiting or held, in queue order.
+pub fn run_leases(conn: &Connection, run_id: RunId) -> Result<Vec<Lease>> {
+    let project: Option<String> = conn
+        .query_row(
+            "SELECT project_id FROM runs WHERE run_id=?",
+            [run_id.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    let Some(project) = project else {
+        return Ok(vec![]);
+    };
+    Ok(leases(conn, id(project)?)?
+        .into_iter()
+        .filter(|l| l.run == run_id)
+        .collect())
+}
+/// A waiting lease's place in its resource's queue, from 1; `None` once held.
+pub fn queue_position(all: &[Lease], lease: LeaseId) -> Option<usize> {
+    let target = all.iter().find(|l| l.id == lease)?;
+    if target.state != LeaseState::Waiting {
+        return None;
+    }
+    all.iter()
+        .filter(|l| l.resource == target.resource && l.state == LeaseState::Waiting)
+        .position(|l| l.id == lease)
+        .map(|n| n + 1)
+}
+
+/// The run's park, kept on its attempt (`$.park` of its frozen request).
+pub fn park_request(conn: &Connection, run_id: RunId) -> Result<Option<ParkRequest>> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT json_extract(a.request,'$.park') FROM runs r JOIN attempts a USING(attempt_id) WHERE r.run_id=?",
+            [run_id.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(raw.map(|raw| serde_json::from_str(&raw)).transpose()?)
+}
+fn set_park(
+    tx: &mut WriteTransaction<'_>,
+    run_id: RunId,
+    park: Option<&ParkRequest>,
+) -> Result<()> {
+    let attempt = "(SELECT attempt_id FROM runs WHERE run_id=?1)";
+    match park {
+        Some(park) => tx.sql().execute(
+            &format!("UPDATE attempts SET request=json_set(request,'$.park',json(?2)) WHERE attempt_id={attempt}"),
+            params![run_id.to_string(), serde_json::to_string(park)?],
+        )?,
+        None => tx.sql().execute(
+            &format!("UPDATE attempts SET request=json_remove(request,'$.park') WHERE attempt_id={attempt}"),
+            [run_id.to_string()],
+        )?,
+    };
+    Ok(())
+}
+/// What `park` answered: parked until the condition, or the condition holds already.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParkAsked {
+    Parked(ParkRequest),
+    Ready { lease: Option<LeaseId> },
+}
+/// Record a park for a live, unscattered run. A `lease:` condition adopts the run's own
+/// oldest request of that resource and amount (keeping its place in the queue), else asks
+/// for one; a lease granted at once answers `Ready`. The caller checks `pid:` and `file:`
+/// conditions, which are not store state, before asking.
+pub fn park(
+    tx: &mut WriteTransaction<'_>,
+    run_id: RunId,
+    condition: ParkCondition,
+    timeout_seconds: Option<u64>,
+) -> Result<ParkAsked> {
+    let run = run(tx.sql(), run_id)?;
+    if run.finished || run.cancelled || !run.current || run.phase != "executing" {
+        return Err(conflict("park needs the step's current, executing run"));
+    }
+    if run.group != run_id.to_string() {
+        return Err(bad("park is not available to a scattered step's item"));
+    }
+    let mut lease = None;
+    if let ParkCondition::Lease { resource, amount } = &condition {
+        let own = run_leases(tx.sql(), run_id)?
+            .into_iter()
+            .find(|l| &l.resource == resource && l.amount == *amount);
+        let id = match own {
+            Some(own) => own.id,
+            None => request_lease_keyed(
+                tx,
+                run_id,
+                resource,
+                *amount,
+                &format!("park/{run_id}/{}", RunId::new()),
+            )?,
+        };
+        grant_leases(tx, run.project)?;
+        if run_leases(tx.sql(), run_id)?
+            .iter()
+            .any(|l| l.id == id && l.state == LeaseState::Held)
+        {
+            return Ok(ParkAsked::Ready { lease: Some(id) });
+        }
+        lease = Some(id);
+    }
+    let park = ParkRequest {
+        condition,
+        timeout_seconds,
+        lease,
+        phase: ParkPhase::Requested,
+        requested_at: now()?,
+        parked_at: None,
+        woke: None,
+    };
+    set_park(tx, run_id, Some(&park))?;
+    changed(tx, run.project);
+    Ok(ParkAsked::Parked(park))
+}
+/// The agent's turn ended: release the step's needs while the run waits. Answers the park,
+/// `None` when there is none.
+pub fn park_enter(tx: &mut WriteTransaction<'_>, run_id: RunId) -> Result<Option<ParkRequest>> {
+    let Some(mut park) = park_request(tx.sql(), run_id)? else {
+        return Ok(None);
+    };
+    if park.phase == ParkPhase::Requested {
+        let run = run(tx.sql(), run_id)?;
+        tx.sql().execute("UPDATE leases SET state='released',released_at=?2,release_id='park/'||lease_id WHERE kind='needs' AND group_id=?1 AND state='held'", params![run.group, now()?])?;
+        park.phase = ParkPhase::Parked;
+        park.parked_at = Some(now()?);
+        set_park(tx, run_id, Some(&park))?;
+        grant_leases(tx, run.project)?;
+        changed(tx, run.project);
+    }
+    Ok(Some(park))
+}
+/// The park's condition fired (`reason`): queue the step's needs again, by its priority.
+/// Answers the park and whether it is over: the needs are held again, and the park is
+/// removed. Repeated until it is.
+pub fn park_wake(
+    tx: &mut WriteTransaction<'_>,
+    run_id: RunId,
+    reason: &str,
+) -> Result<(bool, Option<ParkRequest>)> {
+    let Some(mut park) = park_request(tx.sql(), run_id)? else {
+        return Ok((true, None));
+    };
+    let run = run(tx.sql(), run_id)?;
+    if park.phase == ParkPhase::Parked {
+        let ordinal: i64 = tx.sql().query_row(
+            "SELECT count(*)+1 FROM leases WHERE kind='needs' AND group_id=?1 AND request_id LIKE '%/wake/%'",
+            [&run.group],
+            |r| r.get(0),
+        )?;
+        for (_, name, amount) in need_rows(tx.sql(), &run.group)? {
+            tx.sql().execute("INSERT INTO leases(project_id,run_id,request_id,kind,group_id,scope,resource,amount,priority,state,created_at) VALUES (?1,?2,?3,'needs',?4,?1,?5,?6,?7,'waiting',?8)", params![run.project.to_string(), run_id.to_string(), format!("needs/{}/{name}/wake/{ordinal}", run.group), run.group, name, integer(amount)?, run.priority, now()?])?;
+        }
+        park.phase = ParkPhase::Waking;
+        park.woke = Some(reason.to_owned());
+        set_park(tx, run_id, Some(&park))?;
+        grant_leases(tx, run.project)?;
+        changed(tx, run.project);
+    }
+    let queued: bool = tx.sql().query_row(
+        "SELECT EXISTS(SELECT 1 FROM leases WHERE kind='needs' AND group_id=?1 AND state='waiting')",
+        [&run.group],
+        |r| r.get(0),
+    )?;
+    if queued {
+        return Ok((false, Some(park)));
+    }
+    set_park(tx, run_id, None)?;
+    changed(tx, run.project);
+    Ok((true, Some(park)))
+}
+/// `lease_status`: each resource's capacity, holders (section leases and steps' needs) and
+/// queue with positions, and the project's parked runs.
+pub fn lease_status(conn: &Connection, project: ProjectId, only: Option<&str>) -> Result<Value> {
+    let declared = declarations(conn, project)?;
+    if let Some(name) = only
+        && !declared.contains_key(name)
+    {
+        return Err(bad(format!("project declares no resource '{name}'")));
+    }
+    let sections = leases(conn, project)?;
+    let mut stmt = conn.prepare("SELECT l.lease_id,l.run_id,r.step_id,l.resource,l.amount,l.granted_at FROM leases l JOIN runs r ON r.run_id=l.run_id WHERE l.project_id=? AND l.kind='needs' AND l.state='held' ORDER BY l.lease_id")?;
+    let needs = stmt
+        .query_map([project.to_string()], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, Option<String>>(5)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let waking = waking(conn, project)?;
+    let mut resources = serde_json::Map::new();
+    for (name, resource) in declared {
+        if only.is_some_and(|only| only != name) {
+            continue;
+        }
+        let mut holders: Vec<Value> = needs
+            .iter()
+            .filter(|n| n.3 == name)
+            .map(|(_, run, step, _, amount, since)| {
+                json!({"kind": "needs", "run": run, "step": step, "amount": amount, "since": since})
+            })
+            .collect();
+        holders.extend(
+            sections
+                .iter()
+                .filter(|l| l.resource == name && l.state == LeaseState::Held)
+                .map(|l| json!({"kind": "lease", "lease": l.id, "run": l.run, "step": l.step, "amount": l.amount, "since": l.since})),
+        );
+        let queue: Vec<Value> = sections
+            .iter()
+            .filter(|l| l.resource == name && l.state == LeaseState::Waiting)
+            .enumerate()
+            .map(|(n, l)| json!({"position": n + 1, "lease": l.id, "run": l.run, "step": l.step, "amount": l.amount, "priority": l.priority, "since": l.since}))
+            .collect();
+        let waking: Vec<Value> = waking
+            .iter()
+            .filter_map(|(run, _, bundle, priority, _)| {
+                bundle
+                    .get(&name)
+                    .map(|amount| json!({"run": run, "amount": amount, "priority": priority}))
+            })
+            .collect();
+        resources.insert(
+            name,
+            json!({
+                "capacity": resource.capacity,
+                "held": holders.iter().filter_map(|h| h["amount"].as_u64()).sum::<u64>(),
+                "holders": holders,
+                "queue": queue,
+                "waking": waking,
+            }),
+        );
+    }
+    let mut stmt = conn.prepare("SELECT r.run_id,r.step_id,json_extract(a.request,'$.park') FROM runs r JOIN attempts a USING(attempt_id) WHERE r.project_id=? AND r.finished_at IS NULL AND a.phase<>'terminal' AND json_type(a.request,'$.park') IS NOT NULL ORDER BY r.run_id")?;
+    let parked = stmt
+        .query_map([project.to_string()], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|(run, step, park)| {
+            let park: ParkRequest = serde_json::from_str(&park)?;
+            Ok(json!({"run": run, "step": step, "until": park.condition.to_string(), "phase": park.phase, "lease": park.lease, "since": park.parked_at.unwrap_or(park.requested_at)}))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(json!({"resources": resources, "parked": parked}))
 }
 
 /// Uses the model's readiness evaluator with one durable projection snapshot.

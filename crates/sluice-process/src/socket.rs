@@ -8,6 +8,7 @@ use sluice_model::{
     commands::{CommandReply, CommandRequest},
     error::PublicError,
     ids::*,
+    park::{ParkOp, ParkView},
     rpc::*,
 };
 use std::{
@@ -104,6 +105,11 @@ pub enum CoordinatorCommand {
         identity: AttemptKey,
         request: Box<RpcRequest>,
     },
+    /// The run's park (`sluice tool park`), as its supervisor reads and moves it.
+    Park {
+        identity: AttemptKey,
+        op: ParkOp,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
@@ -125,6 +131,7 @@ pub enum CoordinatorReply {
     Submissions(SubmissionSnapshot),
     Completed(DurableAck),
     Callback(Box<CommandReply>),
+    Park(ParkView),
 }
 /// Implementations reconnect without changing admission identity. Every mutation
 /// is idempotent by its IDs; Complete replies only after the writer commits.
@@ -524,6 +531,7 @@ impl CoordinatorLink for MemoryCoordinator {
             CoordinatorCommand::Submissions(_) => "submissions",
             CoordinatorCommand::Complete(_) => "complete",
             CoordinatorCommand::Callback { .. } => "callback",
+            CoordinatorCommand::Park { .. } => "park",
         };
         self.state
             .lock()
@@ -553,7 +561,8 @@ impl MemoryState {
                 | CoordinatorCommand::Messages { identity, .. }
                 | CoordinatorCommand::Watch { identity, .. }
                 | CoordinatorCommand::DeliverAck { identity, .. }
-                | CoordinatorCommand::Callback { identity, .. } => identity,
+                | CoordinatorCommand::Callback { identity, .. }
+                | CoordinatorCommand::Park { identity, .. } => identity,
                 CoordinatorCommand::CancelIntent(id) | CoordinatorCommand::Submissions(id) => id,
                 CoordinatorCommand::Complete(j) => &j.identity,
             };
@@ -650,6 +659,10 @@ impl MemoryState {
                 CoordinatorCommand::Callback { .. } => {
                     Err(PublicError::not_implemented("fake callback"))
                 }
+                CoordinatorCommand::Park { .. } => Ok(CoordinatorReply::Park(ParkView {
+                    cancelled: a.cancelled,
+                    ..ParkView::default()
+                })),
             }
         }
     }

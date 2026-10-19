@@ -43,11 +43,23 @@ pub(crate) fn atomic_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InputId {
     Task,
-    Message { id: MessageId },
-    Reprime { ordinal: u64 },
-    Nudge { ordinal: u32 },
+    Message {
+        id: MessageId,
+    },
+    Reprime {
+        ordinal: u64,
+    },
+    Nudge {
+        ordinal: u32,
+    },
     Reminder,
-    Continue { attempt: u32 },
+    Continue {
+        attempt: u32,
+    },
+    /// The message that resumes a parked session.
+    Wake {
+        ordinal: u32,
+    },
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

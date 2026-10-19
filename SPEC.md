@@ -1190,10 +1190,52 @@ stays pending and queued (`step.queued` record when its shortfall changes; wait 
 `queued: needs lane 1 (4/4 held)`). Lowering a capacity never stops running work; a resource
 that a step needs or a lease holds cannot be removed.
 
-A **section lease** (`ctx.acquire`, §5.4) waits for and holds an amount of a resource inside a
-running step's run; grants follow the step's `priority`, then arrival. Held leases count in
-the same totals as `needs`. A run that ends releases its leases. Grants and releases are
-`step.lease` records.
+A **section lease** (`ctx.acquire`, §5.4, or `lease_acquire` from inside a run) waits for and
+holds an amount of a resource inside a running step's run; grants follow the request's priority
+(`lease_acquire`'s `priority`, else the step's current `priority`), then arrival, and a request
+that fits is granted even while a larger one ahead of it waits. Held leases count in the same
+totals as `needs`. A run that ends, finished or dead, releases its leases and drops its waiting
+requests, so a dead holder never blocks a queue. Grants and releases are `step.lease` records.
+
+The tools `lease_acquire(project, run, resource, amount=1, wait=false, timeout?, priority?)`,
+`lease_release(project, run, lease)` and `lease_status(project, resource?)` give an agent the
+same leases (`sluice tool lease acquire <resource> [--amount N] [--wait] [--timeout S]
+[--priority P]`, `lease release <id>`, `lease status [<resource>]`). The run named must be one
+of the project's, and the current, executing run of its step; in a run, `project` and `run`
+default to its own (§14). `lease_acquire` answers `{lease, resource, amount, priority, state,
+position}`, `state` `held` or `waiting` and `position` the request's place in its resource's
+queue (from 1) while it waits; with `wait` it answers once the lease is held or `timeout`
+seconds (default and cap 600) pass, then with `timed_out: true` and the request still queued.
+`lease_release` gives back a held lease or drops a waiting request (`bad_request` for any other
+id) and grants the next in line in the same transaction. `lease_status` answers
+`{resources: {<name>: {capacity, held, holders, queue, waking}}, parked}`: `holders` are the
+resource's section leases and running steps' needs (`{kind: "lease"|"needs", lease?, run, step,
+amount, since}`), `queue` its waiting requests in grant order (`{position, lease, run, step,
+amount, priority, since}`), `waking` the parked runs taking it back, and `parked` the project's
+parked runs (`{run, step, until, phase, lease, since}`).
+
+**Parking.** `park(project, run, until, timeout?)` (`sluice tool park --until <until>
+[--timeout S]`) ends an agent's turn and waits for an event without its lane. `until` is
+`lease:<resource>[:<amount>]` (the run's section lease is granted), `pid:<n>` (the process
+exits; the CLI pins it by its start time, so a reused pid does not hold the wait) or
+`file:<absolute path>[:<marker>]` (the file exists and, with a marker, contains it; the CLI
+resolves a relative path against its working directory). A `lease:` condition adopts the run's
+oldest waiting request of that resource and amount, keeping its place, else queues one. A
+condition that holds already answers `{parked: false, until, lease?, message}` and parks
+nothing (a lease granted at once is the run's). Otherwise the park is kept on the run's attempt
+and the answer is `{parked: true, until, lease, position, timeout_seconds, message}`: the agent
+ends its turn. When the turn has ended, the run's supervisor (§15) marks the run parked and the
+coordinator releases the step's needs in the same transaction, so a queued step may start; the
+engine's session stays up, idle, and is neither nudged nor delivered messages (they wait for the
+wake). When the condition fires or `timeout` seconds pass, the coordinator queues the step's
+needs again (`waking`), granted with the section leases in priority order before any new step
+is admitted; once they are held the park ends and the same session gets one input:
+`woke: <until>, lease <id>` (a granted lease), `woke: <until>` (pid, file), or `woke: timeout
+after <n>s waiting for <until>` (with `; lease <id> is still queued` when its lease was not
+granted). Time parked does not count toward the agent's wall cap. A cancelled parked run stops
+as any other. Only agent runs on the `claude` or `codex` engine park: `devin` (whose session
+cannot be held idle and resumed) and a run of anything but an agent are `bad_request`, and so is
+a scattered step's item; a run that is not its step's current, executing one is `conflict`.
 
 ### 7.7 Manual values
 
@@ -1845,6 +1887,10 @@ removed steps.
 | `step_cancel` | `project`, `steps?`, `tags?`, `reason`, `expected_rev?`, `author?` | `{ok: true}`; running, pending `core.external` or failed steps (§7.5) |
 | `step_submit` | `project`, `step`, `run`, `outputs`, `author?` | `{ok: true}` |
 | `step_progress` | `project`, `step`, `run`, `outputs` | `{project, step, run, progress, at}` (§6.4) |
+| `lease_acquire` | `project`, `run`, `resource`, `amount=1`, `wait=false`, `timeout?`, `priority?` | `{lease, resource, amount, priority, state, position, timed_out?}` (§7.6) |
+| `lease_release` | `project`, `run`, `lease` | `{lease, state: "released"}` (§7.6) |
+| `lease_status` | `project`, `resource?` | `{resources, parked}` (§7.6) |
+| `park` | `project`, `run`, `until`, `timeout?` | `{parked, until, lease?, position?, timeout_seconds?, message}` (§7.6) |
 | `step_settle` | `project`, `step`, `reason=""`, `author?` | `{project, step, run, outputs}` (§7.5) |
 | `status` | `project`, `steps?`, `tags?`, `brief=false`, `all=false`, `view="steps"`, `state?` | below |
 | `step_context` | `project`, `step` | below |
@@ -2490,6 +2536,7 @@ write that timed out, and connections dropped for want of a permit.
 | `home migrate [--dry-run] [--json]` | converts `SLUICE_HOME`'s schema-1 or schema-2 database to this binary's schema (§3), holding `coordinator.lock` (refused while a coordinator holds it); `--dry-run` converts a backup-API copy in a scratch directory and leaves the home untouched; `--json` prints the conversion report |
 | `tool [name [json\|-] [--field value]…]` | without a name, lists the tools; with one, runs it (its arguments as below) and prints its result as MCP returns it (`{"ok": true}` for an acknowledgement); `tool <name> --help` lists its fields |
 | `tool rpc '<request>'` | sends a raw wire request |
+| `tool lease acquire\|release\|status [<resource or id>] [--field value]…` | `lease_acquire`, `lease_release` or `lease_status` (§7.6), a leading bare word their `resource` (`lease` for release) |
 | `next [-p P]… [--since-seq N \| --cursor FILE] [--me @NAME] [--scope mine\|all] [--units U,…] [--tags T,…] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; without a since a named session resumes after its last batch and an unnamed one starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |
 | `watch [-p P] [--kinds K,…] [--threads T,…] [--since-seq N] [--wake any\|questions]` | follows the log, one JSON record per line, until killed |
 | `drain [-p P]… [--no-wait] [--release]` | drains (waits until drained unless `--no-wait`) or releases |
@@ -2880,7 +2927,7 @@ fails leaves the failure as it was. The private tmux keeps an exited engine's de
 records every failure but a cancellation as `agent failed: <kind>: <message>`.
 
 Limits (minutes unless noted), overridable through environment variables: `SLUICE_AGENT_MAX_MIN`
-(600, the wall cap), `SLUICE_AGENT_STALL_MIN` (30), `SLUICE_AGENT_SETTLE_S` (10),
+(600, the wall cap; time parked, §7.6, does not count), `SLUICE_AGENT_STALL_MIN` (30), `SLUICE_AGENT_SETTLE_S` (10),
 `SLUICE_AGENT_GRACE_MIN` (10), `SLUICE_AGENT_POLL_S`, `SLUICE_AGENT_READY_S` (180),
 `SLUICE_AGENT_TURN_START_S` (60), `SLUICE_AGENT_DIALOG_S` (60),
 `SLUICE_AGENT_QUIET_MIN` (60, never more often than hourly), `SLUICE_AGENT_NUDGES`,

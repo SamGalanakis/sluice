@@ -42,6 +42,10 @@ pub fn reply_limit(base: Duration, command: &CommandRequest) -> Duration {
             })
             .min(crate::calls::MAX_WAIT_SECONDS),
         CommandRequest::Backup { .. } => BACKUP_SECONDS,
+        CommandRequest::LeaseAcquire(lease) if lease.wait => lease
+            .timeout_seconds
+            .unwrap_or(crate::park::MAX_LEASE_WAIT_SECONDS)
+            .min(crate::park::MAX_LEASE_WAIT_SECONDS),
         _ => 0,
     };
     base.saturating_add(Duration::from_secs(held))

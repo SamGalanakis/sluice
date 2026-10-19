@@ -701,6 +701,45 @@ edit naming a resource the project does not declare, or asking for more than a f
 is refused. In a recipe, a whole-string `{param}` keeps its type: `"needs": {"lane":
 "{lanes}"}`, `"priority": "{prio}"`.
 
+## Waiting inside a step: leases and park
+An agent doing a step waits for a shared slot (a gate, a land queue, a capped pool) with a
+**lease** on one of the project's resources, the same lease `ctx.acquire` takes in a fn:
+
+```
+sluice tool lease acquire gate [--amount N] [--wait] [--timeout S] [--priority P]
+sluice tool lease release <id>
+sluice tool lease status [gate]
+```
+
+`acquire` answers `{lease, state, position}`: `held`, or `waiting` with its place in the
+resource's queue. Requests are granted first-in-first-out within priority (higher first;
+default the step's), and a lease counts against the resource's capacity like steps' `needs`.
+`--wait` returns once the lease is held, or after `--timeout` seconds (default and cap 600)
+with `timed_out` and the request still in line. A lease is the run's: `release` gives it back
+(the next in line gets it at once), and it is released when the run ends or dies, so a dead
+holder never blocks the queue. `status` lists each resource's holders (run, step, held since:
+section leases and steps' needs), its queue with positions, and the parked runs.
+
+To wait for anything longer than a minute, **park** instead of polling or sleeping:
+
+```
+sluice tool park --until lease:gate[:N] | pid:<n> | file:<path>[:<marker>] [--timeout S]
+```
+
+It answers `parked: true`; end your turn at once and do nothing else. The runner keeps your
+session, and while you wait it releases your step's `needs` (its lane), so another step can
+run. When the condition fires (the lease is granted, the process exits, the file exists and
+contains the marker) or `--timeout` passes, the runner takes the step's needs back (queued by
+its priority) and resumes the same session with one message: `woke: lease:gate, lease 17`
+(`woke: timeout after 600s waiting for pid:4242` after a timeout). `lease:` adopts a request
+of yours for that resource and amount that is still waiting, keeping its place, else queues
+one; the woken lease is yours to `release`. With `parked: false` the condition held already
+(a lease granted at once is yours) and you carry on. Parked time does not count toward the
+agent's wall cap; messages to a parked step are delivered after it wakes. Only agent runs on
+the claude or codex engine park (devin is refused: wait with `lease acquire --wait`), and not
+a scattered step's items. Every tool here is on MCP too (`lease_acquire`, `lease_release`,
+`lease_status`, `park`); in a run, `project` and `run` default to its own.
+
 ## Stale results
 A result holds only for the inputs it was computed from. When those change (an upstream re-ran
 with a different result, you changed a plan input or a step's binding, or an upstream you
