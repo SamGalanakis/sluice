@@ -67,6 +67,11 @@ unit), call `step_wait`; to wait for events (failures, messages to you), call `l
 `next`. Each answers the moment its condition holds and costs nothing while it waits; on a
 timeout, call it again with what it returned.
 
+At a shell, `sluice say`, `sluice ask` and `sluice reply` are aliases of
+`sluice tool say`, `sluice tool ask` and `sluice tool reply`. They accept the same JSON,
+flags, `--body-file` and run defaults; for example, `sluice say --body "blocked on schema"`
+speaks to your unit's owner from a run.
+
 ## Who you are
 Every session names itself before it speaks: `@<name>`, a lowercase letter, then lowercase
 letters, digits or `-` (at most 40), for example `@lash-f4`. Pass `me="@lash-f4"` on your first

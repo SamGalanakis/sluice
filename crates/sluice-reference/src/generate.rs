@@ -1109,7 +1109,12 @@ fn build_changes(
                 changes.bindings = Some(fresh.get("in").cloned().map(json_value));
             }
             1 => {
-                let fresh = scope.step(&run, None, step, bytes);
+                let mut fresh = scope.step(&run, None, step, bytes);
+                if bytes.chance(4)
+                    && let Some(bindings) = fresh.get_mut("in").and_then(Value::as_object_mut)
+                {
+                    bindings.insert("obsolete".into(), Value::Null);
+                }
                 changes.bindings = Some(fresh.get("in").cloned().map(json_value));
             }
             2 => {

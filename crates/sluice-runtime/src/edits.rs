@@ -11,7 +11,7 @@ use crate::{
     plan_cache::{PlanCache, recipe_generation},
 };
 use indexmap::IndexMap;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use sluice_model::{
     commands::{CommandRequest, EditOptions, KeptUnit, ProjectIdentity, StepSelection},
     cost::{self, Counter, PreparationPoint},
@@ -438,6 +438,49 @@ fn options(edit: &EditOptions, start: bool) -> PrepareOptions {
     }
 }
 
+/// Add stored state to the model's duplicate-id refusals. This is error-only context:
+/// it reads the same snapshot as preparation without widening successful edits' read sets.
+fn duplicate_status(
+    sql: &Connection,
+    project: ProjectId,
+    mut error: PublicError,
+) -> sluice_store::StoreError {
+    let diagnostics = match &mut error {
+        PublicError::BadRequest { message } => std::slice::from_mut(message),
+        PublicError::Invalid { errors, .. } => errors.as_mut_slice(),
+        _ => return error.into(),
+    };
+    for diagnostic in diagnostics {
+        // Batch refusals have an ops[i] path; the typed step_add has just the message.
+        let message = diagnostic
+            .rsplit_once(": ")
+            .map_or(diagnostic.as_str(), |(_, message)| message);
+        let Some(step) = message
+            .strip_prefix("step ")
+            .and_then(|message| message.strip_suffix(" already exists"))
+        else {
+            continue;
+        };
+        let status = match sql
+            .query_row(
+                "SELECT status FROM steps WHERE project_id=?1 AND step_id=?2",
+                rusqlite::params![project.to_string(), step],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+        {
+            Ok(status) => status,
+            Err(error) => return error.into(),
+        };
+        // A duplicate added earlier in this batch is pending in its candidate.
+        diagnostic.push_str(&format!(
+            " (status: {})",
+            status.as_deref().unwrap_or("pending")
+        ));
+    }
+    error.into()
+}
+
 /// The steps a typed tool's selection names in the base (by id or by tag), for the state its
 /// lowering reads. An unknown id is left to the lowering, which refuses it.
 fn selected(base: &Plan, selection: &StepSelection) -> Vec<StepId> {
@@ -666,7 +709,8 @@ pub(crate) fn prepare(
         &recipes,
         &signatures,
         &input.command,
-    )?;
+    )
+    .map_err(|error| duplicate_status(sql, project, error))?;
     if lowered.ops.is_empty() {
         // A typed no-op (plan-rows §7.8): nothing to prepare or commit; the revision stays.
         let preview = EditPreview {
@@ -741,7 +785,8 @@ pub(crate) fn prepare(
         },
         lowered,
         options,
-    )?;
+    )
+    .map_err(|error| duplicate_status(sql, project, error))?;
     // The steps the edit writes, and only those, are checked for a retired model string.
     let written: Vec<&StepId> = prepared
         .commit

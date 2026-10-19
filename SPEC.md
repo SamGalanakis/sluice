@@ -1891,7 +1891,13 @@ changes}`, `unit.remove {unit}` and `order.set {collection: steps|inputs|outputs
 member once, in the new order). A refused operation is `invalid` with its path (`ops[1].step: no
 step x`), all of them at once; `steps` in the reply are the steps its adds added. `changes`
 (`step_update`, `step.update`, `unit_update`) take the step keys only; an unknown key is
-`bad_request`.
+`bad_request`. `in` replaces the whole input map, with null entries omitted:
+`{"in": {"x": null}}` removes `x`; include bindings for any other inputs to keep.
+`{"default": null}` remains a binding to a literal null. `in: null` removes the whole map.
+`run` may change in the same update; the step keeps its id, position and history.
+
+`step_add` and `step.add` refuse an existing id with `step <id> already exists (status:
+<status>)`, using its current stored state.
 
 `step_pause` with `subtree` also selects every step downstream of the selection (reading from
 or gated on one, transitively). `unit_add` reports the steps it added in `steps`, `unit_tag`
@@ -1936,7 +1942,8 @@ removed steps.
 `status`, steps view: `{project, rev, board_rev, paused, inputs, outputs, resources, execution, steps: {id: {status,
 outputs, error, run_ids, done, total, instances, manual, limits?, run_resources?, budget_error?, paused?, queued?, waiting?,
 finishing?}}, done_units?}`; a finishing step (§6.4) stays `running` and carries `finishing`.
-Without a selection, done units are left out and counted in `done_units: {units, steps}` unless
+Every plan step has a status, including a step that never started or whose file input is
+missing. Without a selection, done units are left out and counted in `done_units: {units, steps}` unless
 `all`. `brief` cuts strings over 200 characters (`… [n more characters]`). `resources` maps
 each to `{capacity, held, queued, error}`. `execution` reports the home-wide physical
 `total`, `held`, `unbounded_attempts` and capacity `reason`, with memory bytes, milli-CPUs
@@ -2573,6 +2580,7 @@ write that timed out, and connections dropped for want of a permit.
 | `tool [name [json\|-] [--field value]…]` | without a name, lists the tools; with one, runs it (its arguments as below) and prints its result as MCP returns it (`{"ok": true}` for an acknowledgement); `tool <name> --help` lists its fields |
 | `tool rpc '<request>'` | sends a raw wire request |
 | `tool lease acquire\|release\|status [<resource or id>] [--field value]…` | `lease_acquire`, `lease_release` or `lease_status` (§7.6), a leading bare word their `resource` (`lease` for release) |
+| `say`, `ask`, `reply` | aliases of `tool say`, `tool ask`, `tool reply`, with the same JSON, flags, files and run defaults |
 | `next [-p P]… [--since-seq N \| --cursor FILE] [--me @NAME] [--scope mine\|all] [--units U,…] [--tags T,…] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; without a since a named session resumes after its last batch and an unnamed one starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |
 | `watch [-p P] [--kinds K,…] [--threads T,…] [--since-seq N] [--wake any\|questions]` | follows the log, one JSON record per line, until killed |
 | `drain [-p P]… [--no-wait] [--release]` | drains (waits until drained unless `--no-wait`) or releases |

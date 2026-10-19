@@ -522,7 +522,8 @@ pub enum OrderCollection {
 }
 
 /// A step's fields to change: each given field replaces that field, null removes it, an
-/// absent one is left as it is. `in` replaces the whole binding map. At least one field.
+/// absent one is left as it is. `in` replaces the whole binding map, omitting null entries.
+/// At least one field.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StepChanges {

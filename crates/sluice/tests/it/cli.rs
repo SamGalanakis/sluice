@@ -5,7 +5,10 @@ use crate::support;
 
 use crate::scratch::ScratchHome;
 use serde_json::{Value, json};
-use sluice_model::{commands::CommandReply, rpc::decode_json};
+use sluice_model::{
+    commands::{CommandReply, RuntimeApi},
+    rpc::decode_json,
+};
 use std::{
     path::Path,
     process::{Command, Output, Stdio},
@@ -1880,4 +1883,72 @@ fn step_bypass_takes_flags_and_settles_a_ready_step() {
     assert_eq!(note["data"]["step_bypass"]["reason"], "done elsewhere");
     let status = ok(tool(home, "status", r#"{"project":"p","steps":"q"}"#));
     assert_eq!(status["steps"]["q"]["manual"], 1);
+}
+
+// Top-level messaging verbs share the tool grammar, receipts and stored messages.
+#[test]
+fn top_level_messaging_aliases() {
+    let scratch = ScratchHome::served().unwrap();
+    let home = scratch.path();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let client = sluice_runtime::client::CoordinatorClient::new(home);
+    let peer = |name: &str, args: Value| {
+        let request =
+            decode_json(&serde_json::to_vec(&json!({"command":name,"args":args})).unwrap())
+                .unwrap();
+        let reply = runtime.block_on(client.command(request)).unwrap();
+        serde_json::to_value(reply).unwrap()["data"].take()
+    };
+    peer(
+        "project_create",
+        json!({"name":"p","description":"","resources":{}}),
+    );
+    let said = ok(run(
+        home,
+        &[
+            "say",
+            "--project",
+            "p",
+            "--to",
+            "owner",
+            "--body",
+            "start here",
+        ],
+    ));
+    assert_eq!(said["thread"], "@orch");
+    let asked = ok(run(
+        home,
+        &["ask", r#"{"project":"p","to":"owner","body":"ready?"}"#],
+    ));
+    assert_eq!(asked["to"], "owner");
+    let question = peer(
+        "ask",
+        json!({
+            "project":{"kind":"name","value":"p"},"to":"@orch","owner":true,"body":"which db?"
+        }),
+    );
+    let replied = ok(run(
+        home,
+        &[
+            "reply",
+            "--project",
+            "p",
+            "--to-message",
+            &question["id"].to_string(),
+            "--body",
+            "postgres",
+        ],
+    ));
+    assert_eq!(replied["to"], "owner");
+    let thread = peer(
+        "messages",
+        json!({
+            "project":{"kind":"name","value":"p"},"view":"thread","thread":"@orch"
+        }),
+    );
+    assert_eq!(thread["messages"][2]["answered_by"], replied["id"]);
+    assert_eq!(thread["messages"][3]["body"], "postgres");
 }

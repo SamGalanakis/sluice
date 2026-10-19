@@ -246,7 +246,22 @@ pub(crate) fn update(declaration: &mut JsonMap, changes: &StepChanges) {
     for (key, value) in changes.fields() {
         match value {
             Some(value) => {
-                declaration.0.insert(key.to_owned(), value.clone());
+                let value = if key == "in"
+                    && let Some(bindings) = value.as_value().as_object()
+                    && bindings.values().any(|binding| binding.is_null())
+                {
+                    let bindings = bindings
+                        .iter()
+                        .filter(|(_, binding)| !binding.is_null())
+                        .map(|(name, binding)| (name.clone(), binding.clone()))
+                        .collect();
+                    serde_json::Value::Object(bindings)
+                        .try_into()
+                        .expect("removing nulls preserves strict JSON")
+                } else {
+                    value.clone()
+                };
+                declaration.0.insert(key.to_owned(), value);
             }
             None => {
                 declaration.0.shift_remove(key);

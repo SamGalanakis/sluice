@@ -517,6 +517,7 @@ Every edit, manual value and step status change is a record in the project's log
 has, `log_read(project)` everything (`docs("threads")`).
 
 ## Keeping the plan short
+`status(project)` includes steps that never started, including one with a missing file input.
 `status(project)` and `plan_view(project)` leave the done units out, saying how many
 (`done_units: {units, steps}` in `status`, one line in the view), so they show what is still
 going on; `status(steps=[...])` or `tags=[...]` returns what you ask for, done or not. The
@@ -611,7 +612,12 @@ validation errors use plan paths.
 
 Small edits use `step_add`, `step_update` or `step_remove`. `changes` accepts only `run`,
 `in`, `scatter`, `doc`, `outputs`, `paused`, `after`, `tags`, `needs`, `priority` and `limits`; null
-removes a key and `in` replaces the whole map. `unit_update(project, unit, changes, reason)`
+removes a key and `in` replaces the whole map, omitting null entries. To remove an old
+function's input while changing functions, use e.g. `changes={"run":"core.external",
+"in":{"x":null},"outputs":{"final":"string"}}`; include bindings for other inputs to keep.
+A binding `{"default":null}` still supplies a literal null. The update keeps the step's id,
+position and history. Adding an id that exists is refused with its current status:
+`step work already exists (status: pending)`. `unit_update(project, unit, changes, reason)`
 changes listed members by exact id without regenerating the recipe; its `steps` report the
 changed members. `unit_remove(project, unit, reason)` removes every member; its `steps`
 report removed members in position order.

@@ -262,7 +262,13 @@ pub fn prepare_edit(
                 if value.as_value().is_null() {
                     fields.shift_remove(&key);
                 } else {
-                    fields.insert(key, value.into_value());
+                    let mut value = value.into_value();
+                    if key == "in"
+                        && let Some(bindings) = value.as_object_mut()
+                    {
+                        bindings.retain(|_, binding| !binding.is_null());
+                    }
+                    fields.insert(key, value);
                 }
             }
             if !crate::hash::data_equal(&step, raw_step(raw, &request.step)?)? {

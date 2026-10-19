@@ -165,10 +165,11 @@ fn ops_of(doc: &Value) -> Value {
     }
     Value::Array(ops)
 }
+fn request(v: Value) -> CommandRequest {
+    decode_json(&serde_json::to_vec(&v).unwrap()).unwrap()
+}
 async fn command(b: &Coordinator<Fake>, v: Value) -> CommandReply {
-    b.command(decode_json(&serde_json::to_vec(&v).unwrap()).unwrap())
-        .await
-        .unwrap()
+    b.command(request(v)).await.unwrap()
 }
 fn map(v: Value) -> JsonMap {
     decode_json(&serde_json::to_vec(&v).unwrap()).unwrap()
@@ -502,10 +503,11 @@ async fn queue_events_are_durable_deduplicated_and_disappear_after_admission(f: 
     assert!(f.status().await["steps"]["inline"].get("queued").is_none());
 }
 
-async fn missing_file_is_typed_failure_and_unrelated_work_progresses(f: &mut Fixture) {
+#[tokio::test]
+async fn status_includes_never_run_steps_and_duplicate_names_their_state() {
     let root = tempfile::tempdir().unwrap();
     let missing = root.path().join("missing.txt");
-    f.seed(
+    let f = Fixture::new(
         json!({"steps":{
             "broken":{"run":"fixture.echo","in":{"value":{"file":missing}}},
             "dependent":{"run":"core.echo","in":{"value":{"source":"broken/value"}}},
@@ -514,8 +516,37 @@ async fn missing_file_is_typed_failure_and_unrelated_work_progresses(f: &mut Fix
         json!({}),
     )
     .await;
+    let status_request = json!({"command":"status","args":{
+        "project":{"kind":"id","value":f.project},"selection":{"steps":null,"tags":null}
+    }});
+    let CommandReply::Data(pending) = command(&f.broker, status_request.clone()).await else {
+        panic!("status")
+    };
+    assert_eq!(pending.as_value()["steps"]["broken"]["status"], "pending");
+    assert_eq!(pending.as_value()["steps"]["broken"]["run_ids"], json!([]));
+    let duplicate = f
+        .broker
+        .command(request(json!({
+            "command":"step_add","args":{
+                "project":{"kind":"id","value":f.project},"step":"broken",
+                "spec":{"run":"core.external"},"edit":{"reason":"duplicate"}
+            }
+        })))
+        .await
+        .unwrap_err();
+    assert!(
+        serde_json::to_string(&duplicate)
+            .unwrap()
+            .contains("step broken already exists (status: pending)"),
+        "{duplicate:?}"
+    );
     f.tick().await;
+    let CommandReply::Data(visible) = command(&f.broker, status_request).await else {
+        panic!("status")
+    };
+    assert_eq!(visible.as_value()["steps"]["broken"]["status"], "failed");
     let status = f.status().await;
+    assert_eq!(status["steps"].as_object().unwrap().len(), 3);
     assert_eq!(status["steps"]["broken"]["status"], "failed");
     assert!(
         status["steps"]["broken"]["error"]
@@ -525,6 +556,23 @@ async fn missing_file_is_typed_failure_and_unrelated_work_progresses(f: &mut Fix
     assert_eq!(status["steps"]["dependent"]["status"], "pending");
     assert_eq!(status["steps"]["plain"]["outputs"]["value"], "ok");
     assert!(f.launches().is_empty());
+    assert_eq!(status["steps"]["broken"]["run_ids"], json!([]));
+    let duplicate = f
+        .broker
+        .command(request(json!({
+            "command":"plan_edit","args":{
+                "project":{"kind":"id","value":f.project},"reason":"duplicate",
+                "ops":[{"op":"step.add","step":"broken","spec":{"run":"core.external"}}]
+            }
+        })))
+        .await
+        .unwrap_err();
+    assert!(
+        serde_json::to_string(&duplicate)
+            .unwrap()
+            .contains("step broken already exists (status: failed)"),
+        "{duplicate:?}"
+    );
 }
 #[tokio::test]
 async fn a_guardian_watch_is_held_until_its_message_or_cancel_and_repeated_reports_do_not_write() {
@@ -658,7 +706,6 @@ async fn readiness_inline_and_independent_failures() {
     readiness_fan_in_outputs_and_inline_quiescence(&mut f).await;
     failed_outputs_and_spawn_failure_block_only_their_dependents(&mut f).await;
     empty_scatter_and_core_scatter_finish_inline_without_runs(&mut f).await;
-    missing_file_is_typed_failure_and_unrelated_work_progresses(&mut f).await;
 }
 
 #[tokio::test]

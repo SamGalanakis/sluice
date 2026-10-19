@@ -657,3 +657,40 @@ async fn no_op_pause_and_input_edit_replies() {
     step_set_input_reports_changed_and_unsupported_steps(&f).await;
     f.close().await;
 }
+
+// Null bindings used to be rejected when changing a function in place.
+#[tokio::test]
+async fn plan_update_removes_inputs_when_changing_function() {
+    let f = Fixture::new().await;
+    f.patch(json!([
+        {"op":"step.add","step":"source","spec":{"run":"core.external","outputs":{"value":"int"}}},
+        {"op":"step.add","step":"work","spec":{"run":"fixture.echo","in":{"value":{"source":"source/value"}},"paused":true}},
+        {"op":"step.add","step":"reader","spec":{"run":"fixture.echo","in":{"value":{"source":"work/value"}},"paused":true}}
+    ])).await;
+    let before = data(f.call("plan_read", json!({})).await.unwrap());
+    let history = data(f.call("plan_history", json!({})).await.unwrap());
+    f.patch(json!([
+        {"op":"step.update","step":"work","changes":{
+            "run":"core.external","in":{"value":null,"keep":{"default":null}},"outputs":{"value":"int"}
+        }}
+    ])).await;
+    let step = data(f.call("step_get", json!({"step":"work"})).await.unwrap());
+    assert_eq!(step["step"]["spec"]["run"], "core.external");
+    assert_eq!(step["step"]["spec"]["in"], json!({"keep":{"default":null}}));
+    let after = data(f.call("plan_read", json!({})).await.unwrap());
+    let positions = |plan: &Value| {
+        plan["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| (s["id"].clone(), s["position"].clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(positions(&after), positions(&before));
+    let after_history = data(f.call("plan_history", json!({})).await.unwrap());
+    let previous = history["entries"].as_array().unwrap();
+    let current = after_history["entries"].as_array().unwrap();
+    assert_eq!(&current[..previous.len()], previous);
+    assert_eq!(current.len(), previous.len() + 1);
+    f.close().await;
+}

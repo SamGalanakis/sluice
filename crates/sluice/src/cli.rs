@@ -61,6 +61,24 @@ pub enum Mode {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Alias of `sluice tool say`.
+    #[command(disable_help_flag = true)]
+    Say {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Alias of `sluice tool ask`.
+    #[command(disable_help_flag = true)]
+    Ask {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Alias of `sluice tool reply`.
+    #[command(disable_help_flag = true)]
+    Reply {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     Next {
         #[arg(short = 'p', long = "project", value_name = "P")]
         projects: Vec<String>,
@@ -192,6 +210,9 @@ impl Mode {
             Self::Guardian(_) => "guardian",
             Self::PayloadExec(_) => "payload-exec",
             Self::Tool { .. } => "tool",
+            Self::Say { .. } => "say",
+            Self::Ask { .. } => "ask",
+            Self::Reply { .. } => "reply",
             Self::Next { .. } => "next",
             Self::Watch { .. } => "watch",
             Self::Drain { .. } => "drain",
@@ -225,8 +246,13 @@ macro_rules! println {
 /// The public modes this module owns; modes/mod.rs registers one line each.
 pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
     Box::pin(async move {
+        let name = mode.name();
         match mode {
             Mode::Tool { args } => tool(&home, args).await,
+            Mode::Say { mut args } | Mode::Ask { mut args } | Mode::Reply { mut args } => {
+                args.insert(0, name.into());
+                tool(&home, args).await
+            }
             Mode::Next {
                 projects,
                 since_seq,
