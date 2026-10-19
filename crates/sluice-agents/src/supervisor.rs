@@ -36,6 +36,8 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug, Clone)]
 pub struct Limits {
     pub nudges: u32,
+    /// Minimum time between reminders, injected directly by tests.
+    pub reminder: Duration,
     pub wall: Duration,
     pub stall: Duration,
     /// Idle time before a session with nothing to submit ends, or an unfinished one is nudged.
@@ -46,15 +48,18 @@ pub struct Limits {
     pub poll: Duration,
     pub ready: Duration,
     pub turn_start: Duration,
+    /// Legacy wait timeout, accepted for compatibility; live work no longer triggers nudges.
     pub wait: Duration,
     pub dialog: Duration,
     pub quiet: Duration,
+    /// Legacy background cleanup timeout, accepted for compatibility.
     pub work: Duration,
 }
 impl Default for Limits {
     fn default() -> Self {
         Self {
             nudges: 3,
+            reminder: Duration::from_secs(3600),
             wall: Duration::from_secs(600 * 60),
             stall: Duration::from_secs(30 * 60),
             settle: Duration::from_secs(10),
@@ -64,7 +69,7 @@ impl Default for Limits {
             turn_start: Duration::from_secs(60),
             wait: Duration::from_secs(90 * 60),
             dialog: Duration::from_secs(60),
-            quiet: Duration::from_secs(45 * 60),
+            quiet: Duration::from_secs(60 * 60),
             work: Duration::from_secs(10 * 60),
         }
     }
@@ -128,6 +133,7 @@ impl Limits {
         let short = Duration::from_millis(20);
         Self {
             nudges: 2,
+            reminder: short,
             wall: Duration::from_secs(3),
             stall: Duration::from_secs(1),
             settle: short,
@@ -362,6 +368,8 @@ pub struct HostSnapshot {
     pub submissions: BTreeMap<String, Value>,
     pub messages: Vec<DeliveryMessage>,
     pub background_work: Vec<String>,
+    /// A held or waiting section lease protects work just as a live child does.
+    pub leases_active: bool,
     pub roots: Vec<ProcessIdentity>,
 }
 /// How long a host call keeps retrying a peer (the coordinator or the run's guardian) that
@@ -528,8 +536,7 @@ pub struct Machine {
     /// Input steered into a busy turn rides that turn, so it starts no turn-start wait.
     steered: bool,
     idle_since: Option<Duration>,
-    wait_since: Option<Duration>,
-    work_since: Option<Duration>,
+    last_nudge: Option<Duration>,
     dialog_since: Option<Duration>,
     moved: Duration,
     progress: Option<u64>,
@@ -559,6 +566,9 @@ impl Machine {
         reports_waiting: bool,
         now: Duration,
     ) -> Self {
+        // A re-entry cannot reconstruct the send time from an old checkpoint. Waiting a
+        // full interval again is conservative and needs no checkpoint format change.
+        let last_nudge = (checkpoint.nudges > 0).then_some(now);
         Self {
             checkpoint,
             limits,
@@ -569,8 +579,7 @@ impl Machine {
             awaiting: None,
             steered: false,
             idle_since: None,
-            wait_since: None,
-            work_since: None,
+            last_nudge,
             dialog_since: None,
             moved: now,
             progress: None,
@@ -597,7 +606,6 @@ impl Machine {
         self.steered = observation.status == EngineStatus::Busy;
         self.awaiting = (!self.steered).then_some(now);
         self.idle_since = None;
-        self.work_since = None;
         self.checkpoint.state = State::Delivering;
         Ok(())
     }
@@ -608,6 +616,7 @@ impl Machine {
         now: Duration,
         o: &EngineObservation,
         background: &[String],
+        leases_active: bool,
     ) -> Result<Action, AgentFailure> {
         self.completed = self.completed.max(o.turns_completed);
         if now >= self.limits.wall {
@@ -671,10 +680,10 @@ impl Machine {
             && matches!(o.status, EngineStatus::Idle | EngineStatus::Exited);
         let has_work = o.waiting.as_ref().is_some_and(|w| !w.is_empty())
             || !o.background_work.is_empty()
-            || !background.is_empty();
-        if let Some(error) = &o.error
-            && !(complete && !has_work)
-        {
+            || !background.is_empty()
+            || leases_active;
+        // A failed turn cannot become success just because no outputs were required.
+        if let Some(error) = &o.error {
             return if error.kind == EngineErrorKind::Transient {
                 Ok(Action::Retry)
             } else {
@@ -717,6 +726,9 @@ impl Machine {
             }
         }
         if let Some(entry) = self.checkpoint.delivery.next() {
+            if has_work && matches!(entry.id, InputId::Nudge { .. }) {
+                return Ok(Action::None);
+            }
             if entry.tries >= 2 {
                 return Err(failure(
                     FailureKind::TurnStartTimeout,
@@ -734,18 +746,29 @@ impl Machine {
                 ordinal: o.compactions,
             });
         }
-        if o.status != EngineStatus::Idle && now.saturating_sub(self.moved) >= self.limits.stall {
+        if !has_work
+            && o.status != EngineStatus::Idle
+            && now.saturating_sub(self.moved) >= self.limits.stall
+        {
             return Err(failure(
                 FailureKind::StallCap,
                 "no transcript progress while non-idle",
             ));
+        }
+        // A gate can be queued and consume no CPU for hours. Neither elapsed wait time nor
+        // an idle/blocked composer is evidence it should be interrupted or abandoned.
+        if has_work {
+            self.checkpoint.state = State::Waiting;
+            self.idle_since = None;
+            self.dialog_since = None;
+            return Ok(Action::None);
         }
         if o.status == EngineStatus::Blocked {
             self.checkpoint.state = State::Waiting;
             let since = *self.dialog_since.get_or_insert(now);
             if now.saturating_sub(since) >= self.limits.dialog {
                 self.dialog_since = None;
-                return self.nudge("Nobody can answer here. Decide, or ask with `sluice tool ask` (your unit's owner answers) and continue the task.".into());
+                return self.nudge(now, "Nobody can answer here. Decide, or ask with `sluice tool ask` (your unit's owner answers) and continue the task.".into());
             }
             return Ok(Action::None);
         }
@@ -757,38 +780,11 @@ impl Machine {
                 State::Busy
             };
             self.idle_since = None;
-            self.work_since = None;
             return Ok(Action::None);
         }
         if self.pending() {
             self.checkpoint.state = State::Delivering;
             return Ok(Action::None);
-        }
-        if has_work {
-            self.checkpoint.state = if complete {
-                State::Finishing
-            } else {
-                State::Waiting
-            };
-            if complete {
-                let since = *self.work_since.get_or_insert(now);
-                if now.saturating_sub(since) < self.limits.work {
-                    return Ok(Action::None);
-                }
-                let note = "background work exceeded completion settle bound; cleanup will stop it";
-                if !self.checkpoint.notes.iter().any(|n| n == note) {
-                    self.checkpoint.notes.push(note.into());
-                }
-            } else {
-                let since = *self.wait_since.get_or_insert(now);
-                if now.saturating_sub(since) < self.limits.wait {
-                    return Ok(Action::None);
-                }
-                self.wait_since = None;
-                return self.nudge(format!("Your step is still waiting on {}. Stop or finish that background work, then submit: {}.", o.waiting.as_deref().unwrap_or("background work"), missing.join(", ")));
-            }
-        } else {
-            self.wait_since = None;
         }
         self.checkpoint.state = State::Idle;
         let idle = *self.idle_since.get_or_insert(now);
@@ -807,9 +803,15 @@ impl Machine {
             self.checkpoint.state = State::Exiting;
             return Ok(Action::Finish);
         }
-        self.nudge(format!("Your turn ended but these outputs are not submitted: {}. Finish and submit them with the command from your task (submitting ends your session), or explain the blocker.", missing.join(", ")))
+        self.nudge(now, format!("Your turn ended but these outputs are not submitted: {}. Finish and submit them with the command from your task (submitting ends your session), or explain the blocker; if you are waiting on a job, keep waiting.", missing.join(", ")))
     }
-    fn nudge(&mut self, text: String) -> Result<Action, AgentFailure> {
+    fn nudge(&mut self, now: Duration, text: String) -> Result<Action, AgentFailure> {
+        if self
+            .last_nudge
+            .is_some_and(|last| now.saturating_sub(last) < self.limits.reminder)
+        {
+            return Ok(Action::None);
+        }
         if self.checkpoint.nudges >= self.limits.nudges {
             return Err(failure(
                 FailureKind::ExitedWithoutSubmit,
@@ -819,6 +821,7 @@ impl Machine {
                 ),
             ));
         }
+        self.last_nudge = Some(now);
         self.checkpoint.nudges += 1;
         let id = InputId::Nudge {
             ordinal: self.checkpoint.nudges,
@@ -1422,15 +1425,6 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
             refresh_me(host, &config.run_dir).await;
         }
         process_hooks(engine, config.run, &config.run_dir).map_err(invalid)?;
-        let o = bounded(cancel, deadline, engine.observe(context)).await?;
-        if engine
-            .profile()
-            .required_capabilities
-            .iter()
-            .any(|c| c == INLINE_COMPACTION_CONTEXT)
-        {
-            machine.checkpoint.compactions = o.compactions;
-        }
 
         let snapshot = answering_hooks(
             engine,
@@ -1442,6 +1436,18 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
             ),
         )
         .await?;
+        // Host reads can answer engine hooks while they wait. Observe afterward so a
+        // submission is judged with the acknowledgements and errors those hooks produced.
+        let o = bounded(cancel, deadline, engine.observe(context)).await?;
+        if engine
+            .profile()
+            .required_capabilities
+            .iter()
+            .any(|c| c == INLINE_COMPACTION_CONTEXT)
+        {
+            machine.checkpoint.compactions = o.compactions;
+        }
+
         // Snapshot is authoritative; removing a field cannot leave an earlier submission complete.
         machine.checkpoint.submissions = snapshot.submissions;
         let mut messages = snapshot.messages;
@@ -1457,11 +1463,17 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
                 .map_err(invalid)?
                 .saturating_sub(machine.checkpoint.started_ms),
         );
-        if o.status == EngineStatus::Busy {
-            if quiet.due(now, config.limits.quiet) {
+        let quiet_period = config.limits.quiet.max(config.limits.reminder);
+        if o.status == EngineStatus::Busy
+            && o.waiting.as_ref().is_none_or(String::is_empty)
+            && o.background_work.is_empty()
+            && snapshot.background_work.is_empty()
+            && !snapshot.leases_active
+        {
+            if quiet.due(now, quiet_period) {
                 let mark = bounded_host(cancel, deadline, git::sample(&config.cwd)).await?;
                 let cpu = crate::quiet::descendant_cpu(&snapshot.roots).map_err(invalid)?;
-                if let Some(note) = quiet.observe(now, config.limits.quiet, mark, cpu) {
+                if let Some(note) = quiet.observe(now, quiet_period, mark, cpu) {
                     machine.checkpoint.notes.push(note.clone());
                     // A note is advice: one its peer never took is logged, never fatal.
                     if let Err(error) = answering_hooks(
@@ -1478,7 +1490,7 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
         } else {
             quiet.reset();
         }
-        let action = machine.update(now, &o, &snapshot.background_work)?;
+        let action = machine.update(now, &o, &snapshot.background_work, snapshot.leases_active)?;
         if let Some(session) = &machine.checkpoint.session {
             sessions.acquire(
                 &config.home,

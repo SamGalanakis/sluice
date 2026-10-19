@@ -599,7 +599,9 @@ pub async fn fixture_server(socket: &Path, scenario: &str) -> io::Result<()> {
                 serde_json::from_str(include_str!("../../../tests/fixtures/codex/turn.json"))
                     .map_err(io::Error::other)?;
             let limited = scenario == "rate-limit-soon" && !fixture_marker("fixture-rate-limited")?;
-            if let Some(events) = network_events(scenario, &active, turns) {
+            if let Some(events) = failed_turn_events(scenario, &active)
+                .or_else(|| network_events(scenario, &active, turns))
+            {
                 // The turn's network failed for good: nothing else comes.
                 for event in events {
                     ws.send(Message::Text(event.to_string().into()))
@@ -684,6 +686,40 @@ pub async fn fixture_server(socket: &Path, scenario: &str) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Completed commentary followed by a terminal refusal, with no submitted outputs.
+fn failed_turn_events(scenario: &str, turn: &str) -> Option<Vec<Value>> {
+    let (method, message, info) = match scenario {
+        "flagged-turn" => (
+            "turn/completed",
+            "Your request was flagged by OpenAI's cybersecurity safety system.",
+            "other",
+        ),
+        "flagged-turn-failed" => (
+            "turn/failed",
+            "Your request was flagged by OpenAI's safety system.",
+            "other",
+        ),
+        "api-error-turn" => (
+            "turn/completed",
+            "API request failed: internal server error",
+            "other",
+        ),
+        "refused-turn" => ("turn/completed", "The request was refused.", "badRequest"),
+        "commentary-only" => ("turn/completed", "", ""),
+        _ => return None,
+    };
+    let error = if message.is_empty() {
+        Value::Null
+    } else {
+        json!({"message":message,"codexErrorInfo":info,"additionalDetails":null})
+    };
+    Some(vec![
+        json!({"method":"turn/started","params":{"threadId":"fixture-thread","turn":{"id":turn,"status":"inProgress"}}}),
+        json!({"method":"item/completed","params":{"threadId":"fixture-thread","turnId":turn,"item":{"type":"agentMessage","id":"commentary","phase":"commentary","text":"The gate is still queued..."}}}),
+        json!({"method":method,"params":{"threadId":"fixture-thread","turn":{"id":turn,"status":if error.is_null() {"completed"} else {"failed"},"error":error}}}),
+    ])
 }
 
 /// The stream error 0.160.x reports while the network is down (`codexErrorInfo`

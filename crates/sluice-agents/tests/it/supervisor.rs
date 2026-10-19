@@ -406,3 +406,206 @@ async fn hooks_are_answered_while_a_delivery_ack_waits_on_the_guardian() {
     assert_eq!(engine.hooks.len(), 1);
     assert_eq!(guardian.host.acks, vec![MessageId(1)]);
 }
+
+/// Queued gates used to get told to stop after WAIT_MIN; once idle, an agent could be
+/// reminded again seconds later. Drive the public supervision policy with elapsed time.
+#[test]
+fn background_jobs_block_nudges_and_idle_reminders_are_at_most_hourly() {
+    let checkpoint = || {
+        serde_json::from_value::<Checkpoint>(serde_json::json!({
+            "version":1, "run":RunId::new(), "attempt":AttemptId::new(),
+            "invocation":InvocationId::new(), "engine":"codex", "cwd":"/tmp",
+            "internal_attempt":1, "session":"s-1", "head_before":null, "started_ms":0,
+            "state":"Busy", "delivery":{"entries":[]}, "submissions":{}, "nudges":0,
+            "compactions":0, "live_after":0, "final_text":"", "notes":[]
+        }))
+        .unwrap()
+    };
+    let limits = Limits {
+        wall: Duration::from_secs(24 * 3600),
+        ..Limits::default()
+    };
+    let mut machine = Machine::new(
+        checkpoint(),
+        limits.clone(),
+        vec!["word".into()],
+        false,
+        Duration::ZERO,
+    );
+    let mut idle = observation(EngineStatus::Busy, 1, 1);
+    let background = vec!["live gate child".into()];
+    assert_eq!(
+        machine
+            .update(Duration::ZERO, &idle, &background, false)
+            .unwrap(),
+        Action::None
+    );
+    assert_eq!(
+        machine
+            .update(Duration::from_secs(2 * 3600), &idle, &background, false)
+            .unwrap(),
+        Action::None
+    );
+    // Engine-reported waiting work receives the same protection.
+    idle.status = EngineStatus::Blocked;
+    idle.waiting = Some("gate queue".into());
+    assert_eq!(
+        machine
+            .update(Duration::from_secs(3 * 3600), &idle, &[], false)
+            .unwrap(),
+        Action::None
+    );
+    idle.waiting = None;
+    idle.status = EngineStatus::Idle;
+    assert_eq!(
+        machine
+            .update(Duration::from_secs(3 * 3600), &idle, &[], true)
+            .unwrap(),
+        Action::None
+    );
+    let now = Duration::from_secs(3 * 3600);
+    assert_eq!(
+        machine.update(now, &idle, &[], false).unwrap(),
+        Action::None
+    );
+    let first = now + limits.grace;
+    let Action::Send { id, text, .. } = machine.update(first, &idle, &[], false).unwrap() else {
+        panic!("an idle agent that forgot to submit must still be reminded");
+    };
+    assert!(
+        text.contains("if you are waiting on a job, keep waiting"),
+        "{text}"
+    );
+    machine.offered(&id, &idle, first).unwrap();
+    idle.acknowledged = vec![id];
+    idle.turns_started += 1;
+    idle.turns_completed += 1;
+    assert_eq!(
+        machine
+            .update(first + Duration::from_secs(1), &idle, &[], false)
+            .unwrap(),
+        Action::None
+    );
+    assert_eq!(
+        machine
+            .update(first + Duration::from_secs(3599), &idle, &[], false)
+            .unwrap(),
+        Action::None
+    );
+    let reentry = first + Duration::from_secs(3599);
+    let mut resumed = Machine::new(
+        machine.checkpoint.clone(),
+        limits,
+        vec!["word".into()],
+        false,
+        reentry,
+    );
+    assert_eq!(
+        resumed.update(reentry, &idle, &[], false).unwrap(),
+        Action::None
+    );
+    assert_eq!(
+        resumed
+            .update(reentry + Duration::from_secs(3599), &idle, &[], false)
+            .unwrap(),
+        Action::None
+    );
+    assert!(matches!(
+        machine
+            .update(first + Duration::from_secs(3600), &idle, &[], false)
+            .unwrap(),
+        Action::Send { .. }
+    ));
+}
+
+#[test]
+fn a_detached_live_job_is_observed_until_it_exits() {
+    let output = std::process::Command::new("systemd-run")
+        .args([
+            "--user",
+            "--quiet",
+            "--wait",
+            "--pipe",
+            "--collect",
+            "--service-type=exec",
+            "--setenv=SLUICE_TEST=1",
+            "-p",
+            "Delegate=yes",
+            "--unit",
+        ])
+        .arg(format!("sluice-test-{}", RunId::new()))
+        .arg(std::env::current_exe().unwrap())
+        .args([
+            "--ignored",
+            "--exact",
+            "supervisor::background_job_worker",
+            "--nocapture",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[ignore = "internal cgroup observation worker"]
+fn background_job_worker() {
+    use sluice_process::{
+        cgroup::{Cgroup, RunCgroups},
+        identity::{OwnedProcess, ProcessIdentity},
+    };
+    use std::{
+        io::{BufRead, BufReader},
+        os::unix::process::CommandExt,
+        process::{Command, Stdio},
+    };
+    let mut me = OwnedProcess::capture(std::process::id()).unwrap();
+    let service = Cgroup::open_service(&me.identity().cgroup).unwrap();
+    let limits = sluice_model::ResourcePolicy::for_host(64 << 30, 32000)
+        .unwrap()
+        .resolve(None, None)
+        .unwrap();
+    let groups = RunCgroups::create(service, &mut me, limits, 256 << 20).unwrap();
+    let leaf = groups.invocation(InvocationId::new()).unwrap();
+    leaf.move_process(&mut me).unwrap();
+    let root = ProcessIdentity::read(std::process::id()).unwrap();
+    let mut agent = Command::new("/bin/sh")
+        .arg0("codex")
+        .args(["-c", "printf 'ready\\n'; read value"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut ready = String::new();
+    BufReader::new(agent.stdout.take().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
+    assert_eq!(ready, "ready\n");
+    let mut gate = Command::new("setsid")
+        .args(["/bin/sh", "-c", "printf 'ready\\n'; read value"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    ready.clear();
+    BufReader::new(gate.stdout.take().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
+    assert_eq!(ready, "ready\n");
+    let work = sluice_agents::quiet::background_work(&root, &[]).unwrap();
+    assert_eq!(work.len(), 1, "{work:?}");
+    assert!(work[0].contains(&format!("pid {} ", gate.id())), "{work:?}");
+    gate.kill().unwrap();
+    gate.wait().unwrap();
+    assert!(
+        sluice_agents::quiet::background_work(&root, &[])
+            .unwrap()
+            .is_empty()
+    );
+    agent.kill().unwrap();
+    agent.wait().unwrap();
+}

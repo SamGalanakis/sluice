@@ -1939,3 +1939,59 @@ fn credential_sharing_preserves_owner_identity_under_concurrent_launches() {
         }
     }
 }
+
+// text-perf's failed turn was treated as a completed no-output task, and its commentary
+// became the successful result. Exercise that exact combination through the supervisor.
+#[tokio::test]
+async fn failed_turn_without_required_outputs_never_succeeds_with_commentary() {
+    use sluice_agents::supervisor::{Checkpoint, FailureKind};
+    for (scenario, message) in [
+        (
+            "flagged-turn",
+            "Your request was flagged by OpenAI's cybersecurity safety system.",
+        ),
+        (
+            "flagged-turn-failed",
+            "Your request was flagged by OpenAI's safety system.",
+        ),
+        (
+            "api-error-turn",
+            "API request failed: internal server error",
+        ),
+        ("refused-turn", "The request was refused."),
+    ] {
+        let scratch = Scratch::new();
+        let (mut adapter, context) = setup(&scratch, scenario);
+        let mut cfg = acceptance::config(scratch.path(), "codex");
+        cfg.cwd = context.cwd;
+        cfg.run_dir = context.run_dir;
+        cfg.required.clear();
+        let directory = cfg.run_dir.clone();
+        let mut host = acceptance::Host::default();
+        let failure = acceptance::run(cfg, &mut adapter, &mut host)
+            .await
+            .unwrap_err();
+        assert_eq!(failure.kind, FailureKind::EngineExited);
+        assert_eq!(failure.message, message);
+        assert_eq!(failure.session.as_deref(), Some("fixture-thread"));
+        let checkpoint = Checkpoint::read(&directory).unwrap().unwrap();
+        assert!(
+            checkpoint.final_text.is_empty(),
+            "{}",
+            checkpoint.final_text
+        );
+        assert_eq!(host.cleanups, 1);
+        assert!(adapter.server_pid().is_none());
+    }
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "commentary-only");
+    start(&mut adapter, &context).await;
+    text(&mut adapter, &context, InputId::Task, "task").await;
+    let observation = completed(&mut adapter, &context, 1).await;
+    assert!(
+        observation.final_text.is_empty(),
+        "{}",
+        observation.final_text
+    );
+    adapter.close().await.unwrap();
+}

@@ -121,6 +121,13 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   what it should have.
 - A run that ends without a valid submission (its agent exited, or stopped after its
   nudges) fails the step with `exited_without_submit`, carrying the agent's `session`.
+- A Codex turn that fails (including a safety/cybersecurity flag, an API error or a refusal)
+  fails with `agent_failure`, keeping its kind, message and session. Commentary is never its
+  final answer, and having no declared outputs cannot turn an engine error into success.
+- The runner leaves live jobs alone: no reminders while a background child remains in the
+  run's cgroup, while it holds or waits on a section lease, or while it is parked. Otherwise
+  reminders are at most hourly and say "if you are waiting on a job, keep waiting". After all
+  work ends, an agent that forgot to submit still gets a reminder to submit.
 - Before it is done, a running step may publish its latest values with
   `step_progress(project, step, run, outputs)` (in the run, `sluice tool step_progress
   --outputs '{"red": 3}'`; `ctx.progress(red=3)` in a fn): fields of its outputs, type-checked

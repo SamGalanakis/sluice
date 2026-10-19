@@ -2639,12 +2639,22 @@ exchange without an answer (…)`.
 
 The agent is done when it submits: the supervisor stops the session as soon as the run's
 valid submission is stored, busy or not, and returns the result (§6.4); `final` is the agent's
-last message so far, which a busy agent may not have finished. An idle agent that has not submitted is nudged
-after the settle (`SLUICE_AGENT_SETTLE_S`), or, before the first nudge of an engine that does
-not report background work (Codex, Devin), after `SLUICE_AGENT_GRACE_MIN`; after the last nudge,
-or when the engine exits first, the run fails with kind `ExitedWithoutSubmit` and the step with
-`exited_without_submit`. A step with nothing to submit ends a settle after its agent goes idle,
-or when its reported background work ends (at most `SLUICE_AGENT_WORK_MIN`).
+last final-answer message (Codex excludes commentary), which a busy agent may not have finished.
+An idle agent that has not submitted is nudged after the settle (`SLUICE_AGENT_SETTLE_S`), or,
+before the first nudge of an engine that does not report background work (Codex, Devin), after
+`SLUICE_AGENT_GRACE_MIN`. Reminders are at most hourly and say "if you are waiting on a job,
+keep waiting". A helper re-entry after a reminder waits a full hour again. No reminder or quiet
+note is sent while a live job remains in the run's payload cgroup (including detached jobs),
+while the engine reports background work, while the run holds or waits for a section lease, or
+while it is parked. The agent CLI, private tmux, composing fn helpers and engine control/MCP processes are not jobs.
+An unavailable process observation conservatively suppresses reminders; it cannot fail the run.
+Observed work also suspends the transcript stall check. Once all work ends, the forgotten-submit
+reminder still applies. After the last nudge, or when the engine exits first, the run fails with
+kind `ExitedWithoutSubmit` and the step with `exited_without_submit`. A step with nothing to
+submit ends a settle after its agent goes idle and its background work ends. A terminal engine
+error is never treated as successful completion merely because no outputs were required; it
+retains its failure kind, message and session. A stored valid submission still ends the session
+at once.
 
 `agent.codex` and `agent.devin` return `log: string?`, a path to the run's readable
 record of turns, completed assistant messages, tool calls and errors. Codex writes
@@ -2657,7 +2667,7 @@ Claude's transcript (its session JSONL and its subagents') is read for progress,
 message so far and API errors. A record over 1 MiB (Claude Code writes one for a large tool
 result or file read) is skipped, never fatal, and the run's log says how many were skipped; the
 turn still ends at its `Stop` hook, which carries the final message, or on a stable idle pane.
-A turn that ended with background work running waits on it (`SLUICE_AGENT_WAIT_MIN`), even while
+A turn that ended with background work running waits until that work ends, even while
 Claude's own status says busy: after such a turn 2.1.294 says so under a compaction spinner
 frozen at `(0s)` and writes nothing until the work notifies it. Once the `Stop` hook and the
 transcript (`stop_hook_summary`, `turn_duration`) have both ended the turn, a busy status with
@@ -2729,7 +2739,10 @@ and each transient backoff with its wait. Each engine's signals, structured firs
   plan and billing details.`, `Your workspace is out of credits.` and the like are a usage limit
   with no known reset; `Your access token could not be refreshed …`, `Your authentication session
   could not be refreshed …`, `unexpected status 401 Unauthorized: …` and the like are an auth
-  failure.
+  failure. Any other failed turn (including safety/cybersecurity flags, API errors and refused
+  requests) reports `agent_failure` with its classified kind and Codex's message; a completed
+  commentary item cannot replace it with success. The failure comes from `turn.error` on
+  `turn/completed` or `turn/failed`, or the terminal `error` notification (`willRetry: false`).
 - Claude: the API error's category, from the transcript's error entry (`isApiErrorMessage`,
   `error`) or `StopFailure`'s `error`: `authentication_failed` is an auth failure (except
   Claude's own `Authentication error · This may be a temporary network issue`, which stays
@@ -2850,11 +2863,12 @@ records every failure but a cancellation as `agent failed: <kind>: <message>`.
 Limits (minutes unless noted), overridable through environment variables: `SLUICE_AGENT_MAX_MIN`
 (600, the wall cap), `SLUICE_AGENT_STALL_MIN` (30), `SLUICE_AGENT_SETTLE_S` (10),
 `SLUICE_AGENT_GRACE_MIN` (10), `SLUICE_AGENT_POLL_S`, `SLUICE_AGENT_READY_S` (180),
-`SLUICE_AGENT_TURN_START_S` (60), `SLUICE_AGENT_WAIT_MIN` (90), `SLUICE_AGENT_DIALOG_S` (60),
-`SLUICE_AGENT_QUIET_MIN` (45), `SLUICE_AGENT_WORK_MIN` (10), `SLUICE_AGENT_NUDGES`,
+`SLUICE_AGENT_TURN_START_S` (60), `SLUICE_AGENT_DIALOG_S` (60),
+`SLUICE_AGENT_QUIET_MIN` (60, never more often than hourly), `SLUICE_AGENT_NUDGES`,
 `SLUICE_AGENT_QUOTA_RESET_MIN` (15; 0 makes every limit with a known reset a hard cap),
 `SLUICE_AGENT_SCREEN_S` (20, seconds: how long an unrecognized screen may stand before the first
-turn).
+turn). `SLUICE_AGENT_WAIT_MIN` and `SLUICE_AGENT_WORK_MIN` remain accepted for compatibility;
+waiting jobs no longer cause reminders or forced background cleanup.
 
 ### 15.1 Choosing a model
 

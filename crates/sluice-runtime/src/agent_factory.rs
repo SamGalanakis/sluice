@@ -591,6 +591,17 @@ impl AgentFactory for Factory {
         } else {
             Limits::from_env().map_err(invalid)?
         };
+        let mut control_scripts = vec![
+            self.context
+                .execution
+                .fn_dir
+                .clone()
+                .unwrap_or_else(|| outer_dir.clone())
+                .join("main.py"),
+        ];
+        if let Adapter::Fake(fixture) = &engine.inner {
+            control_scripts.push(fixture.binary.clone());
+        }
         let host = RunHost {
             link,
             launch: self.launch.clone(),
@@ -599,6 +610,7 @@ impl AgentFactory for Factory {
             directory: directory.clone(),
             cancel: self.cancel.clone(),
             patience: PATIENCE,
+            control_scripts,
         };
         // The guardian's hook transport journals in the outer run directory. Each
         // logical supervisor owns that journal only while it is executing.
@@ -657,6 +669,7 @@ pub struct RunHost {
     cancel: CancellationToken,
     /// How long acknowledgements and notes wait out an unavailable peer.
     patience: Patience,
+    control_scripts: Vec<PathBuf>,
 }
 impl RunHost {
     /// A read waits out a busy or stalled coordinator for as long as the run lives.
@@ -784,10 +797,26 @@ impl SupervisorHost for RunHost {
         {
             self.cancel.cancel();
         }
+        // Failure to observe procfs is not a reason to stop a running job. Until a later
+        // snapshot proves it idle, conservatively suppress reminders.
+        let (roots, background_work) = match ProcessIdentity::read(std::process::id()) {
+            Ok(root) => {
+                let work = sluice_agents::quiet::background_work(&root, &self.control_scripts)
+                    .unwrap_or_else(|error| {
+                        vec![format!("process observation unavailable: {error}")]
+                    });
+                (vec![root], work)
+            }
+            Err(error) => (
+                vec![],
+                vec![format!("process observation unavailable: {error}")],
+            ),
+        };
         Ok(HostSnapshot {
             submissions,
             messages,
-            roots: vec![ProcessIdentity::read(std::process::id())?],
+            roots,
+            background_work,
             ..Default::default()
         })
     }

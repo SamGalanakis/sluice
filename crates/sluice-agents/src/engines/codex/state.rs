@@ -457,7 +457,9 @@ impl Codex {
                             }
                         } else if let Some(held) = held {
                             self.lost(held);
-                        } else if params["turn"]["status"] == "failed" {
+                        } else if params["turn"]["status"] == "failed"
+                            || event["method"] == "turn/failed"
+                        {
                             self.observation.error =
                                 Some(error(EngineErrorKind::Fatal, "Codex turn failed"));
                         }
@@ -467,7 +469,9 @@ impl Codex {
             "item/completed" => {
                 let item = &params["item"];
                 match item["type"].as_str() {
-                    Some("agentMessage") => {
+                    Some("agentMessage")
+                        if item["phase"].is_null() || item["phase"] == "final_answer" =>
+                    {
                         if let Some(text) = item["text"].as_str() {
                             self.observation.final_text = text.into();
                         }
