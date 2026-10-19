@@ -187,13 +187,13 @@ pub enum Clock {
     Manual(ManualClock),
 }
 impl Clock {
-    fn now(&self) -> Duration {
+    pub(crate) fn now(&self) -> Duration {
         match self {
             Clock::Real(start) => start.elapsed(),
             Clock::Manual(clock) => clock.state.borrow().now,
         }
     }
-    async fn sleep_until(&self, at: Duration) {
+    pub(crate) async fn sleep_until(&self, at: Duration) {
         match self {
             Clock::Real(start) => tokio::time::sleep_until(*start + at).await,
             Clock::Manual(clock) => clock.sleep_until(at).await,
@@ -460,6 +460,27 @@ pub async fn next_command(
     reads: &ReadPool,
     request: Next,
 ) -> Result<NextResult, PublicError> {
+    if let Some(name) = request.subscription {
+        if !request.projects.is_empty()
+            || request.since_seq.is_some()
+            || request.scope.is_some()
+            || request.units.is_some()
+            || request.tags.is_some()
+            || request.all
+        {
+            return Err(PublicError::BadRequest {
+                message: "subscription owns its projects, filter and cursor".into(),
+            });
+        }
+        return crate::subscriptions::next(
+            writer,
+            reads,
+            name,
+            Duration::from_secs(request.timeout_seconds.min(3600)),
+            Clock::default(),
+        )
+        .await;
+    }
     let selectors = request.projects;
     let me = request
         .me
@@ -569,6 +590,7 @@ pub async fn next(
     let mut last = None;
     let mut heartbeat = start;
     let mut result = NextResult {
+        suppressed: None,
         records: vec![],
         notes: vec![],
         last_seq: cursor,

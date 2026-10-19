@@ -80,6 +80,9 @@ pub enum Mode {
         args: Vec<String>,
     },
     Next {
+        /// Resume a stored subscription's filter and cursor.
+        #[arg(long, conflicts_with_all = ["projects", "since_seq", "cursor", "me", "scope", "units", "tags", "all"])]
+        subscription: Option<String>,
         #[arg(short = 'p', long = "project", value_name = "P")]
         projects: Vec<String>,
         #[arg(long, conflicts_with = "cursor")]
@@ -254,6 +257,7 @@ pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
                 tool(&home, args).await
             }
             Mode::Next {
+                subscription,
                 projects,
                 since_seq,
                 cursor,
@@ -272,6 +276,7 @@ pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
                 next(
                     &home,
                     NextFlags {
+                        subscription,
                         projects,
                         since_seq,
                         cursor,
@@ -477,6 +482,13 @@ const TOOLS: &[(&str, &str)] = &[
     ("log_wait", "wait for new log records"),
     ("step_wait", "wait until steps reach a status"),
     ("next", "the next records an orchestrator acts on"),
+    (
+        "subscription_set",
+        "store a durable event filter and cursor",
+    ),
+    ("subscription_get", "read a named subscription"),
+    ("subscription_list", "list stored subscriptions"),
+    ("subscription_remove", "remove a stored subscription"),
     ("query", "one read-only SELECT over the home"),
     ("backup", "an online copy of the database"),
     ("docs", "the agent docs (a topic, or the index)"),
@@ -657,6 +669,11 @@ async fn normalize_args(
         }
         Ok(())
     };
+    if name == "subscription_set"
+        && let Some(project) = args.remove("project")
+    {
+        args.entry("projects").or_insert(project);
+    }
     if !matches!(name, "step_submit" | "mark_read")
         && let Some(project) = args.get_mut("project")
     {
@@ -831,7 +848,16 @@ async fn normalize_args(
                 *timeout = json!(3600);
             }
         }
+        "subscription_set" => {
+            listify(args, "projects");
+            if let Some(value) = args.get_mut("wake")
+                && let Some(text) = value.as_str()
+            {
+                *value = json!(text.split(',').map(str::trim).collect::<Vec<_>>());
+            }
+        }
         "next" => {
+            args.entry("projects").or_insert(json!([]));
             listify(args, "projects");
             listify(args, "units");
             listify(args, "tags");
@@ -894,6 +920,10 @@ default to the run's own.
 fn cli_aliases(name: &str) -> Vec<(&'static str, Value)> {
     let text = |doc: &str| json!({"type": "string", "description": doc});
     match name {
+        "subscription_set" => vec![(
+            "project",
+            text("one project to subscribe to; may be repeated (as projects)"),
+        )],
         "project_update" => vec![
             ("name", text("the project's current name (as project)")),
             (
@@ -1121,6 +1151,11 @@ fn parse_tool_args(
             None => (flag.to_owned(), None),
         };
         let key = flag.replace('-', "_");
+        let key = if tool == "subscription_set" && key == "project" {
+            "projects".to_owned()
+        } else {
+            key
+        };
         let (field, from_file) = if fields.field(&key).is_some() {
             (key, false)
         } else if let Some(base) = key.strip_suffix("_file")
@@ -1180,8 +1215,21 @@ fn parse_tool_args(
         Value::Object(map) => map,
         _ => return Err(bad_request("args: expected a JSON object")),
     };
+    let mut subscription_projects = None::<Vec<Value>>;
     for (field, value) in flags {
+        if tool == "subscription_set" && field == "projects" {
+            let values = subscription_projects.get_or_insert_with(Vec::new);
+            match value {
+                Value::Array(items) => values.extend(items),
+                v => values.push(v),
+            }
+            continue;
+        }
         args.insert(field, value);
+    }
+    if let Some(projects) = subscription_projects {
+        args.remove("project");
+        args.insert("projects".into(), Value::Array(projects));
     }
     if let Some(key) = args.keys().find(|key| fields.field(key).is_none()) {
         return Err(fields.unknown(tool, key));
@@ -1523,6 +1571,7 @@ fn docs_mode(topic: Option<String>) -> Result<(), PublicError> {
 // ---- sluice next ---------------------------------------------------------------
 
 struct NextFlags {
+    subscription: Option<String>,
     projects: Vec<String>,
     since_seq: Option<i64>,
     cursor: Option<PathBuf>,
@@ -1545,6 +1594,65 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
         return Err(bad_request(
             "--cut: expected a positive number of characters",
         ));
+    }
+    if let Some(name) = flags.subscription {
+        let request = CommandRequest::Next(Next {
+            subscription: Some(name),
+            projects: vec![],
+            since_seq: None,
+            me: None,
+            scope: None,
+            units: None,
+            tags: None,
+            timeout_seconds: flags.timeout.min(3600),
+            all: false,
+            settle_seconds: 0,
+            settle_max_seconds: 0,
+            settles: Settles::Full,
+        });
+        let program = std::env::current_exe().map_err(storage)?;
+        let client = ensure_coordinator(home, &program).await?;
+        let CommandReply::Next(result) = client.command(request).await? else {
+            return Err(storage("unexpected subscription reply"));
+        };
+        let cancels = reads(home)?
+            .snapshot({
+                let result = result.clone();
+                move |sql| watch::Cancels::read(sql, &result)
+            })
+            .await
+            .map_err(|e| e.into_public(true))?;
+        for record in &result.records {
+            if flags.json {
+                println!("{}", serde_json::to_string(record).map_err(storage)?);
+            } else {
+                println!(
+                    "{}",
+                    watch::line(record, Settles::Full, flags.cut, &cancels)?.replace('\n', " ")
+                );
+            }
+        }
+        let suppressed = result.suppressed.unwrap_or_default();
+        if flags.json {
+            println!(
+                "{}",
+                json!({"digest":suppressed,"seq":result.last_seq,"timed_out":result.timed_out})
+            );
+        } else {
+            let counts = suppressed
+                .iter()
+                .map(|(kind, count)| format!("{kind}={count}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "DIGEST suppressed {} · {}seq {}",
+                if counts.is_empty() { "none" } else { &counts },
+                if result.timed_out { "timeout " } else { "" },
+                result.last_seq.0
+            );
+        }
+        std::io::stdout().flush().map_err(storage)?;
+        return Ok(());
     }
     let projects = selectors(&flags.projects)?;
     let since = match (&flags.cursor, flags.since_seq) {
@@ -1613,6 +1721,7 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
     };
     let list = |values: Vec<String>| (!values.is_empty()).then_some(values);
     let request = CommandRequest::Next(Next {
+        subscription: None,
         projects,
         since_seq,
         me,

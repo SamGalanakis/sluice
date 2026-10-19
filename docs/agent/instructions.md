@@ -34,7 +34,7 @@ Workflow:
    (`project_update(project, resources={"lane": 4})`) and give steps `needs` (`docs("plans")`,
    Resources). Every edit takes `dry_run: true` to see what would change before it does.
 4. Look with `status(project)`; wait for changes with `step_wait(project, steps, until)`,
-   `log_wait(project, since_seq)` or `next(projects)` (every step status change, call and
+   `log_wait(project, since_seq)` or `next(subscription=name)` (every step status change, call and
    message is a log record). A failed step stays failed until you
    act: fix the plan with `step_update` or `plan_edit` (pass `rev` if based on a read), then `step_retry`; or record
    the result yourself with `step_set_output`. A `stale` step was computed from inputs that have
@@ -97,3 +97,9 @@ with `data.execution_limit` tells you a run met a limit (failed forks, memory pr
 throttling, a long wait for home capacity, or a hold until the host has memory free): adjust
 parallelism or limits; a host-memory hold clears by itself. Local descendants share the cap; external services and remote
 executors need their own limits. See `docs("plans")`, Execution limits.
+
+For a standing orchestrator watcher, create a named filter with
+`subscription_set(name, projects, wake=["ask","reply","failed","stale","settled","limit","quota","say-to-me"],
+me="@you", digest="30m")`, then hold `next(subscription=name)`. Its cursor and filter survive
+client restarts and compactions. Default `say_from_steps="asks-only"` counts unsolicited
+step chatter in the digest without waking. See `docs("threads")` for the shell recipe.

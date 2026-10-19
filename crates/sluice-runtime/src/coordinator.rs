@@ -142,6 +142,13 @@ struct RequestScope {
 tokio::task_local! {
     static REQUEST: Arc<RequestScope>;
 }
+/// Durable read waits must stop before consuming their cursor when the caller leaves.
+/// Public API callers outside a socket request receive an uncancelled token.
+pub(crate) fn request_disconnected() -> CancellationToken {
+    REQUEST
+        .try_with(|scope| scope.gone.clone())
+        .unwrap_or_default()
+}
 /// Held watches per run that leave the connection pool; more count against it.
 const WATCHES_PER_RUN: usize = 2;
 /// Connections dropped because every connection permit was taken: logged at most once

@@ -38,3 +38,5 @@ pub mod dotenv;
 pub mod install;
 
 pub mod budget;
+
+pub mod subscriptions;

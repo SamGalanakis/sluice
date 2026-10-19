@@ -251,7 +251,15 @@ pub fn decode_tool(
             _ => return Err(bad("wake must be any or questions")),
         };
     }
-    for field in ["steps", "tags", "projects", "state", "units", "status"] {
+    if name == "subscription_set"
+        && let Some(value) = args.get_mut("wake")
+        && let Some(text) = value.as_str()
+    {
+        *value = json!(text.split(',').map(str::trim).collect::<Vec<_>>());
+    }
+    for field in [
+        "steps", "tags", "projects", "state", "units", "status", "wake",
+    ] {
         if let Some(value) = args.get_mut(field)
             && value.is_string()
         {
@@ -623,7 +631,8 @@ fn schema_fields(
         if matches!(
             key.as_str(),
             "steps" | "tags" | "projects" | "state" | "units" | "status"
-        ) {
+        ) || (name == "subscription_set" && key == "wake")
+        {
             let default = value.get("default").cloned();
             value = json!({"anyOf":[value,{"type":"string"}]});
             if let Some(default) = default {
@@ -988,8 +997,21 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
         "Wait until steps reach a status, instead of polling status. Returns {met, steps, seq}: met\nis whether every selected step meets `until`, steps maps each selected step id to its\nstatus (plan order), and seq is the project log's last seq at that reading (pass it to\nlog_read or log_wait as since_seq to see what happened next). It returns at once when the\ncondition already holds, else as soon as a status change makes it hold, else with met\nfalse once `timeout` seconds pass. An unknown step, a tag no step carries, both or neither\nof steps and tags, or a bad `until` is `invalid`, naming each.\n\nArgs:\n    project: the project.\n    steps: these steps (ids); give steps or tags, not both.\n    tags: every step carrying any of these tags (`unit:<name>` selects a unit).\n    until: \"succeeded\" (every step succeeded), \"settled\" (every step needs an edit\n        or a retry before anything more happens to it: succeeded, failed, stale or skipped,\n        or pending and held: paused, a core.external step waiting for its outputs, or\n        waiting only on settled steps or unset plan inputs), or {\"any_of\": [statuses]}\n        (every step in one of these statuses).\n    timeout: seconds to wait at most (default 300; capped at 3600; 0 checks once).",
     ),
     (
+        "subscription_set",
+        "Store a named durable subscription. Required: name, projects, wake and me (@session). Wake kinds: ask, reply, failed, stale, settled, limit, quota, say-to-me. Optional say_from_steps: none, asks-only (default), all; digest: duration such as 30m. Creation starts at the current log end; updating preserves its cursor. Projects resolve to IDs, and the stored reader ownership scope applies. Use next(subscription=name) to wait; matching events and suppressed counts survive client restarts.",
+    ),
+    (
+        "subscription_get",
+        "Read a subscription's filter, reader, resolved projects and cursor by name.",
+    ),
+    ("subscription_list", "List the home's named subscriptions."),
+    (
+        "subscription_remove",
+        "Remove a named subscription; missing names succeed.",
+    ),
+    (
         "next",
-        "Wait for the records an orchestrator should act on across the projects. Returns\n{records, notes, last_seq, timed_out}. It wakes on a `unit.settled` record (a unit, the\nsteps tagged with the same unit:<name>, else a step on its own, settles each time every\none of its steps comes to rest); a step that failed, went stale or was skipped; a message\nneeding a reply, not from you, addressed to you (or, from before sessions named\nthemselves, to orchestrator or nobody; in scope all, to any session); an answering reply\nnot from you; a project paused or archived by someone else, or its fallback changed; an\nexecution-limit notice to you (a say from sluice with data.execution_limit: a run's failed\nforks, memory at its cap, CPU throttling, or a step waiting long for home capacity). With\nyour name the scope is `mine`: only your units' records (an unowned unit's are the\nproject's fallback's, or everyone's when it has none), messages to or from you or your\nunits' steps, and the projects' own records. A unit.settled record is {unit, work, steps:\n[{id, status, held, outputs, omitted}]}, the succeeded steps' outputs cut as `settles`\nsays. After the first waking record it keeps collecting until `settle` seconds pass with\nno new one, or `settle_max` seconds after the first. Messages come first in `records`,\nwhole. `notes` are the notes (messages with needs_reply false, not from you) held on the\nway; read them before the records. Each wait records where your batch ended, so the next\none, without since_seq, resumes there; nothing is missed or repeated. The command-line\nform is `sluice next`.\n\nArgs:\n    projects: the projects to watch (one or several; leave out for every live project).\n    since_seq: records after this seq (the last_seq you last got); leave out to resume\n        after your last batch (named), or to start now (unnamed).\n    me: your session's name, @name (default: this MCP session's); questions to you\n        wake it, your own messages never do, and each wait marks you as reading.\n    scope: \"mine\" (the default with a name: your units and messages) or \"all\"\n        (everyone's; the only scope without a name).\n    units: only these units' records (names or patterns, `*` and `?`), with messages to\n        or from you.\n    tags: only the records of units carrying one of these tags, with messages to or\n        from you.\n    timeout: seconds to wait at most for the first waking record (default 300;\n        capped at 3600); on a timeout records is empty and timed_out is true.\n    all: every record in scope wakes it (default false).\n    settle: seconds with no new waking record that end the batch (default 20; 0\n        returns at the first).\n    settle_max: seconds after the first waking record that end the batch at the\n        latest (default 120; capped at 3600).\n    settles: how much of a settled unit's outputs each step carries: \"short\"\n        (default) only booleans, numbers, strings of at most 80 characters and a\n        `summary`'s first line (cut to 200), the rest named in `omitted` (read them\n        with status or query); \"full\" every output whole; \"none\" no outputs.",
+        "Pass subscription to resume a stored subscription, returning every matching event and a suppressed digest without a settle delay. Its stored projects, reader, filter and cursor apply; do not pass projects, since_seq, scope, units, tags or all. Otherwise: wait for the records an orchestrator should act on across the projects. Returns\n{records, notes, last_seq, timed_out}. It wakes on a `unit.settled` record (a unit, the\nsteps tagged with the same unit:<name>, else a step on its own, settles each time every\none of its steps comes to rest); a step that failed, went stale or was skipped; a message\nneeding a reply, not from you, addressed to you (or, from before sessions named\nthemselves, to orchestrator or nobody; in scope all, to any session); an answering reply\nnot from you; a project paused or archived by someone else, or its fallback changed; an\nexecution-limit notice to you (a say from sluice with data.execution_limit: a run's failed\nforks, memory at its cap, CPU throttling, or a step waiting long for home capacity). With\nyour name the scope is `mine`: only your units' records (an unowned unit's are the\nproject's fallback's, or everyone's when it has none), messages to or from you or your\nunits' steps, and the projects' own records. A unit.settled record is {unit, work, steps:\n[{id, status, held, outputs, omitted}]}, the succeeded steps' outputs cut as `settles`\nsays. After the first waking record it keeps collecting until `settle` seconds pass with\nno new one, or `settle_max` seconds after the first. Messages come first in `records`,\nwhole. `notes` are the notes (messages with needs_reply false, not from you) held on the\nway; read them before the records. Each wait records where your batch ended, so the next\none, without since_seq, resumes there; nothing is missed or repeated. The command-line\nform is `sluice next`.\n\nArgs:\n    projects: the projects to watch (one or several; leave out for every live project).\n    since_seq: records after this seq (the last_seq you last got); leave out to resume\n        after your last batch (named), or to start now (unnamed).\n    me: your session's name, @name (default: this MCP session's); questions to you\n        wake it, your own messages never do, and each wait marks you as reading.\n    scope: \"mine\" (the default with a name: your units and messages) or \"all\"\n        (everyone's; the only scope without a name).\n    units: only these units' records (names or patterns, `*` and `?`), with messages to\n        or from you.\n    tags: only the records of units carrying one of these tags, with messages to or\n        from you.\n    timeout: seconds to wait at most for the first waking record (default 300;\n        capped at 3600); on a timeout records is empty and timed_out is true.\n    all: every record in scope wakes it (default false).\n    settle: seconds with no new waking record that end the batch (default 20; 0\n        returns at the first).\n    settle_max: seconds after the first waking record that end the batch at the\n        latest (default 120; capped at 3600).\n    settles: how much of a settled unit's outputs each step carries: \"short\"\n        (default) only booleans, numbers, strings of at most 80 characters and a\n        `summary`'s first line (cut to 200), the rest named in `omitted` (read them\n        with status or query); \"full\" every output whole; \"none\" no outputs.",
     ),
     (
         "drain",

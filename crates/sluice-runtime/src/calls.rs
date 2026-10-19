@@ -783,6 +783,17 @@ pub async fn dispatch_p3_04<
                 },
             )?,
         )?,
+        CommandRequest::SubscriptionSet(request) => {
+            data(crate::subscriptions::set(writer, request).await?)?
+        }
+        CommandRequest::SubscriptionGet { name } => {
+            data(crate::subscriptions::get(reads, name).await?)?
+        }
+        CommandRequest::SubscriptionList {} => data(crate::subscriptions::list(reads).await?)?,
+        CommandRequest::SubscriptionRemove { name } => {
+            crate::subscriptions::remove(writer, name).await?;
+            CommandReply::Ack
+        }
         CommandRequest::Next(request) => {
             CommandReply::Next(crate::watch::next_command(writer, reads, request).await?)
         }

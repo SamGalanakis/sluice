@@ -829,9 +829,46 @@ pub struct StepWaitResult {
     pub seq: RecordSeq,
 }
 
+/// Durable named event filters. Names belong to the home; projects are resolved at set time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionSet {
+    pub name: String,
+    pub projects: Vec<ProjectSelector>,
+    pub wake: Vec<SubscriptionWake>,
+    #[serde(default)]
+    pub say_from_steps: StepSays,
+    /// Optional digest interval, such as `30m`, `10s` or `1h`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+    pub me: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubscriptionWake {
+    Ask,
+    Reply,
+    Failed,
+    Stale,
+    Settled,
+    Limit,
+    Quota,
+    SayToMe,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum StepSays {
+    None,
+    #[default]
+    AsksOnly,
+    All,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Next {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription: Option<String>,
     pub projects: Vec<ProjectSelector>,
     /// Records after this seq. Left out, a named session resumes after the last batch it was
     /// given (its own cursor) and an unnamed one starts at the top of the logs.
@@ -1141,6 +1178,9 @@ pub struct RecordPage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NextResult {
+    /// Subscription batches always carry a digest, including an empty one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suppressed: Option<std::collections::BTreeMap<String, u64>>,
     pub records: Vec<Record>,
     pub notes: Vec<Record>,
     pub last_seq: RecordSeq,
@@ -1325,6 +1365,14 @@ pub enum CommandRequest {
     LogWait(LogWait),
     StepWait(StepWait),
     Next(Next),
+    SubscriptionSet(SubscriptionSet),
+    SubscriptionGet {
+        name: String,
+    },
+    SubscriptionList {},
+    SubscriptionRemove {
+        name: String,
+    },
     Query(Query),
     AcquireLease(AcquireLease),
     ReleaseLease(ReleaseLease),

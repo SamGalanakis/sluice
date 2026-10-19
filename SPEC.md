@@ -1755,6 +1755,57 @@ named in `omitted`), `full` or `none`. Every call records the reader's position 
 
 `sluice next` is the same wait (§14), and `sluice watch` follows the log as JSON lines.
 
+### Stored subscriptions
+
+`subscription_set(name, projects, wake, me, say_from_steps="asks-only", digest?)` stores a
+home-wide named subscription. `projects` is a nonempty list of project selectors, resolved
+once to immutable IDs; `me` is a session name and its existing `mine` ownership scope (§8.1)
+applies. `wake` is a nonempty list of `ask`, `reply`, `failed`, `stale`, `settled`, `limit`,
+`quota` and `say-to-me`. Names are nonblank and at most 128 bytes. Creation starts at the
+selected logs' current end; setting an existing name replaces the filter and reader while
+preserving its cursor. `subscription_get(name)` returns its stored filter, reader, projects,
+cursor and revision token; `subscription_list()` lists them by name; `subscription_remove(name)`
+removes one (a missing name succeeds). These are coordinator tools on CLI and MCP. The CLI
+accepts repeated `--project` and comma-separated `--wake` for `subscription_set`.
+
+`next(subscription=name, timeout=300)` (shell: `sluice next --subscription name --timeout S`)
+uses that stored filter and cursor. Do not supply projects, since_seq, scope, units, tags or
+all; its stored reader applies even when the client session changes. It subscribes before
+reading and checks every page of every selected project in one snapshot, returning every
+matching record after the cursor, ordered by seq, as soon as one exists. It has no settle
+delay: an ask wakes it immediately, regardless of `digest`. It returns the usual
+`{records, notes: [], last_seq, timed_out}` plus `suppressed`, a map of suppressed kind to
+count (including an empty map). Message kinds are `ask`, `reply`, `say`, step failures and
+staleness are `failed` and `stale`, unit settlements are `settled`; other counts use log
+kinds. Out-of-scope records are neither returned nor counted.
+
+`ask` and `reply` select messages addressed to the stored reader (including historical
+unaddressed and `orchestrator` messages), excluding its own messages. `failed` and `stale`
+select those step status transitions; `settled` selects unit settlements. `limit` selects
+execution-limit notices to the reader and resource-exhausted step failures. `quota` selects
+step failures with `AgentFailure.kind="QuotaExhausted"`. `say-to-me` selects notes addressed
+to the reader. For step-authored says, `say_from_steps="none"` suppresses them all;
+`"asks-only"` permits them only while the reader has an open question addressed to that
+step; `"all"` permits unsolicited updates too. Ask and reply messages remain governed by
+their wake kinds. Thus reserving, queued and still-waiting step notes do not wake a default
+subscription, even with `say-to-me` enabled, unless the reader requested an update.
+
+Suppressed events are counted until a matching event or timeout returns them. Optional
+`digest` (positive integer seconds, or `s`, `m`, `h`, `d`, up to 365d) also returns a digest-only
+batch that long after the first suppressed event in the wait. A digest expiry has
+`timed_out=false`; a timeout without matching records has `timed_out=true`. Shell output
+has one line per matching event and a final `DIGEST suppressed kind=N, ... · seq N` line;
+`--json` prints record JSON lines and a final `{digest, seq, timed_out}` line.
+
+The filter and cursor live in `maintenance.settings.subscriptions`, independently of
+session read positions and client files. Only a completed batch advances the cursor;
+interrupting a pending wait leaves its unreturned events for the next client. Simultaneous
+waits or changes to the same name use a revision-token compare-and-set: a losing wait
+returns conflict and retries from the stored cursor. Removing or changing a subscription
+wakes its pending wait to refuse that obsolete filter. These cursors have the bounded log's
+retention: `cursor_expired` is returned if history has been trimmed; remove and recreate the
+subscription to start from now. A subscription should have one active reader.
+
 ## 11. Verify
 
 `verify(project?)` returns a list of problems `[{where, message}]` (empty when all is well) and
@@ -2024,7 +2075,11 @@ on.
 | `log_read` | `project?`, `since_seq?`, `kinds?`, `threads?`, `statuses?`, `recipients?`, `limit=200` | `{records, last_seq}`; without `since_seq` the latest records; filters §9 |
 | `log_wait` | as `log_read`, plus `timeout=300`, `wake="any"`, `me?`, `scope?`, `units?`, `tags?` | `{records, last_seq}` (§10) |
 | `step_wait` | `project`, `steps?` or `tags?`, `until`, `timeout=300` | `{met, steps, seq}` (§10) |
-| `next` | §10 | `{records, notes, last_seq, timed_out}` |
+| `next` | §10; `subscription?` resumes a stored filter | `{records, notes, last_seq, timed_out, suppressed?}` |
+| `subscription_set` | `name`, `projects`, `wake`, `me`, `say_from_steps="asks-only"`, `digest?` (§10) | stored filter, cursor and revision token |
+| `subscription_get` | `name` | stored subscription |
+| `subscription_list` | | subscriptions ordered by name |
+| `subscription_remove` | `name` | acknowledgement |
 | `query` | `sql`, `params=[]`, `limit=200` | `{columns, rows, truncated}` |
 
 `query` runs one read-only statement on a fresh connection: at most 100,000 bytes of SQL, `limit`
@@ -2594,6 +2649,7 @@ write that timed out, and connections dropped for want of a permit.
 | `tool rpc '<request>'` | sends a raw wire request |
 | `tool lease acquire\|release\|status [<resource or id>] [--field value]…` | `lease_acquire`, `lease_release` or `lease_status` (§7.6), a leading bare word their `resource` (`lease` for release) |
 | `say`, `ask`, `reply` | aliases of `tool say`, `tool ask`, `tool reply`, with the same JSON, flags, files and run defaults |
+| `next --subscription NAME [--timeout 300] [--cut 600] [--json]` | stored wait (§10); one line per matching event and a digest with suppressed counts; resumes its cursor across clients |
 | `next [-p P]… [--since-seq N \| --cursor FILE] [--me @NAME] [--scope mine\|all] [--units U,…] [--tags T,…] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; without a since a named session resumes after its last batch and an unnamed one starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |
 | `watch [-p P] [--kinds K,…] [--threads T,…] [--since-seq N] [--wake any\|questions]` | follows the log, one JSON record per line, until killed |
 | `drain [-p P]… [--no-wait] [--release]` | drains (waits until drained unless `--no-wait`) or releases |

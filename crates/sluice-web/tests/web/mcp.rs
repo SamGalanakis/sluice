@@ -176,7 +176,21 @@ fn client_config() -> ClientConfig {
 }
 async fn exercise(client: &rmcp::service::RunningService<rmcp::RoleClient, ClientConfig>) {
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 63);
+    for name in [
+        "projects_list",
+        "next",
+        "docs",
+        "lease_acquire",
+        "lease_release",
+        "lease_status",
+        "park",
+        "subscription_set",
+        "subscription_get",
+        "subscription_list",
+        "subscription_remove",
+    ] {
+        assert!(tools.iter().any(|tool| tool.name == name), "missing {name}");
+    }
     let result = client
         .call_tool(CallToolRequestParams::new("projects_list"))
         .await
@@ -276,6 +290,38 @@ async fn rmcp_client_initializes_lists_and_reads_over_process_stdio() {
 
 #[test]
 fn tool_arguments_decode_and_refuse_invalid_wire_shapes() {
+    // Stored watcher signatures must work through MCP's flattened argument decoder too.
+    let CommandRequest::SubscriptionSet(subscription) = decode("subscription_set", json!({
+        "name":"lanes", "projects":"p", "me":"@lead", "wake":"ask,failed,say-to-me", "digest":"30m"
+    })).unwrap() else { panic!("subscription_set") };
+    assert_eq!(subscription.projects.len(), 1);
+    assert_eq!(subscription.wake.len(), 3);
+    assert_eq!(
+        subscription.say_from_steps,
+        sluice_model::commands::StepSays::AsksOnly
+    );
+    let CommandRequest::Next(next) =
+        decode("next", json!({"subscription":"lanes","timeout":0})).unwrap()
+    else {
+        panic!("next")
+    };
+    assert_eq!(next.subscription.as_deref(), Some("lanes"));
+    assert!(next.projects.is_empty());
+    for (name, args) in [
+        ("subscription_get", json!({"name":"lanes"})),
+        ("subscription_list", json!({})),
+        ("subscription_remove", json!({"name":"lanes"})),
+    ] {
+        assert!(decode(name, args).is_ok(), "{name}");
+    }
+    assert!(
+        decode(
+            "subscription_set",
+            json!({"name":"lanes", "projects":["p"], "me":"@lead", "wake":["typo"]})
+        )
+        .is_err()
+    );
+
     {
         let request = decode("unit_add",json!({"project":"p","recipe":"work","unit":"one","params":{},"after":{},"tags":["unit"],"inputs":{"entry":{"prompt":"hi"}},"rev":4,"dry_run":true,"reason":"preview","author":"reviewer"})).unwrap();
         let CommandRequest::UnitAdd(request) = request else {

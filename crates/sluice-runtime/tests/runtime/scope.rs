@@ -386,6 +386,7 @@ async fn a_long_question_keeps_its_first_paragraph_and_its_questions_whole() {
     );
     // A title leads its question's line; the body follows whole.
     let titled = NextResult {
+        suppressed: None,
         records: vec![Record {
             event: match asked.event.clone() {
                 Event::Message(mut m) => {
@@ -452,6 +453,7 @@ async fn a_settled_line_names_how_the_unit_ended() {
     )
     .await;
     let result = NextResult {
+        suppressed: None,
         records: vec![failed_unit, cancelled_unit, fine],
         notes: vec![],
         last_seq: RecordSeq(0),

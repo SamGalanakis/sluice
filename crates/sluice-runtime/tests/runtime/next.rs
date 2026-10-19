@@ -526,6 +526,7 @@ fn compact_rendering_modes_keep_json_whole_and_unicode_cut_safe() {
         },
     };
     let result = NextResult {
+        suppressed: None,
         records: vec![record],
         notes: vec![],
         last_seq: RecordSeq(3),
@@ -968,5 +969,271 @@ async fn settlement_and_retry_certificates() {
     a_unit_settles_again_each_time_it_comes_back_to_rest(&w, &r, p).await;
     p = project(&w, "case-4").await;
     settlements_recorded_before_statuses_upgrade_without_a_record(&w, &r, p).await;
+    w.shutdown().await.unwrap();
+}
+
+/// Status chatter used to wake an orchestrator's grep loop. A subscription counts it,
+/// holds the digest until due, and returns every pending ask immediately, even past a page.
+#[tokio::test]
+async fn subscription_suppresses_chatter_and_asks_bypass_the_digest() {
+    use sluice_model::commands::{StepSays, SubscriptionSet, SubscriptionWake};
+    use sluice_runtime::subscriptions;
+    let (_h, w, r, p) = setup().await;
+    // Use an actual stored plan step so the policy can distinguish workers from sessions.
+    let (doc, _) = compile(
+        br#"{"steps":{"worker":{"run":"test.fn"}}}"#,
+        &IndexMap::from([("test.fn".into(), FnSignature::default())]),
+    );
+    w.write(RetrySafety::NonIdempotent, move |tx| {
+        plan_rows::commit_document(tx, p, &doc, None, None)?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let config = SubscriptionSet {
+        name: "lanes".into(),
+        projects: vec![format!("id:{p}").parse().unwrap()],
+        wake: vec![SubscriptionWake::Ask, SubscriptionWake::SayToMe],
+        say_from_steps: StepSays::AsksOnly,
+        digest: Some("30m".into()),
+        me: "@orch".into(),
+    };
+    subscriptions::set(&w, config.clone()).await.unwrap();
+    let clock = ManualClock::new();
+    let task = {
+        let (w, r, clock) = (w.clone(), r.clone(), clock.clone());
+        tokio::spawn(async move {
+            subscriptions::next(
+                &w,
+                &r,
+                "lanes".into(),
+                Duration::from_secs(3600),
+                Clock::Manual(clock),
+            )
+            .await
+        })
+    };
+    clock.parked().await;
+    // A batch larger than the log page proves next drains all matching events before returning.
+    w.write(RetrySafety::NonIdempotent, move |tx| {
+        for _ in 0..205 {
+            stored_messages::store(
+                tx,
+                p,
+                &Stored {
+                    from: "worker",
+                    to: Some("@orch"),
+                    body: "still waiting",
+                    ..Stored::default()
+                },
+            )?;
+        }
+        for body in ["decision one", "decision two"] {
+            stored_messages::store(
+                tx,
+                p,
+                &Stored {
+                    from: "worker",
+                    to: Some("@orch"),
+                    body,
+                    question: true,
+                    ..Stored::default()
+                },
+            )?;
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let got = task.await.unwrap().unwrap();
+    assert_eq!(got.records.len(), 2);
+    assert_eq!(got.suppressed.unwrap()["say"], 205);
+    assert!(!got.timed_out);
+    // No fake time passed: the ask did not wait for the 30 minute digest.
+    post(&w, p, "queued", "worker", Some("@orch"), false, None).await;
+    let wait = || {
+        let (w, r, clock) = (w.clone(), r.clone(), clock.clone());
+        tokio::spawn(async move {
+            subscriptions::next(
+                &w,
+                &r,
+                "lanes".into(),
+                Duration::from_secs(3600),
+                Clock::Manual(clock),
+            )
+            .await
+        })
+    };
+    let interrupted = wait();
+    clock.parked().await;
+    assert!(
+        !interrupted.is_finished(),
+        "chatter must not wake the reader"
+    );
+    interrupted.abort();
+    assert!(interrupted.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        subscriptions::get(&r, "lanes".into()).await.unwrap()["cursor"],
+        json!(got.last_seq)
+    );
+    let second = wait();
+    clock.parked().await;
+    clock.advance(Duration::from_secs(1800));
+    let got = second.await.unwrap().unwrap();
+    assert!(got.records.is_empty());
+    assert!(!got.timed_out, "digest returned before the timeout");
+    assert_eq!(got.suppressed.unwrap()["say"], 1);
+    // An explicit question requests the worker's update; asks-only allows its say.
+    post(&w, p, "status please", "@orch", Some("worker"), true, None).await;
+    post(&w, p, "still waiting", "worker", Some("@orch"), false, None).await;
+    let asked = subscriptions::next(
+        &w,
+        &r,
+        "lanes".into(),
+        Duration::ZERO,
+        Clock::Manual(clock.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(asked.records.len(), 1);
+    assert_eq!(asked.suppressed.unwrap()["ask"], 1);
+    // An opt-in permits unsolicited says; none suppresses even the requested says.
+    subscriptions::set(
+        &w,
+        SubscriptionSet {
+            say_from_steps: StepSays::None,
+            ..config.clone()
+        },
+    )
+    .await
+    .unwrap();
+    post(&w, p, "queued", "worker", Some("@orch"), false, None).await;
+    let none = subscriptions::next(
+        &w,
+        &r,
+        "lanes".into(),
+        Duration::ZERO,
+        Clock::Manual(clock.clone()),
+    )
+    .await
+    .unwrap();
+    assert!(none.records.is_empty());
+    assert_eq!(none.suppressed.unwrap()["say"], 1);
+    subscriptions::set(
+        &w,
+        SubscriptionSet {
+            say_from_steps: StepSays::All,
+            ..config
+        },
+    )
+    .await
+    .unwrap();
+    post(&w, p, "queued", "worker", Some("@orch"), false, None).await;
+    let all = subscriptions::next(&w, &r, "lanes".into(), Duration::ZERO, Clock::Manual(clock))
+        .await
+        .unwrap();
+    assert_eq!(all.records.len(), 1);
+    subscriptions::remove(&w, "lanes".into()).await.unwrap();
+    w.shutdown().await.unwrap();
+}
+
+/// Quota and execution-limit wakes must be selectable without subscribing to every failure.
+#[tokio::test]
+async fn subscription_wake_kinds_select_typed_events() {
+    use sluice_model::commands::{StepSays, SubscriptionSet, SubscriptionWake as Wake};
+    use sluice_runtime::subscriptions;
+    let (_h, w, r, p) = setup().await;
+    let cases = [
+        ("failed", Wake::Failed, 3),
+        ("quota", Wake::Quota, 1),
+        ("limit", Wake::Limit, 1),
+        ("stale", Wake::Stale, 1),
+        ("settled", Wake::Settled, 1),
+        ("reply", Wake::Reply, 1),
+    ];
+    let question = post(&w, p, "question", "@orch", Some("worker"), true, None).await;
+    for (name, wake, _) in &cases {
+        subscriptions::set(
+            &w,
+            SubscriptionSet {
+                name: (*name).into(),
+                projects: vec![format!("id:{p}").parse().unwrap()],
+                wake: vec![*wake],
+                say_from_steps: StepSays::None,
+                digest: None,
+                me: "@orch".into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+    w.write(RetrySafety::NonIdempotent, move |tx| {
+        for (to, error) in [
+            (
+                StepStatus::Failed,
+                Some(PublicError::FnFailure {
+                    message: "bad command".into(),
+                }),
+            ),
+            (
+                StepStatus::Failed,
+                Some(PublicError::AgentFailure {
+                    kind: "QuotaExhausted".into(),
+                    message: "reset tomorrow".into(),
+                    session: None,
+                }),
+            ),
+            (
+                StepStatus::Failed,
+                Some(PublicError::ResourceExhausted {
+                    resource: sluice_model::limits::ExhaustedResource::Memory,
+                    limit: 1024,
+                    peak: Some(2048),
+                    message: "memory cap".into(),
+                }),
+            ),
+            (StepStatus::Stale, None),
+        ] {
+            tx.append_record(
+                Some(p),
+                Event::StepStatus {
+                    step: "worker".parse().unwrap(),
+                    from: Some(StepStatus::Running),
+                    to,
+                    error,
+                    run_ids: vec![],
+                    needs: JsonMap::default(),
+                },
+            )?;
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+    settled(&w, p, "worker").await;
+    post(
+        &w,
+        p,
+        "answer",
+        "worker",
+        Some("@orch"),
+        false,
+        Some(question.id),
+    )
+    .await;
+    for (name, _, expected) in cases {
+        let got = subscriptions::next(&w, &r, name.into(), Duration::ZERO, Clock::default())
+            .await
+            .unwrap();
+        assert_eq!(got.records.len(), expected, "{name}: {got:?}");
+        assert!(!got.timed_out);
+        let empty = subscriptions::next(&w, &r, name.into(), Duration::ZERO, Clock::default())
+            .await
+            .unwrap();
+        assert!(
+            empty.records.is_empty(),
+            "{name} repeated a delivered record"
+        );
+    }
     w.shutdown().await.unwrap();
 }

@@ -1603,3 +1603,53 @@ async fn message_records_and_filtered_waits() {
     standing_log_wait_sleeps_through_unrelated_records_and_wakes_on_the_first_match(&f).await;
     f.close().await;
 }
+
+/// A disconnected watcher must not consume a future event before its replacement reads it.
+#[tokio::test]
+async fn subscription_client_disconnect_retains_the_cursor() {
+    use sluice_process::socket;
+    use tokio::{io::AsyncWriteExt, net::UnixStream};
+    let f = Fixture::new().await;
+    let stored = data(
+        f.client
+            .command(request(
+                "subscription_set",
+                json!({"name":"lanes","projects":[f.selector()],"wake":["ask"],"me":"@orch"}),
+            ))
+            .await
+            .unwrap(),
+    );
+    let next = |timeout| {
+        request(
+            "next",
+            json!({"subscription":"lanes","projects":[],"timeout_seconds":timeout,"all":false,"settle_seconds":0,"settle_max_seconds":0,"settles":"full"}),
+        )
+    };
+    let mut stream = UnixStream::connect(&f.client.path).await.unwrap();
+    socket::write_frame(&mut stream, &json!({"protocol":1,"request_id":"interrupted","run_capability":null,"command":next(3600)})).await.unwrap();
+    // Half-close models a departing client, retaining the read side to observe cancellation.
+    stream.shutdown().await.unwrap();
+    let reply: Value =
+        tokio::time::timeout(Duration::from_secs(1), socket::read_frame(&mut stream))
+            .await
+            .expect("disconnected wait was cancelled")
+            .unwrap();
+    assert_eq!(reply["result"]["value"]["error"], "cancelled", "{reply}");
+    let retained = data(
+        f.client
+            .command(request("subscription_get", json!({"name":"lanes"})))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(retained["cursor"], stored["cursor"]);
+    f.client.command(request("ask", json!({"project":f.selector(),"me":"@peer","to":"@orch","body":"decision after restart"}))).await.unwrap();
+    let CommandReply::Next(batch) = f.client.command(next(0)).await.unwrap() else {
+        panic!("next")
+    };
+    assert_eq!(batch.records.len(), 1);
+    assert!(!batch.timed_out);
+    assert!(
+        matches!(&batch.records[0].event, sluice_model::events::Event::Message(m) if m.body == "decision after restart")
+    );
+    f.close().await;
+}

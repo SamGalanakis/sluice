@@ -1952,3 +1952,184 @@ fn top_level_messaging_aliases() {
     assert_eq!(thread["messages"][2]["answered_by"], replied["id"]);
     assert_eq!(thread["messages"][3]["body"], "postgres");
 }
+
+/// A named filter must survive separate CLI processes, consume an entire batch, and keep
+/// unrelated messages out. Previously every client needed its own grep and cursor file.
+#[test]
+fn subscription_survives_client_restart_and_consumes_the_whole_batch() {
+    let home = ScratchHome::served().unwrap();
+    assert!(
+        tool(home.path(), "project_create", r#"{"name":"p"}"#)
+            .status
+            .success()
+    );
+    assert!(
+        tool(home.path(), "project_create", r#"{"name":"q"}"#)
+            .status
+            .success()
+    );
+    let set = run(
+        home.path(),
+        &[
+            "tool",
+            "subscription_set",
+            "--name",
+            "lanes",
+            "--project",
+            "p",
+            "--project",
+            "q",
+            "--wake",
+            "ask,reply,failed,stale,settled,limit,quota,say-to-me",
+            "--digest",
+            "30m",
+        ],
+    );
+    assert!(
+        set.status.success(),
+        "{}",
+        String::from_utf8_lossy(&set.stderr)
+    );
+    assert_eq!(stdout(&set)["projects"].as_array().unwrap().len(), 2);
+    let initial = stdout(&set)["cursor"].clone();
+    assert_eq!(
+        stdout(&tool(
+            home.path(),
+            "subscription_get",
+            r#"{"name":"lanes"}"#
+        ))["cursor"],
+        initial
+    );
+    assert_eq!(
+        stdout(&tool(home.path(), "subscription_list", "{}"))[0]["name"],
+        "lanes"
+    );
+    let send = |project: &str, verb: &str, to: &str, body: &str| {
+        let out = run(
+            home.path(),
+            &[
+                "tool",
+                verb,
+                "--me",
+                "@peer",
+                "--project",
+                project,
+                "--to",
+                to,
+                "--body",
+                body,
+            ],
+        );
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        stdout(&out)
+    };
+    // Register a different recipient; ownership scope excludes that session's inbox.
+    assert!(
+        run(
+            home.path(),
+            &["next", "-p", "p", "--me", "@other", "--timeout", "0"]
+        )
+        .status
+        .success()
+    );
+    send("p", "ask", "@other", "not ours");
+    let question = send("p", "ask", "@orch", "need a decision");
+    send("q", "ask", "@orch", "another decision");
+    let batch = run(
+        home.path(),
+        &[
+            "next",
+            "--subscription",
+            "lanes",
+            "--timeout",
+            "0",
+            "--json",
+        ],
+    );
+    assert!(
+        batch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&batch.stderr)
+    );
+    let entries: Vec<Value> = String::from_utf8(batch.stdout)
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    assert_eq!(entries[0]["id"], question["id"]);
+    assert_eq!(entries[2]["digest"], json!({}));
+    assert_eq!(entries[2]["timed_out"], false);
+    // Updating the filter must not rewind the cursor; each wait is a new client process.
+    let updated = run(
+        home.path(),
+        &[
+            "tool",
+            "subscription_set",
+            "--name",
+            "lanes",
+            "--project",
+            "p",
+            "--project",
+            "q",
+            "--wake",
+            "ask",
+        ],
+    );
+    assert!(updated.status.success());
+    assert_eq!(stdout(&updated)["cursor"], entries[2]["seq"]);
+    let empty = run(
+        home.path(),
+        &["next", "--subscription", "lanes", "--timeout", "0"],
+    );
+    assert!(empty.status.success());
+    assert!(
+        String::from_utf8(empty.stdout)
+            .unwrap()
+            .starts_with("DIGEST suppressed none · timeout seq ")
+    );
+    // Optional notes remain visible in digest counts, without becoming waking entries.
+    send("p", "say", "@orch", "queued");
+    let suppressed = run(
+        home.path(),
+        &[
+            "next",
+            "--subscription",
+            "lanes",
+            "--timeout",
+            "0",
+            "--json",
+        ],
+    );
+    let line = String::from_utf8(suppressed.stdout).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(line.trim()).unwrap()["digest"]["say"],
+        1
+    );
+    assert!(
+        run(home.path(), &["next", "--subscription", "lanes", "-p", "p"])
+            .status
+            .code()
+            == Some(2)
+    );
+    assert!(
+        tool(home.path(), "subscription_remove", r#"{"name":"lanes"}"#)
+            .status
+            .success()
+    );
+    assert!(
+        stdout(&tool(home.path(), "subscription_list", "{}"))
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let absent = run(
+        home.path(),
+        &["next", "--subscription", "lanes", "--timeout", "0"],
+    );
+    assert_eq!(stderr(&absent)["error"], "not_found");
+}

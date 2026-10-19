@@ -94,21 +94,46 @@ person), or nobody. A unit you add is yours: `step_add`, `unit_add` and `plan_ed
 `fallback` answers unowned units: `project_update(project, fallback="@lash-f4")`; with no
 fallback, a worker of an unowned unit asks the person.
 
-**Starting.** Name yourself, set the fallback of a project you drive if it has none
-(`project_update(project, fallback="@lash-f4")`), and hold one wait:
-`next(projects=["lash"], timeout=3600)` (from a shell, `SLUICE_ME=@lash-f4 sluice next -p lash
---timeout 3600`, in a loop). It shows you your scope, `mine`: your units' settles, failures and
-records, the unowned units' when you are the fallback (or when the project has none), questions
-and notes to you or your units' steps, replies to your questions, and the project's own events
-(a pause, an archive, a new fallback). Other sessions' units never wake you, so you need no
-filter of your own. `scope="all"` reads everyone's (an unnamed caller's only scope);
-`units=["pe-*"]` or `tags=["arc:x"]` narrow either scope to those units, keeping messages to
-you. `log_wait` takes the same `me`, `scope`, `units` and `tags`.
+**Starting.** Name yourself and set the fallback of a project you drive if it has none
+(`project_update(project, fallback="@lash-f4")`). Create one durable subscription, then wait
+on its name. From a shell:
 
-**Your position.** Each session's `next` keeps its own position: called without `since_seq`
-it resumes after the last batch it was given, so two sessions never share or race one cursor
-and a watcher needs no cursor file or lock. Passing `since_seq` (or `--cursor FILE` from a
-shell) reads from there instead. An unnamed `next` starts at the top of the logs.
+```sh
+export SLUICE_ME=@lash-f4
+sluice tool subscription_set --name lanes --project lash \
+  --wake ask,reply,failed,stale,settled,limit,quota,say-to-me --digest 30m
+sluice next --subscription lanes --timeout 3600
+```
+
+Call `next --subscription lanes` again after acting on each batch; after a compaction or
+client restart, use that same name. Its projects, identity, filter and cursor are stored by
+the coordinator; no grep, cursor file or watcher rebuild is needed. With MCP, use
+`subscription_set(name="lanes", projects=["lash"], me="@lash-f4", wake=["ask", "reply",
+"failed", "stale", "settled", "limit", "quota", "say-to-me"], digest="30m")`, then
+`next(subscription="lanes", timeout=3600)`.
+
+The reader's `mine` scope applies: its units' failures and settlements, questions and replies
+to it, and selected notes to it. `say_from_steps="asks-only"` (the default) suppresses
+unsolicited step notes, including queued and still-waiting updates. To request an update,
+ask the step a question: its says are eligible while that question remains open.
+`"none"` suppresses every step say; `"all"` allows them. Ask and reply wake kinds always
+work independently. `limit` selects execution-limit notices and resource exhaustion;
+`quota` selects quota-exhausted step failures.
+
+A matching event wakes at once and returns every pending match, one line each, followed by a
+digest counting suppressed events by kind. `--json` gives record lines plus
+`{digest, seq, timed_out}`. Optional `digest="30m"` returns a digest-only batch after 30 minutes
+of suppressed events; asks never wait for that timer. Without a digest interval, counts ride
+with the next matching event or timeout. `subscription_get(name)`, `subscription_list()` and
+`subscription_remove(name)` inspect and remove subscriptions. Setting an existing name
+updates its filter without rewinding its cursor; only creation starts from now. Use one
+reader per name. If the bounded log was trimmed while it was away, `cursor_expired` asks you
+to remove and recreate the subscription to start from now.
+
+**Other waits.** Unstored `next` still supports `scope="all"`, `units=["pe-*"]` and
+`tags=["arc:x"]`, and `log_wait` takes the same `me`, `scope`, `units` and `tags`. Each named
+session's unstored `next` keeps its own position; passing `since_seq` or CLI `--cursor FILE`
+reads from there instead. Use a stored subscription for the standing orchestrator watcher.
 
 **Handing off and taking over.** Ownership moves only by these two calls, each one write, all
 or none, and neither is plan work (no `rev`; allowed during a drain):
