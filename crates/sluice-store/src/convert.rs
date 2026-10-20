@@ -238,6 +238,10 @@ pub fn convert_home(database: &Path) -> Result<ConversionReport> {
     if from_schema == 3 {
         let report = upgrade_execution_budgets(&tx)?;
         tx.commit()?;
+        // Match every other conversion path: readers of the converted home require
+        // current-version additive columns too, including restore's verification reader.
+        connection.pragma_update(None, "foreign_keys", true)?;
+        crate::schema::conform(&mut connection)?;
         clean(&connection)?;
         return Ok(report);
     }

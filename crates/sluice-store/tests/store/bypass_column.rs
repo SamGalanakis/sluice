@@ -76,6 +76,9 @@ async fn slow_schema_3_requires_drained_conversion_and_preserves_project_metadat
     let report = sluice_store::convert::convert_home(&home.join("sluice.db")).unwrap();
     assert_eq!(report.from_schema, 3);
     assert_eq!(report.projects.len(), 1);
+    // A completed conversion is readable before a writer opens it; restore verifies
+    // the copy this way too. Additive current-version columns must already exist.
+    ReadPool::open(home, 1).unwrap();
     assert_eq!(
         sql.query_row(
             "SELECT description,fallback,limits FROM projects WHERE project_id=?1",
