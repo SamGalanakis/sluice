@@ -99,9 +99,7 @@ async fn resource_limits_share_sibling_budget_and_isolate_neighboring_run() {
             matches!(outcome, StartOutcome::Confirmed { .. }),
             "{mode}: {outcome:?}"
         );
-        if mode == "threads" {
-            fs::write(home.path().join("threads/confirmed"), b"confirmed").unwrap();
-        }
+        fs::write(home.path().join(mode).join("confirmed"), b"confirmed").unwrap();
     }
     wait_file(&home.path().join("survivor/ready")).await;
     wait_file(&home.path().join("victim/evidence.json")).await;
@@ -346,5 +344,7 @@ fn resource_worker() {
         assert!(groups.payload_empty().unwrap());
         let usage = groups.payload().resource_usage().unwrap();
         fs::write(dir.join("evidence.json"), serde_json::to_vec(&usage).unwrap()).unwrap();
+        // A victim finishes quickly: stay live until the parent has observed its start.
+        wait_file(&dir.join("confirmed")).await;
     });
 }
