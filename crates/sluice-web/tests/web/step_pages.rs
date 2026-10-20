@@ -233,13 +233,13 @@ async fn slow_chromium_run_budgets_and_resource_failures_fit_step_and_unit_pages
                                 return value?.checkVisibility() ? value.textContent.trim() : null;
                             });
                         })()"#).unwrap();
-                        assert_eq!(facts, json!(["8192 MiB memory · 1.5 CPUs · 256 tasks", "8192 MiB peak memory"]), "{width} {theme}");
+                        assert_eq!(facts, json!(["8192 MiB memory cap · 1.5 CPUs · 256 tasks", "8192 MiB peak memory"]), "{width} {theme}");
                         assert_eq!(browser.eval("[...document.querySelectorAll('#tp-runs .a-facts dd')].every(e => e.scrollWidth <= e.clientWidth + 1)").unwrap(), json!(true), "run facts clipped at {width} {theme}");
                     } else {
                         browser
                             .wait("document.querySelector('#us-a-4-review')")
                             .unwrap();
-                        assert_eq!(browser.eval("document.querySelector('#us-a-4-review').closest('.u-step').querySelector('.u-why').innerText").unwrap(), json!("Stopped: its memory budget was exhausted."), "{width} {theme}");
+                        assert_eq!(browser.eval("document.querySelector('#us-a-4-review').closest('.u-step').querySelector('.u-why').innerText").unwrap(), json!("Stopped: it was killed at its memory cap."), "{width} {theme}");
                     }
                     browser.eval(FRAMES).unwrap();
                     assert_eq!(browser.eval(FITS).unwrap(), json!(true), "{name} at {width} {theme} scrolls sideways");

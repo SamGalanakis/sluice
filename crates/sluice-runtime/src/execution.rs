@@ -64,13 +64,26 @@ pub trait ExecutionHost: FnHost + guardian::AdoptionHost + Send + Sync + 'static
     ) -> impl Future<Output = Option<sluice_model::RunUsage>> + Send {
         std::future::ready(None)
     }
-    /// The host's memory now, for admission by measured headroom (SPEC §2.5). `None` when
+    /// The host's memory now, for admission by measured memory (SPEC §2.5). `None` when
     /// there is no host to measure (fakes); an error holds admission.
     fn host_memory(
         &self,
         _home: HomeId,
     ) -> impl Future<Output = Option<io::Result<crate::headroom::HostMemory>>> + Send {
         std::future::ready(None)
+    }
+    /// A live run's payload memory.current and memory.peak, read from its cgroup; `None`
+    /// when there is nothing to read yet (no payload) or no host.
+    fn run_memory(
+        &self,
+        _run: RunId,
+        _service_cgroup: &str,
+    ) -> impl Future<Output = Option<io::Result<sluice_model::limits::RunMemory>>> + Send {
+        std::future::ready(None)
+    }
+    /// The clock admission's readings and warm-ups run on.
+    fn now(&self) -> std::time::SystemTime {
+        std::time::SystemTime::now()
     }
     fn launch(
         &self,
@@ -124,47 +137,35 @@ impl guardian::AdoptionHost for OsHost {
         .await
     }
 }
-/// Each workload slice's cgroup, once systemd has created it.
-static SLICE_GROUPS: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<String, PathBuf>>,
-> = std::sync::OnceLock::new();
 impl ExecutionHost for OsHost {
-    async fn host_memory(&self, home: HomeId) -> Option<io::Result<crate::headroom::HostMemory>> {
+    async fn host_memory(&self, _home: HomeId) -> Option<io::Result<crate::headroom::HostMemory>> {
         // Tests never gate on the machine running them; a fixture can set a reading.
         if sluice_process::host::test_mode() {
             return std::env::var("SLUICE_TEST_HOST_MEMORY")
                 .ok()
                 .map(|reading| serde_json::from_str(&reading).map_err(io::Error::other));
         }
-        let read = async {
-            let slice = sluice_process::systemd::WorkloadSlice::new(
-                home,
-                sluice_model::limits::Limits::UNLIMITED,
-            )?;
-            let groups = SLICE_GROUPS.get_or_init(Default::default);
-            let known = groups
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(slice.name())
-                .cloned();
-            let group = match known {
-                Some(group) => Some(group),
-                None => {
-                    let group = slice.control_group().await?;
-                    if let Some(group) = &group {
-                        groups
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .insert(slice.name().to_owned(), group.clone());
-                    }
-                    group
-                }
-            };
-            tokio::task::spawn_blocking(move || crate::headroom::read_host(group.as_deref()))
+        Some(
+            tokio::task::spawn_blocking(crate::headroom::read_host)
                 .await
-                .map_err(io::Error::other)?
-        };
-        Some(read.await)
+                .map_err(io::Error::other)
+                .and_then(|reading| reading),
+        )
+    }
+    async fn run_memory(
+        &self,
+        _run: RunId,
+        service_cgroup: &str,
+    ) -> Option<io::Result<sluice_model::limits::RunMemory>> {
+        let service = service_cgroup.to_owned();
+        match tokio::task::spawn_blocking(move || {
+            sluice_process::cgroup::Cgroup::service_memory(&service).transpose()
+        })
+        .await
+        {
+            Ok(reading) => reading,
+            Err(error) => Some(Err(io::Error::other(error))),
+        }
     }
     async fn usage(&self, _run: RunId, service_cgroup: &str) -> Option<sluice_model::RunUsage> {
         let service = service_cgroup.to_owned();
@@ -447,6 +448,16 @@ impl<H> CallLauncher<H> {
 impl<H: ExecutionHost> CallGuardian for CallLauncher<H> {
     async fn host_memory(&self) -> Option<io::Result<crate::headroom::HostMemory>> {
         self.host.host_memory(self.home).await
+    }
+    async fn run_memory(
+        &self,
+        run: RunId,
+        service_cgroup: &str,
+    ) -> Option<io::Result<sluice_model::limits::RunMemory>> {
+        self.host.run_memory(run, service_cgroup).await
+    }
+    fn now(&self) -> std::time::SystemTime {
+        self.host.now()
     }
     async fn launch(&self, call: AdmittedCall) -> Result<(), PublicError> {
         let launch = Launch {

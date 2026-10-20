@@ -140,18 +140,28 @@ impl HomeConfig {
     }
 }
 
-/// Admission by measured host memory (SPEC §2.5): what must stay free for everything that is
-/// not a run, and the memory pressure above which no run starts.
+/// Admission by measured memory (SPEC §2.5): what must stay free for everything that is not a
+/// run, the memory pressure above which no run starts, and what a run not yet measured counts.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Headroom {
-    /// `execution.host_reserve`: MemAvailable must keep this much after a new run's reservation.
+    /// `execution.host_reserve`: MemAvailable must keep this much after a new run's charge.
     pub host_reserve_bytes: u64,
     /// `execution.memory_pressure_max`: the PSI `some avg10` percentage at or above which runs
     /// are held.
     pub pressure_max: f64,
+    /// `execution.admission_charge`: what a new run needs to start and counts until its
+    /// warm-up is over.
+    pub charge_bytes: u64,
+    /// `execution.admission_warmup_s`: how long a new run counts at its charge before its
+    /// measured memory.current stands for it.
+    pub warmup: Duration,
 }
 /// The shipped `memory_pressure_max`.
 pub const DEFAULT_MEMORY_PRESSURE_MAX: f64 = 10.0;
+/// The shipped `admission_charge`.
+pub const DEFAULT_ADMISSION_CHARGE: u64 = 1 << 30;
+/// The shipped `admission_warmup_s`.
+pub const DEFAULT_ADMISSION_WARMUP: Duration = Duration::from_secs(30);
 impl Headroom {
     /// The shipped host reserve is max(16 GiB, 15% of memory), never more than a quarter of it.
     pub fn for_host(memory_bytes: u64) -> Self {
@@ -161,6 +171,8 @@ impl Headroom {
         Self {
             host_reserve_bytes: (16u64 << 30).max(share(15)).min(share(25)),
             pressure_max: DEFAULT_MEMORY_PRESSURE_MAX,
+            charge_bytes: DEFAULT_ADMISSION_CHARGE,
+            warmup: DEFAULT_ADMISSION_WARMUP,
         }
     }
 }
@@ -178,8 +190,7 @@ pub fn load_execution(home: &Path) -> Result<(sluice_model::ResourcePolicy, Head
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
         Err(error) => return Err(format!("cannot read config.json: {error}")),
     };
-    let (memory, cpus) = effective_host_capacity()?;
-    execution_from_value(&value, memory, cpus)
+    execution_from_value(&value, &HostCapacity::read()?)
 }
 
 pub fn resource_policy_from_value(
@@ -187,14 +198,15 @@ pub fn resource_policy_from_value(
     memory_bytes: u64,
     cpu_millis: u32,
 ) -> Result<sluice_model::ResourcePolicy, String> {
-    execution_from_value(value, memory_bytes, cpu_millis).map(|(policy, _)| policy)
+    execution_from_value(value, &HostCapacity::plain(memory_bytes, cpu_millis))
+        .map(|(policy, _)| policy)
 }
 
 pub fn execution_from_value(
     value: &Value,
-    memory_bytes: u64,
-    cpu_millis: u32,
+    host: &HostCapacity,
 ) -> Result<(sluice_model::ResourcePolicy, Headroom), String> {
+    let (memory_bytes, cpu_millis) = (host.memory_bytes, host.cpu_millis);
     use sluice_model::{LimitsOverride, ResourcePolicy};
     #[derive(serde::Deserialize, Default)]
     #[serde(deny_unknown_fields)]
@@ -210,6 +222,8 @@ pub fn execution_from_value(
         allow_unlimited_memory: bool,
         host_reserve: Option<sluice_model::limits::MemoryBytes>,
         memory_pressure_max: Option<f64>,
+        admission_charge: Option<sluice_model::limits::MemoryBytes>,
+        admission_warmup_s: Option<f64>,
     }
     if !value.is_object() {
         return Err("config.json must contain an object".into());
@@ -228,7 +242,7 @@ pub fn execution_from_value(
         ] {
             if layer.memory == Some(None) {
                 return Err(format!(
-                    "execution.{level}.memory is unlimited (null), so runs would have no memory cap or reservation; set it to a size such as \"{}\", or set execution.allow_unlimited_memory to true to accept that",
+                    "execution.{level}.memory is unlimited (null), so runs would have no memory cap; set it to a size such as \"{}\", or set execution.allow_unlimited_memory to true to accept that",
                     match level {
                         "defaults" => "6GiB",
                         "ceilings" => "10GiB",
@@ -250,12 +264,45 @@ pub fn execution_from_value(
         }
         headroom.pressure_max = pressure;
     }
+    if let Some(charge) = config.admission_charge {
+        headroom.charge_bytes = charge.0;
+    }
+    if let Some(warmup) = config.admission_warmup_s {
+        headroom.warmup = Duration::try_from_secs_f64(warmup)
+            .map_err(|_| "execution.admission_warmup_s must be a number of seconds, 0 or more")?;
+    }
     let mut policy = ResourcePolicy::for_host(memory_bytes, cpu_millis)?;
     policy.total = config.total.apply(policy.total)?;
-    if policy.total.memory_bytes.is_some_and(|n| n > memory_bytes)
-        || policy.total.cpu_millis.is_some_and(|n| n > cpu_millis)
-    {
-        return Err("execution total exceeds the host's effective memory or CPU capacity".into());
+    use sluice_model::limits::size;
+    if let Some(total) = policy.total.memory_bytes.filter(|n| *n > memory_bytes) {
+        return Err(match &host.memory_cgroup {
+            Some(group) => format!(
+                "execution.total.memory ({}) exceeds the host's effective memory: cgroup {group} has memory.max {}; set execution.total.memory to at most {} or raise that cgroup's limit",
+                size(total),
+                size(memory_bytes),
+                size(memory_bytes)
+            ),
+            None => format!(
+                "execution.total.memory ({}) exceeds the host's memory ({} MemTotal)",
+                size(total),
+                size(memory_bytes)
+            ),
+        });
+    }
+    if let Some(total) = policy.total.cpu_millis.filter(|n| *n > cpu_millis) {
+        let cpus = |n: u32| f64::from(n) / 1000.0;
+        return Err(match &host.cpu_cgroup {
+            Some(group) => format!(
+                "execution.total.cpus ({}) exceeds the host's effective CPUs: cgroup {group} has cpu.max of {} CPUs; lower execution.total.cpus or raise that cgroup's limit",
+                cpus(total),
+                cpus(cpu_millis)
+            ),
+            None => format!(
+                "execution.total.cpus ({}) exceeds the host's {} CPUs",
+                cpus(total),
+                cpus(cpu_millis)
+            ),
+        });
     }
     if let Some(memory) = config.guardian_memory {
         policy.guardian_memory_bytes = memory.0;
@@ -303,91 +350,153 @@ pub fn execution_from_value(
         policy.ceilings.tasks.map(u64::from),
     ));
     policy.defaults = config.defaults.apply(policy.defaults)?;
+    // The shipped charge shrinks to fit a small total; an explicit one is checked.
+    if config.admission_charge.is_none()
+        && let Some(total) = policy.total.memory_bytes
+    {
+        headroom.charge_bytes = headroom.charge_bytes.min(total);
+    }
+    if policy
+        .total
+        .memory_bytes
+        .is_some_and(|total| headroom.charge_bytes > total)
+    {
+        return Err(
+            "execution.admission_charge exceeds the home memory total, so no run could start"
+                .into(),
+        );
+    }
     Ok((policy.validate()?, headroom))
 }
 
-fn effective_host_capacity() -> Result<(u64, u32), String> {
-    let meminfo = std::fs::read_to_string("/proc/meminfo")
-        .map_err(|error| format!("cannot inspect host memory: {error}"))?;
-    let mut memory = meminfo
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("MemTotal:")?
-                .split_whitespace()
-                .next()?
-                .parse::<u64>()
-                .ok()?
-                .checked_mul(1024)
-        })
-        .ok_or("host memory total is unavailable")?;
-    let mut cpus = u32::try_from(
-        std::thread::available_parallelism()
-            .map_err(|error| format!("cannot inspect CPU capacity: {error}"))?
-            .get(),
-    )
-    .ok()
-    .and_then(|n| n.checked_mul(1000))
-    .ok_or("CPU capacity overflows")?;
-    let membership = std::fs::read_to_string("/proc/self/cgroup")
-        .map_err(|error| format!("cannot inspect cgroup membership: {error}"))?;
-    let relative = membership
-        .lines()
-        .find_map(|line| line.strip_prefix("0::"))
-        .ok_or("cgroup v2 membership is unavailable")?;
-    if relative.split('/').any(|part| part == "..") {
-        return Err("cgroup membership is outside the visible hierarchy".into());
+/// What the host gives this process: MemTotal and the CPU count, lowered by the nearest
+/// `memory.max` and `cpu.max` among its cgroup and their ancestors. Each names the cgroup whose
+/// limit set it, so a total above it can say where the limit comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostCapacity {
+    pub memory_bytes: u64,
+    /// The cgroup (as `/user.slice`) whose memory.max is `memory_bytes`; `None` for MemTotal.
+    pub memory_cgroup: Option<String>,
+    pub cpu_millis: u32,
+    /// The cgroup whose cpu.max is `cpu_millis`; `None` for the CPU count.
+    pub cpu_cgroup: Option<String>,
+}
+impl HostCapacity {
+    /// A host with no cgroup limits.
+    pub fn plain(memory_bytes: u64, cpu_millis: u32) -> Self {
+        Self {
+            memory_bytes,
+            memory_cgroup: None,
+            cpu_millis,
+            cpu_cgroup: None,
+        }
     }
-    let root = Path::new("/sys/fs/cgroup");
-    let mut current = root.join(relative.trim_start_matches('/'));
-    loop {
-        for (name, is_memory) in [("memory.max", true), ("cpu.max", false)] {
-            match std::fs::read_to_string(current.join(name)) {
-                Ok(raw) => {
-                    let fields: Vec<_> = raw.split_whitespace().collect();
-                    if fields.first() == Some(&"max") {
-                        continue;
-                    }
-                    if is_memory {
-                        memory = memory.min(
-                            fields
+    /// This process's capacity, from /proc and /sys/fs/cgroup.
+    pub fn read() -> Result<Self, String> {
+        let meminfo = std::fs::read_to_string("/proc/meminfo")
+            .map_err(|error| format!("cannot inspect host memory: {error}"))?;
+        let cpus = u32::try_from(
+            std::thread::available_parallelism()
+                .map_err(|error| format!("cannot inspect CPU capacity: {error}"))?
+                .get(),
+        )
+        .ok()
+        .and_then(|n| n.checked_mul(1000))
+        .ok_or("CPU capacity overflows")?;
+        let membership = std::fs::read_to_string("/proc/self/cgroup")
+            .map_err(|error| format!("cannot inspect cgroup membership: {error}"))?;
+        Self::from_tree(Path::new("/sys/fs/cgroup"), &membership, &meminfo, cpus)
+    }
+    /// The capacity under the cgroup v2 tree at `root`, for a process with `/proc/self/cgroup`
+    /// `membership`, `/proc/meminfo` text `meminfo` and `cpu_millis` CPUs.
+    pub fn from_tree(
+        root: &Path,
+        membership: &str,
+        meminfo: &str,
+        cpu_millis: u32,
+    ) -> Result<Self, String> {
+        let memory = meminfo
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("MemTotal:")?
+                    .split_whitespace()
+                    .next()?
+                    .parse::<u64>()
+                    .ok()?
+                    .checked_mul(1024)
+            })
+            .ok_or("host memory total is unavailable")?;
+        let mut capacity = Self::plain(memory, cpu_millis);
+        let relative = membership
+            .lines()
+            .find_map(|line| line.strip_prefix("0::"))
+            .ok_or("cgroup v2 membership is unavailable")?;
+        if relative.split('/').any(|part| part == "..") {
+            return Err("cgroup membership is outside the visible hierarchy".into());
+        }
+        let mut current = root.join(relative.trim_start_matches('/'));
+        loop {
+            let name = || {
+                format!(
+                    "/{}",
+                    current.strip_prefix(root).unwrap_or(&current).display()
+                )
+            };
+            for (file, is_memory) in [("memory.max", true), ("cpu.max", false)] {
+                match std::fs::read_to_string(current.join(file)) {
+                    Ok(raw) => {
+                        let fields: Vec<_> = raw.split_whitespace().collect();
+                        if fields.first() == Some(&"max") {
+                            continue;
+                        }
+                        if is_memory {
+                            let limit = fields
                                 .first()
                                 .ok_or("empty memory.max")?
                                 .parse::<u64>()
-                                .map_err(|_| "invalid memory.max")?,
-                        );
-                    } else {
-                        let quota = fields
-                            .first()
-                            .ok_or("empty cpu.max")?
-                            .parse::<u64>()
-                            .map_err(|_| "invalid CPU quota")?;
-                        let period = fields
-                            .get(1)
-                            .ok_or("missing CPU period")?
-                            .parse::<u64>()
-                            .map_err(|_| "invalid CPU period")?;
-                        let milli = quota
-                            .checked_mul(1000)
-                            .and_then(|n| n.checked_div(period))
-                            .ok_or("invalid CPU quota ratio")?;
-                        cpus = cpus.min(u32::try_from(milli).unwrap_or(u32::MAX));
+                                .map_err(|_| "invalid memory.max")?;
+                            if limit < capacity.memory_bytes {
+                                capacity.memory_bytes = limit;
+                                capacity.memory_cgroup = Some(name());
+                            }
+                        } else {
+                            let quota = fields
+                                .first()
+                                .ok_or("empty cpu.max")?
+                                .parse::<u64>()
+                                .map_err(|_| "invalid CPU quota")?;
+                            let period = fields
+                                .get(1)
+                                .ok_or("missing CPU period")?
+                                .parse::<u64>()
+                                .map_err(|_| "invalid CPU period")?;
+                            let milli = quota
+                                .checked_mul(1000)
+                                .and_then(|n| n.checked_div(period))
+                                .ok_or("invalid CPU quota ratio")?;
+                            let milli = u32::try_from(milli).unwrap_or(u32::MAX);
+                            if milli < capacity.cpu_millis {
+                                capacity.cpu_millis = milli;
+                                capacity.cpu_cgroup = Some(name());
+                            }
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(format!(
+                            "cannot read {}: {error}",
+                            current.join(file).display()
+                        ));
                     }
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(format!(
-                        "cannot read {}: {error}",
-                        current.join(name).display()
-                    ));
-                }
+            }
+            if current == root {
+                break;
+            }
+            if !current.pop() {
+                return Err("invalid cgroup ancestry".into());
             }
         }
-        if current == root {
-            break;
-        }
-        if !current.pop() {
-            return Err("invalid cgroup ancestry".into());
-        }
+        Ok(capacity)
     }
-    Ok((memory, cpus))
 }

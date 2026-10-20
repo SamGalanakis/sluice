@@ -117,7 +117,7 @@ impl Failure {
                 "resource_exhausted".into(),
                 match resource {
                     sluice_model::limits::ExhaustedResource::Memory => {
-                        "Stopped: its memory budget was exhausted.".into()
+                        "Stopped: it was killed at its memory cap.".into()
                     }
                     sluice_model::limits::ExhaustedResource::Tasks => {
                         "Stopped: its task budget was exhausted.".into()

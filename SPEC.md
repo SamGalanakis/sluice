@@ -343,123 +343,140 @@ are checked by `sluice doctor`; see `docs/rust/host-prerequisites.md`.
 
 #### Execution budgets
 
-Every run that starts a local executable has a frozen `RunLimits` budget:
-`{memory_bytes, memory_max_bytes, cpu_millis, tasks}`. One CPU is 1000 milli-CPUs; tasks
-include threads. Any dimension may be unlimited, stored and passed as `null`; memory only
-by an explicit opt-in (below). This covers
-steps, each scattered item, direct and queued calls, and capacity-function calls. Pure `core.*`
-transformations and an empty scatter settle in the coordinator without a payload executable.
-`core.external` starts no run.
+Every run that starts a local executable has frozen `RunLimits` caps:
+`{memory_max_bytes, cpu_millis, tasks}`. One CPU is 1000 milli-CPUs; tasks include threads.
+Any dimension may be unlimited, stored and passed as `null`; memory only by an explicit opt-in
+(below). This covers steps, each scattered item, direct and queued calls, and capacity-function
+calls. Pure `core.*` transformations and an empty scatter settle in the coordinator without a
+payload executable. `core.external` starts no run.
 
-Limits exist so that the machine cannot deadlock or run out of memory, never to throttle a
-single run: the home total is the safety margin, and the shipped per-run defaults set no CPU
-quota and no task cap. `memory_bytes` is what the run reserves against the home total at
-admission; `memory_max_bytes`, the payload's `memory.max`, is the per-run memory ceiling in
-force at admission, so a run may grow past its reservation up to the ceiling while the home
-total, enforced on the home's slice, bounds all runs together. A budget frozen before
-`memory_max_bytes` existed reads it as `memory_bytes`.
+Caps are kill limits only, never a reservation: nothing counts a run's cap at admission.
+`memory_max_bytes` is the payload's `memory.max` (and the service's `MemoryMax` with the
+guardian's share); a run that reaches it is reclaimed and, past it, OOM-killed. The shipped
+per-run defaults set no CPU quota and no task cap. Admission is by measured memory (below), and
+the home total caps the home's workload slice as a whole. The caps are stored with a
+`memory_bytes` field equal to `memory_max_bytes`, which releases pinned before caps alone read;
+a budget they froze is read with its own `memory_max_bytes` (or, from before unlimited values,
+its `memory_bytes`).
 
-The human-facing override is `limits: {memory?, cpus?, tasks?}`. Memory accepts positive
-integer bytes or a positive integer with `KiB`, `MiB`, `GiB` or `TiB`; CPUs are a positive
-number with at most three decimal places; tasks are a positive integer. `null` makes a field
-unlimited; the string `"unlimited"` is accepted as the same value and stored as `null`. A
-field left out inherits. Unknown keys, zero, overflow and other spellings are refused.
-Resolve each field from home defaults, then project defaults, then the step or call
-override, always within the installation's per-run ceilings: an unlimited value fits only an
-unlimited ceiling. `project_create(limits=...)` sets project defaults;
+The human-facing override is `limits: {memory?, cpus?, tasks?, memory_above_ceiling?}`. Memory
+accepts positive integer bytes or a positive integer with `KiB`, `MiB`, `GiB` or `TiB`; CPUs are
+a positive number with at most three decimal places; tasks are a positive integer. `null` makes
+a field unlimited; the string `"unlimited"` is accepted as the same value and stored as `null`.
+A field left out inherits. Unknown keys, zero, overflow and other spellings are refused.
+Resolve each field from home defaults, then project defaults, then the step or call override,
+within the installation's per-run ceilings: an unlimited value fits only an unlimited ceiling.
+The run's memory cap is the memory that comes out. A step or call may ask for a memory cap above
+the ceiling only explicitly: it sets `memory_above_ceiling: true` with its `memory`, and its
+project's limits must set `memory_above_ceiling: true` too (which allows the request and never
+raises the project's own memory above the ceiling). Even then the cap plus the guardian's share
+must fit the home memory total. Any other request above the ceiling is refused when the step is
+added or edited (or the call is made) with an error naming the ceiling and both flags; there is
+no home-wide bypass. `project_create(limits=...)` sets project defaults;
 `project_update(limits=...)` replaces them and null clears them. Steps and recipes declare
 `limits`; `step_update` or `plan_edit` can replace that field or remove it with null.
-`fn_call(limits=...)` applies an override to that call. A running step cannot change its
-work, including `limits`. Releases pinned before unlimited values read a `null` field of an
-override as inherited.
+`fn_call(limits=...)` applies an override to that call. A running step cannot change its work,
+including `limits`. Releases pinned before unlimited values read a `null` field of an override
+as inherited.
 
 `config.json` owns the policy under `execution`:
 
 ```json
 {"execution": {
-  "total": {"memory": "70GiB", "cpus": null, "tasks": 65536},
+  "total": {"memory": "96GiB", "cpus": null, "tasks": 65536},
   "ceilings": {"memory": "10GiB", "cpus": null, "tasks": null},
   "defaults": {"memory": "6GiB", "cpus": null, "tasks": null},
-  "host_reserve": "18GiB",
-  "memory_pressure_max": 10
+  "host_reserve": "16GiB",
+  "memory_pressure_max": 10,
+  "admission_charge": "1GiB",
+  "admission_warmup_s": 30
 }}
 ```
 
-`defaults`, `ceilings` and `total` each accept the same three optional fields, each a value
-or unlimited; `guardian_memory` and `host_reserve` accept the memory syntax;
-`memory_pressure_max` is a percentage above 0 and at most 100. Memory is unlimited at a level
-only with `"allow_unlimited_memory": true`: without it, a `null` (or `"unlimited"`) memory in
-`defaults`, `ceilings` or `total` is refused at load with an error naming the key, the size to
-set instead and the opt-in, so no run is ever uncapped by accident. Omitted fields use the
-defaults below. Explicit values must fit the host and each other; a smaller finite total clamps
-inherited ceilings, a finite ceiling clamps inherited defaults (an inherited unlimited default
-becomes that ceiling), and an explicit value that does not fit is refused. A malformed policy,
-invalid JSON or an unreadable configuration blocks new admission. A missing file or missing
-`execution` section selects the defaults below. Host memory and CPU capacity account for the
-effective ancestor cgroup limits and available CPUs.
+`defaults` are each run's caps, `ceilings` the largest caps a step may ask for without
+`memory_above_ceiling`, and `total` the workload slice's caps. Each accepts the same three
+optional fields, each a value or unlimited; `guardian_memory`, `host_reserve` and
+`admission_charge` accept the memory syntax; `memory_pressure_max` is a percentage above 0 and
+at most 100; `admission_warmup_s` is a number of seconds, 0 or more. Memory is unlimited at a
+level only with `"allow_unlimited_memory": true`: without it, a `null` (or `"unlimited"`)
+memory in `defaults`, `ceilings` or `total` is refused at load with an error naming the key,
+the size to set instead and the opt-in, so no run is ever uncapped by accident. Omitted fields
+use the defaults below. Explicit values must fit the host and each other; a smaller finite
+total clamps inherited ceilings and the shipped admission charge, a finite ceiling clamps
+inherited defaults (an inherited unlimited default becomes that ceiling), and an explicit value
+that does not fit is refused. The host's effective capacity is MemTotal and the CPU count,
+lowered by the nearest `memory.max` and `cpu.max` among the process's cgroup and its ancestors
+(for a user service, typically `user.slice`); a total above it is refused with an error naming
+that cgroup and its limit, e.g. `execution.total.memory (104 GiB) exceeds the host's effective
+memory: cgroup /user.slice has memory.max 96 GiB; …`. A malformed policy, invalid JSON or an
+unreadable configuration is an error at load: the coordinator does not start on it, and when
+the file goes bad while it serves, no step starts and `status` shows each ready step `held:
+invalid execution config (…)` and `execution.error`. A missing file or missing `execution`
+section selects the defaults below.
 
 | Setting | Default |
 |---|---|
-| Home total | min(70 GiB, 55% of effective host memory), the rest left to agents, editors and services; CPU unlimited; 65536 tasks |
-| Payload default per run | 6 GiB memory reserved, clamped to the ceiling; CPU and tasks unlimited |
-| Payload ceiling per run | 10 GiB memory (each run's memory cap), clamped to the home total minus guardian memory; CPU and tasks unlimited |
-| Guardian reservation per run | 256 MiB or one eighth of total home memory, whichever is smaller; 0.1 CPU; 64 tasks |
+| Home total (the workload slice's caps) | min(70 GiB, 55% of effective host memory), the rest left to agents, editors and services; CPU unlimited; 65536 tasks |
+| Payload cap per run | 6 GiB memory, clamped to the ceiling; CPU and tasks unlimited |
+| Payload ceiling per run | 10 GiB memory, clamped to the home total minus guardian memory; CPU and tasks unlimited |
+| Guardian share per run (added to the service's caps) | 256 MiB or one eighth of total home memory, whichever is smaller; 0.1 CPU; 64 tasks |
 | Host reserve | max(16 GiB, 15% of effective host memory), at most a quarter of it |
 | Memory pressure limit | PSI `some avg10` 10% |
+| Admission charge | 1 GiB, at most the home memory total |
+| Admission warm-up | 30 s |
 
-The coordinator reserves payload plus guardian capacity atomically with the attempt, across
-all projects and calls in the home. A run's reservation is its finite payload limits plus the
-guardian's share. Unlimited CPU and tasks reserve only the guardian's share. Memory is never
-reserved as nothing: a run whose memory resolves unlimited (only under an opted-in unlimited
-ceiling) is frozen with the home default reservation, or 4 GiB (within the total's room) when
-that is unlimited too, and a budget frozen with no reservation by an earlier release counts
-4 GiB. An unlimited home total does not gate admission in that dimension. Live attempts retain their durable reservations across a coordinator restart.
-Admission refuses unknown budgets and overcommitted totals. A ready step waits when capacity
-is unavailable; scatter admits only the items that fit and continues as capacity becomes
-available. Each item reserves separately while the step holds its logical `needs` once.
-Direct calls use the same admission transaction and return a capacity refusal when they
-cannot start; queued calls remain pending.
+**Admission by measured memory.** Before each admission the coordinator reads `/proc/meminfo`
+MemAvailable, `/proc/pressure/memory` `some avg10` (absent on a kernel without PSI) and, for
+each live run with a payload, the payload cgroup's `memory.current` and `memory.peak`. A run
+starts only while all three hold:
 
-Reservations alone do not admit a run: the host must have the memory now. Before each
-admission the coordinator reads `/proc/meminfo` MemAvailable, `/proc/pressure/memory`
-`some avg10` (absent on a kernel without PSI) and the workload slice's `memory.current`, and
-requires all three: MemAvailable less `host_reserve` covers the run's reservation (payload plus
-guardian); the pressure is below `memory_pressure_max`; and the slice's `memory.current` plus
-the reservation stays within the memory total. Runs admitted in the last 60 s count with their
-whole reservation in the first and third checks, since the readings cannot show them yet; a
-batch counts the runs it has already admitted. A run that fails a check is held, not refused:
-`status` shows the step `held: host memory headroom (available X, need Y)` (or `held: host
-memory pressure (some avg10 P%, limit L%)`, or `held: workload memory (in use X, need Y, total
-Z)`, from the coordinator's last reading), its unit's owner is told once per hold (a limit
-notice with `limit: "host_memory"`), and the scheduler checks again every 5 s and starts it
-when the host recovers. A queued call stays pending and a direct call is refused with a
-retryable `busy` naming the hold. An unreadable `/proc/meminfo` holds admission. Capacity-function calls are bounded too. Physical
-accounting is independent of logical resources: `lane` is an ordinary resource name, and
-omitting `needs` never bypasses the home budget.
+1. **host memory:** MemAvailable less `host_reserve`, less the charges of runs still in their
+   warm-up, covers the admission charge;
+2. **memory pressure:** `some avg10` is below `memory_pressure_max`;
+3. **pool memory:** the live runs' measured memory plus the admission charge stays within
+   `total.memory`.
 
-The effective limits and policy are frozen with the attempt before any payload is launched
-(the policy as `request.execution_policy`; releases pinned before unlimited values read
-`request.policy` and count an attempt without it as unbudgeted rather than fail). A retry
-inside that run shares its existing budget. New runs, including later scatter items, resolve
-the policy at their own admission. Physical reservations remain held until the entire service,
-including its guardian, is proven empty. Logical leases can settle after payload cleanup. The
-coordinator reaps a terminal guardian left waiting for an acknowledgement before releasing its
-reservation; a durable result never allows unaccounted guardian processes.
+The admission charge is an internal estimate for a run not yet measured. A run counts at the
+charge (or its reading, if larger) until it has run for the warm-up, measured on the readings'
+clock from its admission, and from then on at its measured `memory.current`; a run with no
+payload yet counts at the charge, and one whose cgroup cannot be read counts at its cap. Runs
+admitted in the same pass count too, so a burst of launches is admitted in waves the charge
+bounds, never all at once on one reading. A run that fails a check is held, not refused:
+`status` shows the step with the check that held it and its numbers, from the coordinator's last
+reading: `held: host memory (available 9.1 GiB, reserve 16 GiB, starting 2 GiB, need 1 GiB)`
+(`starting` only while runs are in their warm-up), `held: memory pressure (some avg10 13.8%,
+limit 10%)` or `held: pool memory (measured 66.2 GiB + 1 GiB > 70 GiB)`. Its unit's owner is
+told once per hold (a limit notice with `limit: "host_memory"`), and the scheduler checks again
+every 5 s and starts it when the host recovers. A queued call stays pending and a direct call
+is refused with a retryable `busy` naming the hold. An unreadable `/proc/meminfo` holds
+admission. Scatter admits the items that pass and continues as memory frees; each item is
+admitted separately while the step holds its logical `needs` once. Physical admission is
+independent of logical resources: `lane` is an ordinary resource name, and omitting `needs`
+never bypasses the checks. `status` reports `execution.total` and `execution.memory`
+(`total_bytes`, `measured_bytes`, `starting_bytes`, `available_bytes`, `pressure_some_avg10`,
+`host_reserve_bytes`, `pressure_max`, `admission_charge_bytes`, `admission_warmup_s`), and each
+of a step's runs in `run_resources` with `memory: {cap_bytes, current_bytes, peak_bytes}`: its
+cap, its measured memory while live, and its peak (live, or from its final usage).
+
+The effective caps and policy are frozen with the attempt before any payload is launched (the
+policy as `request.execution_policy`). A retry inside that run shares its existing caps. New
+runs, including later scatter items, resolve the policy at their own admission. An attempt is
+live work until its entire service, including its guardian, is proven empty; logical leases can
+settle after payload cleanup. The coordinator reaps a terminal guardian left waiting for an
+acknowledgement before it ends that live work; a durable result never allows unaccounted
+guardian processes.
 
 A policy change needs no drain. The scheduler notices a changed `config.json` within seconds
-and re-admits every project: raising a total or a ceiling, or making a dimension unlimited,
-admits at the next admission while existing reservations stay valid, and the home's slice is
-reconfigured live at the next launch (admission has just proven the reservations fit). A total
-lowered below what live attempts already reserve holds all new admission, and `status`
-`execution.reason` and each waiting step say "execution reservations exceed the home budget
-after it was lowered (…); new runs wait until live runs release enough", until enough live runs
-finish. Existing runs keep their frozen limits; changes to run defaults and ceilings affect
-future admission only.
+and re-admits every project at once. The home's workload slice carries the total as
+`MemoryMax`, `CPUQuota`, `TasksMax` and `MemorySwapMax=0`; each launch applies them with
+`systemctl --user set-property --runtime` when they differ and reads them back, and a slice that
+does not keep them fails the launch. Existing runs keep their frozen caps; changes to run
+defaults and ceilings affect future admission only.
 
 Launch, adoption and terminal cleanup share a per-run process fence. A launcher rechecks the
 attempt under that fence; an attempt already ended cannot start a late service. The start
 helper retains the fence after caller cancellation or coordinator death. An interrupted start
-with no confirmed manager outcome keeps its reservation and reports that capacity is retained.
+with no confirmed manager outcome stays live work and reports that capacity is retained.
 An absent unit alone does not clear it: observing the service or a changed host boot ID resolves
 the pending start. No timeout turns uncertain launch evidence into free capacity.
 
@@ -474,15 +491,17 @@ cgroup (`memory.max`, `memory.swap.max`, `pids.max`, `cpu.max`) and the payload'
 `memory.max`, and compares them with the frozen budget. On a mismatch it applies them again
 with `systemctl --user set-property --runtime` and reads them back once more; if they still
 differ, the run fails with `fn_failure` naming each mismatch and no payload ever starts. Invocation and composed-agent sidecar leaves share the payload parent's allowance.
-The guardian has its own reserved control budget. A per-home workload slice bounds the
+The guardian has its own control share. A per-home workload slice bounds the
 aggregate; coordinator, serve and scheduler services stay outside that slice. `doctor` checks
 that the required memory, CPU and task controllers can enforce the settings. Missing
 controllers or failed setup refuse execution.
 
 A payload memory OOM stops the workload as a group (`memory.oom.group=1`). The guardian
 survives in `control`, stops and reaps the remaining payload, and reports `resource_exhausted`
-with `resource: "memory"`, the numeric `limit` (the memory cap; the reservation, or 0, when the
-run had none and the home total ran out), optional `peak`, and a message. A task-limit hit is
+with `resource: "memory"`, the numeric `limit` (the memory cap, or 0 when the run had none and
+the home total ran out), optional `peak`, and a message naming the cap and the peak and saying
+to ask for more explicitly with a larger `limits.memory` (and `memory_above_ceiling` above the
+ceiling). A task-limit hit is
 not fatal: the fork or thread start fails with `EAGAIN` and the run continues (releases pinned
 before this stop the run with `resource: "tasks"`). CPU quota throttles execution; it is not a
 fatal condition. Exhaustion is established by kernel counters, never by `SIGKILL` or an exit
@@ -509,20 +528,17 @@ accepted start is reconciled, never replayed. A deferred start is logged and tol
 reads each executing run's payload counters from its cgroup's event files (`memory.events`
 `oom_kill` and `max`, `pids.events` `max`, `cpu.stat` `throttled_usec`); completion carries the
 final counters. When a run has failed forks, has reached its memory cap, was OOM-killed, or
-has lost at least 60 s to its CPU quota, when a ready step has waited at least 10 minutes on
-the home's execution capacity, and when one is held for the host's memory, Sluice posts a `say` from `sluice` (§8) to whoever answers the
+has lost at least 60 s to its CPU quota, and when a ready step is held for memory, Sluice posts a `say` from `sluice` (§8) to whoever answers the
 run (its unit's owner, a call's session, else the project's fallback, else the person) and,
 while the run is live, the same `say` to the step itself, so its agent reads it in its inbox.
 Its `data.execution_limit` is `{run, step, limit, value, observed, outcome, since?}`: `run` is
-null for a waiting step; `limit` is `memory`, `tasks`, `cpus`, `capacity` or `host_memory`;
-`value` is the limit (`"unlimited"` when none), for `capacity` the home total, and for
-`host_memory` `{host_reserve_bytes, memory_pressure_max}`; `observed` is the counters
-(`peak_bytes`, `oom_kills`, `max_events`, `failed_forks`, `throttled_usec`) or the queue
-reason (for `host_memory`, the hold as status says it); `outcome` is `killed`, `running`,
-`throttled`, `finished`, `waiting` or `held`; `since` is when
-a waiting step began to wait. Each run and limit is told once, and each waiting episode once
-per limit. A step held for host memory is told at once; one waiting on capacity after 10
-minutes.
+null for a held step; `limit` is `memory`, `tasks`, `cpus` or `host_memory`; `value` is the
+limit (`"unlimited"` when none), and for `host_memory` `{host_reserve_bytes,
+memory_pressure_max, admission_charge_bytes, total_memory_bytes}`; `observed` is the counters
+(`peak_bytes`, `oom_kills`, `max_events`, `failed_forks`, `throttled_usec`) or, for
+`host_memory`, the hold as status says it; `outcome` is `killed`, `running`, `throttled`,
+`finished` or `held`; `since` is when a held step began to wait. Each run and limit is told
+once, and each hold once.
 It is a message, not a new record kind, so releases pinned before it read the log unchanged;
 the notice wakes its addressee's `next` (§10).
 
@@ -561,7 +577,9 @@ before then.
 
 **Schema 4.** A fresh home is created from `migrations/0004.sql`, which extends the
 normalized plan layout with execution-budget columns. Projects and queued calls keep
-optional limit overrides; attempts keep frozen payload limits and their reservation.
+optional limit overrides; attempts keep frozen payload caps and a `reservation` column that
+marks a service not yet proven gone (written in the shape releases that admitted by reservation
+read; its numbers are read by nothing else).
 A binary refuses a home at any other schema: a schema-4 binary requires migration of an
 older home (`sluice home migrate`), and an older binary refuses a schema-4 home. Incompatible storage changes take a new schema
 version and a drained, fenced migration with no live consumer of the old schema (§2.2); schema 2 is reserved for the
@@ -856,8 +874,8 @@ sources to succeed and is skipped when a source step is skipped.
 the input's type); every output becomes an array in item order. The step succeeds when every
 item does and fails if any fails, keeping the per-item results so a retry with unchanged inputs
 and item count preserves successful items and retries failed or not-yet-admitted items.
-A scattered step holds its `needs` once, but every item reserves its own physical budget
-(§2.5). Items start only as the home budget permits; a large scatter does not start every
+A scattered step holds its `needs` once, but every item is admitted by measured memory on its
+own (§2.5). Items start only as the host's memory permits; a large scatter does not start every
 local process at once.
 
 ### 6.4 Open fns: extra inputs, declared outputs, submission
@@ -1224,7 +1242,7 @@ Reply `{project, step, run, outputs}`.
 ### 7.6 Resources and leases
 
 These are project-local logical scheduling resources. Every executable run also needs its
-physical home-wide execution reservation (§2.5), whether it declares `needs` or not.
+admission by measured memory (§2.5), whether it declares `needs` or not.
 
 A project declares resources: `{"lane": 4}` or `{"lane": {"capacity": 4}}` (a fixed integer
 ≥ 0), or `{"cpu": {"capacity_fn": "<fn>"}}`, a fn the project sees that takes no required input

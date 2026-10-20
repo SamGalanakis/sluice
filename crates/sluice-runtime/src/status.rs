@@ -64,46 +64,37 @@ fn queued(
         {
             continue;
         }
-        let fit = match &execution {
+        // A step that would start is held only by admission's measured checks.
+        let held = match &execution {
             Ok((policy, headroom)) => {
-                crate::budget::resolve(sql, Some(id), step.limits.as_ref(), policy).and_then(
-                    |limits| {
-                        let fit = resources::budget_fit(sql, &limits, policy)?;
-                        let held = match &sample {
-                            Some(sample) if fit.fits() => {
-                                let need = sluice_model::limits::Reserved::of(
-                                    limits,
-                                    policy.guardian_memory_bytes,
-                                )
-                                .map_err(bad)?
-                                .memory_bytes;
-                                crate::headroom::hold(
-                                    sample,
-                                    headroom,
-                                    policy.total.memory_bytes,
-                                    crate::headroom::pending(sql)?,
-                                    need,
-                                )
-                            }
-                            _ => None,
-                        };
-                        Ok(held.map_or(fit, |reason| resources::Fit {
-                            blocked: vec!["host memory".into()],
-                            reason,
-                        }))
-                    },
-                )
+                crate::budget::resolve(sql, Some(id), step.limits.as_ref(), policy).and_then(|_| {
+                    sample
+                        .as_ref()
+                        .map(|reading| {
+                            Ok(crate::headroom::hold(
+                                &reading.host,
+                                headroom,
+                                policy.total.memory_bytes,
+                                crate::headroom::pool(sql, reading, headroom)?,
+                            ))
+                        })
+                        .transpose()
+                        .map(Option::flatten)
+                })
             }
             Err(error) => Err(error.clone().into()),
         };
-        match fit {
-            Ok(fit) if fit.blocked == ["host memory"] => {
+        match held {
+            Ok(Some(reason)) => {
                 out.entry(step.id.clone())
-                    .or_insert((fit.blocked, fit.reason));
+                    .or_insert((vec!["host memory".into()], reason));
             }
-            Ok(fit) if !fit.fits() => {
-                out.entry(step.id.clone())
-                    .or_insert((fit.blocked, format!("queued: {}", fit.reason)));
+            // An invalid config.json holds every step; it says so rather than queue them.
+            Err(sluice_store::StoreError::Public(error)) if execution.is_err() => {
+                out.entry(step.id.clone()).or_insert((
+                    vec!["execution".into()],
+                    format!("held: invalid execution config ({error})"),
+                ));
             }
             Err(error) => {
                 out.entry(step.id.clone())
@@ -171,9 +162,20 @@ pub(crate) fn status(
         .map(std::path::Path::to_path_buf)
         .unwrap_or_default();
     let names = crate::naming::for_project(sql, &home, id)?;
-    let execution_policy = crate::budget::policy(&home);
-    let execution = match &execution_policy {
-        Ok(policy) => resources::budget_status(sql, policy)?.shown(),
+    let execution_settings = crate::budget::execution(&home);
+    let execution_policy = execution_settings
+        .as_ref()
+        .map(|(policy, _)| policy.clone())
+        .map_err(Clone::clone);
+    let execution = match &execution_settings {
+        Ok((policy, headroom)) => json!({
+            "total": {
+                "memory_bytes": sluice_model::limits::shown(policy.total.memory_bytes),
+                "cpu_millis": sluice_model::limits::shown(policy.total.cpu_millis),
+                "tasks": sluice_model::limits::shown(policy.total.tasks),
+            },
+            "memory": crate::headroom::shown(sql, &home, policy, headroom)?,
+        }),
         Err(error) => json!({"error":error}),
     };
     if query.view == StatusView::Units {

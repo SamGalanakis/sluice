@@ -33,6 +33,10 @@ struct Fake(
     Arc<Mutex<std::collections::BTreeMap<RunId, sluice_model::RunUsage>>>,
     /// The host's memory as the OS host reads it from /proc; `None` measures nothing.
     Arc<Mutex<Option<sluice_runtime::headroom::HostMemory>>>,
+    /// Each live run's payload memory.current and memory.peak.
+    Arc<Mutex<std::collections::BTreeMap<RunId, sluice_model::limits::RunMemory>>>,
+    /// Seconds the host's clock is ahead of the wall clock.
+    Arc<std::sync::atomic::AtomicU64>,
 );
 impl Fake {
     async fn launched(&self, count: usize) -> Vec<Launch> {
@@ -89,6 +93,17 @@ impl ExecutionHost for Fake {
         _: HomeId,
     ) -> Option<std::io::Result<sluice_runtime::headroom::HostMemory>> {
         self.4.lock().unwrap().map(Ok)
+    }
+    async fn run_memory(
+        &self,
+        run: RunId,
+        _: &str,
+    ) -> Option<std::io::Result<sluice_model::limits::RunMemory>> {
+        self.5.lock().unwrap().get(&run).copied().map(Ok)
+    }
+    fn now(&self) -> std::time::SystemTime {
+        std::time::SystemTime::now()
+            + Duration::from_secs(self.6.load(std::sync::atomic::Ordering::SeqCst))
     }
 }
 fn request(v: Value) -> CommandRequest {
@@ -1029,7 +1044,7 @@ async fn complete_with_immutable_usage(b: &Coordinator<Fake>, journal: &Completi
     assert!(b.complete(wrong_identity).await.is_err());
     assert_eq!(reported_usage(b, journal).await, Value::Null);
     let mut wrong_budget = journal.clone();
-    wrong_budget.limits.memory_bytes = wrong_budget.limits.memory_bytes.map(|n| n + 1);
+    wrong_budget.limits.memory_max_bytes = wrong_budget.limits.memory_max_bytes.map(|n| n + 1);
     assert!(b.complete(wrong_budget).await.is_err());
     assert_eq!(reported_usage(b, journal).await, Value::Null);
     b.complete(journal.clone()).await.unwrap();
@@ -2412,16 +2427,7 @@ async fn terminal_guardian_retains_budget_until_service_cleanup_is_proven() {
         })
         .await
         .unwrap();
-    let policy = launch.policy.clone();
-    let held = broker
-        .reads()
-        .snapshot(move |sql| sluice_store::resources::budget_status(sql, &policy))
-        .await
-        .unwrap();
-    assert_eq!(
-        held.held.memory_bytes,
-        launch.limits.memory_bytes.unwrap() + launch.policy.guardian_memory_bytes
-    );
+    assert_eq!(live_attempts(&broker).await, 1);
     let drain = sluice_runtime::drain::status(broker.reads()).await.unwrap();
     assert!(
         drain
@@ -2430,26 +2436,9 @@ async fn terminal_guardian_retains_budget_until_service_cleanup_is_proven() {
             .any(|blocker| blocker.identity == launch.identity.run.to_string())
     );
     broker.reap_terminal(false).await.unwrap();
-    let policy = launch.policy.clone();
-    assert_eq!(
-        broker
-            .reads()
-            .snapshot(move |sql| sluice_store::resources::budget_status(sql, &policy))
-            .await
-            .unwrap()
-            .held,
-        held.held
-    );
+    assert_eq!(live_attempts(&broker).await, 1);
     broker.adopt().await.unwrap();
-    let policy = launch.policy;
-    let released = broker
-        .reads()
-        .snapshot(move |sql| sluice_store::resources::budget_status(sql, &policy))
-        .await
-        .unwrap();
-    assert_eq!(released.held.memory_bytes, 0);
-    assert_eq!(released.held.cpu_millis, 0);
-    assert_eq!(released.held.tasks, 0);
+    assert_eq!(live_attempts(&broker).await, 0);
     assert!(
         sluice_runtime::drain::status(broker.reads())
             .await
@@ -2460,6 +2449,14 @@ async fn terminal_guardian_retains_budget_until_service_cleanup_is_proven() {
     broker.writer().shutdown().await.unwrap();
 }
 
+/// Attempts whose service is not yet proven gone.
+async fn live_attempts(b: &Coordinator<Fake>) -> u64 {
+    b.reads()
+        .snapshot(sluice_store::convert::live_work)
+        .await
+        .unwrap()
+        .attempts
+}
 fn finite_home() -> home::ScratchHome {
     let home = home::ScratchHome::new().unwrap();
     std::fs::write(
@@ -2526,17 +2523,7 @@ async fn delayed_os_launch_cannot_start_after_adoption_finishes_attempt() {
         .unwrap();
     // Even a terminal run cannot release its reservation while a start helper owns the fence.
     broker.adopt().await.unwrap();
-    let policy = launch.policy.clone();
-    assert!(
-        broker
-            .reads()
-            .snapshot(move |sql| sluice_store::resources::budget_status(sql, &policy))
-            .await
-            .unwrap()
-            .held
-            .memory_bytes
-            > 0
-    );
+    assert_eq!(live_attempts(&broker).await, 1);
     drop(fence);
     let outcome = tokio::time::timeout(Duration::from_secs(2), pending)
         .await
@@ -2555,37 +2542,18 @@ async fn delayed_os_launch_cannot_start_after_adoption_finishes_attempt() {
             .exists()
     );
     broker.adopt().await.unwrap();
-    let policy = launch.policy;
-    assert_eq!(
-        broker
-            .reads()
-            .snapshot(move |sql| sluice_store::resources::budget_status(sql, &policy))
-            .await
-            .unwrap()
-            .held
-            .memory_bytes,
-        0
-    );
+    assert_eq!(live_attempts(&broker).await, 0);
 }
 
-/// Bugs: raising `execution.total` in config.json stopped every admission until all live runs
-/// drained ("execution policy change requires draining"); a total lowered below the live
-/// reservations held work with no reason given; and a run's task-limit hit (EAGAIN in its
-/// build) reached nobody.
+/// Bug: a run's task-limit hit (EAGAIN in its build) reached nobody.
 #[tokio::test]
-async fn home_budget_changes_apply_live_and_a_limit_hit_reaches_the_owner_once() {
+async fn a_limit_hit_reaches_the_owner_once() {
     let home = home::ScratchHome::new().unwrap();
-    let policy = |total: &str, ceiling: &str| {
-        json!({"execution":{
-            "defaults":{"memory":ceiling,"cpus":null,"tasks":"unlimited"},
-            "ceilings":{"memory":ceiling,"cpus":null,"tasks":null},
-            "total":{"memory":total,"cpus":null,"tasks":4096},
-            "guardian_memory":"16MiB"
-        }})
-        .to_string()
-    };
-    let config = home.path().join("config.json");
-    std::fs::write(&config, policy("64MiB", "48MiB")).unwrap();
+    std::fs::write(
+        home.path().join("config.json"),
+        json!({"execution":{"defaults":{"memory":"48MiB"},"ceilings":{"memory":"48MiB"},"total":{"memory":"128MiB","tasks":4096},"guardian_memory":"16MiB"}}).to_string(),
+    )
+    .unwrap();
     let fake = Fake::default();
     let b = Coordinator::open(home.path().into(), Catalog::fixtures(), fake.clone())
         .await
@@ -2593,11 +2561,9 @@ async fn home_budget_changes_apply_live_and_a_limit_hit_reaches_the_owner_once()
     let CommandReply::Project(p)=b.command(request(json!({"command":"project_create","args":{"name":"p","description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap()else{panic!("project")};
     let p = p.project_id;
     let selector = json!({"kind":"id","value":p});
-    let submit = |limits: Value| json!({"run":"fixture.submit","in":{"value":{"default":1}},"outputs":{"submitted":"boolean"},"limits":limits});
     b.command(request(
         json!({"command":"plan_edit","args":{"project":selector,"rev":1,"ops":[
-        {"op":"step.add","step":"a","spec":submit(json!({"tasks":32}))},
-        {"op":"step.add","step":"b","spec":submit(json!({}))}
+        {"op":"step.add","step":"a","spec":{"run":"fixture.submit","in":{"value":{"default":1}},"outputs":{"submitted":"boolean"},"limits":{"tasks":32}}}
     ],"start":true,"dry_run":false,"reason":"test","author":"@lead","me":"@lead"}}),
     ))
     .await
@@ -2605,49 +2571,10 @@ async fn home_budget_changes_apply_live_and_a_limit_hit_reaches_the_owner_once()
     b.acquire_scheduler("limits".into()).await.unwrap();
     assert_eq!(reconcile_project(&b, p, "limits").await.unwrap(), 1);
     let a = fake.launched(1).await.remove(0);
-    assert_eq!(a.identity.step.as_ref().unwrap().as_str(), "a");
     assert_eq!((a.limits.tasks, a.limits.cpu_millis), (Some(32), None));
     let status = data_of(&b, json!({"command":"status","args":{"project":selector,"all":true,"selection":{"steps":null,"tags":null}}})).await;
     assert_eq!(status["execution"]["total"]["cpu_millis"], "unlimited");
     assert_eq!(status["steps"]["a"]["limits"]["cpu_millis"], "unlimited");
-    assert!(
-        status["steps"]["b"]["waiting"]
-            .to_string()
-            .contains("execution capacity"),
-        "{status}"
-    );
-
-    // (b) A raised total admits the waiting step while `a` still runs: no drain.
-    std::fs::write(&config, policy("128MiB", "48MiB")).unwrap();
-    assert_eq!(reconcile_project(&b, p, "limits").await.unwrap(), 1);
-    let launched = fake.launched(2).await;
-    assert_eq!(launched[1].identity.step.as_ref().unwrap().as_str(), "b");
-
-    // (c) A total lowered below what live runs reserve holds new work and says why.
-    std::fs::write(&config, policy("32MiB", "16MiB")).unwrap();
-    b.command(request(
-        json!({"command":"plan_edit","args":{"project":selector,"ops":[
-        {"op":"step.add","step":"c","spec":submit(json!({"memory":"8MiB"}))}
-    ],"start":true,"dry_run":false,"reason":"test","author":"@lead","me":"@lead"}}),
-    ))
-    .await
-    .unwrap();
-    assert_eq!(reconcile_project(&b, p, "limits").await.unwrap(), 0);
-    let status = data_of(&b, json!({"command":"status","args":{"project":selector,"all":true,"selection":{"steps":null,"tags":null}}})).await;
-    let lowered = "exceed the home budget after it was lowered";
-    assert!(
-        status["execution"]["reason"]
-            .as_str()
-            .unwrap()
-            .contains(lowered),
-        "{status}"
-    );
-    assert!(
-        status["steps"]["c"]["waiting"]
-            .to_string()
-            .contains(lowered),
-        "{status}"
-    );
 
     // A live run's failed forks (pids.events) reach its unit's owner and the step itself,
     // once, however often it is sampled and when it then finishes.
@@ -2692,104 +2619,263 @@ async fn home_budget_changes_apply_live_and_a_limit_hit_reaches_the_owner_once()
     );
 }
 
-/// Bugs (incident 2026-10-19): with about 1 GB of RAM free and 64% of CPU in memory reclaim,
-/// admission kept starting runs because their reservations fit the home total. A run now waits
-/// while MemAvailable less the host reserve cannot hold its reservation, while memory pressure
-/// is high, or while the workload's memory in use leaves no room in the total; status says
-/// why, the owner is told once, and it starts when the host recovers.
+/// Bugs: admission summed every live run's reservation against the total, so steps queued for
+/// 20 minutes with the host half idle (2026-10-20); before that, uncapped runs were admitted
+/// with about 1 GB free and the host in reclaim (2026-10-19). A run now starts on measured
+/// memory: MemAvailable less the reserve must cover its charge, PSI must be under its limit,
+/// and the live runs' measured memory plus the charge must fit the total. Runs inside their
+/// warm-up count at the charge, so a burst never passes on one stale reading. Status says which
+/// check holds a step, with its numbers, and shows each run's cap, memory and peak.
 #[tokio::test]
-async fn admission_holds_for_host_memory_and_admits_when_it_recovers() {
+async fn admission_counts_measured_memory_and_new_runs_at_their_charge() {
     let home = home::ScratchHome::new().unwrap();
     std::fs::write(
         home.path().join("config.json"),
         json!({"execution":{
-            "defaults":{"memory":"64MiB"},
-            "ceilings":{"memory":"128MiB"},
+            "defaults":{"memory":"256MiB"},
+            "ceilings":{"memory":"512MiB"},
             "total":{"memory":"1GiB"},
             "guardian_memory":"16MiB",
             "host_reserve":"1GiB",
-            "memory_pressure_max":10
+            "memory_pressure_max":10,
+            "admission_charge":"64MiB",
+            "admission_warmup_s":30
         }})
         .to_string(),
     )
     .unwrap();
     let fake = Fake::default();
-    let host = |available: u64, pressure: f64, workload: u64| {
+    let host = |available: u64, pressure: f64| {
         *fake.4.lock().unwrap() = Some(sluice_runtime::headroom::HostMemory {
             available_bytes: available,
             pressure_some_avg10: Some(pressure),
-            workload_bytes: workload,
         });
     };
-    // 50 MiB above the reserve; a run needs 64 MiB plus its guardian's 16 MiB.
-    host((1 << 30) + (50 << 20), 0.0, 0);
+    let warm_up = || {
+        fake.6.fetch_add(31, std::sync::atomic::Ordering::SeqCst);
+    };
+    // Five charges above the reserve.
+    host((1 << 30) + (320 << 20), 0.0);
     let b = Coordinator::open(home.path().into(), Catalog::fixtures(), fake.clone())
         .await
         .unwrap();
     let CommandReply::Project(p)=b.command(request(json!({"command":"project_create","args":{"name":"p","description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap()else{panic!("project")};
     let p = p.project_id;
     let selector = json!({"kind":"id","value":p});
-    let add = |step: &str| {
-        request(
-            json!({"command":"plan_edit","args":{"project":selector,"ops":[
-        {"op":"step.add","step":step,"spec":{"run":"fixture.submit","in":{"value":{"default":1}},"outputs":{"submitted":"boolean"}}}
-    ],"start":true,"dry_run":false,"reason":"test","author":"@lead","me":"@lead"}}),
-        )
+    let ops: Vec<Value> = (0..20).map(|n| json!({"op":"step.add","step":format!("s{n:02}"),"spec":{"run":"fixture.submit","in":{"value":{"default":n}},"outputs":{"submitted":"boolean"}}})).collect();
+    b.command(request(json!({"command":"plan_edit","args":{"project":selector,"ops":ops,"start":true,"dry_run":false,"reason":"test","author":"@lead","me":"@lead"}}))).await.unwrap();
+    let status = async || {
+        data_of(&b, json!({"command":"status","args":{"project":selector,"all":true,"selection":{"steps":null,"tags":null}}})).await
     };
-    let waiting = async |step: &str| {
-        let status = data_of(&b, json!({"command":"status","args":{"project":selector,"all":true,"selection":{"steps":null,"tags":null}}})).await;
-        status["steps"][step]["waiting"].to_string()
+    let held = async || {
+        let status = status().await;
+        let mut held: Vec<String> = status["steps"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter_map(|step| step["waiting"].as_array())
+            .flatten()
+            .filter_map(|reason| reason.as_str().map(str::to_owned))
+            .collect();
+        held.sort();
+        held.dedup();
+        held
     };
-    b.command(add("first")).await.unwrap();
     b.acquire_scheduler("memory".into()).await.unwrap();
-    for _ in 0..2 {
-        assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 0);
-    }
-    let held = waiting("first").await;
+
+    // A burst of 20 with room for five charges starts five, and the same reading starts no more.
+    assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 5);
+    assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 0);
+    let first = fake.launched(5).await;
+    // A run's cap is the default and reserves nothing.
     assert!(
-        held.contains("held: host memory headroom (available 50 MiB, need 80 MiB)"),
-        "{held}"
+        first
+            .iter()
+            .all(|l| l.limits.memory_max_bytes == Some(256 << 20))
+    );
+    assert_eq!(
+        held().await,
+        ["held: host memory (available 1.3 GiB, reserve 1 GiB, starting 320 MiB, need 64 MiB)"]
+    );
+    // Past the warm-up each counts at its measured memory, which MemAvailable now shows.
+    for launch in &first {
+        run_started(&b, launch).await;
+        fake.5.lock().unwrap().insert(
+            launch.identity.run,
+            sluice_model::limits::RunMemory {
+                current_bytes: 32 << 20,
+                peak_bytes: 48 << 20,
+            },
+        );
+    }
+    warm_up();
+    host((1 << 30) + (160 << 20), 0.0);
+    assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 2);
+    assert_eq!(fake.launched(7).await.len(), 7);
+    let status = status().await;
+    let run = &status["steps"][first[0].identity.step.as_ref().unwrap().as_str()]["run_resources"]
+        [0]["memory"];
+    assert_eq!(
+        *run,
+        json!({"cap_bytes": 256 << 20, "current_bytes": 32 << 20, "peak_bytes": 48 << 20}),
+        "{status}"
+    );
+    assert_eq!(
+        status["execution"]["memory"]["measured_bytes"],
+        json!((5 * 32 + 2 * 64) << 20),
+        "{status}"
+    );
+
+    // Low MemAvailable holds, says so once to the owner, and admits when it recovers.
+    warm_up();
+    host(512 << 20, 0.0);
+    assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 0);
+    assert_eq!(
+        held().await,
+        ["held: host memory (available 512 MiB, reserve 1 GiB, need 64 MiB)"]
     );
     let notices = b
         .reads()
         .snapshot(move |sql| {
-            let mut statement = sql.prepare("SELECT \"to\",data FROM messages WHERE project_id=?1 AND \"from\"='sluice' AND json_extract(data,'$.execution_limit.limit')='host_memory'")?;
+            let mut statement = sql.prepare("SELECT DISTINCT \"to\" FROM messages WHERE project_id=?1 AND \"from\"='sluice' AND json_extract(data,'$.execution_limit.limit')='host_memory'")?;
             let rows = statement
-                .query_map([p.to_string()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .query_map([p.to_string()], |r| r.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
         .await
         .unwrap();
-    assert_eq!(notices.len(), 1, "{notices:?}");
-    assert_eq!(notices[0].0, "@lead");
-    assert!(notices[0].1.contains("available 50 MiB"), "{notices:?}");
-
-    // The host recovers: the run starts at the next check.
-    host(3 << 30, 0.0, 0);
+    assert_eq!(notices, ["@lead"]);
+    host((1 << 30) + (64 << 20), 0.0);
     assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 1);
-    assert_eq!(fake.launched(1).await.len(), 1);
+    assert_eq!(fake.launched(8).await.len(), 8);
 
-    // High memory pressure holds the next run however much is available.
-    b.command(add("second")).await.unwrap();
-    host(3 << 30, 25.0, 0);
+    // High memory pressure holds however much is free.
+    warm_up();
+    host(8 << 30, 25.0);
     assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 0);
-    let held = waiting("second").await;
-    assert!(
-        held.contains("held: host memory pressure (some avg10 25.0%, limit 10%)"),
-        "{held}"
+    assert_eq!(
+        held().await,
+        ["held: memory pressure (some avg10 25.0%, limit 10%)"]
     );
-    host(3 << 30, 1.0, 0);
-    assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 1);
-    assert_eq!(fake.launched(2).await.len(), 2);
 
-    // Runs that grew past their reservations leave no room in the total: hold.
-    b.command(add("third")).await.unwrap();
-    host(3 << 30, 1.0, 1 << 30);
+    // The live runs' measured memory leaves no room in the total: 5 × 170 MiB measured, and
+    // three runs without a reading at their charge.
+    host(8 << 30, 1.0);
+    for launch in &first {
+        fake.5.lock().unwrap().insert(
+            launch.identity.run,
+            sluice_model::limits::RunMemory {
+                current_bytes: 170 << 20,
+                peak_bytes: 170 << 20,
+            },
+        );
+    }
     assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 0);
-    let held = waiting("third").await;
-    assert!(held.contains("held: workload memory"), "{held}");
-    host(3 << 30, 1.0, 64 << 20);
-    assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 1);
-    assert_eq!(fake.launched(3).await.len(), 3);
+    assert_eq!(
+        held().await,
+        ["held: pool memory (measured 1 GiB + 64 MiB > 1 GiB)"]
+    );
+    // They shrink: the total admits charges until it is full again: (5 × 100 + 3 × 64) MiB
+    // measured leaves room for five more.
+    for launch in &first {
+        fake.5.lock().unwrap().insert(
+            launch.identity.run,
+            sluice_model::limits::RunMemory {
+                current_bytes: 100 << 20,
+                peak_bytes: 170 << 20,
+            },
+        );
+    }
+    assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 5);
+    assert_eq!(fake.launched(13).await.len(), 13);
+    assert_eq!(
+        held().await,
+        ["held: pool memory (measured 1012 MiB + 64 MiB > 1 GiB)"]
+    );
+}
+
+/// Bug (2026-10-20): a total above the host's effective memory left the coordinator serving
+/// and every step queued behind a generic hold. It now refuses to start, naming the setting.
+#[tokio::test]
+async fn the_coordinator_does_not_start_on_an_invalid_execution_config() {
+    let home = home::ScratchHome::new().unwrap();
+    std::fs::write(
+        home.path().join("config.json"),
+        json!({"execution":{"total":{"memory":"1024TiB"}}}).to_string(),
+    )
+    .unwrap();
+    match Coordinator::open(home.path().into(), Catalog::fixtures(), Fake::default()).await {
+        Err(PublicError::Invalid { message, .. }) => assert!(
+            message.starts_with("config.json: execution.total.memory (1024 TiB) exceeds"),
+            "{message}"
+        ),
+        Err(other) => panic!("{other:?}"),
+        Ok(_) => panic!("opened"),
+    }
+}
+
+/// Bug: a step that needed more than the per-run ceiling could not run at all, and nothing
+/// stopped one from quietly asking for the home's whole total. A cap above the ceiling is refused
+/// when the step is added unless the step sets `memory_above_ceiling` and its project's limits
+/// allow it; it never exceeds the home total, and the run gets that cap.
+#[tokio::test]
+async fn memory_above_the_ceiling_needs_the_step_flag_and_the_project_allowance() {
+    let home = home::ScratchHome::new().unwrap();
+    std::fs::write(
+        home.path().join("config.json"),
+        json!({"execution":{
+            "defaults":{"memory":"256MiB"},
+            "ceilings":{"memory":"512MiB"},
+            "total":{"memory":"1GiB"},
+            "guardian_memory":"16MiB"
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    let fake = Fake::default();
+    let b = Coordinator::open(home.path().into(), Catalog::fixtures(), fake.clone())
+        .await
+        .unwrap();
+    let CommandReply::Project(p)=b.command(request(json!({"command":"project_create","args":{"name":"p","description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap()else{panic!("project")};
+    let p = p.project_id;
+    let selector = json!({"kind":"id","value":p});
+    let add = |limits: Value| {
+        request(
+            json!({"command":"plan_edit","args":{"project":selector,"ops":[
+            {"op":"step.add","step":"big","spec":{"run":"fixture.submit","in":{"value":{"default":1}},"outputs":{"submitted":"boolean"},"limits":limits}}
+        ],"start":true,"dry_run":false,"reason":"test","author":"@lead","me":"@lead"}}),
+        )
+    };
+    let refused = async |limits: Value| match b.command(add(limits)).await {
+        Err(PublicError::Invalid { message, .. }) => message,
+        other => panic!("{other:?}"),
+    };
+    let message = refused(json!({"memory":"768MiB"})).await;
+    assert!(
+        message.contains("768 MiB is above the per-run memory ceiling (512 MiB)")
+            && message.contains("memory_above_ceiling"),
+        "{message}"
+    );
+    let message = refused(json!({"memory":"768MiB","memory_above_ceiling":true})).await;
+    assert!(
+        message.contains("this project does not allow that"),
+        "{message}"
+    );
+    b.command(request(json!({"command":"project_update","args":{"project":selector,"limits":{"memory_above_ceiling":true},"reason":"one big build","author":"owner"}}))).await.unwrap();
+    // Still explicit per step, and never above the home total.
+    let message = refused(json!({"memory":"768MiB"})).await;
+    assert!(message.contains("memory_above_ceiling"), "{message}");
+    let message = refused(json!({"memory":"1GiB","memory_above_ceiling":true})).await;
+    assert!(
+        message.contains("exceeds the home memory total (1 GiB)"),
+        "{message}"
+    );
+    b.command(add(json!({"memory":"768MiB","memory_above_ceiling":true})))
+        .await
+        .unwrap();
+    b.acquire_scheduler("big".into()).await.unwrap();
+    assert_eq!(reconcile_project(&b, p, "big").await.unwrap(), 1);
+    let launch = fake.launched(1).await.remove(0);
+    assert_eq!(launch.limits.memory_max_bytes, Some(768 << 20));
 }

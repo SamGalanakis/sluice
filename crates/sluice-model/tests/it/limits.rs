@@ -16,12 +16,16 @@ fn limits_resolve_each_layer_and_spell_unlimited_as_null() {
         serde_json::from_value(json!({"memory":"4GiB", "cpus":1.25})).unwrap();
     let run: LimitsOverride = serde_json::from_value(json!({"tasks":123})).unwrap();
     let limits = policy.resolve(Some(&project), Some(&run)).unwrap();
+    // A run's memory is its cap; admission never counts it.
     assert_eq!(
-        (limits.memory_bytes, limits.cpu_millis, limits.tasks),
+        (limits.memory_max_bytes, limits.cpu_millis, limits.tasks),
         (Some(4 << 30), Some(1250), Some(123))
     );
-    // A run's memory is its reservation; its cap is the per-run ceiling.
-    assert_eq!(limits.memory_max_bytes, policy.ceilings.memory_bytes);
+    // Stored with `memory_bytes` equal to the cap, for releases that read it as a reservation.
+    assert_eq!(
+        serde_json::to_value(limits).unwrap(),
+        json!({"memory_bytes":4u64 << 30,"memory_max_bytes":4u64 << 30,"cpu_millis":1250,"tasks":123})
+    );
     assert_eq!(
         serde_json::from_value::<LimitsOverride>(serde_json::to_value(&project).unwrap()).unwrap(),
         project

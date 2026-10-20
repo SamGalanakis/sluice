@@ -1805,13 +1805,20 @@ fn exhausted(limits: RunLimits, usage: RunUsage) -> Option<PublicError> {
     if usage.oom_kills == 0 {
         return None;
     }
+    use sluice_model::limits::size;
+    let peak = size(usage.memory_peak_bytes);
     let message = match limits.memory_max_bytes {
-        Some(cap) => format!("Memory limit exceeded: {cap} byte cap; payload stopped"),
-        None => "Out of memory: the run has no memory cap and the home's memory total ran out; payload stopped".into(),
+        Some(cap) => format!(
+            "Memory cap exceeded: the payload was killed at its {} memory cap (peak {peak}). Ask for more explicitly with a larger limits.memory (above the per-run ceiling also set limits.memory_above_ceiling).",
+            size(cap)
+        ),
+        None => format!(
+            "Out of memory: the run has no memory cap and the home's memory total ran out (peak {peak}); payload stopped"
+        ),
     };
     Some(PublicError::ResourceExhausted {
         resource: ExhaustedResource::Memory,
-        limit: limits.memory_max_bytes.or(limits.memory_bytes).unwrap_or(0),
+        limit: limits.memory_max_bytes.unwrap_or(0),
         peak: Some(usage.memory_peak_bytes),
         message,
     })

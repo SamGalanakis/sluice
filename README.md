@@ -54,15 +54,20 @@ is set, else the installation's selected home (`SLUICE_INSTALL_DIR`, default
 
 ### Memory
 
-Runs share the host with your agents, editor and services, so sluice caps them. By default all
-runs together may use min(70 GiB, 55% of the host's memory) (`execution.total.memory` in the
-home's `config.json`), each run reserves 6 GiB at admission (`defaults.memory`) and is capped at
-10 GiB (`ceilings.memory`). A run also starts only while the host's MemAvailable stays at least
-`execution.host_reserve` (default max(16 GiB, 15% of memory)) above its reservation and memory
-pressure (PSI `some avg10`) is below `execution.memory_pressure_max` (10); otherwise it waits and
-`status` says `held: host memory headroom (…)`. Memory can be made unlimited (`null`) only with
-`"allow_unlimited_memory": true` under `execution`; without it such a config is refused. SPEC.md
-§2.5 has the details.
+Runs share the host with your agents, editor and services, so sluice caps them. Each run is
+capped at 6 GiB (`execution.defaults.memory` in the home's `config.json`) and a step may ask
+for up to 10 GiB (`ceilings.memory`); more needs `"memory_above_ceiling": true` on the step and
+on its project's limits. A cap only kills a run that outgrows it; nothing is reserved. Runs
+start on measured memory: while MemAvailable stays at least `execution.host_reserve` (default
+max(16 GiB, 15% of memory)) above a 1 GiB admission charge (`execution.admission_charge`),
+memory pressure (PSI `some avg10`) is below `execution.memory_pressure_max` (10), and the runs'
+measured memory plus the charge fits `execution.total.memory` (default min(70 GiB, 55% of the
+host's memory), also the workload slice's `MemoryMax`, and never above the nearest cgroup's
+`memory.max`, such as `user.slice`'s). A new run counts at the charge for its first 30 s
+(`execution.admission_warmup_s`). Otherwise it waits and `status` names the check, e.g.
+`held: host memory (available 9.1 GiB, reserve 16 GiB, need 1 GiB)`. Memory can be made
+unlimited (`null`) only with `"allow_unlimited_memory": true` under `execution`; without it such
+a config is refused. SPEC.md §2.5 has the details.
 
 ## Use
 

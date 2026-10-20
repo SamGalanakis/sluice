@@ -35,33 +35,43 @@ pub fn resolve(
         .map_err(|e| invalid(e).into())
 }
 
-/// Frozen limits and final usage belong to the attempt, not today's configuration.
+/// Frozen limits and final usage belong to the attempt, not today's configuration. `memory`
+/// is the run's cap, its memory.current while it is live (admission's last reading) and its
+/// peak (the reading while live, the final usage once finished).
 pub fn run_resources(
     sql: &Connection,
     run: sluice_model::ids::RunId,
 ) -> sluice_store::Result<serde_json::Value> {
     use rusqlite::OptionalExtension;
-    let row: Option<(Option<String>, Option<String>)> = sql.query_row(
-        "SELECT a.limits,json_extract(a.request,'$.resource_usage') FROM attempts a JOIN runs r USING(attempt_id) WHERE r.run_id=?1",
-        [run.to_string()], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
-    let (limits, usage) = row.unwrap_or_default();
+    let row: Option<(Option<String>, Option<String>, bool)> = sql.query_row(
+        "SELECT a.limits,json_extract(a.request,'$.resource_usage'),r.finished_at IS NULL FROM attempts a JOIN runs r USING(attempt_id) WHERE r.run_id=?1",
+        [run.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
+    let (limits, usage, live) = row.unwrap_or_default();
+    let limits = limits
+        .map(|v| serde_json::from_str::<RunLimits>(&v))
+        .transpose()?;
+    let usage = usage
+        .map(|v| serde_json::from_str::<serde_json::Value>(&v))
+        .transpose()?;
+    let measured = live
+        .then(|| {
+            sql.path()
+                .and_then(|p| std::path::Path::new(p).parent())
+                .and_then(|home| crate::headroom::published_run(home, run))
+        })
+        .flatten();
+    let memory = serde_json::json!({
+        "cap_bytes": limits.map(|l| sluice_model::limits::shown(l.memory_max_bytes)),
+        "current_bytes": measured.map(|m| m.current_bytes),
+        "peak_bytes": measured.map(|m| m.peak_bytes).or_else(|| usage.as_ref().and_then(|u| u["memory_peak_bytes"].as_u64())),
+    });
     Ok(
-        serde_json::json!({"run":run,"limits":limits.map(|v| serde_json::from_str::<RunLimits>(&v)).transpose()?.map(RunLimits::shown),"usage":usage.map(|v| serde_json::from_str::<serde_json::Value>(&v)).transpose()?}),
+        serde_json::json!({"run":run,"limits":limits.map(RunLimits::shown),"usage":usage,"memory":memory}),
     )
 }
 
 /// CPU throttling worth telling the owner about: a minute of lost run time.
 pub const CPU_THROTTLE_NOTICE_USEC: u64 = 60_000_000;
-/// A ready step waiting this long on the home's execution total is reported once.
-pub const QUEUE_NOTICE_MINUTES: i64 = 10;
-
-pub(crate) fn bytes(n: u64) -> String {
-    if n >= 1 << 30 {
-        format!("{:.1} GiB", n as f64 / f64::from(1u32 << 30))
-    } else {
-        format!("{} MiB", n.div_ceil(1 << 20))
-    }
-}
 
 /// The notices a run's cgroup counters call for. `ended` is whether the run has finished
 /// (its completion carried these counters) or is still running (sampled live).
@@ -72,7 +82,7 @@ pub fn run_notices(
     usage: &sluice_model::RunUsage,
     ended: bool,
 ) -> Vec<(sluice_store::resources::LimitNotice, String)> {
-    use sluice_model::limits::shown;
+    use sluice_model::limits::{shown, size};
     use sluice_store::resources::LimitNotice;
     let who = step.map_or_else(
         || format!("Call {run}"),
@@ -91,11 +101,11 @@ pub fn run_notices(
     if usage.oom_kills > 0 {
         let cap = limits.memory_max_bytes.map_or_else(
             || "the home's memory total".to_owned(),
-            |n| format!("its {} memory cap", bytes(n)),
+            |n| format!("its {} memory cap", size(n)),
         );
         out.push((
             notice("memory", shown(limits.memory_max_bytes), serde_json::json!({"peak_bytes": usage.memory_peak_bytes, "oom_kills": usage.oom_kills}), "killed"),
-            format!("{who} ran out of memory at {cap} (peak {}); the kernel killed its payload and Sluice stopped the run. Retry with less parallelism or a larger limits.memory.", bytes(usage.memory_peak_bytes)),
+            format!("{who} ran out of memory at {cap} (peak {}); the kernel killed its payload and Sluice stopped the run. Retry with less parallelism, or ask for more explicitly with a larger limits.memory.", size(usage.memory_peak_bytes)),
         ));
     } else if usage.memory_max_hits > 0
         && !ended
@@ -103,7 +113,7 @@ pub fn run_notices(
     {
         out.push((
             notice("memory", serde_json::json!(cap), serde_json::json!({"peak_bytes": usage.memory_peak_bytes, "max_events": usage.memory_max_hits}), "running"),
-            format!("{who} reached its {} memory cap (peak {}); the kernel is reclaiming its memory and it may be killed. It is still running.", bytes(cap), bytes(usage.memory_peak_bytes)),
+            format!("{who} reached its {} memory cap (peak {}); the kernel is reclaiming its memory and it may be killed. It is still running.", size(cap), size(usage.memory_peak_bytes)),
         ));
     }
     if usage.pids_limit_hits > 0 {

@@ -483,7 +483,7 @@ pub fn reserve(
     let at = plans::now()?;
     tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,generation,work_generation,item_index,phase,request,inputs_hash,provenance,unit,created_at) VALUES (?1,?2,?3,?4,?5,?6,'reserved',?7,?8,?9,?10,?11)",
         params![id.attempt.to_string(),id.project.to_string(),id.step.as_str(),generation,work,request.item_index,frozen.to_string(),request.inputs_hash.to_string(),serde_json::to_string(&request.provenance)?,step.unit_name().to_string(),at])?;
-    crate::resources::reserve_budget(tx, id.attempt, request.limits, &request.admission)?;
+    crate::resources::freeze_limits(tx, id.attempt, request.limits, &request.admission)?;
     tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,generation,work_generation,item_index,prev_run,unit,release_id,protocol_major,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         params![id.run.to_string(),id.project.to_string(),id.attempt.to_string(),id.step.as_str(),generation,work,request.item_index,prev_run.map(|r|r.to_string()),step.unit_name().to_string(),request.release_id,request.protocol_major,at])?;
     let range = hooks.assign(tx, &id, cursor, exact.as_ref())?;

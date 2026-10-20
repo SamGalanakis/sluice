@@ -5,22 +5,22 @@ definition. `fn_call(name, inputs, project, wait)` runs a single function withou
 plan; poll `call_status(call, project)` if it outlives `wait`, or wait for its `call` records
 with `log_wait(project, since_seq, kinds=["call"])`. Each status change of a call is a record
 in the project's log (the home log without a project). Once admitted, call replies include
-`limits` with frozen `memory_bytes` (the reservation), `memory_max_bytes` (the cap),
-`cpu_millis` and `tasks`, each `"unlimited"` when it has none. Completion adds recorded
+`limits` with frozen `memory_max_bytes` (the memory cap), `cpu_millis` and `tasks`, each
+`"unlimited"` when it has none. Completion adds recorded
 `usage` with `memory_peak_bytes`, `oom_kills`, `pids_limit_hits`, `memory_max_hits` and
 `cpu_throttled_usec`; these are not live readings. Pending calls and historical runs without this evidence omit those fields.
 
-`fn_call` also accepts `limits: {memory?, cpus?, tasks?}`. It inherits project and home
-defaults, and refuses overrides above the installation ceilings. Memory accepts integer
+`fn_call` also accepts `limits: {memory?, cpus?, tasks?, memory_above_ceiling?}`. It inherits
+project and home defaults, and refuses overrides above the installation ceilings unless
+`memory_above_ceiling` asks for that memory explicitly and the project allows it. Memory accepts integer
 bytes or a size such as `"4GiB"`; CPUs may be fractional; tasks count processes and threads;
-`null` (or `"unlimited"`) makes a field unlimited. Direct calls use the same budget and home
-capacity accounting as queued calls. A
-direct call that cannot reserve capacity, or that the host has no memory free for now, is
-refused (the latter with a retryable `busy` saying `held: host memory …`); a queued call waits. Capacity functions
+`null` (or `"unlimited"`) makes a field unlimited. Direct calls are admitted by the same
+measured memory checks as queued calls. A direct call the host has no memory for now is refused
+with a retryable `busy` naming the hold (e.g. `held: host memory …`); a queued call waits. Capacity functions
 also run under budgets. See `docs("plans")`, Execution limits.
 
 A memory OOM returns `resource_exhausted` with `resource`, `limit`, optional `peak`, and
-`message`. The guardian stops the local payload before freeing its reservation. It does not
+`message` naming the cap and the peak. The guardian stops the local payload before its run ends. It does not
 retry that exhaustion automatically. A task-limit hit fails only the fork (`EAGAIN`) and CPU
 quota throttles; neither stops the call. Each limit a call meets is told to its caller in a
 `say` with `data.execution_limit` (`docs("plans")`, Execution limits).

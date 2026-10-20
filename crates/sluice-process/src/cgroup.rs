@@ -154,6 +154,27 @@ impl Cgroup {
             .resource_usage()
     }
 
+    /// The payload's memory.current and memory.peak of a service this process does not own (the
+    /// coordinator measuring a live run for admission); `None` before the payload exists.
+    pub fn service_memory(service: &str) -> io::Result<Option<sluice_model::limits::RunMemory>> {
+        let payload = match Self::open_service(service)?.open_child("payload") {
+            Ok(payload) => payload,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let number = |name: &str| -> io::Result<u64> {
+            payload
+                .read(name)?
+                .trim()
+                .parse()
+                .map_err(|_| io::Error::other(format!("invalid {name}")))
+        };
+        Ok(Some(sluice_model::limits::RunMemory {
+            current_bytes: number("memory.current")?,
+            peak_bytes: number("memory.peak")?,
+        }))
+    }
+
     /// Open or create a leaf in the already admitted service payload subtree.
     pub fn payload_invocation(&self, id: InvocationId, create: bool) -> io::Result<Self> {
         let payload = self.open_child("payload")?;

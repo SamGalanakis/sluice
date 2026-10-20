@@ -4,9 +4,6 @@ use serde::{Deserialize, Serialize};
 
 pub const GUARDIAN_TASKS: u32 = 64;
 pub const GUARDIAN_CPU_MILLIS: u32 = 100;
-/// What a run with no memory reservation of its own reserves at admission: an opted-in
-/// unlimited run still holds this much of the home total, never only the guardian's share.
-pub const UNLIMITED_MEMORY_RESERVATION: u64 = 4 << 30;
 
 /// One budget level (home total, per-run ceilings or per-run defaults). `None` is unlimited:
 /// it serializes as `null` and is never gated or capped.
@@ -32,9 +29,11 @@ impl Limits {
     }
     /// Every dimension within `ceiling`; unlimited fits only an unlimited ceiling.
     pub fn fits(self, ceiling: Self) -> bool {
-        within(self.memory_bytes, ceiling.memory_bytes)
-            && within(self.cpu_millis, ceiling.cpu_millis)
-            && within(self.tasks, ceiling.tasks)
+        within(self.memory_bytes, ceiling.memory_bytes) && self.fits_cpu_and_tasks(ceiling)
+    }
+    /// CPU and tasks within `ceiling`, whatever the memory.
+    pub fn fits_cpu_and_tasks(self, ceiling: Self) -> bool {
+        within(self.cpu_millis, ceiling.cpu_millis) && within(self.tasks, ceiling.tasks)
     }
 }
 fn within<T: PartialOrd>(value: Option<T>, ceiling: Option<T>) -> bool {
@@ -45,23 +44,22 @@ fn within<T: PartialOrd>(value: Option<T>, ceiling: Option<T>) -> bool {
     }
 }
 
-/// A run's frozen budget. `memory_bytes` is what admission reserves; `memory_max_bytes` is the
-/// payload's `memory.max` (the per-run ceiling when the run was admitted). `None` is unlimited:
-/// the cgroup controller set to `max`. A run resolved today always has a memory reservation;
-/// an unlimited one is frozen only by releases before it, and reserves
-/// [`UNLIMITED_MEMORY_RESERVATION`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// A run's frozen caps. `memory_max_bytes` is the payload's `memory.max`; it is a kill cap
+/// only, and admission never counts it (SPEC §2.5). `None` is unlimited: the cgroup
+/// controller set to `max`.
+///
+/// Stored and sent with `memory_bytes` equal to the cap, because releases pinned before caps
+/// alone read that field and require it within the cap. A budget frozen by those releases keeps
+/// its own cap, or, from before unlimited values, its `memory_bytes`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(from = "RunLimitsWire")]
 pub struct RunLimits {
-    pub memory_bytes: Option<u64>,
     pub memory_max_bytes: Option<u64>,
     /// One CPU is 1000 milli-CPUs.
     pub cpu_millis: Option<u32>,
     pub tasks: Option<u32>,
 }
-/// Budgets frozen before unlimited values have no `memory_max_bytes`: their reservation was
-/// also their cap.
-#[derive(Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct RunLimitsWire {
     memory_bytes: Option<u64>,
@@ -73,11 +71,21 @@ struct RunLimitsWire {
 impl From<RunLimitsWire> for RunLimits {
     fn from(wire: RunLimitsWire) -> Self {
         Self {
-            memory_bytes: wire.memory_bytes,
             memory_max_bytes: wire.memory_max_bytes.unwrap_or(wire.memory_bytes),
             cpu_millis: wire.cpu_millis,
             tasks: wire.tasks,
         }
+    }
+}
+impl Serialize for RunLimits {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        RunLimitsWire {
+            memory_bytes: self.memory_max_bytes,
+            memory_max_bytes: Some(self.memory_max_bytes),
+            cpu_millis: self.cpu_millis,
+            tasks: self.tasks,
+        }
+        .serialize(serializer)
     }
 }
 fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
@@ -88,12 +96,6 @@ fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
 impl RunLimits {
     pub fn validate(self) -> Result<Self, String> {
         self.caps().validate()?;
-        if self.memory_bytes == Some(0) {
-            return Err("memory must be positive or unlimited".into());
-        }
-        if !within(self.memory_bytes, self.memory_max_bytes) {
-            return Err("a run's memory reservation exceeds its memory cap".into());
-        }
         Ok(self)
     }
     /// What the payload cgroup enforces.
@@ -104,64 +106,13 @@ impl RunLimits {
             tasks: self.tasks,
         }
     }
-    /// What admission counts for the payload alone.
-    pub fn reservation(self) -> Limits {
-        Limits {
-            memory_bytes: self.memory_bytes,
-            cpu_millis: self.cpu_millis,
-            tasks: self.tasks,
-        }
-    }
-    pub fn fits(self, ceiling: Limits) -> bool {
-        self.reservation().fits(ceiling) && within(self.memory_max_bytes, ceiling.memory_bytes)
-    }
     /// The status form: unlimited dimensions read `"unlimited"`.
     pub fn shown(self) -> serde_json::Value {
         serde_json::json!({
-            "memory_bytes": shown(self.memory_bytes),
             "memory_max_bytes": shown(self.memory_max_bytes),
             "cpu_millis": shown(self.cpu_millis),
             "tasks": shown(self.tasks),
         })
-    }
-}
-
-/// Capacity a live attempt holds against the home total: its payload's finite limits plus the
-/// guardian's share. Unlimited CPU and tasks reserve only the guardian's share; unlimited
-/// memory reserves [`UNLIMITED_MEMORY_RESERVATION`] besides it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Reserved {
-    pub memory_bytes: u64,
-    pub cpu_millis: u32,
-    pub tasks: u32,
-}
-impl Reserved {
-    pub fn of(limits: RunLimits, guardian_memory_bytes: u64) -> Result<Self, String> {
-        let overflow = || "run and guardian reservation overflows".to_string();
-        Ok(Self {
-            memory_bytes: limits
-                .memory_bytes
-                .unwrap_or(UNLIMITED_MEMORY_RESERVATION)
-                .checked_add(guardian_memory_bytes)
-                .ok_or_else(overflow)?,
-            cpu_millis: limits
-                .cpu_millis
-                .unwrap_or(0)
-                .checked_add(GUARDIAN_CPU_MILLIS)
-                .ok_or_else(overflow)?,
-            tasks: limits
-                .tasks
-                .unwrap_or(0)
-                .checked_add(GUARDIAN_TASKS)
-                .ok_or_else(overflow)?,
-        })
-    }
-    /// Every dimension within `total`; an unlimited total holds anything.
-    pub fn fits(self, total: Limits) -> bool {
-        total.memory_bytes.is_none_or(|n| self.memory_bytes <= n)
-            && total.cpu_millis.is_none_or(|n| self.cpu_millis <= n)
-            && total.tasks.is_none_or(|n| self.tasks <= n)
     }
 }
 
@@ -175,6 +126,15 @@ pub struct RunUsage {
     /// `memory.events` `max`: times usage reached `memory.max` and the kernel reclaimed.
     #[serde(default)]
     pub memory_max_hits: u64,
+}
+
+/// One live run's payload memory, as the execution host reads it from the run's cgroup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RunMemory {
+    /// The payload's `memory.current`.
+    pub current_bytes: u64,
+    /// The payload's `memory.peak`.
+    pub peak_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -263,6 +223,11 @@ pub struct LimitsOverride {
     #[serde(deserialize_with = "setting")]
     #[schemars(with = "Option<TasksInput>")]
     pub tasks: Option<Option<Tasks>>,
+    /// A step's or call's explicit request for a memory cap above the per-run ceiling, up to
+    /// the home total. On a project's limits it allows its steps to make that request; the
+    /// project's own memory stays within the ceiling.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub memory_above_ceiling: bool,
 }
 #[derive(JsonSchema)]
 #[serde(untagged)]
@@ -310,6 +275,7 @@ impl LimitsOverride {
             memory: Some(memory.map(MemoryBytes)),
             cpus: Some(cpu_millis.map(CpuMillis)),
             tasks: Some(tasks.map(Tasks)),
+            memory_above_ceiling: false,
         }
     }
     pub fn apply(&self, base: Limits) -> Result<Limits, String> {
@@ -337,13 +303,15 @@ pub const DEFAULT_TOTAL_TASKS: u32 = 65536;
 /// the host's memory: the rest is the agents', the editor's and the services' own.
 pub const DEFAULT_TOTAL_MEMORY: u64 = 70 << 30;
 pub const DEFAULT_TOTAL_MEMORY_PERCENT: u64 = 55;
-/// The shipped per-run memory cap (`memory.max`) and reservation.
+/// The shipped per-run memory ceiling: the largest cap a step may ask for without
+/// `memory_above_ceiling`.
 pub const DEFAULT_RUN_MEMORY_MAX: u64 = 10 << 30;
+/// The shipped per-run memory cap (`memory.max`).
 pub const DEFAULT_RUN_MEMORY: u64 = 6 << 30;
 impl ResourcePolicy {
     /// The shipped policy: the home total is min(70 GiB, 55% of memory) with a task cap and no
-    /// CPU quota; a run reserves 6 GiB for admission and is capped at 10 GiB; CPU and tasks
-    /// are unlimited per run. Every value shrinks to fit a small host.
+    /// CPU quota; a run is capped at 6 GiB and may ask for up to 10 GiB; CPU and tasks are
+    /// unlimited per run. Every value shrinks to fit a small host.
     pub fn for_host(memory_bytes: u64, _cpu_millis: u32) -> Result<Self, String> {
         let total_memory = DEFAULT_TOTAL_MEMORY.min(
             u64::try_from(
@@ -407,43 +375,91 @@ impl ResourcePolicy {
             self.total.tasks.map(u64::from),
         ) {
             return Err(
-                "execution ceilings plus guardian reservation exceed the home budget".into(),
+                "execution ceilings plus the guardian's share exceed the home total".into(),
             );
         }
         Ok(self)
     }
     /// Home defaults, then project defaults, then the step's or call's override, within the
-    /// per-run ceilings. The run's memory cap is the memory ceiling. A run whose memory came
-    /// out unlimited (only under an unlimited ceiling) reserves the home default, or
-    /// [`UNLIMITED_MEMORY_RESERVATION`] when that is unlimited too, within the total's room.
+    /// per-run ceilings. The run's memory cap is the memory that comes out. A step or call may
+    /// ask for memory above the ceiling, up to the home total less the guardian's share, only
+    /// by setting `memory_above_ceiling` while its project's limits allow it.
     pub fn resolve(
         &self,
         project: Option<&LimitsOverride>,
         run: Option<&LimitsOverride>,
     ) -> Result<RunLimits, String> {
         let mut limits = self.defaults;
-        for overrides in [project, run].into_iter().flatten() {
-            limits = overrides.apply(limits)?;
+        if let Some(project) = project {
+            limits = project.apply(limits)?;
             if !limits.fits(self.ceilings) {
                 return Err("execution limits exceed the installation's per-run ceilings".into());
             }
         }
-        let floor = self
-            .defaults
-            .memory_bytes
-            .unwrap_or(UNLIMITED_MEMORY_RESERVATION.min(
-                self.total.memory_bytes.map_or(u64::MAX, |n| {
-                    n.saturating_sub(self.guardian_memory_bytes).max(1)
-                }),
-            ));
+        if let Some(run) = run {
+            limits = run.apply(limits)?;
+            if !limits.fits_cpu_and_tasks(self.ceilings) {
+                return Err("execution limits exceed the installation's per-run ceilings".into());
+            }
+            if !within(limits.memory_bytes, self.ceilings.memory_bytes) {
+                self.above_ceiling(limits.memory_bytes, run, project)?;
+            }
+        }
         RunLimits {
-            memory_bytes: Some(limits.memory_bytes.unwrap_or(floor)),
-            memory_max_bytes: self.ceilings.memory_bytes,
+            memory_max_bytes: limits.memory_bytes,
             cpu_millis: limits.cpu_millis,
             tasks: limits.tasks,
         }
         .validate()
     }
+    /// Whether a run's memory above the ceiling was asked for explicitly and is allowed.
+    fn above_ceiling(
+        &self,
+        memory: Option<u64>,
+        run: &LimitsOverride,
+        project: Option<&LimitsOverride>,
+    ) -> Result<(), String> {
+        let ceiling = self.ceilings.memory_bytes.map_or_else(String::new, size);
+        let Some(memory) = memory else {
+            return Err(format!(
+                "limits.memory is unlimited, above the per-run memory ceiling ({ceiling}); set a size"
+            ));
+        };
+        if !run.memory_above_ceiling {
+            return Err(format!(
+                "limits.memory {} is above the per-run memory ceiling ({ceiling}); set limits.memory_above_ceiling to true to ask for it explicitly (its project's limits must allow it)",
+                size(memory)
+            ));
+        }
+        if !project.is_some_and(|p| p.memory_above_ceiling) {
+            return Err(format!(
+                "limits.memory {} is above the per-run memory ceiling ({ceiling}) and this project does not allow that; set memory_above_ceiling to true in the project's limits (project_update) to allow it",
+                size(memory)
+            ));
+        }
+        if let Some(total) = self.total.memory_bytes
+            && memory.saturating_add(self.guardian_memory_bytes) > total
+        {
+            return Err(format!(
+                "limits.memory {} with its guardian's {} exceeds the home memory total ({})",
+                size(memory),
+                size(self.guardian_memory_bytes),
+                size(total)
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Bytes as a person reads them: whole or one-decimal TiB or GiB, else MiB.
+pub fn size(n: u64) -> String {
+    for (unit, scale) in [("TiB", 1u64 << 40), ("GiB", 1 << 30)] {
+        if n >= scale {
+            let text = format!("{:.1}", n as f64 / scale as f64);
+            return format!("{} {unit}", text.strip_suffix(".0").unwrap_or(&text));
+        }
+    }
+    format!("{} MiB", n.div_ceil(1 << 20))
 }
 
 /// `null` for unlimited in stored and tool JSON; status shows the word.

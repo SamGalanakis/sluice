@@ -674,7 +674,7 @@ async fn exhaustion_settles_once_and_suppresses_requested_retry() {
         ControlReply::Ack
     ));
     *host.state.usage.lock().unwrap() = sluice_model::RunUsage {
-        memory_peak_bytes: args.limits.memory_bytes.unwrap(),
+        memory_peak_bytes: args.limits.memory_max_bytes.unwrap(),
         oom_kills: 1,
         pids_limit_hits: 0,
         cpu_throttled_usec: 400,
@@ -690,8 +690,14 @@ async fn exhaustion_settles_once_and_suppresses_requested_retry() {
         assert_eq!(completion.usage.unwrap().oom_kills, 1);
         assert!(
             matches!(completion.result, PayloadResult::Failed(PublicError::ResourceExhausted {
-            resource: sluice_model::ExhaustedResource::Memory, limit, peak: Some(peak), ..
-        }) if Some(limit) == args.limits.memory_max_bytes && peak == limit)
+            resource: sluice_model::ExhaustedResource::Memory, limit, peak: Some(peak), ref message
+        }) if Some(limit) == args.limits.memory_max_bytes && peak == limit
+            // Bug: the failure said only "N byte cap"; the owner must read the cap, the peak
+            // and how to ask for more.
+            && message.contains("killed at its 1 GiB memory cap (peak 1 GiB)")
+            && message.contains("limits.memory")),
+            "{:?}",
+            completion.result
         );
     });
 }

@@ -581,22 +581,6 @@ impl WorkloadSlice {
     pub fn name(&self) -> &str {
         &self.name
     }
-    /// The slice's cgroup directory, or `None` while systemd has not created it.
-    pub async fn control_group(&self) -> io::Result<Option<PathBuf>> {
-        let mut show = Command::new("/usr/bin/systemctl");
-        show.args([
-            "--user",
-            "show",
-            "--property=ControlGroup",
-            "--value",
-            &self.name,
-        ]);
-        let output = manager_probe(show).await?;
-        let group = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        Ok(group
-            .starts_with('/')
-            .then(|| PathBuf::from("/sys/fs/cgroup").join(group.trim_start_matches('/'))))
-    }
     pub async fn ensure(&self) -> io::Result<()> {
         let _guard = self.lock().await?;
         self.ensure_locked().await
@@ -623,7 +607,31 @@ impl WorkloadSlice {
         .await
         .map_err(io::Error::other)?
     }
+    /// Apply the slice's caps (the pool's bound) and read them back: a slice that does not
+    /// keep them after set-property fails the launch, as a run's own caps do.
     async fn ensure_locked(&self) -> io::Result<()> {
+        if self.mismatches(true).await?.is_empty() {
+            return Ok(());
+        }
+        // A changed total applies to a populated slice: existing runs keep their own caps.
+        let mut update = Command::new("/usr/bin/systemctl");
+        update.args(["--user", "set-property", "--runtime", &self.name]);
+        update.args(properties(self.totals));
+        manager_output(update).await?;
+        let differ = self.mismatches(false).await?;
+        if differ.is_empty() {
+            return Ok(());
+        }
+        Err(io::Error::other(format!(
+            "the workload slice {} did not keep its caps: {}",
+            self.name,
+            differ.join(", ")
+        )))
+    }
+    /// How the slice's MemoryMax, MemorySwapMax, TasksMax and the kernel's cpu.max differ from
+    /// its totals. An inactive slice has no cpu.max to read: `unread_cpu` counts that as a
+    /// difference, so set-property applies the quota before the slice starts.
+    async fn mismatches(&self, unread_cpu: bool) -> io::Result<Vec<String>> {
         let mut show = Command::new("/usr/bin/systemctl");
         show.args([
             "--user",
@@ -631,7 +639,6 @@ impl WorkloadSlice {
             "--property=LoadState",
             "--property=MemoryMax",
             "--property=MemorySwapMax",
-            "--property=CPUQuotaPerSecUSec",
             "--property=TasksMax",
             "--property=ControlGroup",
             &self.name,
@@ -644,29 +651,40 @@ impl WorkloadSlice {
                 "systemd could not load the workload slice",
             ));
         }
-        let memory_matches = match self.totals.memory_bytes {
-            Some(n) => field("MemoryMax=").and_then(|v| v.parse::<u64>().ok()) == Some(n),
-            None => field("MemoryMax=") == Some("infinity"),
-        };
-        let tasks_matches = match self.totals.tasks {
-            Some(n) => field("TasksMax=").and_then(|v| v.parse::<u32>().ok()) == Some(n),
-            None => field("TasksMax=") == Some("infinity"),
-        };
-        // systemctl formats CPUQuotaPerSecUSec as a duration. Read the kernel's
-        // quota instead, which also proves the active slice received the limits.
-        let group = field("ControlGroup=").filter(|g| g.starts_with('/'));
-        let cpu_matches = group
-            .and_then(|g| std::fs::read_to_string(format!("/sys/fs/cgroup{g}/cpu.max")).ok())
-            .is_some_and(|v| cpu_matches(&v, self.totals.cpu_millis));
-        if memory_matches && tasks_matches && cpu_matches && field("MemorySwapMax=") == Some("0") {
-            return Ok(());
+        let mut out = Vec::new();
+        let number = |n: Option<u64>| n.map_or("infinity".to_owned(), |n| n.to_string());
+        let memory = number(self.totals.memory_bytes);
+        if field("MemoryMax=") != Some(memory.as_str()) {
+            out.push(format!(
+                "MemoryMax is {}, expected {memory}",
+                field("MemoryMax=").unwrap_or("unset")
+            ));
         }
-        // Admission already proved that the live reservations fit these totals, so a changed
-        // total applies to a populated slice: existing runs keep their own frozen caps.
-        let mut update = Command::new("/usr/bin/systemctl");
-        update.args(["--user", "set-property", "--runtime", &self.name]);
-        update.args(properties(self.totals));
-        manager_output(update).await?;
-        Ok(())
+        let tasks = number(self.totals.tasks.map(u64::from));
+        if field("TasksMax=") != Some(tasks.as_str()) {
+            out.push(format!(
+                "TasksMax is {}, expected {tasks}",
+                field("TasksMax=").unwrap_or("unset")
+            ));
+        }
+        if field("MemorySwapMax=") != Some("0") {
+            out.push(format!(
+                "MemorySwapMax is {}, expected 0",
+                field("MemorySwapMax=").unwrap_or("unset")
+            ));
+        }
+        // systemctl formats CPUQuotaPerSecUSec as a duration. Read the kernel's quota instead,
+        // which also proves the active slice received the limits; an inactive slice has none.
+        match field("ControlGroup=")
+            .filter(|g| g.starts_with('/'))
+            .and_then(|g| std::fs::read_to_string(format!("/sys/fs/cgroup{g}/cpu.max")).ok())
+        {
+            Some(cpu) if !cpu_matches(&cpu, self.totals.cpu_millis) => {
+                out.push(format!("cpu.max is {}", cpu.trim()));
+            }
+            None if unread_cpu => out.push("cpu.max is not readable yet".into()),
+            _ => {}
+        }
+        Ok(out)
     }
 }

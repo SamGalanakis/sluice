@@ -40,16 +40,14 @@ async fn wait_file(path: &Path) {
 
 fn capped() -> RunLimits {
     RunLimits {
-        memory_bytes: Some(64 << 20),
         memory_max_bytes: Some(64 << 20),
         cpu_millis: Some(250),
         tasks: Some(32),
     }
 }
-/// What a build run gets by default: a memory reservation and cap, no CPU or task cap.
+/// What a build run gets by default: a memory cap, no CPU or task cap.
 fn build() -> RunLimits {
     RunLimits {
-        memory_bytes: Some(128 << 20),
         memory_max_bytes: Some(256 << 20),
         cpu_millis: None,
         tasks: None,

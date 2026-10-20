@@ -253,6 +253,10 @@ impl<H: ExecutionHost> Coordinator<H> {
     /// Writer::open owns the home flock until the actor connection is closed.
     pub async fn open(home: PathBuf, catalog: Catalog, host: H) -> Result<Self, PublicError> {
         sluice_process::host::guard_scratch_home(&home)?;
+        // A bad execution policy fails here, naming what to change, rather than hold every
+        // step once serving.
+        crate::budget::execution(&home)
+            .map_err(|error| crate::budget::invalid(format!("config.json: {error}")))?;
         let path = home.clone();
         let writer = tokio::task::spawn_blocking(move || Writer::open(path))
             .await
@@ -2047,7 +2051,7 @@ impl<H: ExecutionHost> Coordinator<H> {
             let attempt = resource_attempt;
             self.writer()
                 .write(RetrySafety::Idempotent, move |tx| {
-                    resources::release_budget(tx, attempt).map(|_| ())
+                    resources::release_service(tx, attempt).map(|_| ())
                 })
                 .await?;
         }
@@ -2156,7 +2160,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 Ok(true) => {
                     self.writer()
                         .write(RetrySafety::Idempotent, move |tx| {
-                            resources::release_budget(tx, attempt).map(|_| ())
+                            resources::release_service(tx, attempt).map(|_| ())
                         })
                         .await?;
                 }
@@ -3240,19 +3244,13 @@ fn record_resource_usage(
     tx: &mut sluice_store::WriteTransaction<'_>,
     evidence: &CompletionJournal,
 ) -> sluice_store::Result<()> {
-    let (limits, reservation): (String, String) = tx.sql().query_row(
-        "SELECT a.limits,a.reservation FROM attempts a JOIN runs r USING(attempt_id) WHERE r.run_id=?1 AND a.attempt_id=?2",
+    let limits: String = tx.sql().query_row(
+        "SELECT a.limits FROM attempts a JOIN runs r USING(attempt_id) WHERE r.run_id=?1 AND a.attempt_id=?2",
         (evidence.identity.run.to_string(), evidence.identity.attempt.to_string()),
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| row.get(0),
     )?;
     let limits: sluice_model::RunLimits = serde_json::from_str(&limits)?;
-    let reservation: sluice_model::Reserved = serde_json::from_str(&reservation)?;
-    if limits != evidence.limits
-        || reservation
-            .memory_bytes
-            .checked_sub(limits.memory_bytes.unwrap_or(0))
-            != Some(evidence.guardian_memory_bytes)
-    {
+    if limits != evidence.limits {
         return Err(conflict("completion resource budget differs from reservation").into());
     }
     tx.sql().execute(

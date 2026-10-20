@@ -154,7 +154,7 @@ async fn complete(writer: &Writer, completion: CallCompletion) -> Result<bool, P
     if accepted {
         writer
             .write(RetrySafety::Idempotent, move |tx| {
-                sluice_store::resources::release_budget(tx, attempt)
+                sluice_store::resources::release_service(tx, attempt)
             })
             .await?;
     }

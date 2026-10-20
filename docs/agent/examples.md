@@ -93,8 +93,8 @@ well): rename or remove that function.
 sluice tool fn_call '{"name":"inline.bash","inputs":{"code":"./check-one-case","cwd":"/repo"},"limits":{"memory":"2GiB","cpus":1,"tasks":128},"direct":true}'
 ```
 
-The limits must fit the installation ceilings and the home must have capacity for the run
-plus its guardian. A direct call refuses when it cannot reserve that capacity. Without
-`direct`, the call queues. Its descendants share the budget; a memory OOM is reported as
+The limits must fit the installation ceilings, and the host must have the memory free now
+(`docs("plans")`, Execution limits); a direct call the host has no room for is refused with a
+retryable `busy`. Without `direct`, the call queues. Its descendants share the caps; a memory OOM is reported as
 `resource_exhausted` and is not automatically retried, and a task-limit hit is told to the
 caller in a `say` with `data.execution_limit`.

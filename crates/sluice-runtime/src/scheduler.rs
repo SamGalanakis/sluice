@@ -111,11 +111,15 @@ async fn reconcile_pass<H: ExecutionHost>(
 ) -> Result<(), PublicError> {
     loop {
         let (policy, headroom) = crate::budget::execution(broker.home())?;
-        let gate = crate::headroom::Gate::new(
-            broker.host().host_memory(broker.home_id()).await,
-            broker.home(),
-            headroom,
-        );
+        let host = broker.host();
+        let reading = crate::headroom::Reading::take(
+            broker.reads(),
+            host.host_memory(broker.home_id()).await,
+            host.now(),
+            |run, service| async move { host.run_memory(run, &service).await },
+        )
+        .await;
+        let gate = crate::headroom::Gate::new(reading, broker.home(), headroom);
         let context = broker.context(project).await?;
         let copy = context.clone();
         let lease_owner = owner.to_owned();
@@ -394,14 +398,14 @@ async fn reconcile_pass<H: ExecutionHost>(
                 let mut launches=vec![];
                 for index in 0..count.unwrap_or(1){
                     if count.is_some() && keep && instances.get(index.to_string()).is_some_and(|v|v["status"]=="succeeded" || continuing && matches!(v["status"].as_str(),Some("running"|"failed"))){continue;}
-                    if !resources::budget_fit(tx.sql(), &limits, &policy)?.fits() { break; }
-                    // The host's measured memory, counting the runs this batch already admitted.
-                    if let Some(gate) = &gate && gate.hold(tx.sql(), &limits, &policy)?.is_some() { break; }
+                    // The measured memory, counting the runs this batch already admitted at their charge.
+                    if let Some(gate) = &gate && gate.hold(tx.sql(), &policy)?.is_some() { break; }
                     let mut inputs=inputs.clone();if let Some(name)=&step.scatter {inputs.0.insert(name.clone(),inputs.0[name].as_value().as_array().expect("checked scatter")[index].clone().try_into()?);}
                     let capability=new_capability();let attempt=AttemptId::new();let run=RunId::new();
                     let provenance:JsonMap=serde_json::from_value(json!({"runtime":{"capability":capability,"execution":execution,"admitted_rev":copy.revision},"files":fingerprints}))?;
                     let reservation=attempts::reserve(tx,&copy,Reserve{step:step.id.clone(),attempt,run,item_index:if count.is_some(){index as i64}else{-1},item_count:count.map(|n|n as u64),inputs:inputs.clone(),inputs_hash:hash,provenance,release_id:crate::install::release_id("runtime-v1"),protocol_major:1,limits,admission:policy.clone()},&mut Hooks)?;
                     if let Some(job) = execution.as_ref().and_then(|e| e.job) { crate::registry::pin_run(tx,job,run)?; }
+                    if let Some(gate) = &gate { gate.admitted(tx.sql(), reservation.identity.attempt)?; }
                     let id=&reservation.identity;
                     if attempts::spawn_attempted(tx,id)? {
                         launches.push(Launch{identity:AttemptKey{home,project:Some(project),step:Some(id.step.clone()),generation:id.generation,work:id.work,run,attempt},invocation:FnInvocation{project,step:Some(id.step.clone()),run,attempt,invocation:InvocationId::new(),name:step.run.clone(),inputs},assigned:AssignedRange{after:MessageId(reservation.messages.after),through:MessageId(reservation.messages.through)},prev_run:reservation.prev_run,capability,limits,policy:policy.clone(),timeout_seconds:None,context:execution.clone().map(|execution| crate::compose::ReservationContext { execution, project_name:project_name.clone(), extra_inputs:JsonMap(step.extra_inputs.iter().map(|(n,t)| (n.clone(),json!({"type":t.form()}).try_into().expect("input declaration"))).collect()), outputs:JsonMap(step.declared_outputs.iter().map(|(n,d)| (n.clone(),json!({"type":d.ty.form(),"doc":d.doc}).try_into().expect("output declaration"))).collect()) })});
@@ -602,33 +606,27 @@ async fn record_queues<H: ExecutionHost>(
             let needs = step.needs.iter().map(|(n,a)|(n.clone(),*a)).collect();
             let mut fit = if continuing { resources::Fit { blocked: vec![], reason: String::new() } }
                 else { resources::fits(tx.sql(), context.project, &needs)? };
-            let mut physical = false;
             let mut memory_hold = None;
             if fit.fits() {
                 fit = match crate::budget::resolve(tx.sql(), Some(context.project), step.limits.as_ref(), &policy) {
-                    Ok(limits) => {
-                        physical = true;
-                        let fit = resources::budget_fit(tx.sql(), &limits, &policy)?;
-                        match &gate {
-                            Some(gate) if fit.fits() => match gate.hold(tx.sql(), &limits, &policy)? {
-                                // The record keeps the hold's kind; the numbers change every tick
-                                // and go to status and the owner's say instead.
-                                Some(reason) => {
-                                    let kind = reason.split(" (").next().unwrap_or(&reason).to_owned();
-                                    memory_hold = Some(reason);
-                                    resources::Fit { blocked: vec!["host memory".into()], reason: kind }
-                                }
-                                None => fit,
-                            },
-                            _ => fit,
-                        }
+                    Ok(_) => match &gate {
+                        Some(gate) => match gate.hold(tx.sql(), &policy)? {
+                            // The record keeps the hold's kind; the numbers change every tick
+                            // and go to status and the owner's say instead.
+                            Some(reason) => {
+                                let kind = reason.split(" (").next().unwrap_or(&reason).to_owned();
+                                memory_hold = Some(reason);
+                                resources::Fit { blocked: vec!["host memory".into()], reason: kind }
+                            }
+                            None => fit,
+                        },
+                        None => fit,
                     },
                     Err(sluice_store::StoreError::Public(PublicError::Invalid { message, .. })) => resources::Fit { blocked: vec!["limits".into()], reason: message },
                     Err(error) => return Err(error),
                 };
             }
             if fit.fits() { continue; }
-            let waiting_on_home = (physical && memory_hold.is_none()).then(|| fit.reason.clone());
             let event = Event::StepQueued {
                 step: step.id.clone(),
                 needs: serde_json::from_value(json!(needs))?,
@@ -651,36 +649,13 @@ async fn record_queues<H: ExecutionHost>(
                     run: None,
                     step: Some(step.id.clone()),
                     limit: "host_memory",
-                    value: json!({"host_reserve_bytes": headroom.map(|h| h.host_reserve_bytes), "memory_pressure_max": headroom.map(|h| h.pressure_max)}),
+                    value: json!({"host_reserve_bytes": headroom.map(|h| h.host_reserve_bytes), "memory_pressure_max": headroom.map(|h| h.pressure_max), "admission_charge_bytes": headroom.map(|h| h.charge_bytes), "total_memory_bytes": policy.total.memory_bytes}),
                     observed: json!(reason),
                     outcome: "held",
                     since: Some(since),
                 };
                 let body = format!("Step {} is {reason}. Sluice checks again every {} s and starts it once the host has the room; nothing needs doing unless the host stays short of memory.", step.id, crate::headroom::RECHECK_INTERVAL.as_secs());
                 resources::notify_limit(tx, context.project, &notice, body, false)?;
-            }
-            // A step that has waited long on the home's execution total is told to its owner once.
-            if let Some(reason) = waiting_on_home {
-                let (since, minutes): (Option<String>, Option<f64>) = tx.sql().query_row(
-                    "SELECT min(at),(julianday('now')-julianday(min(at)))*1440 FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.queued'
-                     AND seq > coalesce((SELECT max(seq) FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.status'),0)",
-                    (context.project.to_string(), step.id.as_str()), |r| Ok((r.get(0)?, r.get(1)?)))?;
-                if let (Some(since), Some(minutes)) = (since, minutes)
-                    && minutes >= crate::budget::QUEUE_NOTICE_MINUTES as f64
-                {
-                    let total = policy.total;
-                    let notice = resources::LimitNotice {
-                        run: None,
-                        step: Some(step.id.clone()),
-                        limit: "capacity",
-                        value: json!({"memory_bytes": sluice_model::limits::shown(total.memory_bytes), "cpu_millis": sluice_model::limits::shown(total.cpu_millis), "tasks": sluice_model::limits::shown(total.tasks)}),
-                        observed: json!(reason),
-                        outcome: "waiting",
-                        since: Some(since.clone()),
-                    };
-                    let body = format!("Step {} has waited since {since} for the home's execution capacity ({reason}). It starts when live runs release enough; raise execution.total in config.json or lower the step's limits to start it sooner.", step.id);
-                    resources::notify_limit(tx, context.project, &notice, body, false)?;
-                }
             }
         }
         Ok(memory_held)

@@ -57,7 +57,8 @@ pub trait CallRegistry: Send + Sync + 'static {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limits: Option<sluice_model::limits::RunLimits>,
+    /// The run's frozen caps as status shows them (unlimited reads `"unlimited"`).
+    pub limits: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<sluice_model::limits::RunUsage>,
     pub call: RunId,
@@ -85,11 +86,23 @@ pub struct AdmittedCall {
 /// An uncertain launch error must be reconciled against this identity, never relaunched.
 pub trait CallGuardian: Send + Sync + 'static {
     fn launch(&self, call: AdmittedCall) -> impl Future<Output = Result<(), PublicError>> + Send;
-    /// The host's memory for admission by measured headroom; `None` when there is no host.
+    /// The host's memory for admission by measured memory; `None` when there is no host.
     fn host_memory(
         &self,
     ) -> impl Future<Output = Option<std::io::Result<crate::headroom::HostMemory>>> + Send {
         std::future::ready(None)
+    }
+    /// A live run's payload memory, as [`crate::execution::ExecutionHost::run_memory`].
+    fn run_memory(
+        &self,
+        _run: RunId,
+        _service_cgroup: &str,
+    ) -> impl Future<Output = Option<std::io::Result<sluice_model::limits::RunMemory>>> + Send {
+        std::future::ready(None)
+    }
+    /// The clock admission's readings and warm-ups run on.
+    fn now(&self) -> std::time::SystemTime {
+        std::time::SystemTime::now()
     }
 }
 
@@ -197,11 +210,15 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
         PublicError,
     > {
         let (policy, headroom) = crate::budget::execution(self.writer.home())?;
-        let gate = crate::headroom::Gate::new(
-            self.guardian.host_memory().await,
-            self.writer.home(),
-            headroom,
-        );
+        let guardian = &self.guardian;
+        let reading = crate::headroom::Reading::take(
+            &self.reads,
+            guardian.host_memory().await,
+            guardian.now(),
+            |run, service| async move { guardian.run_memory(run, &service).await },
+        )
+        .await;
+        let gate = crate::headroom::Gate::new(reading, self.writer.home(), headroom);
         Ok((policy, gate))
     }
     /// Scheduler entry point. Direct calls are never part of this queue.
@@ -429,7 +446,7 @@ fn admit_tx(
         .transpose()?;
     let limits = crate::budget::resolve(tx.sql(), project, overrides.as_ref(), policy)?;
     if let Some(gate) = gate
-        && let Some(reason) = gate.hold(tx.sql(), &limits, policy)?
+        && let Some(reason) = gate.hold(tx.sql(), policy)?
     {
         return Err(PublicError::Busy {
             message: reason,
@@ -454,7 +471,10 @@ fn admit_tx(
     let frozen =
         serde_json::json!({"function":function,"inputs":inputs,"limits":limits,"policy":policy});
     tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,phase,request,inputs_hash,created_at) VALUES (?1,?2,'reserved',?3,?4,?5)", (attempt.to_string(), project.map(|p|p.to_string()), frozen.to_string(), hash.to_string(), &at))?;
-    resources::reserve_budget(tx, attempt, limits, policy)?;
+    resources::freeze_limits(tx, attempt, limits, policy)?;
+    if let Some(gate) = gate {
+        gate.admitted(tx.sql(), attempt)?;
+    }
     tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,release_id,created_at) VALUES (?1,?2,?3,?4,?5)", (call.to_string(), project.map(|p|p.to_string()), attempt.to_string(), &crate::install::release_id(&function.release_id), &at))?;
     if let Some(job) = function
         .bundle
@@ -687,7 +707,7 @@ pub async fn call_status(
         let mut rows=stmt.query((call.to_string(),project.map(|p|p.to_string())))?;
         let r=rows.next()?.ok_or_else(||PublicError::NotFound{message:format!("no call {call} in this scope")})?;
         let evidence = crate::budget::run_resources(sql,call)?;
-        Ok(CallStatus{limits:serde_json::from_value(evidence["limits"].clone())?,usage:serde_json::from_value(evidence["usage"].clone())?,call,project_id:project,status:serde_json::from_value(serde_json::Value::String(r.get(0)?))?,inputs:serde_json::from_str(&r.get::<_,String>(1)?)?,outputs:r.get::<_,Option<String>>(2)?.map(|s|serde_json::from_str(&s)).transpose()?,error:r.get::<_,Option<String>>(3)?.map(|s|serde_json::from_str(&s)).transpose()?,direct:r.get(4)?,finishing:sluice_store::attempts::call_finishing(sql,call)?})
+        Ok(CallStatus{limits:Some(evidence["limits"].clone()).filter(|v| !v.is_null()),usage:serde_json::from_value(evidence["usage"].clone())?,call,project_id:project,status:serde_json::from_value(serde_json::Value::String(r.get(0)?))?,inputs:serde_json::from_str(&r.get::<_,String>(1)?)?,outputs:r.get::<_,Option<String>>(2)?.map(|s|serde_json::from_str(&s)).transpose()?,error:r.get::<_,Option<String>>(3)?.map(|s|serde_json::from_str(&s)).transpose()?,direct:r.get(4)?,finishing:sluice_store::attempts::call_finishing(sql,call)?})
     }).await.map_err(public)
 }
 /// Explicit 30-day terminal-row cleanup. Feed retention cannot delete calls.

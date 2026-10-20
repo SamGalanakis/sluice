@@ -22,6 +22,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Default)]
 struct Fake {
     launches: Arc<Mutex<Vec<Launch>>>,
+    /// The host's memory reading; `None` measures nothing.
+    memory: Arc<Mutex<Option<sluice_runtime::headroom::HostMemory>>>,
 }
 impl FnHost for Fake {
     async fn invoke(&self, i: FnInvocation) -> Result<JsonMap, PublicError> {
@@ -73,6 +75,12 @@ impl ExecutionHost for Fake {
     }
     async fn cleanup_valid(&self, j: &CompletionJournal) -> Result<bool, PublicError> {
         Ok(j.cleanup.iter().all(|p| p.empty))
+    }
+    async fn host_memory(
+        &self,
+        _: sluice_model::ids::HomeId,
+    ) -> Option<std::io::Result<sluice_runtime::headroom::HostMemory>> {
+        self.memory.lock().unwrap().map(Ok)
     }
 }
 struct Fixture {
@@ -739,9 +747,15 @@ async fn bounded_scatter_keeps_original_inputs_gates_and_files_between_admission
     let mut f = Fixture::new(json!({"steps":{}}), json!({})).await;
     let brief = f.home.root().join("brief.txt");
     std::fs::write(&brief, "original brief").unwrap();
+    // The host has room for one run's admission charge at a time.
     let mut policy = bounded_policy("96MiB");
-    policy["execution"]["defaults"]["memory"] = json!("96MiB");
+    policy["execution"]["host_reserve"] = json!("1GiB");
+    policy["execution"]["admission_charge"] = json!("64MiB");
     std::fs::write(f.home.path().join("config.json"), policy.to_string()).unwrap();
+    *f.host.memory.lock().unwrap() = Some(sluice_runtime::headroom::HostMemory {
+        available_bytes: (1 << 30) + (64 << 20),
+        pressure_some_avg10: None,
+    });
     f.seed(
         json!({"inputs":{"items":"int[]","go":"boolean"},"steps":{
             "each":{"run":"fixture.submit","scatter":"value","after":["go"],"needs":{"lane":1},
@@ -839,7 +853,7 @@ async fn lowering_a_run_ceiling_queues_that_step_without_blocking_other_work() {
             .iter()
             .any(|reason| reason
                 .as_str()
-                .is_some_and(|reason| reason.contains("per-run ceilings"))),
+                .is_some_and(|reason| reason.contains("above the per-run memory ceiling"))),
         "{status}"
     );
 }
