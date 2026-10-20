@@ -481,6 +481,12 @@ pub trait SupervisorHost: Send {
         checkpoint: &Checkpoint,
     ) -> impl Future<Output = io::Result<()>> + Send;
     fn cleanup(&mut self) -> impl Future<Output = io::Result<()>> + Send;
+    /// A mark that moves when the host may have news for the session (a message handed to
+    /// the run). While nothing else changes, the supervisor watches it between snapshots and
+    /// takes them less often. A host without one (`None`) is snapshotted every `poll`.
+    fn news(&mut self) -> Option<u64> {
+        None
+    }
     /// Reads or moves the run's park (see [`ParkOp`]). A host without parks has none.
     fn park(&mut self, op: ParkOp) -> impl Future<Output = io::Result<ParkView>> + Send {
         let _ = op;
@@ -582,6 +588,10 @@ pub struct Machine {
     completed: u64,
     /// The agent asked to park; its turn's end parks the run.
     pub park: bool,
+    /// The checkpoint as last persisted: an unchanged one is not written again.
+    persisted: Option<Vec<u8>>,
+    /// How many times a changed checkpoint was persisted.
+    writes: u64,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -627,6 +637,8 @@ impl Machine {
             boot_at: now,
             completed: 0,
             park: false,
+            persisted: None,
+            writes: 0,
         }
     }
     /// The turns this invocation's engine has completed, as last observed.
@@ -962,7 +974,15 @@ async fn persist<H: SupervisorHost>(
     config: &SupervisorConfig,
     host: &mut H,
 ) -> Result<(), AgentFailure> {
+    // Most ticks change nothing; rewriting (and syncing) the same checkpoint each one was
+    // most of an idle session's cost.
+    let bytes = serde_json::to_vec(&machine.checkpoint).map_err(invalid)?;
+    if machine.persisted.as_ref() == Some(&bytes) {
+        return Ok(());
+    }
     machine.checkpoint.save(&config.run_dir).map_err(invalid)?;
+    machine.persisted = Some(bytes);
+    machine.writes += 1;
     // The local checkpoint is authoritative. A mirror notification is bookkeeping.
     let timing = sluice_process::probe::ProbeTiming::current();
     let mut delay = timing.backoff;
@@ -1635,9 +1655,12 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
     quiet: &mut QuietMonitor,
 ) -> Result<(), AgentFailure> {
     let mut probe_delay = Duration::from_millis(100);
+    let mut idle = IdleTicks::new(config.limits.poll);
+    let mut last: Option<EngineObservation> = None;
     loop {
         // A park moves the wall deadline by its parked time.
         let deadline = *wall;
+        let writes = machine.writes;
         if hooks_need_context(&config.run_dir).map_err(invalid)? {
             refresh_me(host, &config.run_dir).await;
         }
@@ -1767,6 +1790,9 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
             quiet.reset();
         }
         let action = machine.update(now, &o, &snapshot.background_work, snapshot.leases_active)?;
+        let observed = last.as_ref() != Some(&o);
+        let acted = action != Action::None;
+        last = Some(o.clone());
         if let Some(session) = &machine.checkpoint.session {
             sessions.acquire(
                 &config.home,
@@ -1908,7 +1934,69 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
             }
             Action::None => {}
         }
-        tokio::select! { biased; _ = cancel.cancelled() => return Err(failure(FailureKind::Cancelled, "agent cancelled")), _ = tokio::time::sleep(config.limits.poll) => {} }
+        let changed = acted || observed || machine.writes != writes;
+        let wait = idle.after(changed, host.news().is_some());
+        if tick_wait(config, host, cancel, wait).await? {
+            idle.reset();
+        }
+    }
+}
+/// An idle session's tick backs off to this many polls while nothing it observes changes.
+const IDLE_POLLS: u32 = 10;
+/// How often a tick's wait looks for a new hook request or news from the host.
+const WAKE_CHECK: Duration = Duration::from_millis(100);
+/// The wait before a session's next tick: `poll` after a tick that changed anything, doubling
+/// up to [`IDLE_POLLS`] polls after each that changed nothing. A host that cannot say when it
+/// has news keeps the tick at `poll`.
+struct IdleTicks {
+    poll: Duration,
+    next: Duration,
+}
+impl IdleTicks {
+    fn new(poll: Duration) -> Self {
+        Self { poll, next: poll }
+    }
+    fn after(&mut self, changed: bool, news: bool) -> Duration {
+        if changed || !news {
+            self.reset();
+            return self.poll;
+        }
+        let wait = self.next;
+        self.next = (self.next * 2).min(self.poll * IDLE_POLLS);
+        wait
+    }
+    fn reset(&mut self) {
+        self.next = self.poll;
+    }
+}
+/// Waits `wait` for the next tick, ending early when the engine sends a new hook request or
+/// the host's news moves; returns whether it ended early.
+async fn tick_wait<H: SupervisorHost>(
+    config: &SupervisorConfig,
+    host: &mut H,
+    cancel: &CancellationToken,
+    wait: Duration,
+) -> Result<bool, AgentFailure> {
+    let until = tokio::time::Instant::now() + wait;
+    let news = host.news();
+    let hooks = hook_requests(&config.run_dir).map_err(invalid)?;
+    loop {
+        let left = until.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            return Ok(false);
+        }
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(failure(FailureKind::Cancelled, "agent cancelled")),
+            _ = tokio::time::sleep(left.min(WAKE_CHECK)) => {}
+        }
+        if host.news() != news
+            || !hook_requests(&config.run_dir)
+                .map_err(invalid)?
+                .is_subset(&hooks)
+        {
+            return Ok(true);
+        }
     }
 }
 /// Carries the session on in the same engine process after a transient the adapter took back
@@ -1988,6 +2076,7 @@ async fn park<E: EngineAdapter, H: SupervisorHost>(
     };
     eprintln!("agent parked until {}", park.condition);
     let timeout = park.timeout_seconds.map(Duration::from_secs);
+    let mut idle = IdleTicks::new(config.limits.poll);
     let reason = loop {
         let o = bounded(
             cancel,
@@ -2025,7 +2114,7 @@ async fn park<E: EngineAdapter, H: SupervisorHost>(
                 park.condition
             );
         }
-        wait_parked(engine, config, cancel).await?;
+        wait_parked(engine, config, host, cancel, &mut idle).await?;
     };
     let view = loop {
         let view = parked_call(
@@ -2045,7 +2134,7 @@ async fn park<E: EngineAdapter, H: SupervisorHost>(
         if view.woke {
             break view;
         }
-        wait_parked(engine, config, cancel).await?;
+        wait_parked(engine, config, host, cancel, &mut idle).await?;
     };
     let parked = started.elapsed();
     machine.checkpoint.parked_ms = machine
@@ -2104,19 +2193,29 @@ async fn parked_call<E: EngineAdapter, H: SupervisorHost>(
     })
     .await
 }
-async fn wait_parked<E: EngineAdapter>(
+/// A parked session is idle by definition: its checks back off as an idle tick does, and a
+/// hook request ends the wait to be answered at once.
+async fn wait_parked<E: EngineAdapter, H: SupervisorHost>(
     engine: &mut E,
     config: &SupervisorConfig,
+    host: &mut H,
     cancel: &CancellationToken,
+    idle: &mut IdleTicks,
 ) -> Result<(), AgentFailure> {
-    answering_hooks(engine, config, async {
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => Err(failure(FailureKind::Cancelled, "cancelled while parked")),
-            _ = tokio::time::sleep(config.limits.poll) => Ok(()),
-        }
-    })
-    .await
+    let wait = idle.after(false, host.news().is_some());
+    let woke = tick_wait(config, host, cancel, wait)
+        .await
+        .map_err(|error| {
+            if error.kind == FailureKind::Cancelled {
+                failure(FailureKind::Cancelled, "cancelled while parked")
+            } else {
+                error
+            }
+        })?;
+    if woke {
+        idle.reset();
+    }
+    process_hooks(engine, config.run, &config.run_dir).map_err(invalid)
 }
 /// Whether a `pid:` or `file:` park condition holds; a `lease:` one is the coordinator's.
 pub fn condition_holds(condition: &ParkCondition) -> io::Result<bool> {
@@ -2361,11 +2460,10 @@ pub fn process_hooks<E: EngineAdapter>(
     process_hooks_inner(engine, Some(run), directory)
 }
 fn pending_hooks(directory: &Path) -> io::Result<bool> {
-    Ok(
-        !hook_journal::Listing::read(&hook_journal::path(directory))?
-            .requests
-            .is_empty(),
-    )
+    Ok(!hook_requests(directory)?.is_empty())
+}
+fn hook_requests(directory: &Path) -> io::Result<std::collections::BTreeSet<String>> {
+    Ok(hook_journal::Listing::read(&hook_journal::path(directory))?.requests)
 }
 fn process_hooks_inner<E: EngineAdapter>(
     engine: &mut E,

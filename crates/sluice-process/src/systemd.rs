@@ -331,12 +331,13 @@ fn parse_state(name: &str, text: &str) -> io::Result<UnitState> {
     })
 }
 async fn manager_start(
-    command: Command,
+    mut command: Command,
     fence: Option<&crate::locks::RunFence>,
 ) -> io::Result<Output> {
     let Some(fence) = fence else {
         return manager_output(command).await;
     };
+    find_manager(&mut command);
     let child = fence.spawn_start_helper(command)?;
     let output = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
         .await
@@ -350,17 +351,19 @@ async fn manager_start(
     Ok(output)
 }
 
-fn manager_command(command: Command) -> tokio::process::Command {
-    let mut command = tokio::process::Command::from(command);
-    // `systemctl --user` finds the manager through XDG_RUNTIME_DIR, which a scrubbed
-    // environment may lack.
+/// `systemctl --user` and `systemd-run --user` find the manager through XDG_RUNTIME_DIR,
+/// which a scrubbed environment may lack.
+fn find_manager(command: &mut Command) {
     if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
         command.env(
             "XDG_RUNTIME_DIR",
             format!("/run/user/{}", rustix::process::getuid().as_raw()),
         );
     }
-    command
+}
+fn manager_command(mut command: Command) -> tokio::process::Command {
+    find_manager(&mut command);
+    tokio::process::Command::from(command)
 }
 async fn manager_probe(command: Command) -> io::Result<Output> {
     let output = crate::probe::output(&mut manager_command(command)).await?;

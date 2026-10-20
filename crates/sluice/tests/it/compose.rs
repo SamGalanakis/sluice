@@ -871,6 +871,51 @@ fn retired_model_forms_validate_in_the_plan_and_fail_at_launch() {
     assert!(!g.temp.path().join("devin-prompts.jsonl").exists());
 }
 
+/// Bug (2026-10-20): tests that died before their teardown, or tore down from an environment
+/// without XDG_RUNTIME_DIR, left 8 guardians retrying a coordinator that was gone (every 50 ms,
+/// for ten days) and 733 workload slices on the host. A guardian whose coordinator stops
+/// listening stops itself past its bound, and a home's teardown leaves no unit or slice.
+#[test]
+fn a_guardian_outlives_a_vanished_coordinator_only_for_its_bound() {
+    let mut g = Gate::configured(|g| {
+        g.env
+            .insert("SLUICE_TEST_GUARDIAN_ORPHAN_S".into(), "0.5".into());
+    });
+    g.plan(json!({"long": {"run":"fixture.wait","in":{"value":{"default":1}}}}));
+    let lease = g.lease();
+    g.wait(|g| {
+        g.status()["steps"]["long"]["run_ids"][0]
+            .as_str()
+            .is_some_and(|run| {
+                g.home
+                    .join("runs")
+                    .join(run)
+                    .join("dispatch-count")
+                    .exists()
+            })
+    });
+    let unit = format!("sluice-test-{}.service", g.run("long"));
+    let slice = units::home_slice(&g.home).expect("the run's workload slice");
+    assert!(units::unit_active(&unit) && units::unit_active(&slice));
+    // The coordinator dies the way a killed test's does: nothing tears its run down.
+    drop(lease);
+    let mut broker = g.broker.take().unwrap();
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+    let gone = Instant::now();
+    while units::unit_active(&unit) {
+        assert!(
+            gone.elapsed() < Duration::from_secs(2),
+            "{unit} outlived its coordinator"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The slice outlives its last run; the home's teardown removes it and its settings.
+    assert!(units::unit_active(&slice));
+    drop(g);
+    assert!(!units::unit_active(&slice), "{slice} left behind");
+}
+
 // An agent's task starts with its step's previous attempt (the first says so) and the git
 // status of its cwd when it launched.
 

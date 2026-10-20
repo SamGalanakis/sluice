@@ -122,6 +122,7 @@ impl Drop for Gate {
         owned.sort();
         owned.dedup();
         units::stop_units(&owned);
+        units::stop_home_slice(&self.home);
     }
 }
 fn read_frame(stream: &mut UnixStream) -> Vec<u8> {

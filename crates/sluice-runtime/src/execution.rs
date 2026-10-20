@@ -640,6 +640,23 @@ pub async fn fixture_dispatch(
         _ => Err(PublicError::not_implemented("fn dispatcher")),
     }
 }
+/// How long a guardian outlives a coordinator nothing listens for. A test's guardian
+/// outlives it for 30 s, or `SLUICE_TEST_GUARDIAN_ORPHAN_S`, so a test that dies before its
+/// teardown leaves no unit behind for long; production never reads the override.
+fn orphan_after() -> Result<Duration, PublicError> {
+    if !sluice_process::host::test_mode() {
+        return Ok(guardian::ORPHAN_AFTER);
+    }
+    match std::env::var("SLUICE_TEST_GUARDIAN_ORPHAN_S") {
+        Err(std::env::VarError::NotPresent) => Ok(Duration::from_secs(30)),
+        raw => raw
+            .ok()
+            .and_then(|raw| raw.parse::<f64>().ok())
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+            .filter(|bound| !bound.is_zero())
+            .ok_or_else(|| storage("SLUICE_TEST_GUARDIAN_ORPHAN_S: expected positive seconds")),
+    }
+}
 pub async fn guardian_entry(
     home: PathBuf,
     run: RunId,
@@ -695,6 +712,7 @@ pub async fn guardian_entry(
         prev_run: launch.prev_run,
         capability: launch.capability.clone(),
         poll_interval: Duration::from_millis(50),
+        orphan_after: orphan_after()?,
     };
     let link = UnixCoordinatorLink {
         path: socket,

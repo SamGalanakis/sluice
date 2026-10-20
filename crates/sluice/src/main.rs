@@ -60,6 +60,12 @@ fn dispatch() -> Result<(), PublicError> {
         message: e.to_string(),
     })?;
     let result = runtime.block_on(modes::run(cli.mode, home));
+    if mode == "guardian" {
+        // A guardian that stops on an error (its coordinator gone for good) can leave blocking
+        // reads of its payload's pipes running, and dropping the runtime would wait on them
+        // forever. Exiting stops its unit, and the unit's stop ends the payload.
+        runtime.shutdown_background();
+    }
     if logged {
         match &result {
             Ok(()) => tracing::info!(mode, "sluice stopped"),

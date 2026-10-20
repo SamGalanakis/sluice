@@ -203,6 +203,7 @@ fn setup(home: &Path) -> (GuardianArgs, MemoryCoordinator, FixtureHost) {
         prev_run: None,
         capability: RunCapability::new("fixture-secret"),
         poll_interval: Duration::from_millis(2),
+        orphan_after: Duration::from_secs(60),
     };
     let link = MemoryCoordinator::default();
     link.reserve(

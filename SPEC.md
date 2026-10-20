@@ -322,6 +322,13 @@ delivery acknowledgements), holds one watch on the coordinator for cancellation 
 and reports the start and the completion until the coordinator acknowledges them. A payload is
 a Python fn (§5.4), an agent session in the private tmux, or a built-in fn.
 
+A guardian outlives a coordinator that is busy or restarting, retrying it less and less often
+(up to every 5 s), but not one that is gone for good: once nothing has listened on the
+coordinator's socket for ten minutes, or its home no longer exists, the guardian stops, and its
+unit's stop ends the payload. A coordinator that comes back later finds the run `lost` (§7.9).
+A guardian reads its run's resource accounting once a second; an OOM kill ends the payload
+whenever it happens.
+
 An agent's supervisor acknowledges each live message its engine accepted to the guardian, which
 answers once the acknowledgement is durable in the run's `delivery.json` (a redelivery after a
 restart skips it). The guardian tells the coordinator afterwards, beside its loop and again
@@ -3105,6 +3112,12 @@ Limits (minutes unless noted), overridable through environment variables: `SLUIC
 `SLUICE_AGENT_SCREEN_S` (20, seconds: how long an unrecognized screen may stand before the first
 turn). `SLUICE_AGENT_WAIT_MIN` and `SLUICE_AGENT_WORK_MIN` remain accepted for compatibility;
 waiting jobs no longer cause reminders or forced background cleanup.
+
+The supervisor ticks every `SLUICE_AGENT_POLL_S` (0.5 s) while anything it observes changes.
+After a tick that changed nothing (the same engine observation, no action, an unchanged
+checkpoint) it waits twice as long as before, up to ten polls, parked or not; a hook request,
+or a message the guardian hands the run, ends the wait at once. It writes the checkpoint only
+when it changed.
 
 ### 15.1 Choosing a model
 

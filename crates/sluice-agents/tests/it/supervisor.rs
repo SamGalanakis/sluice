@@ -413,6 +413,91 @@ async fn hooks_are_answered_while_a_delivery_ack_waits_on_the_guardian() {
     assert_eq!(guardian.host.acks, vec![MessageId(1)]);
 }
 
+/// A host whose message is held back until `release`, when its news mark moves, and which
+/// counts the checkpoints the supervisor persists.
+struct QuietHost {
+    host: Host,
+    release: tokio::time::Instant,
+    checkpoints: u32,
+}
+impl SupervisorHost for QuietHost {
+    async fn snapshot(&mut self, after: MessageId) -> io::Result<HostSnapshot> {
+        let released = tokio::time::Instant::now() >= self.release;
+        self.host
+            .snapshot(if released { after } else { MessageId(i64::MAX) })
+            .await
+    }
+    async fn acknowledge(&mut self, ids: &[MessageId]) -> io::Result<()> {
+        self.host.acknowledge(ids).await
+    }
+    async fn me(&mut self) -> io::Result<String> {
+        self.host.me().await
+    }
+    async fn note(&mut self, body: &str) -> io::Result<()> {
+        self.host.note(body).await
+    }
+    async fn checkpoint(&mut self, checkpoint: &Checkpoint) -> io::Result<()> {
+        self.checkpoints += 1;
+        self.host.checkpoint(checkpoint).await
+    }
+    async fn cleanup(&mut self) -> io::Result<()> {
+        self.host.cleanup().await
+    }
+    fn news(&mut self) -> Option<u64> {
+        Some(u64::from(tokio::time::Instant::now() >= self.release))
+    }
+}
+/// Bug (2026-10-20): an idle session took a host snapshot (four coordinator requests) and
+/// rewrote and synced its unchanged checkpoint every tick, about 3% of a CPU per idle run. A
+/// tick that changes nothing backs off, a checkpoint is written only when it changes, and a
+/// message still reaches the session once the host's news moves.
+#[tokio::test]
+async fn an_idle_session_backs_off_and_still_takes_its_messages() {
+    let scratch = Scratch::new();
+    let config = config(&scratch);
+    let mut frames = happy()[..2].to_vec();
+    // A long turn with work in the background: every tick observes the same thing.
+    frames[1].observation.background_work = vec!["job".into()];
+    frames.push(frame(
+        Some(EngineCommand::Steer {
+            id: InputId::Message { id: MessageId(1) },
+            text: "*".into(),
+        }),
+        observation(EngineStatus::Busy, 2, 0),
+    ));
+    frames.push(frame(None, observation(EngineStatus::Idle, 2, 1)));
+    let mut engine = ScriptedEngine::new(frames);
+    let mut host = Host::new();
+    host.messages = vec![DeliveryMessage {
+        id: MessageId(1),
+        body: JsonValue::try_from(serde_json::json!({"body":"live"})).unwrap(),
+    }];
+    let mut quiet = QuietHost {
+        host,
+        release: tokio::time::Instant::now() + Duration::from_millis(300),
+        checkpoints: 0,
+    };
+    supervise(
+        config,
+        &mut engine,
+        &mut quiet,
+        &mut SessionGuard::default(),
+        None,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(quiet.host.acks, vec![MessageId(1)]);
+    // At the 2 ms poll, ticking at every poll took about 150 snapshots and as many
+    // checkpoints in the quiet 300 ms; backing off to 20 ms takes at most 15 there.
+    assert!(
+        quiet.host.snapshots < 40,
+        "{} snapshots",
+        quiet.host.snapshots
+    );
+    assert!(quiet.checkpoints < 20, "{} checkpoints", quiet.checkpoints);
+}
+
 /// Queued gates used to get told to stop after WAIT_MIN; once idle, an agent could be
 /// reminded again seconds later. Drive the public supervision policy with elapsed time.
 #[test]

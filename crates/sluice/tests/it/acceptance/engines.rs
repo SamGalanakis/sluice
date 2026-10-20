@@ -419,6 +419,7 @@ impl Gate {
         let mut units = self.units.clone();
         units.push(super::units::coordinator_unit(&self.home));
         super::units::stop_units(&units);
+        super::units::stop_home_slice(&self.home);
     }
 }
 impl Drop for Gate {

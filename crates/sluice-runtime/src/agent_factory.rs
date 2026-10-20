@@ -920,6 +920,20 @@ impl SupervisorHost for RunHost {
     async fn note(&mut self, body: &str) -> io::Result<()> {
         say_to_owner(&self.link, &self.launch, body, &self.cancel, self.patience).await
     }
+    /// The run's guardian holds a watch on the coordinator and writes each message it offers
+    /// the run to `live-messages.json` (replacing the file) the moment it arrives, so the
+    /// file's identity moves with every message; cancellation reaches the payload as a signal.
+    fn news(&mut self) -> Option<u64> {
+        use std::{
+            hash::{DefaultHasher, Hash, Hasher},
+            os::unix::fs::MetadataExt,
+        };
+        let mut mark = DefaultHasher::new();
+        if let Ok(meta) = std::fs::metadata(self.outer_dir.join("live-messages.json")) {
+            (meta.ino(), meta.size(), meta.mtime(), meta.mtime_nsec()).hash(&mut mark);
+        }
+        Some(mark.finish())
+    }
     async fn checkpoint(&mut self, checkpoint: &Checkpoint) -> io::Result<()> {
         checkpoint.save(&self.directory)?;
         if self.directory != self.outer_dir {

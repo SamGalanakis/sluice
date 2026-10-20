@@ -140,6 +140,11 @@ pub trait CoordinatorLink: Send + Sync {
         &self,
         command: CoordinatorCommand,
     ) -> impl Future<Output = Result<CoordinatorReply, PublicError>> + Send;
+    /// Whether a coordinator listens at all, busy or not. A guardian asks it to tell a
+    /// coordinator that is gone for good from one that is slow or restarting.
+    fn listening(&self) -> impl Future<Output = bool> + Send {
+        async { true }
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -306,6 +311,17 @@ impl CoordinatorLink for UnixCoordinatorLink {
             _ => RPC_TIMEOUT,
         };
         call_within(&self.path, &self.capability, command, limit).await
+    }
+    /// A socket that refuses connections or no longer exists has no listener; any other
+    /// outcome (a full backlog, a slow accept) still means one is there.
+    async fn listening(&self) -> bool {
+        match tokio::time::timeout(RPC_TIMEOUT, UnixStream::connect(&self.path)).await {
+            Ok(Err(error)) => !matches!(
+                error.kind(),
+                io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+            ),
+            Ok(Ok(_)) | Err(_) => true,
+        }
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]

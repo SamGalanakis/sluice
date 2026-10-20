@@ -26,6 +26,11 @@ impl Drop for Units {
                 .args(["5", "/usr/bin/systemctl", "--user", action, &self.1])
                 .status();
         }
+        let _ = std::fs::remove_file(format!(
+            "/run/user/{}/{}.lock",
+            rustix::process::getuid().as_raw(),
+            self.1
+        ));
     }
 }
 async fn wait_file(path: &Path) {

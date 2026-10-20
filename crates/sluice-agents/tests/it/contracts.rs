@@ -289,6 +289,7 @@ async fn authenticated_guardian_hook_roundtrip_returns_synchronous_cli_decision(
         prev_run: None,
         capability: capability.clone(),
         poll_interval: Duration::from_millis(2),
+        orphan_after: Duration::from_secs(60),
     };
     let directory = args.run_dir.clone();
     let done = Arc::new(AtomicBool::new(false));

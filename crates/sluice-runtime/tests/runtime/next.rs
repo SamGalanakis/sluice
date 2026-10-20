@@ -16,18 +16,17 @@ use sluice_runtime::watch::*;
 use sluice_store::{ReadPool, RetrySafety, Writer, messages, records};
 use std::{path::PathBuf, time::Duration};
 use stored_messages::{Stored, stored};
-struct Home(PathBuf);
+/// The home's path, and the scratch directory holding it and the installation directory a
+/// development binary keeps beside it; both go with the scratch directory.
+struct Home(
+    PathBuf,
+    #[allow(dead_code, reason = "owns the scratch directory until the home drops")]
+    crate::home::ScratchHome,
+);
 impl Home {
     fn new() -> Self {
-        let p = std::env::temp_dir().join(format!("sluice-test-p3-04-{}", RunId::new()));
-        let p = sluice_process::host::guard_scratch_home(&p).unwrap();
-        std::fs::create_dir(&p).unwrap();
-        Self(p)
-    }
-}
-impl Drop for Home {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).unwrap();
+        let scratch = crate::home::ScratchHome::new().unwrap();
+        Self(scratch.path().to_path_buf(), scratch)
     }
 }
 async fn setup() -> (Home, Writer, ReadPool, ProjectId) {

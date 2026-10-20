@@ -110,6 +110,39 @@ pub struct GuardianArgs {
     pub prev_run: Option<RunId>,
     pub capability: RunCapability,
     pub poll_interval: Duration,
+    /// How long the guardian outlives a coordinator nothing listens for: past it, it stops
+    /// (and its unit, and the payload, with it). A removed home stops it at once.
+    pub orphan_after: Duration,
+}
+/// [`GuardianArgs::orphan_after`] in production. A deploy re-creates the coordinator in
+/// seconds; ten minutes covers that many times over, as the agent supervisor's host patience
+/// does, while a guardian whose coordinator is gone for good stops instead of retrying it
+/// forever.
+pub const ORPHAN_AFTER: Duration = Duration::from_secs(600);
+/// The longest a guardian waits between tries of a coordinator that does not answer.
+const OUTAGE_BACKOFF: Duration = Duration::from_secs(5);
+/// A sleep that doubles from `base` up to `max` while its peer stays unavailable.
+struct Backoff {
+    base: Duration,
+    next: Duration,
+    max: Duration,
+}
+impl Backoff {
+    fn new(base: Duration, max: Duration) -> Self {
+        Self {
+            base,
+            next: base,
+            max: max.max(base),
+        }
+    }
+    fn next(&mut self) -> Duration {
+        let wait = self.next;
+        self.next = (self.next * 2).min(self.max);
+        wait
+    }
+    fn reset(&mut self) {
+        self.next = self.base;
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuardianOutcome {
@@ -132,6 +165,7 @@ pub async fn guardian_main<L: CoordinatorLink, H: PayloadHost>(
 ) -> io::Result<GuardianOutcome> {
     if !args.run_dir.starts_with(&args.home_dir)
         || args.poll_interval.is_zero()
+        || args.orphan_after.is_zero()
         || args.invocation.run != args.guardian.identity.run
         || args.invocation.attempt != args.guardian.identity.attempt
         || args.invocation.step != args.guardian.identity.step
@@ -144,6 +178,50 @@ pub async fn guardian_main<L: CoordinatorLink, H: PayloadHost>(
     {
         return Err(invalid("invalid guardian arguments"));
     }
+    tokio::select! {
+        biased;
+        outcome = guard(&args, link, host) => outcome,
+        orphaned = orphaned(&args, link) => Err(orphaned),
+    }
+}
+/// Resolves once the guardian's coordinator is gone for good: its home was removed, or
+/// nothing has listened on the coordinator's socket for [`GuardianArgs::orphan_after`].
+/// A coordinator that is only busy or restarting still listens, or listens again in time.
+async fn orphaned<L: CoordinatorLink>(args: &GuardianArgs, link: &L) -> io::Error {
+    let probe = (args.orphan_after / 4).clamp(Duration::from_millis(10), Duration::from_secs(30));
+    let mut silent_since = None;
+    loop {
+        tokio::time::sleep(probe).await;
+        if !args.home_dir.exists() {
+            return io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "the home {} was removed; the guardian stops, and its run with it",
+                    args.home_dir.display()
+                ),
+            );
+        }
+        if link.listening().await {
+            silent_since = None;
+            continue;
+        }
+        let since = *silent_since.get_or_insert_with(tokio::time::Instant::now);
+        if since.elapsed() >= args.orphan_after {
+            return io::Error::new(
+                io::ErrorKind::NotConnected,
+                format!(
+                    "no coordinator has listened for {}s; the guardian stops, and its run with it",
+                    since.elapsed().as_secs()
+                ),
+            );
+        }
+    }
+}
+async fn guard<L: CoordinatorLink, H: PayloadHost>(
+    args: &GuardianArgs,
+    link: &L,
+    host: &H,
+) -> io::Result<GuardianOutcome> {
     fs::create_dir_all(&args.run_dir)?;
     if !fs::canonicalize(&args.run_dir)?.starts_with(fs::canonicalize(&args.home_dir)?) {
         return Err(invalid("run directory escapes home"));
@@ -199,7 +277,7 @@ pub async fn guardian_main<L: CoordinatorLink, H: PayloadHost>(
         args.capability.clone(),
         events,
     )?;
-    let result = run_claimed(&args, link, host, &mut control).await;
+    let result = run_claimed(args, link, host, &mut control).await;
     server.close().await;
     result
 }
@@ -255,6 +333,10 @@ async fn probe_warning<L: CoordinatorLink>(
         eprintln!("observation warning could not reach the owner: {error}");
     }
 }
+/// Resource accounting is read once per this many ticks: it walks the run's cgroups and
+/// flushes the kernel's statistics, which cost more than everything else a tick does. An
+/// OOM kill ends the payload anyway; this only tells it sooner.
+const USAGE_TICKS: u32 = 20;
 #[derive(Default)]
 struct UsageProbe {
     next: Option<tokio::time::Instant>,
@@ -279,7 +361,7 @@ impl UsageProbe {
         }
         match crate::probe::retry(|| std::future::ready(host.resource_usage())).await {
             Ok(usage) => {
-                self.next = None;
+                self.next = Some(tokio::time::Instant::now() + args.poll_interval * USAGE_TICKS);
                 self.failures = 0;
                 Some(usage)
             }
@@ -299,10 +381,11 @@ async fn retry_request<L: CoordinatorLink>(
     command: CoordinatorCommand,
     delay: Duration,
 ) -> io::Result<CoordinatorReply> {
+    let mut wait = Backoff::new(delay, OUTAGE_BACKOFF);
     loop {
         match link.request(command.clone()).await {
             Ok(r) => return Ok(r),
-            Err(PublicError::Busy { .. }) => tokio::time::sleep(delay).await,
+            Err(PublicError::Busy { .. }) => tokio::time::sleep(wait.next()).await,
             Err(e) => return Err(io::Error::other(e)),
         }
     }
@@ -536,6 +619,7 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
     'invocations: loop {
         // Before spawning, an unavailable coordinator delays admission. Once a
         // payload exists, outages only delay notifications, never its execution.
+        let mut wait = Backoff::new(args.poll_interval, OUTAGE_BACKOFF);
         loop {
             match cancelled(link, id).await {
                 Ok(true) => {
@@ -543,7 +627,7 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
                     break;
                 }
                 Ok(false) => break,
-                Err(PublicError::Busy { .. }) => tokio::time::sleep(args.poll_interval).await,
+                Err(PublicError::Busy { .. }) => tokio::time::sleep(wait.next()).await,
                 Err(e) => return Err(io::Error::other(e)),
             }
         }
@@ -693,6 +777,10 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
         // that is slow to take them never holds a control reply or the payload's poll.
         let mut reporting: Option<std::pin::Pin<Box<dyn Future<Output = Reported> + Send + '_>>> =
             None;
+        // An unreachable coordinator is tried less and less often, not once per tick.
+        let mut outage = Backoff::new(args.poll_interval, OUTAGE_BACKOFF);
+        let mut report_backoff = Backoff::new(args.poll_interval, OUTAGE_BACKOFF);
+        let mut report_after = tokio::time::Instant::now();
         loop {
             if cancel.is_cancelled() {
                 result = PayloadResult::Cancelled("cancel intent".into());
@@ -710,6 +798,7 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
                     let mut delay = if legacy { args.poll_interval } else { Duration::ZERO };
                     match reply {
                         Ok(CoordinatorReply::Watched { cancelled, messages: batch }) => {
+                            outage.reset();
                             if cancelled { cancel.cancel(); }
                             if let Err(e) = validate_messages(&batch, offered, None) { result = PayloadResult::Unknown(e.to_string()); break; }
                             if !batch.is_empty() {
@@ -725,7 +814,7 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
                         // A coordinator that does not know the watch: poll it every
                         // tick, as before.
                         Ok(_) | Err(PublicError::BadRequest { .. }) => { legacy = true; delay = args.poll_interval; }
-                        Err(_) => { once = true; delay = args.poll_interval; }
+                        Err(_) => { once = true; delay = outage.next(); }
                     }
                     watch = Box::pin(watch_once(link, id, offered, delay, legacy || once));
                 },
@@ -734,9 +823,17 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
                     reported.starts.extend(taken.starts);
                     reported.acks.extend(taken.acks);
                     reported.notices.extend(taken.notices);
+                    let untaken = started.iter().any(|(invocation, _)| !reported.starts.contains(invocation))
+                        || delivery.acks.iter().any(|ack| !reported.acks.contains(ack))
+                        || notices.iter().any(|notice| matches!(notice, CoordinatorCommand::Callback { request, .. } if !reported.notices.contains(&request.request_id.0)));
+                    if untaken {
+                        report_after = tokio::time::Instant::now() + report_backoff.next();
+                    } else {
+                        report_backoff.reset();
+                    }
                 },
                 _ = tokio::time::sleep(args.poll_interval) => {
-                    if reporting.is_none() {
+                    if reporting.is_none() && tokio::time::Instant::now() >= report_after {
                         let starts: Vec<_> = started.iter().filter(|(invocation, _)| !reported.starts.contains(invocation)).cloned().collect();
                         let acks: Vec<_> = delivery.acks.iter().filter(|ack| !reported.acks.contains(ack)).cloned().collect();
                         let pending_notices: Vec<_> = notices.iter().filter(|notice| match notice { CoordinatorCommand::Callback { request, .. } => !reported.notices.contains(&request.request_id.0), _ => false }).cloned().collect();
@@ -1032,6 +1129,7 @@ pub async fn replay_completion<L: CoordinatorLink>(
     delay: Duration,
 ) -> io::Result<DurableAck> {
     journal.validate(&journal.identity)?;
+    let mut wait = Backoff::new(delay, OUTAGE_BACKOFF);
     loop {
         for start in &journal.starts {
             historical_start(
@@ -1063,7 +1161,7 @@ pub async fn replay_completion<L: CoordinatorLink>(
                 return Ok(ack);
             }
             Ok(_) => return Err(invalid("completion acknowledgement has wrong identity")),
-            Err(PublicError::Busy { .. }) => tokio::time::sleep(delay).await,
+            Err(PublicError::Busy { .. }) => tokio::time::sleep(wait.next()).await,
             Err(e) => return Err(io::Error::other(e)),
         }
     }
@@ -1785,10 +1883,11 @@ async fn historical_start<L: CoordinatorLink>(
     command: CoordinatorCommand,
     delay: Duration,
 ) -> io::Result<()> {
+    let mut wait = Backoff::new(delay, OUTAGE_BACKOFF);
     loop {
         match link.request(command.clone()).await {
             Ok(CoordinatorReply::Started) | Err(PublicError::Cancelled { .. }) => return Ok(()),
-            Err(PublicError::Busy { .. }) => tokio::time::sleep(delay).await,
+            Err(PublicError::Busy { .. }) => tokio::time::sleep(wait.next()).await,
             other => {
                 return Err(io::Error::other(format!(
                     "historical start refused: {other:?}"
