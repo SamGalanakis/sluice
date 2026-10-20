@@ -164,6 +164,17 @@ async fn resource_limits_share_sibling_budget_and_isolate_neighboring_run() {
             .trim()
             .to_owned()
     };
+    // The public memory reading must retain real working memory beside cache and total.
+    let service = group(units.0[0].name());
+    let service = format!(
+        "/{}",
+        service.strip_prefix("/sys/fs/cgroup").unwrap().display()
+    );
+    let memory = Cgroup::service_memory(&service).unwrap().unwrap();
+    assert!(memory.working_bytes.is_some_and(|n| n > 0), "{memory:?}");
+    assert!(memory.file_cache_bytes.is_some(), "{memory:?}");
+    assert!(memory.pressure_some_avg10.is_some(), "{memory:?}");
+    assert_eq!(memory.oom_events, 0);
     assert_eq!(read(slice.name(), "cpu.max"), "200000 100000");
     let parents = slice.parents();
     for unit in [slice.name(), &parents[0], &parents[1]] {

@@ -129,12 +129,24 @@ pub struct RunUsage {
 }
 
 /// One live run's payload memory, as the execution host reads it from the run's cgroup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RunMemory {
     /// The payload's `memory.current`.
     pub current_bytes: u64,
     /// The payload's `memory.peak`.
     pub peak_bytes: u64,
+    /// anon + shmem + slab_unreclaimable from memory.stat; unknown in older readings.
+    #[serde(default)]
+    pub working_bytes: Option<u64>,
+    /// File-backed cache excluding shmem (which is working memory).
+    #[serde(default)]
+    pub file_cache_bytes: Option<u64>,
+    /// Cgroup memory PSI `some avg10` (percentage over the last ten seconds).
+    #[serde(default)]
+    pub pressure_some_avg10: Option<f64>,
+    /// Allocation failures, whether or not the kernel killed a process.
+    #[serde(default)]
+    pub oom_events: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

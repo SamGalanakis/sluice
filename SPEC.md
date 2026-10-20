@@ -397,6 +397,8 @@ as inherited.
   "defaults": {"memory": "6GiB", "cpus": null, "tasks": null},
   "host_reserve": "16GiB",
   "memory_pressure_max": 10,
+  "memory_notice_working_percent": 90,
+  "memory_notice_pressure_percent": 10,
   "admission_charge": "1GiB",
   "admission_warmup_s": 30,
   "cpu_pressure_max": 30,
@@ -409,7 +411,8 @@ as inherited.
 `defaults` are each run's caps, `ceilings` the largest caps a step may ask for without
 `memory_above_ceiling`, and `total` the workload slice's caps. Each accepts the same three
 optional fields, each a value or unlimited; `guardian_memory`, `host_reserve` and
-`admission_charge` accept the memory syntax; `memory_pressure_max` and `cpu_pressure_max` are
+`admission_charge` accept the memory syntax; `memory_pressure_max`, `cpu_pressure_max`,
+`memory_notice_working_percent` and `memory_notice_pressure_percent` are
 percentages above 0 and at most 100; `admission_warmup_s` is a number of seconds, 0 or more;
 `load_per_cpu_max` is a number above 0; `warmup_starts` is an integer, at least 1; `cpu_weight`
 is an integer from 1 to 10000. Memory is unlimited at a
@@ -437,6 +440,7 @@ section selects the defaults below.
 | Guardian share per run (added to the service's caps) | 256 MiB or one eighth of total home memory, whichever is smaller; 0.1 CPU; 64 tasks |
 | Host reserve | max(16 GiB, 15% of effective host memory), at most a quarter of it |
 | Memory pressure limit | PSI `some avg10` 10% |
+| Run memory notice | Working memory at least 90% of its cap, or payload PSI `some avg10` at least 10%; OOM always warns |
 | Admission charge | 1 GiB, at most the home memory total |
 | Admission warm-up | 30 s |
 | CPU pressure limit | PSI `some avg10` 30% |
@@ -486,8 +490,12 @@ never bypasses the checks. `status` reports `execution.total` and `execution.mem
 `host_reserve_bytes`, `pressure_max`, `admission_charge_bytes`, `admission_warmup_s`),
 `execution.cpu` (`pressure_some_avg10`, `load_avg1`, `cpus`, `load_per_cpu`, `starting_runs`,
 `pressure_max`, `load_per_cpu_max`, `warmup_starts`, `cpu_weight`), and each
-of a step's runs in `run_resources` with `memory: {cap_bytes, current_bytes, peak_bytes}`: its
-cap, its measured memory while live, and its peak (live, or from its final usage).
+of a step's runs in `run_resources` with `memory: {cap_bytes, current_bytes, peak_bytes,
+working_bytes, file_cache_bytes, pressure_some_avg10}`: its cap, total charged memory, peak (live, or from final usage), working
+memory, reclaimable file cache and payload PSI while live. Working memory is `anon + shmem +
+slab_unreclaimable` from cgroup v2 `memory.stat`; file cache is `file - shmem`. Thus tmpfs/shared
+memory counts as working memory rather than reclaimable file cache. Unknown readings are null;
+older published readings may lack the new fields. Peak and current still include cache.
 
 The effective caps and policy are frozen with the attempt before any payload is launched (the
 policy as `request.execution_policy`). A retry inside that run shares its existing caps. New
@@ -562,7 +570,21 @@ accepted start is reconciled, never replayed. A deferred start is logged and tol
 **Limit notices.** Hitting a limit is told to whoever must act on it. Every 5 s the scheduler
 reads each executing run's payload counters from its cgroup's event files (`memory.events`
 `oom_kill` and `max`, `pids.events` `max`, `cpu.stat` `throttled_usec`); completion carries the
-final counters. When a run has failed forks, has reached its memory cap, was OOM-killed, or
+final counters. Live samples also read `memory.stat`, `memory.current` and `memory.pressure`.
+`memory.events max` counts reclaim attempts, including healthy file-cache reclaim; it remains
+in `usage.memory_max_hits` and alone never triggers a notice. A live memory notice requires
+working memory at least `execution.memory_notice_working_percent` of the frozen cap (default
+90%), a sustained stall measured by payload PSI `some avg10` at least
+`execution.memory_notice_pressure_percent` (default 10%, averaged over ten seconds), or an
+actual `memory.events oom`/`oom_kill` event. These thresholds are read from the host's current
+policy; they apply without a restart and are independent of admission thresholds. If policy
+is invalid, admission holds and live notices use the default thresholds, so configuration
+errors cannot hide OOM kills or failed forks. An
+unlimited run has no working-memory percentage trigger; PSI and OOM still apply. Missing
+memory composition or PSI is unknown, never inferred from `max` or an old peak. An OOM kill
+still warns even if the live memory reading is unavailable. The notice states working memory,
+cap, file cache, peak, PSI and OOM events, without predicting a kill from cache reclaim.
+When a run has failed forks, has real memory pressure as above, was OOM-killed, or
 has lost at least 60 s to its CPU quota, and when a ready step is held for memory or CPU, Sluice posts a `say` from `sluice` (§8) to whoever answers the
 run (its unit's owner, a call's session, else the project's fallback, else the person) and,
 while the run is live, the same `say` to the step itself, so its agent reads it in its inbox.
@@ -571,7 +593,9 @@ null for a held step; `limit` is `memory`, `tasks`, `cpus`, `host_memory` or `ho
 `value` is the limit (`"unlimited"` when none), for `host_memory` `{host_reserve_bytes,
 memory_pressure_max, admission_charge_bytes, total_memory_bytes}` and for `host_cpu`
 `{cpu_pressure_max, load_per_cpu_max, warmup_starts, admission_warmup_s}`; `observed` is the
-counters (`peak_bytes`, `oom_kills`, `max_events`, `failed_forks`, `throttled_usec`) or, for a
+counters (`peak_bytes`, `current_bytes`, `working_bytes`, `file_cache_bytes`,
+`pressure_some_avg10`, `oom_events`, `oom_kills`, `max_events`, `failed_forks`,
+`throttled_usec`; a live memory notice also includes `working_percent` and `pressure_percent`) or, for a
 held step, the hold as status says it; `outcome` is `killed`, `running`, `throttled`,
 `finished` or `held`; `since` is when a held step began to wait. Each run and limit is told
 once, and each hold once.
@@ -2102,10 +2126,11 @@ each to `{capacity, held, queued, error}`. `execution` reports the home-wide phy
 and tasks. When policy configuration is invalid, `execution.error` reports the diagnostic;
 status remains readable. A pending step's `limits` describes the currently resolved admission
 budget, or `budget_error` explains why it cannot resolve. `run_resources` is an array of
-`{run, limits, usage}` from the step's stored runs: limits are frozen, usage is completion
-evidence, and unavailable historical evidence is null. For a step that is no longer pending,
-`limits` comes from its latest run. Neither that field nor `run_resources` changes when home
-or project defaults change. Call replies expose the same frozen `limits` and recorded `usage`
+`{run, limits, usage, memory}` from the step's stored runs: limits are frozen, usage is completion
+evidence, and `memory` includes live working memory and file cache (§2.5). Unavailable
+historical evidence is null. For a step that is no longer pending,
+`limits` comes from its latest run. Frozen limits and recorded usage do not change when home
+or project defaults change; live memory readings do change. Call replies expose the same frozen `limits` and recorded `usage`
 when present; usage fields are `memory_peak_bytes`, `oom_kills`, `pids_limit_hits`,
 `memory_max_hits` and `cpu_throttled_usec`. These are recorded observations, not a live usage
 feed. In `status`, `limits` and `execution.total` show an unlimited dimension as `"unlimited"`.

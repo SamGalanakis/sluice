@@ -37,7 +37,8 @@ pub fn resolve(
 
 /// Frozen limits and final usage belong to the attempt, not today's configuration. `memory`
 /// is the run's cap, its memory.current while it is live (admission's last reading) and its
-/// peak (the reading while live, the final usage once finished).
+/// peak (the reading while live, the final usage once finished), with working memory and
+/// file cache split out while live.
 pub fn run_resources(
     sql: &Connection,
     run: sluice_model::ids::RunId,
@@ -63,6 +64,9 @@ pub fn run_resources(
     let memory = serde_json::json!({
         "cap_bytes": limits.map(|l| sluice_model::limits::shown(l.memory_max_bytes)),
         "current_bytes": measured.map(|m| m.current_bytes),
+        "working_bytes": measured.and_then(|m| m.working_bytes),
+        "file_cache_bytes": measured.and_then(|m| m.file_cache_bytes),
+        "pressure_some_avg10": measured.and_then(|m| m.pressure_some_avg10),
         "peak_bytes": measured.map(|m| m.peak_bytes).or_else(|| usage.as_ref().and_then(|u| u["memory_peak_bytes"].as_u64())),
     });
     Ok(
@@ -81,6 +85,10 @@ pub fn run_notices(
     limits: &RunLimits,
     usage: &sluice_model::RunUsage,
     ended: bool,
+    memory: Option<(
+        sluice_model::limits::RunMemory,
+        crate::config::MemoryNoticePolicy,
+    )>,
 ) -> Vec<(sluice_store::resources::LimitNotice, String)> {
     use sluice_model::limits::{shown, size};
     use sluice_store::resources::LimitNotice;
@@ -107,14 +115,40 @@ pub fn run_notices(
             notice("memory", shown(limits.memory_max_bytes), serde_json::json!({"peak_bytes": usage.memory_peak_bytes, "oom_kills": usage.oom_kills}), "killed"),
             format!("{who} ran out of memory at {cap} (peak {}); the kernel killed its payload and Sluice stopped the run. Retry with less parallelism, or ask for more explicitly with a larger limits.memory.", size(usage.memory_peak_bytes)),
         ));
-    } else if usage.memory_max_hits > 0
-        && !ended
-        && let Some(cap) = limits.memory_max_bytes
-    {
-        out.push((
-            notice("memory", serde_json::json!(cap), serde_json::json!({"peak_bytes": usage.memory_peak_bytes, "max_events": usage.memory_max_hits}), "running"),
-            format!("{who} reached its {} memory cap (peak {}); the kernel is reclaiming its memory and it may be killed. It is still running.", size(cap), size(usage.memory_peak_bytes)),
-        ));
+    } else if !ended && let Some((memory, policy)) = memory {
+        let working_high = memory
+            .working_bytes
+            .zip(limits.memory_max_bytes)
+            .is_some_and(|(working, cap)| {
+                working as f64 / cap as f64 * 100.0 >= policy.working_percent
+            });
+        let stalled = memory
+            .pressure_some_avg10
+            .is_some_and(|pressure| pressure >= policy.pressure_percent);
+        if memory.oom_events > 0 || working_high || stalled {
+            let cap = limits
+                .memory_max_bytes
+                .map_or_else(|| "unlimited".to_owned(), size);
+            let working = memory
+                .working_bytes
+                .map_or_else(|| "unknown".to_owned(), size);
+            let cache = memory
+                .file_cache_bytes
+                .map_or_else(|| "unknown".to_owned(), size);
+            let pressure = memory
+                .pressure_some_avg10
+                .map_or_else(|| "unknown".to_owned(), |v| format!("{v:.1}%"));
+            out.push((
+                notice("memory", shown(limits.memory_max_bytes), serde_json::json!({
+                    "peak_bytes": usage.memory_peak_bytes, "current_bytes": memory.current_bytes,
+                    "working_bytes": memory.working_bytes, "file_cache_bytes": memory.file_cache_bytes,
+                    "pressure_some_avg10": memory.pressure_some_avg10, "oom_events": memory.oom_events,
+                    "max_events": usage.memory_max_hits,
+                    "working_percent": policy.working_percent, "pressure_percent": policy.pressure_percent,
+                }), "running"),
+                format!("{who} is under memory pressure (working {working}, cap {cap}, file cache {cache}, peak {}, PSI some avg10 {pressure}, OOM events {}). It is still running. Reduce parallelism or ask for a larger limits.memory if pressure persists.", size(usage.memory_peak_bytes), memory.oom_events),
+            ));
+        }
     }
     if usage.pids_limit_hits > 0 {
         let tasks = limits

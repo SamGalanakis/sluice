@@ -7,6 +7,20 @@
   into cargo's configured target dir; leave it to cargo's configuration and never set `CARGO_*`
   variables. To pin one invocation to this checkout's `target/`, pass
   `--config 'build.target-dir="<worktree>/target"'`, as `scripts/check` does.
+- Keep a lane's private target for its lifetime and iterate with `-p <crate>`. Cross-worktree
+  target copying is optional: measurements on this host found no net win after the copy, so
+  do not seed every lane automatically. If useful, seed an empty private target from an idle
+  main-branch target built with the
+  same toolchain and Cargo command (profile and feature graph matter). Use
+  `cp -a --reflink=auto <warm-target>/. <empty-private-target>/`: this host falls back to a
+  regular copy. Never hardlink a target or build into another lane's target; Cargo mutates
+  incremental artifacts. Keep configured targets under `/workspace/.cargo-targets`, where ship
+  can clean them. The gate's `target/` stays a real directory: symlinking it changes canonical
+  binary paths. A full-workspace seed can rebuild many dependencies for `-p sluice-web` because
+  features differ; prefer a seed built with that focused command. Bound one invocation with
+  `cargo nextest run -p <crate> --build-jobs 4 --test-threads 4` when lanes compete; these are
+  command-line choices, never host settings. Gate once on the finished change. Before the gate, an idle target from this same checkout can
+  be copied into `target/` to reuse its dependency builds (preserve `target/private-tmux`).
 - Timing seams are direct Rust APIs, never home settings: `Notifier::with_retry_timing`,
   `Claude::with_delivery_timing`, `Devin::with_delivery_timing` and
   `DashboardState::with_clock`. Dashboard `Clock::tokio` ties wall time to Tokio time;

@@ -804,7 +804,8 @@ MemAvailable, pressure and the admission settings). An invalid configuration app
 `execution.error`, and every ready step is `held: invalid execution config (…)`, while status
 stays readable. Pending steps show their current `limits` or a `budget_error`. A step's
 `run_resources` lists each stored run with its frozen limits, recorded usage and `memory:
-{cap_bytes, current_bytes, peak_bytes}` (its cap, its memory now while live, its peak);
+{cap_bytes, current_bytes, peak_bytes, working_bytes, file_cache_bytes, pressure_some_avg10}`
+(its cap, charged memory now, peak, working memory, reclaimable file cache and payload PSI);
 unavailable evidence is null. The latest run's limits remain the step's displayed caps once it
 is no longer pending. A running attempt keeps its frozen caps across retries and coordinator
 restarts. Changing project defaults or the home's policy changes future runs; changing a
@@ -836,6 +837,16 @@ retry; to give it more, ask for a larger `limits.memory` explicitly. Hitting a t
 not stop the run: the process or thread start fails with `EAGAIN` and the run goes on. CPU quota
 throttles a run instead of failing it. Do not treat a bare `SIGKILL` as proof of a memory-limit
 failure.
+
+Memory notices use working memory (`anon + shmem + slab_unreclaimable` from cgroup v2
+`memory.stat`), actual OOM events, or sustained payload memory stalls (PSI `some avg10`).
+By default a notice means working memory is at least 90% of the cap or PSI is at least 10%
+over ten seconds. The host can change `execution.memory_notice_working_percent` and
+`execution.memory_notice_pressure_percent` (percentages above 0 and at most 100), separately
+from admission pressure. File cache (`file - shmem`) stays visible beside working memory in
+status and notices. `usage.memory_max_hits` counts kernel reclaim attempts; a cache-heavy
+build can have thousands with no OOM. That counter or a cached peak alone never warns that
+the run may be killed. Unknown readings stay null; OOM kills still warn without live readings.
 
 Whenever a run meets a limit, Sluice tells whoever answers its unit, and the running step
 itself, in a `say` from `sluice` whose `data.execution_limit` is `{run, step, limit, value,

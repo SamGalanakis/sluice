@@ -2088,6 +2088,11 @@ impl<H: ExecutionHost> Coordinator<H> {
             })
             .await
             .map_err(|e| e.into_public(true))?;
+        // Invalid admission policy must not hide OOM kills or failed forks in live runs.
+        let memory_policy = crate::budget::execution(self.home())
+            .ok()
+            .map(|(_, headroom)| headroom.memory_notice)
+            .unwrap_or_default();
         let mut notices = Vec::new();
         for (run, project, step, cgroup, limits) in live {
             let (Ok(run), Some(Ok(project))) = (
@@ -2108,8 +2113,14 @@ impl<H: ExecutionHost> Coordinator<H> {
             let Some(usage) = self.host().usage(run, &service).await else {
                 continue;
             };
+            let memory = self
+                .host()
+                .run_memory(run, &service)
+                .await
+                .and_then(Result::ok)
+                .map(|m| (m, memory_policy));
             for (notice, body) in
-                crate::budget::run_notices(run, step.as_ref(), &limits, &usage, false)
+                crate::budget::run_notices(run, step.as_ref(), &limits, &usage, false, memory)
             {
                 notices.push((project, notice, body));
             }
@@ -3277,6 +3288,7 @@ fn record_resource_usage(
             &limits,
             usage,
             true,
+            None,
         ) {
             resources::notify_limit(tx, project, &notice, body, false)?;
         }

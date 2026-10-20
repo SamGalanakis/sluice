@@ -154,7 +154,7 @@ impl Cgroup {
             .resource_usage()
     }
 
-    /// The payload's memory.current and memory.peak of a service this process does not own (the
+    /// The payload's memory charge, composition and PSI of a service this process does not own (the
     /// coordinator measuring a live run for admission); `None` before the payload exists.
     pub fn service_memory(service: &str) -> io::Result<Option<sluice_model::limits::RunMemory>> {
         let payload = match Self::open_service(service)?.open_child("payload") {
@@ -162,17 +162,40 @@ impl Cgroup {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),
         };
+        Ok(Some(payload.memory()?))
+    }
+
+    /// Current payload memory split into working memory and reclaimable file cache.
+    pub fn memory(&self) -> io::Result<sluice_model::limits::RunMemory> {
         let number = |name: &str| -> io::Result<u64> {
-            payload
-                .read(name)?
+            self.read(name)?
                 .trim()
                 .parse()
                 .map_err(|_| io::Error::other(format!("invalid {name}")))
         };
-        Ok(Some(sluice_model::limits::RunMemory {
+        let stat = self.read("memory.stat")?;
+        let shmem = counter(&stat, "shmem")?;
+        let pressure_some_avg10 = match self.read("memory.pressure") {
+            Ok(text) => text.lines().find_map(|line| {
+                line.strip_prefix("some ")?
+                    .split_whitespace()
+                    .find_map(|field| field.strip_prefix("avg10=")?.parse().ok())
+            }),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        Ok(sluice_model::limits::RunMemory {
             current_bytes: number("memory.current")?,
             peak_bytes: number("memory.peak")?,
-        }))
+            working_bytes: Some(
+                counter(&stat, "anon")?
+                    .saturating_add(shmem)
+                    .saturating_add(counter(&stat, "slab_unreclaimable")?),
+            ),
+            file_cache_bytes: Some(counter(&stat, "file")?.saturating_sub(shmem)),
+            pressure_some_avg10,
+            oom_events: counter(&self.read("memory.events")?, "oom")?,
+        })
     }
 
     /// Open or create a leaf in the already admitted service payload subtree.

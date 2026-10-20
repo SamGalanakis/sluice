@@ -2623,6 +2623,143 @@ async fn a_limit_hit_reaches_the_owner_once() {
     );
 }
 
+/// Bug: reclaimable build cache reaching memory.max warned that a healthy run might die.
+#[tokio::test]
+async fn cache_reclaim_does_not_warn_of_memory_exhaustion() {
+    use sluice_model::limits::RunMemory;
+    let (home, b, fake, p) = setup().await;
+    let triggers = [
+        "work",
+        "working",
+        "psi",
+        "oom",
+        "kill",
+        "configured_working",
+        "configured_psi",
+    ];
+    let original_config = std::fs::read(home.path().join("config.json")).unwrap();
+    let selector = json!({"kind":"id","value":p});
+    let ops: Vec<_> = triggers[1..].iter().map(|step| json!({"op":"step.add","step":step,
+        "spec":{"run":"fixture.submit","in":{"value":{"default":1}},"outputs":{"submitted":"boolean"}}})).collect();
+    b.command(request(json!({"command":"plan_edit","args":{"project":selector,"rev":2,"ops":ops,"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
+    b.acquire_scheduler("memory-notice".into()).await.unwrap();
+    reconcile_project(&b, p, "memory-notice").await.unwrap();
+    let launches = fake.launched(triggers.len()).await;
+    for trigger in triggers {
+        let launch = launches
+            .iter()
+            .find(|l| l.identity.step.as_ref().unwrap().as_str() == trigger)
+            .unwrap()
+            .clone();
+        run_started(&b, &launch).await;
+        let run = launch.identity.run;
+        let cap = launch.limits.memory_max_bytes.unwrap();
+        let mut usage = sluice_model::RunUsage {
+            memory_peak_bytes: cap,
+            memory_max_hits: 4438,
+            ..Default::default()
+        };
+        fake.3.lock().unwrap().insert(run, usage);
+        // Unknown composition must not turn reclaim counts or an old peak into a warning.
+        assert_eq!(b.sample_limits().await.unwrap(), 0);
+        let mut memory = RunMemory {
+            current_bytes: cap,
+            peak_bytes: cap,
+            working_bytes: Some(cap / 8),
+            file_cache_bytes: Some(cap * 7 / 8),
+            pressure_some_avg10: Some(0.0),
+            oom_events: 0,
+        };
+        fake.5.lock().unwrap().insert(run, memory);
+        assert_eq!(
+            b.sample_limits().await.unwrap(),
+            0,
+            "reclaiming file cache must not warn that the run may be killed"
+        );
+        *fake.4.lock().unwrap() = Some(sluice_runtime::headroom::HostReading {
+            available_bytes: 16 << 30,
+            ..Default::default()
+        });
+        reconcile_project(&b, p, "memory-notice").await.unwrap();
+        let selector = json!({"kind":"id","value":p});
+        let status = data_of(&b, json!({"command":"status","args":{"project":selector,"all":true,"selection":{"steps":null,"tags":null}}})).await;
+        let shown = &status["steps"][trigger]["run_resources"][0]["memory"];
+        assert_eq!(shown["cap_bytes"], cap);
+        assert_eq!(shown["current_bytes"], cap);
+        assert_eq!(shown["peak_bytes"], cap);
+        assert_eq!(shown["working_bytes"], cap / 8);
+        assert_eq!(shown["file_cache_bytes"], cap * 7 / 8);
+        match trigger {
+            "work" => {}
+            "working" => memory.working_bytes = Some(cap * 95 / 100),
+            "psi" => memory.pressure_some_avg10 = Some(15.0),
+            "oom" => memory.oom_events = 1,
+            "kill" => {
+                usage.oom_kills = 1;
+            }
+            "configured_working" => memory.working_bytes = Some(cap * 3 / 5),
+            "configured_psi" => memory.pressure_some_avg10 = Some(5.0),
+            _ => unreachable!(),
+        }
+        fake.3.lock().unwrap().insert(run, usage);
+        fake.5.lock().unwrap().insert(run, memory);
+        if trigger.starts_with("configured_") {
+            assert_eq!(b.sample_limits().await.unwrap(), 0, "{trigger}");
+            let path = home.path().join("config.json");
+            let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            config["execution"]["memory_notice_working_percent"] = json!(50);
+            config["execution"]["memory_notice_pressure_percent"] = json!(4);
+            std::fs::write(path, config.to_string()).unwrap();
+        }
+        if trigger == "kill" {
+            fake.5.lock().unwrap().remove(&run);
+            // Bad admission configuration must not suppress kernel OOM evidence.
+            std::fs::write(home.path().join("config.json"), "invalid json").unwrap();
+        }
+        assert_eq!(
+            b.sample_limits().await.unwrap(),
+            usize::from(trigger != "work"),
+            "{trigger}"
+        );
+        assert_eq!(
+            b.sample_limits().await.unwrap(),
+            0,
+            "notice repeats: {trigger}"
+        );
+        std::fs::write(home.path().join("config.json"), &original_config).unwrap();
+        let mut done = journal(&b, &launch, PayloadResult::Succeeded(JsonMap::default())).await;
+        done.usage = Some(usage);
+        b.complete(done.clone()).await.unwrap();
+        assert_eq!(reported_usage(&b, &done).await["memory_max_hits"], 4438);
+        let CommandReply::Records(page) = b.command(request(json!({"command":"log_read","args":{"project":selector,"since_seq":null,"kinds":["message"],"threads":null,"limit":100}}))).await.unwrap() else { panic!("records") };
+        let records = serde_json::to_value(page.records).unwrap();
+        let notices: Vec<_> = records
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| {
+                r["data"]["execution_limit"]["limit"] == "memory"
+                    && r["data"]["execution_limit"]["run"] == run.to_string()
+            })
+            .collect();
+        assert_eq!(
+            notices.is_empty(),
+            trigger == "work",
+            "{trigger}: {records}"
+        );
+        for notice in notices {
+            let observed = &notice["data"]["execution_limit"]["observed"];
+            if trigger == "kill" {
+                assert_eq!(observed["oom_kills"], 1);
+            } else {
+                assert_eq!(observed["working_bytes"], memory.working_bytes.unwrap());
+                assert_eq!(observed["file_cache_bytes"], cap * 7 / 8);
+                assert_eq!(observed["max_events"], 4438);
+            }
+        }
+    }
+}
+
 /// Bugs: admission summed every live run's reservation against the total, so steps queued for
 /// 20 minutes with the host half idle (2026-10-20); before that, uncapped runs were admitted
 /// with about 1 GB free and the host in reclaim (2026-10-19). A run now starts on measured
@@ -2710,6 +2847,7 @@ async fn admission_counts_measured_memory_and_new_runs_at_their_charge() {
             sluice_model::limits::RunMemory {
                 current_bytes: 32 << 20,
                 peak_bytes: 48 << 20,
+                ..Default::default()
             },
         );
     }
@@ -2722,7 +2860,7 @@ async fn admission_counts_measured_memory_and_new_runs_at_their_charge() {
         [0]["memory"];
     assert_eq!(
         *run,
-        json!({"cap_bytes": 256 << 20, "current_bytes": 32 << 20, "peak_bytes": 48 << 20}),
+        json!({"cap_bytes": 256 << 20, "current_bytes": 32 << 20, "peak_bytes": 48 << 20, "working_bytes": null, "file_cache_bytes": null, "pressure_some_avg10": null}),
         "{status}"
     );
     assert_eq!(
@@ -2773,6 +2911,7 @@ async fn admission_counts_measured_memory_and_new_runs_at_their_charge() {
             sluice_model::limits::RunMemory {
                 current_bytes: 170 << 20,
                 peak_bytes: 170 << 20,
+                ..Default::default()
             },
         );
     }
@@ -2789,6 +2928,7 @@ async fn admission_counts_measured_memory_and_new_runs_at_their_charge() {
             sluice_model::limits::RunMemory {
                 current_bytes: 100 << 20,
                 peak_bytes: 170 << 20,
+                ..Default::default()
             },
         );
     }

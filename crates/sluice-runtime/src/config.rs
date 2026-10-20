@@ -178,6 +178,21 @@ pub struct Headroom {
     /// `execution.cpu_weight`: the workload slices' CPUWeight, so work outside them is
     /// scheduled first when the host is busy.
     pub cpu_weight: u16,
+    /// Live-run memory warning thresholds, separate from admission pressure.
+    pub memory_notice: MemoryNoticePolicy,
+}
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MemoryNoticePolicy {
+    pub working_percent: f64,
+    pub pressure_percent: f64,
+}
+impl Default for MemoryNoticePolicy {
+    fn default() -> Self {
+        Self {
+            working_percent: 90.0,
+            pressure_percent: 10.0,
+        }
+    }
 }
 /// The shipped `memory_pressure_max`.
 pub const DEFAULT_MEMORY_PRESSURE_MAX: f64 = 10.0;
@@ -208,6 +223,7 @@ impl Headroom {
             load_per_cpu_max: DEFAULT_LOAD_PER_CPU_MAX,
             warmup_starts: DEFAULT_WARMUP_STARTS,
             cpu_weight: DEFAULT_CPU_WEIGHT,
+            memory_notice: MemoryNoticePolicy::default(),
         }
     }
 }
@@ -263,6 +279,8 @@ pub fn execution_from_value(
         load_per_cpu_max: Option<f64>,
         warmup_starts: Option<u32>,
         cpu_weight: Option<u16>,
+        memory_notice_working_percent: Option<f64>,
+        memory_notice_pressure_percent: Option<f64>,
     }
     if !value.is_object() {
         return Err("config.json must contain an object".into());
@@ -292,6 +310,27 @@ pub fn execution_from_value(
         }
     }
     let mut headroom = Headroom::for_host(memory_bytes);
+    for (name, value, dest) in [
+        (
+            "memory_notice_working_percent",
+            config.memory_notice_working_percent,
+            &mut headroom.memory_notice.working_percent,
+        ),
+        (
+            "memory_notice_pressure_percent",
+            config.memory_notice_pressure_percent,
+            &mut headroom.memory_notice.pressure_percent,
+        ),
+    ] {
+        if let Some(value) = value {
+            if !(value.is_finite() && value > 0.0 && value <= 100.0) {
+                return Err(format!(
+                    "execution.{name} must be a percentage above 0 and at most 100"
+                ));
+            }
+            *dest = value;
+        }
+    }
     if let Some(reserve) = config.host_reserve {
         headroom.host_reserve_bytes = reserve.0;
     }

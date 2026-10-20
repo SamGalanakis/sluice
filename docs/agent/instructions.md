@@ -94,7 +94,9 @@ only within installation ceilings; project defaults inherit from the home. Scatt
 items as the host's memory permits. A `resource_exhausted` failure is a memory OOM and requires
 judgment before retrying; inspect its recorded budget and peak usage. A `say` from `sluice`
 with `data.execution_limit` tells you a run met a limit (failed forks, memory pressure,
-throttling, or a hold until the host has memory or CPU free): adjust
+throttling, or a hold until the host has memory or CPU free). Memory pressure means high
+working memory, actual OOM events or sustained PSI stalls; file-cache reclaim alone is normal.
+Status separates working memory and file cache beside the cap, current and peak: adjust
 parallelism or limits; a host memory or CPU hold clears by itself. Local descendants share the cap; external services and remote
 executors need their own limits. See `docs("plans")`, Execution limits.
 

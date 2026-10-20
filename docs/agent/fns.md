@@ -8,7 +8,9 @@ in the project's log (the home log without a project). Once admitted, call repli
 `limits` with frozen `memory_max_bytes` (the memory cap), `cpu_millis` and `tasks`, each
 `"unlimited"` when it has none. Completion adds recorded
 `usage` with `memory_peak_bytes`, `oom_kills`, `pids_limit_hits`, `memory_max_hits` and
-`cpu_throttled_usec`; these are not live readings. Pending calls and historical runs without this evidence omit those fields.
+`cpu_throttled_usec`; these are not live readings. `memory_max_hits` counts reclaim attempts,
+including normal file-cache reclaim, and alone does not trigger a memory warning. Pending
+calls and historical runs without this evidence omit those fields.
 
 `fn_call` also accepts `limits: {memory?, cpus?, tasks?, memory_above_ceiling?}`. It inherits
 project and home defaults, and refuses overrides above the installation ceilings unless
