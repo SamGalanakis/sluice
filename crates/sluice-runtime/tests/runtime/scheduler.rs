@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 struct Fake {
     launches: Arc<Mutex<Vec<Launch>>>,
     /// The host's memory reading; `None` measures nothing.
-    memory: Arc<Mutex<Option<sluice_runtime::headroom::HostMemory>>>,
+    memory: Arc<Mutex<Option<sluice_runtime::headroom::HostReading>>>,
 }
 impl FnHost for Fake {
     async fn invoke(&self, i: FnInvocation) -> Result<JsonMap, PublicError> {
@@ -76,10 +76,10 @@ impl ExecutionHost for Fake {
     async fn cleanup_valid(&self, j: &CompletionJournal) -> Result<bool, PublicError> {
         Ok(j.cleanup.iter().all(|p| p.empty))
     }
-    async fn host_memory(
+    async fn host_reading(
         &self,
         _: sluice_model::ids::HomeId,
-    ) -> Option<std::io::Result<sluice_runtime::headroom::HostMemory>> {
+    ) -> Option<std::io::Result<sluice_runtime::headroom::HostReading>> {
         self.memory.lock().unwrap().map(Ok)
     }
 }
@@ -752,9 +752,9 @@ async fn bounded_scatter_keeps_original_inputs_gates_and_files_between_admission
     policy["execution"]["host_reserve"] = json!("1GiB");
     policy["execution"]["admission_charge"] = json!("64MiB");
     std::fs::write(f.home.path().join("config.json"), policy.to_string()).unwrap();
-    *f.host.memory.lock().unwrap() = Some(sluice_runtime::headroom::HostMemory {
+    *f.host.memory.lock().unwrap() = Some(sluice_runtime::headroom::HostReading {
         available_bytes: (1 << 30) + (64 << 20),
-        pressure_some_avg10: None,
+        ..Default::default()
     });
     f.seed(
         json!({"inputs":{"items":"int[]","go":"boolean"},"steps":{

@@ -543,6 +543,9 @@ pub async fn enforce_run_limits(
 pub struct WorkloadSlice {
     name: String,
     totals: Limits,
+    /// CPUWeight, for this slice and the slices above it: under contention work outside them
+    /// is scheduled first.
+    cpu_weight: u16,
 }
 /// systemd properties for caps: unlimited memory and tasks are `infinity`, unlimited CPU an
 /// empty quota (none).
@@ -562,11 +565,17 @@ fn properties(caps: Limits) -> Vec<String> {
     ]
 }
 impl WorkloadSlice {
-    pub fn new(home: HomeId, totals: Limits) -> io::Result<Self> {
+    pub fn new(home: HomeId, totals: Limits, cpu_weight: u16) -> io::Result<Self> {
         if totals.validate().is_err() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "slice limits must be positive or unlimited",
+            ));
+        }
+        if !(1..=10_000).contains(&cpu_weight) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a slice's CPU weight must be from 1 to 10000",
             ));
         }
         Ok(Self {
@@ -576,14 +585,44 @@ impl WorkloadSlice {
                 home.to_string().replace('-', "_")
             ),
             totals,
+            cpu_weight,
         })
     }
     pub fn name(&self) -> &str {
         &self.name
     }
+    /// The slices this one is nested in below the user manager (`sluice-workloads.slice` and
+    /// `sluice.slice`), innermost first. CPU weight only orders siblings, so the outermost one
+    /// is what weighs the workloads against the user's other work.
+    pub fn parents(&self) -> [String; 2] {
+        let prefix = unit_prefix();
+        [
+            format!("{prefix}workloads.slice"),
+            format!("{}.slice", prefix.trim_end_matches('-')),
+        ]
+    }
     pub async fn ensure(&self) -> io::Result<()> {
         let _guard = self.lock().await?;
         self.ensure_locked().await
+    }
+    /// [`Self::ensure`], and the CPU weight on the parent slices too: what the coordinator
+    /// applies when it starts, before any launch.
+    pub async fn ensure_with_parents(&self) -> io::Result<()> {
+        self.ensure().await?;
+        let weight = self.cpu_weight.to_string();
+        for parent in self.parents() {
+            let mut show = Command::new("/usr/bin/systemctl");
+            show.args(["--user", "show", "--property=CPUWeight", "--value", &parent]);
+            let output = manager_probe(show).await?;
+            if String::from_utf8_lossy(&output.stdout).trim() == weight {
+                continue;
+            }
+            let mut update = Command::new("/usr/bin/systemctl");
+            update.args(["--user", "set-property", "--runtime", &parent]);
+            update.arg(format!("CPUWeight={weight}"));
+            manager_output(update).await?;
+        }
+        Ok(())
     }
     async fn lock(&self) -> io::Result<std::fs::File> {
         use std::os::unix::fs::OpenOptionsExt;
@@ -617,6 +656,7 @@ impl WorkloadSlice {
         let mut update = Command::new("/usr/bin/systemctl");
         update.args(["--user", "set-property", "--runtime", &self.name]);
         update.args(properties(self.totals));
+        update.arg(format!("CPUWeight={}", self.cpu_weight));
         manager_output(update).await?;
         let differ = self.mismatches(false).await?;
         if differ.is_empty() {
@@ -628,8 +668,8 @@ impl WorkloadSlice {
             differ.join(", ")
         )))
     }
-    /// How the slice's MemoryMax, MemorySwapMax, TasksMax and the kernel's cpu.max differ from
-    /// its totals. An inactive slice has no cpu.max to read: `unread_cpu` counts that as a
+    /// How the slice's MemoryMax, MemorySwapMax, TasksMax, CPUWeight and the kernel's cpu.max
+    /// differ from its totals and weight. An inactive slice has no cpu.max to read: `unread_cpu` counts that as a
     /// difference, so set-property applies the quota before the slice starts.
     async fn mismatches(&self, unread_cpu: bool) -> io::Result<Vec<String>> {
         let mut show = Command::new("/usr/bin/systemctl");
@@ -640,6 +680,7 @@ impl WorkloadSlice {
             "--property=MemoryMax",
             "--property=MemorySwapMax",
             "--property=TasksMax",
+            "--property=CPUWeight",
             "--property=ControlGroup",
             &self.name,
         ]);
@@ -665,6 +706,13 @@ impl WorkloadSlice {
             out.push(format!(
                 "TasksMax is {}, expected {tasks}",
                 field("TasksMax=").unwrap_or("unset")
+            ));
+        }
+        let weight = self.cpu_weight.to_string();
+        if field("CPUWeight=") != Some(weight.as_str()) {
+            out.push(format!(
+                "CPUWeight is {}, expected {weight}",
+                field("CPUWeight=").unwrap_or("unset")
             ));
         }
         if field("MemorySwapMax=") != Some("0") {

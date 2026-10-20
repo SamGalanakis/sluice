@@ -1,9 +1,12 @@
-//! Admission by measured memory (SPEC §2.5). A run's memory cap only kills it; what admission
-//! counts is what the host and the live runs measure. A run starts only while MemAvailable less
-//! the host reserve covers its admission charge, memory pressure (PSI `some avg10`) is under
-//! its limit, and the live runs' measured memory plus the charge stays within the home total.
-//! A run admitted within the warm-up counts at the charge (or its reading, if larger), since
-//! the readings do not show it yet: a burst of launches never passes on one stale reading.
+//! Admission by measured memory and CPU (SPEC §2.5). A run's memory cap only kills it; what
+//! admission counts is what the host and the live runs measure. A run starts only while
+//! MemAvailable less the host reserve covers its admission charge, memory pressure (PSI `some
+//! avg10`) is under its limit, the live runs' measured memory plus the charge stays within the
+//! home total, CPU pressure and the 1-minute load per CPU are under theirs, and, while either
+//! CPU reading is over half its limit, fewer than the warm-up's allowance of runs started within
+//! the warm-up. A run admitted within the warm-up counts at the charge (or its reading, if
+//! larger), since the readings do not show it yet: a burst of launches never passes on one
+//! stale reading.
 use crate::config::Headroom;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -18,26 +21,42 @@ use std::{
 };
 
 /// One reading of the host, as the execution host takes it.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct HostMemory {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct HostReading {
     /// `/proc/meminfo` MemAvailable.
     pub available_bytes: u64,
     /// `/proc/pressure/memory` `some avg10`, a percentage; `None` on a kernel without PSI.
-    pub pressure_some_avg10: Option<f64>,
+    #[serde(default)]
+    pub memory_pressure_some_avg10: Option<f64>,
+    /// `/proc/pressure/cpu` `some avg10`, a percentage; `None` on a kernel without PSI.
+    #[serde(default)]
+    pub cpu_pressure_some_avg10: Option<f64>,
+    /// `/proc/loadavg`'s 1-minute load.
+    #[serde(default)]
+    pub load_avg1: Option<f64>,
+    /// The host's online CPUs, which the load is divided by.
+    #[serde(default)]
+    pub cpus: Option<u32>,
+}
+impl HostReading {
+    /// The 1-minute load per online CPU.
+    pub fn load_per_cpu(&self) -> Option<f64> {
+        Some(self.load_avg1? / f64::from(self.cpus.filter(|n| *n > 0)?))
+    }
 }
 
 /// How often a held run is checked again.
 pub const RECHECK_INTERVAL: Duration = Duration::from_secs(5);
 /// A published reading older than this is not shown.
 const SAMPLE_FRESH: Duration = Duration::from_secs(120);
-const SAMPLE_FILE: &str = "host-memory.json";
+const SAMPLE_FILE: &str = "host-reading.json";
 
 /// What admission measured at one moment: the host, and each live run with a payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reading {
     /// When it was taken by the execution host's clock, in seconds since the Unix epoch.
     pub at: f64,
-    pub host: HostMemory,
+    pub host: HostReading,
     /// A run whose cgroup could not be read holds the error; it counts at its cap.
     pub runs: BTreeMap<RunId, Result<RunMemory, String>>,
 }
@@ -46,7 +65,7 @@ impl Reading {
     /// `None` when the host has nothing to measure.
     pub async fn take<F, Fut>(
         reads: &sluice_store::ReadPool,
-        host: Option<std::io::Result<HostMemory>>,
+        host: Option<std::io::Result<HostReading>>,
         now: SystemTime,
         run_memory: F,
     ) -> Option<std::io::Result<Self>>
@@ -108,6 +127,8 @@ pub struct Pool {
     pub measured_bytes: u64,
     /// The charges of runs still within the warm-up, which MemAvailable does not show yet.
     pub starting_bytes: u64,
+    /// The runs still within the warm-up, whose CPU the load does not show yet.
+    pub starting_runs: u32,
 }
 
 /// What the live attempts count at `reading`, counting attempts admitted in this transaction.
@@ -151,6 +172,7 @@ pub fn pool(
         };
         let counted = if age < headroom.warmup.as_secs_f64() {
             pool.starting_bytes = pool.starting_bytes.saturating_add(charge);
+            pool.starting_runs = pool.starting_runs.saturating_add(1);
             measured.unwrap_or(0).max(charge)
         } else {
             measured.unwrap_or(charge)
@@ -160,9 +182,54 @@ pub fn pool(
     Ok(pool)
 }
 
-/// Why a new run cannot start now, as status says it, with the numbers the check used.
+/// Why a new run cannot start now: the host resource it waits for and the reason as status
+/// says it, with the numbers the check used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Hold {
+    Memory(String),
+    Cpu(String),
+}
+impl Hold {
+    pub fn reason(&self) -> &str {
+        match self {
+            Self::Memory(reason) | Self::Cpu(reason) => reason,
+        }
+    }
+    pub fn into_reason(self) -> String {
+        match self {
+            Self::Memory(reason) | Self::Cpu(reason) => reason,
+        }
+    }
+    /// What a held step waits for, as status lists it.
+    pub fn resource(&self) -> &'static str {
+        match self {
+            Self::Memory(_) => "host memory",
+            Self::Cpu(_) => "host cpu",
+        }
+    }
+    /// The owner's notice's `limit`.
+    pub fn limit(&self) -> &'static str {
+        match self {
+            Self::Memory(_) => "host_memory",
+            Self::Cpu(_) => "host_cpu",
+        }
+    }
+}
+
+/// Why a new run cannot start now, with the numbers the check used.
 pub fn hold(
-    host: &HostMemory,
+    host: &HostReading,
+    headroom: &Headroom,
+    total: Option<u64>,
+    pool: Pool,
+) -> Option<Hold> {
+    memory_hold(host, headroom, total, pool)
+        .map(Hold::Memory)
+        .or_else(|| cpu_hold(host, headroom, pool).map(Hold::Cpu))
+}
+
+fn memory_hold(
+    host: &HostReading,
     headroom: &Headroom,
     total: Option<u64>,
     pool: Pool,
@@ -185,7 +252,7 @@ pub fn hold(
             size(need)
         ));
     }
-    if let Some(pressure) = host.pressure_some_avg10
+    if let Some(pressure) = host.memory_pressure_some_avg10
         && pressure >= headroom.pressure_max
     {
         return Some(format!(
@@ -202,6 +269,58 @@ pub fn hold(
             size(need),
             size(total)
         ));
+    }
+    None
+}
+
+fn cpu_hold(host: &HostReading, headroom: &Headroom, pool: Pool) -> Option<String> {
+    let pressure = host.cpu_pressure_some_avg10;
+    if let Some(pressure) = pressure
+        && pressure >= headroom.cpu_pressure_max
+    {
+        return Some(format!(
+            "held: cpu pressure (some avg10 {pressure:.1}%, limit {}%)",
+            headroom.cpu_pressure_max
+        ));
+    }
+    let load = host.load_per_cpu();
+    if let Some(load) = load
+        && load >= headroom.load_per_cpu_max
+    {
+        return Some(format!(
+            "held: cpu load (1-min load {:.1} on {} CPUs, {load:.2} per CPU, limit {})",
+            host.load_avg1.unwrap_or_default(),
+            host.cpus.unwrap_or_default(),
+            headroom.load_per_cpu_max
+        ));
+    }
+    // Over half a limit, a burst waits for the warm-up: the readings do not show its runs yet.
+    if pool.starting_runs >= headroom.warmup_starts {
+        let busy = if let Some(pressure) = pressure
+            && pressure >= headroom.cpu_pressure_max / 2.0
+        {
+            Some(format!(
+                "cpu pressure {pressure:.1}%, over half of {}%",
+                headroom.cpu_pressure_max
+            ))
+        } else if let Some(load) = load
+            && load >= headroom.load_per_cpu_max / 2.0
+        {
+            Some(format!(
+                "load {load:.2} per CPU, over half of {}",
+                headroom.load_per_cpu_max
+            ))
+        } else {
+            None
+        };
+        if let Some(busy) = busy {
+            return Some(format!(
+                "held: cpu warm-up ({} runs started within {} s, limit {} while {busy})",
+                pool.starting_runs,
+                headroom.warmup.as_secs_f64(),
+                headroom.warmup_starts
+            ));
+        }
     }
     None
 }
@@ -236,31 +355,52 @@ pub fn published(home: &Path) -> Option<Reading> {
         .flatten()
 }
 
-/// The host's own reading: `/proc/meminfo` and `/proc/pressure/memory`.
-pub fn read_host() -> std::io::Result<HostMemory> {
+/// The host's own reading: `/proc/meminfo`, `/proc/pressure/{memory,cpu}`, `/proc/loadavg`
+/// and the online CPUs in `/proc/stat`.
+pub fn read_host() -> std::io::Result<HostReading> {
     let meminfo = std::fs::read_to_string("/proc/meminfo")?;
     let available_bytes = parse_meminfo(&meminfo)
         .ok_or_else(|| std::io::Error::other("MemAvailable missing from /proc/meminfo"))?;
-    let pressure_some_avg10 = match std::fs::read_to_string("/proc/pressure/memory") {
-        Ok(text) => Some(
-            parse_pressure(&text)
-                .ok_or_else(|| std::io::Error::other("invalid /proc/pressure/memory"))?,
-        ),
-        // A kernel built or booted without PSI.
+    let loadavg = std::fs::read_to_string("/proc/loadavg")?;
+    let load_avg1 = loadavg
+        .split_whitespace()
+        .next()
+        .and_then(|n| n.parse::<f64>().ok())
+        .ok_or_else(|| std::io::Error::other("invalid /proc/loadavg"))?;
+    let stat = std::fs::read_to_string("/proc/stat")?;
+    let cpus = stat
+        .lines()
+        .filter(|line| {
+            line.strip_prefix("cpu")
+                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        })
+        .count();
+    Ok(HostReading {
+        available_bytes,
+        memory_pressure_some_avg10: read_pressure("/proc/pressure/memory")?,
+        cpu_pressure_some_avg10: read_pressure("/proc/pressure/cpu")?,
+        load_avg1: Some(load_avg1),
+        cpus: u32::try_from(cpus).ok().filter(|n| *n > 0),
+    })
+}
+/// A PSI file's `some avg10`; `None` on a kernel built or booted without PSI.
+fn read_pressure(path: &str) -> std::io::Result<Option<f64>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            Ok(Some(parse_pressure(&text).ok_or_else(|| {
+                std::io::Error::other(format!("invalid {path}"))
+            })?))
+        }
         Err(error)
             if matches!(
                 error.kind(),
                 std::io::ErrorKind::NotFound | std::io::ErrorKind::Unsupported
             ) || error.raw_os_error() == Some(95) =>
         {
-            None
+            Ok(None)
         }
-        Err(error) => return Err(error),
-    };
-    Ok(HostMemory {
-        available_bytes,
-        pressure_some_avg10,
-    })
+        Err(error) => Err(error),
+    }
 }
 fn parse_meminfo(text: &str) -> Option<u64> {
     text.lines().find_map(|line| {
@@ -305,7 +445,7 @@ impl Gate {
         &self,
         sql: &Connection,
         policy: &sluice_model::ResourcePolicy,
-    ) -> sluice_store::Result<Option<String>> {
+    ) -> sluice_store::Result<Option<Hold>> {
         Ok(match &self.reading {
             Ok(reading) => hold(
                 &reading.host,
@@ -313,7 +453,7 @@ impl Gate {
                 policy.total.memory_bytes,
                 pool(sql, reading, &self.headroom)?,
             ),
-            Err(error) => Some(format!("held: host memory unreadable ({error})")),
+            Err(error) => Some(Hold::Memory(format!("held: host unreadable ({error})"))),
         })
     }
     /// Stamp an attempt this gate admitted with the reading's time, so its warm-up runs on the
@@ -350,11 +490,37 @@ pub fn shown(
         "measured_bytes": pool.map(|p| p.measured_bytes),
         "starting_bytes": pool.map(|p| p.starting_bytes),
         "available_bytes": reading.as_ref().map(|r| r.host.available_bytes),
-        "pressure_some_avg10": reading.as_ref().and_then(|r| r.host.pressure_some_avg10),
+        "pressure_some_avg10": reading.as_ref().and_then(|r| r.host.memory_pressure_some_avg10),
         "host_reserve_bytes": headroom.host_reserve_bytes,
         "pressure_max": headroom.pressure_max,
         "admission_charge_bytes": headroom.charge_bytes,
         "admission_warmup_s": headroom.warmup.as_secs_f64(),
+    }))
+}
+
+/// The status form of CPU admission: the settings, and the numbers of the reading admission
+/// last published (`null` while there is none).
+pub fn shown_cpu(
+    sql: &Connection,
+    home: &Path,
+    headroom: &Headroom,
+) -> sluice_store::Result<serde_json::Value> {
+    let reading = published(home);
+    let pool = reading
+        .as_ref()
+        .map(|reading| pool(sql, reading, headroom))
+        .transpose()?;
+    let host = reading.as_ref().map(|r| r.host);
+    Ok(serde_json::json!({
+        "pressure_some_avg10": host.and_then(|h| h.cpu_pressure_some_avg10),
+        "load_avg1": host.and_then(|h| h.load_avg1),
+        "cpus": host.and_then(|h| h.cpus),
+        "load_per_cpu": host.and_then(|h| h.load_per_cpu()),
+        "starting_runs": pool.map(|p| p.starting_runs),
+        "pressure_max": headroom.cpu_pressure_max,
+        "load_per_cpu_max": headroom.load_per_cpu_max,
+        "warmup_starts": headroom.warmup_starts,
+        "cpu_weight": headroom.cpu_weight,
     }))
 }
 

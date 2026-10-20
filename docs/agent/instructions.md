@@ -94,8 +94,8 @@ only within installation ceilings; project defaults inherit from the home. Scatt
 items as the host's memory permits. A `resource_exhausted` failure is a memory OOM and requires
 judgment before retrying; inspect its recorded budget and peak usage. A `say` from `sluice`
 with `data.execution_limit` tells you a run met a limit (failed forks, memory pressure,
-throttling, or a hold until the host has memory free): adjust
-parallelism or limits; a host-memory hold clears by itself. Local descendants share the cap; external services and remote
+throttling, or a hold until the host has memory or CPU free): adjust
+parallelism or limits; a host memory or CPU hold clears by itself. Local descendants share the cap; external services and remote
 executors need their own limits. See `docs("plans")`, Execution limits.
 
 For a standing orchestrator watcher, create a named filter with

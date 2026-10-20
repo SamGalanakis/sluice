@@ -85,9 +85,9 @@ fn queued(
             Err(error) => Err(error.clone().into()),
         };
         match held {
-            Ok(Some(reason)) => {
+            Ok(Some(hold)) => {
                 out.entry(step.id.clone())
-                    .or_insert((vec!["host memory".into()], reason));
+                    .or_insert((vec![hold.resource().into()], hold.into_reason()));
             }
             // An invalid config.json holds every step; it says so rather than queue them.
             Err(sluice_store::StoreError::Public(error)) if execution.is_err() => {
@@ -175,6 +175,7 @@ pub(crate) fn status(
                 "tasks": sluice_model::limits::shown(policy.total.tasks),
             },
             "memory": crate::headroom::shown(sql, &home, policy, headroom)?,
+            "cpu": crate::headroom::shown_cpu(sql, &home, headroom)?,
         }),
         Err(error) => json!({"error":error}),
     };

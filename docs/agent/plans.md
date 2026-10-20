@@ -807,16 +807,23 @@ is no longer pending. A running attempt keeps its frozen caps across retries and
 restarts. Changing project defaults or the home's policy changes future runs; changing a
 running step's limits is refused.
 
-**Admission is by measured memory.** A run starts while the host's MemAvailable less its
+**Admission is by measured memory and CPU.** A run starts while the host's MemAvailable less its
 reserve (`execution.host_reserve`, by default max(16 GiB, 15% of memory)) covers a small
 admission charge (`execution.admission_charge`, 1 GiB), memory pressure (PSI `some avg10`) is
 below `execution.memory_pressure_max` (10), and the live runs' measured memory plus the charge
-fits `execution.total.memory`. A run counts at the charge for its first 30 s
+fits `execution.total.memory`, and while CPU pressure (PSI `some avg10`) is below
+`execution.cpu_pressure_max` (30) and the 1-minute load per CPU below
+`execution.load_per_cpu_max` (1.5). A run counts at the charge for its first 30 s
 (`execution.admission_warmup_s`) and at its measured `memory.current` after, so a burst of
-steps starts in waves. Otherwise the step is held and status names the check with its numbers:
-`held: host memory (available 9.1 GiB, reserve 16 GiB, need 1 GiB)`, `held: memory pressure
-(some avg10 13.8%, limit 10%)` or `held: pool memory (measured 66.2 GiB + 1 GiB > 70 GiB)`. Its
-owner is told once, and Sluice checks again every 5 s. Nothing needs doing; it starts when the
+steps starts in waves; while CPU pressure or load is over half its limit, at most
+`execution.warmup_starts` (2) runs start per warm-up. Otherwise the step is held and status names
+the check with its numbers: `held: host memory (available 9.1 GiB, reserve 16 GiB, need 1 GiB)`,
+`held: memory pressure (some avg10 13.8%, limit 10%)`, `held: pool memory (measured 66.2 GiB + 1
+GiB > 70 GiB)`, `held: cpu pressure (some avg10 74.0%, limit 30%)`, `held: cpu load (1-min load
+590.0 on 32 CPUs, 18.44 per CPU, limit 1.5)` or `held: cpu warm-up (2 runs started within 30 s,
+limit 2 while cpu pressure 20.0%, over half of 30%)`. The workloads' slice is capped at
+`execution.total.cpus` (default 75% of the CPUs) with `CPUWeight` `execution.cpu_weight` (20),
+so the host's other work always gets CPU. Its owner is told once, and Sluice checks again every 5 s. Nothing needs doing; it starts when the
 host recovers. A direct `fn_call` held this way is refused with a retryable `busy`. Each
 scattered item is admitted on its own.
 
@@ -829,7 +836,7 @@ failure.
 
 Whenever a run meets a limit, Sluice tells whoever answers its unit, and the running step
 itself, in a `say` from `sluice` whose `data.execution_limit` is `{run, step, limit, value,
-observed, outcome, since?}`: `limit` is `memory`, `tasks`, `cpus` or `host_memory`; `outcome`
+observed, outcome, since?}`: `limit` is `memory`, `tasks`, `cpus`, `host_memory` or `host_cpu`; `outcome`
 is `killed`, `running`, `throttled`, `finished` or `held`. It wakes the owner's `next`
 (`docs("threads")`). Read it as a cue to retry with less parallelism, ask for larger `limits`,
 or report; each run and limit is told once.

@@ -118,8 +118,8 @@ struct Inner<H: ExecutionHost> {
     watches: Arc<std::sync::Mutex<std::collections::HashMap<RunId, usize>>>,
     /// Each project's plan as last compiled, by revision and catalog generation.
     plans: Arc<PlanCache>,
-    /// Projects with a ready step held for the host's memory, checked again on a short tick.
-    memory_holds: std::sync::Mutex<std::collections::BTreeSet<ProjectId>>,
+    /// Projects with a ready step held for the host's memory or CPU, checked again on a short tick.
+    host_holds: std::sync::Mutex<std::collections::BTreeSet<ProjectId>>,
 }
 /// Where the startup adoption pass stands, for requests that wait on it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -255,7 +255,7 @@ impl<H: ExecutionHost> Coordinator<H> {
         sluice_process::host::guard_scratch_home(&home)?;
         // A bad execution policy fails here, naming what to change, rather than hold every
         // step once serving.
-        crate::budget::execution(&home)
+        let (policy, headroom) = crate::budget::execution(&home)
             .map_err(|error| crate::budget::invalid(format!("config.json: {error}")))?;
         let path = home.clone();
         let writer = tokio::task::spawn_blocking(move || Writer::open(path))
@@ -290,6 +290,17 @@ impl<H: ExecutionHost> Coordinator<H> {
         };
         let catalog = Arc::new(catalog);
         let host = Arc::new(host);
+        // The workload slice's CPU quota and weight hold from the start, not only once a run
+        // launches; a launch applies and reads them back again.
+        let slice_host = host.clone();
+        tokio::spawn(async move {
+            if let Err(error) = slice_host
+                .prepare_workloads(home_id, policy.total, headroom.cpu_weight)
+                .await
+            {
+                tracing::warn!(%error, "workload slice settings not applied at start");
+            }
+        });
         let calls = Calls::new(
             writer.clone(),
             reads.clone(),
@@ -316,7 +327,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 connections: Arc::new(tokio::sync::Semaphore::new(CONNECTIONS)),
                 watches: Default::default(),
                 plans: Default::default(),
-                memory_holds: Default::default(),
+                host_holds: Default::default(),
             }),
         };
         artifacts::recover(broker.writer(), broker.home())
@@ -420,10 +431,10 @@ impl<H: ExecutionHost> Coordinator<H> {
     pub fn catalog(&self) -> &Catalog {
         &self.inner.catalog
     }
-    pub(crate) fn note_memory_hold(&self, project: ProjectId, held: bool) {
+    pub(crate) fn note_host_hold(&self, project: ProjectId, held: bool) {
         let mut holds = self
             .inner
-            .memory_holds
+            .host_holds
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if held {
@@ -432,10 +443,10 @@ impl<H: ExecutionHost> Coordinator<H> {
             holds.remove(&project);
         }
     }
-    pub(crate) fn memory_holds(&self) -> Vec<ProjectId> {
+    pub(crate) fn host_holds(&self) -> Vec<ProjectId> {
         let holds = self
             .inner
-            .memory_holds
+            .host_holds
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         holds.iter().copied().collect()

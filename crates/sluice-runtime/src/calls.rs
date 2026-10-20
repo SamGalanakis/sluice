@@ -86,10 +86,11 @@ pub struct AdmittedCall {
 /// An uncertain launch error must be reconciled against this identity, never relaunched.
 pub trait CallGuardian: Send + Sync + 'static {
     fn launch(&self, call: AdmittedCall) -> impl Future<Output = Result<(), PublicError>> + Send;
-    /// The host's memory for admission by measured memory; `None` when there is no host.
-    fn host_memory(
+    /// The host's memory and CPU for admission by measured memory and CPU; `None` when there
+    /// is no host.
+    fn host_reading(
         &self,
-    ) -> impl Future<Output = Option<std::io::Result<crate::headroom::HostMemory>>> + Send {
+    ) -> impl Future<Output = Option<std::io::Result<crate::headroom::HostReading>>> + Send {
         std::future::ready(None)
     }
     /// A live run's payload memory, as [`crate::execution::ExecutionHost::run_memory`].
@@ -199,7 +200,7 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
         })??;
         self.wait(call, project, Duration::from_secs(wait)).await
     }
-    /// The execution policy and what the host's memory allows now.
+    /// The execution policy and what the host's memory and CPU allow now.
     async fn gate(
         &self,
     ) -> Result<
@@ -213,7 +214,7 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
         let guardian = &self.guardian;
         let reading = crate::headroom::Reading::take(
             &self.reads,
-            guardian.host_memory().await,
+            guardian.host_reading().await,
             guardian.now(),
             |run, service| async move { guardian.run_memory(run, &service).await },
         )
@@ -446,10 +447,10 @@ fn admit_tx(
         .transpose()?;
     let limits = crate::budget::resolve(tx.sql(), project, overrides.as_ref(), policy)?;
     if let Some(gate) = gate
-        && let Some(reason) = gate.hold(tx.sql(), policy)?
+        && let Some(hold) = gate.hold(tx.sql(), policy)?
     {
         return Err(PublicError::Busy {
-            message: reason,
+            message: hold.into_reason(),
             retryable: true,
         }
         .into());

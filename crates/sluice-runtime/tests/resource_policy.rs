@@ -22,12 +22,19 @@ fn execution_policy_fails_closed_and_reserves_guardian_capacity() {
         json!({"execution":{"ceilings":{"tasks":8192},"total":{"tasks":4096}}}),
         // An unlimited per-run value needs an unlimited ceiling.
         json!({"execution":{"ceilings":{"tasks":64},"defaults":{"tasks":null}}}),
+        json!({"execution":{"cpu_pressure_max":0}}),
+        json!({"execution":{"load_per_cpu_max":-1}}),
+        json!({"execution":{"warmup_starts":0}}),
+        json!({"execution":{"cpu_weight":0}}),
     ] {
         assert!(
             resource_policy_from_value(&invalid, 8 << 30, 4000).is_err(),
             "accepted {invalid}"
         );
     }
+    // The workloads' slice leaves a quarter of the CPUs to everything else by default.
+    let shipped = resource_policy_from_value(&json!({}), 8 << 30, 4000).unwrap();
+    assert_eq!(shipped.total.cpu_millis, Some(3000));
     let small = resource_policy_from_value(&json!({}), 128 << 20, 1000).unwrap();
     assert!(
         small.defaults.memory_bytes.unwrap() + small.guardian_memory_bytes

@@ -353,8 +353,8 @@ payload executable. `core.external` starts no run.
 Caps are kill limits only, never a reservation: nothing counts a run's cap at admission.
 `memory_max_bytes` is the payload's `memory.max` (and the service's `MemoryMax` with the
 guardian's share); a run that reaches it is reclaimed and, past it, OOM-killed. The shipped
-per-run defaults set no CPU quota and no task cap. Admission is by measured memory (below), and
-the home total caps the home's workload slice as a whole. The caps are stored with a
+per-run defaults set no CPU quota and no task cap. Admission is by measured memory and CPU
+(below), and the home total caps the home's workload slice as a whole. The caps are stored with a
 `memory_bytes` field equal to `memory_max_bytes`, which releases pinned before caps alone read;
 a budget they froze is read with its own `memory_max_bytes` (or, from before unlimited values,
 its `memory_bytes`).
@@ -383,21 +383,27 @@ as inherited.
 
 ```json
 {"execution": {
-  "total": {"memory": "96GiB", "cpus": null, "tasks": 65536},
+  "total": {"memory": "96GiB", "cpus": 24, "tasks": 65536},
   "ceilings": {"memory": "10GiB", "cpus": null, "tasks": null},
   "defaults": {"memory": "6GiB", "cpus": null, "tasks": null},
   "host_reserve": "16GiB",
   "memory_pressure_max": 10,
   "admission_charge": "1GiB",
-  "admission_warmup_s": 30
+  "admission_warmup_s": 30,
+  "cpu_pressure_max": 30,
+  "load_per_cpu_max": 1.5,
+  "warmup_starts": 2,
+  "cpu_weight": 20
 }}
 ```
 
 `defaults` are each run's caps, `ceilings` the largest caps a step may ask for without
 `memory_above_ceiling`, and `total` the workload slice's caps. Each accepts the same three
 optional fields, each a value or unlimited; `guardian_memory`, `host_reserve` and
-`admission_charge` accept the memory syntax; `memory_pressure_max` is a percentage above 0 and
-at most 100; `admission_warmup_s` is a number of seconds, 0 or more. Memory is unlimited at a
+`admission_charge` accept the memory syntax; `memory_pressure_max` and `cpu_pressure_max` are
+percentages above 0 and at most 100; `admission_warmup_s` is a number of seconds, 0 or more;
+`load_per_cpu_max` is a number above 0; `warmup_starts` is an integer, at least 1; `cpu_weight`
+is an integer from 1 to 10000. Memory is unlimited at a
 level only with `"allow_unlimited_memory": true`: without it, a `null` (or `"unlimited"`)
 memory in `defaults`, `ceilings` or `total` is refused at load with an error naming the key,
 the size to set instead and the opt-in, so no run is ever uncapped by accident. Omitted fields
@@ -416,7 +422,7 @@ section selects the defaults below.
 
 | Setting | Default |
 |---|---|
-| Home total (the workload slice's caps) | min(70 GiB, 55% of effective host memory), the rest left to agents, editors and services; CPU unlimited; 65536 tasks |
+| Home total (the workload slice's caps) | min(70 GiB, 55% of effective host memory), the rest left to agents, editors and services; 75% of the effective CPUs; 65536 tasks |
 | Payload cap per run | 6 GiB memory, clamped to the ceiling; CPU and tasks unlimited |
 | Payload ceiling per run | 10 GiB memory, clamped to the home total minus guardian memory; CPU and tasks unlimited |
 | Guardian share per run (added to the service's caps) | 256 MiB or one eighth of total home memory, whichever is smaller; 0.1 CPU; 64 tasks |
@@ -424,17 +430,27 @@ section selects the defaults below.
 | Memory pressure limit | PSI `some avg10` 10% |
 | Admission charge | 1 GiB, at most the home memory total |
 | Admission warm-up | 30 s |
+| CPU pressure limit | PSI `some avg10` 30% |
+| Load limit | 1-minute load 1.5 per online CPU |
+| Starts per warm-up while CPU is over half a limit | 2 |
+| Workload slice CPU weight | 20 (systemd's default is 100) |
 
-**Admission by measured memory.** Before each admission the coordinator reads `/proc/meminfo`
-MemAvailable, `/proc/pressure/memory` `some avg10` (absent on a kernel without PSI) and, for
-each live run with a payload, the payload cgroup's `memory.current` and `memory.peak`. A run
-starts only while all three hold:
+**Admission by measured memory and CPU.** Before each admission the coordinator reads
+`/proc/meminfo` MemAvailable, `/proc/pressure/memory` and `/proc/pressure/cpu` `some avg10`
+(absent on a kernel without PSI), the 1-minute load from `/proc/loadavg`, the online CPUs from
+`/proc/stat` and, for each live run with a payload, the payload cgroup's `memory.current` and
+`memory.peak`. A run starts only while all six hold:
 
 1. **host memory:** MemAvailable less `host_reserve`, less the charges of runs still in their
    warm-up, covers the admission charge;
-2. **memory pressure:** `some avg10` is below `memory_pressure_max`;
+2. **memory pressure:** memory `some avg10` is below `memory_pressure_max`;
 3. **pool memory:** the live runs' measured memory plus the admission charge stays within
-   `total.memory`.
+   `total.memory`;
+4. **cpu pressure:** CPU `some avg10` is below `cpu_pressure_max`;
+5. **cpu load:** the 1-minute load divided by the online CPUs is below `load_per_cpu_max`;
+6. **cpu warm-up:** while CPU pressure or load per CPU is at or over half its limit, fewer than
+   `warmup_starts` runs are still in their warm-up, so a burst of ready steps starts a few at a
+   time and its load shows in the readings before more start.
 
 The admission charge is an internal estimate for a run not yet measured. A run counts at the
 charge (or its reading, if larger) until it has run for the warm-up, measured on the readings'
@@ -445,8 +461,12 @@ bounds, never all at once on one reading. A run that fails a check is held, not 
 `status` shows the step with the check that held it and its numbers, from the coordinator's last
 reading: `held: host memory (available 9.1 GiB, reserve 16 GiB, starting 2 GiB, need 1 GiB)`
 (`starting` only while runs are in their warm-up), `held: memory pressure (some avg10 13.8%,
-limit 10%)` or `held: pool memory (measured 66.2 GiB + 1 GiB > 70 GiB)`. Its unit's owner is
-told once per hold (a limit notice with `limit: "host_memory"`), and the scheduler checks again
+limit 10%)`, `held: pool memory (measured 66.2 GiB + 1 GiB > 70 GiB)`, `held: cpu pressure
+(some avg10 74.0%, limit 30%)`, `held: cpu load (1-min load 590.0 on 32 CPUs, 18.44 per CPU,
+limit 1.5)` or `held: cpu warm-up (2 runs started within 30 s, limit 2 while cpu pressure
+20.0%, over half of 30%)`. A step's `waiting` resource is `host memory` or `host cpu`. Its unit's
+owner is told once per hold (a limit notice with `limit: "host_memory"` or `"host_cpu"`), and
+the scheduler checks again
 every 5 s and starts it when the host recovers. A queued call stays pending and a direct call
 is refused with a retryable `busy` naming the hold. An unreadable `/proc/meminfo` holds
 admission. Scatter admits the items that pass and continues as memory frees; each item is
@@ -454,7 +474,9 @@ admitted separately while the step holds its logical `needs` once. Physical admi
 independent of logical resources: `lane` is an ordinary resource name, and omitting `needs`
 never bypasses the checks. `status` reports `execution.total` and `execution.memory`
 (`total_bytes`, `measured_bytes`, `starting_bytes`, `available_bytes`, `pressure_some_avg10`,
-`host_reserve_bytes`, `pressure_max`, `admission_charge_bytes`, `admission_warmup_s`), and each
+`host_reserve_bytes`, `pressure_max`, `admission_charge_bytes`, `admission_warmup_s`),
+`execution.cpu` (`pressure_some_avg10`, `load_avg1`, `cpus`, `load_per_cpu`, `starting_runs`,
+`pressure_max`, `load_per_cpu_max`, `warmup_starts`, `cpu_weight`), and each
 of a step's runs in `run_resources` with `memory: {cap_bytes, current_bytes, peak_bytes}`: its
 cap, its measured memory while live, and its peak (live, or from its final usage).
 
@@ -468,9 +490,13 @@ guardian processes.
 
 A policy change needs no drain. The scheduler notices a changed `config.json` within seconds
 and re-admits every project at once. The home's workload slice carries the total as
-`MemoryMax`, `CPUQuota`, `TasksMax` and `MemorySwapMax=0`; each launch applies them with
-`systemctl --user set-property --runtime` when they differ and reads them back, and a slice that
-does not keep them fails the launch. Existing runs keep their frozen caps; changes to run
+`MemoryMax`, `CPUQuota`, `TasksMax` and `MemorySwapMax=0`, and `cpu_weight` as `CPUWeight`; the
+coordinator applies them when it starts, and each launch applies them with `systemctl --user
+set-property --runtime` when they differ and reads them back, and a slice that does not keep them
+fails the launch. CPU weight only orders siblings, so at start the coordinator also sets
+`CPUWeight` on the slices the home's slice is nested in (`sluice-workloads.slice` and
+`sluice.slice`): under contention the user's other work (agents, editors, Sluice's own services)
+is scheduled ahead of the workloads, and `total.cpus` keeps the rest of the CPUs free of them. Existing runs keep their frozen caps; changes to run
 defaults and ceilings affect future admission only.
 
 Launch, adoption and terminal cleanup share a per-run process fence. A launcher rechecks the
@@ -528,15 +554,16 @@ accepted start is reconciled, never replayed. A deferred start is logged and tol
 reads each executing run's payload counters from its cgroup's event files (`memory.events`
 `oom_kill` and `max`, `pids.events` `max`, `cpu.stat` `throttled_usec`); completion carries the
 final counters. When a run has failed forks, has reached its memory cap, was OOM-killed, or
-has lost at least 60 s to its CPU quota, and when a ready step is held for memory, Sluice posts a `say` from `sluice` (§8) to whoever answers the
+has lost at least 60 s to its CPU quota, and when a ready step is held for memory or CPU, Sluice posts a `say` from `sluice` (§8) to whoever answers the
 run (its unit's owner, a call's session, else the project's fallback, else the person) and,
 while the run is live, the same `say` to the step itself, so its agent reads it in its inbox.
 Its `data.execution_limit` is `{run, step, limit, value, observed, outcome, since?}`: `run` is
-null for a held step; `limit` is `memory`, `tasks`, `cpus` or `host_memory`; `value` is the
-limit (`"unlimited"` when none), and for `host_memory` `{host_reserve_bytes,
-memory_pressure_max, admission_charge_bytes, total_memory_bytes}`; `observed` is the counters
-(`peak_bytes`, `oom_kills`, `max_events`, `failed_forks`, `throttled_usec`) or, for
-`host_memory`, the hold as status says it; `outcome` is `killed`, `running`, `throttled`,
+null for a held step; `limit` is `memory`, `tasks`, `cpus`, `host_memory` or `host_cpu`;
+`value` is the limit (`"unlimited"` when none), for `host_memory` `{host_reserve_bytes,
+memory_pressure_max, admission_charge_bytes, total_memory_bytes}` and for `host_cpu`
+`{cpu_pressure_max, load_per_cpu_max, warmup_starts, admission_warmup_s}`; `observed` is the
+counters (`peak_bytes`, `oom_kills`, `max_events`, `failed_forks`, `throttled_usec`) or, for a
+held step, the hold as status says it; `outcome` is `killed`, `running`, `throttled`,
 `finished` or `held`; `since` is when a held step began to wait. Each run and limit is told
 once, and each hold once.
 It is a message, not a new record kind, so releases pinned before it read the log unchanged;

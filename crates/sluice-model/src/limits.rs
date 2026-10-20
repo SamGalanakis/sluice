@@ -303,16 +303,19 @@ pub const DEFAULT_TOTAL_TASKS: u32 = 65536;
 /// the host's memory: the rest is the agents', the editor's and the services' own.
 pub const DEFAULT_TOTAL_MEMORY: u64 = 70 << 30;
 pub const DEFAULT_TOTAL_MEMORY_PERCENT: u64 = 55;
+/// The shipped home CPU total (the workload slice's CPUQuota) is this share of the host's CPUs,
+/// so work outside the slice always has the rest.
+pub const DEFAULT_TOTAL_CPU_PERCENT: u32 = 75;
 /// The shipped per-run memory ceiling: the largest cap a step may ask for without
 /// `memory_above_ceiling`.
 pub const DEFAULT_RUN_MEMORY_MAX: u64 = 10 << 30;
 /// The shipped per-run memory cap (`memory.max`).
 pub const DEFAULT_RUN_MEMORY: u64 = 6 << 30;
 impl ResourcePolicy {
-    /// The shipped policy: the home total is min(70 GiB, 55% of memory) with a task cap and no
-    /// CPU quota; a run is capped at 6 GiB and may ask for up to 10 GiB; CPU and tasks are
+    /// The shipped policy: the home total is min(70 GiB, 55% of memory), 75% of the CPUs and a
+    /// task cap; a run is capped at 6 GiB and may ask for up to 10 GiB; CPU and tasks are
     /// unlimited per run. Every value shrinks to fit a small host.
-    pub fn for_host(memory_bytes: u64, _cpu_millis: u32) -> Result<Self, String> {
+    pub fn for_host(memory_bytes: u64, cpu_millis: u32) -> Result<Self, String> {
         let total_memory = DEFAULT_TOTAL_MEMORY.min(
             u64::try_from(
                 u128::from(memory_bytes) * u128::from(DEFAULT_TOTAL_MEMORY_PERCENT) / 100,
@@ -335,7 +338,13 @@ impl ResourcePolicy {
             },
             total: Limits {
                 memory_bytes: Some(total_memory),
-                cpu_millis: None,
+                cpu_millis: Some(
+                    u32::try_from(
+                        u64::from(cpu_millis) * u64::from(DEFAULT_TOTAL_CPU_PERCENT) / 100,
+                    )
+                    .unwrap_or(u32::MAX)
+                    .max(GUARDIAN_CPU_MILLIS),
+                ),
                 tasks: Some(DEFAULT_TOTAL_TASKS),
             },
             guardian_memory_bytes,

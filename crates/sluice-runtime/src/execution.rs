@@ -64,12 +64,12 @@ pub trait ExecutionHost: FnHost + guardian::AdoptionHost + Send + Sync + 'static
     ) -> impl Future<Output = Option<sluice_model::RunUsage>> + Send {
         std::future::ready(None)
     }
-    /// The host's memory now, for admission by measured memory (SPEC §2.5). `None` when
-    /// there is no host to measure (fakes); an error holds admission.
-    fn host_memory(
+    /// The host's memory and CPU now, for admission by measured memory and CPU (SPEC §2.5).
+    /// `None` when there is no host to measure (fakes); an error holds admission.
+    fn host_reading(
         &self,
         _home: HomeId,
-    ) -> impl Future<Output = Option<io::Result<crate::headroom::HostMemory>>> + Send {
+    ) -> impl Future<Output = Option<io::Result<crate::headroom::HostReading>>> + Send {
         std::future::ready(None)
     }
     /// A live run's payload memory.current and memory.peak, read from its cgroup; `None`
@@ -84,6 +84,16 @@ pub trait ExecutionHost: FnHost + guardian::AdoptionHost + Send + Sync + 'static
     /// The clock admission's readings and warm-ups run on.
     fn now(&self) -> std::time::SystemTime {
         std::time::SystemTime::now()
+    }
+    /// Apply the home's workload slice settings (its caps and CPU weight, and the weight of the
+    /// slices above it) when the coordinator starts; fakes have no slice.
+    fn prepare_workloads(
+        &self,
+        _home: HomeId,
+        _total: sluice_model::limits::Limits,
+        _cpu_weight: u16,
+    ) -> impl Future<Output = io::Result<()>> + Send {
+        std::future::ready(Ok(()))
     }
     fn launch(
         &self,
@@ -138,10 +148,13 @@ impl guardian::AdoptionHost for OsHost {
     }
 }
 impl ExecutionHost for OsHost {
-    async fn host_memory(&self, _home: HomeId) -> Option<io::Result<crate::headroom::HostMemory>> {
+    async fn host_reading(
+        &self,
+        _home: HomeId,
+    ) -> Option<io::Result<crate::headroom::HostReading>> {
         // Tests never gate on the machine running them; a fixture can set a reading.
         if sluice_process::host::test_mode() {
-            return std::env::var("SLUICE_TEST_HOST_MEMORY")
+            return std::env::var("SLUICE_TEST_HOST_READING")
                 .ok()
                 .map(|reading| serde_json::from_str(&reading).map_err(io::Error::other));
         }
@@ -151,6 +164,20 @@ impl ExecutionHost for OsHost {
                 .map_err(io::Error::other)
                 .and_then(|reading| reading),
         )
+    }
+    async fn prepare_workloads(
+        &self,
+        home: HomeId,
+        total: sluice_model::limits::Limits,
+        cpu_weight: u16,
+    ) -> io::Result<()> {
+        // Tests create a home's slice only when they launch into it.
+        if sluice_process::host::test_mode() {
+            return Ok(());
+        }
+        sluice_process::systemd::WorkloadSlice::new(home, total, cpu_weight)?
+            .ensure_with_parents()
+            .await
     }
     async fn run_memory(
         &self,
@@ -291,9 +318,17 @@ impl ExecutionHost for OsHost {
         let queued_project = launch.invocation.project;
         let run = launch.identity.run;
         let run_budget = (launch.limits, launch.policy.guardian_memory_bytes);
-        let slice =
-            sluice_process::systemd::WorkloadSlice::new(launch.identity.home, launch.policy.total)
-                .map_err(storage)?;
+        // The caps are the admission's; the weight is the configuration's now.
+        let cpu_weight = crate::config::load_execution(&self.home)
+            .map_or(crate::config::DEFAULT_CPU_WEIGHT, |(_, headroom)| {
+                headroom.cpu_weight
+            });
+        let slice = sluice_process::systemd::WorkloadSlice::new(
+            launch.identity.home,
+            launch.policy.total,
+            cpu_weight,
+        )
+        .map_err(storage)?;
         match tokio::task::spawn_blocking(move || write_launch(&home, &launch)).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => return Ok(LaunchOutcome::Refused(storage(e))),
@@ -446,8 +481,8 @@ impl<H> CallLauncher<H> {
     }
 }
 impl<H: ExecutionHost> CallGuardian for CallLauncher<H> {
-    async fn host_memory(&self) -> Option<io::Result<crate::headroom::HostMemory>> {
-        self.host.host_memory(self.home).await
+    async fn host_reading(&self) -> Option<io::Result<crate::headroom::HostReading>> {
+        self.host.host_reading(self.home).await
     }
     async fn run_memory(
         &self,

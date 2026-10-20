@@ -140,8 +140,9 @@ impl HomeConfig {
     }
 }
 
-/// Admission by measured memory (SPEC §2.5): what must stay free for everything that is not a
-/// run, the memory pressure above which no run starts, and what a run not yet measured counts.
+/// Admission by measured memory and CPU (SPEC §2.5): what must stay free for everything that
+/// is not a run, the memory and CPU pressure and the load above which no run starts, what a run
+/// not yet measured counts, and the workload slice's CPU weight.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Headroom {
     /// `execution.host_reserve`: MemAvailable must keep this much after a new run's charge.
@@ -155,6 +156,18 @@ pub struct Headroom {
     /// `execution.admission_warmup_s`: how long a new run counts at its charge before its
     /// measured memory.current stands for it.
     pub warmup: Duration,
+    /// `execution.cpu_pressure_max`: the CPU PSI `some avg10` percentage at or above which runs
+    /// are held.
+    pub cpu_pressure_max: f64,
+    /// `execution.load_per_cpu_max`: the 1-minute load per online CPU at or above which runs
+    /// are held.
+    pub load_per_cpu_max: f64,
+    /// `execution.warmup_starts`: while CPU pressure or load is over half its limit, at most
+    /// this many runs start within one warm-up.
+    pub warmup_starts: u32,
+    /// `execution.cpu_weight`: the workload slices' CPUWeight, so work outside them is
+    /// scheduled first when the host is busy.
+    pub cpu_weight: u16,
 }
 /// The shipped `memory_pressure_max`.
 pub const DEFAULT_MEMORY_PRESSURE_MAX: f64 = 10.0;
@@ -162,6 +175,14 @@ pub const DEFAULT_MEMORY_PRESSURE_MAX: f64 = 10.0;
 pub const DEFAULT_ADMISSION_CHARGE: u64 = 1 << 30;
 /// The shipped `admission_warmup_s`.
 pub const DEFAULT_ADMISSION_WARMUP: Duration = Duration::from_secs(30);
+/// The shipped `cpu_pressure_max`.
+pub const DEFAULT_CPU_PRESSURE_MAX: f64 = 30.0;
+/// The shipped `load_per_cpu_max`.
+pub const DEFAULT_LOAD_PER_CPU_MAX: f64 = 1.5;
+/// The shipped `warmup_starts`.
+pub const DEFAULT_WARMUP_STARTS: u32 = 2;
+/// The shipped `cpu_weight` (systemd's default is 100).
+pub const DEFAULT_CPU_WEIGHT: u16 = 20;
 impl Headroom {
     /// The shipped host reserve is max(16 GiB, 15% of memory), never more than a quarter of it.
     pub fn for_host(memory_bytes: u64) -> Self {
@@ -173,6 +194,10 @@ impl Headroom {
             pressure_max: DEFAULT_MEMORY_PRESSURE_MAX,
             charge_bytes: DEFAULT_ADMISSION_CHARGE,
             warmup: DEFAULT_ADMISSION_WARMUP,
+            cpu_pressure_max: DEFAULT_CPU_PRESSURE_MAX,
+            load_per_cpu_max: DEFAULT_LOAD_PER_CPU_MAX,
+            warmup_starts: DEFAULT_WARMUP_STARTS,
+            cpu_weight: DEFAULT_CPU_WEIGHT,
         }
     }
 }
@@ -224,6 +249,10 @@ pub fn execution_from_value(
         memory_pressure_max: Option<f64>,
         admission_charge: Option<sluice_model::limits::MemoryBytes>,
         admission_warmup_s: Option<f64>,
+        cpu_pressure_max: Option<f64>,
+        load_per_cpu_max: Option<f64>,
+        warmup_starts: Option<u32>,
+        cpu_weight: Option<u16>,
     }
     if !value.is_object() {
         return Err("config.json must contain an object".into());
@@ -270,6 +299,32 @@ pub fn execution_from_value(
     if let Some(warmup) = config.admission_warmup_s {
         headroom.warmup = Duration::try_from_secs_f64(warmup)
             .map_err(|_| "execution.admission_warmup_s must be a number of seconds, 0 or more")?;
+    }
+    if let Some(pressure) = config.cpu_pressure_max {
+        if !(pressure.is_finite() && pressure > 0.0 && pressure <= 100.0) {
+            return Err(
+                "execution.cpu_pressure_max must be a percentage above 0 and at most 100".into(),
+            );
+        }
+        headroom.cpu_pressure_max = pressure;
+    }
+    if let Some(load) = config.load_per_cpu_max {
+        if !(load.is_finite() && load > 0.0) {
+            return Err("execution.load_per_cpu_max must be a number above 0".into());
+        }
+        headroom.load_per_cpu_max = load;
+    }
+    if let Some(starts) = config.warmup_starts {
+        if starts == 0 {
+            return Err("execution.warmup_starts must be at least 1".into());
+        }
+        headroom.warmup_starts = starts;
+    }
+    if let Some(weight) = config.cpu_weight {
+        if !(1..=10_000).contains(&weight) {
+            return Err("execution.cpu_weight must be from 1 to 10000".into());
+        }
+        headroom.cpu_weight = weight;
     }
     let mut policy = ResourcePolicy::for_host(memory_bytes, cpu_millis)?;
     policy.total = config.total.apply(policy.total)?;

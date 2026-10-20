@@ -14,9 +14,10 @@
   Use `Clock::scope` for helpers called outside the page router. Production uses the system
   clock and the original intervals. Child-process fixtures can set
   `SLUICE_TEST_DEVIN_TURN_QUIET_S` or `SLUICE_TEST_CUTOVER_LEASE_S`; both are read only
-  when `SLUICE_TEST=1` and otherwise ignored. Admission's host-memory reading
-  (`ExecutionHost::host_memory`) is the same kind of seam: in test mode the OS host measures
-  nothing unless `SLUICE_TEST_HOST_MEMORY` holds a reading as JSON. Notification command
+  when `SLUICE_TEST=1` and otherwise ignored. Admission's host reading of memory and CPU
+  (`ExecutionHost::host_reading`) is the same kind of seam: in test mode the OS host measures
+  nothing unless `SLUICE_TEST_HOST_READING` holds a reading as JSON, and the coordinator's
+  start applies no workload slice settings (a launch still does). Notification command
   timeouts stay real.
 - Tests start the binaries they test through `env!("CARGO_BIN_EXE_sluice")` (and the other
   `CARGO_BIN_EXE_*`), never a path under `target/`, so each test runs what cargo just built.

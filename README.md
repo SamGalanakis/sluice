@@ -65,7 +65,13 @@ measured memory plus the charge fits `execution.total.memory` (default min(70 Gi
 host's memory), also the workload slice's `MemoryMax`, and never above the nearest cgroup's
 `memory.max`, such as `user.slice`'s). A new run counts at the charge for its first 30 s
 (`execution.admission_warmup_s`). Otherwise it waits and `status` names the check, e.g.
-`held: host memory (available 9.1 GiB, reserve 16 GiB, need 1 GiB)`. Memory can be made
+`held: host memory (available 9.1 GiB, reserve 16 GiB, need 1 GiB)`. Runs also wait while
+CPU pressure (PSI `some avg10`) reaches `execution.cpu_pressure_max` (30) or the 1-minute load
+per CPU reaches `execution.load_per_cpu_max` (1.5), and while either is over half its limit at
+most `execution.warmup_starts` (2) start per warm-up, e.g. `held: cpu pressure (some avg10
+74.0%, limit 30%)`. The workload slice is capped at `execution.total.cpus` (default 75% of the
+CPUs) with `CPUWeight` `execution.cpu_weight` (default 20), so your own work always gets CPU.
+Memory can be made
 unlimited (`null`) only with `"allow_unlimited_memory": true` under `execution`; without it such
 a config is refused. SPEC.md §2.5 has the details.
 

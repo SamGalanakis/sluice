@@ -56,8 +56,10 @@ fn build() -> RunLimits {
 
 /// Bugs: a run's pids.max of 512 made a Buck2 sync fail with EAGAIN (an unlimited-tasks run
 /// must get `max` and start more than 512 threads); a task-limit hit went unseen (it must show
-/// in the run's counters from pids.events); and raising the home total refused to apply while
-/// runs were live.
+/// in the run's counters from pids.events); raising the home total refused to apply while
+/// runs were live; and the workloads competed with foreground work at full weight with no CPU
+/// ceiling until an operator set one by hand (2026-10-20): the slice's CPU quota and weight,
+/// and the weight of the slices above it, are applied and read back.
 #[tokio::test]
 async fn resource_limits_share_sibling_budget_and_isolate_neighboring_run() {
     let home = tempfile::tempdir().unwrap();
@@ -67,7 +69,7 @@ async fn resource_limits_share_sibling_budget_and_isolate_neighboring_run() {
         tasks: Some(2048),
     };
     let home_id = HomeId::new();
-    let slice = WorkloadSlice::new(home_id, totals).unwrap();
+    let slice = WorkloadSlice::new(home_id, totals, 20).unwrap();
     let mut units = Units(Vec::new(), slice.name().to_owned());
     for mode in ["survivor", "victim", "threads"] {
         let dir = home.path().join(mode);
@@ -141,8 +143,30 @@ async fn resource_limits_share_sibling_budget_and_isolate_neighboring_run() {
     assert!(threads["threads"].as_u64().unwrap() > 512, "{threads}");
     assert_eq!(threads["usage"]["pids_limit_hits"], 0, "{threads}");
     assert!(units.0[0].query().await.unwrap().main_pid.is_some());
-    slice.ensure().await.unwrap();
-    // A changed total applies to the populated slice; live runs keep their own caps.
+    slice.ensure_with_parents().await.unwrap();
+    let group = |unit: &str| {
+        let group = String::from_utf8(
+            Command::new("/usr/bin/systemctl")
+                .args(["--user", "show", "--property=ControlGroup", "--value", unit])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        Path::new("/sys/fs/cgroup").join(group.trim().trim_start_matches('/'))
+    };
+    let read = |unit: &str, file: &str| {
+        fs::read_to_string(group(unit).join(file))
+            .unwrap()
+            .trim()
+            .to_owned()
+    };
+    assert_eq!(read(slice.name(), "cpu.max"), "200000 100000");
+    let parents = slice.parents();
+    for unit in [slice.name(), &parents[0], &parents[1]] {
+        assert_eq!(read(unit, "cpu.weight"), "20", "{unit}");
+    }
+    // A changed total and weight apply to the populated slice; live runs keep their own caps.
     let changed = WorkloadSlice::new(
         home_id,
         Limits {
@@ -150,33 +174,13 @@ async fn resource_limits_share_sibling_budget_and_isolate_neighboring_run() {
             cpu_millis: None,
             ..totals
         },
+        50,
     )
     .unwrap();
     changed.ensure().await.unwrap();
-    let group = String::from_utf8(
-        Command::new("/usr/bin/systemctl")
-            .args([
-                "--user",
-                "show",
-                "--property=ControlGroup",
-                "--value",
-                slice.name(),
-            ])
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
-    let group = Path::new("/sys/fs/cgroup").join(group.trim().trim_start_matches('/'));
-    assert_eq!(
-        fs::read_to_string(group.join("memory.max")).unwrap().trim(),
-        (2u64 << 30).to_string()
-    );
-    assert!(
-        fs::read_to_string(group.join("cpu.max"))
-            .unwrap()
-            .starts_with("max ")
-    );
+    assert_eq!(read(slice.name(), "memory.max"), (2u64 << 30).to_string());
+    assert!(read(slice.name(), "cpu.max").starts_with("max "));
+    assert_eq!(read(slice.name(), "cpu.weight"), "50");
     fs::write(home.path().join("survivor/finish"), b"done").unwrap();
     wait_file(&home.path().join("survivor/evidence.json")).await;
     let survivor: RunUsage =
@@ -190,7 +194,7 @@ async fn resource_limits_share_sibling_budget_and_isolate_neighboring_run() {
 /// must match its frozen budget; a cap lost after start is applied again.
 #[tokio::test]
 async fn a_runs_limits_are_read_back_and_a_lost_cap_is_applied_again() {
-    let slice = WorkloadSlice::new(HomeId::new(), Limits::UNLIMITED).unwrap();
+    let slice = WorkloadSlice::new(HomeId::new(), Limits::UNLIMITED, 20).unwrap();
     let mut units = Units(
         vec![TransientService::for_test(RunId::new())],
         slice.name().to_owned(),

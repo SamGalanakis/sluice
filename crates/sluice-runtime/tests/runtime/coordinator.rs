@@ -32,7 +32,7 @@ struct Fake(
     /// Each live run's cgroup counters, as the OS host reads them from the event files.
     Arc<Mutex<std::collections::BTreeMap<RunId, sluice_model::RunUsage>>>,
     /// The host's memory as the OS host reads it from /proc; `None` measures nothing.
-    Arc<Mutex<Option<sluice_runtime::headroom::HostMemory>>>,
+    Arc<Mutex<Option<sluice_runtime::headroom::HostReading>>>,
     /// Each live run's payload memory.current and memory.peak.
     Arc<Mutex<std::collections::BTreeMap<RunId, sluice_model::limits::RunMemory>>>,
     /// Seconds the host's clock is ahead of the wall clock.
@@ -88,10 +88,10 @@ impl ExecutionHost for Fake {
     async fn usage(&self, run: RunId, _: &str) -> Option<sluice_model::RunUsage> {
         self.3.lock().unwrap().get(&run).copied()
     }
-    async fn host_memory(
+    async fn host_reading(
         &self,
         _: HomeId,
-    ) -> Option<std::io::Result<sluice_runtime::headroom::HostMemory>> {
+    ) -> Option<std::io::Result<sluice_runtime::headroom::HostReading>> {
         self.4.lock().unwrap().map(Ok)
     }
     async fn run_memory(
@@ -2573,7 +2573,11 @@ async fn a_limit_hit_reaches_the_owner_once() {
     let a = fake.launched(1).await.remove(0);
     assert_eq!((a.limits.tasks, a.limits.cpu_millis), (Some(32), None));
     let status = data_of(&b, json!({"command":"status","args":{"project":selector,"all":true,"selection":{"steps":null,"tags":null}}})).await;
-    assert_eq!(status["execution"]["total"]["cpu_millis"], "unlimited");
+    // The home's slice has a CPU quota by default; a run has none of its own.
+    assert!(
+        status["execution"]["total"]["cpu_millis"].is_u64(),
+        "{status}"
+    );
     assert_eq!(status["steps"]["a"]["limits"]["cpu_millis"], "unlimited");
 
     // A live run's failed forks (pids.events) reach its unit's owner and the step itself,
@@ -2646,9 +2650,10 @@ async fn admission_counts_measured_memory_and_new_runs_at_their_charge() {
     .unwrap();
     let fake = Fake::default();
     let host = |available: u64, pressure: f64| {
-        *fake.4.lock().unwrap() = Some(sluice_runtime::headroom::HostMemory {
+        *fake.4.lock().unwrap() = Some(sluice_runtime::headroom::HostReading {
             available_bytes: available,
-            pressure_some_avg10: Some(pressure),
+            memory_pressure_some_avg10: Some(pressure),
+            ..Default::default()
         });
     };
     let warm_up = || {
@@ -2793,6 +2798,131 @@ async fn admission_counts_measured_memory_and_new_runs_at_their_charge() {
         held().await,
         ["held: pool memory (measured 1012 MiB + 64 MiB > 1 GiB)"]
     );
+}
+
+/// Bug (incident 2026-10-20): turbo reached a 1-minute load of 590 on 32 CPUs with 36 GB free,
+/// because admission checked only memory and kept starting runs, about 59 at once. A run now
+/// also waits while CPU pressure or the load per CPU is at its limit, and while either is over
+/// half its limit at most `warmup_starts` runs start within one warm-up. A burst of 40 ready
+/// steps on a loaded host is held with the readings' numbers and the owner is told once.
+#[tokio::test]
+async fn admission_holds_a_burst_on_cpu_pressure_load_and_recent_starts() {
+    let home = home::ScratchHome::new().unwrap();
+    std::fs::write(
+        home.path().join("config.json"),
+        json!({"execution":{
+            "defaults":{"memory":"256MiB"},
+            "ceilings":{"memory":"512MiB"},
+            "total":{"memory":"4GiB"},
+            "guardian_memory":"16MiB",
+            "host_reserve":"1GiB",
+            "admission_charge":"64MiB",
+            "admission_warmup_s":30,
+            "cpu_pressure_max":30,
+            "load_per_cpu_max":1.5,
+            "warmup_starts":2
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    let fake = Fake::default();
+    let host = |pressure: f64, load: f64| {
+        *fake.4.lock().unwrap() = Some(sluice_runtime::headroom::HostReading {
+            available_bytes: 8 << 30,
+            memory_pressure_some_avg10: Some(0.0),
+            cpu_pressure_some_avg10: Some(pressure),
+            load_avg1: Some(load),
+            cpus: Some(32),
+        });
+    };
+    host(74.0, 590.0);
+    let b = Coordinator::open(home.path().into(), Catalog::fixtures(), fake.clone())
+        .await
+        .unwrap();
+    let CommandReply::Project(p)=b.command(request(json!({"command":"project_create","args":{"name":"p","description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap()else{panic!("project")};
+    let p = p.project_id;
+    let selector = json!({"kind":"id","value":p});
+    let ops: Vec<Value> = (0..40).map(|n| json!({"op":"step.add","step":format!("s{n:02}"),"spec":{"run":"fixture.submit","in":{"value":{"default":n}},"outputs":{"submitted":"boolean"}}})).collect();
+    b.command(request(json!({"command":"plan_edit","args":{"project":selector,"ops":ops,"start":true,"dry_run":false,"reason":"test","author":"@lead","me":"@lead"}}))).await.unwrap();
+    let status = async || {
+        data_of(&b, json!({"command":"status","args":{"project":selector,"all":true,"selection":{"steps":null,"tags":null}}})).await
+    };
+    let held = async || {
+        let status = status().await;
+        let mut held: Vec<String> = status["steps"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter_map(|step| step["waiting"].as_array())
+            .flatten()
+            .filter_map(|reason| reason.as_str().map(str::to_owned))
+            .collect();
+        held.sort();
+        held.dedup();
+        held
+    };
+    b.acquire_scheduler("cpu".into()).await.unwrap();
+
+    // The incident's host: CPU pressure over its limit holds all 40, and the owner hears once.
+    assert_eq!(reconcile_project(&b, p, "cpu").await.unwrap(), 0);
+    assert_eq!(
+        held().await,
+        ["held: cpu pressure (some avg10 74.0%, limit 30%)"]
+    );
+    let notices = b
+        .reads()
+        .snapshot(move |sql| {
+            let mut statement = sql.prepare("SELECT DISTINCT \"to\" FROM messages WHERE project_id=?1 AND \"from\"='sluice' AND json_extract(data,'$.execution_limit.limit')='host_cpu'")?;
+            let rows = statement
+                .query_map([p.to_string()], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap();
+    assert_eq!(notices, ["@lead"]);
+    // The load per CPU holds on its own.
+    host(5.0, 590.0);
+    assert_eq!(reconcile_project(&b, p, "cpu").await.unwrap(), 0);
+    assert_eq!(
+        held().await,
+        ["held: cpu load (1-min load 590.0 on 32 CPUs, 18.44 per CPU, limit 1.5)"]
+    );
+
+    // Over half a limit, two start and the rest wait out the warm-up on the same reading.
+    host(20.0, 16.0);
+    assert_eq!(reconcile_project(&b, p, "cpu").await.unwrap(), 2);
+    assert_eq!(reconcile_project(&b, p, "cpu").await.unwrap(), 0);
+    assert_eq!(fake.launched(2).await.len(), 2);
+    assert_eq!(
+        held().await,
+        [
+            "held: cpu warm-up (2 runs started within 30 s, limit 2 while cpu pressure 20.0%, over half of 30%)"
+        ]
+    );
+    host(5.0, 32.0);
+    assert_eq!(reconcile_project(&b, p, "cpu").await.unwrap(), 0);
+    assert_eq!(
+        held().await,
+        [
+            "held: cpu warm-up (2 runs started within 30 s, limit 2 while load 1.00 per CPU, over half of 1.5)"
+        ]
+    );
+    let shown = &status().await["execution"]["cpu"];
+    assert_eq!(
+        *shown,
+        json!({"pressure_some_avg10": 5.0, "load_avg1": 32.0, "cpus": 32, "load_per_cpu": 1.0,
+            "starting_runs": 2, "pressure_max": 30.0, "load_per_cpu_max": 1.5,
+            "warmup_starts": 2, "cpu_weight": 20}),
+    );
+    // Past the warm-up two more start.
+    fake.6.fetch_add(31, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(reconcile_project(&b, p, "cpu").await.unwrap(), 2);
+    assert_eq!(fake.launched(4).await.len(), 4);
+    // A quiet host starts the rest at once.
+    host(1.0, 4.0);
+    assert_eq!(reconcile_project(&b, p, "cpu").await.unwrap(), 36);
+    assert_eq!(fake.launched(40).await.len(), 40);
 }
 
 /// Bug (2026-10-20): a total above the host's effective memory left the coordinator serving

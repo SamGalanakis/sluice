@@ -1286,10 +1286,10 @@ pub struct LimitNotice {
     /// `None` for a step still waiting for admission.
     pub run: Option<RunId>,
     pub step: Option<StepId>,
-    /// `memory`, `tasks`, `cpus`, or `host_memory` (for a held step).
+    /// `memory`, `tasks`, `cpus`, or `host_memory` or `host_cpu` (for a held step).
     pub limit: &'static str,
     /// The limit's value (`"unlimited"` when it has none), or admission's settings for
-    /// `host_memory`.
+    /// `host_memory` and `host_cpu`.
     pub value: Value,
     /// Peak bytes, failed forks, throttled microseconds, or the hold reason.
     pub observed: Value,
