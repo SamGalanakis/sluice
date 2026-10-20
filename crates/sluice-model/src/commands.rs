@@ -929,12 +929,13 @@ impl StatusView {
 }
 
 /// A unit's state in the units view, checked in this order (the status table's, `shown`: a
-/// stopped step first): a step failed or stale, a step running, every step succeeded or
+/// stopped step first): a step failed or stale, all running steps parked, a step running, every step succeeded or
 /// skipped, nothing startable and something held, a step queued on resources, else pending.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum UnitState {
     Running,
+    Parked,
     Failed,
     Settled,
     Blocked,
@@ -1017,7 +1018,8 @@ pub struct Park {
     pub run: RunId,
     /// `lease:<resource>[:<amount>]`, `pid:<n>` or `file:<absolute path>[:<marker>]`.
     pub until: String,
-    /// Wake after this long even when `until` has not fired.
+    /// Wake after this many seconds even when `until` has not fired; defaults to the
+    /// installation park_timeout_seconds (3600). Explicit longer bounds are allowed.
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
     /// Set by `sluice tool park` for a `pid:` condition: the process's start time, so a

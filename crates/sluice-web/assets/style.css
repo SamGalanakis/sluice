@@ -1045,7 +1045,7 @@ svg.icon { stroke-width: var(--glyph-stroke); }
 .g-running, .g-finishing, .g-external { color: var(--run-ink); }
 .g-succeeded, .g-manual { color: var(--sky-ink); }
 .g-stale, .g-quiet { color: var(--sand-ink); }
-.g-paused { color: var(--ink-muted); }
+:is(.g-paused,.g-parked) { color: var(--ink-muted); }
 .g-failed { color: var(--sand-ink); }
 .g-blocked { color: var(--ink); }
 /* cancelled: the owner stopped it on purpose, so a calm stop sign in muted ink, never failure's
@@ -1709,7 +1709,7 @@ td.num, th.num { text-align: right; }
 .b-failed { background: var(--ink); }
 .b-blocked { background: color-mix(in srgb, var(--ink) 40%, var(--paper-2)); }
 .b-pending, .b-held, .b-queued { background: var(--paper-2); }
-.b-paused { background: var(--ink-muted); }
+:is(.b-paused,.b-parked) { background: var(--ink-muted); }
 .b-skipped { background: color-mix(in srgb, var(--idle) 45%, var(--paper-2)); }
 .dur { font-size: 13px; color: var(--ink-muted); white-space: nowrap; }
 

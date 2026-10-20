@@ -735,14 +735,17 @@ sluice tool park --until lease:gate[:N] | pid:<n> | file:<path>[:<marker>] [--ti
 It answers `parked: true`; end your turn at once and do nothing else. The runner keeps your
 session, and while you wait it releases your step's `needs` (its lane), so another step can
 run. When the condition fires (the lease is granted, the process exits, the file exists and
-contains the marker) or `--timeout` passes, the runner takes the step's needs back (queued by
-its priority) and resumes the same session with one message: `woke: lease:gate, lease 17`
-(`woke: timeout after 600s waiting for pid:4242` after a timeout). `lease:` adopts a request
-of yours for that resource and amount that is still waiting, keeping its place, else queues
+contains the marker), an addressed message arrives, or the timeout passes, the runner takes
+back the step's needs (queued by its priority) and resumes the same session with one message: `woke: lease:gate, lease 17`
+(`woke: your park condition did not happen within 600s: pid:4242` after a timeout).
+A message wakes you with `woke: woken by a message` and the message itself (say, ask, reply,
+or retry feedback); retry feedback to a parked step resumes that run. If `--timeout` is absent,
+the installation's `park_timeout_seconds` applies (default one hour). Explicit longer timeouts
+are allowed. Status and the units view show the condition and elapsed wait; query's `parked`
+view lists live parks. `lease:` adopts a request of yours for that resource and amount that is still waiting, keeping its place, else queues
 one; the woken lease is yours to `release`. With `parked: false` the condition held already
 (a lease granted at once is yours) and you carry on. Parked time does not count toward the
-agent's wall cap; messages to a parked step are delivered after it wakes. Only agent runs on
-the claude or codex engine park (devin is refused: wait with `lease acquire --wait`), and not
+agent's wall cap. Only agent runs on the claude or codex engine park (devin is refused: wait with `lease acquire --wait`), and not
 a scattered step's items. Every tool here is on MCP too (`lease_acquire`, `lease_release`,
 `lease_status`, `park`); in a run, `project` and `run` default to its own.
 

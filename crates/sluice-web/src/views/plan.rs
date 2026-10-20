@@ -1513,7 +1513,11 @@ impl<'a> Plan<'a> {
             } else {
                 shown.word().to_owned()
             };
-            if row.waiting {
+            if let Some(park) = &step.parked {
+                let words = format!("parked · {}", ui::since(&park.since));
+                meta.push_str(ui::status_pill(Shown::Parked, &words).as_str());
+                let _ = write!(meta, "<span class=\"ro-why\">{}</span>", esc(&park.until));
+            } else if row.waiting {
                 // a loose step's stage is its state: said once
                 let words = if stage == shown.word() {
                     stage.clone()
@@ -1559,7 +1563,7 @@ impl<'a> Plan<'a> {
                 );
             }
         }
-        if !row.waiting {
+        if !row.waiting && shown != Shown::Parked {
             let quiet_step = unit.steps.iter().find(|s| s.shown() == Shown::Quiet);
             match (quiet_step, row.heard) {
                 // quiet: its pill says for how long
@@ -1655,7 +1659,7 @@ impl<'a> Plan<'a> {
                     .iter()
                     .filter_map(|s| epoch(&s.active_at))
                     .reduce(f64::max),
-                quiet: running.iter().any(|s| s.quiet || s.shown() == Shown::Quiet),
+                quiet: running.iter().any(|s| s.shown() == Shown::Quiet),
             },
             self.now,
         )
@@ -1800,13 +1804,22 @@ fn row_counts(rows: &[&Row<'_>]) -> String {
         .filter(|r| !r.waiting && r.unit.steps.iter().any(|s| s.shown() == Shown::Quiet))
         .count();
     let waiting = rows.iter().filter(|r| r.waiting).count();
-    let running = rows.len() - quiet - waiting;
-    [(quiet, "quiet"), (running, "running"), (waiting, "waiting")]
-        .into_iter()
-        .filter(|(n, _)| *n > 0)
-        .map(|(n, word)| format!("{n} {word}"))
-        .collect::<Vec<_>>()
-        .join(", ")
+    let parked = rows
+        .iter()
+        .filter(|r| r.unit.shown() == Shown::Parked)
+        .count();
+    let running = rows.len() - quiet - waiting - parked;
+    [
+        (quiet, "quiet"),
+        (parked, "parked"),
+        (running, "running"),
+        (waiting, "waiting"),
+    ]
+    .into_iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, word)| format!("{n} {word}"))
+    .collect::<Vec<_>>()
+    .join(", ")
 }
 
 // ---- the plan's parts, drawn here and on `/_ui` -------------------------------------------------

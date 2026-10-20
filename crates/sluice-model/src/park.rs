@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{error::PublicError, ids::LeaseId};
 
+/// The default bound, also used for parks recorded by releases that allowed no timeout.
+pub const DEFAULT_PARK_TIMEOUT_SECONDS: u64 = 3600;
+
 /// One `--until` condition. Its text form is what the wake message names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -181,4 +184,15 @@ mod tests {
             assert!(ParkCondition::parse(bad).is_err(), "{bad}");
         }
     }
+}
+
+/// A live run's park as exposed by status, units and the dashboard.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Parked {
+    pub run: crate::ids::RunId,
+    pub until: String,
+    pub phase: ParkPhase,
+    pub since: String,
+    pub waited_seconds: f64,
+    pub timeout_seconds: u64,
 }

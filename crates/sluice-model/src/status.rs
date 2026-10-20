@@ -41,6 +41,7 @@ pub struct StepFacts {
     pub finishing: Option<crate::attempt::Finishing>,
     /// A running step whose cancel was asked for: its run is stopping.
     pub stopping: bool,
+    pub parked: Option<crate::park::Parked>,
 }
 
 /// A unit row's finishing step (SPEC §12.4).
@@ -49,6 +50,14 @@ pub struct FinishingStep {
     pub step: String,
     #[serde(flatten)]
     pub finishing: crate::attempt::Finishing,
+}
+
+/// A unit's parked step, with the condition and elapsed wait.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ParkedStep {
+    pub step: String,
+    #[serde(flatten)]
+    pub park: crate::park::Parked,
 }
 
 /// The last message on a step's thread (`step-<id>`).
@@ -63,8 +72,7 @@ pub struct LastMessage {
 pub struct UnitRow {
     pub unit: String,
     pub state: UnitState,
-    /// The state its steps read as first (`shown`): its mark in `line`. Not on the wire.
-    #[serde(skip)]
+    /// The state its steps read as first (`shown`): its mark in `line`.
     pub shown: Shown,
     pub age: Option<i64>,
     /// The instant `age` counts from (RFC 3339): a page ticks it, so the age never changes it.
@@ -78,6 +86,8 @@ pub struct UnitRow {
     /// Its running steps that have submitted and are only finishing.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub finishing: Vec<FinishingStep>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parked: Vec<ParkedStep>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -493,7 +503,17 @@ pub fn units_view(
         {
             UnitState::Failed
         } else if statuses.contains(&StepStatus::Running) {
-            UnitState::Running
+            if unit
+                .steps
+                .iter()
+                .zip(&statuses)
+                .filter(|(_, s)| **s == StepStatus::Running)
+                .all(|(id, _)| fact(id).parked.is_some())
+            {
+                UnitState::Parked
+            } else {
+                UnitState::Running
+            }
         } else if statuses
             .iter()
             .all(|s| matches!(s, StepStatus::Succeeded | StepStatus::Skipped))
@@ -516,7 +536,15 @@ pub fn units_view(
             continue;
         }
         // the longest-running step's run, or the latest change: its seconds and its instant
-        let (exact, since) = if unit_state == UnitState::Running {
+        let (exact, since) = if unit_state == UnitState::Parked {
+            unit.steps
+                .iter()
+                .filter_map(|id| fact(id).parked.as_ref())
+                .max_by(|a, b| a.waited_seconds.total_cmp(&b.waited_seconds))
+                .map_or((None, None), |p| {
+                    (Some(p.waited_seconds), Some(p.since.clone()))
+                })
+        } else if unit_state == UnitState::Running {
             let mut longest = (0.0, None);
             for (id, _) in unit
                 .steps
@@ -561,6 +589,7 @@ pub fn units_view(
                     queued: fact(id).queued.is_some(),
                     finishing: fact(id).finishing.is_some(),
                     stopping: fact(id).stopping,
+                    parked: fact(id).parked.is_some(),
                     ..Facts::of(status.clone())
                 })
             })
@@ -615,7 +644,30 @@ pub fn units_view(
             last,
             line: String::new(),
             finishing,
+            parked: unit
+                .steps
+                .iter()
+                .filter_map(|id| {
+                    fact(id).parked.clone().map(|park| ParkedStep {
+                        step: id.to_string(),
+                        park,
+                    })
+                })
+                .collect(),
         };
+        if !row.parked.is_empty() {
+            let waiting = row
+                .parked
+                .iter()
+                .map(|p| format!("parked: {}", p.park.until))
+                .collect::<Vec<_>>()
+                .join("; ");
+            row.blocked = if row.blocked.is_empty() {
+                waiting
+            } else {
+                format!("{}; {waiting}", row.blocked)
+            };
+        }
         row.line = line(&row);
         exacts.push(exact.unwrap_or(-1.0));
         view.rows.push(row);

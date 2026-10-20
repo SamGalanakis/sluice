@@ -140,6 +140,8 @@ async fn states(f: &Fixture) -> ProjectId {
             run(tx, id, "s-quiet", "2026-01-01T00:00:00Z", false)?;
             run(tx, id, "s-stopping", &recent, true)?;
             run(tx, id, "s-running", &recent, false)?;
+            let parked = run(tx, id, "s-parked", &recent, false)?;
+            tx.sql().execute("UPDATE attempts SET request=json_object('park',json(?2)) WHERE attempt_id=(SELECT attempt_id FROM runs WHERE run_id=?1)", (parked.to_string(), json!({"condition":{"kind":"file","path":"/tmp/ruling","marker":null},"timeout_seconds":3600,"lease":null,"phase":"parked","requested_at":recent,"parked_at":recent}).to_string()))?;
             let finishing = run(tx, id, "s-finishing", &recent, false)?;
             tx.sql().execute(
                 "INSERT INTO submissions(run_id,project_id,step_id,outputs,at) VALUES(?1,?2,'s-finishing','{}',?3)",
@@ -154,7 +156,7 @@ async fn states(f: &Fixture) -> ProjectId {
     for (i, _) in Shown::ALL.iter().enumerate() {
         program.push_str(&format!(", st{i}, n{i}"));
     }
-    program.push_str("])\nunits = Units([\"running\", \"failed\", \"settled\", \"blocked\", \"queued\", \"pending\"])\n");
+    program.push_str("])\nunits = Units([\"parked\", \"running\", \"failed\", \"settled\", \"blocked\", \"queued\", \"pending\"])\n");
     for (i, state) in Shown::ALL.iter().enumerate() {
         program.push_str(&format!(
             "st{i} = StepStatus(\"{}\")\nn{i} = Count(\"{} steps\", \"{}\")\n",
@@ -380,8 +382,8 @@ async fn states_priorities_cancellation_and_skipped_units() {
         let sum = plan_html::summary(&html);
         for said in [
             "1 failed, 1 cancelled, 1 stale, 1 quiet.",
-            "5 at work;",
-            "3 of 16 done · 16 steps.",
+            "6 at work;",
+            "3 of 17 done · 17 steps.",
         ] {
             assert!(sum.contains(said), "{said}: {sum}");
         }
@@ -400,7 +402,7 @@ async fn states_priorities_cancellation_and_skipped_units() {
         let card = between(&home, "aria-label=\"states\"", "</article>");
         assert!(
             card.contains(
-                "<p class=\"pm-summary\">1 failed, 1 cancelled, 1 stale, 1 quiet. 5 at work;"
+                "<p class=\"pm-summary\">1 failed, 1 cancelled, 1 stale, 1 quiet. 6 at work;"
             ) && card.contains("<li><b>Long runs</b> · 1 quiet<span class=\"pm-g-said\"><a href=")
                 && card.contains("/steps/s-quiet\">s-quiet</a>"),
             "{card}"

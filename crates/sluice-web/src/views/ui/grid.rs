@@ -202,7 +202,9 @@ impl Cell {
             return Cell::Empty;
         };
         let spec = shown.spec();
-        if spec.band == Band::Done {
+        if shown == Shown::Parked {
+            Cell::Empty
+        } else if spec.band == Band::Done {
             Cell::Done
         } else if spec.attention {
             Cell::Look

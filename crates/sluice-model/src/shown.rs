@@ -32,6 +32,8 @@ pub enum Shown {
     Stopping,
     /// Running, and its run has submitted: only finishing (SPEC §6.4).
     Finishing,
+    /// Running session held idle, its lane released.
+    Parked,
     Running,
     /// Pending, ready, and done outside sluice (`core.external`).
     External,
@@ -119,7 +121,7 @@ pub struct Spec {
 
 impl Shown {
     /// Every state, in priority order.
-    pub const ALL: [Shown; 16] = [
+    pub const ALL: [Shown; 17] = [
         Shown::Failed,
         Shown::Cancelled,
         Shown::Stale,
@@ -127,6 +129,7 @@ impl Shown {
         Shown::Blocked,
         Shown::Stopping,
         Shown::Finishing,
+        Shown::Parked,
         Shown::Running,
         Shown::External,
         Shown::Paused,
@@ -224,6 +227,18 @@ impl Shown {
                 attention: false,
                 caption: true,
                 help: "Its agent submitted; its run is ending",
+            },
+            Shown::Parked => Spec {
+                key: "parked",
+                word: "parked",
+                icon: "circle-pause",
+                turns: false,
+                lane: 'Ⅱ',
+                tone: Tone::Paused,
+                band: Band::Running,
+                attention: false,
+                caption: true,
+                help: "Its session waits for a condition, a message or its timeout",
             },
             Shown::Running => Spec {
                 key: "running",
@@ -354,7 +369,7 @@ impl Shown {
         match self {
             Shown::Failed | Shown::Cancelled => StepStatus::Failed,
             Shown::Stale => StepStatus::Stale,
-            Shown::Quiet | Shown::Stopping | Shown::Finishing | Shown::Running => {
+            Shown::Quiet | Shown::Stopping | Shown::Finishing | Shown::Parked | Shown::Running => {
                 StepStatus::Running
             }
             Shown::Blocked
@@ -387,6 +402,7 @@ pub struct Facts {
     pub queued: bool,
     /// Its run has written nothing past its cadence.
     pub quiet: bool,
+    pub parked: bool,
     /// Its run has submitted.
     pub finishing: bool,
     /// A cancel was asked for and its run has not ended.
@@ -406,6 +422,7 @@ impl Facts {
             held: false,
             queued: false,
             quiet: false,
+            parked: false,
             finishing: false,
             stopping: false,
             manual: false,
@@ -421,6 +438,7 @@ pub fn classify(f: &Facts) -> Shown {
         StepStatus::Stale => Shown::Stale,
         StepStatus::Running if f.stopping => Shown::Stopping,
         StepStatus::Running if f.finishing => Shown::Finishing,
+        StepStatus::Running if f.parked => Shown::Parked,
         StepStatus::Running if f.quiet => Shown::Quiet,
         StepStatus::Running => Shown::Running,
         StepStatus::Pending if f.paused => Shown::Paused,

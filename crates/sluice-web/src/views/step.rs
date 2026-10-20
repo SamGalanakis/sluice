@@ -447,6 +447,8 @@ pub struct StepView {
     pub quiet: bool,
     /// Running, and a cancel was asked for: its run is stopping.
     pub stopping: bool,
+    #[serde(serialize_with = "super::serialize_park")]
+    pub parked: Option<sluice_model::park::Parked>,
     /// What it waits on besides a pause (`hold` says that): its gates and handoffs not ready.
     pub waits: Vec<String>,
     /// A pending step's pause: its own (and who paused it, once its page has read the record)
@@ -981,6 +983,7 @@ impl StepView {
             held: pending && sluice_model::status::missing_input(plan, state, step).is_some(),
             quiet: false,
             stopping: false,
+            parked: None,
             waits: vec![],
             hold,
             waits_on: vec![],
@@ -1149,6 +1152,7 @@ impl StepView {
             quiet: self.quiet && !self.active_at.is_empty(),
             finishing: self.finishing.is_some(),
             stopping: self.stopping,
+            parked: self.parked.is_some(),
             manual: self.manual,
             ..Facts::of(self.status.clone())
         })
@@ -1361,6 +1365,7 @@ impl StepView {
             | Shown::Stale
             | Shown::Quiet
             | Shown::Stopping
+            | Shown::Parked
             | Shown::Finishing
             | Shown::Running
             | Shown::External
@@ -1429,6 +1434,9 @@ impl StepView {
             shown: String,
             said: String,
             title: String,
+        }
+        if let Some(park) = &self.parked {
+            return Ok(super::ui::since(&park.since));
         }
         if self.shown() == Shown::Quiet {
             // how long it has written nothing, ticking, in place of its run's time
@@ -1823,9 +1831,16 @@ impl StepView {
                 Shown::Finishing => "Finishing",
                 _ => "Running",
             };
-            parts.push(own(match self.running_since() {
-                Some(at) => format!("<b>{lead}</b> {}", since(at)),
-                None => format!("<b>{lead}</b>"),
+            parts.push(own(match self.parked.as_ref() {
+                Some(park) => format!(
+                    "<b>Parked</b> {} · {}",
+                    since(&park.since),
+                    esc(&park.until)
+                ),
+                None => match self.running_since() {
+                    Some(at) => format!("<b>{lead}</b> {}", since(at)),
+                    None => format!("<b>{lead}</b>"),
+                },
             }));
             let heard = super::timestamp(&self.active_at).map(|at| now.saturating_sub(at));
             // its question leads to where Overview draws it whole to answer; one put to
@@ -1842,7 +1857,9 @@ impl StepView {
                     self.awaiting
                 )));
             }
-            if self.is_quiet() {
+            if self.parked.is_some() {
+                // The wait above is the relevant age; an idle session is expected to be quiet.
+            } else if self.is_quiet() {
                 parts.push(super::ui::status_pill(
                     Shown::Quiet,
                     &format!(

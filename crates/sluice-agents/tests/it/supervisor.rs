@@ -774,75 +774,81 @@ impl SupervisorHost for ParkHost {
 #[tokio::test]
 async fn a_parked_run_outlasts_its_wall_cap_and_resumes_in_the_same_session() {
     use sluice_model::park::{ParkCondition, ParkPhase, ParkRequest};
-    let scratch = Scratch::new();
-    let mut config = config(&scratch);
-    config.limits.poll = Duration::from_millis(500);
-    let wall = config.limits.wall;
-    let never = scratch.0.join("never");
-    let mut frames = happy();
-    frames.push(frame(
-        Some(input(InputId::Wake { ordinal: 1 })),
-        observation(EngineStatus::Busy, 2, 1),
-    ));
-    frames.push(frame(None, observation(EngineStatus::Idle, 2, 2)));
-    let mut engine = ScriptedEngine::new(frames);
-    let mut host = ParkHost {
-        host: Host::new(),
-        park: Some(ParkRequest {
-            condition: ParkCondition::File {
-                path: never.display().to_string(),
-                marker: None,
-            },
-            timeout_seconds: Some(10),
-            lease: None,
-            phase: ParkPhase::Requested,
-            requested_at: "now".into(),
-            parked_at: None,
-            woke: None,
-        }),
-        entered: 0,
-        woke: vec![],
-    };
-    host.host.submit_at = Some(State::Done);
-    let run_dir = config.run_dir.clone();
-    let started = tokio::time::Instant::now();
-    supervise(
-        config,
-        &mut engine,
-        &mut host,
-        &mut SessionGuard::default(),
-        None,
-        &CancellationToken::new(),
-    )
-    .await
-    .unwrap();
-    assert!(started.elapsed() > wall + Duration::from_secs(5));
-    assert_eq!(host.entered, 1);
-    let reason = format!("timeout after 10s waiting for file:{}", never.display());
-    assert_eq!(host.woke, vec![reason.clone()]);
-    let woke: Vec<_> = engine
-        .commands
-        .iter()
-        .filter_map(|c| match c {
-            EngineCommand::DeliverText {
-                id: InputId::Wake { .. },
-                text,
-            } => Some(text.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(woke, vec![format!("woke: {reason}")]);
-    // The same session carried on: started once, never resumed or restarted.
-    assert_eq!(
-        engine
+    for timeout_seconds in [Some(10), None] {
+        let scratch = Scratch::new();
+        let mut config = config(&scratch);
+        config.limits.poll = Duration::from_millis(500);
+        let wall = config.limits.wall;
+        let never = scratch.0.join("never");
+        let mut frames = happy();
+        frames.push(frame(
+            Some(input(InputId::Wake { ordinal: 1 })),
+            observation(EngineStatus::Busy, 2, 1),
+        ));
+        frames.push(frame(None, observation(EngineStatus::Idle, 2, 2)));
+        let mut engine = ScriptedEngine::new(frames);
+        let mut host = ParkHost {
+            host: Host::new(),
+            park: Some(ParkRequest {
+                condition: ParkCondition::File {
+                    path: never.display().to_string(),
+                    marker: None,
+                },
+                timeout_seconds,
+                lease: None,
+                phase: ParkPhase::Requested,
+                requested_at: "now".into(),
+                parked_at: None,
+                woke: None,
+            }),
+            entered: 0,
+            woke: vec![],
+        };
+        host.host.submit_at = Some(State::Done);
+        let run_dir = config.run_dir.clone();
+        let started = tokio::time::Instant::now();
+        supervise(
+            config,
+            &mut engine,
+            &mut host,
+            &mut SessionGuard::default(),
+            None,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(started.elapsed() > wall + Duration::from_secs(5));
+        assert_eq!(host.entered, 1);
+        let reason = format!(
+            "your park condition did not happen within {}s: file:{}",
+            timeout_seconds.unwrap_or(sluice_model::park::DEFAULT_PARK_TIMEOUT_SECONDS),
+            never.display()
+        );
+        assert_eq!(host.woke, vec![reason.clone()]);
+        let woke: Vec<_> = engine
             .commands
             .iter()
-            .filter(|c| matches!(c, EngineCommand::StartFresh | EngineCommand::Resume { .. }))
-            .count(),
-        1
-    );
-    let checkpoint = Checkpoint::read(&run_dir).unwrap().unwrap();
-    assert!(checkpoint.parked_ms >= 10_000, "{}", checkpoint.parked_ms);
+            .filter_map(|c| match c {
+                EngineCommand::DeliverText {
+                    id: InputId::Wake { .. },
+                    text,
+                } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(woke, vec![format!("woke: {reason}")]);
+        // The same session carried on: started once, never resumed or restarted.
+        assert_eq!(
+            engine
+                .commands
+                .iter()
+                .filter(|c| matches!(c, EngineCommand::StartFresh | EngineCommand::Resume { .. }))
+                .count(),
+            1
+        );
+        let checkpoint = Checkpoint::read(&run_dir).unwrap().unwrap();
+        assert!(checkpoint.parked_ms >= 10_000, "{}", checkpoint.parked_ms);
+    }
 }
 
 // Regression: git bookkeeping used to tear down a busy session after a single timeout.

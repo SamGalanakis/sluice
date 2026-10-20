@@ -25,7 +25,15 @@ pub(crate) const TABLES: i64 = 27;
 /// Columns added after schema 4 homes exist. Earlier additions are folded into its DDL.
 const ADDED_COLUMNS: &[(&str, &str, &str)] = &[];
 /// Views added after schema 4 homes exist, as `(name, definition)`.
-const ADDED_VIEWS: &[(&str, &str)] = &[];
+const ADDED_VIEWS: &[(&str, &str)] = &[("parked", "CREATE VIEW parked AS
+SELECT r.project_id,r.step_id,r.run_id,
+json_extract(a.request,'$.park.condition') AS condition,
+json_extract(a.request,'$.park.phase') AS phase,
+coalesce(json_extract(a.request,'$.park.parked_at'),json_extract(a.request,'$.park.requested_at')) AS since,
+max(0,(julianday('now')-julianday(coalesce(json_extract(a.request,'$.park.parked_at'),json_extract(a.request,'$.park.requested_at'))))*86400) AS waited_seconds,
+coalesce(json_extract(a.request,'$.park.timeout_seconds'),3600) AS timeout_seconds
+FROM runs r JOIN attempts a USING(attempt_id)
+WHERE r.finished_at IS NULL AND a.phase<>'terminal' AND json_type(a.request,'$.park')='object'")];
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {

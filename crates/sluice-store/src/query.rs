@@ -29,6 +29,8 @@
 //!   assigned_through, started_at, created_at, finished_at, completion_id,
 //!   completion_ack, result, completion_action, action_outcome, stopped (who cancelled or
 //!   retried the run and why: `{"cancel": {author, reason, at}, "retry": {...}}`).
+//! - `parked`: project_id, step_id, run_id, condition (JSON), phase, since,
+//!   waited_seconds, timeout_seconds: live parks, also while requesting or waking.
 //! - `calls`: call_id, project_id, run_id, fn, status, inputs, outputs, error,
 //!   direct, author, created_at, finished_at.
 //!

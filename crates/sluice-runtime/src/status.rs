@@ -152,6 +152,7 @@ pub(crate) fn status(
         (json!({"project_id":id,"name":p.name}), p.board_rev)
     };
     let queued = queued(sql, id, ctx.revision, plan)?;
+    let parks = resources::parked_steps(sql, id)?;
     let resources = resources_value(sql, id, ctx.revision, plan)?;
     let paused = state.paused.is_paused();
     let mut finishing = sluice_store::attempts::finishing(sql, id)?;
@@ -252,6 +253,10 @@ pub(crate) fn status(
             continue;
         }
         let mut row: Value = serde_json::from_str(&row)?;
+        if let Some(park) = parks.get(&step) {
+            row["shown"] = json!("parked");
+            row["parked"] = json!(park);
+        }
         if query.brief
             && let Some(outputs) = row.get_mut("outputs")
         {
@@ -400,6 +405,9 @@ fn facts(
     }
     for step in sluice_store::attempts::stopping(sql, id)? {
         facts.entry(step).or_default().stopping = true;
+    }
+    for (step, park) in resources::parked_steps(sql, id)? {
+        facts.entry(step).or_default().parked = Some(park);
     }
     // each query's third column is the instant its seconds count from (SQLite takes a bare
     // column from the row its min or max picked)

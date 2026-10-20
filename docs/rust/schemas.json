@@ -14696,10 +14696,11 @@
         ]
       },
       "UnitState": {
-        "description": "A unit's state in the units view, checked in this order (the status table's, `shown`: a\nstopped step first): a step failed or stale, a step running, every step succeeded or\nskipped, nothing startable and something held, a step queued on resources, else pending.",
+        "description": "A unit's state in the units view, checked in this order (the status table's, `shown`: a\nstopped step first): a step failed or stale, all running steps parked, a step running, every step succeeded or\nskipped, nothing startable and something held, a step queued on resources, else pending.",
         "type": "string",
         "enum": [
           "running",
+          "parked",
           "failed",
           "settled",
           "blocked",
@@ -32518,10 +32519,11 @@
         ]
       },
       "UnitState": {
-        "description": "A unit's state in the units view, checked in this order (the status table's, `shown`: a\nstopped step first): a step failed or stale, a step running, every step succeeded or\nskipped, nothing startable and something held, a step queued on resources, else pending.",
+        "description": "A unit's state in the units view, checked in this order (the status table's, `shown`: a\nstopped step first): a step failed or stale, all running steps parked, a step running, every step succeeded or\nskipped, nothing startable and something held, a step queued on resources, else pending.",
         "type": "string",
         "enum": [
           "running",
+          "parked",
           "failed",
           "settled",
           "blocked",

@@ -739,15 +739,39 @@ pub fn step_retry(
 ) -> Result<RetryResult> {
     check_context(tx, context)?;
     check_selector(tx.sql(), context.project, &request.project)?;
-    retry_selected(
-        tx,
-        context,
-        &select(context, &request.selection)?,
-        request.message.as_deref(),
-        request.author.as_deref().unwrap_or_default(),
-        request.reason.as_deref().unwrap_or_default(),
-        messages,
-    )
+    let selected = select(context, &request.selection)?;
+    let parks = crate::resources::parked_steps(tx.sql(), context.project)?;
+    let (wake, retry): (Vec<_>, Vec<_>) = selected
+        .into_iter()
+        .partition(|id| request.message.is_some() && parks.contains_key(id));
+    let author = request.author.as_deref().unwrap_or_default();
+    let mut result = if retry.is_empty() && !wake.is_empty() {
+        RetryResult {
+            project: identity(tx.sql(), context.project)?,
+            steps: vec![],
+            rearmed: vec![],
+            stopped_at: vec![],
+        }
+    } else {
+        retry_selected(
+            tx,
+            context,
+            &retry,
+            request.message.as_deref(),
+            author,
+            request.reason.as_deref().unwrap_or_default(),
+            messages,
+        )?
+    };
+    if let Some(body) = request.message.as_deref().filter(|_| !wake.is_empty()) {
+        validate_message(body)?;
+        messages.validate_retry(tx, context.project, &wake, body, author)?;
+        for id in wake {
+            messages.post_retry(tx, context.project, &id, body, author)?;
+            result.steps.push(id);
+        }
+    }
+    Ok(result)
 }
 pub(crate) fn retry_selected(
     tx: &mut WriteTransaction<'_>,

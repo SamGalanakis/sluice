@@ -906,6 +906,44 @@ pub fn park_request(conn: &Connection, run_id: RunId) -> Result<Option<ParkReque
         .flatten();
     Ok(raw.map(|raw| serde_json::from_str(&raw)).transpose()?)
 }
+/// Live parks keyed by step, including requests whose agent turn has not ended yet.
+pub fn parked_steps(
+    conn: &Connection,
+    project: ProjectId,
+) -> Result<BTreeMap<StepId, sluice_model::park::Parked>> {
+    let mut query = conn.prepare("SELECT r.run_id,r.step_id,json_extract(a.request,'$.park'),max(0,(julianday('now')-julianday(coalesce(json_extract(a.request,'$.park.parked_at'),json_extract(a.request,'$.park.requested_at'))))*86400) FROM runs r JOIN attempts a USING(attempt_id) WHERE r.project_id=?1 AND r.finished_at IS NULL AND a.phase<>'terminal' AND json_type(a.request,'$.park')='object'")?;
+    let rows = query.query_map([project.to_string()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, f64>(3)?,
+        ))
+    })?;
+    let mut out = BTreeMap::new();
+    for row in rows {
+        let (run, step, request, waited_seconds) = row?;
+        let park: ParkRequest = serde_json::from_str(&request)?;
+        out.insert(
+            step.parse()
+                .map_err(|e| crate::StoreError::InvalidDatabase(format!("{e}")))?,
+            sluice_model::park::Parked {
+                run: run
+                    .parse()
+                    .map_err(|e| crate::StoreError::InvalidDatabase(format!("{e}")))?,
+                until: park.condition.to_string(),
+                phase: park.phase,
+                since: park.parked_at.unwrap_or(park.requested_at),
+                waited_seconds,
+                timeout_seconds: park
+                    .timeout_seconds
+                    .unwrap_or(sluice_model::park::DEFAULT_PARK_TIMEOUT_SECONDS),
+            },
+        );
+    }
+    Ok(out)
+}
+
 fn set_park(
     tx: &mut WriteTransaction<'_>,
     run_id: RunId,
@@ -973,7 +1011,9 @@ pub fn park(
     }
     let park = ParkRequest {
         condition,
-        timeout_seconds,
+        timeout_seconds: Some(
+            timeout_seconds.unwrap_or(sluice_model::park::DEFAULT_PARK_TIMEOUT_SECONDS),
+        ),
         lease,
         phase: ParkPhase::Requested,
         requested_at: now()?,

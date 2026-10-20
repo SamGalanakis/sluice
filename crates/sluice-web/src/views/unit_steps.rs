@@ -113,6 +113,9 @@ pub enum Span {
 }
 impl Span {
     pub fn of(step: &StepView) -> Self {
+        if let Some(park) = &step.parked {
+            return Span::Since(park.since.clone());
+        }
         match step.shown_timing() {
             Some(t) if t.finished.is_none() => Span::Since(t.started.clone()),
             Some(t) => Span::Took(t.seconds),
@@ -1292,11 +1295,16 @@ pub fn of_unit<'a>(
             progress: Progress::of(s),
             spans: s.timing.as_ref().map_or(&[][..], |t| t.spans.as_slice()),
             span: Span::of(s),
-            note: unit
-                .waits_of(s)
-                .first()
-                .map(|w| format!("waits for {}", w.name.text(48)))
-                .unwrap_or_default(),
+            note: s
+                .parked
+                .as_ref()
+                .map(|park| park.until.clone())
+                .unwrap_or_else(|| {
+                    unit.waits_of(s)
+                        .first()
+                        .map(|w| format!("waits for {}", w.name.text(48)))
+                        .unwrap_or_default()
+                }),
             runs_on: s.runs_on(),
             ticks: unit
                 .said

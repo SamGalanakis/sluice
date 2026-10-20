@@ -901,6 +901,9 @@ A loose step's pill says its state once ("quiet 3h", never "quiet · quiet 3h").
 - **Blocked**: `circle-minus` in ink; not reached, saying "blocked".
 - **Stopping**: `circle-stop`, turning, in muted ink; a running cell.
 - **Finishing**: `loader-circle`, turning, in `run-ink`; a running cell.
+- **Parked**: `circle-pause` in muted ink; an outline cell saying "parked", its elapsed wait
+  from the park start, and the condition in the existing status line. Its session remains
+  in At work, with no quiet warning while it waits.
 - **Running**: `loader-circle`, turning, in `run-ink`; a running cell.
 - **Outside** (`external`): `square-arrow-out-up-right` in `run-ink`; a running cell.
 - **Paused**: `circle-pause` in muted ink; not reached, saying "paused".

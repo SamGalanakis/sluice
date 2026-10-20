@@ -1595,6 +1595,14 @@ fn enqueue_message(
     message: &DeliveryMessage,
     directory: &Path,
 ) -> Result<(), AgentFailure> {
+    enqueue_message_with_prefix(checkpoint, message, directory, "")
+}
+fn enqueue_message_with_prefix(
+    checkpoint: &mut Checkpoint,
+    message: &DeliveryMessage,
+    directory: &Path,
+    prefix: &str,
+) -> Result<(), AgentFailure> {
     let body = message.body.as_value();
     let text = if let Some(object) = body.as_object() {
         let field = |key: &str| object.get(key).and_then(Value::as_str);
@@ -1639,7 +1647,10 @@ fn enqueue_message(
     .map_err(invalid)?;
     checkpoint
         .delivery
-        .enqueue(InputId::Message { id: message.id }, text)
+        .enqueue(
+            InputId::Message { id: message.id },
+            format!("{prefix}{text}"),
+        )
         .map_err(invalid)
 }
 #[allow(clippy::too_many_arguments)]
@@ -2075,7 +2086,19 @@ async fn park<E: EngineAdapter, H: SupervisorHost>(
         return Ok(());
     };
     eprintln!("agent parked until {}", park.condition);
-    let timeout = park.timeout_seconds.map(Duration::from_secs);
+    let timeout = Duration::from_secs(
+        park.timeout_seconds
+            .unwrap_or(sluice_model::park::DEFAULT_PARK_TIMEOUT_SECONDS),
+    );
+    // A recovered supervisor must not restart the park's budget.
+    let already_waited = time::OffsetDateTime::parse(
+        park.parked_at.as_deref().unwrap_or(&park.requested_at),
+        &time::format_description::well_known::Rfc3339,
+    )
+    .ok()
+    .and_then(|at| std::time::Duration::try_from(time::OffsetDateTime::now_utc() - at).ok())
+    .unwrap_or_default();
+    let mut messages: Vec<DeliveryMessage>;
     let mut idle = IdleTicks::new(config.limits.poll);
     let reason = loop {
         let o = bounded(
@@ -2098,6 +2121,22 @@ async fn park<E: EngineAdapter, H: SupervisorHost>(
             cancel.cancel();
             return Err(failure(FailureKind::Cancelled, "cancelled while parked"));
         }
+        let snapshot = answering_hooks(engine, config, async {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => Err(failure(FailureKind::Cancelled, "cancelled while parked")),
+                result = host.snapshot(machine.checkpoint.live_after) => result.map_err(host_failure),
+            }
+        }).await?;
+        messages = snapshot
+            .messages
+            .into_iter()
+            .filter(|m| m.id > machine.checkpoint.live_after)
+            .collect();
+        messages.sort_by_key(|m| m.id);
+        if !messages.is_empty() {
+            break "woken by a message".to_owned();
+        }
         let fired = match &park.condition {
             ParkCondition::Lease { .. } => view.lease_held,
             condition => condition_holds(condition).map_err(invalid)?,
@@ -2105,11 +2144,9 @@ async fn park<E: EngineAdapter, H: SupervisorHost>(
         if fired {
             break park.condition.to_string();
         }
-        if let Some(timeout) = timeout
-            && started.elapsed() >= timeout
-        {
+        if already_waited.saturating_add(started.elapsed()) >= timeout {
             break format!(
-                "timeout after {}s waiting for {}",
+                "your park condition did not happen within {}s: {}",
                 timeout.as_secs(),
                 park.condition
             );
@@ -2148,23 +2185,36 @@ async fn park<E: EngineAdapter, H: SupervisorHost>(
         None => format!("woke: {reason}"),
     };
     eprintln!("agent {text}");
-    let ordinal = machine
-        .checkpoint
-        .delivery
-        .entries
-        .iter()
-        .filter(|entry| matches!(entry.id, InputId::Wake { .. }))
-        .count();
-    machine
-        .checkpoint
-        .delivery
-        .enqueue(
-            InputId::Wake {
-                ordinal: u32::try_from(ordinal + 1).map_err(invalid)?,
-            },
-            text,
-        )
-        .map_err(invalid)?;
+    if messages.is_empty() {
+        let ordinal = machine
+            .checkpoint
+            .delivery
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry.id, InputId::Wake { .. }))
+            .count();
+        machine
+            .checkpoint
+            .delivery
+            .enqueue(
+                InputId::Wake {
+                    ordinal: u32::try_from(ordinal + 1).map_err(invalid)?,
+                },
+                text,
+            )
+            .map_err(invalid)?;
+    } else {
+        let prefix = format!("{text}\n\n");
+        for (index, message) in messages.iter().enumerate() {
+            enqueue_message_with_prefix(
+                &mut machine.checkpoint,
+                message,
+                &config.run_dir,
+                if index == 0 { &prefix } else { "" },
+            )?;
+            machine.checkpoint.live_after = message.id;
+        }
+    }
     let now = machine.checkpoint.elapsed().map_err(invalid)?;
     *machine = Machine::new(
         machine.checkpoint.clone(),

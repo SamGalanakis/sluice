@@ -545,7 +545,7 @@ use PropType as T;
 const RULES: Prop = opt("rules", T::Strings);
 /// The unit states the units view reports (`UnitState`).
 pub const UNIT_STATES: &[&str] = &[
-    "running", "failed", "settled", "blocked", "queued", "pending",
+    "running", "parked", "failed", "settled", "blocked", "queued", "pending",
 ];
 
 /// What a question's `ui` may use (assets/openui.js draws exactly these).

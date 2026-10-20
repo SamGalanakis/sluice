@@ -31,6 +31,8 @@ pub struct HomeConfig {
     /// Minutes an unread settlement may wait before the owner is asked about it.
     pub unread_alert_min: Option<f64>,
     pub notify: Option<NotifyConfig>,
+    /// Default bound for a park without --timeout.
+    pub park_timeout_seconds: u64,
 }
 
 impl Default for HomeConfig {
@@ -41,6 +43,7 @@ impl Default for HomeConfig {
             log_max: DEFAULT_LOG_MAX,
             unread_alert_min: None,
             notify: None,
+            park_timeout_seconds: sluice_model::park::DEFAULT_PARK_TIMEOUT_SECONDS,
         }
     }
 }
@@ -100,6 +103,13 @@ impl HomeConfig {
             Some(n) => match n.as_f64() {
                 Some(n) if n.is_finite() && n > 0.0 => config.unread_alert_min = Some(n),
                 _ => ignored("unread_alert_min"),
+            },
+        }
+        match value.get("park_timeout_seconds") {
+            None | Some(Value::Null) => {}
+            Some(n) => match n.as_u64().filter(|n| *n > 0) {
+                Some(n) => config.park_timeout_seconds = n,
+                None => ignored("park_timeout_seconds"),
             },
         }
         match value.get("notify") {

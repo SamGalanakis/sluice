@@ -264,6 +264,8 @@ config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port"
                             http       serve's host and port when the command line gives none
                             log_max    records each log keeps; past it the coordinator trims
                                        the oldest down to 90% of it (every 30 s)
+                            park_timeout_seconds  positive integer seconds, default 3600;
+                                       bound for park when --timeout is absent (§7.6)
                             unread_alert_min  minutes; when set, the "nobody reading" owner
                                        question (§8)
                             notify     {command: [argv…], timeout_s: 30}: owner notification
@@ -1327,14 +1329,25 @@ nothing (a lease granted at once is the run's). Otherwise the park is kept on th
 and the answer is `{parked: true, until, lease, position, timeout_seconds, message}`: the agent
 ends its turn. When the turn has ended, the run's supervisor (§15) marks the run parked and the
 coordinator releases the step's needs in the same transaction, so a queued step may start; the
-engine's session stays up, idle, and is neither nudged nor delivered messages (they wait for the
-wake). When the condition fires or `timeout` seconds pass, the coordinator queues the step's
+engine's session stays up, idle. An addressed say, ask, reply, or step_retry with a message
+wakes it; the first message is delivered with `woke: woken by a message`, under its normal
+message delivery id, and any other messages follow in order. A retry with feedback to a parked
+step wakes its existing run without resetting its work generation; ordinary retry semantics
+apply to other selected steps. Without `timeout`, config.json's `park_timeout_seconds` applies
+(default 3600); zero is refused, and explicit longer bounds are allowed. When a message arrives,
+the condition fires or `timeout` seconds pass, the coordinator queues the step's
 needs again (`waking`), granted with the section leases in priority order before any new step
 is admitted; once they are held the park ends and the same session gets one input:
-`woke: <until>, lease <id>` (a granted lease), `woke: <until>` (pid, file), or `woke: timeout
-after <n>s waiting for <until>` (with `; lease <id> is still queued` when its lease was not
+`woke: <until>, lease <id>` (a granted lease), `woke: <until>` (pid, file), or
+`woke: your park condition did not happen within <n>s: <until>` (with `; lease <id> is still queued` when its lease was not
 granted). Time parked does not count toward the agent's wall cap. A cancelled parked run stops
-as any other. Only agent runs on the `claude` or `codex` engine park: `devin` (whose session
+as any other. The bound is recorded on the park; supervisor recovery counts time already waited,
+and legacy unbounded parks use the one-hour fallback. Status exposes `shown: "parked"` and
+`parked: {run, until, phase, since, waited_seconds, timeout_seconds}` while the stored status
+remains running. The units view has state `parked` when all its running steps are parked,
+and lists their parks with step ids. The public `parked` SQL view exposes live parks as
+`{project_id, step_id, run_id, condition, phase, since, waited_seconds, timeout_seconds}`;
+`condition` is JSON. Only agent runs on the `claude` or `codex` engine park: `devin` (whose session
 cannot be held idle and resumed) and a run of anything but an agent are `bad_request`, and so is
 a scattered step's item; a run that is not its step's current, executing one is `conflict`.
 
@@ -2079,17 +2092,18 @@ pending step that is not about to start has `waiting`, the reasons in order: `pa
 input <name> has no value`), each gate not satisfied (`after <entry> (<why>)`), the resource
 shortfall (`queued: needs lane 1 (4/4 held)`, with `queued` listing the resources), and for a
 `core.external` step with nothing else, `external: set its outputs with step_set_output`. Units view (`view: "units"`, `brief` refused): `{project, rev, board_rev, paused, resources?, execution,
-units: [{unit, title, recipe, state, age, engine, steps, blocked, last, line, finishing?}], done_units?}`
+units: [{unit, title, recipe, state, shown, age, engine, steps, blocked, last, line, finishing?, parked?}], done_units?}`
 (`recipe` the matched recipe's name or empty; the steps view gives each step `title` and, in a
 unit of more than one step, `stage`);
 `finishing` lists the unit's finishing steps `[{step, since, submission_seq, release}]`, whose
 mark in `steps` is `▷` and which `line` names (`finishing <step>`) when nothing blocks it; `state` one of
-`failed` (a step failed or stale, checked first), `running`, `settled`, `blocked` (held: every
+`failed` (a step failed or stale, checked first), `parked` (all its running steps parked),
+`running`, `settled`, `blocked` (held: every
 pending step paused, its project paused, outside work, a plan input with no value, or behind a
 failed, stale or held step), `queued`, `pending`, filterable with `state` (`state` is refused
 in the steps view). `steps` marks each step with the status table's lane mark (§13) as the
 store knows it: ✗ failed (a cancel too: tools keep `failed`), ~ stale, □ stopping (a cancel
-asked for), ▷ finishing, ▶ running, ↗ outside (ready `core.external`), ‖ paused (its own or its
+asked for), ▷ finishing, Ⅱ parked, ▶ running, ↗ outside (ready `core.external`), ‖ paused (its own or its
 project's pause), ⊖ blocked (behind a failed or stale step), ∅ held (a plan input with no
 value), ≡ queued, · pending, ✓ succeeded, – skipped; `line` leads with the mark of the unit's
 first step in the table's order.
@@ -2250,7 +2264,7 @@ with how long, in place of its run's time) and Show: Attention.
 **The status table.** Every page draws a step's state from one table
 (`sluice_model::shown`, DESIGN.md's status ramp): a stored status named from the facts read
 beside it, in this order, which is the one priority: failed, cancelled, stale, quiet, blocked,
-stopping, finishing, running, outside (`external`), paused, held, queued, pending, set by hand
+stopping, finishing, parked, running, outside (`external`), paused, held, queued, pending, set by hand
 (`manual`), succeeded, skipped. Each state has one glyph, word, lane mark, tone and band, and
 says whether it needs attention (failed, cancelled, stale, quiet). Whatever stands for several
 steps reads as the first of their states in that order: a unit (a failed step and a running
@@ -2450,7 +2464,7 @@ freshest value: the step's progress for that field while it is fresher than the 
 marked "live" with the running glyph while the step runs and "progress" after, with when it
 was set; otherwise the output), `Count(label, of)` (the number the dashboard's own summary
 counts for `of`: the steps in one state of the status table, by its key (`failed` never counts
-a cancel, `running` never a quiet, stopping or finishing run, `pending` never a paused, blocked,
+a cancel, `running` never a quiet, stopping, finishing or parked run, `pending` never a paused, blocked,
 held or queued step), or `steps`, every step), `Metric(label, query)`, `Query(query, caption?)`,
 `Chart(kind, query, caption?)` (bar or
 line, an inline SVG), `Doc(fallback?)` (the board's document, `board_doc_write`, as markdown

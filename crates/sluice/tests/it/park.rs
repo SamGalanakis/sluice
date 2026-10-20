@@ -51,6 +51,7 @@ def act():
                 turn += 1
                 actions[1:1] = turns[turn - 1] if turn <= len(turns) else []
         if 'touch' in action: pathlib.Path(action['touch']).write_text(run)
+        if 'save_text' in action: saved[action['save_text']] = text
         if 'submit' in action: submit(fill(action['submit']))
         if 'die' in action: log(died=True); os._exit(3)
         actions.pop(0)
@@ -64,6 +65,9 @@ for line in sys.stdin:
         if cmd['command'] in ('deliver_text','steer'):
             state['acknowledged'].append(cmd['id']); state['turns_started']+=1; state['status']='busy'; state['progress']+=1
             text, turn = cmd['text'], turn + 1
+            if 'A message is in ' in text:
+                before, link = text.split('A message is in ', 1)
+                text = before + pathlib.Path(link.split(';',1)[0]).read_text()
             actions = list(turns[turn-1]) if turn <= len(turns) else []
         if cmd['command']=='request_exit': state['status']='exited'
     if req['operation']=='observe' and state['status']=='busy' and act():
@@ -282,4 +286,134 @@ fn lease_requests_are_granted_in_order_and_a_dead_holder_frees_its_lease() {
             "{done}"
         );
     }
+}
+
+/// Say, ask, reply and retry feedback reach the idle session even if its file never appears.
+#[test]
+fn an_addressed_message_wakes_a_parked_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let conditions: Vec<_> = (0..4)
+        .map(|i| format!("file:{}/never-{i}", dir.path().display()))
+        .collect();
+    let p = Park::new(
+        json!({"lane":1}),
+        json!({
+            "work": [
+                [{"sh":["tool","ask","--to","owner","--body","Which ruling?"]},
+                 {"sh":["tool","park","--until",conditions[0]],"save":"park"}],
+                [{"save_text":"say"},{"sh":["tool","park","--until",conditions[1]]}],
+                [{"save_text":"ask"},{"sh":["tool","park","--until",conditions[2]]}],
+                [{"save_text":"reply"},{"sh":["tool","park","--until",conditions[3],"--timeout","7200"]}],
+                [{"submit":{"summary":"{say}\n{ask}\n{reply}\n{text}"}}]
+            ]
+        }),
+    );
+    let mut agent = p.agent(json!({"lane":1}), 0);
+    agent["tags"] = json!(["unit:manual-park"]);
+    p.g.plan(json!({"work":agent}));
+    let _scheduler = p.g.lease();
+    let mut first_run = Value::Null;
+    for (index, condition) in conditions.iter().enumerate() {
+        p.g.wait(|g| {
+            let view = g.data(json!({"command":"lease_status","args":{"project":g.selector()}}));
+            view["parked"][0]["phase"] == "parked" && view["parked"][0]["until"] == *condition
+        });
+        let status = p.g.status();
+        assert_eq!(status["steps"]["work"]["shown"], "parked", "{status}");
+        let park = &status["steps"]["work"]["parked"];
+        assert_eq!(park["until"], *condition);
+        assert!(park["waited_seconds"].as_f64().unwrap() >= 0.0);
+        assert_eq!(
+            park["timeout_seconds"],
+            if index == 3 { 7200 } else { 3600 }
+        );
+        if index == 0 {
+            first_run = status["steps"]["work"]["run_ids"].clone();
+        }
+        assert_eq!(status["steps"]["work"]["run_ids"], first_run);
+        let query = p.g.data(json!({"command":"query","args":{"sql":"SELECT step_id, phase, waited_seconds, timeout_seconds FROM parked WHERE project_id=?","params":[p.g.project.to_string()],"limit":10}}));
+        assert_eq!(query["rows"][0][0], "work", "{query}");
+        assert_eq!(query["rows"][0][1], "parked", "{query}");
+        let units = p.g.data(json!({"command":"status","args":{"project":p.g.selector(),"view":"units","state":["parked"],"all":true,"selection":{"steps":null,"tags":null}}}));
+        assert_eq!(units["units"][0]["state"], "parked", "{units}");
+        assert_eq!(units["units"][0]["shown"], "parked", "{units}");
+        assert_eq!(
+            units["units"][0]["parked"][0]["until"], *condition,
+            "{units}"
+        );
+        assert!(
+            units["units"][0]["line"]
+                .as_str()
+                .unwrap()
+                .contains("parked"),
+            "{units}"
+        );
+        let command = match index {
+            0 => {
+                json!({"command":"say","args":{"project":p.g.selector(),"to":"work","body":"Say ruling"}})
+            }
+            1 => {
+                json!({"command":"ask","args":{"project":p.g.selector(),"to":"work","body":"Ask ruling"}})
+            }
+            2 => {
+                json!({"command":"reply","args":{"project":p.g.selector(),"to_message":p.reply("work", &["ask"])["id"],"body":"Reply ruling","owner":true}})
+            }
+            _ => {
+                json!({"command":"step_retry","args":{"project":p.g.selector(),"selection":{"steps":["work"],"tags":null},"message":"Retry ruling","reason":"wake the parked session","author":"owner"}})
+            }
+        };
+        p.g.rpc(command);
+    }
+    let done = p.g.terminal("work");
+    assert_eq!(done["status"], "succeeded", "{done}");
+    let summary = done["outputs"]["summary"].as_str().unwrap();
+    assert_eq!(
+        summary.matches("woken by a message").count(),
+        4,
+        "{summary}"
+    );
+    for body in ["Say ruling", "Ask ruling", "Reply ruling", "Retry ruling"] {
+        assert!(summary.contains(body), "{summary}");
+    }
+    let inputs = p.inputs("work");
+    assert_eq!(inputs.len(), 5, "{inputs:?}");
+    assert!(
+        inputs.iter().all(|(_, pid)| *pid == inputs[0].1),
+        "{inputs:?}"
+    );
+}
+
+/// Cancelling a park releases its lane and section lease without waking its agent.
+#[test]
+fn a_parked_run_is_cancelled_and_releases_its_leases() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = Park::new(
+        json!({"lane":1,"gate":1}),
+        json!({
+            "work": [[{"sh":["tool","lease","acquire","gate"]},
+                       {"sh":["tool","park","--until",format!("file:{}/never",dir.path().display())],"save":"park"}]]
+        }),
+    );
+    std::fs::write(
+        p.g.home.join("config.json"),
+        r#"{"park_timeout_seconds":7200}"#,
+    )
+    .unwrap();
+    p.g.plan(json!({"work":p.agent(json!({"lane":1}),0)}));
+    let _scheduler = p.g.lease();
+    p.g.wait(|g| {
+        let view = g.data(json!({"command":"lease_status","args":{"project":g.selector()}}));
+        view["parked"][0]["phase"] == "parked"
+    });
+    assert_eq!(p.reply("work", &["park"])["timeout_seconds"], 7200);
+    p.g.rpc(json!({"command":"step_cancel","args":{"project":p.g.selector(),"selection":{"steps":["work"],"tags":null},"reason":"cancel the wait","author":"owner"}}));
+    let done = p.g.terminal("work");
+    assert_eq!(done["status"], "failed", "{done}");
+    let view =
+        p.g.data(json!({"command":"lease_status","args":{"project":p.g.selector()}}));
+    assert_eq!(view["parked"], json!([]), "{view}");
+    for resource in ["gate", "lane"] {
+        assert_eq!(view["resources"][resource]["holders"], json!([]), "{view}");
+    }
+    assert_eq!(p.inputs("work").len(), 1);
 }

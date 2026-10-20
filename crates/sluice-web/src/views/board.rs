@@ -1441,6 +1441,7 @@ struct Cards {
     lately: BTreeMap<String, String>,
     finishing: BTreeMap<StepId, sluice_model::attempt::Finishing>,
     stopping: BTreeSet<StepId>,
+    parked: BTreeMap<StepId, sluice_model::park::Parked>,
     timings: BTreeMap<String, RunTiming>,
     bypass: BTreeMap<StepId, sluice_store::bypass::Mark>,
 }
@@ -1458,6 +1459,7 @@ impl Cards {
             lately: sluice_store::messages::dismissed_lately(c, project, 10.0)?,
             finishing: sluice_store::attempts::finishing(c, project)?,
             stopping: sluice_store::attempts::stopping(c, project)?,
+            parked: sluice_store::resources::parked_steps(c, project)?,
             timings: run_timings(c, project)?,
             bypass: sluice_store::bypass::marks(c, project)?,
         })
@@ -1470,6 +1472,7 @@ impl Cards {
         }
         step.finishing = self.finishing.get(&step.id).cloned();
         step.stopping = self.stopping.contains(&step.id);
+        step.parked = self.parked.get(&step.id).cloned();
         step.timing = self.timings.get(step.id.as_str()).cloned();
         if let Some((manual, total, done, error)) = self.rows.get(step.id.as_str()) {
             step.manual = *manual;

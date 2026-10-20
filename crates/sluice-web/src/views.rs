@@ -300,6 +300,8 @@ pub struct RunningView {
     /// Its run has submitted: it is only finishing.
     #[serde(default)]
     pub finishing: bool,
+    #[serde(default, serialize_with = "serialize_park")]
+    pub parked: Option<sluice_model::park::Parked>,
 }
 impl RunningView {
     /// How the running step reads (`shown`).
@@ -308,9 +310,24 @@ impl RunningView {
             quiet: self.quiet,
             stopping: self.stopping,
             finishing: self.finishing,
+            parked: self.parked.is_some(),
             ..sluice_model::shown::Facts::of(sluice_model::commands::StepStatus::Running)
         })
     }
+}
+
+/// Page versions contain the park's start; the browser ticks its age from that instant.
+fn serialize_park<S: serde::Serializer>(
+    park: &Option<sluice_model::park::Parked>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    park.as_ref()
+        .map(|p| {
+            let mut park = p.clone();
+            park.waited_seconds = 0.0;
+            park
+        })
+        .serialize(serializer)
 }
 
 /// A step that stopped: failed, or cancelled by the owner.
@@ -1229,6 +1246,7 @@ impl RunningView {
             said: r.get(6)?,
             stopping: false,
             finishing: false,
+            parked: None,
         })
     }
     /// `step`'s run while it runs, its activity not yet observed (`observe_run`).
@@ -1314,6 +1332,7 @@ pub fn load_snapshot(
         let mut cancels = vec![];
         let stopping = sluice_store::attempts::stopping(c, id)?;
         let finishing = sluice_store::attempts::finishing(c, id)?;
+        let parked = sluice_store::resources::parked_steps(c, id)?;
         while let Some(r) = step_rows.next()? {
             let status: String = r.get(1)?;
             let step: String = r.get(0)?;
@@ -1334,6 +1353,7 @@ pub fn load_snapshot(
                 let sid = run.step.parse::<sluice_model::ids::StepId>().ok();
                 run.stopping = sid.as_ref().is_some_and(|s| stopping.contains(s));
                 run.finishing = sid.as_ref().is_some_and(|s| finishing.contains_key(s));
+                run.parked = sid.as_ref().and_then(|s| parked.get(s)).cloned();
                 view.running.push(run);
             }
         }

@@ -227,6 +227,12 @@ async fn park<H: ExecutionHost>(
             ));
         }
     }
+    let timeout = request
+        .timeout_seconds
+        .unwrap_or_else(|| crate::config::HomeConfig::load(broker.home()).park_timeout_seconds);
+    if timeout == 0 {
+        return Err(bad("timeout must be a positive number of seconds"));
+    }
     if sluice_agents::supervisor::condition_holds(&condition).map_err(|e| bad(e.to_string()))? {
         return data(json!({
             "parked": false,
@@ -235,11 +241,10 @@ async fn park<H: ExecutionHost>(
         }));
     }
     let until = condition.to_string();
-    let timeout = request.timeout_seconds;
     let asked = broker
         .writer()
         .write(RetrySafety::NonIdempotent, move |tx| {
-            resources::park(tx, run, condition, timeout)
+            resources::park(tx, run, condition, Some(timeout))
         })
         .await?;
     match asked {
@@ -269,7 +274,7 @@ async fn park<H: ExecutionHost>(
                 "lease": park.lease,
                 "position": position,
                 "timeout_seconds": park.timeout_seconds,
-                "message": format!("Parked until {until}. End your turn now and do nothing else: your step's lane is released while you wait, and this session resumes with a message that starts \"woke:\" when it fires."),
+                "message": format!("Parked until {until}, a message, or {timeout}s pass. End your turn now and do nothing else: your step's lane is released while you wait, and this session resumes with a message that starts \"woke:\" when it fires."),
             }))
         }
     }

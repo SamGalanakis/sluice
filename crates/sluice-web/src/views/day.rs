@@ -311,10 +311,11 @@ pub fn load(
         .unwrap_or(0);
     let mut moving = BTreeMap::new();
     for run in runs.iter_mut().filter(|r| r.outcome == Some(Shown::Running)) {
-        let (stopping, finishing) = moving.entry(run.project).or_insert_with(|| {
+        let (stopping, finishing, parked) = moving.entry(run.project).or_insert_with(|| {
             (
                 sluice_store::attempts::stopping(c, run.project).unwrap_or_default(),
                 sluice_store::attempts::finishing(c, run.project).unwrap_or_default(),
+                sluice_store::resources::parked_steps(c, run.project).unwrap_or_default(),
             )
         });
         if let Some(mut live) = super::RunningView::of(c, run.project, &run.step)?
@@ -324,6 +325,7 @@ pub fn load(
             let id = live.step.parse::<sluice_model::ids::StepId>().ok();
             live.stopping = id.as_ref().is_some_and(|s| stopping.contains(s));
             live.finishing = id.as_ref().is_some_and(|s| finishing.contains_key(s));
+            live.parked = id.as_ref().and_then(|s| parked.get(s)).cloned();
             run.outcome = Some(live.shown());
         }
     }
