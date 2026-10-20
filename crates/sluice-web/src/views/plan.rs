@@ -3,7 +3,7 @@
 //! raised well, says each question, stop and silence in a sentence with one action and a quick
 //! dismissal; **Finished since you looked** lists what finished since this browser last looked
 //! with what it produced; **At work** is a roster of the live units, a row each, grouped by
-//! recipe and ordered by how long since each was heard from, with a pulse strip of its last
+//! recipe and ordered by creation by default, with a pulse strip of its last
 //! hour (a mark each minute its agent acted, a dotted tail since). A row opens in place to its steps (`unit_steps`).
 //!
 //! Generic by rule: every word comes from the status table, the recipe, the failure's own
@@ -68,6 +68,40 @@ pub fn seen_of(headers: &HeaderMap, project: ProjectId) -> Option<u64> {
         .and_then(|(_, v)| v.parse().ok())
         // 0 is the look undone: everything finished lately again
         .filter(|seen| *seen > 0)
+}
+
+/// The viewer's roster order, shared by page loads and stream reconnects through a cookie.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum Order {
+    #[default]
+    Created,
+    Plan,
+    Recent,
+}
+impl Order {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "created" => Some(Self::Created),
+            "plan" => Some(Self::Plan),
+            "recent" => Some(Self::Recent),
+            _ => None,
+        }
+    }
+}
+pub fn order_cookie(project: ProjectId) -> String {
+    format!("sluice_order_{project}")
+}
+pub fn order_of(headers: &HeaderMap, project: ProjectId) -> Order {
+    let name = order_cookie(project);
+    headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|c| c.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .filter_map(|c| c.trim().split_once('='))
+        .find(|(n, _)| *n == name)
+        .and_then(|(_, v)| Order::parse(v))
+        .unwrap_or_default()
 }
 
 fn now() -> f64 {
@@ -316,17 +350,16 @@ impl<'a> Plan<'a> {
                 rows: long,
             });
         }
-        // running first, the longest silent first; then waiting, in plan order
         for group in &mut groups {
             group.rows.sort_by(|a, b| {
-                a.waiting
-                    .cmp(&b.waiting)
-                    .then(
-                        a.heard
-                            .unwrap_or(f64::MAX)
-                            .total_cmp(&b.heard.unwrap_or(f64::MAX)),
-                    )
-                    .then(a.unit.pos.cmp(&b.unit.pos))
+                match view.order {
+                    Order::Created => a.unit.created.cmp(&b.unit.created),
+                    Order::Plan => std::cmp::Ordering::Equal,
+                    Order::Recent => heard(b.unit)
+                        .unwrap_or(0.0)
+                        .total_cmp(&heard(a.unit).unwrap_or(0.0)),
+                }
+                .then(a.unit.pos.cmp(&b.unit.pos))
             });
         }
         let mut plan = Plan {
@@ -1262,8 +1295,43 @@ impl<'a> Plan<'a> {
         } else {
             format!("{}{}", esc(&note), track_help())
         };
+        let note = region(
+            "ro-counts",
+            &format!("<span id=\"ro-counts\">{note}</span>"),
+        );
+        let options: String = [
+            (
+                "created",
+                "Created",
+                matches!(self.view.order, Order::Created),
+            ),
+            ("plan", "Plan order", matches!(self.view.order, Order::Plan)),
+            (
+                "recent",
+                "Recent activity",
+                matches!(self.view.order, Order::Recent),
+            ),
+        ]
+        .into_iter()
+        .map(|(value, label, selected)| {
+            format!(
+                "<option value=\"{value}\"{}>{label}</option>",
+                if selected { " selected" } else { "" }
+            )
+        })
+        .collect();
+        let change = format!(
+            "document.cookie = '{}=' + el.value + '; Path=/; Max-Age=34560000; SameSite=Lax'; {}",
+            order_cookie(self.project()),
+            ui::stream_reopen(&self.view.stream_href())
+        );
+        let order = format!(
+            "<select class=\"ro-order\" aria-label=\"Row order\" data-on:change=\"{}\">{options}</select>",
+            esc(&change)
+        );
         let head = ui::SectionHead::new("at-work", "At work")
             .note(&TrustedHtml::owned(note))
+            .action(&TrustedHtml::owned(order))
             .html();
         // a strip's pick asks for its details (`pulse`), drawn into the page's popover
         let mut out = format!(
@@ -1309,7 +1377,22 @@ impl<'a> Plan<'a> {
                         })
                         .unwrap_or_default()
                 };
-                let counts = row_counts(&group.rows.iter().collect::<Vec<_>>());
+                let group_id = format!(
+                    "ro-g-{:x}",
+                    crate::streams::skeleton_hash(&format!("{}:{}", group.recipe, group.name))
+                );
+                let counts = region(
+                    &format!("{group_id}-counts"),
+                    &format!(
+                        "<span id=\"{group_id}-counts\">{}{}</span>",
+                        row_counts(&group.rows.iter().collect::<Vec<_>>()),
+                        if whole {
+                            heard(&healthy)
+                        } else {
+                            String::new()
+                        }
+                    ),
+                );
                 let name = if group.recipe.is_empty() {
                     esc(&group.name)
                 } else {
@@ -1323,13 +1406,8 @@ impl<'a> Plan<'a> {
                 };
                 let _ = write!(
                     out,
-                    "<details class=\"ro-g\"{}><summary class=\"ro-group\"><h3><b>{name}</b> · {counts}{}</h3></summary>{}",
+                    "<details class=\"ro-g\" id=\"{group_id}\" data-plan-fold=\"{group_id}\" data-preserve-attr=\"open\"{}><summary class=\"ro-group\"><h3><b>{name}</b> · {counts}</h3></summary>{}",
                     if whole { "" } else { " open" },
-                    if whole {
-                        heard(&healthy)
-                    } else {
-                        String::new()
-                    },
                     axis(" ro-axis-g"),
                 );
                 // a recipe whose view does not check: said once
@@ -1353,9 +1431,15 @@ impl<'a> Plan<'a> {
                     draw(&mut out, &marked);
                     let _ = write!(
                         out,
-                        "<details class=\"qf ro-fold\"><summary>+{}{}</summary>",
-                        row_counts(&healthy),
-                        heard(&healthy)
+                        "<details class=\"qf ro-fold\" id=\"{group_id}-quiet\" data-plan-fold=\"{group_id}-quiet\" data-preserve-attr=\"open\"><summary>{}</summary>",
+                        region(
+                            &format!("{group_id}-quiet-counts"),
+                            &format!(
+                                "<span id=\"{group_id}-quiet-counts\">+{}{}</span>",
+                                row_counts(&healthy),
+                                heard(&healthy)
+                            )
+                        )
                     );
                     draw(&mut out, &healthy);
                     out.push_str("</details>");
@@ -1384,9 +1468,14 @@ impl<'a> Plan<'a> {
                 }
             ));
         }
-        if !more.is_empty() {
-            let _ = write!(out, "<p class=\"ro-more\">{}</p>", more.join(" · "));
-        }
+        out.push_str(&region(
+            "ro-more",
+            &format!(
+                "<p id=\"ro-more\" class=\"ro-more\"{}>{}</p>",
+                if more.is_empty() { " hidden" } else { "" },
+                more.join(" · ")
+            ),
+        ));
         out.push_str("</section>");
         out
     }

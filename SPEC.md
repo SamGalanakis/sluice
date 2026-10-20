@@ -2552,14 +2552,22 @@ its edges the bar's (at most 1440px; on a phone Finished follows At work). The h
   `?recipe=<name>&show=all`, its rows counted quiet, running and waiting), then the units of
   no recipe ("Other units"),
   then the long runs (a unit of one step and no recipe reporting progress, or running six hours
-  or more). In a group the running rows come first, the longest since it was heard from first,
-  then the waiting ones in plan order. A group is a `<details>`, open, its line its name in
+  or more). Within each visible or quiet section, rows default to Created: when the unit was
+  added to the plan (earliest revision first, ties by plan position). At work's quiet text select
+  offers Created, Plan order and Recent activity (latest heard first, ties by plan position),
+  kept per viewer and project in `sluice_order_<p>`. Pages and streams read the same cookie.
+  Activity never reorders Created or Plan order; changing group or state section may move a row.
+  A group is a `<details>`, open, its line its name in
   ink over its counts. In a roster of more than 12 rows a group folds by row: its remarkable
   rows first (a silence, a wait of an hour or more since its last run, a unit with an open
   item in Needs you), the rest, when more than 3, folded under them to one line ("+7 running ·
   each heard from in the last 11m"), a `<details>` opening in place; a group
   with nothing remarkable folds whole to its line ("article · 23 running · each heard from in
-  the last 27m"). A stop is in Needs you, not a row, so it keeps no row in sight. A row: what
+  the last 27m"). Every Plan fold preserves the viewer's open and closed choices through
+  patches and re-creation, including unit moves between groups, with `data-preserve-attr="open"`
+  and project-scoped session memory keyed by fold or unit id. Counts have their own stream
+  regions; count and activity changes alone never replace the roster skeleton.
+  A stop is in Needs you, not a row, so it keeps no row in sight. A row: what
   its steps run on as a badge, only where that tells rows apart and never for a fn (an
   engine's name), its title whole (two lines at most, whole when the row is open, its `title`
   the whole) with its owner small and muted, under it (two lines at most) its recipe's view or its

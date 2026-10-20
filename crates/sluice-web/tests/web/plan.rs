@@ -1,7 +1,7 @@
 //! The project page's plan on the neutral fixture (DESIGN.md, The plan): its head's sentence,
 //! Needs you (a question, the stops, stops sharing a cause as one, a silence), what finished
-//! lately, At work (a group a recipe, no recipe and the long runs after, the longest silent
-//! first) and the steps each row opens to; what the owner sets aside comes back
+//! lately, At work (a group a recipe, no recipe and the long runs after, creation order
+//! by default) and the steps each row opens to; what the owner sets aside comes back
 //! when it changes; the read cursor is this browser's; in Chromium no sideways scroll from a
 //! phone to a wide screen, beside the board too.
 use crate::board_fixture;
@@ -84,6 +84,10 @@ async fn slow_chromium_the_plan_fits_every_width_from_a_phone_to_a_wide_screen()
             for width in [390, 1440, 2560] {
                 for theme in ["light", "dark"] {
                     browser.viewport(width, theme).unwrap();
+                    // Use the real preference signal too: a live patch re-applies that
+                    // signal, so changing only the DOM attribute can capture light twice.
+                    browser.eval(&format!("document.querySelector('input[name=theme][value=sluice-{theme}]').click()")).unwrap();
+                    browser.wait(&format!("document.documentElement.dataset.theme === 'sluice-{theme}'")).unwrap();
                     let g = browser.eval(LOOK).unwrap();
                     let label = format!("{slug} {width} {theme}");
                     assert_eq!(g["scroll"], 0, "{label}: sideways {g}");
@@ -241,8 +245,8 @@ async fn plan_units_and_loose_steps() {
             at(cards, "/units/a-3\"") < at(cards, "/units/s-2\""),
             "{cards}"
         );
-        // At work: a group a recipe, then no recipe, the long runs last; the longest silent
-        // first; the window's labels over the strips
+        // At work: a group a recipe, then no recipe, the long runs last; creation order
+        // by default; the window's labels over the strips
         let roster = plan_html::band(&html, "plan-roster");
         assert!(
             at(roster, ">article</a></b>") < at(roster, ">scan</a></b>")
@@ -653,24 +657,22 @@ async fn a_big_roster_folds_its_unremarkable_groups() {
     // entry and article, healthy (article's failures are in Needs you, not on the roster),
     // fold whole to their lines, their rows still drawn for a click
     assert!(
-        roster.contains(">entry</a></b> · 25 running · each heard from in the last ")
-            && roster.contains(">article</a></b> · 23 running · each heard from in the last ")
+        roster.contains(">25 running · each heard from in the last ")
+            && roster.contains(">23 running · each heard from in the last ")
             && roster.matches("<details id=\"u-e-").count() == 25,
         "{roster}"
     );
     assert_eq!(
-        roster.matches("<details class=\"ro-g\"><summary").count(),
+        roster
+            .matches("data-preserve-attr=\"open\"><summary class=\"ro-group\">")
+            .count(),
         2,
         "{roster}"
     );
     // scan: its quiet row in sight, first, the seven healthy folded to one line under it
-    let scan = &roster[at(roster, ">scan</a></b> · 1 quiet, 7 running</h3>")..];
+    let scan = &roster[at(roster, ">scan</a></b>")..];
     assert!(
-        at(scan, "<!--r:u-c-50-->")
-            < at(
-                scan,
-                "<details class=\"qf ro-fold\"><summary>+7 running · each heard from in the last "
-            )
+        at(scan, "<!--r:u-c-50-->") < at(scan, "<details class=\"qf ro-fold\"")
             && scan.matches("<details id=\"u-c-").count() == 8,
         "{scan}"
     );
@@ -684,7 +686,7 @@ async fn a_big_roster_folds_its_unremarkable_groups() {
     let (_, html) = f.get(&format!("/projects/id/{}", f.id)).await;
     let roster = plan_html::band(&html, "plan-roster");
     assert!(
-        !roster.contains("<details class=\"ro-g\"><summary"),
+        !roster.contains("data-preserve-attr=\"open\"><summary class=\"ro-group\">"),
         "{roster}"
     );
 }
@@ -738,6 +740,118 @@ async fn slow_chromium_mark_as_seen_and_its_undo_go_through_the_answer() {
     })
     .await
     .unwrap();
+    server.abort();
+    let _ = server.await;
+}
+
+/// Regression: agent writes reordered the roster and its whole-region morph reset group and
+/// quiet folds; moving a unit into another group also lost its open drilldown. Counts alone
+/// must patch their own text. This drives the real page, stream, fold memory and sort cookie.
+#[tokio::test(flavor = "multi_thread")]
+async fn slow_chromium_plan_folds_and_order_survive_activity_and_group_moves() {
+    use serde_json::json;
+    let f = Fixture::new().await;
+    let project = neutral::seed_big(&f.writer, f._home.path()).await;
+    let router = f.router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let url = format!("http://{addr}/projects/id/{project}");
+    let mut browser = tokio::task::spawn_blocking(move || {
+        let mut b = Chrome::open("about:blank").unwrap();
+        b.send("Page.addScriptToEvaluateOnNewDocument", json!({"source": "window.patches=[]; document.addEventListener('datastar-fetch', e => { if(e.detail.type==='datastar-patch-signals' && JSON.parse(e.detail.argsRaw?.signals??'{}').rel) window.streamReady=true; if(e.detail.type==='datastar-patch-elements') patches.push(e.detail.argsRaw?.selector); });"})).unwrap();
+        b.navigate(&url).unwrap();
+        b.wait("window.streamReady && !!customElements.get('sluice-board')").unwrap();
+        b.eval("window.entry = [...document.querySelectorAll('.ro-g')].find(g=>g.querySelector('h3 a')?.textContent==='entry').id; window.scan = [...document.querySelectorAll('.ro-g')].find(g=>g.querySelector('h3 a')?.textContent==='scan').id; window.order = () => [...document.getElementById(entry).querySelectorAll('.ro-u')].map(r=>r.dataset.unit); window.initialOrder=order();").unwrap();
+        assert_eq!(b.eval("document.getElementById(entry).open").unwrap(), false);
+        assert_eq!(b.eval("document.getElementById(scan).open").unwrap(), true);
+        assert_eq!(b.eval("[...document.querySelectorAll('#plan-pane details')].every(d=>(d.getAttribute('data-preserve-attr')||'').split(' ').includes('open'))").unwrap(), true);
+        b.eval("document.getElementById(entry).open=true; document.getElementById(scan).open=false; document.querySelector('#'+scan+' .ro-fold').open=true; document.getElementById('u-e-096').open=true").unwrap();
+        b.wait("!!document.querySelector('#drill-e-096 sluice-steps')").unwrap();
+        b.eval("window.patches=[]").unwrap();
+        b
+    }).await.unwrap();
+    crate::stored_messages::stored(
+        &f.writer,
+        project,
+        crate::stored_messages::Stored {
+            thread: "step-e-096-check",
+            from: "e-096-check",
+            body: "Activity that used to move this row",
+            ..Default::default()
+        },
+    )
+    .await;
+    browser = tokio::task::spawn_blocking(move || {
+        browser.wait("document.querySelector('#u-e-096 .ro-s').textContent.includes('Activity that used to move')").unwrap();
+        assert_eq!(browser.eval("order()").unwrap(), browser.eval("initialOrder").unwrap());
+        assert_eq!(browser.eval("patches.includes('#plan-roster')").unwrap(), false);
+        browser.eval("window.patches=[]").unwrap();
+        browser
+    }).await.unwrap();
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE steps SET status='pending' WHERE project_id=?1 AND step_id='e-096-check'",
+                [project.to_string()],
+            )?;
+            tx.changed(Some(project), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    browser = tokio::task::spawn_blocking(move || {
+        browser.wait("document.getElementById(entry+'-counts').textContent.includes('1 waiting')").unwrap();
+        assert_eq!(browser.eval("patches.includes('#plan-roster')").unwrap(), false);
+        assert_eq!(browser.eval("order()").unwrap(), browser.eval("initialOrder").unwrap());
+        assert_eq!(browser.eval("document.getElementById(entry).open && !document.getElementById(scan).open && document.querySelector('#'+scan+' .ro-fold').open && document.getElementById('u-e-096').open").unwrap(), true);
+        browser
+    }).await.unwrap();
+    // A new member makes e-096 no longer match the one-step entry recipe. A new entry is
+    // inserted first in plan position, but was created after every other entry.
+    f.writer.write(RetrySafety::NonIdempotent, move |tx| {
+        let mut doc = serde_json::to_value(sluice_store::plans::read_plan_rows(tx.sql(), project)?.to_document())?;
+        let mut steps = serde_json::Map::new();
+        steps.insert("new-check".into(), json!({"run":"custom.open", "tags":["unit:new"], "in":{"species":{"default":"New entry"}}}));
+        steps.extend(doc["steps"].as_object().unwrap().clone());
+        steps.insert("e-096-extra".into(), json!({"run":"custom.open", "tags":["unit:e-096"]}));
+        doc["steps"] = json!(steps);
+        crate::seed::put(tx, project, json!(doc))?;
+        tx.sql().execute("UPDATE steps SET status='running' WHERE project_id=?1 AND step_id IN ('new-check','e-096-check')", [project.to_string()])?;
+        tx.changed(Some(project), "status");
+        Ok(())
+    }).await.unwrap();
+    browser = tokio::task::spawn_blocking(move || {
+        browser.wait("!!document.querySelector('#u-new') && document.querySelector('#u-e-096').closest('.ro-g').id !== entry").unwrap();
+        assert_eq!(browser.eval("document.getElementById('u-e-096').open && document.getElementById(entry).open && !document.getElementById(scan).open && document.querySelector('#'+scan+' .ro-fold').open").unwrap(), true);
+        assert_eq!(browser.eval("order().at(-1)").unwrap(), "new");
+        // The quiet text menu changes the cookie before reconnecting the real stream.
+        browser.eval("document.querySelector('.ro-order').value='plan'; document.querySelector('.ro-order').dispatchEvent(new Event('change',{bubbles:true}))").unwrap();
+        browser.wait("order()[0] === 'new'").unwrap();
+        assert_eq!(browser.eval("document.cookie.includes('=plan')").unwrap(), true);
+        browser.eval("location.reload()").unwrap();
+        browser.wait("window.streamReady && !!document.querySelector('#u-new')").unwrap();
+        assert_eq!(browser.eval("document.querySelector('.ro-order').value").unwrap(), "plan");
+        assert_eq!(browser.eval("[...document.querySelector('.ro-g').querySelectorAll('.ro-u')][0].dataset.unit").unwrap(), "new");
+        assert_eq!(browser.eval("document.getElementById('u-e-096').open").unwrap(), true);
+        browser.eval("document.querySelector('.ro-order').value='recent'; document.querySelector('.ro-order').dispatchEvent(new Event('change',{bubbles:true}))").unwrap();
+        browser
+    }).await.unwrap();
+    crate::stored_messages::stored(
+        &f.writer,
+        project,
+        crate::stored_messages::Stored {
+            thread: "step-e-097-check",
+            from: "e-097-check",
+            body: "Most recent entry activity",
+            ..Default::default()
+        },
+    )
+    .await;
+    tokio::task::spawn_blocking(move || {
+        browser.wait("[...document.querySelector('.ro-g').querySelectorAll('.ro-u')][0].dataset.unit === 'e-097'").unwrap();
+        assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), json!([]));
+    }).await.unwrap();
     server.abort();
     let _ = server.await;
 }

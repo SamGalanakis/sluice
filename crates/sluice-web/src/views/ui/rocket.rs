@@ -242,7 +242,7 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         tag: "sluice-board",
         script: "board.js",
-        does: "A project's page (#project-board): the Plan · Both · Board switch shows its view at once and keeps it per project, the board's column fits the window with its More below cue, a step the live plan moves on is said once in #announce, and a form with data-focus-after hands the focus on once its write is drawn.",
+        does: "A project's page (#project-board): the Plan · Both · Board switch shows its view at once and keeps it per project, the owner's Plan folds survive patches and moves using project-scoped session memory, the board's column fits the window with its More below cue, a step the live plan moves on is said once in #announce, and a form with data-focus-after hands the focus on once its write is drawn.",
         props: &[],
         events: &[],
         slots: &["plan", "board"],

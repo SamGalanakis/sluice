@@ -47,6 +47,38 @@ rocket("sluice-board", {
       };
     };
 
+    // ---- the owner's Plan folds ----
+    // Morph preserves `open` on surviving disclosures. Session memory also covers a unit
+    // moved into a folded group, a removed/re-created fold and a page reload. Datastar cannot
+    // preserve an attribute on an element that no longer exists. Only the viewer's choices
+    // are kept; the server still supplies each fold's first default.
+    const foldPrefix = `sluice:plan-fold:${host.dataset.project}:`;
+    const initialized = new WeakSet();
+    const foldKey = (d) => {
+      if (d.dataset.planFold || d.id) return d.dataset.planFold || d.id;
+      const parent = d.parentElement.closest("[id]") || host;
+      const peers = [...parent.querySelectorAll("details")].filter(e => e.className === d.className);
+      return `${parent.id}:${d.className}:${peers.indexOf(d)}`;
+    };
+    const restoreFolds = () => {
+      for (const d of host.querySelectorAll("#plan-pane details")) {
+        if (initialized.has(d)) continue;
+        initialized.add(d);
+        try {
+          const kept = sessionStorage.getItem(foldPrefix + foldKey(d));
+          if (kept !== null) d.open = kept === "open";
+        } catch { /* session storage may be unavailable */ }
+      }
+    };
+    on(host, "toggle", (event) => {
+      const d = event.target;
+      if (!(d instanceof HTMLDetailsElement) || !d.closest("#plan-pane") || !host.contains(d)) return;
+      try { sessionStorage.setItem(foldPrefix + foldKey(d), d.open ? "open" : "closed"); }
+      catch { /* preserve attributes still work without storage */ }
+    }, { capture: true });
+    restoreFolds();
+    observe(host, restoreFolds, { childList: true, subtree: true });
+
     // ---- the board column ----
     // It scrolls on its own and is at most the window's height once it sticks; until the page
     // has scrolled it up to its sticky top, it ends where the window does, so its own end (and

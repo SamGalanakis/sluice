@@ -2453,6 +2453,10 @@ details.read-today .item { opacity: .85; }
 .ro-ticks > span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
 .ro-ticks > span:first-child { transform: none; }
 .ro-ticks > span:last-child { transform: translateX(-100%); }
+#ro-counts { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.ro-order { width: auto; max-width: 100%; min-height: 32px; padding: 2px 20px 2px 4px;
+  border: 0; box-shadow: none; background-color: transparent; color: var(--ink-muted); font: inherit; font-size: 13px; }
+@media (max-width: 760px) { .ro-order { min-height: 44px; } }
 .ro-g { min-width: 0; }
 .ro-group { display: flex; align-items: baseline; gap: 6px; padding: 16px 0 4px; border-bottom: 1px solid var(--rule-faint);
             list-style: none; cursor: pointer; color: var(--ink-muted); }

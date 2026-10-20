@@ -223,7 +223,7 @@ The owner opens the dashboard between other work, often on a second screen or a 
 answer one question within seconds: does anything need me, and is the work moving? A plan
 answers in its order, a briefing over a roster. Its head says it in one sentence; under it
 **Needs you** (questions, stops and silences, each a sentence with one action and a ×) →
-**At work** (a row a unit, the longest silent first, a pulse strip of its last hour) →
+**At work** (a row a unit, creation order by default, a pulse strip of its last hour) →
 **Finished since you looked** (what this browser has not seen finish), in that order at every
 width: what is moving matters more than what is done. A running step shows how long
 it has run; how long a stage usually takes is the project's Stats page's to say, never a
@@ -989,7 +989,8 @@ It is the unit page's body, what a plan row opens in place, and a step's Runs ta
   page as quiet links and Open step. A run that began before the hour fades at the strip's left
   edge (no words on the strip: Took already says how long), and that edge, pointed at, says
   when it began (The pulse strip's popover). It stays open
-  through a patch (`data-preserve-attr="open"`), the unit moving between groups included.
+  through a patch (`data-preserve-attr="open"`); project-and-unit session memory restores it
+  if a whole-region morph re-creates it, including a move into a folded group.
 - **Narrow** (under 560px of its own width: a phone, a narrow drawer): one column, the rail
   and name, then state, progress and span, then the runs as a 4px bar; the head and the axis's
   labels give way. Nothing scrolls sideways.
@@ -1020,12 +1021,16 @@ for each.
 
 - **The backend is the source of truth** ([Tao](https://data-star.dev/guide/the_tao_of_datastar)).
   Every page is HTML from Rust (Askama templates and `views::ui`), whole as it arrives; state
-  lives in the store and the cookies, never in the browser. A component never draws content.
+  lives in the store and the cookies; disclosure choices alone may live in project-scoped
+  session memory so re-created folds keep the viewer's choice. A component never draws content.
 - **Patch elements, fat morph** ([Tao: Patch Elements](https://data-star.dev/guide/the_tao_of_datastar),
   [SSE events: datastar-patch-elements](https://data-star.dev/reference/sse_events)).
   A page's stream (`streams::page_events`) renders the page again and sends each region that
   changed (`#id`, mode `outer`, the default), so the morph keeps focus, scroll and open folds;
-  it never sends a fragment built for the patch. A quiet page sends nothing.
+  it never sends a fragment built for the patch. Plan group, quiet and unit folds preserve
+  `open`, with project-scoped session memory restoring re-created folds; a group's initial
+  default applies only before the viewer has chosen. Counts have their own regions, so count
+  or activity changes alone leave the roster skeleton unchanged. A quiet page sends nothing.
 - **CQRS: one read, short writes** ([Tao: CQRS](https://data-star.dev/guide/the_tao_of_datastar)).
   The read is `data-init="@get(stream, …)"` on `main`
   ([Attributes: data-init](https://data-star.dev/reference/attributes)). Every write is
@@ -1187,7 +1192,7 @@ why each is script rather than Datastar attributes:
 | `sluice-day` | `components.js` | the day line: its now rule and running bars move on the clock's tick | marks placed by time on each tick, measured against the window |
 | `sluice-pulse` | `components.js` | a pulse strip (At work's rows, a running step's in a drilldown): pointing, a tap or the arrows pick a minute (or the faded edge), anchor the page's popover to it and ask for what happened (`sluice-pulse`, the holder's debounced `@get`); its left edge fades while its run began before the hour | hit-testing a minute-wide target around a 2px mark and the strip's keys are not an attribute's; the words are the server's |
 | `sluice-drawer` | `sluice.js` | the step drawer: `#step:<id>` opens it beside the plan (over it below 1200px, a modal dialog; a sheet on a phone) and binds the step's stream; it follows the browser's own `hashchange` (no `pushState`, no event of its own): its close is a plain link to `#`, the scrim and Escape set `location.hash` from `data-on` (`data-on:keydown__window`), and a step link's click sets the hash | `inert` behind a modal, its focus trap, `[` and `]` (the plan's order as drawn, read from its links) and the stream binding it swaps per step |
-| `sluice-board` | `board.js` | a project's page: the board column's height and its "More below" cue, a board Button's say sent in place, a step's new state said once in `#announce`, and after a form with `data-focus-after` is taken the focus on that element once a patch draws it (the view is the server's: the switch is links) | fitting a column to the window, announcing changes and moving the focus |
+| `sluice-board` | `board.js` | a project's page: project-scoped session memory for all Plan folds (open and closed, including re-created units), the board column's height and its "More below" cue, a board Button's say sent in place, a step's new state said once in `#announce`, and after a form with `data-focus-after` is taken the focus on that element once a patch draws it (the view is the server's: the switch is links) | restoring a fold after its element is re-created, fitting a column to the window, announcing changes and moving the focus |
 
 Beside the components, one piece of script belongs to every page rather than a part:
 `nav.js`'s clock and title (below: a time that ticks in the reader's own words and zone is
@@ -1320,7 +1325,8 @@ the page's stream. A lane that redraws a page writes its notes here.
     nothing to say, no section: the lead line says "Nothing needs you" (a section labelled "Set
     aside" holds the Undo lines while there are some). Each Set aside
     line reads as one sentence with its Undo after it, wrapping as text does at any width.
-  - **At work**: the roster, its head one line: the name, its counts and its ⓘ over the
+  - **At work**: the roster, its head one line: the name, its counts, its ⓘ and a quiet text select
+    (Created · Plan order · Recent activity) over the
     roster's first columns, the strips' labels ("1h ago" at their left, "now" at their right,
     12px) on the same line over the strips' column, and under the labels one muted 12px line
     that says how to read a strip: "Each mark is something the agent did; a message is a taller
@@ -1334,13 +1340,21 @@ the page's stream. A lane that redraws a page writes its notes here.
     a few marks. A group a recipe (a `<details>`, its
     triangle, its name at 15px/600 in ink, so a big plan scans by its groups, and its counts
     13px muted: "1 quiet, 7 running, 2 waiting"); the units of no recipe after ("Other
-    units"), the long runs last. **Folding, by row**: in a roster of more than 12 rows a
+    units"), the long runs last. **Order**: Created by default (the revision when a unit was
+    added to the plan, earliest first; ties by plan position), or Plan order, or Recent activity
+    (latest heard first, ties by plan position). The select remembers the viewer's choice per
+    project in `sluice_order_<p>`, which both page loads and streams read. In Created and Plan
+    order, activity never moves a row; a group or state-section change may move it.
+    **Folding, by row**: in a roster of more than 12 rows a
     group shows its remarkable rows first (a silence, a wait of an hour or more since its last
     run, a unit with an open item in Needs you) and folds the rest, when more than 3, to one
     line under them, "+7 running · each heard from in the last 11m", a `<details>` that opens
     in place; a group with nothing remarkable folds whole to its own line,
     "article · 23 running · each heard from in the last 27m". A stop is in Needs you, not a
-    row, so it keeps no healthy sibling in sight. A row (8px,
+    row, so it keeps no healthy sibling in sight. Every Plan disclosure (including Needs you)
+    preserves `open`; project-and-fold session memory restores both open and closed choices
+    after re-creation, group count changes and unit moves. Count text patches independently
+    of the roster skeleton. A row (8px,
     `paper-2` on hover and open) is a grid: the badge (a 60px chip, an engine's name at 12px; drawn
     only when rows run on more than one thing, never "fn"), its title whole (an outcome
     sentence, often long) in ink at weight 600 with its owner muted, and under it its recipe's
@@ -1357,8 +1371,9 @@ the page's stream. A lane that redraws a page writes its notes here.
     yet" muted; once quiet, the one pill turns sand and says how long it has been silent
     ("scan · quiet 3h"); its
     pulse strip (`clamp(180px, 34cqi, 560px)` wide, so a wide screen gives its room to the time
-    rather than to a gap after the title); the live dot. Waiting rows follow the running
-    ones. A line ends it: "4 waiting on earlier work · 25 done, the last 2h ago". The head
+    rather than to a gap after the title); the live dot. Running and waiting rows share the
+    chosen order within each visible or quiet section. A line ends it: "4 waiting on earlier
+    work · 25 done, the last 2h ago". The head
     counts as the summary sentence does: a blocked, held or queued unit waits, so "At work · 2
     units · 3 waiting", or "Nothing at work · 3 waiting". Under 760px
     of the pane the row stacks: badge and title, then the meta, then the track full width; the

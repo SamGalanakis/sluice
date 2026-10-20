@@ -225,6 +225,8 @@ pub struct UnitView {
     pub params: indexmap::IndexMap<String, String>,
     /// Its place in the plan's order.
     pub pos: usize,
+    /// Revision at which this unit was added to the plan (ties use plan position).
+    pub created: u64,
     pub tagged: bool,
     pub done: bool,
     pub settled: bool,
@@ -313,6 +315,7 @@ impl UnitView {
             stages: vec![],
             params: indexmap::IndexMap::new(),
             pos: 0,
+            created: 0,
             tagged: unit.tagged,
             done: unit.done(state),
             settled: unit.settled_in(&depths.settled),
@@ -572,6 +575,9 @@ pub struct ProjectView {
     /// time of the last it marked seen; `None` before it ever did.
     #[serde(skip)]
     pub seen: Option<u64>,
+    /// This viewer's roster order, read from the project cookie on pages and streams.
+    #[serde(skip)]
+    pub order: super::plan::Order,
     /// The items of its Needs you the owner set aside (`NeedsDismiss`), newest first.
     #[serde(skip)]
     pub set_aside: Vec<sluice_store::messages::SetAside>,
@@ -670,6 +676,7 @@ impl ProjectView {
             questions: vec![],
             set_aside: vec![],
             seen: None,
+            order: Default::default(),
         };
         view.settle();
         view
@@ -1142,6 +1149,13 @@ struct CompiledPlan {
     rev: Revision,
     signatures: String,
     plan: std::sync::Arc<Plan>,
+    created: Option<std::sync::Arc<UnitBirths>>,
+}
+#[derive(Clone, Default)]
+struct UnitBirths {
+    rev: u64,
+    steps: BTreeMap<String, String>,
+    units: std::sync::Arc<BTreeMap<String, u64>>,
 }
 impl PlanCache {
     /// The project's plan at its current revision, compiled against `provider` (whose version is
@@ -1166,6 +1180,77 @@ impl PlanCache {
         })?;
         Ok((rev, plan))
     }
+    /// Unit birth revisions come from the durable edit history, never run or message times.
+    /// Replay only when the plan revision changes, alongside the compiled plan cache.
+    fn created(
+        &self,
+        c: &Connection,
+        project: ProjectId,
+    ) -> sluice_store::Result<std::sync::Arc<BTreeMap<String, u64>>> {
+        let rev = sluice_store::plans::plan_revision(c, project)?;
+        let mut births = self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&project)
+            .and_then(|p| p.created.clone())
+            .filter(|b| b.rev <= rev.0)
+            .unwrap_or_default();
+        if births.rev == rev.0 {
+            return Ok(births.units.clone());
+        }
+        use sluice_model::plan_rows::PlanChange;
+        let next = std::sync::Arc::make_mut(&mut births);
+        let created = std::sync::Arc::make_mut(&mut next.units);
+        let mut query = c.prepare_cached(
+            "SELECT rev,changes FROM plan_edits WHERE project_id=?1 AND rev>?2 AND rev<=?3 ORDER BY rev",
+        )?;
+        let edits = query.query_map(
+            (project.to_string(), next.rev as i64, rev.0 as i64),
+            |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?)),
+        )?;
+        for edit in edits {
+            let (rev, changes) = edit?;
+            for change in serde_json::from_str::<Vec<PlanChange>>(&changes)? {
+                match change {
+                    PlanChange::StepPut {
+                        step, declaration, ..
+                    } => {
+                        let unit = declaration
+                            .0
+                            .get("tags")
+                            .and_then(|t| t.as_value().as_array())
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|t| t.as_str())
+                            .find_map(|t| t.strip_prefix("unit:"))
+                            .unwrap_or(step.as_str());
+                        next.steps.insert(step.to_string(), unit.to_owned());
+                    }
+                    PlanChange::StepDelete { step } => {
+                        next.steps.remove(step.as_str());
+                    }
+                    _ => {}
+                }
+            }
+            let units: BTreeSet<_> = next.steps.values().collect();
+            created.retain(|unit, _| units.contains(unit));
+            for unit in units {
+                created.entry(unit.clone()).or_insert(rev);
+            }
+        }
+        next.rev = rev.0;
+        if let Some(kept) = self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(&project)
+            .filter(|p| p.rev == rev)
+        {
+            kept.created = Some(births.clone());
+        }
+        Ok(births.units.clone())
+    }
     /// The plan kept for `(rev, signatures)`, else `compile`'s, kept in its place.
     pub fn compiled(
         &self,
@@ -1183,12 +1268,15 @@ impl PlanCache {
         }
         drop(held);
         let plan = std::sync::Arc::new(compile()?);
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(
+        let mut held = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let created = held.get(&project).and_then(|p| p.created.clone());
+        held.insert(
             project,
             CompiledPlan {
                 rev,
                 signatures: signatures.to_owned(),
                 plan: plan.clone(),
+                created,
             },
         );
         Ok(plan)
@@ -1222,12 +1310,14 @@ pub fn load_board(
         &super::home_of(c),
         project,
     )?);
+    let created = plans.created(c, project)?;
     let mut last = last_messages(c, project, &board)?;
     let mut said = said_lately(c, project)?;
     board.set_aside = sluice_store::messages::needs_set_aside(c, project)?;
     let cards = Cards::read(c, project)?;
     let owners = owners(c, project)?;
     for unit in &mut board.units {
+        unit.created = created.get(unit.id.as_str()).copied().unwrap_or(0);
         unit.owner = unit
             .steps
             .iter()
@@ -2225,6 +2315,7 @@ pub async fn project_page(
         }
         view.view = chosen_view(&query, &headers, project);
         view.seen = super::plan::seen_of(&headers, project);
+        view.order = super::plan::order_of(&headers, project);
         let html = super::plan::render(&view, &shared, &Viewer::from_headers(&headers))?;
         let mut response = Html(html.0).into_response();
         // a view asked for by its link is kept for the next visit
@@ -2291,6 +2382,7 @@ pub async fn project_stream(
             };
             query.apply(&mut view)?;
             view.view = chosen_view(&query, &headers, project);
+            view.order = super::plan::order_of(&headers, project);
             view.seen = match seen {
                 Some(0) => None,
                 Some(seen) => Some(seen),
