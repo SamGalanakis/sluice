@@ -2914,7 +2914,8 @@ while the engine reports background work, while the run holds or waits for a sec
 while it is parked. The agent CLI, private tmux, composing fn helpers and engine control/MCP processes are not jobs.
 An unavailable process observation conservatively suppresses reminders; it cannot fail the run.
 Observed work also suspends the transcript stall check. Once all work ends, the forgotten-submit
-reminder still applies. After the last nudge, or when the engine exits first, the run fails with
+reminder still applies. Once the final nudge's turn ends and the settle passes, or when the
+engine exits first, the run fails without another reminder interval with
 kind `ExitedWithoutSubmit` and the step with `exited_without_submit`. A step with nothing to
 submit ends a settle after its agent goes idle and its background work ends. A terminal engine
 error is never treated as successful completion merely because no outputs were required; it

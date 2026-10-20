@@ -870,12 +870,6 @@ impl Machine {
         self.nudge(now, format!("Your turn ended but these outputs are not submitted: {}. Finish and submit them with the command from your task (submitting ends your session), or explain the blocker; if you are waiting on a job, keep waiting.", missing.join(", ")))
     }
     fn nudge(&mut self, now: Duration, text: String) -> Result<Action, AgentFailure> {
-        if self
-            .last_nudge
-            .is_some_and(|last| now.saturating_sub(last) < self.limits.reminder)
-        {
-            return Ok(Action::None);
-        }
         if self.checkpoint.nudges >= self.limits.nudges {
             return Err(failure(
                 FailureKind::ExitedWithoutSubmit,
@@ -884,6 +878,12 @@ impl Machine {
                     self.checkpoint.nudges, self.checkpoint.final_text
                 ),
             ));
+        }
+        if self
+            .last_nudge
+            .is_some_and(|last| now.saturating_sub(last) < self.limits.reminder)
+        {
+            return Ok(Action::None);
         }
         self.last_nudge = Some(now);
         self.checkpoint.nudges += 1;
