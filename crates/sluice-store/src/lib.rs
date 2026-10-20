@@ -13,6 +13,7 @@ pub mod query;
 pub mod reads;
 pub mod records;
 pub mod resources;
+pub mod restart;
 pub mod schema;
 pub mod writer;
 

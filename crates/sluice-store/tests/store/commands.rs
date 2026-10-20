@@ -477,7 +477,7 @@ async fn slow_legacy_dismissal_is_rewritten_without_refreshing_undo_time() {
         tx.sql().execute("DELETE FROM records", [])?;
         tx.sql().execute("INSERT INTO readers(project_id,identity,stream,thread,cursor,heartbeat_at) VALUES (?1,'owner','dismissed','a',226915,'2000-01-01T00:00:00Z'),(?1,'owner','dismissed','b',226915,'2000-01-01T00:00:00Z')", [project.to_string()])?;
         for (step, error) in [
-            ("c", PublicError::AgentFailure { kind: "Cancelled".into(), message: "stop".into(), session: None }),
+            ("c", PublicError::AgentFailure { retry_at: None, kind: "Cancelled".into(), message: "stop".into(), session: None }),
             ("d", PublicError::FnFailure { message: "cancelled: stop".into() }),
         ] {
             tx.sql().execute("UPDATE steps SET status='failed',error=?2 WHERE step_id=?1", params![step, serde_json::to_string(&error)?])?;

@@ -913,6 +913,8 @@ pub fn step_cancel(
         match state.status(id) {
             StepStatus::Running | StepStatus::Failed => {}
             StepStatus::Pending if context.plan.steps()[id].is_external() => {}
+            StepStatus::Pending | StepStatus::Succeeded
+                if context.plan.steps()[id].restart.is_some() => {}
             _ => {
                 return Err(invalid(format!(
                     "step {id} must be running, failed or pending external work"

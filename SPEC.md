@@ -889,7 +889,30 @@ input and output names match `^[a-z0-9][a-z0-9_-]*$`; a project name may not loo
 
 Step keys: `run` (the fn), `in` (bindings), `scatter`, `doc`, `outputs` (declared, open fns
 only), `paused` (`true` or a reason string), `after` (gate entries), `tags`, `needs`,
-`priority` and `limits` (§2.5). Plan outputs are `{"source": "<ref>"}`.
+`priority`, `limits` (§2.5) and `restart` (§6.1.1). Plan outputs are `{"source": "<ref>"}`.
+
+### 6.1.1 Restart policies
+
+A step may declare `restart: "on_engine_error"` or `restart: "always"`; omission disables
+restarts. `step_update` can replace or remove it while the step is running. `on_engine_error`
+retries engine failures (quota exhaustion, operation/wall/stall/turn-start/readiness deadlines,
+unknown acceptance, engine exit or transient/cleanup failure) and lost guardians/processes.
+It never retries output validation failures, an exit without submitting, authentication/setup
+failures, or cancellation. `always` also retries success and ordinary work/output failures.
+A cancellation stops either policy, including while waiting after success; a manual retry
+re-arms the step. Manually set outputs and skipped steps never restart.
+
+Restarts use `step_retry` with the predecessor run, resuming the recorded engine session when
+available. They deliver feedback naming the policy, count and previous result; uncertain input
+is never replayed from the failed run. Admission, pauses, gates and resource limits still apply.
+A restart waits at least 10 seconds after completion, doubles the delay per restart in the
+rolling hour up to five minutes, and permits at most six automatic restarts per rolling hour.
+A usage limit's parsed reset plus its two-second margin is an additional minimum.
+An automatic restart resets only its step; it does not re-arm failed dependents. An unknown
+reset uses the backoff and hourly budget. The scheduler rechecks waiting restarts on its normal
+full sweep (at most 30 seconds later). Counts and the hourly budget survive coordinator restarts.
+The steps status view includes `restart`, `restart_count` and, when waiting, `restart_at` (Unix
+seconds). Each units status row includes a `restart` map by step with policy, count and next_at.
 
 ### 6.2 Bindings
 
@@ -1096,7 +1119,7 @@ state or readiness it changes, and the ready steps competing for the resources o
   committed stale; when the third preparation is stale too, the edit is refused `busy` with
   `retryable: true` and nothing is written. Preparation never runs in the writer. `order.set`
   requires `rev`.
-- A running step may change only `paused` and `tags`, and may not be removed.
+- A running step may change only `paused`, `tags` and `restart`, and may not be removed.
 - `start: false` (`plan_edit`, `step_add`, `unit_add`) adds steps with `"paused": true` unless a
   step sets `paused` itself.
 - An edit that changes nothing (an edge already there, tags or pauses as they are, a prune that
@@ -2966,7 +2989,8 @@ after 20 s with no hook, no working pane and no sight of it queued.
 An engine's account problems end the run at once, typed: a hard usage cap with `agent_failure`
 kind `QuotaExhausted`, an auth failure (logged out, a token expired or revoked, the account
 barred) with kind `AuthFailed`. Neither is transient: the supervisor neither retries nor replays
-input, and the failure keeps the session, so the step can be retried with its `session` bound
+input. A step with a restart policy (§6.1.1) retries quota failures after the reset and backoff;
+authentication still needs the owner. The failure keeps the session, so the step can also be retried with its `session` bound
 once the owner has acted (after the reset or with quota added; after signing in again on this
 host), or run on another engine. A hard cap is a usage, plan, spend or credit limit whose reset
 is unknown, or any limit whose reset is more than `SLUICE_AGENT_QUOTA_RESET_MIN` (15) away. A

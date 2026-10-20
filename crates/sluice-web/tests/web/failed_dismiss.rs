@@ -40,6 +40,7 @@ fn fn_failure(message: &str) -> PublicError {
 }
 fn exited() -> PublicError {
     PublicError::AgentFailure {
+        retry_at: None,
         kind: "EngineExited".into(),
         message: "claude: transcript record exceeds 1 MiB".into(),
         session: None,

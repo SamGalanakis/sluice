@@ -142,7 +142,7 @@ impl Limit {
                     self.engine,
                     &self.text,
                 ),
-                retry_at: None,
+                retry_at: self.resets_at.map(|at| at.saturating_add(RESET_MARGIN)),
             };
         }
         let retry_at = self.resets_at.map(|at| at.max(now) + RESET_MARGIN);

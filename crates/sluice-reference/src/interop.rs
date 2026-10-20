@@ -190,6 +190,7 @@ pub struct StepShape {
     pub scatter: Option<String>,
     pub doc: Option<String>,
     pub paused: String,
+    pub restart: Option<sluice_model::plan::Restart>,
     /// Each gate's entry text.
     pub after: Vec<String>,
     pub tags: Vec<String>,
@@ -249,6 +250,7 @@ macro_rules! plan_shape {
                     scatter: s.scatter.clone(),
                     doc: s.doc.clone(),
                     paused: format!("{:?}", s.paused),
+                    restart: s.restart,
                     after: s.after.iter().map(|g| g.entry()).collect(),
                     tags: s.tags.iter().map(ToString::to_string).collect(),
                     needs: s.needs.iter().map(|(n, a)| (n.to_string(), *a)).collect(),

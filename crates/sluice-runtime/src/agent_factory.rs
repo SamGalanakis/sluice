@@ -233,6 +233,7 @@ fn public(error: AgentFailure) -> sluice_model::error::PublicError {
         }
     } else {
         sluice_model::error::PublicError::AgentFailure {
+            retry_at: error.retry_at,
             kind: format!("{:?}", error.kind),
             message: error.message,
             session: error.session,

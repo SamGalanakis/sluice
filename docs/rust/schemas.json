@@ -1633,6 +1633,16 @@
                 "type": "null"
               }
             ]
+          },
+          "restart": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -8189,6 +8199,15 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
+              },
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -9932,6 +9951,15 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
+              },
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -12703,6 +12731,16 @@
             ]
           },
           "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "restart": {
             "anyOf": [
               {
                 "$ref": "#/$defs/JsonValue"
@@ -18052,6 +18090,15 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
+              },
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -19835,6 +19882,15 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
+              },
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -21693,6 +21749,15 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
+              },
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -23246,6 +23311,16 @@
                 "type": "null"
               }
             ]
+          },
+          "restart": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -23469,6 +23544,16 @@
             ]
           },
           "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "restart": {
             "anyOf": [
               {
                 "$ref": "#/$defs/JsonValue"
@@ -23944,6 +24029,16 @@
         ]
       },
       "priority": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/JsonValue"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "restart": {
         "anyOf": [
           {
             "$ref": "#/$defs/JsonValue"
@@ -24469,6 +24564,16 @@
             ]
           },
           "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "restart": {
             "anyOf": [
               {
                 "$ref": "#/$defs/JsonValue"
@@ -30534,6 +30639,16 @@
                 "type": "null"
               }
             ]
+          },
+          "restart": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -35823,6 +35938,15 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
+              },
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -39365,6 +39489,15 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
+              },
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -41359,6 +41492,15 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
+              },
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -42032,6 +42174,15 @@
           "error": {
             "type": "string",
             "const": "agent_failure"
+          },
+          "retry_at": {
+            "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
           }
         },
         "additionalProperties": false,

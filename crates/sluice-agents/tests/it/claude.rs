@@ -1294,7 +1294,10 @@ fn transcript_decoder_skips_oversize_records_and_preserves_offsets() {
             "{}",
             error.message
         );
-        assert_eq!(error.retry_at, None);
+        assert_eq!(
+            error.retry_at,
+            Some(now + 3 * 86400 + account::RESET_MARGIN)
+        );
         // The 5-hour session limit an hour from its reset is a hard cap too.
         let mut session = real[1].clone();
         session["quotaLimits"]["resetsAt"] = json!(now + 3600);

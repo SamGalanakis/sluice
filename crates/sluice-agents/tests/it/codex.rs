@@ -1521,7 +1521,7 @@ async fn provider_account_errors_refuse_input_and_mask_credentials() {
         assert!(error.message.contains(
         " — wait for the reset or buy credits at https://chatgpt.com/codex/settings/usage, then step_retry (or run the step on another engine). Codex said: account/rateLimits/updated: rate_limit_reached (limit codex)"
     ), "{}", error.message);
-        assert_eq!(error.retry_at, None);
+        assert!(error.retry_at.is_some());
         // No further turn starts into a hard cap.
         let refused = adapter
             .execute(

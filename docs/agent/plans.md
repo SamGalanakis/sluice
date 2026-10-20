@@ -611,7 +611,7 @@ An unknown operation or field, empty `ops`, changes, removal steps or edge entri
 validation errors use plan paths.
 
 Small edits use `step_add`, `step_update` or `step_remove`. `changes` accepts only `run`,
-`in`, `scatter`, `doc`, `outputs`, `paused`, `after`, `tags`, `needs`, `priority` and `limits`; null
+`in`, `scatter`, `doc`, `outputs`, `paused`, `after`, `tags`, `needs`, `priority`, `limits` and `restart`; null
 removes a key and `in` replaces the whole map, omitting null entries. To remove an old
 function's input while changing functions, use e.g. `changes={"run":"core.external",
 "in":{"x":null},"outputs":{"final":"string"}}`; include bindings for other inputs to keep.
@@ -637,7 +637,7 @@ For a whole-plan simulation, pass `dry_run=true, preview_scope="all"`; without `
 A no-op writes no record or history and keeps the current revision with empty
 `preview.changes`. Typed lowering can produce no operations; supplied empty batches are
 still refused. `step_set_input` keeps its `bad_request` when it changes nothing. A running
-step can only be paused or tagged. A `busy` refusal with `retryable=true` after three stale
+step can change only `paused`, `tags` and `restart`. A `busy` refusal with `retryable=true` after three stale
 preparations writes nothing: send the same edit again.
 
 `plan_history(project, since_rev?, after_seq?, limit=200)` returns `{project, entries,
@@ -855,3 +855,21 @@ or outputs, gate entries name a step, a boolean ref or a unit, types fit, no cyc
 a list with paths, e.g.
 `steps.notes.in.cwd: repo is int, which does not fit string: int is not string`. Fix each path
 and resend. `verify(project)` runs the same checks plus function and state checks.
+
+
+### Automatic restarts
+
+Set `restart: "on_engine_error"` on lanes that should resume after engine errors, or
+`restart: "always"` on overseers that should resume after either success or failure.
+`step_update(project, step, changes={"restart":"always"})` works while running; null removes
+it. Engine errors include usage limits, deadlines, lost processes, broken pipes and unknown
+acceptance. `on_engine_error` leaves output failures, exits without submission and setup/auth
+failures for you to fix. Cancellation stops either policy, including between runs.
+
+Sluice resumes the previous session when recorded and sends a message explaining the restart.
+It waits 10 seconds, doubling per restart in the past hour to five minutes, with at most six
+restarts per rolling hour. Known usage resets extend the wait until two seconds after reset;
+unknown resets use the same bounded backoff. Pauses and admission still apply. Status shows
+`restart`, `restart_count`, and `restart_at` while waiting; units status has a `restart` map by
+step. Restart counts and the hourly budget survive a deploy. `step_retry` manually re-arms a
+cancelled step. This replaces external status-polling/retry loops.

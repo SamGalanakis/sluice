@@ -47,6 +47,9 @@ pub enum PublicError {
     Rejected { message: String },
     #[error("{message}")]
     AgentFailure {
+        /// Earliest safe retry, as a Unix second (for example a usage-limit reset).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_at: Option<u64>,
         #[serde(default = "agent_failure_kind")]
         kind: String,
         message: String,

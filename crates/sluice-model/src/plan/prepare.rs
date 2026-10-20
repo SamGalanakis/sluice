@@ -264,7 +264,7 @@ fn work_out(
         {
             errors.push(super::diagnostic(
                 &format!("steps.{id}"),
-                "cannot remove or change a running step except paused and tags",
+                "cannot remove or change a running step except paused, tags and restart",
             ));
         }
     }

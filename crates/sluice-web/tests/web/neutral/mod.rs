@@ -315,6 +315,7 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
         message: "The editors set the owls aside for the next edition.".into(),
     };
     let capped = || PublicError::AgentFailure {
+        retry_at: None,
         kind: "WallCap".into(),
         message: "The run reached its wall-clock cap.".into(),
         session: None,
@@ -671,6 +672,7 @@ pub async fn seed_big(writer: &Writer, home: &Path) -> ProjectId {
                 ),
                 Step {
                     error: Some(PublicError::AgentFailure {
+                        retry_at: None,
                         kind: "WallCap".into(),
                         message: "The run reached its wall-clock cap.".into(),
                         session: None,

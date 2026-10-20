@@ -296,6 +296,7 @@ impl<F: AgentFactory> FnHost for AgentFnHost<F> {
                     message: error.message,
                 },
                 _ => PublicError::AgentFailure {
+                    retry_at: error.retry_at,
                     kind: format!("{:?}", error.kind),
                     message: error.message,
                     session: error.session,

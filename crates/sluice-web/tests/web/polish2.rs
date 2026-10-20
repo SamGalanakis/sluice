@@ -194,6 +194,7 @@ async fn a_failure_says_what_to_try() {
         )
         .await;
     let quota = PublicError::AgentFailure {
+        retry_at: None,
         kind: "QuotaExhausted".into(),
         message: "usage cap".into(),
         session: None,

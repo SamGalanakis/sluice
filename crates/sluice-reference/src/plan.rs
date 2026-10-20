@@ -117,6 +117,7 @@ pub struct Step {
     pub scatter: Option<String>,
     pub doc: Option<String>,
     pub paused: Pause,
+    pub restart: Option<sluice_model::plan::Restart>,
     pub after: Vec<Gate>,
     pub tags: Vec<String>,
     pub needs: IndexMap<String, u64>,
@@ -563,7 +564,7 @@ fn parse_step(
         raw,
         &[
             "run", "in", "scatter", "doc", "outputs", "paused", "after", "tags", "needs",
-            "priority", "limits",
+            "priority", "limits", "restart",
         ],
         &path,
         errors,
@@ -598,6 +599,18 @@ fn parse_step(
     let scatter = raw
         .get("scatter")
         .and_then(|value| string(value, &format!("{path}.scatter"), errors));
+    let restart = raw.get("restart").and_then(|value| {
+        match serde_json::from_value::<sluice_model::plan::Restart>(value.clone()) {
+            Ok(policy) => Some(policy),
+            Err(_) => {
+                errors.push(diagnostic(
+                    &format!("{path}.restart"),
+                    "expected on_engine_error or always",
+                ));
+                None
+            }
+        }
+    });
     let paused = match raw.get("paused") {
         None | Some(Value::Bool(false)) => Pause::No,
         Some(Value::Bool(true)) => Pause::Yes,
@@ -744,6 +757,7 @@ fn parse_step(
         scatter,
         doc,
         paused,
+        restart,
         after: vec![],
         tags,
         needs,
@@ -1280,6 +1294,8 @@ pub fn prepare_candidate(
             let mut new = new.clone();
             old.paused = Pause::No;
             new.paused = Pause::No;
+            old.restart = None;
+            new.restart = None;
             old.tags.clear();
             new.tags.clear();
             old == new
@@ -1287,7 +1303,7 @@ pub fn prepare_candidate(
         if !allowed {
             errors.push(diagnostic(
                 &format!("steps.{id}"),
-                "cannot remove or change a running step except paused and tags",
+                "cannot remove or change a running step except paused, tags and restart",
             ));
         }
     }

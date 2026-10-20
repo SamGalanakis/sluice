@@ -611,7 +611,7 @@ pub(crate) fn complete_in(
     }
     let frozen: serde_json::Value = serde_json::from_str(&frozen)?;
     let function: FrozenFunction = serde_json::from_value(frozen["function"].clone())?;
-    let error = if cancelled {
+    let mut error = if cancelled {
         Some(PublicError::Cancelled {
             message: "cancel requested".into(),
         })
@@ -620,6 +620,11 @@ pub(crate) fn complete_in(
             .error
             .or_else(|| validate_fields(&function.outputs, &request.outputs, "outputs").err())
     };
+    // Standalone calls have no restart policy. Keep their stored/wire error readable
+    // by older pinned clients, as step completion does for its stored error.
+    if let Some(PublicError::AgentFailure { retry_at, .. }) = &mut error {
+        *retry_at = None;
+    }
     let status = if error.is_some() {
         StepStatus::Failed
     } else {

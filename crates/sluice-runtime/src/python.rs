@@ -39,6 +39,7 @@ pub enum PythonError {
     Failure(String),
     Transient(String),
     AgentFailure {
+        retry_at: Option<u64>,
         kind: String,
         message: String,
         session: Option<String>,
@@ -81,7 +82,9 @@ impl PythonError {
                 kind,
                 message,
                 session,
+                retry_at,
             } => PublicError::AgentFailure {
+                retry_at,
                 kind,
                 message,
                 session,
@@ -518,11 +521,13 @@ pub fn decode_result(
             let error = match result.error {
                 FunctionError::Helper(error) => error,
                 FunctionError::Public(PublicError::AgentFailure {
+                    retry_at,
                     kind,
                     message,
                     session,
                 }) => {
                     return Err(PythonError::AgentFailure {
+                        retry_at,
                         kind,
                         message: tail(&message),
                         session,

@@ -53,6 +53,7 @@ fn persisted_status_vocabulary_and_cancel_errors() {
 
     {
         let failure = PublicError::AgentFailure {
+            retry_at: None,
             kind: "EngineExited".into(),
             message: "\nclaude: transcript record exceeds 1 MiB\npane at failure".into(),
             session: None,

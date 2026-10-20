@@ -26,6 +26,7 @@ fn between<'a>(html: &'a str, from: &str, to: &str) -> &'a str {
 
 fn agent(kind: &str) -> PublicError {
     PublicError::AgentFailure {
+        retry_at: None,
         kind: kind.into(),
         message: "it stopped".into(),
         session: None,

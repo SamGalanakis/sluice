@@ -196,7 +196,7 @@ pub struct AgentFailure {
     pub kind: FailureKind,
     pub message: String,
     pub session: Option<String>,
-    /// A `Transient` rate limit's reported reset (or the end of Codex's network backoff): the
+    /// An engine limit's reported reset (or the end of Codex's network backoff): the
     /// Unix second the retry starts at, in place of the policy's fixed backoff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_at: Option<u64>,
@@ -1397,7 +1397,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                     tokio::select! {
                         biased;
                         _ = cancel.cancelled() => return Err(failure(FailureKind::Cancelled, "cancelled during transient backoff")),
-                        _ = tokio::time::sleep_until(deadline) => return Err(failure(FailureKind::WallCap, "wall-clock cap during backoff")),
+                        _ = tokio::time::sleep_until(deadline) => return Err(AgentFailure { retry_at: error.retry_at, ..failure(FailureKind::WallCap, "wall-clock cap during backoff") }),
                         _ = tokio::time::sleep(wait) => {},
                     }
                     machine.checkpoint.internal_attempt += 1;
@@ -2035,7 +2035,7 @@ async fn continue_in_place<E: EngineAdapter, H: SupervisorHost>(
         tokio::select! {
             biased;
             _ = cancel.cancelled() => Err(failure(FailureKind::Cancelled, "cancelled during transient backoff")),
-            _ = tokio::time::sleep_until(deadline) => Err(failure(FailureKind::WallCap, "wall-clock cap during backoff")),
+            _ = tokio::time::sleep_until(deadline) => Err(AgentFailure { retry_at: error.retry_at, ..failure(FailureKind::WallCap, "wall-clock cap during backoff") }),
             _ = tokio::time::sleep(wait) => Ok(()),
         }
     })
@@ -2549,6 +2549,7 @@ fn process_hooks_inner<E: EngineAdapter>(
                     payload: request.payload.into_value(),
                 })
                 .map_err(|error| PublicError::AgentFailure {
+                    retry_at: error.retry_at,
                     kind: format!("{:?}", error.kind),
                     message: error.to_string(),
                     session: None,

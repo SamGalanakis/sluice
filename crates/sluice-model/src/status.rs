@@ -99,7 +99,16 @@ pub struct UnitsView {
 
 /// The done units (every step succeeded or skipped), in plan order.
 pub fn done_units<'a>(plan: &'a Plan, state: &StateSnapshot) -> Vec<&'a Unit> {
-    plan.units().values().filter(|u| u.done(state)).collect()
+    plan.units()
+        .values()
+        .filter(|u| {
+            u.done(state)
+                && !u
+                    .steps
+                    .iter()
+                    .any(|id| plan.steps()[id].restart == Some(crate::plan::Restart::Always))
+        })
+        .collect()
 }
 
 /// The steps a selection names, in plan order; `None` when it names none (no ids, no tags).
@@ -487,7 +496,13 @@ pub fn units_view(
             if !unit.steps.iter().any(|id| selected.contains(id)) {
                 continue;
             }
-        } else if !all && unit.done(state) {
+        } else if !all
+            && unit.done(state)
+            && !unit
+                .steps
+                .iter()
+                .any(|id| plan.steps()[id].restart == Some(crate::plan::Restart::Always))
+        {
             done.0 += 1;
             done.1 += unit.steps.len();
             continue;

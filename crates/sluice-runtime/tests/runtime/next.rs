@@ -1177,6 +1177,7 @@ async fn subscription_wake_kinds_select_typed_events() {
             (
                 StepStatus::Failed,
                 Some(PublicError::AgentFailure {
+                    retry_at: None,
                     kind: "QuotaExhausted".into(),
                     message: "reset tomorrow".into(),
                     session: None,

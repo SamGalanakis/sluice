@@ -97,7 +97,7 @@ pub enum EngineErrorKind {
 pub struct EngineError {
     pub kind: EngineErrorKind,
     pub message: String,
-    /// For a `Transient` rate limit whose reset the engine reported: the Unix second, just
+    /// For an engine limit whose reset the engine reported: the Unix second, just
     /// after that reset, at which a retry should start instead of the fixed backoff; for
     /// Codex's network loss, the end of its network backoff.
     #[serde(default, skip_serializing_if = "Option::is_none")]

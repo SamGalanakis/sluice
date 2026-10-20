@@ -140,6 +140,10 @@ pub(crate) fn status(
     let id = sluice_store::messages::resolve_project(sql, &query.project)?;
     let ctx = crate::coordinator::cached_context(sql, id, catalog, cache)?;
     let plan = &ctx.plan;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
     let state = plans::read_state(sql, id)?;
     let selected = status::select(
         plan,
@@ -216,6 +220,32 @@ pub(crate) fn status(
         let mut rows = serde_json::to_value(&view.rows)?;
         for row in rows.as_array_mut().into_iter().flatten() {
             let unit = row["unit"].as_str().unwrap_or_default().to_owned();
+            let restarts = plan
+                .units()
+                .get(
+                    &unit
+                        .parse::<UnitName>()
+                        .map_err(|e| sluice_store::StoreError::InvalidDatabase(e.to_string()))?,
+                )
+                .map(|u| {
+                    u.steps
+                        .iter()
+                        .map(|step| {
+                            Ok((
+                                step.to_string(),
+                                sluice_store::restart::status(sql, &ctx, step, now)?,
+                            ))
+                        })
+                        .collect::<sluice_store::Result<BTreeMap<_, _>>>()
+                })
+                .transpose()?
+                .unwrap_or_default();
+            row["restart"] = json!(
+                restarts
+                    .into_iter()
+                    .filter_map(|(step, status)| status.map(|s| (step, s)))
+                    .collect::<BTreeMap<_, _>>()
+            );
             let named = names.naming.unit(&unit);
             row["title"] = json!(names.naming.unit_title(&unit));
             if let Some(recipe) = named.map(|n| n.recipe.as_str()).filter(|r| !r.is_empty()) {
@@ -256,6 +286,13 @@ pub(crate) fn status(
         if let Some(park) = parks.get(&step) {
             row["shown"] = json!("parked");
             row["parked"] = json!(park);
+        }
+        if let Some(restart) = sluice_store::restart::status(sql, &ctx, &step, now)? {
+            row["restart"] = json!(restart.policy);
+            row["restart_count"] = json!(restart.count);
+            if let Some(at) = restart.next_at {
+                row["restart_at"] = json!(at);
+            }
         }
         if query.brief
             && let Some(outputs) = row.get_mut("outputs")

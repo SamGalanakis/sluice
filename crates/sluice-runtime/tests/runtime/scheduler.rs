@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Default)]
 struct Fake {
     launches: Arc<Mutex<Vec<Launch>>>,
+    now: Arc<Mutex<Option<std::time::SystemTime>>>,
     /// The host's memory reading; `None` measures nothing.
     memory: Arc<Mutex<Option<sluice_runtime::headroom::HostReading>>>,
 }
@@ -49,6 +50,12 @@ impl sluice_process::guardian::AdoptionHost for Fake {
     }
 }
 impl ExecutionHost for Fake {
+    fn now(&self) -> std::time::SystemTime {
+        self.now
+            .lock()
+            .unwrap()
+            .unwrap_or_else(std::time::SystemTime::now)
+    }
     async fn terminal_gone(
         &self,
         _: sluice_model::ids::RunId,
@@ -855,5 +862,263 @@ async fn lowering_a_run_ceiling_queues_that_step_without_blocking_other_work() {
                 .as_str()
                 .is_some_and(|reason| reason.contains("above the per-run memory ceiling"))),
         "{status}"
+    );
+}
+
+// Regression: terminated engine lanes and overseers used to need a polling cron invoking
+// step_retry. Drive coordinator completion and admission with the host clock; no sleeps.
+#[tokio::test]
+async fn restart_policies_wait_resume_limit_and_stop_on_cancel() {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let spec = |restart: &str| json!({"run":"fixture.echo","restart":restart,"in":{"value":{"default":7}}});
+    let mut f = Fixture::new(
+        json!({"steps":{
+            "engine":spec("on_engine_error"),
+            "quota":spec("on_engine_error"),
+            "legacy":spec("on_engine_error"),
+            "output":spec("on_engine_error"),
+            "mixed":{"run":"fixture.echo","restart":"on_engine_error","scatter":"value","in":{"value":{"default":[1,2]}}},
+            "work-failure":spec("on_engine_error"),
+            "success":spec("on_engine_error"),
+            "deadline":spec("on_engine_error"),
+            "pipe":spec("on_engine_error"),
+            "cancelled":spec("always"),
+            "watch":spec("always")
+        }}),
+        json!({}),
+    )
+    .await;
+    f.tick().await;
+    let launches = f.launches();
+    let find = |name: &str| {
+        launches
+            .iter()
+            .find(|l| l.identity.step.as_ref().unwrap().as_str() == name)
+            .unwrap()
+    };
+    let reset = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 7200;
+    let failure = |kind: &str, retry_at| {
+        PayloadResult::Failed(PublicError::AgentFailure {
+            kind: kind.into(),
+            message: format!("{kind}: engine stopped"),
+            session: Some("session-1".into()),
+            retry_at,
+        })
+    };
+    for launch in launches
+        .iter()
+        .filter(|l| l.identity.step.as_ref().unwrap().as_str() == "mixed")
+    {
+        let result = if launch.invocation.inputs.0["value"].as_value() == 1 {
+            failure("EngineExited", None)
+        } else {
+            PayloadResult::Succeeded(map(json!({"undeclared":true})))
+        };
+        f.finish(launch, result).await;
+    }
+    f.finish(find("engine"), failure("UnknownAcceptance", None))
+        .await;
+    f.finish(find("deadline"), failure("WallCap", None)).await;
+    f.finish(
+        find("pipe"),
+        PayloadResult::Lost("guardian broken pipe".into()),
+    )
+    .await;
+    f.finish(
+        find("work-failure"),
+        PayloadResult::Failed(PublicError::FnFailure {
+            message: "work output failed".into(),
+        }),
+    )
+    .await;
+    f.finish(
+        find("success"),
+        PayloadResult::Succeeded(map(json!({"value":7}))),
+    )
+    .await;
+    f.finish(find("legacy"), PayloadResult::Failed(PublicError::AgentFailure {
+        kind:"QuotaExhausted".into(), message:"claude: weekly limit reached; resets 2099-01-01T00:00Z (in many days) — wait for reset".into(), session:Some("legacy-session".into()), retry_at:None,
+    })).await;
+    f.finish(find("quota"), failure("QuotaExhausted", Some(reset)))
+        .await;
+    f.finish(
+        find("output"),
+        PayloadResult::Succeeded(map(json!({"undeclared":true}))),
+    )
+    .await;
+    f.finish(
+        find("cancelled"),
+        PayloadResult::Cancelled("owner stopped it".into()),
+    )
+    .await;
+    f.finish(
+        find("watch"),
+        PayloadResult::Succeeded(map(json!({"value":7}))),
+    )
+    .await;
+    assert_eq!(f.tick().await, 0, "backoff before every relaunch");
+    *f.host.now.lock().unwrap() = Some(SystemTime::now() + Duration::from_secs(11));
+    assert_eq!(f.tick().await, 4);
+    let retries = f.launches();
+    for name in ["engine", "watch", "deadline", "pipe"] {
+        let retry = retries
+            .iter()
+            .rev()
+            .find(|l| l.identity.step.as_ref().unwrap().as_str() == name)
+            .unwrap();
+        assert_eq!(
+            retry.prev_run,
+            Some(find(name).identity.run),
+            "same-session predecessor"
+        );
+        assert!(
+            retry.assigned.through > retry.assigned.after,
+            "restart reason delivered as feedback"
+        );
+    }
+    let status = f.status().await;
+    assert_eq!(status["steps"]["engine"]["restart_count"], 1);
+    assert_eq!(status["steps"]["quota"]["restart_count"], 0);
+    assert_eq!(status["steps"]["quota"]["restart_at"], reset);
+    assert!(
+        status["steps"]["quota"]["error"]["retry_at"].is_null(),
+        "pinned binaries retain the old error shape"
+    );
+    assert_eq!(status["steps"]["legacy"]["restart_at"], 4070908862_i64);
+    assert_eq!(status["steps"]["output"]["status"], "failed");
+    assert_eq!(status["steps"]["mixed"]["restart_count"], 0);
+    assert_eq!(status["steps"]["cancelled"]["status"], "failed");
+    assert_eq!(status["steps"]["work-failure"]["restart_count"], 0);
+    assert_eq!(status["steps"]["success"]["restart_count"], 0);
+    let CommandReply::Data(units) = command(&f.broker,json!({"command":"status","args":{"project":{"kind":"id","value":f.project},"view":"units","all":true,"selection":{}}})).await else {panic!("units")};
+    assert_eq!(
+        units.into_value()["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["unit"] == "watch")
+            .unwrap()["restart"]["watch"]["count"],
+        1
+    );
+    let records = command(&f.broker,json!({"command":"log_read","args":{"project":{"kind":"id","value":f.project},"kinds":["message"],"limit":100}})).await;
+    assert!(
+        serde_json::to_string(&records)
+            .unwrap()
+            .contains("UnknownAcceptance: engine stopped")
+    );
+    command(&f.broker,json!({"command":"step_cancel","args":{"project":{"kind":"id","value":f.project},"selection":{"steps":["mixed"]},"reason":"stop mixed"}})).await;
+    command(&f.broker,json!({"command":"step_update","args":{"project":{"kind":"id","value":f.project},"step":"mixed","changes":{"restart":"always"},"edit":{}}})).await;
+    // The policy can change while a run is live, through the public command.
+    command(&f.broker,json!({"command":"step_update","args":{"project":{"kind":"id","value":f.project},"step":"engine","changes":{"restart":"always"},"edit":{"reason":"watch","author":"test"}}})).await;
+    assert_eq!(f.status().await["steps"]["engine"]["restart"], "always");
+    *f.host.now.lock().unwrap() = Some(UNIX_EPOCH + Duration::from_secs(reset));
+    assert_eq!(
+        f.tick().await,
+        1,
+        "quota waits through its reset: {:?}",
+        f.launches()
+            .iter()
+            .map(|l| l.identity.step.as_ref().unwrap().as_str())
+            .collect::<Vec<_>>()
+    );
+    let all = f.launches();
+    let quota = all.last().unwrap();
+    assert_eq!(quota.prev_run, Some(find("quota").identity.run));
+    // One overseer repeatedly succeeds. The seventh automatic restart waits for the
+    // oldest of six attempts to leave the rolling hour, even after repeated ticks.
+    let mut watch = retries
+        .iter()
+        .rev()
+        .find(|l| l.identity.step.as_ref().unwrap().as_str() == "watch")
+        .unwrap()
+        .clone();
+    let mut now = reset;
+    for count in 2..=6 {
+        f.finish(&watch, PayloadResult::Succeeded(map(json!({"value":7}))))
+            .await;
+        now += 301;
+        *f.host.now.lock().unwrap() = Some(UNIX_EPOCH + Duration::from_secs(now));
+        assert_eq!(f.tick().await, 1);
+        watch = f.launches().last().unwrap().clone();
+        assert_eq!(f.status().await["steps"]["watch"]["restart_count"], count);
+    }
+    // This first retry was two hours ago; add one more within this hour.
+    f.finish(
+        &watch,
+        PayloadResult::Failed(PublicError::FnFailure {
+            message: "overseer failed".into(),
+        }),
+    )
+    .await;
+    now += 301;
+    *f.host.now.lock().unwrap() = Some(UNIX_EPOCH + Duration::from_secs(now));
+    assert_eq!(f.tick().await, 1, "always also restarts ordinary failures");
+    watch = f.launches().last().unwrap().clone();
+    f.finish(&watch, PayloadResult::Succeeded(map(json!({"value":7}))))
+        .await;
+    now += 301;
+    *f.host.now.lock().unwrap() = Some(UNIX_EPOCH + Duration::from_secs(now));
+    // Reopening the coordinator must retain the budget and counts.
+    f.broker.writer().shutdown().await.unwrap();
+    f.broker = Coordinator::open(f.home.path().into(), Catalog::fixtures(), f.host.clone())
+        .await
+        .unwrap();
+    f.broker.acquire_scheduler("test".into()).await.unwrap();
+    assert_eq!(
+        f.tick().await,
+        0,
+        "six per rolling hour survives coordinator replacement"
+    );
+    assert_eq!(f.status().await["steps"]["watch"]["restart_count"], 7);
+    // Cancelling during the backoff after success must stop an overseer too.
+    command(&f.broker,json!({"command":"step_cancel","args":{"project":{"kind":"id","value":f.project},"selection":{"steps":["watch"]},"reason":"stop overseer"}})).await;
+    *f.host.now.lock().unwrap() = Some(UNIX_EPOCH + Duration::from_secs(now + 7200));
+    assert_eq!(f.tick().await, 0);
+}
+
+// A policy is local to its step. The manual retry walk also re-arms failed dependents;
+// automatically doing that would silently retry somebody else's output failure/cancel.
+#[tokio::test]
+async fn automatic_restart_does_not_rearm_failed_or_cancelled_dependents() {
+    use std::time::{Duration, SystemTime};
+    let f = Fixture::new(
+        json!({"steps":{
+            "parent":{"run":"fixture.echo","in":{"value":{"default":7}}},
+            "child":{"run":"fixture.echo","in":{"value":{"source":"parent/value"}}}
+        }}),
+        json!({}),
+    )
+    .await;
+    f.tick().await;
+    f.finish(
+        &f.launches()[0],
+        PayloadResult::Succeeded(map(json!({"value":7}))),
+    )
+    .await;
+    f.tick().await;
+    f.finish(
+        &f.launches()[1],
+        PayloadResult::Succeeded(map(json!({"undeclared":true}))),
+    )
+    .await;
+    command(&f.broker,json!({"command":"step_update","args":{"project":{"kind":"id","value":f.project},"step":"parent","changes":{"restart":"always"},"edit":{}}})).await;
+    *f.host.now.lock().unwrap() = Some(SystemTime::now() + Duration::from_secs(11));
+    assert_eq!(f.tick().await, 1);
+    assert_eq!(f.status().await["steps"]["child"]["status"], "failed");
+    command(&f.broker,json!({"command":"step_cancel","args":{"project":{"kind":"id","value":f.project},"selection":{"steps":["child"]},"reason":"leave stopped"}})).await;
+    f.finish(
+        &f.launches()[2],
+        PayloadResult::Succeeded(map(json!({"value":7}))),
+    )
+    .await;
+    *f.host.now.lock().unwrap() = Some(SystemTime::now() + Duration::from_secs(40));
+    assert_eq!(f.tick().await, 1);
+    assert_eq!(
+        f.status().await["steps"]["child"]["error"]["error"],
+        "cancelled"
     );
 }

@@ -112,6 +112,16 @@ impl Pause {
     }
 }
 
+/// Automatic relaunch after a completed run. Cancellation stops either policy.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Restart {
+    OnEngineError,
+    Always,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Step {
     pub id: StepId,
@@ -123,6 +133,7 @@ pub struct Step {
     pub scatter: Option<String>,
     pub doc: Option<String>,
     pub paused: Pause,
+    pub restart: Option<Restart>,
     pub after: Vec<Gate>,
     pub tags: Vec<String>,
     pub needs: IndexMap<String, u64>,
@@ -165,7 +176,7 @@ impl Step {
             .into_iter()
             .collect()
     }
-    /// Whether `self` and `other` mean the same work, `paused` and `tags` aside: what a
+    /// Whether `self` and `other` mean the same work, `paused`, `tags` and `restart` aside: what a
     /// running step may change (and nothing else).
     pub fn same_work(&self, other: &Self) -> bool {
         self.id == other.id
@@ -620,7 +631,7 @@ pub(crate) fn parse_step(
         raw,
         &[
             "run", "in", "scatter", "doc", "outputs", "paused", "after", "tags", "needs",
-            "priority", "limits",
+            "priority", "limits", "restart",
         ],
         &path,
         errors,
@@ -655,6 +666,18 @@ pub(crate) fn parse_step(
     let scatter = raw
         .get("scatter")
         .and_then(|value| string(value, &format!("{path}.scatter"), errors));
+    let restart = raw.get("restart").and_then(|value| {
+        match serde_json::from_value::<Restart>(value.clone()) {
+            Ok(policy) => Some(policy),
+            Err(_) => {
+                errors.push(diagnostic(
+                    &format!("{path}.restart"),
+                    "expected on_engine_error or always",
+                ));
+                None
+            }
+        }
+    });
     let paused = match raw.get("paused") {
         None | Some(Value::Bool(false)) => Pause::No,
         Some(Value::Bool(true)) => Pause::Yes,
@@ -801,6 +824,7 @@ pub(crate) fn parse_step(
         scatter,
         doc,
         paused,
+        restart,
         after: vec![],
         tags,
         needs,

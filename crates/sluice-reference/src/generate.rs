@@ -1100,7 +1100,7 @@ fn build_changes(
     let mut changes = StepChanges::default();
     let some = |v: Value| Some(Some(json_value(v)));
     for _ in 0..1 + bytes.next() % 3 {
-        match bytes.next() % 11 {
+        match bytes.next() % 12 {
             0 => {
                 let fns: Vec<&String> = catalog.keys().collect();
                 let new = (*bytes.pick(&fns).unwrap()).clone();
@@ -1168,6 +1168,14 @@ fn build_changes(
                     0 => Some(None),
                     1 => some(json!({"flag":"int"})),
                     _ => some(json!({"extra":"string"})),
+                };
+            }
+            11 => {
+                changes.restart = match bytes.next() % 4 {
+                    0 => Some(None),
+                    1 => some(json!("always")),
+                    2 => some(json!("on_engine_error")),
+                    _ => some(json!("invalid")),
                 };
             }
             9 => {

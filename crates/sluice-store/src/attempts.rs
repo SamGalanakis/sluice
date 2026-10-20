@@ -1191,6 +1191,15 @@ pub fn complete_frozen(
             }
         }
     };
+    // Reset metadata is additive store state. Keep the persisted PublicError in the
+    // shape older pinned binaries decode strictly when they read their project's state.
+    if let Some(PublicError::AgentFailure { retry_at, .. }) = &mut error {
+        let reset = retry_at.take().map(plans::sql_counter).transpose()?;
+        tx.sql().execute(
+            "UPDATE runs SET restart_after=?2 WHERE run_id=?1",
+            params![id.run.to_string(), reset],
+        )?;
+    }
     let mut schema = frozen["returns"].clone();
     if let (Some(schema), Some(declared)) = (schema.as_object_mut(), frozen["declared"].as_object())
     {
@@ -1247,6 +1256,7 @@ pub fn complete_frozen(
                 kind,
                 message,
                 session,
+                ..
             }) if kind == "ExitedWithoutSubmit" => {
                 error = Some(PublicError::ExitedWithoutSubmit {
                     message: message.clone(),

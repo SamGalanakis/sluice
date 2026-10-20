@@ -123,10 +123,17 @@ async fn reconcile_pass<H: ExecutionHost>(
         let context = broker.context(project).await?;
         let copy = context.clone();
         let lease_owner = owner.to_owned();
+        let now = broker
+            .host()
+            .now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
         broker
             .writer()
             .write(RetrySafety::Idempotent, move |tx| {
                 lease(tx, &lease_owner)?;
+                sluice_store::restart::reconcile(tx, &copy, now, &mut Hooks)?;
                 plans::reconcile(tx, &copy)?;
                 crate::watch::record_settlements(tx, project, copy.revision, &copy.plan)?;
                 resources::grant_leases(tx, project)?;

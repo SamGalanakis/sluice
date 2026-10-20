@@ -23,7 +23,11 @@ pub(crate) const SCHEMA: &str = include_str!("../migrations/0004.sql");
 /// The tables a schema-4 home has (`sqlite_%` excluded).
 pub(crate) const TABLES: i64 = 27;
 /// Columns added after schema 4 homes exist. Earlier additions are folded into its DDL.
-const ADDED_COLUMNS: &[(&str, &str, &str)] = &[];
+const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
+    ("runs", "restart_after", "INTEGER"),
+    ("steps", "restart_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("steps", "restart_history", "TEXT NOT NULL DEFAULT '[]'"),
+];
 /// Views added after schema 4 homes exist, as `(name, definition)`.
 const ADDED_VIEWS: &[(&str, &str)] = &[("parked", "CREATE VIEW parked AS
 SELECT r.project_id,r.step_id,r.run_id,
