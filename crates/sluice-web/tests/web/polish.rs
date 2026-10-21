@@ -2,7 +2,7 @@
 //! stops marking its project; a project's messages page is "Messages"; a message box to a step
 //! not running says when it is read; "Waits on" names steps by their titles, linked; a pending
 //! step that ran says when its last run ended, once; an empty output says so; Clear board and
-//! Remove ask first, a cleared board's program kept in the box. In Chromium: a step opened from
+//! Remove act at once and can be undone. In Chromium: a step opened from
 //! another opens on its Overview, a long token never
 //! pushes a phone's page sideways, a step's heading steps down on a phone, and a form of filters
 //! applies as it changes.
@@ -352,8 +352,9 @@ async fn slow_chromium_clear_board_acts_and_undo_restores() {
         browser.wait("document.querySelector('#board-clear') && document.readyState === 'complete'").unwrap();
         browser.eval("document.querySelector('#board-clear').click()").unwrap();
         browser.wait("document.querySelector('#board-edit .undo-line button') && document.querySelector('#board-clear').disabled").unwrap();
-        browser.eval("location.reload()").unwrap();
-        browser.wait("document.querySelector('#board-edit .undo-line button') && document.readyState === 'complete'").unwrap();
+        // The old document can still be complete before navigation starts.
+        browser.eval("window.beforeUndoReload = true; location.reload()").unwrap();
+        browser.wait("!window.beforeUndoReload && document.querySelector('#board-edit .undo-line button') && document.readyState === 'complete'").unwrap();
         browser.eval("document.querySelector('#board-edit .undo-line button').click()").unwrap();
         browser.wait("document.querySelector('#board-program').value.startsWith('root = Stack(') && !document.querySelector('#board-clear').disabled").unwrap();
         assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
