@@ -324,6 +324,7 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_and_undo_brings_back
         "{acts}"
     );
     assert!(!acts.contains("sluice-confirm"), "{acts}");
+
     // on the plan, each item's × sets it aside for attention alone; a cancel's Settle as done
     // is its step's Dismiss
     let card = plan_html::stopped(&plan, "first");

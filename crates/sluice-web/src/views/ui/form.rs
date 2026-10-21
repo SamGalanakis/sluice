@@ -132,6 +132,16 @@ pub fn action_form(
     fields: &[(&str, String)],
     label: &str,
 ) -> crate::views::TrustedHtml {
+    action_form_with(id, url, fields, label, "")
+}
+/// A direct action with already escaped form attributes, such as its focus destination.
+pub fn action_form_with(
+    id: &str,
+    url: &str,
+    fields: &[(&str, String)],
+    label: &str,
+    attrs: &str,
+) -> crate::views::TrustedHtml {
     let hidden: String = fields
         .iter()
         .map(|(key, value)| {
@@ -144,7 +154,7 @@ pub fn action_form(
         .collect();
     crate::views::TrustedHtml::owned(format!(
         "{}{hidden}<button>{}</button>{}</form>",
-        post_form(id, "", url),
+        post_form_with(id, "", url, "", attrs),
         super::esc(label),
         form_said(id)
     ))

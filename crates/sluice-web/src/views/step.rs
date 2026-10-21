@@ -1674,8 +1674,8 @@ impl StepView {
         )
     }
     /// A step action applies immediately, fenced against changes since it was drawn.
-    pub fn direct_action(&self, action: &str, label: &str) -> TrustedHtml {
-        super::ui::action_form(
+    pub fn direct_action(&self, action: &str, label: &str, focus: &str) -> TrustedHtml {
+        super::ui::action_form_with(
             &super::ui::form_id(&format!("{} {action}", self.href())),
             &format!("{}/actions", self.href()),
             &[
@@ -1684,6 +1684,7 @@ impl StepView {
                 ("action", action.into()),
             ],
             label,
+            &format!(" data-focus-after=\"{}\"", super::ui::esc(focus)),
         )
     }
     /// Its failure's own words lead its page (Why it failed), so its last run's Runs entry
@@ -1698,13 +1699,13 @@ impl StepView {
         self.shown() == Shown::Failed
     }
     /// A failure's Cancel and Cancel and dismiss act immediately.
-    pub fn set_aside_actions(&self, _focus: &str) -> Vec<TrustedHtml> {
+    pub fn set_aside_actions(&self, focus: &str) -> Vec<TrustedHtml> {
         if !self.can_set_aside() {
             return vec![];
         }
         vec![
-            self.direct_action("cancel", "Cancel"),
-            self.direct_action("cancel_dismiss", "Cancel and dismiss"),
+            self.direct_action("cancel", "Cancel", ""),
+            self.direct_action("cancel_dismiss", "Cancel and dismiss", focus),
         ]
     }
     /// One muted sentence under its name (`ui::status_line`): how it stands and since when;
@@ -1851,7 +1852,7 @@ impl StepView {
             )));
         }
         if self.cancellable() {
-            actions.push(self.direct_action("cancel", "Cancel"));
+            actions.push(self.direct_action("cancel", "Cancel", ""));
         }
         actions.extend(self.set_aside_actions(&focus));
         actions.push(TrustedHtml::owned(format!(
