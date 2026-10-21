@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""The shared local/ship gate and the source-to-slow-suite map."""
+import argparse
+import fnmatch
+import pathlib
+import re
+import subprocess
+import sys
+import time
+
+# Membership is by test source; newly added slow tests in an unmapped file fail the gate.
+# Source patterns are repository relative. Test sources also trigger their own group.
+GROUPS = {
+    'durability': {
+        'tests': ('crates/sluice/tests/it/cutover.rs', 'crates/sluice/tests/it/release.rs',
+                  'crates/sluice/tests/it/schema_migrate.rs', 'crates/sluice/tests/it/ship.rs',
+                  'crates/sluice-store/tests/store/convert.rs',
+                  'crates/sluice-store/tests/store/bypass_column.rs',
+                  'crates/sluice-store/tests/store/legacy_replay.rs',
+                  'crates/sluice-store/tests/store/commands.rs'),
+        'sources': ('scripts/deploy', 'scripts/build-release', 'scripts/compat-check',
+                    'scripts/cutover-rehearse', 'scripts/ship', 'scripts/build-private-tmux',
+                    'crates/sluice/src/install.rs', 'crates/sluice/src/release.rs',
+                    'crates/sluice/src/modes/install.rs', 'crates/sluice/src/modes/home.rs',
+                    'crates/sluice-store/src/schema.rs', 'crates/sluice-store/src/writer.rs',
+                    'crates/sluice-store/src/convert.rs', 'crates/sluice-store/src/backup.rs',
+                    'crates/sluice-store/src/records.rs', 'crates/sluice-store/src/restart.rs',
+                    'crates/sluice-store/migrations/*', 'tests/fixtures/legacy/*',
+                    'crates/sluice-runtime/src/drain.rs',
+                    'crates/sluice-runtime/src/install.rs'),
+    },
+    'browser': {
+        'tests': ('crates/sluice-web/tests/*',),
+        'sources': ('crates/sluice-web/*', 'tests/browser.py', 'tests/support/chrome.rs',
+                    'DESIGN.md'),
+    },
+    'scale': {
+        'tests': ('crates/sluice-model/tests/it/warm.rs', 'crates/sluice-reference/tests/*',
+                  'crates/sluice-store/tests/store/costs.rs',
+                  'crates/sluice-runtime/tests/runtime/plan_scale.rs',
+                  'crates/sluice-runtime/tests/runtime/plan_rows_gates.rs'),
+        'sources': ('crates/sluice-model/src/plan/*', 'crates/sluice-model/src/plan_*.rs',
+                    'crates/sluice-model/src/cost.rs', 'crates/sluice-model/src/persistent.rs',
+                    'crates/sluice-model/src/edit.rs',
+                    'crates/sluice-reference/*', 'crates/sluice-store/src/plans.rs',
+                    'crates/sluice-store/src/reads.rs', 'crates/sluice-store/src/writer.rs',
+                    'crates/sluice-runtime/src/plan_cache.rs', 'crates/sluice-runtime/src/edits.rs',
+                    'crates/sluice-runtime/src/dispatch_ext/plan*.rs'),
+    },
+    'execution': {
+        'tests': ('crates/sluice-agents/tests/*', 'crates/sluice-process/tests/*',
+                  'crates/sluice-runtime/tests/runtime/python_helper.rs',
+                  'crates/sluice/tests/it/compose.rs', 'crates/sluice/tests/it/cli.rs',
+                  'crates/sluice/tests/it/acceptance/*'),
+        'sources': ('crates/sluice-agents/*', 'crates/sluice-process/*',
+                    'crates/sluice-runtime/src/*', 'crates/sluice-store/src/query.rs',
+                    'crates/sluice/src/*', 'python/*', 'scripts/build-private-tmux'),
+    },
+}
+# Changes to gate machinery, dependency graphs or shared fixtures need every group.
+COMMON = ('crates/sluice-model/src/types.rs', 'crates/sluice-model/src/commands.rs',
+          'crates/sluice-model/src/plan_rows.rs', 'crates/sluice-model/src/rpc.rs',
+          'Cargo.toml', 'Cargo.lock', 'crates/*/Cargo.toml', '.cargo/*', '.config/nextest.toml',
+          'scripts/gate', 'scripts/check', 'tests/support/home.rs', 'tests/support/units.rs',
+          'tests/support/mod.rs', 'tests/support/plan_rows.rs', 'tests/support/executable.rs',
+          'tests/support/free_port.rs', 'tests/support/messages.rs')
+SCHEMA = 'crates/sluice-store/src/schema.rs'
+
+
+def git(repo, *args):
+    return subprocess.check_output(['git', '-C', str(repo), *args], text=True).strip()
+
+
+def matches(path, patterns):
+    return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
+
+
+def slow_tests(repo):
+    groups = {name: [] for name in GROUPS}
+    for source in sorted((repo / 'crates').rglob('*.rs')):
+        names = re.findall(r'(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(slow_\w+)\s*\(', source.read_text())
+        if not names:
+            continue
+        path = source.relative_to(repo).as_posix()
+        owners = [name for name, group in GROUPS.items() if matches(path, group['tests'])]
+        if len(owners) != 1:
+            raise ValueError(f'{path}: slow tests need exactly one group, found {owners}: {names}')
+        groups[owners[0]].extend(names)
+    return groups
+
+
+# Tokenize strings before punctuation, so SQL semicolons/brackets cannot end an initializer.
+TOKEN = re.compile(r'\s+|//[^\n]*|/\*.*?\*/|r(?P<hash>\#*)".*?"(?P=hash)|"(?:\\.|[^"\\])*"|\w+|.', re.S)
+
+
+def schema_parts(source):
+    tokens = [m.group() for m in TOKEN.finditer(source)
+              if not m.group().isspace() and not m.group().startswith(('//', '/*'))]
+    additions = {}
+    for name, fields in (('ADDED_COLUMNS', 3), ('ADDED_VIEWS', 2)):
+        start = next(i for i in range(len(tokens) - 1) if tokens[i:i + 2] == ['const', name])
+        begin = tokens.index('=', start) + 1
+        end = tokens.index(';', begin)
+        values = tokens[begin:end]
+        if values[:2] != ['&', '['] or values[-1:] != [']']:
+            raise ValueError('unrecognized additive initializer')
+        entries = []
+        i = 2
+        while i < len(values) - 1:
+            if values[i] != '(':
+                raise ValueError('unrecognized additive tuple')
+            i += 1
+            entry = []
+            for field in range(fields):
+                if not (values[i].startswith('"') or re.match(r'r\#*"', values[i])):
+                    raise ValueError('unrecognized additive field')
+                entry.append(values[i])
+                i += 1
+                if field < fields - 1 or values[i] == ',':
+                    if values[i] != ',':
+                        raise ValueError('missing additive field separator')
+                    i += 1
+            if values[i] != ')':
+                raise ValueError('unrecognized additive tuple end')
+            entries.append(tuple(entry))
+            i += 1
+            if i < len(values) - 1:
+                if values[i] != ',':
+                    raise ValueError('missing additive separator')
+                i += 1
+        additions[name] = entries
+        tokens[begin:end] = ['ADDITIONS']
+    return tokens, additions
+
+
+def additive_schema(before, after):
+    """Fail closed: only insertions of new column/view keys, with all other tokens identical."""
+    try:
+        old_rest, old = schema_parts(before)
+        new_rest, new = schema_parts(after)
+        if old_rest != new_rest:
+            return False
+        for name, entries in old.items():
+            current = new[name]
+            keys = []
+            for entry in current:
+                key = tuple(literal[literal.index('"') + 1:literal.rindex('"')]
+                            for literal in (entry[:2] if name == 'ADDED_COLUMNS' else entry[:1]))
+                if any(not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', part) for part in key):
+                    return False
+                keys.append(key)
+            if len(set(keys)) != len(keys):
+                return False
+            remaining = iter(current)
+            if not all(any(entry == candidate for candidate in remaining) for entry in entries):
+                return False
+        return old != new
+    except (ValueError, StopIteration, IndexError):
+        return False
+
+
+def selection(repo, base, head):
+    changed = git(repo, 'diff', '--name-only', '--no-renames', *([base + '..' + head] if head else [base])).splitlines()
+    reasons = {name: [] for name in GROUPS}
+    for path in changed:
+        if path == SCHEMA:
+            try:
+                before = git(repo, 'show', base + ':' + path)
+                after = git(repo, 'show', head + ':' + path) if head else (repo / path).read_text()
+                if additive_schema(before, after):
+                    print('gate: additive schema entries only; durability not required by ' + path, file=sys.stderr)
+                    continue
+            except (subprocess.CalledProcessError, OSError):
+                pass
+        for name, group in GROUPS.items():
+            if matches(path, COMMON + group['sources'] + group['tests']):
+                reasons[name].append(path)
+    return {name: paths for name, paths in reasons.items() if paths}
+
+
+def run_gate(repo, base, head, *, dry=False, all_slow=False, covered_groups=None):
+    tests = slow_tests(repo)  # checked even for changes selecting no slow groups
+    reasons = ({name: ['--slow'] for name in GROUPS} if all_slow else selection(repo, base, head))
+    covered = set() if covered_groups is None else set(covered_groups)
+    if covered_groups is not None:
+        print('gate: unchanged tree; reusing that gate for common checks and covered slow groups', file=sys.stderr, flush=True)
+        reasons = {name: paths for name, paths in reasons.items() if name not in covered}
+    for name, paths in reasons.items():
+        print(f'gate: slow group {name} ({len(tests[name])} tests) required by: ' + ', '.join(paths), file=sys.stderr, flush=True)
+    if not reasons:
+        print('gate: no slow groups required', file=sys.stderr, flush=True)
+    target = ['--config', f'build.target-dir="{repo}/target"']
+    # Keep the command definition here: scripts/check and ship both call this function.
+    commands = [] if covered_groups is not None else [
+        ['fmt', '--all', '--check'],
+        ['clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings'],
+        ['nextest', 'run', '--workspace', '--all-targets', '--locked'],
+        ['test', '--workspace', '--doc', '--locked'],
+    ]
+    selected_tests = sorted({test for name in reasons for test in tests[name]})
+    if selected_tests:
+        expression = 'test(/(^|::)(' + '|'.join(selected_tests) + ')$/)'
+        commands.append(['nextest', 'run', '--workspace', '--all-targets', '--locked',
+                         '--profile', 'slow', '-E', expression])
+    started = time.monotonic()
+    for command in commands:
+        print('gate: $ cargo ' + ' '.join(command), file=sys.stderr, flush=True)
+        if dry:
+            continue
+        phase = time.monotonic()
+        subprocess.run(['cargo', *target, *command], cwd=repo, check=True)
+        print(f'gate: {command[0]} {"slow" if "slow" in command else ""} finished in {time.monotonic() - phase:.3f}s', file=sys.stderr, flush=True)
+    if not dry:
+        print(f'gate: passed in {time.monotonic() - started:.3f}s', file=sys.stderr, flush=True)
+    return covered | reasons.keys()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--slow', action='store_true', help='run every slow group as well as the fast gate')
+    parser.add_argument('--base', default='origin/main', help='diff base for slow selection (default origin/main; includes local edits)')
+    parser.add_argument('--dry-run', action='store_true')
+    args = parser.parse_args()
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    try:
+        # The working tree diff includes staged, unstaged and deleted tracked sources for local use.
+        run_gate(repo, args.base, '', dry=args.dry_run, all_slow=args.slow)
+    except (ValueError, subprocess.CalledProcessError) as error:
+        sys.exit('gate: ' + str(error))

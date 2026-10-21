@@ -46,9 +46,15 @@ are schema annotations and the decoder tests enforce them.
 
 ## Checks
 
-`scripts/check` runs formatting, Clippy, the workspace tests and the doctests against this
-worktree's `target/` (it passes the target dir with `--config` and sets no `CARGO_*`
-variables). Host prerequisites and the containment gates are in
+`scripts/ship` is the shipping gate: after rebasing it runs formatting, workspace Clippy,
+fast tests, doctests and the slow groups selected by the changed sources. `scripts/check`
+is the local entry point to that same definition (`scripts/gate`), not a separate prerequisite.
+Both build into the worktree's `target/` with `--config`, without `CARGO_*` variables. The slow
+profile runs only `slow_*` tests. Use `scripts/check --dry-run` to inspect the source-to-group
+selection, `--base REF` to choose a diff base or `--slow` to run every group. The gate rejects
+unmapped slow tests. Ship reuses a passed gate after a push retry only when the Git tree is
+identical, and runs any newly selected slow group. Host prerequisites and the containment
+gates are in
 [host-prerequisites.md](host-prerequisites.md).
 
 `tests/support/` holds the helpers shared by the integration tests (scratch homes, free ports, systemd unit names, the headless Chromium driver) and `tests/browser.py` the

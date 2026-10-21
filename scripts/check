@@ -1,12 +1,4 @@
 #!/usr/bin/env bash
-# The gate. `--slow` adds the slow tier (tests named `slow_*`).
+# Local entry point for the same gate ship runs on its rebased tree.
 set -euo pipefail
-cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.."
-# Override the shim's shared target default without setting CARGO_* variables.
-cargo() { command cargo --config "build.target-dir=\"$PWD/target\"" "$@"; }
-profile=default
-if [ "${1:-}" = "--slow" ]; then profile=slow; fi
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo nextest run --workspace --all-targets --locked --profile "$profile"
-cargo test --workspace --doc --locked
+exec "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/gate" "$@"

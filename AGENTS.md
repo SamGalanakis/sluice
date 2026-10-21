@@ -1,26 +1,19 @@
 # sluice: notes for agents
 
-- Rust workspace under `crates/`. `scripts/check` is the gate: `cargo fmt --check`, Clippy with
-  `-D warnings`, `cargo nextest run --workspace --all-targets --locked` and doctests, all built
-  into this checkout's `target/`. `scripts/check --slow` adds the slow tier (see Tests).
+- Rust workspace under `crates/`. Ship gates: `scripts/ship` runs formatting, workspace
+  Clippy with `-D warnings`, the fast suite, doctests and the slow groups selected by changed
+  sources on the rebased tree. `scripts/check` is the same gate for local use, not a prerequisite
+  to shipping. Both use the shared definition in `scripts/gate` and this checkout's `target/`.
 - Day to day, `cargo nextest run --workspace --locked` (or `-p <crate> -E 'test(name)'`) builds
   into cargo's configured target dir; leave it to cargo's configuration and never set `CARGO_*`
   variables. To pin one invocation to this checkout's `target/`, pass
   `--config 'build.target-dir="<worktree>/target"'`, as `scripts/check` does.
-- Keep a lane's private target for its lifetime and iterate with `-p <crate>`. Cross-worktree
-  target copying is optional: measurements on this host found no net win after the copy, so
-  do not seed every lane automatically. If useful, seed an empty private target from an idle
-  main-branch target built with the
-  same toolchain and Cargo command (profile and feature graph matter). Use
-  `cp -a --reflink=auto <warm-target>/. <empty-private-target>/`: this host falls back to a
-  regular copy. Never hardlink a target or build into another lane's target; Cargo mutates
-  incremental artifacts. Keep configured targets under `/workspace/.cargo-targets`, where ship
-  can clean them. The gate's `target/` stays a real directory: symlinking it changes canonical
-  binary paths. A full-workspace seed can rebuild many dependencies for `-p sluice-web` because
-  features differ; prefer a seed built with that focused command. Bound one invocation with
-  `cargo nextest run -p <crate> --build-jobs 4 --test-threads 4` when lanes compete; these are
-  command-line choices, never host settings. Gate once on the finished change. Before the gate, an idle target from this same checkout can
-  be copied into `target/` to reuse its dependency builds (preserve `target/private-tmux`).
+- Keep a lane's private target for its lifetime and iterate with `-p <crate>`. Do not seed
+  targets across worktrees: measurements on this host found no net win after copying. Never
+  hardlink targets or build into another lane's target. Keep configured targets under
+  `/workspace/.cargo-targets`, where ship can clean them; the gate uses a real `target/`
+  directory (symlinks change canonical binary paths). Under multi-lane load use
+  `NEXTEST_TEST_THREADS=4`; do not change host Cargo settings or set `CARGO_*` variables.
 - Timing seams are direct Rust APIs, never home settings: `Notifier::with_retry_timing`,
   `Claude::with_delivery_timing`, `Devin::with_delivery_timing` and
   `DashboardState::with_clock`. Dashboard `Clock::tokio` ties wall time to Tokio time;
@@ -38,7 +31,7 @@
 - Tests start the binaries they test through `env!("CARGO_BIN_EXE_sluice")` (and the other
   `CARGO_BIN_EXE_*`), never a path under `target/`, so each test runs what cargo just built.
 - The only Python left is the fn helper (`python/`), the custom-fn and engine test fixtures,
-  `tests/browser.py` and the dependency-inventory generator in `docs/rust/`. Run
+  `tests/browser.py`, the shipping scripts and the dependency-inventory generator in `docs/rust/`. Run
   `uv sync --locked` once per checkout: the engine acceptance gates use the repository's
   `.venv/bin/python`. Agent and engine tests need the private tmux: run
   `scripts/build-private-tmux` once per checkout.
@@ -67,13 +60,19 @@ The suite is small, fast and end to end. The default run takes about a minute.
   codecs. Prefer a property or a differential to a list of examples there.
 - Every default test finishes in 3 s on this host (nextest marks anything slower). No sleeps:
   wait on state or events, fake the clock.
-- The slow tier is tests named `slow_*`: durability across releases (cutover, schema
-  migration, release builds), browser checks beyond each page's smoke, scale. It runs with
-  `scripts/check --slow` for changes to release, deploy, install, schema or storage-format code.
-  Ship also runs this tier in its land check when the branch changes deployment, installation,
-  release, home migration or store durability sources, and `--dry-run` prints the paths and command.
-  It also holds cost gates and scenarios blocked by fixed product retry, quiet-time or stream
-  observation windows until controllable timing is available.
+- The slow tier contains only tests named `slow_*`; its nextest profile excludes fast tests.
+  `scripts/gate` maps every slow test source to exactly one group and checks coverage on every
+  gate. Ship selects durability, browser, scale and execution groups from the base..head diff
+  and prints each selected group and its source paths. Dashboard changes select browser tests;
+  plan compilation and plan-store changes select scale tests; conversion, backup, migration,
+  release, install and deploy changes select durability. Additions confined to new
+  `ADDED_COLUMNS` or `ADDED_VIEWS` entries with all other schema tokens unchanged do not select
+  durability. Gate machinery, shared fixtures and dependency changes select all groups.
+  `scripts/check` selects groups from the diff against origin/main, including local tracked edits;
+  `--base REF` chooses another base and `--slow` runs every slow group. `--dry-run` prints the
+  selection and commands without running them. Keep nextest at four threads under multi-lane
+  load (`NEXTEST_TEST_THREADS=4`); keep each lane's target for its lifetime, without cross-worktree
+  seeding. The tier also holds scenarios waiting on fixed retry or observation windows.
 - A test home's teardown (`tests/support/units.rs`) stops its units and its workload slice
   and fails the test when one is still running or the user manager cannot be reached.
 - Before adding a test, name the real bug it catches that no existing test catches. If you can't,
@@ -85,8 +84,8 @@ Deploy-started services are transient units created with `systemd-run --collect`
 re-create them with the same deploy arguments.
 Never `systemctl restart` a deploy-started transient unit; re-create it with `systemd-run` as deploy does, or re-run deploy.
 
-- `scripts/ship [REF] [--dry-run]` takes a branch that already passed `scripts/check` to a
-  verified live deploy. From any worktree, with a clean tree, it rebases REF (default `HEAD`;
+- `scripts/ship [REF] [--dry-run]` takes a branch through its gate to a verified live deploy.
+  From any worktree, with a clean tree, it rebases REF (default `HEAD`;
   another ref is worked on in a temporary worktree) onto `origin/main`, runs the land check (below), pushes to main
   (fetching and rebasing again, up to `--retries`, when the push is not a fast-forward), runs
   `scripts/deploy origin/main` with the home `sluice install status` selects, and checks
@@ -98,16 +97,12 @@ Never `systemctl restart` a deploy-started transient unit; re-create it with `sy
   It reads the target from Cargo metadata, permits only targets inside `/workspace/.cargo-targets`
   and protects the script and invoking checkout's own targets. Shipping the current checkout
   removes no target; a dry run prints the cleanup without creating a temporary checkout.
-- Gate once. A branch passes `scripts/check` once, on its finished change, and never again
-  because main moved. Ship's land check runs on the rebased tree before every push: Clippy over
-  the whole workspace (every target, so every test compiles) and the fast suite. If the branch's
-  base..head diff changes `scripts/{deploy,build-release,compat-check,cutover-rehearse,ship}`,
-  `crates/sluice/src/{install,release}.rs`, `crates/sluice/src/modes/{install,home}.rs`,
-  `crates/sluice-store/src/{schema,writer,convert}.rs` or `crates/sluice-store/migrations/`, it also runs
-  `cargo nextest run --workspace --all-targets --locked --profile slow` and names the changed paths.
-  This applies before every push attempt; `--dry-run` prints the reason and slow command too. A rebase
-  conflict stops the ship: resolve it, run the tests covering the code you resolved, and ship
-  again. A ship's temporary checkout borrows this checkout's `.venv` and `target/private-tmux`.
+- Ship gates once on the finished, rebased tree per push attempt: formatting, Clippy over
+  every workspace target, the fast suite, doctests and the selected slow groups. Do not run a
+  separate full local gate before shipping. If a push retry leaves the Git tree unchanged,
+  ship reuses the common checks and covered slow groups; any newly selected slow group runs
+  once. A different tree runs the gate again. A rebase conflict stops the ship: resolve it, test the resolved code and ship again. A temporary
+  checkout borrows this checkout's `.venv` and `target/private-tmux`.
 - `scripts/compat-check [--release DIR]` proves a candidate release (default: the newest under
   the prefix, i.e. the one `scripts/build-release` just built) can serve every release a live
   run is pinned to. It copies the home's `sluice.db` (SQLite backup API, the live file opened
@@ -179,6 +174,5 @@ nothing is clipped, and that the page never scrolls sideways.
 - Driver: `tests/support/chrome.rs` (`Chrome`: `open`, `eval`, `wait`, `send` for any DevTools
   call, e.g. `Emulation.setDeviceMetricsOverride`, `Emulation.setEmulatedMedia` with
   `prefers-color-scheme`, `Page.captureScreenshot`).
-- Serve a copy, never the live home: build with `scripts/check` (or `cargo build -p sluice` with
-  the `--config` above), then
+- Serve a copy, never the live home: build with `cargo build -p sluice` and the `--config` above, then
   `SLUICE_HOME=<scratch copy> target/debug/sluice serve --no-runner --port <free port>`.

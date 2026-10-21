@@ -1,6 +1,6 @@
 # The default run is the gate: every test in it finishes in seconds. A test whose name starts
 # with `slow_` (durability across releases, real browsers beyond the smoke, scale) runs only in
-# the slow profile: `scripts/check --slow`.
+# the slow profile. Ship selects groups by changed sources; `scripts/check --slow` runs all groups.
 [profile.default]
 default-filter = "not test(/(^|::)slow_/)"
 slow-timeout = { period = "3s" }
@@ -9,5 +9,5 @@ status-level = "fail"
 final-status-level = "slow"
 
 [profile.slow]
-default-filter = "all()"
+default-filter = "test(/(^|::)slow_/)"
 slow-timeout = { period = "60s" }

@@ -36,8 +36,8 @@ new release on a copy of the home and checks that every release a live run is pi
 still read, say and submit against it; a failure stops the deploy unless
 `--skip-compat "<reason>"` is given.
 
-To ship a gated branch in one go, `scripts/ship [REF]` rebases it onto `origin/main`, builds,
-pushes to main, deploys `origin/main` to the selected home and checks that every live run was
+To ship a branch in one go, `scripts/ship [REF]` rebases it onto `origin/main`, runs the shared
+gate (fmt, Clippy, fast tests, doctests and slow groups selected by changed sources), pushes to main, deploys `origin/main` to the selected home and checks that every live run was
 adopted and the dashboard answers; `--dry-run` prints the steps without doing them.
 
 Put the launcher on your `PATH`:
@@ -91,7 +91,8 @@ a config is refused. SPEC.md §2.5 has the details.
 
 ```sh
 cargo --config 'build.target-dir="target"' test --workspace --locked
-scripts/check            # fmt, clippy, tests, doctests
+scripts/check            # optional local use of the same gate ship runs
+scripts/check --dry-run  # show slow groups selected by changed sources
 ```
 
 Run a scratch home from source, never the live one:

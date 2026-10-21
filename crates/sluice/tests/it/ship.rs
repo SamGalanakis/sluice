@@ -1,4 +1,4 @@
-//! Shipping chooses durability gates, preserves dry runs and removes temporary build targets.
+//! Shipping chooses slow groups, preserves dry runs and removes temporary build targets.
 use crate::executable;
 use std::{fs, path::Path, process::Command};
 
@@ -27,7 +27,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 
 // Temporary ships used to leave a new multi-gigabyte Cargo target after every checkout removal.
 #[test]
-fn ship_cleans_temporary_targets_and_preserves_repository_and_unsafe_targets() {
+fn slow_ship_cleans_temporary_targets_and_preserves_repository_and_unsafe_targets() {
     use std::{
         io::{Read, Write},
         net::{TcpListener, TcpStream},
@@ -60,7 +60,21 @@ fn ship_cleans_temporary_targets_and_preserves_repository_and_unsafe_targets() {
     fs::write(outside.join("keep"), "Unrelated files").unwrap();
     let script = repo.join("scripts/ship");
     executable::write(&script, include_str!("../../../../scripts/ship"));
+    executable::write(
+        repo.join("scripts/gate"),
+        include_str!("../../../../scripts/gate"),
+    );
+    executable::write(
+        repo.join("scripts/check"),
+        include_str!("../../../../scripts/check"),
+    );
     executable::write(repo.join("scripts/deploy"), "#!/bin/sh\nexit 0\n");
+    fs::create_dir_all(repo.join("crates/sluice/tests/it")).unwrap();
+    fs::write(
+        repo.join("crates/sluice/tests/it/release.rs"),
+        "#[test]\nfn slow_fixture_durability() {}\n",
+    )
+    .unwrap();
     fs::write(
         repo.join("crates/sluice-store/src/schema.rs"),
         format!(
@@ -94,7 +108,34 @@ fn ship_cleans_temporary_targets_and_preserves_repository_and_unsafe_targets() {
     // All pushes and deployments are fixtures. Git still creates and removes real worktrees.
     executable::write(
         bin.join("git"),
-        "#!/bin/sh\ncase \"$3\" in\nfetch) exit 0;;\npush) exec /usr/bin/git -C \"$2\" update-ref refs/remotes/origin/main HEAD;;\nesac\nexec /usr/bin/git \"$@\"\n",
+        r#"#!/usr/bin/env python3
+import os, pathlib, subprocess, sys
+repo, verb = sys.argv[2:4]
+def git(*args, data=None):
+    return subprocess.check_output(['/usr/bin/git', '-C', repo, *args], input=data, text=True).strip()
+if verb == 'fetch': sys.exit(0)
+if verb == 'diff' and os.environ['SHIP_FIXTURE_MODE'] == 'success-groups-retry' and pathlib.Path(os.environ['SHIP_FIXTURE_PUSH']).exists():
+    print('crates/sluice-store/src/writer.rs')
+    sys.exit(0)
+if verb == 'push':
+    mode = os.environ['SHIP_FIXTURE_MODE']
+    record = pathlib.Path(os.environ['SHIP_FIXTURE_PUSH'])
+    if 'retry' in mode and not record.exists():
+        record.write_text('rejected')
+        base = git('rev-parse', 'origin/main')
+        tree = git('rev-parse', 'HEAD^{tree}')
+        if mode == 'success-tree-retry':
+            blob = git('hash-object', '-w', '--stdin', data='Upstream change')
+            tree = git('mktree', data=git('ls-tree', 'HEAD') + '\n100644 blob ' + blob + '\tupstream.txt\n')
+        commit = git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com',
+                     'commit-tree', tree, '-p', base, '-m', 'Concurrent upstream change')
+        git('update-ref', 'refs/remotes/origin/main', commit)
+        print('[rejected] fetch first', file=sys.stderr)
+        sys.exit(1)
+    git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+    sys.exit(0)
+os.execv('/usr/bin/git', ['/usr/bin/git', *sys.argv[1:]])
+"#,
     );
     executable::write(
         bin.join("cargo"),
@@ -102,7 +143,9 @@ fn ship_cleans_temporary_targets_and_preserves_repository_and_unsafe_targets() {
 import json, os, pathlib, sys
 repo = pathlib.Path(os.environ['SHIP_FIXTURE_REPO'])
 target = pathlib.Path(os.environ['SHIP_FIXTURE_OWN'] if pathlib.Path.cwd() == repo else os.environ['SHIP_FIXTURE_TARGET'])
-if sys.argv[1] == 'metadata':
+arguments = sys.argv[1:]
+if arguments[:1] == ['--config']: arguments = arguments[2:]
+if arguments[0] == 'metadata':
     if pathlib.Path.cwd() != repo:
         pathlib.Path(os.environ['SHIP_FIXTURE_CHECKOUT']).write_text(str(pathlib.Path.cwd()))
     if os.environ['SHIP_FIXTURE_MODE'] == 'metadata-failure': sys.exit(1)
@@ -110,7 +153,8 @@ if sys.argv[1] == 'metadata':
 else:
     target.mkdir(parents=True, exist_ok=True)
     (target / 'artifact').write_text('Build artifacts')
-    if os.environ['SHIP_FIXTURE_MODE'] != 'success': sys.exit(1)
+    with open(os.environ['SHIP_FIXTURE_GATES'], 'a') as record: record.write(arguments[0] + '\n')
+    if not os.environ['SHIP_FIXTURE_MODE'].startswith('success'): sys.exit(1)
 "#,
     );
     let path =
@@ -127,6 +171,9 @@ else:
     let checkout_record = scratch.path().join("checkout");
     for (mode, candidate, cargo_target, dry) in [
         ("success", "candidate", &target, false),
+        ("success-empty-retry", "candidate", &target, false),
+        ("success-tree-retry", "candidate", &target, false),
+        ("success-groups-retry", "candidate", &target, false),
         ("failure", "candidate", &target, false),
         ("failure", "candidate", &own, false),
         ("failure", "candidate", &outside, false),
@@ -139,6 +186,10 @@ else:
         fs::create_dir_all(cargo_target).unwrap();
         fs::write(cargo_target.join("artifact"), "Build artifacts").unwrap();
         let _ = fs::remove_file(&checkout_record);
+        let push_record = scratch.path().join("push");
+        let gate_record = scratch.path().join("gates");
+        let _ = fs::remove_file(&push_record);
+        let _ = fs::remove_file(&gate_record);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let result = std::thread::scope(|scope| {
@@ -174,6 +225,8 @@ else:
                 .env("SHIP_FIXTURE_TARGET", cargo_target)
                 .env("SHIP_FIXTURE_CHECKOUT", &checkout_record)
                 .env("SHIP_FIXTURE_MODE", mode)
+                .env("SHIP_FIXTURE_PUSH", &push_record)
+                .env("SHIP_FIXTURE_GATES", &gate_record)
                 .output()
                 .unwrap();
             // Wake the fixture if this scenario stopped before the adoption HTTP request.
@@ -184,9 +237,36 @@ else:
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert_eq!(
             result.status.success(),
-            mode == "success" || dry,
+            mode.starts_with("success") || dry,
             "{stderr}"
         );
+        if mode.starts_with("success") {
+            let gates = fs::read_to_string(&gate_record).unwrap();
+            let expected = if mode == "success-tree-retry" { 2 } else { 1 };
+            for command in ["fmt", "clippy", "nextest", "test"] {
+                assert_eq!(
+                    gates.lines().filter(|line| *line == command).count(),
+                    if mode == "success-groups-retry" && command == "nextest" {
+                        2
+                    } else {
+                        expected
+                    },
+                    "{mode}: {stderr}"
+                );
+            }
+            assert_eq!(
+                stderr.contains("reusing that gate"),
+                mode == "success-empty-retry" || mode == "success-groups-retry",
+                "{stderr}"
+            );
+        }
+        if mode == "success-groups-retry" {
+            assert!(
+                stderr.contains("slow group durability (1 tests)"),
+                "{stderr}"
+            );
+            assert!(stderr.contains("--profile slow"), "{stderr}");
+        }
         let removed =
             candidate != "HEAD" && !dry && cargo_target == &target && mode != "metadata-failure";
         assert_eq!(!cargo_target.exists(), removed, "{mode}: {stderr}");
@@ -238,6 +318,14 @@ fn ship_dry_run_gates_the_requested_branch_and_preserves_the_checkout() {
     }
     let script = repo.join("scripts/ship");
     executable::write(&script, include_str!("../../../../scripts/ship"));
+    executable::write(
+        repo.join("scripts/gate"),
+        include_str!("../../../../scripts/gate"),
+    );
+    executable::write(
+        repo.join("scripts/check"),
+        include_str!("../../../../scripts/check"),
+    );
     fs::write(
         repo.join("crates/sluice-store/src/schema.rs"),
         format!(
@@ -309,10 +397,14 @@ fn ship_dry_run_gates_the_requested_branch_and_preserves_the_checkout() {
             stderr.contains("cargo nextest run --workspace --all-targets --locked"),
             "{stderr}"
         );
-        assert_eq!(stderr.contains("--profile slow"), slow, "{stderr}");
+        assert!(stderr.contains("cargo fmt --all --check"), "{stderr}");
+        assert!(
+            stderr.contains("cargo test --workspace --doc --locked"),
+            "{stderr}"
+        );
         assert_eq!(
             stderr.contains(
-                "slow tier required by durability changes: crates/sluice-store/src/writer.rs"
+                "slow group durability (0 tests) required by: crates/sluice-store/src/writer.rs"
             ),
             slow,
             "{stderr}"
@@ -323,4 +415,110 @@ fn ship_dry_run_gates_the_requested_branch_and_preserves_the_checkout() {
         assert!(git(&repo, &["status", "--porcelain"]).is_empty());
         assert!(!repo.join(".git/FETCH_HEAD").exists());
     }
+}
+
+// Catch overbroad schema triggers, missing browser coverage and unmapped new slow scenarios
+// through the local entry point that ship shares, without doing a Cargo build in the fixture.
+#[test]
+fn local_gate_selects_risks_and_refuses_unmapped_slow_tests() {
+    let scratch = tempfile::tempdir_in("/tmp").unwrap();
+    let repo = scratch.path();
+    for dir in [
+        "scripts",
+        "crates/sluice-store/src",
+        "crates/sluice-web/tests",
+        "crates/sluice/tests/it",
+    ] {
+        fs::create_dir_all(repo.join(dir)).unwrap();
+    }
+    executable::write(
+        repo.join("scripts/check"),
+        include_str!("../../../../scripts/check"),
+    );
+    executable::write(
+        repo.join("scripts/gate"),
+        include_str!("../../../../scripts/gate"),
+    );
+    fs::write(
+        repo.join("crates/sluice-web/tests/browser.rs"),
+        "#[test]\nfn slow_browser_fixture() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join("crates/sluice/tests/it/release.rs"),
+        "#[test]\nfn slow_release_fixture() {}\n",
+    )
+    .unwrap();
+    let schema = repo.join("crates/sluice-store/src/schema.rs");
+    let initial = "pub const SCHEMA_VERSION: i64 = 4;\nconst ADDED_COLUMNS: &[(&str, &str, &str)] = &[];\nconst ADDED_VIEWS: &[(&str, &str)] = &[(\"old\", \"SELECT 1;\")];\n";
+    fs::write(&schema, initial).unwrap();
+    git(repo, &["init", "-q", "-b", "main"]);
+    let base = commit(repo);
+    git(repo, &["update-ref", "refs/remotes/origin/main", &base]);
+    let added = initial.replace("&[]", "&[(\"runs\", \"new\", \"TEXT\"),]");
+    let view = initial.replace("SELECT 1;\")", "SELECT 1;\"), (\"new\", \"SELECT '[;]';\")");
+    for (source, durability) in [
+        (&added, false),
+        (&view, false),
+        (&initial.replace("SELECT 1;", "SELECT 2;"), true),
+        (&initial.replace("= 4;", "= 5;"), true),
+        (
+            &initial.replace("&[]", "&[];\nfn changed_writer() {}"),
+            true,
+        ),
+        (&initial.replace("&[(\"old\", \"SELECT 1;\")]", "&[]"), true),
+        (
+            &added.replace("TEXT\"),]", "TEXT\"), (\"runs\", \"new\", \"INTEGER\"),]"),
+            true,
+        ),
+    ] {
+        fs::write(&schema, source).unwrap();
+        let output = Command::new(repo.join("scripts/check"))
+            .current_dir(repo)
+            .arg("--dry-run")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        assert_eq!(
+            stderr.contains("slow group durability"),
+            durability,
+            "{source}\n{stderr}"
+        );
+        assert_eq!(stderr.contains("--profile slow"), durability, "{stderr}");
+        assert!(!stderr.contains("slow group browser"), "{stderr}");
+    }
+    fs::write(&schema, initial).unwrap();
+    fs::write(
+        repo.join("crates/sluice-web/page.rs"),
+        "// Dashboard change\n",
+    )
+    .unwrap();
+    // Ship uses committed base..head changes, and the local command includes staged changes.
+    git(repo, &["add", "."]);
+    let output = Command::new(repo.join("scripts/check"))
+        .current_dir(repo)
+        .arg("--dry-run")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("slow group browser (1 tests)"), "{stderr}");
+    assert!(
+        stderr.contains("test(/(^|::)(slow_browser_fixture)$/)"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("slow group durability"), "{stderr}");
+    fs::write(
+        repo.join("crates/sluice/tests/it/unmapped.rs"),
+        "#[test]\nfn slow_unmapped_fixture() {}\n",
+    )
+    .unwrap();
+    let output = Command::new(repo.join("scripts/check"))
+        .current_dir(repo)
+        .arg("--dry-run")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("slow tests need exactly one group"));
 }

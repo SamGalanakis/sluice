@@ -131,15 +131,29 @@ installs one commit:
 10. prune releases: keep the newest three plus every release a live process runs from or an
    unfinished run in the home records.
 
-**`scripts/ship [REF] [--dry-run]`** takes a gated branch to a verified live deploy: it refuses a
-dirty tree and a ref whose `SCHEMA_VERSION` differs from the selected home's (checked before
-anything moves and again on the rebased commit before the push: ship ships compatible changes
-only), rebases onto `origin/main` (re-running `scripts/check` only when main changed a non-`*.md`
-file the branch changed, else building), pushes with a bounded retry, deploys `origin/main` to the
-selected home, checks that every run live before the deploy is still running or finished with a
-result, that the three units are active and that the dashboard answers, and prints one line. A
-deploy that fails or rolls back fails ship, which says that main is ahead of live: the push has
-already happened.
+**`scripts/ship [REF] [--dry-run]`** takes a branch through its gate to a verified live deploy:
+it refuses a dirty tree and a ref whose `SCHEMA_VERSION` differs from the selected home's
+(checked before anything moves and again on the rebased commit before the push: ship ships
+compatible changes only), rebases onto `origin/main`, then gates the rebased tree with
+formatting, Clippy over every workspace target, fast tests, doctests and the slow groups
+selected by the base..head diff. `scripts/gate` defines both this gate and the local
+`scripts/check` command. No separate pre-ship gate is required. A push retry reuses passed
+common checks only if the Git tree is identical; any newly selected slow group still runs.
+A changed tree gates again.
+
+The slow nextest profile runs only `slow_*` tests. The shared gate maps every slow test to
+exactly one source-based group and refuses unmapped tests. Dashboard sources select browser
+tests; plan compiler and plan-store sources select scale and cost tests; conversion, backup,
+migration, release, install and deploy sources select durability; engine and execution sources
+select execution tests. Shared fixtures, dependency graphs and gate machinery select all groups.
+The gate prints selected groups and their triggering paths. A schema change confined to new
+`ADDED_COLUMNS` or `ADDED_VIEWS` entries, with every other token including the schema version
+unchanged, does not select durability. `scripts/check --slow` runs all groups.
+
+Ship pushes with a bounded retry, deploys `origin/main` to the selected home, checks that every
+run live before the deploy is still running or finished with a result, that the three units
+are active and that the dashboard answers, and prints one line. A deploy that fails or rolls
+back fails ship, which says that main is ahead of live: the push has already happened.
 
 Shipping another ref uses a temporary checkout. On success or failure, ship reads its Cargo
 `target_directory` with `cargo metadata --format-version 1 --no-deps` and removes that target
