@@ -46,8 +46,6 @@ impl Part {
 #[template(path = "gallery.html")]
 struct GalleryTemplate<'a> {
     parts: &'a [Part],
-    /// The page's theme family: each part is drawn in its light and its dark.
-    family: &'a str,
 }
 #[derive(Template)]
 #[template(
@@ -100,7 +98,7 @@ fn statuses() -> TrustedHtml {
     TrustedHtml::owned(format!("<ul class=\"gal-states\">{rows}</ul>"))
 }
 /// Every pill's tone: a plain fact, a muted one, running, needs a look, quiet, done, and the
-/// coral one for a question to the owner; one with a mark, one a link.
+/// teal one for a question to the owner; one with a mark, one a link.
 fn pills() -> TrustedHtml {
     TrustedHtml::owned(format!(
         "<p class=\"gal-row\">{}{}{}{}{}{}{}{}{}{}{}{}</p>",
@@ -230,15 +228,11 @@ fn tabs(prefix: &str) -> TrustedHtml {
     html.push_str(ui::tabs_close().as_str());
     TrustedHtml::owned(html)
 }
-/// A card around a region, and the wells: plain, and the pale sand's for what needs a look.
+/// A card around a region.
 fn sections() -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<div class=\"gal-stack\"><div class=\"card gal-card\"><p class=\"card-k\">00:12 · took 1h 29m</p><p class=\"card-t\">A card</p><p class=\"meta\">A region of its own.</p></div>{}<p>A well's rows.</p>{}{}<p>Something stopped: why, and its next move.</p>{}</div>",
-        ui::well_open("div", "", "", true),
-        ui::well_close("div"),
-        ui::well_open("div", "", "look", true),
-        ui::well_close("div"),
-    ))
+    TrustedHtml::owned(
+        "<div class=\"gal-stack\"><div class=\"card gal-card\"><p class=\"card-k\">00:12 · took 1h 29m</p><p class=\"card-t\">A card</p><p class=\"meta\">A region of its own.</p></div></div>".to_owned(),
+    )
 }
 fn fields(prefix: &str, project: &ProjectId) -> Result<TrustedHtml, askama::Error> {
     let summary = "Drafted the spring guide's shorebird entries: fourteen species, each with a range map, a photograph credit and a note on when to look. The two disputed sightings are marked for review.";
@@ -301,16 +295,11 @@ fn copies() -> TrustedHtml {
 }
 fn toggles(prefix: &str) -> TrustedHtml {
     use super::prefs::{Level, picture};
-    let theme = if prefix == "d-" {
-        "sluice-dark"
-    } else {
-        "sluice-light"
-    };
+    let theme = if prefix == "d-" { "carbon" } else { "paper" };
     TrustedHtml::owned(format!(
-        "<div class=\"d-sec-h tp-top\"><p class=\"meta\">From run 2</p>{}</div><div class=\"gal-levels\"><figure><figcaption class=\"meta\">Display preferences, opened</figcaption>{}</figure><figure><figcaption class=\"meta\">Theme</figcaption>{}</figure><figure><figcaption class=\"meta\">Keyboard shortcuts</figcaption>{}</figure></div>",
+        "<div class=\"d-sec-h tp-top\"><p class=\"meta\">From run 2</p>{}</div><div class=\"gal-levels\"><figure><figcaption class=\"meta\">Display preferences, opened</figcaption>{}</figure><figure><figcaption class=\"meta\">Keyboard shortcuts</figcaption>{}</figure></div>",
         ui::types_toggle(),
         picture(prefix, theme, Level::Top),
-        picture(prefix, theme, Level::Theme),
         picture(prefix, theme, Level::Keys),
     ))
 }
@@ -581,7 +570,7 @@ fn modules_part() -> TrustedHtml {
         question_card("")
     );
     let look = format!(
-        "{open}<p class=\"mod-k\">{g}<b>failed</b><span class=\"quiet\">review, after 18m</span></p><p class=\"mod-t\">Waders: the autumn guide's entries</p>{menu}<div class=\"mod-body\"><p>The style check found two entries without a photograph credit.</p></div><div class=\"mod-actions\"><button class=\"primary\" type=\"button\">Retry with feedback</button><button type=\"button\">Retry</button></div>{close}",
+        "{open}<div class=\"mod-k\">{g}<b>failed</b><span class=\"quiet\">review, after 18m</span>{menu}</div><p class=\"mod-t\">Waders: the autumn guide's entries</p><div class=\"mod-body\"><p>The style check found two entries without a photograph credit.</p></div><div class=\"mod-actions\"><button class=\"primary\" type=\"button\">Retry with feedback</button><button type=\"button\">Retry</button></div>{close}",
         open = ui::module_open(4, ui::Swell::Look, "Waders, failed"),
         g = ui::mark(Shown::Failed),
         menu = unit_details("a-6", "a-6-review").menu("Waders: the autumn guide's entries"),
@@ -613,22 +602,36 @@ fn question_card(prefix: &str) -> TrustedHtml {
     }
     .html()
 }
-/// A question to the owner in both its densities: a line in Needs you or For you, and the
-/// card where it is answered.
+/// A question to the owner in both its densities: a line in Needs you or For you, answered in
+/// place, and the card where it is answered.
 fn questions(prefix: &str) -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<div class=\"gal-stack\"><ul class=\"nd-list\">{}</ul>{}</div>",
+        "<div class=\"gal-stack\"><ul class=\"nd\">{}</ul>{}</div>",
         ui::need_line(
             ui::Mark::Ask,
-            &format!("{prefix}q-line"),
-            "",
-            "<b><a href=\"#\">Shorebirds: the spring guide's entries</a></b> asks: Use the checklist's new spring dates in this draft?",
-            "",
-            &ui::link_with(ui::Btn::Primary, "#", "Answer", ""),
-            "<button type=\"button\" class=\"icon\" aria-label=\"Set aside\" title=\"Set aside\">×</button>",
+            &ui::NeedLine {
+                id: &format!("{prefix}q-line"),
+                title: "<a class=\"nd-t\" href=\"#\">Shorebirds: the spring guide's entries</a>",
+                state: "asks you",
+                who: &format!("<code class=\"ref\">a-7-draft</code> · {}", ui::ago(&before(240))),
+                body: "<div class=\"md\"><p>Use the checklist's new spring dates in this draft?</p></div>",
+                asker: Some("a-7"),
+                form: &answer_sample(&format!("{prefix}q-answer"), "Shorebirds"),
+                x: X_SAMPLE,
+                ..Default::default()
+            },
         ),
         question_card(prefix)
     ))
+}
+/// A set-aside × as the gallery draws it, posting nowhere.
+const X_SAMPLE: &str = "<button type=\"button\" class=\"x\" aria-label=\"Set aside\" title=\"Set aside\">×</button>";
+/// An answer in place as Needs you draws it, posting nowhere.
+fn answer_sample(id: &str, to: &str) -> String {
+    format!(
+        "<form class=\"answer-in\" onsubmit=\"return false\">{}<div class=\"af\"><label class=\"vh\" for=\"{id}\">Your answer</label><textarea id=\"{id}\" rows=\"1\" data-answer placeholder=\"Answer {to}…\"></textarea><div class=\"hint\" aria-hidden=\"true\"><span><kbd>⌘↵</kbd> answer</span><span><kbd>Esc</kbd> cancel</span></div></div><button class=\"primary\" type=\"button\">Answer</button></form>",
+        ui::avatar("owner", ui::AvSize::Md, true),
+    )
 }
 /// An item's Details: its "⋯" closed, as every row, module and head carries it, and open.
 fn details_part(prefix: &str) -> TrustedHtml {
@@ -655,71 +658,90 @@ fn heads_part() -> TrustedHtml {
         ui::SectionHead::new("", "Projects").level(3).count(7).html(),
     ))
 }
-/// A plan's briefing (`views::plan`): Needs you with a question, a group of stops and a
-/// silence, one item set aside; what finished since the owner looked; At work's axis and two
-/// rows, one quiet.
+/// A plan's briefing (`views::plan`): Needs you with a question answered in place, a group of
+/// stops and a silence, one item set aside; At work's head and five rows (busy, slow, quiet,
+/// just started, started before the window); Watching; what finished since the owner looked.
 fn plan_part(prefix: &str) -> TrustedHtml {
-    use super::plan::{RowParts, axis, finished_card, roster_head, roster_row, track};
-    use ui::{Mark, need_line as need_item};
+    use super::plan::{RowParts, finished_row, roster_row, track};
+    use ui::{Mark, NeedLine, need_line};
     let now = (crate::clock::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
         / 60.0)
         .floor()
         * 60.0;
-    let x = "<button type=\"button\" class=\"icon\" aria-label=\"Dismiss\" title=\"Dismiss\">×</button>";
     let needs = [
-        need_item(
+        need_line(
             Mark::Ask,
-            &format!("{prefix}n-ask"),
-            " data-unit=\"a-7\"",
-            "<b><a href=\"#\">Shorebirds: the spring guide's entries</a></b> asks: Use the checklist's new spring dates in this draft?",
-            "",
-            &ui::link_with(ui::Btn::Primary, "#", "Answer", ""),
-            x,
+            &NeedLine {
+                id: &format!("{prefix}n-ask"),
+                title: "<a class=\"nd-t\" href=\"#\">Shorebirds: the spring guide's entries</a>",
+                state: "asks you",
+                who: &format!("<code class=\"ref\">a-7-draft</code> · {}", ui::ago(&before(240))),
+                body: "<div class=\"md\"><p>The regional checklist moved the spring dates a week earlier. Use the new dates in this draft, or wait for <span class=\"ref\">s-5</span> to finish the index first?</p></div>",
+                asker: Some("a-7"),
+                form: &answer_sample(&format!("{prefix}n-answer"), "Shorebirds"),
+                x: X_SAMPLE,
+                ..Default::default()
+            },
         ),
-        need_item(
+        need_line(
             Mark::State(Shown::Failed),
-            &format!("{prefix}n-cause"),
-            "",
-            "Three units failed: they hit their wall-clock cap.",
-            "<details class=\"qf nd-more\"><summary>Show the three</summary><ul><li><a href=\"#\">Waders: the autumn guide's entries</a> <span>· “Two of five maps redrawn”</span></li><li><a href=\"#\">Gannets: the spring guide's entries</a></li><li><a href=\"#\">Scan the range maps for broken links</a></li></ul></details>",
-            &ui::button(ui::Btn::Outlined, "Retry all", " type=\"button\""),
-            x,
+            &NeedLine {
+                id: &format!("{prefix}n-fail"),
+                title: "<a class=\"nd-t\" href=\"#\">Owls: the autumn guide's entries</a>",
+                state: "failed at review after 12m",
+                who: &format!("<code class=\"ref\">a-6-review</code> · {}", ui::ago(&before(720))),
+                body: "The review found two entries citing the old checklist. <span class=\"nd-next\">Retry with feedback to say which dates to keep.</span>",
+                act: "<button type=\"button\" data-fb aria-expanded=\"false\">Retry with feedback</button><button type=\"button\">Retry</button>",
+                x: X_SAMPLE,
+                ..Default::default()
+            },
         ),
-        need_item(
+        need_line(
+            Mark::State(Shown::Failed),
+            &NeedLine {
+                id: &format!("{prefix}n-cause"),
+                title: "<span class=\"nd-t\">Three units</span>",
+                state: "failed: they hit their wall-clock cap",
+                more: "<details class=\"qf nd-more\"><summary>Show the three</summary><ul><li><a href=\"#\">Waders: the autumn guide's entries</a> <span>· “Two of five maps redrawn”</span></li><li><a href=\"#\">Gannets: the spring guide's entries</a></li><li><a href=\"#\">Scan the range maps for broken links</a></li></ul></details>",
+                act: &ui::button(ui::Btn::Outlined, "Retry all", " type=\"button\""),
+                x: X_SAMPLE,
+                ..Default::default()
+            },
+        ),
+        need_line(
             Mark::State(Shown::Quiet),
-            &format!("{prefix}n-quiet"),
-            " data-unit=\"s-3\"",
-            &format!(
-                "<b><a href=\"#\">Scan the coast photographs for duplicates</a></b> has not been heard from since {}, {}.",
-                ui::clock(&before(9_840)),
-                ui::ago(&before(9_840))
-            ),
-            "",
-            &ui::link_with(ui::Btn::Outlined, "#", "Message it", ""),
-            x,
+            &NeedLine {
+                id: &format!("{prefix}n-quiet"),
+                title: "<a class=\"nd-t\" href=\"#\">Scan the coast photographs for duplicates</a>",
+                state: &format!("has not been heard from since {}", ui::clock(&before(9_840))),
+                who: ui::ago(&before(9_840)).as_str(),
+                act: &ui::link_with(ui::Btn::Outlined, "#", "Message it", ""),
+                x: X_SAMPLE,
+                ..Default::default()
+            },
         ),
     ]
     .concat();
     let finished = [
-        finished_card(&before(1_500), 15_300.0, "#", "Plovers: the spring guide's entries", "<p class=\"fin-facts\">commit <code>3f2b9d1</code> · entries <b>14</b></p><p class=\"fin-v\">Fourteen entries, each with its photograph credited.</p>", ""),
-        finished_card(&before(8_040), 14_160.0, "#", "Herons: the autumn guide's entries", "<p class=\"fin-facts\">commit <code>9e1c0a4</code></p>", ""),
+        finished_row(&before(1_500), 15_300.0, "#", "Plovers: the spring guide's entries (FIG-7045)", "<code class=\"ref\">3f2b9d1c0e</code> Fourteen entries, each with its photograph credited.", ""),
+        finished_row(&before(8_040), 14_160.0, "#", "Herons: the autumn guide's entries", "<code class=\"ref\">9e1c0a4b7d</code>", ""),
     ]
     .concat();
     // a strip's states: busy, slow, quiet, just started, started before the window
-    let row = |id: &str, badge: &str, title: &str, said: &str, meta: String, pulse: Pulse<'_>| {
+    let row = |id: &str, engine: &str, title: &str, said: &str, track_html: String, pulse: Pulse<'_>| {
         roster_row(&RowParts {
             id: &format!("{prefix}{id}"),
             waiting: false,
             said_states: "",
-            badge,
-            runs_on: badge,
+            engine,
+            runs_on: engine,
             title,
             owner: "",
             said,
-            meta: &meta,
-            track: &track(id, &pulse, now),
+            track: &track_html,
+            pulse: &track(id, &pulse, now),
             drill: None,
         })
     };
@@ -738,64 +760,73 @@ fn plan_part(prefix: &str) -> TrustedHtml {
     let quiet = vec![now - 10_200.0, now - 9_960.0];
     let fresh = every(230.0, 20.0, 40.0);
     let earlier = every(3_500.0, 400.0, 140.0);
-    let pill = |shown: Shown, words: &str, since: u64| {
-        ui::status_pill(shown, &format!("{words}{}", ui::since(&before(since)).0)).0
+    let stages = |unit: &str, at: Shown, since: u64| {
+        let current = ui::Stage::new("draft", Some(at)).running_since(before(since), since as f64);
+        ui::stage_track(
+            &format!("Stages of {unit}"),
+            &[current, ui::Stage::new("review", None), ui::Stage::new("publish", None)],
+            None,
+        )
+        .0
     };
-    let heard = |ago: u64| {
+    let heard = |ago: u64, live: bool| {
         format!(
-            "<span class=\"ro-heard\">heard {}</span>",
+            "<span class=\"live{}\" aria-hidden=\"true\"></span><span class=\"heard\">heard {}</span>",
+            if live { " is-live" } else { "" },
             ui::ago(&before(ago))
         )
     };
+    let said = |who: &str, words: &str| format!("{}{words}", ui::avatar(who, ui::AvSize::Sm, true));
     let rows = [
         row(
             "a-12",
-            "claude",
+            "opus",
             "Terns: the spring guide's entries",
-            "Entries 41 to 58 drafted; the maps moved under maps/coast/.",
-            format!("{}{}", pill(Shown::Running, "<span class=\"vh\">running, </span>draft · ", 2_400), heard(30)),
+            &said("a-12", "Entries 41 to 58 drafted; the maps moved under maps/coast/."),
+            format!("{}{}", stages("a-12", Shown::Running, 2_400), heard(30, true)),
             Pulse { live: true, start: Some(now - 2_400.0), acts: &busy, said: &[now - 1_500.0, now - 480.0], active: Some(now - 30.0), quiet: false },
         ),
         row(
             "a-13",
-            "codex",
+            "sol",
             "Shorebirds: the spring guide's entries",
-            "Checking each entry's dates against the checklist.",
-            format!("{}{}", pill(Shown::Running, "<span class=\"vh\">running, </span>draft · ", 3_000), heard(380)),
+            &format!("{}<b>@lead</b> Checking each entry's dates against the checklist (FIG-7047).", ui::avatar("@lead", ui::AvSize::Sm, true)),
+            format!("{}{}", stages("a-13", Shown::Running, 3_000), heard(380, false)),
             Pulse { live: true, start: Some(now - 3_000.0), acts: &slow, said: &[], active: Some(now - 380.0), quiet: false },
         ),
         row(
             "a-9",
-            "codex",
+            "sol",
             "Gannets: the spring guide's entries",
-            "Two of the five range maps redrawn; checking the third.",
-            pill(Shown::Quiet, "review · quiet ", 9_960),
+            &said("a-9", "Two of the five range maps redrawn; checking the third."),
+            format!("{}<span class=\"live quiet\" aria-hidden=\"true\"></span>", stages("a-9", Shown::Quiet, 9_960)),
             Pulse { live: true, start: Some(now - 10_800.0), acts: &quiet, said: &[], active: Some(now - 9_960.0), quiet: true },
         ),
         row(
             "a-14",
-            "claude",
+            "opus",
             "Skuas: the spring guide's entries",
             "",
-            format!("{}{}", pill(Shown::Running, "<span class=\"vh\">running, </span>draft · ", 240), heard(20)),
+            format!("{}{}", stages("a-14", Shown::Running, 240), heard(20, true)),
             Pulse { live: true, start: Some(now - 240.0), acts: &fresh, said: &[], active: Some(now - 20.0), quiet: false },
         ),
         row(
             "a-15",
-            "claude",
+            "",
             "Auks: the spring guide's entries",
-            "Entries 1 to 9 drafted.",
-            format!("{}{}", pill(Shown::Running, "<span class=\"vh\">running, </span>draft · ", 18_000), heard(400)),
+            &said("a-15", "Entries 1 to 9 drafted."),
+            format!("{}{}", stages("a-15", Shown::Running, 18_000), heard(400, false)),
             Pulse { live: true, start: Some(now - 18_000.0), acts: &earlier, said: &[now - 2_100.0], active: Some(now - 400.0), quiet: false },
         ),
     ]
     .concat();
+    let watching = "<div class=\"wline\"><a class=\"wt\" href=\"#\">Checks every range map's links each night</a><span class=\"result red\"><span>broken 3 of 412</span></span><span class=\"w-hist\" role=\"img\" aria-label=\"The last 12 results: 4 red, 8 green\"><i class=\"g\"></i><i class=\"g\"></i><i class=\"r\"></i><i class=\"g\"></i><i class=\"g\"></i><i class=\"g\"></i><i class=\"r\"></i><i class=\"r\"></i><i class=\"g\"></i><i class=\"g\"></i><i class=\"g\"></i><i class=\"r\"></i></span><span class=\"when\">last result 2h ago</span></div>";
     TrustedHtml::owned(format!(
-        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\">{nh}<ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\"{listen}><div class=\"ro\">{}<details class=\"ro-g\" open><summary class=\"ro-group\"><h3><b>article</b> · 1 quiet, 4 running</h3></summary>{}{rows}</details></div><p class=\"ro-more\"><b>2 waiting</b> on earlier work · <a href=\"#\"><b>5 done</b></a>, the last {}</p>{pop}</section><section class=\"pb-sec\">{fh}<ul class=\"fin\">{finished}</ul><p class=\"fin-quiet\">1 more finished with nothing to say: <a href=\"#\">Scan the photograph archive for credits</a></p></section></div></div>",
-        roster_head(ui::section_head("", "At work", "5 units").as_str()),
-        axis(" ro-axis-g"),
-        ui::ago(&before(1_500)),
-        nh = ui::SectionHead::new("", "Needs you").count(3).html(),
+        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><div class=\"plan-col\"><section class=\"pb-sec\">{nh}<ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\"{listen}><div class=\"ro\"><div class=\"aw-head\"><div class=\"aw-left\"><h2>At work</h2><span class=\"n\">5 units</span></div><div class=\"scale\" aria-hidden=\"true\"><span>1h ago</span><span>now</span></div><span class=\"pad\"></span></div><details class=\"ro-g\" open><summary class=\"ro-group\">{chev}<b>article</b><span>1 quiet, 4 running</span></summary>{rows}</details></div><p class=\"ro-more\">2 waiting on earlier work · <a href=\"#\">5 done</a>, the last {last}</p>{pop}</section></div><aside class=\"plan-rail\"><section class=\"pb-sec\">{wh}<div class=\"wl\">{watching}</div></section><section class=\"pb-sec\">{fh}<ul class=\"fin\">{finished}</ul><p class=\"fin-quiet\">1 more finished with nothing to say: <a href=\"#\">Scan the photograph archive for credits</a></p></section></aside></div></div>",
+        last = ui::ago(&before(1_500)),
+        chev = super::icons::icon(super::icons::Icon::ChevronRight, 16, "chev"),
+        nh = ui::SectionHead::new("", "Needs you").count(4).html(),
+        wh = ui::SectionHead::new("", "Watching").count(1).html(),
         listen = super::pulse::listen("/_ui/pulse", &format!("{prefix}pulse-pop")),
         pop = super::pulse::popover(&format!("{prefix}pulse-pop")),
         fh = ui::SectionHead::new("", "Finished since you looked")
@@ -814,23 +845,43 @@ fn strips_part() -> TrustedHtml {
         ui::Stage::new("review", Some(Shown::Quiet)).took(3_180.0),
         ui::Stage::new("publish", None),
     ];
-    let first = vec![
-        ui::Stage::new("draft", Some(Shown::Running)).running_since(before(5_300), 5_300.0),
-        ui::Stage::gap("then review and publish", 2),
+    let long = vec![
+        ui::Stage::new("fork", Some(Shown::Succeeded)).took(40.0),
+        ui::Stage::new("work", Some(Shown::Succeeded)).took(9_840.0),
+        ui::Stage::new("land", Some(Shown::Running)).running_since(before(360), 360.0),
+        ui::Stage::new("landed", None),
+        ui::Stage::new("close", None),
+        ui::Stage::new("rm", None),
     ];
-    let scan = vec![ui::Stage::new("scan", Some(Shown::Succeeded)).took(42.0)];
+    let asks = vec![
+        ui::Stage::new("fork", Some(Shown::Succeeded)),
+        ui::Stage::new("work", Some(Shown::Succeeded)).took(1_860.0),
+        ui::Stage::new("land", Some(Shown::Pending)).asks(true),
+        ui::Stage::new("landed", None),
+    ];
+    let scan = vec![ui::Stage::new("scan", Some(Shown::Running)).running_since(before(1_080), 1_080.0)];
     let held = vec![
         ui::Stage::new("draft", Some(Shown::Paused)),
         ui::Stage::new("review", Some(Shown::Blocked)),
         ui::Stage::new("publish", Some(Shown::Pending)),
     ];
+    let failed = vec![
+        ui::Stage::new("draft", Some(Shown::Succeeded)),
+        ui::Stage::new("review", Some(Shown::Failed)),
+        ui::Stage::new("publish", None),
+    ];
+    let track = |label: &str, stages: &[ui::Stage]| {
+        format!("<div class=\"track\">{}</div>", ui::stage_track(label, stages, None))
+    };
     TrustedHtml::owned(format!(
-        "<p class=\"meta gal-cap\">Done, running, not reached</p>{}<p class=\"meta gal-cap\">Quiet; a note across the stages not reached</p>{}{}<p class=\"meta gal-cap\">Not reached; a one-step recipe</p>{}{}",
-        ui::stage_strip("Stages of a-12", &article(Some(Shown::Succeeded), Some(Shown::Running), None)),
-        ui::stage_strip("Stages of a-9", &quiet),
-        ui::stage_strip("Stages of a-14", &first),
-        ui::stage_strip("Stages of a-15", &held),
-        ui::stage_strip("Stages of s-4", &scan),
+        "<p class=\"meta gal-cap\">Done, running, next; the rest folded</p>{}{}<p class=\"meta gal-cap\">Asks you; quiet; failed</p>{}{}{}<p class=\"meta gal-cap\">Paused; one stage</p>{}{}",
+        track("Stages of a-12", &article(Some(Shown::Succeeded), Some(Shown::Running), None)),
+        track("Stages of FIG-7048", &long),
+        track("Stages of FIG-7047", &asks),
+        track("Stages of a-9", &quiet),
+        track("Stages of a-6", &failed),
+        track("Stages of a-15", &held),
+        track("Stages of s-4", &scan),
     ))
 }
 fn summary_part() -> TrustedHtml {
@@ -876,8 +927,24 @@ fn bars() -> Result<TrustedHtml, askama::Error> {
         label: label.into(),
         current,
     };
+    let almanac = super::ProjectView {
+        id,
+        name: "almanac".into(),
+        description: String::new(),
+        icon_text: String::new(),
+        icon_url: String::new(),
+        paused: false,
+        archived: false,
+        changed: String::new(),
+        counts: Default::default(),
+        running: vec![],
+        stopped: vec![],
+        dismissed: Default::default(),
+        asks: vec![],
+        looks: 0,
+    };
     let project_nav = super::NavView {
-        projects: vec![],
+        projects: vec![almanac],
         label: "almanac".into(),
         links: vec![
             link("Plan", base.clone(), true),
@@ -886,12 +953,11 @@ fn bars() -> Result<TrustedHtml, askama::Error> {
             link("Messages", format!("{base}/inbox"), false),
             link("Log", format!("{base}/log"), false),
             link("Functions", format!("/fns?project={id}"), false),
+            link("Settings", format!("{base}/settings"), false),
         ],
         inbox: 3,
         notes: 0,
-        settings_href: format!("{base}/settings"),
         selected: Some(id),
-        icon: TrustedHtml::owned("<span class=\"proj-icon pi-mono\" aria-hidden=\"true\">A</span>".into()),
     };
     let home_nav = super::NavView {
         label: "All projects".into(),
@@ -902,40 +968,29 @@ fn bars() -> Result<TrustedHtml, askama::Error> {
         ],
         inbox: 0,
         notes: 2,
-        settings_href: String::new(),
         selected: None,
-        icon: TrustedHtml::default(),
         ..project_nav.clone()
     };
-    let tools = |q: &str| {
-        TrustedHtml::owned(format!(
-            "<form class=\"board-tools pl-find\" role=\"search\" aria-label=\"Find units\" onsubmit=\"return false\"><div class=\"q-field\">{}<input type=\"search\" name=\"q\" value=\"{}\" placeholder=\"Find\" aria-label=\"Find units\" autocomplete=\"off\"><a class=\"q-clear\" href=\"#\" aria-label=\"Clear the find\">{}</a></div></form>{}",
-            super::icons::icon(super::icons::Icon::Search, 16, "q-icon"),
-            ui::esc(q),
-            super::icons::icon(super::icons::Icon::X, 16, ""),
-            super::plan::view_switch_sample(Some("both")),
-        ))
+    // a picture, not the page's own: its ids left out so the page keeps one of each
+    let unid = |html: &str| {
+        html.replace(" id=\"top-nav\"", "")
+            .replace(" id=\"nav-inbox\"", "")
+            .replace(" id=\"side-nav\"", "")
+            .replace(" id=\"sidebar\"", "")
     };
-    let viewer = super::Viewer::default();
-    let bar = |nav: &super::NavView, tools: TrustedHtml| -> Result<String, askama::Error> {
-        let frame = super::Frame { tools, ..super::Frame::default() };
+    let bar = |nav: &super::NavView, stream: &str| -> Result<String, askama::Error> {
         let html = TrustedHtml::from_template(&super::Bar {
-            frame: &frame,
             nav,
-            viewer: &viewer,
-            stream: "",
+            stream,
             path: "/_ui",
         })?;
-        Ok(html
-            .as_str()
-            .replace(" id=\"top-nav\"", "")
-            .replace(" id=\"nav-inbox\"", ""))
+        Ok(unid(html.as_str()))
     };
     Ok(TrustedHtml::owned(format!(
-        "<div class=\"gal-bars\"><p class=\"meta\">A project's plan with a board</p>{}<p class=\"meta\">Holding a find</p>{}<p class=\"meta\">A page of no project</p>{}</div>",
-        bar(&project_nav, tools(""))?,
-        bar(&project_nav, tools("gulls"))?,
-        bar(&home_nav, TrustedHtml::default())?,
+        "<div class=\"gal-bars\"><p class=\"meta\">A project's page</p>{}<p class=\"meta\">Updates paused</p><div data-stream=\"paused\">{}</div><p class=\"meta\">A page of no project</p>{}</div>",
+        bar(&project_nav, "")?,
+        bar(&project_nav, "/stream")?,
+        bar(&home_nav, "")?,
     )))
 }
 fn head_part() -> TrustedHtml {
@@ -1373,29 +1428,6 @@ fn steps_part() -> TrustedHtml {
     out.push_str("</div>");
     TrustedHtml::owned(out)
 }
-/// Every theme: each a small page in its own tokens, its band with its name and a summary, then
-/// on its paper a unit's stages, the tags, prose with a link, the buttons.
-fn themes_part() -> TrustedHtml {
-    let cards: String = super::THEMES
-        .iter()
-        .map(|theme| {
-            format!(
-                "<figure class=\"gal-themecard\" data-theme=\"{id}\"><div class=\"gt-band\"><span class=\"gt-name\">{name}</span><span class=\"gt-sum\"><a class=\"ask\" href=\"#\">1 question for you</a>. 1 failed. 2 article at work.</span></div><div class=\"gt-paper\">{strip}<p class=\"gal-row\">{ask}{attn}{live}</p><p class=\"gt-text\">The draft cites the checklist; <a href=\"#\">its thread</a> has the reply. <span class=\"meta\">running 41m</span></p><p class=\"gal-row\"><button class=\"primary\" type=\"button\">Answer</button><button type=\"button\">Retry</button></p></div><figcaption class=\"meta\">{source}</figcaption></figure>",
-                id = theme.id,
-                name = ui::esc(theme.name),
-                source = ui::esc(theme.source),
-                strip = ui::stage_strip(
-                    "Stages of a-12",
-                    &article(Some(Shown::Succeeded), Some(Shown::Running), Some(Shown::Failed))
-                ),
-                ask = ui::ask_link("#", "Use the new dates?"),
-                attn = ui::pill("quiet 42m", ui::Tone::Look, None),
-                live = ui::pill("live", ui::Tone::Run, Some(ui::mark(Shown::Running))),
-            )
-        })
-        .collect();
-    TrustedHtml::owned(format!("<div class=\"gal-themes\">{cards}</div>"))
-}
 /// Every part, drawn twice: once per theme of the house pair, with its ids apart.
 pub fn parts() -> Result<Vec<Part>, askama::Error> {
     let project = project();
@@ -1407,26 +1439,26 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
         parts.push(Part { name, wide: false, about, built, light, dark })
     };
     add("Status", "Each state a step, unit or project can be in: its glyph, its word and what it means.", "`ui::status`, `ui::glyph` or `ui::mark`, from the status table.", both(&|_| Ok(statuses()))?);
-    add("The bar", "One row on the band: the mark, the project switcher (All projects first in its menu), the page's sections, then the plan's Find (an icon that opens into its field, open while it holds a find) and its view switch, Inbox, Live and display preferences. Narrower than it fits, a second row holds the sections, scrolling sideways with a chevron, and the tools.", "`templates/bar.html` (`views::Bar`), included by `layout.html`; its nav the region a stream patches as `top-nav`; the tools `Frame::tools` (`Plan::tools`).", both(&|_| bars())?);
+    add("The top bar", "The page's sections, then Inbox at the right; while the page's stream reconnects, an ochre \"Updates paused · Reconnect\". On a phone the menu button and the project's name lead it, the sections a row of their own, Log, Functions and Settings in More.", "`templates/bar.html` (`views::Bar`) and `top_nav.html`, included by `layout.html`; its nav the region a stream patches as `top-nav`.", both(&|_| bars())?);
     add("Page head", "On a page the bar already names (a plan, home, a project's sections) the lead line alone, its name a heading for a screen reader, its ⋯ beside it; elsewhere (a unit, a step, a thread) the page's name over its line.", "`ui::lead_head`; `ui::page_head`, `ui::page_head_with` in `Frame::head` (`render_framed`); `ui::summary_sentence` from `ui::UnitFact`s.", both(&|_| Ok(head_part()))?);
-    add("Step head", "A step's way back, name, state, words, its unit's stages and its actions.", "`StepView::band` (`templates/step_band.html`) in `Frame::head`, the region a step's stream patches as `step-band`; `ui::stage_strip_at`.", both(&|p| step_band_part(p))?);
+    add("Step head", "A step's way back, name, state, words, its unit's stages and its actions.", "`StepView::band` (`templates/step_band.html`) in `Frame::head`, the region a step's stream patches as `step-band`; `ui::stage_track` at its own stage.", both(&|p| step_band_part(p))?);
     add("Details", "What identifies an item, behind one ⋯ at its end; a failure's ⋯ also holds Set it aside.", "`ui::Details`, its `actions` and its `menu` (`sluice-menu`).", both(&|p| Ok(details_part(p)))?);
     add("Summary sentence", "One sentence from the counts alone, the question for you first.", "`ui::summary_sentence`.", both(&|_| Ok(summary_part()))?);
     add("Module grid", "Twelve columns every module spans, half or whole on a medium sheet.", "`ui::grid_open`, `ui::module_open`.", both(&|p| Ok(grid_part(p)))?);
     add("Modules", "A unit, a question or a step on the grid; the one that needs you swells.", "`ui::module_open` with `ui::Swell`, `.mod-k`, `.mod-t`, `.mod-meta`, `.mod-body`, `.mod-actions`.", both(&|_| Ok(modules_part()))?);
     add("Section heads", "A section's name, its count muted, a note and its one action at the right.", "`ui::SectionHead`, `ui::section_head`.", both(&|_| Ok(heads_part()))?);
     add("Plan briefing", "A plan's Needs you (each item a sentence, one action and a ×; what was set aside, with Undo), what finished since you looked, and At work: a row a unit, its pulse strip over the last hour (busy, slow, quiet, just started, started earlier); point at a mark, or the faded left edge of one that started earlier, to see what happened then.", "`plan::need_item`, `plan::finished_card`, `plan::roster_head`, `plan::axis`, `plan::track` (a `sluice-pulse`, its popover `pulse::popover`, its details `pulse::details`) and `plan::roster_row`, drawn by `views::plan::Plan`.", both(&|p| Ok(plan_part(p)))?);
-    add("Stage strip", "A unit's stages in recipe order, one cell each.", "`ui::stage_strip` from `ui::Stage`s (`ui::Cell::of` reads the status table).", both(&|_| Ok(strips_part()))?);
+    add("Stage track", "A unit's stages in a line: the one before where it stands, that one (green while it runs, teal when it asks you, its word when it stopped) and the next; the rest folded into a count that names them. On a phone only where it stands, and its place.", "`ui::stage_track` from `ui::Stage`s.", both(&|_| Ok(strips_part()))?);
     add("Stats", "A project's numbers over a window.", "`views::stats::StatsView` (`durations`, `outcomes`, `throughput`, `slowest_html`), from `StatsData`.", both(&|p| Ok(stats_part(p)))?);
     add("Step view", "A unit step by step: its gates, what each step runs on, its state, progress, runs on one time axis with a tick a message, how long it took, and its last message.", "`unit_steps::View` (`unit_steps::of_unit` from a unit) in `sluice-steps`; a plan row opens to it (`plan::roster_row`).", both(&|_| Ok(steps_part()))?);
-    add("Question", "A question to you, the one way it is drawn: a line in Needs you and For you, and the card where it is answered. The coral dot alone marks it; one filled Answer, a quiet Close question, the form folded until Answer.", "`ui::need_line` with `ui::Mark::Ask`; `ui::QuestionCard` (`MessageItem::question_card` with `answer.html` in `sluice-answer`).", both(&|p| Ok(questions(p)))?);
-    add("Pills", "A small fact set apart, in its state's tone; a question to you is its coral dot, never a pill.", "`ui::pill`, `ui::pill_link`, `ui::ask_link` with `ui::Tone`.", both(&|_| Ok(pills()))?);
+    add("Question", "A question to you, the one way it is drawn: a line in Needs you and For you, and the card where it is answered. The teal dot alone marks it; one filled Answer, a quiet Close question, the form folded until Answer.", "`ui::need_line` with `ui::Mark::Ask`; `ui::QuestionCard` (`MessageItem::question_card` with `answer.html` in `sluice-answer`).", both(&|p| Ok(questions(p)))?);
+    add("Pills", "A small fact set apart, in its state's tone; a question to you is its teal dot, never a pill.", "`ui::pill`, `ui::pill_link`, `ui::ask_link` with `ui::Tone`.", both(&|_| Ok(pills()))?);
     add("Buttons", "The filled button is the next move; the others outlined, quiet or an icon.", "`ui::submit`, `ui::link` with `ui::Btn` (`ui/button.rs`).", both(&|_| Ok(buttons()))?);
     add("Status line", "How a thing stands in one muted sentence after its dot: running (breathing while heard lately), quiet, waiting on you, failed, done, waiting.", "`ui::status_line` with `ui::Dot`.", both(&|_| Ok(status_lines()))?);
     add("Tool calls", "A turn's calls in a quiet fold, shut and open: the tool, its key argument on one line, how long it took or that it failed.", "`ui::calls` from `ui::Call`s.", both(&|_| Ok(tool_calls()))?);
     add("Message cards", "A message as a card: who to whom, when, its first words and the way to the whole.", "`ui::message_card`; `threads::Conversation::cards`.", both(&|_| Ok(message_cards()))?);
     add("Tabs", "A step's parts, one at a time.", "`ui::tabs_open`, `panel_open`, `panel_close`, `tabs_close` (`sluice-tabs`).", both(&|p| Ok(tabs(&format!("{p}tabs-"))))?);
-    add("Cards and wells", "A card around a region; a well for rows that belong together, the pale sand's for what needs a look.", "`.card`; `ui::well_open`, `ui::well_close`.", both(&|_| Ok(sections()))?);
+    add("Cards", "A card around a region of its own: a hairline, no shadow.", "`.card`.", both(&|_| Ok(sections()))?);
     add("Fields", "Inputs, outputs and progress, one row each.", "`kit.html`'s `field`.", both(&|p| fields(p, &project))?);
     add("Folds", "A long value cut to its first lines, and More and Less.", "`ui::fold`, `ui::more_open` (`sluice-fold`).", both(&|_| Ok(folds()))?);
     add("Conversation", "Messages in one column, the message box at the end.", "`threads::Conversation` in `sluice-conversation`, `sluice-answer`; its message box a `ui::post_form`.", both(&|p| conversation(p, &project))?);
@@ -1442,10 +1474,9 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Splitter", "The line between the plan and the board.", "`ui::splitter` (`sluice-splitter`).", both(&|p| Ok(splitters(p)))?);
     add("Day line", "The day's runs as bars, a row a project, the now rule moving with the clock while something runs.", "`DayView::day_line` in `sluice-day`, which moves its now rule and running bars on `sluice-tick`.", both(&|_| Ok(day_lines()))?);
     add("Project page", "Plan, Both or Board: an icon each in the bar, named by its title, a link each, the server drawing the chosen view and keeping it per project, the board beside the plan. The step drawer opens over it from any step link; its head is the Step head above.", "The view switch in `Plan::tools`, its tabs `sluice-board` (`board.js`); the drawer `ui::drawer` in `sluice-drawer` (`sluice.js`). Each is one a page and binds the page's address, so the gallery draws their parts, not a second live instance.", both(&|_| Ok(view_switches()))?);
-    add("Themes", "Each of the thirty themes the display preferences offer, in its light and dark.", "`data-theme` on the page (the cookie `sluice_theme`); Sluice's tokens in `style.css`, each other family's in `assets/themes/`.", (themes_part(), TrustedHtml::default()));
     add("Components", "Every component, the attributes it reads and what it does.", "Rocket components in `components.js`, light DOM.", (components(), TrustedHtml::default()));
     for part in &mut parts {
-        part.wide = matches!(part.name, "Themes" | "Page head" | "Step head" | "Module grid" | "Modules" | "Section heads" | "Plan briefing" | "Step view");
+        part.wide = matches!(part.name, "Page head" | "Step head" | "Module grid" | "Modules" | "Section heads" | "Plan briefing" | "Step view");
     }
     Ok(parts)
 }
@@ -1455,12 +1486,8 @@ async fn gallery(State(state): State<DashboardState>, headers: HeaderMap) -> Res
         let nav = NavView::new(&snapshot, None, "")?;
         let parts = parts().map_err(super::threads::render_error)?;
         let viewer = Viewer::from_headers(&headers);
-        // each part in the light and dark of the theme the page is in
-        let family = viewer
-            .theme
-            .and_then(|t| t.rsplit_once('-'))
-            .map_or("sluice", |(family, _)| family);
-        let body = TrustedHtml::from_template(&GalleryTemplate { parts: &parts, family })
+        // each part in Paper and in Carbon
+        let body = TrustedHtml::from_template(&GalleryTemplate { parts: &parts })
             .map_err(super::threads::render_error)?;
         super::render_layout("States and parts", &body, &nav, &viewer, "", "", "/_ui")
             .map_err(super::threads::render_error)

@@ -6,7 +6,7 @@
 //!
 //! Generic by rule: a stage is whatever a unit's recipe names it, a count is a status table
 //! count, and a progress field is whatever a step reported. Nothing here knows a project.
-use super::{Shown, Tally, count, duration, duration_text, esc, mark, since, word};
+use super::{Shown, Tally, count, duration, duration_text, esc, since, word};
 use crate::views::TrustedHtml;
 use sluice_model::shown::Band;
 
@@ -40,7 +40,7 @@ pub fn grid_close() -> TrustedHtml {
 pub enum Swell {
     /// A module like any other: a hairline over it.
     Plain,
-    /// It needs a look (stopped: failed, cancelled, stale): a well on the pale sand. A
+    /// It needs a look (stopped: failed, cancelled, stale): a well on the pale ochre. A
     /// question to the owner is no module but `ui::QuestionCard`.
     Look,
 }
@@ -111,10 +111,10 @@ pub fn column_close() -> TrustedHtml {
     TrustedHtml::owned("</div>".into())
 }
 
-// ---- the stage strip -------------------------------------------------------------------------
+// ---- the stage track ------------------------------------------------------------------------
 
-/// One cell of a unit's stage strip: a stage of its recipe (or a step of a unit with no
-/// recipe), in recipe order.
+/// One stage of a unit's track: a stage of its recipe (or a step of a unit with no recipe), in
+/// recipe order.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Stage {
     /// The stage's own name, as its recipe names it.
@@ -134,8 +134,10 @@ pub struct Stage {
     pub step: String,
     /// Its state's word when its step says it otherwise ("bypassed" for set by hand).
     pub word: Option<&'static str>,
-    /// A small tag a cell not reached carries, and what it says ("bypass", "bypass by o").
+    /// A small tag a stage not reached carries, and what it says ("bypass", "bypass by o").
     pub tag: Option<(String, String)>,
+    /// Its step waits on the owner's answer: it reads "asks you", in teal.
+    pub ask: bool,
 }
 impl Stage {
     pub fn new(name: impl Into<String>, shown: Option<Shown>) -> Self {
@@ -174,24 +176,26 @@ impl Stage {
         self.word = Some(word);
         self
     }
+    pub fn asks(mut self, ask: bool) -> Self {
+        self.ask = ask;
+        self
+    }
     pub fn tag(mut self, tag: impl Into<String>, said: impl Into<String>) -> Self {
         self.tag = Some((tag.into(), said.into()));
         self
     }
 }
-/// How a cell is drawn, from its state's row in the status table alone.
+/// How a state stands, from its row in the status table alone: done, at work, needs a look, or
+/// not reached (the day line's bars and a state's badge read it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cell {
-    /// Not reached: an outline (a waiting state that says itself, held, queued, paused,
-    /// blocked, writes its word in it).
+    /// Not reached: a waiting state, held, queued, paused, blocked.
     Empty,
-    /// Done: sky, its glyph and how long it took.
+    /// Done.
     Done,
-    /// Running: the channel's blue, its glyph and name, its elapsed time big, a sweep along
-    /// its foot.
+    /// Running.
     Run,
-    /// Needs a look: sand, its glyph and its word (failed, cancelled, stale; quiet keeps
-    /// running's blue edge).
+    /// Needs a look: failed, cancelled, stale, quiet.
     Look,
 }
 impl Cell {
@@ -214,7 +218,7 @@ impl Cell {
             Cell::Empty
         }
     }
-    /// Its name in a class: `sc-<key>` a cell, `mk-<key>` a mark.
+    /// Its name in a class (`sv-c-<key>`, `sv-b-<key>`).
     pub fn key(self) -> &'static str {
         match self {
             Cell::Empty => "empty",
@@ -223,112 +227,141 @@ impl Cell {
             Cell::Look => "look",
         }
     }
-    fn class(self) -> String {
-        format!("sc sc-{}", self.key())
-    }
 }
-/// A unit's stages as a strip of cells, one a stage in recipe order (DESIGN.md, Status
-/// presentation): never colour alone, each cell carries its glyph or its words, and the strip
-/// is a list named `label` ("Stages of a-12"). A cell with a page links to it.
-pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
-    let n: usize = stages
-        .iter()
-        .map(|s| s.gap.as_ref().map_or(1, |(_, c)| *c as usize))
-        .sum();
-    let mut cells = String::new();
-    for stage in stages {
-        if let Some((text, cols)) = &stage.gap {
-            cells.push_str(&format!(
-                "<li class=\"sc sc-gap\" style=\"--gap:{cols}\"><span>{}</span></li>",
-                esc(text)
-            ));
-            continue;
-        }
-        let cell = Cell::of(stage.shown);
-        let state = stage
-            .word
-            .unwrap_or_else(|| stage.shown.map_or("not reached", word));
-        let time = |s: f64| -> String {
-            match cell {
-                // a run still going ticks, a quiet one too: its text is the clock's
-                _ if !stage.since.is_empty() => {
-                    format!("<span class=\"sc-time\">{}</span>", since(&stage.since))
-                }
-                _ => format!("<span class=\"sc-time\">{}</span>", duration(s)),
-            }
-        };
-        // a reached cell's second line: its state's word, as the status table says it, then its
-        // time
-        let said = |shown: Shown| {
-            format!(
-                "<span class=\"sc-said\"><span class=\"sc-word\" aria-hidden=\"true\">{}</span>{}</span>",
-                esc(word(shown)),
-                stage.seconds.map(time).unwrap_or_default()
+/// How a stage reads on its track, from its state's row in the status table: its class, the
+/// glyph before its name and the word after it ("" for none).
+fn stage_look(stage: &Stage, current: bool, next: bool) -> (&'static str, String, String) {
+    if stage.ask {
+        return ("ask", "<i></i>".into(), "asks you".into());
+    }
+    // not reached and tagged (a bypass and who set it): the tag says more than "next"
+    if let Some((tag, _)) = &stage.tag
+        && stage.shown.is_none_or(|s| s.spec().band != Band::Done)
+        && !current
+    {
+        return (if next { "next" } else { "pend" }, String::new(), esc(tag));
+    }
+    let Some(shown) = stage.shown else {
+        return if next {
+            ("next", String::new(), "next".into())
+        } else {
+            (
+                "pend",
+                String::new(),
+                match &stage.tag {
+                    Some((tag, _)) => tag.clone(),
+                    None => String::new(),
+                },
             )
         };
-        // a cell's first line is its glyph (where it draws one) and its name; under it its word
-        // and its time
-        let inner = match cell {
-            Cell::Empty => match stage.shown {
-                Some(s) if s.spec().caption || s == Shown::Paused => format!(
-                    "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span><span class=\"sc-word\" aria-hidden=\"true\">{}</span><span class=\"vh\">: {}</span>",
-                    mark(s),
-                    esc(&stage.name),
-                    esc(word(s)),
-                    esc(state)
-                ),
-                _ => match &stage.tag {
-                    Some((tag, said)) => format!(
-                        "<span class=\"sc-name\">{}</span><span class=\"sc-word sc-tag\" aria-hidden=\"true\" title=\"{said}\">{}</span><span class=\"vh\">: {}, {said}</span>",
-                        esc(&stage.name),
-                        esc(tag),
-                        esc(state),
-                        said = esc(said)
-                    ),
-                    None => format!(
-                        "<span class=\"sc-name\">{}</span><span class=\"vh\">: {}</span>",
-                        esc(&stage.name),
-                        esc(state)
-                    ),
-                },
+    };
+    let spec = shown.spec();
+    let said = stage.word.unwrap_or_else(|| word(shown));
+    let time = |s: f64| {
+        if stage.since.is_empty() {
+            duration(s).0
+        } else {
+            since(&stage.since).0
+        }
+    };
+    let took = stage
+        .seconds
+        .map(|s| format!(" <em>{}</em>", time(s)))
+        .unwrap_or_default();
+    match shown {
+        Shown::Succeeded | Shown::Manual => (
+            "ok",
+            "<i aria-hidden=\"true\">✓</i>".into(),
+            if current {
+                format!("{}{took}", esc(said))
+            } else {
+                String::new()
             },
-            Cell::Done => {
-                let shown = stage.shown.unwrap_or(Shown::Succeeded);
-                format!(
-                    "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span>{}<span class=\"vh\">: {}</span>",
-                    mark(shown),
-                    esc(&stage.name),
-                    said(shown),
-                    esc(state)
-                )
+        ),
+        Shown::Running | Shown::Finishing | Shown::External => {
+            ("run", "<i></i>".into(), took.trim_start().to_owned())
+        }
+        Shown::Quiet => (
+            "quiet",
+            "<i aria-hidden=\"true\">●</i>".into(),
+            format!("{}{took}", esc(said)),
+        ),
+        Shown::Failed => ("fail", "<i aria-hidden=\"true\">✕</i>".into(), esc(said)),
+        Shown::Stale => ("quiet", String::new(), esc(said)),
+        Shown::Paused | Shown::Held | Shown::Queued | Shown::Blocked => {
+            ("held", "<i aria-hidden=\"true\">‖</i>".into(), esc(said))
+        }
+        _ if spec.band == Band::Done => ("ok", String::new(), esc(said)),
+        _ if next => ("next", String::new(), "next".into()),
+        _ => (
+            "pend",
+            String::new(),
+            if spec.caption {
+                esc(said)
+            } else {
+                String::new()
+            },
+        ),
+    }
+}
+/// The stage a unit stands at: its first not done (a stop, a run, a wait), else its last.
+pub fn current_stage(stages: &[Stage]) -> usize {
+    stages
+        .iter()
+        .position(|s| s.ask || s.shown.is_none_or(|shown| shown.spec().band != Band::Done))
+        .unwrap_or(stages.len().saturating_sub(1))
+}
+/// A unit's stages as its track (DESIGN.md, The stage track): the stage before the one it
+/// stands at, that one (green while it runs, with how long; teal when it asks the owner; its
+/// state's word when it stopped) and the next, a hairline between; the stages before and after
+/// those folded into a count that names them. One stage is drawn alone. `at` is the stage the
+/// page is about (a step's own page), which the window then stands around, marked current;
+/// else the unit's own place. A list named `label` ("Stages of a-12"); each stage with a page
+/// links to it. On a phone only the stage it stands at shows, with its place ("2/6").
+pub fn stage_track(label: &str, stages: &[Stage], at: Option<usize>) -> TrustedHtml {
+    let stages: Vec<&Stage> = stages.iter().filter(|s| s.gap.is_none()).collect();
+    if stages.is_empty() {
+        return TrustedHtml::default();
+    }
+    let owned: Vec<Stage> = stages.iter().map(|s| (*s).clone()).collect();
+    let cur = at
+        .unwrap_or_else(|| current_stage(&owned))
+        .min(stages.len() - 1);
+    let from = cur.saturating_sub(1);
+    let to = (cur + 1).min(stages.len() - 1);
+    let names = |range: &[&Stage]| {
+        range
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut items = String::new();
+    if from > 0 {
+        items.push_str(&format!(
+            "<li class=\"st fold-n\" title=\"{}\"><span class=\"vh\">{} earlier: </span>+{}</li>",
+            esc(&names(&stages[..from])),
+            from,
+            from
+        ));
+    }
+    for (i, stage) in stages.iter().enumerate().take(to + 1).skip(from) {
+        let (class, glyph, said) = stage_look(stage, i == cur, i == cur + 1);
+        let name = esc(&stage.name);
+        // what the stage is called and where it stands, a screen reader's words for it
+        let words = format!(
+            "{glyph}<span class=\"st-n\">{name}</span>{}",
+            if said.is_empty() {
+                String::new()
+            } else {
+                format!(" <span class=\"st-w\">{said}</span>")
             }
-            Cell::Run => {
-                let shown = stage.shown.unwrap_or(Shown::Running);
-                format!(
-                    "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span>{}<span class=\"vh\">: {}</span><span class=\"sweep\" aria-hidden=\"true\"></span>",
-                    mark(shown),
-                    esc(&stage.name),
-                    said(shown),
-                    esc(state),
-                )
-            }
-            Cell::Look => {
-                let shown = stage.shown.expect("a look has a state");
-                format!(
-                    "<span class=\"sc-top\">{}<span class=\"sc-name\">{}</span></span>{}<span class=\"vh\">: {}</span>",
-                    mark(shown),
-                    esc(&stage.name),
-                    said(shown),
-                    esc(state)
-                )
-            }
-        };
-        let quiet = stage.shown == Some(Shown::Quiet);
+        );
         let body = if stage.href.is_empty() {
-            inner
+            words
         } else {
             format!(
-                "<a class=\"sc-a\" href=\"{}\"{}>{inner}</a>",
+                "<a href=\"{}\"{}>{words}</a>",
                 esc(&stage.href),
                 if stage.step.is_empty() {
                     String::new()
@@ -337,44 +370,40 @@ pub fn stage_strip(label: &str, stages: &[Stage]) -> TrustedHtml {
                 }
             )
         };
-        cells.push_str(&format!(
-            "<li class=\"{}{}\"{}>{body}</li>",
-            cell.class(),
-            if quiet { " sc-quiet" } else { "" },
+        items.push_str(&format!(
+            "<li class=\"st {class}{}\"{}{}>{body}</li>",
+            if i == cur { " cur" } else { "" },
+            if at == Some(i) {
+                " aria-current=\"step\""
+            } else {
+                ""
+            },
             stage
                 .shown
                 .map(|s| format!(" data-state=\"{}\"", s.key()))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+        ));
+    }
+    if to + 1 < stages.len() {
+        let later = stages.len() - to - 1;
+        items.push_str(&format!(
+            "<li class=\"st fold-n\" title=\"{}\"><span class=\"vh\">{} later: </span>+{}</li>",
+            esc(&names(&stages[to + 1..])),
+            later,
+            later
+        ));
+    }
+    if stages.len() > 1 {
+        items.push_str(&format!(
+            "<li class=\"of\" aria-hidden=\"true\">{}/{}</li>",
+            cur + 1,
+            stages.len()
         ));
     }
     TrustedHtml::owned(format!(
-        "<ol class=\"strip\" style=\"--n:{}\" aria-label=\"{}\">{cells}</ol>",
-        n.max(1),
+        "<ol class=\"stages\" aria-label=\"{}\">{items}</ol>",
         esc(label)
     ))
-}
-/// The strip as `stage_strip` draws it, with the cell at `at` marked as the page's own stage
-/// (`aria-current="step"`, ringed): a step's band shows where it stands in its unit.
-pub fn stage_strip_at(label: &str, stages: &[Stage], at: usize) -> TrustedHtml {
-    let strip = stage_strip(label, stages).0;
-    let mut out = String::with_capacity(strip.len() + 32);
-    let mut rest = strip.as_str();
-    let mut n = 0;
-    while let Some(i) = rest.find("<li class=\"sc") {
-        out.push_str(&rest[..i]);
-        rest = &rest[i..];
-        if n == at {
-            out.push_str("<li aria-current=\"step\" class=\"sc-here sc");
-            rest = &rest["<li class=\"sc".len()..];
-            out.push_str(rest);
-            return TrustedHtml::owned(out);
-        }
-        out.push_str("<li class=\"sc");
-        rest = &rest["<li class=\"sc".len()..];
-        n += 1;
-    }
-    out.push_str(rest);
-    TrustedHtml::owned(out)
 }
 
 // ---- the summary sentence ---------------------------------------------------------------------

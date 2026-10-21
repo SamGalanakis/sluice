@@ -237,18 +237,18 @@ async fn slow_chromium_the_project_page_components_keep_their_state_through_a_pa
             json!([336, true])
         );
         // opening another menu closes it: one menu open at a time
-        browser.eval("document.querySelector('details.switcher > summary').click()").unwrap();
+        browser.eval("document.querySelector('details.settings > summary').click()").unwrap();
         assert_eq!(
-            browser.eval("[document.querySelector('details.switcher').open, document.querySelector('#plan-band details.dm').open]").unwrap(),
+            browser.eval("[document.querySelector('details.settings').open, document.querySelector('#plan-band details.dm').open]").unwrap(),
             json!([true, false])
         );
         // the menu: ArrowDown moves into it, Escape closes it back on its summary
-        browser.eval("document.querySelector('details.switcher > summary').focus()").unwrap();
+        browser.eval("document.querySelector('details.settings > summary').focus()").unwrap();
         press(&mut browser, "ArrowDown", 40, 0);
-        browser.wait("document.activeElement.closest('details.switcher .menu')").unwrap();
+        browser.wait("document.activeElement.closest('details.settings .menu')").unwrap();
         press(&mut browser, "Escape", 27, 0);
         assert_eq!(
-            browser.eval("[document.querySelector('details.switcher').open, document.activeElement.matches('details.switcher > summary')]").unwrap(),
+            browser.eval("[document.querySelector('details.settings').open, document.activeElement.matches('details.settings > summary')]").unwrap(),
             json!([false, true])
         );
         // the board as wide after a reload
@@ -258,7 +258,7 @@ async fn slow_chromium_the_project_page_components_keep_their_state_through_a_pa
         assert_eq!(browser.eval(width).unwrap(), json!(336));
         // the find: the stream reopens on the page's `q` as one types and draws the plan as
         // found, the banner staying hidden (the old stream ends on purpose); Escape clears it
-        browser.eval("document.querySelector('form.board-tools input[name=q]').focus()").unwrap();
+        browser.eval("document.querySelector('.sb-find input[data-find]').focus()").unwrap();
         browser.send("Input.insertText", json!({"text": "beta"})).unwrap();
         browser.wait("!document.querySelector('#plan-pane [data-unit=alpha]')").unwrap();
         assert_eq!(browser.eval("document.querySelector('#stream-state').hidden").unwrap(), true);

@@ -427,7 +427,7 @@ async fn tabs_values_and_owner_conversations() {
                 "{place}: {question}"
             );
             assert!(
-                question.contains("<span class=\"pill muted\">Answered</span>"),
+                question.contains("<span class=\"badge muted\">Answered</span>"),
                 "{place}: {question}"
             );
             assert!(

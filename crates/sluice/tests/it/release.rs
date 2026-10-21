@@ -231,7 +231,7 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
         "tmux/bin/tmux",
         "assets",
         "licenses/fonts/SHA256SUMS",
-        "licenses/fonts/schibsted-grotesk/LICENSE",
+        "licenses/fonts/inter/LICENSE",
         "manifest.json",
     ] {
         assert!(release.join(path).exists(), "{path}");

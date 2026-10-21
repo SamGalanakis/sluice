@@ -149,24 +149,20 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     let (_, page) = f.get("/").await;
     assert!(page.contains("<title>3 questions · "), "{page}");
 
-    // home: For you lists each question under the coral dot, a step's leading to its step,
+    // home: For you lists each question under the teal dot, a step's leading to its step,
     // the old shared address's to its thread; the project's card counts them
-    let asks = between(&page, "<ul class=\"nd-list fy-list\">", "</ul>");
-    assert_eq!(
-        asks.matches("<span class=\"nk nk-ask\"").count(),
-        3,
-        "{asks}"
-    );
+    let asks = between(&page, "<ul class=\"nd fy-list\">", "</ul>");
+    assert_eq!(asks.matches("class=\"nd-i ask\"").count(), 3, "{asks}");
     assert!(
         asks.contains(&format!(
-            "<b><a href=\"/projects/id/{id}/steps/l1-work\">Land l1 first?</a></b>"
+            "<a class=\"nd-t\" href=\"/projects/id/{id}/steps/l1-work\">Land l1 first?</a> <span class=\"nd-s\">asks you</span>"
         )),
         "{asks}"
     );
     let old = between(asks, &format!("id=\"item-{id}-{orchestrator}\""), "</li>");
     assert!(
         old.contains("<span class=\"who who-old\">orchestrator</span>")
-            && old.contains(">Accept revision 3?</a></b>"),
+            && old.contains(">Accept revision 3?</a> <span class=\"nd-s\">asks you</span>"),
         "{old}"
     );
     let card = between(&page, "aria-label=\"titled\"", "</article>");
@@ -178,11 +174,13 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     let summary = plan_html::summary(&plan);
     assert!(summary.contains("3 questions for you</a>,"), "{summary}");
     let q = plan_html::question(&plan, lane);
-    assert!(q.contains("<span class=\"nk nk-ask\""), "{q}");
+    assert_eq!(plan_html::kind(q), "ask", "{q}");
+    // answered in place: its words beside the asker, a field and Answer, posting the reply
     assert!(
         q.contains(&format!(
-            "<a class=\"btn primary\" href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\" data-opens=\"l1-work\">Answer"
-        )) && q.contains(" asks: Land l1 first?"),
+            "<a class=\"nd-t\" href=\"/projects/id/{id}/steps/l1-work#ov-message-{lane}\" data-opens=\"l1-work\">"
+        )) && q.contains(&format!("action=\"/projects/id/{id}/messages/{lane}/reply\""))
+            && plan_html::body(q).starts_with("Land l1 first? It touches two files."),
         "{q}"
     );
     assert!(
@@ -197,9 +195,9 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     // the asking unit is the question's
     assert_eq!(plan_html::place(&plan, "l1"), "asks");
     assert_ne!(plan_html::place(&plan, "l2"), "asks");
-    // coral is spent on nothing else on the plan
-    assert_eq!(plan.matches("nk-ask").count(), 3, "{plan}");
-    assert!(!plan.contains("class=\"pill ask\""), "{plan}");
+    // the question's teal is spent on nothing else on the plan's list
+    assert_eq!(plan.matches("class=\"nd-i ask\"").count(), 3, "{plan}");
+    assert!(!plan.contains("class=\"badge ask\""), "{plan}");
 }
 
 #[tokio::test]

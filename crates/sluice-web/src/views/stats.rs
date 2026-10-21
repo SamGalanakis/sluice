@@ -11,7 +11,7 @@
 use crate::clock::ClockRead;
 use super::failure::Failure;
 use super::ui::{self, Shown, esc};
-use super::{DashboardState, Frame, NavView, TrustedHtml, Viewer, render_framed, render_nav};
+use super::{DashboardState, Frame, NavView, TrustedHtml, Viewer, render_framed};
 use axum::{
     Router,
     extract::{Path, Query, State},
@@ -1001,7 +1001,8 @@ fn batch(
     viewer: &Viewer,
 ) -> Result<crate::streams::RenderedBatch, PublicError> {
     let nav = NavView::new(shared, Some(view.project), "stats")?;
-    let nav_html = render_nav(&nav, viewer, &view.href()).map_err(error)?;
+    let _ = viewer;
+    let nav_html = super::nav_text(&nav, &view.href());
     let head = super::day::band_with_id(&view.head(), "stats-head");
     let body = view.body();
     let version = sluice_store::artifacts::fingerprint(
@@ -1009,17 +1010,19 @@ fn batch(
             "{}\u{0}{}\u{0}{}",
             body.as_str(),
             head.as_str(),
-            nav_html.as_str()
+            nav_html
         )
         .as_bytes(),
     );
     Ok(crate::streams::RenderedBatch {
         version,
-        regions: vec![
+        regions: [
             crate::streams::PatchRegion::new("stats-view", body),
             crate::streams::PatchRegion::new("stats-head", head),
-            crate::streams::PatchRegion::new("top-nav", nav_html),
-        ],
+        ]
+        .into_iter()
+        .chain(super::nav_regions(&nav, &view.href()))
+        .collect(),
     })
 }
 fn error(e: askama::Error) -> PublicError {

@@ -73,7 +73,7 @@ pub fn page_head_with(
 }
 
 /// A status line's mark: its state's glyph, as the status table draws it everywhere, or the
-/// coral dot when it asks the owner.
+/// teal dot when it asks the owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dot {
     None,

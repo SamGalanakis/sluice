@@ -94,7 +94,7 @@ async fn a_units_owner_is_said_once_on_its_plan_row_and_in_its_page_head_and_kep
 }
 
 #[tokio::test]
-async fn stops_say_their_owner_after_their_title_and_an_unowned_one_says_nothing() {
+async fn stops_say_their_owner_after_their_state_and_an_unowned_one_says_nothing() {
     let f = Fixture::new().await;
     let id = f.id;
     f.writer
@@ -117,8 +117,8 @@ async fn stops_say_their_owner_after_their_title_and_an_unowned_one_says_nothing
     assert!(!unowned.contains("class=\"own\""), "{unowned}");
     let owned = super::plan_html::stopped(&plan, "beta");
     assert!(
-        owned.contains("</a></b> <span class=\"own\">@lash-f4</span> failed"),
-        "the stop's sentence: {owned}"
+        owned.contains("<span class=\"nd-who\">· <span class=\"own\">@lash-f4</span> · "),
+        "the stop's line: {owned}"
     );
 }
 
@@ -202,13 +202,14 @@ async fn messages_name_their_identities_and_the_old_shared_address_stays_as_stor
     // the question, as the plan, home and the inbox draw it
     let plan = f.opened(&format!("/projects/id/{id}")).await;
     assert!(
-        plan.contains("<b><span class=\"who-old\">orchestrator</span></b> asks:"),
+        plan.contains("<span class=\"nd-who\">· <span class=\"who-old\">orchestrator</span> · "),
         "{plan}"
     );
     never(&plan);
     let (_, home) = f.get("/").await;
     assert!(
-        home.contains("<span class=\"who who-old\">orchestrator</span> asks: <b><a href="),
+        home.contains("<span class=\"nd-s\">asks you</span> <span class=\"nd-who\">· ")
+            && home.contains(" · <span class=\"who who-old\">orchestrator</span> · <time"),
         "{home}"
     );
     never(&home);

@@ -36,12 +36,11 @@ async fn recipe_titles_and_search() {
         // a way to its unit's page
         let l1 = plan_html::row(&html, "l1");
         assert!(
-            l1.contains("<span class=\"ro-t\" title=\"FIG-1: Fix the cron driver\">FIG-1: Fix the cron driver</span>")
-                && l1.contains("<span class=\"vh\">running, </span>work</span>"),
+            l1.contains("<span class=\"ro-t\" title=\"FIG-1: Fix the cron driver\">FIG-1: Fix the cron driver</span>"),
             "{l1}"
         );
         assert!(
-            plan_html::cell(l1, "l1-work").contains("aria-label=\"running\""),
+            plan_html::stage(l1, "l1-work").contains("data-state=\"running\""),
             "{l1}"
         );
         assert!(
@@ -55,10 +54,9 @@ async fn recipe_titles_and_search() {
         let roster = plan_html::band(&html, "plan-roster");
         assert_eq!(roster.matches("view does not check").count(), 1, "{roster}");
         assert_ne!(plan_html::place(&html, "r1"), "");
-        // a unit of no recipe draws its own steps: kit's two, the gate between them its step
-        // view's
+        // a unit of no recipe draws its own steps: kit's two, a stage each on its track
         let kit = plan_html::row(&html, "kit");
-        assert_eq!(kit.matches("<li class=\"sv-row").count(), 2, "{kit}");
+        assert_eq!(kit.matches("<li class=\"st ").count(), 2, "{kit}");
     }
     {
         // "parser" is in no id: l2's title, which each of its stages carries, and probe's doc; each

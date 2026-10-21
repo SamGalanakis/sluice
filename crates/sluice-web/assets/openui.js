@@ -218,7 +218,7 @@ export function answered(area, closed) {
     held = { q: note.dataset.q ?? "", slot: area.id.replace(/answer-.*$/, ""), until: Date.now() + 60000 };
   });
   if (area.dataset.ownerQuestion !== "true") return;
-  const badge = document.querySelector("#nav-inbox .badge");
+  const badge = document.querySelector("#nav-inbox .count");
   const left = badge ? Number(badge.firstChild.textContent) - 1 : NaN;
   if (left > 0) badge.firstChild.textContent = String(left);
   else if (badge) badge.remove();

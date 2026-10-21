@@ -270,7 +270,7 @@ async fn the_day_patches_only_when_its_runs_change() {
     );
     let listed = cell.split("<details").next().unwrap();
     assert!(
-        listed.contains("<span class=\"pill look\"><span class=\"g g-failed\""),
+        listed.contains("<span class=\"badge fail\"><span class=\"g g-failed\""),
         "{cell}"
     );
     assert_eq!(listed.matches("g g-failed").count(), 2, "{cell}");
@@ -351,9 +351,13 @@ async fn slow_chromium_no_page_scrolls_sideways_from_a_small_phone_to_a_wide_scr
                         g["scroll"].as_f64() <= g["width"].as_f64(),
                         "{name} at {width}px scrolls sideways: {g}"
                     );
-                    // the band's content (its mark first) and the page share their left edge
-                    let edges = browser.eval("(n => [Math.round(n.getBoundingClientRect().left), Math.round(document.querySelector('main > :not(sluice-banner):not([hidden])')?.getBoundingClientRect().left ?? n.getBoundingClientRect().left)])(document.querySelector('.site-bar a.brand'))").unwrap();
+                    // the top bar's content (its sections first) and the page share their left
+                    // edge, in the column centred beside the sidebar
+                    let edges = browser.eval("(n => { const l = n.getBoundingClientRect().left + parseFloat(getComputedStyle(n).paddingLeft); return [Math.round(l), Math.round(document.querySelector('main > :not(sluice-banner):not([hidden])')?.getBoundingClientRect().left ?? l)]; })(document.querySelector('header.top .top-in'))").unwrap();
                     assert_eq!(edges[0], edges[1], "{name} {width}: {edges}");
+                    // and that column centred in the room beside the sidebar
+                    let gap = browser.eval("(m => { const a = document.querySelector('.mainarea').getBoundingClientRect(), r = m.getBoundingClientRect(); return Math.abs((r.left - a.left) - (a.right - r.right)); })(document.querySelector('main'))").unwrap();
+                    assert!(gap.as_f64().unwrap() < 1.0, "{name} {width}: off centre by {gap}");
                     if let (true, Some(dir)) = (shoot, &screens) {
                         browser
                             .screenshot(&dir.join(format!("{name}-{width}-{theme}.png")))
@@ -398,17 +402,16 @@ async fn home_attention_and_reader_day() {
             band.contains("<div class=\"page-alert runner-off\" role=\"status\">"),
             "{band}"
         );
-        // For you: the question as a line of the Needs-you list, its coral dot, Answer the
+        // For you: the question as a line of the Needs-you list, its teal dot, Answer the
         // way to its step (where it is answered) and × to set it aside
         let ask = between(
             &home,
             &format!(
-                "<li id=\"item-{}-{}\" class=\"nd-i\"",
+                "<li id=\"item-{}-{}\" class=\"nd-i ask\"",
                 n.almanac, n.question
             ),
             "</li>",
         );
-        assert!(ask.contains("<span class=\"nk nk-ask\""), "{ask}");
         assert!(
             ask.contains("Use the checklist&#39;s new spring dates in this draft?"),
             "{ask}"
@@ -459,7 +462,7 @@ async fn home_attention_and_reader_day() {
             "{almanac}"
         );
         // Today: a line a project, and the way to the timetable
-        let today = between(&home, "<div class=\"mod swell-margin td", "</div>");
+        let today = between(&home, "<div class=\"mod td", "</div>");
         assert!(
             today.contains(&format!(
                 "<a class=\"td-name\" href=\"/projects/id/{}/day\">almanac</a>",
@@ -569,7 +572,7 @@ async fn home_attention_and_reader_day() {
     );
         assert!(
             failed.contains(
-                "<span class=\"tt-out\"><span class=\"pill look\"><span class=\"g g-failed\""
+                "<span class=\"tt-out\"><span class=\"badge fail\"><span class=\"g g-failed\""
             ),
             "{failed}"
         );
@@ -583,7 +586,7 @@ async fn home_attention_and_reader_day() {
             "{running}"
         );
         assert!(
-            running.contains("<span class=\"tt-out\"><span class=\"pill run\">"),
+            running.contains("<span class=\"tt-out\"><span class=\"badge running\">"),
             "{running}"
         );
         // a succeeded run: its check and how long on the sky pill, said in words for a screen

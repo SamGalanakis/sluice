@@ -13,6 +13,7 @@
 //! component's own unless its attribute says `__root`
 //! (<https://data-star.dev/reference/rocket>): the busy signal is the page's.
 use super::esc;
+use crate::views::TrustedHtml;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// The opening tag of a form with `id` and `class` that posts its fields to `action`.
@@ -88,4 +89,38 @@ fn get(url: &str, more: &str) -> String {
         "@get('{}', {{retry: 'always', retryMaxCount: 10, retryMaxWait: 30000{more}}})",
         url.replace('\\', "\\\\").replace('\'', "\\'")
     )
+}
+
+/// The sidebar's find (DESIGN.md, The frame): a search field reading "Find steps" with its `/`,
+/// a form getting `action` with `q`. `value` is the find it holds; `attrs` more attributes on
+/// its input (the plan's: its `q` signal and the stream it reopens), already escaped; `more`
+/// what the form carries besides (hidden fields, the clear link).
+pub fn find_field(
+    action: &str,
+    value: &str,
+    placeholder: &str,
+    label: &str,
+    attrs: &str,
+) -> TrustedHtml {
+    find_form(action, value, placeholder, label, attrs, "")
+}
+/// `find_field` with more in the form after its input.
+pub fn find_form(
+    action: &str,
+    value: &str,
+    placeholder: &str,
+    label: &str,
+    attrs: &str,
+    more: &str,
+) -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<form class=\"palette\" method=\"get\" action=\"{}\" role=\"search\" aria-label=\"{}\">{}<input type=\"search\" name=\"q\" value=\"{}\" placeholder=\"{}\" title=\"{} (/)\" aria-label=\"{}\" data-find autocomplete=\"off\" spellcheck=\"false\" enterkeyhint=\"search\"{attrs}><kbd aria-hidden=\"true\">/</kbd>{more}</form>",
+        super::esc(action),
+        super::esc(label),
+        crate::views::icons::icon(crate::views::icons::Icon::Search, 16, ""),
+        super::esc(value),
+        super::esc(placeholder),
+        super::esc(placeholder),
+        super::esc(label),
+    ))
 }

@@ -28,7 +28,7 @@ pub fn region<'a>(html: &'a str, id: &str) -> &'a str {
 pub fn has_region(html: &str, id: &str) -> bool {
     html.contains(&format!("<!--r:{id}-->"))
 }
-/// A step's row in the step view a unit's row opens to (`data-sv="<step>"`).
+/// A step's row in a unit page's step view (`data-sv="<step>"`).
 pub fn cell<'a>(html: &'a str, step: &str) -> &'a str {
     let at = html
         .find(&format!(" data-sv=\"{step}\">"))
@@ -37,38 +37,97 @@ pub fn cell<'a>(html: &'a str, step: &str) -> &'a str {
     let end = html[at..].find("</li>").expect("its end") + at;
     &html[start..end]
 }
+/// A step's stage on its unit's track at work (`<li class="st …" data-state="…">`): what a
+/// row says of each step it shows.
+pub fn stage<'a>(html: &'a str, step: &str) -> &'a str {
+    let at = html
+        .match_indices(&format!(" data-step=\"{step}\">"))
+        .map(|(at, _)| at)
+        .find(|&at| {
+            html[..at]
+                .rfind("<li")
+                .is_some_and(|li| html[li..].starts_with("<li class=\"st "))
+        })
+        .unwrap_or_else(|| panic!("the stage of {step} in {html}"));
+    let start = html[..at].rfind("<li class=\"st ").expect("its stage");
+    let end = html[at..].find("</li>").expect("its end") + at;
+    &html[start..end]
+}
 /// A unit's row in At work.
 pub fn row<'a>(html: &'a str, unit: &str) -> &'a str {
     region(html, &format!("u-{unit}"))
 }
-/// Every item of Needs you, whole.
+/// Every item of Needs you, whole: each is a region of its own (`n-…`).
 pub fn needs(html: &str) -> Vec<&str> {
     if !has_region(html, "plan-needs") {
         return vec![];
     }
-    let well = region(html, "plan-needs");
     let mut out = vec![];
-    let mut rest = well;
-    while let Some(at) = rest.find("<li id=\"n-") {
-        let item = &rest[at..];
-        // an item ends where its actions (the × last, a form) close
-        let end = item
-            .find("</form></span></li>")
-            .map_or(item.len(), |e| e + "</form></span></li>".len());
-        out.push(&item[..end]);
-        rest = &item[end..];
+    let mut rest = region(html, "plan-needs");
+    while let Some(at) = rest.find("<!--r:n-") {
+        let id = &rest[at + "<!--r:".len()..];
+        let id = &id[..id.find("-->").expect("its id's end")];
+        out.push(region(rest, id));
+        rest = &rest[at + id.len()..];
+        rest = &rest[rest.find(&format!("<!--/r:{id}-->")).expect("its end")..];
     }
     out
 }
-/// An item's mark when it is a state's glyph (a stop or a silence), and a silence's.
-pub const STATE: &str = "<span class=\"nk\"><span class=\"g g-";
-pub const QUIET: &str = "<span class=\"nk\"><span class=\"g g-quiet\"";
+/// What an item of Needs you is, from its class: "ask", "fail", "mute" (a cancel), "stale"
+/// or "quiet" (a silence).
+pub fn kind(item: &str) -> &str {
+    const CLASS: &str = "class=\"nd-i ";
+    let at = item
+        .find(CLASS)
+        .unwrap_or_else(|| panic!("an item of Needs you: {item}"))
+        + CLASS.len();
+    let rest = &item[at..];
+    &rest[..rest.find([' ', '"']).expect("its class's end")]
+}
+/// `html` as it reads: its tags dropped, its spaces collapsed.
+pub fn text(html: &str) -> String {
+    let mut out = String::new();
+    let mut rest = html;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        let end = rest[at..].find('>').map_or(rest.len(), |e| at + e + 1);
+        // a block's end parts its words from the next block's
+        let tag = &rest[at + 1..end.saturating_sub(1).max(at + 1)];
+        if ["/p", "/div", "/li", "br", "/h"]
+            .iter()
+            .any(|b| tag.starts_with(b))
+        {
+            out.push(' ');
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out.replace("&#39;", "'")
+        .replace("&amp;", "&")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+/// An item's line as it reads: its title, how it stands, who and when ("alpha failed at build
+/// · @lash-f4 · alpha-build").
+pub fn line(item: &str) -> String {
+    text(between(item, "<div class=\"nd-l\">", "</div>"))
+}
+/// What an item says under its line, as it reads ("" for nothing).
+pub fn body(item: &str) -> String {
+    for from in ["<div class=\"nd-body\">", "<div class=\"nd-qb\">"] {
+        if item.contains(from) {
+            return text(between(item, from, "</div>"));
+        }
+    }
+    String::new()
+}
 /// The item of Needs you about `unit`: its own, or the group that lists it.
 pub fn stopped<'a>(html: &'a str, unit: &str) -> &'a str {
     let mark = format!("data-unit=\"{unit}\"");
     needs(html)
         .into_iter()
-        .find(|item| item.contains(&mark) && !item.contains(QUIET))
+        .find(|item| item.contains(&mark) && kind(item) != "quiet")
         .unwrap_or_else(|| panic!("an item of Needs you for {unit} in {html}"))
 }
 /// A question's item of Needs you, by its message.
@@ -88,19 +147,21 @@ pub fn summary(html: &str) -> &str {
     between(html, "<p class=\"page-line\">", "</p>")
 }
 /// Where a unit is drawn: "asks" (a question of its in Needs you), "stopped" (a stop in Needs
-/// you), "running" or "waiting" (its row at work), "done" (a card of what finished, or a line
+/// you), "running" or "waiting" (its row at work), "watching" (a long run's line), "done" (a card of what finished, or a line
 /// of the Done index); "" when it is only counted (waiting on earlier work, done long ago).
 pub fn place(html: &str, unit: &str) -> &'static str {
     let mark = format!("data-unit=\"{unit}\"");
     for item in needs(html) {
         if item.contains(&mark) {
-            if item.contains("nk-ask") {
-                return "asks";
-            }
-            if item.contains(STATE) && !item.contains(QUIET) {
-                return "stopped";
+            match kind(item) {
+                "ask" => return "asks",
+                "quiet" => {}
+                _ => return "stopped",
             }
         }
+    }
+    if has_region(html, &format!("w-{unit}")) {
+        return "watching";
     }
     if has_region(html, &format!("u-{unit}")) {
         return if row(html, unit).contains("class=\"ro-u is-wait\"") {

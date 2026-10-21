@@ -4,6 +4,7 @@
 use super::TrustedHtml;
 use super::icons::{Icon, solid};
 
+mod avatar;
 mod button;
 mod calls;
 mod card;
@@ -15,9 +16,12 @@ mod menu;
 mod need;
 mod pill;
 mod question;
+mod refs;
 mod rocket;
 mod section;
+mod sketch;
 mod tabs;
+pub use avatar::*;
 pub use button::*;
 pub use calls::*;
 pub use card::*;
@@ -29,8 +33,10 @@ pub use menu::*;
 pub use need::*;
 pub use pill::*;
 pub use question::*;
+pub use refs::*;
 pub use rocket::*;
 pub use section::*;
+pub use sketch::*;
 pub use tabs::*;
 
 /// Text escaped for HTML content and attribute values.
@@ -149,22 +155,23 @@ pub fn bar(tally: &Tally, class: &str) -> TrustedHtml {
     ))
 }
 
-/// A project's mark (the nav's switcher, home's modules): its uploaded icon, else its icon
-/// text, else its initial in a square of the band's mark.
+/// A project's mark (its sidebar row, the sidebar's head, home's modules): its uploaded icon,
+/// else its icon text (an emoji), else its initial on a hairline tile. 16px in a row; the head's
+/// is larger (style.css).
 pub fn project_mark(p: &super::ProjectView) -> TrustedHtml {
     TrustedHtml::owned(if !p.icon_url.is_empty() {
         format!(
-            "<img class=\"proj-icon\" src=\"{}\" alt=\"\">",
+            "<img class=\"pi img\" src=\"{}\" alt=\"\">",
             esc(&p.icon_url)
         )
     } else if !p.icon_text.is_empty() {
         format!(
-            "<span class=\"proj-icon pi-text\" aria-hidden=\"true\">{}</span>",
+            "<span class=\"pi emoji\" aria-hidden=\"true\">{}</span>",
             esc(&p.icon_text)
         )
     } else {
         format!(
-            "<span class=\"proj-icon pi-mono\" aria-hidden=\"true\">{}</span>",
+            "<span class=\"pi\" aria-hidden=\"true\">{}</span>",
             esc(&p
                 .name
                 .chars()
@@ -173,6 +180,12 @@ pub fn project_mark(p: &super::ProjectView) -> TrustedHtml {
                 .unwrap_or_default())
         )
     })
+}
+
+/// The one floating card a reference opens (`[data-ref]`: a ticket, a sha, a step id), filled
+/// from the server when it opens (`components.js`, `refs`): 320ms to show, 160ms to hide.
+pub fn hover_card() -> &'static str {
+    "<div id=\"hover-card\" class=\"hcard\" role=\"tooltip\" hidden></div>"
 }
 
 // ---- time and duration -----------------------------------------------------------------------

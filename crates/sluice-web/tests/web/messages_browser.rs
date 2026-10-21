@@ -252,7 +252,7 @@ async fn slow_chromium_an_answer_is_confirmed_where_it_was_given() {
         browser
             .wait("document.readyState === 'complete' && document.querySelectorAll('#inbox-items article.q-card').length === 2 && [...document.querySelectorAll('#inbox-items .answer')].every(a => a.dataset.drawn)")
             .unwrap();
-        let badge = browser.eval("document.querySelector('#nav-inbox .badge').textContent").unwrap();
+        let badge = browser.eval("document.querySelector('#nav-inbox .count').textContent").unwrap();
         browser
             .eval("(a => { a.querySelector('button.q-toggle').click(); const t = a.querySelector('textarea'); t.value = 'Accept it.'; t.form.requestSubmit(); })([...document.querySelectorAll('#inbox-items article.q-card')].at(-1))")
             .unwrap();
@@ -267,7 +267,7 @@ async fn slow_chromium_an_answer_is_confirmed_where_it_was_given() {
             2
         );
         assert_eq!(
-            browser.eval("document.querySelector('#nav-inbox .badge')?.textContent ?? '0'").unwrap(),
+            browser.eval("document.querySelector('#nav-inbox .count')?.textContent ?? '0'").unwrap(),
             (badge.as_str().unwrap().parse::<u32>().unwrap() - 1).to_string()
         );
         assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), serde_json::json!([]));
@@ -361,7 +361,7 @@ async fn slow_chromium_closing_a_question_confirms_it_in_place_and_keeps_the_foc
         browser
             .wait("document.readyState === 'complete' && customElements.get('sluice-answer') && [...document.querySelectorAll('#inbox-items .answer')].every(a => a.dataset.drawn)")
             .unwrap();
-        let badge = browser.eval("document.querySelector('#nav-inbox .badge').textContent").unwrap();
+        let badge = browser.eval("document.querySelector('#nav-inbox .count').textContent").unwrap();
         // kept open: nothing sent
         let open = "[...document.querySelectorAll('#inbox-items article.q-card')].at(-1).querySelector('details.confirm-flow > summary').click()";
         browser.eval(open).unwrap();
@@ -382,7 +382,7 @@ async fn slow_chromium_closing_a_question_confirms_it_in_place_and_keeps_the_foc
         let said = browser.eval("document.activeElement.textContent").unwrap();
         assert!(said.as_str().unwrap().starts_with("Closed just now: "), "{said}");
         assert_eq!(
-            browser.eval("document.querySelector('#nav-inbox .badge')?.textContent ?? '0'").unwrap(),
+            browser.eval("document.querySelector('#nav-inbox .count')?.textContent ?? '0'").unwrap(),
             (badge.as_str().unwrap().parse::<u32>().unwrap() - 1).to_string()
         );
         assert_eq!(closes(&f), 2);

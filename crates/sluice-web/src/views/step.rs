@@ -470,7 +470,7 @@ pub struct StepView {
     pub messages: usize,
     pub awaiting: usize,
     /// Its open question to the owner that its run waits on, when it has put one: its header,
-    /// its card and its unit's row say so in coral, and its Overview draws it whole to answer.
+    /// its card and its unit's row say so in teal, and its Overview draws it whole to answer.
     pub asking: Option<super::AskView>,
     pub total: Option<usize>,
     pub done: usize,
@@ -542,7 +542,7 @@ pub struct StepView {
     /// A pending or stale step retried since its last run started: who retried it, when, and
     /// the feedback sent with it, said under its header until it runs (`load_restarts`).
     pub retried: Option<Restart>,
-    /// Its unit's stage strip (`ui::stage_strip`, its own stage marked), its unit's id and its
+    /// Its unit's stage track (`ui::stage_track`, its own stage marked), its unit's id and its
     /// recipe's name, drawn in its band: empty for a step that is its unit alone
     /// (`board::load_step`).
     #[serde(skip)]
@@ -740,6 +740,66 @@ pub struct ProgressView {
     pub fields: Vec<FieldView>,
     pub at: String,
     pub live: bool,
+    /// Each result it published, oldest first (`steps.progress_runs`): when, and how it read.
+    pub history: Vec<(String, Verdict)>,
+}
+/// How a published result reads, from its own fields alone: red when it counts failures
+/// (`failed`, `failures`, `red`, `errors` above zero) or says it did not pass (`ok`, `passed`,
+/// `green`, `success` false, a `status` of failed or red); green when it says it passed or counts
+/// no failures; else it says neither.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum Verdict {
+    Red,
+    Green,
+    Neither,
+}
+impl Verdict {
+    pub fn of(values: &serde_json::Map<String, serde_json::Value>) -> Verdict {
+        use serde_json::Value;
+        let mut green = false;
+        for (name, value) in values {
+            let name = name.to_ascii_lowercase();
+            let counts = ["failed", "failures", "failing", "red", "errors", "fails"]
+                .iter()
+                .any(|w| {
+                    name == *w
+                        || name.ends_with(&format!("_{w}"))
+                        || name.starts_with(&format!("{w}_"))
+                });
+            let passes =
+                ["ok", "passed", "pass", "green", "success", "healthy"].contains(&name.as_str());
+            match value {
+                Value::Number(n) if counts => match n.as_f64() {
+                    Some(n) if n > 0.0 => return Verdict::Red,
+                    Some(_) => green = true,
+                    None => {}
+                },
+                Value::Bool(false) if passes => return Verdict::Red,
+                Value::Bool(true) if passes => green = true,
+                Value::String(text) if name == "status" || name == "result" || name == "state" => {
+                    match text.to_ascii_lowercase().as_str() {
+                        "failed" | "fail" | "red" | "error" | "broken" => return Verdict::Red,
+                        "ok" | "passed" | "pass" | "green" | "success" | "healthy" => green = true,
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        if green {
+            Verdict::Green
+        } else {
+            Verdict::Neither
+        }
+    }
+    /// Its class on a square or a result: `r`, `g`, or none.
+    pub fn key(self) -> &'static str {
+        match self {
+            Verdict::Red => "r",
+            Verdict::Green => "g",
+            Verdict::Neither => "",
+        }
+    }
 }
 impl ProgressView {
     /// The fields that explain, drawn as rows.
@@ -1255,14 +1315,11 @@ impl StepView {
     pub fn progress_live(&self) -> bool {
         self.progress.as_ref().is_some_and(|p| p.live)
     }
-    /// Its unit's stage strip with its own stage marked, for its head.
+    /// Its unit's stage track around its own stage, marked, for its head.
     pub fn lane_html(&self) -> TrustedHtml {
         let href = self.href();
-        let label = "Stages of its unit";
-        match self.lane.iter().position(|s| s.href == href) {
-            Some(at) => super::ui::stage_strip_at(label, &self.lane, at),
-            None => super::ui::stage_strip(label, &self.lane),
-        }
+        let at = self.lane.iter().position(|s| s.href == href);
+        super::ui::stage_track("Stages of its unit", &self.lane, at)
     }
     /// Its doc as its page shows it: without its first line when that line is its title, so
     /// the page never says it twice.
@@ -1303,7 +1360,7 @@ impl StepView {
         }
         details.text("Tags", &tags.join(", "))
     }
-    /// Under its card on the board and its unit's matrix row: its coral dot and "Waiting on your answer",
+    /// Under its card on the board and its unit's matrix row: its teal dot and "Waiting on your answer",
     /// leading to its page, where its Overview draws the question whole to answer.
     pub fn ask_html(&self) -> TrustedHtml {
         match &self.asking {
@@ -1815,7 +1872,7 @@ impl StepView {
     }
     /// One muted sentence under its name (`ui::status_line`): how it stands and since when;
     /// while it runs, when it was last heard from (the live dot breathing for five minutes
-    /// after, a sand "quiet" once it has gone quiet, coral while it waits on the owner); how
+    /// after, an ochre "quiet" once it has gone quiet, teal while it waits on the owner); how
     /// its run ended once it has; and its run, when it has had more than one.
     pub fn status_html(&self) -> TrustedHtml {
         use super::ui::{Dot, Tone, ago, esc, pill, since, status_line};
@@ -2394,6 +2451,11 @@ pub fn load_progress(
                 .collect(),
             at: p.at,
             live: p.live,
+            history: p
+                .history
+                .iter()
+                .map(|(at, values)| (at.clone(), Verdict::of(values)))
+                .collect(),
         });
     Ok(())
 }

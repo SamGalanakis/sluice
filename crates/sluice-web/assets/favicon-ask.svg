@@ -18,5 +18,5 @@
   <path fill="url(#channel)" d="M541 177H715V418 C715 477 758 507 818 537 L956 604 V818 H298 V604 L436 537 C496 507 541 477 541 418 Z"/>
   <path fill="url(#water)" d="M581 177 H674 V498 C674 561 710 599 777 632 C848 667 924 695 956 751 V818 H298 V751 C330 695 406 667 477 632 C544 599 581 561 581 498 Z"/>
 </g>
-<circle cx="806" cy="668" r="150" fill="#ff5c49" stroke="#fbf8ee" stroke-width="44"/>
+<circle cx="806" cy="668" r="150" fill="#10c9cf" stroke="#fbf8ee" stroke-width="44"/>
 </svg>

@@ -726,8 +726,10 @@ pub fn socket_pages(
     client: CoordinatorClient,
     reads: ReadPool,
     catalog: SocketCatalog,
+    long_run_quiet_h: f64,
 ) -> PageState {
-    let dashboard = views::DashboardState::new(reads.clone(), Arc::new(catalog));
+    let dashboard = views::DashboardState::new(reads.clone(), Arc::new(catalog))
+        .with_long_run_quiet(long_run_quiet_h);
     let mut pages = PageState::new(dashboard.clone());
     pages.messages = Some(views::inbox::MessageState {
         dashboard: dashboard.clone(),
@@ -781,7 +783,8 @@ pub async fn serve(
     let catalog = SocketCatalog::default();
     let _ = tokio::time::timeout(Duration::from_secs(10), catalog.refresh(&client)).await;
     let stop = CancellationToken::new();
-    let pages = socket_pages(client.clone(), reads, catalog.clone());
+    let quiet_h = sluice_runtime::config::HomeConfig::load(&home).long_run_quiet_h;
+    let pages = socket_pages(client.clone(), reads, catalog.clone(), quiet_h);
     let app = router(pages, Arc::new(client.clone()), stop.clone())
         .layer(axum::Extension(board::Registry(Arc::new(catalog.clone()))))
         .layer(axum::Extension(step::Commands(Arc::new(

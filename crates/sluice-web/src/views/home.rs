@@ -141,7 +141,7 @@ impl HomeProject {
                 self.finished
             )
         };
-        // a card, not a well: its sentence says what needs the owner, the coral only on its
+        // a card, not a well: its sentence says what needs the owner, the teal only on its
         // questions
         TrustedHtml::owned(format!(
             "<article class=\"pm card\" aria-label=\"{name}\"><div class=\"pm-head\"><h3 class=\"pm-name\"><a href=\"{href}\">{icon}{text}{name}</a></h3><p class=\"pm-size\">{state} {size}{paused}</p></div>{about}<p class=\"pm-summary\">{sentence}</p>{groups}{finished}<p class=\"pm-open\"><a href=\"{href}\">Open the {name} plan</a><a href=\"{href}/day\">Its day</a></p></article>",
@@ -334,7 +334,7 @@ impl HomeView {
             html.push_str("<p class=\"fy-none\">Nothing waiting on you.</p>");
             return Ok(html);
         }
-        html.push_str("<ul class=\"nd-list fy-list\">");
+        html.push_str("<ul class=\"nd fy-list\">");
         let mut first = true;
         for q in &self.questions {
             let id = format!("item-{}-{}", q.project, q.id());
@@ -347,39 +347,49 @@ impl HomeView {
                 _ => q.thread_url(),
             };
             let project = format!("/projects/id/{}", q.project);
+            let act = ui::link(
+                // only the first open question's Answer is filled: the page's next move
+                if std::mem::take(&mut first) {
+                    ui::Btn::Primary
+                } else {
+                    ui::Btn::Outlined
+                },
+                &place,
+                &TrustedHtml::owned("Answer".into()),
+                "",
+            );
+            let x = {
+                let form = format!("aside-{}-{}", q.project, q.id());
+                format!(
+                    "{open}<input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"items\" value=\"ask:{m}\"><button class=\"x\" aria-label=\"Set aside {t}\" title=\"Set aside {t}\">{i}</button>{said}</form>",
+                    open = ui::post_form(&form, "nd-form", &format!("{project}/needs")),
+                    said = ui::form_said(&form),
+                    m = q.id(),
+                    t = esc(&q.title()),
+                    i = super::icons::icon(super::icons::Icon::X, 16, ""),
+                )
+            };
+            let title = format!(
+                "<a class=\"nd-t\" href=\"{}\">{}</a>",
+                esc(&place),
+                esc(&q.title())
+            );
+            let who = format!(
+                "{} · {} · {}",
+                esc(&q.project_name),
+                q.from_who.html(&q.project),
+                ui::ago(&q.message.at)
+            );
             html.push_str(&ui::need_line(
                 ui::Mark::Ask,
-                &id,
-                "",
-                &format!(
-                    "<span class=\"fy-where\">{} ·</span> {} asks: <b><a href=\"{}\">{}</a></b>",
-                    esc(&q.project_name),
-                    q.from_who.html(&q.project),
-                    esc(&place),
-                    esc(&q.title())
-                ),
-                "",
-                // only the first open question's Answer is filled: the page's next move
-                ui::link(
-                    if std::mem::take(&mut first) {
-                        ui::Btn::Primary
-                    } else {
-                        ui::Btn::Outlined
-                    },
-                    &place,
-                    &TrustedHtml::owned("Answer".into()),
-                    "",
-                )
-                .as_str(),
-                &{
-                    let form = format!("aside-{}-{}", q.project, q.id());
-                    format!(
-                        "{open}<input type=\"hidden\" name=\"action\" value=\"dismiss\"><input type=\"hidden\" name=\"items\" value=\"ask:{m}\"><button class=\"icon\" aria-label=\"Set aside {t}\" title=\"Set aside {t}\">×</button>{said}</form>",
-                        open = ui::post_form(&form, "nd-form", &format!("{project}/needs")),
-                        said = ui::form_said(&form),
-                        m = q.id(),
-                        t = esc(&q.title()),
-                    )
+                &ui::NeedLine {
+                    id: &id,
+                    title: &title,
+                    state: "asks you",
+                    who: &who,
+                    act: act.as_str(),
+                    x: &x,
+                    ..Default::default()
                 },
             ));
         }
@@ -404,7 +414,7 @@ impl HomeView {
             ));
         }
         format!(
-            "{}<div class=\"mod swell-margin td{wide}\"><ul class=\"td-list\">{rows}</ul><p class=\"td-all\"><a href=\"/day\">Timetable</a></p></div>",
+            "{}<div class=\"mod td{wide}\"><ul class=\"td-list\">{rows}</ul><p class=\"td-all\"><a href=\"/day\">Timetable</a></p></div>",
             ui::section_head("today", "Today", "The last 24 hours"),
             wide = if self.questions.is_empty() { " td-wide" } else { "" },
         )
@@ -551,14 +561,13 @@ pub async fn home_batch(
 ) -> Result<(RenderedBatch, HomeView, NavView), PublicError> {
     let (shared, view) = load(state, registry, zone).await?;
     let nav = NavView::new(&shared, None, "")?;
-    let batch = RenderedBatch::new(vec![
+    let _ = viewer;
+    let mut regions = vec![
         PatchRegion::new("projects", view.body().map_err(template_error)?),
         PatchRegion::new("home-band", view.head()),
-        PatchRegion::new(
-            "top-nav",
-            render_nav(&nav, viewer, "/").map_err(template_error)?,
-        ),
-    ]);
+    ];
+    regions.extend(super::nav_regions(&nav, "/"));
+    let batch = RenderedBatch::new(regions);
     Ok((batch, view, nav))
 }
 #[derive(Clone, Debug)]
@@ -693,14 +702,13 @@ pub fn batch(
     let path = project
         .map(|id| format!("/fns?project={id}"))
         .unwrap_or_else(|| "/fns".into());
-    Ok(RenderedBatch::new(vec![
+    let _ = viewer;
+    let mut regions = vec![
         PatchRegion::new("functions", body),
         PatchRegion::new("fns-band", function_head(snapshot, &nav)),
-        PatchRegion::new(
-            "top-nav",
-            render_nav(&nav, viewer, &path).map_err(template_error)?,
-        ),
-    ]))
+    ];
+    regions.extend(super::nav_regions(&nav, &path));
+    Ok(RenderedBatch::new(regions))
 }
 
 async fn home_handler(

@@ -1,7 +1,7 @@
 //! A question to the owner (DESIGN.md, Components: Question), drawn one way everywhere in two
 //! densities: a line in a list (Needs you, For you: `ui::need_line` with `Mark::Ask`, its
 //! Answer the way to the card) and a card where it is answered (a step, Questions, a thread, a
-//! unit). Coral is its dot alone, never a stripe or a box; one filled Answer, one quiet Close
+//! unit). Teal is its dot alone, never a stripe or a box; one filled Answer, one quiet Close
 //! question; its answer form stays folded until Answer.
 use super::{Btn, esc};
 use crate::views::TrustedHtml;

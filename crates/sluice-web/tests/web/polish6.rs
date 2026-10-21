@@ -154,13 +154,13 @@ async fn slow_chromium_a_code_block_keeps_its_lines_and_the_keys_find_and_move()
             .unwrap();
         assert_eq!(code, json!(["0px", "rgba(0, 0, 0, 0)", "pre-wrap", false, true]));
 
-        // `/` on a step's page finds on its plan
+        // `/` on a step's page takes the sidebar's find, which finds on its plan
         browser.viewport(1440, "light").unwrap();
         browser.navigate(&format!("{base}/steps/l1-work")).unwrap();
-        browser.wait("customElements.get('sluice-keys') && document.querySelector('a[data-find-at]')").unwrap();
+        browser.wait("customElements.get('sluice-keys') && document.querySelector('.sidebar input[data-find]')").unwrap();
         press(&mut browser, "/", "Slash");
         browser
-            .wait(&format!("location.pathname === '/projects/id/{id}' && document.activeElement?.matches('input[data-find]')"))
+            .wait(&format!("document.activeElement?.matches('.sidebar input[data-find]') && new URL(document.activeElement.form.action).pathname === '/projects/id/{id}'"))
             .unwrap();
 
         // `]` and `[` move the drawer through the plan's steps, in its order as drawn
@@ -355,7 +355,7 @@ async fn ready_work_repeated_failure_and_answered_questions() {
         // a stopped unit says why it stopped, not the note sent to it
         let l2 = plan_html::stopped(&html, "l2");
         assert!(
-            l2.contains("</a></b> failed") && !l2.contains("Heads up"),
+            plan_html::line(l2).contains(" failed") && !l2.contains("Heads up"),
             "{l2}"
         );
         // l3 has not begun: the plan counts it, its page says the note

@@ -27,6 +27,13 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("runs", "restart_after", "INTEGER"),
     ("steps", "restart_count", "INTEGER NOT NULL DEFAULT 0"),
     ("steps", "restart_history", "TEXT NOT NULL DEFAULT '[]'"),
+    // the results a step published by `step_progress`, newest last, at most 20: a long run's
+    // history (the dashboard's Watching)
+    (
+        "steps",
+        "progress_runs",
+        "TEXT CHECK (progress_runs IS NULL OR json_valid(progress_runs))",
+    ),
 ];
 /// Views added after schema 4 homes exist, as `(name, definition)`.
 const ADDED_VIEWS: &[(&str, &str)] = &[("parked", "CREATE VIEW parked AS

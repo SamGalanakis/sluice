@@ -53,11 +53,11 @@ async fn slow_chromium_the_plan_fits_every_width_from_a_phone_to_a_wide_screen()
         const LOOK: &str = r#"(() => {
   const sheet = document.querySelector('.plan-sheet');
   const box = sheet.getBoundingClientRect();
-  const out = [...sheet.querySelectorAll(':scope > section')].filter(e => e.checkVisibility()).filter(b => { const r = b.getBoundingClientRect(); return r.left < box.left - 1 || r.right > box.right + 1; }).map(b => b.id);
-  const head = document.querySelector('.plan-band h1').getBoundingClientRect();
+  const out = [...sheet.querySelectorAll('section')].filter(e => e.checkVisibility()).filter(b => { const r = b.getBoundingClientRect(); return r.left < box.left - 1 || r.right > box.right + 1; }).map(b => b.id);
+  const head = document.querySelector('.plan-band .page-line').getBoundingClientRect();
   return {scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           out, edge: Math.abs(head.left - box.left) < 1,
-          clipped: [...sheet.querySelectorAll('.ro-t, .nd-say, .fin-t, .sv-a')].filter(e => e.getBoundingClientRect().right > document.documentElement.clientWidth + 0.5).length,
+          clipped: [...sheet.querySelectorAll('.ro-t, .nd-l, .fin-t, .wt, .track')].filter(e => e.getBoundingClientRect().right > document.documentElement.clientWidth + 0.5).length,
           errors: window.browserErrors};
 })()"#;
         for (project, slug) in [(n.almanac, "almanac"), (n.chores, "chores"), (lanes, "both")] {
@@ -65,12 +65,12 @@ async fn slow_chromium_the_plan_fits_every_width_from_a_phone_to_a_wide_screen()
             browser
                 .wait("document.readyState === 'complete' && document.querySelector('.plan-sheet')")
                 .unwrap();
-            // a row open, its steps asked for and drawn
+            // a row open, its conversation asked for and drawn
             browser
                 .eval("(() => { const row = document.querySelector('.ro-u'); if (row) row.open = true; })()")
                 .unwrap();
             browser
-                .wait("!document.querySelector('.ro-u') || document.querySelector('.ro-u .ro-drill sluice-steps')")
+                .wait("!document.querySelector('.ro-u') || document.querySelector('.ro-u .ro-drill .ro-foot')")
                 .unwrap();
             // the strips' places are the page's clock's (the server's version leaves them
             // out): each moved off, the next tick puts it back
@@ -86,8 +86,9 @@ async fn slow_chromium_the_plan_fits_every_width_from_a_phone_to_a_wide_screen()
                     browser.viewport(width, theme).unwrap();
                     // Use the real preference signal too: a live patch re-applies that
                     // signal, so changing only the DOM attribute can capture light twice.
-                    browser.eval(&format!("document.querySelector('input[name=theme][value=sluice-{theme}]').click()")).unwrap();
-                    browser.wait(&format!("document.documentElement.dataset.theme === 'sluice-{theme}'")).unwrap();
+                    let stock = if theme == "light" { "paper" } else { "carbon" };
+                    browser.eval(&format!("document.querySelector('input[name=theme][value={stock}]').click()")).unwrap();
+                    browser.wait(&format!("document.documentElement.dataset.theme === '{stock}'")).unwrap();
                     let g = browser.eval(LOOK).unwrap();
                     let label = format!("{slug} {width} {theme}");
                     assert_eq!(g["scroll"], 0, "{label}: sideways {g}");
@@ -121,18 +122,18 @@ async fn plan_units_and_loose_steps() {
         want.extend(neutral::STOPPED.iter().map(|u| (*u, "stopped")));
         want.extend(neutral::WAITING.iter().map(|u| (*u, "")));
         want.extend(["a-2", "a-3", "s-1", "s-2"].iter().map(|u| (*u, "done")));
-        want.extend(
-            ["a-6", "s-3", "index", "survey"]
-                .iter()
-                .map(|u| (*u, "running")),
-        );
+        want.extend(["a-6", "s-3", "index"].iter().map(|u| (*u, "running")));
+        // a long run is watched, not at work
+        want.push(("survey", "watching"));
         for (unit, place) in want {
             assert_eq!(plan_html::place(&html, unit), place, "{unit}");
         }
-        // the sections in order: Needs you, At work, Finished lately; no Done index unasked
+        // the sections in order: Needs you, At work, then the rail's Watching and Finished
+        // lately; no Done index unasked
         let order = [
             "<!--r:plan-needs-->",
             "<!--r:plan-roster-->",
+            "<!--r:plan-watching-->",
             "<!--r:plan-finished-->",
             "<!--r:plan-done-->",
         ];
@@ -140,15 +141,14 @@ async fn plan_units_and_loose_steps() {
             assert!(at(&html, pair[0]) < at(&html, pair[1]), "{pair:?}");
         }
         assert!(!html.contains("class=\"pl-idx\""), "{html}");
-        // At work says how to read its strips in a line and behind its ⓘ
-        let roster = &html[at(&html, "<!--r:plan-roster-->")..at(&html, "<!--r:plan-finished-->")];
+        // At work says how to read a row behind its ⓘ, the strip's marks drawn as they are
+        let roster = plan_html::band(&html, "plan-roster");
         assert!(
-            roster.contains("<summary class=\"dm-b\" aria-label=\"How to read At work\""),
-            "{roster}"
-        );
-        assert!(
-            roster.contains("Each unit's strip is its last hour, now at the right edge.")
-                && roster.contains("<p class=\"ro-legend\">Each mark is something the agent did;"),
+            roster.contains("<summary class=\"dm-b\" aria-label=\"How to read At work\"")
+                && roster.contains(
+                    "<p>The strip at the right is its last hour, now at the right edge.</p>"
+                )
+                && roster.contains("<span>a message it sent</span>"),
             "{roster}"
         );
         // a running step's Overview: Now, then its brief (its spec's first paragraph, the whole
@@ -172,7 +172,7 @@ async fn plan_units_and_loose_steps() {
             "{step}"
         );
         // Needs you: the question, the failures (two at their wall-clock cap said once, with
-        // what to try), the cancel, the silence; each one action and a ×
+        // what to try), the cancel, the silence; each its actions and one ×
         let needs = plan_html::needs(&html);
         let ids: Vec<&str> = needs
             .iter()
@@ -187,38 +187,42 @@ async fn plan_units_and_loose_steps() {
                 "n-quiet-s-3-scan",
             ]
         );
+        let kinds: Vec<&str> = needs.iter().map(|i| plan_html::kind(i)).collect();
+        assert_eq!(kinds, ["ask", "fail", "mute", "quiet"]);
         let cause = needs[1];
         assert!(
-            cause.contains("Two units failed: they hit their wall-clock cap. <span class=\"nd-next\">Give the agents more time: set <code>SLUICE_AGENT_MAX_MIN</code>, their limit in minutes, in the project's <code>.env</code> file, then Retry all.</span>")
+            cause.contains("<span class=\"nd-t\">Two units</span> <span class=\"nd-s\">failed: they hit their wall-clock cap</span>")
+                && cause.contains("<span class=\"nd-next\">Give the agents more time: set <code>SLUICE_AGENT_MAX_MIN</code>, their limit in minutes, in the project's <code>.env</code> file, then Retry all.</span>")
                 && cause.contains("<summary>Show the two</summary>")
                 && cause.contains(">Retry all</button>")
-                && cause.contains("value=\"stop:a-4-review stop:s-4-scan\""),
+                && cause.contains("value=\"stop:a-4-review@"),
             "{cause}"
         );
         for item in &needs {
             assert_eq!(
-                item.matches("<button class=\"icon\" aria-label=\"Set aside")
+                item.matches("<button class=\"x\" aria-label=\"Set aside")
                     .count(),
                 1,
                 "{item}"
             );
         }
+        // the question: its words beside the asker's avatar, answered in place, Answer filled
+        let ask = needs[0];
         assert!(
-            needs[0].contains("<span class=\"nk nk-ask\" role=\"img\" aria-label=\"Question\">")
-        );
-        assert!(
-            needs[3].contains(
-                "<span class=\"nk\"><span class=\"g g-quiet\" role=\"img\" aria-label=\"quiet\">"
-            ),
-            "{}",
-            needs[3]
+            ask.contains("<span class=\"nd-s\">asks you</span>")
+                && ask.contains("<div class=\"nd-q\"><span class=\"av ")
+                && ask.contains("class=\"answer-in\"")
+                && ask.contains("<textarea ")
+                && ask.contains(" data-answer ")
+                && ask.contains("<button class=\"primary\">Answer</button>"),
+            "{ask}"
         );
         assert!(needs[3].contains(">Message it</a>"), "{}", needs[3]);
         // the head's sentence, from the counts alone
         let summary = plan_html::summary(&html);
         assert!(
             summary.contains(
-                "1 question for you</a>, 2 failed, 1 cancelled, 1 quiet. 5 at work; 5 of 16 done · 36 steps."
+                "1 question for you</a>, 2 failed, 1 cancelled, 1 quiet. 4 at work and 1 long run watched; 5 of 16 done · 36 steps."
             ),
             "{summary}"
         );
@@ -228,16 +232,27 @@ async fn plan_units_and_loose_steps() {
             "{html}"
         );
         assert!(html.contains("href=\"/static/favicon-ask.svg?v="), "{html}");
-        // Finished lately, with no look kept: the latest four, newest first, by title; a card
+        // Watching: the long run's title, its latest result in its colour, its last results
+        // red and green, oldest first
+        let watching = plan_html::region(&html, "w-survey");
+        assert!(
+            watching.contains(
+                "<span class=\"result red\"><span>checked 1240 · remaining 310</span></span>"
+            ) && watching.contains("aria-label=\"The last 18 results: 4 red, 14 green\"")
+                && watching.matches("<i class=\"r\"").count() == 4
+                && watching.contains("<span class=\"when\">last result <time"),
+            "{watching}"
+        );
+        // Finished lately, with no look kept: the latest four, newest first, by title; a line
         // for the one that said what it produced, the three that left nothing in one line
         let cards = plan_html::band(&html, "plan-finished");
         assert!(
             cards.contains("<h2 id=\"finished\">Finished lately</h2>"),
             "{cards}"
         );
-        assert_eq!(cards.matches("<li class=\"fin-i\"").count(), 1, "{cards}");
+        assert_eq!(cards.matches("<li class=\"fin-r\"").count(), 1, "{cards}");
         assert!(
-            cards.contains("<p class=\"fin-v\">Fourteen entries")
+            cards.contains("<span class=\"fin-v\">Fourteen entries")
                 && cards.contains("<p class=\"fin-quiet\">3 more finished with nothing to say: <a"),
             "{cards}"
         );
@@ -245,31 +260,35 @@ async fn plan_units_and_loose_steps() {
             at(cards, "/units/a-3\"") < at(cards, "/units/s-2\""),
             "{cards}"
         );
-        // At work: a group a recipe, then no recipe, the long runs last; creation order
-        // by default; the window's labels over the strips
-        let roster = plan_html::band(&html, "plan-roster");
+        // At work: a group a recipe, then no recipe; creation order by default; the window's
+        // labels over the strips; what waits and what is done in a line under it
         assert!(
             at(roster, ">article</a></b>") < at(roster, ">scan</a></b>")
                 && at(roster, ">scan</a></b>") < at(roster, "<b>Other units</b>")
-                && at(roster, "<b>Other units</b>") < at(roster, "<b>Long runs</b>"),
+                && !roster.contains("Long runs"),
             "{roster}"
         );
         assert!(at(roster, "<!--r:u-a-6-->") < at(roster, "<!--r:u-a-7-->"));
         assert!(
-            roster.contains(">1h ago</span>") && roster.contains(">now</span>"),
+            roster.contains("<span>1h ago</span>") && roster.contains("<span>now</span>"),
             "{roster}"
         );
         assert!(
-            roster.contains("<b>3 waiting</b> on earlier work · <a href=")
-                && roster.contains("<b>5 done</b></a>, the last"),
+            roster.contains("3 waiting on earlier work · <a href=")
+                && roster.contains(">5 done</a>, the last <time"),
             "{roster}"
         );
-        // a row: its state in words beside its mark, how long it has run, when it was heard
-        // from (its line says what it said, not again when), its strip a tall mark a message
+        // a row: the engine it runs on, its title, its stages (the current one green and how
+        // long, the next, the rest folded), when it was heard from, what it said last; its
+        // strip a tall mark a message
         let a6 = plan_html::row(&html, "a-6");
         assert!(
-            a6.contains("<span class=\"vh\">running, </span>draft · ")
-                && a6.contains("class=\"ro-heard\"><span class=\"dot run pulse\" aria-hidden=\"true\"></span>heard <time data-ago=")
+            a6.contains("<span class=\"engine\" title=\"Runs on claude\">claude</span>")
+                && a6.contains("<span class=\"ro-t\" title=\"Terns: the spring guide&#39;s entries\">")
+                && plan_html::stage(a6, "a-6-draft").starts_with("<li class=\"st run cur\" data-state=\"running\">")
+                && plan_html::stage(a6, "a-6-review").contains("<span class=\"st-w\">next</span>")
+                && a6.contains("<li class=\"st fold-n\" title=\"publish\"><span class=\"vh\">1 later: </span>+1</li>")
+                && a6.contains("class=\"heard\">heard <time data-ago=")
                 && a6.contains("<b class=\"uv-from\">draft</b>: Entries 41 to 58")
                 && a6.contains("aria-label=\"Its pulse: acted in ")
                 && a6.contains(" minutes of its run, 3 messages lately\""),
@@ -281,62 +300,58 @@ async fn plan_units_and_loose_steps() {
             3,
             "{strip}"
         );
-        // quiet: one sand pill, its stage and how long it has been silent
+        // quiet: its stage says so and for how long, the dot beside it ochre
         let s3 = plan_html::row(&html, "s-3");
         assert!(
-            s3.contains("<span class=\"pill look\"><span class=\"g g-quiet\"")
-                && s3.contains("</span>scan · quiet <time"),
+            plan_html::stage(s3, "s-3-scan")
+                .starts_with("<li class=\"st quiet cur\" data-state=\"quiet\">")
+                && s3.contains("<span class=\"st-w\">quiet <em><time")
+                && s3.contains("<span class=\"live quiet\""),
             "{s3}"
         );
+        assert!(s3.contains(" class=\"pk-tail is-quiet\"></i>"), "{s3}");
         // nothing heard since its run began: said once
         let index = plan_html::row(&html, "index");
         assert!(
-            index.contains("<span class=\"ro-heard\">no word yet</span>"),
+            index.contains("<span class=\"heard\">no word yet</span>"),
             "{index}"
         );
-        assert!(s3.contains(" class=\"pk-tail is-quiet\"></i>"), "{s3}");
-        // the drilldown: a disclosure whose body is the unit's steps on its
-        // axis, the current one marked, each step what it runs on, then its latest and actions
+        // opened, a row is its conversation, oldest first, each message with its sender's
+        // avatar, then when it was last heard from and its ways on; no step table
         assert!(
-            a6.starts_with(&format!("<details id=\"u-a-6\" class=\"ro-u\" data-unit=\"a-6\" data-said=\"a-6-draft running|a-6-review pending|a-6-publish pending\" data-preserve-attr=\"open\" data-steps=\"a-6-draft a-6-review a-6-publish\" data-on:toggle=\"el.open &amp;&amp; @get('/projects/id/{}/units/a-6/drill')\"><summary class=\"ro-r\">", n.almanac)),
+            a6.starts_with(&format!("<details id=\"u-a-6\" class=\"ro-u\" data-unit=\"a-6\" data-said=\"a-6-draft running|a-6-review pending|a-6-publish pending\" data-preserve-attr=\"open data-flash\" data-steps=\"a-6-draft a-6-review a-6-publish\" data-on:toggle=\"el.open &amp;&amp; @get('/projects/id/{}/units/a-6/drill')\"><summary class=\"ro-r\">", n.almanac)),
             "{a6}"
         );
         let drill = &a6[at(
             a6,
             "<div id=\"drill-a-6\" class=\"ro-drill\" data-ignore-morph>",
         )..];
-        assert!(drill.contains("<sluice-steps class=\"sv\""), "{drill}");
         assert!(
-            plan_html::cell(drill, "a-6-draft").starts_with("<li class=\"sv-row sv-c-run is-cur\""),
+            !drill.contains("sluice-steps") && !drill.contains("sv-row"),
             "{drill}"
         );
-        // its draft runs on an engine, its other steps on the fn: a column says which
+        let said: Vec<usize> = [
+            "Entries 1 to 20 drafted.",
+            "Entries 21 to 40 drafted.",
+            "Entries 41 to 58 drafted;",
+        ]
+        .iter()
+        .map(|w| at(drill, w))
+        .collect();
+        assert!(said.windows(2).all(|p| p[0] < p[1]), "{drill}");
         assert!(
-            drill.contains("<div class=\"sv-g sv-no-pr\"")
-                && drill.contains("<span class=\"sv-h-on\" aria-hidden=\"true\">Runs on</span>")
-                && !drill.contains(">Progress<"),
+            drill.contains("<div class=\"msg\"><div class=\"by\"><span class=\"av agent ")
+                && drill.contains("<b class=\"agent\">draft</b><span>to @lead · "),
             "{drill}"
         );
-        // what it said last leads it whole, a message card over its steps (its row cuts it)
-        assert!(
-            drill.starts_with("<div id=\"drill-a-6\" class=\"ro-drill\" data-ignore-morph><div class=\"msg-card\"><p class=\"mc-h\"><b>draft</b>")
-                && drill.contains("<div class=\"md\"><p>Entries 41 to 58 drafted; the maps moved under maps/coast/.</p>"),
-            "{drill}"
-        );
-        // its foot: when it was last heard from (the card says what), Open step the one move,
-        // the rest quiet links
         let foot = &drill[at(drill, "<div class=\"ro-foot\">")..];
         assert!(
-            foot.contains("<p class=\"ro-ev\">Last heard ")
-                && !foot.contains("Entries 41 to 58")
-                && drill.contains("<span class=\"ro-links\"><a href=")
-                && drill.contains(">Message</a>")
-                && drill.contains(" data-step=\"a-6-draft\">Open step</a>"),
-            "{drill}"
+            foot.contains("<span>Last heard ")
+                && foot.contains(">Message</a>")
+                && foot.contains(">Unit page</a>")
+                && foot.contains(" data-step=\"a-6-draft\">Open step</a>"),
+            "{foot}"
         );
-        // a unit of no recipe: in its step view its two gathers fan in to its merge
-        let merge = plan_html::between(index, "data-sv=\"index-merge\"", "</li>");
-        assert_eq!(merge.matches("class=\"sv-arrow\"").count(), 2, "{merge}");
         // the Done index when asked for: every done unit
         let (_, done) = f
             .get(&format!("/projects/id/{}?show=done", n.almanac))
@@ -364,11 +379,13 @@ async fn plan_units_and_loose_steps() {
             ),
             "{html}"
         );
-        // Needs you is not drawn while nothing needs you
+        // with nothing to answer, Needs you is its pen sketch and says so: no list
+        let needs = plan_html::band(&html, "plan-needs");
         assert!(
-            plan_html::band(&html, "plan-needs")
-                .starts_with("<section id=\"plan-needs\" class=\"pb-sec\" hidden></section>"),
-            "{html}"
+            needs.contains("<div class=\"state\"><div class=\"art\" aria-hidden=\"true\"><svg")
+                && needs.contains("Nothing needs you")
+                && !needs.contains("<ul class=\"nd\""),
+            "{needs}"
         );
     }
 }
@@ -546,9 +563,12 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
     // Needs you is then only its Undo, and the lead says so first
     let said = plan_html::summary(&html);
     assert!(said.contains(">Nothing needs you; 4 set aside. "), "{said}");
+    let needs = plan_html::band(&html, "plan-needs");
     assert!(
-        plan_html::band(&html, "plan-needs").contains("aria-label=\"Set aside\""),
-        "{html}"
+        needs.contains("<h3>Nothing needs you</h3><p>4 items set aside: each comes back when it changes, or with its Undo below.</p>")
+            && needs.contains("<ul class=\"nd-gone\" role=\"status\"><li><span>Set aside: the question “")
+            && needs.matches(">Undo</button>").count() == 4,
+        "{needs}"
     );
     // setting aside is about attention alone: the head still says what is true (the failures,
     // the cancel, which Set all aside never settles, and the silence), and the cancelled unit
@@ -610,10 +630,11 @@ async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
     let seen = plan_html::band(&html, "plan-finished");
     assert!(
         seen.contains("<h2 id=\"finished\">Finished lately</h2>")
-            && seen.contains("<p class=\"seen-line\">Seen through <time data-clock")
-            && seen.contains("· <button class=\"quiet\">Undo</button></p>")
+            && seen
+                .contains("<h3>Nothing new since you looked</h3><p>Seen through <time data-clock")
+            && seen.contains(" · <button class=\"quiet\">Undo</button></p>")
             && seen.contains("<input type=\"hidden\" name=\"through\" value=\"0\">")
-            && !seen.contains("class=\"fin-i\""),
+            && !seen.contains("class=\"fin-r\""),
         "{seen}"
     );
     let (_, _, _, undone) = browse(
@@ -623,9 +644,9 @@ async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
         &format!("sluice_seen_{}=0", n.almanac),
     )
     .await;
-    assert!(plan_html::band(&undone, "plan-finished").contains("class=\"fin-i\""));
+    assert!(plan_html::band(&undone, "plan-finished").contains("class=\"fin-r\""));
     let (_, _, _, other) = browse(&router, &plan, None, "").await;
-    assert!(plan_html::band(&other, "plan-finished").contains("class=\"fin-i\""));
+    assert!(plan_html::band(&other, "plan-finished").contains("class=\"fin-r\""));
     // a look kept earlier: what finished after it, said since when
     let a2 = "a-2";
     let (_, _, _, html) = browse(
@@ -638,8 +659,8 @@ async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
     let cards = plan_html::band(&html, "plan-finished");
     assert!(
         cards.contains(
-            "<h2 id=\"finished\">Finished since you looked</h2><span class=\"sec-note\">since "
-        ) && cards.matches("<li class=\"fin-i\"").count() == 2
+            "<h2 id=\"finished\">Finished<span class=\"lk\"> since you looked</span></h2><span class=\"sec-note\">since "
+        ) && cards.matches("<li class=\"fin-r\"").count() == 2
             && cards.contains("3 more finished with nothing to say")
             && cards.contains(&format!("/units/{a2}\"")),
         "{cards}"
@@ -667,6 +688,13 @@ async fn a_big_roster_folds_its_unremarkable_groups() {
             .matches("data-preserve-attr=\"open\"><summary class=\"ro-group\">")
             .count(),
         2,
+        "two groups folded: {roster}"
+    );
+    assert_eq!(
+        roster
+            .matches("data-preserve-attr=\"open\" open><summary class=\"ro-group\">")
+            .count(),
+        1,
         "{roster}"
     );
     // scan: its quiet row in sight, first, the seven healthy folded to one line under it
@@ -679,7 +707,7 @@ async fn a_big_roster_folds_its_unremarkable_groups() {
     // a finished card with no output says the unit's last message
     let cards = plan_html::band(&html, "plan-finished");
     assert!(
-        cards.contains("<p class=\"fin-v\">Checked against the regional list"),
+        cards.contains("<span class=\"fin-v\">Checked against the regional list"),
         "{cards}"
     );
     // a small plan leaves every group open
@@ -694,7 +722,8 @@ async fn a_big_roster_folds_its_unremarkable_groups() {
 /// The bug this catches: Mark as seen set the page's look before sluice took it, so a mark that
 /// never arrived still emptied Finished; and what it left stacked a word a line on a phone.
 /// Now the answer sets the `seen` signal, the stream reopens on it, the section keeps its head
-/// and says "Seen through … · Undo" on one line, and Undo brings the cards back.
+/// and draws its empty state, "Seen through … · Undo" on one line, and Undo brings the rows
+/// back.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_mark_as_seen_and_its_undo_go_through_the_answer() {
     let f = Fixture::new().await;
@@ -708,16 +737,16 @@ async fn slow_chromium_mark_as_seen_and_its_undo_go_through_the_answer() {
             Chrome::open(&format!("http://{addr}/projects/id/{}", n.almanac)).unwrap();
         browser.viewport(390, "light").unwrap();
         browser
-            .wait("document.readyState === 'complete' && !!document.querySelector('#plan-finished .fin-i')")
+            .wait("document.readyState === 'complete' && !!document.querySelector('#plan-finished .fin-r')")
             .unwrap();
         browser
             .eval("document.querySelector('#mark-seen button').click()")
             .unwrap();
         browser
-            .wait("!!document.querySelector('#plan-finished .seen-line')")
+            .wait("!!document.querySelector('#plan-finished .state p')")
             .unwrap();
         let line = browser
-            .eval("(() => { const l = document.querySelector('#plan-finished .seen-line'); return {h: l.getBoundingClientRect().height, text: l.textContent, head: document.querySelector('#plan-finished h2').textContent, said: document.querySelector('#mark-seen-said').textContent}; })()")
+            .eval("(() => { const l = document.querySelector('#plan-finished .state p'); return {h: l.getBoundingClientRect().height, text: l.textContent, head: document.querySelector('#plan-finished h2').textContent, said: document.querySelector('#mark-seen-said').textContent}; })()")
             .unwrap();
         assert!(line["h"].as_f64().unwrap() < 30.0, "{line}");
         assert!(
@@ -728,10 +757,10 @@ async fn slow_chromium_mark_as_seen_and_its_undo_go_through_the_answer() {
         assert_eq!(line["head"], "Finished lately", "{line}");
         assert_eq!(line["said"], "", "{line}");
         browser
-            .eval("document.querySelector('#plan-finished .seen-line button').click()")
+            .eval("document.querySelector('#plan-finished .state p button').click()")
             .unwrap();
         browser
-            .wait("!!document.querySelector('#plan-finished .fin-i')")
+            .wait("!!document.querySelector('#plan-finished .fin-r')")
             .unwrap();
         assert_eq!(
             browser.eval("window.browserErrors ?? []").unwrap(),
@@ -762,12 +791,12 @@ async fn slow_chromium_plan_folds_and_order_survive_activity_and_group_moves() {
         b.send("Page.addScriptToEvaluateOnNewDocument", json!({"source": "window.patches=[]; document.addEventListener('datastar-fetch', e => { if(e.detail.type==='datastar-patch-signals' && JSON.parse(e.detail.argsRaw?.signals??'{}').rel) window.streamReady=true; if(e.detail.type==='datastar-patch-elements') patches.push(e.detail.argsRaw?.selector); });"})).unwrap();
         b.navigate(&url).unwrap();
         b.wait("window.streamReady && !!customElements.get('sluice-board')").unwrap();
-        b.eval("window.entry = [...document.querySelectorAll('.ro-g')].find(g=>g.querySelector('h3 a')?.textContent==='entry').id; window.scan = [...document.querySelectorAll('.ro-g')].find(g=>g.querySelector('h3 a')?.textContent==='scan').id; window.order = () => [...document.getElementById(entry).querySelectorAll('.ro-u')].map(r=>r.dataset.unit); window.initialOrder=order();").unwrap();
+        b.eval("window.entry = [...document.querySelectorAll('.ro-g')].find(g=>g.querySelector(':scope > summary a')?.textContent==='entry').id; window.scan = [...document.querySelectorAll('.ro-g')].find(g=>g.querySelector(':scope > summary a')?.textContent==='scan').id; window.order = () => [...document.getElementById(entry).querySelectorAll('.ro-u')].map(r=>r.dataset.unit); window.initialOrder=order();").unwrap();
         assert_eq!(b.eval("document.getElementById(entry).open").unwrap(), false);
         assert_eq!(b.eval("document.getElementById(scan).open").unwrap(), true);
         assert_eq!(b.eval("[...document.querySelectorAll('#plan-pane details')].every(d=>(d.getAttribute('data-preserve-attr')||'').split(' ').includes('open'))").unwrap(), true);
         b.eval("document.getElementById(entry).open=true; document.getElementById(scan).open=false; document.querySelector('#'+scan+' .ro-fold').open=true; document.getElementById('u-e-096').open=true").unwrap();
-        b.wait("!!document.querySelector('#drill-e-096 sluice-steps')").unwrap();
+        b.wait("!!document.querySelector('#drill-e-096 .ro-foot')").unwrap();
         b.eval("window.patches=[]").unwrap();
         b
     }).await.unwrap();
@@ -783,7 +812,7 @@ async fn slow_chromium_plan_folds_and_order_survive_activity_and_group_moves() {
     )
     .await;
     browser = tokio::task::spawn_blocking(move || {
-        browser.wait("document.querySelector('#u-e-096 .ro-s').textContent.includes('Activity that used to move')").unwrap();
+        browser.wait("document.querySelector('#u-e-096 .ro-said').textContent.includes('Activity that used to move')").unwrap();
         assert_eq!(browser.eval("order()").unwrap(), browser.eval("initialOrder").unwrap());
         assert_eq!(browser.eval("patches.includes('#plan-roster')").unwrap(), false);
         browser.eval("window.patches=[]").unwrap();
@@ -825,16 +854,16 @@ async fn slow_chromium_plan_folds_and_order_survive_activity_and_group_moves() {
         browser.wait("!!document.querySelector('#u-new') && document.querySelector('#u-e-096').closest('.ro-g').id !== entry").unwrap();
         assert_eq!(browser.eval("document.getElementById('u-e-096').open && document.getElementById(entry).open && !document.getElementById(scan).open && document.querySelector('#'+scan+' .ro-fold').open").unwrap(), true);
         assert_eq!(browser.eval("order().at(-1)").unwrap(), "new");
-        // The quiet text menu changes the cookie before reconnecting the real stream.
-        browser.eval("document.querySelector('.ro-order').value='plan'; document.querySelector('.ro-order').dispatchEvent(new Event('change',{bubbles:true}))").unwrap();
+        // The order menu changes the cookie before reconnecting the real stream.
+        browser.eval("document.querySelector('.order-menu').open = true; [...document.querySelectorAll('.order-menu [role=menuitemradio]')][1].click()").unwrap();
         browser.wait("order()[0] === 'new'").unwrap();
         assert_eq!(browser.eval("document.cookie.includes('=plan')").unwrap(), true);
         browser.eval("location.reload()").unwrap();
         browser.wait("window.streamReady && !!document.querySelector('#u-new')").unwrap();
-        assert_eq!(browser.eval("document.querySelector('.ro-order').value").unwrap(), "plan");
+        assert_eq!(browser.eval("document.querySelector('.order-menu [aria-checked=true]').textContent").unwrap(), "Plan order");
         assert_eq!(browser.eval("[...document.querySelector('.ro-g').querySelectorAll('.ro-u')][0].dataset.unit").unwrap(), "new");
         assert_eq!(browser.eval("document.getElementById('u-e-096').open").unwrap(), true);
-        browser.eval("document.querySelector('.ro-order').value='recent'; document.querySelector('.ro-order').dispatchEvent(new Event('change',{bubbles:true}))").unwrap();
+        browser.eval("document.querySelector('.order-menu').open = true; [...document.querySelectorAll('.order-menu [role=menuitemradio]')][2].click()").unwrap();
         browser
     }).await.unwrap();
     crate::stored_messages::stored(

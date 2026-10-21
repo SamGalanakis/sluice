@@ -217,20 +217,13 @@ async fn a_project_pause_and_outside_work_read_as_themselves() {
         .unwrap();
     board(&f, id, "root = Units()".into()).await;
     let html = f.opened(&format!("/projects/id/{id}")).await;
-    // the plan: a waiting unit held by the pause is a row that says so, its mark and word
+    // the plan: a waiting unit held by the pause is a row whose stage says so
     let row = plan_html::row(&html, "l3");
+    let stage = plan_html::stage(row, "l3-fork");
     assert!(
-        row.contains(&format!(
-            "<span class=\"pill\">{}paused at fork</span>",
-            mark(Shown::Paused)
-        )),
-        "{row}"
-    );
-    let cell = plan_html::cell(row, "l3-fork");
-    assert!(
-        cell.contains("aria-label=\"paused\"")
-            && cell.contains("<span class=\"st-w\" aria-hidden=\"true\">paused</span>"),
-        "{cell}"
+        stage.contains("data-state=\"paused\"")
+            && stage.contains("<span class=\"st-w\">paused</span>"),
+        "{stage}"
     );
     let pane = between(&html, "<aside id=\"board-pane\"", "</aside>");
     let row = between(pane, "/units/l3\">l3</a>", "</tr>");
@@ -271,8 +264,7 @@ async fn a_unit_with_a_failed_and_a_quiet_step_counts_once() {
         .collect();
     assert_eq!(stops.len(), 2, "{stops:?}");
     assert!(
-        stops[0].contains("<span class=\"nk\"><span class=\"g g-failed\"")
-            && stops[1].contains(plan_html::QUIET),
+        plan_html::kind(stops[0]) == "fail" && plan_html::kind(stops[1]) == "quiet",
         "{stops:?}"
     );
     assert!(
@@ -309,17 +301,20 @@ async fn states_priorities_cancellation_and_skipped_units() {
                 _ if matches!(state, Shown::Failed | Shown::Cancelled | Shown::Stale) => {
                     let module = plan_html::stopped(plan, &step);
                     assert!(
-                        module.contains(&format!("</a></b> {}.", state.word())),
+                        plan_html::kind(module) != "quiet"
+                            && module.contains(&format!("<span class=\"nd-s\">{}", state.word())),
                         "{state:?}: {module}"
                     );
                 }
                 _ => {
                     if plan_html::has_region(plan, &format!("u-{step}")) {
+                        // its row's stage says its state, in its own words where the stage
+                        // has them
                         let row = plan_html::row(plan, &step);
-                        let pill = between(row, "<span class=\"pill", "</span><span class=\"ro");
+                        let stage = plan_html::stage(row, &step);
                         assert!(
-                            pill.contains(&mark(state)) && pill.contains(state.word()),
-                            "{state:?}: {pill}"
+                            stage.contains(&format!("data-state=\"{}\"", state.key())),
+                            "{state:?}: {stage}"
                         );
                     }
                     let (_, unit) = f.get(&format!("/projects/id/{id}/units/{step}")).await;
@@ -366,7 +361,7 @@ async fn states_priorities_cancellation_and_skipped_units() {
                     "<b>{}{}</b>",
                     word[..1].to_uppercase(),
                     &word[1..]
-                )) && (state != Shown::Quiet || line.contains("<span class=\"pill look\">")),
+                )) && (state != Shown::Quiet || line.contains("<span class=\"badge look\">")),
                 "{state:?}: {line}"
             );
             // a cancel asked for is not offered again
@@ -382,7 +377,8 @@ async fn states_priorities_cancellation_and_skipped_units() {
         let sum = plan_html::summary(&html);
         for said in [
             "1 failed, 1 cancelled, 1 stale, 1 quiet.",
-            "6 at work;",
+            // a loose step that has run for days is watched, not at work
+            "5 at work and 1 long run watched;",
             "3 of 17 done · 17 steps.",
         ] {
             assert!(sum.contains(said), "{said}: {sum}");
@@ -402,8 +398,8 @@ async fn states_priorities_cancellation_and_skipped_units() {
         let card = between(&home, "aria-label=\"states\"", "</article>");
         assert!(
             card.contains(
-                "<p class=\"pm-summary\">1 failed, 1 cancelled, 1 stale, 1 quiet. 6 at work;"
-            ) && card.contains("<li><b>Long runs</b> · 1 quiet<span class=\"pm-g-said\"><a href=")
+                "<p class=\"pm-summary\">1 failed, 1 cancelled, 1 stale, 1 quiet. 5 at work and 1 long run watched;"
+            ) && card.contains("<li><b>Watching</b> · 1 quiet<span class=\"pm-g-said\"><a href=")
                 && card.contains("/steps/s-quiet\">s-quiet</a>"),
             "{card}"
         );
@@ -547,11 +543,12 @@ async fn states_priorities_cancellation_and_skipped_units() {
         let (_, found) = f.get(&format!("/projects/id/{id}?q=reads")).await;
         let reads = plan_html::row(&found, "reads");
         assert!(reads.contains(">up</a> (cancelled)</span>"), "{reads}");
-        // a blocked step's row in its steps says it is blocked
-        let cell = plan_html::cell(gated, "gated");
+        // a blocked step's stage on its row says it is blocked
+        let stage = plan_html::stage(gated, "gated");
         assert!(
-            cell.contains("aria-label=\"blocked\"") && cell.contains("blocked</span>"),
-            "{cell}"
+            stage.contains("data-state=\"blocked\"")
+                && stage.contains("<span class=\"st-w\">blocked</span>"),
+            "{stage}"
         );
         let pane = between(&html, "<aside id=\"board-pane\"", "</aside>");
         assert!(

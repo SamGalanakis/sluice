@@ -10,6 +10,8 @@ pub struct SectionHead {
     id: String,
     name: String,
     level: u8,
+    /// Its name is HTML already (a part of it hidden on a narrow rail).
+    raw: bool,
     count: String,
     note: String,
     action: String,
@@ -21,6 +23,14 @@ impl SectionHead {
             name: name.to_owned(),
             level: 2,
             ..Self::default()
+        }
+    }
+    /// A head whose name is HTML, already escaped ("Finished<span class=\"lk\"> since you
+    /// looked</span>").
+    pub fn new_html(id: &str, html: &str) -> Self {
+        Self {
+            raw: true,
+            ..Self::new(id, html)
         }
     }
     /// Its heading's level (2 by default).
@@ -51,7 +61,11 @@ impl SectionHead {
         };
         TrustedHtml::owned(format!(
             "<div class=\"sec-h\"><h{l}{id}>{}</h{l}>{}{}{}</div>",
-            esc(&self.name),
+            if self.raw {
+                self.name.clone()
+            } else {
+                esc(&self.name)
+            },
             if self.count.is_empty() {
                 String::new()
             } else {

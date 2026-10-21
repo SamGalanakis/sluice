@@ -13,16 +13,19 @@ use sluice_store::RetrySafety;
 
 const GEOMETRY: &str = r#"(() => {
   const box = s => { const e = document.querySelector(s); if (!e || !e.checkVisibility()) return null;
-                     const r = e.getBoundingClientRect(); return {left: r.left, right: r.right, width: r.width, top: r.top}; };
-  const nav = document.querySelector('.site-bar'), n = nav.getBoundingClientRect(), css = getComputedStyle(nav);
+                     const r = e.getBoundingClientRect(); return {left: r.left, right: r.right, width: r.width, top: r.top, bottom: r.bottom}; };
+  // the top bar's column: its content edges are the page's
+  const nav = document.querySelector('header.top .top-in'), n = nav.getBoundingClientRect(), css = getComputedStyle(nav);
+  // the room beside the sidebar (the whole window under 860px, where it is a drawer)
+  const area = document.querySelector('.mainarea').getBoundingClientRect();
   const page = document.querySelector('#project-board').getBoundingClientRect();
   return {scroll: document.documentElement.scrollWidth, width: document.documentElement.clientWidth,
-          left: page.left, right: page.right,
+          left: page.left, right: page.right, areaLeft: area.left, areaRight: area.right,
           navLeft: n.left + parseFloat(css.paddingLeft), navRight: n.right - parseFloat(css.paddingRight),
           plan: box('#plan-pane'),
           board: box('#board-pane'), sum: box('.page-line'),
-          // the sections fit the bar, or scroll sideways with the chevron that says so
-          navFits: (l => l.scrollWidth <= l.clientWidth || l.hasAttribute('data-more'))(document.querySelector('.bar-tabs')), tabs: box('.view-switch'), split: box('.splitter'),
+          // the sections fit the bar, or scroll sideways with the fade that says so
+          navFits: (l => l.scrollWidth <= l.clientWidth || l.hasAttribute('data-overflow'))(document.querySelector('.sec-links')), tabs: box('.view-switch'), split: box('.splitter'),
           view: (() => { const p = document.querySelector('#plan-pane')?.checkVisibility(), b = document.querySelector('#board-pane')?.checkVisibility(); return p && b ? 'both' : b ? 'board' : 'plan'; })(),
           // the page is as tall as its main column (or the window): nothing hangs below it
           below: document.documentElement.scrollHeight - Math.max(innerHeight,
@@ -49,8 +52,13 @@ fn check(g: &Value, label: &str) {
         near(&g["navLeft"], left) && near(&g["navRight"], right),
         "{label}: nav edges {g}"
     );
+    // centred in the room beside the sidebar
+    let (area_left, area_right) = (
+        g["areaLeft"].as_f64().unwrap(),
+        g["areaRight"].as_f64().unwrap(),
+    );
     assert!(
-        near(&g["left"], (width - (right - left)) / 2.0),
+        (left - area_left - (area_right - right)).abs() < 1.0 && area_right <= width + 0.5,
         "{label}: not centred {g}"
     );
     assert_eq!(g["clipped"], 0, "{label}: clipped {g}");
@@ -147,7 +155,7 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                             assert!(g["tabs"].is_object() && g["board"].is_null() && plan.is_object(), "{label}: {g}");
                             assert_eq!(g["view"], "plan", "{label}: {g}");
                             assert!(g["sum"].is_object(), "{label}: the lead line stays over its board {g}");
-                            assert!(g["tabs"]["top"].as_f64().unwrap() < g["sum"]["top"].as_f64().unwrap(), "{label}: the switch in the bar, over the lead {g}");
+                            assert!(g["tabs"]["bottom"].as_f64().unwrap() <= g["plan"]["top"].as_f64().unwrap(), "{label}: the switch in the head, over the plan {g}");
                             assert!(g["board"].is_null(), "{label}: {g}");
                         }
                         ("board", _) => {
@@ -165,14 +173,15 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                             assert!(near(&g["split"]["left"], plan["right"].as_f64().unwrap()), "{label}: {g}");
                             assert!(near(&board["right"], g["right"].as_f64().unwrap()), "{label}: {g}");
                             let page = right - left;
-                            // the frame's centred column, at most 1440px, the band's content on
+                            // the frame's centred column, at most 1240px, the bar's content on
                             // the same edges
                             let column = g["navRight"].as_f64().unwrap() - g["navLeft"].as_f64().unwrap();
+                            let room = g["areaRight"].as_f64().unwrap() - g["areaLeft"].as_f64().unwrap();
                             assert!(
                                 (page - column).abs() < 1.0
-                                    && page > (vw - 140.0).min(1439.0)
-                                    && page < 1441.0
-                                    && (left - (vw - right)).abs() < 24.0,
+                                    && page > (room - 64.0).min(1240.0) - 1.0
+                                    && page < 1241.0
+                                    && right <= vw,
                                 "{label}: {g}"
                             );
                             assert!(plan["width"].as_f64().unwrap() >= 560.0, "{label}: {g}");
@@ -198,12 +207,11 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
             let g = browser.eval(GEOMETRY).unwrap();
             let label = format!("cliff {width}");
             check(&g, &label);
-            // the frame's fluid gutter each side, the band's edges
-            let gutter = (10.0 + 0.015 * width as f64).clamp(16.0, 64.0);
-            assert!(near(&g["left"], gutter) && near(&g["right"], g["width"].as_f64().unwrap() - gutter), "{label}: {g}");
+            // the column's gutter each side of the room beside the sidebar, the bar's edges
+            assert!(near(&g["left"], g["areaLeft"].as_f64().unwrap() + 32.0) && near(&g["right"], g["areaRight"].as_f64().unwrap() - 32.0), "{label}: {g}");
             assert!(near(&g["left"], g["navLeft"].as_f64().unwrap()) && near(&g["right"], g["navRight"].as_f64().unwrap()), "{label}: {g}");
-            // the switch in the bar, over the lead
-            assert!(g["tabs"]["top"].as_f64().unwrap() < g["sum"]["top"].as_f64().unwrap(), "{label}: {g}");
+            // the switch in the head, over the plan
+            assert!(g["tabs"]["bottom"].as_f64().unwrap() <= g["plan"]["top"].as_f64().unwrap(), "{label}: {g}");
         }
         // Every page's times are nav.js's, in one vocabulary: a running time is a two-unit
         // duration, never "… ago".
@@ -391,8 +399,8 @@ fn hover(browser: &mut Chrome, selector: &str) -> (f64, f64) {
     (x, y)
 }
 
-/// The drawer gives the focus back to the step row it opened from, in a unit's steps under its
-/// row on the plan: that row's link wears the keyboard's ring.
+/// The drawer gives the focus back to the link it opened from, the Open step of a unit's row
+/// open on the plan: that link wears the keyboard's ring.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_the_step_the_drawer_gives_focus_back_wears_the_ring() {
     let f = Fixture::new().await;
@@ -403,7 +411,7 @@ async fn slow_chromium_the_step_the_drawer_gives_focus_back_wears_the_ring() {
     let lanes = f.id;
     tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{lanes}")).unwrap();
-        const LINK: &str = "#u-alpha a.sv-a[data-step=alpha-review]";
+        const LINK: &str = "#u-alpha .ro-foot a.btn";
         browser
             .wait("document.readyState === 'complete' && document.querySelector('#u-alpha > summary')")
             .unwrap();
@@ -418,7 +426,7 @@ async fn slow_chromium_the_step_the_drawer_gives_focus_back_wears_the_ring() {
         let (x, y) = hover(&mut browser, LINK);
         pointer(&mut browser, "mousePressed", x, y);
         pointer(&mut browser, "mouseReleased", x, y);
-        browser.wait("location.hash === '#step:alpha-review'").unwrap();
+        browser.wait("location.hash.startsWith('#step:alpha-')").unwrap();
         browser
             .send(
                 "Input.dispatchKeyEvent",
@@ -548,10 +556,11 @@ async fn slow_chromium_says_a_steps_new_state_to_a_screen_reader() {
         let said = browser
             .wait("!document.querySelector('[data-said*=\"alpha-review pending\"]') && document.getElementById('announce').textContent")
             .unwrap();
-        // the stream's patches redraw the nav and keep its live line
+        // the stream's patches redraw the nav whole, its Inbox with it, and say nothing of
+        // being live
         assert_eq!(
-            browser.eval("document.querySelectorAll('#top-nav .live').length").unwrap(),
-            1
+            browser.eval("[document.querySelectorAll('#top-nav #nav-inbox').length, document.querySelectorAll('#top-nav .live').length]").unwrap(),
+            serde_json::json!([1, 0])
         );
         said
     })

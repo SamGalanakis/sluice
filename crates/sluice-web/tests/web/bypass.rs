@@ -150,17 +150,25 @@ async fn a_bypassed_step_reads_bypassed_and_a_waiting_one_carries_its_tag() {
         .unwrap();
     let state =
         views::DashboardState::new(ReadPool::open(home.path(), 2).unwrap(), Arc::new(Catalog));
-    // Waiting, its first step ready: a row, whose steps carry the tag with who set it.
+    // Waiting, its first step ready: a row whose stage after it carries the tag with who set
+    // it, as its unit page's step does
     let plan = page(&state, format!("/projects/id/{project}")).await;
     assert_eq!(plan_html::place(&plan, "l"), "waiting");
     let row = plan_html::row(&plan, "l");
     assert!(
-        sv_row(row, "l-close").contains("<span class=\"pill sv-tag\">bypass · orchestrator</span>"),
+        plan_html::stage(row, "l-close")
+            .contains("<span class=\"st-w\">bypass · orchestrator</span>"),
         "{row}"
+    );
+    let unit = page(&state, format!("/projects/id/{project}/units/l")).await;
+    assert!(
+        sv_row(&unit, "l-close")
+            .contains("<span class=\"badge sv-tag\">bypass · orchestrator</span>"),
+        "{unit}"
     );
     let waiting = drawer(&state, project, "l-close").await;
     assert!(
-        waiting.contains("<span class=\"pill\">bypass · orchestrator</span>"),
+        waiting.contains("<span class=\"badge\">bypass · orchestrator</span>"),
         "{waiting}"
     );
     // land is set by hand: the preset settles close in the same transaction.
@@ -182,10 +190,16 @@ async fn a_bypassed_step_reads_bypassed_and_a_waiting_one_carries_its_tag() {
         .await
         .unwrap();
     let plan = page(&state, format!("/projects/id/{project}")).await;
-    // begun: its row at work, its steps under it
+    // begun: its row at work, its stage done (set by hand) and its tag gone
     let row = plan_html::row(&plan, "l");
+    let stage = plan_html::stage(row, "l-close");
+    assert!(
+        stage.contains("data-state=\"manual\"") && !stage.contains("bypass ·"),
+        "{row}"
+    );
     // its unit's step view: the state cell says it
-    let close = sv_row(row, "l-close");
+    let unit = page(&state, format!("/projects/id/{project}/units/l")).await;
+    let close = sv_row(&unit, "l-close");
     assert!(
         close.contains("aria-label=\"bypassed\"")
             && close.contains("<span class=\"st-w\" aria-hidden=\"true\">bypassed</span>"),
@@ -193,9 +207,9 @@ async fn a_bypassed_step_reads_bypassed_and_a_waiting_one_carries_its_tag() {
     );
     assert!(!close.contains("sv-tag"), "{close}");
     assert!(
-        sv_row(row, "l-land")
+        sv_row(&unit, "l-land")
             .contains("<span class=\"st-w\" aria-hidden=\"true\">set by hand</span>"),
-        "{row}"
+        "{unit}"
     );
     for html in [
         drawer(&state, project, "l-close").await,

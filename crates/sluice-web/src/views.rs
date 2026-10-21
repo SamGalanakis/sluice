@@ -62,8 +62,8 @@ impl fmt::Display for TrustedHtml {
     }
 }
 
-/// The one stylesheet every page loads, as served (`/static/style.css`): `assets/style.css`
-/// followed by each theme family's file in `assets/themes/`, joined by `build.rs`.
+/// The one stylesheet every page loads, as served (`/static/style.css`): `assets/style.css`,
+/// its font URLs fingerprinted by `build.rs`.
 pub const STYLESHEET: &str = include_str!(concat!(env!("OUT_DIR"), "/style.css"));
 
 /// The faces the stylesheet's `@font-face` rules use, vendored under `assets/fonts/` and served
@@ -75,174 +75,28 @@ pub fn served_assets() -> impl Iterator<Item = &'static Asset> {
     PAGES.iter().flat_map(|page| (page)().assets).chain(FONTS)
 }
 
-/// A theme (DESIGN.md, Themes): one complete look, a palette mapped onto every role in one
-/// scheme, light or dark. Its id is `data-theme` on the page and the `sluice_theme` cookie:
-/// `<family>-light` or `<family>-dark`, the family naming its palette in the stylesheet, the
-/// suffix its scheme.
+/// A theme (DESIGN.md, Themes): cenote's Paper (light) or Carbon (dark). Its id is
+/// `data-theme` on the page and the `sluice_theme` cookie; it sets `color-scheme`, which every
+/// colour token (each a `light-dark()` pair) follows.
 pub struct Theme {
     pub id: &'static str,
     pub name: &'static str,
-    /// Where its colours come from: the scheme, its author and its licence.
-    pub source: &'static str,
 }
 impl Theme {
     pub fn dark(&self) -> bool {
-        self.id.ends_with("-dark")
+        self.id == "carbon"
     }
 }
-/// Every theme the display preferences offer, one flat list, each light then dark. With none
-/// chosen (the first open) a page is Sluice Light or Sluice Dark by the system's scheme, and
-/// its script keeps that choice from then on.
+/// The two themes the display preferences offer. With none chosen (the first open) a page is
+/// Carbon unless the system asks for light, and its script keeps that choice from then on.
 pub const THEMES: &[Theme] = &[
     Theme {
-        id: "sluice-light",
-        name: "Sluice Light",
-        source: "The logo's own palette",
+        id: "paper",
+        name: "Paper",
     },
     Theme {
-        id: "sluice-dark",
-        name: "Sluice Dark",
-        source: "The logo's own palette",
-    },
-    Theme {
-        id: "solarized-light",
-        name: "Solarized Light",
-        source: "Solarized, Ethan Schoonover (MIT)",
-    },
-    Theme {
-        id: "solarized-dark",
-        name: "Solarized Dark",
-        source: "Solarized, Ethan Schoonover (MIT)",
-    },
-    Theme {
-        id: "nord-light",
-        name: "Nord Light",
-        source: "Nord, Arctic Ice Studio (MIT)",
-    },
-    Theme {
-        id: "nord-dark",
-        name: "Nord",
-        source: "Nord, Arctic Ice Studio (MIT)",
-    },
-    Theme {
-        id: "gruvbox-light",
-        name: "Gruvbox Light",
-        source: "Gruvbox, Pavel Pertsev (MIT/X11)",
-    },
-    Theme {
-        id: "gruvbox-dark",
-        name: "Gruvbox Dark",
-        source: "Gruvbox, Pavel Pertsev (MIT/X11)",
-    },
-    Theme {
-        id: "catppuccin-light",
-        name: "Catppuccin Latte",
-        source: "Catppuccin (MIT)",
-    },
-    Theme {
-        id: "catppuccin-dark",
-        name: "Catppuccin Mocha",
-        source: "Catppuccin (MIT)",
-    },
-    Theme {
-        id: "rose-pine-light",
-        name: "Rosé Pine Dawn",
-        source: "Rosé Pine (MIT)",
-    },
-    Theme {
-        id: "rose-pine-dark",
-        name: "Rosé Pine",
-        source: "Rosé Pine (MIT)",
-    },
-    Theme {
-        id: "flexoki-light",
-        name: "Flexoki Light",
-        source: "Flexoki, Steph Ango (MIT)",
-    },
-    Theme {
-        id: "flexoki-dark",
-        name: "Flexoki Dark",
-        source: "Flexoki, Steph Ango (MIT)",
-    },
-    Theme {
-        id: "empire-light",
-        name: "Empire Builder Light",
-        source: "Great Northern Railway livery, GNRHS Reference Sheet 28",
-    },
-    Theme {
-        id: "empire-dark",
-        name: "Empire Builder Dark",
-        source: "Great Northern Railway livery, GNRHS Reference Sheet 28",
-    },
-    Theme {
-        id: "williamsburg-light",
-        name: "Williamsburg Light",
-        source: "Benjamin Moore Williamsburg Collection",
-    },
-    Theme {
-        id: "williamsburg-dark",
-        name: "Williamsburg Dark",
-        source: "Benjamin Moore Williamsburg Collection",
-    },
-    Theme {
-        id: "interstate-light",
-        name: "Interstate Light",
-        source: "MUTCD sign colours, FHWA",
-    },
-    Theme {
-        id: "interstate-dark",
-        name: "Interstate Dark",
-        source: "MUTCD sign colours, FHWA",
-    },
-    Theme {
-        id: "ranger-light",
-        name: "Ranger Light",
-        source: "WPA Ranger Naturalist posters, Library of Congress",
-    },
-    Theme {
-        id: "ranger-dark",
-        name: "Ranger Dark",
-        source: "WPA Ranger Naturalist posters, Library of Congress",
-    },
-    Theme {
-        id: "parks-light",
-        name: "Park Service Light",
-        source: "NPS UniGuide standards",
-    },
-    Theme {
-        id: "parks-dark",
-        name: "Park Service Dark",
-        source: "NPS UniGuide standards",
-    },
-    Theme {
-        id: "kodachrome-light",
-        name: "Kodachrome Light",
-        source: "Kodak trade dress",
-    },
-    Theme {
-        id: "kodachrome-dark",
-        name: "Kodachrome Dark",
-        source: "Kodak trade dress",
-    },
-    Theme {
-        id: "fiesta-light",
-        name: "Fiesta Light",
-        source: "Fiesta ware glazes (unofficial matches)",
-    },
-    Theme {
-        id: "fiesta-dark",
-        name: "Fiesta Dark",
-        source: "Fiesta ware glazes (unofficial matches)",
-    },
-    Theme {
-        id: "atlas-light",
-        name: "Road Atlas Light",
-        source: "Rand McNally road map, 1926",
-    },
-    Theme {
-        id: "atlas-dark",
-        name: "Road Atlas Dark",
-        source: "Rand McNally road map, 1926",
+        id: "carbon",
+        name: "Carbon",
     },
 ];
 fn theme(id: &str) -> Option<&'static Theme> {
@@ -466,8 +320,8 @@ impl ProjectView {
         words.push_str(&self.name);
         words
     }
-    /// The favicon its plan's tab wears with `tab_words`: the mark with a coral dot while a
-    /// question waits on the owner, a sand square while a step needs a look, else the mark.
+    /// The favicon its plan's tab wears with `tab_words`: the mark with a teal dot while a
+    /// question waits on the owner, an ochre square while a step needs a look, else the mark.
     pub fn favicon(&self) -> &'static str {
         if !self.asks.is_empty() {
             "favicon-ask.svg"
@@ -476,6 +330,11 @@ impl ProjectView {
         } else {
             "favicon.svg"
         }
+    }
+    /// Something waits on the owner: a question, or a step that needs a look and was not set
+    /// aside. The sidebar's teal dot.
+    pub fn needs_owner(&self) -> bool {
+        !self.asks.is_empty() || self.looks > 0
     }
     pub fn summary(&self) -> &str {
         self.description.split("\n\n").next().unwrap_or("")
@@ -579,6 +438,9 @@ pub struct DashboardState {
     /// Claude's config home, where its session transcripts are (an agent run's activity):
     /// `CLAUDE_CONFIG_DIR`, else `~/.claude`, as Claude finds it.
     pub claude_home: Option<std::path::PathBuf>,
+    /// Seconds a long run may publish nothing before the plan asks the owner to look
+    /// (config.json's `long_run_quiet_h`, read when the dashboard starts).
+    pub long_run_quiet: f64,
 }
 impl DashboardState {
     pub fn new(reads: ReadPool, catalog: Arc<dyn CatalogSource>) -> Self {
@@ -589,7 +451,13 @@ impl DashboardState {
             stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             plans: board::PlanCache::default(),
             claude_home: sluice_agents::activity::Homes::claude_from_env(),
+            long_run_quiet: sluice_runtime::config::DEFAULT_LONG_RUN_QUIET_H * 3600.0,
         }
+    }
+    /// How long (hours) a long run may publish nothing before it needs a look.
+    pub fn with_long_run_quiet(mut self, hours: f64) -> Self {
+        self.long_run_quiet = hours * 3600.0;
+        self
     }
     pub fn with_clock(mut self, clock: crate::clock::Clock) -> Self {
         self.clock = clock;
@@ -692,10 +560,7 @@ pub struct NavView {
     pub links: Vec<NavLink>,
     pub inbox: usize,
     pub notes: usize,
-    pub settings_href: String,
     pub selected: Option<ProjectId>,
-    /// The current project's mark in the switcher: its icon, else its initial in a square.
-    pub icon: TrustedHtml,
 }
 impl NavView {
     pub fn new(
@@ -719,29 +584,34 @@ impl NavView {
             .flat_map(|page| ((page)().nav)(project))
             .collect::<Vec<_>>();
         sections.sort_by_key(|entry| entry.order);
-        // the switcher lists projects as the index does: most urgent first
+        // the sidebar lists the projects by name, so a row never moves under the pointer
         let mut projects = snapshot.projects.clone();
-        projects.sort_by_key(|p| (p.counts.total() == 0, p.shown()));
+        projects.sort_by_key(|p| p.name.to_lowercase());
+        let mut links: Vec<NavLink> = sections
+            .into_iter()
+            .map(|entry| NavLink {
+                href: entry.href,
+                label: entry.label.into(),
+                current: entry.key == tab,
+            })
+            .collect();
+        // a project's settings are its last section
+        if let Some(p) = chosen {
+            links.push(NavLink {
+                href: format!("{}/settings", p.href()),
+                label: "Settings".into(),
+                current: tab == "settings",
+            });
+        }
         Ok(Self {
             projects,
             label: chosen
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "All projects".into()),
-            links: sections
-                .into_iter()
-                .map(|entry| NavLink {
-                    href: entry.href,
-                    label: entry.label.into(),
-                    current: entry.key == tab,
-                })
-                .collect(),
+            links,
             inbox: snapshot.inbox,
             notes: snapshot.notes,
-            settings_href: chosen
-                .map(|p| format!("{}/settings", p.href()))
-                .unwrap_or_default(),
             selected: project,
-            icon: chosen.map(ui::project_mark).unwrap_or_default(),
         })
     }
 }
@@ -764,18 +634,18 @@ impl NavView {
         keys
     }
 }
-/// What a page puts in the frame around it (DESIGN.md, The page head): its row under the slim
-/// nav bar (its sections, a count line such as "12 units · 40 steps" and its tools, a find and
-/// the view switch), then its head on the paper (`ui::page_head`: its name, and on the plan and
-/// home the summary sentence). The row comes first on every page, so it never moves with a
-/// head's height. A page with none of it draws the nav bar alone.
+/// What a page puts in the frame around it (DESIGN.md, The frame): its head on the sheet under
+/// the top bar (`ui::page_head`: its name, or on the plan and home only the summary sentence),
+/// and what its sidebar's find does (the plan's live find; elsewhere in a project a find that
+/// goes to its plan). A page with none of it draws the frame alone.
 #[derive(Clone, Debug, Default)]
 pub struct Frame {
-    /// Under the bar on the paper: the page's lead line, or its head where its name says what
-    /// the bar does not (a unit, a step, a thread).
+    /// Under the top bar on the sheet: the page's lead line, or its head where its name says
+    /// what the bar does not (a unit, a step, a thread).
     pub head: TrustedHtml,
-    /// In the bar, between the tabs and Inbox: the plan's Find and its view switch.
-    pub tools: TrustedHtml,
+    /// In the sidebar under its head: the page's find ("" for the project's default, a find on
+    /// its plan; none on a page of no project).
+    pub find: TrustedHtml,
     /// The page's own signals beside the frame's (`ver`, `stale`): what it sends its stream
     /// when it opens it (the plan's find and read cursor).
     pub signals: serde_json::Map<String, serde_json::Value>,
@@ -799,17 +669,52 @@ struct Layout<'a> {
     /// The build that drew the page (`streams::release`): a stream from another says so.
     release: &'static str,
 }
-/// The bar on the band (`templates/bar.html`, which `layout.html` includes): the nav a stream
-/// patches (`render_nav`) and the page's tools beside it.
+/// The sidebar (`templates/sidebar.html`), around its project list (`side_nav`).
 #[derive(Template)]
-#[template(path = "bar.html")]
-pub struct Bar<'a> {
+#[template(path = "sidebar.html")]
+pub struct Sidebar<'a> {
     pub frame: &'a Frame,
     pub nav: &'a NavView,
     pub viewer: &'a Viewer,
-    /// The page's stream ("" for none: no Live).
+    pub path: &'a str,
+}
+/// The top bar (`templates/bar.html`), around its sections and Inbox (`top_nav`).
+#[derive(Template)]
+#[template(path = "bar.html")]
+pub struct Bar<'a> {
+    pub nav: &'a NavView,
+    /// The page's stream ("" for none: no paused line).
     pub stream: &'a str,
     pub path: &'a str,
+}
+#[derive(Template)]
+#[template(path = "side_head.html")]
+struct SideHead<'a> {
+    nav: &'a NavView,
+}
+#[derive(Template)]
+#[template(path = "side_nav.html")]
+struct SideNav<'a> {
+    nav: &'a NavView,
+    path: &'a str,
+}
+#[derive(Template)]
+#[template(path = "top_nav.html")]
+struct TopNav<'a> {
+    nav: &'a NavView,
+    path: &'a str,
+}
+/// The sidebar's head (`#side-head`): the current project, a stream region of its own.
+pub fn side_head(nav: &NavView) -> TrustedHtml {
+    TrustedHtml::from_template(&SideHead { nav }).expect("the side head renders")
+}
+/// The sidebar's projects (`#side-nav`), a stream region of its own.
+pub fn side_nav(nav: &NavView, path: &str) -> TrustedHtml {
+    TrustedHtml::from_template(&SideNav { nav, path }).expect("the side nav renders")
+}
+/// The top bar's crumb, sections and Inbox (`#top-nav`), a stream region of its own.
+pub fn top_nav(nav: &NavView, path: &str) -> TrustedHtml {
+    TrustedHtml::from_template(&TopNav { nav, path }).expect("the top nav renders")
 }
 pub fn render_layout(
     title: &str,
@@ -843,6 +748,22 @@ pub fn render_framed(
     path: &str,
     frame: &Frame,
 ) -> Result<TrustedHtml, askama::Error> {
+    // a project's page finds on its plan unless it has a find of its own (the plan's live one)
+    let mut framed;
+    let frame = match nav.selected {
+        Some(project) if frame.find.as_str().is_empty() => {
+            framed = frame.clone();
+            framed.find = ui::find_field(
+                &format!("/projects/id/{project}"),
+                "",
+                "Find steps",
+                "Find units and steps on this project's plan",
+                "",
+            );
+            &framed
+        }
+        _ => frame,
+    };
     TrustedHtml::from_template(&Layout {
         title,
         frame,
@@ -887,31 +808,23 @@ fn import_map() -> &'static str {
             .replace("</", "<\\/")
     })
 }
-/// Render the shared stable nav target for a sibling page's patch batch. Only a streamed page
-/// patches its nav, so it is drawn as a streamed page's is: with its live line.
-pub fn render_nav(
-    nav: &NavView,
-    viewer: &Viewer,
-    path: &str,
-) -> Result<TrustedHtml, askama::Error> {
-    let layout = TrustedHtml::from_template(&Bar {
-        frame: &Frame::default(),
-        nav,
-        viewer,
-        stream: "streamed",
-        path,
-    })?;
-    let start = layout
-        .as_str()
-        .find("<nav id=\"top-nav\"")
-        .expect("the bar has its nav");
-    // the bar's nav holds the project's tabs, a nav of their own: it ends at its marker
-    let end = start
-        + layout.as_str()[start..]
-            .find("</nav><!--/top-nav-->")
-            .expect("the bar closes its nav")
-        + 6;
-    Ok(TrustedHtml::owned(layout.as_str()[start..end].into()))
+/// The frame's parts a page's stream patches: the sidebar's projects and the top bar's
+/// sections and Inbox, each a region of its own.
+pub fn nav_regions(nav: &NavView, path: &str) -> Vec<crate::streams::PatchRegion> {
+    vec![
+        crate::streams::PatchRegion::new("side-head", side_head(nav)),
+        crate::streams::PatchRegion::new("side-nav", side_nav(nav, path)),
+        crate::streams::PatchRegion::new("top-nav", top_nav(nav, path)),
+    ]
+}
+/// `nav_regions` as one text, for a stream's version.
+pub fn nav_text(nav: &NavView, path: &str) -> String {
+    format!(
+        "{}{}{}",
+        side_head(nav),
+        side_nav(nav, path),
+        top_nav(nav, path)
+    )
 }
 /// Every embedded asset's fingerprint, folded into one: what a release's pages look and act
 /// like (`streams::release`).
@@ -1043,13 +956,19 @@ impl NavView {
         }
         label
     }
-    pub fn has_archived(&self) -> bool {
-        self.projects.iter().any(|p| p.archived)
-    }
 }
 impl NavView {
     pub fn is_selected(&self, id: &ProjectId) -> bool {
         self.selected.as_ref() == Some(id)
+    }
+    /// The page's project, when it has one: the sidebar's head names it.
+    pub fn current(&self) -> Option<&ProjectView> {
+        let id = self.selected?;
+        self.projects.iter().find(|p| p.id == id)
+    }
+    /// The sidebar's rows: every live project, by name.
+    pub fn sidebar(&self) -> impl Iterator<Item = &ProjectView> {
+        self.projects.iter().filter(|p| !p.archived)
     }
 }
 

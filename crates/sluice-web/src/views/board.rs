@@ -578,6 +578,10 @@ pub struct ProjectView {
     /// This viewer's roster order, read from the project cookie on pages and streams.
     #[serde(skip)]
     pub order: super::plan::Order,
+    /// Seconds a long run may publish nothing before Needs you asks the owner to look
+    /// (`DashboardState::long_run_quiet`).
+    #[serde(skip)]
+    pub long_quiet: f64,
     /// The items of its Needs you the owner set aside (`NeedsDismiss`), newest first.
     #[serde(skip)]
     pub set_aside: Vec<sluice_store::messages::SetAside>,
@@ -589,6 +593,8 @@ pub struct Question {
     pub message: i64,
     pub body: String,
     pub at: String,
+    /// It asks through a form of its own (`ui`): it is answered on its page, not in a line.
+    pub form: bool,
 }
 impl ProjectView {
     pub fn new(
@@ -677,6 +683,7 @@ impl ProjectView {
             set_aside: vec![],
             seen: None,
             order: Default::default(),
+            long_quiet: sluice_runtime::config::DEFAULT_LONG_RUN_QUIET_H * 3600.0,
         };
         view.settle();
         view
@@ -1372,11 +1379,17 @@ pub fn load_board(
         }
     }
     // each open question to the owner as asked: its words and when
-    let mut asked = c.prepare_cached("SELECT body,at FROM messages WHERE project_id=?1 AND id=?2")?;
+    let mut asked = c.prepare_cached(
+        "SELECT body,at,coalesce(ui,'')!='' FROM messages WHERE project_id=?1 AND id=?2",
+    )?;
     for ask in &summary.asks {
-        if let Some((body, at)) = asked
+        if let Some((body, at, form)) = asked
             .query_row(rusqlite::params![project.to_string(), ask.message], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, bool>(2)?,
+                ))
             })
             .optional()?
         {
@@ -1384,6 +1397,7 @@ pub fn load_board(
                 message: ask.message,
                 body,
                 at,
+                form,
             });
         }
     }
@@ -2049,6 +2063,7 @@ async fn load(
         })
         .await
         .map_err(|e| e.into_public(true))?;
+    board.long_quiet = state.long_run_quiet;
     attach_pulses(state, &shared, project, &mut board).await;
     Ok((shared, board, loaded))
 }
@@ -2343,7 +2358,6 @@ pub async fn project_stream(
     Query(query): Query<BoardQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let viewer = Viewer::from_headers(&headers);
     let headers = std::sync::Arc::new(headers);
     let stop = state.stop.clone();
     let version = StreamQuery {
@@ -2366,7 +2380,6 @@ pub async fn project_stream(
     let watch = state.watch(Some(project));
     let loader = move || {
         let state = state.clone();
-        let viewer = viewer.clone();
         let query = query.clone();
         let registry = registry.clone();
         let cache = cache.clone();
@@ -2391,7 +2404,7 @@ pub async fn project_stream(
                 Some(seen) => Some(seen),
                 None => super::plan::seen_of(&headers, project),
             };
-            Ok(super::plan::draw(&view, &shared, &viewer)?.2)
+            Ok(super::plan::draw(&view, &shared)?.2)
         }
     };
     Sse::new(streams::page_events(
@@ -2465,6 +2478,10 @@ pub fn registration() -> super::PageRegistration {
                 .route(
                     "/projects/id/{project}/pulse",
                     get(super::pulse::details),
+                )
+                .route(
+                    "/projects/id/{project}/ref",
+                    get(super::plan::reference),
                 )
                 .route(
                     "/projects/id/{project}/seen",

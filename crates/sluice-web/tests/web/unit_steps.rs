@@ -96,7 +96,7 @@ fn answered(browser: &mut Chrome) -> Value {
 /// (a pick answered by an earlier one, the minute misread from the pointer), or its details
 /// leak into the page and its stream. Pointing at a row's tall mark shows that minute's message
 /// on the reader's clock; the arrows move the popover to the minute before, Escape closes it;
-/// a drilldown's strip says its calls with a link into its step's Activity, and its faded left
+/// a minute of calls says them with a link into its step's Activity, and the strip's faded left
 /// edge says when its run began.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_a_strips_marks_say_what_its_agent_did_that_minute() {
@@ -104,7 +104,7 @@ async fn slow_chromium_a_strips_marks_say_what_its_agent_did_that_minute() {
     let n = neutral::seed(&f.writer, f._home.path()).await;
     let id = n.almanac;
     // Isolate the command minutes: the dense showcase fixture can put adjacent marks
-    // less than a pixel apart on the drilldown's strip.
+    // less than a pixel apart on the row's strip.
     neutral::lay_pulse(
         &f.writer,
         f._home.path(),
@@ -140,12 +140,8 @@ async fn slow_chromium_a_strips_marks_say_what_its_agent_did_that_minute() {
         browser.wait("!document.getElementById('pulse-pop').matches(':popover-open')").unwrap();
         // pointing never opened the row
         assert_eq!(browser.eval("document.querySelector('#u-a-6').open").unwrap(), json!(false));
-        // its drilldown: the running step's latest minute, its calls and where Activity has them
-        browser.eval("document.querySelector('#u-a-6 .ro-t').click()").unwrap();
-        browser.wait("document.querySelector('#drill-a-6 sluice-pulse[data-rocket-host]')").unwrap();
-        browser.eval(FRAMES).unwrap();
-        let drill = "#drill-a-6 sluice-pulse";
-        let (x, y, minute, _) = aim(&mut browser, drill, "i.pk:not(.pk-m):not(.pk-start)");
+        // a minute of calls: what was run, and where its step's Activity has them
+        let (x, y, minute, _) = aim(&mut browser, row, "i.pk:not(.pk-m):not(.pk-start)");
         point(&mut browser, x, y);
         let pop = answered(&mut browser);
         assert_eq!(pop["at"], json!(minute), "{pop}");
@@ -157,10 +153,10 @@ async fn slow_chromium_a_strips_marks_say_what_its_agent_did_that_minute() {
         );
         // its run began before the hour: its left edge fades and says when
         assert_eq!(
-            browser.eval(&format!("[document.querySelector({}).hasAttribute('data-before'), document.querySelector({}).hasAttribute('data-before')]", json!(drill), json!(row))).unwrap(),
-            json!([true, true])
+            browser.eval(&format!("document.querySelector({}).hasAttribute('data-before')", json!(row))).unwrap(),
+            json!(true)
         );
-        let (_, y, _, left) = aim(&mut browser, drill, "i.pk");
+        let (_, y, _, left) = aim(&mut browser, row, "i.pk");
         point(&mut browser, left + 3.0, y);
         browser.wait("document.getElementById('pulse-pop').innerText.startsWith('Started 1h')").unwrap();
         let pop = answered(&mut browser);
@@ -172,10 +168,6 @@ async fn slow_chromium_a_strips_marks_say_what_its_agent_did_that_minute() {
     .unwrap();
     server.abort();
 }
-/// The open step view of l1 as the page reads it: each row's step and state word, and whether
-/// the row is selected.
-const ROWS: &str = "[...document.querySelectorAll('#u-l1[open] li.sv-row')].map(r => [r.dataset.sv, r.querySelector('.st-w').textContent, r.classList.contains('is-sel')])";
-
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_the_drawers_strip_and_step_view_say_quiet_like_the_plan() {
     let f = Fixture::new().await;
@@ -196,15 +188,19 @@ async fn slow_chromium_the_drawers_strip_and_step_view_say_quiet_like_the_plan()
     tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}#step:a-6-draft")).unwrap();
         browser.wait("document.querySelector('#step-detail[data-step=\"a-6-draft\"] .sh-lane')").unwrap();
-        assert_eq!(browser.eval("document.querySelector('#u-a-6 .pill.look') !== null").unwrap(), json!(true));
-        assert_eq!(browser.eval("document.querySelector('#step-detail .sh-lane .sc[data-state=\"quiet\"] .sc-word')?.textContent").unwrap(), json!("quiet"));
-        assert_eq!(browser.eval("document.querySelector('#step-detail li[data-sv=\"a-6-draft\"] .st-w')?.textContent").unwrap(), json!("quiet"));
+        // the row's track and the drawer's say the stage is quiet, in the same words
+        assert_eq!(browser.eval("document.querySelector('#u-a-6 .track li.st[data-state=\"quiet\"] .st-n')?.textContent").unwrap(), json!("draft"));
+        assert_eq!(browser.eval("document.querySelector('#step-detail .sh-lane li.st[data-state=\"quiet\"] .st-w')?.textContent.startsWith('quiet ')").unwrap(), json!(true));
     }).await.unwrap();
     server.abort();
 }
 
+/// A row of At work opens in place to its conversation and its ways on (no step table), asked
+/// for as it opens; it stays open through the stream's patches, and its new stamp asks again, so
+/// its Open step follows the unit to its next step. The bug this catches: a patch that closes an
+/// open row, or leaves its body saying a step it has moved past.
 #[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_a_row_opens_its_step_view_in_place_through_a_patch() {
+async fn slow_chromium_a_row_opens_its_conversation_in_place_through_a_patch() {
     let f = Fixture::new().await;
     let id = f.titled().await;
     let (addr, server) = serve(&f);
@@ -215,56 +211,40 @@ async fn slow_chromium_a_row_opens_its_step_view_in_place_through_a_patch() {
         let mut browser = Chrome::open(&page).unwrap();
         browser.viewport(1440, "light").unwrap();
         browser
-            .wait("customElements.get('sluice-steps') && document.querySelector('#u-l1 > summary')")
+            .wait("customElements.get('sluice-board') && document.querySelector('#u-l1 > summary')")
             .unwrap();
-        // closed at first, its view not drawn: the page has only the rows
+        // closed at first, its body not drawn: the page has only the rows
         assert_eq!(
-            browser.eval("[document.querySelector('#u-l1').open, document.querySelector('#u-l1 sluice-steps')]").unwrap(),
+            browser.eval("[document.querySelector('#u-l1').open, document.querySelector('#u-l1 .ro-foot')]").unwrap(),
             json!([false, null])
         );
-        // Enter on the row opens it, asking for its view
+        // Enter on the row opens it, asking for its body
         browser.eval("document.querySelector('#u-l1 > summary').focus()").unwrap();
         press(&mut browser, "Enter", 13);
-        browser.wait("document.querySelector('#u-l1').open && document.querySelector('#u-l1 sluice-steps')").unwrap();
+        browser.wait("document.querySelector('#u-l1').open && document.querySelector('#u-l1 .ro-foot')").unwrap();
         browser.eval(FRAMES).unwrap();
-        assert_eq!(browser.eval("document.querySelector('#u-l1 sluice-steps').checkVisibility()").unwrap(), json!(true));
-        // its rows: the unit's steps in its recipe's order, each with its state's word
+        // no step table; its ways on, Open step at its current step
         assert_eq!(
-            browser.eval(ROWS).unwrap(),
-            json!([["l1-fork", "succeeded", false], ["l1-work", "running", false], ["l1-land", "pending", false]])
+            browser.eval("[!!document.querySelector('#u-l1 sluice-steps'), [...document.querySelectorAll('#u-l1 .ro-foot a')].map(a => a.textContent), document.querySelector('#u-l1 .ro-foot a.btn').dataset.step]").unwrap(),
+            json!([false, ["Message", "Unit page", "Open step"], "l1-work"])
         );
-        // the view sits under the row
+        // the body sits under the row, on its edges
         let geometry = browser
-            .eval("(() => { const row = document.querySelector('#u-l1 > summary').getBoundingClientRect(), view = document.querySelector('#u-l1 sluice-steps').getBoundingClientRect(); return [view.top >= row.bottom, view.left >= row.left - 0.5, view.right <= row.right + 0.5]; })()")
+            .eval("(() => { const row = document.querySelector('#u-l1 > summary').getBoundingClientRect(), body = document.querySelector('#u-l1 .ro-drill').getBoundingClientRect(); return [body.top >= row.bottom - 0.5, Math.abs(body.left - row.left) < 0.5, Math.abs(body.right - row.right) < 0.5]; })()")
             .unwrap();
         assert_eq!(geometry, json!([true, true, true]));
-        // the arrows move between its rows' links, the row in focus selected
-        browser.eval("document.querySelector('#u-l1 li.sv-row a.sv-a').focus()").unwrap();
-        press(&mut browser, "ArrowDown", 40);
-        assert_eq!(
-            browser.eval("[document.activeElement.closest('li.sv-row')?.dataset.sv, document.querySelector('#u-l1 sluice-steps').getAttribute('selected')]").unwrap(),
-            json!(["l1-work", "l1-work"])
-        );
-        press(&mut browser, "End", 35);
-        assert_eq!(browser.eval("document.activeElement.closest('li.sv-row')?.dataset.sv").unwrap(), json!("l1-land"));
-        press(&mut browser, "Home", 36);
-        assert_eq!(browser.eval("document.activeElement.closest('li.sv-row')?.dataset.sv").unwrap(), json!("l1-fork"));
-        // a click on a step's row (not on its link) opens the step in the drawer, the row ringed
-        click(&mut browser, "#u-l1 li.sv-row[data-sv='l1-work'] .sv-st");
+        // Open step opens the step in the drawer
+        click(&mut browser, "#u-l1 .ro-foot a.btn");
         browser.wait("location.hash === '#step:l1-work' && !document.getElementById('drawer').hidden").unwrap();
         browser.wait("document.querySelector('#step-detail[data-step=\"l1-work\"] #d-title')").unwrap();
-        assert_eq!(
-            browser.eval("document.querySelector('#u-l1 li.sv-row.is-sel')?.dataset.sv").unwrap(),
-            json!("l1-work")
-        );
         press(&mut browser, "Escape", 27);
         browser.wait("location.hash === '' && document.getElementById('drawer').hidden").unwrap();
         // Space on another row opens it too
         browser.eval("window.other = [...document.querySelectorAll('details.ro-u')].find(d => d.id !== 'u-l1').id; document.querySelector(`#${other} > summary`).focus()").unwrap();
         press(&mut browser, " ", 32);
-        browser.wait("document.getElementById(other).open && document.getElementById(other).querySelector('sluice-steps')").unwrap();
-        // a stream patch: l1's work finishes, so l1 waits on its next step, drawn anew; its
-        // view stays open and, asked for again by the row's new stamp, says the new state
+        browser.wait("document.getElementById(other).open && document.getElementById(other).querySelector('.ro-foot')").unwrap();
+        // a stream patch: l1's work finishes, so l1 waits on its next step, drawn anew; it
+        // stays open and, asked for again by the row's new stamp, leads to the new step
         assert_eq!(browser.eval("document.querySelector('#u-l1').classList.contains('is-wait')").unwrap(), json!(false));
         rt.block_on(async {
             writer
@@ -284,29 +264,23 @@ async fn slow_chromium_a_row_opens_its_step_view_in_place_through_a_patch() {
             .unwrap();
         browser.wait("document.querySelector('#u-l1').open").unwrap();
         browser
-            .wait("document.querySelector('#u-l1 li.sv-row[data-sv=\"l1-work\"] .st-w')?.textContent === 'succeeded'")
+            .wait("document.querySelector('#u-l1 .ro-foot a.btn')?.dataset.step === 'l1-land'")
             .unwrap();
-        browser.eval(FRAMES).unwrap();
-        assert_eq!(
-            browser.eval(ROWS).unwrap(),
-            json!([["l1-fork", "succeeded", false], ["l1-work", "succeeded", false], ["l1-land", "pending", false]])
-        );
         assert_eq!(browser.eval("document.getElementById(other).open").unwrap(), json!(true));
 
-        // at every width and in the three themes: nothing scrolls sideways, nothing in a row
-        // spills, every rail runs its row's height and the row is a whole target
-        for theme in ["light", "dark", "interstate-light"] {
+        // at every width, in both stocks: nothing scrolls sideways, the body keeps its row's edges,
+        // and the row is a whole target
+        for theme in ["light", "dark"] {
             for width in [390, 1440, 2560] {
                 browser.viewport(width, theme).unwrap();
                 browser.eval(FRAMES).unwrap();
                 let g: Value = browser
-                    .eval("(() => { const view = document.querySelector('#u-l1 sluice-steps'); const rows = [...view.querySelectorAll('li.sv-row')]; const out = view.getBoundingClientRect(); const sum = document.querySelector('#u-l1 > summary').getBoundingClientRect(); return {fits: document.documentElement.scrollWidth <= document.documentElement.clientWidth, inside: rows.every(r => { const b = r.getBoundingClientRect(); return b.left >= out.left - 0.5 && b.right <= out.right + 0.5; }), spills: rows.flatMap(r => [...r.querySelectorAll('.sv-name, .sv-st, .sv-pr, .sv-sp, .sv-tr')].filter(e => e.scrollWidth > e.clientWidth + 1).map(e => r.dataset.sv + ' ' + e.className)), rails: rows.every(r => { const a = r.getBoundingClientRect(), s = r.querySelector('.sv-rail > svg').getBoundingClientRect(); return Math.abs(a.top - s.top) < 1 && Math.abs(a.bottom - s.bottom) < 1; }), target: [Math.round(sum.width), Math.round(sum.height)], errors: window.browserErrors}; })()")
+                    .eval("(() => { const body = document.querySelector('#u-l1 .ro-drill').getBoundingClientRect(); const sum = document.querySelector('#u-l1 > summary').getBoundingClientRect(); return {fits: document.documentElement.scrollWidth <= document.documentElement.clientWidth, inside: Math.abs(body.left - sum.left) < 0.5 && Math.abs(body.right - sum.right) < 0.5, spills: [...document.querySelectorAll('#u-l1 .ro-drill .msg, #u-l1 .ro-foot')].filter(e => e.scrollWidth > e.clientWidth + 1).length, target: [Math.round(sum.width), Math.round(sum.height)], errors: window.browserErrors}; })()")
                     .unwrap();
                 let label = format!("{width} {theme}");
                 assert_eq!(g["fits"], true, "{label}: {g}");
                 assert_eq!(g["inside"], true, "{label}: {g}");
-                assert_eq!(g["spills"], json!([]), "{label}: {g}");
-                assert_eq!(g["rails"], true, "{label}: {g}");
+                assert_eq!(g["spills"], 0, "{label}: {g}");
                 let least = if width == 390 { 44 } else { 34 };
                 assert!(g["target"][0].as_i64().unwrap() >= least && g["target"][1].as_i64().unwrap() >= least, "{label}: {g}");
                 assert_eq!(g["errors"], json!([]), "{label}: {g}");

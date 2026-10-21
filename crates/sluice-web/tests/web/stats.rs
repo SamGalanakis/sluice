@@ -296,7 +296,7 @@ async fn windows_outcomes_and_stage_statistics() {
         let (status, page) = get(&router, &format!("/projects/id/{}/stats", n.almanac)).await;
         assert_eq!(status, StatusCode::OK, "{page}");
         // the tab after Day, current; the head says what the window holds
-        let tabs = page.split("<nav class=\"tabs bar-tabs\"").nth(1).unwrap();
+        let tabs = page.split("<nav class=\"sections\"").nth(1).unwrap();
         let tabs = &tabs[..tabs.find("</nav>").unwrap()];
         let day = tabs.find(">Day</a>").unwrap();
         let stats = tabs

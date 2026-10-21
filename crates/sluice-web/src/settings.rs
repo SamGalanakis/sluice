@@ -587,7 +587,7 @@ impl ProjectSettingsView {
             retire_keep: self.retire_keep(),
         })
     }
-    fn batch(&self, viewer: &Viewer) -> Result<RenderedBatch, PublicError> {
+    fn batch(&self) -> Result<RenderedBatch, PublicError> {
         let nav = NavView::new(&self.shared, Some(self.project.project_id), "settings")?;
         let body = self.body(None).map_err(render_error)?;
         // the forms one edits are left out: what is typed stays until it is saved
@@ -604,16 +604,11 @@ impl ProjectSettingsView {
         .map(|id| PatchRegion::new(id, TrustedHtml::owned(marked(&body, id).into())));
         Ok(RenderedBatch {
             version: self.version(),
-            regions: [
-                PatchRegion::new(
-                    "top-nav",
-                    views::render_nav(&nav, viewer, &self.path()).map_err(render_error)?,
-                ),
-                PatchRegion::new("settings-band", self.head()),
-            ]
-            .into_iter()
-            .chain(regions)
-            .collect(),
+            regions: views::nav_regions(&nav, &self.path())
+                .into_iter()
+                .chain([PatchRegion::new("settings-band", self.head())])
+                .chain(regions)
+                .collect(),
         })
     }
 }
@@ -1305,20 +1300,17 @@ async fn settings_stream(
     State(state): State<SettingsState>,
     Path(id): Path<ProjectId>,
     Query(query): Query<StreamQuery>,
-    headers: HeaderMap,
 ) -> Response {
     if let Err(e) = state.snapshot(id).await {
         return crate::http::error_response(e);
     }
-    let viewer = Viewer::from_headers(&headers);
     let stop = state.dashboard.stop.clone();
     let watch = state.dashboard.watch(Some(id));
     let loader = move || {
         let state = state.clone();
-        let viewer = viewer.clone();
         async move {
             match state.snapshot(id).await {
-                Ok(v) => v.batch(&viewer),
+                Ok(v) => v.batch(),
                 // deleted: its page goes home
                 Err(PublicError::NotFound {..}) => Ok(RenderedBatch { version:"deleted".into(), regions:vec![PatchRegion::new("settings-live", TrustedHtml::owned("<header id=\"settings-live\" data-init=\"window.location.assign('/')\">Project deleted.</header>".into()))] }),
                 Err(e) => Err(e),

@@ -179,13 +179,14 @@ try:
  def capture(name,width,theme):
   chrome.send('Emulation.setDeviceMetricsOverride',{'width':width,'height':1000,'deviceScaleFactor':1,'mobile':False})
   chrome.send('Emulation.setEmulatedMedia',{'features':[{'name':'prefers-color-scheme','value':theme}]})
-  chrome.eval("document.documentElement.dataset.theme='sluice-"+theme+"'")
+  chrome.eval("document.documentElement.dataset.theme='"+('paper' if theme=='light' else 'carbon')+"'")
   chrome.eval('document.fonts.ready')
   chrome.eval('window.scrollTo(0,0);new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
-  g=chrome.eval("(()=>{const content=document.querySelector('.settings-page, #projects, #functions').getBoundingClientRect(),nav=document.querySelector('#top-nav .switcher').getBoundingClientRect(),cog=document.querySelector('.project-settings')?.getBoundingClientRect();return {scroll:document.documentElement.scrollWidth,width:document.documentElement.clientWidth,left:content.left,nav:document.querySelector('.site-bar a.brand').getBoundingClientRect().left,column:content.width,height:document.documentElement.scrollHeight,cog:cog&&{width:cog.width,height:cog.height}}})()")
+  g=chrome.eval("(()=>{const content=document.querySelector('.settings-page, #projects, #functions').getBoundingClientRect(),bar=document.querySelector('header.top .top-in'),area=document.querySelector('.mainarea').getBoundingClientRect(),cog=document.querySelector('.project-settings')?.getBoundingClientRect();return {scroll:document.documentElement.scrollWidth,width:document.documentElement.clientWidth,left:content.left,nav:bar.getBoundingClientRect().left+parseFloat(getComputedStyle(bar).paddingLeft),areaLeft:area.left,areaRight:area.right,column:content.width,height:document.documentElement.scrollHeight,cog:cog&&{width:cog.width,height:cog.height}}})()")
   assert g['scroll']<=g['width'],(name,width,g)
   assert abs(g['left']-g['nav'])<1,(name,g)
-  assert abs(g['left']-(g['width']-g['column'])/2)<1,(name,g)
+  # the column centred in the room beside the sidebar
+  assert abs((g['left']-g['areaLeft'])-(g['areaRight']-g['left']-g['column']))<1,(name,g)
   if g.get('cog'): assert g['cog']['width']>=44 and g['cog']['height']>=44,g
   geometry.append({'state':name,'viewport':width,'theme':theme,**g})
   shot=chrome.send('Page.captureScreenshot',{'format':'png','captureBeyondViewport':True,'clip':{'x':0,'y':0,'width':width,'height':g['height'],'scale':1}})['data']
@@ -217,10 +218,10 @@ try:
  chrome.eval("document.querySelector('#project-description').focus();document.querySelector('#project-description').value='Draft words';document.querySelector('#project-description').dispatchEvent(new Event('input',{bubbles:true}))")
  chrome.wait("document.querySelector('#description-preview').textContent.includes('Draft words')")
  assert not chrome.eval("requests.some(r=>r.endsWith('/settings'))")
- # Save details: renamed (the page's head and switcher follow), the draft saved with it
+ # Save details: renamed (the page's head and the sidebar follow), the draft saved with it
  save('details-form',{'name':'browser-project-renamed'})
  chrome.wait("document.title==='browser-project-renamed · Settings · sluice'")
- assert chrome.eval("document.querySelector('.sw-name').textContent==='browser-project-renamed'")
+ assert chrome.eval("document.querySelector('.sb-id b').textContent==='browser-project-renamed'")
  assert chrome.eval("location.pathname")==path
  assert chrome.eval("document.querySelector('#project-description').value==='Draft words'")
  assert chrome.eval("(async()=> (await fetch('/projects/browser-project/settings')).status)()")==404
@@ -248,7 +249,7 @@ try:
  assert chrome.eval("document.querySelector('#resource-workers').value==='-1'")
  states('resource-error')
  chrome.eval("document.querySelector('#activity-form button[name=paused]').click()")
- chrome.wait("document.querySelector('#settings-live .pill')?.textContent==='Paused'")
+ chrome.wait("document.querySelector('#settings-live .badge')?.textContent==='Paused'")
  states('paused')
  # Delete a live, unarchived project after its work finishes.
  chrome.wait("document.querySelector('#delete-button').getAttribute('aria-disabled')!=='true'")
@@ -283,9 +284,9 @@ try:
  deadline=time.monotonic()+20
  while chrome.send('Page.getFrameTree')['frameTree']['frame']['url']!=url+'/':
   assert time.monotonic()<deadline, ('delete did not navigate home', chrome.eval("[document.querySelector('#confirmation').open, document.querySelector('#confirmation').innerHTML.slice(0,2000), errors]"))
- chrome.wait("document.readyState==='complete' && !!document.querySelector('.switcher')")
+ chrome.wait("document.readyState==='complete' && !!document.querySelector('#side-nav')")
  assert chrome.eval("location.pathname==='/'")
- assert not chrome.eval('document.querySelector(".switcher").textContent.includes("final-name")')
+ assert not chrome.eval('document.querySelector("#side-nav").textContent.includes("final-name")')
  (screens/'geometry.json').write_text(json.dumps(geometry,indent=2))
 finally:
  chrome.close()

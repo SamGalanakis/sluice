@@ -289,7 +289,7 @@ async fn slow_chromium_the_pages_keys_find_go_and_list_but_never_while_typing() 
             .unwrap();
         assert_eq!(
             browser
-                .eval("[document.querySelector('details.settings').open, document.querySelector('sluice-keys').closest('details.sub').open, document.querySelector('sluice-keys a[data-go]').checkVisibility(), document.querySelector('.sub-themes > summary').checkVisibility()]")
+                .eval("[document.querySelector('details.settings').open, document.querySelector('sluice-keys').closest('details.sub').open, document.querySelector('sluice-keys a[data-go]').checkVisibility(), document.querySelector('.pref-theme').checkVisibility()]")
                 .unwrap(),
             json!([true, true, true, false])
         );
@@ -466,7 +466,7 @@ async fn messages_retries_waits_and_run_files() {
             assert_eq!(plan_html::place(&page, unit), "", "{unit}");
         }
         assert!(
-            plan_html::band(&page, "plan-roster").contains("<b>3 waiting</b> on earlier work"),
+            plan_html::band(&page, "plan-roster").contains(">3 waiting on earlier work"),
             "{page}"
         );
         for (unit, on) in [

@@ -159,12 +159,13 @@ async fn the_plan_card_and_the_step_page_give_one_retry_advice() {
         said.push(on_card);
         let band = between(&page, "<header id=\"step-band\"", "</header>");
         if step == "rep" {
-            // a repeated failure: Retry with feedback leads on both (the plan's to its page's
-            // box), the bare Retry outlined beside it on the page
+            // a repeated failure: Retry with feedback leads on both (the plan's open in place
+            // under it), with no bare Retry on the plan; the page's Retry outlined beside it
             assert!(
-                card.contains(
-                    "/steps/rep#why-feedback\" data-step=\"rep\">Retry with feedback</a>"
-                ) && !card.contains("value=\"retry\""),
+                card.contains("data-fb aria-expanded=\"true\"")
+                    && card.contains("class=\"answer-in fb open\"")
+                    && card.contains("name=\"message\"")
+                    && !card.contains("id=\"retry-rep\""),
                 "{card}"
             );
             assert!(
@@ -379,8 +380,8 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_and_undo_brings_back
     let (_, plan) = f.get(&plan_href).await;
     let card = plan_html::stopped(&plan, "first");
     assert!(
-        card.contains("</b> cancelled after 4m. superseded.")
-            && card.contains("It had failed: process_lost: gone")
+        plan_html::line(card).starts_with("Fails once cancelled after 4m ·")
+            && plan_html::body(card) == "superseded. It had failed: process_lost: gone"
             && card.contains("value=\"stop:first\"")
             && card.contains(">Settle as done</button>"),
         "{card}"
@@ -400,8 +401,8 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_and_undo_brings_back
     let (_, plan) = f.get(&plan_href).await;
     let card = plan_html::stopped(&plan, "rep");
     assert!(
-        card.contains("</b> cancelled after 4m.")
-            && card.contains("Cancelled after it failed.")
+        plan_html::line(card).contains(" cancelled after 4m ·")
+            && plan_html::body(card).starts_with("Cancelled after it failed.")
             && !card.contains("Run 1 failed the same way"),
         "{card}"
     );
@@ -436,9 +437,9 @@ async fn slow_chromium_dismiss_a_stop_in_place_with_the_focus_on_undo() {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
         for (width, step) in [(1440, "first"), (390, "exited")] {
             browser.viewport(width, "light").unwrap();
-            browser.wait(&format!("document.querySelector('#n-stop-{step} button.icon')?.checkVisibility()")).unwrap();
+            browser.wait(&format!("document.querySelector('#n-stop-{step} button.x')?.checkVisibility()")).unwrap();
             browser.eval("window.marker = 'same document'; window.navigations = performance.getEntriesByType('navigation').length").unwrap();
-            browser.eval(&format!("document.querySelector('#n-stop-{step} button.icon').click()")).unwrap();
+            browser.eval(&format!("document.querySelector('#n-stop-{step} button.x').click()")).unwrap();
             browser.wait(&format!("document.activeElement?.id === 'undo-n-stop-{step}' && !document.querySelector('#n-stop-{step}')")).unwrap();
             assert_eq!(
                 browser.eval("[window.marker, performance.getEntriesByType('navigation').length === window.navigations, document.documentElement.scrollWidth <= innerWidth]").unwrap(),

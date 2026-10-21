@@ -123,11 +123,11 @@ async fn slow_in_chromium_a_cancel_set_aside_and_undone_in_place() {
         let mut browser = Chrome::open(&plan).unwrap();
         browser.viewport(1440, "light").unwrap();
         browser
-            .wait("document.querySelector('#n-stop-b button.icon')?.checkVisibility()")
+            .wait("document.querySelector('#n-stop-b button.x')?.checkVisibility()")
             .unwrap();
         browser.eval("(() => { const item = document.querySelector('#n-stop-b'); document.querySelector('#project-board').before(Object.assign(document.createElement('div'), {style:'height:700px'})); document.querySelector('#content').append(Object.assign(document.createElement('div'), {style:'height:1400px'})); window.scrollTo(0, item.getBoundingClientRect().top + scrollY - 400); window.dismissMarker = 'same document'; window.dismissNavigations = performance.getEntriesByType('navigation').length; window.dismissScroll = scrollY; })()").unwrap();
         browser
-            .eval("document.querySelector('#n-stop-b button.icon').click()")
+            .eval("document.querySelector('#n-stop-b button.x').click()")
             .unwrap();
         browser
             .wait("!document.querySelector('#n-stop-b') && document.activeElement?.id === 'undo-n-stop-b'")
@@ -145,9 +145,9 @@ async fn slow_in_chromium_a_cancel_set_aside_and_undone_in_place() {
             .wait("document.activeElement?.id === 'n-stop-b' && !document.querySelector('#undo-n-stop-b')")
             .unwrap();
         assert_eq!(browser.eval("[window.dismissMarker, performance.getEntriesByType('navigation').length === window.dismissNavigations, Math.abs(scrollY - window.dismissScroll) <= 3]").unwrap(), json!(["same document", true, true]));
-        browser.eval("window.realFetch = window.fetch; window.fetch = (...args) => /\\/(needs|actions)$/.test(String(args[0])) ? Promise.reject(new TypeError('Failed to fetch')) : realFetch(...args); document.querySelector('#n-stop-b button.icon').click()").unwrap();
+        browser.eval("window.realFetch = window.fetch; window.fetch = (...args) => /\\/(needs|actions)$/.test(String(args[0])) ? Promise.reject(new TypeError('Failed to fetch')) : realFetch(...args); document.querySelector('#n-stop-b button.x').click()").unwrap();
         browser.wait("document.querySelector('#n-stop-b .form-said[role=alert]')?.textContent.includes('Sluice did not answer')").unwrap();
-        assert_eq!(browser.eval("[window.dismissMarker, !document.querySelector('#n-stop-b button.icon').disabled]").unwrap(), json!(["same document", true]));
+        assert_eq!(browser.eval("[window.dismissMarker, !document.querySelector('#n-stop-b button.x').disabled]").unwrap(), json!(["same document", true]));
         assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
     })
     .await

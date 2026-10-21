@@ -560,13 +560,13 @@ async fn http_refusals_assets_and_shutdown() {
         let page = text_body(response).await;
         assert!(page.contains(">No such project</h1>"), "{page}");
         assert!(!page.contains("Invalid URL"), "{page}");
-        // the band sits in a header, its landmark named apart from the settings' index
+        // the shell: the sidebar of projects, then the top bar's header over the page
         assert!(
-        page.contains(
-            "<header class=\"site-head\"><div class=\"band-in site-bar\"><nav id=\"top-nav\" class=\"top\" aria-label=\"Main\">"
-        ),
-        "{page}"
-    );
+            page.contains(
+                "<aside class=\"sidebar\" id=\"sidebar\" aria-label=\"Projects and preferences\">"
+            ) && page.contains("<header class=\"top\"><div class=\"wrap top-in\">"),
+            "{page}"
+        );
         let page = text_body(get_with(&fixture, "/nowhere", &html).await).await;
         assert!(page.contains(">Nothing here</h1>"), "{page}");
         // a run's file names the run and the file

@@ -84,7 +84,7 @@ async fn slow_chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_
         browser.navigate(&failed).unwrap();
         browser.wait("document.readyState === 'complete'").unwrap();
         let band: Value = browser
-            .eval("(() => { const b = document.querySelector('.page-top #step-band'); return [b.querySelector('h1#d-title').textContent, b.querySelector('[aria-current=step] .sc-name').textContent, [...b.querySelectorAll('.sh-acts :is(button, summary)')].filter(x => x.checkVisibility()).map(x => x.textContent.trim())]; })()")
+            .eval("(() => { const b = document.querySelector('.page-top #step-band'); return [b.querySelector('h1#d-title').textContent, b.querySelector('[aria-current=step] .st-n').textContent, [...b.querySelectorAll('.sh-acts :is(button, summary)')].filter(x => x.checkVisibility()).map(x => x.textContent.trim())]; })()")
             .unwrap();
         // Retry with feedback, as on the plan's Stopped cards, its box folded; Retry beside it
         assert_eq!(
@@ -93,13 +93,13 @@ async fn slow_chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_
         );
 
         // Overview at 2560, in the frame's centred column: its two columns side by side from
-        // the top, seven and five twelfths, the sheet centred under the nav
+        // the top, seven and five twelfths, the sheet centred beside the sidebar under the bar
         browser.viewport(2560, "dark").unwrap();
         browser.navigate(&failed).unwrap();
         browser.wait("document.querySelector('#tp-overview .d-failure')").unwrap();
         browser.eval(FRAMES).unwrap();
         let cols: Value = browser
-            .eval("(() => { const c = [...document.querySelectorAll('#tp-overview .ov > .sheet > .mod-col')].map(e => e.getBoundingClientRect()), s = document.querySelector('#tp-overview .ov > .sheet').getBoundingClientRect(); return [c.length, Math.round(c[0].top) === Math.round(c[1].top), c[0].right < c[1].left, c[0].width > c[1].width, s.width <= 1440.5, Math.abs(s.left - (innerWidth - s.right)) < 24]; })()")
+            .eval("(() => { const c = [...document.querySelectorAll('#tp-overview .ov > .sheet > .mod-col')].map(e => e.getBoundingClientRect()), s = document.querySelector('#tp-overview .ov > .sheet').getBoundingClientRect(); return [c.length, Math.round(c[0].top) === Math.round(c[1].top), c[0].right < c[1].left, c[0].width > c[1].width, s.width <= 1240.5, (a => Math.abs((s.left - a.left) - (a.right - s.right)) < 24)(document.querySelector('.mainarea').getBoundingClientRect())]; })()")
             .unwrap();
         assert_eq!(cols, json!([2, true, true, true, true, true]));
 
@@ -212,8 +212,9 @@ async fn slow_chromium_run_budgets_and_resource_failures_fit_step_and_unit_pages
                     browser.navigate(url).unwrap();
                     browser.wait("document.readyState === 'complete'").unwrap();
                     browser.viewport(width, theme).unwrap();
-                    browser.eval(&format!("document.querySelector('input[name=theme][value=sluice-{theme}]').click()")).unwrap();
-                    browser.wait(&format!("document.documentElement.dataset.theme === 'sluice-{theme}' && getComputedStyle(document.documentElement).colorScheme === '{theme}'")).unwrap();
+                    let stock = if theme == "light" { "paper" } else { "carbon" };
+                    browser.eval(&format!("document.querySelector('input[name=theme][value={stock}]').click()")).unwrap();
+                    browser.wait(&format!("document.documentElement.dataset.theme === '{stock}' && getComputedStyle(document.documentElement).colorScheme === '{theme}'")).unwrap();
                     browser.eval("document.fonts.ready").unwrap();
                     if *name == "step-runs" {
                         browser
@@ -246,10 +247,12 @@ async fn slow_chromium_run_budgets_and_resource_failures_fit_step_and_unit_pages
                     let alignment = browser.eval(r#"(() => {
                         const head = document.querySelector('.page-top');
                         const rect = head.getBoundingClientRect();
-                        const nav = document.querySelector('#top-nav .brand').getBoundingClientRect();
+                        const bar = document.querySelector('header.top .top-in');
+                        const area = document.querySelector('.mainarea').getBoundingClientRect();
+                        const navLeft = bar.getBoundingClientRect().left + parseFloat(getComputedStyle(bar).paddingLeft);
                         const contentLeft = rect.left + parseFloat(getComputedStyle(head).paddingLeft);
-                        return [Math.abs(rect.left - (document.documentElement.clientWidth - rect.right)) <= 1,
-                                Math.abs(contentLeft - nav.left) <= 1];
+                        return [Math.abs((rect.left - area.left) - (area.right - rect.right)) <= 1,
+                                Math.abs(contentLeft - navLeft) <= 1];
                     })()"#).unwrap();
                     assert_eq!(alignment, json!([true, true]), "{name} column at {width} {theme}");
                     assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));

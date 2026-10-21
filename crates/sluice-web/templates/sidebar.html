@@ -1,0 +1,7 @@
+<aside class="sidebar" id="sidebar" aria-label="Projects and preferences">
+{{ crate::views::side_head(nav)|safe }}
+{% if !frame.find.as_str().is_empty() %}<div class="sb-find">{{ frame.find|safe }}</div>{% endif %}
+{{ crate::views::side_nav(nav, path)|safe }}
+<div class="sb-foot">{{ crate::views::ui::avatar("owner", crate::views::ui::AvSize::Lg, true)|safe }}<b>You</b>{{ crate::views::ui::menu_open()|safe }}<details class="settings" data-preserve-attr="open"><summary class="ghost" aria-label="Display preferences and theme" title="Display preferences and theme">{{ crate::views::icons::icon(crate::views::icons::Icon::Ellipsis, 16, "")|safe }}</summary>
+{{ crate::views::prefs::menu(viewer, nav.keys().as_slice())|safe }}</details>{{ crate::views::ui::menu_close()|safe }}</div>
+</aside>

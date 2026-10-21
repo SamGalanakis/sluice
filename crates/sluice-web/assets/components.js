@@ -418,10 +418,11 @@ define("sluice-answer", {
 // behind its "⋯"): a `<details>`. Its summary says
 // aria-expanded; a click elsewhere or Escape closes it, the focus back on its summary;
 // ArrowDown from the summary goes into it, and the arrows, Home and End move through its rows,
-// links and buttons (a radio keeps its own up and down).
-// A menu may hold sub-menus (`details.sub`: display preferences' Theme and Keyboard shortcuts),
-// one level shown at a time (style.css): Enter, Space or ArrowRight on a row opens its panel in
-// the same menu, the focus on its chosen radio or its first link; its back control,
+// links and buttons; a radio group is one stop, its checked radio (the group keeps its own up
+// and down, which choose).
+// A menu may hold sub-menus (`details.sub`: display preferences' Keyboard shortcuts), one level
+// shown at a time (style.css): Enter, Space or ArrowRight on a row opens its panel in the same
+// menu, the focus on its chosen radio or its first link; its back control,
 // ArrowLeft or Backspace returns to the top level, the focus on the row it came from. Only one
 // is open at a time, and closing the menu closes them, so it opens again at its top.
 define("sluice-menu", {
@@ -481,8 +482,13 @@ define("sluice-menu", {
     expanded(details());
     for (const sub of subs()) expanded(sub);
     fit();
+    const stop = (el) => {
+      if (!el.matches("input[type=radio]") || el.checked) return true;
+      const group = `input[type=radio][name="${CSS.escape(el.name)}"]`;
+      return !details()?.querySelector(`${group}:checked`) && details()?.querySelector(group) === el;
+    };
     const items = () => [...(details()?.querySelectorAll(".menu a[href], .menu button:not([hidden]), .menu input:not([type=hidden]), .menu details.sub > summary") ?? [])]
-      .filter(shown);
+      .filter((el) => shown(el) && stop(el));
     on(document, "click", (event) => {
       const d = details();
       if (d?.open && !d.contains(event.target)) d.open = false;
@@ -560,7 +566,7 @@ define("sluice-keys", {
     cleanup(() => clearTimeout(go));
     const typing = (target) =>
       target instanceof Element && Boolean(target.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])"));
-    const finder = () => [...document.querySelectorAll(":is(main, .site-head) [data-find]")].find((el) => el.checkVisibility?.() ?? true);
+    const finder = () => [...document.querySelectorAll(":is(main, .sidebar) [data-find]")].find((el) => el.checkVisibility?.() ?? true);
     // arrived from `/` on a page with nothing to find: the find takes the focus
     if (location.hash === "#find") requestAnimationFrame(() => finder()?.focus());
     on(document, "keydown", (event) => {
@@ -1142,3 +1148,69 @@ define("sluice-pulse", {
     cleanup(hide);
   },
 });
+
+// ---- hover cards -------------------------------------------------------------------------------
+// A reference (`[data-ref]`: a ticket, a commit's sha, a step's id; `ui::refs`) pointed at or
+// focused for 320ms opens the page's one card (`#hover-card`), filled from its project's `ref`
+// route; it hides 160ms after the pointer leaves both, at once on Escape. Each answer is kept for
+// a minute. Outside a project's page a reference has no card.
+{
+  const card = () => document.getElementById("hover-card");
+  const kept = new Map();
+  let showing = 0, hiding = 0, current = null;
+  const base = (el) => el.closest("[data-project-base]")?.dataset.projectBase
+    ?? document.querySelector("[data-project-base]")?.dataset.projectBase;
+  const place = (el, c) => {
+    const r = el.getBoundingClientRect(), w = c.offsetWidth, h = c.offsetHeight;
+    const left = Math.min(Math.max(8, r.left), innerWidth - w - 8);
+    const below = r.bottom + 6 + h <= innerHeight - 8;
+    c.style.left = `${Math.round(left)}px`;
+    c.style.top = `${Math.round(below ? r.bottom + 6 : Math.max(8, r.top - 6 - h))}px`;
+  };
+  const show = async (el) => {
+    const at = base(el);
+    if (!at) return;
+    const url = `${at}/ref?r=${encodeURIComponent(el.dataset.ref)}`;
+    let got = kept.get(url);
+    if (!got || Date.now() - got.at > 60000) {
+      try {
+        const response = await fetch(url, { headers: { accept: "text/html" } });
+        got = { html: response.ok ? await response.text() : "", at: Date.now() };
+      } catch { got = { html: "", at: Date.now() }; }
+      kept.set(url, got);
+    }
+    const c = card();
+    if (current !== el || !c || !got.html) return;
+    c.innerHTML = got.html;
+    c.hidden = false;
+    place(el, c);
+  };
+  const enter = (el) => {
+    clearTimeout(hiding);
+    if (current === el) return;
+    clearTimeout(showing);
+    current = el;
+    showing = setTimeout(() => show(el), 320);
+  };
+  const hide = () => { current = null; const c = card(); if (c) c.hidden = true; };
+  const leave = () => { clearTimeout(showing); clearTimeout(hiding); hiding = setTimeout(hide, 160); };
+  const within = (node) => (node instanceof Element ? node.closest("[data-ref], #hover-card") : null);
+  document.addEventListener("pointerover", (event) => {
+    const el = event.target instanceof Element ? event.target.closest("[data-ref]") : null;
+    if (el) enter(el);
+    else if (within(event.target)) clearTimeout(hiding);
+  });
+  document.addEventListener("pointerout", (event) => {
+    const from = within(event.target);
+    if (from && from !== within(event.relatedTarget)) leave();
+  });
+  document.addEventListener("focusin", (event) => {
+    const el = event.target instanceof Element ? event.target.closest("[data-ref]") : null;
+    if (el) enter(el);
+  });
+  document.addEventListener("focusout", (event) => { if (within(event.target)) leave(); });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && card() && !card().hidden) { clearTimeout(showing); hide(); }
+  });
+  addEventListener("scroll", () => { if (current) hide(); }, { passive: true, capture: true });
+}

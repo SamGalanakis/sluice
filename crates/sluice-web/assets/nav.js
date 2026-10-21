@@ -154,9 +154,19 @@ function more(list) {
   const more = list.scrollLeft + list.clientWidth < list.scrollWidth - 2;
   if (list.hasAttribute("data-more") !== more) list.toggleAttribute("data-more", more);
 }
-const everyMore = () => document.querySelectorAll(".tabs").forEach(more);
+// the bar's sections fade at their edge instead (`data-tabs-fade`) while more lies past it
+function fade(row) {
+  const over = row.scrollLeft + row.clientWidth < row.scrollWidth - 1;
+  if (row.hasAttribute("data-overflow") !== over) row.toggleAttribute("data-overflow", over);
+}
+const everyMore = () => {
+  document.querySelectorAll(".tabs").forEach(more);
+  document.querySelectorAll("[data-tabs-fade]").forEach(fade);
+};
 document.addEventListener("scroll", (event) => {
-  if (event.target instanceof Element && event.target.matches(".tabs")) more(event.target);
+  if (!(event.target instanceof Element)) return;
+  if (event.target.matches(".tabs")) more(event.target);
+  if (event.target.matches("[data-tabs-fade]")) fade(event.target);
 }, { capture: true, passive: true });
 window.addEventListener("resize", everyMore);
 document.fonts?.ready.then(everyMore);
@@ -179,4 +189,32 @@ for (const pop of document.querySelectorAll("body > .pulse-pop")) {
   const id = decodeURIComponent(location.hash.slice(1));
   const target = id ? document.getElementById(id) : null;
   if (target?.matches("button, [tabindex='-1']")) target.focus();
+}
+
+// ---- the sidebar as a phone's drawer ----------------------------------------------------------
+// Under 860px the sidebar slides over the page from the left: the bar's menu button opens it,
+// its ×, the scrim behind it, a link in it or Escape closes it, and the focus goes in and comes
+// back. Wider, it stands in its column and none of this applies.
+{
+  const root = document.documentElement;
+  const opener = () => document.querySelector("[data-nav-open]");
+  const set = (open) => {
+    if (root.classList.contains("nav-open") === open) return;
+    root.classList.toggle("nav-open", open);
+    opener()?.setAttribute("aria-expanded", String(open));
+    if (open) document.querySelector("#sidebar [data-nav-close]")?.focus();
+    else if (!document.activeElement || document.activeElement === document.body
+      || document.activeElement.closest?.("#sidebar")) opener()?.focus();
+  };
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest("[data-nav-open]")) set(true);
+    else if (target.closest("[data-nav-close]")) set(false);
+    else if (target.closest("#sidebar a[href]")) set(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && root.classList.contains("nav-open")) set(false);
+  });
+  matchMedia("(min-width: 861px)").addEventListener("change", (m) => { if (m.matches) set(false); });
 }

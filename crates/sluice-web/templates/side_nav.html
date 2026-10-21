@@ -1,0 +1,5 @@
+<nav id="side-nav" class="sb-mid" aria-label="Projects">
+<a class="sbrow" href="/"{% if nav.selected.is_none() && path == "/" %} aria-current="page"{% endif %}>{{ crate::views::icons::icon(crate::views::icons::Icon::LayoutGrid, 16, "")|safe }}<span class="label">All projects</span></a>
+<h2 class="sb-sec">Projects</h2>
+{% for project in nav.sidebar() %}<a class="sbrow" href="{{ project.href() }}"{% if nav.is_selected(project.id) %} aria-current="page"{% endif %}>{{ crate::views::ui::project_mark(project)|safe }}<span class="label">{{ project.name }}</span>{% if !project.running.is_empty() %}<span class="meta" title="{{ project.running.len() }} running"><span class="vh">, </span>{{ project.running.len() }}<span class="vh"> running</span></span>{% endif %}{% if project.needs_owner() %}<span class="unread" title="Needs you"><span class="vh">, needs you</span></span>{% endif %}</a>
+{% endfor %}</nav><!--/side-nav-->

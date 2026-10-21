@@ -1,0 +1,4 @@
+{#- The sidebar's head (`#side-head`, a stream region of its own, so a rename follows): the
+    current project's mark and name, else sluice's; sluice's mark small at the right; on a phone
+    the drawer's close. -#}
+<div id="side-head" class="sb-head">{% if let Some(project) = nav.current() %}<a class="sb-id" href="{{ project.href() }}">{{ crate::views::ui::project_mark(project)|safe }}<b>{{ project.name }}</b></a>{% else %}<a class="sb-id" href="/"><img class="sb-logo" src="{{ crate::views::asset_url("logo.svg") }}" width="22" height="22" alt=""><b>sluice</b></a>{% endif %}<a class="sb-mark" href="/" aria-label="sluice: all projects" title="sluice"><img src="{{ crate::views::asset_url("logo.svg") }}" width="16" height="16" alt=""></a><button type="button" class="ghost sb-close" aria-label="Close projects" data-nav-close>{{ crate::views::icons::icon(crate::views::icons::Icon::X, 16, "")|safe }}</button></div>

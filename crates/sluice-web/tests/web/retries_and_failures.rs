@@ -143,32 +143,33 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
     let f = Fixture::new().await;
     let id = retried(&f).await;
     let html = f.opened(&format!("/projects/id/{id}")).await;
-    // the row of a quiet run: how long it has been silent; which run it is and how the earlier
-    // ones ended are its steps', not its line's
+    // the row of a quiet run: its stage says how long it has been silent; which run it is and
+    // how the earlier ones ended are its unit page's and its step's, not the row's
     let row = plan_html::row(&html, "l1");
+    let stage = plan_html::stage(row, "l1-work");
     assert!(
-        row.contains("<span class=\"pill look\"><span class=\"g g-quiet\"")
-            && row.contains(" · quiet <time"),
+        stage.starts_with("<li class=\"st quiet cur\" data-state=\"quiet\">")
+            && stage.contains("<span class=\"st-w\">quiet <em><time"),
         "{row}"
     );
-    let line = &row[..row.find("<div id=\"drill-").unwrap_or(row.len())];
     assert!(
-        !line.contains("class=\"tries\"") && !line.contains(">run 6<"),
+        !row.contains("class=\"tries\"") && !row.contains(">run 6<"),
         "{row}"
     );
-    // its step view says the run beside its state, and its runs in words, the earlier ones
-    // too (in the plan's last hour, those before it are said, not drawn)
-    let view = &row[row.find("<sluice-steps").expect("its step view")..];
+    // its unit page's step view says the run beside its state, and its runs in words, the
+    // earlier ones too (in the last hour, those before it are said, not drawn)
+    let (_, unit) = f.get(&format!("/projects/id/{id}/units/l1")).await;
+    let view = &unit[unit.find("<sluice-steps").expect("its step view")..];
     assert!(view.contains(">run 6<"), "{view}");
     assert!(
         (1..=6).all(|n| view.contains(&format!("Run {n} "))),
         "{view}"
     );
     // a unit of no recipe: its second run, the first faint before it
-    let kit = plan_html::row(&html, "kit");
+    let (_, kit) = f.get(&format!("/projects/id/{id}/units/kit")).await;
     assert!(kit.contains(">run 2<"), "{kit}");
     // a first run says nothing of runs
-    let first = plan_html::row(&html, "probe");
+    let (_, first) = f.get(&format!("/projects/id/{id}/units/probe")).await;
     assert!(!first.contains(">run 1<"), "{first}");
 
     // its page: its head's Details say the run, Now says how the run before ended and why,
@@ -242,18 +243,21 @@ async fn a_stopped_card_names_its_failures_kind_and_says_why_under_it() {
     // stored JSON
     let l2 = plan_html::stopped(&html, "l2");
     assert!(
-        l2.contains("</a></b> failed at work. Its engine hit a usage cap."),
+        plan_html::line(l2).contains(" failed at work")
+            && plan_html::body(l2).starts_with("Its engine hit a usage cap."),
         "{l2}"
     );
     assert!(!l2.contains("agent_failure"), "{l2}");
     let plain = plan_html::stopped(&html, "plain");
     assert!(
-        plain.contains("</a></b> failed. Its process was lost."),
+        plan_html::line(plain).contains(" failed")
+            && plan_html::body(plain).starts_with("Its process was lost."),
         "{plain}"
     );
     let bare = plan_html::stopped(&html, "bare");
     assert!(
-        bare.contains("</a></b> failed. Its fn failed: boom."),
+        plan_html::line(bare).contains(" failed")
+            && plan_html::body(bare).starts_with("Its fn failed: boom."),
         "{bare}"
     );
     // a fn stopped at its wall-clock cap reads as an agent's cap does

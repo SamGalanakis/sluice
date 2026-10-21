@@ -580,7 +580,7 @@ async fn filtered_units_progress_done_and_paused() {
         let red = output(&html, "red");
         assert!(red.contains("<span class=\"v num\">2</span>"), "{red}");
         assert!(
-        red.contains("<span class=\"pill run\">")
+        red.contains("<span class=\"badge running\">")
             && red.contains("live</span><time data-ago=\"2026-10-06T10:00:00.5Z\" datetime=\"2026-10-06T10:00:00.5Z\" title=\"2026-10-06 10:00 UTC\">")
             && red.contains(" ago</time>"),
         "{red}"
@@ -625,7 +625,7 @@ async fn filtered_units_progress_done_and_paused() {
         let red = output(&html, "red");
         assert!(
             red.contains("<span class=\"v num\">2</span>")
-                && red.contains("<span class=\"pill muted\">progress</span>")
+                && red.contains("<span class=\"badge muted\">progress</span>")
                 && !red.contains("live"),
             "{red}"
         );
@@ -681,7 +681,7 @@ async fn filtered_units_progress_done_and_paused() {
         let recent = plan_html::band(&html, "plan-finished");
         assert!(
             recent.contains("<p class=\"fin-quiet\">4 units finished with nothing to say: ")
-                && !recent.contains("<li class=\"fin-i\""),
+                && !recent.contains("<li class=\"fin-r"),
             "{recent}"
         );
         assert!(
@@ -690,7 +690,7 @@ async fn filtered_units_progress_done_and_paused() {
         );
         assert!(!recent.contains("/u20\""), "{recent}");
         assert!(
-            plan_html::band(&html, "plan-roster").contains("<b>25 done</b></a>, the last"),
+            plan_html::band(&html, "plan-roster").contains(">25 done</a>, the last"),
             "{html}"
         );
         // Show: Done, the index: every one, newest first
@@ -737,10 +737,10 @@ async fn filtered_units_progress_done_and_paused() {
             )
             .await;
         let html = f.opened(&format!("/projects/id/{held}")).await;
-        // the plan: the paused one waits, a row whose steps say paused; nothing is at work
+        // the plan: the paused one waits, a row whose stage says paused; nothing is at work
         assert_eq!(plan_html::place(&html, "hold"), "waiting", "{html}");
-        let cell = plan_html::cell(&html, "hold");
-        assert!(cell.contains("aria-label=\"paused\""), "{cell}");
+        let stage = plan_html::stage(&html, "hold");
+        assert!(stage.contains("data-state=\"paused\""), "{stage}");
         assert!(
             plan_html::summary(&html)
                 .contains("Nothing needs you. Nothing at work; 1 of 3 done · 3 steps."),

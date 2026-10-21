@@ -396,11 +396,16 @@ async fn a_recipes_head_leads_to_every_unit_it_made_done_ones_too() {
     let f = Fixture::new().await;
     let id = recipes(&f).await;
     let (_, html) = f.get(&format!("/projects/id/{id}")).await;
+    let head = html
+        .split("<summary class=\"ro-group\">")
+        .nth(1)
+        .and_then(|rest| rest.split("</summary>").next())
+        .unwrap_or_else(|| panic!("{html}"));
     assert!(
-        html.contains(&format!(
-            "<summary class=\"ro-group\"><h3><b><a href=\"/projects/id/{id}?recipe=lane&amp;show=all\">lane</a></b>"
+        head.contains(&format!(
+            "<b><a href=\"/projects/id/{id}?recipe=lane&amp;show=all\">lane</a></b>"
         )),
-        "{html}"
+        "{head}"
     );
     let (status, html) = f
         .get(&format!("/projects/id/{id}?recipe=lane&show=all"))

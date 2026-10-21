@@ -6,7 +6,9 @@
 // (the view, Plan · Both · Board, is the server's alone: the switch is links, the choice kept
 // in the project's cookie, and with none chosen the stylesheet picks by the window's width)
 // - the board column's height and its "More below" cue;
-// - a step whose state the live plan moves on is said once, politely, in #announce;
+// - a step whose state the live plan moves on is said once, politely, in #announce, and its row
+//   flashes once where it stands;
+// - an answer in place: ⌘↵ sends it, Escape lets it go; Retry with feedback opens its field;
 // - after a write from a form with `data-focus-after`, the focus goes to that element once the
 //   stream draws it (an item's Undo, the next item).
 const runtime = document.querySelector("script[data-datastar-runtime]")?.src;
@@ -164,11 +166,60 @@ rocket("sluice-board", {
       requestAnimationFrame(() => { live.textContent = moved.join(". "); });
     });
 
+    // ---- a row whose steps moved on flashes once, where it stands ----
+    // Its `data-said` (each step's state) changed under a patch: the row's wash goes teal and
+    // fades over 1.4s (style.css, `--flash`). It never moves: the order is the viewer's.
+    const flash = (row) => {
+      row.removeAttribute("data-flash");
+      void row.offsetWidth;  // a second change restarts it
+      row.setAttribute("data-flash", "");
+      const end = () => row.removeAttribute("data-flash");
+      row.addEventListener("animationend", end, { once: true });
+      setTimeout(end, 1600);
+    };
+
     // a patch may redraw the column without the height it was given, or move a step on
     observe(host, (records) => {
       fit();
+      for (const r of records) {
+        if (r.attributeName === "data-said" && r.oldValue !== null && r.oldValue !== r.target.dataset.said
+          && r.target.matches(".ro-u")) flash(r.target);
+      }
       if (records.some((r) => r.type === "childList" || r.attributeName === "data-said" || r.attributeName === "data-state")) say();
-    }, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "data-said", "data-state"] });
+    }, { childList: true, subtree: true, attributes: true, attributeOldValue: true, attributeFilter: ["style", "data-said", "data-state"] });
+
+    // ---- an answer in place ----
+    // ⌘↵ (Ctrl+Enter) sends what was written; Escape lets it go and gives the focus back. Retry
+    // with feedback opens its field under the failure, and Escape folds it again.
+    on(host, "keydown", (event) => {
+      const field = event.target.closest?.("textarea[data-answer]");
+      if (!field) return;
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        if (field.value.trim()) field.form?.requestSubmit();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        field.value = "";
+        const item = field.closest(".nd-i"), toggle = item?.querySelector("[data-fb]");
+        if (field.form?.classList.contains("fb") && toggle) {
+          item.classList.remove("fb-open");
+          toggle.setAttribute("aria-expanded", "false");
+          toggle.focus();
+        } else {
+          field.blur();
+        }
+      }
+    });
+    on(host, "click", (event) => {
+      const toggle = event.target.closest?.("[data-fb]");
+      const item = toggle?.closest(".nd-i");
+      if (!item) return;
+      const open = !item.classList.contains("fb-open");
+      item.classList.toggle("fb-open", open);
+      toggle.setAttribute("aria-expanded", String(open));
+      if (open) item.querySelector(".answer-in.fb textarea")?.focus();
+    });
     fitPane();
   },
 });

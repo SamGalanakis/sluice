@@ -74,6 +74,9 @@ icons! {
     Grid3x3 => "grid-3x3",
     Timer => "timer",
     Info => "info",
+    Menu => "menu",
+    LayoutGrid => "layout-grid",
+    ChevronRight => "chevron-right",
 }
 
 /// Each icon's shapes (what sits inside its `<svg>`), on one line, in `Icon` order.
@@ -116,7 +119,7 @@ pub fn sprite() -> TrustedHtml {
                     .replace("<circle ", "<circle style=\"fill:currentColor\" ")
                     .replace(
                         "<path ",
-                        "<path style=\"stroke:var(--glyph-cut,var(--paper-raised))\" ",
+                        "<path style=\"stroke:var(--glyph-cut,var(--sheet))\" ",
                     );
                 out.push_str(&format!(
                     "<symbol id=\"i-{}-solid\" viewBox=\"0 0 24 24\">{solid}</symbol>",
@@ -124,6 +127,8 @@ pub fn sprite() -> TrustedHtml {
                 ));
             }
         }
+        // the owner's avatar (`ui::avatar`)
+        out.push_str(super::ui::person_symbol());
         out.push_str("</svg>");
         out
     });
@@ -133,7 +138,7 @@ pub fn sprite() -> TrustedHtml {
 fn draw(name: &str, size: u16, class: &str) -> TrustedHtml {
     let sep = if class.is_empty() { "" } else { " " };
     TrustedHtml::owned(format!(
-        "<svg class=\"icon{sep}{class}\" width=\"{size}\" height=\"{size}\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><use href=\"#i-{name}\"/></svg>"
+        "<svg class=\"icon{sep}{class}\" width=\"{size}\" height=\"{size}\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><use href=\"#i-{name}\"/></svg>"
     ))
 }
 /// The icon, `size` px square, on Lucide's own 24-unit grid and stroke, drawn in

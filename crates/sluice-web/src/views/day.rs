@@ -10,7 +10,7 @@
 use crate::clock::ClockRead;
 use super::ui::{self, Shown, esc};
 use super::{
-    DashboardState, Frame, NavView, TrustedHtml, Viewer, render_framed, render_nav,
+    DashboardState, Frame, NavView, TrustedHtml, Viewer, render_framed,
 };
 use axum::{
     Router,
@@ -1066,22 +1066,18 @@ fn batch(
 ) -> Result<crate::streams::RenderedBatch, PublicError> {
     let nav = NavView::new(shared, view.project, "day")?;
     let (path, _) = paths(view.project);
-    let nav_html = render_nav(&nav, viewer, &path).map_err(error)?;
+    let _ = viewer;
+    let nav_html = super::nav_text(&nav, &path);
     let head = view.head();
     let version = sluice_store::artifacts::fingerprint(
-        format!("{}\u{0}{}", view.facts(), nav_html.as_str()).as_bytes(),
+        format!("{}\u{0}{}", view.facts(), nav_html).as_bytes(),
     );
-    Ok(crate::streams::RenderedBatch {
-        version,
-        regions: vec![
-            crate::streams::PatchRegion::new("day-view", view.body()),
-            crate::streams::PatchRegion::new(
-                "day-head",
-                band_with_id(&head, "day-head"),
-            ),
-            crate::streams::PatchRegion::new("top-nav", nav_html),
-        ],
-    })
+    let mut regions = vec![
+        crate::streams::PatchRegion::new("day-view", view.body()),
+        crate::streams::PatchRegion::new("day-head", band_with_id(&head, "day-head")),
+    ];
+    regions.extend(super::nav_regions(&nav, &path));
+    Ok(crate::streams::RenderedBatch { version, regions })
 }
 fn error(e: askama::Error) -> PublicError {
     PublicError::Storage {

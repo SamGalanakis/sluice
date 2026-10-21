@@ -266,6 +266,9 @@ config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port"
                                        the oldest down to 90% of it (every 30 s)
                             park_timeout_seconds  positive integer seconds, default 3600;
                                        bound for park when --timeout is absent (§7.6)
+                            long_run_quiet_h  hours, default 24: how long a long run
+                                       (the plan's Watching, §13) may publish nothing and show
+                                       no activity before Needs you asks the owner to look
                             unread_alert_min  minutes; when set, the "nobody reading" owner
                                        question (§8)
                             notify     {command: [argv…], timeout_s: 30}: owner notification
@@ -696,7 +699,10 @@ JSON array of patterns, null when none).
 
 A step's row also carries its progress (§6.4): `progress` (the JSON object of latest values),
 `progress_at` (when it was last set) and `progress_run` (the run that set it), all null until a
-run publishes some and cleared when the step's next run starts. `steps` is readable by `query`
+run publishes some and cleared when the step's next run starts; and `progress_runs` (an added
+column), its history: a JSON array of `{at, progress}`, one entry each publication (the merged
+values as they stood), oldest first, the last 20 kept across the step's runs (the plan's
+Watching draws it). `steps` is readable by `query`
 as it is, so `SELECT json_extract(progress, '$.red'), progress_at FROM steps WHERE project_id =
 ? AND step_id = 'tests-main'` reads a rolling step's latest count.
 
@@ -1007,8 +1013,10 @@ outputs, as before) and joins no result. It writes no log record, so it wakes no
 `log_wait` or `step_wait` (§10); its commit touches a change view of its own (`progress`) that
 nothing waits on and the scheduler's project versions leave out. It is kept, with its time
 and run, until the step's next run is reserved, which clears it: after the run ends it stays
-visible, as progress, not as outputs. The reply is `{project, step, run, progress, at}`, the
-merged values and when they were set. The dashboard (§13) shows a step's progress while it is
+visible, as progress, not as outputs. Each publication is also one entry of the step's
+history (`steps.progress_runs`, §3: the merged values and when, the last 20 kept across its
+runs), which the plan's Watching draws as the step's latest results. The reply is `{project,
+step, run, progress, at}`, the merged values and when they were set. The dashboard (§13) shows a step's progress while it is
 fresher than its outputs: unless the step has succeeded (or gone stale since) with a result
 recorded at or after the progress was set.
 
@@ -2248,7 +2256,7 @@ Read the unit or steps you need with `unit_get`, `step_get` or `plan_read`. Use 
 
 | route | page |
 |---|---|
-| `/` | every project with steps as a card. Its head (the bar names the page; "All projects" its heading for a screen reader) is one sentence of counts alone across them: the open questions to the owner first, linked to For you, then each state that needs a look by its word, then how many run in how many projects ("3 questions for you, 2 failed, 1 quiet; 63 running in 4 projects."). "Runner stopped" (nothing new starts) sits under it while nothing holds the scheduler lease (no `loop`, no `serve` without `--no-runner`). For you lists every open question to the owner someone waits on, oldest first, as a line of the Needs-you list: its coral dot, its project and who asked (the asking step by title, else the session by its `@name`, or "orchestrator", muted, for one from before sessions named themselves), its title linking where it is answered, Answer and × (which sets it aside in its plan's Needs you). One answered or closed in the last ten minutes stays as the line that says so. Beside it, Today has a line a project of its last 24 hours of runs (how many, how many ended needing a look, what runs now) and the way to `/day`. Then each project with steps as a card, ordered by what needs the owner (a question to the owner, then something stopped, running, waiting, done, a paused one after the waiting). A card is its plan in brief: its name, its state's glyph, its units and steps counted, its description, its plan's summary sentence, At work's groups a line each (as the plan counts them, its remarkable units named), "Finished lately:" and the last three finished by name (each its unit's link), and the way to its plan and its day. Under the cards, a line names the projects with no steps yet and another the archived ones, their steps counted; no table repeats the cards' counts |
+| `/` | every project with steps as a card. Its head (the bar names the page; "All projects" its heading for a screen reader) is one sentence of counts alone across them: the open questions to the owner first, linked to For you, then each state that needs a look by its word, then how many run in how many projects ("3 questions for you, 2 failed, 1 quiet; 63 running in 4 projects."). "Runner stopped" (nothing new starts) sits under it while nothing holds the scheduler lease (no `loop`, no `serve` without `--no-runner`). For you lists every open question to the owner someone waits on, oldest first, as a line of the Needs-you list: its teal dot, its project and who asked (the asking step by title, else the session by its `@name`, or "orchestrator", muted, for one from before sessions named themselves), its title linking where it is answered, Answer and × (which sets it aside in its plan's Needs you). One answered or closed in the last ten minutes stays as the line that says so. Beside it, Today has a line a project of its last 24 hours of runs (how many, how many ended needing a look, what runs now) and the way to `/day`. Then each project with steps as a card, ordered by what needs the owner (a question to the owner, then something stopped, running, waiting, done, a paused one after the waiting). A card is its plan in brief: its name, its state's glyph, its units and steps counted, its description, its plan's summary sentence, At work's groups a line each (as the plan counts them, its remarkable units named), "Finished lately:" and the last three finished by name (each its unit's link), and the way to its plan and its day. Under the cards, a line names the projects with no steps yet and another the archived ones, their steps counted; no table repeats the cards' counts |
 | `/day`, `/projects/id/<p>/day` | the day: every step's run of the last 24 hours (across the projects, or one project's), from the runs alone, its hours on the reader's clock (the `sluice_zone` cookie `nav.js` keeps, minutes east of UTC; UTC until it is set). Its head: the date (the bar names the page); over the day line one sentence (how many runs and in which project, how many ended failed or cancelled, what runs now and the longest, how many succeeded in under a minute). The day line: a row a project, each run a bar from its start to its end (a running one to now), stacked into tracks where runs overlapped, with the hours along the top and a rule at now; a run that succeeded in under a minute is counted, not drawn. The timetable: a row an hour, the current one last with the rule at now, a column a project (the busiest first; stacked under each hour on a narrow screen): each run by its start minute (a run that started before the window, in the first row, by its day and time), its unit's title and its stage (its step and run number in the link's title), how it ended (its glyph and, but for a success, its word; a run still going as its step reads, running, quiet, stopping or finishing) and how long it took (a running one ticking), linked to its step's Runs (a step its plan has since retired, to its records on the project's log, `log?step=`); a busy hour (more than six runs in a project's cell, quick ones aside) lists its notable runs (any that did not succeed: failed, cancelled, running or ended with no result; any that took an hour or more) and folds the rest, every one a success, behind "+23 more succeeded, 1m to 12m", a `details` that opens in place and stays open through a patch (its longest is listed when none is notable); past eight listed, the runs still running fold the same way behind "+14 more running", every one needing a look kept in sight; quick runs are counted; a cell's runs flow into as many columns as the frame's width allows; two or more hours in a row in which no run started are one line, "03–14 · nothing ran". Read-only; its stream patches only when the runs (or the nav) change, and on the hour |
 | `/projects/id/<p>/stats` | a project's stats over a window (`window=24h\|7d\|30d\|all`, 7 days by default and for anything else; 24 hours to the end of the reader's hour, 7 and 30 days whole days on the reader's clock, all from the day of its first run), from its runs, steps, units and recipes alone: the one place a stage's usual time is said. Its head (the bar names the page): how many runs ended and units finished in the window, the window switch beside it, links. **Durations by stage**: a table a recipe, in the project's recipe order, of the recipes whose units ended a run in the window (its name, how many units and runs), a row a stage in the recipe's order: how many of its runs succeeded, their median (the mean of the two middles for an even count), p90 (nearest rank) and longest, the median drawn inside the p90 on one scale for every table (minutes on a log, to the longest p90 of any stage); a unit the plan holds goes with the recipe its naming matched, one it has retired with the recipe whose stages hold every stage its runs ran with the fewest left over, and the units of no recipe and the loose steps form "Without a recipe", a row a step (a unit's step by its stage, a loose step by its id; the busiest first). **Outcomes**: the same tables, a stage's runs that ended in the window as succeeded, failed and cancelled (the status table's reading of each run's result), retried (a run that is a second or later try of its step and item), the failure rate (failed of those that ended) and its failures by kind in words (`views::failure`). **Throughput**: units finished and started a bucket (an hour for 24 hours, a day, or a week for an all of more than 92 days): a unit (a loose step one) starts with its first run and finishes with its last run's end once every step is done (the plan's steps all succeeded or skipped; a retired unit's every step's last run succeeded); one sentence, a column a bucket and every count in a table for a screen reader. **The slowest runs**: the ten longest that ended in the window, by its unit's title (a loose step's) and its stage, how it ended when not a success, when, linked to its step's Runs (a retired step's records on the log), its step, run, try, unit and item in its Details. Read-only; its version is what it draws, so its stream (`stats/stream?window=`) patches only when that changes |
 | `/projects/<name>` | redirects (307) to `/projects/id/<uuid>` |
@@ -2258,9 +2266,9 @@ find, `recipe=` or `root=` asks for it: "n units · m steps · the last finished
 one newest first, each a line of its finish time, glyph, title and how long it took (a dismissed
 cancel "b cancelled and dismissed"). No line is drawn between units or steps: a waiting unit's
 row says what it waits for in words (each source by its title, linked, and what it is doing). On a phone the page opens on the plan while a step needs attention (failed, cancelled, stale or quiet) or is paused, else on the board |
-| `/projects/id/<p>/units/<u>` | one unit, its head under the frame's row: its way back, its title with its Details (its id, recipe and params), its steps summed by state ("6 steps · 1 running · 4 pending · 1 succeeded"), a short recipe view on that line, its owner (`@lash-f4`, "you" for the owner; nothing when it has none), and a link to its log (`log?unit=`); then on the sheet its recipe's view drawn whole when it says more than a line (below; a view of params alone draws nothing), its step view (below), and a module for each step that needs the owner, in the view's order (the one asking on the coral rule, answered in place; a stop on the sand with why it stopped), each headed by its stage with its Details |
+| `/projects/id/<p>/units/<u>` | one unit, its head under the frame's row: its way back, its title with its Details (its id, recipe and params), its steps summed by state ("6 steps · 1 running · 4 pending · 1 succeeded"), a short recipe view on that line, its owner (`@lash-f4`, "you" for the owner; nothing when it has none), and a link to its log (`log?unit=`); then on the sheet its recipe's view drawn whole when it says more than a line (below; a view of params alone draws nothing), its step view (below), and a module for each step that needs the owner, in the view's order (the one asking on the teal rule, answered in place; a stop on the ochre with why it stopped), each headed by its stage with its Details |
 | `/projects/id/<p>/steps/<s>` | one step, its head under the frame's row (in the drawer the same head tops the step): a way back to its plan and unit, its stage and title the heading (two lines at most, the whole in its tooltip) with its one "⋯" beside it (its Details: its id, unit, recipe, fn, run and earlier runs, tags; then its Actions: Pause or Unpause, Cancel, a failure's Set it aside, its log (`log?step=`) and, with no thread yet, Message it; the tab its stage and title, led by "Question ·" while its own question to the owner waits, kept by each patch), a pending or stale step retried since its last run started saying so under its header ("You retried it 2m ago, with feedback: <its first line>."; a pending step nothing holds says on Overview that it is ready and when it starts: "Ready: nothing holds it, so the runner starts it next.", or "Ready, but the runner is stopped: it starts when `sluice loop` runs."; a failed step whose run before failed the same way says so, and its retry feedback box stands
-open under that advice in why it failed rather than folded in its head), its status line (one muted sentence after its state's glyph: its state and since when, "Running 6h 34m · heard 1h 18m ago · run 2, after 1 failed"; while it runs when it was last heard from, a sand "quiet 3h" pill and "not heard from since …" once quiet, "waiting on your answer" leading to its question while one to the owner waits (the coral dot in place of the glyph), else "N awaiting reply" leading to Messages; once ended its word and when ("Failed 2h ago · after 18m"; from its result when no run is kept; a pending step that ran "its last run ended 12h ago · after 3m"); its run when it has had more than one; its items done; a waiting bypass), never against a usual time, the rest of its doc, its unit's stage strip when the unit has more than one step (its own stage ringed, `aria-current="step"`), and only its next moves (Retry with feedback, its box folded under it, then Retry: the first primary on a
+open under that advice in why it failed rather than folded in its head), its status line (one muted sentence after its state's glyph: its state and since when, "Running 6h 34m · heard 1h 18m ago · run 2, after 1 failed"; while it runs when it was last heard from, an ochre "quiet 3h" pill and "not heard from since …" once quiet, "waiting on your answer" leading to its question while one to the owner waits (the teal dot in place of the glyph), else "N awaiting reply" leading to Messages; once ended its word and when ("Failed 2h ago · after 18m"; from its result when no run is kept; a pending step that ran "its last run ended 12h ago · after 3m"); its run when it has had more than one; its items done; a waiting bypass), never against a usual time, the rest of its doc, its unit's stage strip when the unit has more than one step (its own stage ringed, `aria-current="step"`), and only its next moves (Retry with feedback, its box folded under it, then Retry: the first primary on a
 failed step, not on a cancelled one, which has a Dismiss instead; on a failure that repeated
 (below) its head's Retry with feedback leads to the box standing open in why it failed, focusing
 it, and the bare Retry is outlined; asking first on a succeeded one, which says how many steps come after it; and a failure's "To resume …" hint under the status line), then tabs, each only when it has something to show: **Overview** (always; why it failed first on a failed step (one sentence from its failure kind, or a fn's from its traceback's last exception, a wall-clock cap's as the agent's; a link to the failure's own log record, `log?step=<s>&before=<seq+1>#r<seq>`, which the log marks; what it said and a link opening Activity on its last failed call, then
@@ -2281,6 +2289,7 @@ recorded) or its going stale: "You retried it: <reason>, with feedback.", "`fig-
 | `/projects/id/<p>/{inbox,questions,history,thread}` | the same for one project (its nav section Messages, its inbox titled "Messages"); the views' switch reads For you · Questions · History; each question a one-message conversation as a step's Messages tab draws it; `thread?thread=<name>`, under a way back to its plan and its step (or History, an empty thread too), with its message box even before anyone wrote in it (a step's "Message it"), its Details its thread and step ids, a step's thread headed and titled by its step's name as the step's own page has it ("work · Fix the cron driver"; `StepRef`, the one name a step has in words: its page, its thread, every message box's "Message to …", the log), with its message count (and, on a step's thread whose step's conversation holds more, "2 in this thread · 11 with this step", a link to its Messages tab), "Jump to latest" and, while notes in it are unread, a button to mark them read, then its conversation (below) and a message box to its step (while the plan has it; to a step not running, a line saying when it reads it) or, on a session's thread (`@lead`, headed "You and @lead"), to the session; the `owner` thread from before sessions named themselves has none; a page arriving without an anchor scrolls to the newest message |
 | `POST /projects/id/<p>/needs` | Needs you's own forms: `action=dismiss\|undo\|retry`, `items` (space apart: `stop:<step>`, `quiet:<step>@<stamp>`, `ask:<message>`, `cancel:<step>`; for `retry`, `stop:<step>@<seen>`, `seen` as a step's action form carries it), `revision` (for `retry`). `dismiss` and `undo` set the items aside or back: a cancel as its step's Dismiss does (`step_dismiss`), the rest by `needs_dismiss` (§12.5). `retry` retries each step as its own Retry would, the first refusal answered as that step's action's is; answered as a step's actions are (its form's notice, or 204 and the JSON error) |
 | `POST /projects/id/<p>/seen` | Mark as seen: `through` (the finish time, seconds since the epoch, of the latest finished unit the page drew) kept in this browser's `sluice_seen_<p>` cookie for 400 days. To the page's form (`sluice-form`) the answer empties its notice and sets the page's `seen` signal, whose change reopens its stream on the new look (`data-on-signal-patch`), so the page changes only once sluice took the mark; any other client gets 204. With nothing finished since, Finished keeps its head and is the one line "Seen through 04:21 · Undo"; Undo posts `through=0`, which takes the look back (a cookie or signal of 0 is no look kept), so Finished lately is drawn again. Nothing is written to the store: what one browser has seen is its own |
+| `/projects/id/<p>/ref?r=<kind>:<key>` | a hover card's body, HTML for `#hover-card`: `step:<id>` (its state, fn and unit), `sha:<hex>` (the steps whose outputs name the commit) or `t:<ticket>` (the units whose titles name it); 404 for any other kind |
 | `POST /projects/id/<p>/messages` | post an answer or reply as `owner`. A question's Close question is this reply with the action `close`, behind the page's confirmation ("Whoever asked is told you closed it, without an answer. It cannot be reopened."): it reaches the asker at once and the store has no reopen, so it is confirmed rather than held for an Undo |
 | `POST /projects/id/<p>/messages/read` | mark messages read (`thread`, `through`); the pages send it only when the owner asks: a note's Mark read, Mark all read, or the thread page's button. Never on render, on sight or on opening a thread. The inbox lists the notes read in the last 24 hours under "Read today", from each message's `read_at` |
 | `POST /messages/close` | close several questions as `owner` (each `m=<project>/<message>`), then to `next` |
@@ -2291,9 +2300,9 @@ recorded) or its going stale: "You retried it: <reason>, with feedback.", "`fig-
 | `POST /projects/id/<p>/settings/board/preview` | the body (a draft program) drawn as the board would draw it, with the project's data, as a Datastar patch into the preview |
 | `POST /projects/id/<p>/board/action` | a board Button: `board_rev`, `button` (its number), `field-<n>`; its form's notice says "Sent to <session>.", or why it was not sent with each refused field's own note under it; any other client gets 204 or the JSON error |
 | `/projects/id/<p>/icon` | the project's image icon |
-| `POST /settings` | display preferences: `theme` (one of the theme ids, `<family>-light` or `<family>-dark`: `sluice-light`, `sluice-dark`, `solarized-…`, `nord-…`, `gruvbox-…`, `catppuccin-…`, `rose-pine-…`, `flexoki-…`; anything else is refused) and value types (`types`), each kept a year in its own cookie (`sluice_theme`, `sluice_types`); the page posts its signals (`theme`, `types`) as JSON and is answered 204 with the cookies. With no theme cookie a page names no theme and draws Sluice Light or Dark by the system's scheme; the page posts that choice once (`<html>`'s `data-init`), so from then on only a pick changes it |
-| `/title`, `/title?project=<p>` | a page's tab title alone, as text, and its favicon's address in `x-sluice-favicon`: the index's ("2 questions · 2 failed · 1 quiet · Projects · sluice") or a project's, the plan's glance: its open questions to the owner in brackets, a warning sign and how many of its steps need a look the owner has not set aside, its name ("(1) ⚠4 · almanac · sluice", "⚠2 · almanac · sluice", "(1) almanac · sluice", its name alone when nothing needs the owner), its favicon the mark with a coral dot while a question waits, a sand square while a step needs a look; what a hidden tab asks for every 30 s while its stream is closed; the open questions to the owner someone waits on lead it (the inbox's title too: "2 questions · Inbox") |
-| `/_ui` | "States and parts": what each state and shared part of the dashboard means as its pages show it, in every state, in the house pair's light and dark (DESIGN.md, Components), how each is built under it, and every component with its props and events; nothing on it is read from the store |
+| `POST /settings` | display preferences: `theme` (`paper` or `carbon`; anything else is refused) and value types (`types`), each kept a year in its own cookie (`sluice_theme`, `sluice_types`); the page posts its signals (`theme`, `types`) as JSON and is answered 204 with the cookies. With no theme cookie (or one naming a theme sluice no longer has) a page names no theme and draws Paper or Carbon by the system's scheme; the page posts that choice once (`<html>`'s `data-init`), so from then on only a pick changes it |
+| `/title`, `/title?project=<p>` | a page's tab title alone, as text, and its favicon's address in `x-sluice-favicon`: the index's ("2 questions · 2 failed · 1 quiet · Projects · sluice") or a project's, the plan's glance: its open questions to the owner in brackets, a warning sign and how many of its steps need a look the owner has not set aside, its name ("(1) ⚠4 · almanac · sluice", "⚠2 · almanac · sluice", "(1) almanac · sluice", its name alone when nothing needs the owner), its favicon the mark with a teal dot while a question waits, an ochre square while a step needs a look; what a hidden tab asks for every 30 s while its stream is closed; the open questions to the owner someone waits on lead it (the inbox's title too: "2 questions · Inbox") |
+| `/_ui` | "States and parts": what each state and shared part of the dashboard means as its pages show it, in every state, in Paper and Carbon (DESIGN.md, Components), how each is built under it, and every component with its props and events; nothing on it is read from the store |
 | `/docs`, `/docs/<topic>` | the agent docs (`docs/agent`, what `sluice docs` and the MCP `docs` tool serve) as pages: an index of the topics (the overview first, then by task), then each topic's markdown drawn, every topic listed beside it (under it on a narrow screen); display preferences link it beside the guide |
 | `/static/<name>` | assets |
 
@@ -2359,10 +2368,10 @@ from each run's result in the step's current generation; a quiet run keeps it. I
 step's badges say it. A stopped unit's module names its failure's kind in a word or two ("cap", "stalled", "quota", "auth", "engine exited", "engine fault",
 "lost", "no submit", "invalid", "rejected", "transient", else "failed"); the module
 says the failure's sentence under it (a cancel's too). A step that asked the owner a question
-its run waits on puts its unit under For you on the plan, the question whole, Answer leading
-to it on the step's Overview, whose header's tag (coral, in place of the gold "n awaiting
-reply") leads there too; the plan's summary sentence leads with "1 question for you", linked to
-For you. The page draws the
+its run waits on puts its unit in the plan's Needs you, the question whole and answered in
+place; its step's status line says "waiting on your answer" (in place of "n awaiting reply"),
+leading to it on the step's Overview; the plan's summary sentence leads with "1 question for
+you", linked to Needs you. The page draws the
 time as of its render, so it reads right before the clock ticks, and the version (below) leaves a
 ticking time's text out, so the clock alone never patches the page.
 
@@ -2389,7 +2398,7 @@ from its `## Task` section); a message by who sent it, "From @lash-f4" ("From or
 messages table by its id, the id a link); sluice's own nudge "From sluice"; a compacted context
 handed back "Compacted" and a session carried on from an earlier run "Carried on", both muted)
 and what the agent did until the next, its last
-words, its tool calls counted by tool, how long it took and how many failed ("1 failed", in the sand's ink). A turn opens
+words, its tool calls counted by tool, how long it took and how many failed ("1 failed", in the ochre's ink). A turn opens
 (`<details>`, no script) to its calls as a tree: the tool, its key argument (the
 command, the path, the pattern, the query), how long it took and its outcome; a call opens to its
 arguments as name and value rows and its result (a long one folded behind "Show all"; a failed
@@ -2414,7 +2423,7 @@ page, the inbox's notes) draws them one way, in one column: a run of messages fr
 a group under who sent it and to whom (a step by its title and id, the page's own step "This
 step", a session by its name (`@lead`), "orchestrator", muted, on older messages, the owner "You"); a line at each day's start (UTC) and at the first note
 to the owner not read yet ("New", by the owner's read mark on its thread; nothing is marked read
-by being drawn); a question with its state ("Waiting on your answer", after the coral dot, when it waits on the owner,
+by being drawn); a question with its state ("Waiting on your answer", after the teal dot, when it waits on the owner,
 "Awaiting reply", "Answered", "Closed") and the replies to it directly under it; each message's
 id and its time (relative, the absolute time in its title); a body past 700 characters or 14
 lines folded behind "Show all", but never an open question the owner can answer, which is
@@ -2448,8 +2457,8 @@ Datastar `@post` whose effect comes back on the stream; every value is HTML-esca
 server with unsafe link schemes refused. A page loads nothing from any other host: every
 script is served from `/static/` (Datastar 1.0.4, OpenUI lang-core 0.3.0, zod 4.6.5 and
 sluice's own), and every face from `/static/fonts/` (`font/woff2`, vendored fontsource 5.3.0
-files), each fetched only for a face the page's theme sets text in (their `@font-face` rules are
-in the one stylesheet). A page and each stream batch are drawn from one store
+files of its two faces, Inter and JetBrains Mono, whose `@font-face` rules are in the one
+stylesheet). A page and each stream batch are drawn from one store
 snapshot, with each running run's activity (its run files' modification times, and when its
 agent was sent each turn and made each tool call, from its transcript, cached by the bytes
 already read so a page reads only what was appended) read once;
@@ -2457,13 +2466,14 @@ nothing that changes meanwhile fails the page. The version a page carries (`ver`
 fingerprint of the HTML its stream patches with what the page's clock keeps left out: a ticking
 `<time data-since>`'s or `<time data-ago>`'s text (every time that ticks is one, the board's
 Units ages too), the place of each mark and span on At work's pulse strips (`<i data-a>`'s
-style, kept by `nav.js` from its times) and a row's heard line's ink (`data-heard`'s class). So a
+style, kept by `nav.js` from its times) and a row's live dot (`data-heard`'s class). So a
 stream opened at it sends nothing until something shown changes, however long the page stays
 open. A page marks parts of what
 it patches as regions of their own (`<!--r:id-->…<!--/r:id-->` around the element of that id):
-the plan's head, each section of the sheet (Needs you, At work, Finished
-since you looked, Done; one with nothing in it a hidden placeholder, so it keeps its place), each
-item of Needs you and each row of At work, a step's page's head (`#step-band`)
+the sidebar's head and its project list and the top bar's tabs on every page, the plan's head,
+each section of the sheet (Needs you, At work, Watching, Finished since you looked, Done; one
+with nothing in it a hidden placeholder, so it keeps its place), each item of Needs you, each
+line of Watching and each row of At work, a step's page's head (`#step-band`)
 and detail apart, a unit's page's head and detail, the message views' head, the plan's facts
 and the board's pane.
 A batch sends, for each region that changed, the smallest region around the change whose
@@ -2477,8 +2487,9 @@ While the step runs, its detail renders every second (its transcript grows with 
 step or unit no longer in the plan, or a deleted project, is said in place ("This step left the
 plan; it may have retired.", with its log) and its stream stays open and quiet. The drawer's
 stream has its own `sver` and `sstale` (a step's own page streams under the page's `ver`); the page's line under the nav reads only the page's
-stream: hidden while live, "Updates paused. Reconnecting…" while Datastar retries, and "Updates
-stopped at 14:02." with Reconnect once it gives up (its ten retries, about three minutes, or a
+stream: nothing while live, an ochre pill in the top bar, "Updates paused · Reconnect", while
+Datastar retries (its Reconnect opens the stream at once), and "Updates stopped at 14:02." with
+Reconnect under the bar once it gives up (its ten retries, about three minutes, or a
 stream the server ended), opening the stream again on Reconnect, on going online, on the tab
 showing and on the window's focus. Every stream's first signals carry the build that drew them
 (`rel`, the release and its assets' fingerprint); a page drawn by another build says "sluice was
@@ -2557,141 +2568,154 @@ field or output is shown or kept there by its JSON shape alone: numbers, boolean
 words show; a hash, id, path, URL or long token is kept there; prose shows on two lines and
 whole there.
 
-**The plan.** The project page is a briefing over a roster. Its head (the bar names the
-project, and the name is its heading for a screen reader) is one sentence from the status
-table's counts, the silences and the open questions alone, each state in its own word: the
-questions first, linked to where they are answered ("1 question for you"), then each stop and
-silence by its word ("2 failed, 1 cancelled, 1 quiet"), then "10 at work; 73 of 92 done", then
-its steps counted, "· 412 steps."; with nothing for the owner it begins "Nothing needs you."
-("Nothing needs you; 4 set aside." when the owner set it all aside; not under a find, which
-narrows Needs you), "Nothing needs you. 3 at work, all heard from recently. 5 of 8 done · 31
-steps."; it names no unit. It says what is true whatever the owner set aside: setting an item aside is
-about attention alone, so only Needs you's list, the tab title's ⚠ count and the favicon leave
-it out (a cancel settled as done is no longer one: its unit is done). The project's sections
-(Plan, Day, Stats, Messages, Log, Functions, Settings) are in the bar beside the project
-switcher, on a row of their own that scrolls sideways within itself where the bar is too
-narrow for one row; Find (an icon that opens into its field on a click or `/`, open while it
-holds a find) and the view switch (three icons, each named by its title) are the bar's tools.
-The head and three sections under it, each a patch region, keep the frame's centred column,
-its edges the bar's (at most 1440px; on a phone Finished follows At work). The head's Details, the plan's one ⋯, holds Export (the plan as Mermaid text,
-`?format=mermaid&all=true`):
+**The plan.** The project page is a briefing over a roster, in the frame's centred column (at
+most 1240px; DESIGN.md, The shell). Its head (the top bar names the project, and the name is its
+heading for a screen reader) is one sentence from the status table's counts, the silences and
+the open questions alone, each state in its own word: the questions first, linked to where they
+are answered ("1 question for you"), then each stop and silence by its word ("2 failed, 1
+cancelled, 1 quiet"), then "10 at work; 73 of 92 done", then its steps counted, "· 412 steps.";
+with nothing for the owner it begins "Nothing needs you." ("Nothing needs you; 4 set aside."
+when the owner set it all aside; not under a find, which narrows Needs you), "Nothing needs you.
+3 at work, all heard from recently. 5 of 8 done · 31 steps."; it names no unit. It says what is
+true whatever the owner set aside: setting an item aside is about attention alone, so only Needs
+you's list, the tab title's ⚠ count and the favicon leave it out (a cancel settled as done is no
+longer one: its unit is done). The project's sections (Plan, Day, Stats, Messages, Log,
+Functions, Settings) are the top bar's tabs, with Inbox at its right; under 620px the last three
+fold into "More". The find is the sidebar's (`/` focuses it; on a step's or unit's page it finds
+on the plan), and the view switch (three icons, each named by its title) and the head's Details,
+the plan's one ⋯, stand beside the sentence; Details holds Export (the plan as Mermaid text,
+`?format=mermaid&all=true`). Under it Needs you, then At work; Watching and Finished stand in a
+300px rail at the column's right from 1600px wide (when no board stands beside the plan), and
+follow At work in the column narrower.
 
-- **Needs you**: every item that needs the owner, in one well, a sentence each with one action
-  and a ×: the open questions to the owner someone waits on ("<title> asks: <its title>",
-  Answer, which opens the step on the question), then the stops (each unit whose current step
-  failed, was cancelled or is stale: "<title> failed at <stage> after 1h 4m <owner>.", the
-  failure's headline, what it last said and what to try next, `failure::Advice`, where a limit
-  is set when one stopped it ("Raise its agent's time limit (SLUICE_AGENT_MAX_MIN in the
-  project's .env), then Retry."); Retry, or "Retry with feedback" leading to the step's
-  feedback box when the failure repeated; a cancel says its reason and, when it set a failure
-  aside, "It had failed: …", with Retry and "Settle as done"), failures that share a cause of
-  their own (a wall-clock cap, a stall, an engine's usage cap, sign-in, exit or readiness, a
-  lost process, a passing failure outlasting its retries, exiting without submitting) said once
-  in the head's word ("Two units failed: they hit their wall-clock cap.", the advice in the
-  plural), the units in a fold, with Retry all; then the silences, the longest first ("<title> has not been heard from since 14:02,
-  3h ago.", Message it). Only the first item's action is filled; the rest are outlined. Each is
-  marked: a coral dot a question (the larger mark), a sand square a stop, a sand ring a
-  silence, said in words to a screen reader. A cancel stays in Needs you: a cancelled step
-  leaves its unit unfinished and holds every step after it, and the status table counts it as
-  needing a look on every page (home, `show=attention`, the tab title), so the owner still has
-  one decision to make: Retry, or "Settle as done" (outlined, its step's Dismiss), which settles
-  the cancel so its unit is done; its step's page undoes it. Settling is never the ×. Every ×
-  sets its item aside for attention alone (`POST …/needs`, `needs_dismiss`, nothing settled),
-  kept until it changes (a stop's step is retried, recancelled or recreated: its generations
-  move on; a silent run writes; a question is answered or closed), when it comes back by
-  itself. For ten minutes after, "Set aside: <what> · Undo" stands under the well ("Set aside:
-  the silence of <title>"), Undo putting it back. "Set all aside" in the section's head sets
-  every stop and silence aside the same way, a cancel included, and settles nothing; a
-  question keeps its own × (the head's words are the same while one is open), so the head never
-  counts a question the well hides. With nothing to say there is no section (the head says
-  "Nothing needs you"), only the "Set aside" lines while there are some.
-- **At work**: its head says how to read a strip in one muted line ("Each mark is something
-  the agent did; a message is a taller mark. The dotted line is time since its last action."),
-  and its ⓘ (a small round button, the Details popover) at length: a blue mark a minute its
-  agent did something (was sent a turn or ran a tool), a taller one a message, a notch where
-  its run began; the dotted line after the last mark the time since it last did anything, grey
-  while recent, sand once quiet. A row a unit at work or waiting once begun, grouped by recipe (its name linking
-  `?recipe=<name>&show=all`, its rows counted quiet, running and waiting), then the units of
-  no recipe ("Other units"),
-  then the long runs (a unit of one step and no recipe reporting progress, or running six hours
-  or more). Within each visible or quiet section, rows default to Created: when the unit was
-  added to the plan (earliest revision first, ties by plan position). At work's quiet text select
-  offers Created, Plan order and Recent activity (latest heard first, ties by plan position),
-  kept per viewer and project in `sluice_order_<p>`. Pages and streams read the same cookie.
-  Activity never reorders Created or Plan order; changing group or state section may move a row.
-  A group is a `<details>`, open, its line its name in
-  ink over its counts. In a roster of more than 12 rows a group folds by row: its remarkable
-  rows first (a silence, a wait of an hour or more since its last run, a unit with an open
-  item in Needs you), the rest, when more than 3, folded under them to one line ("+7 running ·
-  each heard from in the last 11m"), a `<details>` opening in place; a group
-  with nothing remarkable folds whole to its line ("article · 23 running · each heard from in
-  the last 27m"). Every Plan fold preserves the viewer's open and closed choices through
-  patches and re-creation, including unit moves between groups, with `data-preserve-attr="open"`
-  and project-scoped session memory keyed by fold or unit id. Counts have their own stream
-  regions; count and activity changes alone never replace the roster skeleton.
-  A stop is in Needs you, not a row, so it keeps no row in sight. A row: what
-  its steps run on as a badge, only where that tells rows apart and never for a fn (an
-  engine's name), its title whole (two lines at most, whole when the row is open, its `title`
-  the whole) with its owner small and muted, under it (two lines at most) its recipe's view or its
-  last message and who sent it (when, its meta says); its stage (its
-  step's name in a unit of several or of a recipe; a loose step's state alone), its state and
-  how long it has run or waited; "heard 12m ago" when it was heard from since its run began
-  (inked from 15 minutes, bold from 30, the page's clock moving it on), else "no word yet"; once quiet, "quiet 2h 3m" on the
-  sand in place of the stage's time; a breathing dot
-  while it was heard from in the last five minutes; and its pulse strip: the last hour,
-  linear, now at the right, a mark each minute its agent acted (each turn it was sent and each
-  tool call it made, as its transcript says; the latest 90 such minutes, so the strip changes
-  only when the agent acts), a taller mark each message, a start notch where its run began
-  when that is inside the hour, and a dotted tail from its last action, message or write to
-  now, muted while recent and sand once the unit is quiet (a strip whose last mark is over an
-  hour old is all sand dots); a waiting row draws only what it said. One pair of labels on the
-  head's line over the strips ("1h ago", "now"; on a phone over each group's first strip) says
-  the window to a screen reader ("The last hour, now at the right: …"), and each strip says
-  what it shows ("Its pulse: acted in 14 minutes of its run, 3 messages lately, then quiet"; it counts
-  since the run began, so the clock alone never changes it). Pointed at, tapped or reached
-  with the arrows (the strip is one tab stop; Escape closes), a mark's minute opens a popover
-  of what happened then, asked for only then (`GET /projects/id/<p>/pulse?unit=<u>[&step=<s>]&at=<minute>`,
-  a Datastar patch of the popover's body; never in the page or its stream): the time on the
-  reader's clock, then in order each tool call (its tool and first argument, one line), turn
-  (what opened it and its first sentence) and message (who and an excerpt), read from the
-  run's transcript and the store; eight at most, then "+N more" and a link to the first in its
-  step's Activity tab. A strip whose run began before the hour fades at its left edge, which
-  says "Started 1h 42m ago, at 14:05" (`&from=<start>`). A
-  unit that has not begun and waits on earlier work is counted, not drawn ("4 waiting on earlier
-  work · 25 done, the last 2h ago"), unless a find, `root=` or `recipe=` asks for it. A row is
-  a `<details>`: opening it asks for its body (`GET /projects/id/<p>/units/<u>/drill`, which
-  answers a Datastar patch that replaces the row's empty body; while it is open the row's stream
-  carries a stamp of that body, and a new stamp asks for it again), so the page and its stream
-  carry rows, never the steps of rows nobody opened. It opens to its last message whole (a
-  message card: who, when, its markdown), then its step view (below) on the
-  row's own window, the
-  same hour, linear, across exactly the row's strip (its timeline as wide as the strip and
-  ending where it does, how long each took before it), its current step's row tinted, the run
-  going now drawn as the row's pulse strip again, its marks saying what happened the same way
-  (a run that began earlier starts at the left edge, which fades and says when it began when
-  pointed at, never in words on the strip; one over before the hour is said, not drawn; a
-  pending step draws nothing), then when it was last heard from ("Last heard 22:51 (6m
-  ago)"; for a quiet unit "Not heard from since 19:14 (3h ago)"; never the message the card
-  above says),
-  Open step, and Message and Unit page as quiet links; it stays open through a patch. A failed, cancelled or stale unit is
-  a stop in Needs you, not a row.
+- **Needs you**: every item that needs the owner, a hairline row each, a sentence with its
+  actions and a ×: the open questions to the owner someone waits on (its unit's title, "asks
+  you", who asked and when; its words; the answer in place under them: a one-line field that
+  grows to about four lines on focus, ⌘↵ or Ctrl+↵ sends it as the owner's reply, Escape empties
+  it, and Answer is the page's one filled button; a question with an OpenUI form opens its form
+  from Answer instead), then the stops (each unit whose current step failed, was cancelled or is
+  stale: "<title> failed after 1h 4m", who and when, the failure's headline, what it last said
+  and what to try next, `failure::Advice`, where a limit is set when one stopped it ("Raise its
+  agent's time limit (SLUICE_AGENT_MAX_MIN in the project's .env), then Retry."); Retry and Retry
+  with feedback, whose field opens in place under the item and sends the retry with its words to
+  the step's thread, `POST …/steps/<s>/actions` `action=retry` with `message`; when the failure
+  repeated the field stands open at once and there is no bare Retry; a cancel says its reason
+  and, when it set a failure aside, "It had failed: …", with Retry and "Settle as done"),
+  failures that share a cause of their own (a wall-clock cap, a stall, an engine's usage cap,
+  sign-in, exit or readiness, a lost process, a passing failure outlasting its retries, exiting
+  without submitting) said once in the head's word ("Two units failed: they hit their
+  wall-clock cap.", the advice in the plural), the units in a fold, with Retry all; then the
+  silences, the longest first ("<title> has not been heard from since 14:02, 3h ago.", Message
+  it), a long run's (Watching, below) only past `long_run_quiet_h`. Each is marked: a teal dot a
+  question, a red square a stop, an ochre ring a silence, said in words to a screen reader. A
+  cancel stays in Needs you: a cancelled step leaves its unit unfinished and holds every step
+  after it, and the status table counts it as needing a look on every page (home,
+  `show=attention`, the tab title), so the owner still has one decision to make: Retry, or
+  "Settle as done" (its step's Dismiss), which settles the cancel so its unit is done; its step's
+  page undoes it. Settling is never the ×. Every × sets its item aside for attention alone
+  (`POST …/needs`, `needs_dismiss`, nothing settled), kept until it changes (a stop's step is
+  retried, recancelled or recreated: its generations move on; a silent run writes; a question is
+  answered or closed), when it comes back by itself. For ten minutes after, "Set aside: <what> ·
+  Undo" stands under the list ("Set aside: the silence of <title>"), the focus going to it, Undo
+  putting it back. "Set all aside" in the section's head sets every stop and silence aside the
+  same way, a cancel included, and settles nothing; a question keeps its own ×, so the head
+  never counts a question the list hides. With nothing to say the section stays, drawn as a
+  state: a pen sketch over "Nothing needs you" and one muted sentence (how many items are set
+  aside and how they come back, when some are).
+- **Watching**: the long runs, apart from At work: a running step of no recipe alone in its
+  unit that publishes progress (`step_progress`) or has run six hours or more. A line each: its
+  title, its latest result in short words (the first short progress field) coloured by its
+  verdict, its last twenty published results as small squares, oldest first, the latest taller
+  (each titled with when it was published; the strip labelled with its green and red counts),
+  and "last result 2h ago" (or "running 11d" before any). The verdict is read from the progress
+  fields alone: a count of failures (`failed`, `red`, `errors` and their like) above zero, or a
+  status word of failure, is red; a pass count or an `ok` with no failure is green; else
+  neither, and colour is never alone (a square of it before the words, the words themselves).
+  Its history is the step's `progress_runs` (§6.4). A long run comes to Needs you only on a
+  failure, a question or a silence: no progress and no activity for `long_run_quiet_h` hours
+  (config.json, 24 by default). Each line is a patch region of its own.
+- **At work**: its head one line: its counts ("8 units · 1 waiting"), the order menu
+  ("Order: Created", a menu of radio items: Created, when the unit was added to the plan,
+  earliest revision first, ties by plan position; Plan order; Recent activity, latest heard
+  first, ties by plan position; kept per viewer and project in `sluice_order_<p>`, which pages
+  and streams read alike; activity never reorders Created or Plan order, and changing group or
+  state section may move a row), its ⓘ (a popover drawing each mark of a pulse strip beside its
+  meaning: a mark a minute its agent did something (was sent a turn or ran a tool), a taller
+  blue one a message, a notch where its run began, the dotted line after the last mark the time
+  since it last did anything, faint while recent and ochre once quiet), and over the strips
+  "1h ago" and "now", which say the window to a screen reader ("The last hour, now at the
+  right: …"). A row a unit at work or waiting once begun, grouped by recipe (a `<details>`, open,
+  its line its name, linking `?recipe=<name>&show=all`, over its counts: quiet, running and
+  waiting), then the units of no recipe ("Other units"). In a roster of more than 12 rows a
+  group folds by row: its remarkable rows first (a silence, a wait of an hour or more since its
+  last run, a unit with an open item in Needs you), the rest, when more than 3, folded under
+  them to one line ("+7 running · each heard from in the last 11m"), a `<details>` opening in
+  place; a group with nothing remarkable folds whole to its line ("article · 23 running · each
+  heard from in the last 27m"). Every Plan fold preserves the viewer's open and closed choices
+  through patches and re-creation, including unit moves between groups, with
+  `data-preserve-attr="open"` and project-scoped session memory keyed by fold or unit id.
+  Counts have their own stream regions; count and activity changes alone never replace the
+  roster skeleton. A stop is in Needs you, not a row. A row: what its steps run on as a chip
+  (an engine's name; the column kept, empty, for a fn, and drawn only when some row of the
+  roster runs on an agent); its title (two lines at most, whole when the row is open, its
+  `title` the whole) with its owner small and muted; its stage track (each stage of a unit of
+  several or of a recipe by its name and state; a loose step's state alone), how long it has
+  run or waited and "heard 12m ago" when it was heard from since its run began (the page's clock
+  moving it on), else "no word yet", once quiet "quiet 2h 3m" in ochre; a dot while it was heard
+  from in the last five minutes (`data-heard`, kept by the page's clock); its recipe's view or
+  its last message with its sender (one line; a waiting row says what it waits on instead); and
+  its pulse strip: the last hour, linear, now at the right, a mark each minute its agent acted
+  (each turn it was sent and each tool call it made, as its transcript says; the latest 90 such
+  minutes, so the strip changes only when the agent acts), a taller mark each message, a start
+  notch where its run began when that is inside the hour, and a dotted tail from its last
+  action, message or write to now, faint while recent and ochre once the unit is quiet (a strip
+  whose last mark is over an hour old is all ochre dots); under 760px wide the strip gives way to
+  the dot. Each strip says what it shows ("Its pulse: acted in 14 minutes of its run, 3 messages
+  lately, then quiet"; it counts since the run began, so the clock alone never changes it).
+  Pointed at, tapped or reached with the arrows (the strip is one tab stop; Escape closes), a
+  mark's minute opens a popover of what happened then, asked for only then
+  (`GET /projects/id/<p>/pulse?unit=<u>[&step=<s>]&at=<minute>`, a Datastar patch of the
+  popover's body; never in the page or its stream): the time on the reader's clock, then in
+  order each tool call (its tool and first argument, one line), turn (what opened it and its
+  first sentence) and message (who and an excerpt), read from the run's transcript and the
+  store; eight at most, then "+N more" and a link to the first in its step's Activity tab. A
+  strip whose run began before the hour fades at its left edge, which says "Started 1h 42m ago,
+  at 14:05" (`&from=<start>`). A row whose state the stream changes stays where it is and
+  flashes (its wash fading over 1.4 s, `data-flash`), never moving under the reader; reduced
+  motion skips it. A unit that has not begun and waits on earlier work is counted, not drawn,
+  on the line under At work ("4 waiting on earlier work · 25 done, the last 2h ago", the done
+  count linking `show=done`), unless a find, `root=` or `recipe=` asks for it. A row is a
+  `<details>`: opening it asks for its body (`GET /projects/id/<p>/units/<u>/drill`, which
+  answers a Datastar patch that replaces the row's empty body; while it is open the row's
+  stream carries a stamp of that body, and a new stamp asks for it again), so the page and its
+  stream carry rows, never the conversations of rows nobody opened. It opens to its
+  conversation, oldest first (each message its sender, when, its markdown), then when it was last
+  heard from ("Last heard 22:51 UTC (6m ago)"; for a quiet unit "Not heard from since 19:14
+  (3h ago)"), Message and Unit page as quiet links and Open step (the drawer, on its current
+  step); it stays open through a patch. It draws no step table: the unit's page keeps its step
+  view.
 - **Finished since you looked**: the units finished since this browser last marked the
   project seen (its `sluice_seen_<p>` cookie), at most eight and how many more, newest first,
   "since 14:02"; with no mark kept, "Finished lately", the latest four. A unit that produced
-  something is a card: when it finished and how long it took, its title linking its page, then
-  what it produced. That is first the values that identify it or say it in a word (a commit, a
-  count of files), each named, at most three, then the output that explains it (its summary) or
-  else its last message, cut to 160 characters. The units that left neither share one line,
-  "3 more finished with nothing to say:" and their titles as links. Home draws each project's
-  Finished the same way. "Mark as seen"
-  (`POST …/seen`) moves the mark to the latest drawn: the page's `seen` signal takes it at once
-and the plan's stream, opened again, draws from it. The cards fill
-  their row, each as tall as what it says.
+  something is a row: its title linking its page, then what it produced in one line: the output
+  that explains it (its summary), else its last message, else up to two short outputs named
+  ("ready true · files 3"), cut to 160 characters; at its right when it finished and how long it
+  took. The units that left nothing share one muted line, "3 more finished with nothing to
+  say:" and their titles as links. "Mark as seen" (`POST …/seen`) moves the mark to the latest
+  drawn: the page's `seen` signal takes it at once and the plan's stream, opened again, draws
+  from it; with nothing finished since, the section is a state, "Nothing new since you looked"
+  over "Seen through 22:41 · Undo". Home draws each project's finished units by name.
+
+A reference in prose (a step id, a commit, a ticket) carries a hover card: pointed at for
+320 ms, or focused, it opens a card of what the plan knows of it, asked for then
+(`GET /projects/id/<p>/ref?r=step:<id>|sha:<hex>|t:<ticket>`: a step's state, its fn and its
+unit; the steps whose outputs name a commit; the units a ticket names), closed 160 ms after the
+pointer leaves, on Escape or on a scroll.
 
 A view whose program does not check says so once over its group ("This recipe's view does not
 check, so its summary is left out: …"). The find, `show`, `tag`, `recipe` and `root` keep or
-hide whole units. Each item of Needs you and each row is a patch region of its own, so a change
-patches the item or row it moved and nothing else. A step whose state the live plan moves on is
+hide whole units. Each item of Needs you, each line of Watching and each row is a patch region of its own, so a
+change patches the item, line or row it moved and nothing else. A step whose state the live plan moves on is
 said once to a screen reader ("alpha-review failed"), from the `data-said` each item, row, card
 and Done line carries, also when its unit moves between sections. A time of day is drawn on the
 server in UTC and says so ("19:14 UTC"); the page's script sets it on the reader's own clock.
@@ -2701,7 +2725,7 @@ else the plan's, each step after every step of its unit it comes after), named b
 (else its id less the unit's prefix) and linking to it; then what it runs on (an engine's name,
 a fn), a column only when its steps run on more than one thing. A rail at its left draws the gates
 between the unit's steps (an `after` entry or a value passed): a node a step, filled when done,
-ringed when not reached, an arc turning while it runs, sand when it needs a look; a chain runs
+ringed when not reached, an arc turning while it runs, ochre when it needs a look; a chain runs
 down one lane, a branch and a join take lanes beside it with an arrow into each step they reach,
 and a condition is named at the row of the step it gates ("if ok", "if not ok": the gate's value, negated or not). Then its state (its
 glyph and word from the status table, "run 3" with its earlier runs' marks past its first), its

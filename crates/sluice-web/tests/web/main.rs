@@ -6,6 +6,7 @@ mod board_fixture;
 #[path = "../../../../tests/support/chrome.rs"]
 mod chrome;
 mod components;
+mod design_rules;
 mod failed_dismiss;
 mod forms;
 mod http;

@@ -1,7 +1,7 @@
 //! A unit's own page (DESIGN.md, A unit's page): its head carries its name, what identifies it
 //! behind its ⋯ and how its steps stand. On the paper its recipe's view when it says more than a
 //! line, then its step view (`unit_steps`), the whole unit step by step, and under it a module
-//! for each step that needs the owner: a question on the coral rule, a stop on the sand with why
+//! for each step that needs the owner: a question on the teal rule, a stop on the ochre with why
 //! it stopped. Generic by rule: every stage is named as its recipe names it.
 use super::board::{self, Registry, UnitView, render_error};
 use super::step::StepView;
@@ -148,7 +148,7 @@ impl UnitPage<'_> {
         }
         .html()
     }
-    /// A step's module: a stop in the sand well.
+    /// A step's module: a stop in the ochre well.
     fn module(&self, step: &StepView) -> TrustedHtml {
         ui::module_open_as(6, Swell::Look, &format!("us-{}", step.id), "u-step")
     }
@@ -203,15 +203,16 @@ fn batch(
     let unit = unit_of(view, unit)?;
     let drawn = draw(view, &unit).map_err(render_error)?;
     let nav = NavView::new(shared, Some(view.project.id), "plan")?;
-    Ok(RenderedBatch::new(vec![
+    let _ = viewer;
+    let mut regions = vec![
         PatchRegion::new("unit-band", drawn.band),
         PatchRegion::new("unit-detail", drawn.detail),
-        PatchRegion::new(
-            "top-nav",
-            super::render_nav(&nav, viewer, &format!("{}/units/{}", view.href(), unit.id))
-                .map_err(render_error)?,
-        ),
-    ]))
+    ];
+    regions.extend(super::nav_regions(
+        &nav,
+        &format!("{}/units/{}", view.href(), unit.id),
+    ));
+    Ok(RenderedBatch::new(regions))
 }
 pub async fn unit_page(
     State(state): State<super::DashboardState>,

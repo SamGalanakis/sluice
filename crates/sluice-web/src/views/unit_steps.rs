@@ -251,7 +251,7 @@ pub struct Pulse<'a> {
 }
 impl Pulse<'_> {
     /// Its strip's marks, as `<i>`s on the window: the silence since it last acted a dotted
-    /// tail to now (sand once it is quiet), a notch where its run began, a mark each minute it
+    /// tail to now (ochre once it is quiet), a notch where its run began, a mark each minute it
     /// acted (its latest `PULSE_MARKS`), a taller one each message. With its words for a screen
     /// reader: how many actions and messages it shows, and whether it has gone quiet.
     pub fn html(&self, now: f64) -> (String, String) {
@@ -956,7 +956,7 @@ impl View<'_> {
                 ui::status_as(step.shown, step.word),
                 step.bypass_by
                     .as_ref()
-                    .map(|by| format!("<span class=\"pill sv-tag\">bypass · {}</span>", esc(by)))
+                    .map(|by| format!("<span class=\"badge sv-tag\">bypass · {}</span>", esc(by)))
                     .unwrap_or_default(),
                 step.runs
             );
@@ -1013,7 +1013,7 @@ const NONE: &str = "<span class=\"sv-none\" aria-hidden=\"true\">—</span>";
 
 /// A row's piece of the rail: the lines passing by, the edges in (an arrow where one is due)
 /// and out, and its node over them: filled when done, ringed when not reached, a turning arc
-/// while it runs, sand when it wants a look.
+/// while it runs, ochre when it wants a look.
 fn rail_svg(r: &Rail, width: usize, cell: Cell, shown: Shown) -> String {
     let x = |l: usize| lane_x(l, width);
     let me = x(r.lane);
@@ -1092,7 +1092,7 @@ fn track(axis: &Axis, unit: &str, step: &Step<'_>) -> String {
     let last = step.spans.len().saturating_sub(1);
     for (n, span) in step.spans.iter().enumerate() {
         let open = span.to.is_none();
-        // a run still going reads as its step does now (a quiet one on the sand), an ended
+        // a run still going reads as its step does now (a quiet one on the ochre), an ended
         // one as it ended
         let outcome = if open {
             step.shown
@@ -1129,7 +1129,7 @@ fn track(axis: &Axis, unit: &str, step: &Step<'_>) -> String {
             edge = Some(span.from);
             continue;
         }
-        // a run gone quiet: running until it fell silent, then on the sand
+        // a run gone quiet: running until it fell silent, then on the ochre
         let (cut, rest) = match step.quiet_since {
             Some(q) if open && q > span.from => (q, Shown::Quiet),
             _ => (end, outcome),

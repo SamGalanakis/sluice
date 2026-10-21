@@ -1152,23 +1152,20 @@ async fn page(
 async fn global_stream(
     State(state): State<DashboardState>,
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
-    headers: HeaderMap,
 ) -> Response {
-    stream(state, None, uri.query().unwrap_or(""), headers)
+    stream(state, None, uri.query().unwrap_or(""))
 }
 async fn project_stream(
     State(state): State<DashboardState>,
     Path(project): Path<ProjectId>,
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
-    headers: HeaderMap,
 ) -> Response {
-    stream(state, Some(project), uri.query().unwrap_or(""), headers)
+    stream(state, Some(project), uri.query().unwrap_or(""))
 }
 fn stream(
     state: DashboardState,
     project: Option<ProjectId>,
     raw: &str,
-    headers: HeaderMap,
 ) -> Response {
     use crate::streams::{PatchRegion, RenderedBatch, StreamQuery, VersionSignal, page_events};
     let query = match LogQuery::parse(raw) {
@@ -1180,27 +1177,23 @@ fn stream(
         .map(|(_, v)| v.into_owned());
     let version = StreamQuery { project, datastar }.version(VersionSignal::Page);
     let stop = state.stop.clone();
-    let viewer = Viewer::from_headers(&headers);
     let events = page_events(
         state.watch(project),
         move || {
             let state = state.clone();
             let query = query.clone();
-            let viewer = viewer.clone();
             async move {
                 let page = load(&state.reads, project, query).await?;
                 let nav = NavView::new(&page.nav, project, "log")?;
                 Ok(RenderedBatch {
                     version: page.version(),
-                    regions: vec![
+                    regions: [
                         PatchRegion::new("log-view", page.body()?),
                         PatchRegion::new("log-band", page.head()),
-                        PatchRegion::new(
-                            "top-nav",
-                            super::render_nav(&nav, &viewer, &page.base())
-                                .map_err(super::threads::render_error)?,
-                        ),
-                    ],
+                    ]
+                    .into_iter()
+                    .chain(super::nav_regions(&nav, &page.base()))
+                    .collect(),
                 })
             }
         },

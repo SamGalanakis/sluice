@@ -120,25 +120,22 @@ async fn global_stream(
     State(state): State<MessageState>,
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
     Query(query): Query<MessageQuery>,
-    headers: HeaderMap,
 ) -> Response {
-    stream(state, None, uri.path().into(), query, headers).await
+    stream(state, None, uri.path().into(), query).await
 }
 async fn project_stream(
     State(state): State<MessageState>,
     Path(project): Path<ProjectId>,
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
     Query(query): Query<MessageQuery>,
-    headers: HeaderMap,
 ) -> Response {
-    stream(state, Some(project), uri.path().into(), query, headers).await
+    stream(state, Some(project), uri.path().into(), query).await
 }
 async fn stream(
     state: MessageState,
     project: Option<ProjectId>,
     path: String,
     query: MessageQuery,
-    headers: HeaderMap,
 ) -> Response {
     use crate::streams::{PatchRegion, RenderedBatch, VersionSignal, page_events};
     let version = query
@@ -148,13 +145,11 @@ async fn stream(
         .and_then(|v| v.get("ver").and_then(|v| v.as_str()).map(str::to_owned))
         .unwrap_or_default();
     let stop = state.dashboard.stop.clone();
-    let viewer = Viewer::from_headers(&headers);
     let events = page_events(
         state.dashboard.watch(project),
         move || {
             let state = state.clone();
             let path = path.clone();
-            let viewer = viewer.clone();
             let query = query.clone();
             async move {
                 let page =
@@ -168,16 +163,9 @@ async fn stream(
                 }
                 Ok(RenderedBatch {
                     version: page.version(),
-                    regions: vec![
-                        regions.remove(0),
-                        PatchRegion::new(
-                            "top-nav",
-                            super::render_nav(&nav, &viewer, path.trim_end_matches("/stream"))
-                                .map_err(threads::render_error)?,
-                        ),
-                    ]
-                    .into_iter()
-                    .chain(regions)
+                    regions: std::iter::once(regions.remove(0))
+                        .chain(super::nav_regions(&nav, path.trim_end_matches("/stream")))
+                        .chain(regions)
                     .collect(),
                 })
             }

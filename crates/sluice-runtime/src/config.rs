@@ -6,6 +6,8 @@ use std::{path::Path, time::Duration};
 
 /// `log_max` when config.json does not set it.
 pub const DEFAULT_LOG_MAX: usize = 10_000;
+/// Hours a long run may publish nothing before the plan asks the owner to look (`long_run_quiet_h`).
+pub const DEFAULT_LONG_RUN_QUIET_H: f64 = 24.0;
 /// The port `serve` binds when neither `--port` nor config.json's `http.port` gives one.
 pub const DEFAULT_PORT: u16 = 3065;
 /// The host `serve` binds when neither `--host` nor config.json's `http.host` gives one.
@@ -30,6 +32,8 @@ pub struct HomeConfig {
     pub log_max: usize,
     /// Minutes an unread settlement may wait before the owner is asked about it.
     pub unread_alert_min: Option<f64>,
+    /// Hours a long run (the dashboard's Watching) may publish nothing before it needs a look.
+    pub long_run_quiet_h: f64,
     pub notify: Option<NotifyConfig>,
     /// Default bound for a park without --timeout.
     pub park_timeout_seconds: u64,
@@ -42,6 +46,7 @@ impl Default for HomeConfig {
             port: None,
             log_max: DEFAULT_LOG_MAX,
             unread_alert_min: None,
+            long_run_quiet_h: DEFAULT_LONG_RUN_QUIET_H,
             notify: None,
             park_timeout_seconds: sluice_model::park::DEFAULT_PARK_TIMEOUT_SECONDS,
         }
@@ -110,6 +115,13 @@ impl HomeConfig {
             Some(n) => match n.as_u64().filter(|n| *n > 0) {
                 Some(n) => config.park_timeout_seconds = n,
                 None => ignored("park_timeout_seconds"),
+            },
+        }
+        match value.get("long_run_quiet_h") {
+            None | Some(Value::Null) => {}
+            Some(n) => match n.as_f64() {
+                Some(n) if n.is_finite() && n > 0.0 => config.long_run_quiet_h = n,
+                _ => ignored("long_run_quiet_h"),
             },
         }
         match value.get("notify") {

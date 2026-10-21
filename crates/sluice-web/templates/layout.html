@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"{% if viewer.theme.is_some() %} data-theme="{{ viewer.theme_id() }}"{% endif %}{% if viewer.types %} class="show-types"{% endif %} data-signals="{{ signals }}" data-attr:data-theme="$theme" data-class:show-types="$types" data-init="$theme || ($theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'sluice-dark' : 'sluice-light', @post('/settings'))">
+<html lang="en"{% if viewer.theme.is_some() %} data-theme="{{ viewer.theme_id() }}"{% endif %}{% if viewer.types %} class="show-types"{% endif %} data-signals="{{ signals }}" data-attr:data-theme="$theme" data-class:show-types="$types" data-init="$theme || ($theme = matchMedia('(prefers-color-scheme: light)').matches ? 'paper' : 'carbon', @post('/settings'))">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{ title }} · sluice</title><link id="favicon" rel="icon" href="{{ crate::views::asset_url("favicon.svg") }}" type="image/svg+xml">
 <link rel="stylesheet" href="{{ style_url }}">
@@ -7,9 +7,15 @@
 <script type="module" data-datastar-runtime src="{{ datastar_url }}"></script>
 </head><body data-release="{{ release }}">{{ crate::views::icons::sprite()|safe }}
 <a class="skip" href="#content">Skip to content</a>
+<div class="app">
+{%- include "sidebar.html" %}
+<div class="scrim nav-scrim" data-nav-close></div>
+<div class="mainarea">
 {%- include "bar.html" %}
-{% if !frame.head.as_str().is_empty() %}<div class="page-top">{{ frame.head|safe }}</div>{% endif %}
-<main id="content" tabindex="-1"{% if !stream.is_empty() %} data-init="{{ crate::views::ui::stream_get(stream) }}"{% endif %}>
+{% if !frame.head.as_str().is_empty() %}<div class="wrap page-top">{{ frame.head|safe }}</div>{% endif %}
+<main id="content" class="wrap" tabindex="-1"{% if !stream.is_empty() %} data-init="{{ crate::views::ui::stream_get(stream) }}"{% endif %}>
 {{ crate::views::ui::banners(stream)|safe }}
 {{ body|safe }}
-</main>{{ crate::views::ui::confirmation()|safe }}{{ crate::views::pulse::popover("pulse-pop")|safe }}<script type="module" src="{{ nav_url }}"></script><script type="module" src="{{ components_url }}"></script></body></html>
+</main>
+</div>
+</div>{{ crate::views::ui::confirmation()|safe }}{{ crate::views::pulse::popover("pulse-pop")|safe }}{{ crate::views::ui::hover_card()|safe }}<script type="module" src="{{ nav_url }}"></script><script type="module" src="{{ components_url }}"></script></body></html>

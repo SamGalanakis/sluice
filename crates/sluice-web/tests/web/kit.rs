@@ -13,7 +13,7 @@ const RAW: [(&str, &str); 4] = [
     ("data-on:submit", "a write: ui::post_form"),
 ];
 /// The few that are the kit's exceptions, each with why: (file, the line's distinctive text).
-const ALLOWED: [(&str, &str, &str); 3] = [
+const ALLOWED: [(&str, &str, &str); 6] = [
     (
         "src/views/panel.rs",
         "<h2 id=\\\"board-h\\\"",
@@ -28,6 +28,21 @@ const ALLOWED: [(&str, &str, &str); 3] = [
         "src/views/step.rs",
         "<h2 id=\\\"d-title\\\"",
         "the same drawer title, for a step the plan no longer has",
+    ),
+    (
+        "src/views/plan.rs",
+        "<h2 id=\\\"at-work\\\">At work</h2>",
+        "At work's head stands on its rows' grid, the strip's window over the strip column, which a section head's row cannot",
+    ),
+    (
+        "src/views/gallery.rs",
+        "<h2>At work</h2>",
+        "the gallery's stand-in for that same head",
+    ),
+    (
+        "templates/side_nav.html",
+        "<h2 class=\"sb-sec\">Projects</h2>",
+        "the sidebar's list label, not a section of the page",
     ),
 ];
 

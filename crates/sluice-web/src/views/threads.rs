@@ -105,7 +105,7 @@ impl MessageItem {
     pub fn thread_url(&self) -> String {
         thread_url(self.project, &self.message.thread)
     }
-    /// An open question someone waits on, put to the owner: the one place coral is spent.
+    /// An open question someone waits on, put to the owner: the one place teal is spent.
     /// A question to the owner, open or not: a conversation draws it whole wherever it is
     /// shown, its answer under it, never as a run-together excerpt.
     pub fn asks_owner(&self) -> bool {
@@ -115,7 +115,7 @@ impl MessageItem {
         self.state == "open" && self.stopped.is_empty() && self.recipient() == "owner"
     }
     /// Its state as a tag: an open question to the owner "Waiting on your answer" after the
-    /// coral dot, to
+    /// teal dot, to
     /// anyone else "Awaiting reply" in gold, else "Answered" or "Closed", muted; a note none.
     pub fn state_tag(&self) -> TrustedHtml {
         match self.state.as_str() {

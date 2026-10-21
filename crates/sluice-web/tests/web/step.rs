@@ -302,10 +302,11 @@ async fn card(state: &views::DashboardState, project: ProjectId) -> String {
         "done" => {
             let cards = plan_html::band(&body, "plan-finished");
             let at = cards.find("/steps/work\">").expect("its card");
-            let start = cards[..at].rfind("<li class=\"fin-i\"").unwrap();
+            let start = cards[..at].rfind("<li class=\"fin-r\"").unwrap();
             cards[start..at + cards[at..].find("</li>").unwrap()].to_owned()
         }
         "" => String::new(),
+        "watching" => plan_html::region(&body, "w-work").to_owned(),
         _ => plan_html::row(&body, "work").to_owned(),
     }
 }
@@ -358,15 +359,14 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
     let html = card(&state, project).await;
     assert!(!html.contains("data-since"), "{html}");
 
-    // running for days, alone: a long run, its time a <time data-since> at its run's start,
-    // which the page ticks
+    // running for days, alone: a long run, watched, its time a <time data-since> at its
+    // run's start, which the page ticks
     run("2026-10-05T09:00:00Z", None).await;
     set("UPDATE steps SET status='running' WHERE project_id=?1").await;
     let html = card(&state, project).await;
-    let pill = &html[html.find("<span class=\"pill run\">").expect("its pill")..];
     assert!(
-        pill.contains(
-            "<time data-since=\"2026-10-05T09:00:00Z\" datetime=\"2026-10-05T09:00:00Z\""
+        html.contains(
+            "<span class=\"when\">running <time data-since=\"2026-10-05T09:00:00Z\" datetime=\"2026-10-05T09:00:00Z\""
         ),
         "{html}"
     );
@@ -376,7 +376,10 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
     set("UPDATE runs SET finished_at='2026-10-05T09:30:00Z' WHERE project_id=?1").await;
     set("UPDATE steps SET status='failed' WHERE project_id=?1").await;
     let html = card(&state, project).await;
-    assert!(html.contains(" failed after 30m."), "{html}");
+    assert!(
+        html.contains("<span class=\"nd-s\">failed after 30m</span>"),
+        "{html}"
+    );
     assert!(!html.contains("data-since"), "{html}");
     set("UPDATE steps SET status='pending' WHERE project_id=?1").await;
     let html = card(&state, project).await;
@@ -385,24 +388,20 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
         "a pending step shows no timer: {html}"
     );
 
-    // the retry runs: the timer is the current run's, not the first's, and its steps say
-    // which run
+    // the retry runs: the timer is the current run's, not the first's
     run("2026-10-05T10:00:00Z", None).await;
     set("UPDATE steps SET status='running' WHERE project_id=?1").await;
     let html = card(&state, project).await;
-    let pill = &html[html.find("<span class=\"pill run\">").expect("its pill")..];
-    let pill = &pill[..pill.find("</span><sluice-pulse class=\"ro-track").unwrap()];
     assert!(
-        pill.contains("<time data-since=\"2026-10-05T10:00:00Z\""),
-        "{pill}"
+        html.contains("<span class=\"when\">running <time data-since=\"2026-10-05T10:00:00Z\""),
+        "{html}"
     );
-    assert!(html.contains(">run 2<"), "{html}");
 
     // it succeeds, saying it is ready: done, how long its last run took, static
     set("UPDATE runs SET finished_at='2026-10-05T12:14:30Z' WHERE project_id=?1 AND finished_at IS NULL").await;
     set("UPDATE steps SET status='succeeded',outputs='{\"ready\":true}' WHERE project_id=?1").await;
     let html = card(&state, project).await;
-    assert!(html.contains(" · took 2h 14m</p>"), "{html}");
+    assert!(html.contains(" · took 2h 14m</span>"), "{html}");
     assert!(!html.contains("data-since"), "{html}");
 
     // a value set by hand did not take its run's time
@@ -614,7 +613,7 @@ async fn a_running_step_says_what_it_is_doing_now() {
     let status = &status[..status.find("</p>").unwrap()];
     assert!(
         status.contains("<span class=\"g g-quiet\"")
-            && status.contains("<span class=\"pill look\"><span class=\"g g-quiet\"")
+            && status.contains("<span class=\"badge look\"><span class=\"g g-quiet\"")
             && status.contains("</span>quiet ")
             && status.contains("not heard from since <time data-ago=\"2026-10-05T09:40:00Z\""),
         "{status}"
