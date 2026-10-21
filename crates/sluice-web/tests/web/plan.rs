@@ -858,7 +858,9 @@ async fn slow_chromium_plan_folds_and_order_survive_activity_and_group_moves() {
         browser.eval("document.querySelector('.order-menu').open = true; [...document.querySelectorAll('.order-menu [role=menuitemradio]')][1].click()").unwrap();
         browser.wait("order()[0] === 'new'").unwrap();
         assert_eq!(browser.eval("document.cookie.includes('=plan')").unwrap(), true);
-        browser.eval("location.reload()").unwrap();
+        // The old document already has both the row and streamReady. Clear its flag
+        // before reloading so this wait can only pass on the new document's stream.
+        browser.eval("window.streamReady=false; location.reload()").unwrap();
         browser.wait("window.streamReady && !!document.querySelector('#u-new')").unwrap();
         assert_eq!(browser.eval("document.querySelector('.order-menu [aria-checked=true]').textContent").unwrap(), "Plan order");
         assert_eq!(browser.eval("[...document.querySelector('.ro-g').querySelectorAll('.ro-u')][0].dataset.unit").unwrap(), "new");
