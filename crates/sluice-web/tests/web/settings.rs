@@ -2,7 +2,7 @@ use crate::seed;
 use axum::{
     Router,
     body::{Body, to_bytes},
-    http::Request,
+    http::{Request, StatusCode},
 };
 use futures_util::StreamExt;
 use serde_json::{Value, json};
@@ -325,7 +325,7 @@ async fn a_section_saves_what_changed_with_owner_records_safe_preview_and_resour
         })
         .await
         .unwrap();
-    // a resource's Remove (its confirmation's form) is refused while a step needs it
+    // a resource's Remove is refused while a step needs it
     let response = f
         .router()
         .oneshot(super::forms::post(
@@ -342,6 +342,91 @@ async fn a_section_saves_what_changed_with_owner_records_safe_preview_and_resour
         "{html}"
     );
     assert_eq!(f.project().await.settings_rev, rev);
+    for (name, capacity, number, function) in [
+        ("spare", "number", "7", ""),
+        ("dynamic", "fn", "", "test.capacity"),
+    ] {
+        f.save(
+            "resources",
+            &[
+                ("new", name),
+                ("capacity.:new", capacity),
+                ("number.:new", number),
+                ("capacity_fn.:new", function),
+            ],
+        )
+        .await;
+        let response = f
+            .router()
+            .oneshot(super::forms::post(
+                f.path(),
+                "remove-test",
+                &[("section", "remove"), ("resource", name)],
+            ))
+            .await
+            .unwrap();
+        let html = super::forms::text(response).await;
+        assert!(
+            html.contains(&format!("Removed {name}")) && html.contains("<button>Undo</button>"),
+            "{html}"
+        );
+    }
+    for name in ["spare", "dynamic"] {
+        let key = format!("resource:{name}");
+        let response = f
+            .router()
+            .oneshot(super::forms::post(
+                format!("{}/undo", f.path()),
+                "undo-test",
+                &[("key", &key)],
+            ))
+            .await
+            .unwrap();
+        let html = super::forms::text(response).await;
+        assert!(html.contains("Restored."), "{html}");
+    }
+    let (_, html) = f.get_page().await;
+    assert!(
+        html.contains("name=\"number.spare\"") && html.contains("value=\"7\""),
+        "{html}"
+    );
+    assert!(
+        html.contains("<option selected>test.capacity</option>"),
+        "{html}"
+    );
+    let response = f
+        .router()
+        .oneshot(super::forms::post(
+            f.path(),
+            "remove-test",
+            &[("section", "remove"), ("resource", "spare")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    f.save(
+        "resources",
+        &[
+            ("new", "spare"),
+            ("capacity.:new", "number"),
+            ("number.:new", "9"),
+        ],
+    )
+    .await;
+    let response = f
+        .router()
+        .oneshot(super::forms::post(
+            format!("{}/undo", f.path()),
+            "undo-test",
+            &[("key", "resource:spare")],
+        ))
+        .await
+        .unwrap();
+    assert!(
+        super::forms::text(response)
+            .await
+            .contains("Undo expired or the setting changed")
+    );
 }
 #[tokio::test]
 async fn duplicate_name_and_stale_revision_have_no_partial_effect_or_records() {
@@ -574,7 +659,7 @@ async fn rename_preserves_live_callbacks_next_reader_and_id_stream() {
 async fn dashboard_deletion_archives_first_and_requires_current_revision_and_no_live_work() {
     let f = Fixture::new().await;
     let (_, html) = request(f.router(), "GET", &f.path(), String::new()).await;
-    assert!(html.contains("Delete first?"));
+    assert!(html.contains("Delete first</button>"));
     assert!(!html.contains("confirm-name"));
     assert!(
         html.contains("<summary id=\"delete-button\">Delete project</summary>"),

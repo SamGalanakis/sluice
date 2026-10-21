@@ -199,7 +199,6 @@ async fn durable_detail_uses_current_generation_frozen_inputs_and_live_submissio
     assert!(!ended_html.as_str().contains("took took"));
     let mut timed = step.clone();
     timed.runs[0].seconds = Some(19200.0);
-    assert_eq!(timed.cancel_prompt(), "Running for 5h 20m.");
     assert_eq!(step.inputs[0].value, "frozen attempted value");
     assert_eq!(step.outputs[0].value, "true");
     assert_eq!(step.outputs[0].source, "Submitted so far");

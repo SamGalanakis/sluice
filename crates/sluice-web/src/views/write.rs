@@ -2,8 +2,7 @@
 //! (`ui::post_form`: `@post` with `contentType: 'form'`), so a write is a short request beside
 //! the page's one long-lived stream (the Tao of Datastar's CQRS): the stream draws what the
 //! write changed, and the write's own answer says only what the stream cannot, its form's
-//! notice. A write that went through clears that notice (and the confirmation it was sent from,
-//! `sluice-dialog`, closes on it); one sluice refused fills it. An answer patches elements and
+//! notice. A write that went through clears that notice; one sluice refused fills it. An answer patches elements and
 //! signals only, never script. Datastar applies an answer only when its status is
 //! 200, so a refusal to a form is a 200 that says so; a client that is not a page's form (a
 //! script, a test) gets the JSON error with its status instead.
@@ -31,8 +30,8 @@ pub fn form(headers: &HeaderMap) -> Option<String> {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
     .then(|| id.to_owned())
 }
-/// The answer to a write sluice took: the form's notice emptied (a confirmation it was sent
-/// from closes on that); what changed comes with the page's stream. A client that is not a
+/// The answer to a write sluice took: the form's notice emptied;
+/// what changed comes with the page's stream. A client that is not a
 /// page's form gets 204.
 pub fn done(headers: &HeaderMap) -> Response {
     match form(headers) {
@@ -48,8 +47,7 @@ pub fn status(form: &str, words: &str) -> StreamEvent {
         esc(words)
     ))
 }
-/// A notice put in place whole (`replace`, not morphed): a confirmation's form sits in the
-/// page's one dialog, which no patch morphs (`data-ignore-morph`), while it is open.
+/// A notice put in place whole (`replace`, not morphed).
 fn whole(html: String) -> StreamEvent {
     StreamEvent::Elements(PatchElements::new(html).mode(ElementPatchMode::Replace))
 }

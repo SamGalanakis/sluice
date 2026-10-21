@@ -124,3 +124,28 @@ pub fn find_form(
         super::esc(label),
     ))
 }
+
+/// A single click action, with its own refusal notice.
+pub fn action_form(
+    id: &str,
+    url: &str,
+    fields: &[(&str, String)],
+    label: &str,
+) -> crate::views::TrustedHtml {
+    let hidden: String = fields
+        .iter()
+        .map(|(key, value)| {
+            format!(
+                "<input type=\"hidden\" name=\"{}\" value=\"{}\">",
+                super::esc(key),
+                super::esc(value)
+            )
+        })
+        .collect();
+    crate::views::TrustedHtml::owned(format!(
+        "{}{hidden}<button>{}</button>{}</form>",
+        post_form(id, "", url),
+        super::esc(label),
+        form_said(id)
+    ))
+}

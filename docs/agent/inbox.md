@@ -35,7 +35,10 @@ a note is never read for having been shown.
 - A reply with an `answer` to a question that is no longer open is refused (`conflict`:
   "question is no longer open"), so a stale button can never answer twice; a later plain
   reply is just a message. A reply whose `answer.action` is `close` closes the question
-  without answering it.
+  without answering it. The dashboard closes immediately and offers Undo for ten minutes.
+  Undo sends an owner's reply with `answer.action="reopen"`: the same question becomes open
+  and answerable again. Its asker sees the close, then “Question reopened.” Both replies stay
+  in the thread. Reopening does not restart a run that already stopped.
 - Message rows outlive the log: they are never trimmed with it, and are deleted with their
   project.
 

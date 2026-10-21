@@ -216,130 +216,6 @@ define("sluice-fold", {
   },
 });
 
-// ---- sluice-confirm ----------------------------------------------------------------------------
-// A confirmation (Cancel, Close all, Delete project) stays the `<details class="confirm-flow">`
-// the server draws, so a patch morphs it in place: its summary keeps the focus and a click that
-// straddles the patch. Its summary opens the page's one `<dialog id="confirmation">` instead,
-// titled `heading` (with `ref-id` after it in data mono), the form moved into it while it is
-// open; focus starts on the keep button, stays in the dialog and goes back to the opener. While
-// its summary is `aria-disabled="true"` (drawn by the server, so a patch keeps it current) it
-// does nothing.
-let confirming = null;
-// The confirmation done (kept, taken, or its dialog closed any other way): the form back in its
-// details, under its own id, and the focus on its opener. Called at once wherever the dialog is
-// closed, not only from its `close` event, which the browser queues as a task: an opener pressed
-// in between found its form still in the dialog and opened nothing (a confirmation kept and
-// opened again at once). Calling it again does nothing.
-function settle() {
-  if (!confirming) return;
-  const { host, form, id, place, flow, opener, heading } = confirming;
-  confirming = null;
-  rename(form, "confirming", id);
-  form.querySelector(".confirm-copy")?.removeAttribute("id");
-  // a patch while it was open may have drawn the details a new form: keep that one
-  if (place.isConnected && !flow.querySelector(":scope > form")) place.replaceWith(form);
-  else { place.remove(); form.remove(); }
-  const back = opener.isConnected ? opener
-    : [...document.querySelectorAll("sluice-confirm")].find((c) => c.heading === heading)?.querySelector("details.confirm-flow > summary");
-  // an opener in a menu the dialog closed: back onto the menu's own summary
-  let to = back;
-  while (to && !(to.checkVisibility?.() ?? true)) {
-    to = to.closest("details")?.parentElement?.closest("details")?.querySelector(":scope > summary");
-  }
-  to?.focus();
-  host.dispatchEvent(new CustomEvent("sluice-confirm-close", { bubbles: true }));
-}
-// form `from` (and its notice, `<id>-said`) under id `to`
-const rename = (form, from, to) => {
-  const said = form.querySelector(`[id="${from}-said"]`);
-  if (said) said.id = `${to}-said`;
-  form.id = to;
-};
-define("sluice-confirm", {
-  props: ({ string }) => ({ heading: string, refId: string }),
-  manifest: {
-    slots: [{ name: "summary", description: "The opener: details.confirm-flow > summary." },
-            { name: "form", description: "What is confirmed: its .confirm-copy, its fields, a primary or danger button and [data-keep]." }],
-    events: [{ name: "sluice-confirm-open", description: "Its dialog opened." },
-             { name: "sluice-confirm-close", description: "Its dialog closed; its form is back in its details." }],
-  },
-  setup({ host, props, cleanup }) {
-    const on = listening(cleanup);
-    const dialog = document.querySelector("#confirmation");
-    on(host, "click", (event) => {
-      const s = event.target.closest?.("details.confirm-flow > summary");
-      if (!s || !dialog) return;
-      event.preventDefault();
-      if (s.getAttribute("aria-disabled") === "true" || dialog.open) return;
-      open(s);
-    });
-    const open = (opener) => {
-      settle();
-      const flow = opener.parentElement;
-      const form = flow.querySelector(":scope > form");
-      if (!form) return;
-      const place = document.createComment("confirmation form");
-      form.replaceWith(place);
-      // while it is in the dialog the form answers as `confirming`: a patch may draw the details
-      // a new form under its own id, and a write's answer finds its notice by id
-      const id = form.id;
-      rename(form, id, "confirming");
-      confirming = { host, form, id, place, flow, opener, heading: props.heading };
-      const head = dialog.querySelector("#confirmation-title");
-      head.textContent = props.heading;
-      if (props.refId) {
-        // the question mark ends the title; the id it names goes under it
-        const id = Object.assign(document.createElement("code"), { className: "sref-id", textContent: props.refId });
-        head.append("?", " ", id);
-      }
-      dialog.querySelector("#confirmation-body").replaceChildren(form);
-      form.querySelector(".confirm-copy").id = "confirmation-copy";
-      dialog.setAttribute("aria-describedby", "confirmation-copy");
-      dialog.showModal();
-      form.querySelector("[data-keep]").focus();
-      host.dispatchEvent(new CustomEvent("sluice-confirm-open", { bubbles: true }));
-    };
-  },
-});
-// ---- sluice-dialog -----------------------------------------------------------------------------
-// The page's one confirmation dialog: keep closes it, Tab stays in it, closing puts the form back
-// in its details and the focus on its opener. It is a component so that a form moved into it is
-// inside a Rocket host, where Rocket finds the action (`@post`) its submit calls.
-define("sluice-dialog", {
-  props: () => ({}),
-  manifest: {
-    slots: [{ name: "dialog", description: "dialog#confirmation: its #confirmation-title and #confirmation-body." }],
-    events: [],
-  },
-  setup({ host, cleanup }) {
-    const on = listening(cleanup);
-    const dialog = host.querySelector(":scope > dialog");
-    // Escape, or any other close the page did not make itself. The event is queued: one from a
-    // close `done` already settled can arrive after the next confirmation opened, and must
-    // leave that one be
-    on(dialog, "close", () => { if (!dialog.open) settle(); });
-    const done = () => { dialog.close(); settle(); };
-    on(dialog, "click", (event) => {
-      if (event.target.closest?.("[data-keep]")) done();
-    });
-    // the write its form sent went through (its answer emptied its notice, never an alert): the
-    // confirmation is done (`views::write::done`)
-    on(document, "datastar-fetch", (event) => {
-      const { type, el } = event.detail;
-      if (type !== "finished" || !dialog.open || !(el instanceof HTMLFormElement) || !dialog.contains(el)) return;
-      if (el.querySelector(".form-said[role=alert]")?.textContent) return;
-      done();
-    });
-    on(dialog, "keydown", (event) => {
-      if (event.key !== "Tab") return;
-      const controls = [...dialog.querySelectorAll("button:not(:disabled), textarea, input:not([type=hidden])")];
-      const first = controls[0], last = controls.at(-1);
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    });
-  },
-});
-
 // ---- sluice-conversation -----------------------------------------------------------------------
 // One conversation and what its page draws before it (a note's head, a thread's line). "Jump to
 // latest" brings its newest message into view and gives it the focus; a thread's own page
@@ -380,7 +256,7 @@ let openui = null;
 define("sluice-answer", {
   props: () => ({}),
   manifest: {
-    slots: [{ name: "actions", description: ".q-actions: button.q-toggle (aria-controls its box) and Close question's sluice-confirm (form.q-close)." },
+    slots: [{ name: "actions", description: ".q-actions: button.q-toggle (aria-controls its box) and Close question's form.q-close." },
             { name: "box", description: ".q-box with its .answer[data-url] area and its words-only form." }],
     events: [],
   },
@@ -400,8 +276,7 @@ define("sluice-answer", {
     on(document, "datastar-fetch", async (event) => {
       const form = event.detail.el;
       if (event.detail.type !== "finished" || !(form instanceof HTMLFormElement)) return;
-      // Close question is confirmed in the page's dialog, out of this host: its form names
-      // the answer area it closes (`ui::close_form`); one with none is redrawn by the stream
+      // Close question's form names the answer area it closes (`ui::close_form`); one with none is redrawn by the stream
       const closed = form.matches("form.q-close");
       const area = closed ? document.getElementById(form.dataset.closes ?? "") : host.querySelector(".answer[data-url]");
       if (!area || !host.contains(area) || (!closed && !(form.matches(".answer form") && host.contains(form)))) return;

@@ -4,7 +4,7 @@
 //! token instead of rendering; a step or unit that left the plan, or a deleted project, is said in
 //! place and its stream stays open; a stream's first batch names the build; a hidden tab asks for
 //! its title alone; and in Chromium, the settings forms refuse an apply over another author's
-//! change, a confirmation, the More menu and a refused field's note survive patches, and the
+//! change, an action, the More menu and a refused field's note survive patches, and the
 //! line under the nav says when updates stopped and opens the stream again.
 use crate::board_fixture;
 use crate::chrome;
@@ -370,7 +370,7 @@ async fn slow_chromium_a_settings_save_refuses_to_write_over_another_authors_cha
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refused_fields_note() {
+async fn slow_chromium_a_patch_keeps_the_action_the_more_menu_and_a_refused_fields_note() {
     let f = Fixture::new().await;
     let titled = f.titled().await;
     let (base, server) = serve(f.router()).await;
@@ -378,9 +378,9 @@ async fn slow_chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refuse
     let page = format!("{base}/projects/id/{titled}#step:watch");
     let mut browser = tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&page).unwrap();
-        browser.wait("document.querySelector('#step-detail details.confirm-flow > summary')").unwrap();
+        browser.wait("document.querySelector('#step-detail .dm-acts form:has(input[value=cancel]) button')").unwrap();
         // the running step's Cancel, in its head's open ⋯: the summary the server draws, focused
-        browser.eval("document.querySelector('#step-detail .sh-name details.dm').open=true;window.cancel=document.querySelector('#step-detail details.confirm-flow > summary');cancel.focus();window.sver=document.querySelector('#step-detail').outerHTML.length").unwrap();
+        browser.eval("document.querySelector('#step-detail .sh-name details.dm').open=true;window.cancel=document.querySelector('#step-detail .dm-acts form:has(input[value=cancel]) button');cancel.focus();window.sver=document.querySelector('#step-detail').outerHTML.length").unwrap();
         browser
     })
     .await
@@ -397,14 +397,8 @@ async fn slow_chromium_a_patch_keeps_the_confirmation_the_more_menu_and_a_refuse
     let mut browser = tokio::task::spawn_blocking(move || {
         browser.wait("document.querySelector('#step-detail').textContent.includes('Main is green again.')").unwrap();
         assert_eq!(browser.eval("cancel.isConnected && document.activeElement===cancel").unwrap(), true);
-        // and it still opens the dialog
-        browser.eval("cancel.click()").unwrap();
-        browser.wait("document.querySelector('#confirmation').open").unwrap();
-        browser.eval("document.querySelector('#confirmation [data-keep]').click()").unwrap();
-        // Keep puts the focus back on its opener, in the menu it was in, still open: the form is
-        // back in its details before the click reaches the page, so the menu never saw a click
-        // outside it
-        browser.wait("!document.querySelector('#confirmation').open && document.activeElement===document.querySelector('#step-detail details.confirm-flow > summary') && document.querySelector('#step-detail .sh-name details.dm').open").unwrap();
+        // The direct action keeps its focus through the patch.
+        assert_eq!(browser.eval("cancel.textContent").unwrap(), "Cancel");
         browser.navigate(&format!("{base}/projects/id/{lanes}")).unwrap();
         browser.wait("document.querySelector('form.board-form') && document.querySelector('#project-board')").unwrap();
         // a refused field: its note under the field

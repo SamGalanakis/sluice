@@ -392,6 +392,14 @@ pub struct SocketSettings {
     pub reads: ReadPool,
 }
 impl settings::SettingsCommands for SocketSettings {
+    fn undo(&self, project: ProjectId, key: String) -> BoxFuture<'_, Result<(), PublicError>> {
+        Box::pin(async move {
+            self.client
+                .command(CommandRequest::SettingsUndo { project, key })
+                .await?;
+            Ok(())
+        })
+    }
     fn update(
         &self,
         id: ProjectId,

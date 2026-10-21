@@ -479,11 +479,11 @@ details.dm > summary:hover, details.dm[open] > summary { color: var(--ink); back
 .dm-l sluice-copy > .copy { opacity: 1; }
 .dm-acts { display: grid; gap: 2px; margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); }
 .dm-acts > .dm-h { margin: 0 0 2px; }
-.dm-acts :is(.confirm-flow > summary, button, a) { display: flex; align-items: center; justify-content: flex-start;
+.dm-acts :is(button, a) { display: flex; align-items: center; justify-content: flex-start;
   width: 100%; height: var(--row); padding: 0 8px; border-radius: var(--radius-sm); background: none;
   box-shadow: none; color: var(--ink); font: 400 var(--text-ui)/20px var(--font-sans);
   text-decoration: none; list-style: none; cursor: pointer; }
-.dm-acts :is(.confirm-flow > summary, button, a):hover { background: var(--wash); color: var(--ink); }
+.dm-acts :is(button, a):hover { background: var(--wash); color: var(--ink); }
 .dm-acts form { display: contents; }
 @media (max-width: 760px) {
   details.dm > summary { width: 36px; height: 36px; }
@@ -527,7 +527,7 @@ sluice-tabs, sluice-fold, sluice-banner { display: block; }
 sluice-banner[hidden] { display: none; }
 sluice-fold:has(> details) { display: contents; }
 sluice-fold[hidden] { display: none; }
-sluice-drawer, sluice-menu, sluice-confirm, sluice-conversation, sluice-answer, sluice-search { display: contents; }
+sluice-drawer, sluice-menu, sluice-conversation, sluice-answer, sluice-search { display: contents; }
 sluice-copy { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; vertical-align: baseline; }
 sluice-copy > code { min-width: 0; overflow-wrap: anywhere; }
 sluice-copy > .copy { display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; padding: 0;
@@ -2177,28 +2177,15 @@ button.q-toggle.primary[aria-expanded="true"]:hover {
 .stopped-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
                 gap: 8px 16px; }
 .stopped-head h2 { margin: 0; }
-/* Shared confirmation: its opener, and its form in the page's one dialog (`sluice-dialog`). */
-.confirm-flow > summary { display: inline-flex; align-items: center; min-height: 32px;
-  padding: 5px 12px; border: 1px solid var(--line-2); border-radius: var(--radius-sm);
-  background: var(--field); cursor: pointer; list-style: none; font-weight: 400; }
-.confirm-flow > summary::-webkit-details-marker { display: none; }
-.confirm-flow > summary[aria-disabled="true"] { pointer-events: none; opacity: .5; }
-.confirm-flow > form { padding: 16px; background: var(--field); border: 1px solid var(--line);
-  border-radius: var(--radius-sm); margin-top: 8px; }
-.confirmation { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px);
-  margin: auto; padding: 24px; border: 1px solid var(--line-2); border-radius: var(--radius-lg);
-  background: var(--field); color: var(--ink); box-shadow: var(--shadow-float); }
-.confirmation::backdrop { background: var(--scrim); }
-.confirmation h2 { font: 600 var(--text-subhead)/24px var(--font-sans); margin: 0 0 12px; overflow-wrap: anywhere; }
-/* the title asks the question; the id it names sits under it */
-.confirmation h2 .sref-id { display: block; margin-top: 4px; font-size: var(--text-sm); font-weight: 400;
-                            color: var(--muted); }
-.confirm-copy { margin-bottom: 16px; overflow-wrap: anywhere; }
-.confirm-copy:empty { display: none; }
-.confirm-reason { display: grid; gap: 6px; font-size: var(--text-ui); }
-.confirm-reason textarea { width: 100%; min-width: 0; }
-.confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-.confirm-actions button { overflow-wrap: anywhere; max-width: 100%; }
+/* Project deletion alone asks first, in place under its guard. */
+.delete-flow > summary { display: inline-flex; align-items: center; min-height: 32px;
+  padding: 5px 12px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); cursor: pointer; }
+.delete-flow > summary[aria-disabled="true"] { pointer-events: none; opacity: .5; }
+.delete-flow > form { margin-top: 12px; }
+.delete-flow > form p { margin-bottom: 12px; max-width: var(--measure); }
+.undo-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--muted); margin-top: 8px; }
+.undo-line form, .q-answered form { display: inline-flex; align-items: center; }
+.undo-line button, .q-answered form button { box-shadow: none; border: 0; padding: 0; background: none; color: var(--muted); text-decoration: underline; }
 .stopped > .meta, .notes > .meta, .q-group > .meta { margin: 4px 0 10px; max-width: var(--measure); }
 .stopped-list { list-style: none; margin: 0; padding: 0; background: var(--field);
                 border: 1px solid var(--line); border-radius: var(--radius-sm); }
@@ -2246,7 +2233,7 @@ details.read-today .item { opacity: .85; }
 .missing-links a:hover { color: var(--ink); }
 @media (max-width: 720px) {
   .q-actions button, .q-close button, .crumbs a, .missing-links a, details.pane > summary,
-  details.kinds > summary, .stopped-list summary, .confirm-flow > summary, .mark-all, .mark-read, details.read-today > summary,
+  details.kinds > summary, .stopped-list summary, .delete-flow > summary, .undo-line button, .q-answered form button, .mark-all, .mark-read, details.read-today > summary,
   .composer button, .composer label.check, .convo-of .jump, .m-whole { min-height: 44px; }
   .stopped-list summary { padding-top: 10px; }
   dl.a-facts { grid-template-columns: minmax(0, 1fr); }
@@ -3012,9 +2999,9 @@ main { container: frame / inline-size; }
 .settings-page .cap-opt input[type=radio] { width: auto; min-height: 0; margin: 0; }
 .cap-opt select { min-height: 40px; min-width: 0; }
 .cap-remove { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
-:is(.cap-remove, .board-clear) .confirm-flow > summary { min-height: 32px; padding: 0; border: 0; background: none;
+:is(.cap-remove, .board-clear) button { box-shadow: none; min-height: 32px; padding: 0; border: 0; background: none;
   color: var(--muted); text-decoration: underline; text-underline-offset: 2px; font-size: var(--text-sm); font-weight: 400; }
-:is(.cap-remove, .board-clear) .confirm-flow > summary:hover { color: var(--ink); }
+:is(.cap-remove, .board-clear) button:hover { color: var(--ink); }
 .board-clear { margin-top: 2px; }
 .resource-list { padding: 0; list-style: none; }
 /* the project's sessions, each its @name and when it was last seen, on one line while they fit */
@@ -3068,7 +3055,7 @@ main { container: frame / inline-size; }
   .setting-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .setting-row dt, #sessions dd { padding: 0; }
   .settings-page button, .settings-page input:not([type=hidden]),
-  :is(.cap-remove, .board-clear) .confirm-flow > summary, .settings-page label.file-pill { min-height: 44px; }
+  :is(.cap-remove, .board-clear) .settings-page label.file-pill { min-height: 44px; }
   .settings-switch { flex-wrap: wrap; }
   .cap-opt { grid-template-columns: minmax(0, 1fr); }
   .settings-page .cap-opt input[type=radio] { min-height: 0; }

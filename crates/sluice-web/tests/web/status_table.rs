@@ -372,10 +372,10 @@ async fn states_priorities_cancellation_and_skipped_units() {
             );
             // a cancel asked for is not offered again
             if state == Shown::Stopping {
-                assert!(!page.contains("<summary>Cancel</summary>"), "{page}");
+                assert!(!page.contains("<button>Cancel</button>"), "{page}");
             }
             if state == Shown::Running {
-                assert!(page.contains("<summary>Cancel</summary>"), "{page}");
+                assert!(page.contains("<button>Cancel</button>"), "{page}");
             }
         }
         // the band's summary sentence: each unit (a loose step is one) counted once by how it reads,

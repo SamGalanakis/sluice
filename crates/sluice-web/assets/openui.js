@@ -204,7 +204,7 @@ export function answered(area, closed) {
   const drawn = area.querySelector(`template[data-done="${closed ? "close" : "answer"}"]`)?.content.firstElementChild;
   const line = drawn ? drawn.cloneNode(true) : h("p", { class: "q-answered", tabindex: "-1" }, closed ? "Closed." : "Answered.");
   // an empty live region first, filled once in the page, so a reader hears it
-  const note = h("p", { class: line.className, tabindex: "-1", role: "status", "aria-live": "polite" });
+  const note = h("div", { class: line.className, tabindex: "-1", role: "status", "aria-live": "polite" });
   if (line.dataset.q) note.dataset.q = line.dataset.q;
   // a question card becomes the line alone, as the server draws it; a message in a thread
   // keeps its words with the line under them

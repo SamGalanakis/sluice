@@ -5,7 +5,7 @@
 use super::step::FieldView;
 use super::unit_steps::Pulse;
 use super::threads::{Build, Composer, Conversation, MessageItem, Who};
-use super::ui::{self, Confirm, Shown, StepRef, Tab};
+use super::ui::{self, Shown, StepRef, Tab};
 use super::{DashboardState, NavView, PageRegistration, TrustedHtml, Viewer};
 use askama::Template;
 use axum::{
@@ -468,36 +468,6 @@ fn empties() -> TrustedHtml {
             "No run kept.",
             &TrustedHtml::owned("<a href=\"#\">Search the log for it</a>".into())
         )
-    ))
-}
-fn dialog() -> TrustedHtml {
-    let cancel = Confirm {
-        opener: "Cancel".into(),
-        title: "Cancel draft · Shorebirds: the spring guide's entries".into(),
-        id: "a-7-draft".into(),
-        action: "#".into(),
-        copy: "It has been running for 2h 14m. Cancelling stops that run; Retry starts it over.".into(),
-        reason: Some("Why stop this run?"),
-        confirm: "Cancel the run".into(),
-        keep: "Keep running",
-        danger: true,
-        ..Default::default()
-    };
-    let delete = Confirm {
-        opener: "Delete project".into(),
-        title: "Delete almanac?".into(),
-        action: "#".into(),
-        copy: "This permanently removes the plan, messages, history, functions, secrets and artifacts. This cannot be undone.".into(),
-        confirm: "Delete almanac".into(),
-        keep: "Keep it",
-        danger: true,
-        disabled: true,
-        ..Default::default()
-    };
-    TrustedHtml::owned(format!(
-        "<div class=\"gal-row\">{}{}</div>",
-        cancel.html(),
-        delete.html()
     ))
 }
 fn notices() -> TrustedHtml {
@@ -1447,7 +1417,6 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Folds", "A long value cut to its first lines, and More and Less.", "`ui::fold`, `ui::more_open` (`sluice-fold`).", both(&|_| Ok(folds()))?);
     add("Conversation", "Messages in one column, the message box at the end.", "`threads::Conversation` in `sluice-conversation`, `sluice-answer`; its message box a `ui::post_form`.", both(&|p| conversation(p, &project))?);
     add("Empty states", "One line where a place has nothing to show.", "`ui::empty`, `ui::empty_with`.", both(&|_| Ok(empties()))?);
-    add("Confirmation", "Asked before Cancel, a succeeded step's Retry, Close all and a delete.", "`ui::Confirm` in `sluice-confirm`.", both(&|_| Ok(dialog()))?);
     add("Menus", "The project switcher, display preferences and an item's Details.", "`ui::menu_open` (`sluice-menu`).", both(&|_| Ok(menus()))?);
     add("Copy", "An id or a SHA, with a copy button.", "`ui::copy` (`sluice-copy`).", both(&|_| Ok(copies()))?);
     add("Settings", "Display preferences: Theme, Show value types and Keyboard shortcuts, applied at once and kept.", "`views::prefs::menu` (the `theme` and `types` signals; `details.sub` in `sluice-menu`), `ui::types_toggle`.", both(&|p| Ok(toggles(p)))?);

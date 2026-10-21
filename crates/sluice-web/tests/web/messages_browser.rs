@@ -335,26 +335,12 @@ async fn slow_chromium_closing_a_question_confirms_it_in_place_and_keeps_the_foc
         browser
             .wait("document.readyState === 'complete' && !!document.querySelector('#tp-overview sluice-answer .answer[data-drawn]') && customElements.get('sluice-answer')")
             .unwrap();
-        // Close question reaches the asker at once and cannot be reopened, so it is confirmed:
-        // nothing is sent until the dialog's Close question
-        browser
-            .eval("(s => { s.focus(); s.click(); })(document.querySelector('#tp-overview sluice-answer details.confirm-flow > summary'))")
-            .unwrap();
-        browser.wait("document.querySelector('#confirmation').open").unwrap();
-        assert_eq!(
-            browser.eval("document.querySelector('#confirmation-title').textContent").unwrap(),
-            "Close “Land it before the rename?”?"
-        );
-        assert_eq!(closes(&f), 0);
-        browser
-            .eval("document.querySelector('#confirmation form.q-close button.primary').click()")
-            .unwrap();
+        browser.eval("document.querySelector('#tp-overview form.q-close button').click()").unwrap();
         browser
             .wait("document.activeElement?.matches('#tp-overview .q-answered[role=status][aria-live=polite]')")
             .unwrap();
-        browser.wait("!document.querySelector('#confirmation').open").unwrap();
         let said = browser.eval("document.activeElement.textContent").unwrap();
-        assert_eq!(said, "Closed just now: Land it before the rename? Read the thread");
+        assert_eq!(said, "Closed just now: Land it before the rename? Read the threadUndo");
         assert_eq!(closes(&f), 1);
         // on the inbox the same: its line in the card's place, focused, the count down by one
         browser.navigate(&format!("{base}/inbox")).unwrap();
@@ -362,20 +348,7 @@ async fn slow_chromium_closing_a_question_confirms_it_in_place_and_keeps_the_foc
             .wait("document.readyState === 'complete' && customElements.get('sluice-answer') && [...document.querySelectorAll('#inbox-items .answer')].every(a => a.dataset.drawn)")
             .unwrap();
         let badge = browser.eval("document.querySelector('#nav-inbox .count').textContent").unwrap();
-        // kept open: nothing sent
-        let open = "[...document.querySelectorAll('#inbox-items article.q-card')].at(-1).querySelector('details.confirm-flow > summary').click()";
-        browser.eval(open).unwrap();
-        browser.wait("document.querySelector('#confirmation').open").unwrap();
-        browser
-            .eval("document.querySelector('#confirmation [data-keep]').click()")
-            .unwrap();
-        browser.wait("!document.querySelector('#confirmation').open").unwrap();
-        assert_eq!(closes(&f), 1);
-        browser.eval(open).unwrap();
-        browser.wait("document.querySelector('#confirmation').open").unwrap();
-        browser
-            .eval("document.querySelector('#confirmation form.q-close button.primary').click()")
-            .unwrap();
+        browser.eval("[...document.querySelectorAll('#inbox-items article.q-card:not(.q-done)')].at(-1).querySelector('form.q-close button').click()").unwrap();
         browser
             .wait("document.activeElement?.matches('#inbox-items article.q-card.q-done .q-answered')")
             .unwrap();

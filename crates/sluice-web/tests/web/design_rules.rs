@@ -375,7 +375,6 @@ const FLOATS: &[&str] = &[
     ".sidebar",
     ".skip",
     ".pulse-pop",
-    ".confirmation",
     ".kinds",
 ];
 /// Mono by role: ids, stages, step names, fns, times, code and figures in a table of them.

@@ -286,7 +286,7 @@ async fn slow_chromium_the_project_page_components_keep_their_state_through_a_pa
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_conversations_answers_copies_and_the_dialog_take_the_keyboard() {
+async fn slow_chromium_conversations_answers_and_copies_take_the_keyboard() {
     let f = Fixture::new().await;
     for body in ["Build the crates.", "Then the docs.", "Then the review."] {
         note(&f, "alpha-build", body).await;
@@ -309,7 +309,7 @@ async fn slow_chromium_conversations_answers_copies_and_the_dialog_take_the_keyb
         "http://{addr}/projects/id/{}/thread?thread=step-alpha-build",
         f.id
     );
-    let (inbox, gallery) = (format!("http://{addr}/inbox"), format!("http://{addr}/_ui"));
+    let inbox = format!("http://{addr}/inbox");
     tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&thread).unwrap();
         browser.viewport(390, "dark").unwrap();
@@ -344,23 +344,6 @@ async fn slow_chromium_conversations_answers_copies_and_the_dialog_take_the_keyb
             browser.eval("[document.querySelector('button.q-toggle').getAttribute('aria-expanded'), document.querySelector('.q-box').hasAttribute('data-open'), !!document.activeElement.closest('.q-box')]").unwrap(),
             json!(["true", true, true])
         );
-        // the dialog: focus starts on keep, Tab stays in it, Escape closes it back on its opener
-        browser.navigate(&gallery).unwrap();
-        browser.wait("document.readyState === 'complete' && customElements.get('sluice-confirm')").unwrap();
-        browser.eval("document.querySelector('.gal-th sluice-confirm:not(.dm-acts > *) summary:not([aria-disabled=true])').click()").unwrap();
-        assert_eq!(
-            browser.eval("[document.querySelector('#confirmation').open, document.activeElement.matches('[data-keep]')]").unwrap(),
-            json!([true, true])
-        );
-        press(&mut browser, "Tab", 9, 0);
-        assert_eq!(browser.eval("document.querySelector('#confirmation').contains(document.activeElement)").unwrap(), true);
-        press(&mut browser, "Escape", 27, 0);
-        browser
-            .wait("!document.querySelector('#confirmation').open && document.activeElement.matches('.gal-th sluice-confirm summary') && !!document.querySelector('.gal-th sluice-confirm details > form')")
-            .unwrap();
-        // a disabled one does nothing
-        browser.eval("document.querySelector('.gal-th sluice-confirm summary[aria-disabled=true]').click()").unwrap();
-        assert_eq!(browser.eval("document.querySelector('#confirmation').open").unwrap(), false);
         assert_eq!(logged(&mut browser), Vec::<String>::new());
     })
     .await

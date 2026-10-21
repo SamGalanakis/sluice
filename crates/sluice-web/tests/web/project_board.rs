@@ -272,7 +272,12 @@ async fn settings_save_clear_and_preview_the_board() {
         "{html}"
     );
     let (_, html) = send(form("clear", "2", "root = Text(\"saved\")")).await;
-    assert!(html.contains("Cleared (rev 3)"), "{html}");
+    assert!(
+        html.contains("Cleared.")
+            && html.contains("Board cleared")
+            && html.contains("<button>Undo</button>"),
+        "{html}"
+    );
     let (_, plan) = f.get(&format!("/projects/id/{}", f.id)).await;
     assert!(!plan.contains("board-pane"));
     // The preview draws a draft with the project's data, or its problems.

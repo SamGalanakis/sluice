@@ -712,7 +712,7 @@ impl<'a> Plan<'a> {
             (Shown::Stale, None) => body.push_str("An input it read changed after it ran."),
             _ => {}
         }
-        let (act, form) = if step.retryable() && !step.retry_asks() {
+        let (act, form) = if step.retryable() {
             let retry = self.retry_form(&[step], "Retry");
             if step.cancelled() {
                 // the cancel's other decision: settle it, so its unit counts as done
@@ -827,7 +827,7 @@ impl<'a> Plan<'a> {
         let steps: Vec<&StepView> = members
             .iter()
             .map(|(_, s)| *s)
-            .filter(|s| s.retryable() && !s.retry_asks())
+            .filter(|s| s.retryable())
             .collect();
         let act = if steps.len() == n {
             self.retry_form(&steps, "Retry all")

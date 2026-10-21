@@ -60,6 +60,7 @@ pub fn router(state: MessageState) -> Router {
         .route("/projects/id/{project}/messages/read", post(mark_read))
         .route("/projects/id/{project}/messages", post(post_message))
         .route("/messages/close", post(close_many))
+        .route("/messages/reopen", post(reopen_many))
         .with_state(state)
 }
 #[derive(Clone, Deserialize, Default)]
@@ -339,6 +340,12 @@ async fn close_many(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    change_many(state, headers, body, "close").await
+}
+async fn reopen_many(State(state): State<MessageState>, headers: HeaderMap, body: Bytes) -> Response {
+    change_many(state, headers, body, "reopen").await
+}
+async fn change_many(state: MessageState, headers: HeaderMap, body: Bytes, action: &str) -> Response {
     let mut targets = vec![];
     for (_, value) in url::form_urlencoded::parse(&body).filter(|(key, _)| key == "m") {
         let parsed = value
@@ -374,7 +381,7 @@ async fn close_many(
                 to: None,
                 body: String::new(),
                 answer: Some(MessageAnswer {
-                    action: "close".into(),
+                    action: action.into(),
                     params: None,
                     values: None,
                 }),
@@ -393,7 +400,7 @@ async fn close_many(
         super::write::failed(
             &headers,
             PublicError::Conflict {
-                message: format!("could not close {}", failed.join("; ")),
+                message: format!("could not {action} {}", failed.join("; ")),
                 current_rev: None,
             },
         )

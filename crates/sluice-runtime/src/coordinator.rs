@@ -3300,6 +3300,7 @@ fn project_mutation(command: &CommandRequest) -> bool {
     matches!(
         command,
         CommandRequest::ProjectUpdate(_)
+            | CommandRequest::SettingsUndo { .. }
             | CommandRequest::BoardSet(_)
             | CommandRequest::BoardDocWrite(_)
             | CommandRequest::BoardDocEdit(_)
@@ -3318,6 +3319,10 @@ fn mutate_project(
     command: CommandRequest,
 ) -> sluice_store::Result<CommandReply> {
     match command {
+        CommandRequest::SettingsUndo { project, key } => {
+            projects::undo_setting(tx, project, &key, &ResourceSettings(catalog.clone()))?;
+            Ok(CommandReply::Ack)
+        }
         CommandRequest::ProjectUpdate(update) => {
             if let Some(Some(limits)) = &update.limits {
                 let home = tx

@@ -247,7 +247,7 @@ async fn a_steps_overview_draws_its_open_question_whole_to_answer_and_its_header
     // the line it becomes once answered, the server's one sentence, waits in a template
     assert!(
         item.contains(&format!(
-            "<template data-done=\"answer\"><p class=\"q-answered\" tabindex=\"-1\" data-q=\"{id}-{q}\">"
+            "<template data-done=\"answer\"><div class=\"q-answered\" tabindex=\"-1\" data-q=\"{id}-{q}\">"
         )) && item.contains("Answered just now: <span class=\"qa-title\">Land l1 first?</span>"),
         "{item}"
     );

@@ -504,25 +504,14 @@ async fn messages_retries_waits_and_run_files() {
         let (_, page) = f.get(&format!("/projects/id/{id}/steps/a")).await;
         let actions = between(&page, "<div class=\"sh-acts\">", "</header>");
         assert!(
-            actions.contains("<sluice-confirm heading=\"Retry a?\"")
-                && actions.contains("<details class=\"confirm-flow\"><summary>Retry</summary>"),
+            actions.contains("<button name=\"action\" value=\"retry\">Retry</button>"),
             "{actions}"
         );
         assert!(
-        actions.contains("<p class=\"confirm-copy\">It succeeded. The 2 steps after it rerun only if its result changes.</p>"),
-        "{actions}"
-    );
-        assert!(
-            actions.contains(
-                "<label class=\"confirm-reason\">Feedback (optional)<textarea name=\"message\""
-            ),
+            actions.contains("<textarea id=\"retry-message\" name=\"message\""),
             "{actions}"
         );
-        assert!(actions.contains("<button type=\"button\" data-keep>Keep its result</button>"));
-        assert!(
-            !actions.contains("value=\"retry\" class=\"primary\""),
-            "{actions}"
-        );
+        assert!(!actions.contains("sluice-confirm"), "{actions}");
         // with no key output, its outputs are a path and a hash: they identify rather than
         // explain, so Overview's preview leaves them to the Outputs tab, which draws them whole
         let overview = between(&page, "id=\"tp-overview\"", "<!--/r:tp-overview-->");

@@ -314,16 +314,16 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_and_undo_brings_back
     let router = router(&f);
     let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
     let plan_href = format!("/projects/id/{id}");
-    // the step's head offers Cancel and Cancel and dismiss, each a confirmation
+    // the step's head offers Cancel and Cancel and dismiss, each acting immediately
     let (_, page) = f.get(&format!("{plan_href}/steps/first")).await;
     let acts = between(&page, "<header id=\"step-band\"", "</header>").to_owned();
     let acts = acts.as_str();
     assert!(acts.contains("value=\"cancel_dismiss\""), "{acts}");
     assert!(
-        acts.contains("heading=\"Cancel and dismiss Fails once?\"")
-            && acts.contains("Undo brings back the cancel, not the failure.</p>"),
+        acts.contains("<button>Cancel and dismiss</button>"),
         "{acts}"
     );
+    assert!(!acts.contains("sluice-confirm"), "{acts}");
     // on the plan, each item's × sets it aside for attention alone; a cancel's Settle as done
     // is its step's Dismiss
     let card = plan_html::stopped(&plan, "first");

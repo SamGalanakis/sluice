@@ -34,6 +34,7 @@ use std::{collections::BTreeMap, sync::Arc};
 /// The host wires its command service here. A committed result is the only
 /// success acknowledgement; transport handlers never write SQL themselves.
 pub trait SettingsCommands: Send + Sync {
+    fn undo(&self, id: ProjectId, key: String) -> BoxFuture<'_, Result<(), PublicError>>;
     fn update(
         &self,
         id: ProjectId,
@@ -58,6 +59,16 @@ pub struct StoreCommands {
     pub deletion_guard: Arc<dyn DeletionGuard + Send + Sync>,
 }
 impl SettingsCommands for StoreCommands {
+    fn undo(&self, id: ProjectId, key: String) -> BoxFuture<'_, Result<(), PublicError>> {
+        let resources = self.resources.clone();
+        Box::pin(async move {
+            self.writer
+                .write(RetrySafety::NonIdempotent, move |tx| {
+                    projects::undo_setting(tx, id, &key, resources.as_ref())
+                })
+                .await
+        })
+    }
     fn update(
         &self,
         id: ProjectId,
@@ -208,6 +219,7 @@ impl SettingsState {
                 let fallback = sluice_store::identities::fallback(c, id)?.unwrap_or_default();
                 let sessions = sessions(c, id)?;
                 Ok(ProjectSettingsView {
+                    undo: projects::settings_undo(c, id)?,
                     shared,
                     project,
                     resources: rows,
@@ -351,6 +363,7 @@ const SECTIONS: [(&str, &[&str]); 3] = [
     ("retiring", &["prune_done_after", "prune_keep"]),
 ];
 pub struct ProjectSettingsView {
+    pub undo: Vec<projects::SettingsUndo>,
     pub shared: DashboardSnapshot,
     pub project: Project,
     pub resources: Vec<ResourceView>,
@@ -408,67 +421,67 @@ impl ProjectSettingsView {
     pub fn path(&self) -> String {
         format!("/projects/id/{}/settings", self.project.project_id)
     }
-    /// Delete project's confirmation: one button and a dialog, no typed name; dimmed while
-    /// something blocks it (drawn in the page's stream, so it follows the live state).
-    pub fn delete_confirm(&self) -> crate::views::ui::Confirm {
-        let name = &self.project.name;
-        crate::views::ui::Confirm {
-            opener: "Delete project".into(),
-            opener_id: "delete-button".into(),
-            title: format!("Delete {name}?"),
-            action: format!("{}/delete", self.path()),
-            form_id: "delete-form".into(),
-            hidden: vec![("expected_settings_rev", self.project.settings_rev.to_string())],
-            copy: "This permanently removes the plan, messages, history, functions, secrets and artifacts. This cannot be undone.".into(),
-            confirm: format!("Delete {name}"),
-            keep: "Keep it",
-            danger: true,
-            disabled: self.blocker.is_some(),
-            ..Default::default()
-        }
+    /// The sole guarded dashboard action, kept inline beside its deletion guard.
+    pub fn delete_guard(&self) -> TrustedHtml {
+        let ui = &self.project;
+        TrustedHtml::owned(format!(
+            "<details class=\"delete-flow\" data-preserve-attr=\"open\"><summary id=\"delete-button\"{}>Delete project</summary>{}<input type=\"hidden\" name=\"expected_settings_rev\" value=\"{}\"><p>This permanently removes the plan, messages, history, functions, secrets and artifacts. This cannot be undone.</p><button class=\"danger\"{}>Delete {}</button>{}</form></details>",
+            if self.blocker.is_some() {
+                " aria-disabled=\"true\""
+            } else {
+                ""
+            },
+            views::ui::post_form("delete-form", "", &format!("{}/delete", self.path())),
+            ui.settings_rev,
+            if self.blocker.is_some() {
+                " disabled"
+            } else {
+                ""
+            },
+            views::ui::esc(ui.name.as_str()),
+            views::ui::form_said("delete-form")
+        ))
     }
-    /// Clear board's confirmation: it removes the program from the plan's page, the program
-    /// sent along so the box keeps it after (Save board restores it).
-    pub fn clear_confirm(&self) -> crate::views::ui::Confirm {
-        crate::views::ui::Confirm {
-            opener: "Clear board".into(),
-            opener_id: "board-clear".into(),
-            title: "Clear the board?".into(),
-            action: format!("{}/board", self.path()),
-            form_id: "board-clear-form".into(),
-            hidden: vec![
-                ("op", "clear".into()),
-                ("expected_rev", self.project.board_rev.to_string()),
-                ("program", self.project.board.clone().unwrap_or_default()),
-            ],
-            copy: format!(
-                "Save board puts rev {} back until you leave this page.",
-                self.project.board_rev
-            ),
-            confirm: "Clear board".into(),
-            keep: "Keep it",
-            danger: true,
-            disabled: self.project.board.is_none(),
-            ..Default::default()
-        }
+    pub fn clear_action(&self) -> TrustedHtml {
+        TrustedHtml::owned(format!(
+            "{}<input type=\"hidden\" name=\"op\" value=\"clear\"><input type=\"hidden\" name=\"expected_rev\" value=\"{}\"><button id=\"board-clear\"{}>Clear board</button>{}</form>",
+            views::ui::post_form("board-clear-form", "", &format!("{}/board", self.path())),
+            self.project.board_rev,
+            if self.project.board.is_none() {
+                " disabled"
+            } else {
+                ""
+            },
+            views::ui::form_said("board-clear-form")
+        ))
     }
-    /// Remove a resource's confirmation: its steps then run with no limit on it.
-    pub fn remove_confirm(&self, resource: &str) -> crate::views::ui::Confirm {
-        crate::views::ui::Confirm {
-            opener: format!("Remove {resource}"),
-            title: format!("Remove {resource}?"),
-            action: self.path(),
-            form_id: format!("remove-{resource}"),
-            hidden: vec![
-                ("section", "remove".into()),
-                ("resource", resource.to_owned()),
-            ],
-            copy: "Refused while a step still needs it.".into(),
-            confirm: format!("Remove {resource}"),
-            keep: "Keep it",
-            danger: true,
-            ..Default::default()
-        }
+    pub fn remove_action(&self, resource: &str) -> TrustedHtml {
+        views::ui::action_form(
+            &views::ui::form_id(&format!("remove {resource}")),
+            &self.path(),
+            &[("section", "remove".into()), ("resource", resource.into())],
+            &format!("Remove {resource}"),
+        )
+    }
+    pub fn undo_lines(&self, board: bool) -> TrustedHtml {
+        let html: String = self
+            .undo
+            .iter()
+            .filter(|e| (e.key == "board") == board)
+            .map(|entry| {
+                format!(
+                    "<div class=\"undo-line\"><span>{}</span> · {}</div>",
+                    views::ui::esc(&entry.label),
+                    views::ui::action_form(
+                        &views::ui::form_id(&format!("undo {}", entry.key)),
+                        &format!("{}/undo", self.path()),
+                        &[("key", entry.key.clone())],
+                        "Undo"
+                    )
+                )
+            })
+            .collect();
+        TrustedHtml::owned(html)
     }
     /// The last change to any setting `section` edits, as drawn: what its form has seen.
     fn seen(&self, section: &str) -> i64 {
@@ -510,7 +523,7 @@ impl ProjectSettingsView {
         sluice_store::artifacts::fingerprint(&serde_json::to_vec(&serde_json::json!({
             "shared":self.shared,"revision":self.project.settings_rev,"resources":self.resources,"blocker":self.blocker,
             "retired":self.retired.as_ref().map(|r| r.rev),
-            "doc":self.doc.rev,"sessions":self.sessions
+            "doc":self.doc.rev,"sessions":self.sessions,"board":self.project.board_rev,"undo":self.undo
         })).expect("owned views serialize"))
     }
     /// The fallback field's choices, as (value, words): nobody, each registered session, and
@@ -888,8 +901,7 @@ fn setting_words(field: &str) -> &'static str {
     }
 }
 /// The answer to a section's write the store took: the section drawn anew from what it now
-/// says (its form, `<section>-edit`, or the switches), with `words` in its notice; a
-/// confirmation it came from closes. A client that is not a page's form gets 204.
+/// says (its form, `<section>-edit`, or the switches), with `words` in its notice. A client that is not a page's form gets 204.
 async fn saved(
     state: &SettingsState,
     id: ProjectId,
@@ -924,8 +936,6 @@ async fn saved(
         Ok(body) => body,
         Err(e) => return views::write::failed(headers, e),
     };
-    // the confirmation closes once the answer is in (`sluice-dialog`), its form back in place
-    // unless the section's patch drew a new one
     views::write::events([
         StreamEvent::Elements(PatchElements::new(marked(&body, region))),
         views::write::status(form, words),
@@ -958,6 +968,7 @@ pub fn router(state: SettingsState) -> Router {
             post(board_preview),
         )
         .route("/projects/id/{id}/settings/delete", post(delete))
+        .route("/projects/id/{id}/settings/undo", post(undo))
         .route("/projects/id/{id}/settings/stream", get(settings_stream))
         .route("/projects/id/{id}/icon", get(image))
         .layer(DefaultBodyLimit::max(512 * 1024))
@@ -1047,8 +1058,7 @@ async fn change(
         Err(e) => refused(&headers, e),
     }
 }
-/// The Board section's Save (`op=save`, `program`) and Clear (`op=clear`, from its
-/// confirmation), each fenced by `expected_rev`; answered as the other sections are.
+/// The Board section's Save (`op=save`, `program`) and direct Clear (`op=clear`), each fenced by `expected_rev`; answered as the other sections are.
 async fn board_change(
     State(state): State<SettingsState>,
     Path(id): Path<ProjectId>,
@@ -1093,11 +1103,7 @@ async fn board_change(
         Err(e) => Err(e),
     };
     match result {
-        Ok(outcome) if clear => {
-            // the box keeps the cleared program, so Save board puts it back
-            let words = format!("Cleared (rev {}). Save board restores it.", outcome.rev);
-            saved(&state, id, &headers, "board", Some(&program), &words).await
-        }
+        Ok(_) if clear => saved(&state, id, &headers, "board", None, "Cleared.").await,
         Ok(outcome) => {
             let words = std::iter::once(format!("Saved (rev {}).", outcome.rev))
                 .chain(outcome.warnings.iter().map(|w| format!("Warning: {w}")))
@@ -1330,4 +1336,25 @@ async fn settings_stream(
 /// Two names the same: for the template, whose values arrive as `String` and `&str` alike.
 pub fn same(a: &str, b: &str) -> bool {
     a == b
+}
+
+#[derive(Deserialize)]
+struct UndoForm {
+    key: String,
+}
+async fn undo(
+    State(state): State<SettingsState>,
+    Path(id): Path<ProjectId>,
+    headers: HeaderMap,
+    axum::Form(form): axum::Form<UndoForm>,
+) -> Response {
+    let section = if form.key == "board" {
+        "board"
+    } else {
+        "resources"
+    };
+    match state.commands.undo(id, form.key).await {
+        Ok(()) => saved(&state, id, &headers, section, None, "Restored.").await,
+        Err(e) => refused(&headers, e),
+    }
 }

@@ -156,51 +156,30 @@ async fn ran(f: &Fixture, project: ProjectId, step: &'static str, at: &'static s
 }
 
 #[tokio::test]
-async fn clear_board_and_remove_ask_first_and_a_cleared_board_keeps_its_program_in_the_box() {
+async fn clear_board_is_immediate_and_undo_restores_its_program() {
     let f = Fixture::new().await;
     let path = format!("/projects/id/{}/settings", f.id);
     let (_, page) = f.get(&path).await;
-    let clear = between(&page, "<div class=\"board-clear\">", "</sluice-confirm>");
-    assert!(
-        clear.contains("<sluice-confirm heading=\"Clear the board?\""),
-        "{clear}"
-    );
-    assert!(
-        clear.contains("<summary id=\"board-clear\">Clear board</summary>"),
-        "{clear}"
-    );
-    assert!(
-        clear.contains("<input type=\"hidden\" name=\"op\" value=\"clear\">"),
-        "{clear}"
-    );
-    assert!(
-        !page.contains("<button type=\"submit\" name=\"op\" value=\"clear\""),
-        "no one-click Clear"
-    );
-    // cleared from its confirmation's form, the box keeps the program
+    assert!(page.contains("<button id=\"board-clear\">Clear board</button>"));
+    assert!(!page.contains("sluice-confirm"));
     let response = post_html(
         f.router(),
         &format!("{path}/board"),
-        &[
-            ("op", "clear"),
-            ("expected_rev", "1"),
-            ("program", board_fixture::BOARD),
-        ],
+        &[("op", "clear"), ("expected_rev", "1")],
     )
     .await;
+    assert!(response.contains("Board cleared"), "{response}");
+    assert!(response.contains("<button>Undo</button>"), "{response}");
     assert!(
-        response.contains("Cleared (rev 2). Save board restores it."),
+        response.contains("id=\"board-clear\" disabled"),
         "{response}"
     );
-    let program = between(&response, "<textarea id=\"board-program\"", "</textarea>");
-    assert!(program.contains("root = Stack("), "{program}");
-    assert!(
-        response.contains("<summary id=\"board-clear\" aria-disabled=\"true\">"),
-        "nothing left to clear"
-    );
+    let restored = post_html(f.router(), &format!("{path}/undo"), &[("key", "board")]).await;
+    assert!(restored.contains("root = Stack("), "{restored}");
+    assert!(!restored.contains("Board cleared"), "{restored}");
 }
 
-/// Board clear's confirmation form posted, its answer.
+/// Board clear's direct form posted, its answer.
 async fn post_html(router: axum::Router, path: &str, form: &[(&str, &str)]) -> String {
     use tower::ServiceExt;
     let response = router
@@ -364,42 +343,21 @@ async fn slow_chromium_a_form_of_filters_applies_as_it_changes_with_no_apply_but
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_clear_board_asks_first_and_keeps_the_program_to_restore() {
+async fn slow_chromium_clear_board_acts_and_undo_restores() {
     let f = Fixture::new().await;
     let (addr, server) = serve(&f).await;
     let id = f.id;
     tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}/settings")).unwrap();
-        browser
-            .wait("customElements.get('sluice-confirm') && document.querySelector('#board-clear')")
-            .unwrap();
+        browser.wait("document.querySelector('#board-clear') && document.readyState === 'complete'").unwrap();
         browser.eval("document.querySelector('#board-clear').click()").unwrap();
-        browser.wait("document.querySelector('#confirmation[open]')").unwrap();
-        let heading = browser
-            .eval("document.querySelector('#confirmation-title').textContent")
-            .unwrap();
-        assert_eq!(heading, "Clear the board?");
-        // Keep: nothing cleared
-        browser.eval("document.querySelector('#confirmation [data-keep]').click()").unwrap();
-        // closed, its form back in its details (the dialog's close event puts it there)
-        browser
-            .wait("!document.querySelector('#confirmation[open]') && document.querySelector('#board-clear').parentElement.querySelector(':scope > form')")
-            .unwrap();
-        browser.eval("document.querySelector('#board-clear').click()").unwrap();
-        browser.wait("document.querySelector('#confirmation[open]')").unwrap();
-        browser
-            .eval("document.querySelector('#confirmation button.danger').click()")
-            .unwrap();
-        browser
-            .wait("document.querySelector('#board-program-form-said')?.textContent.includes('Save board restores it')")
-            .unwrap();
-        let g = browser
-            .eval("({open: Boolean(document.querySelector('#confirmation[open]')), kept: document.querySelector('#board-program').value.startsWith('root = Stack('), off: document.querySelector('#board-clear').getAttribute('aria-disabled'), errors: window.browserErrors})")
-            .unwrap();
-        assert_eq!(g, json!({"open": false, "kept": true, "off": "true", "errors": []}));
-    })
-    .await
-    .unwrap();
+        browser.wait("document.querySelector('#board-edit .undo-line button') && document.querySelector('#board-clear').disabled").unwrap();
+        browser.eval("location.reload()").unwrap();
+        browser.wait("document.querySelector('#board-edit .undo-line button') && document.readyState === 'complete'").unwrap();
+        browser.eval("document.querySelector('#board-edit .undo-line button').click()").unwrap();
+        browser.wait("document.querySelector('#board-program').value.startsWith('root = Stack(') && !document.querySelector('#board-clear').disabled").unwrap();
+        assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
+    }).await.unwrap();
     server.abort();
 }
 

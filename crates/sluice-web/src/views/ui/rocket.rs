@@ -5,7 +5,7 @@
 //! whole before its script runs and without it, a stream patch morphs server HTML into server
 //! HTML (each host's state is an attribute kept through the patch, `data-preserve-attr`), and a
 //! screen reader hears what the server wrote. A page makes a host only through these functions.
-use super::{Confirm, esc};
+use super::esc;
 use crate::views::TrustedHtml;
 use crate::views::icons::{Icon, icon};
 
@@ -82,16 +82,6 @@ impl Host {
     }
 }
 
-/// The page's one confirmation dialog (`sluice-confirm` moves the form it confirms into it while
-/// it is open), in its own component: a form in it is in a Rocket host, which is where Rocket
-/// looks for the actions its attributes call (https://data-star.dev/reference/rocket). No patch
-/// morphs it (`data-ignore-morph`); a write's answer puts its notice in whole.
-pub fn confirmation() -> TrustedHtml {
-    Host::new("sluice-dialog").wrap(&TrustedHtml::owned(
-        "<dialog id=\"confirmation\" class=\"confirmation\" aria-labelledby=\"confirmation-title\" data-ignore-morph><h2 id=\"confirmation-title\"></h2><div id=\"confirmation-body\"></div></dialog>".into(),
-    ))
-}
-
 /// A component as its script declares it: its props (as attributes, with their codec), the
 /// events it sends and the parts the server draws in it. `/_ui` lists them; a Chromium test
 /// holds each one to its script's `manifest()`.
@@ -121,22 +111,6 @@ pub const COMPONENTS: &[Component] = &[
         props: &[("remember", "string"), ("wide", "boolean")],
         events: &[],
         slots: &["clip", "toggle", "details"],
-    },
-    Component {
-        tag: "sluice-confirm",
-        script: "components.js",
-        does: "Its summary opens the page's one dialog with its form; focus starts on the keep button, stays in the dialog and goes back to the opener.",
-        props: &[("heading", "string"), ("ref-id", "string")],
-        events: &["sluice-confirm-open", "sluice-confirm-close"],
-        slots: &["summary", "form"],
-    },
-    Component {
-        tag: "sluice-dialog",
-        script: "components.js",
-        does: "The page's one confirmation dialog: keep closes it, Tab stays in it, and closing puts the form it holds back where it came from, the focus on its opener.",
-        props: &[],
-        events: &[],
-        slots: &["dialog"],
     },
     Component {
         tag: "sluice-conversation",
@@ -541,80 +515,4 @@ pub fn answer_open() -> TrustedHtml {
 }
 pub fn answer_close() -> TrustedHtml {
     Host::new("sluice-answer").close()
-}
-
-impl Confirm {
-    /// The confirmation as a page draws it: the server's `<details>` (its summary the opener,
-    /// its form what is confirmed) in a `sluice-confirm`, whose summary opens the shared
-    /// dialog (`sluice-dialog`) with the form in it.
-    pub fn html(&self) -> TrustedHtml {
-        let hidden: String = self
-            .hidden
-            .iter()
-            .map(|(n, v)| {
-                format!(
-                    "<input type=\"hidden\" name=\"{}\" value=\"{}\">",
-                    esc(n),
-                    esc(v)
-                )
-            })
-            .collect();
-        // the box is the owner's while open: a stream patch never empties it (`data-ignore-morph`)
-        let reason = self.reason.map_or(String::new(), |placeholder| format!(
-            "<label class=\"confirm-reason\">{}<textarea name=\"message\" rows=\"3\" maxlength=\"16384\" placeholder=\"{}\" data-ignore-morph></textarea></label>",
-            esc(if self.reason_label.is_empty() { "Reason (optional)" } else { self.reason_label }),
-            esc(placeholder),
-        ));
-        // a form posts through Datastar (`ui::post_form`), under its own id or one made from
-        // what it confirms
-        let form_id = if self.form_id.is_empty() {
-            super::form_id(&format!(
-                "{} {} {:?}",
-                self.action, self.opener, self.hidden
-            ))
-        } else {
-            self.form_id.clone()
-        };
-        let focus = if self.focus_after.is_empty() {
-            String::new()
-        } else {
-            format!(" data-focus-after=\"{}\"", esc(&self.focus_after))
-        };
-        let host = Host::new("sluice-confirm")
-            .attr("heading", &self.title)
-            .some("ref-id", &self.id);
-        let id = |id: &str| {
-            if id.is_empty() {
-                String::new()
-            } else {
-                format!(" id=\"{}\"", esc(id))
-            }
-        };
-        TrustedHtml::owned(format!(
-            "{open}<details class=\"confirm-flow\"><summary{opener_id}{disabled}>{opener}</summary>{form}{hidden}<p class=\"confirm-copy\">{lead}{copy}</p>{reason}<div class=\"confirm-actions\"><button class=\"{tone}\">{confirm}</button><button type=\"button\" data-keep>{keep}</button></div>{after}{said}</form></details>{close}",
-            open = host.open(),
-            close = host.close(),
-            opener_id = id(&self.opener_id),
-            disabled = if self.disabled {
-                " aria-disabled=\"true\""
-            } else {
-                ""
-            },
-            opener = esc(&self.opener),
-            form = super::post_form_with(
-                &form_id,
-                self.form_class,
-                &self.action,
-                "",
-                &format!("{focus}{}", self.form_attrs)
-            ),
-            said = super::form_said(&form_id),
-            lead = self.lead,
-            copy = esc(&self.copy),
-            tone = if self.danger { "danger" } else { "primary" },
-            confirm = esc(&self.confirm),
-            keep = esc(self.keep),
-            after = self.after,
-        ))
-    }
 }

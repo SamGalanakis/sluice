@@ -196,7 +196,7 @@ async fn an_answered_or_closed_question_keeps_its_place_and_reads_whole() {
     );
     assert!(
         card.contains(&format!(
-            "<p class=\"q-answered\" tabindex=\"-1\" data-q=\"{id}-{c}\">"
+            "<div class=\"q-answered\" tabindex=\"-1\" data-q=\"{id}-{c}\">"
         )) && card.contains(">just now</time>: <span class=\"qa-title\">Accept revision 3?</span>")
             && card.contains("<span class=\"qa-what\">Closed "),
         "{card}"

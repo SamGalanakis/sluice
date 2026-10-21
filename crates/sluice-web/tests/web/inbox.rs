@@ -641,13 +641,8 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
     assert!(html.contains(
         "<h2 id=\"stopped-h\">Nobody is waiting</h2><span class=\"sec-note\">3 questions</span>"
     ));
-    assert!(html.contains("<summary>Close all 3</summary>"));
-    assert!(html.contains("<sluice-confirm heading=\"Close all 3 questions?\" data-preserve-attr=\"data-rocket-host\">"));
-    assert!(html.contains("data-keep>Keep them</button>"));
-    // its body does not say its title again
-    assert!(!html.contains("Close these 3 questions?"));
-    // the button and the title say it: no copy explains closing
-    assert!(html.contains("<p class=\"confirm-copy\"></p>"));
+    assert!(html.contains("<button>Close all 3</button>"));
+    assert!(!html.contains("sluice-confirm"));
     // the nav's Inbox counts what the page lists as yours: not the ones nobody waits on
     assert_eq!(page.nav.inbox, page.for_you().len());
     // a question one agent put to another is listed apart, quieter, answerable as the owner
@@ -698,7 +693,7 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
                 .method("POST")
                 .uri("/messages/close")
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from(form))
+                .body(Body::from(form.clone()))
                 .unwrap(),
         )
         .await
@@ -712,9 +707,163 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
         .filter(|r| matches!(r, CommandRequest::Reply(reply) if reply.owner && reply.answer.as_ref().is_some_and(|a| a.action == "close")))
         .count();
     assert_eq!(closes, 3);
+    let page = threads::load(
+        &state.dashboard.reads,
+        Some(project),
+        MessageView::Questions,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(page.undo_closed().as_str().contains("Undo all"));
+    let response = inbox::router(state.clone())
+        .oneshot(
+            Request::post("/messages/reopen")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let page = threads::load(
+        &state.dashboard.reads,
+        Some(project),
+        MessageView::Questions,
+        None,
+    )
+    .await
+    .unwrap();
+    for id in gone {
+        assert!(
+            page.questions
+                .iter()
+                .any(|q| q.id() == id && q.answerable())
+        );
+    }
+
     let page = threads::load(&state.dashboard.reads, None, MessageView::Inbox, None)
         .await
         .unwrap();
-    assert!(page.stopped().is_empty());
+    assert_eq!(page.stopped().len(), 3);
     assert_eq!(page.waiting().len(), 1);
+}
+
+/// Closing used to be irreversible: Undo must restore an answerable question, while the
+/// asker retains both the close and reopen messages in its thread.
+#[tokio::test]
+async fn closing_then_undo_reopens_an_answerable_question_with_a_record() {
+    let (_home, writer, project, state, _commands) = fixture().await;
+    let id = post(
+        &writer,
+        project,
+        serde_json::json!({"needs_reply":true,"thread":"undo","title":"Publish the guide?"}),
+    )
+    .await;
+    let path = format!("/projects/id/{project}/messages/{id}/reply");
+    for action in ["close", "reopen"] {
+        let response = inbox::router(state.clone())
+            .oneshot(
+                Request::post(&path)
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("action={action}")))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let page = threads::load(
+            &state.dashboard.reads,
+            Some(project),
+            MessageView::Questions,
+            None,
+        )
+        .await
+        .unwrap();
+        let question = page.questions.iter().find(|q| q.id() == id).unwrap();
+        assert_eq!(
+            question.state,
+            if action == "close" { "closed" } else { "open" }
+        );
+        assert_eq!(question.answerable(), action == "reopen");
+        if action == "close" {
+            assert!(
+                question
+                    .answered_html()
+                    .as_str()
+                    .contains("<button>Undo</button>")
+            );
+        }
+    }
+    let response = inbox::router(state.clone())
+        .oneshot(
+            Request::post(&path)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("action=answer&body=Publish+it"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let thread = threads::load(
+        &state.dashboard.reads,
+        Some(project),
+        MessageView::Thread,
+        Some("undo".into()),
+    )
+    .await
+    .unwrap();
+    let messages = &thread.threads[0].messages;
+    assert_eq!(messages[0].state, "answered");
+    assert_eq!(
+        messages
+            .iter()
+            .skip(1)
+            .map(|m| m.message.answer.as_ref().unwrap().action.as_str())
+            .collect::<Vec<_>>(),
+        ["close", "reopen", "answer"]
+    );
+    assert_eq!(messages[2].message.body, "Question reopened.");
+    let response = inbox::router(state.clone())
+        .oneshot(
+            Request::post(&path)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("action=reopen"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let expired = post(
+        &writer,
+        project,
+        serde_json::json!({"needs_reply":true,"thread":"expired"}),
+    )
+    .await;
+    let path = format!("/projects/id/{project}/messages/{expired}/reply");
+    let response = inbox::router(state.clone())
+        .oneshot(
+            Request::post(&path)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("action=close"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    writer.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute("UPDATE messages SET closed_at=datetime('now','-11 minutes') WHERE project_id=?1 AND id=?2", (project.to_string(), expired))?;
+        tx.changed(Some(project), "messages");
+        Ok(())
+    }).await.unwrap();
+    let response = inbox::router(state)
+        .oneshot(
+            Request::post(path)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("action=reopen"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }

@@ -556,7 +556,7 @@ for each.
 - **Keep what the owner holds through a morph**
   ([Attributes: data-preserve-attr, data-ignore-morph](https://data-star.dev/reference/attributes)).
   An open `<details>`, a host's chosen tab or width, a composer's text: `data-preserve-attr`
-  on the element that holds it (`Host::keep`); the confirmation dialog `data-ignore-morph`.
+  on the element that holds it (`Host::keep`).
   Every Rocket host keeps `data-rocket-host` (Rocket's own mark, by which it finds the host an
   element's actions run in); a morph would otherwise take it away.
 - **Reconnect, and rest while hidden** ([Actions: @get options](https://data-star.dev/reference/actions)).
@@ -608,15 +608,13 @@ answered by `views::write`:
   second press while the form is busy.
 - The answer is SSE ([SSE events](https://data-star.dev/reference/sse_events)), and only to the
   form that asked (its `sluice-form` header). It patches elements and signals, never script: a
-  write taken empties the form's notice, and `sluice-dialog` closes the confirmation it was sent
-  from on that answer (a `datastar-fetch` `finished` with no alert in its notice); one that says
+  write taken empties the form's notice; one that says
   something ("Saved.", "Sent to @lead.") puts it in the notice as a status, and a message sent
   also empties its box by patching the box's signals (`ui::draft_signals`, bound to its words
   and its "ask" box); a refusal puts sluice's words there as an alert, what was typed kept. The
   one exception is a deleted project's page, which the answer sends home with the Datastar
   SDK's redirect (an `ExecuteScript` of `window.location`, the documented way). A refusal to a form is a 200, because Datastar applies only a 200's events; any other
-  client gets 204, or the JSON error at its status. A notice is put in whole (mode `replace`),
-  because a confirmation's form sits in the dialog, which no morph enters.
+  client gets 204, or the JSON error at its status. A notice is put in whole (mode `replace`).
 - Display preferences are not a form: the theme radios and the types switch are bound
   (`data-bind:theme__root`, `data-bind:types__root`) and a change posts the signals to
   `/settings` (`@post('/settings')`, JSON), answered 204 with the cookies.
@@ -648,7 +646,7 @@ The helpers (`crates/sluice-web/src/views/`):
 | Buttons | `ui/button.rs` (`Btn`, `submit`, `link`) | a ring by default (secondary), Primary the one teal move a place (Answer, a form's Save), Quiet (ghost), Danger (red ink), Icon; 30px, 44px on a phone |
 | Badges | `ui/pill.rs` (`Tone`, `pill`, `pill_link`, `ask_link`) | a small fact on its meaning's tint: running, fail, look, agent, ask, done, muted; `ask_link` the way to an open question, its teal dot |
 | Needs you | `ui/need.rs` (`Mark`, `NeedLine`, `need_line`, `need_said`) | an item a hairline row: its mark, its title and state, who and when, its body or a question's words with its asker's avatar, its actions and ×, a folded form |
-| Question | `ui/question.rs` (`QuestionCard`, `answer_link`, `way_on`); `threads::MessageItem::question_card`; `templates/answer.html` | a question to the owner, one way everywhere: as a line it is `need_line` with `Mark::Ask` and the answer in place; as a card, its teal dot and "Question for you", who asked and when, its words whole, Answer and Close question (behind the page's confirmation) |
+| Question | `ui/question.rs` (`QuestionCard`, `answer_link`, `way_on`); `threads::MessageItem::question_card`; `templates/answer.html` | a question to the owner, one way everywhere: as a line it is `need_line` with `Mark::Ask` and the answer in place; as a card, its teal dot and "Question for you", who asked and when, its words whole, Answer and Close question (immediate, with Undo for ten minutes) |
 | Message | `ui/card.rs` (`message_card`) | a message: who to whom with their avatars, when, its words, the way to the whole |
 | Avatars | `ui/avatar.rs` (`avatar`, `AvSize`) | an identity's printed mark: an agent's moiré square, a session's square on a diamond, the owner's bust |
 | References | `ui/refs.rs` (`refs`, `step_ref`, `sha_ref`, `is_sha`); `ui.rs` (`hover_card`) | tickets, shas and step ids in prose as `.ref`s; the page's one hover card |
@@ -660,7 +658,6 @@ The helpers (`crates/sluice-web/src/views/`):
 | Status and time | `ui.rs` (`status`, `glyph`, `mark`, `word`, `tries`, `duration`, `ago`, `since`, `at`, `count`, `tally`, `progress`, `bar`) | a state's glyph and word, durations and clock times as `<time>` the clock ticks |
 | Who | `ui.rs` (`Party`, `StepRef`, `party_html`) | a sender or recipient as the identity it is |
 | Fields | `ui.rs` (`head`, `field`, `field_start`, `field_end`); `templates/kit.html` | a form's row: its label, its control, its error |
-| Confirmation | `ui.rs` (`Confirm`) in a `sluice-confirm` | the one native `<dialog>` |
 | Conversation | `threads::Conversation` (`cards`, rows, the composer) | a thread's messages and its box |
 | The plan's rows | `views/plan.rs` (`RowParts`, `roster_row`, `finished_row`) | At work's row and Finished's row, which the gallery draws as the plan does |
 
@@ -671,8 +668,6 @@ why each is script rather than Datastar attributes:
 |---|---|---|---|
 | `sluice-tabs` | `components.js` | an ARIA tablist over its panels: arrows wrap, Home and End; the choice in `$$tab` and the page's `tab` signal, its `current` kept through a patch; an anchor in a panel opens its tab | a tablist's roving focus and an anchor's tab are imperative focus and hash work across many elements |
 | `sluice-fold` | `components.js` | Show all and Show less over a long text, said only when it is cut; or a More fold kept open per project or opened on a wide screen | whether a text is cut is a layout measurement, and the fold's memory is this browser's |
-| `sluice-confirm` | `components.js` | its summary opens the page's one dialog with its form; disabled while its summary is `aria-disabled` | moving a form into a modal `<dialog>` and back, and `showModal`, are DOM calls |
-| `sluice-dialog` | `components.js` | the page's one confirmation dialog: keep closes it, Tab stays in it, a write taken from its form closes it, closing puts the form back and the focus on its opener; a form in it runs its `@post` in its host | a focus trap and focus return are imperative; closing a modal `<dialog>` is a method call no patch makes |
 | `sluice-conversation` | `components.js` | Jump to latest, and a thread's page opening at its end | scrolling to and focusing a message is imperative |
 | `sluice-answer` | `components.js` | a question's Answer opens its box, drawn by `openui.js` from the question's OpenUI program; once answered the question gives way at once to the line that says so | the OpenUI program is parsed and drawn in the browser, and the answered line takes the focus |
 | `sluice-menu` | `components.js` | display preferences, More, the order menu and every ⋯ and ⓘ: a click elsewhere or Escape closes it and gives the focus back, its button says `aria-expanded`, the arrows, Home and End move through it, a sub-menu opens one level at a time, the panel kept inside the window | a click elsewhere, focus return, a menu's keys and fitting the panel to the window are imperative |
@@ -716,11 +711,14 @@ every component, its props and events. A new part goes there first. The two page
 so the gallery draws their parts rather than a second live instance; their live states are held
 by the Chromium tests (`board_browser`, `live_path`).
 
-The confirmation dialogs (Cancel, a succeeded step's Retry, Delete project, Clear board, Remove a
-resource, Close all) use one native `<dialog>` (`ui::rocket::confirmation`, in a
-`sluice-dialog`), opened by `ui::Confirm` in a `sluice-confirm`: the floating look with
-`--shadow-sheet` and the scrim, its title naming what it acts on in words. Focus starts on the
-keep button, stays in the dialog, Escape closes it and focus returns to the opener.
+Actions happen on click. Close question and Close all leave a muted line with Undo for ten
+minutes; Undo reopens them. Clear board and Remove resource use the same line and window,
+restoring the saved board program (its document stays at its previous revision) or resource
+capacity. Undo survives reloads and cannot overwrite a later edit. Cancel says “Cancelled.
+Retry runs it again”; a succeeded step's Retry acts immediately, with feedback still optional.
+Only Delete project asks first, in an inline `<details class="delete-flow">` beside its live
+work guard. Its final button names the project; deletion archives first. There is no shared
+confirmation dialog or component.
 
 **Icons**: Lucide (lucide-static 1.52.0, ISC), the published SVG unmodified in `assets/icons/`,
 each a `<symbol>` in the page's one sprite and drawn as a `<use>` of it in `currentColor`,
@@ -740,17 +738,17 @@ A lane that redraws a page writes its notes here.
 | Page | Route | Drawn by | Components and helpers |
 |---|---|---|---|
 | Home | `/` (its stream `/stream`; `/title` the tab title alone) | `views::home` | lead head (the summary sentence), section heads, For you as Needs-you lines, Today, a card a project |
-| A project's plan | `/projects/id/<p>` (`?view=plan`, `both`, `board`; `/stream`; posts `/needs`, `/seen`; `/pulse`, `/ref`) | `views::board::project_page`, `views::plan`, `views::panel` (the board), `templates/project.html` | `sluice-board`, lead head, the page menu, Needs you rows, At work rows, Finished rows, `sluice-pulse`, `sluice-splitter`, `sluice-drawer`, `sluice-keys`, `sluice-menu`, `sluice-confirm`, the hover card |
-| A step | `/projects/id/<p>/steps/<s>` (`/stream`; posts `/actions`), and in the drawer | `views::step`, `templates/step.html`, `step_band.html`, `activity.html` | the step head, `sluice-tabs`, Now with the tool calls fold, asking and stopped modules, message cards, `sluice-steps` (Runs), field tables, `sluice-fold`, `sluice-confirm`, the message box |
+| A project's plan | `/projects/id/<p>` (`?view=plan`, `both`, `board`; `/stream`; posts `/needs`, `/seen`; `/pulse`, `/ref`) | `views::board::project_page`, `views::plan`, `views::panel` (the board), `templates/project.html` | `sluice-board`, lead head, the page menu, Needs you rows, At work rows, Finished rows, `sluice-pulse`, `sluice-splitter`, `sluice-drawer`, `sluice-keys`, `sluice-menu`, the hover card |
+| A step | `/projects/id/<p>/steps/<s>` (`/stream`; posts `/actions`), and in the drawer | `views::step`, `templates/step.html`, `step_band.html`, `activity.html` | the step head, `sluice-tabs`, Now with the tool calls fold, asking and stopped modules, message cards, `sluice-steps` (Runs), field tables, `sluice-fold`, the message box |
 | A unit | `/projects/id/<p>/units/<u>` (`/stream`) | `views::unit_page`, `templates/unit_page.html` | page head, status line, `sluice-steps`, asking and stopped modules, `sluice-answer` |
 | A run's file | `/projects/id/<p>/runs/<r>/files/<name>` | `views::step::run_file_page` | page head, the file in mono on the inset |
 | Day | `/day`, `/projects/id/<p>/day` (`/stream`) | `views::day` | lead head, `sluice-day`, the timetable with its badges and folds |
 | Stats | `/projects/id/<p>/stats` (`/stream`) | `views::stats` | lead head with the window switch beside it, section heads, tables, the throughput chart |
-| For you, Questions, History | `/inbox`, `/questions`, `/history`, and each under `/projects/id/<p>/` (`/stream`; posts `/messages`, `/messages/read`, `/messages/close`, a reply) | `views::inbox`, `views::threads`, `templates/inbox.html`, `history.html`, `conversation.html`, `answer.html` | lead head over the messages' switch, question cards (`sluice-answer`), section heads, cards, `sluice-conversation`, `sluice-confirm` (Close all) |
+| For you, Questions, History | `/inbox`, `/questions`, `/history`, and each under `/projects/id/<p>/` (`/stream`; posts `/messages`, `/messages/read`, `/messages/close`, a reply) | `views::inbox`, `views::threads`, `templates/inbox.html`, `history.html`, `conversation.html`, `answer.html` | lead head over the messages' switch, question cards (`sluice-answer`), section heads, cards, `sluice-conversation` |
 | A thread | `/projects/id/<p>/thread?thread=<t>` | `views::inbox`, `templates/thread.html` | page head with Details, a conversation, `sluice-conversation`, the message box, `sluice-answer` |
 | Log | `/log`, `/projects/id/<p>/log` (`/stream`) | `views::log`, `templates/log.html` | lead head, the presets, `sluice-search` filters, the records table, `sluice-copy` |
 | Functions | `/fns` (`?project=`; `/fns/stream`) | `views::home`, `templates/functions.html` | lead head, `sluice-search`, section heads, a card a fn |
-| Settings | `/projects/id/<p>/settings` (`/stream`; posts its fields, `/board`, `/icon`, `/delete`) | `crate::settings`, `views::project_settings`, `templates/settings.html` | the sections' index, section heads, field rows, switches, Delete, `sluice-confirm` |
+| Settings | `/projects/id/<p>/settings` (`/stream`; posts its fields, `/board`, `/icon`, `/delete`) | `crate::settings`, `views::project_settings`, `templates/settings.html` | the sections' index, section heads, field rows, switches, Delete |
 | States and parts | `/_ui` | `views::gallery`, `templates/gallery.html` | every part and component, Paper and Carbon |
 | Agent docs | `/docs`, `/docs/<topic>` | `views::gallery::agent_docs` | page head, a card a topic, the topic at the measure, the index sticky beside it |
 | A page that cannot be drawn | any address a browser asks for that answers 4xx | `views::missing`, `templates/missing.html` | page head and note, the ways on |
@@ -801,7 +799,7 @@ A lane that redraws a page writes its notes here.
 - **Functions** (`/fns`): the picker and the find on one bar, the groups' index, each group a
   grid of fns, a broken one saying its problem first under a "cannot be loaded" look badge.
 - **Settings**: its sections' index sticky at the left (a scrolling row on a phone), each section
-  one form with one Save and its notice; Delete behind its confirmation; a Save never writes over
+  one form with one Save and its notice; Delete behind its inline guard; a Save never writes over
   another author.
 - **History**: the threads with the owner, a module each; one with an open question says
   "Waiting on your answer" after the teal dot.

@@ -157,7 +157,7 @@ async fn slow_in_chromium_a_cancel_set_aside_and_undone_in_place() {
 
 /// The plan's Retry and the drawer's action forms post in place: a refusal (sluice's answer to
 /// the form, its notice) reads under the form that sent it, the page and a typed message kept;
-/// one taken closes the confirmation it was sent from.
+/// one taken says so in place.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_plan_and_drawer_action_forms_submit_in_place() {
     let f = Fixture::new().await;
@@ -166,7 +166,7 @@ async fn slow_chromium_plan_and_drawer_action_forms_submit_in_place() {
     tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
         browser.viewport(1440, "light").unwrap();
-        browser.wait("customElements.get('sluice-confirm') && document.querySelector('#n-stop-b form[action$=\"/actions\"] button')").unwrap();
+        browser.wait("document.querySelector('#n-stop-b form[action$=\"/actions\"] button')").unwrap();
         browser.eval("window.marker = true; window.posts = []; window.realFetch = fetch; window.fetch = (url, options) => { if (options?.method === 'POST' && /\\/(actions|needs)$/.test(String(url))) { posts.push({url:String(url), data:Object.fromEntries(options.body)}); const form = options.headers['sluice-form']; return Promise.resolve(new Response(`event: datastar-patch-elements\\ndata: mode replace\\ndata: elements <p id=\"${form}-said\" class=\"form-said\" role=\"alert\">Fixture refusal</p>\\n\\n`, {headers: {'content-type': 'text/event-stream'}})); } return realFetch(url, options); }").unwrap();
         browser.eval("document.querySelector('#n-stop-b form[action$=\"/actions\"] button').click()").unwrap();
         browser.wait("posts.length === 1 && document.querySelector('#n-stop-b .form-said[role=alert]')?.textContent.includes('Fixture refusal')").unwrap();
@@ -181,14 +181,12 @@ async fn slow_chromium_plan_and_drawer_action_forms_submit_in_place() {
         browser.eval("location.hash = 'step:c'").unwrap();
         browser.wait("document.querySelector('#drawer .sh-name details.dm')").unwrap();
         browser.eval("document.querySelector('#drawer .sh-name details.dm').open = true").unwrap();
-        browser.wait("document.querySelector('#drawer sluice-confirm summary')?.checkVisibility()").unwrap();
-        browser.eval("document.querySelector('#drawer sluice-confirm summary').click()").unwrap();
-        browser.wait("document.querySelector('#confirmation').open").unwrap();
-        browser.eval("document.querySelector('#confirmation textarea').value = 'Stop this work'; document.querySelector('#confirmation button.danger').click()").unwrap();
-        browser.wait("posts.length === 4 && document.querySelector('#confirmation .form-said[role=alert]')").unwrap();
-        assert_eq!(browser.eval("[window.marker, document.querySelector('#confirmation').open, posts[3].data.action, posts[3].data.message, document.querySelector('#confirmation textarea').value]").unwrap(), json!([true, true, "cancel", "Stop this work", "Stop this work"]));
-        browser.eval("window.fetch = realFetch; document.querySelector('#confirmation button.danger').click()").unwrap();
-        browser.wait("!document.querySelector('#confirmation').open").unwrap();
+        browser.wait("document.querySelector('#drawer .dm-acts form:has(input[value=cancel]) button')?.checkVisibility()").unwrap();
+        browser.eval("document.querySelector('#drawer .dm-acts form:has(input[value=cancel]) button').click()").unwrap();
+        browser.wait("posts.length === 4 && document.querySelector('#drawer .dm-acts .form-said[role=alert]')").unwrap();
+        assert_eq!(browser.eval("[window.marker, posts[3].data.action]").unwrap(), json!([true, "cancel"]));
+        browser.eval("window.fetch = realFetch; document.querySelector('#drawer .dm-acts form:has(input[value=cancel]) button').click()").unwrap();
+        browser.wait("document.querySelector('#drawer').textContent.includes('Cancelled. Retry runs it again')").unwrap();
         assert_eq!(browser.eval("[window.marker, window.browserErrors]").unwrap(), json!([true, []]));
     }).await.unwrap();
     server.abort();

@@ -135,15 +135,18 @@ impl MessageItem {
     /// place, "just now", the moment the answer is taken. It takes focus there (tabindex -1),
     /// found again after a patch by its `data-q`.
     pub fn answered_html(&self) -> TrustedHtml {
-        self.answered_line(self.state == "closed", Some(&self.answered_at))
+        self.answered_html_in("")
     }
-    fn answered_line(&self, closed: bool, at: Option<&str>) -> TrustedHtml {
+    pub fn answered_html_in(&self, slot: &str) -> TrustedHtml {
+        self.answered_line(self.state == "closed", Some(&self.answered_at), slot)
+    }
+    fn answered_line(&self, closed: bool, at: Option<&str>, slot: &str) -> TrustedHtml {
         use super::ui::{ago, esc};
         let when = at
             .filter(|a| !a.is_empty())
             .map_or_else(|| "just now".to_owned(), |a| ago(a).0);
         TrustedHtml::owned(format!(
-            "<p class=\"q-answered\" tabindex=\"-1\" data-q=\"{p}-{id}\">{icon}<span class=\"qa-what\">{did} {when}: <span class=\"qa-title\">{title}</span></span> <span class=\"meta qa-to\">{to}<a href=\"{href}#message-{id}\">Read the thread</a></span></p>",
+            "<div class=\"q-answered\" tabindex=\"-1\" data-q=\"{p}-{id}\">{icon}<span class=\"qa-what\">{did} {when}: <span class=\"qa-title\">{title}</span></span> <span class=\"meta qa-to\">{to}<a href=\"{href}#message-{id}\">Read the thread</a></span>{undo}</div>",
             p = self.project,
             id = self.id(),
             icon = super::icons::icon(
@@ -163,15 +166,26 @@ impl MessageItem {
                 format!("sent to {} · ", self.from_who.html(&self.project))
             },
             href = esc(&self.thread_url()),
+            undo = if closed {
+                super::ui::action_form(
+                    &super::ui::form_id(&format!("reopen {slot}{}", self.reply_url())),
+                    &self.reply_url(),
+                    &[("action", "reopen".into())],
+                    "Undo",
+                )
+                .to_string()
+            } else {
+                String::new()
+            },
         ))
     }
     /// The answered and closed lines, unshown, in its answer box: `openui.js` puts the one that
     /// happened in the question's place, so client and server say it in one sentence.
-    pub fn answered_template(&self) -> TrustedHtml {
+    pub fn answered_template(&self, slot: &str) -> TrustedHtml {
         TrustedHtml::owned(format!(
             "<template data-done=\"answer\">{}</template><template data-done=\"close\">{}</template>",
-            self.answered_line(false, None),
-            self.answered_line(true, None)
+            self.answered_line(false, None, slot),
+            self.answered_line(true, None, slot)
         ))
     }
     /// Itself as the question card (`ui::QuestionCard`), answered in place: `slot` keeps its
@@ -473,8 +487,8 @@ impl InboxView {
         self.questions
             .iter()
             .filter(|q| {
-                q.recipient() == "owner"
-                    && ((q.state == "open" && !q.stopped()) || !q.answered_at.is_empty())
+                (q.recipient() == "owner" && q.state == "open" && !q.stopped())
+                    || !q.answered_at.is_empty()
             })
             .collect()
     }
@@ -515,24 +529,38 @@ impl InboxView {
             .filter(|q| q.state == "open" && q.stopped())
             .collect()
     }
-    /// "Close all n": the questions nobody waits on, closed at once once confirmed.
-    pub fn close_all(&self, stopped: &[&MessageItem]) -> super::ui::Confirm {
-        let hidden = stopped
+    /// Close the questions nobody waits on immediately.
+    pub fn close_all(&self, stopped: &[&MessageItem]) -> TrustedHtml {
+        let hidden: Vec<_> = stopped
             .iter()
             .map(|item| ("m", format!("{}/{}", item.project, item.id())))
             .collect();
-        super::ui::Confirm {
-            opener: format!("Close all {}", stopped.len()),
-            title: format!("Close all {} questions?", stopped.len()),
-            id: String::new(),
-            action: "/messages/close".into(),
-            hidden,
-            copy: String::new(),
-            reason: None,
-            confirm: "Close them".into(),
-            keep: "Keep them",
-            ..Default::default()
+        super::ui::action_form(
+            "close-all",
+            "/messages/close",
+            &hidden,
+            &format!("Close all {}", stopped.len()),
+        )
+    }
+    /// One Undo for a batch of recent closes, as well as each question's own Undo.
+    pub fn undo_closed(&self) -> TrustedHtml {
+        let closed: Vec<_> = self
+            .questions
+            .iter()
+            .filter(|q| q.state == "closed" && !q.answered_at.is_empty())
+            .collect();
+        if closed.len() < 2 {
+            return TrustedHtml::default();
         }
+        let hidden: Vec<_> = closed
+            .iter()
+            .map(|item| ("m", format!("{}/{}", item.project, item.id())))
+            .collect();
+        TrustedHtml::owned(format!(
+            "<div class=\"undo-line\"><span>Closed {} questions</span> · {}</div>",
+            closed.len(),
+            super::ui::action_form("undo-closed", "/messages/reopen", &hidden, "Undo all")
+        ))
     }
     /// The project a project's page is in: its name, for the way back.
     pub fn project_name(&self) -> &str {
@@ -734,6 +762,23 @@ pub fn item(
         ),
         None => ("note".into(), String::new()),
     };
+    let answered_at = if state == "closed" {
+        let q = messages::question(sql, project, message.id)?;
+        q.reply
+            .filter(|r| {
+                r.from == "owner"
+                    && super::timestamp(&r.at).is_some_and(|at| {
+                        let now = crate::clock::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_secs());
+                        now.saturating_sub(at) < 600
+                    })
+            })
+            .map(|r| r.at)
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     let long = message.body.chars().count() > 700 || message.body.lines().count() > 14;
     Ok(MessageItem {
         project,
@@ -750,7 +795,7 @@ pub fn item(
         long,
         from_who: Who::of(Some(&message.from), None, steps),
         to_who: Who::of(message.to.as_deref(), None, steps),
-        answered_at: String::new(),
+        answered_at,
         message,
     })
 }
@@ -1493,7 +1538,7 @@ fn just_answered(
     sql: &rusqlite::Connection,
     project: ProjectId,
 ) -> Result<bool, sluice_store::StoreError> {
-    Ok(sql.prepare_cached("SELECT EXISTS (SELECT 1 FROM messages q JOIN messages a ON a.project_id=q.project_id AND a.id=q.resolved_by WHERE q.project_id=?1 AND q.\"to\"='owner' AND q.needs_reply=1 AND a.\"from\"='owner' AND julianday(a.at)>=julianday('now')-10.0/1440.0)")?
+    Ok(sql.prepare_cached("SELECT EXISTS (SELECT 1 FROM messages q JOIN messages a ON a.project_id=q.project_id AND a.id=q.resolved_by WHERE q.project_id=?1 AND (q.\"to\"='owner' OR q.closed_at IS NOT NULL) AND q.needs_reply=1 AND a.\"from\"='owner' AND julianday(a.at)>=julianday('now')-10.0/1440.0)")?
         .query_row([project.to_string()], |r| r.get(0))?)
 }
 pub async fn load(
@@ -1556,7 +1601,7 @@ pub async fn load(
                 // the questions to the owner the owner answered or closed in the last ten
                 // minutes: kept in their place, each one line that says so
                 if matches!(view, MessageView::Inbox | MessageView::Questions) {
-                    let mut q = sql.prepare_cached("SELECT q.id,a.at FROM messages q JOIN messages a ON a.project_id=q.project_id AND a.id=q.resolved_by WHERE q.project_id=?1 AND q.\"to\"='owner' AND q.needs_reply=1 AND a.\"from\"='owner' AND julianday(a.at)>=julianday('now')-10.0/1440.0 ORDER BY q.id")?;
+                    let mut q = sql.prepare_cached("SELECT q.id,a.at FROM messages q JOIN messages a ON a.project_id=q.project_id AND a.id=q.resolved_by WHERE q.project_id=?1 AND (q.\"to\"='owner' OR q.closed_at IS NOT NULL) AND q.needs_reply=1 AND a.\"from\"='owner' AND julianday(a.at)>=julianday('now')-10.0/1440.0 ORDER BY q.id")?;
                     let answered = q
                         .query_map([p.id.to_string()], |r| {
                             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))

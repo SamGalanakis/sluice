@@ -66,8 +66,8 @@ impl Details {
         }
         self
     }
-    /// Actions under the rows, headed `head` ("Set it aside"): each already drawn (a
-    /// `ui::Confirm`'s opener and form). Left out when there are none.
+    /// Actions under the rows, headed `head` ("Set it aside"): each already drawn as
+    /// a form or link. Left out when there are none.
     pub fn actions(mut self, head: &'static str, actions: Vec<TrustedHtml>) -> Self {
         self.acts = head;
         self.actions = actions.into_iter().map(|a| a.0).collect();

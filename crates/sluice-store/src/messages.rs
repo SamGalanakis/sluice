@@ -200,18 +200,15 @@ pub fn question(sql: &Connection, project: ProjectId, id: MessageId) -> Result<Q
     if !msg.is_question() {
         return Err(invalid("message is not a question"));
     }
-    let reply_id: Option<i64> = sql.query_row("SELECT id FROM messages WHERE project_id=?1 AND reply_to=?2 AND (needs_reply=0 OR answer IS NOT NULL) ORDER BY id LIMIT 1",
-        params![project.to_string(),id.0], |r| r.get(0)).optional()?;
+    let reply_id: Option<i64> = sql.query_row(
+        "SELECT resolved_by FROM messages WHERE project_id=?1 AND id=?2",
+        params![project.to_string(), id.0],
+        |r| r.get(0),
+    )?;
     let reply = reply_id
         .map(|id| message(sql, project, MessageId(id)))
         .transpose()?;
-    let state = match reply.as_ref() {
-        None => QuestionState::Open,
-        Some(reply) if reply.answer.as_ref().is_some_and(|a| a.action == "close") => {
-            QuestionState::Closed
-        }
-        Some(_) => QuestionState::Answered,
-    };
+    let state = msg.state.unwrap_or(QuestionState::Open);
     let attached: Option<String> = sql.query_row("SELECT run_id FROM question_attachments WHERE project_id=?1 AND message_id=?2 AND detached_at IS NULL",
         params![project.to_string(),id.0], |r| r.get(0)).optional()?;
     let asking = attached.or_else(|| msg.run.map(|r| r.to_string()));
@@ -760,7 +757,24 @@ pub fn post(
                 if !parent.is_question() {
                     return Err(invalid("answer must reply to a question"));
                 }
-                if question(tx.sql(), project, parent.id)?.state != QuestionState::Open {
+                let question = question(tx.sql(), project, parent.id)?;
+                if answer.action == "reopen" {
+                    let recent: bool = tx.sql().query_row(
+                        "SELECT closed_at IS NOT NULL AND julianday(closed_at)>=julianday('now')-10.0/1440.0 FROM messages WHERE project_id=?1 AND id=?2",
+                        params![project.to_string(), parent.id.0], |r| r.get(0))?;
+                    if from != OWNER_STREAM
+                        || question.state != QuestionState::Closed
+                        || !recent
+                        || !question
+                            .reply
+                            .as_ref()
+                            .is_some_and(|r| r.from == OWNER_STREAM)
+                    {
+                        return Err(conflict(
+                            "Undo is available for ten minutes after you close a question",
+                        ));
+                    }
+                } else if question.state != QuestionState::Open {
                     return Err(conflict("question is no longer open"));
                 }
             } else if post.body.trim().is_empty() {
@@ -787,7 +801,9 @@ pub fn post(
     // Answering or closing a question it asked is still taken: a question that does not
     // wait leaves its step settled at once, and its answer is for the plan input it sets,
     // whoever reads the inbox, or the step's retry to take up.
+    let reopening = matches!(&verb, Verb::Reply { answer: Some(a), .. } if a.action == "reopen");
     if resolving.is_none()
+        && !reopening
         && let Some(why) = closed(tx.sql(), project, &to)?
     {
         return Err(conflict(format!(
@@ -884,6 +900,9 @@ pub fn post(
             msg.answer = answer;
         }
     }
+    if reopening && msg.body.is_empty() {
+        msg.body = "Question reopened.".into();
+    }
     let record = tx.append_record(Some(project), Event::Message(Box::new(msg.clone())))?;
     msg.id = MessageId(record.seq.0);
     msg.at = record.at;
@@ -900,6 +919,13 @@ pub fn post(
     tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",title,body,needs_reply,reply_to,answer,ui,input,data,run_id,at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
         params![msg.id.0,project.to_string(),msg.thread,msg.from,msg.to,msg.title,msg.body,asking,msg.to_message.map(|id| id.0),
         msg.answer.as_ref().map(serde_json::to_string).transpose()?,msg.ui,msg.input,msg.data.as_ref().map(serde_json::to_string).transpose()?,msg.run.map(|id| id.to_string()),msg.at])?;
+    if reopening {
+        let parent = parent.as_ref().expect("reopening replies to a question");
+        tx.sql().execute(
+            "UPDATE messages SET resolved_by=NULL,closed_at=NULL WHERE project_id=?1 AND id=?2",
+            params![project.to_string(), parent.id.0],
+        )?;
+    }
     if let Some(q) = resolving {
         tx.sql().execute("UPDATE messages SET resolved_by=?1,closed_at=?2 WHERE project_id=?3 AND id=?4 AND resolved_by IS NULL",
             params![msg.id.0,msg.answer.as_ref().filter(|a| a.action=="close").map(|_| msg.at.clone()),project.to_string(),q.message.id.0])?;

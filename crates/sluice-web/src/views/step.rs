@@ -1629,9 +1629,9 @@ impl StepView {
         self.advice().text()
     }
     /// Its retry's feedback box stands open in Why it failed, under the advice, rather than
-    /// folded in its band: the failure repeated and Retry asks no confirm.
+    /// folded in its band: the failure repeated.
     pub fn feedback_in_why(&self) -> bool {
-        self.retryable() && !self.retry_asks() && self.advice().repeated()
+        self.retryable() && self.advice().repeated()
     }
     pub fn retryable(&self) -> bool {
         matches!(
@@ -1662,28 +1662,6 @@ impl StepView {
             self.name().label()
         }
     }
-    pub fn cancel_prompt(&self) -> String {
-        let duration = self
-            .last_run()
-            .filter(|r| r.finished.is_empty())
-            .and_then(|r| r.seconds)
-            .map(super::ui::duration_text);
-        let ran = duration
-            .map(|d| format!("Running for {d}."))
-            .unwrap_or_default();
-        // a run waiting on the owner's answer: cancelling leaves its question unanswered
-        match &self.asking {
-            Some(ask) => format!(
-                "Waiting on your answer to “{}”. {ran}",
-                super::ui::cut(&ask.title, 80)
-            )
-            .trim_end()
-            .to_owned(),
-            None => ran,
-        }
-    }
-    /// Cancel's confirmation: titled by its title, its id after it ("Cancel Fix the parser
-    /// `l1-work`?"), naming the run, with an optional reason.
     /// What its action forms were drawn against (`seen`): its status, its own pause and how
     /// many runs it has had. A plan edit elsewhere leaves it the same, so an action posted
     /// after one still applies, at the plan's new revision (`execute_action`).
@@ -1695,66 +1673,18 @@ impl StepView {
             self.timing.as_ref().map_or(0, |t| t.runs)
         )
     }
-    /// Retry asks first on a succeeded step: its result stands, and running it again can send
-    /// the steps after it round again. A failed or stale step's Retry is direct.
-    pub fn retry_asks(&self) -> bool {
-        self.status == StepStatus::Succeeded
-    }
-    /// A succeeded step's Retry: what it does to it and to the steps after it.
-    pub fn retry_confirm(&self) -> super::ui::Confirm {
-        let after = match self.downstream {
-            0 => String::new(),
-            1 => "The step after it reruns only if its result changes.".into(),
-            n => format!("The {n} steps after it rerun only if its result changes."),
-        };
-        let lead = if self.result_at.is_empty() {
-            "It succeeded. ".to_owned()
-        } else {
-            format!("It succeeded {}. ", super::ui::ago(&self.result_at))
-        };
-        super::ui::Confirm {
-            opener: "Retry".into(),
-            title: if self.titled() {
-                format!("Retry {}", self.name().text(60))
-            } else {
-                format!("Retry {}?", self.id)
-            },
-            action: format!("{}/actions", self.href()),
-            hidden: vec![
+    /// A step action applies immediately, fenced against changes since it was drawn.
+    pub fn direct_action(&self, action: &str, label: &str) -> TrustedHtml {
+        super::ui::action_form(
+            &super::ui::form_id(&format!("{} {action}", self.href())),
+            &format!("{}/actions", self.href()),
+            &[
                 ("revision", self.revision.to_string()),
                 ("seen", self.seen()),
-                ("action", "retry".into()),
+                ("action", action.into()),
             ],
-            lead: TrustedHtml::owned(lead),
-            copy: after,
-            reason: Some("Optional feedback for the next attempt"),
-            reason_label: "Feedback (optional)",
-            confirm: "Retry".into(),
-            keep: "Keep its result",
-            ..Default::default()
-        }
-    }
-    pub fn cancel_confirm(&self) -> super::ui::Confirm {
-        super::ui::Confirm {
-            opener: "Cancel".into(),
-            title: if self.titled() {
-                format!("Cancel {}", self.name().text(60))
-            } else {
-                format!("Cancel {}?", self.id)
-            },
-            action: format!("{}/actions", self.href()),
-            hidden: vec![
-                ("revision", self.revision.to_string()),
-                ("seen", self.seen()),
-                ("action", "cancel".into()),
-            ],
-            copy: self.cancel_prompt(),
-            reason: Some("Why stop this run?"),
-            confirm: "Cancel the run".into(),
-            keep: "Keep running",
-            danger: true,
-            ..Default::default()
-        }
+            label,
+        )
     }
     /// Its failure's own words lead its page (Why it failed), so its last run's Runs entry
     /// does not repeat them: a failure, not a cancel (one that set a failure aside keeps it
@@ -1767,47 +1697,14 @@ impl StepView {
     pub fn can_set_aside(&self) -> bool {
         self.shown() == Shown::Failed
     }
-    /// A failure's Cancel and its Cancel and dismiss, each a confirmation, for its ⋯ Details
-    /// (none for any other step). `focus`: what takes the focus once its write is drawn (the
-    /// plan's Undo of it, from the drawer), "" for none.
-    pub fn set_aside_actions(&self, focus: &str) -> Vec<TrustedHtml> {
+    /// A failure's Cancel and Cancel and dismiss act immediately.
+    pub fn set_aside_actions(&self, _focus: &str) -> Vec<TrustedHtml> {
         if !self.can_set_aside() {
             return vec![];
         }
-        let name = if self.titled() {
-            self.name().text(60)
-        } else {
-            self.id.to_string()
-        };
-        let confirm =
-            |opener: &str, action: &'static str, focus: &str, copy: String, confirm: &str| {
-                super::ui::Confirm {
-                    opener: opener.into(),
-                    title: format!("{opener} {name}?"),
-                    action: format!("{}/actions", self.href()),
-                    hidden: vec![
-                        ("revision", self.revision.to_string()),
-                        ("seen", self.seen()),
-                        ("action", action.into()),
-                    ],
-                    focus_after: focus.to_owned(),
-                    copy,
-                    reason: Some("Why set it aside?"),
-                    confirm: confirm.into(),
-                    keep: "Keep it failed",
-                    ..Default::default()
-                }
-            };
         vec![
-            confirm("Cancel", "cancel", "", String::new(), "Cancel it").html(),
-            confirm(
-                "Cancel and dismiss",
-                "cancel_dismiss",
-                focus,
-                "Undo brings back the cancel, not the failure.".into(),
-                "Cancel and dismiss",
-            )
-            .html(),
+            self.direct_action("cancel", "Cancel"),
+            self.direct_action("cancel_dismiss", "Cancel and dismiss"),
         ]
     }
     /// One muted sentence under its name (`ui::status_line`): how it stands and since when;
@@ -1932,7 +1829,7 @@ impl StepView {
         status_line(dot, &parts)
     }
     /// Its head's one "⋯": what identifies it, then what can be done to it that is no next
-    /// move: Pause or Unpause, Cancel (a confirmation), a failure's Cancel and Cancel and
+    /// move: Pause or Unpause, Cancel, a failure's Cancel and Cancel and
     /// dismiss, and its log. In the drawer (not its `page`) a set-aside's focus goes to the
     /// plan's Undo of it.
     pub fn head_menu(&self, page: bool) -> super::ui::Details {
@@ -1954,7 +1851,7 @@ impl StepView {
             )));
         }
         if self.cancellable() {
-            actions.push(self.cancel_confirm().html());
+            actions.push(self.direct_action("cancel", "Cancel"));
         }
         actions.extend(self.set_aside_actions(&focus));
         actions.push(TrustedHtml::owned(format!(
@@ -2957,7 +2854,7 @@ pub enum Action {
     Retry,
     Cancel,
     /// Cancel a failed step and set the cancel aside at once (`step_cancel`, then
-    /// `StepDismiss`): one confirmation for both.
+    /// `StepDismiss`): one action for both.
     CancelDismiss,
     /// Set a cancel aside (`StepDismiss`): no plan edit, so no revision to match.
     Dismiss,
@@ -3058,7 +2955,9 @@ async fn execute_action(
     headers: HeaderMap,
     form: ActionForm,
 ) -> Response {
+    let cancelled = matches!(form.action, Action::Cancel | Action::CancelDismiss);
     match try_action(&state, commands, registry.as_ref(), project, &id, form).await {
+        Ok(()) if cancelled => super::write::said(&headers, "Cancelled. Retry runs it again"),
         Ok(()) => super::write::done(&headers),
         Err(Ok(refusal)) => refusal.answer(&headers),
         Err(Err(e)) => super::write::failed(&headers, e),
@@ -3138,7 +3037,7 @@ pub(crate) async fn try_action(
             ),
         );
     };
-    // Cancel and dismiss is the cancel, then its dismissal: one confirmation for both
+    // Cancel and dismiss is the cancel, then its dismissal: one action for both
     let steps: &[Action] = match form.action {
         Action::CancelDismiss => &[Action::Cancel, Action::Dismiss],
         _ => std::slice::from_ref(&form.action),

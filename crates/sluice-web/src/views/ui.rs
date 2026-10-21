@@ -572,7 +572,7 @@ impl StepRef {
         }
     }
     /// How every page says it in words, the one name for a step wherever it is plain text: a
-    /// composer's "Message to …", a tab's title, a thread's heading, a confirmation. Its stage
+    /// composer's "Message to …", a tab's title, a thread's heading. Its stage
     /// and its title cut to `NAME_CHARS` ("draft · The spring guide's shorebird…"); its id alone
     /// when it has no title.
     pub fn label(&self) -> String {
@@ -653,50 +653,14 @@ impl StepRef {
     }
 }
 
-// ---- the kit: tabs, panels, an empty state, a confirmation ------------------------------------
+// ---- the kit: tabs, panels, an empty state ------------------------------------
 // Server-drawn parts with one look each (DESIGN.md, Components; the gallery at `/_ui` shows every
 // one in every state). Their behaviour is a Rocket component around them (`ui::rocket`): a page
 // works without it, each part falling back to plain HTML (tabs to their panels stacked under
-// their heads, a fold to its details, a confirmation to its form inline).
+// their heads, a fold to its details).
 
 /// A fold around HTML that may run long: its first lines, faded, and "Show all" under them
 /// (`sluice-fold`; said only when the text is cut).
 pub fn fold(class: &str, html: &TrustedHtml) -> TrustedHtml {
     TrustedHtml::owned(format!("{}{html}{}", fold_open(class), fold_close()))
-}
-/// A confirmation (Cancel, Close all, Delete project), drawn by `html` (`ui::rocket`): its
-/// opener's words, the dialog's title with an `id` after it in data mono, the form it confirms
-/// and its words.
-#[derive(Clone, Debug, Default)]
-pub struct Confirm {
-    pub opener: String,
-    /// The opener's own id, for a page that names it (`delete-button`).
-    pub opener_id: String,
-    pub title: String,
-    pub id: String,
-    pub action: String,
-    pub form_id: String,
-    pub hidden: Vec<(&'static str, String)>,
-    pub copy: String,
-    /// A reason field's placeholder: none when the confirmation takes no reason.
-    pub reason: Option<&'static str>,
-    /// The reason field's label: "Reason (optional)" when empty.
-    pub reason_label: &'static str,
-    /// Once its write is taken and the stream draws what it changed, the focus goes to the
-    /// element of this id (`data-focus-after`; "" leaves it).
-    pub focus_after: String,
-    pub confirm: String,
-    pub keep: &'static str,
-    /// The confirm button in the ink-filled danger tone (Delete), else primary.
-    pub danger: bool,
-    /// It cannot be confirmed now: its opener is dimmed and does nothing.
-    pub disabled: bool,
-    /// What the form draws after its buttons (a status line its page's script writes).
-    pub after: TrustedHtml,
-    /// Drawn before its copy, in the same paragraph: a time that ticks ("It succeeded 3h ago.").
-    pub lead: TrustedHtml,
-    /// Its form's class ("" for none), for a component that answers to what it confirms.
-    pub form_class: &'static str,
-    /// More attributes on its form, each with its leading space, already escaped.
-    pub form_attrs: String,
 }

@@ -1322,6 +1322,11 @@ pub enum CompletionActionOutcome {
 pub enum CommandRequest {
     ProjectUpdate(ProjectUpdate),
     ProjectDelete(ProjectDelete),
+    /// Dashboard Undo of a recent board clear or resource removal.
+    SettingsUndo {
+        project: ProjectId,
+        key: String,
+    },
     BoardSet(BoardSet),
     BoardGet {
         project: ProjectSelector,

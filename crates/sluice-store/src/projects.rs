@@ -621,11 +621,43 @@ pub fn project_update(
         )?;
         fields.push("description".into());
     }
-    if let Some(patch) = request.resources
-        && resources.set_resources(tx, id, &patch)?
-    {
-        tx.changed(Some(id), "resources");
-        fields.push("resources".into());
+    if let Some(patch) = request.resources {
+        let previous = crate::resources::declarations(tx.sql(), id)?;
+        if resources.set_resources(tx, id, &patch)? {
+            let mut undos = undo_map(tx.sql(), id)?;
+            undos.retain(|key, _| {
+                !key.strip_prefix("resource:")
+                    .is_some_and(|name| patch.get(name).is_some())
+            });
+            let revision = resolve(tx.sql(), &ProjectSelector::Id(id))?.resources_rev;
+            for entry in undos
+                .values_mut()
+                .filter(|entry| entry.key.starts_with("resource:"))
+            {
+                entry.revision = revision;
+            }
+            save_undo(tx, id, &undos)?;
+            if request.author == "owner" {
+                for (name, resource) in previous {
+                    if patch.get(&name).is_some_and(Value::is_null) {
+                        let value = match resource.declaration {
+                            crate::resources::Capacity::Fixed(n) => json!(n),
+                            crate::resources::Capacity::Function(f) => json!({"capacity_fn": f}),
+                        };
+                        remember_undo(
+                            tx,
+                            id,
+                            format!("resource:{name}"),
+                            format!("Removed {name}"),
+                            value,
+                            revision,
+                        )?;
+                    }
+                }
+            }
+            tx.changed(Some(id), "resources");
+            fields.push("resources".into());
+        }
     }
     if let Some(icon) = request.icon
         && set_icon(tx, id, icon)?
@@ -798,6 +830,16 @@ pub fn board_set(
     }
     let id = project.project_id;
     let rev = Revision(project.board_rev.0 + 1);
+    if request.program.is_none() && request.author == "owner" {
+        remember_undo(
+            tx,
+            project.project_id,
+            "board".into(),
+            "Board cleared".into(),
+            json!(project.board),
+            rev,
+        )?;
+    }
     tx.sql().execute(
         "UPDATE projects SET board=?2,board_rev=?3 WHERE project_id=?1",
         rusqlite::params![
@@ -1308,4 +1350,116 @@ pub fn icon_image(
         return Err(invalid("icon hash mismatch"));
     }
     Ok((media_type, bytes, hash))
+}
+
+/// A recent destructive setting change, retained across dashboard reloads and deploys.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SettingsUndo {
+    pub key: String,
+    pub at: String,
+    pub label: String,
+    value: Value,
+    revision: Revision,
+}
+fn undo_map(c: &Connection, id: ProjectId) -> Result<BTreeMap<String, SettingsUndo>> {
+    let raw: String = c.query_row(
+        "SELECT settings_undo FROM projects WHERE project_id=?1",
+        [id.to_string()],
+        |r| r.get(0),
+    )?;
+    Ok(serde_json::from_str(&raw)?)
+}
+fn save_undo(
+    tx: &mut WriteTransaction<'_>,
+    id: ProjectId,
+    map: &BTreeMap<String, SettingsUndo>,
+) -> Result<()> {
+    tx.sql().execute(
+        "UPDATE projects SET settings_undo=?2 WHERE project_id=?1",
+        params![id.to_string(), serde_json::to_string(map)?],
+    )?;
+    Ok(())
+}
+fn remember_undo(
+    tx: &mut WriteTransaction<'_>,
+    id: ProjectId,
+    key: String,
+    label: String,
+    value: Value,
+    revision: Revision,
+) -> Result<()> {
+    let mut entries = undo_map(tx.sql(), id)?;
+    entries.retain(|_, entry| undo_recent(&entry.at));
+    entries.insert(
+        key.clone(),
+        SettingsUndo {
+            key,
+            at: now()?,
+            label,
+            value,
+            revision,
+        },
+    );
+    save_undo(tx, id, &entries)
+}
+fn undo_recent(at: &str) -> bool {
+    time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339)
+        .is_ok_and(|at| (time::OffsetDateTime::now_utc() - at).whole_seconds() < 600)
+}
+/// Only changes still in effect can be undone. A later edit never gets overwritten.
+pub fn settings_undo(c: &Connection, id: ProjectId) -> Result<Vec<SettingsUndo>> {
+    let project = resolve(c, &ProjectSelector::Id(id))?;
+    let resources = crate::resources::declarations(c, id)?;
+    Ok(undo_map(c, id)?
+        .into_values()
+        .filter(|entry| {
+            undo_recent(&entry.at)
+                && if entry.key == "board" {
+                    project.board.is_none() && project.board_rev == entry.revision
+                } else {
+                    !resources.contains_key(entry.key.trim_start_matches("resource:"))
+                        && project.resources_rev == entry.revision
+                }
+        })
+        .collect())
+}
+/// Restore one saved setting in the same writer transaction as its revision check and record.
+pub fn undo_setting(
+    tx: &mut WriteTransaction<'_>,
+    id: ProjectId,
+    key: &str,
+    resources: &dyn ResourceSettings,
+) -> Result<()> {
+    let entry = settings_undo(tx.sql(), id)?
+        .into_iter()
+        .find(|e| e.key == key)
+        .ok_or_else(|| invalid("Undo expired or the setting changed"))?;
+    if key == "board" {
+        board_set(
+            tx,
+            &ProjectSelector::Id(id),
+            SetBoard {
+                program: entry.value.as_str().map(str::to_owned),
+                expected_rev: Some(entry.revision),
+                reason: Some("Undo clear board".into()),
+                author: "owner".into(),
+            },
+        )?;
+    } else {
+        project_update(
+            tx,
+            &ProjectSelector::Id(id),
+            UpdateProject {
+                resources: Some(json!({key.trim_start_matches("resource:"): entry.value})),
+                reason: Some("Undo remove resource".into()),
+                author: "owner".into(),
+                ..Default::default()
+            },
+            resources,
+        )?;
+    }
+    let mut map = undo_map(tx.sql(), id)?;
+    map.remove(key);
+    save_undo(tx, id, &map)?;
+    Ok(())
 }
