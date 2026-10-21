@@ -462,7 +462,7 @@ async fn the_log_says_each_record_in_a_sentence_and_the_global_log_spans_project
                     StepStatus::Running,
                     StepStatus::Failed,
                     Some(PublicError::FnFailure {
-                        message: "exit code 1\nTraceback (most recent call last):\n  File \"m.py\"\nRuntimeError: codex ran past the wall-clock cap of 600 min (SLUICE_AGENT_MAX_MIN)\nsession: s".into(),
+                        message: "exit code 1\nTraceback (most recent call last):\n  File \"m.py\"\nRuntimeError: codex ran past the wall-clock cap of 600 min\nsession: s".into(),
                     }),
                 ),
             )?;

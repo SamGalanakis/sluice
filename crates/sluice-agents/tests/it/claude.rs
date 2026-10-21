@@ -593,7 +593,6 @@ async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
         ),
     );
     let mut cfg = acceptance::config(&h.scratch.0, "claude");
-    cfg.limits.wall = Duration::from_secs(15);
     cfg.limits.ready = Duration::from_secs(5);
     cfg.limits.turn_start = Duration::from_secs(5);
     cfg.limits.stall = Duration::from_secs(10);
@@ -806,7 +805,6 @@ async fn supervise_claude(
         ),
     );
     let mut cfg = acceptance::config(&h.scratch.0, "claude");
-    cfg.limits.wall = Duration::from_secs(15);
     cfg.limits.ready = Duration::from_secs(5);
     cfg.limits.turn_start = Duration::from_millis(200);
     cfg.limits.stall = Duration::from_secs(10);
@@ -1148,7 +1146,6 @@ async fn supervisor_claude_unseen_drafts_resume_and_deliver_the_task_again() {
     )
     .await;
     let (result, directory) = supervise_claude(&h, |cfg| {
-        cfg.limits.wall = Duration::from_secs(60);
         cfg.limits.turn_start = Duration::from_secs(40);
         cfg.limits.stall = Duration::from_secs(40);
     })

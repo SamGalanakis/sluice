@@ -240,7 +240,6 @@ pub async fn scenario(name: &str, engine_name: &str) {
     let mut frames = happy();
     match name {
         "busy_submitted" | "quiet" => {
-            cfg.limits.wall = Duration::from_millis(300);
             cfg.limits.quiet = Duration::from_millis(20);
             frames.truncate(2);
             if name == "quiet" {
@@ -248,9 +247,8 @@ pub async fn scenario(name: &str, engine_name: &str) {
                 repo(&cfg.cwd);
             } else if let Some((at, _)) = &mut host.submit_when {
                 // Submitted mid-turn: the session ends though the engine is still busy,
-                // long before the wall cap.
+                // without waiting for a stalled engine.
                 *at = State::Busy;
-                cfg.limits.wall = Duration::from_secs(30);
             }
         }
         "background" => {
@@ -387,7 +385,6 @@ pub async fn scenario(name: &str, engine_name: &str) {
     }
     let cancel = CancellationToken::new();
     if name == "quiet" {
-        cfg.limits.wall = Duration::from_secs(5);
         host.cancel_on_note = Some(cancel.clone());
     }
     if name == "cancel_backoff" {

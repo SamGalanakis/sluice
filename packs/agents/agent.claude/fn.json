@@ -1,6 +1,6 @@
 {
   "name": "agent.claude",
-  "doc": "Run a supervised interactive Claude session on a prompt in a working directory. Submit declared step outputs before the session ends; pass session to resume in the same directory. Runs Opus: model is a JSON object, by default {\"type\":\"normal\",\"model\":\"opus\",\"effort\":\"high\"}: {\"type\":\"normal\",\"model\":M,\"effort\":E?} with M opus or claude-opus-5-5 and E low, medium, high, xhigh or max. The result's model names what ran (docs(\"plans\"), Choosing a model).",
+  "doc": "Run a supervised interactive Claude session on a prompt in a working directory. Submit declared step outputs before the session ends; pass session to resume in the same directory. Runs Opus: model is a JSON object, by default {\"type\":\"normal\",\"model\":\"opus\",\"effort\":\"high\"}: {\"type\":\"normal\",\"model\":M,\"effort\":E?} with M opus or claude-opus-5-5 and E low, medium, high, xhigh or max. The result's model names what ran (docs(\"plans\"), Choosing a model). Agent runs have no total time limit; readiness, individual operations, transient backoffs and idle detection remain bounded.",
   "open": true,
   "inputs": {
     "cwd": "string",

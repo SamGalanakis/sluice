@@ -539,7 +539,7 @@ async fn python_callbacks_and_exception_contracts() {
                     json!({"status":"error","value":{"error":"transient","message":"busy"}})
                 }
                 HelperCommand::Runtime(CommandRequest::Builtin { .. }) => {
-                    json!({"status":"error","value":{"error":"agent_failure","kind":"WallCap","message":"time budget exhausted","session":"session-1"}})
+                    json!({"status":"error","value":{"error":"agent_failure","kind":"OperationTimeout","message":"operation timed out","session":"session-1"}})
                 }
                 HelperCommand::Extension(HelperExtension::Tool(_)) => {
                     json!({"status":"error","value":{"error":"invalid","message":"bad request","errors":["inputs.n"],"current_rev":3,"retryable":false}})
@@ -553,7 +553,7 @@ async fn python_callbacks_and_exception_contracts() {
         assert_eq!(out["attempt"], 2);
         assert_eq!(
             out["agent"],
-            json!({"kind":"WallCap","message":"time budget exhausted","session":"session-1"})
+            json!({"kind":"OperationTimeout","message":"operation timed out","session":"session-1"})
         );
         assert_eq!(
             out["tool"],

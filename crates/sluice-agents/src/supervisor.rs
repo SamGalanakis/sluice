@@ -39,7 +39,6 @@ pub struct Limits {
     pub nudges: u32,
     /// Minimum time between reminders, injected directly by tests.
     pub reminder: Duration,
-    pub wall: Duration,
     pub stall: Duration,
     /// Idle time before a session with nothing to submit ends, or an unfinished one is nudged.
     pub settle: Duration,
@@ -61,7 +60,6 @@ impl Default for Limits {
         Self {
             nudges: 3,
             reminder: Duration::from_secs(3600),
-            wall: Duration::from_secs(600 * 60),
             stall: Duration::from_secs(30 * 60),
             settle: Duration::from_secs(10),
             grace: Duration::from_secs(10 * 60),
@@ -88,7 +86,6 @@ impl Limits {
     pub fn parse(mut get: impl FnMut(&str) -> io::Result<Option<String>>) -> io::Result<Self> {
         let mut limits = Self::default();
         for (name, duration, scale) in [
-            ("SLUICE_AGENT_MAX_MIN", &mut limits.wall, 60.0),
             ("SLUICE_AGENT_STALL_MIN", &mut limits.stall, 60.0),
             ("SLUICE_AGENT_SETTLE_S", &mut limits.settle, 1.0),
             ("SLUICE_AGENT_GRACE_MIN", &mut limits.grace, 60.0),
@@ -135,7 +132,6 @@ impl Limits {
         Self {
             nudges: 2,
             reminder: short,
-            wall: Duration::from_secs(3),
             stall: Duration::from_secs(1),
             settle: short,
             grace: short,
@@ -170,7 +166,8 @@ pub enum FailureKind {
     MissingSession,
     /// The agent exited, or stopped after its nudges, without a valid step_submit.
     ExitedWithoutSubmit,
-    WallCap,
+    /// One engine or host operation, or one retry wait, did not finish in time.
+    OperationTimeout,
     StallCap,
     ReadyTimeout,
     TurnStartTimeout,
@@ -336,7 +333,7 @@ pub struct Checkpoint {
     pub live_after: MessageId,
     pub final_text: String,
     pub notes: Vec<String>,
-    /// Time spent parked, which the wall cap leaves out.
+    /// Time spent parked, left out of the active-time clock used by idle detection.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub parked_ms: u64,
 }
@@ -404,8 +401,13 @@ pub struct HostSnapshot {
 /// answers `busy` (retryable) or does not answer in time, before the run fails `Transient`.
 /// A coordinator applying a burst of plan edits stalls for minutes at most, and a deploy
 /// restarts it in seconds; ten minutes covers both many times over while still ending a run
-/// whose peer is gone for good well inside the wall cap.
+/// whose peer is gone for good.
 pub const HOST_PATIENCE: Duration = Duration::from_secs(600);
+/// Each engine or host operation gets its own budget, regardless of run age. A host's
+/// retry patience fits inside it, including the last transport attempt.
+pub const OPERATION_TIMEOUT: Duration = Duration::from_secs(660);
+/// Bound one transient wait, including a reported reset, without limiting session duration.
+pub const BACKOFF_TIMEOUT: Duration = Duration::from_secs(3600);
 /// A host call whose peer stayed unavailable for its whole patience. The supervisor fails
 /// the run `Transient` on it, so the helper's retry resumes the session.
 #[derive(Debug)]
@@ -673,9 +675,6 @@ impl Machine {
         leases_active: bool,
     ) -> Result<Action, AgentFailure> {
         self.completed = self.completed.max(o.turns_completed);
-        if now >= self.limits.wall {
-            return Err(failure(FailureKind::WallCap, "wall-clock cap exceeded"));
-        }
         for id in &o.acknowledged {
             self.checkpoint
                 .delivery
@@ -1034,12 +1033,12 @@ async fn observation_warning<H: SupervisorHost>(
 }
 async fn startup_host<T, H: SupervisorHost>(
     cancel: &CancellationToken,
-    deadline: tokio::time::Instant,
+    timeout: Duration,
     host: &mut H,
     notes: &mut Vec<String>,
     operation: impl Future<Output = io::Result<T>>,
 ) -> Result<T, AgentFailure> {
-    let waiting = bounded_host(cancel, deadline, operation);
+    let waiting = bounded_host(cancel, timeout, operation);
     tokio::pin!(waiting);
     tokio::select! {
         result = &mut waiting => result,
@@ -1052,24 +1051,24 @@ async fn startup_host<T, H: SupervisorHost>(
 
 async fn bounded<T>(
     cancel: &CancellationToken,
-    deadline: tokio::time::Instant,
+    timeout: Duration,
     future: impl Future<Output = Result<T, EngineError>>,
 ) -> Result<T, AgentFailure> {
     tokio::select! {
         biased;
         _ = cancel.cancelled() => Err(failure(FailureKind::Cancelled, "agent cancelled")),
-        result = tokio::time::timeout_at(deadline, future) => result.map_err(|_| failure(FailureKind::WallCap, "engine operation deadline exceeded"))?.map_err(Into::into),
+        result = tokio::time::timeout(timeout, future) => result.map_err(|_| failure(FailureKind::OperationTimeout, "engine operation timed out"))?.map_err(Into::into),
     }
 }
 async fn bounded_host<T>(
     cancel: &CancellationToken,
-    deadline: tokio::time::Instant,
+    timeout: Duration,
     future: impl Future<Output = io::Result<T>>,
 ) -> Result<T, AgentFailure> {
     tokio::select! {
         biased;
         _ = cancel.cancelled() => Err(failure(FailureKind::Cancelled, "agent cancelled")),
-        result = tokio::time::timeout_at(deadline, future) => result.map_err(|_| failure(FailureKind::WallCap, "wall-clock cap during host operation"))?.map_err(host_failure),
+        result = tokio::time::timeout(timeout, future) => result.map_err(|_| failure(FailureKind::OperationTimeout, "host operation timed out"))?.map_err(host_failure),
     }
 }
 /// A host error fails the run `Transient` when its peer was only unavailable, else `Invalid`.
@@ -1243,7 +1242,6 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
         enqueue_message(&mut checkpoint, &message, &config.run_dir)?;
     }
     let now = checkpoint.elapsed().map_err(invalid)?;
-    let mut deadline = tokio::time::Instant::now() + config.limits.wall.saturating_sub(now);
     let mut machine = Machine::new(
         checkpoint,
         config.limits.clone(),
@@ -1268,10 +1266,10 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             if let Some(session) = machine.checkpoint.session.clone() {
                 let mut delay = Duration::from_millis(100);
                 let metadata_result = loop {
-                    match bounded(cancel, deadline, async { Ok(engine.session(&session).await) }).await? {
+                    match bounded(cancel, OPERATION_TIMEOUT, async { Ok(engine.session(&session).await) }).await? {
                         Err(error) if error.kind == EngineErrorKind::ObservationUnavailable => {
                             observation_warning(&mut machine.checkpoint.notes, host, "session metadata", &io::Error::other(error.message)).await;
-                            bounded(cancel, deadline, async { tokio::time::sleep(delay).await; Ok(()) }).await?;
+                            bounded(cancel, OPERATION_TIMEOUT, async { tokio::time::sleep(delay).await; Ok(()) }).await?;
                             delay = (delay * 2).min(Duration::from_secs(30));
                         }
                         result => break result.map_err(AgentFailure::from),
@@ -1299,18 +1297,17 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             }
             persist(&mut machine, &config, host).await?;
             refresh_me(host, &config.run_dir).await;
-            let mut ready_deadline = deadline;
             let startup: Result<(), AgentFailure> = async {
                 while pending_hooks(&context.run_dir).map_err(invalid)? {
                     process_hooks_inner(engine, None, &context.run_dir).map_err(invalid)?;
                 }
                 let mut probe_delay = Duration::from_millis(100);
                 let launch = loop {
-                    match bounded(cancel, deadline, async { Ok(engine.prepare(&context, machine.checkpoint.session.as_deref()).await) }).await? {
+                    match bounded(cancel, OPERATION_TIMEOUT, async { Ok(engine.prepare(&context, machine.checkpoint.session.as_deref()).await) }).await? {
                         Ok(launch) => break launch,
                         Err(error) if error.kind == EngineErrorKind::ObservationUnavailable => {
                             observation_warning(&mut machine.checkpoint.notes, host, "engine probe", &io::Error::other(error.message)).await;
-                            bounded(cancel, deadline, async { tokio::time::sleep(probe_delay).await; Ok(()) }).await?;
+                            bounded(cancel, OPERATION_TIMEOUT, async { tokio::time::sleep(probe_delay).await; Ok(()) }).await?;
                             probe_delay = (probe_delay * 2).min(Duration::from_secs(30));
                         }
                         Err(error) => return Err(error.into()),
@@ -1318,28 +1315,25 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                 };
                 // Host preflight delay is not time spent waiting for an engine to become ready.
                 machine.boot_at = Duration::from_millis(clock_ms().map_err(invalid)?.saturating_sub(machine.checkpoint.started_ms));
-                ready_deadline = deadline.min(tokio::time::Instant::now() + config.limits.ready);
                 if let Some(mut launch) = launch {
                     launch.env.insert("SLUICE_RUN_DIR".into(), context.run_dir.to_string_lossy().into_owned());
                     launch.env.insert("SLUICE_RUN_ID".into(), config.run.to_string());
                     let artifact = tmux.ok_or_else(|| failure(FailureKind::CapabilityMismatch, "pane launch requires approved private tmux"))?;
-                    let private = startup_host(cancel, deadline, host, &mut machine.checkpoint.notes, PrivateTmux::spawn(artifact, &context.run_dir)).await?;
+                    let private = startup_host(cancel, OPERATION_TIMEOUT, host, &mut machine.checkpoint.notes, PrivateTmux::spawn(artifact, &context.run_dir)).await?;
                     // Store ownership before awaiting pane creation.
                     server = Some(private);
-                    startup_host(cancel, deadline, host, &mut machine.checkpoint.notes, server.as_mut().expect("private server").create_pane(artifact, &context, launch)).await?;
-                    ready_deadline = deadline.min(tokio::time::Instant::now() + config.limits.ready);
+                    startup_host(cancel, OPERATION_TIMEOUT, host, &mut machine.checkpoint.notes, server.as_mut().expect("private server").create_pane(artifact, &context, launch)).await?;
                     machine.boot_at = Duration::from_millis(clock_ms().map_err(invalid)?.saturating_sub(machine.checkpoint.started_ms));
                 }
                 let command = machine.checkpoint.session.clone().map(|session| EngineCommand::Resume { session }).unwrap_or(EngineCommand::StartFresh);
                 let mut probe_delay = Duration::from_millis(100);
                 loop {
-                    match bounded(cancel, ready_deadline, async { Ok(engine.execute(&context, command.clone()).await) }).await? {
+                    match bounded(cancel, config.limits.ready, async { Ok(engine.execute(&context, command.clone()).await) }).await.map_err(|mut error| { if error.kind == FailureKind::OperationTimeout { error.kind = FailureKind::ReadyTimeout; } error })? {
                         Ok(_) => break Ok(()),
                         Err(error) if error.kind == EngineErrorKind::ObservationUnavailable => {
                             observation_warning(&mut machine.checkpoint.notes, host, "engine probe", &io::Error::other(error.message)).await;
-                            bounded(cancel, deadline, async { tokio::time::sleep(probe_delay).await; Ok(()) }).await?;
+                            bounded(cancel, OPERATION_TIMEOUT, async { tokio::time::sleep(probe_delay).await; Ok(()) }).await?;
                             probe_delay = (probe_delay * 2).min(Duration::from_secs(30));
-                            ready_deadline = deadline.min(tokio::time::Instant::now() + config.limits.ready);
                             machine.boot_at = Duration::from_millis(clock_ms().map_err(invalid)?.saturating_sub(machine.checkpoint.started_ms));
                         }
                         Err(error) => break Err(error.into()),
@@ -1355,8 +1349,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                 machine.checkpoint.notes.push(note);
             }
             let mut startup_failure = None;
-            if let Err(mut error) = startup {
-                if error.kind == FailureKind::WallCap && ready_deadline < deadline { error.kind = FailureKind::ReadyTimeout; }
+            if let Err(error) = startup {
                 let missing = error.message.clone();
                 // Only an explicit adapter missing-session error before any offer permits fallback.
                 // Preserve its typed kind through startup (the public kind maps this below).
@@ -1377,7 +1370,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                 Err(error)
             } else {
                 machine.checkpoint.state = State::Delivering;
-                run_invocation(&mut machine, &config, engine, host, sessions, &context, cancel, &mut deadline, &mut quiet).await
+                run_invocation(&mut machine, &config, engine, host, sessions, &context, cancel, &mut quiet).await
             };
             match result {
                 Ok(()) => return Ok(()),
@@ -1397,7 +1390,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                     tokio::select! {
                         biased;
                         _ = cancel.cancelled() => return Err(failure(FailureKind::Cancelled, "cancelled during transient backoff")),
-                        _ = tokio::time::sleep_until(deadline) => return Err(AgentFailure { retry_at: error.retry_at, ..failure(FailureKind::WallCap, "wall-clock cap during backoff") }),
+                        _ = tokio::time::sleep(BACKOFF_TIMEOUT) => return Err(AgentFailure { retry_at: error.retry_at, ..failure(FailureKind::OperationTimeout, "transient backoff timed out") }),
                         _ = tokio::time::sleep(wait) => {},
                     }
                     machine.checkpoint.internal_attempt += 1;
@@ -1485,7 +1478,7 @@ fn keeps_pane(kind: FailureKind, turns_completed: u64) -> bool {
                 FailureKind::TurnStartTimeout
                     | FailureKind::StallCap
                     | FailureKind::ReadyTimeout
-                    | FailureKind::WallCap
+                    | FailureKind::OperationTimeout
             ))
 }
 /// Keeps the private pane's text at a failure, before the teardown destroys it: its screen (and
@@ -1662,15 +1655,12 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
     sessions: &mut SessionGuard,
     context: &EngineContext,
     cancel: &CancellationToken,
-    wall: &mut tokio::time::Instant,
     quiet: &mut QuietMonitor,
 ) -> Result<(), AgentFailure> {
     let mut probe_delay = Duration::from_millis(100);
     let mut idle = IdleTicks::new(config.limits.poll);
     let mut last: Option<EngineObservation> = None;
     loop {
-        // A park moves the wall deadline by its parked time.
-        let deadline = *wall;
         let writes = machine.writes;
         if hooks_need_context(&config.run_dir).map_err(invalid)? {
             refresh_me(host, &config.run_dir).await;
@@ -1682,14 +1672,14 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
             config,
             bounded_host(
                 cancel,
-                deadline,
+                OPERATION_TIMEOUT,
                 host.snapshot(machine.checkpoint.live_after),
             ),
         )
         .await?;
         // Host reads can answer engine hooks while they wait. Observe afterward so a
         // submission is judged with the acknowledgements and errors those hooks produced.
-        let o = match bounded(cancel, deadline, async {
+        let o = match bounded(cancel, OPERATION_TIMEOUT, async {
             Ok(engine.observe(context).await)
         })
         .await?
@@ -1706,7 +1696,7 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
                     &io::Error::other(error.message),
                 )
                 .await;
-                bounded(cancel, deadline, async {
+                bounded(cancel, OPERATION_TIMEOUT, async {
                     tokio::time::sleep(probe_delay).await;
                     Ok(())
                 })
@@ -1789,7 +1779,7 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
                     if let Err(error) = answering_hooks(
                         engine,
                         config,
-                        bounded_host(cancel, deadline, host.note(&note)),
+                        bounded_host(cancel, OPERATION_TIMEOUT, host.note(&note)),
                     )
                     .await
                     {
@@ -1820,7 +1810,7 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
         answering_hooks(
             engine,
             config,
-            bounded_host(cancel, deadline, host.acknowledge(&acknowledged)),
+            bounded_host(cancel, OPERATION_TIMEOUT, host.acknowledge(&acknowledged)),
         )
         .await?;
         match action {
@@ -1840,7 +1830,7 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
                 };
                 let outcome = match bounded(
                     cancel,
-                    deadline.min(tokio::time::Instant::now() + config.limits.turn_start),
+                    config.limits.turn_start,
                     engine.execute(context, command),
                 )
                 .await
@@ -1911,16 +1901,8 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
                     && machine.checkpoint.internal_attempt <= config.retry.additional_tries
                     && engine.recover_in_place(error)
                 {
-                    continue_in_place(
-                        machine,
-                        config,
-                        engine,
-                        host,
-                        cancel,
-                        deadline,
-                        error.clone().into(),
-                    )
-                    .await?;
+                    continue_in_place(machine, config, engine, host, cancel, error.clone().into())
+                        .await?;
                     quiet.reset();
                     continue;
                 }
@@ -1930,14 +1912,14 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
                 });
             }
             Action::Park => {
-                park(machine, config, engine, host, context, cancel, wall).await?;
+                park(machine, config, engine, host, context, cancel).await?;
                 quiet.reset();
                 continue;
             }
             Action::Finish => {
                 let _ = bounded(
                     cancel,
-                    deadline.min(tokio::time::Instant::now() + config.limits.ready),
+                    config.limits.ready,
                     engine.execute(context, EngineCommand::RequestExit),
                 )
                 .await;
@@ -2020,7 +2002,6 @@ async fn continue_in_place<E: EngineAdapter, H: SupervisorHost>(
     engine: &mut E,
     host: &mut H,
     cancel: &CancellationToken,
-    deadline: tokio::time::Instant,
     error: AgentFailure,
 ) -> Result<(), AgentFailure> {
     machine.checkpoint.state = State::Backoff;
@@ -2035,7 +2016,7 @@ async fn continue_in_place<E: EngineAdapter, H: SupervisorHost>(
         tokio::select! {
             biased;
             _ = cancel.cancelled() => Err(failure(FailureKind::Cancelled, "cancelled during transient backoff")),
-            _ = tokio::time::sleep_until(deadline) => Err(AgentFailure { retry_at: error.retry_at, ..failure(FailureKind::WallCap, "wall-clock cap during backoff") }),
+            _ = tokio::time::sleep(BACKOFF_TIMEOUT) => Err(AgentFailure { retry_at: error.retry_at, ..failure(FailureKind::OperationTimeout, "transient backoff timed out") }),
             _ = tokio::time::sleep(wait) => Ok(()),
         }
     })
@@ -2065,7 +2046,7 @@ async fn continue_in_place<E: EngineAdapter, H: SupervisorHost>(
 /// The agent asked to park (`sluice tool park`) and its turn is over. The session stays up,
 /// idle; the coordinator releases the step's needs while the run waits for the condition (or
 /// its timeout), then takes them back in the queue by priority, and the same session resumes
-/// with one "woke:" message. Parked time moves the wall deadline: the wall cap leaves it out.
+/// with one "woke:" message. Idle detection starts afresh after the park.
 async fn park<E: EngineAdapter, H: SupervisorHost>(
     machine: &mut Machine,
     config: &SupervisorConfig,
@@ -2073,7 +2054,6 @@ async fn park<E: EngineAdapter, H: SupervisorHost>(
     host: &mut H,
     context: &EngineContext,
     cancel: &CancellationToken,
-    wall: &mut tokio::time::Instant,
 ) -> Result<(), AgentFailure> {
     machine.checkpoint.state = State::Parked;
     persist(machine, config, host).await?;
@@ -2101,12 +2081,7 @@ async fn park<E: EngineAdapter, H: SupervisorHost>(
     let mut messages: Vec<DeliveryMessage>;
     let mut idle = IdleTicks::new(config.limits.poll);
     let reason = loop {
-        let o = bounded(
-            cancel,
-            tokio::time::Instant::now() + config.limits.ready,
-            engine.observe(context),
-        )
-        .await?;
+        let o = bounded(cancel, config.limits.ready, engine.observe(context)).await?;
         if o.status == EngineStatus::Exited {
             return Err(failure(
                 FailureKind::EngineExited,
@@ -2121,13 +2096,16 @@ async fn park<E: EngineAdapter, H: SupervisorHost>(
             cancel.cancel();
             return Err(failure(FailureKind::Cancelled, "cancelled while parked"));
         }
-        let snapshot = answering_hooks(engine, config, async {
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled() => Err(failure(FailureKind::Cancelled, "cancelled while parked")),
-                result = host.snapshot(machine.checkpoint.live_after) => result.map_err(host_failure),
-            }
-        }).await?;
+        let snapshot = answering_hooks(
+            engine,
+            config,
+            bounded_host(
+                cancel,
+                OPERATION_TIMEOUT,
+                host.snapshot(machine.checkpoint.live_after),
+            ),
+        )
+        .await?;
         messages = snapshot
             .messages
             .into_iter()
@@ -2178,7 +2156,6 @@ async fn park<E: EngineAdapter, H: SupervisorHost>(
         .checkpoint
         .parked_ms
         .saturating_add(u64::try_from(parked.as_millis()).unwrap_or(u64::MAX));
-    *wall += parked;
     let text = match park.lease {
         Some(lease) if view.lease_held => format!("woke: {reason}, lease {lease}"),
         Some(lease) => format!("woke: {reason}; lease {lease} is still queued"),
@@ -2234,13 +2211,11 @@ async fn parked_call<E: EngineAdapter, H: SupervisorHost>(
     cancel: &CancellationToken,
     op: ParkOp,
 ) -> Result<ParkView, AgentFailure> {
-    answering_hooks(engine, config, async {
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => Err(failure(FailureKind::Cancelled, "cancelled while parked")),
-            result = host.park(op) => result.map_err(host_failure),
-        }
-    })
+    answering_hooks(
+        engine,
+        config,
+        bounded_host(cancel, OPERATION_TIMEOUT, host.park(op)),
+    )
     .await
 }
 /// A parked session is idle by definition: its checks back off as an idle tick does, and a

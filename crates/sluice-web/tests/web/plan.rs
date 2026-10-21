@@ -192,7 +192,7 @@ async fn plan_units_and_loose_steps() {
         let cause = needs[1];
         assert!(
             cause.contains("<span class=\"nd-t\">Two units</span> <span class=\"nd-s\">failed: they hit their wall-clock cap</span>")
-                && cause.contains("<span class=\"nd-next\">Give the agents more time: set <code>SLUICE_AGENT_MAX_MIN</code>, their limit in minutes, in the project's <code>.env</code> file, then Retry all.</span>")
+                && cause.contains("<span class=\"nd-next\">Agent runs now have no time limit. Retry all to use the current release.</span>")
                 && cause.contains("<summary>Show the two</summary>")
                 && cause.contains(">Retry all</button>")
                 && cause.contains("value=\"stop:a-4-review@"),

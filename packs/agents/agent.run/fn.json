@@ -1,6 +1,6 @@
 {
   "name": "agent.run",
-  "doc": "Run a spec in a supervised interactive session on the named engine. Submit declared step outputs before the session ends; pass session to resume in the same directory. model is a JSON object: {\"type\":\"normal\",\"model\":M,\"effort\":E?,\"fast\":bool?} (defaults: devin swe-2 high, codex sol high, claude opus high; fast only on devin), or on devin {\"type\":\"fusion\",\"main\":{\"model\":M,\"effort\":E?,\"fast\":bool?},\"sidekick\":{\"model\":S,\"effort\":F?,\"priority\":bool?}}. It is checked against the engine's models before the session starts; the result's model names what ran (docs(\"plans\"), Choosing a model).",
+  "doc": "Run a spec in a supervised interactive session on the named engine. Submit declared step outputs before the session ends; pass session to resume in the same directory. model is a JSON object: {\"type\":\"normal\",\"model\":M,\"effort\":E?,\"fast\":bool?} (defaults: devin swe-2 high, codex sol high, claude opus high; fast only on devin), or on devin {\"type\":\"fusion\",\"main\":{\"model\":M,\"effort\":E?,\"fast\":bool?},\"sidekick\":{\"model\":S,\"effort\":F?,\"priority\":bool?}}. It is checked against the engine's models before the session starts; the result's model names what ran (docs(\"plans\"), Choosing a model). Agent runs have no total time limit; readiness, individual operations, transient backoffs and idle detection remain bounded.",
   "open": true,
   "inputs": {
     "engine": {

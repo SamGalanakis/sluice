@@ -1,6 +1,6 @@
 {
   "name": "agent.review",
-  "doc": "Review and fix a branch diff against project standards in a supervised interactive Claude session. Pass session to resume in the same directory.",
+  "doc": "Review and fix a branch diff against project standards in a supervised interactive Claude session. Pass session to resume in the same directory. Agent runs have no total time limit; readiness, individual operations, transient backoffs and idle detection remain bounded.",
   "open": true,
   "inputs": {
     "cwd": "string",

@@ -82,7 +82,9 @@ impl Failure {
             PublicError::AgentFailure { kind, .. } => {
                 let headline = match kind.as_str() {
                     "Cancelled" => "Cancelled while it ran.".into(),
+                    // Historical failures remain readable after removing the run cap.
                     "WallCap" => wall_cap(took),
+                    "OperationTimeout" => "An engine or host operation timed out.".into(),
                     "StallCap" => format!("Stopped: its agent wrote nothing for too long{after}."),
                     "ReadyTimeout" => "Its engine never became ready.".into(),
                     "TurnStartTimeout" => {
@@ -243,7 +245,7 @@ impl Failure {
             "EngineExited" => "engine exited",
             "ReadyTimeout" | "TurnStartTimeout" | "MissingSession" | "BlockedScreen"
             | "LockConflict" | "SessionCwd" | "CapabilityMismatch" | "UnknownAcceptance"
-            | "Cleanup" => "engine fault",
+            | "Cleanup" | "OperationTimeout" => "engine fault",
             "process_lost" => "lost",
             "ExitedWithoutSubmit" | "exited_without_submit" => "no submit",
             "invalid" | "Invalid" => "invalid",
@@ -258,9 +260,7 @@ impl Failure {
     /// cancel. HTML: fixed words, a setting's name in code.
     pub fn next_step(&self) -> &'static str {
         match self.caption() {
-            "cap" => {
-                "Give its agent more time: set <code>SLUICE_AGENT_MAX_MIN</code>, its limit in minutes, in the project's <code>.env</code> file, then Retry."
-            }
+            "cap" => "Agent runs now have no time limit. Retry to use the current release.",
             "stalled" => "Its Activity shows where it went quiet.",
             "quota" => "Retry once its engine's usage cap resets.",
             "auth" => "Sign its engine in again on this machine, then Retry.",
@@ -277,9 +277,7 @@ impl Failure {
     /// them, with its Retry all): `next_step` in the plural, as HTML.
     pub fn next_step_all(&self) -> &'static str {
         match self.caption() {
-            "cap" => {
-                "Give the agents more time: set <code>SLUICE_AGENT_MAX_MIN</code>, their limit in minutes, in the project's <code>.env</code> file, then Retry all."
-            }
+            "cap" => "Agent runs now have no time limit. Retry all to use the current release.",
             "stalled" => "Each one's Activity shows where it went quiet.",
             "quota" => "Retry all once their engines' usage caps reset.",
             "auth" => "Sign their engines in again on this machine, then Retry all.",

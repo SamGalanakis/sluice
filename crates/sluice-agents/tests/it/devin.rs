@@ -562,7 +562,6 @@ fn supervisor_config(root: &Scratch) -> SupervisorConfig {
         messages: vec![],
         model: None,
         limits: Limits {
-            wall: Duration::from_secs(15),
             ready: Duration::from_secs(5),
             turn_start: Duration::from_secs(5),
             stall: Duration::from_secs(10),

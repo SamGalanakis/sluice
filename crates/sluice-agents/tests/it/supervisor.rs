@@ -45,6 +45,8 @@ struct Host {
     notes: Vec<String>,
     messages: Vec<DeliveryMessage>,
     me: String,
+    pause: bool,
+    hang_snapshot: bool,
 }
 impl Host {
     fn new() -> Self {
@@ -63,11 +65,16 @@ impl Host {
             notes: vec![],
             messages: vec![],
             me: "step stands here".into(),
+            pause: false,
+            hang_snapshot: false,
         }
     }
 }
 impl SupervisorHost for Host {
     async fn snapshot(&mut self, after: MessageId) -> io::Result<HostSnapshot> {
+        if self.hang_snapshot {
+            std::future::pending::<()>().await;
+        }
         self.snapshots += 1;
         Ok(HostSnapshot {
             submissions: if self.snapshots >= self.complete_after
@@ -103,6 +110,10 @@ impl SupervisorHost for Host {
         Ok(())
     }
     async fn checkpoint(&mut self, checkpoint: &Checkpoint) -> io::Result<()> {
+        if self.pause {
+            tokio::time::pause();
+            self.pause = false;
+        }
         self.has_nudged = checkpoint.nudges > 0;
         self.submitted |= self.submit_at == Some(checkpoint.state);
         if self.fail_checkpoint {
@@ -512,10 +523,7 @@ fn background_jobs_block_nudges_and_idle_reminders_are_at_most_hourly() {
         }))
         .unwrap()
     };
-    let limits = Limits {
-        wall: Duration::from_secs(24 * 3600),
-        ..Limits::default()
-    };
+    let limits = Limits::default();
     let mut machine = Machine::new(
         checkpoint(),
         limits.clone(),
@@ -533,7 +541,12 @@ fn background_jobs_block_nudges_and_idle_reminders_are_at_most_hourly() {
     );
     assert_eq!(
         machine
-            .update(Duration::from_secs(2 * 3600), &idle, &background, false)
+            .update(
+                Duration::from_secs(7 * 24 * 3600),
+                &idle,
+                &background,
+                false
+            )
             .unwrap(),
         Action::None
     );
@@ -542,7 +555,7 @@ fn background_jobs_block_nudges_and_idle_reminders_are_at_most_hourly() {
     idle.waiting = Some("gate queue".into());
     assert_eq!(
         machine
-            .update(Duration::from_secs(3 * 3600), &idle, &[], false)
+            .update(Duration::from_secs(8 * 24 * 3600), &idle, &[], false)
             .unwrap(),
         Action::None
     );
@@ -550,11 +563,11 @@ fn background_jobs_block_nudges_and_idle_reminders_are_at_most_hourly() {
     idle.status = EngineStatus::Idle;
     assert_eq!(
         machine
-            .update(Duration::from_secs(3 * 3600), &idle, &[], true)
+            .update(Duration::from_secs(8 * 24 * 3600), &idle, &[], true)
             .unwrap(),
         Action::None
     );
-    let now = Duration::from_secs(3 * 3600);
+    let now = Duration::from_secs(8 * 24 * 3600);
     assert_eq!(
         machine.update(now, &idle, &[], false).unwrap(),
         Action::None
@@ -768,17 +781,15 @@ impl SupervisorHost for ParkHost {
     }
 }
 
-/// Parked time is left out of the wall cap: a run parked well past its cap still finishes,
-/// in the session it parked in, after one "woke:" message. Tokio's clock is paused while it
-/// is parked, so the park's ten-second timeout passes at once.
+/// A timed-out park resumes the same session with one "woke:" message, including when
+/// the default timeout applies. Tokio's clock is paused only while parked.
 #[tokio::test]
-async fn a_parked_run_outlasts_its_wall_cap_and_resumes_in_the_same_session() {
+async fn a_park_timeout_resumes_in_the_same_session() {
     use sluice_model::park::{ParkCondition, ParkPhase, ParkRequest};
     for timeout_seconds in [Some(10), None] {
         let scratch = Scratch::new();
         let mut config = config(&scratch);
         config.limits.poll = Duration::from_millis(500);
-        let wall = config.limits.wall;
         let never = scratch.0.join("never");
         let mut frames = happy();
         frames.push(frame(
@@ -817,7 +828,12 @@ async fn a_parked_run_outlasts_its_wall_cap_and_resumes_in_the_same_session() {
         )
         .await
         .unwrap();
-        assert!(started.elapsed() > wall + Duration::from_secs(5));
+        assert!(
+            started.elapsed()
+                >= Duration::from_secs(
+                    timeout_seconds.unwrap_or(sluice_model::park::DEFAULT_PARK_TIMEOUT_SECONDS)
+                )
+        );
         assert_eq!(host.entered, 1);
         let reason = format!(
             "your park condition did not happen within {}s: file:{}",
@@ -1039,4 +1055,102 @@ async fn unavailable_pane_and_checkpoint_mirror_keep_the_same_session() {
             .count(),
         1
     );
+}
+
+// A transient retry used to inherit an expired run deadline, killing even a healthy host
+// operation immediately. Re-enter a seven-day-old checkpoint and exercise the real driver;
+// then prove that a hung host/engine, startup and retry wait each still have a fresh bound.
+#[tokio::test]
+async fn old_runs_get_fresh_operation_budgets_and_hangs_still_time_out() {
+    for scenario in ["healthy", "host", "engine", "ready", "backoff"] {
+        let scratch = Scratch::new();
+        let mut config = config(&scratch);
+        config.internal_attempt = 2;
+        config.retry.additional_tries = 2;
+        let run_dir = config.run_dir.clone();
+        fs::create_dir_all(&run_dir).unwrap();
+        let started_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+            - 7 * 24 * 3600 * 1000;
+        let checkpoint: Checkpoint = serde_json::from_value(serde_json::json!({
+            "version":1, "run":config.run, "attempt":config.attempt,
+            "invocation":config.invocation, "engine":"fake", "cwd":config.cwd,
+            "internal_attempt":1, "session":"s-1", "head_before":null,
+            "started_ms":started_ms, "state":"Backoff", "delivery":{"entries":[]},
+            "submissions":{}, "nudges":0, "compactions":0, "live_after":0,
+            "final_text":"", "notes":[]
+        }))
+        .unwrap();
+        checkpoint.save(&run_dir).unwrap();
+        let mut frames = happy();
+        frames[0].command = Some(EngineCommand::Resume {
+            session: "s-1".into(),
+        });
+        // The old run gets its task, then the continuation from its transient re-entry.
+        frames.insert(
+            2,
+            frame(
+                Some(EngineCommand::Steer {
+                    id: InputId::Continue { attempt: 2 },
+                    text: "*".into(),
+                }),
+                observation(EngineStatus::Busy, 1, 0),
+            ),
+        );
+        let mut host = Host::new();
+        host.pause = true;
+        match scenario {
+            "healthy" => {}
+            "host" => {
+                host.hang_snapshot = true;
+            }
+            "engine" => {
+                frames[3].delay_ms = OPERATION_TIMEOUT.as_millis() as u64 + 1000;
+            }
+            "ready" => {
+                frames[0].delay_ms = 2000;
+            }
+            "backoff" => {
+                frames[3].observation.error = Some(EngineError {
+                    kind: EngineErrorKind::Transient,
+                    message: "retry me".into(),
+                    retry_at: None,
+                });
+                config.retry.backoff = BACKOFF_TIMEOUT + Duration::from_secs(1);
+                host.submit_at = Some(State::Done);
+            }
+            _ => unreachable!(),
+        }
+        let mut engine = ScriptedEngine::new(frames);
+        let result = supervise(
+            config,
+            &mut engine,
+            &mut host,
+            &mut SessionGuard::default(),
+            None,
+            &CancellationToken::new(),
+        )
+        .await;
+        tokio::time::resume();
+        if scenario == "healthy" {
+            assert_eq!(result.unwrap().session, "s-1");
+            assert_eq!(
+                Checkpoint::read(&run_dir).unwrap().unwrap().state,
+                State::Done
+            );
+        } else {
+            let error = result.unwrap_err();
+            assert_eq!(
+                error.kind,
+                if scenario == "ready" {
+                    FailureKind::ReadyTimeout
+                } else {
+                    FailureKind::OperationTimeout
+                },
+                "{scenario}: {error}"
+            );
+        }
+    }
 }

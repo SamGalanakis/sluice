@@ -170,7 +170,8 @@ fn leading(n: usize) -> String {
 /// that say the same of every unit they stop. Any other kind is said a unit at a time.
 fn shared_cause(kind: &str) -> Option<&'static str> {
     Some(match kind {
-        "WallCap" => "they hit their wall-clock cap",
+        "WallCap" => "they hit their wall-clock cap", // Historical failures.
+        "OperationTimeout" => "an engine or host operation timed out",
         "StallCap" => "their agents wrote nothing for too long",
         "QuotaExhausted" => "their engines hit a usage cap",
         "AuthFailed" => "their engines could not sign in",

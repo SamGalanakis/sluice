@@ -1,6 +1,6 @@
 {
   "name": "agent.codex",
-  "doc": "Run a supervised interactive Codex session on a spec in a working directory. Submit declared step outputs before the session ends; pass session to resume in the same directory. model is a JSON object, by default {\"type\":\"normal\",\"model\":\"sol\",\"effort\":\"high\"}: {\"type\":\"normal\",\"model\":M,\"effort\":E?}, a model `codex debug models` lists (sol and astra name gpt-6.1-sol and gpt-6-astra) at an effort it supports. The result's model names what ran (docs(\"plans\"), Choosing a model).",
+  "doc": "Run a supervised interactive Codex session on a spec in a working directory. Submit declared step outputs before the session ends; pass session to resume in the same directory. model is a JSON object, by default {\"type\":\"normal\",\"model\":\"sol\",\"effort\":\"high\"}: {\"type\":\"normal\",\"model\":M,\"effort\":E?}, a model `codex debug models` lists (sol and astra name gpt-6.1-sol and gpt-6-astra) at an effort it supports. The result's model names what ran (docs(\"plans\"), Choosing a model). Agent runs have no total time limit; readiness, individual operations, transient backoffs and idle detection remain bounded.",
   "open": true,
   "inputs": {
     "cwd": "string",

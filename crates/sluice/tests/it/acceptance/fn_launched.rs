@@ -21,7 +21,7 @@ use std::{
 };
 
 // A cut-down lash.worker: the same imports, header, `report_path`, `ctx.builtin` call,
-// WallCap continuation, submission read and outputs, without the lash rules.
+// submission read and outputs, without the lash rules.
 const WORKER: &str = r#"# /// script
 # requires-python = ">=3.12"
 # dependencies = []
@@ -33,27 +33,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sluice_fn import AgentFailure, run
+from sluice_fn import run
 
 HEADER = """\
 Labelled G3 scratch fixture, launched through a Python fn. Work only in {cwd}; make no commits.
 Before you finish, write one line saying what you did to $TASK/summary.txt.
 """
 
-WALL_CAP_CONTINUE = "You ran past the wall-clock cap; this is the same session, resumed.\n\n"
-
-
 def main(inp, ctx):
     spec = ctx.header(HEADER.format(cwd=inp["cwd"]).replace("$TASK", str(ctx.run_dir))
                       + inp["spec"])
     base = {**inp, "report_path": str(ctx.run_dir / "summary.txt")}
-    try:
-        out = ctx.builtin("agent.run", {**base, "spec": spec})
-    except AgentFailure as failure:
-        if failure.kind != "WallCap" or not failure.session:
-            raise
-        out = ctx.builtin("agent.run", {**base, "session": failure.session,
-                                        "spec": WALL_CAP_CONTINUE + spec})
+    out = ctx.builtin("agent.run", {**base, "spec": spec})
     sent = ctx.submission()
     if not sent.get("word"):
         raise RuntimeError(f"the agent submitted no word: {sent}")

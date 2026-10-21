@@ -1409,7 +1409,7 @@ needs again (`waking`), granted with the section leases in priority order before
 is admitted; once they are held the park ends and the same session gets one input:
 `woke: <until>, lease <id>` (a granted lease), `woke: <until>` (pid, file), or
 `woke: your park condition did not happen within <n>s: <until>` (with `; lease <id> is still queued` when its lease was not
-granted). Time parked does not count toward the agent's wall cap. A cancelled parked run stops
+granted). Agent runs have no total time limit; idle detection restarts after waking. A cancelled parked run stops
 as any other. The bound is recorded on the park; supervisor recovery counts time already waited,
 and legacy unbounded parks use the one-hour fallback. Status exposes `shown: "parked"` and
 `parked: {run, until, phase, since, waited_seconds, timeout_seconds}` while the stored status
@@ -2609,8 +2609,8 @@ follow At work in the column narrower.
   it, and Answer is the page's one filled button; a question with an OpenUI form opens its form
   from Answer instead), then the stops (each unit whose current step failed, was cancelled or is
   stale: "<title> failed after 1h 4m", who and when, the failure's headline, what it last said
-  and what to try next, `failure::Advice`, where a limit is set when one stopped it ("Raise its
-  agent's time limit (SLUICE_AGENT_MAX_MIN in the project's .env), then Retry."); Retry and Retry
+  and what to try next, `failure::Advice`, for a historical wall-cap failure ("Agent runs now have no time limit. Retry to use
+  the current release."); Retry and Retry
   with feedback, whose field opens in place under the item and sends the retry with its words to
   the step's thread, `POST …/steps/<s>/actions` `action=retry` with `message`; when the failure
   repeated the field stands open at once and there is no bare Retry; a cancel says its reason
@@ -3203,7 +3203,7 @@ any turn — run `<engine>` once in the step's cwd on this host and answer it (o
 run's private pane while it waits), then step_retry. …``.
 
 When a pane-driven run fails before its engine completed a turn, or with a timeout or stall kind
-(`TurnStartTimeout`, `ReadyTimeout`, `StallCap`, `WallCap`), the supervisor keeps the pane before
+(`TurnStartTimeout`, `ReadyTimeout`, `StallCap`, `OperationTimeout`), the supervisor keeps the pane before
 tearing it down: its screen and up to 50 rows above it, anything token-like masked, in
 `pane-at-failure.txt` (mode 0600) in the invocation's directory (`runs/<run>/`), and the message
 ends with `pane at failure (last rows; whole screen: <path>):` and the last 6 non-empty rows, each
@@ -3213,8 +3213,16 @@ fails leaves the failure as it was. The private tmux keeps an exited engine's de
 (`remain-on-exit`) until the teardown, so what it printed as it exited is kept too. The run's log
 records every failure but a cancellation as `agent failed: <kind>: <message>`.
 
-Limits (minutes unless noted), overridable through environment variables: `SLUICE_AGENT_MAX_MIN`
-(600, the wall cap; time parked, §7.6, does not count), `SLUICE_AGENT_STALL_MIN` (30), `SLUICE_AGENT_SETTLE_S` (10),
+Agent runs have no overall wall-clock limit. Each engine or host operation has a fresh
+660-second timeout (`OperationTimeout`), long enough for a host's 600-second retry patience
+and its last transport attempt. Starting or resuming the engine uses `SLUICE_AGENT_READY_S`
+(`ReadyTimeout`); delivering input uses `SLUICE_AGENT_TURN_START_S` (unknown acceptance on a
+timed-out send). Each transient backoff is bounded independently at one hour
+(`OperationTimeout`), and the retry count still applies. None of these budgets decreases with
+run age. Parked time stays out of idle detection's active-time clock.
+
+Timing (minutes unless noted), overridable through environment variables:
+`SLUICE_AGENT_STALL_MIN` (30), `SLUICE_AGENT_SETTLE_S` (10),
 `SLUICE_AGENT_GRACE_MIN` (10), `SLUICE_AGENT_POLL_S`, `SLUICE_AGENT_READY_S` (180),
 `SLUICE_AGENT_TURN_START_S` (60), `SLUICE_AGENT_DIALOG_S` (60),
 `SLUICE_AGENT_QUIET_MIN` (60, never more often than hourly), `SLUICE_AGENT_NUDGES`,

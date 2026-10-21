@@ -189,8 +189,8 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   engine CLI to a tested version), or run the step on another engine. `sluice doctor` shows each
   engine's tested versions, floor, installed version and probe results.
 - When an agent run fails before its engine completed a turn, or on a timeout or stall
-  (`TurnStartTimeout`, `ReadyTimeout`, `StallCap`, `WallCap`), its message ends with the last
-  rows of the engine's screen at the failure, under `pane at failure (last rows; whole screen:
+  (`TurnStartTimeout`, `ReadyTimeout`, `StallCap`, `OperationTimeout`), its message ends with the
+  last rows of the engine's screen at the failure, under `pane at failure (last rows; whole screen:
   <path>):`; the whole screen is in `pane-at-failure.txt` in the run's directory (secrets
   masked). Read those rows before retrying: they usually say what the engine was waiting for.
 - Each agent's task starts with `## Previous attempt`: "None: this is the first attempt at
@@ -745,10 +745,13 @@ the installation's `park_timeout_seconds` applies (default one hour). Explicit l
 are allowed. Status and the units view show the condition and elapsed wait; query's `parked`
 view lists live parks. `lease:` adopts a request of yours for that resource and amount that is still waiting, keeping its place, else queues
 one; the woken lease is yours to `release`. With `parked: false` the condition held already
-(a lease granted at once is yours) and you carry on. Parked time does not count toward the
-agent's wall cap. Only agent runs on the claude or codex engine park (devin is refused: wait with `lease acquire --wait`), and not
-a scattered step's items. Every tool here is on MCP too (`lease_acquire`, `lease_release`,
+(a lease granted at once is yours) and you carry on. Agent runs have no total time limit;
+idle detection restarts after waking. Only agent runs on the claude or codex engine park
+(devin is refused: wait with `lease acquire --wait`), and not a scattered step's items. Every tool here is on MCP too (`lease_acquire`, `lease_release`,
 `lease_status`, `park`); in a run, `project` and `run` default to its own.
+
+Agent readiness, individual engine and host operations, and each transient backoff stay
+bounded independently of run age. Idle detection and its reminder budget still apply.
 
 ## Stale results
 A result holds only for the inputs it was computed from. When those change (an upstream re-ran

@@ -834,6 +834,10 @@ A lane that redraws a page writes its notes here.
 
 ## Words
 
+Historical wall-cap failures keep their cause and say “Agent runs now have no time limit.
+Retry to use the current release.” (Retry all for a group); no time-limit setting is offered.
+An operation timeout reads “An engine or host operation timed out.” and groups by that cause.
+
 The UI explains nothing it shows: no captions on how to read a view, no standing hints, no
 legend sentence (the ⓘ holds the strip's legend), no second sentences; state, labels and errors
 only. A field's constraint is said by the error when it is broken, never under the field. One

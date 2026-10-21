@@ -10,8 +10,7 @@ use sluice_model::commands::CommandReply;
 /// input's text, `{name[field]}` a saved reply's field) and saves its JSON reply, `until`
 /// stays busy until the file exists, `touch` writes one, `submit` submits the outputs and
 /// `die` ends the engine at once. Every input and command lands in `park-events.jsonl`.
-/// The runs sequence themselves through files, each waiting parked: a fake engine's run has
-/// a 3 s wall cap, and parked time does not count.
+/// The runs sequence themselves through files, each waiting parked.
 const FAKE_PARK: &str = r#"#!/usr/bin/python3
 import os, sys, json, socket, struct, pathlib, subprocess
 home = pathlib.Path(os.environ['SLUICE_HOME'])

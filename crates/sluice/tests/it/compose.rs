@@ -928,7 +928,7 @@ fn sequential_composition_retains_assigned_and_live_messages() {
     });
     // The first agent stops without submitting (a run submits once, and submitting ends
     // the agent); the fn continues its session with a second one, as a wrapper continues
-    // after a wall cap.
+    // after an operation timeout.
     g.script(json!({"outputs":{"summary":"done"},"wait_message":true,"no_submit":true,"messages_needed":2}));
     g.function("custom.sequential", json!({"cwd":"string"}), json!({"session":"string"}), r#"from sluice_fn import run, AgentFailure
 import json, os, pathlib

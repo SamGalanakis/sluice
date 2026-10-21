@@ -84,7 +84,8 @@ pub fn status(
                 PublicError::AgentFailure { kind, .. } => matches!(
                     kind.as_str(),
                     "QuotaExhausted"
-                        | "WallCap"
+                        | "WallCap" // Historical failures from pinned releases.
+                        | "OperationTimeout"
                         | "StallCap"
                         | "ReadyTimeout"
                         | "TurnStartTimeout"

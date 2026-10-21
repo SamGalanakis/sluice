@@ -645,7 +645,6 @@ async fn supervisor_fails_at_once(
     cfg.cwd = context.cwd;
     cfg.run_dir = context.run_dir;
     cfg.limits.stall = Duration::from_secs(10);
-    cfg.limits.wall = Duration::from_secs(30);
     let stall = cfg.limits.stall;
     let directory = cfg.run_dir.clone();
     let mut host = acceptance::Host::submitted();
@@ -676,7 +675,6 @@ async fn slow_supervisor_codex_short_rate_limit_backs_off_until_its_reset() {
     cfg.cwd = context.cwd;
     cfg.run_dir = context.run_dir;
     cfg.limits.stall = Duration::from_secs(10);
-    cfg.limits.wall = Duration::from_secs(60);
     // The fixed backoff would outlast the test; the reported reset is two seconds away.
     cfg.retry.backoff = Duration::from_secs(600);
     let directory = cfg.run_dir.clone();
@@ -732,7 +730,6 @@ async fn supervised(
     cfg.cwd = context.cwd;
     cfg.run_dir = context.run_dir;
     cfg.limits.stall = Duration::from_secs(10);
-    cfg.limits.wall = Duration::from_secs(60);
     // A wait of the fixed backoff would outlast the test: the network backoff is used instead.
     cfg.retry.backoff = Duration::from_secs(600);
     let directory = cfg.run_dir.clone();
@@ -1354,7 +1351,6 @@ async fn version_capability_refusals_and_startup_cleanup() {
         let mut cfg = acceptance::config(scratch.path(), "codex");
         cfg.cwd = context.cwd.clone();
         cfg.run_dir = context.run_dir.clone();
-        cfg.limits.wall = Duration::from_millis(2000);
         let result = acceptance::run(cfg, &mut adapter, &mut acceptance::Host::submitted())
             .await
             .unwrap();

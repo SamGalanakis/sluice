@@ -922,7 +922,8 @@ async fn restart_policies_wait_resume_limit_and_stop_on_cancel() {
     }
     f.finish(find("engine"), failure("UnknownAcceptance", None))
         .await;
-    f.finish(find("deadline"), failure("WallCap", None)).await;
+    f.finish(find("deadline"), failure("OperationTimeout", None))
+        .await;
     f.finish(
         find("pipe"),
         PayloadResult::Lost("guardian broken pipe".into()),
