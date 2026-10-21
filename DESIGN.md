@@ -770,6 +770,8 @@ A lane that redraws a page writes its notes here.
   beside them what it waits on, "Runs after", its progress and its key output). Activity is its
   turns as rows numbered in mono; Messages its conversation; Inputs and Outputs field tables;
   Runs its unit's step view over its runs, each run's facts with its Budget and Usage.
+  Usage leads with sampled peak working memory; a faint parenthesis names the peak including
+  cache. Older usage says working unknown rather than treating cache as working memory.
 - **A unit's page**: its head (its way back, its glyph and title with its Details, how its steps
   stand, a short recipe view, its owner), its recipe's view whole when it says more than a line,
   then Steps: its step view across the sheet, and under it a module for each step that needs the

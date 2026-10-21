@@ -468,8 +468,9 @@ section selects the defaults below.
 **Admission by measured memory and CPU.** Before each admission the coordinator reads
 `/proc/meminfo` MemAvailable, `/proc/pressure/memory` and `/proc/pressure/cpu` `some avg10`
 (absent on a kernel without PSI), the 1-minute load from `/proc/loadavg`, the online CPUs from
-`/proc/stat` and, for each live run with a payload, the payload cgroup's `memory.current` and
-`memory.peak`. A run starts only while all six hold:
+`/proc/stat` and, for each live run with a payload, its working memory (`anon + shmem +
+slab_unreclaimable` from `memory.stat`), charged current memory and kernel peak. A run starts
+only while all six hold:
 
 1. **host memory:** MemAvailable less `host_reserve`, less the charges of runs still in their
    warm-up, covers the admission charge;
@@ -484,7 +485,9 @@ section selects the defaults below.
 
 The admission charge is an internal estimate for a run not yet measured. A run counts at the
 charge (or its reading, if larger) until it has run for the warm-up, measured on the readings'
-clock from its admission, and from then on at its measured `memory.current`; a run with no
+clock from its admission, and from then on at its measured working memory (falling back to
+`memory.current` only for readings without composition). MemAvailable already treats
+reclaimable cache as available, so both checks exclude it consistently. A run with no
 payload yet counts at the charge, and one whose cgroup cannot be read counts at its cap. Runs
 admitted in the same pass count too, so a burst of launches is admitted in waves the charge
 bounds, never all at once on one reading. A run that fails a check is held, not refused:
@@ -508,11 +511,15 @@ never bypasses the checks. `status` reports `execution.total` and `execution.mem
 `execution.cpu` (`pressure_some_avg10`, `load_avg1`, `cpus`, `load_per_cpu`, `starting_runs`,
 `pressure_max`, `load_per_cpu_max`, `warmup_starts`, `cpu_weight`), and each
 of a step's runs in `run_resources` with `memory: {cap_bytes, current_bytes, peak_bytes,
-working_bytes, file_cache_bytes, pressure_some_avg10}`: its cap, total charged memory, peak (live, or from final usage), working
+working_peak_bytes, working_bytes, file_cache_bytes, pressure_some_avg10}`: its cap, total charged
+memory, kernel peak including file cache, sampled peak working memory, current working
 memory, reclaimable file cache and payload PSI while live. Working memory is `anon + shmem +
 slab_unreclaimable` from cgroup v2 `memory.stat`; file cache is `file - shmem`. Thus tmpfs/shared
 memory counts as working memory rather than reclaimable file cache. Unknown readings are null;
-older published readings may lack the new fields. Peak and current still include cache.
+older published readings may lack composition. `current_bytes` and `peak_bytes` include cache;
+`working_peak_bytes` is the maximum working-memory sample retained by admission or the guardian,
+not an exact kernel high-water mark. Sampling can miss brief spikes. The Runs tab leads with
+“peak working N GiB” and shows “incl. cache M GiB” faintly; older runs say working unknown.
 
 The effective caps and policy are frozen with the attempt before any payload is launched (the
 policy as `request.execution_policy`). A retry inside that run shares its existing caps. New
@@ -559,14 +566,17 @@ controllers or failed setup refuse execution.
 A payload memory OOM stops the workload as a group (`memory.oom.group=1`). The guardian
 survives in `control`, stops and reaps the remaining payload, and reports `resource_exhausted`
 with `resource: "memory"`, the numeric `limit` (the memory cap, or 0 when the run had none and
-the home total ran out), optional `peak`, and a message naming the cap and the peak and saying
+the home total ran out), optional `peak` (sampled peak working memory), and a message naming
+the cap, peak working memory (unknown for older evidence) and peak including file cache, saying
 to ask for more explicitly with a larger `limits.memory` (and `memory_above_ceiling` above the
 ceiling). A task-limit hit is
 not fatal: the fork or thread start fails with `EAGAIN` and the run continues (releases pinned
 before this stop the run with `resource: "tasks"`). CPU quota throttles execution; it is not a
 fatal condition. Exhaustion is established by kernel counters, never by `SIGKILL` or an exit
 code alone, and is not automatically retried. Completion keeps `RunUsage` with
-`memory_peak_bytes`, `oom_kills`, `pids_limit_hits` (failed forks summed over the payload's
+`memory_working_peak_bytes` (the largest guardian or admission sample, absent in older usage),
+`memory_peak_bytes` (kernel `memory.peak`, including file cache), `oom_kills`,
+`pids_limit_hits` (failed forks summed over the payload's
 leaves, the most any sample saw), `memory_max_hits` (`memory.events` `max`) and
 `cpu_throttled_usec`; ordinary cancellation and settlement rules still decide an already
 accepted cancel or settlement. Resource accounting is an observation: read failures retry
@@ -600,7 +610,8 @@ errors cannot hide OOM kills or failed forks. An
 unlimited run has no working-memory percentage trigger; PSI and OOM still apply. Missing
 memory composition or PSI is unknown, never inferred from `max` or an old peak. An OOM kill
 still warns even if the live memory reading is unavailable. The notice states working memory,
-cap, file cache, peak, PSI and OOM events, without predicting a kill from cache reclaim.
+cap, file cache, sampled peak working memory, peak including file cache, PSI and OOM events,
+without predicting a kill from cache reclaim.
 When a run has failed forks, has real memory pressure as above, was OOM-killed, or
 has lost at least 60 s to its CPU quota, and when a ready step is held for memory or CPU, Sluice posts a `say` from `sluice` (§8) to whoever answers the
 run (its unit's owner, a call's session, else the project's fallback, else the person) and,
@@ -610,7 +621,8 @@ null for a held step; `limit` is `memory`, `tasks`, `cpus`, `host_memory` or `ho
 `value` is the limit (`"unlimited"` when none), for `host_memory` `{host_reserve_bytes,
 memory_pressure_max, admission_charge_bytes, total_memory_bytes}` and for `host_cpu`
 `{cpu_pressure_max, load_per_cpu_max, warmup_starts, admission_warmup_s}`; `observed` is the
-counters (`peak_bytes`, `current_bytes`, `working_bytes`, `file_cache_bytes`,
+counters (`peak_bytes` (including cache), `working_peak_bytes`, `current_bytes`,
+`working_bytes`, `file_cache_bytes`,
 `pressure_some_avg10`, `oom_events`, `oom_kills`, `max_events`, `failed_forks`,
 `throttled_usec`; a live memory notice also includes `working_percent` and `pressure_percent`) or, for a
 held step, the hold as status says it; `outcome` is `killed`, `running`, `throttled`,
@@ -2151,7 +2163,8 @@ evidence, and `memory` includes live working memory and file cache (§2.5). Unav
 historical evidence is null. For a step that is no longer pending,
 `limits` comes from its latest run. Frozen limits and recorded usage do not change when home
 or project defaults change; live memory readings do change. Call replies expose the same frozen `limits` and recorded `usage`
-when present; usage fields are `memory_peak_bytes`, `oom_kills`, `pids_limit_hits`,
+when present; usage fields are optional `memory_working_peak_bytes`, cache-inclusive
+`memory_peak_bytes`, `oom_kills`, `pids_limit_hits`,
 `memory_max_hits` and `cpu_throttled_usec`. These are recorded observations, not a live usage
 feed. In `status`, `limits` and `execution.total` show an unlimited dimension as `"unlimited"`.
 `paused` is `true` or the pause's reason. Every

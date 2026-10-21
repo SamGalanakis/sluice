@@ -341,6 +341,7 @@ const USAGE_TICKS: u32 = 20;
 struct UsageProbe {
     next: Option<tokio::time::Instant>,
     failures: u32,
+    working_peak: Option<u64>,
 }
 impl UsageProbe {
     async fn observe<H: PayloadHost, L: CoordinatorLink>(
@@ -360,7 +361,9 @@ impl UsageProbe {
             return None;
         }
         match crate::probe::retry(|| std::future::ready(host.resource_usage())).await {
-            Ok(usage) => {
+            Ok(mut usage) => {
+                self.working_peak = self.working_peak.max(usage.memory_working_peak_bytes);
+                usage.memory_working_peak_bytes = self.working_peak;
                 self.next = Some(tokio::time::Instant::now() + args.poll_interval * USAGE_TICKS);
                 self.failures = 0;
                 Some(usage)
@@ -1905,20 +1908,20 @@ fn exhausted(limits: RunLimits, usage: RunUsage) -> Option<PublicError> {
         return None;
     }
     use sluice_model::limits::size;
-    let peak = size(usage.memory_peak_bytes);
+    let peak = usage.memory_summary();
     let message = match limits.memory_max_bytes {
         Some(cap) => format!(
-            "Memory cap exceeded: the payload was killed at its {} memory cap (peak {peak}). Ask for more explicitly with a larger limits.memory (above the per-run ceiling also set limits.memory_above_ceiling).",
+            "Memory cap exceeded: the payload was killed at its {} memory cap ({peak}). Ask for more explicitly with a larger limits.memory (above the per-run ceiling also set limits.memory_above_ceiling).",
             size(cap)
         ),
         None => format!(
-            "Out of memory: the run has no memory cap and the home's memory total ran out (peak {peak}); payload stopped"
+            "Out of memory: the run has no memory cap and the home's memory total ran out ({peak}); payload stopped"
         ),
     };
     Some(PublicError::ResourceExhausted {
         resource: ExhaustedResource::Memory,
         limit: limits.memory_max_bytes.unwrap_or(0),
-        peak: Some(usage.memory_peak_bytes),
+        peak: usage.memory_working_peak_bytes,
         message,
     })
 }

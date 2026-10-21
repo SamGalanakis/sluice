@@ -7,8 +7,12 @@ with `log_wait(project, since_seq, kinds=["call"])`. Each status change of a cal
 in the project's log (the home log without a project). Once admitted, call replies include
 `limits` with frozen `memory_max_bytes` (the memory cap), `cpu_millis` and `tasks`, each
 `"unlimited"` when it has none. Completion adds recorded
-`usage` with `memory_peak_bytes`, `oom_kills`, `pids_limit_hits`, `memory_max_hits` and
-`cpu_throttled_usec`; these are not live readings. `memory_max_hits` counts reclaim attempts,
+`usage` with optional `memory_working_peak_bytes` (maximum sampled working memory),
+`memory_peak_bytes` (kernel peak including file cache), `oom_kills`, `pids_limit_hits`,
+`memory_max_hits` and
+`cpu_throttled_usec`; these are not live readings. Working memory is `anon + shmem +
+slab_unreclaimable`; its sampled peak can miss brief spikes and is unknown for older runs.
+`memory_max_hits` counts reclaim attempts,
 including normal file-cache reclaim, and alone does not trigger a memory warning. Pending
 calls and historical runs without this evidence omit those fields.
 
@@ -22,7 +26,8 @@ with a retryable `busy` naming the hold (e.g. `held: host memory …`); a queued
 also run under budgets. See `docs("plans")`, Execution limits.
 
 A memory OOM returns `resource_exhausted` with `resource`, `limit`, optional `peak`, and
-`message` naming the cap and the peak. The guardian stops the local payload before its run ends. It does not
+`message` naming the cap, sampled peak working memory (unknown for older evidence) and peak
+including file cache. The guardian stops the local payload before its run ends. It does not
 retry that exhaustion automatically. A task-limit hit fails only the fork (`EAGAIN`) and CPU
 quota throttles; neither stops the call. Each limit a call meets is told to its caller in a
 `say` with `data.execution_limit` (`docs("plans")`, Execution limits).

@@ -72,7 +72,7 @@ pub trait ExecutionHost: FnHost + guardian::AdoptionHost + Send + Sync + 'static
     ) -> impl Future<Output = Option<io::Result<crate::headroom::HostReading>>> + Send {
         std::future::ready(None)
     }
-    /// A live run's payload memory.current and memory.peak, read from its cgroup; `None`
+    /// A live run's payload working memory, file cache and kernel peak, read from its cgroup; `None`
     /// when there is nothing to read yet (no payload) or no host.
     fn run_memory(
         &self,

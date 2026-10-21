@@ -114,6 +114,32 @@ impl Reading {
     }
 }
 
+/// Keep the largest working-memory sample independently of admission's latest reading.
+/// The conditional update makes repeated samples cheap and survives coordinator restarts.
+pub(crate) fn record_working_peak(
+    tx: &mut sluice_store::WriteTransaction<'_>,
+    run: RunId,
+    peak: Option<u64>,
+) -> sluice_store::Result<()> {
+    if let Some(peak) = peak {
+        let changed = tx.sql().execute(
+            "UPDATE attempts SET request=json_set(request,'$.memory_working_peak_bytes',?2)
+             WHERE attempt_id=(SELECT attempt_id FROM runs WHERE run_id=?1 AND finished_at IS NULL)
+             AND coalesce(json_extract(request,'$.memory_working_peak_bytes'),-1) < ?2",
+            (run.to_string(), i64::try_from(peak).unwrap_or(i64::MAX)),
+        )?;
+        if changed > 0 {
+            let project: Option<String> = tx.sql().query_row(
+                "SELECT project_id FROM runs WHERE run_id=?1",
+                [run.to_string()],
+                |row| row.get(0),
+            )?;
+            tx.changed(project.map(crate::calls::parse_id).transpose()?, "status");
+        }
+    }
+    Ok(())
+}
+
 fn unix_seconds(at: SystemTime) -> f64 {
     at.duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
@@ -123,7 +149,7 @@ fn unix_seconds(at: SystemTime) -> f64 {
 /// What the live runs count for admission at a reading.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Pool {
-    /// Every live run at its measured memory.current, or its charge within the warm-up.
+    /// Every live run at its measured working memory, or its charge within the warm-up.
     pub measured_bytes: u64,
     /// The charges of runs still within the warm-up, which MemAvailable does not show yet.
     pub starting_bytes: u64,
@@ -158,7 +184,7 @@ pub fn pool(
             .and_then(|r| r.parse::<RunId>().ok())
             .and_then(|r| reading.runs.get(&r))
         {
-            Some(Ok(memory)) => Some(memory.current_bytes),
+            Some(Ok(memory)) => Some(memory.working_bytes.unwrap_or(memory.current_bytes)),
             // An unreadable run counts at its cap: it may be using all of it.
             Some(Err(_)) => Some(
                 limits
@@ -439,6 +465,30 @@ impl Gate {
             publish(home, reading);
         }
         Some(Self { reading, headroom })
+    }
+    /// Retain each admission sample even when no new run can start.
+    pub async fn record_peaks(
+        &self,
+        writer: &sluice_store::Writer,
+    ) -> Result<(), sluice_model::error::PublicError> {
+        if let Ok(reading) = &self.reading {
+            let peaks: Vec<_> = reading
+                .runs
+                .iter()
+                .filter_map(|(run, memory)| Some((*run, memory.as_ref().ok()?.working_bytes?)))
+                .collect();
+            if !peaks.is_empty() {
+                writer
+                    .write(sluice_store::RetrySafety::Idempotent, move |tx| {
+                        for (run, peak) in &peaks {
+                            record_working_peak(tx, *run, Some(*peak))?;
+                        }
+                        Ok(())
+                    })
+                    .await?;
+            }
+        }
+        Ok(())
     }
     /// Why a new run must wait, counting runs admitted in this transaction too.
     pub fn hold(

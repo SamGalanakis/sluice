@@ -808,8 +808,9 @@ MemAvailable, pressure and the admission settings). An invalid configuration app
 `execution.error`, and every ready step is `held: invalid execution config (…)`, while status
 stays readable. Pending steps show their current `limits` or a `budget_error`. A step's
 `run_resources` lists each stored run with its frozen limits, recorded usage and `memory:
-{cap_bytes, current_bytes, peak_bytes, working_bytes, file_cache_bytes, pressure_some_avg10}`
-(its cap, charged memory now, peak, working memory, reclaimable file cache and payload PSI);
+{cap_bytes, current_bytes, peak_bytes, working_peak_bytes, working_bytes, file_cache_bytes, pressure_some_avg10}`
+(its cap, charged memory now, peak including file cache, sampled peak working memory, current
+working memory, reclaimable file cache and payload PSI);
 unavailable evidence is null. The latest run's limits remain the step's displayed caps once it
 is no longer pending. A running attempt keeps its frozen caps across retries and coordinator
 restarts. Changing project defaults or the home's policy changes future runs; changing a
@@ -822,7 +823,10 @@ below `execution.memory_pressure_max` (10), and the live runs' measured memory p
 fits `execution.total.memory`, and while CPU pressure (PSI `some avg10`) is below
 `execution.cpu_pressure_max` (30) and the 1-minute load per CPU below
 `execution.load_per_cpu_max` (1.5). A run counts at the charge for its first 30 s
-(`execution.admission_warmup_s`) and at its measured `memory.current` after, so a burst of
+(`execution.admission_warmup_s`), or its reading if larger, and at its measured working memory
+(`anon + shmem + slab_unreclaimable`) after. Only readings without composition fall back to
+`memory.current`; an unreadable run counts at its cap. MemAvailable already treats reclaimable
+cache as available, so the host and pool checks agree. Thus a burst of
 steps starts in waves; while CPU pressure or load is over half its limit, at most
 `execution.warmup_starts` (2) runs start per warm-up. Otherwise the step is held and status names
 the check with its numbers: `held: host memory (available 9.1 GiB, reserve 16 GiB, need 1 GiB)`,
@@ -835,8 +839,13 @@ so the host's other work always gets CPU. Its owner is told once, and Sluice che
 host recovers. A direct `fn_call` held this way is refused with a retryable `busy`. Each
 scattered item is admitted on its own.
 
-A memory OOM is `resource_exhausted`, with `resource`, `limit` (the cap), `peak`, and a message
-naming both: the run was killed at its cap. It stops the payload and does not automatically
+A memory OOM is `resource_exhausted`, with `resource`, `limit` (the cap), optional `peak`
+(sampled peak working memory), and a message naming the cap, working peak and peak including
+file cache: the run was killed at its cap. Final usage keeps `memory_working_peak_bytes`, the
+maximum working-memory sample from the guardian or admission over the run, and
+`memory_peak_bytes`, the kernel peak including cache. Sampling can miss brief spikes; older
+usage lacks the working peak, which stays unknown. The Runs tab leads with peak working
+memory and shows the cache-inclusive peak faintly. It stops the payload and does not automatically
 retry; to give it more, ask for a larger `limits.memory` explicitly. Hitting a task limit does
 not stop the run: the process or thread start fails with `EAGAIN` and the run goes on. CPU quota
 throttles a run instead of failing it. Do not treat a bare `SIGKILL` as proof of a memory-limit

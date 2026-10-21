@@ -120,6 +120,9 @@ async fn reconcile_pass<H: ExecutionHost>(
         )
         .await;
         let gate = crate::headroom::Gate::new(reading, broker.home(), headroom);
+        if let Some(gate) = &gate {
+            gate.record_peaks(broker.writer()).await?;
+        }
         let context = broker.context(project).await?;
         let copy = context.clone();
         let lease_owner = owner.to_owned();

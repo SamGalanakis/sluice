@@ -167,7 +167,7 @@ async fn slow_chromium_run_budgets_and_resource_failures_fit_step_and_unit_pages
     f.writer
         .write(sluice_store::RetrySafety::NonIdempotent, move |tx| {
             let limits = json!({"memory_bytes": 8_u64 << 30, "cpu_millis": 1500, "tasks": 256});
-            let usage = json!({"memory_peak_bytes": 8_u64 << 30, "oom_kills": 1,
+            let usage = json!({"memory_peak_bytes": 8_u64 << 30, "memory_working_peak_bytes": 2_u64 << 30, "oom_kills": 1,
                 "pids_limit_hits": 0, "cpu_throttled_usec": 1200});
             let error = json!({"error": "resource_exhausted", "resource": "memory",
                 "limit": 8_u64 << 30, "peak": 8_u64 << 30,
@@ -234,7 +234,7 @@ async fn slow_chromium_run_budgets_and_resource_failures_fit_step_and_unit_pages
                                 return value?.checkVisibility() ? value.textContent.trim() : null;
                             });
                         })()"#).unwrap();
-                        assert_eq!(facts, json!(["8192 MiB memory cap · 1.5 CPUs · 256 tasks", "8192 MiB peak memory"]), "{width} {theme}");
+                        assert_eq!(facts, json!(["8192 MiB memory cap · 1.5 CPUs · 256 tasks", "peak working 2 GiB (incl. cache 8 GiB)"]), "{width} {theme}");
                         assert_eq!(browser.eval("[...document.querySelectorAll('#tp-runs .a-facts dd')].every(e => e.scrollWidth <= e.clientWidth + 1)").unwrap(), json!(true), "run facts clipped at {width} {theme}");
                     } else {
                         browser

@@ -119,13 +119,30 @@ impl RunLimits {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunUsage {
+    /// Kernel memory.peak, including reclaimable file cache.
     pub memory_peak_bytes: u64,
+    /// Maximum sampled anon + shmem + slab_unreclaimable; absent in older usage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_working_peak_bytes: Option<u64>,
     pub oom_kills: u64,
     pub pids_limit_hits: u64,
     pub cpu_throttled_usec: u64,
     /// `memory.events` `max`: times usage reached `memory.max` and the kernel reclaimed.
     #[serde(default)]
     pub memory_max_hits: u64,
+}
+
+impl RunUsage {
+    /// Explicitly distinguish sampled working memory from the kernel's cache-inclusive peak.
+    pub fn memory_summary(&self) -> String {
+        let working = self
+            .memory_working_peak_bytes
+            .map_or_else(|| "unknown".to_owned(), size);
+        format!(
+            "peak working {working}; peak incl. file cache {}",
+            size(self.memory_peak_bytes)
+        )
+    }
 }
 
 /// One live run's payload memory, as the execution host reads it from the run's cgroup.

@@ -216,6 +216,7 @@ fn file_path(value: &serde_json::Value) -> Option<&str> {
 pub struct RunView {
     pub budget: String,
     pub usage: String,
+    pub usage_cache: String,
     pub id: RunId,
     pub started: String,
     pub finished: String,
@@ -2560,15 +2561,22 @@ pub fn load_detail(
             .get("resource_usage")
             .and_then(|v| serde_json::from_value::<sluice_model::limits::RunUsage>(v.clone()).ok())
             .map(|usage| {
-                format!(
-                    "{} MiB peak memory",
-                    usage.memory_peak_bytes.div_ceil(1 << 20)
+                (
+                    usage.memory_working_peak_bytes.map_or_else(
+                        || "peak working unknown".to_owned(),
+                        |bytes| format!("peak working {}", sluice_model::limits::size(bytes)),
+                    ),
+                    format!(
+                        "incl. cache {}",
+                        sluice_model::limits::size(usage.memory_peak_bytes)
+                    ),
                 )
             })
             .unwrap_or_default();
         step.runs.push(RunView {
             budget,
-            usage,
+            usage: usage.0,
+            usage_cache: usage.1,
             id,
             started: r.get(1)?,
             finished,

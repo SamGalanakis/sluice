@@ -265,6 +265,7 @@ impl Cgroup {
                 .trim()
                 .parse()
                 .map_err(|_| io::Error::other("invalid memory.peak"))?,
+            memory_working_peak_bytes: self.memory()?.working_bytes,
             oom_kills: counter(&self.read("memory.events")?, "oom_kill")?,
             pids_limit_hits: self.pids_limit_hits()?,
             cpu_throttled_usec: counter(&self.read("cpu.stat")?, "throttled_usec")?,

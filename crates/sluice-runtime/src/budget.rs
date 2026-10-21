@@ -35,19 +35,21 @@ pub fn resolve(
         .map_err(|e| invalid(e).into())
 }
 
+type ResourceRow = (Option<String>, Option<String>, bool, Option<i64>);
+
 /// Frozen limits and final usage belong to the attempt, not today's configuration. `memory`
-/// is the run's cap, its memory.current while it is live (admission's last reading) and its
-/// peak (the reading while live, the final usage once finished), with working memory and
-/// file cache split out while live.
+/// includes live working memory and file cache, the sampled working peak, and the kernel's
+/// cache-inclusive peak. Unknown historic working peaks remain null.
 pub fn run_resources(
     sql: &Connection,
     run: sluice_model::ids::RunId,
 ) -> sluice_store::Result<serde_json::Value> {
     use rusqlite::OptionalExtension;
-    let row: Option<(Option<String>, Option<String>, bool)> = sql.query_row(
-        "SELECT a.limits,json_extract(a.request,'$.resource_usage'),r.finished_at IS NULL FROM attempts a JOIN runs r USING(attempt_id) WHERE r.run_id=?1",
-        [run.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
-    let (limits, usage, live) = row.unwrap_or_default();
+    let row: Option<ResourceRow> = sql.query_row(
+        "SELECT a.limits,json_extract(a.request,'$.resource_usage'),r.finished_at IS NULL,json_extract(a.request,'$.memory_working_peak_bytes') FROM attempts a JOIN runs r USING(attempt_id) WHERE r.run_id=?1",
+        [run.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).optional()?;
+    let (limits, usage, live, sampled_peak) = row.unwrap_or_default();
+    let sampled_peak = sampled_peak.and_then(|n| u64::try_from(n).ok());
     let limits = limits
         .map(|v| serde_json::from_str::<RunLimits>(&v))
         .transpose()?;
@@ -67,6 +69,7 @@ pub fn run_resources(
         "working_bytes": measured.and_then(|m| m.working_bytes),
         "file_cache_bytes": measured.and_then(|m| m.file_cache_bytes),
         "pressure_some_avg10": measured.and_then(|m| m.pressure_some_avg10),
+        "working_peak_bytes": sampled_peak.max(usage.as_ref().and_then(|u| u["memory_working_peak_bytes"].as_u64())),
         "peak_bytes": measured.map(|m| m.peak_bytes).or_else(|| usage.as_ref().and_then(|u| u["memory_peak_bytes"].as_u64())),
     });
     Ok(
@@ -112,8 +115,8 @@ pub fn run_notices(
             |n| format!("its {} memory cap", size(n)),
         );
         out.push((
-            notice("memory", shown(limits.memory_max_bytes), serde_json::json!({"peak_bytes": usage.memory_peak_bytes, "oom_kills": usage.oom_kills}), "killed"),
-            format!("{who} ran out of memory at {cap} (peak {}); the kernel killed its payload and Sluice stopped the run. Retry with less parallelism, or ask for more explicitly with a larger limits.memory.", size(usage.memory_peak_bytes)),
+            notice("memory", shown(limits.memory_max_bytes), serde_json::json!({"peak_bytes": usage.memory_peak_bytes, "working_peak_bytes": usage.memory_working_peak_bytes, "oom_kills": usage.oom_kills}), "killed"),
+            format!("{who} ran out of memory at {cap} ({}); the kernel killed its payload and Sluice stopped the run. Retry with less parallelism, or ask for more explicitly with a larger limits.memory.", usage.memory_summary()),
         ));
     } else if !ended && let Some((memory, policy)) = memory {
         let working_high = memory
@@ -140,13 +143,13 @@ pub fn run_notices(
                 .map_or_else(|| "unknown".to_owned(), |v| format!("{v:.1}%"));
             out.push((
                 notice("memory", shown(limits.memory_max_bytes), serde_json::json!({
-                    "peak_bytes": usage.memory_peak_bytes, "current_bytes": memory.current_bytes,
+                    "peak_bytes": usage.memory_peak_bytes, "working_peak_bytes": usage.memory_working_peak_bytes, "current_bytes": memory.current_bytes,
                     "working_bytes": memory.working_bytes, "file_cache_bytes": memory.file_cache_bytes,
                     "pressure_some_avg10": memory.pressure_some_avg10, "oom_events": memory.oom_events,
                     "max_events": usage.memory_max_hits,
                     "working_percent": policy.working_percent, "pressure_percent": policy.pressure_percent,
                 }), "running"),
-                format!("{who} is under memory pressure (working {working}, cap {cap}, file cache {cache}, peak {}, PSI some avg10 {pressure}, OOM events {}). It is still running. Reduce parallelism or ask for a larger limits.memory if pressure persists.", size(usage.memory_peak_bytes), memory.oom_events),
+                format!("{who} is under memory pressure (working {working}, cap {cap}, file cache {cache}, {}, PSI some avg10 {pressure}, OOM events {}). It is still running. Reduce parallelism or ask for a larger limits.memory if pressure persists.", usage.memory_summary(), memory.oom_events),
             ));
         }
     }

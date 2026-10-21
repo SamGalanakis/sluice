@@ -33,7 +33,7 @@ struct Fake(
     Arc<Mutex<std::collections::BTreeMap<RunId, sluice_model::RunUsage>>>,
     /// The host's memory as the OS host reads it from /proc; `None` measures nothing.
     Arc<Mutex<Option<sluice_runtime::headroom::HostReading>>>,
-    /// Each live run's payload memory.current and memory.peak.
+    /// Each live run's working memory, charged memory and kernel peak.
     Arc<Mutex<std::collections::BTreeMap<RunId, sluice_model::limits::RunMemory>>>,
     /// Seconds the host's clock is ahead of the wall clock.
     Arc<std::sync::atomic::AtomicU64>,
@@ -2688,6 +2688,7 @@ async fn cache_reclaim_does_not_warn_of_memory_exhaustion() {
         assert_eq!(shown["current_bytes"], cap);
         assert_eq!(shown["peak_bytes"], cap);
         assert_eq!(shown["working_bytes"], cap / 8);
+        assert_eq!(shown["working_peak_bytes"], cap / 8);
         assert_eq!(shown["file_cache_bytes"], cap * 7 / 8);
         match trigger {
             "work" => {}
@@ -2730,7 +2731,13 @@ async fn cache_reclaim_does_not_warn_of_memory_exhaustion() {
         let mut done = journal(&b, &launch, PayloadResult::Succeeded(JsonMap::default())).await;
         done.usage = Some(usage);
         b.complete(done.clone()).await.unwrap();
-        assert_eq!(reported_usage(&b, &done).await["memory_max_hits"], 4438);
+        let recorded = reported_usage(&b, &done).await;
+        assert_eq!(recorded["memory_max_hits"], 4438);
+        assert_eq!(
+            recorded["memory_working_peak_bytes"],
+            memory.working_bytes.unwrap()
+        );
+        assert_eq!(recorded["memory_peak_bytes"], cap);
         let CommandReply::Records(page) = b.command(request(json!({"command":"log_read","args":{"project":selector,"since_seq":null,"kinds":["message"],"threads":null,"limit":100}}))).await.unwrap() else { panic!("records") };
         let records = serde_json::to_value(page.records).unwrap();
         let notices: Vec<_> = records
@@ -2860,7 +2867,7 @@ async fn admission_counts_measured_memory_and_new_runs_at_their_charge() {
         [0]["memory"];
     assert_eq!(
         *run,
-        json!({"cap_bytes": 256 << 20, "current_bytes": 32 << 20, "peak_bytes": 48 << 20, "working_bytes": null, "file_cache_bytes": null, "pressure_some_avg10": null}),
+        json!({"cap_bytes": 256 << 20, "current_bytes": 32 << 20, "peak_bytes": 48 << 20, "working_peak_bytes": null, "working_bytes": null, "file_cache_bytes": null, "pressure_some_avg10": null}),
         "{status}"
     );
     assert_eq!(
@@ -2911,6 +2918,7 @@ async fn admission_counts_measured_memory_and_new_runs_at_their_charge() {
             sluice_model::limits::RunMemory {
                 current_bytes: 170 << 20,
                 peak_bytes: 170 << 20,
+                working_bytes: Some(170 << 20),
                 ..Default::default()
             },
         );
@@ -2920,20 +2928,26 @@ async fn admission_counts_measured_memory_and_new_runs_at_their_charge() {
         held().await,
         ["held: pool memory (measured 1 GiB + 64 MiB > 1 GiB)"]
     );
-    // They shrink: the total admits charges until it is full again: (5 × 100 + 3 × 64) MiB
+    // Working memory shrinks while file cache stays charged: (5 × 100 + 3 × 64) MiB
     // measured leaves room for five more.
     for launch in &first {
         fake.5.lock().unwrap().insert(
             launch.identity.run,
             sluice_model::limits::RunMemory {
-                current_bytes: 100 << 20,
+                current_bytes: 170 << 20,
                 peak_bytes: 170 << 20,
+                working_bytes: Some(100 << 20),
+                file_cache_bytes: Some(70 << 20),
                 ..Default::default()
             },
         );
     }
     assert_eq!(reconcile_project(&b, p, "memory").await.unwrap(), 5);
     assert_eq!(fake.launched(13).await.len(), 13);
+    let sample = data_of(&b, json!({"command":"status","args":{"project":selector,"all":true,"selection":{"steps":null,"tags":null}}})).await;
+    let measured = &sample["steps"][first[0].identity.step.as_ref().unwrap().as_str()]["run_resources"]
+        [0]["memory"];
+    assert_eq!(measured["working_peak_bytes"], 170 << 20);
     assert_eq!(
         held().await,
         ["held: pool memory (measured 1012 MiB + 64 MiB > 1 GiB)"]

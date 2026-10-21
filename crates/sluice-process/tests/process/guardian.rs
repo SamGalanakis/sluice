@@ -24,6 +24,7 @@ struct FixtureState {
     delivered: Mutex<Vec<MessageId>>,
     checkpoints: Mutex<Vec<JsonMap>>,
     usage: Mutex<sluice_model::RunUsage>,
+    usage_reads: AtomicUsize,
     /// What the readback of the service's limits finds wrong, if anything.
     limits_wrong: Mutex<Option<String>>,
     limits_unavailable: AtomicUsize,
@@ -77,7 +78,9 @@ impl PayloadHost for FixtureHost {
         if self.state.usage_unavailable.load(Ordering::SeqCst) {
             return Err(io::Error::other("cgroup observation unavailable"));
         }
-        Ok(*self.state.usage.lock().unwrap())
+        let usage = *self.state.usage.lock().unwrap();
+        self.state.usage_reads.fetch_add(1, Ordering::SeqCst);
+        Ok(usage)
     }
     fn empty_without_payload(&self) -> io::Result<CleanupEvidence> {
         Ok(proof())
@@ -657,6 +660,7 @@ async fn wire_and_result_decoders_refuse_ambiguous_or_oversized_frames() {
 async fn exhaustion_settles_once_and_suppresses_requested_retry() {
     let home = tempfile::tempdir().unwrap();
     let (args, link, host) = setup(home.path());
+    host.state.usage.lock().unwrap().memory_working_peak_bytes = Some(512 << 20);
     let task = {
         let (args, link, host) = (args.clone(), link.clone(), host.clone());
         tokio::spawn(async move { guardian_main(args, &link, &host).await })
@@ -674,8 +678,10 @@ async fn exhaustion_settles_once_and_suppresses_requested_retry() {
         .unwrap(),
         ControlReply::Ack
     ));
+    until(|| host.state.usage_reads.load(Ordering::SeqCst) > 0).await;
     *host.state.usage.lock().unwrap() = sluice_model::RunUsage {
         memory_peak_bytes: args.limits.memory_max_bytes.unwrap(),
+        memory_working_peak_bytes: Some(64 << 20),
         oom_kills: 1,
         pids_limit_hits: 0,
         cpu_throttled_usec: 400,
@@ -692,10 +698,10 @@ async fn exhaustion_settles_once_and_suppresses_requested_retry() {
         assert!(
             matches!(completion.result, PayloadResult::Failed(PublicError::ResourceExhausted {
             resource: sluice_model::ExhaustedResource::Memory, limit, peak: Some(peak), ref message
-        }) if Some(limit) == args.limits.memory_max_bytes && peak == limit
+        }) if Some(limit) == args.limits.memory_max_bytes && peak == 512 << 20
             // Bug: the failure said only "N byte cap"; the owner must read the cap, the peak
             // and how to ask for more.
-            && message.contains("killed at its 1 GiB memory cap (peak 1 GiB)")
+            && message.contains("killed at its 1 GiB memory cap (peak working 512 MiB; peak incl. file cache 1 GiB)")
             && message.contains("limits.memory")),
             "{:?}",
             completion.result

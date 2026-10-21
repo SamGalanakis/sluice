@@ -96,7 +96,8 @@ judgment before retrying; inspect its recorded budget and peak usage. A `say` fr
 with `data.execution_limit` tells you a run met a limit (failed forks, memory pressure,
 throttling, or a hold until the host has memory or CPU free). Memory pressure means high
 working memory, actual OOM events or sustained PSI stalls; file-cache reclaim alone is normal.
-Status separates working memory and file cache beside the cap, current and peak: adjust
+Status counts working memory for admission and separates sampled peak working memory from
+the kernel peak including file cache; older working peaks are unknown. Adjust
 parallelism or limits; a host memory or CPU hold clears by itself. Local descendants share the cap; external services and remote
 executors need their own limits. See `docs("plans")`, Execution limits.
 

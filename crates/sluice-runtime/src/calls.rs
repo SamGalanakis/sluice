@@ -220,6 +220,9 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
         )
         .await;
         let gate = crate::headroom::Gate::new(reading, self.writer.home(), headroom);
+        if let Some(gate) = &gate {
+            gate.record_peaks(&self.writer).await?;
+        }
         Ok((policy, gate))
     }
     /// Scheduler entry point. Direct calls are never part of this queue.

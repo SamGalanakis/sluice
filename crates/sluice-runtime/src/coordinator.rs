@@ -2078,11 +2078,11 @@ impl<H: ExecutionHost> Coordinator<H> {
             .reads()
             .snapshot(|sql| {
                 let mut statement = sql.prepare(
-                    "SELECT r.run_id,r.project_id,r.step_id,r.cgroup,a.limits FROM runs r JOIN attempts a USING(attempt_id)
+                    "SELECT r.run_id,r.project_id,r.step_id,r.cgroup,a.limits,json_extract(a.request,'$.memory_working_peak_bytes') FROM runs r JOIN attempts a USING(attempt_id)
                      WHERE r.finished_at IS NULL AND a.phase='executing' AND r.cgroup IS NOT NULL AND a.limits IS NOT NULL AND r.project_id IS NOT NULL",
                 )?;
                 let rows = statement
-                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(rows)
             })
@@ -2094,7 +2094,8 @@ impl<H: ExecutionHost> Coordinator<H> {
             .map(|(_, headroom)| headroom.memory_notice)
             .unwrap_or_default();
         let mut notices = Vec::new();
-        for (run, project, step, cgroup, limits) in live {
+        let mut peaks = Vec::new();
+        for (run, project, step, cgroup, limits, sampled_peak) in live {
             let (Ok(run), Some(Ok(project))) = (
                 run.parse::<RunId>(),
                 project.map(|p| p.parse::<ProjectId>()),
@@ -2110,7 +2111,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 .strip_suffix("/control")
                 .unwrap_or(&cgroup)
                 .to_owned();
-            let Some(usage) = self.host().usage(run, &service).await else {
+            let Some(mut usage) = self.host().usage(run, &service).await else {
                 continue;
             };
             let memory = self
@@ -2119,17 +2120,25 @@ impl<H: ExecutionHost> Coordinator<H> {
                 .await
                 .and_then(Result::ok)
                 .map(|m| (m, memory_policy));
+            usage.memory_working_peak_bytes = usage
+                .memory_working_peak_bytes
+                .max(memory.and_then(|(m, _)| m.working_bytes))
+                .max(sampled_peak.and_then(|n| u64::try_from(n).ok()));
+            peaks.push((run, usage.memory_working_peak_bytes));
             for (notice, body) in
                 crate::budget::run_notices(run, step.as_ref(), &limits, &usage, false, memory)
             {
                 notices.push((project, notice, body));
             }
         }
-        if notices.is_empty() {
+        if notices.is_empty() && peaks.is_empty() {
             return Ok(0);
         }
         self.writer()
             .write(RetrySafety::Idempotent, move |tx| {
+                for (run, peak) in &peaks {
+                    crate::headroom::record_working_peak(tx, *run, *peak)?;
+                }
                 let mut posted = 0;
                 for (project, notice, body) in &notices {
                     // A run that finished meanwhile is told at its completion instead.
@@ -3260,7 +3269,14 @@ impl EditLog {
 }
 
 /// A live run as `sample_limits` reads it: run, project, step, guardian cgroup, frozen limits.
-type LiveRun = (String, Option<String>, Option<String>, String, String);
+type LiveRun = (
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    String,
+    Option<i64>,
+);
 
 fn record_resource_usage(
     tx: &mut sluice_store::WriteTransaction<'_>,
@@ -3275,13 +3291,22 @@ fn record_resource_usage(
     if limits != evidence.limits {
         return Err(conflict("completion resource budget differs from reservation").into());
     }
+    let sampled_peak: Option<i64> = tx.sql().query_row(
+        "SELECT json_extract(request,'$.memory_working_peak_bytes') FROM attempts WHERE attempt_id=?1",
+        [evidence.identity.attempt.to_string()], |row| row.get(0),
+    )?;
+    let sampled_peak = sampled_peak.and_then(|n| u64::try_from(n).ok());
+    let usage = evidence.usage.map(|mut usage| {
+        usage.memory_working_peak_bytes = usage.memory_working_peak_bytes.max(sampled_peak);
+        usage
+    });
     tx.sql().execute(
         "UPDATE attempts SET request=json_set(request,'$.resource_usage',json(?2)) WHERE attempt_id=?1",
-        (evidence.identity.attempt.to_string(), serde_json::to_string(&evidence.usage)?),
+        (evidence.identity.attempt.to_string(), serde_json::to_string(&usage)?),
     )?;
     tx.changed(evidence.identity.project, "status");
     // A limit the run met and the live sample missed is told now, once per run and limit.
-    if let (Some(project), Some(usage)) = (evidence.identity.project, &evidence.usage) {
+    if let (Some(project), Some(usage)) = (evidence.identity.project, &usage) {
         for (notice, body) in crate::budget::run_notices(
             evidence.identity.run,
             evidence.identity.step.as_ref(),

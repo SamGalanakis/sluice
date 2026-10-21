@@ -1873,6 +1873,7 @@ dl.a-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); g
              margin: 6px 0 0; font-size: var(--text-sm); line-height: 20px; }
 dl.a-facts > div { display: contents; }
 dl.a-facts dt { color: var(--muted); }
+dl.a-facts .a-cache { color: var(--faint); }
 dl.a-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 dl.a-facts code { font-size: var(--text-meta); border: 0; background: none; padding: 0; }
 .a-said { white-space: pre-wrap; max-height: 9em; overflow: auto; }
