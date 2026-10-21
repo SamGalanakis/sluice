@@ -213,7 +213,7 @@ async fn plan_units_and_loose_steps() {
         let summary = plan_html::summary(&html);
         assert!(
             summary.contains(
-                "1 question for you</a> · 2 failed · 1 cancelled · 1 quiet · 5 at work · 5 of 16 done"
+                "1 question for you</a> · 2 failed · 1 cancelled · 1 quiet · 5 at work · 3 waiting · <a href="
             ),
             "{summary}"
         );
@@ -245,12 +245,11 @@ async fn plan_units_and_loose_steps() {
             at(cards, "/units/a-3\"") < at(cards, "/units/s-2\""),
             "{cards}"
         );
-        // At work: a group a recipe, then no recipe; creation order by default; the window's
-        // labels over the strips; what waits and what is done in a line under it
+        // At work: a group a recipe, then plain rows, then long runs; creation order by default
         assert!(
             at(roster, ">article</a></b>") < at(roster, ">scan</a></b>")
-                && at(roster, ">scan</a></b>") < at(roster, "<b>Other units</b>")
-                && at(roster, "<b>Other units</b>") < at(roster, "<b>Long runs</b>"),
+                && at(roster, ">scan</a></b>") < at(roster, "<!--r:u-index-->")
+                && at(roster, "<!--r:u-index-->") < at(roster, "<b>Long runs</b>"),
             "{roster}"
         );
         assert!(at(roster, "<!--r:u-a-6-->") < at(roster, "<!--r:u-a-7-->"));
@@ -258,10 +257,17 @@ async fn plan_units_and_loose_steps() {
             !roster.contains("<span>1h ago</span>") && !roster.contains("<span>now</span>"),
             "{roster}"
         );
-        assert!(
-            roster.contains("3 waiting on earlier work · <a href=")
-                && roster.contains(">5 done</a>, the last <time"),
+        assert_eq!(
+            roster.matches("<summary class=\"ro-group\">").count(),
+            3,
             "{roster}"
+        );
+        assert!(
+            summary.contains(&format!(
+                "href=\"/projects/id/{}?show=done#done\">5 of 16 done</a>",
+                n.almanac
+            )),
+            "{summary}"
         );
         // a row: the engine it runs on, its title, its stages (the current one green and how
         // long, the next, the rest folded), when it was heard from, what it said last; its
@@ -360,9 +366,11 @@ async fn plan_units_and_loose_steps() {
             "{html}"
         );
         assert!(
-            plan_html::summary(&html).contains("1 at work · 1 of 3 done"),
+            plan_html::summary(&html).contains("1 at work · 1 waiting · <a href="),
             "{html}"
         );
+        let roster = plan_html::band(&html, "plan-roster");
+        assert!(!roster.contains("ro-g"), "{roster}");
         let needs = plan_html::band(&html, "plan-needs");
         assert!(
             needs.contains("hidden") && !needs.contains("Needs you"),
@@ -834,7 +842,7 @@ async fn slow_chromium_plan_folds_and_order_survive_activity_and_group_moves() {
         Ok(())
     }).await.unwrap();
     browser = tokio::task::spawn_blocking(move || {
-        browser.wait("!!document.querySelector('#u-new') && document.querySelector('#u-e-096').closest('.ro-g').id !== entry").unwrap();
+        browser.wait("!!document.querySelector('#u-new') && document.querySelector('#u-e-096')?.parentElement.matches('.ro')").unwrap();
         assert_eq!(browser.eval("document.getElementById('u-e-096').open && document.getElementById(entry).open && !document.getElementById(scan).open && document.querySelector('#'+scan+' .ro-fold').open").unwrap(), true);
         assert_eq!(browser.eval("order().at(-1)").unwrap(), "new");
         // The order menu changes the cookie before reconnecting the real stream.

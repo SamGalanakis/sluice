@@ -1047,11 +1047,6 @@ span.pp-w { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-cla
 .ro-foot a:not(.btn):hover { color: var(--ink); }
 .ro-foot .btn { margin-left: 6px; }
 
-/* -- the line under At work: what waits on earlier work and what is done -- */
-.ro-more { margin: 20px 0 0; color: var(--muted); }
-.ro-more a { color: var(--muted); text-decoration-color: var(--line-2); }
-.ro-more a:hover { color: var(--ink); }
-
 /* -- Finished: title, finish time and duration, a plain row each -- */
 .fin { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .fin-r { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 16px; padding: 9px 0; border-bottom: 1px solid var(--line); }

@@ -379,9 +379,11 @@ it is answered under a teal underline.
 `sluice-board` its host). Each section is a stream region and each item and row one inside it,
 so a change patches what it moved and nothing else.
 
-- **The lead sentence**: "3 at work · 70 of 81 done". When something needs the owner it leads:
-  "1 question for you · 2 failed · 3 at work · 70 of 81 done". Items set aside do not ask for
-  attention in this line. There is no step count or separate clause for long runs.
+- **The lead sentence**: "3 at work · 4 waiting · 70 of 81 done". When something needs the
+  owner it leads: "1 question for you · 2 failed · 3 at work · 4 waiting · 70 of 81 done". Items
+  set aside do not ask for attention in this line. Waiting units that have not begun are counted after At work, omitted
+  when none wait. The done count links to the Done index when any unit is done. There is no
+  step count or separate clause for long runs.
 - **Needs you** (`ui::need_line`): a hairline row an item, in a grid of a mark column, the
   sentence and the actions. The mark: a teal dot a question, a red square a failure, an ochre
   ring a silence, stale or a set-aside item (each said in words to a screen reader). The line:
@@ -402,7 +404,9 @@ so a change patches what it moved and nothing else.
   Escape empties and leaves it. A question with an OpenUI form opens its form from Answer
   (`sluice-answer`). Answered, the item gives way to the line that says so.
 - **At work**: the head is "At work" and its counts ("8 units · 1 waiting"). A group per recipe
-  (a quiet fold, its name and counts), then "Other units", then "Long runs". Long runs keep
+  (a quiet fold, its name and counts), then plain rows for units with no recipe, then "Long
+  runs". The plain rows have no group heading or fold; with no recipes they sit directly under
+  At work. Long runs keep
   their engine chip, title, latest progress line and pulse strip; their normal silence is not
   a quiet warning. A failure, question or silence past `long_run_quiet_h` (24 hours by default)
   still enters Needs you. In a big roster remarkable rows stay visible while healthy rows fold
@@ -429,8 +433,6 @@ so a change patches what it moved and nothing else.
   to the name, oldest first), then its foot: "Last heard 22:11 UTC (10m ago)" and Message · Unit
   page as quiet links, Open step its one outlined move. No step table: the unit's page keeps its
   step view.
-- **The line under At work**: "4 waiting on earlier work · 25 done, the last 2h ago", the done
-  count linking the Done index.
 - **Finished since you looked**: at most five plain rows, newest first, then "N more" linking
   the Done index. Each row is the title (one link), with faint finish time and duration on the
   right ("20:17 · 59m"). Outputs, result lines and sha chips stay on the unit or step page.
@@ -783,8 +785,8 @@ A lane that redraws a page writes its notes here.
   line an open question (its teal mark, its title linking where it is answered, its project, who
   asked and when, Answer and the ×); Today a project's last day in a line. Then a card a project,
   ordered by what needs the owner: its mark and name, its state, its plan's sentence, At work's
-  groups a line each (Long runs last), "Finished lately:" and the last three, the way to
-  its plan and its day. A muted line names the projects with no steps yet and another the
+  groups a line each (Long runs last) and units of no recipe as plain lines, "Finished lately:" and the last
+  three, the way to its plan and its day. A muted line names the projects with no steps yet and another the
   archived ones.
 - **Day**: the day as a timetable. The day line: a row a project, its runs as bars (done muted,
   running green, a look ochre, a failure red), the hours along the top in mono, the rule at now

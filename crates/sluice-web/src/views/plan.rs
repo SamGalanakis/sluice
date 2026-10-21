@@ -228,7 +228,7 @@ struct Row<'a> {
     heard: Option<f64>,
     waiting: bool,
 }
-/// A group of rows: a recipe's, or the units of no recipe.
+/// A recipe's rows, long runs, or plain rows with no name or fold.
 struct Group<'a> {
     name: String,
     recipe: String,
@@ -350,11 +350,7 @@ impl<'a> Plan<'a> {
             match groups.iter_mut().find(|g| g.recipe == unit.recipe) {
                 Some(group) => group.rows.push(row),
                 None => groups.push(Group {
-                    name: if unit.recipe.is_empty() {
-                        "Other units".into()
-                    } else {
-                        unit.recipe.clone()
-                    },
+                    name: unit.recipe.clone(),
                     recipe: unit.recipe.clone(),
                     rows: vec![row],
                 }),
@@ -1134,7 +1130,18 @@ impl<'a> Plan<'a> {
             return "No units yet.".into();
         }
         first.push(format!("{} at work", self.at_work));
-        first.push(format!("{} of {total} done", self.done.len()));
+        if self.later > 0 {
+            first.push(format!("{} waiting", self.later));
+        }
+        let done = format!("{} of {total} done", self.done.len());
+        first.push(if self.done.is_empty() {
+            done
+        } else {
+            format!(
+                "<a href=\"{}?show=done#done\">{done}</a>",
+                esc(&self.view.href())
+            )
+        });
         first.join(" · ")
     }
     // ---- the plan in brief, as home's card draws it ----------------------------------------------
@@ -1156,6 +1163,18 @@ impl<'a> Plan<'a> {
     pub fn group_lines(&self) -> String {
         let mut out = String::new();
         for group in &self.groups {
+            if group.name.is_empty() {
+                for row in &group.rows {
+                    let _ = write!(
+                        out,
+                        "<li><a href=\"{}\">{}</a> · {}</li>",
+                        esc(&unit_href(self.view, row.unit)),
+                        esc(title(row.unit)),
+                        row_counts(&[row])
+                    );
+                }
+                continue;
+            }
             let rows: Vec<&Row<'_>> = group.rows.iter().collect();
             let marked: Vec<&Row<'_>> = rows
                 .iter()
@@ -1406,7 +1425,7 @@ impl<'a> Plan<'a> {
 
     // ---- At work -------------------------------------------------------------------------------
 
-    /// At work: its name and counts, grouped rows, then what waits and what is done.
+    /// At work: its name and counts, recipe groups, plain rows and long runs.
     fn roster_html(&self) -> String {
         let rows: usize = self.groups.iter().map(|g| g.rows.len()).sum();
         // counted as the summary counts them: a blocked or queued unit waits, it is not at work
@@ -1459,7 +1478,19 @@ impl<'a> Plan<'a> {
                 "<div class=\"ro{}\"><div class=\"aw-head\">{left}</div>",
                 if engined { "" } else { " no-engine" }
             );
+            let draw = |out: &mut String, rows: &[&Row<'_>]| {
+                for row in rows {
+                    out.push_str(&region(
+                        &format!("u-{}", row.unit.id),
+                        &self.row_html(row, engined),
+                    ));
+                }
+            };
             for group in &self.groups {
+                if group.name.is_empty() {
+                    draw(&mut out, &group.rows.iter().collect::<Vec<_>>());
+                    continue;
+                }
                 // a big roster shows a group's remarkable rows first and folds the rest to one
                 // line ("+21 running · each heard from in the last 28m"), opening in place; a
                 // group with nothing remarkable folds whole to its own line
@@ -1521,14 +1552,6 @@ impl<'a> Plan<'a> {
                 {
                     out.push_str(super::unit_view::broken(error).as_str());
                 }
-                let draw = |out: &mut String, rows: &[&Row<'_>]| {
-                    for row in rows {
-                        out.push_str(&region(
-                            &format!("u-{}", row.unit.id),
-                            &self.row_html(row, engined),
-                        ));
-                    }
-                };
                 if fold && !whole {
                     draw(&mut out, &marked);
                     let _ = write!(
@@ -1552,32 +1575,6 @@ impl<'a> Plan<'a> {
             }
             out.push_str("</div>");
         }
-        // the rest: what waits on earlier work, and what is done
-        let mut more = vec![];
-        if self.later > 0 {
-            more.push(format!("{} waiting on earlier work", self.later));
-        }
-        if !self.done.is_empty() {
-            let last = self.done.first().map(|u| u.finished()).unwrap_or("");
-            more.push(format!(
-                "<a href=\"{}?show=done#done\">{} done</a>{}",
-                esc(&self.view.href()),
-                self.done.len(),
-                if last.is_empty() {
-                    String::new()
-                } else {
-                    format!(", the last {}", ui::ago(last))
-                }
-            ));
-        }
-        out.push_str(&region(
-            "ro-more",
-            &format!(
-                "<p id=\"ro-more\" class=\"ro-more\"{}>{}</p>",
-                if more.is_empty() { " hidden" } else { "" },
-                more.join(" · ")
-            ),
-        ));
         out.push_str("</section>");
         out
     }

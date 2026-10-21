@@ -466,7 +466,7 @@ async fn messages_retries_waits_and_run_files() {
             assert_eq!(plan_html::place(&page, unit), "", "{unit}");
         }
         assert!(
-            plan_html::band(&page, "plan-roster").contains(">3 waiting on earlier work"),
+            plan_html::summary(&page).contains(" · 3 waiting · "),
             "{page}"
         );
         for (unit, on) in [

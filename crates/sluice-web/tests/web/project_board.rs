@@ -689,7 +689,7 @@ async fn filtered_units_progress_done_and_paused() {
         );
         assert!(!recent.contains("/u19\""), "{recent}");
         assert!(
-            plan_html::band(&html, "plan-roster").contains(">25 done</a>, the last"),
+            plan_html::summary(&html).contains(">25 of 25 done</a>"),
             "{html}"
         );
         // Show: Done, the index: every one, newest first
@@ -741,7 +741,7 @@ async fn filtered_units_progress_done_and_paused() {
         let stage = plan_html::stage(&html, "hold");
         assert!(stage.contains("data-state=\"paused\""), "{stage}");
         assert!(
-            plan_html::summary(&html).contains("0 at work · 1 of 3 done"),
+            plan_html::summary(&html).contains("0 at work · 1 waiting · <a href="),
             "{html}"
         );
         let reads = sluice_store::ReadPool::open(f._home.path(), 1).unwrap();
@@ -768,7 +768,7 @@ async fn filtered_units_progress_done_and_paused() {
             .unwrap_or_else(|| panic!("no card for held: {home}"));
         assert!(
             card.contains("<p class=\"pm-size\"><span class=\"g g-paused\" role=\"img\" aria-label=\"paused\">")
-                && card.contains("<p class=\"pm-summary\">0 at work · 1 of 3 done</p>"),
+                && card.contains(&format!("<p class=\"pm-summary\">0 at work · 1 waiting · <a href=\"/projects/id/{held}?show=done#done\">1 of 3 done</a></p>")),
             "{card}"
         );
         let (_, step) = f.get(&format!("/projects/id/{held}/steps/hold")).await;

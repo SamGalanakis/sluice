@@ -2582,9 +2582,11 @@ whole there.
 
 **The plan.** The project page is a briefing over a roster in the centred main column
 (at most 1240px). Its head (the top bar names the project, and the name is its heading for a
-screen reader) is one short line: "3 at work · 70 of 81 done". When something
-needs the owner it leads: "1 question for you · 2 failed · 3 at work · 70 of 81 done".
-Questions link to where they are answered. Items set aside are omitted from the attention
+screen reader) is one short line: "3 at work · 4 waiting · 70 of 81 done". When something
+needs the owner it leads: "1 question for you · 2 failed · 3 at work · 4 waiting · 70 of 81 done".
+Questions link to where they are answered. Waiting units that have not begun are counted
+immediately after At work, omitted when none wait. The done count links to `?show=done#done`
+when any unit is done. Items set aside are omitted from the attention
 counts; settling a cancel as done also completes its unit. The line names no unit and has no
 step count, recent-activity assurance or separate long-run clause. The project's sections
 (Plan, Day, Stats, Messages, Log, Functions, Settings) are the top bar's tabs, with Inbox at its
@@ -2638,8 +2640,10 @@ Needs you, when needed, then At work and Finished occupy the same main column at
   position, Recent activity by latest heard then plan position. The per-viewer, per-project
   `sluice_order_<p>` cookie is read by pages and streams alike; activity never reorders Created
   or Plan order. No legend or axis labels stand beside the head. Rows group by recipe (an open
-  `<details>` whose name links `?recipe=<name>&show=all`, with counts), then "Other units", then
-  "Long runs". In a roster of more than 12 rows a
+  `<details>` whose name links `?recipe=<name>&show=all`, with counts), then plain rows for
+  units with no recipe, then "Long runs". The plain rows have no group heading or fold, even
+  in a big roster; when all units lack recipes they sit directly under At work. In a roster
+  of more than 12 rows a
   group folds by row: its remarkable rows first (a silence, a wait of an hour or more since its
   last run, a unit with an open item in Needs you), the rest, when more than 3, folded under
   them to one line ("+7 running · each heard from in the last 11m"), a `<details>` opening in
@@ -2675,9 +2679,9 @@ Needs you, when needed, then At work and Finished occupy the same main column at
   strip whose run began before the hour fades at its left edge, which says "Started 1h 42m ago,
   at 14:05" (`&from=<start>`). A row whose state the stream changes stays where it is and
   flashes (its wash fading over 1.4 s, `data-flash`), never moving under the reader; reduced
-  motion skips it. A unit that has not begun and waits on earlier work is counted, not drawn,
-  on the line under At work ("4 waiting on earlier work · 25 done, the last 2h ago", the done
-  count linking `show=done`), unless a find, `root=` or `recipe=` asks for it. A row is a
+  motion skips it. A unit that has not begun and waits on earlier work is counted in the
+  summary's "N waiting", with no line under At work, unless a find, `root=` or `recipe=` asks
+  for its row. A row is a
   `<details>`: opening it asks for its body (`GET /projects/id/<p>/units/<u>/drill`, which
   answers a Datastar patch that replaces the row's empty body; while it is open the row's
   stream carries a stamp of that body, and a new stamp asks for it again), so the page and its
